@@ -657,3 +657,25 @@ Still open:
     - leftover `google:reauth-noticed` entries from the base's fake acknowledgement;
     - `APP_CONNECT_GUIDANCE` hard-codes app navigation with no contract behind it ("top left" unverified).
 - Findings sent to L2.
+
+## 06:49Z: #1083 review FAIL; owner items surfaced
+
+- **Independent review at `4f80da1f`: FAIL.**
+  - **Correct:** the composite math. The reviewer's standalone script checked the integer half-up expression against exact rounding over about 106M inputs, with 0 mismatches. Weights, pillars, coverage, zones, the 36/72 h windows and confidence all match ADR-0081.
+  - **Required, tests:**
+    - Rounding vectors that catch a floating-point mutant, which passes today.
+    - A Form assertion in the SDNN test. Deleting the same-method filter isn't caught.
+  - **Required, cleanups:**
+    - Stop fetching workouts, which nothing uses now.
+    - Make explicit how the heart-rate and HRV windows count toward the 8-bucket gate.
+    - Fix the stale comment.
+    - Take the weights and source table from the contract (`crs.ts:91-114`). Today they have two owners.
+  - **Required, PR body:** list the unlisted deviations under NOT DONE:
+    - (a) one source per row, chosen by reading count, not confidence;
+    - (b) no SDNN confidence factor;
+    - (c) stored rows never age.
+- **Owner items, sent to L1 and told to the owner:**
+  - an SDNN confidence factor;
+  - aligning to ADR-0081 drops Form's HR/HRV stress part, against the 10 Oct §7 ruling and the site's "Form (circadian, motion, stress)";
+  - owners whose only source is Health Connect lose Form.
+- **L4 told:** Form's `confidence` will mean the ADR product, while Recovery's and Weight's still mean coverage, in the same response.
