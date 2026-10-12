@@ -1,6 +1,8 @@
 import { WorkspaceError, r2Bodies, workspaceStore, type Admission, type Metadata, type OwnerBinding, type WorkspaceState } from '@waldo/workspace';
 import { signedRpc, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import type { RunEffectScope } from './run-effect-scope';
+import { workspaceReceipt } from './console-workspace';
+import { wantsHtml } from './standalone-page';
 
 // SQLite callback is synchronous. No network, body writes or thenables belong here.
 export const workspaceMetadata = (storage: Pick<DurableObjectStorage, 'sql' | 'transactionSync'>, scope?: RunEffectScope): Metadata => ({
@@ -97,7 +99,11 @@ export const workspaceRequest = async (
   download: (bytes: Uint8Array, meta: Awaited<ReturnType<Awaited<ReturnType<typeof workspaceOwnerHost>>['export']>>['meta']) => Response,
 ): Promise<Response> => {
   const url = new URL(request.url);
-  const failure = (code: string, status: number) => Response.json({ error: `workspace_${code}` }, { status, headers: { 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff' } });
+  // A native browser form or link gets the same outcome as a styled page; JSON callers are unchanged.
+  const browser = wantsHtml(request.headers.get('accept'));
+  const action = url.pathname === '/console/workspace' ? 'list' : url.pathname.endsWith('/upload') ? 'upload' : url.pathname.endsWith('/remove') ? 'remove' : 'download';
+  const reply = (body: unknown, status: number, headers: Record<string, string>) => browser ? workspaceReceipt(action, { status, body }) : Response.json(body, { status, headers });
+  const failure = (code: string, status: number) => reply({ error: `workspace_${code}` }, status, { 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff' });
   try {
     if (url.pathname === '/console/workspace' && request.method === 'GET') {
       const page = await (await open()).list(url.searchParams.get('cursor') ?? undefined);
@@ -144,13 +150,13 @@ export const workspaceRequest = async (
     if (url.pathname.endsWith('/remove')) {
       const revision = form.get('revision');
       if (typeof revision !== 'string' || !/^[1-9]\d*$/.test(revision) || typeof form.get('file_id') !== 'string') return failure('invalid', 400);
-      return Response.json(await store.tombstone(String(form.get('file_id')), Number(revision)), { headers: { 'cache-control': 'private, no-store' } });
+      return reply(await store.tombstone(String(form.get('file_id')), Number(revision)), 200, { 'cache-control': 'private, no-store' });
     }
     const file: unknown = form.get('file'); const path = form.get('path'); const expected = form.get('expected_revision'); const operation = form.get('operation_id');
     if (!(file instanceof File) || typeof path !== 'string' || typeof expected !== 'string' || !/^\d+$/.test(expected) || typeof operation !== 'string') return failure('invalid', 400);
     lease.assert();
     const meta = await store.write({ path, bytes: new Uint8Array(await file.arrayBuffer()), mime: file.type || 'application/octet-stream', expected_revision: Number(expected), operation_id: operation, provenance: 'owner_upload' });
-    return Response.json({ file_id: meta.file_id, revision: meta.revision, byte_size: meta.byte_size, sha256: meta.sha256 }, { headers: { 'cache-control': 'private, no-store' } });
+    return reply({ file_id: meta.file_id, revision: meta.revision, byte_size: meta.byte_size, sha256: meta.sha256 }, 200, { 'cache-control': 'private, no-store' });
     } finally { lease.release(); }
   } catch (error) {
     const code = error instanceof WorkspaceError ? error.code : 'unavailable';

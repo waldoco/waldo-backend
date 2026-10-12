@@ -1,5 +1,6 @@
 import { readConsentState, type ConsentSurface } from '../connectors/google';
 import { CONSOLE_PATH } from './console';
+import { resultCard, standalonePage } from './standalone-page';
 import type { ConsentOutcome } from '../connectors/google-consent';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
 import type { TelegramWebhookEnv } from './telegram-webhook';
@@ -19,15 +20,15 @@ const returnAction = (surface: ConsentSurface | undefined, bot: string | null): 
   switch (surface) {
     case 'telegram':
       return bot
-        ? `<a class="button" href="https://t.me/${encodeURIComponent(bot)}">Back to Telegram</a>`
-        : '<p class="note">You can go back to Telegram.</p>';
+        ? `<a class="button-link" href="https://t.me/${encodeURIComponent(bot)}">Back to Telegram</a>`
+        : '<p class="help">You can go back to Telegram.</p>';
     case 'whatsapp':
-      return '<p class="note">You can go back to WhatsApp.</p>';
+      return '<p class="help">You can go back to WhatsApp.</p>';
     case 'app':
-      return `<a class="button" href="${APP_RETURN_DEEP_LINK}">Back to the app</a>`;
+      return `<a class="button-link" href="${APP_RETURN_DEEP_LINK}">Back to the app</a>`;
     case 'dashboard':
     default:
-      return `<a class="button" href="${CONSOLE_PATH}">Back to your console</a>`;
+      return `<a class="button-link" href="${CONSOLE_PATH}">Back to your console</a>`;
   }
 };
 
@@ -42,20 +43,15 @@ const COPY: Record<ConsentOutcome['kind'], Readonly<{ status: number; title: str
 // The callback URL carries the authorization code, so the page is never cached, framed or sent as a referrer.
 export const consentPage = (outcome: ConsentOutcome, bot: string | null, surface?: ConsentSurface): Response => {
   const copy = COPY[outcome.kind];
-  const account = outcome.kind === 'linked' && outcome.email ? `<p class="account">${escape(outcome.email)}</p>` : '';
+  const account = outcome.kind === 'linked' && outcome.email ? `<p><strong>${escape(outcome.email)}</strong></p>` : '';
   const back = returnAction(surface, bot);
-  const mark = outcome.kind === 'linked' ? '&#10003;' : '!';
   // The callback has already settled server-side. Remove its one-time code and state from
   // the address bar/history before the owner follows a return link or shares this tab.
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${copy.title} - Waldo</title><script>history.replaceState(null, '', location.pathname);</script>
-<style>:root{color-scheme:light dark;--bg:#f7f7f5;--card:#fff;--ink:#1c1c1a;--muted:#6b6b66;--ok:#1f7a4d;--bad:#b3261e;--btn:#2a6fdb}
-@media (prefers-color-scheme:dark){:root{--bg:#141413;--card:#1f1f1d;--ink:#ecece8;--muted:#a3a39c;--ok:#5cc28f;--bad:#f2837a;--btn:#5b93f0}}
-body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,sans-serif}
-main{box-sizing:border-box;width:min(420px,calc(100vw - 32px));background:var(--card);border-radius:16px;padding:32px 24px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.08)}
-.mark{width:56px;height:56px;margin:0 auto 16px;border-radius:50%;display:grid;place-items:center;font-size:28px;color:#fff;background:var(${outcome.kind === 'linked' ? '--ok' : '--bad'})}
-h1{font-size:22px;margin:0 0 8px}p{margin:0 0 16px;color:var(--muted)}.account{color:var(--ink);font-weight:bold}
-.button{display:inline-block;margin-top:8px;padding:12px 20px;border-radius:10px;background:var(--btn);color:#fff;text-decoration:none;font-weight:bold}.note{margin:8px 0 0}</style></head>
-<body><main><div class="mark" aria-hidden="true">${mark}</div><h1>${copy.title}</h1>${account}<p>${copy.body}</p>${back}</main></body></html>`;
+  const html = standalonePage({
+    title: `${copy.title} - Waldo`, layout: 'card',
+    body: resultCard({ tone: outcome.kind === 'linked' ? 'positive' : 'negative', title: copy.title, body: `${account}<p>${copy.body}</p>`, actions: back }),
+    tail: "<script>history.replaceState(null, '', location.pathname);</script>",
+  });
   return new Response(html, {
     status: copy.status,
     headers: {

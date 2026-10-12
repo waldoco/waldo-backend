@@ -1,21 +1,24 @@
 import type { AdminOverview } from '../identity/console-auth';
 import { CONSOLE_ACTION_PATH, CONSOLE_PATH } from './console';
+import { pageHeading, standalonePage } from './standalone-page';
 
 export const CONSOLE_ADMIN_PATH = `${CONSOLE_PATH}/admin`;
 
 const esc = (text: string) => text.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
 const when = (iso: string | null) => (iso ? esc(iso.slice(0, 16).replace('T', ' ')) : '');
-const button = (csrf: string, action: string, label: string, fields: Readonly<Record<string, string>>, extra = '') =>
-  `<form method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${csrf}"><input type="hidden" name="action" value="${action}">${Object.entries(fields).map(([name, value]) => `<input type="hidden" name="${name}" value="${esc(value)}">`).join('')}${extra}<button>${esc(label)}</button></form>`;
+const button = (csrf: string, action: string, label: string, fields: Readonly<Record<string, string>>, extra = '', kind = '') =>
+  `<form method="post" action="${CONSOLE_ACTION_PATH}"${extra ? ' class="stack"' : ''}><input type="hidden" name="csrf" value="${esc(csrf)}"><input type="hidden" name="action" value="${action}">${Object.entries(fields).map(([name, value]) => `<input type="hidden" name="${name}" value="${esc(value)}">`).join('')}${extra}<div class="actions"><button${kind ? ` class="${kind}"` : ''}>${esc(label)}</button></div></form>`;
 
 // Admin page: who has access, who is invited, and invite or revoke by email.
 export const renderAdmin = (overview: AdminOverview, csrf: string): string => {
-  const owners = overview.owners.map((owner) => `<tr><td>${esc(owner.email ?? '(no email)')}</td><td>${esc(owner.state)}</td><td>${esc(owner.presences.join(', ') || 'none')}</td><td>${when(owner.created_at)}</td></tr>`).join('');
+  const owners = overview.owners.map((owner) => `<li><div class="row-head"><h3>${esc(owner.email ?? '(no email)')}</h3><span class="chip">${esc(owner.state)}</span></div><dl class="facts"><dt>Linked</dt><dd>${esc(owner.presences.join(', ') || 'none')}</dd><dt>Since</dt><dd class="time">${when(owner.created_at)}</dd></dl></li>`).join('');
   const invites = overview.invites.map((invite) => {
     const state = invite.used_at ? `used ${when(invite.used_at)}` : invite.revoked_at ? `revoked ${when(invite.revoked_at)}` : invite.expires_at && new Date(invite.expires_at).getTime() <= Date.now() ? 'expired' : 'open';
-    const revoke = state === 'open' ? button(csrf, 'invite.revoke', 'Revoke', { id: invite.id }) : '';
-    return `<tr><td>${esc(invite.email ?? '')}</td><td>${state}</td><td>${when(invite.created_at)}</td><td>${when(invite.expires_at)}</td><td>${revoke}</td></tr>`;
+    const revoke = state === 'open' ? button(csrf, 'invite.revoke', 'Revoke', { id: invite.id }, '', 'danger') : '';
+    return `<li><div class="row-head"><h3>${esc(invite.email ?? '')}</h3><span class="chip">${state}</span></div><dl class="facts"><dt>Created</dt><dd class="time">${when(invite.created_at)}</dd><dt>Expires</dt><dd class="time">${when(invite.expires_at)}</dd></dl>${revoke}</li>`;
   }).join('');
-  const create = button(csrf, 'invite.create', 'Invite', {}, '<label>Recipient email <input name="value" type="email" autocomplete="email" required placeholder="email@example.com"></label>');
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Waldo admin</title><style>body{font-family:system-ui,sans-serif;background:#FAFAF8;color:#1A1A1A;margin:24px}table{border-collapse:collapse;width:100%;margin-bottom:24px}td,th{border-bottom:1px solid #ddd;padding:8px;text-align:left;font-size:14px}form{display:inline-flex;gap:8px}input,button{font:inherit;padding:6px 10px}</style></head><body><p><a href="${CONSOLE_PATH}">Back to console</a></p><h2>Owners</h2><p>Root invites count toward your five codes. A signup link is shown once after creation; Waldo does not email anyone.</p><table><tr><th>Email</th><th>State</th><th>Linked</th><th>Since</th></tr>${owners}</table><h2>Invites</h2>${create}<table><tr><th>Email</th><th>State</th><th>Created</th><th>Expires</th><th></th></tr>${invites}</table></body></html>`;
+  const create = button(csrf, 'invite.create', 'Invite', {}, '<label>Recipient email <input name="value" type="email" autocomplete="email" required placeholder="email@example.com"></label>', 'primary');
+  const ownerTile = `<section class="tile" aria-labelledby="owners-heading"><h2 id="owners-heading">Owners <span class="count">${overview.owners.length}</span></h2>${owners ? `<ul class="records">${owners}</ul>` : '<p class="empty">No owners yet.</p>'}</section>`;
+  const inviteTile = `<section class="tile" aria-labelledby="invites-heading"><h2 id="invites-heading">Invites <span class="count">${overview.invites.length}</span></h2><p>Root invites count toward your five codes. A signup link is shown once after creation; Waldo does not email anyone.</p>${create}${invites ? `<ul class="records inset">${invites}</ul>` : '<p class="empty inset">No invites yet.</p>'}</section>`;
+  return standalonePage({ title: 'Admin · Waldo', body: `${pageHeading('Admin', 'Who has access to this Waldo, and who is invited.', 'Settings')}${ownerTile}${inviteTile}` });
 };
