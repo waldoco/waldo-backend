@@ -294,7 +294,7 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
 - **#1066** (L2): `c8d3190c` "Re-plan every day card on a zone change and log each held job", pushed 01:47Z, draft. CI 6/6 SUCCESS incl. pgTAP, `CLEAN` **[verified]**. Still held for the owner's health ruling; the fixes need a short delta review before any merge.
 - Staging `889efa27`. No #116 comments since 01:34Z. The app probe is still waiting for the owner's morning send.
 
-## 02:00Z: final checks before the morning report
+## 01:58Z: final checks before the morning report
 
 - **Advisor's final review applied:**
   - Audit got its findings (send 12, `a4bc29d4`, delivered; map §6 plus the research folder; leads only, no ledger edits).
