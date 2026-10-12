@@ -91,7 +91,7 @@ export const parseDayPlan = (raw: string, cards: readonly DayCard[]): readonly C
 export const applyDayPlan = async (
   scheduler: Scheduler, book: DayPlanBook, timezone: string, now: number, plan: readonly CardPlan[], respectPins = true, enabled = true,
 ): Promise<readonly CardPlan[]> => {
-  if (!enabled) { for (const planned of plan) if (scheduler.read(planned.card)) await scheduler.cancel(planned.card); return []; }
+  if (!enabled) { for (const planned of plan) await scheduler.cancelReadable(planned.card); return []; }
   const pins = respectPins ? book.pins() : {};
   const day = localIso(now, timezone).slice(0, 10);
   const pending = new Set(book.pending(day).map((card) => card.id));
@@ -100,6 +100,8 @@ export const applyDayPlan = async (
     const pinned = pins[planned.card];
     const entry: CardPlan = pinned ? { card: planned.card, time: pinned, reason: 'pinned by you' } : planned;
     if (!pending.has(entry.card)) continue;
+    // A card row this Worker cannot read is left for the Worker that wrote it, and nothing is planned that no row backs.
+    if (scheduler.lookup(entry.card).state === 'unreadable') continue;
     book.save(day, entry);
     const at = entry.time === null ? null : localToEpoch(`${day}T${entry.time}`, timezone);
     if (at === null || at <= now) await scheduler.cancel(entry.card);

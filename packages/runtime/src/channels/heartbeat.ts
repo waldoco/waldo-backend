@@ -30,7 +30,7 @@ const DUE_SCAN_LIMIT = 20;
 const RENOTIFY_COOLDOWN_MS = 4 * 60 * 60_000;
 
 export const armHeartbeat = async (scheduler: Scheduler, now: number): Promise<void> => {
-  if (scheduler.read(HEARTBEAT_ID)) return;
+  if (scheduler.lookup(HEARTBEAT_ID).state !== 'absent') return;
   await scheduler.schedule({
     id: HEARTBEAT_ID, kind: 'heartbeat', payloadRefs: { id: HEARTBEAT_ID },
     occurrenceAt: now + HEARTBEAT_EVERY_MS, dueAt: now + HEARTBEAT_EVERY_MS,

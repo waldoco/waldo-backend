@@ -36,7 +36,8 @@ export const standingOrderBook = (sql: Sql, scheduler: Scheduler, clock: OwnerCl
   sql.exec(`CREATE TABLE IF NOT EXISTS standing_orders (
     id TEXT PRIMARY KEY, scope TEXT NOT NULL, trigger TEXT NOT NULL, at TEXT, gate TEXT NOT NULL, escalation TEXT NOT NULL, created_at INTEGER NOT NULL)`);
   const toOrder = (row: StandingOrder): StandingOrder => {
-    const recurrence = scheduler.read(row.id)?.recurrence;
+    const found = scheduler.lookup(row.id);
+    const recurrence = found.state === 'entry' ? found.entry.recurrence : undefined;
     return recurrence?.type === 'cron' ? { ...row, cron: recurrence.expression } : row;
   };
   return {

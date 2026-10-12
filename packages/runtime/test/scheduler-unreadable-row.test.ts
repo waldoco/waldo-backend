@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { env, runInDurableObject } from 'cloudflare:test';
+import { SCHEDULE_KINDS } from '@waldo/contracts';
+import { applyDayPlan, dayPlanBook, defaultPlan } from '../src/channels/day-cards';
+import { NIGHTLY_ID } from '../src/channels/episodes';
+import { BRIEF_SWEEP_ID } from '../src/channels/event-briefs';
+import { HEARTBEAT_ID } from '../src/channels/heartbeat';
+import { reminderBook } from '../src/channels/reminders';
+import { applySchedulePreferences, reconcileSchedulePreferences } from '../src/channels/schedule-preferences';
+import { standingOrderBook } from '../src/channels/standing-orders';
+import { DAY_CARDS } from '../src/prompt/day-cards';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import type { Deps } from '../src/seams/deps';
 
@@ -12,9 +21,11 @@ const freshStub = (): Parameters<typeof runInDurableObject>[0] => {
 const MINUTE = 60_000;
 
 // A row as an older Worker meets it after a rollback: written by a newer Worker, with a kind this build does not know.
-const plantUnknownKind = (sql: SqlStorage, id: string, dueAt: number) => sql.exec(
+const plantUnknownKind = (sql: SqlStorage, id: string, dueAt: number, kind = 'kind_from_a_newer_worker', recurrence: unknown = null) => sql.exec(
   `INSERT INTO schedule (id, kind, occurrence_at, due_at, recurrence_json, payload_json, status, attempts, last_fired_at, quarantined_until, created_at, updated_at)
-   VALUES (?, 'kind_from_a_newer_worker', ?, ?, NULL, ?, 'armed', 0, NULL, NULL, ?, ?)`, id, dueAt, dueAt, JSON.stringify({ id }), dueAt, dueAt);
+   VALUES (?, ?, ?, ?, ?, ?, 'armed', 0, NULL, NULL, ?, ?)`, id, kind, dueAt, dueAt, recurrence === null ? null : JSON.stringify(recurrence), JSON.stringify({ id }), dueAt, dueAt);
+// A known kind with a recurrence only a newer Worker writes.
+const RESHAPED = { type: 'every_other_tuesday', every_ms: 600_000 };
 const rowsLike = (sql: SqlStorage, prefix: string) => sql.exec("SELECT * FROM schedule WHERE id >= ? AND id < ? ORDER BY id", prefix, `${prefix}~`).toArray();
 const invalidLogs = (log: { mock: { calls: unknown[][] } }) => log.mock.calls.flatMap(([line]) => {
   try { const parsed = JSON.parse(String(line)); return parsed.hop === 'schedule_row_invalid' ? [parsed] : []; } catch { return []; }
@@ -30,10 +41,13 @@ describe('a schedule row this Worker cannot read', () => {
       const now = Date.now();
       const fired = await runInDurableObject(freshStub(), async (_instance, state) => {
         const scheduler = new Scheduler(state.storage.sql, state.storage, at(now));
-        await scheduler.schedule({ id: 'valid', kind: 'brief', occurrenceAt: now - MINUTE, dueAt: now - MINUTE, payloadRefs: { id: 'valid' }, recurrence: null });
-        // As many unreadable rows as one alarm may dispatch, all due earlier than the valid one.
+        // As many unreadable rows as one alarm may dispatch, stored first and due earlier than the valid one, so a
+        // dispatch that cut its batch before leaving them out would never reach the valid row.
         for (let i = 0; i < bad; i += 1) plantUnknownKind(state.storage.sql, `unreadable-${i}`, now - 2 * MINUTE);
+        await scheduler.schedule({ id: 'valid', kind: 'brief', occurrenceAt: now - MINUTE, dueAt: now - MINUTE, payloadRefs: { id: 'valid' }, recurrence: null });
         const before = rowsLike(state.storage.sql, 'unreadable-');
+        expect(scheduler.hasDue()).toBe(true);
+        expect(invalidLogs(log)).toEqual([]);
         const ran: string[] = [];
         await scheduler.dispatchDue({ brief: async entry => { ran.push(entry.id); } });
         expect(rowsLike(state.storage.sql, 'unreadable-')).toEqual(before);
@@ -62,6 +76,82 @@ describe('a schedule row this Worker cannot read', () => {
       await scheduler.rearm();
       expect(await state.storage.getAlarm()).toBeNull();
       expect(rowsLike(state.storage.sql, 'unreadable-').map(row => row.status)).toEqual(['armed', 'armed']);
+    });
+  });
+});
+
+describe('reading one id whose row this Worker cannot read', () => {
+  it('tells absent, readable and unreadable apart, and cancels only a readable row', async () => {
+    const now = Date.now();
+    await runInDurableObject(freshStub(), async (_instance, state) => {
+      const scheduler = new Scheduler(state.storage.sql, state.storage, at(now));
+      plantUnknownKind(state.storage.sql, 'unreadable-row', now + MINUTE, 'heartbeat', RESHAPED);
+      await scheduler.schedule({ id: 'valid', kind: 'brief', occurrenceAt: now + MINUTE, dueAt: now + MINUTE, payloadRefs: { id: 'valid' }, recurrence: null });
+      expect([scheduler.lookup('nothing').state, scheduler.lookup('valid').state, scheduler.lookup('unreadable-row').state]).toEqual(['absent', 'entry', 'unreadable']);
+      const before = rowsLike(state.storage.sql, 'unreadable-');
+      await scheduler.cancelReadable('unreadable-row');
+      await scheduler.cancelReadable('valid');
+      expect(rowsLike(state.storage.sql, 'unreadable-')).toEqual(before);
+      expect(scheduler.lookup('valid').state).toBe('absent');
+    });
+  });
+
+  it('turning every kind off cancels the readable fixed jobs and leaves the unreadable ones exactly as they were', async () => {
+    const now = Date.now();
+    await runInDurableObject(freshStub(), async (_instance, state) => {
+      const { sql } = state.storage;
+      const scheduler = new Scheduler(sql, state.storage, at(now));
+      const unreadable = [[HEARTBEAT_ID, 'heartbeat'], [NIGHTLY_ID, 'dreaming'], [BRIEF_SWEEP_ID, 'pre_activity_spot'], [DAY_CARDS[0]!.id, 'brief']] as const;
+      for (const [id, kind] of unreadable) plantUnknownKind(sql, id, now + 60 * MINUTE, kind, RESHAPED);
+      const readableCard = DAY_CARDS[1]!.id;
+      await scheduler.schedule({ id: readableCard, kind: 'brief', occurrenceAt: now + 60 * MINUTE, dueAt: now + 60 * MINUTE, payloadRefs: { id: readableCard }, recurrence: null });
+      const rows = () => sql.exec('SELECT * FROM schedule WHERE id IN (?, ?, ?, ?) ORDER BY id', ...unreadable.map(([id]) => id)).toArray();
+      const before = rows();
+      const off = Object.fromEntries(SCHEDULE_KINDS.map(kind => [kind, false])) as Record<(typeof SCHEDULE_KINDS)[number], boolean>;
+      const ctx = { scheduler, plans: dayPlanBook(sql), timezone: 'UTC', now };
+      await applySchedulePreferences(off, ctx);
+      await reconcileSchedulePreferences(off, ctx);
+      expect(rows()).toEqual(before);
+      expect(scheduler.lookup(readableCard).state).toBe('absent');
+    });
+  });
+
+  it('plans no day card whose row cannot be read, and cancels only readable cards when the day plan is off', async () => {
+    // Midnight UTC, so every card's default time is still ahead today.
+    const now = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
+    await runInDurableObject(freshStub(), async (_instance, state) => {
+      const { sql } = state.storage;
+      const scheduler = new Scheduler(sql, state.storage, at(now));
+      const [unreadableCard, readableCard] = [DAY_CARDS[0]!.id, DAY_CARDS[1]!.id];
+      plantUnknownKind(sql, unreadableCard, now + 60 * MINUTE, 'brief', RESHAPED);
+      const before = rowsLike(sql, unreadableCard);
+      const plans = dayPlanBook(sql);
+      const applied = await applyDayPlan(scheduler, plans, 'UTC', now, defaultPlan(DAY_CARDS));
+      expect(applied.map(entry => entry.card)).not.toContain(unreadableCard);
+      expect(applied.map(entry => entry.card)).toContain(readableCard);
+      expect(plans.read(new Date(now).toISOString().slice(0, 10)).map(entry => entry.card)).not.toContain(unreadableCard);
+      expect(scheduler.lookup(readableCard).state).toBe('entry');
+      await applyDayPlan(scheduler, plans, 'UTC', now, defaultPlan(DAY_CARDS), true, false);
+      expect(rowsLike(sql, unreadableCard)).toEqual(before);
+      expect(scheduler.lookup(readableCard).state).toBe('absent');
+    });
+  });
+
+  it('lists a standing order without its schedule, and leaves out a reminder, when the row behind it cannot be read', async () => {
+    const now = Date.now();
+    await runInDurableObject(freshStub(), async (_instance, state) => {
+      const { sql } = state.storage;
+      const scheduler = new Scheduler(sql, state.storage, at(now));
+      const clock = { timezone: 'UTC', now: () => new Date(now) };
+      const orders = standingOrderBook(sql, scheduler, clock, () => 'order-1');
+      sql.exec("INSERT INTO standing_orders (id, scope, trigger, at, gate, escalation, created_at) VALUES ('order-1', 'tidy the inbox', 'daily', '09:00', 'confirm_first', 'none', ?)", now);
+      plantUnknownKind(sql, 'order-1', now + 60 * MINUTE, 'standing_order', RESHAPED);
+      expect(orders.list().map(order => [order.id, order.cron])).toEqual([['order-1', undefined]]);
+      const reminders = reminderBook(sql, scheduler, clock, () => 'unused');
+      for (const id of ['reminder-unreadable', 'reminder-readable']) sql.exec('INSERT INTO reminder_notes (id, note, created_at) VALUES (?, ?, ?)', id, 'call Sam', now);
+      plantUnknownKind(sql, 'reminder-unreadable', now + 30 * MINUTE, 'reminder', RESHAPED);
+      await scheduler.schedule({ id: 'reminder-readable', kind: 'reminder', occurrenceAt: now + 60 * MINUTE, dueAt: now + 60 * MINUTE, payloadRefs: { reminder_id: 'reminder-readable' }, recurrence: null });
+      expect(reminders.list().map(reminder => reminder.id)).toEqual(['reminder-readable']);
     });
   });
 });

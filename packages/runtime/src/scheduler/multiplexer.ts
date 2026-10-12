@@ -50,6 +50,9 @@ export type ScheduleInput = {
   recurrence?: ScheduleRecurrence | null;
 };
 
+// One id's row as this Worker reads it. `unreadable` is a row this Worker cannot parse, such as one a newer Worker wrote.
+export type ScheduleLookup = Readonly<{ state: 'absent' } | { state: 'entry'; entry: ScheduleEntry } | { state: 'unreadable' }>;
+
 export type ScheduleExecutor = (entry: ScheduleEntry) => Promise<void | 'delivery_pending'>;
 export type ScheduleExecutors = Partial<Record<ScheduleKind, ScheduleExecutor>>;
 
@@ -136,6 +139,19 @@ export class Scheduler {
       .exec<ScheduleSqlRow>('SELECT * FROM schedule WHERE id = ?', id)
       .toArray()[0];
     return row ? toEntry(row) : null;
+  }
+
+  // For callers that arm or cancel a fixed id at start-up. They treat an unreadable row as present and leave it as it is,
+  // so one reshaped row neither fails the runtime's start nor is overwritten before the Worker that wrote it returns.
+  lookup(id: string): ScheduleLookup {
+    const row = this.sql.exec<ScheduleSqlRow>('SELECT * FROM schedule WHERE id = ?', id).toArray()[0];
+    if (!row) return { state: 'absent' };
+    const [entry] = readable([row]).entries;
+    return entry ? { state: 'entry', entry } : { state: 'unreadable' };
+  }
+
+  async cancelReadable(id: string): Promise<void> {
+    if (this.lookup(id).state === 'entry') await this.cancel(id);
   }
 
   hasDue(): boolean { return this.dueEntries(this.deps.now()).entries.length > 0; }

@@ -49,10 +49,11 @@ export const reminderBook = (sql: SqlStorage, scheduler: Scheduler, clock: Owner
       }
       return { id, note, at: local(entry.due_at), repeat, ...(cron === undefined ? {} : { cron }) };
     },
+    // A reminder row this Worker cannot read stays out of the list, which feeds prompts, rather than failing them.
     list() {
       return sql.exec<{ id: string; note: string; due_at: number; recurrence_json: string | null }>(
         "SELECT s.id, n.note, s.due_at, s.recurrence_json FROM schedule s JOIN reminder_notes n ON n.id = s.id WHERE s.kind = 'reminder' ORDER BY s.due_at",
-      ).toArray().map(toReminder);
+      ).toArray().filter(row => scheduler.lookup(row.id).state === 'entry').map(toReminder);
     },
     async cancel(id) {
       const known = scheduler.read(id)?.kind === 'reminder';
