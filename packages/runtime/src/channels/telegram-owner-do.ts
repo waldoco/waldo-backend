@@ -2137,7 +2137,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
             return undefined;
           }
         })() : undefined;
-        const capability = createScopedCuratedSkillCapability(storage.sql, { owner: admission?.invocation.verified_authority.principal_ref ?? contextOwnerId, custodyKey: `telegram:${owner}`, turnId: turn.traceId,
+        // Activations from the app, stamped with the principal the directory verified for this DO, stay the owner's here.
+        const appPrincipal = identity.get<string>('owner_principal_ref');
+        const capability = createScopedCuratedSkillCapability(storage.sql, { owner: admission?.invocation.verified_authority.principal_ref ?? contextOwnerId, custodyKey: `telegram:${owner}`,
+          custodyAliases: appPrincipal && /^prn_[0-9a-f]{32}$/.test(appPrincipal) ? [appPrincipal] : [], turnId: turn.traceId,
           trigger: 'user_message', ownerText: turn.text, assertCurrent: assertSkillOwnerCurrent, assertDispatch: assertOwnerIdentity }, scope);
         return Object.freeze({ ...capability, ...(admission ? { admission } : {}), taskContext: async (assertSourceCurrent?: () => Promise<void>) => {
           await assertSkillOwnerCurrent();
@@ -2155,17 +2158,20 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         } });
       } } : channel === 'app' ? { prepare: async (turn, contextOwnerId, scope) => {
         const record = this.activeApp;
+        // Skill activations are stamped with a custody key. Telegram stamps its verified subject, so a DO that holds its own
+        // stored Telegram binding stamps that custody here too; otherwise the app's verified principal is the custody. Either way,
+        // activations under the principal stay the owner's. An unlinked subject still names this DO's own owner, so
+        // telegram_unlinked is deliberately not consulted.
+        const subject = identity.get<string>('telegram_subject');
         const assertOwnerIdentity = async () => {
           scope.admit();
-          if (!record || record !== this.activeApp || record.id !== scope.runId || record.attempt !== scope.attempt || turn.text !== record.text) throw new ClosedRunError();
+          if (!record || record !== this.activeApp || record.id !== scope.runId || record.attempt !== scope.attempt || turn.text !== record.text
+            || identity.get<string>('telegram_subject') !== subject) throw new ClosedRunError();
           scope.admit();
         };
         await assertOwnerIdentity();
-        // Skill activations are stamped with a custody key. Telegram stamps its verified subject, so a DO that holds its own
-        // stored Telegram binding keeps that custody on the app; otherwise the app's verified principal is the custody.
-        const subject = identity.get<string>('telegram_subject');
         const custodyKey = subject && /^\d+$/.test(subject) && Number.isSafeInteger(Number(subject)) && Number(subject) > 0 ? `telegram:${Number(subject)}` : contextOwnerId;
-        return createScopedCuratedSkillCapability(storage.sql, { owner: contextOwnerId, custodyKey, turnId: turn.traceId, trigger: 'user_message', ownerText: turn.text,
+        return createScopedCuratedSkillCapability(storage.sql, { owner: contextOwnerId, custodyKey, custodyAliases: [contextOwnerId], turnId: turn.traceId, trigger: 'user_message', ownerText: turn.text,
           assertCurrent: async () => { scope.admit(); }, assertDispatch: assertOwnerIdentity }, scope);
       } } : undefined,
       channel === 'app' ? {contextHost:{prepare:async (turn,scope)=>{

@@ -19,6 +19,8 @@ export function byteUpperBoundSkillBudget(): ResolvedSkillBudget {
 }
 export type CuratedSkillTurn = Readonly<{
  owner: string; custodyKey?: string; turnId: string; trigger: TriggerType; ownerText: string;
+ // This owner's other verified identities: activations stamped under them stay this owner's.
+ custodyAliases?: readonly string[];
  assertCurrent(): Promise<void>;
  assertDispatch?(): Promise<void>;
 }>;
@@ -53,9 +55,11 @@ export class CuratedOwnerSkills {
  readonly #selected = new Map<string,string>();
  constructor(private readonly sql: SqlStorage, private readonly owner: string,
   private readonly budget: ResolvedSkillBudget = byteUpperBoundSkillBudget(), private readonly custodyKey: string = owner,
-  private readonly catalog: readonly Skill[] = CURATED_SKILLS) { this.sql.exec(SKILLS_TABLE_SCHEMA); this.ensureDefaults(); }
+  private readonly catalog: readonly Skill[] = CURATED_SKILLS, private readonly custodyAliases: readonly string[] = []) { this.sql.exec(SKILLS_TABLE_SCHEMA); this.ensureDefaults(); }
  private skillFor(name: string): Skill | undefined { return this.catalog.find(s => s.name === name); }
  private createdBy(s: Skill): string { return `${sourceOf(s.name,s.version)}:owner:${this.custodyKey}`; }
+ // New activations are stamped with this surface's custody; any of the owner's custodies reads as theirs.
+ private get custodies(): readonly string[] { return [this.custodyKey, ...this.custodyAliases]; }
  private insert(s: Skill, conflict: string): void {
   this.sql.exec(`INSERT INTO skills(name,version,provenance,identity_locked,provisional,trigger_types_json,trigger_condition,required_tools_json,required_connectors_json,effectiveness,invocations,last_used,body_markdown,created_by,created_at,status,pinned,last_curated_at,archived_at)
    VALUES(?,?,'system',1,0,?,?,?,?,1,0,NULL,?,?,?,'active',1,NULL,NULL) ${conflict}`,s.name,s.version,JSON.stringify(s.trigger_types),s.trigger_condition,JSON.stringify(s.required_tools),JSON.stringify(s.required_connectors),s.body_markdown,this.createdBy(s),s.created_at);
@@ -69,7 +73,7 @@ export class CuratedOwnerSkills {
   for (const s of this.catalog) {
    const row = this.stored(s.name);
    if (!row || row.admitted !== 1 || row.version === null || row.version >= s.version || row.provenance !== 'system' || row.identity_locked !== 1
-    || !row.created_by.startsWith(`reviewed-builtin:${s.name}@`) || !row.created_by.endsWith(`:owner:${this.custodyKey}`)
+    || !row.created_by.startsWith(`reviewed-builtin:${s.name}@`) || !this.custodies.some(key => row.created_by.endsWith(`:owner:${key}`))
     || !['[]', JSON.stringify(s.required_tools)].includes(row.required_tools_json) || row.required_connectors_json !== '[]') continue;
    this.sql.exec('UPDATE skills SET version=?,trigger_types_json=?,trigger_condition=?,required_tools_json=?,required_connectors_json=?,body_markdown=?,created_by=?,created_at=? WHERE name=?',
     s.version,JSON.stringify(s.trigger_types),s.trigger_condition,JSON.stringify(s.required_tools),JSON.stringify(s.required_connectors),s.body_markdown,this.createdBy(s),s.created_at,s.name);
@@ -129,7 +133,7 @@ export class CuratedOwnerSkills {
   return row.admitted===1 && row.version===s.version && row.provenance==='system' && row.identity_locked===1 && row.provisional===0
    && row.trigger_types_json===JSON.stringify(s.trigger_types) && row.trigger_condition===s.trigger_condition
    && row.required_tools_json===JSON.stringify(s.required_tools) && row.required_connectors_json===JSON.stringify(s.required_connectors) && row.body_markdown===s.body_markdown
-   && row.created_by===this.createdBy(s) && row.created_at===s.created_at && row.effectiveness===1 && row.pinned===1 && row.invocations===0
+   && this.custodies.some(key => row.created_by===`${sourceOf(s.name,s.version)}:owner:${key}`) && row.created_at===s.created_at && row.effectiveness===1 && row.pinned===1 && row.invocations===0
    && row.last_used===null && row.last_curated_at===null && row.archived_at===null && ['active','archived'].includes(row.status);
  }
  private active(name:string):boolean {const s=this.skillFor(name); const row=this.stored(name); return s!==undefined && row!==undefined && this.authentic(row,s)&&row.status==='active';}

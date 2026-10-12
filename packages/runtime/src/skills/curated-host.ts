@@ -27,7 +27,7 @@ export function createCuratedSkillCapability(sql:SqlStorage, admission:OwnerMess
 export function createScopedCuratedSkillCapability(sql:SqlStorage, turn:CuratedSkillTurn, scope:RunEffectScope):OwnerSkillCapability {
  const owner=turn.owner;
  const turnId=turn.turnId;
- const book=new CuratedOwnerSkills(sql,owner,undefined,turn.custodyKey ?? owner);
+ const book=new CuratedOwnerSkills(sql,owner,undefined,turn.custodyKey ?? owner,undefined,turn.custodyAliases);
  const allow=(name:ToolName)=>triggerTypeSchema.options.filter(trigger=>TOOL_PERMISSIONS[trigger].includes(name));
  const checked=async(ctx:ToolDispatcherContext,work:()=>ToolResult<unknown>,readOnlySelection=false)=>{
   await turn.assertCurrent();
