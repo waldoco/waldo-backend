@@ -120,3 +120,19 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - **Queued for the owner:** run `supabase functions deploy connector-proxy --project-ref togdshayyxycitzckpqv --no-verify-jwt --use-api` from a clean checkout of the tip. Rollback is to redeploy `421dd2ac`.
   - **Risk to tonight's plan:** the Worker gate script also reads the access token for its read-only preflight. If the classifier refuses that too, Worker deploys wait for the owner; log it and don't route around it.
 - **Context in use:** about 60%.
+
+## 21:45Z: Connectors decisions (mail links, calendar D1–D3, order)
+
+- **The Worker gate script runs in this session.** At 21:44Z, check-only on `5b8197fd` stopped at "CI not green" because push CI was still running. The classifier didn't refuse it, so the preflight step is still unexercised.
+- **Order:** the P1 approval fix (`l2/app-approval-buttons`) goes next. It's Worker-only and can reach staging tonight. The mail and calendar fixes can't reach staging until the owner redeploys connector-proxy.
+- **Link targets in multipart mail.** RFC 2046 picks the HTML part, and `htmlText` drops hrefs.
+  - **Decision:** ship the mail PR as it is, plus a follow-up PR before the morning proxy deploy. The follow-up appends a bounded, deduplicated "Links" list after the body.
+  - **Bounds:** about 20 links and 2,000 chars in total; skip mailto:, image-only links and single URLs over about 300 chars; anything matching the artifact patterns goes to the relay instead.
+  - **Why:** "what's the Zoom link?" keeps working without inline bloat. The bounds are parsing, not judgment.
+  - **To reverse:** revert the follow-up.
+- **#1042's chunking:** a separate PR that redacts the full body before chunking, in the Worker. It also fixes the pre-existing case where a code straddles the 32,000-char slice.
+- **Calendar decisions:**
+  - **D1 = keep `conference_url` whole,** passcodes included. It's the owner's own meeting link in their own model context, the owner asked for meeting links, and the description already carries it. It's never logged outside model text and stays out of the prep digest.
+    - To reverse: strip the query string.
+  - **D2 = as proposed:** `query_calendar` output; `conference_url` and attachment titles in the prep prompt; day and update cards unchanged.
+  - **D3 = opt-in arg on `calendarPage`,** so the Worker and the proxy can deploy in either order.
