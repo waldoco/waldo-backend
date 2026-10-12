@@ -1606,3 +1606,14 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - #1093 LOW: `calendar_primary`.
   - The tip: `87b31948` plus #1093, without #1091.
   - Asks: probe 6 and 8 results. Relayed L4's two questions (movement minutes on staging; the zone-id design).
+- **16:25Z heartbeat:** the cron job is present and the brief is unchanged since 11 Oct 21:36Z. `beta-mvp` is `87b31948`. Staging `/healthz` returns `{"ok":true,"release":"614d1aff"}` [verified].
+- **L1's probes 6 and 8** were posted on #116 (comment 6128149432, 16:16Z), because L1's direct messages were held by its cap [reported; codes only].
+  - **Probe 6, The Close: not a pass.** The 16:00:00Z alarm composed: `composer_phase:ok ×5` and `health_context:ok:present`. No send was seen, but the tail viewer kept only 6 hops per event and there's no raw capture, so delivery can't be confirmed either way. The 14:00Z alarms show the same pattern.
+  - **Probe 8:** 0 `scheduled_hold`, `scheduled_drop` or `scheduled_admission` hops from 11:55Z to 16:15Z, with two short tail gaps. Five events hit the 6-hop cap.
+    - [inference, L1] Wave 2 holds or drops only for an app owner with an unconfirmed zone. Zero fits there being no such due job, but it doesn't prove the path ran.
+  - **The viewer now keeps up to 16 hops plus `hops_total`** (since 16:15:29Z), so probe 7 and later probes will show their terminal hops.
+  - **Deploy:** `87b31948` passes L1's gate (CI 6/6; 55 applied, 0 pending; no wrangler, migration or contract change). L1 is asking the owner in its session; #1093 isn't in it.
+  - **D14:** after this deploy the rollback target is still `02103423`, which has no guard, so E15 waits one more release.
+  - My earlier message to L1 assumed the deploy would wait for #1093. L1 and the owner decide; either order is fine.
+- **Sent L2 the #1091 fix** (delivered; its turn started). The text matches the 16:23Z queued note, plus the merge state and D14. My cross-session count is now about 10 of 10.
+- **Effect on the 17:00Z re-score:** The Close doesn't move (probe 6 isn't a pass), and W2 doesn't move (probe 8 shows no hold activity). Probe 6 is retried at the next Close with the 16-hop viewer.
