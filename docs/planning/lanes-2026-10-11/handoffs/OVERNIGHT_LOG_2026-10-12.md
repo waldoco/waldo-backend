@@ -1372,3 +1372,10 @@ I read the source delta over `2fc0e642` (+237/−57 across 6 files; about 120 so
   - It stays owner-merge.
 - **L2 OK'd L1's guard edits.** Skipping cancels is safe because `gateScheduleExecutors` cancels a disabled kind at dispatch (`schedule-preferences.ts:103-111`) [reported].
 - **#1079:** L2 asks for it to be closed as superseded after #1091 merges. It's L2's PR, so L2 should close it. Closing a PR is outward-facing, so I won't.
+
+## 12:54Z: heartbeat; usage pace warning
+
+- **State:** `beta-mvp` is `2d18e5e5`; staging is `614d1aff`. #1091 is a draft at `de6211c9`, CI running. No app PRs since 12:00Z.
+- **Usage:** the 5-hour window is at 34%, 85 minutes after its 11:30Z reset, which works out to about 24% an hour [inference]. At that pace it runs out around 15:40Z, before probe 6 at 16:00Z and before the 16:30Z reset.
+  - My context is at 74%, so cycles stay lean.
+  - Proposed: the lanes pace down (no subagents, fewer long turns) until 16:30Z, or the owner accepts a pause.
