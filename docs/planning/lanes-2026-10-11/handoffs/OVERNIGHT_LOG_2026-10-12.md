@@ -1072,3 +1072,25 @@ Staging `e37f60f3`, version `c7974404`. Codes and times only.
   - **#1086's dual-channel test was flaky.** L2 reproduced the flake deterministically, so it was a test-clock bug, not true flakiness. The fix sets the interval phase to the due occurrence (`phase_ms: sweepAt % 600000`, was `0`). The assertion is unchanged.
 - **Next:** CI at `fd792254`, then the advisor, then merge with `--match-head-commit`. The PR is no longer a draft. Wave 2 needs the owner's go in L1's session.
 - **Skills PR:** L2 is opening it as owner-merge. Its local wall had one owner-ingress run fail with `delivery_uncertain` (`telegram-relink-owner-do`, 8 cases). That run overlapped another worktree's tests, and the file passed 3/3 alone. L2 has logged this on #116.
+
+## 10:29Z: standing-grants ADR draft landed (E16); #1089 review started
+
+- **The draft:** `STANDING_GRANTS_ADR_DRAFT_2026-10-12.md`. I read it in full before committing.
+  - It proposes ADR-0085; the number is [inference], since brain `main` `23c4f99` ends at 0084.
+  - It builds on #932 (`5506de85`) and brain #34 (`13d60067`, unmerged), and lists eight departures from #932.
+- **v1 is calendar holds only:** attendee-free Waldo holds on the primary calendar, which can be created, moved or shortened, and removed only through Undo.
+  - Tasks are deferred: there is no task Undo, completions stay `connector_write`, and there is no reorder action.
+  - Sends, attendees, purchases, deletions and health shares can't be expressed in a grant.
+  - Coverage: WP-026 in full, given Form. WP-032, WP-033 and WP-046 for holds only. WP-025, WP-028, WP-030 and WP-047 in part.
+- **Questions for the owner, Q1–Q7. Q1 (taint) comes first:**
+  - Calendar reads are external-origin, and their taint latches for the rest of the turn (`tool-loop.ts:161-167`). So a rule of "any taint means a card" blocks every hold run.
+  - Recommended Q1(b): act only when every field is host-fixed and the host checks the time against the grant and free/busy. That amends ADR-0049.
+- **On the hold list:**
+  - a DO migration (a table and two ledger columns);
+  - an ADR-0008/0033 amendment;
+  - the brain PR, which only the owner merges;
+  - an app.v1 re-pin before anything is emitted.
+- **For L3 before any code:** confirm that the grant SQL and the effect-ledger KV share one `transactionSync` [inference in the draft].
+  - L3 is still unreachable; the owner needs to resume L3's session.
+- **One edit by me:** the draft notes that WP-034 and WP-061 also wait on autonomous moves (ten rows).
+- **#1089 (Weight, L1):** an independent review is running at `76d9bcaf`. L1 holds pushes, and the merge needs the owner's yes in L1's session.
