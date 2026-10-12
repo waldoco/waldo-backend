@@ -28,3 +28,17 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
      - This is the owner's 21:20Z ruling, relayed to the App session.
   3. **The orchestrator holds PR D's guard deletions or downgrades for the owner.**
      - Why: they change what blocks a merge, and posture.md treats process and security decisions as needing human-visible review.
+
+## 21:31Z: board post, lanes briefed, heartbeat repointed, two reviews running
+
+- **#1103:** posted the owner's rulings, the Mac lane map, the P1 cause and the handed-over E15 items (comment 6132960211).
+- **Lanes briefed:**
+  - **App** (`local_5eb95055`): R1–R14 follow Ansh's list wherever it covers them; up to 5 test sends are pre-approved; the board is #1103; merges are the orchestrator's. Its plan: #89 follow-ups, then B1, B2, the plain fixes P1–P13, and the P1 re-run.
+  - **Connectors** (the old L2): `CONNECTORS.md`, starting with the P1 approval fix. It was asked to push `l2/e15-followups` and `l2/e15-no-copy` for Ansh's A3.
+  - **L1:** stood down; deploys are the orchestrator's now (message delivered).
+- **Heartbeat:** the new cron `1880182e` (`3,23,43`) reads the 13 Oct pack. The old `29a6d33d` is deleted.
+- **#1102** (flaky run-loop test fix, test-only, +92/-92) is at `5c57cefb`, with CI 6/6 and CLEAN. Its review subagent is running.
+- **#1100** is now `655b77a7`, with CI 6/6 and CLEAN.
+  - It still contains the `v6` rename (`wrangler.jsonc`, `owner-do.ts`), so it's **not merged**: the owner's ruling puts the behaviour first, then the rename after a Simulator check.
+  - A review subagent is checking the merge resolution in `owner-turn.ts` and `tool-loop.ts` now. Its findings go to #1100 as PR comments, for the cloud lane's split.
+- **Usage:** the 5-hour window reset at 21:30Z (0%). The orchestrator's context is at 55%.
