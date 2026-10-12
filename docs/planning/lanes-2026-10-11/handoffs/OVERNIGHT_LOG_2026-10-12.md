@@ -2059,3 +2059,23 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - the restart-during-copy residual;
   - the production-flags regression.
 - **The result can't reach L2** until the owner types here, because sends are at the cap. It goes into this log, and the owner merges #1101 anyway.
+
+## 20:07Z: E15 (#1101) review passes, owner-merge; the owner typed (the cap reset)
+
+- **#1101 at `a2737ad1`:** CI is green (4 shards, pgTAP, verify). The independent review passed with no blocking reasons (one subagent, 20 calls).
+  - **Binding:** all ten pre-E15 `allowed` checks and the whole `defer` survive word for word in `routeFor`. A record no route claims ends `blocked/owner_binding`. Cross-owner tests cover both arms.
+  - **No double scheduling:** one executor map and one dispatch; the app's jobs run instead of Telegram's.
+  - **The dev copy** goes only to the same owner's own Telegram chat, once, and logs codes only.
+  - **Non-blocking, for L2:**
+    1. Make the dual-surface app send fail closed when no delivery is set. It depends today on admission setting `scheduledAppDelivery`.
+    2. Dormant isn't logged with its own code in the drain.
+    3. A directory outage at the delivery's own recheck ends `quarantined/send_unknown`.
+    4. The test at :326 should pin the terminal state.
+    5. The Telegram arm's `doName` and `bot` checks aren't re-pinned.
+    6. Four pieces of logic sit in the hot file.
+  - **For the owner before any production deploy:** with `CALENDAR_GROUNDED_PREP=0`, an owner on both Telegram and the app loses pre-meeting event briefs, which they get on Telegram today. Staging runs both flags at 1.
+  - **A conflict for the owner:** the founders' Build Bible (Ansh, 12 Oct, decision table) says "No copy stays on Telegram". E15, as ruled in this session, keeps one dev copy.
+- **The owner typed at about 19:58Z,** so cross-session sends reset. Their asks:
+  - read #1100, Ansh's "Waldo Build Bible" doc, the scorecard and the design system;
+  - say whether progress is meaningful and what's wrong with our build style;
+  - propose the next split and a new orchestrator session.
