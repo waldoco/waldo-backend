@@ -227,7 +227,7 @@ const WHATSAPP_PENDING_PREFIX = 'wa_pending:';
 // How often an unfinished WhatsApp payload is looked at again. A cadence, not a limit on how long a turn may run.
 const WHATSAPP_PENDING_CHECK_MS = 60_000;
 
-export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
+export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private readonly ownerBrowser: ReturnType<typeof ownerBrowserRuntime>;
   private browserTasks: ReturnType<typeof browserOwnerHost>;
   private readonly makeBrowserHost: (config?: BrowserOwnerConfiguration) => ReturnType<typeof browserOwnerHost>;
@@ -238,7 +238,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     this.browserTrial = browserTrial;
     this.ownerBrowser = ownerBrowserRuntime({ env, storage: ctx.storage, actualDoId: ctx.id.toString(), activeScope: () => this.activeScope });
     const makeBrowserHost = this.makeBrowserHost = (config?: BrowserOwnerConfiguration) => browserOwnerHost({ storage: ctx.storage, config, now: Date.now, newId: () => crypto.randomUUID(),
-      physical: () => { const doName = ctx.storage.kv.get<string>('do_name'); return { doName, subject: ctx.storage.kv.get<string>('telegram_subject'), matches: Boolean(doName && env.TELEGRAM_OWNER_DO && env.TELEGRAM_OWNER_DO.idFromName(doName).toString() === ctx.id.toString() && ctx.storage.kv.get<boolean>('telegram_unlinked') !== true) }; },
+      physical: () => { const doName = ctx.storage.kv.get<string>('do_name'); return { doName, subject: ctx.storage.kv.get<string>('telegram_subject'), matches: Boolean(doName && env.OWNER_DO && env.OWNER_DO.idFromName(doName).toString() === ctx.id.toString() && ctx.storage.kv.get<boolean>('telegram_unlinked') !== true) }; },
       approved: (approval, proposal) => {
         try {
           const row = ctx.storage.sql.exec<{ payload_json: string; decided_at: number }>("SELECT payload_json, decided_at FROM ledger WHERE id = ? AND kind = 'browser_submit' AND status = 'uncertain'", approval).toArray()[0];
@@ -290,8 +290,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         || !Number.isSafeInteger(Number(current.subject)) || Number(current.subject) <= 0) current.outcomeNoticeBlocked = 'invalid_record';
       else if (this.ctx.storage.kv.get<string>('telegram_subject') !== current.subject
         || this.ctx.storage.kv.get<string>('do_name') !== current.doName || this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] !== current.bot
-        || this.ctx.storage.kv.get<boolean>('telegram_unlinked') || !this.env.TELEGRAM_OWNER_DO
-        || this.env.TELEGRAM_OWNER_DO.idFromName(current.doName).toString() !== this.ctx.id.toString()) current.outcomeNoticeBlocked = 'owner_binding';
+        || this.ctx.storage.kv.get<boolean>('telegram_unlinked') || !this.env.OWNER_DO
+        || this.env.OWNER_DO.idFromName(current.doName).toString() !== this.ctx.id.toString()) current.outcomeNoticeBlocked = 'owner_binding';
       else work(current);
       if (current.outcomeNoticeBlocked) { current.state = 'quarantined'; current.body = ''; }
       this.ctx.storage.kv.put('telegram_owner_inbox_v1', rows);
@@ -343,7 +343,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (request.method !== 'POST' || !secret || !sameSecret(request.headers.get('x-waldo-inbox-secret') ?? '', secret)) return new Response('forbidden', { status: 403 });
     const subject = request.headers.get('x-waldo-telegram-subject') ?? '';
     const doName = request.headers.get('x-waldo-do-name') ?? '';
-    if (!/^\d+$/.test(subject) || !doName || !this.env.TELEGRAM_OWNER_DO || this.env.TELEGRAM_OWNER_DO.idFromName(doName).toString() !== this.ctx.id.toString()) return new Response('forbidden', { status: 403 });
+    if (!/^\d+$/.test(subject) || !doName || !this.env.OWNER_DO || this.env.OWNER_DO.idFromName(doName).toString() !== this.ctx.id.toString()) return new Response('forbidden', { status: 403 });
     let boundSubject = this.ctx.storage.kv.get<string>('telegram_subject');
     const boundName = this.ctx.storage.kv.get<string>('do_name');
     if (boundName && boundName !== doName) return new Response('forbidden', { status: 403 });
@@ -509,11 +509,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const raw=await request.text();if(raw.length>64_000)return new Response('too large',{status:413});
     let data:LinkBinding & {id:number;digest:string;hash:string};try{data=JSON.parse(raw)}catch{return new Response('bad request',{status:400})}
     const bot=this.env.TELEGRAM_BOT_TOKEN?.split(':')[0];
-    if(!data||data.bot!==bot||!/^\d+$/.test(data.bot)||!/^\d+$/.test(data.subject)||data.name!==`telegram-link:${bot}:${data.subject}`||!Number.isSafeInteger(data.id)||data.id<0||!/^[a-f0-9]{64}$/.test(data.digest)||!/^[a-f0-9]{64}$/.test(data.hash)||!this.env.TELEGRAM_OWNER_DO||this.env.TELEGRAM_OWNER_DO.idFromName(data.name).toString()!==this.ctx.id.toString())return new Response('forbidden',{status:403});
+    if(!data||data.bot!==bot||!/^\d+$/.test(data.bot)||!/^\d+$/.test(data.subject)||data.name!==`telegram-link:${bot}:${data.subject}`||!Number.isSafeInteger(data.id)||data.id<0||!/^[a-f0-9]{64}$/.test(data.digest)||!/^[a-f0-9]{64}$/.test(data.hash)||!this.env.OWNER_DO||this.env.OWNER_DO.idFromName(data.name).toString()!==this.ctx.id.toString())return new Response('forbidden',{status:403});
     try{const result=await new TelegramLinkInbox(this.ctx.storage).admit({bot:data.bot,subject:data.subject,name:data.name},data.id,data.digest,data.hash);return new Response(result==='conflict'?'conflict':'ok',{status:result==='conflict'?409:result==='capacity'?503:200});}catch{return new Response('admission unavailable',{status:503})}
   }
   private async drainLink(mode:LinkBinding):Promise<void>{
-    const live=()=>{const stored=this.ctx.storage.kv.get<LinkBinding>(LINK_MODE);return this.env.TELEGRAM_BOT_TOKEN?.split(':')[0]===mode.bot&&stored?.name===mode.name&&stored.bot===mode.bot&&stored.subject===mode.subject&&this.env.TELEGRAM_OWNER_DO?.idFromName(mode.name).toString()===this.ctx.id.toString();};
+    const live=()=>{const stored=this.ctx.storage.kv.get<LinkBinding>(LINK_MODE);return this.env.TELEGRAM_BOT_TOKEN?.split(':')[0]===mode.bot&&stored?.name===mode.name&&stored.bot===mode.bot&&stored.subject===mode.subject&&this.env.OWNER_DO?.idFromName(mode.name).toString()===this.ctx.id.toString();};
     const inbox=new TelegramLinkInbox(this.ctx.storage);
     try{
       await inbox.maintain();
@@ -547,7 +547,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
 
   private async appAuthority(name: string, hash: string) {
-    if (!name || this.env.TELEGRAM_OWNER_DO?.idFromName(name).toString() !== this.ctx.id.toString()
+    if (!name || this.env.OWNER_DO?.idFromName(name).toString() !== this.ctx.id.toString()
       || this.ctx.storage.kv.get<string>('do_name') !== name) throw new ClosedRunError();
     return appSessionAuthority(this.env)(name, hash);
   }
@@ -563,7 +563,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   // Scheduled work for an owner with an app binding asks the directory whether the account is still admitted. A revoked or
   // rejected account runs nothing and stays dormant; a directory outage runs nothing now and asks the alarm to try again.
   private async appOwnerLookup(): Promise<Readonly<{ kind: 'admitted'; authority: OwnerRuntimeAuthority } | { kind: 'dormant' } | { kind: 'retry' }>> {
-    const kv = this.ctx.storage.kv, doName = kv.get<string>('do_name'), owners = this.env.TELEGRAM_OWNER_DO;
+    const kv = this.ctx.storage.kv, doName = kv.get<string>('do_name'), owners = this.env.OWNER_DO;
     if (!doName || !owners || !this.appBound()) return { kind: 'dormant' };
     try {
       const authority = await ownerRuntimeAuthority(this.env).resolve({ doName, actualDoId: this.ctx.id.toString(), expectedDoId: name => owners.idFromName(name).toString(),
@@ -621,7 +621,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const fail=(status:number)=>Response.json({error:'unavailable'},{status,headers:{'cache-control':'no-store'}});
     const name=request.headers.get('x-waldo-do-name')??'',hash=request.headers.get('x-waldo-app-session-hash')??'',given=request.headers.get('x-waldo-fence-sig')??'';
     const secret=this.env.WALDO_ROUTER_HMAC_SECRET;
-    if(request.method!=='POST'||!secret||!name||!/^[a-f0-9]{64}$/.test(hash)||this.env.TELEGRAM_OWNER_DO?.idFromName(name).toString()!==this.ctx.id.toString())return fail(403);
+    if(request.method!=='POST'||!secret||!name||!/^[a-f0-9]{64}$/.test(hash)||this.env.OWNER_DO?.idFromName(name).toString()!==this.ctx.id.toString())return fail(403);
     const expected=new TextEncoder().encode(await appSessionFenceSignature(secret,name,hash)),supplied=new TextEncoder().encode(given);
     let diff=expected.length^supplied.length;for(let i=0;i<expected.length;i+=1)diff|=expected[i]!^(supplied[i]??0);
     if(diff!==0)return fail(403);
@@ -633,7 +633,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   // owner and offers no connect link.
   private async calendarDemand(request: Request): Promise<Response> {
     const headers={'cache-control':'no-store'};
-    const range=await verifiedDemandRequest(request,this.env.WALDO_ROUTER_HMAC_SECRET,name=>this.env.TELEGRAM_OWNER_DO?.idFromName(name).toString()===this.ctx.id.toString()&&this.ctx.storage.kv.get<string>('do_name')===name);
+    const range=await verifiedDemandRequest(request,this.env.WALDO_ROUTER_HMAC_SECRET,name=>this.env.OWNER_DO?.idFromName(name).toString()===this.ctx.id.toString()&&this.ctx.storage.kv.get<string>('do_name')===name);
     if(!range)return Response.json({error:'unavailable'},{status:403,headers});
     const runtime=this.setup('app'),started=Date.now(),trace=`calendar-demand:${started}`;
     try{
@@ -645,7 +645,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async appRoute(request: Request): Promise<Response> {
     const path=new URL(request.url).pathname,name=request.headers.get('x-waldo-do-name')??'',hash=request.headers.get('x-waldo-app-session-hash')??'';
     const fail=(status=403)=>Response.json({error:'unavailable'},{status,headers:{'cache-control':'no-store'}});
-    if(!name||this.env.TELEGRAM_OWNER_DO?.idFromName(name).toString()!==this.ctx.id.toString())return fail();
+    if(!name||this.env.OWNER_DO?.idFromName(name).toString()!==this.ctx.id.toString())return fail();
     const previous=this.ctx.storage.kv.get<string>('do_name');
     if(previous!==undefined&&previous!==name)return fail();
     // Authentication and physical routing precede the first identity write.
@@ -713,7 +713,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (path !== MEMORY_GRAPH_PATH && doName && this.ctx.storage.kv.get<string>('do_name') !== doName) {
       // Same rule as /enqueue and the app route: only a name that addresses this very object may bind it, and never a second name.
       if (this.ctx.storage.kv.get<string>('do_name') !== undefined
-        || this.env.TELEGRAM_OWNER_DO?.idFromName(doName).toString() !== this.ctx.id.toString()) return new Response('forbidden', { status: 403 });
+        || this.env.OWNER_DO?.idFromName(doName).toString() !== this.ctx.id.toString()) return new Response('forbidden', { status: 403 });
       this.ctx.storage.kv.put('do_name', doName);
     }
     if (new URL(request.url).pathname === '/grant-console' && request.method === 'POST') return new Response(await consoleAccess(this.ctx.storage).grant());
@@ -1004,7 +1004,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const posted = url.pathname === CONSOLE_PATH && request.method === 'POST' ? String((await request.formData()).get('t') ?? '') : '';
     if (posted) {
       const routed = posted.startsWith('c1.') && this.env.WALDO_ROUTER_HMAC_SECRET ? await readConsoleTicket(posted, this.env.WALDO_ROUTER_HMAC_SECRET) : null;
-      if (posted.startsWith('c1.') && (!routed || this.env.TELEGRAM_OWNER_DO?.idFromName(routed.owner).toString() !== this.ctx.id.toString())) return new Response('Invalid console link.', { status: 403 });
+      if (posted.startsWith('c1.') && (!routed || this.env.OWNER_DO?.idFromName(routed.owner).toString() !== this.ctx.id.toString())) return new Response('Invalid console link.', { status: 403 });
       const session = await this.serial(() => access.redeem(routed?.token ?? posted, sessionCookie(request)));
       if (!session) return new Response('This console link is used or expired. Send /console to Waldo for a new one.', { status: 403 });
       return new Response(null, { status: 303, headers: { location: CONSOLE_PATH, 'set-cookie': `${CONSOLE_COOKIE}=${session}; Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=43200` } });
@@ -1303,7 +1303,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const subject = this.ctx.storage.kv.get<string>('telegram_subject');
         const telegramBound = doName && subject && /^\d+$/.test(subject) && Number.isSafeInteger(Number(subject)) && Number(subject) > 0
           && this.ctx.storage.kv.get<boolean>('telegram_unlinked') !== true
-          && this.env.TELEGRAM_OWNER_DO && this.env.TELEGRAM_OWNER_DO.idFromName(doName).toString() === this.ctx.id.toString();
+          && this.env.OWNER_DO && this.env.OWNER_DO.idFromName(doName).toString() === this.ctx.id.toString();
         const appOwner = telegramBound ? null : await this.appOwnerLookup();
         if (appOwner?.kind === 'admitted') { channel = 'app'; this.scheduledAppDelivery = this.appDeliveryFor(appOwner.authority); }
         if (!telegramBound && appOwner?.kind !== 'admitted') {
@@ -1956,7 +1956,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const currentTaskOwnerKey = async () => {
       const currentOwner = resolveOwnerTelegramId(identity.get<string>('telegram_subject'), this.env, consoleAuth(this.env) !== null);
       if (channel !== 'telegram' || owner <= 0 || currentOwner !== owner || identity.get('telegram_unlinked') === true
-        || !identity.get<string>('do_name') || this.env.TELEGRAM_OWNER_DO?.idFromName(identity.get<string>('do_name')!).toString() !== this.ctx.id.toString()) throw new ClosedRunError();
+        || !identity.get<string>('do_name') || this.env.OWNER_DO?.idFromName(identity.get<string>('do_name')!).toString() !== this.ctx.id.toString()) throw new ClosedRunError();
       return `telegram:${this.ctx.id.toString()}:${owner}`;
     };
     const browserSources = browserTaskSourceCustody(storage.sql, storage.kv, currentTaskOwnerKey);
@@ -2152,7 +2152,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         try { return await ownerMessageAdmission({
         lookup: browserOwnerBindingReader({ env: this.env, storage, actualDoId: this.ctx.id.toString() }, doName!, subject!), scope,
         locator: { environment: this.env.WALDO_ENVIRONMENT ?? '', namespace: this.env.WALDO_OWNER_DO_NAMESPACE ?? '', doName: doName!, doId: this.ctx.id.toString() },
-        actualDoId: this.ctx.id.toString(), expectedDoId: name => this.env.TELEGRAM_OWNER_DO!.idFromName(name).toString(), allowedDoNames: [trial.policy.doName],
+        actualDoId: this.ctx.id.toString(), expectedDoId: name => this.env.OWNER_DO!.idFromName(name).toString(), allowedDoNames: [trial.policy.doName],
         provider: 'telegram', subject: subject!, text: turn.text!, occurrenceKey: occurrence!.id, occurredAt: occurrence!.admittedAt, now: Date.now,
       }); } catch {
           await assertOwnerIdentity();
@@ -2507,7 +2507,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const bound = channel === 'telegram' ? identity.get<string>('telegram_subject') === String(owner) && this.env.TELEGRAM_BOT_TOKEN === token
           : channel === 'app' && !!doName && identity.get<string>('app_subject') === String(owner) && String(owner) === String(appSubjectFor(doName));
         if (!bound || !doName || owner <= 0 || identity.get<boolean>(`${channel}_unlinked`) === true || timezone !== clock.timezone
-          || !this.env.TELEGRAM_OWNER_DO || this.env.TELEGRAM_OWNER_DO.idFromName(doName).toString() !== this.ctx.id.toString()
+          || !this.env.OWNER_DO || this.env.OWNER_DO.idFromName(doName).toString() !== this.ctx.id.toString()
           || !currentAccounts.some(account => account.id === connectionId && googleHas(account.scopes, 'calendar'))) throw new Error('calendar prep authority changed');
         return doName;
       };

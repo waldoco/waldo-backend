@@ -6,7 +6,7 @@ import { backupAndCopySpots, LEGACY_BACKUP, markCoreFilesMigrated, pendingCoreFi
 
 let sequence = 0;
 const withSql = <T>(fn: (sql: SqlStorage, transaction: <R>(work: () => R) => R) => T) =>
-  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`claims-${sequence++}`)), (_instance, state) => fn(state.storage.sql, (work) => state.storage.transactionSync(work)));
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`claims-${sequence++}`)), (_instance, state) => fn(state.storage.sql, (work) => state.storage.transactionSync(work)));
 
 const ops = (partial: Record<string, unknown>) => JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null, ...partial });
 const AT = '2026-09-24T04:00:00Z';

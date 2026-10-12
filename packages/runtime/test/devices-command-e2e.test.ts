@@ -6,7 +6,7 @@ import { newMessageId } from '../src/devices/command-store';
 import { base64url, frameSignatureBase, httpSignatureBase, sha256Hex } from '../src/devices/signing';
 import { routerSignature } from '../src/identity/owner-directory';
 import { consoleAccess } from '../src/channels/console';
-import type { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
+import type { OwnerDO } from '../src/channels/owner-do';
 import type { DeviceBridgeDO } from '../src/devices/device-bridge-do';
 afterEach(() => vi.unstubAllGlobals());
 it('round-trips owner commands, reconciles old results before new work, and re-receipts across restart', async () => {
@@ -35,7 +35,7 @@ it('round-trips owner commands, reconciles old results before new work, and re-r
     else throw new Error(`Unexpected fictional RPC ${path}`);
     return Response.json(response);
   });
-  const ownerStub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(owner)) as DurableObjectStub<TelegramOwnerDO>;
+  const ownerStub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(owner)) as DurableObjectStub<OwnerDO>;
   const deviceStub = env.DEVICE_BRIDGE_DO!.get(env.DEVICE_BRIDGE_DO!.idFromName(device)) as DurableObjectStub<DeviceBridgeDO>;
   let session = '', csrf = '';
   await runInDurableObject(ownerStub, async (_instance, state) => { state.storage.kv.put('do_name', owner); session = await consoleAccess(state.storage).grant(); csrf = (await consoleAccess(state.storage).session(session))!.csrf; });

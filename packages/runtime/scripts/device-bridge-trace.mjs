@@ -210,8 +210,8 @@ try {
   const rpcPort = await listen(stub), workerPort = await freePort();
   assert.notEqual(workerPort, 8787, 'trace must avoid the live local agent');
   // A dedicated generated config prevents consuming an existing .dev.vars or hosted binding.
-  const classes = ['RuntimeProbeDO', 'RunLoopDO', 'TracerDO', 'TelegramOwnerDO', 'DeviceBridgeDO'];
-  const bindings = ['RUNTIME_DO', 'RUN_LOOP_DO', 'TRACER_DO', 'TELEGRAM_OWNER_DO', 'DEVICE_BRIDGE_DO'];
+  const classes = ['RuntimeProbeDO', 'RunLoopDO', 'TracerDO', 'OwnerDO', 'DeviceBridgeDO'];
+  const bindings = ['RUNTIME_DO', 'RUN_LOOP_DO', 'TRACER_DO', 'OWNER_DO', 'DEVICE_BRIDGE_DO'];
   const config = { name: 'waldo-device-bridge-local-trace', main: join(runtime, 'src/index.ts'), compatibility_date: '2026-06-16',
     vars: { WALDO_ENVIRONMENT: 'preview', WALDO_RELEASE: 'local-source-trace', WALDO_OWNER_DO_NAMESPACE: '', WALDO_OWNER_TELEGRAM_ID: '',
       WALDO_EGRESS_ALLOWLIST: '', LANGFUSE_CAPTURE_TEXT: 'false', SUPABASE_PROJECT_URL: `http://127.0.0.1:${rpcPort}`,
