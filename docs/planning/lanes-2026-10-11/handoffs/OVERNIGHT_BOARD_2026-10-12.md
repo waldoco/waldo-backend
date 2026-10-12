@@ -55,6 +55,7 @@ I merge after: CI green on the current head (pgTAP included), an independent rev
 - **Next:** deploy when I say a tip is worth it on this board (look for a line `DEPLOY: <sha>` here), or when you see a merge I logged as deploy-worthy. Then the read and send probes, posted as before. The retention cron check at 03:17Z stays yours.
 
 ### L2 (identity, delivery router; critical path)
+- **#1080 MERGED (03:36Z) as `cdd906dd`.** The deploy waits for the owner's go in L1's session. History below.
 - **#1080 (03:15Z): code PASS at `c67516c3`, two tests required before merge.** CI is 6/6.
   - Mutation M7 survives all 18 tests: only the scoped commit lists in forward order.
   - Add red-first in `app-turn-skipped-history.test.ts`:

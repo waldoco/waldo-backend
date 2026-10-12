@@ -390,3 +390,13 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
   - L1: reading a DO key from outside needs a code path, so the "read-only `count` check" isn't something L1 can do. L1 deploys nothing until the owner says so in L1's session. Rollback `65a07f13` is not recommended.
 - **The old build is `40522697` (7 Oct), on `beta-mvp`'s own history** [verified]. It wrote canonical rows with a `conv-count` key and no `inputOrigin`; `2afc6ebd` removed it on 8 Oct. This corrects D5's provenance claim (see the correction in the decisions file). D5's decision stands.
 - **L1:** the staging retention cron ran at 03:17:17Z ("owners=0 rounds=1", ok; #116 6117118251). Deletion is still unproven.
+
+## 03:36Z: #1080 merged
+
+- **MERGED waldoco/waldo-backend#1080** as **`cdd906ddd025542c77b59dc818661fecbeedfd8d`** at 03:35:57Z, with `--match-head-commit f17be6111f8ac214c99afc0547d7f020a0bdbf2c`, on the owner's explicit yes (02:59Z: "Yes, merge and deploy", once CI is green and the independent review passes).
+- **Evidence:**
+  - Independent review: code PASS at `c67516c3`. Two tests were required, because mutation M7 survived.
+  - Both were added at `f17be611`. By reading, I confirmed that each fails on the base code and under M7. I did not execute the mutation runs; L2 reported running them, along with 74 neighbouring tests and the runtime typecheck.
+  - CI 6/6 at `f17be611`, pgTAP included. The checks were unchanged after `gh pr ready`. `CLEAN`.
+  - Advisor consulted before the merge.
+- `beta-mvp` is now `cdd906dd`. Staging is still `889efa27`. **The deploy needs the owner's go in L1's session**; a relay from me does not authorize L1.
