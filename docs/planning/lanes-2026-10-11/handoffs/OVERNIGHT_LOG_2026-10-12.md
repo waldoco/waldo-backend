@@ -1828,3 +1828,22 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
     - #1091 stores the running taint and checks `'external'` at write (:168) and read (:133), per L2.
   - **#1079:** L2 leaves it for the owner, since closing needs the owner's yes in L2's session.
   - The delta review is running (about 12 calls). It includes whether deleting the legacy cache rows is acceptable.
+- **18:06Z, #1099 review: PASS on the code** at `bbae8681` (CI 6/6; CLEAN; merge-tree clean against `cf38b379`).
+  - **Detection is correct:** intervals are half-open (`o.end > w.start`, with timestamps normalized by `toISOString`); the cross-day case is handled (`o.day !== w.day`); the sweep catches non-adjacent pairs; each signal is checked separately; invalid windows are skipped.
+  - **A flagged day counts as missing everywhere:** on the target day Form is unavailable (`form.ts:39`); the daylight, motion and stress baselines need at least 8 buckets each and drop null days; Weight and Recovery don't read `hourly`.
+  - **Bounded:** at most 8,000 rows per source, and the check runs once per run. No destination is widened and nothing new is logged.
+  - **Merge gate:** the PR body says the owner's yes "is being asked in L1's session before merge". So it isn't merged; it waits for L1 to report that yes.
+  - **MEDIUM (tracking):** #1089 (`4b98b1d7`) merges cleanly with #1099, so nothing forces the `physicalLoad` guard. A flagged day with a workout would show a workout-only load as complete. Only #1099's body records this, not #1089's or #116.
+    - **Fix:** L1 records it on #1089. Whichever lands second adds `overlapped.has(day.day) ? null : physicalLoadOf(day)` with a test.
+    - **Owner batch:** before merging #1089, check whether #1099 is merged and the guard is in.
+  - **LOW, ADR-0081:54** ("a change to a component formula or normalization creates a new version; old rows are never silently reinterpreted"): leaving a flagged baseline day out can change today's and yesterday's Form under the same `algorithm_version`.
+    - This is defensible: input admission only, the producer's two-day rewrite, and Form is `candidate_unaccepted`.
+    - It goes to the owner with the pending yes.
+  - **LOWs (follow-up):**
+    - held-back windows and missing ones look the same (carry a flag on `DayRecord`);
+    - the check runs before `withinLocalDay`;
+    - no test for a non-adjacent overlap or for `zone_changed`;
+    - `overlapped` is returned but unused;
+    - the `WINDOW_SIGNALS` name clashes with the contract's list.
+- **Queued for L1** (cap reached):
+  > "#1099 code PASS (bbae8681). Not merged until you report the owner's yes from your session. Please record the #1089 guard on #1089's body, since nothing forces it. Put the ADR-0081:54 version question to the owner with the yes. LOWs: the DayRecord flag, withinLocalDay ordering, non-adjacent and zone_changed tests, the unused overlapped, and the WINDOW_SIGNALS name."
