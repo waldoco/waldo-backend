@@ -1617,3 +1617,10 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - My earlier message to L1 assumed the deploy would wait for #1093. L1 and the owner decide; either order is fine.
 - **Sent L2 the #1091 fix** (delivered; its turn started). The text matches the 16:23Z queued note, plus the merge state and D14. My cross-session count is now about 10 of 10.
 - **Effect on the 17:00Z re-score:** The Close doesn't move (probe 6 isn't a pass), and W2 doesn't move (probe 8 shows no hold activity). Probe 6 is retried at the next Close with the 16-hop viewer.
+- **16:35Z heartbeat:** cron present. `beta-mvp` `87b31948`. Staging `614d1aff` (L1 is busy, likely on the deploy ask). #1093 is unchanged at `ceac4c5f`. #1088 and #1089 wait for the owner.
+  - **L2, #1091 fix (from L2's transcript; its send is pending the wall):**
+    - The fix is `3ca41626`, local. Each stored row records whether the turn had already read outside content when the result arrived. The change is in the tool loop; the ledger is the only reader.
+    - Two red-first tests: a mail-copied reminder and forget note, and a reminder set while replying to an outside message. Neither reaches the next turn, and the desk line still shows. Mutations catch 3 of 3, and the neighbouring suites pass 114 tests.
+    - The base is merged cleanly (`17e99fc6`). The full wall is running; push and the head come after it.
+  - **Correction to the review's LOW 5:** L2 saw this same fixture refuse `send_message` under the D15 seed. That matches the code: the registry gate keys on `PRIVILEGED_ACTION_TOOLS` plus `toolArgSourceTaint`, not `autonomy_gated` (`hooks/registry.ts:432-447`), and `send_message` is privileged. So the send test does catch a seed, and LOW 5 is withdrawn. The red count is 13 of 19 (L2 agrees).
+  - **#116, iMessage lane (comment 6128311027):** #1017 is rebased onto `beta-mvp` as draft #1095 and handed back to Ashish on the owner's instruction. It isn't in my gate: it's a draft, and its DO migration is on the hold list.
