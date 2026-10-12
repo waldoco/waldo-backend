@@ -499,3 +499,10 @@ Still open:
 - E5: the APNs key, the owner's task.
 - E10: copy.
 - E11: L3's batch, in L3's session. L3 isn't in `ListAgents`, and its socket is stale.
+
+## 04:54Z: heartbeat
+
+- Staging is on `cdd906dd` [verified].
+- #1076 moved to `eb959538` at 04:47Z. CI is running (4 of 6 green), and the PR is still a draft. L2 is updating it under E4.
+- No new #116 comments since 04:40Z.
+- L3 is still absent from `ListAgents`. Nothing is ready to merge.
