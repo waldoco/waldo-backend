@@ -1501,3 +1501,7 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - **L1:** the #1092 scenario fake and the wording fixes. Delivered.
   - **L4:** the app #86 fixes and the zone follow-up. Queued.
 - **15:16Z, app #86 merged as `108e76bc`** on the owner's yes in L4's session (#116 comment 6127132595). It went in before my review reached L4, because the message cap held it. So main carries the MEDIUM watermark walk-back (`runner.ts:153`) and the `!unasked` issue. L4 is asked to put a follow-up PR with both fixes before any tester build, ahead of refresh-while-open. L1 is still checking that staging accepts `movement_duration`.
+- **15:21Z, probe 5** [reported by L4]: the texts sent were "Move my 6 pm to 7." at 12:25:35Z and "Today." at 12:33:52Z. Both replies said Waldo couldn't identify a 6 pm event in what it could see.
+  - Hypotheses (b), a prompt mismatch, and (c), the event already started, are ruled out. That leaves (a): the read didn't return the event, most likely because it isn't on the connected account's primary calendar.
+  - The owner chose a rerun with an event 2+ hours out on the test account's primary calendar.
+- **App #86 follow-up** (L4): the hold uses `Math.max`; the no-hold is scoped to the `not_asked` kind; a failed check rejects; Allow during a run queues a forced run. A source test guards the per-kind wrapper. The zone-id issue goes to L1 as a design question.
