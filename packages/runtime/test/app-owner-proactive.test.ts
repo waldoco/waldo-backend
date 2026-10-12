@@ -179,6 +179,17 @@ describe('proactive work for an owner who only uses the app', () => {
     expect(wire.telegramSent).toBe(0);
   });
 
+  it.each([['card.time'], ['card.pin']] as const)('%s from the app controls arms a day card only once a zone is confirmed', async action => {
+    await withAppOwner(`proactive-${action}-unconfirmed`, {}, async (owner, state) => {
+      expect(await owner.setup('app').act({ action, id: 'card:close', value: '22:15' })).toBe(true);
+      expect(schedule(state)['card:close']?.status ?? 'none').not.toBe('armed');
+    });
+    await withAppOwner(`proactive-${action}-confirmed`, { zone: 'UTC', confirmed: true }, async (owner, state) => {
+      expect(await owner.setup('app').act({ action, id: 'card:close', value: '23:59' })).toBe(true);
+      expect(schedule(state)['card:close']?.status).toBe('armed');
+    });
+  });
+
   it('an event-brief sweep armed by the Telegram runtime is cancelled the first time the app alarm meets it, with one trace row', async () => {
     await withAppOwner('proactive-brief-drop', { zone: 'UTC', confirmed: true }, async (owner, state) => {
       const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());

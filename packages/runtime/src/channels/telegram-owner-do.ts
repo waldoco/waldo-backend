@@ -2742,7 +2742,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           else {
             if (!isClock(value)) return false;
             if (action === 'card.pin') plans.pin(card.id, value);
-            await applyDayPlan(scheduler, plans, clock.timezone, now, [{ card: card.id, time: value, reason: action === 'card.pin' ? 'pinned by you' : 'set by you for today' }], action === 'card.pin', schedPrefs.enabled('daily_brief'));
+            await applyDayPlan(scheduler, plans, clock.timezone, now, [{ card: card.id, time: value, reason: action === 'card.pin' ? 'pinned by you' : 'set by you for today' }], action === 'card.pin', schedPrefs.enabled('daily_brief') && armable('daily_brief'));
           }
         }
         // consoleActionTraceDetail strips the free-form form id before it can reach the
