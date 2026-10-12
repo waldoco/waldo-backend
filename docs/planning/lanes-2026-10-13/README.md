@@ -95,7 +95,10 @@ https://github.com/waldoco/waldo-backend/issues/1103
 1. #1100's behaviour PR.
 2. A Simulator check.
 3. The rename PR, deployed on its own.
-4. Connectors' #1101 follow-up PR, rebased once onto `owner-do.ts`.
+4. #1108 (A1: scheduled jobs under the owner principal), rebased onto the rename, then a Simulator check that scheduled work still lands in Main chat for the app-bound owner.
+5. Connectors' #1101 follow-up PR, rebased once onto `owner-do.ts`.
+
+No PR in this list merges early, even when GitHub shows it CLEAN.
 
 Until the rename has merged, no Mac session edits that file. After that, announce any edit on #1103 first.
 

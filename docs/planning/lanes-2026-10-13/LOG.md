@@ -305,3 +305,23 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - The fix: check the not-before, call `keepServerWait` on failure, and add a test.
 - **Merge order is now:** #92 once its Simulator line is in; then #93 and #94 once fixed; then #95, rebased.
 - All reviews are posted on the PRs.
+
+## 22:47Z heartbeat: app CI merged; #1108 in review; owner-DO order pinned
+
+- **Merged app #96 (CI: typecheck and unit tests on PRs into `main`) as `212e4b31`.**
+  - **Review:** deterministic conformance checks instead of a subagent.
+    - All three pinned action SHAs resolve to their tags [verified].
+    - The trigger is `pull_request`, not `pull_request_target`.
+    - Permissions are `contents: read`, with `persist-credentials: false` and `--ignore-scripts`.
+    - It ran green on its own PR.
+  - posture.md counts "changing CI/CD pipelines" as destructive. I read this additive, read-only check, which the plan called for and which deleting one file reverts, as covered by the owner's merge ruling (as with the Edge Function).
+  - #93–#95 get CI on their next push after retargeting. #92 relies on the author's local results unless it's pushed again.
+- **#1108** (Ansh's cloud lane A1: scheduled jobs under the owner principal; owner DO, `owner-turn`, identity, contracts intent) is open at `a463b18f`.
+  - Its body says to merge after #1100's behaviour PR.
+  - A review subagent is running, checking first for #1100's thread-fork bug class in scheduled jobs and for fail-closed admission.
+- **Owner-DO landing order pinned in the README:** #1100 behaviour → Simulator check → rename → #1108 (rebased, plus a Simulator check that scheduled work lands in Main chat) → Connectors' E15 follow-ups.
+- **Connectors on #1103 (6133719132):**
+  - **The "duplicate `set_reminder`" is not a bug.** The prompt asked for two reminders, both fired, and the first call failed on `invalid_args` and was corrected.
+  - **"Gmail beyond 60" has no cap to lift.** Both tools page, and the model stopped after two pages and said so.
+  - Both items are closed.
+- **P1:** no result yet, about 40 minutes after the go. Next cycle: if there's still none on #1103 or #92, repeat the go on #92, to be run on the saved `60fce743` build before more PR-head installs.
