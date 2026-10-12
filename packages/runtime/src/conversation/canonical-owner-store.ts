@@ -6,7 +6,7 @@ import { stableJson } from '../context-composer/canonical';
 import { redactSecretUrls } from '../channels/egress-guard';
 
 export type CanonicalHistoryStorage = Pick<DurableObjectStorage, 'get' | 'list' | 'put'> & {
-  kv?: Pick<DurableObjectStorage['kv'], 'get' | 'put'>;
+  kv?: Pick<DurableObjectStorage['kv'], 'get' | 'put' | 'list'>;
 };
 type Witness = Readonly<{ lineage: 'canonical_v1'; principal_ref: string; tenant_ref: string; entry: ConversationEntry }>;
 const writesInProgress = new WeakMap<object, Promise<unknown>>();
@@ -38,9 +38,22 @@ const shapeFault = (entry: ConversationEntry): CanonicalShapeCheck | null => {
   return null;
 };
 export type CanonicalSkip = Readonly<{ count: number; unwitnessed: number }>;
-export type CanonicalHistoryRead = Readonly<{ entries: readonly ConversationEntry[]; leafId: string | null; skipped: Readonly<Partial<Record<CanonicalShapeCheck, CanonicalSkip>>> }>;
+// What a read left out: rows per failed check, loaded rows whose stored parent was left out, and whether the stored leaf was.
+export type CanonicalSkipped = Readonly<{ checks: Readonly<Partial<Record<CanonicalShapeCheck, CanonicalSkip>>>; orphans: number; leaf: boolean }>;
+export type CanonicalHistoryRead = Readonly<{ entries: readonly ConversationEntry[]; leafId: string | null; skipped: CanonicalSkipped }>;
 
-export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage, context: Pick<OwnerContextCapability, 'invocation' | 'assertCurrent'>): ConversationStore & Readonly<{ readForDisplay(): Promise<CanonicalHistoryRead> }> {
+// The fixed code for each canonical-history fault. A Map, so an error message can never select an inherited member.
+const FAULT_CODES = new Map([
+  ['canonical history owner mismatch', 'history_owner'], ['canonical history entry invalid', 'history_invalid'],
+  ['canonical history witness mismatch', 'history_witness'], ['canonical history leaf mismatch', 'history_leaf'],
+  ['canonical history input conflict', 'history_conflict'],
+]);
+export const canonicalHistoryFault = (error: unknown): string | null => error instanceof Error ? FAULT_CODES.get(error.message) ?? null : null;
+// Log lines for rows a read left out: fixed codes and counts, never an id or a row's text.
+export const skippedRowLines = (hop: string, skipped: CanonicalSkipped) => Object.entries(skipped.checks).map(([check, tally]) =>
+  ({ hop, ok: true, code: 'history_rows_skipped', check, count: tally!.count, unwitnessed: tally!.unwitnessed, orphans: skipped.orphans, leaf: skipped.leaf }));
+
+export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage, context: Pick<OwnerContextCapability, 'invocation' | 'assertCurrent'>, onSkipped?: (skipped: CanonicalSkipped) => void): ConversationStore & Readonly<{ readForDisplay(): Promise<CanonicalHistoryRead> }> {
   const principal = context.invocation.verified_authority.principal_ref;
   const tenant = context.invocation.verified_authority.tenant_ref;
   const prefix = `canonical-owner-v1:${principal}:${tenant}:`;
@@ -53,19 +66,22 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
   const witness = (entry: ConversationEntry): Witness => ({ lineage: 'canonical_v1', principal_ref: principal, tenant_ref: tenant, entry });
   const matches = (receipt: Witness, entry: ConversationEntry) => receipt.lineage === 'canonical_v1' && receipt.principal_ref === principal
     && receipt.tenant_ref === tenant && stableJson(receipt.entry) === stableJson(entry);
-  // Strict for turns. For display, a row that fails the shape check is left out and counted instead of failing the read,
-  // whether its witness matches or is absent: a skipped row never loads as context. A witness that differs, an owner
-  // mismatch, a duplicate id, and any shape-valid row without its exact witness stay fatal.
-  const read = async (skipShapeFaults: boolean): Promise<CanonicalHistoryRead> => {
+  // From the last read: ids it left out, which no new row may take, and each row it re-linked, which is saved back as stored.
+  let leftOut: ReadonlySet<string> = new Set();
+  let relinked: ReadonlyMap<string, Readonly<{ stored: ConversationEntry; loaded: ConversationEntry }>> = new Map();
+  // A row that fails the shape check is left out and counted instead of failing the read, whether its witness matches or is
+  // absent: it never loads as context. A witness that differs, an owner mismatch, a duplicate id, and any shape-valid row
+  // without its exact witness stay fatal. For a turn, a row whose parent was left out hangs on the nearest loaded row above
+  // it, in memory only; the page shows each row with its stored parent.
+  const read = async (relink: boolean): Promise<CanonicalHistoryRead> => {
     await context.assertCurrent();
     const rows = await storage.list<ConversationEntry>({ prefix: `${prefix}conv:` });
     const entries: ConversationEntry[] = [];
-    const ids = new Set<string>(), seen = new Set<string>(), left = new Set<string>();
-    const skipped: Partial<Record<CanonicalShapeCheck, { count: number; unwitnessed: number }>> = {};
+    const ids = new Set<string>(), seen = new Set<string>(), left = new Map<string, string | null>();
+    const checks: Partial<Record<CanonicalShapeCheck, { count: number; unwitnessed: number }>> = {};
     for (const entry of rows.values()) {
       if (!entry || entry.ownerId !== principal) throw new Error('canonical history owner mismatch');
       const fault = shapeFault(entry);
-      if (fault !== null && !skipShapeFaults) throw new Error('canonical history entry invalid');
       const receipt = await storage.get<Witness>(witnessKey(entry.id));
       if (seen.has(entry.id)) throw new Error('canonical history witness mismatch');
       seen.add(entry.id);
@@ -73,25 +89,54 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
         // stableJson refuses undefined values, which a shape-faulted row may hold; plain JSON equality decides a row that never loads.
         if (receipt && (receipt.lineage !== 'canonical_v1' || receipt.principal_ref !== principal || receipt.tenant_ref !== tenant
           || JSON.stringify(receipt.entry) !== JSON.stringify(entry))) throw new Error('canonical history witness mismatch');
-        const tally = skipped[fault] ??= { count: 0, unwitnessed: 0 };
+        const tally = checks[fault] ??= { count: 0, unwitnessed: 0 };
         tally.count += 1; if (!receipt) tally.unwitnessed += 1;
-        left.add(entry.id); continue;
+        left.set(entry.id, typeof entry.parentId === 'string' ? entry.parentId : null); continue;
       }
       if (!receipt || receipt.lineage !== 'canonical_v1' || receipt.principal_ref !== principal || receipt.tenant_ref !== tenant
         || stableJson(receipt.entry) !== stableJson(entry)) throw new Error('canonical history witness mismatch');
       ids.add(entry.id); entries.push(entry);
     }
-    const leafId = (await storage.get<string>(`${prefix}leaf`)) ?? null;
-    if (leafId !== null && !ids.has(leafId) && !left.has(leafId)) throw new Error('canonical history leaf mismatch');
+    const storedLeaf = (await storage.get<string>(`${prefix}leaf`)) ?? null;
+    if (storedLeaf !== null && !ids.has(storedLeaf) && !left.has(storedLeaf)) throw new Error('canonical history leaf mismatch');
     await context.assertCurrent();
-    return { entries, leafId: leafId !== null && left.has(leafId) ? null : leafId, skipped };
+    // The nearest loaded row above a left-out one. A loop among left-out rows, or a parent that is not loaded, ends at no parent.
+    const above = (id: string): string | null => {
+      const walked = new Set<string>();
+      let current: string | null = id;
+      while (current !== null && left.has(current)) {
+        if (walked.has(current)) return null;
+        walked.add(current); current = left.get(current) ?? null;
+      }
+      return current !== null && ids.has(current) ? current : null;
+    };
+    const orphaned = (entry: ConversationEntry) => entry.parentId !== null && left.has(entry.parentId);
+    const moved = new Map<string, Readonly<{ stored: ConversationEntry; loaded: ConversationEntry }>>();
+    const loaded = relink ? entries.map(entry => {
+      if (!orphaned(entry)) return entry;
+      const linked = { ...entry, parentId: above(entry.parentId!) };
+      moved.set(entry.id, { stored: entry, loaded: linked });
+      return linked;
+    }) : entries;
+    leftOut = new Set(left.keys()); relinked = moved;
+    const skipped = { checks, orphans: entries.filter(orphaned).length, leaf: storedLeaf !== null && left.has(storedLeaf) };
+    return { entries: loaded, leafId: storedLeaf !== null && left.has(storedLeaf) ? above(storedLeaf) : storedLeaf, skipped };
+  };
+  const asStored = (entry: ConversationEntry) => {
+    const moved = relinked.get(entry.id);
+    return moved && stableJson(entry) === stableJson(moved.loaded) ? moved.stored : entry;
   };
   const store: ConversationStore & Readonly<{ readForDisplay(): Promise<CanonicalHistoryRead> }> = {
-    async load() { const { entries, leafId } = await read(false); return { entries, leafId }; },
-    readForDisplay: () => read(true),
+    async load() {
+      const { entries, leafId, skipped } = await read(true);
+      if (Object.keys(skipped.checks).length > 0) onSkipped?.(skipped);
+      return { entries, leafId };
+    },
+    readForDisplay: () => read(false),
     save(rawEntries, leafId, scope) { return serialize(storage, async () => {
       await context.assertCurrent();
-      const checked = rawEntries.map(entry => scrub(validate(entry)));
+      const checked = rawEntries.map(entry => scrub(validate(asStored(entry))));
+      if (checked.some(entry => leftOut.has(entry.id))) throw new Error('canonical history input conflict');
       if (new Set(checked.map(entry => entry.id)).size !== checked.length) throw new Error('canonical history duplicate input');
       const entries: ConversationEntry[] = [];
       for (const entry of checked) {
@@ -102,6 +147,15 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
       const previousLeaf = await storage.get<Witness>(witnessKey(leafId));
       if (!checked.some(entry => entry.id === leafId) && (!previousLeaf || !matches(previousLeaf, validate(previousLeaf.entry)))) throw new Error('canonical history leaf mismatch');
       await context.assertCurrent();
+      // New rows go after both the stored count and the last stored row. An older build could leave rows the count
+      // does not cover, and a write at the count would then replace any stored row at or past it.
+      const nextSlot = (count: number, last: string | undefined) => {
+        if (last === undefined) return count;
+        const slot = last.slice(`${prefix}conv:`.length);
+        if (!/^\d{10}$/.test(slot)) throw new Error('canonical history entry invalid');
+        return Math.max(count, Number(slot) + 1);
+      };
+      const lastSlot = { prefix: `${prefix}conv:`, reverse: true, limit: 1 } as const;
       const commit = (count: number, fresh: readonly ConversationEntry[]) => {
         const writes: Record<string, unknown> = { [`${prefix}count`]: count + fresh.length, [`${prefix}leaf`]: leafId };
         fresh.forEach((entry, index) => {
@@ -124,10 +178,14 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
             const leaf = storage.kv!.get<Witness>(witnessKey(leafId));
             if (!leaf || !matches(leaf, validate(leaf.entry))) throw new Error('canonical history leaf mismatch');
           }
-          const count = storage.kv!.get<number>(`${prefix}count`) ?? 0;
+          const [last] = storage.kv!.list(lastSlot);
+          const count = nextSlot(storage.kv!.get<number>(`${prefix}count`) ?? 0, last?.[0]);
           for (const [key, value] of Object.entries(commit(count, fresh))) storage.kv!.put(key, value);
         });
-      } else await storage.put(commit((await storage.get<number>(`${prefix}count`)) ?? 0, entries));
+      } else {
+        const [last] = (await storage.list(lastSlot)).keys();
+        await storage.put(commit(nextSlot((await storage.get<number>(`${prefix}count`)) ?? 0, last), entries));
+      }
     }); },
     persistOwnerInput: async (entry, scope) => { await store.save([entry], entry.id, scope); },
   };
