@@ -786,7 +786,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       }catch(error){console.error('app execution outcome unconfirmed');const code=canonicalHistoryFault(error);if(code)console.error(JSON.stringify({hop:'app_turn',ok:false,code}));}
       finally{clearTimeout(timeout);this.appInbox.settle(record,completed);abort.abort();this.appAttempts.delete(record.attempt!);this.activeApp=null;if(this.activeScope===scope){this.activeScope=undefined;this.activeAbort=undefined;}}
     }
-    await rearmSharedAlarm(this.ctx.storage,null,Date.now());
+    // The schedule's next wake goes into the re-arm too, or an app message would drop the alarm for the next scheduled job.
+    ensureSchema(this.ctx.storage);
+    await new Scheduler(this.ctx.storage.sql,this.ctx.storage,productionDeps()).rearm();
   }
 
   // WhatsApp ingress (WHATSAPP_CHANNEL_SPEC W3). The webhook has already verified Meta's
