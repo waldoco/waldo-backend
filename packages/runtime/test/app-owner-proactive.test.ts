@@ -53,7 +53,7 @@ afterEach(() => { vi.unstubAllGlobals(); });
 
 type Runtime = Readonly<{ ready: Promise<unknown>; timezone: string; view(session: { token: string; csrf: string; expires: number }, notice: null): Promise<{ timezoneConfirmed: boolean }>; act(action: { action: string; id?: string; value?: string }): Promise<boolean | string> }>;
 type Owner = Readonly<{ setup(channel: string): Runtime; fetch(request: Request): Promise<Response>; alarm(): Promise<void> }>;
-type Stored = Readonly<{ zone?: string; confirmed?: boolean; pins?: Record<string, string> }>;
+type Stored = Readonly<{ zone?: string; confirmed?: boolean; pins?: Record<string, string>; capture?: boolean }>;
 
 const withAppOwner = async <T>(name: string, stored: Stored, run: (owner: Owner, state: DurableObjectState) => Promise<T>): Promise<T> => {
   const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
@@ -64,7 +64,7 @@ const withAppOwner = async <T>(name: string, stored: Stored, run: (owner: Owner,
     if (stored.zone) state.storage.kv.put('timezone', stored.zone);
     if (stored.confirmed) state.storage.kv.put('timezone_confirmed', true);
     for (const [card, time] of Object.entries(stored.pins ?? {})) dayPlanBook(state.storage.sql).pin(card as never, time);
-    const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: FALLBACK, WALDO_OWNER_TELEGRAM_ID: undefined }) as unknown as Owner;
+    const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: FALLBACK, WALDO_OWNER_TELEGRAM_ID: undefined, ...(stored.capture ? { LANGFUSE_CAPTURE_TEXT: 'true', WALDO_ENVIRONMENT: 'staging' } : {}) }) as unknown as Owner;
     try { return await run(owner, state); } finally { await state.storage.deleteAlarm(); }
   });
 };
@@ -163,18 +163,31 @@ describe('proactive work for an owner who only uses the app', () => {
     expect(wire.saved).toEqual(['UTC', 'Europe/London']);
   });
 
-  it('while no zone is confirmed, a due heartbeat or day card delivers nothing and the heartbeat stays scheduled', async () => {
-    await withAppOwner('proactive-held-fire', {}, async (owner, state) => {
+  it.each([false, true])('while no zone is confirmed, a due heartbeat or day card delivers nothing and the heartbeat stays scheduled (text capture %s)', async capture => {
+    await withAppOwner(`proactive-held-fire-${capture}`, { capture }, async (owner, state) => {
       const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
       await armHeartbeat(scheduler, Date.now() - 60 * 60_000);
       await scheduler.schedule({ id: 'card:brief', kind: 'brief', payloadRefs: { id: 'card:brief' }, occurrenceAt: Date.now() - 60_000, dueAt: Date.now() - 60_000, recurrence: null });
       await owner.alarm(); await owner.alarm();
       expect(model.calls).toBe(0);
-      expect(await appChat(owner, 'proactive-held-fire')).toEqual([]);
+      expect(await appChat(owner, `proactive-held-fire-${capture}`)).toEqual([]);
       expect(schedule(state)[HEARTBEAT_ID]?.status).toBe('armed');
       // Each hold leaves one fixed code naming the kind and the reason, never an id or text.
       expect(state.storage.sql.exec<{ hop: string; note: string; ok: number }>("SELECT DISTINCT hop, note, ok FROM trace_log WHERE hop = 'scheduled_hold' ORDER BY note").toArray())
         .toEqual([{ hop: 'scheduled_hold', note: 'daily_brief_timezone_unconfirmed', ok: 1 }, { hop: 'scheduled_hold', note: 'heartbeat_timezone_unconfirmed', ok: 1 }]);
+    });
+    expect(wire.telegramSent).toBe(0);
+  });
+
+  it.each([false, true])('an event-brief sweep on the app is cancelled the first time the alarm meets it, with one trace row naming why (text capture %s)', async capture => {
+    await withAppOwner(`proactive-brief-drop-${capture}`, { zone: 'UTC', confirmed: true, capture }, async (owner, state) => {
+      const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
+      await scheduler.schedule({ id: BRIEF_SWEEP_ID, kind: 'pre_activity_spot', payloadRefs: { id: BRIEF_SWEEP_ID }, occurrenceAt: Date.now() - 60_000, dueAt: Date.now() - 60_000, recurrence: { type: 'interval', every_ms: 10 * 60_000, phase_ms: 0 } });
+      await owner.alarm(); await owner.alarm();
+      expect(model.calls).toBe(0);
+      expect(schedule(state)[BRIEF_SWEEP_ID]?.status ?? 'none').not.toBe('armed');
+      expect(state.storage.sql.exec<{ hop: string; note: string }>("SELECT hop, note FROM trace_log WHERE note = 'event_briefs_not_routed'").toArray())
+        .toEqual([{ hop: 'scheduled_drop', note: 'event_briefs_not_routed' }]);
     });
     expect(wire.telegramSent).toBe(0);
   });

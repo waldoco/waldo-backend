@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { appSubjectFor } from '../src/channels/app-api';
+import { BRIEF_SWEEP_ID } from '../src/channels/event-briefs';
 import { traceBook } from '../src/channels/harness';
 import { armHeartbeat, HEARTBEAT_ID } from '../src/channels/heartbeat';
 import { reminderBook } from '../src/channels/reminders';
@@ -63,7 +64,7 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
-type Identity = Readonly<{ telegram?: boolean; telegramUnlinked?: boolean; app?: 'own' | 'foreign' | 'none'; telegramReply?: string; alarms?: number; heartbeatDue?: boolean }>;
+type Identity = Readonly<{ telegram?: boolean; telegramUnlinked?: boolean; app?: 'own' | 'foreign' | 'none'; telegramReply?: string; alarms?: number; heartbeatDue?: boolean; sweepDue?: boolean }>;
 const driveAlarm = async (name: string, identity: Identity) => {
   const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
   return runInDurableObject(stub, async (_instance, state) => {
@@ -75,6 +76,7 @@ const driveAlarm = async (name: string, identity: Identity) => {
     const reminder = await book.set({ note: 'call Sam', at: clockBack(30 * 60_000)().toISOString().slice(0, 16), repeat: 'none' });
     state.storage.kv.put('do_name', name);
     if (identity.heartbeatDue) await armHeartbeat(new Scheduler(state.storage.sql, state.storage, productionDeps()), Date.now() - 60 * 60_000);
+    if (identity.sweepDue) await new Scheduler(state.storage.sql, state.storage, productionDeps()).schedule({ id: BRIEF_SWEEP_ID, kind: 'pre_activity_spot', payloadRefs: { id: BRIEF_SWEEP_ID }, occurrenceAt: Date.now() - 60_000, dueAt: Date.now() - 60_000, recurrence: { type: 'interval', every_ms: 10 * 60_000, phase_ms: 0 } });
     if (identity.telegram) state.storage.kv.put('telegram_subject', '7');
     if (identity.telegramUnlinked) state.storage.kv.put('telegram_unlinked', true);
     if (identity.app === 'own') state.storage.kv.put('app_subject', String(appSubjectFor(name)));
@@ -102,6 +104,9 @@ const driveAlarm = async (name: string, identity: Identity) => {
         heartbeat: state.storage.sql.exec<{ status: string; attempts: number }>("SELECT status, attempts FROM schedule WHERE id = ?", HEARTBEAT_ID).toArray(),
         heartbeatRuns: state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM schedule_runs WHERE schedule_id = ?", HEARTBEAT_ID).one().n,
         held: state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM trace_log WHERE hop = 'scheduled_admission'").one().n,
+        sweep: state.storage.sql.exec<{ status: string }>("SELECT status FROM schedule WHERE id = ?", BRIEF_SWEEP_ID).toArray().map(row => row.status),
+        sweepRuns: state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM schedule_runs WHERE schedule_id = ?", BRIEF_SWEEP_ID).one().n,
+        dropped: state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM trace_log WHERE hop IN ('scheduled_drop', 'scheduled_hold')").one().n,
         outcomes: state.storage.sql.exec<{ outcome: string }>("SELECT outcome FROM schedule_runs WHERE schedule_id = ?", reminder.id).toArray().map(row => row.outcome),
       };
     } finally { await state.storage.deleteAlarm(); }
@@ -160,6 +165,11 @@ describe('scheduled reminders for a Telegram-linked owner', () => {
     expect(wire.telegramSent).toEqual([{ chat_id: 7, text: 'Here is your answer.' }]);
     expect(outcome.transcript).toEqual([{ role: 'assistant', surface: 'app', text: REMINDER_TEXT }]);
     expect(outcome.outcomes).toEqual(['ok']);
+  });
+
+  it('keeps running the event-brief sweep on Telegram for an owner who also uses the app', async () => {
+    const outcome = await driveAlarm('telegram-linked-app-sweep', { telegram: true, app: 'own', sweepDue: true });
+    expect(outcome).toMatchObject({ sweep: ['armed'], sweepRuns: 1, dropped: 0 });
   });
 
   it.each([['none'], ['foreign']] as const)('keeps the reminder on Telegram while the owner has no app binding of their own (%s)', async app => {
