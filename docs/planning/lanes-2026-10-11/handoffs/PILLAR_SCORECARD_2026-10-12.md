@@ -79,7 +79,7 @@ Each can be asked with AskUserQuestion. The first option is the recommendation.
 | E10 | **WhatsApp and iMessage in the beta promise** | (a) **Take both out of the beta copy**, and keep #1017 as a dev surface. (b) Keep "WhatsApp next" | Before landing #18 | Copy rows only |
 | E11 | **L3's morning batch**, answered in L3's session | (a) **All recommended options:** open the reminder-push contract PR; ADR-0068; approvals 3a–3e | 08:00Z | Push reminders (W2 of S7); approval card fields |
 
-**Answered at about 04:48Z, in the orchestrator's session:**
+**Answered at about 04:47Z, in the orchestrator's session:**
 - **E1:** (a), the daytime standing go.
 - **E2:** strip the transcript copies and build a health-history read, chosen after the owner asked how Waldo can learn patterns without history.
   - #1066 ships today with health-log numbers kept out of chat history and the search index.
