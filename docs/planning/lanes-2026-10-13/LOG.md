@@ -180,7 +180,7 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - tell the App session that P1 waits;
   - take no other route.
 
-## 21:58Z: cross-session cap reached; #1105 and #1106 open; scribe goes to the owner
+## 21:57Z: cross-session cap reached; #1105 and #1106 open; scribe goes to the owner
 
 - **The cross-session message cap was reached:** 10 sends since the owner's last message at about 21:27Z.
   - Direct messages to sessions are paused until the owner types. Messages from sessions to the orchestrator still arrive.
