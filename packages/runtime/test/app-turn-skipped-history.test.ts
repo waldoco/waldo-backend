@@ -139,6 +139,54 @@ describe('an app turn over a history that holds a row failing the entry shape', 
     });
   });
 
+  // A store an older build wrote can lack the count and leaf keys, or carry a count behind its rows. A skipped row still
+  // keeps its slot: the turn's rows go after the last stored row, never over one.
+  it.each([
+    ['without count or leaf keys', 'turn-skip-no-count', (rows: Record<string, unknown>) => { delete rows[`${PREFIX}count`]; delete rows[`${PREFIX}leaf`]; }, 1, false],
+    ['with a count behind its rows', 'turn-skip-stale-count', (rows: Record<string, unknown>) => { rows[`${PREFIX}count`] = 0; }, 1, true],
+    ['with a count ahead of its rows', 'turn-skip-ahead-count', (rows: Record<string, unknown>) => { rows[`${PREFIX}count`] = 3; }, 3, true],
+  ] as const)('a turn over a skipped row stored %s writes after it, never over it', async (_case, name, damage, firstFree, leaf) => {
+    const { inputOrigin: _origin, ...lone } = user('u1', 'Lone question.', null);
+    const stored = history([lone as Row], 'u1');
+    damage(stored);
+    await withOwner(name, stored, async (owner, state, lines) => {
+      const turn = await send(owner, state, name, `client-${name}`.slice(0, 40), 'Next question.');
+      expect(turn.outcome).toBe('completed');
+      expect(state.storage.kv.get(`${PREFIX}conv:0000000000`)).toEqual(lone);
+      expect([0, 1].map(index => state.storage.kv.get<Row>(`${PREFIX}conv:${String(firstFree + index).padStart(10, '0')}`)?.id)).toEqual([turn.id, `${turn.id}-reply`]);
+      expect(state.storage.kv.get(`${PREFIX}count`)).toBe(firstFree + 2);
+      expect(links(await shown(owner, name))).toEqual([[turn.id, null], [`${turn.id}-reply`, turn.id]]);
+      expect(loads(lines)).toEqual([{ hop: 'app_history_load', ok: true, code: 'history_rows_skipped', check: 'input_origin', count: 1, unwitnessed: 0, orphans: 0, leaf }]);
+    });
+  });
+
+  it('a save outside a run scope also writes after the last stored row', async () => {
+    const { inputOrigin: _origin, ...lone } = user('u1', 'Lone question.', null);
+    const stored = history([lone as Row], 'u1');
+    delete stored[`${PREFIX}count`];
+    await withOwner('save-unscoped-no-count', stored, async (_owner, state) => {
+      const store = canonicalOwnerConversationStore(state.storage, { invocation: { verified_authority: { principal_ref: PRINCIPAL, tenant_ref: TENANT } }, assertCurrent: async () => undefined } as never);
+      await store.load();
+      const next = user('u2', 'Next question.', null);
+      await store.save([next as never], 'u2');
+      expect(state.storage.kv.get(`${PREFIX}conv:0000000000`)).toEqual(lone);
+      expect(state.storage.kv.get(`${PREFIX}conv:0000000001`)).toEqual(next);
+      expect(state.storage.kv.get(`${PREFIX}count`)).toBe(2);
+    });
+  });
+
+  it('a last stored row under a key that is not a slot number stops the save and writes nothing', async () => {
+    const first = user('u1', 'First question.', null);
+    const stored = { ...history([first], 'u1'), [`${PREFIX}conv:stray`]: reply('u1-reply', 'First answer.', 'u1'), [`${PREFIX}witness:u1-reply`]: { lineage: 'canonical_v1', principal_ref: PRINCIPAL, tenant_ref: TENANT, entry: reply('u1-reply', 'First answer.', 'u1') } };
+    await withOwner('save-stray-slot', stored, async (_owner, state) => {
+      const store = canonicalOwnerConversationStore(state.storage, { invocation: { verified_authority: { principal_ref: PRINCIPAL, tenant_ref: TENANT } }, assertCurrent: async () => undefined } as never);
+      await store.load();
+      await expect(store.save([user('u2', 'Next question.', 'u1-reply') as never], 'u2')).rejects.toThrow('canonical history entry invalid');
+      expect(state.storage.kv.get(`${PREFIX}witness:u2`)).toBeUndefined();
+      expect(state.storage.kv.get(`${PREFIX}count`)).toBe(1);
+    });
+  });
+
   it('leaves out a broken parent and links its child to the nearest good row above it, for the turn only', async () => {
     const name = 'turn-skip-parent';
     const rows = [user('u1', 'First question.', null), broken('broken-1', 'u1'), user('u2', 'Second question.', 'broken-1'), reply('u2-reply', 'Second answer.', 'u2')];
