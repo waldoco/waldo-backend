@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { admittedRoute, routedDelivery, withPlainCopy, type Admission, type OutboxRoute } from '../src/channels/delivery-routes';
+import { admittedRoute, routedDelivery, type Admission, type OutboxRoute } from '../src/channels/delivery-routes';
 import type { FinalRecord } from '../src/channels/telegram-final-outbox';
 
 const record = (chat: number) => ({ id: `r${chat}`, payload: { chat_id: chat, text: 'hi' } }) as unknown as FinalRecord;
@@ -58,27 +58,5 @@ describe('a route that needs the owner admitted', () => {
     expect(await admitted.defer(record(9))).toBeNull();
     expect(await admitted.allowed(record(9))).toBe(false);
     expect(seen).toEqual(['defer 9']);
-  });
-});
-
-describe('a delivery with a plain copy', () => {
-  const run = async (delivery: 'ok' | 'fails', copy: 'ok' | 'refused' | 'fails') => {
-    const steps: string[] = [];
-    const deliver = async (text: string) => { steps.push(`deliver ${text}`); if (delivery === 'fails') throw new Error('not taken'); };
-    const send = async (text: string) => { steps.push(`copy ${text}`); if (copy === 'fails') throw new Error('provider error 500'); return copy === 'ok' ? { message_id: 1 } : undefined; };
-    const outcome = await withPlainCopy(deliver, send, code => steps.push(`report ${code}`))('hello').then(() => 'resolved', () => 'rejected');
-    return { outcome, steps };
-  };
-
-  it('copies after the delivery, once, and reports nothing when both succeed', async () => {
-    expect(await run('ok', 'ok')).toEqual({ outcome: 'resolved', steps: ['deliver hello', 'copy hello'] });
-  });
-
-  it('sends no copy when the delivery fails, and fails as the delivery did', async () => {
-    expect(await run('fails', 'ok')).toEqual({ outcome: 'rejected', steps: ['deliver hello'] });
-  });
-
-  it.each([['refused', 'copy_blocked'], ['fails', 'copy_failed']] as const)('reports a %s copy by its code only, and the delivery still succeeds', async (copy, code) => {
-    expect(await run('ok', copy)).toEqual({ outcome: 'resolved', steps: ['deliver hello', 'copy hello', `report ${code}`] });
   });
 });

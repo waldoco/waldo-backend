@@ -31,7 +31,7 @@ import { receiptUrl } from '../conversation/artifact-link-guard';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
 import { APP_INBOX_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, armWhatsappPendingWake, persistInboxWake, persistTransportWake, rearmSharedAlarm } from '../scheduler/alarm-slot';
-import { admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
+import { admittedRoute, routedDelivery, type OutboxRoute } from './delivery-routes';
 import { TelegramFinalOutbox, redactMailFollowupEntries, redactCalendarPrepEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
 import { DeliveryGateStore } from '../delivery-gate/store';
@@ -595,13 +595,6 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           modelPayload: text, appPayload: text, modelProjection: { mode: 'include' }, role: 'assistant' }], id, scope);
       } finally { abort.abort(); }
     };
-  }
-
-  // For an owner on both surfaces, a scheduled message is written to the app, then Telegram gets a plain copy.
-  private copiedToTelegram(deliver: (text: string) => Promise<void>): (text: string) => Promise<void> {
-    const telegram = this.setup('telegram');
-    return withPlainCopy(deliver, text => telegram.call('sendMessage', { chat_id: telegram.owner, text }),
-      code => telegram.log({ trace: `copy:${Date.now()}`, hop: 'telegram_copy', ms: 0, ok: false, code, detail: code }));
   }
 
   private async appContext(name: string, hash: string, text: string, occurrence: string, occurredAt: number, scope: RunEffectScope, sources?: OwnerContextSources) {
@@ -1361,14 +1354,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const routes = [routeFor(channel)];
         if (channel === 'telegram' && consoleAuth(this.env) && this.appBound()) routes.push(admittedRoute(routeFor('app'), async () => {
           const found = await this.appOwnerLookup();
-          if (found.kind === 'admitted') this.scheduledAppDelivery = this.copiedToTelegram(this.appDeliveryFor(found.authority));
+          if (found.kind === 'admitted') this.scheduledAppDelivery = this.appDeliveryFor(found.authority);
           return found.kind;
         }, () => Date.now() + APP_ADMISSION_RETRY_MS));
         try { await finalOutbox.drain({ ...routedDelivery(routes), settled: settleFinal }); } finally { await scheduler.rearm(); }
         return;
       }
-      // Proactive work goes to the app, the default surface, once the owner has used it, and Telegram gets a plain copy of it;
-      // Telegram keeps it only for an owner with no app binding. A refusal holds the whole scheduled pass, never falling back
+      // Proactive work goes to the app, the default surface, once the owner has used it; Telegram keeps it only for an owner
+      // with no app binding. A refusal holds the whole scheduled pass, never falling back
       // to Telegram: a revoked account runs nothing, and an outage asks again without spending attempts.
       let executors = { reminder: fire, heartbeat: beat, dreaming: nightly, pre_activity_spot: briefs, brief: cards, standing_order: fireOrder };
       if (channel === 'telegram' && consoleAuth(this.env) && this.appBound()) {
@@ -1378,7 +1371,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           await rearmSharedAlarm(this.ctx.storage, appOwner.kind === 'retry' ? Date.now() + APP_ADMISSION_RETRY_MS : null, Date.now(), 30_000);
           return;
         }
-        this.scheduledAppDelivery = this.copiedToTelegram(this.appDeliveryFor(appOwner.authority));
+        this.scheduledAppDelivery = this.appDeliveryFor(appOwner.authority);
         const app = this.setup('app');
         await app.ready;
         executors = { ...executors, reminder: app.fire, heartbeat: app.beat, pre_activity_spot: app.briefs, brief: app.cards, standing_order: app.fireOrder };

@@ -35,13 +35,3 @@ export const admittedRoute = (route: OutboxRoute, admission: () => Promise<Admis
     allowed: async record => (await current()) === 'admitted' && route.allowed(record),
   };
 };
-
-// Delivers a message, then sends a plain copy of its text. The copy goes once, only after the delivery succeeded, and a
-// refused copy (the send returns nothing) or a failed one is only reported by its code: it never fails or repeats the delivery.
-export const withPlainCopy = (deliver: (text: string) => Promise<void>, copy: (text: string) => Promise<unknown>, report: (code: 'copy_blocked' | 'copy_failed') => void) =>
-  async (text: string): Promise<void> => {
-    await deliver(text);
-    let code: 'copy_blocked' | 'copy_failed' | null = null;
-    try { if ((await copy(text)) === undefined) code = 'copy_blocked'; } catch { code = 'copy_failed'; }
-    if (code) report(code);
-  };

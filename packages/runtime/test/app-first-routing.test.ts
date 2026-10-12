@@ -19,7 +19,7 @@ import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 
-// Proactive work for an owner on both Telegram and the app goes to the app, and Telegram gets one plain copy of it.
+// Proactive work for an owner on both Telegram and the app goes to the app only.
 const CARD_TEXT = 'Your morning is clear until noon.';
 const UPDATE_TEXT = 'Your 10:30 moved to 11:00.';
 const FOLLOWUP_TEXT = 'Have you handled the deck review? Pat asked for it by 10.';
@@ -139,7 +139,6 @@ const appChat = async (owner: Owner, ctx: Ctx) => {
   return (await response.json() as { messages: { role: string; text: string; channel: string }[] }).messages.map(({ role, text, channel }) => ({ role, text, channel }));
 };
 const outbox = (state: DurableObjectState) => state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY) ?? [];
-const copyLog = (state: DurableObjectState) => state.storage.sql.exec<{ ok: number; note: string }>("SELECT ok, note FROM trace_log WHERE hop = 'telegram_copy'").toArray();
 // A record already frozen in the outbox: a reply to an earlier Telegram turn, or a nudge addressed to the app.
 const queue = (state: DurableObjectState, ctx: Ctx, record: 'telegram' | 'app', changed: Partial<FinalRecord> = {}) => new TelegramFinalOutbox(state.storage.kv, () => Date.now() - 60_000, (rows, at) => persistTransportWake(state.storage, rows, at))
   .enqueue({ ...(record === 'telegram'
@@ -147,14 +146,14 @@ const queue = (state: DurableObjectState, ctx: Ctx, record: 'telegram' | 'app', 
     : { id: 'nudge:app-1', trace: 'app-1', payload: { chat_id: ctx.appSubject, text: NUDGE_TEXT }, ownerSubject: String(ctx.appSubject), doName: ctx.name }), ...changed });
 
 describe('proactive work for an owner on Telegram who also uses the app', () => {
-  it('a day card reaches the app chat, and Telegram gets one plain copy with no buttons, with no time zone confirmed in the app', async () => {
+  it('a day card reaches the app chat, and nothing goes to Telegram, with no time zone confirmed in the app', async () => {
     await withOwner('routing-day-card', async (owner, state, ctx) => {
       expect(state.storage.kv.get('timezone_confirmed')).toBeUndefined();
       dayPlanBook(state.storage.sql).save(DAY, { card: 'card:brief', time: '00:00', reason: 'planned' });
       await due(state, 'card:brief', 'brief');
       await schedulePass(owner, state);
       expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: CARD_TEXT, channel: 'app' }]);
-      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: CARD_TEXT }]);
+      expect(wire.telegramSent).toEqual([]);
     });
   });
 
@@ -170,7 +169,7 @@ describe('proactive work for an owner on Telegram who also uses the app', () => 
     });
   });
 
-  it('an update card reaches the app chat, and Telegram gets one plain copy', async () => {
+  it('an update card reaches the app chat, and nothing goes to Telegram', async () => {
     await withOwner('routing-update-card', async (owner, state, ctx) => {
       dayPlanBook(state.storage.sql).sent(DAY, 'card:brief');
       updateBook(state.storage.sql).mark('calendar_since', AT - 3_600_000);
@@ -179,11 +178,11 @@ describe('proactive work for an owner on Telegram who also uses the app', () => 
       await dueSweep(state);
       await schedulePass(owner, state);
       expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: UPDATE_TEXT, channel: 'app' }]);
-      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: UPDATE_TEXT }]);
+      expect(wire.telegramSent).toEqual([]);
     });
   });
 
-  it('a mail follow-up is queued for the app, reaches the app chat and is settled as delivered, and Telegram gets one plain copy', async () => {
+  it('a mail follow-up is queued for the app, reaches the app chat and is settled as delivered, and nothing goes to Telegram', async () => {
     await withOwner('routing-mail-followup', async (owner, state, ctx) => {
       const updates = updateBook(state.storage.sql);
       updates.observeMail('mail:thread-1', 'thread-1', AT - 600_000, 'message-1');
@@ -196,11 +195,11 @@ describe('proactive work for an owner on Telegram who also uses the app', () => 
       await outboxPass(owner, state, ctx);
       expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: FOLLOWUP_TEXT, channel: 'app' }]);
       expect(state.storage.sql.exec('SELECT delivery_state FROM loop_mail_sources').toArray()).toEqual([{ delivery_state: 'delivered' }]);
-      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: FOLLOWUP_TEXT }]);
+      expect(wire.telegramSent).toEqual([]);
     });
   });
 
-  it('meeting prep is queued for the app, reaches the app chat before the meeting, and Telegram gets one plain copy', async () => {
+  it('meeting prep is queued for the app, reaches the app chat before the meeting, and nothing goes to Telegram', async () => {
     await withOwner('routing-prep', async (owner, state, ctx) => {
       fixture.event = { id: 'event-1', title: 'Design review', status: 'confirmed', start: `${DAY}T09:30:00Z`, end: `${DAY}T10:00:00Z`, all_day: false,
         description: 'Bring the onboarding mocks.', attendee_names: ['Pat'], attendees: 3, etag: 'r1' } as CalendarItem;
@@ -210,11 +209,11 @@ describe('proactive work for an owner on Telegram who also uses the app', () => 
       await outboxPass(owner, state, ctx);
       expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: PREP_TEXT, channel: 'app' }]);
       expect(outbox(state).find(record => record.calendarPrep)?.status).toBe('delivered');
-      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: PREP_TEXT }]);
+      expect(wire.telegramSent).toEqual([]);
     });
   });
 
-  it('a heartbeat nudge is queued for the app, reaches the app chat, and Telegram gets one plain copy', async () => {
+  it('a heartbeat nudge is queued for the app, reaches the app chat, and nothing goes to Telegram', async () => {
     await withOwner('routing-heartbeat', async (owner, state, ctx) => {
       loopBook(state.storage.sql, { newId: () => 'loop-1', now: () => AT }).open({ title: 'Send the invoice', due: `${DAY}T08:00` });
       await armHeartbeat(new Scheduler(state.storage.sql, state.storage, productionDeps()), Date.now() - 60 * 60_000);
@@ -223,11 +222,11 @@ describe('proactive work for an owner on Telegram who also uses the app', () => 
       await outboxPass(owner, state, ctx);
       const nudge = 'From your list, past due:\n- Send the invoice (due 2026-10-03 08:00)';
       expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: nudge, channel: 'app' }]);
-      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: nudge }]);
+      expect(wire.telegramSent).toEqual([]);
     });
   });
 
-  it('a standing order\'s report reaches the app chat, and Telegram gets one plain copy', async () => {
+  it('a standing order\'s report reaches the app chat, and nothing goes to Telegram', async () => {
     await withOwner('routing-standing-order', async (owner, state, ctx) => {
       const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
       const order = await standingOrderBook(state.storage.sql, scheduler, { timezone: 'UTC', now: () => new Date(Date.now()) }, () => 'order1')
@@ -235,7 +234,7 @@ describe('proactive work for an owner on Telegram who also uses the app', () => 
       await due(state, order.id, 'standing_order', { order_id: order.id });
       await schedulePass(owner, state);
       expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: ORDER_TEXT, channel: 'app' }]);
-      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: ORDER_TEXT }]);
+      expect(wire.telegramSent).toEqual([]);
     });
   });
 
@@ -254,7 +253,7 @@ describe('proactive work for an owner on Telegram who also uses the app', () => 
 });
 
 describe('the delivery outbox for an owner on both surfaces', () => {
-  it('delivers a reply to a Telegram turn on Telegram with no copy, and a record queued for the app to the app with one copy', async () => {
+  it('delivers a reply to a Telegram turn on Telegram, and a record queued for the app to the app only', async () => {
     await withOwner('routing-mixed-outbox', async (owner, state, ctx) => {
       await queue(state, ctx, 'telegram');
       await queue(state, ctx, 'app');
@@ -262,7 +261,7 @@ describe('the delivery outbox for an owner on both surfaces', () => {
       await outboxPass(owner, state, ctx);
       expect(outbox(state).map(record => [record.id, record.status])).toEqual([['turn:telegram-1', 'delivered'], ['nudge:app-1', 'delivered']]);
       expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: NUDGE_TEXT, channel: 'app' }]);
-      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: REPLY_TEXT }, { chat_id: 7, text: NUDGE_TEXT }]);
+      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: REPLY_TEXT }]);
     });
   });
 
@@ -283,7 +282,7 @@ describe('the delivery outbox for an owner on both surfaces', () => {
       ctx.now += 120_000;
       await outboxPass(owner, state, ctx);
       expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: NUDGE_TEXT, channel: 'app' }]);
-      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: REPLY_TEXT }, { chat_id: 7, text: NUDGE_TEXT }]);
+      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: REPLY_TEXT }]);
     });
   });
 
@@ -309,7 +308,7 @@ describe('the delivery outbox for an owner on both surfaces', () => {
     });
   });
 
-  it('sends one copy for a delivered record, and none when the same record is queued and drained again', async () => {
+  it('delivers a record once, and not again when the same record is queued and drained again', async () => {
     await withOwner('routing-redelivery', async (owner, state, ctx) => {
       await queue(state, ctx, 'app');
       await outboxPass(owner, state, ctx);
@@ -318,11 +317,11 @@ describe('the delivery outbox for an owner on both surfaces', () => {
       await outboxPass(owner, state, ctx);
       expect(outbox(state).map(record => record.status)).toEqual(['delivered']);
       expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: NUDGE_TEXT, channel: 'app' }]);
-      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: NUDGE_TEXT }]);
+      expect(wire.telegramSent).toEqual([]);
     });
   });
 
-  it('sends no copy for a message the app did not take', async () => {
+  it('sends nothing to Telegram for a message the app did not take', async () => {
     await withOwner('routing-app-refused', async (owner, state, ctx) => {
       await queue(state, ctx, 'app');
       // The drain admits the owner; the delivery's own check, just before the write, finds the account revoked.
@@ -334,17 +333,4 @@ describe('the delivery outbox for an owner on both surfaces', () => {
     });
   });
 
-  it.each([['fails', 'copy_failed'], ['blocked', 'copy_blocked']] as const)('writes the app message once and settles it when the Telegram copy %s, with one fixed-code log line and no retry', async (failure, code) => {
-    await withOwner(`routing-copy-${failure}`, async (owner, state, ctx) => {
-      await queue(state, ctx, 'app');
-      if (failure === 'fails') wire.telegram = 'fails';
-      else wire.presence = false;
-      await outboxPass(owner, state, ctx);
-      await outboxPass(owner, state, ctx);
-      expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: NUDGE_TEXT, channel: 'app' }]);
-      expect(outbox(state).map(record => record.status)).toEqual(['delivered']);
-      expect(wire.telegramSent).toEqual(failure === 'fails' ? [{ chat_id: 7, text: NUDGE_TEXT }] : []);
-      expect(copyLog(state)).toEqual([{ ok: 0, note: code }]);
-    });
-  });
 });
