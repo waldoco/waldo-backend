@@ -469,3 +469,22 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **App #93** is at `32beb204` (the not-before fix), CI green. A delta review is running.
 - **Usage:** 62% at 23:49Z; the window resets at 02:30Z. No new reviews unless they unblock a merge.
 - **Test sends:** 1 of 5 used.
+
+## 23:56Z: the probe mail went out; app #94 and #95 updated; a force-push slip
+
+- **App lane's read-only QA turn** (main's build): "QA: did my probe email go out?" was sent at 23:52:39Z, and Waldo answered by 23:53:25Z that Sent has "probe" from the account.
+  - **So the approved send went out but wasn't confirmed.** H2 (send failed) is ruled out; H1, H3 or H4 remain. Connectors was told, and its hops will say which.
+  - **Waldo's time was 30 minutes off** (it said 05:24 IST; the tap was at 04:54 IST). [inference] The model did the zone arithmetic itself. A low-priority item went to Connectors: give mail times to the model already in the owner's zone.
+- **App #94** is at `ebceb711`:
+  - approve labels per action (7 tests);
+  - "Submit on the site";
+  - "(#91)" removed.
+- **App #95** is at `ef400e23`, with #94 merged in.
+- **Both get CI** only when they target `main`. After #93 merges, the App lane retargets each one and pushes an empty commit.
+- **Rule slip, self-reported:** the App lane rebased #94 onto #93's fix and pushed with `--force-with-lease`. Nothing was lost; the range is #93's fix plus the fix commit. It's recorded on #94, and the App lane now merges only.
+- **App #98** (chat chrome R5, R6 and R11) is at `8a8b114e`. The merge is held until the P1 re-run:
+  - once the card shows on main's build, install #98's build and look;
+  - reinstall main, then approve.
+
+  Its review runs shortly before that, to save usage.
+- **`created_at` on chat rows:** the contract field exists, but the backend never sets it and `ConversationEntry` has no time. I asked the backend lane on #1103. A new DO column would be a migration and waits for the owner.
