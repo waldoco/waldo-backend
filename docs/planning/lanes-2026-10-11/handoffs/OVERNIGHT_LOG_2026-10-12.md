@@ -2014,3 +2014,15 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - the version answer: Form's v1→v2 rewrite applies to Form only;
   - new owner items: #1088 or #1100, the time-zone gap, the trend query, and app #89's follow-up;
   - the P1 crediting constraint.
+- **19:26Z heartbeat:**
+  - **Status:**
+    - the cron job is present, and the brief is unchanged (`35b7c21b`);
+    - staging is `5bf2857d` and `beta-mvp` is `d704ffff`, whose push `verify` is running (started 19:23:44Z);
+    - the only open PR updated is #1077, and there are no new #116 comments since 19:14Z;
+    - the scorecard page's notes were republished at 19:25Z (notes v13, from data12).
+  - **L1** waits for the tip's CI, then runs its gate on `d704ffff` and asks the owner for the deploy.
+    - Its heads-up to L4 says: after the deploy, Form and Weight rows read v2, and an overlapped day shows Form as `intraday_inputs_unavailable`, with no new reason.
+    - **I checked that claim:** the reason is already in `contracts/src/app/health-ingest.ts:177` at live `5bf2857d`, and `packages/contracts` is unchanged between `5bf2857d` and `d704ffff` [verified].
+  - **L2** is idle: "The drafts are ready. Waiting on the wall at `09de9df1`." E15 sits at `09de9df1` and isn't a PR yet. Its local verify is probably running [inference].
+  - **L4** is running and has L1's heads-up. My #89 findings are queued there.
+  - **Sends** are at the cap (10 of 10 since about 18:11Z).
