@@ -781,3 +781,16 @@ Still open:
   - a stale Telegram `d:` button after an app defer;
   - the mutation count in the body.
 - **Wave 1 still waits on #1085.** L2 is to warn by 09:00Z if 10:00Z is at risk.
+
+## 08:14Z: #1085 fixes pushed and read; #1083 v2 waits on the owner
+
+- **#1085 at `ee213723`.** It contains `2e5993d6`. I read the delta [verified]:
+  - `reraise` now checks in this order: not waiting, in flight, expired (which calls `retire()`), then not put off;
+  - Telegram answers a stale `d:` with "Already put off" and keeps the card's buttons;
+  - the `owner-turn.ts:308` filter offers `raise_approval` only on the owner's own turns;
+  - the `unshown` wording no longer claims nothing was sent;
+  - the description drops "or its moment is near";
+  - the re-render catch logs `rerender_failed` (`approvals.ts:932`).
+- **L2's local wall at `ee213723`:** all pass, including 4868 runtime tests and 28/28 mutations. `verify:supabase` NOT RUN; pgTAP UNAVAILABLE. CI is pending at `ee213723`. Merge follows green CI and the advisor.
+- **#1083 v2 (`c2f652b2`, L1):** stress pillar, per-pillar source choice, HC 0.6, SDNN ×0.8, and a stale source is dropped. It waits on the owner merging waldo-brain #34, then #37, and on the owner's yes. It needs a fresh independent review. Not an EoD item.
+- **L2 next:** the #1066 follow-ups are on `l2/app-brief-hold` (three commits). The PR comes after #1085 merges.
