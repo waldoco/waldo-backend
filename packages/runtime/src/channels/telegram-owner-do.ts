@@ -60,6 +60,7 @@ import { newInviteCode, inviteLink } from '../identity/invite-code';
 import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, consoleActionTraceDetail, consoleMayApprove, consoleSessionRows, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, CONSOLE_RUNS_PATH, CONSOLE_PAGES, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
 import { HARNESS_MESSAGE_LIMIT, heldRowShapes } from '../memory/held-rows';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
+import { costLedger, ensureCostLedger } from '../llm/cost-ledger';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
 import { Scheduler } from '../scheduler/multiplexer';
@@ -1642,7 +1643,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       captureText: resolveCaptureText(this.env),
     }) : undefined;
     const deps = productionDeps();
-    const traces = traceBook(this.ctx.storage.sql);
+    ensureCostLedger(this.ctx.storage.sql);
+    const traces = traceBook(this.ctx.storage.sql, undefined, costLedger(this.ctx.storage.sql));
     const captureText = resolveCaptureText(this.env);
     const turnReceiptUrls = new Map<string, Set<string>>();
     const log = (entry: TurnLogEntry) => {

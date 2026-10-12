@@ -123,7 +123,7 @@ export const traceBook = (sql: Sql, keep = 500, ledger?: CostLedger) => {
          FROM trace_log WHERE model IS NOT NULL GROUP BY model ORDER BY usd DESC`,
       ).toArray();
     },
-    usage(): string {
+    usage(at = Date.now()): string {
       const rows = sql.exec<{ model: string; calls: number; input: number; cached: number; output: number; usd: number; sys: number | null; req: number | null }>(
         `SELECT model, COUNT(*) AS calls, SUM(input_tokens) AS input, SUM(cached_tokens) AS cached, SUM(output_tokens) AS output, SUM(usd) AS usd,
                 AVG(system_bytes) AS sys, AVG(request_bytes) AS req
@@ -131,7 +131,11 @@ export const traceBook = (sql: Sql, keep = 500, ledger?: CostLedger) => {
       ).toArray();
       if (rows.length === 0) return 'No model usage recorded yet.';
       const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(Math.round(n)));
-      return rows.map((row) => `${row.model}: ${row.calls} calls, ${k(row.input)} in (${row.input > 0 ? Math.round((100 * row.cached) / row.input) : 0}% cached), ${k(row.output)} out, $${row.usd.toFixed(4)}${row.req ? `, avg request ${(row.req / 1024).toFixed(1)}kB (system ${((row.sys ?? 0) / 1024).toFixed(1)}kB)` : ''}`).join('\n');
+      const models = rows.map((row) => `${row.model}: ${row.calls} calls, ${k(row.input)} in (${row.input > 0 ? Math.round((100 * row.cached) / row.input) : 0}% cached), ${k(row.output)} out, $${row.usd.toFixed(4)}${row.req ? `, avg request ${(row.req / 1024).toFixed(1)}kB (system ${((row.sys ?? 0) / 1024).toFixed(1)}kB)` : ''}`);
+      // The trace log keeps only recent rows; the ledger keeps the month, so spend reads from it.
+      const kinds = ledger?.monthByKind(at) ?? [];
+      const month = kinds.length ? [`This month: $${ledger!.monthTotal(at).toFixed(4)} (${kinds.map((row) => `${row.kind} $${row.usd.toFixed(4)}`).join(', ')})`] : [];
+      return [...models, ...month].join('\n');
     },
     steps(timezone: string): readonly E2EStep[] {
       return E2E_STEPS.map(({ step, hops }) => {

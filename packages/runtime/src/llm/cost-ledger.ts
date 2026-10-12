@@ -29,13 +29,17 @@ export type SpendPosture = Readonly<{
 
 const utcDay = (at: number): string => new Date(at).toISOString().slice(0, 10);
 
-// Schema for the owner DO migration that is still to be written. costLedger never creates it.
-export const COST_LEDGER_DDL = [`CREATE TABLE cost_ledger (
+// The owner object creates its tables idempotently at start, as its other books do.
+export const COST_LEDGER_DDL = [`CREATE TABLE IF NOT EXISTS cost_ledger (
     id INTEGER PRIMARY KEY AUTOINCREMENT, day TEXT NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN (${COST_KINDS.map((kind) => `'${kind}'`).join(',')})),
     responsibility_id TEXT, trigger TEXT NOT NULL, model TEXT NOT NULL,
     input INTEGER NOT NULL, output INTEGER NOT NULL, cached INTEGER NOT NULL, usd REAL NOT NULL)`,
-  'CREATE INDEX cost_ledger_day ON cost_ledger (day)'] as const;
+  'CREATE INDEX IF NOT EXISTS cost_ledger_day ON cost_ledger (day)'] as const;
+
+export const ensureCostLedger = (sql: Readonly<{ exec(query: string): unknown }>): void => {
+  for (const ddl of COST_LEDGER_DDL) sql.exec(ddl);
+};
 
 export type CostLedger = ReturnType<typeof costLedger>;
 

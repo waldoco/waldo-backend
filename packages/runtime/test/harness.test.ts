@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { WALDO_CHAT_MODEL } from '@waldo/contracts';
-import { COST_LEDGER_DDL, costLedger } from '../src/llm/cost-ledger';
+import { COST_LEDGER_DDL, costLedger, ensureCostLedger } from '../src/llm/cost-ledger';
 import { OWNER_REQUEST_HOP, parseHarnessCommand, traceBook } from '../src/channels/harness';
 
 let sequence = 0;
@@ -165,6 +165,30 @@ describe('cost ledger', () => {
       expect(ledgerUsd('background')).toBeCloseTo(traceUsd('nightly-1'), 12);
       expect(ledger.byResponsibility(at)).toHaveLength(1);
       expect(ledger.monthByKind(at).map((row) => row.kind).sort()).toEqual(['background', 'heartbeat', 'turn']);
+    });
+  });
+
+  it('shows this month\'s ledgered spend by kind under the per-model usage', async () => {
+    await withSql((sql) => {
+      ensureCostLedger(sql);
+      const ledger = costLedger(sql);
+      const book = traceBook(sql, 50, ledger);
+      book.record({ trace: 'tg-3', hop: OWNER_REQUEST_HOP, ms: 0, ok: true }, at);
+      book.record({ trace: 'tg-3', hop: 'llm_reply', ms: 900, ok: true, usage }, at + 1_000);
+      book.record({ trace: 'nightly-3', hop: 'nightly_memory', ms: 300, ok: true, usage }, at + 2_000);
+      const month = ledger.monthTotal(at);
+      expect(month).toBeGreaterThan(0);
+      expect(book.usage(at)).toContain(`This month: $${month.toFixed(4)} (turn $${(month / 2).toFixed(4)}, background $${(month / 2).toFixed(4)})`);
+      expect(traceBook(sql, 50).usage(at)).not.toContain('This month');
+    });
+  });
+
+  it('creates the ledger table once, however often the owner object starts', async () => {
+    await withSql((sql) => {
+      ensureCostLedger(sql);
+      ensureCostLedger(sql);
+      costLedger(sql).add({ kind: 'turn', model: WALDO_CHAT_MODEL, trigger: 'llm_reply', input: 1, output: 1, cached: 0, usd: 0.5 }, at);
+      expect(costLedger(sql).monthTotal(at)).toBe(0.5);
     });
   });
 
