@@ -1354,3 +1354,21 @@ I read the source delta over `2fc0e642` (+237/−57 across 6 files; about 120 so
   - `read(id)` keeps throwing only on cancels the owner starts for a known id.
   - L1 is waiting for L2's OK on `event-briefs.ts`, `schedule-preferences.ts` and `day-cards.ts`.
   - **D14** (adopted): a fixed-id row may be reshaped only one release after the guard is live, so the rollback target has it too.
+
+## About 12:50Z: G1 is #1091 (draft); #1088's fix is written locally
+
+- **#1091 (G1, L2):** a draft at `de6211c9` on base `2d18e5e5` (#116 comment 6124573993). It ships both halves.
+  - Earlier tool results go in the owner turn as fenced external data, never in the system prompt. A test pins this: external text never joins the system prompt (`owner-turn.ts:440-442`).
+  - It shares the receipts block's gate (scribe and session canaries) and has a 4096-byte cap that drops the oldest entry whole. Owner turns only; job prompts get nothing.
+  - REASONS is byte-identical, because `context_ref` is checked on replay.
+  - Receipt half: a linked entry shows `desk.approvals` state, or is withheld if the desk can't answer. Old rows read exactly as before.
+  - DO change: one line, at the ledger.
+  - The P1 tests on the app and on Telegram were red at base. Mutations: 12/14 caught; the two survivors are defence in depth.
+  - A full wall at `de6211c9` is running. Gate when it's ready: CI, an independent review, the advisor, then my merge under E1.
+- **#1088 fix (local):** custody aliases.
+  - Telegram accepts the stored, directory-verified `owner_principal_ref`, and the app accepts the app principal. New rows are stamped with the surface's own key.
+  - The app re-checks the stored subject in `assertOwnerIdentity`.
+  - Tests: app first, then link Telegram, gives all 16 skills on both surfaces. A spoofed `x-waldo-telegram-subject` header changes no custody.
+  - It stays owner-merge.
+- **L2 OK'd L1's guard edits.** Skipping cancels is safe because `gateScheduleExecutors` cancels a disabled kind at dispatch (`schedule-preferences.ts:103-111`) [reported].
+- **#1079:** L2 asks for it to be closed as superseded after #1091 merges. It's L2's PR, so L2 should close it. Closing a PR is outward-facing, so I won't.
