@@ -10,7 +10,7 @@ const note = (result: ReraiseOutcome): string => {
     expired: 'It expired, so it was closed and not shown. If the owner still wants it, propose it again.',
     not_put_off: 'The owner has not put it off, so nothing was sent; its card is still waiting.',
     not_waiting: 'It is not waiting on the owner, so nothing was sent.',
-    unshown: 'Its card could not be shown, so it is still put off. Nothing was sent.',
+    unshown: 'Its card was not confirmed as shown, so it is still put off. Tell the owner only that you could not bring it back.',
   }[result.outcome];
   if (result.on_this_reply) return 'Its card is on this reply.';
   return result.shown_on.some(surface => surface !== 'app') ? 'A fresh card with its buttons was sent to the owner.' : "It is back in the owner's approvals list; no card is on this reply.";
@@ -19,7 +19,7 @@ const note = (result: ReraiseOutcome): string => {
 export const approvalHandlers = (desk: Pick<ApprovalDesk, 'waiting' | 'reraise'>) => [
   {
     name: 'raise_approval',
-    description: "Approvals the owner put off with Not now wait until you raise them again. list shows the approvals waiting on the owner, with put_off marked. raise shows one they put off to them again: do it when it matters again (they ask about it, or its moment is near), never just because it is waiting.",
+    description: "Approvals the owner put off with Not now wait until you raise them again. list shows the approvals waiting on the owner, with put_off marked. raise shows one they put off to them again: do it when the owner's conversation makes it matter again, never just because it is waiting.",
     schema: raiseApprovalArgsSchema,
     trigger_allowlist: allowlist('raise_approval'),
     autonomy_gated: false,

@@ -90,6 +90,17 @@ it('an approval past its expiry is expired, never shown again, and never listed 
   });
 });
 
+it('an approval past its expiry is expired by a raise even if it was never put off, and its cards are retired', async () => {
+  await deskOn('app', 'raise-expired-open', async ({ clock, raise, propose, shownCount, sql }) => {
+    const id = await propose('Old');
+    clock.at += PROPOSAL_TTL_MS + 60_000;
+    expect((await raise({ operation: 'raise', approval_id: id })).data).toMatchObject({ outcome: 'expired', note: expect.stringContaining('expired') });
+    expect(sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status).toBe('expired');
+    expect(shownCount(id)).toBe(1);
+    expect(sql.exec<{ live: number }>('SELECT COUNT(*) AS live FROM approval_presentations WHERE approval_id = ? AND retired_at IS NULL', id).one().live).toBe(0);
+  });
+});
+
 it('nothing is sent for an approval that is decided, unknown, or not put off', async () => {
   await deskOn('app', 'raise-refused', async ({ desk, raise, propose, shownCount }) => {
     const skipped = await propose('Skipped'), open = await propose('Open');
@@ -138,7 +149,7 @@ it('a raise whose card cannot be sent leaves the approval put off', async () => 
     await desk.decide(id, 'd', 't', { surface: 'telegram' });
     const at = deferredAt(id);
     telegram.deliver = false;
-    expect((await raise({ operation: 'raise', approval_id: id })).data).toMatchObject({ outcome: 'unshown' });
+    expect((await raise({ operation: 'raise', approval_id: id })).data).toMatchObject({ outcome: 'unshown', note: 'Its card was not confirmed as shown, so it is still put off. Tell the owner only that you could not bring it back.' });
     expect(deferredAt(id)).toBe(at);
   });
 });
@@ -165,4 +176,16 @@ it('a raise backs no done claim: listing or raising changes nothing outside the 
     { seq: 1, call: { name: 'raise_approval', args: { operation: 'list' } }, ok: true },
     { seq: 2, call: { name: 'raise_approval', args: { operation: 'raise', approval_id: 'p1' } }, ok: true },
   ] as never)).toEqual([]);
+});
+
+it('a Telegram Not now tapped after the approval was put off elsewhere keeps the card decidable and says so', async () => {
+  await deskOn('telegram', 'raise-stale-defer', async ({ desk, sent, propose, deferredAt }) => {
+    const id = await propose('Stale');
+    await desk.decide(id, 'd', 'app:approval', { surface: 'app' });
+    const at = deferredAt(id);
+    await desk.callback({ id: 'q1', from: { id: 42 }, data: `d:${id}`, message: { message_id: 1, chat: { id: 42 } } }, 't');
+    expect(sent.filter(message => message.method === 'answerCallbackQuery').at(-1)?.body.text).toBe('Already put off');
+    expect(keyboard(sent.filter(message => message.method === 'editMessageReplyMarkup').at(-1))).toEqual(['Send it=a', 'Modify=e', "Don't do this=s"]);
+    expect(deferredAt(id)).toBe(at);
+  });
 });

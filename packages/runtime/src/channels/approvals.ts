@@ -706,11 +706,13 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     async reraise(id) {
       const entry = row(id);
       if (!entry || !waitingRow(entry)) return { outcome: 'not_waiting' };
-      if (entry.deferred_at == null || raising.has(id)) return { outcome: 'not_put_off' };
+      if (raising.has(id)) return { outcome: 'not_put_off' };
       if (expired(entry, JSON.parse(entry.payload_json) as Stored)) {
         setStatus(id, 'expired');
+        await retire(id, { surface });
         return { outcome: 'expired' };
       }
+      if (entry.deferred_at == null) return { outcome: 'not_put_off' };
       raising.add(id);
       try {
         const runRef = deps.appReplyRef?.();
@@ -922,10 +924,12 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       if (query.message) await deps.call('editMessageReplyMarkup', { chat_id: query.message.chat.id, message_id: query.message.message_id, reply_markup: { inline_keyboard: [] } }).catch(() => undefined);
       const messageRef = query.message ? `${query.message.chat.id}:${query.message.message_id}` : undefined;
       const out = await decideOnce(id, action as DeskAction, trace, { surface, ...(messageRef ? { messageRef } : {}) });
-      // Not now leaves the card decidable: it keeps the buttons that still move the approval.
-      const deferred = action === 'd' && out.toast === 'Later' && query.message ? row(id) : undefined;
+      // Not now leaves the card decidable: it keeps the buttons that still move the approval, also when it was already put off.
+      const current = action === 'd' && query.message ? row(id) : undefined;
+      const deferred = current && waitingRow(current) && current.deferred_at != null ? current : undefined;
+      const stillPutOff = deferred !== undefined && out.toast === 'Already handled.';
       const tapped = deferred ? sql.exec<{ approvable: number }>('SELECT approvable FROM approval_presentations WHERE approval_id = ? AND surface = ? AND message_ref = ? AND retired_at IS NULL', id, surface, messageRef!).toArray()[0] : undefined;
-      if (deferred && tapped) await deps.call('editMessageReplyMarkup', { chat_id: query.message!.chat.id, message_id: query.message!.message_id, reply_markup: { inline_keyboard: [(tapped.approvable === 1 ? buttonsFor(deferred) : laterButtons(id, false)).map(([text, data]) => ({ text, callback_data: data }))] } }).catch(() => undefined);
+      if (deferred && tapped) await deps.call('editMessageReplyMarkup', { chat_id: query.message!.chat.id, message_id: query.message!.message_id, reply_markup: { inline_keyboard: [(tapped.approvable === 1 ? buttonsFor(deferred) : laterButtons(id, false)).map(([text, data]) => ({ text, callback_data: data }))] } }).catch(() => deps.log({ trace: id, hop: 'approval_defer_card', ms: 0, ok: false, code: 'rerender_failed' }));
       // An uncertain card may have reached the owner before a channel timeout. It has
       // no valid send approval until reconciled, so tell the owner what to do next.
       const unconfirmedRow = out.toast === 'Already handled.' ? row(id) : undefined;
@@ -935,8 +939,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           : 'That approval card was not confirmed, so I cannot use its button. Nothing was done. Check this chat and ask for a fresh proposal if you still want it.' }
         : out;
       // The desk's skip toast names the old button; on Telegram the owner tapped Don't do this.
-      await answer(action === 's' && reported.toast === 'Not now' ? 'Skipped' : reported.toast);
-      await say(reported.message, action === 'a' && out.toast === 'Done' && out.message.includes('Undo is available') ? [['Undo', `u:${id}`]] : undefined);
+      await answer(stillPutOff ? 'Already put off' : action === 's' && reported.toast === 'Not now' ? 'Skipped' : reported.toast);
+      await say(stillPutOff ? 'It is already put off for later, and still waiting.' : reported.message, action === 'a' && out.toast === 'Done' && out.message.includes('Undo is available') ? [['Undo', `u:${id}`]] : undefined);
     },
     ledger(reminders) {
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status IN ('open', 'changing') ORDER BY created_at").toArray();
