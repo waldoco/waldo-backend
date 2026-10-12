@@ -136,3 +136,13 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
     - To reverse: strip the query string.
   - **D2 = as proposed:** `query_calendar` output; `conference_url` and attachment titles in the prep prompt; day and update cards unchanged.
   - **D3 = opt-in arg on `calendarPage`,** so the Worker and the proxy can deploy in either order.
+
+## 21:46Z heartbeat
+
+- **Staging:** `e93a87c9` [verified]. `beta-mvp` is `5b8197fd`, and its push CI is still running. Nothing is worth deploying yet: the only change since staging is #1102, which is test-only.
+- **PRs:**
+  - Backend: #1100 is unchanged at `655b77a7`; it waits for the cloud lane's split and blocker fix. Nothing else is ready.
+  - App: no PR yet.
+- **Lanes:** App (`local_5eb95055`), Connectors (`local_83ce6587`) and the flaky-fix session (`local_7fe60b28`) are all running. Connectors has created `l2/app-approval-buttons` with no commits yet; its mail PR head is local `2027735f`.
+- **#1103:** only the orchestrator's two comments so far. The cloud lanes haven't posted.
+- **Decision:** push this docs branch once per heartbeat, not after every entry. Each push re-runs #1077's full CI and competes with the lanes' PR CI.
