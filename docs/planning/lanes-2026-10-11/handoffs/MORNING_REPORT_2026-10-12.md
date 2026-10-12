@@ -13,7 +13,8 @@ Tags: **[verified]** observed tonight; **[lane report]** a lane said so, not re-
 ## Late additions (02:15Z)
 
 - This docs PR (#1077) passed CI: 6/6 incl. pgTAP, `CLEAN` **[verified]**.
-- L2 opened **#1078** (draft), "Count the history each reply call leaves out". It's the measurement step of the long-sessions plan.
+- L2 opened **#1078** (draft, `863427c6`), "Count the history each reply call leaves out". Each reply call now carries `history_cut_window`, `held`, `cap` and `scribe` counts, with no storage change. It's the measurement step of the long-sessions plan, and L2 reports 9 of 9 mutations caught.
+- L2 opened **#1079** (draft, `ed7a13a6`): the test that confirms the harness finding below.
 - The Audit lane ran a ledger delta pass on #1057 (`604e5538`) from the map's findings and posted a note on #116.
 
 ## Staging now
@@ -139,7 +140,12 @@ All are reversible; the decisions file says how to reverse each.
 - **A health-data leak, live today for Telegram owners:** health-log lines (calorie estimates, minutes) go into the day-card prompt, which is saved verbatim to `conv:*` and the episodes full-text index. CLAUDE.md forbids numeric health values in transcripts, independent of #1066. Evidence: the #1066 reviewer's code read plus a probe on synthetic data in a test worktree. Not observed on staging. Option (a) of question 1 fixes it for everyone.
 - **No proactive message reaches the app** until #1066 merges and deploys.
 - **Telegram and the app keep two transcripts.** The episodes index and nightly consolidation don't see app chat. Fixing that is structural work for L2 (owner principal, slice 2) **[verified by code read]**.
-- **Harness finding:** tool results from earlier turns don't reach the reply model on either path. That's a code read, unverified by a test, and it contradicts the long-conversations brief (`research-2026-10-12/04-harness-context.md`). It matters for the working-set work (option C).
+- **Harness finding, now confirmed by a test:** tool results from earlier turns reach the reply model on neither path. L2's #1079 (draft, `ed7a13a6`) seeds one ledger row and runs one real Durable Object turn per path.
+  - On Telegram the reply has no recent-tool-results section.
+  - On the app the section reads "No recent tool results."
+  - Causes, named by mutations: the app context host's sources are health-only; on Telegram the composition carries the row, but the reply's own system prompt drops it.
+  - The tests pin today's gap, so the fix PR flips them. **[lane report; PR body]**
+  - This is the main input to the working-set work (option C).
 - **WhatsApp linking is impossible today:** the only link-code issuer hard-codes `'telegram'` **[code read]**.
 - **Website:** 33 promises have no implementation and 21 need a copy decision. The Gmail "read only" line contradicts what Waldo does (map §1).
 - **Usage:** the 5-hour usage window reached 84% overnight, so I paused low-value lane work from 22:17Z until the 01:30Z reset.

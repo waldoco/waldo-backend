@@ -310,3 +310,9 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
 - L2 opened #1078 (draft, `863427c6`) "Count the history each reply call leaves out" (long-sessions step 1).
 - Audit: ledger delta pass on #1057 at `604e5538`; #116 comment 6116427714. No action needed before the owner is up.
 - Staging `889efa27`. The morning report has been posted in the orchestrator session.
+
+## 02:20Z: L2's two board items done (drafts, not held)
+
+- **#1078** (`863427c6`): history-cut counts (`history_cut_window`, `held`, `cap`, `scribe`) on each `llm_reply` context, surfaced to the console and Langfuse. No storage change, no new hop. 9/9 mutations caught; targeted tests pass; CI was pending **[lane report]**.
+- **#1079** (`ed7a13a6`): **harness finding 1 HOLDS on both paths.** One ledger row, a real DO turn per path. Telegram: no `<recent-tool-results>` section. App: "No recent tool results." Causes: the app context host's sources are health-only; Telegram's reply builds its own system prompt and drops the joined composition. The tests pin the gap; no fix in this PR. Unverified: "the ledger is written every turn" (the row was seeded) **[lane report]**.
+- The morning report's risk entry is updated.
