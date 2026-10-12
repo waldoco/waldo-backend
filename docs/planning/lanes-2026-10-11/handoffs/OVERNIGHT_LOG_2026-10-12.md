@@ -1094,3 +1094,36 @@ Staging `e37f60f3`, version `c7974404`. Codes and times only.
   - L3 is still unreachable; the owner needs to resume L3's session.
 - **One edit by me:** the draft notes that WP-034 and WP-061 also wait on autonomous moves (ten rows).
 - **#1089 (Weight, L1):** an independent review is running at `76d9bcaf`. L1 holds pushes, and the merge needs the owner's yes in L1's session.
+
+## 11:38Z: usage-limit outage (about 10:30–11:30Z); #1087 merged as `614d1aff`
+
+- **The outage:** the account hit its 5-hour session limit at about 10:30Z. The window reset at 11:30Z and resets again at 16:30Z; it is at 1% now.
+  - All my subagents died with nothing produced:
+    - the strict-check sweep and the six sub-agents it had fanned out;
+    - the #1089 review.
+  - L2 also stopped at the limit. L1's and this session's processes restarted.
+  - Cause [inference]: fan-out subagents, the sweep's six above all, while four lanes ran at max effort.
+  - Fixes:
+    - the sweep is relaunched as one agent, with no Agent tool and a budget of about 45 tool calls;
+    - every lane is asked not to fan out;
+    - peer messages now go by session id, because names didn't resolve after the restart.
+  - The cron `29a6d33d` is present.
+- **#1087 (MUST 3) merged as `614d1aff`** (`gh pr merge --merge --match-head-commit fd7922547009c4d006caa07980c92c7e77298c26`).
+  - Gate:
+    - CI passed 6/6 at `fd792254`, pgTAP included;
+    - a subagent reviewed the full diff at `53d0f699` (FAIL, then fixed);
+    - I re-reviewed the fix delta myself;
+    - the advisor passed it;
+    - GitHub reported CLEAN against `e4ef5b59`.
+  - Not on the hold list:
+    - no migrations and no contract change;
+    - health goes only into the owner's model context, and stored copies are stripped and sentinel-tested;
+    - the app branch adds fail-closed owner checks.
+  - Non-blocking follow-ups from the review:
+    - (5) `appCaller`'s synthetic ACK when a send happens outside the alarm;
+    - (6) whether a health-tool read in an app update-card job with follow-ups off reaches a stored copy. Day cards already carry the same exposure.
+- **Wave 2** is #1086 plus #1087, on the owner's go in L1's session. #1088 joins only if the owner merges it first.
+- **#1089:** L1 is asked to merge base now that #1087 is in, because both touch `telegram-owner-do.ts`. The review launches at the new head.
+- **Lanes:**
+  - L4 had committed movement minutes locally (`a5f26f16`, 660 tests passed) and asked the owner about probe 5's 4 pm window; that question was interrupted. Probe 5 needs a new time.
+  - L2 is idle after the limit; it was told #1087's state, to mark #1088 ready when green, and to pace itself.
