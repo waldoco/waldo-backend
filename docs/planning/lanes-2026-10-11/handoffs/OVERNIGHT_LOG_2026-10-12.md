@@ -1211,3 +1211,24 @@ No second sweep for now, because the usage window has to last through wave 2 and
 - **12:0xZ, L2:** G1's two owner-DO lines (~`:2101`, ~`:2157`) don't overlap #1089's hunks, and #1089 doesn't touch `owner-turn.ts` [L2's check; it matches mine]. L2 is making the hot-file edits locally on `l2/g1-tool-results`, unpushed.
   - Already committed locally: the ledger reconciliation (24/24) and the red P1 tests for the app and Telegram.
   - L2 is waiting for the slot before it pushes or posts on #116. My "slot is yours" reply is blocked by the message cap until the owner types here.
+
+## 12:1xZ: #1088 review: isolation PASS, but FAIL as written (the app-first, Telegram-later transition)
+
+- **Isolation PASS** [verified by the reviewer]: the custody key comes only from this DO's KV `telegram_subject` or the context principal. No app request field, header or model output reaches it. Skill loading grants no tools.
+- **Blocking as written (MEDIUM): an owner who starts in the app and links Telegram later loses all 16 skills on both surfaces.** I re-read the mechanism myself at `0e2557c3` (`skills/curated-owner.ts`) [verified by reading; not executed]:
+  - `authentic()` requires `created_by === createdBy(s)`, which includes the current custody key.
+  - `ensureDefaults()` inserts only missing names and upgrades only rows ending `:owner:${custodyKey}`.
+  - `install()` denies when the existing row isn't authentic.
+  - So the app's `prn_` rows block the Telegram custody after linking.
+  - This is the onboarding path the product expects (connect Telegram from the app later). The body's "Telegram unchanged" and "no data change on revert" claims are wrong in effect: a revert leaves `prn_` rows behind.
+- **Lower findings:**
+  - The app's dispatch check doesn't re-check the stored subject the way Telegram's does (`:2116` vs `:2158-2162`). A relink race fails closed.
+  - Test gaps: no subject in the app request, no `telegram_unlinked` case, no transition case.
+  - The body overstates "never from ingress", and the comment should say that `telegram_unlinked` is deliberately ignored.
+  - Pre-existing (INFO): `bindIdentity` writes the subject from a Worker header without the regex or the directory re-check.
+- **Recommendation for L2** [proposed]:
+  - Accept either of this DO's own identities in `authentic()` and in the upgrade loop: the stored Telegram subject, or `prn_<owner>`. The DO never changes owner, which was checked.
+  - Add the transition test: app first, then link Telegram, and skills are still active on both surfaces.
+  - The alternative is to land E15 (both surfaces on `principal_ref`) first.
+- **Owner:** don't merge #1088 at `0e2557c3`.
+- **Queued for L2** (message cap): this finding, plus the G1 slot message from 11:59Z.
