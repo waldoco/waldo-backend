@@ -420,3 +420,34 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   3. The labels follow the design pass, with "Review not confirmed" for the unconfirmed state.
 - **#93 and #94's FAIL blockers** were relayed to the App lane directly. It hadn't seen them while messages were paused.
 - **Advisor** consulted on D-a; I followed its advice.
+
+## 23:46Z: #1107 merged; #1109 FAIL (codes in table cells reach the prep prompt)
+
+- **Merged #1107 as `f93a7eff`** (calendar join link, attachments and attendee emails, with a fixed-projection digest).
+  - **Gate:**
+    - CI 6/6 at `89b701c5`, CLEAN against `8195fee6`. The only commit since is #1106, which is test-only.
+    - Review PASS. Either-order deploy is closed in both directions, and 7 mutations were caught, including the 8195fee6 proxy run under the new test.
+    - The advisor agreed.
+  - **No deploy for #1107 alone.** Staging's proxy (v17) ignores the flag, so users see no change.
+  - **Residual risks:**
+    - The 16 KiB prep guard measures the whole event; this goes to Connectors.
+    - D1: `conference_url` is kept whole, so it may carry a passcode or a third party's video link.
+    - Attendee emails reach model context.
+
+    All three take effect only after the owner's proxy redeploy, so they go in the morning summary's proxy item.
+- **#1109** is retargeted to `beta-mvp` (CLEAN; the diff is its own 3 files). **Review FAIL** (PR comment 6134785093):
+  1. **Codes leak into the prep prompt** when they sit in adjacent HTML table cells. This was reproduced through the real connector.
+     - **Cause:** `htmlText` has no `td`/`th` boundary. It's the same root as #1105's blocker. It predates #1109 and also hits chat `read_thread`.
+  2. **An outsider's unanswered invite picks which owner mail is read,** and prep notes go to Telegram with link previews on.
+     - **Fix:** a deterministic authority gate, reading only for events the owner organized or accepted.
+  3. **The mail reads have no deadline.**
+  4. **No test pins the post-read currentness check.**
+- **Connectors' revised queue:**
+  1. the send-verify PR;
+  2. one "codes in table cells" PR for #1105 and #1109: a Worker-side extractor that works on v17, plus `htmlText` separators;
+  3. #1109's fixes, plus the 16 KiB guard and the ADR's wording;
+  4. `APP_CONNECT_GUIDANCE`;
+  5. links, then chunks.
+
+  Items 2–5 must merge before the owner's proxy redeploy.
+- **Security note [inference]:** the table-cell OTP gap is live on staging today for HTML-only mail in chat `read_thread` (the HTML fallback exists at base). Fix 2a closes it with a Worker deploy.
