@@ -950,3 +950,15 @@ Still open:
   - It is an existing producer input, not a new destination [inference from L1's report].
   - Revisit the legal side before production.
 - **L1** is building Weight on `l1/weight-demand` from `e4ef5b59`; the owner-DO lines go on #116 for L2 first.
+
+## 09:56Z: owner ruling E16, standing grants (contract and ADR now)
+
+- **The owner's question:** is "at or above the bar on authority and safety" too restrictive for Waldo?
+- **My answer:** the safety layer is not the limit. The missing standing grants are:
+  - every write needs a one-time approval, so nothing acts on its own;
+  - competitors document grant lifetimes (Muse, Vellum, OpenClaw, Hermes; report 11).
+- **E16 (owner):** "Start the contract and ADR now".
+  - The draft standing-grants ADR and contract are being written by a subagent. They build on draft #932: owner-only, reversible actions; scoped, expiring and revocable; rechecked before dispatch.
+  - Output: `STANDING_GRANTS_ADR_DRAFT_2026-10-12.md`, for L3 and the owner.
+  - The code comes after the app musts. The ADR goes to waldo-brain, which only the owner merges.
+- **L3 has been unreachable all morning.** The owner needs to resume L3's session for the contract and E11.
