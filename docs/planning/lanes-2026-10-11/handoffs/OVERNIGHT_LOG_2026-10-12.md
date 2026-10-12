@@ -506,3 +506,19 @@ Still open:
 - #1076 moved to `eb959538` at 04:47Z. CI is running (4 of 6 green), and the PR is still a draft. L2 is updating it under E4.
 - No new #116 comments since 04:40Z.
 - L3 is still absent from `ListAgents`. Nothing is ready to merge.
+
+## 04:57Z: #1076 ready; gate started
+
+- **L2 marked #1076 ready** at `eb959538`, with `cdd906dd` merged in. CI is 6/6, pgTAP included, and the PR is `CLEAN`.
+  - The owner approved it twice: in this session (E4) and in L2's ("Merge as is, rest today").
+  - In L2's session the owner also said #1066 is "ready after the strip", and gave L2 a go to post its exact `telegram-owner-do.ts` lines on #116.
+  - L2's local evidence:
+    - 10 approval and control files, 110 tests;
+    - typecheck, guards and the diff check pass;
+    - pgTAP is UNAVAILABLE locally.
+  - Follow-ups due today: the model re-raising a deferred item on any surface, and Telegram's "Not now" mapped to defer.
+- **Independent review subagent launched**, read-first with a limited budget.
+  - 5-hour usage window: 73%, resetting at 06:30Z.
+  - My context: 70%.
+- **Scorecard:** the W2 probe now notes that with #1076 alone, a deferred chat card may read "no longer available". Reading "put off" also needs L3's `deferred_at` field and L4's re-pin.
+- **Board:** L2's merge-order note for L3's expiry rebase. L3 is still unreachable.
