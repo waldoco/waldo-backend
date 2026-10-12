@@ -1379,3 +1379,5 @@ I read the source delta over `2fc0e642` (+237/−57 across 6 files; about 120 so
 - **Usage:** the 5-hour window is at 34%, 85 minutes after its 11:30Z reset, which works out to about 24% an hour [inference]. At that pace it runs out around 15:40Z, before probe 6 at 16:00Z and before the 16:30Z reset.
   - My context is at 74%, so cycles stay lean.
   - Proposed: the lanes pace down (no subagents, fewer long turns) until 16:30Z, or the owner accepts a pause.
+
+- **13:14Z heartbeat:** #1092, L1's fixed-id follow-up, is open at `457c0f67` with CI running. #1091 (G1) is a draft at `10dbfdec`. No new app PRs. The #1092 review starts when L1 reports the head and CI, so it doesn't chase a moving head.
