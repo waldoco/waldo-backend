@@ -727,3 +727,7 @@ Still open:
 - **L3** is unreachable (not in `ListAgents`). Its queue, L2's merge-order note and L4's expiry question are on the board.
 - **Usage:** the 5-hour window reset at 06:30Z. Three reviews used part of it. My context is about 80%.
 - **The owner, at about 07:13Z in this session:** a health number copied from an earlier reply into the day card's stored `today:` summary "counts as replies", so it is stored as written. The `today:` copy question is closed. Relayed to L2.
+- **L1 (about 07:15Z):** the owner's #1083 rulings in L1's session match this session's.
+  - Health Connect goes into the source table at 0.6, marked candidate, in the same ADR amendment. Mixed owners keep Form through per-component selection.
+  - L1's order: the brain amendment PR, then the re-work of #1083.
+  - E12 answered: the owner approved Weight's free/busy design, using all selected calendars. It comes after #1083, and its owner-DO route will be sequenced with L2.

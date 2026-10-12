@@ -99,7 +99,7 @@ Each can be asked with AskUserQuestion. The first option is the recommendation.
 If you choose E1(a), tell each lane in its own session; a relay from me is not a yes there. L4's brief, for one, requires your yes in L4's session for every app merge.
 
 **Asked in L1's session (about 04:56Z):**
-- **E12, Weight.** It never computes because its demand input has no producer. The producer runs in the Worker, and calendar access exists only in the owner DO. Filling it is a design decision, because Weight has no ADR and its weights are drafts. L1's smallest slice:
+- **E12, Weight: answered in L1's session.** The owner approved the free/busy design, using all selected calendars. It comes after #1083, needs a small owner-DO route in `telegram-owner-do.ts` sequenced with L2, the single writer of that file today, and is not an EoD item. The original question: It never computes because its demand input has no producer. The producer runs in the Worker, and calendar access exists only in the owner DO. Filling it is a design decision, because Weight has no ADR and its weights are drafts. L1's smallest slice:
   - freebusy busy minutes per local day over the 30-day window, as counts only, with no titles;
   - physical load from the workouts and movement the producer already reads;
   - results stay `candidate_unaccepted`.
@@ -110,6 +110,7 @@ If you choose E1(a), tell each lane in its own session; a relay from me is not a
     - **amend the ADR to keep stress** in Form;
     - SDNN confidence factor 0.8, marked candidate;
     - **fix source choice before merging**, so Health-Connect and mixed owners keep Form.
+    - In L1's session the owner then added Health Connect to the source table at 0.6, marked candidate, in the same ADR amendment. Mixed owners keep Form through per-component source selection.
   - **#1083 is not an EoD item.** It needs a waldo-brain ADR amendment that the owner approves and merges, a code re-alignment, the source-choice fix, and the review's test fixes.
   - Earlier detail on the deviation: The code weights five components differently from the ADR. Align the code or amend the ADR, and decide who edits `scores/`, which is the Instinct contributor lane's code and read-only for L1.
 
