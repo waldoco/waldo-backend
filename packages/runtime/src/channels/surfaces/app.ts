@@ -9,7 +9,7 @@ export const APP_REVIEW_MAX_CHARS = REPLY_TEXT_MAX_CHARS;
 export const appApprovalPart = (part: AppApprovalPart): AppApprovalPart => replyApprovalPartV1Schema.parse(part);
 export const appApprovalLink = (approvalId: string): string => `waldo://approvals/${approvalId}`;
 // What a chat turn on the app tells the model when a tool needs Google: the app connects from its own screen.
-export const APP_CONNECT_GUIDANCE = 'No button was sent: the app chat shows none. Tell the owner to go back to Home, open the menu at the top left, tap Connections and connect Google there - never quote or retype any link yourself.';
+export const APP_CONNECT_GUIDANCE = 'No connect button was sent: the app chat has none. Tell the owner to go back to Home, open the menu at the top left, tap Connections and connect Google there - never quote or retype any link yourself.';
 
 // A turn's reply reaches the app through the transcript its own turn writes, so a plain send during a
 // turn is accepted and goes nowhere else. Scheduled work has no turn: while the alarm holds a delivery,

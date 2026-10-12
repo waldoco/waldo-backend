@@ -129,7 +129,7 @@ export function ownerClockLine(clock: MessagingClock): string {
 
 // A host fact from granted scopes: tools for these features were left out, so the model offers the connection instead of denying the ability.
 export function unconnectedLine(features: readonly string[]): string {
-  return features.length ? `Google features not connected for this owner: ${features.join(', ')}. Their tools are left out of this turn. If the owner asks for one, call connect_service with that feature so a connect button is sent.` : '';
+  return features.length ? `Google features not connected for this owner: ${features.join(', ')}. Their tools are left out of this turn. If the owner asks for one, call connect_service with that feature; its result says whether a connect button reached the owner or where else they connect.` : '';
 }
 
 // These canonical restrictions remain last on the private skill-enabled reply path.

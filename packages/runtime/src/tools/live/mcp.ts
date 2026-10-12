@@ -108,9 +108,6 @@ export type McpDesk = Readonly<{
   placement?(id: string): CardPlacement;
 }>;
 
-// Auth failures are a typed intent, never a URL in text (S4): the responder sees `connect` and
-// calls the channel's offerConnect seam; the model reads only fixed words.
-
 // Owner channel (desk present): the tool proposes a card instead of executing - ADR-0049's
 // human-confirm route. Surfaces without the desk keep direct execution (tests, console).
 export const callMcpToolHandler = (serversRaw: string | undefined, desk?: McpDesk, googleAuth?: McpGoogleAuth): ToolHandler<CallMcpToolArgs, unknown, ToolDispatcherContext> => ({

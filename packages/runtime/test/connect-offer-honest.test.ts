@@ -86,6 +86,9 @@ describe('connecting Google from a chat turn', () => {
         expect(await state.storage.get('connect:offers')).toBeUndefined();
         expect([...state.storage.kv.list({ prefix: 'connect_channel:' })]).toEqual([]);
         expect(traceHops(state).filter(hop => hop.startsWith('oauth_link_sent'))).toEqual([]);
+        const prompts = JSON.stringify(model.requests);
+        expect(prompts).toContain('Google features not connected for this owner');
+        expect(prompts).not.toMatch(/button is sent|button is in the chat/);
       } finally { await state.storage.deleteAlarm(); }
     });
   });
@@ -103,7 +106,7 @@ describe('connecting Google from a chat turn', () => {
         expect(sent.status).toBe(202);
         const { message_id: id } = await sent.json() as { message_id: string };
         await vi.waitFor(() => expect(state.storage.kv.get<{ state: string }>(`app:inbox-record:${id}`)?.state).toBe('completed'), { timeout: 10_000, interval: 20 });
-        await vi.waitFor(() => expect(traceHops(state)).toContain('google_reauth_notice:0'), { timeout: 5_000, interval: 20 });
+        await vi.waitFor(() => expect(traceHops(state)).toContain('google_reauth_notice_skipped:1'), { timeout: 5_000, interval: 20 });
         expect(await state.storage.get('google:health')).toEqual({ 'local:owner@example.test': 'invalid_grant' });
         expect(rpcs).not.toContain('connect_session_issue');
         expect([...state.storage.kv.list({ prefix: 'connect_channel:' })]).toEqual([]);

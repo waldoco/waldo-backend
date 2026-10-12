@@ -126,7 +126,8 @@ export async function runToolLoop(input: Readonly<{
         let outcome = offered.get(offerKey);
         if (outcome === undefined) {
           let answer: boolean | string | undefined;
-          try { answer = await input.onConnect?.(result.connect); } catch { /* an offer failure must not break the turn */ }
+          // An offer failure must not break the turn; the model hears that nothing was sent.
+          try { answer = await input.onConnect?.(result.connect); } catch { console.error(JSON.stringify({ hop: 'connect_offer', ok: false, code: 'offer_threw' })); }
           outcome = answer === true ? CONNECT_BUTTON_SENT : typeof answer === 'string' ? answer : CONNECT_BUTTON_UNSENT;
           offered.set(offerKey, outcome);
         }

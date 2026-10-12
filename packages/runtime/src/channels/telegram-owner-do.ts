@@ -1684,7 +1684,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const storage = this.ctx.storage;
     // S4 (CONNECT_FLOW_DESIGN 4.4): the responder calls this when a tool reports auth_required.
     // At most one button per owner/service/reason per 60 s; a repeat just points at the last one.
-    // The app chat shows no buttons, so on the app nothing is minted or sent: the owner connects from the app's own screen.
+    // The app chat has no connect button, so on the app nothing is minted or sent: the owner connects from the app's own screen.
     const offerConnect = async (intent: ConnectIntent): Promise<boolean | string> => {
       if (channel === 'app') return APP_CONNECT_GUIDANCE;
       const key = `${intent.service}:${intent.reason}`;
@@ -1738,9 +1738,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           await storage.put('google:reauth-noticed', remaining);
         }
         if (!transition.send) return;
-        // The app chat shows no buttons and a new ticket revokes the owner's open ones, so on the app nothing is minted:
+        // The app chat has no connect button and a new ticket revokes the owner's open ones, so on the app nothing is minted:
         // the app's Connections screen shows the grant as needing a reconnect.
-        if (channel === 'app') { log({ trace: `google:${Date.now()}`, hop: 'google_reauth_notice', ms: 0, ok: false, code: 'app_no_button' }); return; }
+        if (channel === 'app') { log({ trace: `google:${Date.now()}`, hop: 'google_reauth_notice_skipped', ms: 0, ok: true, code: 'app_surface' }); return; }
         const account = (await accounts()).find((known) => known.id === id);
         const url = await google.connectUrl('calendar');
         const sent = url !== null && (await deliverConnectLink(url, 'reconnect', account?.email));
