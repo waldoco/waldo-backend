@@ -1523,3 +1523,9 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
     - `run()` returns the queued run's status;
     - three gaps in the source test;
     - a real-iPhone falsifier for `not_asked`.
+- **15:43Z heartbeat:**
+  - #1094 is ready and CLEAN; its review is running (about 10 calls).
+  - #1092 is at `7e91fa58` (L1's scenario-fake and wording fixes), with CI running. A delta re-review comes when it's green.
+  - #1088 and app #87 wait for the owner's merge. App #86 is merged.
+  - `beta-mvp` is `2d18e5e5`.
+  - Probe 6 is at 16:00Z (L1 is watching).
