@@ -44,3 +44,43 @@ The decision stands: skip the row, and don't widen the validator.
 **Reverse.** Add the client rule later if L3's fix slips.
 
 **Unblocks.** L4 relabels nothing, and L3's PR is the single fix.
+
+## D11 (09:59Z, daytime; an orchestrator decision, not an owner ruling)
+
+**Question.** L2 asked which custody key app turns should use for skill activations (SHOULD, #1088). (a) `principal_ref` only. (b) A bridge: the DO's own stored, verified Telegram subject, then `principal_ref`.
+
+**Decision.** (b) for today. The bridge reads only the DO's stored subject, never one from the request.
+- Tests:
+  - a seeded Telegram-custody row loads on an app turn;
+  - a fresh DO uses `principal_ref`;
+  - a row stamped with another subject or principal stays disabled.
+- L2's evidence for option (i) shows the DO can't be re-bound to another owner's app principal:
+  - `do_name` is `not null unique` and minted as `'owner-' || gen_random_uuid()`;
+  - it is never rewritten;
+  - the app principal is `prn_<owner_id>`, resolved by `do_name`.
+
+**Why.**
+- Under (a), the Telegram-linked probe account's activations show as disabled on the app, so probe 7 fails.
+- Skills are instructions, not permissions.
+- No data is rewritten.
+
+**Reverse.** Revert the PR. Both surfaces move to `principal_ref`, with a reviewed re-stamp, in E15's routing slice.
+
+**Gate.** The PR touches user isolation, so it is on the hold list: the owner merges #1088, not the orchestrator.
+
+**Unblocks.** Probe 7 ("Prep me for my 3 pm") on a Telegram-linked account.
+
+## D12 (11:44Z, daytime; an orchestrator sequencing decision, not an owner ruling)
+
+**Question.** G1, earlier tool results reaching the reply, needs about 5 lines in `owner-turn.ts` and `telegram-owner-do.ts`, both hot files. #1089 (Weight) also changes `telegram-owner-do.ts`. L2 offered to wait until #1089 lands.
+
+**Decision.** Don't wait. L2 builds G1, hot-file lines included, in parallel, and posts the exact lines on #116 before pushing. Whichever PR passes its gate first merges first, and the other merges base (merge, no rebase).
+
+**Why.**
+- #1089 merges only on the owner's yes in L1's session, which may take hours.
+- G1 is core to E17: the agent works end to end in the app, and earlier tool results reach later turns.
+- The two PRs touch different parts of the file. #1089 adds 8 lines at `:615-618`, near `appContext` at `:596`, so any conflict should be small and textual [inference].
+
+**Reverse.** Hold G1's push until #1089 lands, as L2 first offered.
+
+**Unblocks.** G1 starts now, not after the owner's next answer in L1's session.

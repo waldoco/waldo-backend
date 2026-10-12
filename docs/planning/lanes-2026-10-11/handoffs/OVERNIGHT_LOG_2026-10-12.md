@@ -1134,3 +1134,8 @@ Staging `e37f60f3`, version `c7974404`. Codes and times only.
   - **#1089** merged base `614d1aff` cleanly; the new head is `dc9cdefc`. Locally, 264 tests pass across 29 files, typecheck passes, and guards pass 37/37; pgTAP is unavailable. CI is running. The review subagent is now running at `dc9cdefc`, under the no-fan-out rule and a budget of about 60 calls.
   - **The staging tail** was down from about 10:52Z to 11:38Z, after the restart, and is live again. Anything probed in that gap went unobserved.
   - **Wave 2:** L1 runs the gate and asks the owner for the go in L1's session.
+
+- **11:44Z:**
+  - D11 and D12 are written up in the decisions file. D12: G1 builds in parallel with #1089, and the gate decides the merge order.
+  - L4 holds movement minutes and probe 5 for the owner's answers in L4's session.
+  - #1088 merged the new base at `0e2557c3`; L2 marks it ready when it is green.
