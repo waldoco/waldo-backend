@@ -14,3 +14,19 @@ Decisions the orchestrator made on the owner's behalf under the brief ([ORCHESTR
 | D1a | 22:07 | Revision of D1: does #1066 wait for the follow-up to *merge*, or only to *deploy*? | **Merge #1066 as soon as it passes the gate; deploy only once the follow-up is merged too.** | Keep D1 (merge the follow-up first) | D1's risk was staging running #1066's proactive deliveries into the strict load. That's a deploy question, and L1 deploys only tips I report. Merging early also tests the merge path hours before the deploy window. L2 asked for "follow-up first, or together"; from staging's view this is together. | Revert the #1066 merge commit on `beta-mvp` | L2 |
 | D8 | 22:32 | #1066 after its review (FAIL on re-plan and a clock-dependent test; HOLD on health destinations) | **Held for the owner's morning ruling.** L2 fixes the re-plan, the test and the held-skip trace tonight, so the PR is ready the moment the owner rules. | Merge with a follow-up issue (rejected: the brief holds anything that widens health-data destinations); drop the day-card arming from #1066 (a product cut I shouldn't make) | Health-log numbers in the machine prompt reach `conv:*` and `episodes` for a new population (app-only owners). The owner must decide whether those count as forbidden values. | Owner merges after ruling | L2 |
 | D9 | 22:34 | Pacing under the account's 5-hour usage limit (81% at 22:33Z, resets 01:30Z) | **Until 01:30Z:** no new subagents; heartbeats do only a few cheap checks (`gh pr list`, `/healthz`, new #116 comments); app PR reviews and merges are batched into 01:30–02:15Z (the app is built from source in the morning, so no deploy waits on them); the promise map is written after the reset. The only critical action before the reset is L1's deploy of `889efa27` and its probe. | Keep full cycles and per-PR review subagents (risks stopping every session before the deploy is verified) | Spend the remaining budget where it changes the morning: send works on staging. | Resume full cycles at any time | all |
+
+## Correction to D5 (03:40Z)
+
+D5's provenance claim, that no merged build wrote the row, was wrong. [verified from git objects]
+- `40522697` (7 Oct) is an ancestor of `889efa27`. It added `packages/runtime/src/channels/owner-canonical-history.ts`, which wrote canonical rows under today's prefix `canonical-owner-v1:<principal>:<tenant>:`:
+  - `conv:<slot>`, `witness:<id>` and `lineage` keys;
+  - a count under `conv-count` (`:69`, `:87`), not `count`;
+  - no `inputOrigin` field anywhere in contracts or runtime (introduced only in `e35d0262` on 10 Oct).
+- `2afc6ebd` (8 Oct) deleted that file. `e35d0262` (10 Oct) added today's store, with `count`, `leaf` and the `inputOrigin` rule.
+- So the skipped row and the missing `count` key both fit a store last written by the 7–8 Oct build on `beta-mvp`'s own history.
+- My mistake: I searched only the current store's history, from `e35d0262` onwards.
+
+The decision stands: skip the row, and don't widen the validator.
+- What's still unknown is the row's origin, owner or machine, which the old build never recorded. Accepting it would still mean guessing.
+- A separate, reviewed change could read such legacy rows (canonical lineage, no `inputOrigin`) as `machine`, the least-authority value, so they show again without counting as owner input. That's for L2 and the owner.
+- Exposure: any staging owner whose store the 7–8 Oct build wrote has `conv-count` but no `count`. On `889efa27`, each send there overwrites the next old slot until the count passes the last old row. #1080 fixes this.

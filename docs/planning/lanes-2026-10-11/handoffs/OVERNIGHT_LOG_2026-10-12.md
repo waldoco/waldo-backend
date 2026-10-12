@@ -377,3 +377,16 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
   - L4 is asking the owner in its own session to choose a presentation: design-system chapter 08 says the graph is not MVP and bans confidence numbers.
   - Zone heads-up: once #1066 deploys, the Simulator app (signed in as the owner) writes its zone once to the owner's staging account, if the account is still unconfirmed and on `UTC`.
 - The owner asked for a pillar assessment (8 agent-product pillars × surfaces × industry bar × promises). I launched four read-only research agents, at 31% of the 5-hour window.
+
+## 03:40Z: #1080 tests pushed; the old build is named
+
+- **L2 pushed `f17be611`** with the reviewer's two tests and the nits. I read the delta: one comment line and 30 test lines.
+  - By reading, test (a) fails under M7, which writes at slots 1–2, and on base, which writes at slot 0.
+  - Test (b) fails under M7, which finds slot 0 and doesn't throw, and on base, which writes at slot 1.
+  - CI is running at `f17be611`.
+- **L2 and L1 on the owner's store:** it held one canonical row [inference]. The 4bb040f5 display read showed 0 rows plus 1 skipped; after two sends, a Refresh read back four rows.
+  - So the first send overwrote slot 0 and set `count`, and later sends append.
+  - My stop-sending advice to the owner was conservative, and I've corrected it.
+  - L1: reading a DO key from outside needs a code path, so the "read-only `count` check" isn't something L1 can do. L1 deploys nothing until the owner says so in L1's session. Rollback `65a07f13` is not recommended.
+- **The old build is `40522697` (7 Oct), on `beta-mvp`'s own history** [verified]. It wrote canonical rows with a `conv-count` key and no `inputOrigin`; `2afc6ebd` removed it on 8 Oct. This corrects D5's provenance claim (see the correction in the decisions file). D5's decision stands.
+- **L1:** the staging retention cron ran at 03:17:17Z ("owners=0 rounds=1", ok; #116 6117118251). Deletion is still unproven.
