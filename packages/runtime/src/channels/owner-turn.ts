@@ -417,6 +417,7 @@ export const createOwnerResponder = (
           const entries = request.messages.filter((message, index) => index === request.messages.length - 1 || !holdsHeldTopic(message.content));
           const ownerCurrentText = (entries[entries.length - 1]?.content ?? '') + added;
           if (turnReplyContext) entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + '\n\n' + turnReplyContext };
+          if (promptContext) entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + '\n\n' + promptContext };
           entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + added };
           const ordersRaw = standingOrders?.() ?? '';
           const ordersSection = ordersRaw.split('\n').filter(row => !holdsHeldTopic(row)).join('\n');
@@ -527,6 +528,7 @@ export const createOwnerResponder = (
   // owner saw) instead of the owner's message alone - the 😢-on-stress class (2026-09-27 sweep).
   let lastReply: string | undefined;
   let turnReplyContext = '';
+  let promptContext = '';
   let turnReplyOwnAuthored = false;
   const quoteContext = async (reply: ReplyContext | undefined): Promise<string> => {
     if (!reply) return '';
@@ -644,7 +646,7 @@ export const createOwnerResponder = (
       pending = undefined;
       return converse(id, conversationRef, `[Reminder due now, set earlier by the owner: "${note}"] Send the reminder briefly in your own words. Do not add a sentence explaining that they asked for it.`, time, false, surface);
     },
-    async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision) {
+    async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, context) {
       // Cards read in seconds, so a job's prompt gets half the provider budget; the guard keeps the opening and closing and cuts the data between.
       const said = fitPromptToBudget(jobText, Math.floor(deriveContextBudgetChars(model, SANITISE_DESTINATION_POLICIES.internal_context.max_chars) / 2));
       backgroundCurrent = current;
@@ -664,8 +666,9 @@ export const createOwnerResponder = (
           const bounded = context;
           return await time('background_decision', () => ask(id, 'background_decision', [messagingSystemPrompt([]), ownerClockLine(clock), bounded].filter(Boolean).join('\n\n'), said, decision));
         }
+        promptContext = context ?? '';
         return await converse(id, conversationRef, said, time, false, surface, toolNames);
-      } finally { backgroundCurrent = undefined; transientDecision = false; }
+      } finally { backgroundCurrent = undefined; transientDecision = false; promptContext = ''; }
     },
     async consolidate(trace, day, sides) {
       if (!memory) return 'no memory';
