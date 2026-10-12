@@ -16,6 +16,75 @@ The eight pillars:
 7. payments and identity
 8. evals and observability
 
+## EoD status, 12 October (17:01Z)
+
+**The strict test in app Main chat: 0 of 6 chat-capable pillars.** The target was 2–3.
+- **Triggers (P4) and connectors (P5)** have t1, t2 and the reply half of t3 observed live. One follow-up app turn would settle the rest of t3 for both: a later turn reading the result back ("What was on my calendar tomorrow again?", "What reminders do I have?").
+- **Memory and skills (P3)** waits on #1088 (your merge).
+
+**Live on staging `87b31948`** (deployed 16:36Z; rollback `02103423`):
+- **Before wave 1:** #1074 and #1075, the history-load fixes; #1080, the history-overwrite fix.
+- **Wave 1 (08:50Z):**
+  - #1066: proactive arming, with the zone hold;
+  - #1076 and #1085: "Not now", "what's waiting" and bringing a card back;
+  - #1084: the connect text.
+- **Wave 2 (11:55Z):** #1086, unreadable rows held, not fatal; #1087, MUST 3: prep and update cards on the app channel for app-only owners.
+- **16:36Z:** #1090 and #1092, the schedule-row guards; #1094, the episodes search hit.
+
+**Probes:**
+- **Passed:**
+  - 1: an app send and reply;
+  - 2: a reminder fires (GP-6 verified live, though Main chat needs a refresh);
+  - 3: no false connect claim, on an already-connected account;
+  - 4: a calendar read;
+  - 6: The Close arrives on Telegram.
+- **Not passed yet:**
+  - 5: the approval card didn't appear; the rerun waits on your test event;
+  - 8: inconclusive;
+  - 9: a day card in the app, on an app-only account; not run.
+
+**Merged, not deployed (tip `27214c63`):**
+- #1091, G1: earlier tool results and approval state carry into the next owner turn. Only Waldo's own untainted results and the approval desk's state lines are shown (D16).
+- #1093: one content-free log line per calendar read.
+- #1096: the type check now covers `evals/` and `scenarios/`.
+
+To deploy, give your yes in L1's session, naming `27214c63`. That deploy makes `87b31948` (with its guard) the rollback target, which clears D14 for E15 tomorrow.
+
+**Waiting on you:**
+- **Merges:**
+  - #1088, skills on app turns (PASS at `1e1a4b39`);
+  - #1089, Weight (PASS at `4b98b1d7`).
+- **Probes:**
+  - the t3 follow-up turn (your yes in L4's session);
+  - the probe-5 test event;
+  - probe 9, on an app-only account.
+- **Decisions:**
+  - standing grants Q1–Q7 (`STANDING_GRANTS_ADR_DRAFT_2026-10-12.md`, Q1 first);
+  - whether you want D16's alternative, cross-turn taint;
+  - the provenance of notes stored during tainted turns (an ADR-0049 question);
+  - the zone-id producer guard (#116 comment 6127532876).
+- **L3** has been idle since 08:46Z. Resume it in its session for the grants contract and E11.
+- **Your own tasks:** the APNs key (E5), the Google consent move (E8) and the real-iPhone health run.
+
+**Tomorrow, 13 Oct [proposed]:**
+- **L2:** the shared-ring fix, so "did it go out?" survives a busy job, then E15 app-first routing.
+- **L4:** refresh-while-open with the unread signal, then Android (E17).
+- **L1:** deploy `27214c63`, then the Weight and Form follow-ups.
+- **Grants (E16)** once Q1–Q7 are answered.
+
+**Decided on your behalf today** (`OVERNIGHT_DECISIONS_2026-10-12.md`, each reversible):
+- **D11:** skill custody bridges Telegram and the app through the DO's own stored subject.
+- **D12:** G1's sequencing around the hot files.
+- **D13:** stored-data reads skip a bad item and record a code, while authority checks fail closed.
+- **D14:** a fixed-id schedule row is reshaped only after the guard is the rollback target.
+- **D15, superseded by D16:** later turns see only Waldo's own untainted results plus approval state; external reads are re-read on demand.
+
+**Risks and unverified:**
+- G1 hasn't been seen live.
+- "Did it go out?" can still fail after a job with 6 or more tool calls, until L2's ring fix.
+- Text the model copied from mail can still reach later turns through saved replies: the ADR-0049 history class.
+- Before 16:15Z the staging tail cut events at 6 hops, so deliveries before then are confirmed only by the owner's own observation.
+
 ## Basis
 
 **Pins**
