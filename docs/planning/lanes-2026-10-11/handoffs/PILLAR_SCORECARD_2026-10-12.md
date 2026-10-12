@@ -86,7 +86,15 @@ Each can be asked with AskUserQuestion. The first option is the recommendation.
   - A governed history read over the health plane follows as a roadmap item.
 - **E4:** (a).
 - **E8:** (a).
-- **Still open:** E3, E5, E6, E7, E9, E10 and E11.
+- **About 04:50Z:**
+  - E3 (a): index app chat under the strip rule.
+  - E6 (a): device routes for staging behind a flag.
+  - E7 (a): #1071 and canonical admission, staging only, after the musts.
+  - E9 (a): probes from the owner's account, with L1 reading the tail.
+- **Still open:**
+  - E5: the owner creates the APNs .p8.
+  - E10: WhatsApp and iMessage copy.
+  - E11: L3's batch, in L3's session. L3 isn't reachable by message right now.
 
 If you choose E1(a), tell each lane in its own session; a relay from me is not a yes there. L4's brief, for one, requires your yes in L4's session for every app merge.
 

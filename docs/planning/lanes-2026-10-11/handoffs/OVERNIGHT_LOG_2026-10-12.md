@@ -484,3 +484,18 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
   - #1066 ships with health-log numbers kept out of chat history and the episodes index.
   - A governed, owner-scoped health-history read over the health plane is added to the roadmap, gated on a bounded contract under ADR-0081. It is not an EoD item.
   - Relayed to L2 (SendMessage). E3 stays open.
+
+## 04:53Z: more answers from the owner; relayed
+
+All four were the recommended options, at about 04:50Z in this session:
+- **E9:** probes come from the owner's account. L4 or the owner sends, and L1 reads the tail.
+- **E6:** the push device routes (`/devices*`) are approved for staging behind a flag. Production stays off.
+- **E3:** app chat is indexed into episode search and the nightly job, under the strip rule.
+- **E7:** #1071, plus browser admission by canonical identity, is approved for staging only, after the musts.
+
+Relayed by SendMessage to L2 (E3, E6, E7, E9), L1 and L4 (E9 and E6; information only). L1's deploys and L4's merges still need the owner's word in those sessions.
+
+Still open:
+- E5: the APNs key, the owner's task.
+- E10: copy.
+- E11: L3's batch, in L3's session. L3 isn't in `ListAgents`, and its socket is stale.
