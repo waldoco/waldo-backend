@@ -322,6 +322,9 @@ const BODY_CAP = 32_000;
 type GmailPayload = Readonly<{ mimeType?: string; filename?: string; body?: { data?: string; attachmentId?: string; size?: number }; parts?: GmailPayload[]; headers?: { name: string; value: string }[] }>;
 type GmailFullMessage = Readonly<{ id?: string; threadId?: string; snippet?: string; internalDate?: string; payload?: GmailPayload }>;
 const LINK_SCAN_CAP = 100;
+// Artifact extraction backtracks across an unbroken run, so its cost grows with the square of a link's
+// length. A longer target is skipped; link targets are only scanned, never shown.
+const LINK_TARGET_MAX = 2_048;
 const htmlText = (html: string): Readonly<{ text: string; links: readonly string[] }> => {
   const blocks = new Set(['p', 'div', 'br', 'li', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'section', 'article', 'hr']);
   let suppressed = 0;
@@ -332,7 +335,7 @@ const htmlText = (html: string): Readonly<{ text: string; links: readonly string
     onopentag(name, attributes) {
       if (name === 'script' || name === 'style') suppressed++;
       else if (blocks.has(name)) boundary();
-      if (name === 'a' && /^https?:\/\//i.test(attributes.href ?? '') && links.length < LINK_SCAN_CAP) links.push(attributes.href!);
+      if (name === 'a' && /^https?:\/\//i.test(attributes.href ?? '') && attributes.href!.length <= LINK_TARGET_MAX && links.length < LINK_SCAN_CAP) links.push(attributes.href!);
     },
     ontext(text) { if (!suppressed) chunks.push(text); },
     onclosetag(name) { if (name === 'script' || name === 'style') suppressed = Math.max(0, suppressed - 1); else if (blocks.has(name)) boundary(); },

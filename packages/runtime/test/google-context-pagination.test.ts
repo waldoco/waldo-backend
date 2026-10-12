@@ -117,6 +117,12 @@ it('returns link targets only to a caller that asks for full bodies, so an older
  expect((await client.threadPage!('t', 10, undefined, { fullBodies: true })).messages[0]).toMatchObject({ body: 'Sign in', artifact_scan: 'https://auth.example.com/auth/v1/verify?token=synthetic-token-7f3a' });
 });
 
+it('leaves a link target over 2,048 characters out of the scan, so one hostile link cannot stall extraction', async () => {
+ const long = `https://example.com/${'https://a'.repeat(400)}`;
+ const client = thread({ mimeType: 'text/html', body: { data: encode(`<p><a href="${long}">x</a> <a href="https://auth.example.com/auth/v1/verify?token=synthetic-token-7f3a">Sign in</a></p>`) } });
+ expect((await client.threadPage!('t', 10, undefined, { fullBodies: true })).messages[0]!.artifact_scan).toBe('https://auth.example.com/auth/v1/verify?token=synthetic-token-7f3a');
+});
+
 it('resolving a reply parent reads headers only and fetches no held bodies', async () => {
  const calls: string[] = [];
  const client = thread({ mimeType: 'text/html', headers: [{ name: 'Message-ID', value: '<parent@example.invalid>' }, { name: 'Subject', value: 'Debit alert' }], body: { attachmentId: 'html1', size: 10 } }, { html1: alertHtml }, calls);
