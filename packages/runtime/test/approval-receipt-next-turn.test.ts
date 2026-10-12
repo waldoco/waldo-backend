@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 import { handleApp } from '../src/channels/app-api';
 
-// P1: "Draft a note to Sam and send it once I approve." The owner approves the card; a later turn asking whether
+// "Draft a note to Sam and send it once I approve." The owner approves the card; a later turn asking whether
 // it went out sees the approval desk's state for it, not the proposing tool's "nothing was sent".
 const NOTE = { to: ['sam@example.test'], subject: 'Running late', body_markdown: 'Running ten minutes late.' };
 const proof = vi.hoisted(() => ({ outputs: [] as any[][], replies: [] as string[], requests: [] as string[], sentRaw: [] as string[], telegram: [] as { method: string; body: any }[] }));
