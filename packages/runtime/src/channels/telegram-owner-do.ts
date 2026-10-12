@@ -116,7 +116,7 @@ import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
 import { APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_UPDATE_BASE, appSubjectFor, appTranscriptPage, ownerPrincipalRef, parseAppSend } from './app-api';
-import { appApprovalLink, appCaller } from './surfaces/app';
+import { APP_CONNECT_GUIDANCE, appApprovalLink, appCaller } from './surfaces/app';
 import { appApprovalsRequest } from './app-approvals';
 import { WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
 import { readDriveHandler } from '../tools/live/drive';
@@ -1687,7 +1687,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const storage = this.ctx.storage;
     // S4 (CONNECT_FLOW_DESIGN 4.4): the responder calls this when a tool reports auth_required.
     // At most one button per owner/service/reason per 60 s; a repeat just points at the last one.
-    const offerConnect = async (intent: ConnectIntent): Promise<boolean> => {
+    // The app chat has no connect button, so on the app nothing is minted or sent: the owner connects from the app's own screen.
+    const offerConnect = async (intent: ConnectIntent): Promise<boolean | string> => {
+      if (channel === 'app') return APP_CONNECT_GUIDANCE;
       const key = `${intent.service}:${intent.reason}`;
       const sent = (await storage.get<Record<string, number>>('connect:offers')) ?? {};
       if (Date.now() - (sent[key] ?? 0) < 60_000) {
@@ -1739,6 +1741,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           await storage.put('google:reauth-noticed', remaining);
         }
         if (!transition.send) return;
+        // The app chat has no connect button and a new ticket revokes the owner's open ones, so on the app nothing is minted:
+        // the app's Connections screen shows the grant as needing a reconnect.
+        if (channel === 'app') { log({ trace: `google:${Date.now()}`, hop: 'google_reauth_notice_skipped', ms: 0, ok: true, code: 'app_surface' }); return; }
         const account = (await accounts()).find((known) => known.id === id);
         const url = await google.connectUrl('calendar');
         const sent = url !== null && (await deliverConnectLink(url, 'reconnect', account?.email));
