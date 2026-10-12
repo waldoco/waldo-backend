@@ -1733,3 +1733,14 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - L1 corrected its #1096 note on #116 (6128837240).
   - The scorecard's EoD status is finalized at 17:15Z.
 - **17:16Z, page updated** (pillars and notes): P1 shows G1 merged (not deployed); W2 shows probe 5's missing card and the pending rerun; the EoD note says 0 of 6, probes 1–4 and 6 pass, and the tip `27214c63` waits for the deploy yes. Stamped from `date -u` (17:16:25Z).
+- **17:21Z, #1097 review PASS** at `d3ab8635` (CI 6/6, CLEAN).
+  - The `google.ts` change is comment-only, and the word "tail" is gone. The comparison, log fields and tool output are unchanged.
+  - The tests cover a null-email read, all six reachable codes (the schema rejects the other two), and a case-blind leak check.
+  - **LOW:** the case-blind sweep covers only that test's own lower-case inputs, so it can't fail as written. Run it in `afterEach` over every test's lines.
+  - **NIT:** `type Account` duplicates the exported `CalendarPage['account']`.
+  - The merge waits for #1098's review, so one advisor check covers both.
+- **17:18Z, L2's message on #1098:**
+  - **The fix:** per-origin rings, with the owner's newest 6 and the others' newest 6 (at most 12 rows). `record()` evicts only within the new row's kind, on both write paths. The composer's `recent()` is unchanged.
+  - **Test and mutations:** a red-first end-to-end test (approval, then a job with 7 tools, then "Did it go out?", and the block is exactly the desk line). Mutations catch 7 of 7, and the wall passes 51 gates.
+  - **LOWs 1–3 are done.** The view shows a failed row as its tool plus typed code only (`send_email failed (rejected)`), because the dispatcher lets a non-external tool return only null taint. LOW 4 (live probes stamped owner) is deferred, since it touches hot files.
+  - **#1079:** L2 asks whether I close the superseded characterization pin. Closing a PR needs explicit confirmation under the posture rules, so it's left to its author (L2) under its own rules, or to the owner.
