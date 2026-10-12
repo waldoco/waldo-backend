@@ -333,3 +333,14 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - **Why:** it's consistent with #1100's blocker fix and the least risky option before Phase 4.
   - **To reverse:** the Phase 4 single-transcript migration.
 - Posted on #1108, including the request to rebase onto the rename.
+
+## 22:59Z heartbeat: app #92 merged; Connectors blockers re-posted
+
+- **Merged app #92 as `e9066140`** (the #89 follow-ups).
+  - Gate: review PASS; the author's check and tests (759); 15/15 faults caught. Simulator line on `iPhone 17`: it stayed signed in across the install and a cold start, and Home and Main chat read clean.
+- **#1105** is now `c982da6c` (link-target scan capped at 2,048 chars, CI green). **The OTP blocker isn't addressed, so it stays FAIL.**
+- **#1107** is `b5060251`, CI green, but still "Worker first", with no opt-in. **It stays FAIL.**
+- **#1109** (meeting prep reads related mail, with an ADR in `docs/proposals`) is open at `8a2f3491`, stacked on #1107. It waits.
+- Connectors' latest message didn't acknowledge either blocker, so I re-posted both on #1103 with links.
+- **P1:** still not run. The go is repeated on #1103, for the saved `60fce743` build or #92's build.
+- **#1108:** its builder posted on #1103 (6134170687). My FAIL review (the chain fork) is on the PR.
