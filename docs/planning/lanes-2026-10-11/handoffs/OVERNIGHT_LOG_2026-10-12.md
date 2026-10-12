@@ -345,3 +345,15 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
 - **Fix: draft #1080** (`c67516c3`, 2 files): new rows go to max(count, last slot + 1) on both commit paths; a non-slot key stops the save. 5/5 mutations caught **[lane report]**. CI running. Independent review launched at 02:58Z.
 - **Owner questions:** (1) leave or restore the overwritten row (L2 and I recommend leaving it: it was shape-invalid and hidden, and was written by a build outside `beta-mvp`; see D5); (2) approve #1080 for merge and deploy once CI and the review pass.
 - **Lesson:** the #1075 review named this hazard as "pre-existing, needs a stale `count`" and judged it unlikely from one inference (a matching witness implies `commit()` wrote the row). That inference was wrong: an older build wrote the row. The falsifier I gave L1 caught it on the first real send.
+
+## 03:00Z: owner answers (in this session); app #79 merged
+
+- **The owner, via AskUserQuestion in the orchestrator session (about 02:59Z):**
+  - #1080 → "Yes, merge and deploy (Recommended)", once CI is green and the independent review passes;
+  - the overwritten row → "Leave it (Recommended)";
+  - app #79 → "Merge now (Recommended)";
+  - heartbeat → "Keep it running".
+- **MERGED waldoco/waldo-app#79** as **`5bf7fd3d140d809faae16bd727901a173fbe543e`** at 02:59:51Z, with `--match-head-commit 3546e5016869f0e04f5eac72e508e5b059195d94`, on the owner's explicit yes.
+  - Evidence: CI-equivalent at the exact head (580 passed / 1 skipped; tsc clean; frozen install clean); `CLEAN` before the merge; diff read.
+  - No independent review subagent: the owner chose "Merge now" over "Full gate first".
+- The owner's answers are relayed to L2 (SendMessage `bbf281aa`) as relayed answers, not as a yes in L2's session. #1080's deploy needs the owner's go in L1's session.
