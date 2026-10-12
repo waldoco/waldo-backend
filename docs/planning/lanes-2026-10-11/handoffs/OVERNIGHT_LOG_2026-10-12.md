@@ -1059,3 +1059,16 @@ Staging `e37f60f3`, version `c7974404`. Codes and times only.
   - The model chose 15:42 IST, which is 10:12:00Z. The alarm fired at 10:12:02Z, about 2 s after the due minute.
 - **A one-shot reminder at a time already past is rejected, not fired** [verified at `beta-mvp`: `packages/runtime/src/channels/reminders.ts:31`].
 - **So "in 1 minute" fires at the next minute the model picks.** That is between a few seconds and about a minute after the request [inference], and nothing fires early.
+
+## 10:26Z: #1087 delta re-review PASS at `fd792254`; CI running
+
+- **Delta over `53d0f699`** [verified by reading the diff; `53d0f699` is an ancestor]: 4 files, +49/−16.
+  - **Source** (`telegram-owner-do.ts`, 3 lines): the stale comment at `:2041` is deleted. Before the legacy branch, `if (channel !== 'telegram') return void (await updateCheck(...))` is added, with a comment saying why. With the flag on, the grounded block returns first on both channels. With it off, Telegram keeps the legacy sweep, and the app gets only the update check.
+  - **Tests:**
+    - **Grounded prep off.** A new test with `CALENDAR_GROUNDED_PREP: '0'` checks three things: the app chat holds exactly the update card, `event_briefs` has 0 rows, and no model request names the meeting. L2 reports it was red at `53d0f699`.
+    - **Health strip.** It now uses decimal sentinels. Requests carry the rendered lines; `storedText` has neither number, after the update card and after prep. The prep request carries neither number nor the meal.
+    - **Re-arm.** It now asserts zero Telegram sends.
+    - **Keyboard.** The Telegram keyboard is pinned exactly: `fb:<id>:u` and `fb:<id>:n`, keyed to the pushed row.
+  - **#1086's dual-channel test was flaky.** L2 reproduced the flake deterministically, so it was a test-clock bug, not true flakiness. The fix sets the interval phase to the due occurrence (`phase_ms: sweepAt % 600000`, was `0`). The assertion is unchanged.
+- **Next:** CI at `fd792254`, then the advisor, then merge with `--match-head-commit`. The PR is no longer a draft. Wave 2 needs the owner's go in L1's session.
+- **Skills PR:** L2 is opening it as owner-merge. Its local wall had one owner-ingress run fail with `delivery_uncertain` (`telegram-relink-owner-do`, 8 cases). That run overlapped another worktree's tests, and the file passed 3/3 alone. L2 has logged this on #116.
