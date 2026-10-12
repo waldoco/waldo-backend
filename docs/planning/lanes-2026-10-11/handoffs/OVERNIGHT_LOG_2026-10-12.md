@@ -2132,3 +2132,7 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - **Latency:** about 2 minutes, which is slow.
   - **The join link:** the calendar mapper drops Meet links [verified in source], so a link on a real meeting would be missed. Whether this event had one is unknown.
 - **The duplicate reminder is visible in the account's history:** receipts "reminder set (failed); reminder set (accepted); reminder set (accepted)", then two different stretch messages. It's queued for L2 (red test first).
+- **Correction, 20:53Z:** the CI-failure email that test 1 surfaced was most likely the **`e93a87c9` push CI, attempt 1** (shard 3/4, about 20:38Z), not the 11 Oct run. So Waldo reported a failure within minutes of it happening.
+  - **L1's #116 record (6132247308):** the failing test is `trusted-run-loop.test.ts:3534`. L1 classifies it as flaky, with a hypothesis that the alarm fires on its own under CI load. It passed 3 of 3 times locally, one documented rerun passed (`attempt=2 success` [verified]), and the race fix is a separate task.
+  - My earlier line was wrong because `gh run list --status failure` shows only a run's latest attempt.
+- **Test 3, on the owner's ask (20:52:49Z):** "the Razorpay meeting yesterday, plus the Fireflies notes and recap". It runs before any P1 approval; L4 is still waiting on the owner's rulings.
