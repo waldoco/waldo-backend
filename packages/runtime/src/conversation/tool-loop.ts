@@ -25,6 +25,7 @@ export type ToolLoopStep = (
   turns: readonly LLMToolTurn[],
 ) => Promise<Readonly<{ text: string; tool_calls?: readonly LLMToolCall[]; output_items?: readonly Record<string, unknown>[] }>>;
 
+// taint is the turn's once this result landed: external when this result, an earlier one, or the turn's own context was.
 export type ToolLoopEvent = Readonly<{ call: LLMToolCall; ok: boolean; ms: number; output: string; error?: string; code?: string; reason?: string; guard?: string; taint: 'external' | null }>;
 
 export const toolDefinitions = (handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']): LLMTool[] =>
@@ -192,7 +193,7 @@ export async function runToolLoop(input: Readonly<{
       const failure = result.ok ? undefined : result.error ?? (typed?.code ? `${typed.code}${typed.reason ? `:${typed.reason}` : ''}` : undefined);
       input.onTool?.({
         call, ok: result.ok, ms: Date.now() - started, output,
-        taint: (result as { source_taint?: 'external' | null }).source_taint ?? null,
+        taint: (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint === 'external' ? 'external' : null,
         ...(failure ? { error: failure } : {}),
         ...(typed?.code ? { code: typed.code } : {}),
         ...(typed?.reason ? { reason: typed.reason } : {}),

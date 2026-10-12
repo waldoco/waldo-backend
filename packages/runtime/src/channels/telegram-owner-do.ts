@@ -93,7 +93,7 @@ import { browseActHandler, browsePageHandler, executeBrowserSubmit } from '../to
 import { webSearchHandler } from '../tools/live/web-search';
 import { healthLogBook, healthLogHandlers, healthSection } from './health-log';
 import { healthContextBook } from './health-context';
-import { localIso, localToEpoch, reminderBook, reminderHandlers } from './reminders';
+import { localIso, localToEpoch, reminderBook, reminderHandlers, unreadableRemindersLine } from './reminders';
 import { standingOrderBook, standingOrderFireText, standingOrderHandlers, standingOrdersPrompt } from './standing-orders';
 import { artifactDelivery, artifactPage, artifactReadAdmission, ARTIFACT_PATH } from './artifact-delivery';
 import { artifactExports, exportArtifactHandler, r2ArtifactBinaries } from './artifact-exports';
@@ -2012,7 +2012,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     // those reach the model as the turn's context, which is never stored.
     const healthLogLines = async () => healthSection(await healthLogs.recent(10), clock.timezone);
     const promptLedger = async () =>
-      [loopsSection(loops, clock.timezone), desk.ledger(book.list()), proactivityLine(loops.proactivity()), schedulePreferencesLine(schedPrefs.all())]
+      [loopsSection(loops, clock.timezone), desk.ledger(book.list()), unreadableRemindersLine(book.unreadable()), proactivityLine(loops.proactivity()), schedulePreferencesLine(schedPrefs.all())]
         .filter((section) => section !== '')
         .join('\n\n');
     const ledger = async () => [await promptLedger(), await healthLogLines()].filter((section) => section !== '').join('\n\n');
@@ -2115,7 +2115,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const ownerKey = await currentTaskOwnerKey(); await context.assertTaskSourceCurrent();
         browserSources.capture(payload, ownerKey);
         const id = await desk.proposeBrowserSubmit(payload); await context.assertTaskSourceCurrent(); return id;
-      }, placement: id => desk.placement(id), stopAdmission: async context => { await this.ownerBrowser.current(context)(); this.ownerBrowser.stop(); await this.browserTasks.revoke(); } }), () => this.browserTasks.principal)), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), ...loopHandlers(loops), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable }))], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining }; }), undefined,
+      }, placement: id => desk.placement(id), stopAdmission: async context => { await this.ownerBrowser.current(context)(); this.ownerBrowser.stop(); await this.browserTasks.revoke(); } }), () => this.browserTasks.principal)), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), ...loopHandlers(loops), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable }))], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining }; }), undefined,
       (opt) => opt ? openLoopsPrompt(loops, clock.timezone, opt.loopsRoom) : standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
@@ -2763,6 +2763,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         } else {
           const card = cardFor(id);
           if (card === null) return false;
+          // A card whose row this version cannot read is not changed, and the owner is told why.
+          if (scheduler.lookup(card.id).state === 'unreadable') return 'card.unreadable.failed';
           if (action === 'card.unpin') plans.pin(card.id, null);
           else {
             if (!isClock(value)) return false;

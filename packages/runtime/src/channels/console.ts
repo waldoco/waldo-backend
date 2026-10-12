@@ -145,6 +145,7 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'card.today': 'Card time set for today.',
   'card.pin': 'Card pinned. Waldo will use this time every day.',
   'card.unpin': 'Pin cleared. Waldo plans this card again.',
+  'card.unreadable.failed': "This card's schedule is stored in a form this version can't read, so it can't be changed here. Nothing was changed.",
   'google.disconnect': 'Google disconnected. Waldo no longer reads your calendar or mail.',
   'google.connected': 'Google connected.',
   'google.connect.failed': 'Google connect could not start. Try again.',
