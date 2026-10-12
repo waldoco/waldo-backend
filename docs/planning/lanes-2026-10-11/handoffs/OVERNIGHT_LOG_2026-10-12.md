@@ -1929,3 +1929,21 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - Use a fresh card the owner makes, not the two that are waiting.
   - The Simulator session ends at about 21:44Z, so the approval must come before then. The morning question can come from the owner's own device.
 - **Sent to L2** (queued): E15's app rows must carry channel `"app"`, or proactive messages won't light Home's card. Assert it in the routing tests, make sure the dev copy creates no second app-visible row, and tell L4 first before using any other value.
+
+## 19:01Z: staging on `5bf2857d` (#1098 live); #1089 merged; Form version bump ruled; app #89 merged
+
+- **Owner rulings in L1's session** [reported by L1; #116]:
+  - about 18:10Z: #1099 uses the overlap rule, and the orchestrator may merge it after review; #1089 may merge after fresh CI;
+  - **about 18:30Z, ADR-0081: bump Form's version.** A change in which inputs are admitted is a new version;
+  - about 18:50Z: deploy `5bf2857d`, and merge #1089, but **no staging deploy until #1099 lands**.
+- **Staging is `5bf2857d`** (version `8fe4c98a`, 18:55Z; rollback `483c7475`) [verified: `/healthz` at 19:01Z]. **#1098 is live**, so the P1 approval can be made now.
+- **#1089 merged as `446762f4`** at 18:55:39Z (by L1, on the owner's yes in L1's session, pinned to `b4383587`). It isn't deployed. `beta-mvp` is `446762f4`.
+- **#1099's delta at `5a141798`** (base merge `465fff65`):
+  - `ALGORITHM.form` becomes `form.candidate.v2`;
+  - the physicalLoad guard, with a workout test;
+  - the `SCORED_WINDOW_SIGNALS` rename;
+  - a `zone_changed` test.
+  - 9 of 9 mutants are caught and 365 tests pass. CI is running.
+  - **My delta review is running.** Its focus is every consumer of the version string (DB constraints, the fence regex, app.v1, readers), old v1 rows, and #1083's overlapping `ALGORITHM.form` line.
+- **P1 job question (L1):** the tail can't tie events to an account or read schedules. Since 16:15Z no composed alarm made 6 or more tool calls (reminders and day plans made 0), so which job does 6 or more must come from the DO schedule (L2 or the console). L1 now reports `hops_total` for every composed alarm.
+- **App #89 merged as `3862bb26`** at `b3ecc11f`, on the owner's yes in L4's session, before my review result. The findings go to L4 for a follow-up PR. L4 waits for the deploy report, then makes the P1 approval with the owner before about 21:44Z.
