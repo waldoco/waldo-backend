@@ -1289,3 +1289,17 @@ I read the source delta over `2fc0e642` (+237/−57 across 6 files; about 120 so
   - Local runs: 204 scheduler tests and 230 RunLoop, tracer and outbox tests pass; tsc passes; guards pass 37/37.
   - Gate: CI is pending; the independent review is running (no fan-out, about 25 calls).
   - Merge is mine under E1 (not on the hold list); deploy needs the owner's yes in L1's session.
+
+## 12:4xZ: probe 5 FAIL on `02103423`; correction on tool search
+
+- **Probe 5 (W2):** sent on the test account at 12:25Z and 12:33Z [reported by L1].
+  - Each turn made one `query_calendar` call (ok) and ended `resolved` ok.
+  - No `propose_calendar_change` call, no `approval_raise`, no failed hop.
+  - The test event was at 6 pm IST (12:30Z), so it started between the two sends.
+  - The calendar tool logs no count, so we don't know whether the event came back.
+- **Diagnosis:**
+  - `propose_calendar_change` is eligible whenever Google calendar is granted (`tools/live/google.ts:299-306`) [verified], so a missing tool is unlikely.
+  - Hypotheses: (a) the read missed the event (window, zone, or a calendar the account doesn't read); (b) the prompt's time didn't match the event; (c) the event had already started at the second send; (d) the model chose not to propose.
+  - The cheapest discriminator is Waldo's reply. I asked L4 for a one-line paraphrase and the exact prompt.
+  - Rerun only on the owner's yes in L4's session: an event 2+ hours ahead on the primary calendar, with a prompt that names its time.
+- **Correction to my 12:2xZ answer:** the registry has a `search_tools` schema (`hooks/registry.ts:214`, classed `read()`), but no runtime handler [verified by grep: no `name: 'search_tools'`]. "Tools don't load just in time" still holds. JIT tool loading would build on that schema.
