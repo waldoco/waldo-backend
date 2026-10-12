@@ -1880,3 +1880,11 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - **L4** (queued): `created_at` is in the contract; the P1 morning probe plan.
   - **L1** (queued): #1099 code PASS, the #1089 guard tracking, the ADR-0081:54 question, the next tip `5bf2857d`, and which job makes 6 or more tool calls.
   - **L2** (delivered): #1098 merged; go on E15.
+- **18:15Z heartbeat:** the cron job is present. `beta-mvp` is `5bf2857d`; staging is `27214c63`.
+  - **Owner answers in L1's session** (about 18:10Z; #116 6129976909) [reported by L1]:
+    1. **#1099:** the overlap rule, not "any two grids". The owner approved the merge after the orchestrator's review (E1); the deploy is a separate yes.
+       - The ADR-0081:54 version question was put to the owner in this session at about 18:10Z and again at 18:13Z, and the owner didn't object. The merge entry will record that.
+    2. **#1089 (Weight):** the owner approved the merge once CI is fresh. The head is `b4383587` (beta-mvp `27214c63` merged in, no conflicts; 358 local tests pass; `tsc` passes). L1 merges when CI is 6/6, on the owner's yes in L1's session, outside my gate.
+  - **Order:** #1089 lands first. #1099 then adds `overlapped.has(day.day) ? null : physicalLoadOf(day)` plus a test, and I review #1099's delta at that head.
+  - **Possible duplicate reminder.** The app turn at 18:12:33Z on `483c7475` ran `tool_set_reminder:FAIL(invalid_args:tool_result_error)`, then `tool_get_context:ok`, then `tool_set_reminder:ok` **twice**, then resolved [reported by L1, codes only]. L4 is checking the account.
+    - If it's a duplicate, the set_reminder path has no guard against identical (note, time) pairs within a turn. That's a pre-existing reliability gap for L2, not caused by G1, which carries results across turns rather than within one [inference].
