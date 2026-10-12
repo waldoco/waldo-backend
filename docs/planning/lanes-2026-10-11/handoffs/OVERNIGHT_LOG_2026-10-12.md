@@ -1387,3 +1387,8 @@ I read the source delta over `2fc0e642` (+237/−57 across 6 files; about 120 so
   - Red first [reported]: at `4a644e06`, a reshaped heartbeat, nightly or brief-sweep row ends an app turn `interrupted`, and the planner deletes a reshaped day-card row. With the fix, all 4 cases pass and the row stays byte-identical.
   - Evidence: 4891 tests pass under the default config, mutants 14/14, tsc and guards pass. CI is running.
   - The independent review is running, with no fan-out and about 30 calls. L1 wants one deploy after #1092 merges, which needs the owner's yes in L1's session.
+
+- **13:16Z, probe 5 diagnosis:** L1's tail can't see the `query_calendar` arguments or an event count. The tool logs ok with no code (12:25:57Z, 12:34:06Z). Raw capture is off by design, and `calendar_id` is often an email address.
+  - Chosen: option (3). L1 writes a count-only log line for the tool (window default | date_range, calendar primary | other, events N), with L2's OK on the tool path. It falls under the D13 standard and merges under E1 after the gate.
+  - Still open: option (1), the owner naming the account and calendar. Option (2), Langfuse, is not used without the owner's go.
+  - Message cap: 9 of 10 sends used since the owner's last message.
