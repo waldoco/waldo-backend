@@ -1,4 +1,5 @@
 import { toRowZone } from '../../../contracts/src/health/zone-bridge';
+import { byFormTrust, isFormSource } from './scores/form';
 import { shiftDay } from './scores/time';
 import type { DailyScores, DailyScoresInput, DayRecord, HourlyBucket, HrvMethod, Span } from './scores/types';
 
@@ -101,11 +102,18 @@ const daysOf = (readings: readonly Reading[], fallbackZone: string): Readonly<{ 
 const localDay = (at: number, timeZone: string): string =>
   new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(at));
 
-const rowOf = (day: string, scores: DailyScores, basis: Readonly<{ source: string; epoch: number }>, readAt: string, timezone: string, zoneChanged: boolean): object => {
+// A row's basis holds at most three sources: the chosen one, and the two most trusted others Form may draw on.
+const formCandidates = (sources: readonly Source[], chosen: Source): Source[] => {
+  const others = new Map<string, Source>();
+  for (const s of sources) if (s.source !== chosen.source && s.readings.length > 0 && isFormSource(s.source) && !others.has(s.source)) others.set(s.source, s);
+  return [chosen, ...[...others.values()].sort((a, b) => byFormTrust(a.source, b.source)).slice(0, 2)];
+};
+
+const rowOf = (day: string, scores: DailyScores, basis: readonly Source[], readAt: string, timezone: string, zoneChanged: boolean): object => {
   const { recovery, form, weight } = scores;
   const unavailable = (reason: string) => ({ reason });
   return {
-    day, timezone, read_at: readAt, basis: [{ source: basis.source, consent_epoch: basis.epoch }],
+    day, timezone, read_at: readAt, basis: basis.map(s => ({ source: s.source, consent_epoch: s.epoch })),
     recovery: recovery.state === 'unavailable' ? unavailable(recovery.reason)
       : { score: recovery.score, zone: toRowZone('recovery', recovery.zone), confidence: recovery.coverage, algorithm_version: recovery.algorithm_version, activation: recovery.activation, hrv_method: recovery.hrv_method },
     form: form.state === 'unavailable' ? unavailable(form.reason)
@@ -133,12 +141,17 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     const chosen = [...parsed.series.sources].filter(s => s.readings.length > 0).sort((a, b) => b.readings.length - a.readings.length || a.source.localeCompare(b.source))[0];
     if (!chosen) return 'no_readings';
     const { days, zoneChanged } = daysOf(chosen.readings, at.timezone);
+    const candidates = formCandidates(parsed.series.sources, chosen);
+    const formSources = candidates.map(s => ({ source: s.source, days: s === chosen ? days : daysOf(s.readings, at.timezone).days }));
     const outcomes: ReturnType<typeof writeOutcome>[] = [];
     for (const targetDay of [shiftDay(today, -1), today]) {
-      const scores = deps.compute({ access: 'granted', targetDay, days, sleepNeedMinutes: null, asOf: parsed.series.readAt, source: chosen.source });
+      const scores = deps.compute({ access: 'granted', targetDay, days, sleepNeedMinutes: null, asOf: parsed.series.readAt, source: chosen.source, formSources });
       const nothingToShow = [scores.recovery, scores.form, scores.weight].every(p => p.state === 'unavailable');
       if (nothingToShow && !days.some(d => d.day === targetDay)) continue;
-      const row = rowOf(targetDay, scores, chosen, parsed.series.readAt, at.timezone, zoneChanged.has(targetDay));
+      // Form may draw a pillar from a source other than the chosen one; the basis names every source the row used.
+      const formUsed = scores.form.state === 'available' ? scores.form.sources : [];
+      const basis = candidates.filter(s => s === chosen || formUsed.includes(s.source));
+      const row = rowOf(targetDay, scores, basis, parsed.series.readAt, at.timezone, zoneChanged.has(targetDay));
       outcomes.push(writeOutcome(await deps.writeContext(JSON.stringify(row))));
     }
     for (const outcome of ['failed', 'refused', 'written', 'stale'] as const) if (outcomes.includes(outcome)) return outcome;

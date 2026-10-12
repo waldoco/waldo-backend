@@ -40,6 +40,8 @@ export interface DayRecord {
   readonly workouts: readonly Span[];
   readonly demand: DemandInputs | null;
 }
+// One reading source's days, for Form's per-pillar source choice.
+export interface FormSourceDays { readonly source: string; readonly days: readonly DayRecord[] }
 export interface DailyScoresInput {
   readonly access: HealthAccess;
   readonly targetDay: string;
@@ -47,10 +49,12 @@ export interface DailyScoresInput {
   readonly days: readonly DayRecord[];
   // An owner-confirmed sleep need. When null, the owner's own 14-day average stands in.
   readonly sleepNeedMinutes: number | null;
-  // The newest instant the inputs were read, used only to judge freshness of intraday data.
+  // When the inputs were read. Form judges the age of the night's sleep against it.
   readonly asOf: string | null;
-  // The reading source the producer chose. Form counts only sources in ADR-0081's table.
+  // The source of `days`. Form counts only sources in its confidence table.
   readonly source?: string | null;
+  // Every source's days. When present, Form picks the best source per pillar from these instead of `days`.
+  readonly formSources?: readonly FormSourceDays[];
 }
 
 export interface Unavailable { readonly state: 'unavailable'; readonly reason: UnavailableReason }
@@ -70,8 +74,9 @@ export interface Available<Zone> {
   readonly used: UsedBasis;
 }
 export type RecoveryResult = Available<RecoveryZone> | Unavailable;
-// ADR-0081 confidence: coverage x source confidence x freshness factor, to three places.
-export type FormResult = (Available<FormZone> & { readonly confidence: number }) | Unavailable;
+// Confidence: coverage x share-weighted source confidence x freshness factor, to three places. `sources` are
+// the sources whose pillars made the score.
+export type FormResult = (Available<FormZone> & { readonly confidence: number; readonly sources: readonly string[] }) | Unavailable;
 export type WeightResult = Available<LoadZone> | Unavailable;
 export interface SleepDebtResult {
   readonly state: 'available' | 'partial';

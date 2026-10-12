@@ -113,6 +113,29 @@ export const HRV_SOURCE_CONFIDENCE: Readonly<Record<HrvSource, number>> = {
   samsung: 0.6,
 };
 
+// Candidate form.safte-fast.v2 (ADR-0081 2026-10-12 amendment): v1's pillars scaled by 0.9 plus a measured
+// stress pillar, Health Connect as a source, and a discount for SDNN. Every value here is a candidate.
+export const formV2PillarSchema = z.enum(['sleep', 'hrv', 'circadian', 'motion', 'stress']);
+export type FormV2Pillar = z.infer<typeof formV2PillarSchema>;
+const HRV_FORM_V2_SHARE = 3150;
+// Shares per 10,000, so the composite rounds half up in integer arithmetic.
+export const FORM_V2_SHARES_PER_10K: Readonly<Record<FormV2Pillar, number>> = {
+  sleep: 4500,
+  hrv: HRV_FORM_V2_SHARE,
+  circadian: 675,
+  motion: 675,
+  stress: 1000,
+};
+// Key order is the tiebreaker for equal confidence: Apple > Oura > WHOOP > Samsung > Health Connect.
+export const FORM_V2_SOURCE_CONFIDENCE: Readonly<Record<string, number>> = {
+  ...HRV_SOURCE_CONFIDENCE,
+  health_connect: 0.6,
+};
+// A pillar computed from SDNN keeps its own baseline and carries this share of its source confidence.
+export const FORM_V2_SDNN_CONFIDENCE_FACTOR = 0.8;
+// An hour with this many movement minutes or more is exertion, never stress (ADR-0010 2026-10-10 rule 2).
+export const FORM_V2_EXERTION_MOVEMENT_MINUTES = 10;
+
 // contribution is signed: a pillar below its baseline drags the composite down. The weight
 // must match the pinned CRS_FORM_WEIGHTS row for that pillar.
 export const pillarBreakdownSchema = z
