@@ -1195,3 +1195,16 @@ No second sweep for now, because the usage window has to last through wave 2 and
   - Hot-file changes: about 3 lines in the owner DO and about 10 in `owner-turn.ts`.
   - The new `proposal_ref` field is additive in KV (`tool-output-ledger.ts:109-115` uses `storage.put`) [verified], so it isn't a DO schema change.
   - L2 has the slot now (D12, restated), with the #116 lines posted first.
+
+## 11:59Z: lane messages paused at the 10-message cap; #1089 forget-class fix at `2fc0e642`
+
+- **The cap:** the desktop app paused my cross-session sends after 10 since the owner last typed here. It resumes on the owner's next message, and I'm not routing around it. One message is undelivered, to L2:
+  - the G1 slot is L2's now (D12, restated);
+  - `proposal_ref` is additive KV, not a DO schema change [verified];
+  - add a test that old entries without the field read as non-proposal;
+  - #1088 READY is noted, with the owner's review running.
+
+  D12 itself was queued to L2 at 11:44Z.
+- **#1089:** L1 pushed `2fc0e642`, a one-line forget-inventory entry (EXEMPT: day, zone, digest, minute counts; no owner text). It fixes the shard-1 blocker. My six should-fix findings went to L1 at 11:56Z, queued, and L1's message suggests it hadn't read them yet. The delta re-review waits for L1's next head.
+  - L1 classifies a shard-2 failure at the old head `76d9bcaf` as flaky, fixed upstream by #1087's phase fix [inference].
+- **The docs push** was rejected once ("failed") and went through on retry. It was transient.
