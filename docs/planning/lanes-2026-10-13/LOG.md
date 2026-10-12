@@ -228,3 +228,14 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
     - a cosmetic double relay;
     - the proxy wire path is untested.
 - My direct messages are capped, so Connectors finds the findings on the PR. It isn't merged.
+
+## 22:08Z heartbeat
+
+- **Staging:** `3bc1bb54` [verified].
+- **#1106** (flaky-test follow-up): CI 6/6 green. Its review subagent is running.
+- **#1107** (Connectors' calendar change: join link, attachments, attendee emails, digest guard) is open at `3aadc20e`, CLEAN. Its review subagent is running.
+  - Effective on staging only after the owner's connector-proxy redeploy.
+- **#1105** waits for Connectors' fixes after the FAIL review.
+- **#1100:** no update from the cloud lane.
+- **App:** no PR yet. The session is running, and the P1 re-run is pending its read of #1103.
+- **#1103:** no new lane posts since 22:00Z.
