@@ -762,3 +762,22 @@ Still open:
   - the console says "Don't do this".
 
   L2 is merging `2e5993d6` before pushing, ETA before 08:00Z. The review is running at `c001e427`; I'll read the delta myself.
+
+## 07:37Z: #1085 review FAIL (small fixes); not merged
+
+- **Independent review at `c001e427`: FAIL. No owner ruling is needed.**
+- **Passed:** authority (`reraise` only presents), Telegram compatibility, the WhatsApp one-character change, app.v1 (pins byte-identical), the main-path tests and the golden DO test, abuse limits, hot files, concurrency.
+- **Already fixed in `6f9bf8de`, which I read:** WhatsApp `note()`, and the console "Don't do this" text.
+- **Required:**
+  1. Check expiry before put-off. An open approval past its expiry is reported as "still waiting".
+  2. The proactive raise from job prompts is reachable and untested. My recommendation: keep `raise_approval` out of machine turns, or own the path with tests.
+  3. Log the bare `.catch` (`approvals.ts:928`) with a fixed code, and drop a date comment from a test.
+  4. Green CI.
+- **Residuals sent to L2:**
+  - `unshown` after an ambiguous send;
+  - an expired raise leaves old cards unretired;
+  - after a raise, two live app cards;
+  - "Not now" is offered per raise;
+  - a stale Telegram `d:` button after an app defer;
+  - the mutation count in the body.
+- **Wave 1 still waits on #1085.** L2 is to warn by 09:00Z if 10:00Z is at risk.
