@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { toolOutputLedger } from '../src/conversation/tool-output-ledger';
+import { redactToolOutputLedger, toolOutputLedger } from '../src/conversation/tool-output-ledger';
 
 const fakeStorage = () => {
   const data = new Map<string, unknown>();
@@ -274,15 +274,24 @@ describe('which outputs link to the approval desk', () => {
 });
 
 describe('earlier results for the owner\'s turn', () => {
-  it('come only from the owner\'s own turns; rows stored before origins were kept are left out', async () => {
+  it('come only from the owner\'s own turns; a row stored before origins were kept is left out', async () => {
     const storage = fakeStorage();
-    storage.data.set('toolout:0000000000', { tool: 'get_tasks', ok: true, at: 1000, taint: null, summary: 'from before' });
-    storage.data.set('toolout-count', 1);
     const ledger = toolOutputLedger(storage as never);
     await ledger.record({ tool: 'get_tasks', ok: true, at: 1001, taint: null, origin: 'machine', summary: 'from a job' });
     await ledger.record({ tool: 'get_tasks', ok: true, at: 1002, taint: null, origin: 'owner', summary: 'from the owner' });
+    storage.data.set('toolout:0000000002', { tool: 'get_tasks', ok: true, at: 1000, taint: null, summary: 'from before' });
+    storage.data.set('toolout-count', 3);
     expect(await ledger.ownerTurnResults()).toEqual(['get_tasks succeeded: from the owner']);
-    expect((await ledger.recent()).map(fragment => fragment.text)).toEqual(['get_tasks succeeded: from before', 'get_tasks succeeded: from a job', 'get_tasks succeeded: from the owner']);
+    expect((await ledger.recent()).map(fragment => fragment.text)).toEqual(['get_tasks succeeded: from a job', 'get_tasks succeeded: from the owner', 'get_tasks succeeded: from before']);
+  });
+
+  it('take a row recorded without an origin as a job\'s, never the owner\'s', async () => {
+    const storage = fakeStorage();
+    const ledger = toolOutputLedger(storage as never);
+    await ledger.record({ tool: 'get_tasks', ok: true, at: 1000, taint: null, summary: 'unstated' });
+    expect(storage.data.get('toolout:0000000000')).toMatchObject({ origin: 'machine' });
+    expect(await ledger.ownerTurnResults()).toEqual([]);
+    expect((await ledger.recent()).map(fragment => fragment.text)).toEqual(['get_tasks succeeded: unstated']);
   });
 
   it('never carry an external result\'s content; an approval it proposed shows as the desk\'s state', async () => {
@@ -307,6 +316,14 @@ describe('earlier results for the owner\'s turn', () => {
     await ledger.record({ tool: 'set_reminder', ok: false, at: 1001, taint: null, origin: 'owner', summary: 'not json' });
     expect(await ledger.ownerTurnResults()).toEqual(['send_email failed (rejected)', 'set_reminder failed']);
     expect((await ledger.recent())[0]!.text).toBe(`send_email failed: ${refused}`);
+  });
+
+  it('show a failed output that names an approval as the desk\'s state for it, never its error text', async () => {
+    const ID = 'p3e9a1c07';
+    const ledger = toolOutputLedger(fakeStorage() as never, { proposalState: async id => (id === ID ? { kind: 'email_send', state: 'open' } : null) });
+    const refused = JSON.stringify({ ok: false, error: 'Google refused the card for this send', code: 'rejected', data: { proposal_id: ID } });
+    await ledger.record({ tool: 'send_email', ok: false, at: 1000, taint: null, origin: 'owner', summary: refused });
+    expect(await ledger.ownerTurnResults()).toEqual([`send_email failed: proposed approval ${ID} (email_send). Its current state on the approval desk is open; this replaces what the tool reported when it proposed.`]);
   });
 
   it('admits a row as external data whatever its own taint, so an own result carrying a health reading is never kept', async () => {
@@ -359,15 +376,27 @@ describe('what the ring keeps', () => {
     expect(await ledger.ownerTurnResults()).toEqual(['owner 2', 'owner 3', 'owner 4', 'owner 5', 'owner 6', 'owner 7'].map(text => `search_episodes succeeded: ${text}`));
   });
 
-  it('counts a row stored before origins were kept with the jobs, never against the owner\'s six', async () => {
+  it.each([['awaited', 'owner', undefined], ['fenced', 'owner', scope], ['awaited', 'machine', undefined], ['fenced', 'machine', scope]] as const)('%s: the first %s write drops a row stored before origins were kept', async (_path, origin, runScope) => {
     const storage = fencedStorage();
-    storage.data.set('toolout:0000000000', { tool: 'search_episodes', ok: true, at: 1000, taint: null, summary: 'from before' });
+    storage.data.set('toolout:0000000000', { tool: 'search_episodes', ok: true, at: 1000, taint: 'external', summary: 'from before' });
     storage.data.set('toolout-count', 1);
     const ledger = toolOutputLedger(storage as never);
-    for (let i = 0; i < 6; i += 1) await ledger.record({ tool: 'search_episodes', ok: true, at: 2000 + i, taint: null, origin: 'owner', summary: `owner ${i}` });
-    expect(storage.data.has('toolout:0000000000')).toBe(true);
-    for (let i = 0; i < 6; i += 1) await ledger.record({ tool: 'search_episodes', ok: true, at: 3000 + i, taint: null, origin: 'machine', summary: `job ${i}` });
+    await ledger.record({ tool: 'search_episodes', ok: true, at: 2000, taint: null, origin, summary: `${origin} 0` }, runScope);
     expect(storage.data.has('toolout:0000000000')).toBe(false);
-    expect(await ledger.ownerTurnResults()).toHaveLength(6);
+    for (let i = 1; i < 6; i += 1) await ledger.record({ tool: 'search_episodes', ok: true, at: 2000 + i, taint: null, origin, summary: `${origin} ${i}` }, runScope);
+    expect((await ledger.recent()).map(fragment => fragment.text)).toEqual([0, 1, 2, 3, 4, 5].map(i => `search_episodes succeeded: ${origin} ${i}`));
+  });
+
+  it('forgets an owner\'s row kept behind six newer job rows', async () => {
+    const storage = fakeStorage();
+    const ledger = toolOutputLedger(storage as never);
+    const needle = 'Synthetic amber offsite plan';
+    await ledger.record({ tool: 'search_episodes', ok: true, at: 1000, taint: null, origin: 'owner', summary: `notes on ${needle}` });
+    for (let i = 0; i < 6; i += 1) await ledger.record({ tool: 'search_episodes', ok: true, at: 2000 + i, taint: null, origin: 'machine', summary: `job ${i}` });
+    expect(await ledger.remaining([needle])).toBe(1);
+    expect(await redactToolOutputLedger(storage as never, [needle], '[forgotten]')).toBe(1);
+    expect(await ledger.remaining([needle])).toBe(0);
+    expect(JSON.stringify([...storage.data.values()])).not.toContain(needle);
+    expect(await ledger.ownerTurnResults()).toEqual(['search_episodes succeeded: notes on [forgotten]']);
   });
 });

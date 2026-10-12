@@ -149,6 +149,8 @@ it('an approval raised in an owner turn still shows its desk state after a job r
     for (let i = 1; i <= 7; i += 1) seen.calls.push({ name: 'search_episodes', arguments: JSON.stringify({ query: `plan ${i}` }) });
     await responder.prompt('job-brief', 'owner', 'Write the morning brief.', timer);
     expect(seen.calls).toEqual([]);
+    const stored = [...(await state.storage.list<{ tool: string; origin?: string }>({ prefix: 'toolout:' })).values()].map(({ tool, origin }) => ({ tool, origin }));
+    expect(stored).toEqual([{ tool: 'raise_approval', origin: 'owner' }, ...Array.from({ length: 6 }, () => ({ tool: 'search_episodes', origin: 'machine' }))]);
     const [first] = await turn('owner-2', 'Did it go out?');
     expect(block(first!)).toEqual([`- raise_approval succeeded: proposed approval ${ID} (email_send). Its current state on the approval desk is done; this replaces what the tool reported when it proposed.`]);
   });

@@ -15,7 +15,8 @@ export type ToolOutputEntry = Readonly<{
   // The turn's running taint when this output landed: external when it or anything earlier in the turn came from
   // outside. Admission and staging treat every row as external data whatever it is; a row without one counts as external.
   taint: SourceTaint;
-  // 'owner' when the owner's own turn produced the output. A row stored before origins were kept is never the owner's.
+  // 'owner' when the owner's own turn produced the output; anything else is 'machine', the default when a writer names
+  // none. Absent only on a row stored before origins were kept, which the next write drops.
   origin?: 'owner' | 'machine';
   summary: string;
   // The approval a proposing tool's output names, read from the full output before the summary is cut: '' when the row
@@ -59,10 +60,11 @@ type KeyValueStorage = {
 const entryKey = (seq: number) => `toolout:${String(seq).padStart(10, '0')}`;
 // The owner's own turns keep their newest rows apart from everything else, so a busy job never pushes them out.
 const ownersRow = (row: ToolOutputEntry) => row.origin === 'owner';
-// The rows past the newest MAX_KEPT of the new row's kind, oldest first.
+// The rows a write drops: any stored before origins were kept, and those past the newest MAX_KEPT of the new row's kind.
 const evicted = (rows: Iterable<[string, ToolOutputEntry]>, added: ToolOutputEntry): string[] => {
-  const kind = [...rows].filter(([, row]) => ownersRow(row) === ownersRow(added)).map(([key]) => key).sort();
-  return kind.slice(0, Math.max(0, kind.length - MAX_KEPT));
+  const all = [...rows];
+  const kind = all.filter(([, row]) => row.origin !== undefined && ownersRow(row) === ownersRow(added)).map(([key]) => key).sort();
+  return [...all.filter(([, row]) => row.origin === undefined).map(([key]) => key), ...kind.slice(0, Math.max(0, kind.length - MAX_KEPT))];
 };
 
 const summaryAdmissionSchema: StrictSchema<string> = {
@@ -181,7 +183,7 @@ export const toolOutputLedger = (storage: KeyValueStorage, options: Readonly<{ p
     // Admission guard at write time: a poisoned summary is dropped, never persisted.
     if (!admitsForPrompt(summary, 'external')) return;
     const link = linkOf(entry.tool, entry.summary);
-    const row: ToolOutputEntry = { ...entry, summary, ...(link === undefined ? {} : { proposal_ref: link }) };
+    const row: ToolOutputEntry = { ...entry, origin: entry.origin ?? 'machine', summary, ...(link === undefined ? {} : { proposal_ref: link }) };
     const count = (await storage.get<number>('toolout-count')) ?? 0;
     if (scope) {
       const kv = storage.kv;
@@ -216,9 +218,9 @@ export const toolOutputLedger = (storage: KeyValueStorage, options: Readonly<{ p
     }));
   },
   // What the owner's own earlier turns' tools returned. Provider text never carries across turns: an external result shows
-  // only when it is the desk's state for an approval it proposed, and a failure only as its tool and code.
+  // only as the desk's state for an approval it proposed, and a failure that names no approval only as its tool and code.
   async ownerTurnResults(texts: readonly string[] = []): Promise<readonly string[]> {
-    return (await shownRows(storage, options, texts, ownersRow)).filter(({ entry, desk }) => desk || entry.taint === null).map(({ entry, text }) => entry.ok ? text : failureOf(entry));
+    return (await shownRows(storage, options, texts, ownersRow)).filter(({ entry, desk }) => desk || entry.taint === null).map(({ entry, desk, text }) => desk || entry.ok ? text : failureOf(entry));
   },
 });
 
