@@ -1517,3 +1517,9 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - A source-level native seam is added: 14 deliberate faults, all caught.
   - Results: 680 tests pass, the build is OK, and the Simulator smoke test is OK [reported].
   - A small delta review is running. The zone-id question is with L1 for planning.
+- **15:43Z, app #87 review PASS** at `daff130b`. Nothing blocks the owner's merge, and no regressions were found.
+  - Four LOWs went to L4 for a follow-up:
+    - a failed check strips v2, so the backfill reruns;
+    - `run()` returns the queued run's status;
+    - three gaps in the source test;
+    - a real-iPhone falsifier for `not_asked`.
