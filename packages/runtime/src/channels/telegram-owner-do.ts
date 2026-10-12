@@ -1999,7 +1999,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const destination = (name: string) => name === channel && !nativeSurface(channel) ? { call: routedCall, owner } : name === 'telegram' || name === 'whatsapp' ? this.setup(name) : null;
     const desk = approvalDesk(storage.sql, {
       effects, googleTasks: () => googleTasks, currentRunRef, appReplyRef: () => this.activeApp?.id, ownerRef, ownerRefAliases,
-      surface: channel, appLink: appApprovalLink, commit: work => storage.transactionSync(work),
+      // iMessage has no decision buttons, so its turns present approval cards in the app only.
+      surface: channel === 'imessage' ? 'app' : channel, appLink: appApprovalLink, commit: work => storage.transactionSync(work),
       retire: async ({ surface, message_ref }) => {
         const [chat = '', message = ''] = message_ref.split(':');
         if (surface !== 'telegram' || !/^-?\d+$/.test(chat) || !/^\d+$/.test(message)) return;
