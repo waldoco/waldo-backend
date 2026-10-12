@@ -1443,3 +1443,26 @@ The independent review read every line at `10dbfdec`. Nothing is CRITICAL or HIG
   - Residual for E15: relinking to a different Telegram account leaves rows disabled, the same as for Telegram-only owners today.
   - A delta review is running (no fan-out, about 18 calls).
 - **L2** started the episodes fix (`owner-turn.ts:333-337`) before getting the #1091 findings. Those findings are queued behind the message cap.
+
+## 13:48Z: app #86 review: the PR logic passes; three items before the owner merges
+
+The reviewer read `d7d73e68` [verified by reading]:
+- the per-kind skip never stops a run, and Swift reads each kind on its own;
+- the codes are fixed;
+- no health value reaches a log, AsyncStorage or MMKV, and the watermark is in SecureStore;
+- `movement_duration` matches the backend contract byte for byte (minutes, 0–60 per local hour).
+
+**Findings for the owner:**
+1. **HIGH, pre-existing, made wider by this PR.** Window ids are keyed on UTC instants, and past offsets use today's phone zone (`windows.ts:7`, `time.ts:10`). After the phone moves between IST and a whole-hour zone, re-sent hours get new ids, so readings are counted twice. And `revision: 0` points can hit revision conflicts (`health_series.sql:79-81`) [inference]. The one-time 30-day re-send stretches the exposure from 1 day to 30. It only hits owners whose phone zone changed, such as after travel.
+2. **MEDIUM.** `runner.ts:153` holds at the run's first failing chunk, so a kind that keeps failing walks the watermark back a day per run. Fix: `held = Math.max(cursor, valid?.through ?? cursor)`.
+3. **LOW–MED.** `!unasked` turns off holds for every kind, so an owner who never taps the row gets no retries. This is untested.
+- **LOW:**
+  - a failed check can use up the one-time backfill;
+  - tapping Allow during a run returns early;
+  - the consent row names Exercise Minutes for any new type;
+  - a stale comment.
+- **Gap:** undoing the Swift per-kind wrapper still passes every Jest test. The native skip rests on one manual Simulator run, and the app has no CI.
+
+**Recommendation:** fix 2 and 3 before the merge, since both are small. Track 1 as a follow-up for L4 and L1, with stable window ids across zone changes, before any wider beta or travel. Or fix it first, if the owner wants.
+
+These can't reach L4 yet: the message cap applies, and L4 is asking the owner directly.
