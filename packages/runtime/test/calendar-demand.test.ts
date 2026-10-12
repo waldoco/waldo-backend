@@ -184,6 +184,7 @@ describe('calendar demand route', () => {
     const cases = {
       forged: await resend(await signed(), { headers: { 'x-waldo-demand-sig': '0'.repeat(64) } }),
       otherOwner: await signed('owner-b'),
+      reAddressed: await resend(await signed('owner-b'), { headers: { 'x-waldo-do-name': 'owner-a' } }),
       widened: await resend(await signed(), { body: { ...range, from: '2026-02-20' } }),
       otherZone: await resend(await signed(), { body: { ...range, timezone: 'Asia/Kolkata' } }),
       wrongMethod: await resend(await signed(), { method: 'GET' }),

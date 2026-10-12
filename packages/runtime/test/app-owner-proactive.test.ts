@@ -265,4 +265,15 @@ describe('Weight\'s calendar demand route on the owner object', () => {
     expect(model.calls).toBe(0);
     expect(wire.telegramSent).toBe(0);
   });
+
+  it('refuses a signed request on an object that has not been bound to that owner', async () => {
+    const name = 'demand-unbound';
+    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+      const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: FALLBACK, WALDO_OWNER_TELEGRAM_ID: undefined }) as unknown as Owner;
+      const owners = { idFromName: (n: string) => n as never, get: () => ({ fetch: (request: Request) => owner.fetch(request) }) };
+      const today = localIso(Date.now(), 'Europe/London').slice(0, 10);
+      await expect(readOwnerDemand(owners, directory.WALDO_ROUTER_HMAC_SECRET, name, { from: shiftDay(today, -2), to: today, timezone: 'Europe/London' })).rejects.toThrow('calendar demand unavailable');
+      expect(state.storage.kv.get('do_name')).toBeUndefined();
+    });
+  });
 });

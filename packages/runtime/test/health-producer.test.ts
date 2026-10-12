@@ -119,6 +119,13 @@ describe('produceHealthScores', () => {
     expect(today.demand?.physicalLoad).toBe(96 + 60);
   });
 
+  it('leaves physical load unknown on a day with no hourly readings and no workout', async () => {
+    const sleepOnly = history(25).filter(r => r.day !== TODAY || ['sleep_duration', 'sleep_midpoint', 'overnight_hrv'].includes(r.signal as string));
+    const h = harness(seriesOf(sleepOnly), undefined, undefined, { readDemand: async () => ({ state: 'available', days: [] }) });
+    await run(h);
+    expect(h.inputs.find(input => input.targetDay === TODAY)!.days.find(d => d.day === TODAY)!.demand?.physicalLoad).toBeNull();
+  });
+
   it('writes only keys the database accepts, and every pillar is either a score or a reason', async () => {
     const h = harness(seriesOf(history(25)));
     await run(h);
