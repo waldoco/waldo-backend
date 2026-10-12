@@ -599,3 +599,17 @@ Still open:
   - `verify:supabase` NOT RUN locally, pgTAP UNAVAILABLE; CI covers both.
 - **L2's note for MUST 3:** once Prep, update cards and mail follow-ups run on the app, a grant that dies there goes unannounced. L2 will add a link-free app notice with MUST 3, or right after it.
 - **Review queue for after the 06:30Z reset:** #1066 (delta), #1083 and #1084, in parallel. #1076 waits only on its CI rerun.
+
+## 06:08Z: #1076 merged
+
+- **MERGED waldoco/waldo-backend#1076** as **`c5c36a05d34a6fb1f80d523fc446f5981ad93b72`** at 06:07:55Z, with `--match-head-commit 3aefff5c0bddbd422f9f3a3b14931b56b329b443`. Approved by the owner in this session (E4) and in L2's session ("Merge as is, rest today"), under E1.
+- **Evidence:**
+  - Independent review at `eb959538`: FAIL, with one required change.
+  - The fix at `3aefff5c` was read by me. Source: the `AND deferred_at IS NULL` guard and `withDefer` offering defer only once. Tests:
+    - a second "Not now" is refused, gets 409 and "Already handled.", and leaves `deferred_at` unchanged;
+    - a review-only defer;
+    - an expired defer records nothing.
+  - CI 6/6 after a single rerun of `verify`. The runner-infra classification held: the rerun passed with no code change.
+  - `CLEAN`; advisor consulted.
+- **Deploy:** `beta-mvp` is now `c5c36a05`, so every tip carries #1076. L2's re-raise and Telegram "Not now" follow-up is now a wave-1 must, and both L2 and L1 were told. If the follow-up misses 10:00Z, the owner decides whether wave 1 ships.
+- **Hot-file merge order:** #1066 and #1084 must each merge base and pass CI on the new base before I merge them.

@@ -148,8 +148,13 @@ Each target has a probe in the app Main chat.
 ## C. Today, by lane
 
 **Deploy waves.** Each needs E1, or your go in L1's session:
-- **Wave 1 at about 10:00Z** (15:30 IST): #1066, the interim connect text, the app branch at `:2417`, and expiry on read.
-- **Wave 2 at about 14:00Z** (19:30 IST): skills on app turns and #1076, plus whichever stretch items (G1, G3, S7) passed the gate.
+- **Wave 1 at about 10:00Z** (15:30 IST):
+  - #1066;
+  - the interim connect text (#1084);
+  - the app branch at `:2417`;
+  - expiry on read;
+  - #1076 (merged 06:07Z as `c5c36a05`) together with L2's re-raise follow-up. Every tip from now on carries #1076, so the follow-up is a wave-1 must.
+- **Wave 2 at about 14:00Z** (19:30 IST): skills on app turns, plus whichever stretch items (G1, G3, S7) passed the gate.
 
 Then:
 - **Probes:** 14:30–16:30Z.
