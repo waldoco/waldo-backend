@@ -466,3 +466,17 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
 - **Competitor matrix:** report 11, built by one synthesis agent with no web access from #1058, report 02 and report 09. Covers Meta Muse, OpenAI Dots, Instinct, Poke, Folk, Vellum, OpenClaw, Hermes, Letta and Khoj. Dots is unverified (403). ChatGPT, Gemini and Claude are deferred until after the 06:30Z reset.
 - **Verified fetch:** Google's OAuth page (updated 26 May 2026) says an external app in "Testing" gets refresh tokens that expire after 7 days. This is now in E8 and platform gate 6. Waldo's publishing status is unverified.
 - **L4 (04:15Z):** building D6 as its own PR. The row reads "Use this device's time zone" or "Keep <zone>", because the design system bans "Confirm". L4 is also rewording #78's comment. App merges go through the owner in L4's session.
+
+## 04:45Z: the owner's answers on the plan (E1, E4, E8; E2 queried)
+
+- **E1:** "Daytime standing go (Recommended)". I merge today under the overnight gate. L1's deploys and L4's merges still need the owner's word in their own sessions.
+- **E4:** #1076, "Approve L2's proposal (Recommended)": the DO ALTER `ledger.deferred_at`, L2's definition of "raises it again", and Telegram's "Not now".
+- **E8:** "Yes, move to In production (Recommended)". The owner checks the Google consent screen's publishing status and runs consent on staging.
+- **E2 (#1066's health strip):** no option chosen. The owner asked how Waldo can learn patterns from health data without historical evidence. Answered in session:
+  - the history lives in the Supabase health plane (`waldo.health_samples`, `health_anchors`, `health_context_basis`, `health_daily`, `crs_scores`, `health_logs`) [verified table names];
+  - the gap is that no runtime tool reads it. `get_health` and `get_crs` exist only as contract and permission names, with no runtime handler [verified at `cdd906dd`]; `list_health_logs` is the only health tool.
+  - Re-asked with refined options.
+- **Relays:**
+  - L2 got E1, E4, E2-pending and its tiered queue (SendMessage, delivered).
+  - L3's socket is stale, and L3 isn't in `ListAgents`, so the update went on the board.
+  - The board now carries a DAYTIME GO banner.

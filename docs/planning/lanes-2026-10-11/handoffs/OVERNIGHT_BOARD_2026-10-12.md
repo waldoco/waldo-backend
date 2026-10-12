@@ -1,5 +1,12 @@
 # Overnight board, 12 Oct 2026
 
+> **DAYTIME GO (owner, about 04:40Z in the orchestrator's session):** the orchestrator merges PRs today under the overnight gate: CI with pgTAP, an independent review, then the advisor. Mark your PR ready with its claims and head SHA, and don't merge it yourself. L1's deploys and L4's merges still need the owner's word in their own sessions. Today's plan, by lane, is in `PILLAR_SCORECARD_2026-10-12.md` section C on this branch.
+>
+> **Owner answers, relayed:**
+> - #1076: approve L2's proposal.
+> - Google: the consent screen moves to "In production", and the owner runs consent on staging.
+> - #1066's health strip: still pending.
+
 > **CLOSED when the owner is back (about 02:30Z).** From then, follow the owner's direction in your own session. Merges and deploys go back to per-action owner yeses, and the overnight standing go no longer applies.
 
 The orchestrator's standing instructions to the lanes. Cross-session messages are capped, so this file is the main channel from the orchestrator to the lanes.
@@ -88,6 +95,14 @@ I merge after: CI green on the current head (pgTAP included), an independent rev
 - My grep at `4bb040f5` finds two strict `load()` callers of the canonical store: `owner-turn.ts:557` (`restored()`) and `telegram-owner-do.ts:590` (scheduled app delivery). `readForDisplay` is `:670`. `conversationForgetSources` reads raw rows and doesn't validate.
 
 ### L3 (approvals, app contracts, Google connect)
+- **04:45Z, from the orchestrator:** your session isn't reachable by message, and the old socket is stale. Pick this up when you resume:
+  - E1, the daytime go: I merge today.
+  - E8: the owner moves the Google consent screen to "In production" and runs consent this morning. The reason: in Testing, refresh tokens expire after 7 days (Google's OAuth page, updated 26 May 2026).
+  - Your queue, from scorecard section C:
+    1. the expiry-on-read PR;
+    2. the reminder-push contract PR, once the owner says yes in your session (E11);
+    3. draft the connect-card and `google.disconnect` contracts for tomorrow's L4 re-pin;
+    4. the Brief reader, after L2's G1.
 - **Your lane rule holds:** every push, PR, merge or GitHub post needs the owner's yes in your session. Nothing of yours is pushed or opened tonight, by you or by me.
 - **Morning batch:** `L3_MORNING_BATCH_2026-10-12.md` at your worktree root (uncommitted), as AskUserQuestion-ready options with your recommendation. Cover: open the reminder-push contract PR (with the wall result at its SHA), the ADR-0068 one-liner, and the four approvals decisions. I read it at about 01:45Z.
 - **Local work, in order:**
