@@ -16,7 +16,7 @@ The eight pillars:
 7. payments and identity
 8. evals and observability
 
-## EoD status, 12 October (17:15Z; t3 re-score 17:56Z; evening update 19:24Z)
+## EoD status, 12 October (17:15Z; t3 re-score 17:56Z; evening updates 19:24Z and 19:35Z)
 
 **The strict test in app Main chat: 2 of 6 chat-capable pillars** (re-scored 17:56Z). The target was 2–3.
 - **Triggers (P4, through reminders) and connectors (P5, for a connected owner) pass.**
@@ -25,7 +25,7 @@ The eight pillars:
   - Caveats: a day card in the app (probe 9) and P5's connect step itself are still unprobed.
 - **Memory and skills (P3)** wait on your pick between #1088 and #1100 (below).
 
-**Live on staging: `5bf2857d`** (deployed 18:55Z as version `8fe4c98a`, on your yes in L1's session; rollback `483c7475`) [verified: `/healthz` at 19:01Z and 19:13Z]:
+**Live on staging: `d704ffff`** (deployed 19:34Z as version `b6b2c5ec`, on your yes in L1's session; rollback `8fe4c98a`, which is `5bf2857d`) [verified: `/healthz` at 19:34Z]:
 - **Before wave 1:** #1074 and #1075, the history-load fixes; #1080, the history-overwrite fix.
 - **Wave 1 (08:50Z):**
   - #1066, proactive arming, with the zone hold;
@@ -44,15 +44,19 @@ The eight pillars:
 - **18:55Z:**
   - #1097, #1093's follow-ups;
   - #1098: each origin keeps its own 6 rows, so "did it go out?" survives a busy job in tests. Rows from before origins were kept were dropped on the first write.
-- G1 hasn't been probed live yet.
+- **19:34Z:**
+  - **#1089, Weight:** calendar busy minutes plus physical load. L1 merged it on your yes.
+  - **#1099, the zone-overlap net:** I merged it under E1 at 19:23:41Z, after CI, an independent review and the advisor.
+    - Form becomes `form.candidate.v2` and Weight `weight.candidate.v2`, under your ruling that a change in which inputs are admitted is a new version.
+    - On the first producer run, yesterday's Form row is rewritten as v2, and it's labelled. No Weight v1 value was ever written: `5bf2857d` had no demand reader [verified], so Weight was always unavailable there [inference].
+  - **Not exercised yet:** the live Google free/busy path. Weight's first computation follows the next app health upload, and L1 posts its codes on #116.
+  - **A rollback to `8fe4c98a`** [reported by L1]:
+    - relabels the two rewritten days as v1;
+    - sends Weight back to unavailable;
+    - leaves the counts-only `calendar_demand` DO table in place, because the old code doesn't delete it on forget.
+- G1 and #1098 haven't been probed live yet.
 
-**Merged, not deployed (tip `d704ffff`):**
-- **#1089, Weight** (`446762f4`, 18:55Z): merged by L1 on your yes.
-- **#1099, the zone-overlap net** (`d704ffff`, 19:23:41Z): merged by me under E1 after CI, an independent review and the advisor.
-  - Form becomes `form.candidate.v2` and Weight `weight.candidate.v2`, under your ruling that a change in which inputs are admitted is a new version.
-  - On the first run after the deploy, yesterday's Form row is rewritten as v2, and it's labelled. No Weight v1 value was ever written: live `5bf2857d` has no demand reader [verified], so Weight was always unavailable there [inference].
-
-The next deploy carries both, on your yes in L1's session naming that tip. Nothing else merges while that ask is open.
+**Merged, not deployed:** nothing. `beta-mvp` and staging are both `d704ffff`.
 
 **Waiting on you:**
 - **#1088 or #1100: the same seam, two implementations.** Both change `skills/curated-owner.ts` and `app-turn-skills.test.ts` [verified].
@@ -64,10 +68,10 @@ The next deploy carries both, on your yes in L1's session naming that tip. Nothi
   - **Pick one;** the other rebases or closes. If you pick #1100, D11 gives way.
   - **#1100 is based on `87b31948`**, before G1, #1098 and #1089 [verified]. So its rebase crosses `owner-turn.ts` and `tool-loop.ts`. A review of just those files after the rebase is the one review I'd offer.
   - **Its class rename is a migration-lineage change,** so L1 checks the rollback path before any deploy carrying it.
-  - Both are on the hold list, and neither merges while L1's deploy ask is open.
+  - Both are on the hold list.
 - **E15** (L2, being built): app-first routing. You merge it; I review it first.
 - **Version follow-ups, all on the hold list:**
-  - **The time-zone gap L1 found** (it predates #1099). The ingest stamps the batch's zone on each row, and the producer clips a day to its newest row's zone, ignoring the offset. So a backfill sent from another zone can cut a day's early hours [inference, untested]. The fix changes which inputs are admitted, so it needs a new version and your yes.
+  - **The time-zone gap L1 found** (it predates #1099). The ingest stamps the batch's zone on each row, and the producer clips a day to its newest row's zone, ignoring the offset. So a backfill sent from another zone can cut a day's early hours [inference, untested]. The fix changes which inputs are admitted, so it needs a new version and your yes. You kept it on the hold list at about 19:33Z.
   - **The trend line compares scores across versions** (`health_plane.sql:537-543`). Fixing it needs a migration.
 - **App #89 follow-up:** three findings, one MEDIUM: a new hold drops the server's Retry-After. L4 puts up one follow-up PR before any tester build.
 - **Probes:**
@@ -81,7 +85,7 @@ The next deploy carries both, on your yes in L1's session naming that tip. Nothi
 - **Your own tasks:** the APNs key (E5), the Google consent move (E8) and the real-iPhone health run.
 
 **Tomorrow, 13 Oct [proposed]:**
-- **L1:** deploy #1089 and #1099 on your yes, then the zone-gap version if you approve it.
+- **L1:** watch Weight's first live computation and post its codes. The zone-gap version waits on you.
 - **L2:** E15, app-first routing; then the possible duplicate reminder, with a red test first.
 - **L4:** #89's follow-up, then Android (E17).
 - **P1 probe (morning):**

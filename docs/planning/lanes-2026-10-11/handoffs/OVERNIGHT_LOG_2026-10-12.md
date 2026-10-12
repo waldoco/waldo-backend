@@ -2026,3 +2026,19 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - **L2** is idle: "The drafts are ready. Waiting on the wall at `09de9df1`." E15 sits at `09de9df1` and isn't a PR yet. Its local verify is probably running [inference].
   - **L4** is running and has L1's heads-up. My #89 findings are queued there.
   - **Sends** are at the cap (10 of 10 since about 18:11Z).
+
+## 19:35Z: staging serves `d704ffff` (#1089 and #1099 live); the freeze is lifted
+
+- **The deploy:** at 19:34Z, as version `b6b2c5ec`, on the owner's yes in L1's session (about 19:33Z). The rollback target is `8fe4c98a` (`5bf2857d`) [verified: `/healthz` reports `d704ffff` at 19:34:45Z; the rest is from L1's #116 record 6131256871].
+  - **L1's gate:**
+    - CI passed 6 of 6;
+    - the diff is 11 files, with no wrangler, deploy-script, migration or `app` contract change, and no new secret;
+    - preflight shows 55 applied and 0 pending;
+    - signed-out app routes return 401, and so does the new internal `/app/v1/internal/calendar-demand` route, for unsigned GET and POST;
+    - the cron is still registered.
+  - **Not exercised yet:** the live Google free/busy path through the Vault proxy. Weight's first computation follows the next app health upload, and L1 posts the `calendar_demand` and `weight_demand` codes.
+  - **A rollback** relabels the two rewritten days as v1, and leaves the counts-only `calendar_demand` DO table in place, because the old code doesn't delete it on forget [reported by L1].
+- **The owner, in the same exchange:** the newest-row zone-clipping gap stays on the hold list.
+- **The freeze is lifted:** the deploy ask is closed, and `beta-mvp` and staging are both `d704ffff`.
+- **P1:** the approval can now be made on a build that has #1098, in L4's session before about 21:44Z.
+- **The scorecard's EoD section is updated** (19:35Z): staging `d704ffff`, nothing merged and undeployed, and the zone gap on hold.
