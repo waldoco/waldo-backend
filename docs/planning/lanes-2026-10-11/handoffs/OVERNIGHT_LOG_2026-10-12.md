@@ -1303,3 +1303,24 @@ I read the source delta over `2fc0e642` (+237/−57 across 6 files; about 120 so
   - The cheapest discriminator is Waldo's reply. I asked L4 for a one-line paraphrase and the exact prompt.
   - Rerun only on the owner's yes in L4's session: an event 2+ hours ahead on the primary calendar, with a prompt that names its time.
 - **Correction to my 12:2xZ answer:** the registry has a `search_tools` schema (`hooks/registry.ts:214`, classed `read()`), but no runtime handler [verified by grep: no `name: 'search_tools'`]. "Tools don't load just in time" still holds. JIT tool loading would build on that schema.
+
+## 12:5xZ: #1090 review FAIL on claim scope; fixed-id rows are the remaining gap
+
+- **#1090 at `4a644e06`:** the code is correct and safer than base, with no regressions. CI is 6/6 green [verified by the reviewer].
+- **Finding 1 (HIGH, the claim):** `read(id)` on fixed-id rows (heartbeat, nightly, brief sweep, day cards) still throws on an unreadable row.
+  - It runs inside `ready` (`:2042-2059`), through `heartbeat.ts:33`, `episodes.ts:93`, `event-briefs.ts:16` and `schedule-preferences.ts:60-82`.
+  - **Every chat turn awaits `ready`** (`telegram-owner-do.ts:1081`, `:1135`, `:1150`, `:1423`, `:1449` `turn()`) [verified by me]. So a reshaped fixed-id row would break every alarm and every chat turn, the same class as the overnight 503.
+- **Rollback check:** `packages/contracts/src/runtime/schedule.ts` is unchanged from `e37f60f3` to `614d1aff` [verified]. Today's rollback to `c7974404` is safe from this bug.
+- **Lower findings:**
+  - the reaper writes to a quarantined unreadable row once its window has passed;
+  - a mutant that logs from `hasDue` survives;
+  - slice-before-filter is caught only by the count;
+  - unreadable rows that aren't due are skipped silently.
+- **Plan (advisor-checked):**
+  - #1090 gets a body-only edit (scope, "never written", NOT DONE), keeping the head `4a644e06`, then I merge.
+  - L1's next PR is its top priority: unreadable fixed-id rows are skipped in the existence checks and never upserted over.
+    - An owner-DO test plants a reshaped heartbeat row; an alarm and an app turn must both succeed.
+    - `event-briefs.ts` and `schedule-preferences.ts` are coordinated with L2, and the LOW test fixes are folded in.
+    - It lands before anything reshapes a fixed-id row.
+  - L2 is told not to reshape fixed-id schedule rows until then.
+- **Correction to the owner:** after #1090, skip-and-run-the-rest holds only for rows read at dispatch and rearm. A bad heartbeat, nightly or day-card row still stops every job and every chat turn, until L1's next PR.
