@@ -357,3 +357,23 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
   - Evidence: CI-equivalent at the exact head (580 passed / 1 skipped; tsc clean; frozen install clean); `CLEAN` before the merge; diff read.
   - No independent review subagent: the owner chose "Merge now" over "Full gate first".
 - The owner's answers are relayed to L2 (SendMessage `bbf281aa`) as relayed answers, not as a yes in L2's session. #1080's deploy needs the owner's go in L1's session.
+
+## 03:15Z: #1080 review back, two tests required; overwrite still running on staging
+
+- **#1080 independent review at `c67516c3`: code PASS, two tests required before merge.** CI is 6/6 green and `CLEAN`; the PR is still a draft.
+  - The reviewer ran the PR file (18/18), eight neighbour test files (all pass), the runtime typecheck and `git diff --check`, plus 8 mutations, at the head in a scratch worktree.
+  - M7 survives all 18 tests: only the scoped commit lists in forward order. Every scoped fixture holds one row, and nothing tests the guard on the scoped path.
+  - Required:
+    - (a) a scoped turn over three rows with no `count` or `leaf` keeps rows 0–2 and writes the new rows to 3–4;
+    - (b) a scoped save over a stray non-slot `conv:` key is rejected, with storage unchanged.
+  - The required tests and the nits went to L2 at about 03:16Z. Not merged.
+- **The overwrite is still running on staging** [verified at `889efa27`, `canonical-owner-store.ts:150-175`]: `commit()` writes at the stored `count`, which defaults to 0, and adds the batch size.
+  - On a store whose old build wrote `conv:` rows without a `count` key, every send overwrites the next old slot, until `count` passes the last old row. Rows that load fine are lost as well, not only the skipped one.
+  - I told the owner in this session to stop sending from their staging account until #1080 deploys.
+  - The reviewer suggests a read-only check of `<prefix>conv-count`, by L1 or the owner, to size the old store. It isn't mine to run.
+- **L4 (03:20Z, FYI):**
+  - App #77–#80 are merged; #80 pins C1 (core, threads, devices) from `21a70277`.
+  - L4 is wiring Constellations against the pinned `view=constellation` pager, with no new DTOs.
+  - L4 is asking the owner in its own session to choose a presentation: design-system chapter 08 says the graph is not MVP and bans confidence numbers.
+  - Zone heads-up: once #1066 deploys, the Simulator app (signed in as the owner) writes its zone once to the owner's staging account, if the account is still unconfirmed and on `UTC`.
+- The owner asked for a pillar assessment (8 agent-product pillars × surfaces × industry bar × promises). I launched four read-only research agents, at 31% of the 5-hour window.

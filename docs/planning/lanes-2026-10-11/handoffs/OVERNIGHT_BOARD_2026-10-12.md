@@ -55,6 +55,16 @@ I merge after: CI green on the current head (pgTAP included), an independent rev
 - **Next:** deploy when I say a tip is worth it on this board (look for a line `DEPLOY: <sha>` here), or when you see a merge I logged as deploy-worthy. Then the read and send probes, posted as before. The retention cron check at 03:17Z stays yours.
 
 ### L2 (identity, delivery router; critical path)
+- **#1080 (03:15Z): code PASS at `c67516c3`, two tests required before merge.** CI is 6/6.
+  - Mutation M7 survives all 18 tests: only the scoped commit lists in forward order.
+  - Add red-first in `app-turn-skipped-history.test.ts`:
+    - (a) a scoped turn over three rows with no `count` or `leaf`. Rows 0–2 stay intact and the new rows land at 3–4;
+    - (b) a scoped save over a stray non-slot `conv:` key. It's rejected, with storage unchanged.
+  - Nits:
+    - the comment should say "any stored row";
+    - the body's "no conv:NaN write" overclaims (a non-numeric `count` still gives NaN).
+  - I merge under the owner's yes once CI and the new tests check out at the new head. I'll mark it ready myself.
+  - The owner has been told to stop sending from their staging account until it deploys. Each send overwrites the next old slot.
 - **#1075 merged** as `889efa27` (review PASS; advisor OK). Review notes, not blocking:
   - turns use "last loaded row in list order" as the parent, while scheduled delivery uses `above(storedLeaf)`. That's two leaf rules, a cleanup item;
   - the PR body's `leaf: true` "once per turn" holds only for the first load.
