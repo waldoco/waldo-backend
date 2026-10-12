@@ -361,3 +361,35 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **Why:** the App session says `iPhone 17` is back on main's build (`60fce743` copy) and signed in as of 23:12Z, ready for P1 "when you say #1104 is live". But my direct messages are capped, and it doesn't read my PR or board replies, so it can't receive the go. It also doesn't know #93 and #94 failed review.
 - **Decision:** the orchestrator runs P1 now on `iPhone 17`. It's quick, and the App session's next step is code for the shell items. This is test send 1 of 5: to the owner's own address, with the word "probe". If the app is disturbed mid-run (a build install), I stop.
 - **App session:** #97 (B2) is CI green; #93 is retargeted to `main`. It asks for merge commits, not squash, for #93 → #95. It raised a non-blocking question about the approval card summary also clipping, which it will fix after #95. It reported that the proper fix in RN's text drawing needs a dependency patch, which is the owner's call.
+
+## 23:32Z: P1 result: the card shows in chat, but an approved send ends "Outcome not confirmed"
+
+- **Setup:** `iPhone 17`, main's build (`60fce743` copy), staging `3bc1bb54` (Worker `9c973463`). Test send 1 of 5, to the test account's own address, with the word "probe". Hops are from the Worker tail.
+- **Turn 1 (23:16:53Z),** "Draft a note to myself saying 'probe' and send it once I approve": `tool_draft_email`. Waldo drafted and said to tell it to send. There was no card. **FAIL** for the one-ask script.
+- **Turn 2 (23:22:10Z),** "Send it now.": `tool_send_email`, and the card showed in chat (Send it, Change it, Don't do this, Not now). **PASS** for #1104.
+- **Approve (23:24:02Z):** `POST /app/v1/approvals/decisions` returned 503. The desk's `approval_a` hop was ok in 4962 ms, but the row ended `uncertain`, so Approvals › Earlier shows "Outcome not confirmed". **FAIL.**
+- **The path [verified in source at `8195fee6`]:**
+  - `approvals.ts:516-551` sends, then immediately searches Sent by `rfc822msgid` (`google.ts:698-712`).
+  - A miss throws `EffectUnknownError`, and the reconcile repeats the same search.
+  - Any error ends `uncertain`, with no code logged.
+- **Hypotheses (unconfirmed):**
+  - H1: Gmail's index lag; the mail went out once.
+  - H2: the send failed.
+  - H3: Gmail rewrote the Message-ID.
+
+  Whether the mail went out isn't known yet. The App lane runs one read-only check.
+- **Routed to Connectors as its top item,** ahead of links and chunks:
+  1. a coded hop for each step;
+  2. a red test;
+  3. a fix that verifies with the id the send returned, if the existing proxy methods allow it;
+  4. a definite pre-send failure is never called unknown.
+
+  `approvals.ts` is on no lane's list, so Connectors announces on #1103 and takes it.
+- **The App session hadn't touched the device.** It found the decided approval and asked who ran it. It's holding its own P1 run, and re-runs P1 after the fix deploys; that will be test send 2 of 5. The device is the App lane's again.
+- **Messages:** direct messages to the App session and to Connectors went through again.
+- **Smaller items:**
+  - **The expiry label** on the card read "4:52 PM" when the device clock read 4:53 AM IST. That's 23:52Z in US Pacific time, 30 minutes after the card was raised [inference]. So the label isn't in the device's zone. This goes to the App lane.
+  - **No reply time shows in chat,** because staging transcript rows carry no `created_at` (App lane report). It's an additive app.v1 item for the backend.
+- **Gates:**
+  - #1107 (`89b701c5`) and #1109 (`d33b05c1`) are in review. Connectors released its hold.
+  - **App #97: FAIL** on five "(B2)" ticket tags in code comments (PR comment 6134625045). The fix itself is sound.
