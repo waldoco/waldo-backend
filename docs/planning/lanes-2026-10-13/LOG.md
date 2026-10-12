@@ -192,3 +192,22 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **#1106** (flaky-fix follow-up, test-only, all four review notes) is open at `68158b3f`, with CI pending. It's gated after the #1104 deploy.
   - **#1072** is superseded according to the flaky-fix session's evidence (#1072 comment 6133334539; #1103 comment 6133334197). It's not closed overnight: closing another lane's PR waits for the owner or the latency session.
 - **The scribe false positives go to the owner.** Connectors' corpus at `5b8197fd` shows no safe narrowing: the pairs are lexically identical, for example "form 71" vs "form 3 of 5" and "steps: 8000" vs "Next steps: 3". Options A/B/C are on #1103. This is the owner's first morning decision.
+
+## 22:06Z: #1104 merged and deployed; P1 go posted
+
+- **Merged #1104 as `3bc1bb54` at 21:57:53Z.**
+  - Gate: CI 6/6 at `a45ef088`; independent review PASS; advisor yes; CLEAN.
+- **Push CI on `3bc1bb54`:** success at 22:04:48Z.
+- **Deployed `3bc1bb54` to staging at 22:05Z** [verified].
+  - The gate passed: the tip; CI 6/6; 3 files changed since `e93a87c9`; no wrangler or migration change; preflight 55/0. The classifier allowed the preflight.
+  - Worker `9c973463`. Rollback target `a446c445` (`e93a87c9`).
+  - **Smoke:**
+    - `/healthz` shows `3bc1bb54`;
+    - signed-out `/app/v1/session` and `/app/v1/chat/main` return 401;
+    - `/probe/turn` with no token returns 403;
+    - the tail shows authenticated Main-chat reads returning 200 on `9c973463`.
+  - **Records:** #116 (6133481055) and #1103 (6133480755, "P1: go").
+- **Next:**
+  - the App session's P1 re-run on `iPhone 17`, with trace hops from the tail;
+  - #1105's review and merge, then #1106;
+  - the cloud lanes' #1100 split.
