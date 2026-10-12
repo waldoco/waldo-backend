@@ -1161,3 +1161,5 @@ The sweep was one agent with 43 tool calls and no fan-out, at `614d1aff`. I veri
 No second sweep for now, because the usage window has to last through wave 2 and the 17:00Z re-score.
 
 **D13** is written up in the decisions file: one log shape, rows behind owner-visible promises are skipped and never mutated, and authority chains keep failing closed.
+
+- **11:55Z, wave 2 deploying.** L1 has the owner's go in L1's session for `614d1aff` (#1086 and #1087) and is deploying through its gate, with CI 6/6. Probe 7 depends on #1088 and is not a MUST 3 failure. Probe 8 tests wave 2. A new probe 9 proves MUST 3 on an app-only account with a confirmed zone and an event 35–40 minutes out. The Telegram-linked test account can't prove MUST 3. The owner's own staging account qualifies, if the owner agrees. The probe sheet is updated.

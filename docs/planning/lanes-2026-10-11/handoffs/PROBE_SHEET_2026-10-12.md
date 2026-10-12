@@ -33,7 +33,8 @@ On a Telegram-linked account, reminders arrive in the app, but day cards, heartb
 
 | # | Pillar | Send in Main chat | Pass | L1's tail |
 |---|---|---|---|---|
-| 7 | P3 | "Prep me for my 3 pm." | The meeting-prep skill loads in app chat | A skill-load line for the app turn |
+| 7 | P3 | "Prep me for my 3 pm." | The meeting-prep skill loads in app chat. Needs #1088 (skills on app turns), which isn't in wave 2: don't score it until #1088 deploys | A skill-load line for the app turn |
 | 8 | #1086 | None | No hold-row flood; each held row carries only its fixed code | `scheduled_hold` and `scheduled_drop` notes are codes |
+| 9 | P4, MUST 3 (#1087) | None. Needs an app-only account with a confirmed zone (the owner's own staging account is app-only) and a calendar event starting in 35–40 minutes | Prep arrives in app chat about 35 minutes before, as plain text with no buttons; a calendar change shows an update card | `calendarPrep` delivered through the final outbox; zero Telegram sends |
 
 The results feed the 17:00Z re-score of `PILLAR_SCORECARD_2026-10-12.md` and the scorecard page.
