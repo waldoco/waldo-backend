@@ -1759,3 +1759,8 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
     4. Assert that the job's rows are stored as `machine`.
   - **[inference, unverified]:** the pre-#1091 guard at `87b31948` (`admitsForPrompt(summary, entry.taint)`) might admit a health-reading summary when the taint is null. L2 will settle it with one test and report in the PR body. It goes to the owner only if confirmed. If so, the `27214c63` deploy (#1091 forces `'external'`) fixes the write side, and fix 1 clears the leftovers.
 - **Freeze:** `beta-mvp` is frozen at `27214c63` until L1's deploy ask is resolved. L1 has an AskUserQuestion open, so the owner's yes names that SHA. #1097 (review PASS) waits only for the freeze. #1097 and the fixed #1098 then merge back to back. The advisor flagged that any merge now would invalidate the SHA in the owner's yes.
+- **17:35Z heartbeat:**
+  - The cron job is present. `beta-mvp` is frozen at `27214c63`. Staging is `87b31948`.
+  - #1097 is CLEAN, CI 6/6, held by the freeze. #1098 is unchanged at `2915e830` while L2 works on the fixes (running, last active 17:34Z).
+  - **Blocked on the owner:** L1 has an AskUserQuestion open (the `27214c63` deploy, by its last message). L4 has had an AskUserQuestion open since about 16:59Z (likely the t3 probe or its next item) [inference: the question text isn't visible from here].
+  - No new #116 comments since 17:01Z, and no new app PRs.
