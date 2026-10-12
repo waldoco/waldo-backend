@@ -1496,3 +1496,7 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
 - **14:34Z heartbeat:** no PR updates since 14:10Z; the lanes look stalled on the held fixes. I sent the owner one push notification. I am not routing around the cap with PR comments or the other send tool.
 - **14:54Z heartbeat:** still no PR updates in either repo; the owner hasn't typed. Next timed items: probe 6 at 16:00Z (L1's watch is armed) and the re-score at 17:00Z.
 - **15:14Z heartbeat:** no PR updates; the owner hasn't typed; the lanes are idle on the held fixes.
+- **15:15Z:** the owner said "go ahead, send the queued fixes to the lanes", which reset the cap. Sent:
+  - **L2:** the #1091 findings with D15, the #1088 rollback text, and a note to mark #1094 ready. Delivered.
+  - **L1:** the #1092 scenario fake and the wording fixes. Delivered.
+  - **L4:** the app #86 fixes and the zone follow-up. Queued.
