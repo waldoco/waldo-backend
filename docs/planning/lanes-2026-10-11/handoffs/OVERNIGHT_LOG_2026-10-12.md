@@ -1139,3 +1139,25 @@ Staging `e37f60f3`, version `c7974404`. Codes and times only.
   - D11 and D12 are written up in the decisions file. D12: G1 builds in parallel with #1089, and the gate decides the merge order.
   - L4 holds movement minutes and probe 5 for the owner's answers in L4's session.
   - #1088 merged the new base at `0e2557c3`; L2 marks it ready when it is green.
+
+## 11:53Z: strict-read sweep results; D13; the scheduler fix goes to L1
+
+The sweep was one agent with 43 tool calls and no fan-out, at `614d1aff`. I verified finding 1 myself.
+
+1. **Worst case** [verified]: one schedule row that fails `toEntry` makes `dueEntries` throw before the dispatch `try`, so all scheduled work stops for that owner. It also breaks `rearm`, which reads every row in every status. The likely trigger is a rollback [inference].
+   - This goes to L1. The bad row is skipped in memory and logged as `schedule_row_invalid`, and it is never mutated.
+   - Tests come first: a valid row still dispatches, `rearm` binds, and the bad row stays byte-identical. It stays out of wave 2.
+2. `loops.ts:82` `proactivity()`: settings JSON with no schema check. It feeds the heartbeat, day-card holds and card prompts. Backlog.
+3. `update-cards.ts:61-64` `unfolded()`: a `JSON.parse` inside `.map` can stop the day-card job. Backlog.
+4. `owner-turn.ts:333-337`: one failed episode read fails the whole `search_episodes` call while a forget hold exists. This goes to L2 as a small PR after G1.
+5. `recall.ts:176-206`: one recall hit over 2,000 characters fails the turn. It is latent while recall is stubbed. Backlog.
+
+**Not covered:**
+- approvals, the coordinator and `run-loop/do.ts`;
+- model-output parses that end a whole job (prep, nightly);
+- L1's narrative and health material;
+- day-card time parsing.
+
+No second sweep for now, because the usage window has to last through wave 2 and the 17:00Z re-score.
+
+**D13** is written up in the decisions file: one log shape, rows behind owner-visible promises are skipped and never mutated, and authority chains keep failing closed.

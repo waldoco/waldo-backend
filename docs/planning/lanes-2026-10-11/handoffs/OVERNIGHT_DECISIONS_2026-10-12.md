@@ -84,3 +84,24 @@ The decision stands: skip the row, and don't widen the validator.
 **Reverse.** Hold G1's push until #1089 lands, as L2 first offered.
 
 **Unblocks.** G1 starts now, not after the owner's next answer in L1's session.
+
+## D13 (11:53Z, daytime; an orchestrator engineering decision, not an owner ruling)
+
+**Question.** The owner asked that strict checks fail per item, not per read, as #1075 does for chat history. A sweep at `614d1aff` found three different skip shapes in the code:
+- the history store logs `history_rows_skipped` with the check and a count;
+- the recall gateway reports `row_rejected`/`partial`;
+- the tool-output ledger deletes bad rows and records no code.
+
+**Decision.** One standard, with no shared helper:
+- Reads of stored data skip the bad item and log one fixed-code line with the check and a count, never ids or text.
+- A row tied to a promise the owner can see, such as a reminder, is skipped in memory and never mutated, so a rolled-forward Worker can still run it.
+- Authority, approval, receipt and effect chains, canaries and write paths keep failing closed.
+
+**Why.** One concept, one log shape. The sites differ in what a skip means (exclusion in memory, an omission line, a safe default), so a shared helper would hide those differences. The scheduler case shows why a mutation is wrong: a quarantine with no expiry would lose a reminder that a rollback merely failed to parse.
+
+**Reverse.** Per site. Each fix is its own small PR.
+
+**Unblocks:**
+- L1: the scheduler fix (`multiplexer.ts`). One bad row currently stops all scheduled jobs for that owner [verified].
+- L2: the per-hit episode-read fix (`owner-turn.ts:333-337`), after G1.
+- Backlog: `loops.ts` `proactivity()`, `update-cards.ts` `unfolded()`, and the recall length cap. Each needs a corrupt row or a live recall gateway first.
