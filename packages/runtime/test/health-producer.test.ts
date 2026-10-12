@@ -119,6 +119,17 @@ describe('produceHealthScores', () => {
     expect(today.demand?.physicalLoad).toBe(96 + 60);
   });
 
+  it('needs readings on the baseline days too: calendar minutes attach only to days with health readings', async () => {
+    const busy = Array.from({ length: 31 }, (_, i) => ({ day: addDays(TODAY, -i), busy_minutes: Math.round(240 + wobble(i, 40)) }));
+    const weightAfter = async (nights: number) => {
+      const h = harness(seriesOf(history(nights)), undefined, undefined, { readDemand: async () => ({ state: 'available', days: busy }) });
+      await run(h);
+      return h.writes.find(w => w.day === TODAY)!.weight as Record<string, unknown>;
+    };
+    expect(await weightAfter(3)).toEqual({ reason: 'baseline_immature' });
+    expect(typeof (await weightAfter(15)).score).toBe('number');
+  });
+
   it('leaves physical load unknown on a day with no hourly readings and no workout', async () => {
     const sleepOnly = history(25).filter(r => r.day !== TODAY || ['sleep_duration', 'sleep_midpoint', 'overnight_hrv'].includes(r.signal as string));
     const h = harness(seriesOf(sleepOnly), undefined, undefined, { readDemand: async () => ({ state: 'available', days: [] }) });
