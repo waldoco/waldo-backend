@@ -1917,3 +1917,15 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - L1's gate passes on `5bf2857d` (5 files since live, 0 migrations pending, rollback `483c7475`). L1 asked the owner to deploy it and how to order the Weight work, so #1089 isn't merged yet. I can't see the answer [inference: L1 has run Bash since, so the question may be answered].
   - **Freeze while that deploy ask is open:** nothing merges through my gate that would move the tip. #1099 waits for #1089 anyway.
   - L2 is on E15. L4 is mid-test with a reminder.
+- **18:59Z, app #89 (L4)** at `b3ecc11f`: Main chat refreshes while open, and Home gets an unread signal. The merge waits for the owner's yes in L4's session.
+  - **Evidence [reported]:**
+    - A 429 with Retry-After: 240 goes through the real transport, and the next read waits 240 s.
+    - 35 deliberate faults are caught.
+    - Simulator passes: Home's card appears by itself (18:15:34Z); an untouched Main chat shows the reminder (18:21:24Z); after a cold start the card is there (18:35:27Z); the Chats dot plus "Read it".
+  - **My independent review is running** (about 15 calls), so the owner can merge with findings in hand.
+  - **Owner ruling, 13 Oct (relayed by L4):** only Waldo's rows on the app channel count as new.
+- **Sent to L4** (queued):
+  - Deploy #1098 before the P1 approval, not just before the brief: the live shared ring could evict the desk row before the deploy.
+  - Use a fresh card the owner makes, not the two that are waiting.
+  - The Simulator session ends at about 21:44Z, so the approval must come before then. The morning question can come from the owner's own device.
+- **Sent to L2** (queued): E15's app rows must carry channel `"app"`, or proactive messages won't light Home's card. Assert it in the routing tests, make sure the dev copy creates no second app-visible row, and tell L4 first before using any other value.
