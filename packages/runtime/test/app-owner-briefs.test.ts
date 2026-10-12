@@ -22,7 +22,7 @@ const fixture = vi.hoisted(() => ({ event: null as CalendarItem | null, changes:
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
   return { ...original, googleClient: (_app: unknown, _tokens: unknown, _fetch: unknown, _health: unknown, account: unknown) => ({
-    account, events: async () => [], newMail: async () => [], changedEvents: async () => fixture.changes, event: async () => fixture.event,
+    account, events: async () => fixture.event ? [fixture.event] : [], newMail: async () => [], changedEvents: async () => fixture.changes, event: async () => fixture.event,
     calendarPage: async () => ({ events: fixture.event ? [fixture.event] : [], next_page_token: null, fetched_count: 1, account, observed_at: new Date().toISOString() }),
   }) };
 });
@@ -60,8 +60,8 @@ beforeEach(() => {
     if (fn === 'owner_runtime_authority') return Response.json(wire.revoked ? null : { owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: asked.p_do_name, state_version: 1, admission_revision: '5' });
     if (fn === 'app_session_authority') return Response.json({ owner_id: OWNER_ID, do_name: asked.p_do_name, session_hash: asked.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 });
     if (fn === 'health_log_recent') return Response.json([
-      { id: 1, kind: 'meal', logged_at: new Date(Date.now() - 3_600_000).toISOString(), payload: { description: 'oat bowl', calories_estimate: 640 } },
-      { id: 2, kind: 'workout', logged_at: new Date(Date.now() - 3_600_000).toISOString(), payload: { type: 'run', duration_minutes: 37 } },
+      { id: 1, kind: 'meal', logged_at: new Date(Date.now() - 3_600_000).toISOString(), payload: { description: 'oat bowl', calories_estimate: 8263.75 } },
+      { id: 2, kind: 'workout', logged_at: new Date(Date.now() - 3_600_000).toISOString(), payload: { type: 'run', duration_minutes: 91.625 } },
     ]);
     if (fn === 'health_context_read') return Response.json(null);
     // An owner who only uses the app has no Telegram or WhatsApp presence.
@@ -78,7 +78,7 @@ type Ctx = { now: number; built: Record<string, string> };
 
 // An owner who only uses the app, with Google connected and the clock pinned. The jobs the runtime arms on its first
 // build are noted, then cleared, so each test schedules exactly the work it means to run.
-const withAppOwner = async (name: string, confirmed: boolean, run: (owner: Owner, state: DurableObjectState, ctx: Ctx) => Promise<void>) => {
+const withAppOwner = async (name: string, confirmed: boolean, run: (owner: Owner, state: DurableObjectState, ctx: Ctx) => Promise<void>, flags: Record<string, string> = {}) => {
   const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
   await runInDurableObject(stub, async (_instance, state) => {
     const originalNow = Date.now, ctx: Ctx = { now: AT, built: {} };
@@ -93,7 +93,7 @@ const withAppOwner = async (name: string, confirmed: boolean, run: (owner: Owner
       await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only',
         scopes: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/gmail.readonly'] }]);
       const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC',
-        WALDO_OWNER_TELEGRAM_ID: undefined, GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', MAIL_SOURCE_FOLLOWUPS: '1', CALENDAR_GROUNDED_PREP: undefined }) as unknown as Owner;
+        WALDO_OWNER_TELEGRAM_ID: undefined, GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', MAIL_SOURCE_FOLLOWUPS: '1', CALENDAR_GROUNDED_PREP: undefined, ...flags }) as unknown as Owner;
       await owner.setup('app').ready;
       ctx.built = schedule(state);
       state.storage.sql.exec('DELETE FROM schedule');
@@ -120,13 +120,15 @@ const storedText = (state: DurableObjectState) => {
   const tables = state.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE '\\_cf\\_%' ESCAPE '\\'").toArray().map(row => row.name);
   return [...kv, ...tables.flatMap(table => state.storage.sql.exec(`SELECT * FROM "${table}"`).toArray().map(row => JSON.stringify(row)))].join('\n');
 };
+// The health values are decimal sentinels: a '.' never occurs in the hex ids or epoch times a store holds, so their absence
+// from storedText means no stored copy carries them in any rendering.
+const HEALTH_VALUES = ['8263.75', '91.625'];
 const expectHealthOnlyInTheRequest = (state: DurableObjectState, marker: string) => {
   const request = fixture.requests.find(sent => sent.includes(marker));
-  expect(request).toContain('~640 kcal, estimate');
-  expect(request).toContain('run, 37 min');
+  expect(request).toContain('~8263.75 kcal, estimate');
+  expect(request).toContain('run, 91.625 min');
   const stored = storedText(state);
-  expect(stored).not.toContain('640 kcal');
-  expect(stored).not.toContain('37 min');
+  for (const value of HEALTH_VALUES) expect(stored).not.toContain(value);
 };
 const outbox = (state: DurableObjectState) => state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY) ?? [];
 
@@ -176,8 +178,30 @@ describe('event-brief work for an owner who only uses the app', () => {
       await outboxPass(owner, state, ctx);
       expect(await appChat(owner, 'app-briefs-prep')).toEqual([{ role: 'assistant', text: PREP_TEXT }]);
       expect(outbox(state).find(record => record.calendarPrep)?.status).toBe('delivered');
-      expect(fixture.requests.filter(sent => sent.includes('[Meeting prep decision'))).toHaveLength(1);
+      const prep = fixture.requests.filter(sent => sent.includes('[Meeting prep decision'));
+      expect(prep).toHaveLength(1);
+      for (const value of [...HEALTH_VALUES, 'oat bowl']) expect(prep[0]).not.toContain(value);
+      for (const value of HEALTH_VALUES) expect(storedText(state)).not.toContain(value);
     });
+    expect(wire.telegramSent).toBe(0);
+  });
+
+  // Production runs with grounded prep off. The legacy sweep sends straight to the chat with no outbox, so it never runs on
+  // the app; the update check after it still does.
+  it('with grounded prep off, no event brief is sent on the app, and the update card still reaches the app chat', async () => {
+    await withAppOwner('app-briefs-legacy-off', true, async (owner, state) => {
+      fixture.event = { id: 'event-1', title: 'Design review', status: 'confirmed', start: `${DAY}T09:30:00Z`, end: `${DAY}T10:00:00Z`, all_day: false,
+        description: 'Bring the onboarding mocks.', attendee_names: ['Pat'], attendees: 3, etag: 'r1' } as CalendarItem;
+      dayPlanBook(state.storage.sql).sent(DAY, 'card:brief');
+      updateBook(state.storage.sql).mark('calendar_since', AT - 3_600_000);
+      fixture.changes = [{ id: 'event-2', title: 'Changed event', status: 'confirmed', start: `${DAY}T11:00:00Z`, end: `${DAY}T11:30:00Z`, all_day: false, description: '', etag: 'r2',
+        created: new Date(AT - 86_400_000).toISOString() } as CalendarChange];
+      await dueSweep(state);
+      await sweepPass(owner, state);
+      expect(await appChat(owner, 'app-briefs-legacy-off')).toEqual([{ role: 'assistant', text: UPDATE_TEXT }]);
+      expect(state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM event_briefs').one().n).toBe(0);
+      expect(fixture.requests.filter(sent => sent.includes('Design review'))).toEqual([]);
+    }, { CALENDAR_GROUNDED_PREP: '0' });
     expect(wire.telegramSent).toBe(0);
   });
 
@@ -237,5 +261,6 @@ describe('event-brief work for an owner who only uses the app', () => {
       expect(schedule(state)[BRIEF_SWEEP_ID]).toBe('armed');
     });
     expect(fixture.requests).toEqual([]);
+    expect(wire.telegramSent).toBe(0);
   });
 });

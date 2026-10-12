@@ -2038,7 +2038,6 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const updates = updateBook(storage.sql);
     // App-only owners get no proactive work on a fallback zone: only the owner's own time-zone choice confirms one.
-    // Event briefs stay off on the app until Calendar Prep and update cards have app parts.
     const armable = (_kind: ScheduleKind) => channel !== 'app' || identity.get<boolean>('timezone_confirmed') === true;
     const armOwnJobs = (timezone: string, now: number, replanCards = false) => Promise.all([
       schedPrefs.enabled('nightly') && armable('nightly') ? armNightly(scheduler, timezone, now) : Promise.resolve(),
@@ -2494,6 +2493,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           await updateCheck(`update:${entry.occurrence_at}`);
           return;
         }
+        // The legacy sweep sends straight to the chat, with no outbox, cap or cooldown: on the app only grounded prep runs.
+        if (channel !== 'telegram') return void (await updateCheck(`update:${entry.occurrence_at}`));
         // An owner who opted out of follow-ups gets no event brief either (the legacy sweep is a proactive send).
         if (loops.proactivity().followups === false) {
           log({ trace, hop: 'brief_sweep', ms: 0, ok: true, detail: 'held: owner opted out of follow-ups' });
