@@ -1492,3 +1492,4 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - **Queued for L1** (message cap). L1 may see the red CI on its own.
 
 - **14:01Z heartbeat:** no new heads. #1092 is still red at `fdfb23ca`. #1094 is a draft with CI running. #1088 is CLEAN and waits for the owner. My messages to L1, L2 and L4 are held by the message cap until the owner types here.
+- **14:14Z heartbeat:** no PR updates in either repo since 14:00Z, and the lane messages are still held by the cap.
