@@ -9,6 +9,17 @@ const NAME = 'document-email-preparation';
 export const CURATED_PREPARATION_SKILL: Skill = CURATED_PACK_SKILLS.find(s=>s.name===NAME)!;
 export const CURATED_SKILLS: readonly Skill[] = Object.freeze([CURATED_PREPARATION_SKILL, ...CURATED_PACK_SKILLS.filter(s=>s.name!==NAME)]);
 const sourceOf = (name: string, version: number) => `reviewed-builtin:${name}@${version}`;
+const CUSTODY_MARKER = ':owner:';
+// The custody key most of this owner's reviewed rows carry, so every surface of one owner reads one skill book: a
+// Telegram-first owner keeps the key those rows were seeded under when an app turn arrives, and an app-first owner
+// keeps the principal when Telegram links later. No reviewed rows yet leaves the caller's key in force.
+export function seededSkillCustody(sql: SqlStorage): string | undefined {
+ sql.exec(SKILLS_TABLE_SCHEMA);
+ const row = sql.exec<{ custody: string; n: number }>(`SELECT substr(created_by, instr(created_by, ?) + ?) AS custody, count(*) AS n FROM skills
+  WHERE provenance='system' AND identity_locked=1 AND created_by LIKE 'reviewed-builtin:%' AND instr(created_by, ?) > 0 GROUP BY custody ORDER BY n DESC, custody LIMIT 1`,
+  CUSTODY_MARKER, CUSTODY_MARKER.length, CUSTODY_MARKER).toArray()[0];
+ return row && row.custody.length > 0 ? row.custody : undefined;
+}
 
 // Conservative upper bound for byte-level BPE: each token consumes at least one UTF-8 byte.
 // This is deliberately NOT an exact tokenizer count or a chars/4 estimate. The entire rendered
