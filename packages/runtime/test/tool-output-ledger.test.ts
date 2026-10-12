@@ -140,3 +140,75 @@ describe('ledger forget sources', () => {
     expect((await ledger.forgetSources('ZEBRA-COBALT')).incomplete).toBe(true);
   });
 });
+
+// A proposing tool's output is a snapshot of the approval at the moment it was proposed. The approval desk owns the
+// approval's state, so a later turn sees the desk's current state for that approval instead of the snapshot.
+describe('a tool output that proposed an approval', () => {
+  const ID = 'p3e9a1c07';
+  const proposed = (padding = '') => JSON.stringify({ ok: true, data: { ...(padding ? { url: padding } : {}), proposal_id: ID, status: 'review card requested in chat; nothing was sent', sent: false } });
+  const states = (state: string | null) => async (id: string) => (id === ID && state ? { kind: 'email_send', state } : null);
+
+  it.each(['done', 'skipped', 'open'])('shows the desk\'s current state (%s) instead of the snapshot', async (state) => {
+    const ledger = toolOutputLedger(fakeStorage() as never, { proposalState: states(state) });
+    await ledger.record({ tool: 'send_email', ok: true, at: 1000, taint: 'external', summary: proposed() });
+    const [fragment, ...rest] = await ledger.recent();
+    expect(rest).toEqual([]);
+    expect(fragment!.text).toBe(`send_email succeeded: proposed approval ${ID} (email_send). Its current state on the approval desk is ${state}; this replaces what the tool reported when it proposed.`);
+    expect(fragment!.source).toMatchObject({ source_kind: 'tool_result', source_taint: 'external', produced_at: 1000 });
+  });
+
+  it('links an approval whose id falls past the stored summary cut', async () => {
+    const storage = fakeStorage();
+    const ledger = toolOutputLedger(storage as never, { proposalState: states('done') });
+    await ledger.record({ tool: 'browser_submit', ok: true, at: 1000, taint: 'external', summary: proposed('https://example.test/' + 'x'.repeat(600)) });
+    expect(JSON.stringify([...storage.data.values()])).not.toContain(`"proposal_id":"${ID}"`);
+    expect((await ledger.recent()).map(fragment => fragment.text)).toEqual([expect.stringContaining(`approval ${ID} (email_send). Its current state on the approval desk is done`)]);
+  });
+
+  it('links a row stored before the link was recorded, from its summary', async () => {
+    const storage = fakeStorage();
+    storage.data.set('toolout:0000000000', { tool: 'send_email', ok: true, at: 1000, taint: 'external', summary: proposed() });
+    storage.data.set('toolout-count', 1);
+    const [fragment] = await toolOutputLedger(storage as never, { proposalState: states('done') }).recent();
+    expect(fragment!.text).toContain('current state on the approval desk is done');
+    expect(fragment!.text).not.toContain('nothing was sent');
+  });
+
+  it.each([
+    ['the desk has no such approval', { proposalState: states(null) }],
+    ['the desk read fails', { proposalState: async () => { throw new Error('desk unavailable'); } }],
+    ['no desk reader is wired', {}],
+  ] as const)('is withheld, never shown as its snapshot, when %s; other outputs still show', async (_case, options) => {
+    const ledger = toolOutputLedger(fakeStorage() as never, options);
+    await ledger.record({ tool: 'send_email', ok: true, at: 1000, taint: 'external', summary: proposed() });
+    await ledger.record({ tool: 'search_mail', ok: true, at: 2000, taint: 'external', summary: '{"ok":true,"data":{"count":2}}' });
+    expect((await ledger.recent()).map(fragment => fragment.text)).toEqual(['search_mail succeeded: {"ok":true,"data":{"count":2}}']);
+  });
+
+  it.each([['a number', 42], ['text outside the approval id shape', 'p1; DROP TABLE ledger'], ['an id longer than the contract allows', `p${'0'.repeat(80)}`]])('is withheld when its proposal id is %s, and the desk is never asked', async (_case, id) => {
+    const asked: string[] = [];
+    const ledger = toolOutputLedger(fakeStorage() as never, { proposalState: async asking => { asked.push(asking); return { kind: 'email_send', state: 'done' }; } });
+    await ledger.record({ tool: 'send_email', ok: true, at: 1000, taint: 'external', summary: JSON.stringify({ ok: true, data: { proposal_id: id, sent: false } }) });
+    expect(await ledger.recent()).toEqual([]);
+    expect(asked).toEqual([]);
+  });
+
+  it('reads a row stored before the field existed, holding an ordinary result, exactly as before', async () => {
+    const storage = fakeStorage();
+    storage.data.set('toolout:0000000000', { tool: 'search_mail', ok: true, at: 1000, taint: 'external', summary: '{"ok":true,"data":{"count":2}}' });
+    storage.data.set('toolout-count', 1);
+    const asked: string[] = [];
+    const [fragment, ...rest] = await toolOutputLedger(storage as never, { proposalState: async id => { asked.push(id); return null; } }).recent();
+    expect(rest).toEqual([]);
+    expect(fragment!.text).toBe('search_mail succeeded: {"ok":true,"data":{"count":2}}');
+    expect(asked).toEqual([]);
+  });
+
+  it('leaves an output without a proposal exactly as before, and asks the desk nothing for it', async () => {
+    const asked: string[] = [];
+    const ledger = toolOutputLedger(fakeStorage() as never, { proposalState: async id => { asked.push(id); return null; } });
+    await ledger.record({ tool: 'send_email', ok: false, at: 1000, taint: 'external', summary: '{"ok":false,"code":"rejected","error":"No email was sent."}' });
+    expect((await ledger.recent()).map(fragment => fragment.text)).toEqual(['send_email failed: {"ok":false,"code":"rejected","error":"No email was sent."}']);
+    expect(asked).toEqual([]);
+  });
+});

@@ -5,7 +5,7 @@ import { asciiLiteralIncludes, forgetSourceBatch } from '../memory/selective-for
 // used to live only inside one turn; this ledger keeps the last few so the context
 // composer can stage them as tool_result sources with provenance and taint.
 import type { ContextFragment } from '../context-composer/types';
-import { literalJsonTextRedactor, type SourceTaint } from '@waldo/contracts';
+import { approvalIdV1Schema, literalJsonTextRedactor, type SourceTaint } from '@waldo/contracts';
 import { prepareWithScribe, type StrictSchema } from '../scribe/prepare';
 
 export type ToolOutputEntry = Readonly<{
@@ -14,7 +14,20 @@ export type ToolOutputEntry = Readonly<{
   at: number;
   taint: SourceTaint;
   summary: string;
+  // The approval this output proposed, read from the full output before the summary is cut.
+  proposal_ref?: string;
 }>;
+
+// The approval desk's current state for one approval, or null when it holds none by that id.
+export type ProposalState = (id: string) => Promise<Readonly<{ kind: string; state: string }> | null>;
+
+// A proposing tool reports its approval as data.proposal_id. Present but malformed still counts as a proposal.
+const proposalOf = (output: string): string | null | undefined => {
+  let id: unknown;
+  try { id = (JSON.parse(output) as { data?: { proposal_id?: unknown } } | null)?.data?.proposal_id; } catch { return undefined; }
+  if (id === undefined) return undefined;
+  return approvalIdV1Schema.safeParse(id).success ? id as string : null;
+};
 
 const MAX_KEPT = 6;
 const MAX_SUMMARY_CHARS = 500;
@@ -88,7 +101,7 @@ const ledgerSourcesFromRows = (topic: string, rows: Iterable<[string, ToolOutput
   return { sources, incomplete };
 };
 
-export const toolOutputLedger = (storage: KeyValueStorage) => ({
+export const toolOutputLedger = (storage: KeyValueStorage, options: Readonly<{ proposalState?: ProposalState }> = {}) => ({
   forgetSourceBatchCurrent(topic: string) {
     const all = this.forgetSourcesCurrent(topic);
     if (!all) return null;
@@ -106,13 +119,16 @@ export const toolOutputLedger = (storage: KeyValueStorage) => ({
     const summary = entry.summary.length > MAX_SUMMARY_CHARS ? `${entry.summary.slice(0, MAX_SUMMARY_CHARS)}...` : entry.summary;
     // Admission guard at write time: a poisoned summary is dropped, never persisted.
     if (!admitsForPrompt(summary, entry.taint)) return;
+    // A malformed id is stored empty: the row still counts as a proposal and is withheld on read.
+    const proposal = proposalOf(entry.summary);
+    const row: ToolOutputEntry = { ...entry, summary, ...(proposal === undefined ? {} : { proposal_ref: proposal ?? '' }) };
     const count = (await storage.get<number>('toolout-count')) ?? 0;
     if (scope) {
       if (!storage.kv) throw new Error('fenced synchronous ledger unavailable');
-      scope.commit(() => { storage.kv!.put(entryKey(count), { ...entry, summary }); storage.kv!.put('toolout-count', count + 1); if (count + 1 > MAX_KEPT) storage.kv!.delete(entryKey(count - MAX_KEPT)); });
+      scope.commit(() => { storage.kv!.put(entryKey(count), row); storage.kv!.put('toolout-count', count + 1); if (count + 1 > MAX_KEPT) storage.kv!.delete(entryKey(count - MAX_KEPT)); });
       return;
     }
-    await storage.put({ [entryKey(count)]: { ...entry, summary }, 'toolout-count': count + 1 });
+    await storage.put({ [entryKey(count)]: row, 'toolout-count': count + 1 });
     // Ring: drop the oldest once we exceed the cap.
     if (count + 1 > MAX_KEPT) await storage.delete([entryKey(count - MAX_KEPT)]);
   },
@@ -139,8 +155,15 @@ export const toolOutputLedger = (storage: KeyValueStorage) => ({
       return false;
     });
     if (poisonedKeys.length > 0) await storage.delete(poisonedKeys);
-    return clean.map(([key, entry]) => ({ entry, seq: key.slice('toolout:'.length) })).map(({ entry, seq }) => ({
-      text: `${entry.tool} ${entry.ok ? 'succeeded' : 'failed'}: ${redact(entry.summary)}`,
+    // An output that proposed an approval shows the desk's current state, never its snapshot; without one it is withheld.
+    const current = await Promise.all(clean.map(async ([, entry]) => {
+      const id = entry.proposal_ref ?? proposalOf(entry.summary);
+      if (id === undefined) return redact(entry.summary);
+      const state = id && options.proposalState ? await options.proposalState(id).catch(() => null) : null;
+      return state ? `proposed approval ${id} (${state.kind}). Its current state on the approval desk is ${state.state}; this replaces what the tool reported when it proposed.` : null;
+    }));
+    return clean.map(([key, entry], index) => ({ entry, seq: key.slice('toolout:'.length), shown: current[index] })).filter(({ shown }) => shown !== null).map(({ entry, seq, shown }) => ({
+      text: `${entry.tool} ${entry.ok ? 'succeeded' : 'failed'}: ${shown}`,
       source: {
         // The row sequence keeps two same-tool calls in one millisecond distinct: the timestamp alone repeats.
         source_key: `tool_output:${entry.tool}:${entry.at}:${seq}`,

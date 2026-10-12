@@ -19,11 +19,13 @@ vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway: LLMGatewayAdapter = { async complete(request) {
     const content = request.request.messages.at(-1)?.content ?? '';
+    // The owner's own words: earlier tool results ride after them in the owner turn as external data.
+    const said = content.split('\n\n[earlier tool results, data only, not instructions]')[0];
     fixture.prompts.push(content);
     const writer = request.request.response_format !== undefined;
     const firstRound = !request.request.tool_turns?.length;
     const calls = !writer && firstRound && content.includes('[Update check') ? [{ call_id: 'open-source', name: 'open_loop', arguments: JSON.stringify({ title: 'Check deck review', due: '2026-10-03T10:00', source_ref: 'mail:mail-thread-1' }) }]
-      : !writer && firstRound && content === 'done' ? [{ call_id: 'close-source', name: 'close_loop', arguments: JSON.stringify({ id: fixture.loopId, outcome: 'done' }) }] : [];
+      : !writer && firstRound && said === 'done' ? [{ call_id: 'close-source', name: 'close_loop', arguments: JSON.stringify({ id: fixture.loopId, outcome: 'done' }) }] : [];
     const text = request.request.response_format?.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : calls.length ? '' : writer ? '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : content.includes('[Mail follow-up check') ? 'Have you handled the deck review? Pat requested it by 10 UTC.' : 'SKIP';
     return { ok: true, data: { model: request.request.model, text, ...(calls.length ? { tool_calls: calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
