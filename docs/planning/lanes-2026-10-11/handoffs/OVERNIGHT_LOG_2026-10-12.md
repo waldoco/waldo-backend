@@ -613,3 +613,10 @@ Still open:
   - `CLEAN`; advisor consulted.
 - **Deploy:** `beta-mvp` is now `c5c36a05`, so every tip carries #1076. L2's re-raise and Telegram "Not now" follow-up is now a wave-1 must, and both L2 and L1 were told. If the follow-up misses 10:00Z, the owner decides whether wave 1 ships.
 - **Hot-file merge order:** #1066 and #1084 must each merge base and pass CI on the new base before I merge them.
+
+## 06:31Z: three independent reviews launched (usage reset)
+
+- **#1066 delta review** at `075eb8fe`. The reviewer has the original findings (the cross-date re-plan, the clock-dependent test 4, the held-skip trace, and the health HOLD) and the owner's rulings on the strip, replies, scope and time zone. It is asked to confirm the strip covers legacy `conv:*`, episodes and FTS, canonical `conv:*` and `witness:*`.
+- **#1083** at `4f80da1f`: Form aligned to ADR-0081. The reviewer reads the ADR from the local `waldo-brain` clone (`origin/main`).
+- **#1084** at `6587c579`: honest connect on the app.
+- **Status:** all three are 6/6 on the old base (`cdd906dd`), and `beta-mvp` is now `c5c36a05`. Before merging, #1066 and #1084, which touch the hot file, must merge the new base and pass CI on it. #1083 doesn't touch the hot file, but I'll still require a current base if GitHub reports it out of date.
