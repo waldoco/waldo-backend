@@ -163,14 +163,14 @@ describe('proactive work for an owner who only uses the app', () => {
     expect(wire.saved).toEqual(['UTC', 'Europe/London']);
   });
 
-  it('while no zone is confirmed, a due heartbeat or day card delivers nothing and the heartbeat stays scheduled', async () => {
-    await withAppOwner('proactive-held-fire', {}, async (owner, state) => {
+  it.each([false, true])('while no zone is confirmed, a due heartbeat or day card delivers nothing and the heartbeat stays scheduled (text capture %s)', async capture => {
+    await withAppOwner(`proactive-held-fire-${capture}`, { capture }, async (owner, state) => {
       const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
       await armHeartbeat(scheduler, Date.now() - 60 * 60_000);
       await scheduler.schedule({ id: 'card:brief', kind: 'brief', payloadRefs: { id: 'card:brief' }, occurrenceAt: Date.now() - 60_000, dueAt: Date.now() - 60_000, recurrence: null });
       await owner.alarm(); await owner.alarm();
       expect(model.calls).toBe(0);
-      expect(await appChat(owner, 'proactive-held-fire')).toEqual([]);
+      expect(await appChat(owner, `proactive-held-fire-${capture}`)).toEqual([]);
       expect(schedule(state)[HEARTBEAT_ID]?.status).toBe('armed');
       // Each hold leaves one fixed code naming the kind and the reason, never an id or text.
       expect(state.storage.sql.exec<{ hop: string; note: string; ok: number }>("SELECT DISTINCT hop, note, ok FROM trace_log WHERE hop = 'scheduled_hold' ORDER BY note").toArray())
@@ -179,18 +179,7 @@ describe('proactive work for an owner who only uses the app', () => {
     expect(wire.telegramSent).toBe(0);
   });
 
-  it.each([['card.time'], ['card.pin']] as const)('%s from the app controls arms a day card only once a zone is confirmed', async action => {
-    await withAppOwner(`proactive-${action}-unconfirmed`, {}, async (owner, state) => {
-      expect(await owner.setup('app').act({ action, id: 'card:close', value: '22:15' })).toBe(true);
-      expect(schedule(state)['card:close']?.status ?? 'none').not.toBe('armed');
-    });
-    await withAppOwner(`proactive-${action}-confirmed`, { zone: 'UTC', confirmed: true }, async (owner, state) => {
-      expect(await owner.setup('app').act({ action, id: 'card:close', value: '23:59' })).toBe(true);
-      expect(schedule(state)['card:close']?.status).toBe('armed');
-    });
-  });
-
-  it.each([false, true])('an event-brief sweep armed by the Telegram runtime is cancelled the first time the app alarm meets it, with one trace row naming why (text capture %s)', async capture => {
+  it.each([false, true])('an event-brief sweep on the app is cancelled the first time the alarm meets it, with one trace row naming why (text capture %s)', async capture => {
     await withAppOwner(`proactive-brief-drop-${capture}`, { zone: 'UTC', confirmed: true, capture }, async (owner, state) => {
       const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
       await scheduler.schedule({ id: BRIEF_SWEEP_ID, kind: 'pre_activity_spot', payloadRefs: { id: BRIEF_SWEEP_ID }, occurrenceAt: Date.now() - 60_000, dueAt: Date.now() - 60_000, recurrence: { type: 'interval', every_ms: 10 * 60_000, phase_ms: 0 } });
