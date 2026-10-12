@@ -2116,3 +2116,19 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - **Status:** staging is `d704ffff`; `beta-mvp` is `e93a87c9` (#1101). L1's deploy ask is pending, so the freeze applies.
   - **App #91 merged as `f37223b0`** on the owner's yes in L4's session: times and days read the same everywhere. It's UI formatting, so I ran no review.
   - **The owner is signing in on my simulator** (`iPhone 17`): the code was requested, and the screen is waiting for it. I don't type codes.
+
+## 20:51Z: first autonomous Simulator run (orchestrator device `iPhone 17`, staging `d704ffff`)
+
+- **Setup:** the owner signed in at about 20:40Z. Home showed 2 approvals waiting, which matches L4's account, so this is likely the P1 test account.
+  - My two turns ran before any P1 approval; no #116 record of one exists.
+  - **I'm making no further turns on this account until the morning "did it go out?" question.**
+  - No email content is recorded here or anywhere else.
+- **Test 1, email summary** (sent 20:46:05Z, answered in under a minute): **PASS.** In the app, Waldo listed the important mail from the last 48 hours, one line each, with a reply-needed judgment per item. It stated its coverage honestly: "Gmail returned only a partial sample (60 messages)". Three issues:
+  - **One HTML-only alert's body was unreadable.** The Gmail read probably extracts text parts only [inference]. It goes to the backend.
+  - **One bold line ran past the right edge** in the app's markdown rendering. It goes to L4.
+  - **A CI-failure email it surfaced was the 11 Oct run** (`21a70277`). The latest four `beta-mvp` runs pass [verified], so nothing is broken now.
+- **Test 2, meeting prep** (sent 20:48:10Z, answered about 20:50Z, about 2 minutes): **PASS for the flow.**
+  - It read the calendar, then searched mail and docs. It said honestly that the event shows no attendees, agenda or join link, and that it found no matching email or doc.
+  - **Latency:** about 2 minutes, which is slow.
+  - **The join link:** the calendar mapper drops Meet links [verified in source], so a link on a real meeting would be missed. Whether this event had one is unknown.
+- **The duplicate reminder is visible in the account's history:** receipts "reminder set (failed); reminder set (accepted); reminder set (accepted)", then two different stretch messages. It's queued for L2 (red test first).
