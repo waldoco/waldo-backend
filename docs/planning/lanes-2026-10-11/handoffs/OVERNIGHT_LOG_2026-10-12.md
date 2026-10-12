@@ -327,3 +327,11 @@ Report `04-harness-context.md`, code read at `35b7c21b` (= `4bb040f5` + docs). N
   - Approval card in chat: NOT RUN.
 - **App #78 merged by the owner in L4's session** as `83b5310f` (02:39:54Z), without D6 or the comment rewording **[verified: app commits]**.
 - Follow-ups for L2: `commit()` must not overwrite an existing key; unify the two leaf rules.
+
+## 02:56Z: heartbeat. App #79 ready for the owner's yes
+
+- **App #79** (L4) "chat: label only rows from other channels, by name", head `3546e501`, based on main `83b5310f`, `CLEAN`.
+  - CI-equivalent (D2) at the exact head **[verified]**: frozen install exit 0, no drift; `tsc` exit 0; jest 580 passed / 1 skipped.
+  - Diff read **[verified]**: app rows unlabelled, other channels named (`iMessage` spelling added), drafts "local", the `#BDBDBD` inline colour removed, the Waldo mark gets a VoiceOver label, tests added. No rule issues.
+  - The standing go has ended, so this merge needs the owner's yes.
+- Staging `889efa27`; no new #116 comments.
