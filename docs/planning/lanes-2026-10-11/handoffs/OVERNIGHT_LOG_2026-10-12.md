@@ -974,3 +974,25 @@ Still open:
   - Both surfaces move to `principal_ref`, with a reviewed re-stamp, in E15's routing slice tomorrow. SHOULD goes in its own PR, not #1087.
   - Next: an advisor check on whether this falls on the hold list (user isolation).
 - **#1087 (MUST 3)** is a draft at `53d0f699` on `e4ef5b59`. pgTAP passed; verify and the four runtime shards are pending. The independent review subagent started at `53d0f699`.
+
+## 10:07Z: E17, the app first on iOS and Android; D11 goes to the owner; #1037 read; strict-check sweep
+
+- **E17 (owner, verbatim):** "we need to resolve this as well have a working waldo app for ios and android ready followed by whatsapp and imessages". Then: "focus on app build for to make everything work fully the agent on app for ios and android end to end the we can continue the extension work on whatsapp and imessages".
+  - This replaces 11 Oct's "iPhone first, Android later". E10's copy question stays open. The scorecard (A, §5) and memory are updated.
+- **Android today** [verified at waldo-app `5017f0c8`, files read]:
+  - Package `com.waldo.app`, Expo SDK 54, and an EAS development profile with an Android key.
+  - Android health uses Samsung Health's SDK only (`HealthModule.kt`, `withHealth.js`). There is no Health Connect, so non-Samsung phones get no health data. A code comment says reads need Samsung Health's developer mode until Samsung registers the app (error 2003).
+  - There is no Firebase config, so there is no Android push. The backend accepts an `fcm` token (`contracts/src/app/devices.ts:7`) but has no FCM sender [verified by grep at `e4ef5b59`].
+  - This Mac has no Android SDK or emulator; Java 17 is present [verified].
+- **D11 goes to the owner** (advisor): the SHOULD PR touches user isolation, so it is on the hold list, and I don't merge it under E1.
+  - L2 builds (b) and must show one of two things: that a DO can't be re-bound to another owner's app principal, or a same-owner check with a negative test.
+  - If the owner hasn't said yes before wave 2, wave 2 ships #1087 alone and probe 7 waits.
+- **#1037** [subagent read; claims carry file:line]:
+  - It is a docs-only pack at `a709fcd6`: 113 tasks and 66 gold rows. Nothing runs, and no task targets the app. The gold is Instinct-written, prepare-only and self-graded, with no fixtures.
+  - It isn't a GitHub draft, despite its "do not merge". I won't merge it.
+  - Waldo's research doc records that Instinct's terms bar benchmarking (moonshot evaluation, :183), so the catalog's §8 plan needs the owner's terms decision.
+  - Proposed slice 1: five app-path golden journeys (UC-02-US, PR-07, SAF-01, SAF-05, PR-15). They use synthetic fixtures, run in verify, and use no Instinct output. The owner is to be decided; it is not L2, which holds today's hot file.
+  - Slice 2 (nightly, model-graded) waits on a CI secret, an egress review and the terms decision.
+- **Strict checks:** reads of stored data skip the bad item and record a code, as #1075 does. Authority and safety checks still fail closed. A read-only sweep subagent is listing every whole-read failure at `e4ef5b59`.
+- **Promise count correction:** the grant-blocked promises are ten rows, not "about eight": WP-025, -026, -028, -030, -032, -033, -034, -046, -047 and -061. WP-023 and WP-038 depend on grants in part.
+- **L1:** the tail for probes 1–8 is live on `c7974404` (10:00:31Z), with the owner's confirmation in L1's session. Results come per probe.

@@ -99,6 +99,8 @@ Each can be asked with AskUserQuestion. The first option is the recommendation.
 **Answered at about 09:25Z, in the orchestrator's session:**
 - **E14, P4 proof:** at about 09:25Z, an app-only test account. At about 09:35Z the owner named an existing Telegram-linked test account instead: it proves reminders in the app and day cards on Telegram, and a day card in the app needs an app-only account or E15's routing. A Telegram-linked owner's day cards, heartbeat and nightly run on Telegram, and only reminders go to the app [verified at `e37f60f3`].
 - **E15, routing:** app-first. Proactive messages (day cards, prep, update cards, follow-ups) go to the app for anyone who uses it, with Telegram as a dev copy. L2 builds it on 13 Oct as the slice after MUST 3; MUST 3 stays app-channel only.
+- **E16, standing grants (about 09:55Z):** "Start the contract and ADR now". v1 covers reversible, owner-only actions; sends to other people, purchases, deletions and health shares stay per-action. The draft is `STANDING_GRANTS_ADR_DRAFT_2026-10-12.md`, and the code comes after the app musts.
+- **E17, the app first (about 10:05Z):** the agent works end to end in the app on iOS and Android, and WhatsApp and iMessage come after. This replaces 11 Oct's "iPhone first, Android later". E10's copy question stays open.
 
 If you choose E1(a), tell each lane in its own session; a relay from me is not a yes there. L4's brief, for one, requires your yes in L4's session for every app merge.
 
@@ -390,6 +392,8 @@ The dates are estimates. The gate column names what holds each item.
 | When | Pillar | Item | Gate |
 |---|---|---|---|
 | 13–14 Oct | P4 / P6 | App-first routing: proactive messages (day cards, prep, update cards, follow-ups) go to the app for anyone who uses it, with Telegram as a dev copy (E15) | L2's slice after MUST 3, with its own tests |
+| Next, alongside iOS (E17) | all | Android end to end: a build from source on a phone; Health Connect reads (today only Samsung Health's SDK); FCM push (the contract accepts `fcm`, but there is no sender) | The owner: the Android SDK or a cloud build, a Firebase project and key, a test phone. FCM is a new external integration |
+| After the app musts | P4 / W2 | Standing grants (E16), then the autonomy dial, then the Patrol acting under a grant. Ten promise rows: WP-025, -026, -028, -030, -032, -033, -034, -046, -047, -061 | The ADR in waldo-brain and a DO migration, both the owner's |
 | 13–14 Oct | P5 | A connect card in app chat, and Google disconnect, with revocation shown to the owner | L3 contract, then L4 re-pin |
 | 13–14 Oct | P7 | Google sign-in (O2-A) once S7 has landed, then session refresh | Security review of the auth change |
 | 13–14 Oct | P8 | A model-graded app-path eval in CI: a judge from another model family, pass^k on the golden tasks, seeded from real failures. Alerts on fatal codes (`history_invalid`, `send_failed`) | You add a model API key as a CI secret |
@@ -408,7 +412,7 @@ The dates are estimates. The gate column names what holds each item.
 | Start now, weeks | P5 | Google verification and the CASA assessment for `gmail.readonly`, `gmail.compose` and `drive.readonly` | External assessor |
 | Before App Store | P7 | 4.8 equivalent login, 5.1.1(v) deletion, 5.1.2(i) AI consent, 4.5.4 push content | App Store submission |
 | Not for the beta | P7 | Payments: not promised; pricing lines are copy (O7) | none |
-| Not for the beta | P6 | WhatsApp (AI-provider terms) and iMessage beyond the #1017 Mac bridge | Platform terms |
+| After the app (E17) | P6 | WhatsApp and iMessage. Recommended order: iMessage through the #1017 Mac bridge first, since WhatsApp waits on Meta's AI-provider terms | The #1017 DO migration (the owner's); a legal read of Meta's terms |
 
 ## 6. Against other personal agents
 
