@@ -125,7 +125,7 @@ Each target has a probe in the app Main chat.
 | Pillar | Target today | What must land | Probe (app Main chat) | Gates |
 |---|---|---|---|---|
 | **P3** Memory and skills | **yes (should)** | **L2:** skills on app turns. **G3:** app chat in search and nightly | "Prep me for my 3 pm" loads the meeting-prep skill. "What did I tell you this morning about lunch?" finds the app message | E1, E3 |
-| **P4** Triggers and jobs | **yes (must)** | **#1066** with the strip. **L4:** the D6 zone row (merged as app #82, `89a8e1d8`) ("Use this device's time zone", or "Keep <zone>"; the design system bans "Confirm" on buttons). **L2:** Prep, update cards and mail follow-ups on the app channel (`telegram-owner-do.ts:2417`) | "Remind me in 10 minutes to stretch" arrives on time. Then ask Waldo to move today's day card to a time inside the probe window (14:30–16:30Z), watch it arrive, and set it back. Without that, P4 is verified on reminders plus armed-job lines in L1's log tail | E1, E2 |
+| **P4** Triggers and jobs | **yes (must)** | **#1066** with the strip. **L4:** the D6 zone row (merged as app #82, `89a8e1d8`) ("Use this device's time zone", or "Keep <zone>"; the design system bans "Confirm" on buttons). **L2:** Prep, update cards and mail follow-ups on the app channel (`telegram-owner-do.ts:2417`) | "Remind me in 10 minutes to stretch" arrives on time in the app. Then, on an app-only account, ask Waldo to move today's day card to a time inside the probe window (14:30–16:30Z), watch it arrive in the app, and set it back. On a Telegram-linked account the day card arrives on Telegram. Without that, P4 is verified on reminders plus armed-job lines in L1's log tail | E1, E2 |
 | **P5** Connectors and auth | **yes (must)** for a connected owner | **Your consent run.** **L2:** interim connect text, so the app turn points to Connections instead of reporting a button it dropped | "What's on my calendar tomorrow?" lists real events. "Connect my Google" points to Connections | E1, E8 |
 | **W2** Approvals (not one of the eight) | **should:** the card, "Not now", "what's waiting on me?" and bringing it back | **#1076** and **#1085**, both merged. **L3:** expiry on read, plus the `deferred_at` card field; **L4:** the re-pin | Defer, ask, re-raise. "Move my 4 pm to 5" shows the card. Tap "Not now". Ask "What's waiting on me?": Waldo names it from `raise_approval list`, with no G1. Ask to bring it back: a fresh card appears. Until L3's field and L4's re-pin land, the deferred chat card may still read "no longer available" | E1, E4 |
 | **P6** Text and voice | text yes; push is a stretch goal | **S7** sender and device routes. **L4:** registration | A reminder arrives as a push with the app closed | E5, E6 |
@@ -162,7 +162,10 @@ Each target has a probe in the app Main chat.
   - #1076 (merged 06:07Z as `c5c36a05`) together with its re-raise follow-up #1085 (merged 08:40Z as `e37f60f3`).
   - Not in it: expiry on read (L3 is not back), and the event-brief hold noise fix (about 144 rows a day; it goes in the next deploy).
 - **Wave 2 at about 14:00Z** (19:30 IST): the app branch at `:2417` (MUST 3, which slips here behind the re-raise PR on the hot file) and skills on app turns, plus whichever stretch items (G1, G3, S7) passed the gate.
-- **After wave 1, before the P4 probe:** the owner's zone must be confirmed. That means a tap on the D6 row, or the Simulator's one-time automatic write. Until then the app runtime arms nothing. The P4 probe (a reminder, plus the day card moved into the probe window) rides on #1066 alone.
+- **After wave 1, before the P4 probe:** confirm the owner's zone, with a tap on the D6 row or the Simulator's one-time automatic write.
+  - For an app-only owner, the app runtime arms nothing until then.
+  - A Telegram-linked owner's nightly, heartbeat and day cards run on Telegram either way, and only reminders arrive in the app [verified at `e37f60f3`: `telegram-owner-do.ts:1272-1281`, `:1337-1345`].
+  - So the day-card half of the P4 app probe needs an app-only test account, unless the owner chooses otherwise.
 
 Then:
 - **Probes:** 14:30–16:30Z.

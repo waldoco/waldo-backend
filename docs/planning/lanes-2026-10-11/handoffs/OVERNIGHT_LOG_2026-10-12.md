@@ -888,3 +888,18 @@ Still open:
 **App #84** (the 18+ gate at sign-up) is merged as `72eae07a`, on the owner's yes in L4's session. It has separate Sign in and Create account. The server record, the web sign-up box and invites from links are still open. B.2 row 1c is updated.
 
 **Scorecard page published:** https://claude.ai/artifact/QQyVwrydfu3Exn6xVHyA8Q. It is a dashboard built from 13 data files; the build script checks the per-row counts against the doc's tables. Four rows were refreshed for #84 and #1086. Four superseded copies of the data files are still in the artifact's file store; I didn't delete them, because the brief bars deleting data.
+
+## 09:20Z: P4 routing correction; #1086 fixes pushed
+
+- **Correction** [verified at `e37f60f3`: `telegram-owner-do.ts:1272-1281`, `:1337-1345`]: the zone tap gates arming only for app-only owners.
+  - A Telegram-bound owner's nightly, heartbeat and day cards run on Telegram either way, and only their reminders go to the app.
+  - If the owner's account is Telegram-bound, the P4 day card lands on Telegram.
+  - The page (notes y1 and `w_zone`; pillars P4) and scorecard section C and B.1 are reworded to hold either way.
+  - L1 has the correction. The owner is asked how P4 is proven in the app, and whether a dual-channel owner's proactive jobs move to the app.
+  - The owner's Telegram binding is not verified; L1 won't do a directory read without the owner's say-so.
+- **#1086:** L2 pushed `5b41101a` and CI is running.
+  - The no-op gate is removed, and with it the time-dependent test and the silent loss of a card time.
+  - Held-row notes are tested with capture on and off.
+  - Residuals are listed in the body.
+  - Next: I read the delta, then CI, the advisor, and the merge.
+- **The one-time auto-write:** a `date -u` check caught a dataset update stamp ahead of the clock; it was corrected.
