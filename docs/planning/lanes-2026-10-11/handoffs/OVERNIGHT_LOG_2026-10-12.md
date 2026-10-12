@@ -731,3 +731,18 @@ Still open:
   - Health Connect goes into the source table at 0.6, marked candidate, in the same ADR amendment. Mixed owners keep Form through per-component selection.
   - L1's order: the brain amendment PR, then the re-work of #1083.
   - E12 answered: the owner approved Weight's free/busy design, using all selected calendars. It comes after #1083, and its owner-DO route will be sequenced with L2.
+
+## 07:16Z: heartbeat. #1084 rebased and its fix read; #1085 review launched
+
+- **Staging:** `cdd906dd`. **`beta-mvp`:** `531813cb`.
+- **#1084** at `93351f98`, after L2 merged `531813cb` in. Its patch-id matches `6202b51b` [verified].
+  - I read the 7-file fix delta and it matches L2's account:
+    - `unconnectedLine` reworded;
+    - the skip now has its own hop (`ok:true`, `app_surface`);
+    - the logged catch (`offer_threw`);
+    - the comment and guidance wording;
+    - the `mcp.ts` comment removed.
+  - CI is running at `93351f98`. Merge follows CI and the advisor.
+- **#1085** (re-raise, and Telegram "Not now" as defer) is ready at `c001e427`, with CI at 5/6.
+  - Independent review launched. It covers authority, Telegram callback compatibility, the WhatsApp parser change, app.v1 parts, abuse limits and the hot files.
+  - It must merge base and pass CI again after #1084.
