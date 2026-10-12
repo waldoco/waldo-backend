@@ -6,7 +6,7 @@ import { stableJson } from '../context-composer/canonical';
 import { redactSecretUrls } from '../channels/egress-guard';
 
 export type CanonicalHistoryStorage = Pick<DurableObjectStorage, 'get' | 'list' | 'put'> & {
-  kv?: Pick<DurableObjectStorage['kv'], 'get' | 'put'>;
+  kv?: Pick<DurableObjectStorage['kv'], 'get' | 'put' | 'list'>;
 };
 type Witness = Readonly<{ lineage: 'canonical_v1'; principal_ref: string; tenant_ref: string; entry: ConversationEntry }>;
 const writesInProgress = new WeakMap<object, Promise<unknown>>();
@@ -147,6 +147,15 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
       const previousLeaf = await storage.get<Witness>(witnessKey(leafId));
       if (!checked.some(entry => entry.id === leafId) && (!previousLeaf || !matches(previousLeaf, validate(previousLeaf.entry)))) throw new Error('canonical history leaf mismatch');
       await context.assertCurrent();
+      // New rows go after both the stored count and the last stored row. An older build could leave rows the count
+      // does not cover, and a write at the count would then replace any stored row at or past it.
+      const nextSlot = (count: number, last: string | undefined) => {
+        if (last === undefined) return count;
+        const slot = last.slice(`${prefix}conv:`.length);
+        if (!/^\d{10}$/.test(slot)) throw new Error('canonical history entry invalid');
+        return Math.max(count, Number(slot) + 1);
+      };
+      const lastSlot = { prefix: `${prefix}conv:`, reverse: true, limit: 1 } as const;
       const commit = (count: number, fresh: readonly ConversationEntry[]) => {
         const writes: Record<string, unknown> = { [`${prefix}count`]: count + fresh.length, [`${prefix}leaf`]: leafId };
         fresh.forEach((entry, index) => {
@@ -169,10 +178,14 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
             const leaf = storage.kv!.get<Witness>(witnessKey(leafId));
             if (!leaf || !matches(leaf, validate(leaf.entry))) throw new Error('canonical history leaf mismatch');
           }
-          const count = storage.kv!.get<number>(`${prefix}count`) ?? 0;
+          const [last] = storage.kv!.list(lastSlot);
+          const count = nextSlot(storage.kv!.get<number>(`${prefix}count`) ?? 0, last?.[0]);
           for (const [key, value] of Object.entries(commit(count, fresh))) storage.kv!.put(key, value);
         });
-      } else await storage.put(commit((await storage.get<number>(`${prefix}count`)) ?? 0, entries));
+      } else {
+        const [last] = (await storage.list(lastSlot)).keys();
+        await storage.put(commit(nextSlot((await storage.get<number>(`${prefix}count`)) ?? 0, last), entries));
+      }
     }); },
     persistOwnerInput: async (entry, scope) => { await store.save([entry], entry.id, scope); },
   };
