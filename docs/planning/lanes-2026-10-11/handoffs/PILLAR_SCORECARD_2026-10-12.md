@@ -16,13 +16,13 @@ The eight pillars:
 7. payments and identity
 8. evals and observability
 
-## EoD status, 12 October (17:15Z)
+## EoD status, 12 October (17:15Z; deploy update 17:38Z)
 
 **The strict test in app Main chat: 0 of 6 chat-capable pillars.** The target was 2–3.
 - **Triggers (P4) and connectors (P5)** have t1, t2 and the reply half of t3 observed live. One follow-up app turn would settle the rest of t3 for both: a later turn reading the result back ("What was on my calendar tomorrow again?", "What reminders do I have?").
 - **Memory and skills (P3)** waits on #1088 (your merge).
 
-**Live on staging `87b31948`** (deployed 16:36Z; rollback `02103423`):
+**Live on staging `27214c63`** (deployed 17:37Z as version `483c7475`, on your yes in L1's session; rollback `c9de74c5`, which has the guard, so D14 is cleared and E15 can go ahead on 13 Oct):
 - **Before wave 1:** #1074 and #1075, the history-load fixes; #1080, the history-overwrite fix.
 - **Wave 1 (08:50Z):**
   - #1066: proactive arming, with the zone hold;
@@ -30,6 +30,7 @@ The eight pillars:
   - #1084: the connect text.
 - **Wave 2 (11:55Z):** #1086, unreadable rows held, not fatal; #1087, MUST 3: prep and update cards on the app channel for app-only owners.
 - **16:36Z:** #1090 and #1092, the schedule-row guards; #1094, the episodes search hit.
+- **17:37Z:** #1091, G1: earlier tool results and approval state carry into the next owner turn, and only Waldo's own untainted results and desk state lines are shown (D16). Also #1093, the calendar-read log line, and #1096, the wider type check. G1 is not probed yet.
 
 **Probes:**
 - **Passed:**
@@ -43,12 +44,7 @@ The eight pillars:
   - 8: inconclusive;
   - 9: a day card in the app, on an app-only account; not run.
 
-**Merged, not deployed (tip `27214c63`):**
-- #1091, G1: earlier tool results and approval state carry into the next owner turn. Only Waldo's own untainted results and the approval desk's state lines are shown (D16).
-- #1093: one content-free log line per calendar read.
-- #1096: the type check now covers `evals/` and `scenarios/`.
-
-Push CI is green at `27214c63` [verified]. To deploy, give your yes in L1's session, naming `27214c63`. That deploy makes `87b31948` (with its guard) the rollback target, which clears D14 for E15 tomorrow.
+**Merged, not deployed:** #1097, #1093's test and comment follow-ups (tip `cf38b379`). #1098, the shared-ring fix, is back with L2 for two small fixes.
 
 **Waiting on you:**
 - **Merges:**
@@ -67,9 +63,7 @@ Push CI is green at `27214c63` [verified]. To deploy, give your yes in L1's sess
 - **Your own tasks:** the APNs key (E5), the Google consent move (E8) and the real-iPhone health run.
 
 **Tomorrow, 13 Oct [proposed]:**
-- **Waiting to merge:** `beta-mvp` is frozen until the `27214c63` deploy is resolved, so the SHA in your yes stays the tip.
-  - #1097 (L1): #1093's test and comment follow-ups. The review passed, and it's held only by the freeze.
-  - #1098 (L2): the shared-ring fix, so "did it go out?" survives a busy job. The review passed, but it's back with L2 for two small fixes: drop legacy origin-less rows on any write, and keep a failed desk row's desk line.
+- **#1098 (L2):** the shared-ring fix, so "did it go out?" survives a busy job. The review passed, but it's back with L2 for two small fixes: drop legacy origin-less rows on any write, and keep a failed desk row's desk line.
 - **L2:** after #1098, E15 app-first routing.
 - **L4:** refresh-while-open with the unread signal, then Android (E17).
 - **L1:** deploy `27214c63`, then the Weight and Form follow-ups.
