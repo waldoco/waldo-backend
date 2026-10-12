@@ -73,7 +73,7 @@ describe('update cards', () => {
 });
 
 
-const updateFixture = vi.hoisted(() => ({ changed: false, sent: [] as string[], prompts: [] as string[] }));
+const updateFixture = vi.hoisted(() => ({ changed: false, sent: [] as string[], markups: [] as unknown[], prompts: [] as string[] }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
   return { ...original, googleClient: (...args: Parameters<typeof original.googleClient>) => args[0].clientId !== 'update-fixture' ? original.googleClient(...args) : ({
@@ -83,8 +83,8 @@ vi.mock('../src/connectors/google', async load => {
 });
 vi.mock('../src/channels/telegram-api', async load => {
   const original = await load<typeof import('../src/channels/telegram-api')>();
-  return { ...original, createTelegramCaller: () => async (method: string, payload: { chat_id?: number; text?: string }) => {
-    if (method === 'sendMessage') { updateFixture.sent.push(payload.text ?? ''); return { message_id: updateFixture.sent.length, chat: { id: payload.chat_id } }; } return true;
+  return { ...original, createTelegramCaller: () => async (method: string, payload: { chat_id?: number; text?: string; reply_markup?: unknown }) => {
+    if (method === 'sendMessage') { updateFixture.sent.push(payload.text ?? ''); updateFixture.markups.push(payload.reply_markup); return { message_id: updateFixture.sent.length, chat: { id: payload.chat_id } }; } return true;
   } };
 });
 vi.mock('../src/channels/telegram-turn', async load => {
@@ -98,7 +98,7 @@ it.each(['normal', 'low', 'quiet', 'off', 'closed'] as const)('updates without a
   await runInDurableObject(env.TRACER_DO.get(env.TRACER_DO.idFromName(`update-without-brief-${mode}`)), async (_instance, state) => {
     const now = Date.parse('2026-10-08T09:00:00Z');
     const savedNow = Date.now; Date.now = () => now;
-    updateFixture.changed = false; updateFixture.sent = []; updateFixture.prompts = [];
+    updateFixture.changed = false; updateFixture.sent = []; updateFixture.markups = []; updateFixture.prompts = [];
     try {
       state.storage.kv.put('telegram_subject', '7');
       await state.storage.put('origin', 'https://fixture.invalid');
@@ -112,6 +112,11 @@ it.each(['normal', 'low', 'quiet', 'off', 'closed'] as const)('updates without a
       await runtime.updateCheck('changed');
       expect(updatePlans(state.storage.sql).read('2026-10-08').some(row => row.card === 'card:brief' && row.sent)).toBe(false);
       expect(updateFixture.sent.filter(text => text === 'Calendar update: Lunch added.')).toHaveLength(mode === 'normal' ? 1 : 0);
+      // On Telegram the update card carries its Useful / Not useful feedback buttons, keyed to its stored row.
+      if (mode === 'normal') {
+        const id = state.storage.sql.exec<{ id: number }>('SELECT id FROM update_cards WHERE pushed = 1').one().id;
+        expect(updateFixture.markups).toEqual([{ inline_keyboard: [[{ text: 'Useful', callback_data: `fb:${id}:u` }, { text: 'Not useful', callback_data: `fb:${id}:n` }]] }]);
+      }
       expect(closedTraces(state, 'changed')).toBe(1);
     } finally { Date.now = savedNow; await state.storage.deleteAlarm(); }
   });

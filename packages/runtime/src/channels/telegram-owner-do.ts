@@ -1347,10 +1347,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const started = Date.now();
       let fired: readonly ScheduleEntry[];
       try {
-        // Event briefs have no app delivery yet, so an app owner's sweep (armed by a Telegram runtime build) is cancelled, not held.
-        const held = (kind: ScheduleKind): ScheduleHold => channel !== 'app' ? false : kind === 'event_briefs' ? 'drop' : this.ctx.storage.kv.get<boolean>('timezone_confirmed') !== true ? 'hold' : false;
+        // An app owner's jobs wait for a confirmed zone. The event-brief sweep, which a Telegram runtime build can arm, is
+        // cancelled instead of held, so it does not wake every ten minutes; confirming the zone arms it again.
+        const held = (kind: ScheduleKind): ScheduleHold => channel !== 'app' || this.ctx.storage.kv.get<boolean>('timezone_confirmed') === true ? false : kind === 'event_briefs' ? 'drop' : 'hold';
         const onHeld = (kind: ScheduleKind, outcome: 'hold' | 'drop') => {
-          const code = kind === 'event_briefs' ? 'event_briefs_not_routed' : `${kind}_timezone_unconfirmed`;
+          const code = `${kind}_timezone_unconfirmed`;
           log({ trace: `alarm:${started}`, hop: outcome === 'drop' ? 'scheduled_drop' : 'scheduled_hold', ms: 0, ok: true, code, detail: code });
         };
         fired = await scheduler.dispatchDue(gateScheduleExecutors({ reminder, heartbeat: beat, dreaming: nightly, pre_activity_spot: briefs, brief: cards, standing_order: fireOrder }, schedulePreferences(this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now })), scheduler, held, onHeld));
@@ -2037,8 +2038,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const updates = updateBook(storage.sql);
     // App-only owners get no proactive work on a fallback zone: only the owner's own time-zone choice confirms one.
-    // Event briefs stay off on the app until Calendar Prep and update cards have app parts.
-    const armable = (kind: ScheduleKind) => channel !== 'app' || (kind !== 'event_briefs' && identity.get<boolean>('timezone_confirmed') === true);
+    const armable = (_kind: ScheduleKind) => channel !== 'app' || identity.get<boolean>('timezone_confirmed') === true;
     const armOwnJobs = (timezone: string, now: number, replanCards = false) => Promise.all([
       schedPrefs.enabled('nightly') && armable('nightly') ? armNightly(scheduler, timezone, now) : Promise.resolve(),
       schedPrefs.enabled('event_briefs') && armable('event_briefs') ? armBriefSweep(scheduler, now) : Promise.resolve(),
@@ -2415,14 +2415,17 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const check = () => {
         const doName = identity.get<string>('do_name');
         const currentAccounts = storage.kv.get<readonly GoogleAccount[]>('google:accounts') ?? [];
-        if (channel !== 'telegram' || !doName || owner <= 0 || identity.get<string>('telegram_subject') !== String(owner)
-          || identity.get<boolean>('telegram_unlinked') === true || timezone !== clock.timezone || this.env.TELEGRAM_BOT_TOKEN !== token
+        // Prep goes to the owner bound on this channel: the Telegram subject on this bot, or this owner's own app binding.
+        const bound = channel === 'telegram' ? identity.get<string>('telegram_subject') === String(owner) && this.env.TELEGRAM_BOT_TOKEN === token
+          : channel === 'app' && !!doName && identity.get<string>('app_subject') === String(owner) && String(owner) === String(appSubjectFor(doName));
+        if (!bound || !doName || owner <= 0 || identity.get<boolean>(`${channel}_unlinked`) === true || timezone !== clock.timezone
           || !this.env.TELEGRAM_OWNER_DO || this.env.TELEGRAM_OWNER_DO.idFromName(doName).toString() !== this.ctx.id.toString()
           || !currentAccounts.some(account => account.id === connectionId && googleHas(account.scopes, 'calendar'))) throw new Error('calendar prep authority changed');
         return doName;
       };
       const doName = check();
-      const present = presenceRecheck(consoleAuth(this.env), doName, 'telegram', String(owner));
+      // The app has no presence check: the alarm admitted the owner through the directory, and the app delivery asks it again.
+      const present = channel === 'telegram' ? presenceRecheck(consoleAuth(this.env), doName, 'telegram', String(owner)) : null;
       if (present && !(await present())) throw new Error('calendar prep presence revoked');
       check();
     };
@@ -2445,7 +2448,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const started = Date.now();
       try {
         if (proactiveEnabled(this.env.CALENDAR_GROUNDED_PREP, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity())) {
-          if (channel !== 'telegram' || loops.proactivity().volume === 'low') return;
+          if ((channel !== 'telegram' && channel !== 'app') || loops.proactivity().volume === 'low') return;
           const counterHold = calendarCounterHold();
           if (counterHold) {
             log({ trace, hop: 'brief_sweep', ms: 0, ok: false, code: 'calendar_counter_cutover_required', detail: `Counter timezone transition held: ${counterHold}.` });
@@ -2468,17 +2471,17 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
               const doName = identity.get<string>('do_name')!;
               let admitted = false;
               await finalOutbox.enqueueFenced({ id, trace: id, payload: { chat_id: owner, text: redactSecretUrls(text).text },
-                ownerSubject: String(owner), doName, bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0], expiresAt: Date.parse(calendarPrep.start), calendarPrep,
+                ownerSubject: String(owner), doName, ...(channel === 'telegram' ? { bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] } : {}), expiresAt: Date.parse(calendarPrep.start), calendarPrep,
               }, work => storage.transactionSync(() => {
-                if (clock.timezone !== timezone || identity.get<string>('do_name') !== doName || identity.get<string>('telegram_subject') !== String(owner)
-                  || identity.get<boolean>('telegram_unlinked') || calendarCounterHold() !== null || !proactiveEnabled(this.env.CALENDAR_GROUNDED_PREP, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity())
+                if (clock.timezone !== timezone || identity.get<string>('do_name') !== doName || identity.get<string>(`${channel}_subject`) !== String(owner)
+                  || identity.get<boolean>(`${channel}_unlinked`) || calendarCounterHold() !== null || !proactiveEnabled(this.env.CALENDAR_GROUNDED_PREP, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity())
                   || loops.proactivity().volume === 'low' || Date.now() >= Date.parse(calendarPrep.start)) throw new Error('calendar prep admission changed');
                 const now = Date.now();
                 const candidate = { event_id: cooldownKey, push_class: 'pre_activity_spot' as const, trigger: 'pre_activity_spot' as const, expires_at: Date.parse(calendarPrep.start) };
                 const admission = computeAdmission({ candidate, classState: calendarGate.readClassState(String(owner), candidate, now, timezone), countedSends: calendarGate.readBudget(String(owner), now, timezone).sends_total, now, timezone });
-                if (!['send', 'degrade'].includes(admission.verdict) || !admission.channels.includes('telegram')) return;
+                if (!['send', 'degrade'].includes(admission.verdict) || !admission.channels.includes(channel === 'app' ? 'in_app' : 'telegram')) return;
                 work(); commit();
-                // Telegram-only output never consumes an APNs budget reservation.
+                // Chat output, on Telegram or in the app, never consumes an APNs budget reservation.
                 calendarGate.applyAdmission(String(owner), candidate, { ...admission, budget_charged: false }, now, timezone);
                 admitted = true;
               }));
@@ -2490,6 +2493,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           await updateCheck(`update:${entry.occurrence_at}`);
           return;
         }
+        // The legacy sweep sends straight to the chat, with no outbox, cap or cooldown: on the app only grounded prep runs.
+        if (channel !== 'telegram') return void (await updateCheck(`update:${entry.occurrence_at}`));
         // An owner who opted out of follow-ups gets no event brief either (the legacy sweep is a proactive send).
         if (loops.proactivity().followups === false) {
           log({ trace, hop: 'brief_sweep', ms: 0, ok: true, detail: 'held: owner opted out of follow-ups' });
@@ -2542,7 +2547,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
         if (text) {
           if (id === null) id = updates.record(day, now, [], null);
-          await sentOrThrow(routedCall('sendMessage', { chat_id: owner, text, reply_markup: { inline_keyboard: [[{ text: 'Useful', callback_data: `fb:${id}:u` }, { text: 'Not useful', callback_data: `fb:${id}:n` }]] } }));
+          // The app chat has no feedback buttons; Useful and Not useful stay on Telegram.
+          const feedback = channel === 'app' ? {} : { reply_markup: { inline_keyboard: [[{ text: 'Useful', callback_data: `fb:${id}:u` }, { text: 'Not useful', callback_data: `fb:${id}:n` }]] } };
+          await sentOrThrow(routedCall('sendMessage', { chat_id: owner, text, ...feedback }));
           updates.pushed(id, text);
         }
         await reviewMailFollowup({ loops, now, timezone: clock.timezone, allowed: sourceFollowups && canSend && analysisChanges.length === 0,
