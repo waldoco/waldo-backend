@@ -10,12 +10,13 @@ const desk = { propose: async () => '', proposeSendEmail: async () => '', record
 const TEAM = 'team@group.calendar.google.com';
 const event = (id: string, hour: number) => ({ id, summary: `Board review ${id}`, start: { dateTime: `2026-10-10T${String(hour).padStart(2, '0')}:00:00Z` }, end: { dateTime: `2026-10-10T${String(hour).padStart(2, '0')}:30:00Z` } });
 
-const read = async (args: Record<string, unknown>, respond: (url: URL) => unknown) => {
+type Account = Readonly<{ connection_id: string | null; email: string | null }>;
+const read = async (args: Record<string, unknown>, respond: (url: URL) => unknown, owner: Account = account) => {
   const fetcher = (async (input: RequestInfo | URL) => {
     const url = new URL(String(input));
     return Response.json(url.hostname === 'oauth2.googleapis.com' ? { access_token: 'fixture' } : respond(url));
   }) as typeof fetch;
-  const client = googleClient(app, { refresh_token: 'grant' }, fetcher, undefined, account);
+  const client = googleClient(app, { refresh_token: 'grant' }, fetcher, undefined, owner);
   const handler = googleHandlers({ client: async () => client } as never, desk, clock).find(h => h.name === 'query_calendar')!;
   return await handler.handle(queryCalendarArgsSchema.parse(args)) as { ok: boolean; data?: { next_page_token: string | null } };
 };
@@ -44,8 +45,28 @@ describe('the calendar read log line', () => {
       { hop: 'calendar_read', ok: true, code: 'window_date_range:calendar_primary:page_first', count: 1 },
       { hop: 'calendar_read', ok: true, code: 'window_date_range:calendar_primary:page_next', count: 0 },
     ]);
-    // Codes stay inside the staging tail's code set, or the viewer drops them and keeps only the count.
-    for (const line of readLines()) expect(line.code).toMatch(/^[a-z0-9_:]{1,64}$/);
+  });
+
+  it('keeps every code the handler can log within the hop-code charset', async () => {
+    log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const range = { from: '2026-10-10T00:00:00Z', to: '2026-10-11T00:00:00Z' };
+    for (const date_range of [undefined, range]) for (const calendar_id of ['primary', TEAM]) {
+      const window = { ...(date_range ? { date_range } : {}), calendar_id, limit: 1 };
+      const first = await read(window, () => ({ kind: 'calendar#events', items: [event('j', 9)], nextPageToken: 'provider-next' }));
+      if (date_range) await read({ ...window, page_token: first.data!.next_page_token }, () => ({ kind: 'calendar#events', items: [] }));
+    }
+    const codes = readLines().map(line => line.code as string);
+    expect(new Set(codes).size).toBe(6);
+    for (const code of codes) expect(code).toMatch(/^[a-z0-9_:]{1,64}$/);
+    // The other two combinations cannot be logged: a continuation must repeat an explicit window.
+    expect(queryCalendarArgsSchema.safeParse({ page_token: 'next' }).success).toBe(false);
+  });
+
+  it('reads with an account that has no known address, and calls only the literal primary id primary', async () => {
+    log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const anonymous = { connection_id: null, email: null };
+    for (const calendar_id of ['primary', TEAM, account.email]) expect((await read({ calendar_id }, () => ({ kind: 'calendar#events', items: [] }), anonymous)).ok).toBe(true);
+    expect(readLines().map(line => line.code)).toEqual(['window_default:calendar_primary:page_first', 'window_default:calendar_other:page_first', 'window_default:calendar_other:page_first']);
   });
 
   it('never logs the calendar id, the account, the window or any event text, and logs nothing for a calendar listing', async () => {
@@ -56,6 +77,6 @@ describe('the calendar read log line', () => {
     await read({ operation: 'list_calendars' }, () => ({ kind: 'calendar#calendarList', items: [{ id: TEAM, summary: 'Team', accessRole: 'reader', selected: true }] }));
     expect(readLines()).toHaveLength(2);
     // The default window starts at the clock's now.
-    for (const line of lines()) for (const secret of [TEAM, account.email, account.connection_id, 'Board review', '2026-10-13T07:17', '2026-10-14T07:17', '2026-10-10T00:00']) expect([secret, line.includes(secret)]).toEqual([secret, false]);
+    for (const line of lines()) for (const secret of [TEAM, account.email, account.connection_id, 'Board review', '2026-10-13T07:17', '2026-10-14T07:17', '2026-10-10T00:00']) expect([secret, line.toLowerCase().includes(secret.toLowerCase())]).toEqual([secret, false]);
   });
 });

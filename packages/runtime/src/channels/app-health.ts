@@ -20,6 +20,8 @@ export type AppHealthInput = Readonly<{
   // After a committed ingest the owner's derived rows are recomputed off the request path. Both must be present to run it.
   defer?: (work: Promise<unknown>) => void;
   compute?: ProducerDeps['compute'];
+  // The owner's calendar busy minutes for Weight, read from the owner's Durable Object. Without it Weight is unavailable.
+  readDemand?: ProducerDeps['readDemand'];
 }>;
 
 export const APP_HEALTH_PATH = '/app/v1/health';
@@ -121,13 +123,14 @@ const scores = async (input: AppHealthInput): Promise<Response> => {
 
 // A batch that changed nothing (a replay, or only ignored readings) leaves every derived row as it was. The producer cannot
 // fail the ingest: it starts after the database has answered and its outcome is not part of the response.
-const recompute = ({ rpc, doName, defer, compute }: AppHealthInput, result: unknown, timezone: string): void => {
+const recompute = ({ rpc, doName, defer, compute, readDemand }: AppHealthInput, result: unknown, timezone: string): void => {
   const receipt = healthIngestReceiptV1Schema.safeParse(result);
   if (!defer || !compute || !receipt.success || receipt.data.replayed || receipt.data.accepted + receipt.data.deleted === 0) return;
   defer(produceHealthScores({
     readSeries: range => invoke(rpc, doName, 'series_read', JSON.stringify(range)),
     writeContext: payload => invoke(rpc, doName, 'context_write', payload),
     compute,
+    ...(readDemand ? { readDemand } : {}),
   }, { now: Date.now(), timezone }));
 };
 
