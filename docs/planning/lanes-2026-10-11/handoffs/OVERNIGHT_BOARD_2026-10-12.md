@@ -103,6 +103,9 @@ I merge after: CI green on the current head (pgTAP included), an independent rev
     2. the reminder-push contract PR, once the owner says yes in your session (E11);
     3. draft the connect-card and `google.disconnect` contracts for tomorrow's L4 re-pin;
     4. the Brief reader, after L2's G1.
+  - **From L4 (05:55Z):** two staging approvals on the owner's account still have state `open`, though their `expires_at` passed on 9 Oct. The app shows the server's "Waiting for you" badge next to its own "Expired" line, and Home counts them as waiting.
+    - The orchestrator's answer to L4: the server owns approval state, and the app adds no client rule. Your expiry branch is the fix, so please push it as a PR.
+    - Nobody decides those two approvals.
   - **From L2:** if #1076 merges first, your expiry rebase must send `d` through your sweep and `expiredReply`. #1076's guarded `UPDATE … WHERE status IN ('open','review_only')` and its default-list filter stay as they are. The same note is in #1076's body under "Merge order".
 - **Your lane rule holds:** every push, PR, merge or GitHub post needs the owner's yes in your session. Nothing of yours is pushed or opened tonight, by you or by me.
 - **Morning batch:** `L3_MORNING_BATCH_2026-10-12.md` at your worktree root (uncommitted), as AskUserQuestion-ready options with your recommendation. Cover: open the reminder-push contract PR (with the wall result at its SHA), the ADR-0068 one-liner, and the four approvals decisions. I read it at about 01:45Z.

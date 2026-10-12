@@ -30,3 +30,17 @@ The decision stands: skip the row, and don't widen the validator.
 - What's still unknown is the row's origin, owner or machine, which the old build never recorded. Accepting it would still mean guessing.
 - A separate, reviewed change could read such legacy rows (canonical lineage, no `inputOrigin`) as `machine`, the least-authority value, so they show again without counting as owner input. That's for L2 and the owner.
 - Exposure: any staging owner whose store the 7–8 Oct build wrote has `conv-count` but no `count`. On `889efa27`, each send there overwrites the next old slot until the count passes the last old row. #1080 fixes this.
+
+## D10 (05:51Z, daytime; an orchestrator engineering decision, not an owner ruling)
+
+**Question.** L4 asked whether an approval left `open` after its `expires_at` has passed should be shown as expired by the app, or moved to expired by the server.
+
+**Decision.** The server owns approval state, and the app adds no client rule.
+- The fix is L3's server-side expiry branch, which moves past-expiry rows to `expired` on read or in a sweep.
+- Until it deploys, staging shows a contradictory badge on two 9 Oct approvals.
+
+**Why.** One owner per policy. A client rule would duplicate the expiry policy in two places, and the copies would drift.
+
+**Reverse.** Add the client rule later if L3's fix slips.
+
+**Unblocks.** L4 relabels nothing, and L3's PR is the single fix.

@@ -117,7 +117,7 @@ Each target has a probe in the app Main chat.
 | Pillar | Target today | What must land | Probe (app Main chat) | Gates |
 |---|---|---|---|---|
 | **P3** Memory and skills | **yes (should)** | **L2:** skills on app turns. **G3:** app chat in search and nightly | "Prep me for my 3 pm" loads the meeting-prep skill. "What did I tell you this morning about lunch?" finds the app message | E1, E3 |
-| **P4** Triggers and jobs | **yes (must)** | **#1066** with the strip. **L4:** the D6 zone row ("Use this device's time zone", or "Keep <zone>"; the design system bans "Confirm" on buttons). **L2:** Prep, update cards and mail follow-ups on the app channel (`telegram-owner-do.ts:2417`) | "Remind me in 10 minutes to stretch" arrives on time. Then ask Waldo to move today's day card to a time inside the probe window (14:30–16:30Z), watch it arrive, and set it back. Without that, P4 is verified on reminders plus armed-job lines in L1's log tail | E1, E2 |
+| **P4** Triggers and jobs | **yes (must)** | **#1066** with the strip. **L4:** the D6 zone row (merged as app #82, `89a8e1d8`) ("Use this device's time zone", or "Keep <zone>"; the design system bans "Confirm" on buttons). **L2:** Prep, update cards and mail follow-ups on the app channel (`telegram-owner-do.ts:2417`) | "Remind me in 10 minutes to stretch" arrives on time. Then ask Waldo to move today's day card to a time inside the probe window (14:30–16:30Z), watch it arrive, and set it back. Without that, P4 is verified on reminders plus armed-job lines in L1's log tail | E1, E2 |
 | **P5** Connectors and auth | **yes (must)** for a connected owner | **Your consent run.** **L2:** interim connect text, so the app turn points to Connections instead of reporting a button it dropped | "What's on my calendar tomorrow?" lists real events. "Connect my Google" points to Connections | E1, E8 |
 | **W2** Approvals (not one of the eight) | **should:** the card plus "Not now" | **#1076.** **L3:** expiry on read. **G1:** approval state in the reply | "Move my 4 pm to 5" shows the card. Tap "Not now". With #1076 alone, the chat card for a deferred item may still read "no longer available". To read as put off, it also needs L3's `deferred_at` field and L4's re-pin. "What's waiting on me?" naming it needs G1, a stretch goal | E1, E4 |
 | **P6** Text and voice | text yes; push is a stretch goal | **S7** sender and device routes. **L4:** registration | A reminder arrives as a push with the app closed | E5, E6 |
@@ -136,7 +136,7 @@ Each target has a probe in the app Main chat.
 | 1c 18+ checkbox | app gate today; server record on the roadmap | L4 (D7) |
 | 2 Google connect | probe | E8: your consent run |
 | 3 Health consent, ingest, scores | probe | Real iPhone; L1's Weight fix; L4's permission prompt |
-| 4a/4b Main chat history and send | re-probe on `cdd906dd` | E9 |
+| 4a/4b Main chat history and send | **verified live on `cdd906dd`** [reported: L4's two sends with the owner's yes, plus L1's log tail; no overwrite] | done |
 | 5a Approve, "Don't do this" | probe | E9, after Google connects |
 | 5b "Not now" | build | E4, then #1076 |
 | 6 A reminder fires | probe | E9 |

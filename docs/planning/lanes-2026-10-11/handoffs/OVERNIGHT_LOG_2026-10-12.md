@@ -566,3 +566,11 @@ Still open:
   The delta review is deferred until after the 06:30Z usage reset (79% at 05:14Z). Wave 1 isn't until about 10:00Z.
 - **#1076 fix at `3aefff5c`, read by me.** It adds `AND deferred_at IS NULL`, offers `withDefer` only while `deferred_at` is null, drops `defer` from TARGET, fixes the comment, and adds 67 test lines. L2 reports red-first and 5/5 mutations caught.
 - **CI `verify` failed at infrastructure**, before any test ran: the Supabase docker container failed to set up networking (run 38207328547). The four runtime shards and pgTAP passed. Classified as runner infra, not flaky code. I requested a rerun of the failed job once, with the reason logged here.
+
+## 05:51Z: #1080 verified live; L4's D6 merged; D10
+
+- **#1080 verified live on `cdd906dd`** [reported]: L4 sent the two-message re-probe with the owner's yes in L4's session, L1 read the tail, and no overwrite was seen. The scorecard moves GP-4a/4b to verified live on `cdd906dd`.
+- **App #82 (D6) merged as `89a8e1d8`**, on the owner's yes in L4's session. It does nothing until #1066 deploys.
+- **L4's Health permission and "Last sent" fix** is built on branch `app/health-honest-sent-20261012` (`b7220a4e`). L4 reports 629 tests and 9 faults caught. The PR is next, and its merge needs the owner's yes in L4's session.
+- **D10:** the expiry question (L4 to L3). The server owns approval state, with no client rule, and L3's expiry branch is the fix. Logged in the decisions file and posted on the board for L3, which is still unreachable.
+- **L2:** #1066's body now carries the owner's replies ruling, and its head is unchanged at `075eb8fe`. The connect-honest branch (`61eac09c`) is nearly ready. #1076's verify rerun is still in progress.
