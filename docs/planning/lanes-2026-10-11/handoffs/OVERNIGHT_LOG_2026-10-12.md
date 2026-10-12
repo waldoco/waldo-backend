@@ -1414,3 +1414,24 @@ I read the source delta over `2fc0e642` (+237/−57 across 6 files; about 120 so
   - **Finding:** iOS refuses to read a kind it has never asked about, so without the per-kind skip `a5f26f16` alone would have stopped all sending on every updated install. Any lane adding HealthKit kinds needs to know this.
   - An independent review is running (no fan-out, about 22 calls) as evidence for the owner. L1 is checking that staging accepts `movement_duration`.
   - **Usage:** 46% at 13:32Z, about 19% an hour, which reaches the limit near 16:20Z, close to the 16:30Z reset. Context is at 77%.
+
+## 13:34Z: #1091 (G1) review FAIL: three MEDIUM; D15 on taint
+
+The independent review read every line at `10dbfdec`. Nothing is CRITICAL or HIGH. Injection containment, the health strip (no new stored copy), forget, the desk read, the zero-block path and the contracts all pass.
+
+**MEDIUM findings:**
+1. **Google task approvals still show the stale snapshot.** `propose_google_task_change` returns `data.approval_ref` (`tasks.ts:22`), but `proposalOf` reads only `data.proposal_id` (`tool-output-ledger.ts:27`). So the PR now delivers "Nothing has changed… applied:false" after the owner has approved. Fix: link `approval_ref` too, and add a test for each proposing tool.
+2. **The block skips ADR-0049 turn taint.** Every ledger row is stamped external (`:520`), but the block (`owner-turn.ts:454-458`) sets no taint. So `checkExecutableArgs` for `draft_email` and `workspace_write` gets null taint (`registry.ts:389-397`). An injection in an earlier result could steer those arguments.
+3. **"From the owner's own turns" is false.** `onTool` (`:520`) and the flush (`:611`) also record machine and job turns. A background `[Update check` turn's output reached the owner's turn, which is why the mail test changed.
+
+**LOW findings:**
+- Old rows truncated at 500 characters show their snapshot.
+- Linking ignores `entry.tool`; restrict it to the proposing tools.
+- When the gate withholds the block, nothing records it; add a count-only log.
+- A test comment carries a transient `// P1:` label.
+
+**D15 (my decision; it keeps ADR-0049, so it needs no owner ruling):**
+- Store each ledger row's real taint and seed the turn's taint from the rows shown. A row with no stored taint counts as external.
+- Store each row's origin and show only owner-turn results, as the PR claims. If job-turn results should appear later, that's a separate decision.
+
+**Queued for L2** (the message cap is reached): findings 1–3 and the LOW fixes. Then I re-review the delta, run the advisor, and merge under E1.

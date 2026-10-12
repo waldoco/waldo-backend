@@ -117,3 +117,19 @@ The decision stands: skip the row, and don't widen the validator.
 **Reverse.** Drop the rule once every deployable version carries the guard.
 
 **Unblocks.** E15's routing slice and the grants work, both of which may reshape fixed-id rows. L1 has told L2.
+
+## D15 (13:34Z, daytime; an orchestrator engineering decision that keeps an accepted ADR, not an owner ruling)
+
+**Question.** G1 (#1091) puts earlier tool results into the owner turn. Those results are external content, but the block sets no ADR-0049 taint. Two options: taint every turn that shows them, or keep exempting them.
+
+**Decision.**
+- Store each ledger row's real taint, and seed the turn's taint from the rows actually shown. A row with no stored taint counts as external.
+- Store each row's origin, and show only results from owner turns.
+
+**Why.**
+- ADR-0049 is accepted. External content taints the turn, so a shown result must too, or an injection in an old email could steer `draft_email` or `workspace_write` arguments.
+- Per-row taint is the precise form of the rule: only external results taint the turn, which keeps most turns as they are today.
+
+**Reverse.** Drop the seeding only by amending ADR-0049. That needs the owner.
+
+**Unblocks.** G1's merge after the fix. It also bears on the standing-grants Q1 (grant use under taint).
