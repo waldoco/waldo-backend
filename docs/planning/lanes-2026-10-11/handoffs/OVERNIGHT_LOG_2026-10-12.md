@@ -1343,3 +1343,9 @@ I read the source delta over `2fc0e642` (+237/−57 across 6 files; about 120 so
   - Files: `multiplexer.ts` and a new test.
   - Not on the hold list.
 - **Not deployed:** staging stays on `614d1aff`. Deploying needs the owner's yes in L1's session. It's worth deploying with L1's fixed-id follow-up, which is L1's top priority, stacked on `4a644e06`.
+
+- **12:45Z, probe 5 detail** [reported by L4]: at 12:25Z the move request got a clarifying question about which date by 12:26Z. At 12:33Z a follow-up naming the day got "could not identify the event on today's calendar" by 12:35Z. No card appeared, and nothing was approved or deferred.
+  - `query_calendar` reads one account's calendar, primary by default, from now through the next 24 hours unless the model passes `date_range` (`tools/live/google.ts:145-164`) [verified]. Google filters on end time, so an event already under way still comes back [inference from the Calendar API].
+  - Likeliest causes: (a) the event is on another calendar or account; (b) the model passed a `date_range` or zone that excluded it. L1 is asked for the tool args and the count; the owner, for the event's account and calendar.
+  - **Quality note:** asking which date for "my 6 pm" suggests the turn may lack a clear local "today" [inference]. Check the turn context once the cause is known.
+  - L4 is building the per-kind skip into movement minutes, with the owner's approval.
