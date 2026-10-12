@@ -131,12 +131,16 @@ export async function exchangeGoogleCode(app: GoogleApp, code: string, fetcher: 
 }
 
 export type CalendarItem = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number; etag?: string; operation_marker?: string;
-  status?: 'confirmed' | 'tentative' | 'cancelled'; updated?: string; recurring_event_id?: string; original_start?: string; source_url?: string; attendee_names?: readonly string[] }>;
+  status?: 'confirmed' | 'tentative' | 'cancelled'; updated?: string; recurring_event_id?: string; original_start?: string; source_url?: string; attendee_names?: readonly string[];
+  attendee_emails?: readonly string[]; conference_url?: string; attachments?: readonly CalendarAttachment[] }>;
+export type CalendarAttachment = Readonly<{ title: string; file_id?: string }>;
 
 // Provider-internal etags are unnecessary in model-facing context. Keep them in the
-// connector API for concurrency (moveEvent/cancelEvent), not in a card prompt.
-export const calendarPromptProjection = (event: CalendarItem): Omit<CalendarItem, 'etag' | 'operation_marker'> => {
-  const { etag: _etag, operation_marker: _marker, ...projection } = event;
+// connector API for concurrency (moveEvent/cancelEvent), not in a card prompt. Attendee emails,
+// the join link and attachments stay out of the shared card projection; meeting prep adds the
+// link and attachment titles itself.
+export const calendarPromptProjection = (event: CalendarItem): Omit<CalendarItem, 'etag' | 'operation_marker' | 'attendee_emails' | 'conference_url' | 'attachments'> => {
+  const { etag: _etag, operation_marker: _marker, attendee_emails: _emails, conference_url: _link, attachments: _attachments, ...projection } = event;
   return projection;
 };
 
@@ -768,11 +772,26 @@ const toItem = (event: GoogleEvent): CalendarItem => ({
   ...(typeof event.originalStartTime?.dateTime === 'string' && validCalendarInstant(event.originalStartTime.dateTime) ? { original_start: event.originalStartTime.dateTime } : {}),
   ...(calendarSourceUrl(event.htmlLink) ? { source_url: calendarSourceUrl(event.htmlLink) } : {}),
   ...(event.attendees?.some(a => typeof a.displayName === 'string' && a.displayName.trim() && a.responseStatus !== 'declined') ? { attendee_names: event.attendees.filter(a => a.responseStatus !== 'declined' && typeof a.displayName === 'string' && a.displayName.trim()).slice(0, 20).map(a => a.displayName!.trim().slice(0, 200)) } : {}),
+  ...(event.attendees?.some(a => typeof a.email === 'string' && a.email.trim() && a.responseStatus !== 'declined') ? { attendee_emails: event.attendees.filter(a => a.responseStatus !== 'declined' && typeof a.email === 'string' && a.email.trim()).slice(0, 20).map(a => a.email!.trim().slice(0, 320)) } : {}),
+  ...(conferenceUrl(event) ? { conference_url: conferenceUrl(event) } : {}),
+  ...(attachmentsOf(event).length ? { attachments: attachmentsOf(event) } : {}),
 });
 
 type GoogleEvent = {
   id: string; etag?: string; status?: string; summary?: string; location?: string; description?: string; created?: string; updated?: string; recurringEventId?: string; originalStartTime?: { dateTime?: string; date?: string }; htmlLink?: string;
   start: { dateTime?: string; date?: string }; end: { dateTime?: string; date?: string };
   extendedProperties?: { private?: Record<string,string> };
-  attendees?: { self?: boolean; responseStatus?: string; displayName?: string }[];
+  attendees?: { self?: boolean; responseStatus?: string; displayName?: string; email?: string }[];
+  hangoutLink?: string; conferenceData?: { entryPoints?: { entryPointType?: string; uri?: string }[] };
+  attachments?: { fileId?: string; title?: string }[];
 };
+const httpsUrl = (value: unknown): string | undefined => {
+  if (typeof value !== 'string' || value.length > 2048) return undefined;
+  try { return new URL(value).protocol === 'https:' ? value : undefined; } catch { return undefined; }
+};
+const conferenceUrl = (event: GoogleEvent): string | undefined =>
+  httpsUrl(event.hangoutLink) ?? httpsUrl(event.conferenceData?.entryPoints?.find(point => point.entryPointType === 'video')?.uri);
+const attachmentsOf = (event: GoogleEvent): CalendarAttachment[] => (event.attachments ?? [])
+  .filter(attachment => typeof attachment.title === 'string' && attachment.title.trim())
+  .slice(0, 20)
+  .map(attachment => ({ title: attachment.title!.trim().slice(0, 255), ...(validGoogleId(attachment.fileId) ? { file_id: attachment.fileId } : {}) }));
