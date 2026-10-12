@@ -1533,3 +1533,15 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - The probe 5 rerun adds a read-only first step ("What's on my calendar today?") to tell a missing read apart from the model declining.
   - L4's next item: refresh-while-open with the unread signal on Home.
   - The app #87 review LOWs, sent at about 15:4xZ, are a later follow-up.
+
+## 15:52Z: #1094 merged as `f2c1b6e3`
+
+- **Merge:** `gh pr merge 1094 --merge --match-head-commit f70c0dffd4a89c7104edc0f860b00063c518e192`.
+- **Gate:**
+  - CI 6/6 at `f70c0dff`, pgTAP included.
+  - An independent review PASSED. A failed re-read is always withheld; the log is count-only; the test can't pass at base.
+  - The advisor approved.
+  - CLEAN against `2d18e5e5`.
+  - It's not on the hold list. Forget only gets more conservative.
+- **Follow-up** (reviewer finding D, not a blocker): when every re-read fails while a topic is held, the model sees `withheld_items:N` with no retry signal. It might then tell the owner the results were held back for privacy when storage actually failed. The fix is a separate unreadable count in the tool output, an additive tool-contract change.
+- **The deployable tip** is now `f2c1b6e3`: #1090 and #1094 on top of wave 2. #1092 is still to merge (CI at `7e91fa58`). Deploying needs the owner's go in L1's session.
