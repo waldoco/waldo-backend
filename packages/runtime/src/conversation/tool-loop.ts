@@ -1,6 +1,7 @@
 import { guardArtifactLinks, receiptUrl } from './artifact-link-guard';
 import { toolNameSchema, toolParameters, type ConnectIntent, type LLMTool, type LLMToolCall, type LLMToolTurn } from '@waldo/contracts';
 import { dispatchTool, type DispatchToolOptions, type ToolDispatcherContext } from '../tools/dispatcher';
+import { CONNECT_BUTTON_SENT, CONNECT_BUTTON_UNSENT } from '../tools/live/connect-text';
 import type { ToolOutputStore } from './tool-output-store';
 
 
@@ -57,13 +58,14 @@ export async function runToolLoop(input: Readonly<{
   // it, so a turn's stated round cap is absolute - children can never dispatch past it.
   budget?: { remaining: number };
   // S4 (CONNECT_FLOW_DESIGN 4.4): a tool's typed auth intent is acted on by the responder via
-  // the channel's offerConnect seam. Fired at most once per (service, reason) per turn.
-  onConnect?: (intent: ConnectIntent) => Promise<boolean>;
+  // the channel's offerConnect seam. Fired at most once per (service, reason) per turn. It answers
+  // true when a connect button reached the owner, or the words the model gets instead.
+  onConnect?: (intent: ConnectIntent) => Promise<boolean | string>;
 }>): Promise<string> {
   const tools = toolDefinitions(input.handlers);
   const turns: LLMToolTurn[] = [];
   const seen = new Map<string, Awaited<ReturnType<typeof dispatch>>>();
-  const offered = new Set<string>();
+  const offered = new Map<string, string>();
   const browserActions = new Map<string, number>();
   const browserReads = new Map<string, {handle:string; epoch:number}>();
   const sessionHandle = (data:unknown, field:string):string|undefined => {
@@ -111,7 +113,7 @@ export async function runToolLoop(input: Readonly<{
       const previous = retainedRead ? undefined : cached;
       // Preserve settled nonretryable failures and mutation failures verbatim.
       // Replaying them performs no I/O; transient reads may retry within the budget.
-      const result = previous
+      let result = previous
         ? previous.ok
           ? { ok: false, error: 'Same call already made this turn; use its result.', code: 'repeat_refusal' as const }
           : previous
@@ -119,13 +121,17 @@ export async function runToolLoop(input: Readonly<{
           ? { ok: false, error: 'Tool handler unavailable.', code: 'not_found' as const, reason: 'handler_unavailable' }
           : await dispatch(call, input);
       input.ctx.runScope?.admit();
-      if (!result.ok && result.connect) {
+      if (!previous && !result.ok && result.connect) {
         const offerKey = `${result.connect.service}:${result.connect.reason}`;
-        if (!offered.has(offerKey)) {
-          offered.add(offerKey);
-          const intent = result.connect;
-          try { await input.onConnect?.(intent); } catch { /* an offer failure must not break the turn */ }
+        let outcome = offered.get(offerKey);
+        if (outcome === undefined) {
+          let answer: boolean | string | undefined;
+          // An offer failure must not break the turn; the model hears that nothing was sent.
+          try { answer = await input.onConnect?.(result.connect); } catch { console.error(JSON.stringify({ hop: 'connect_offer', ok: false, code: 'offer_threw' })); }
+          outcome = answer === true ? CONNECT_BUTTON_SENT : typeof answer === 'string' ? answer : CONNECT_BUTTON_UNSENT;
+          offered.set(offerKey, outcome);
         }
+        result = { ...result, error: `${result.error} ${outcome}` };
       }
       const mutation = mutationTools.has(call.name as never);
       // Only a typed adapter failure explicitly classified transient permits recovery.

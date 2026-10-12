@@ -150,6 +150,45 @@ describe('runToolLoop connect intents', () => {
     expect(offered).toEqual(['google:not_connected:calendar']);
   });
 
+  it.each([
+    ['a delivered button', async (): Promise<boolean | string> => true, 'A connect button is in the chat'],
+    ['the host\'s own words', async (): Promise<boolean | string> => 'Connect it from settings.', 'Connect it from settings.'],
+    ['an offer that was not sent', async (): Promise<boolean | string> => false, 'No connect button was sent.'],
+    ['an offer that threw', async (): Promise<boolean | string> => { throw new Error('send failed'); }, 'No connect button was sent.'],
+  ] as const)('the model reads what the missing grant is, then what happened to the offer: %s', async (_case, onConnect, outcome) => {
+    const seen: string[] = [];
+    await runToolLoop({
+      handlers: [failing as never], ctx, maxSteps: 3,
+      onConnect,
+      step: async (tools, turns) => {
+        seen.push(JSON.stringify(turns ?? []));
+        return tools ? { text: '', tool_calls: [{ call_id: `c${seen.length}`, name: 'query_calendar', arguments: `{"limit":${seen.length}}` }] } : { text: 'done' };
+      },
+    });
+    const outputs = (JSON.parse(seen.at(-1)!) as { output: string }[]).map(turn => turn.output);
+    expect(outputs.length).toBeGreaterThan(1);
+    for (const output of outputs) {
+      expect(output.split('Google (calendar) is not connected.').length - 1).toBe(1);
+      expect(output.split(outcome).length - 1).toBe(1);
+      if (outcome !== 'A connect button is in the chat') expect(output).not.toContain('connect button is in the chat');
+    }
+  });
+
+  it('a repeated identical failing call does not hear the offer twice', async () => {
+    const seen: string[] = [];
+    await runToolLoop({
+      handlers: [failing as never], ctx, maxSteps: 3,
+      onConnect: async () => true,
+      step: async (tools, turns) => {
+        seen.push(JSON.stringify(turns ?? []));
+        return tools ? { text: '', tool_calls: [{ call_id: `c${seen.length}`, name: 'query_calendar', arguments: '{}' }] } : { text: 'done' };
+      },
+    });
+    const outputs = (JSON.parse(seen.at(-1)!) as { output: string }[]).map(turn => turn.output);
+    expect(outputs.length).toBeGreaterThan(1);
+    for (const output of outputs) expect(output.split('A connect button is in the chat').length - 1).toBe(1);
+  });
+
   it('a throwing offerConnect never breaks the turn', async () => {
     const text = await runToolLoop({
       handlers: [failing as never], ctx, maxSteps: 2,

@@ -125,7 +125,7 @@ describe('google tools', () => {
     const result = await query!.handle({ include_declined: false, limit: 20 } as never);
     expect(result).toMatchObject({
       ok: false, code: 'auth_failed',
-      error: expect.stringContaining('connect button'),
+      error: 'Google (calendar) is not connected.',
       connect: { status: 'auth_required', service: 'google', reason: 'not_connected', feature: 'calendar' },
     });
     expect(JSON.stringify(result)).not.toMatch(/https?:|state=|accounts\.google/);
