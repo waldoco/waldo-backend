@@ -144,4 +144,24 @@ describe('an earlier tool result in the ledger, then one owner turn', () => {
       for (const request of owner) expect(count(ownerTurn(request), MARKER)).toBe(1);
     });
   });
+
+  // A capture-mode probe presents synthetic text with owner authority and returns what the reply says, so it never
+  // sees live provider results from earlier turns.
+  it('a capture-mode probe turn carries no earlier tool results', async () => {
+    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('cross-turn-probe')), async (_instance, state) => {
+      await seedLedger(state);
+      const requests: LLMGatewayRequest['request'][] = [];
+      const gateway: LLMGatewayAdapter = { async complete(request) {
+        requests.push(request.request);
+        return { ok: true, data: { model: request.request.model, text: request.request.response_format ? '{}' : 'Noted.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
+      } };
+      const { createOwnerResponder } = await import('../src/channels/owner-turn');
+      const responder = createOwnerResponder('fixture', undefined, undefined, undefined, undefined, [], undefined, false, toolOutputLedger(state.storage), undefined, gateway, undefined, { suppressMemory: true, stripLiveTools: true });
+      await responder.respond({ traceId: 'probe-ask', conversationRef: 'owner', surface: 'telegram', text: 'what did you find in my mail?' }, async (_hop, work) => work());
+      const replies = requests.filter(request => request.response_format === undefined);
+      expect(replies.length).toBeGreaterThan(0);
+      expect(JSON.stringify(replies)).not.toContain(MARKER);
+      expect(JSON.stringify(replies)).not.toContain(LABEL);
+    });
+  });
 });

@@ -1,4 +1,5 @@
 import { appApprovalDecisionResultV1Schema, appApprovalListV1Schema } from '../../contracts/src/app/approvals';
+import { appHistoryResultV1Schema } from '../../contracts/src/app/core';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
 import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
@@ -29,6 +30,8 @@ const proposeTheNote = () => {
   proof.outputs.push([{ type: 'function_call', call_id: 'note-sam', name: 'send_email', arguments: JSON.stringify(NOTE) }], []);
   proof.replies.push('', 'Here is the note to Sam for your approval.');
 };
+// The reply that cites the receipt; the owner sees it as written.
+const CITED = 'Yes, the note to Sam went out.';
 const stateLine = (id: string) => `send_email succeeded: proposed approval ${id} (email_send). Its current state on the approval desk is done; this replaces what the tool reported when it proposed.`;
 // The turn after the approval: the owner turn carries the desk's state for the note once, as external data; the
 // instructions carry none of it, and the proposing tool's snapshot is nowhere.
@@ -99,9 +102,11 @@ it('app: a turn after the owner approves an email from the app sees that the des
       expect(appApprovalDecisionResultV1Schema.parse(await approved.json())).toMatchObject({ receipt: { state: 'recorded' }, approval_state: 'done' });
       expect(proof.sentRaw).toHaveLength(1);
 
-      proof.requests = [];
+      proof.requests = []; proof.replies.push(CITED);
       await turn(credential, 'note-sam-client-0002', 'Did the note to Sam go out?');
       expectTheReceipt(card!.approval_id);
+      const history = appHistoryResultV1Schema.parse(await (await app('/chat/main', undefined, credential)).json());
+      expect(history.messages.find(message => message.role === 'assistant' && message.text.includes('note to Sam went out'))?.text).toBe(CITED);
       expect(proof.telegram).toEqual([]);
     } finally { (instance as any).ownerBrowser.stop(); await (instance as any).ownerBrowser.maintain(); await state.storage.deleteAlarm(); fetcher.mockRestore(); }
   });
@@ -130,9 +135,10 @@ it('Telegram: a turn after the owner taps Send it sees that the desk carried it 
       await deliver({ update_id: 101, callback_query: { id: 'send-it', from: { id: 7, is_bot: false }, data: `a:${id}`, message: { message_id: proof.telegram.indexOf(card) + 1, chat: { id: 7, type: 'private' } } } });
       expect(proof.sentRaw).toHaveLength(1);
 
-      proof.requests = [];
+      proof.requests = []; proof.replies.push(CITED); proof.telegram = [];
       await deliver({ update_id: 102, message: { message_id: 3, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: 'Did the note to Sam go out?' } });
       expectTheReceipt(id);
+      expect(proof.telegram.filter(call => call.method === 'sendMessage').map(call => call.body.text)).toEqual([CITED]);
     } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
   });
 }, 30_000);
