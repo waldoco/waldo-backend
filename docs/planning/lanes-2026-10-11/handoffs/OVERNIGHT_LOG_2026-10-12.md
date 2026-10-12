@@ -1473,3 +1473,9 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - **LOW, for the body:** rolling the *Worker version* back past this deploy acts like the full revert. Skills turn off until a roll forward; nothing is destroyed. Add "fix forward; never roll back the Worker past this deploy".
   - **Notes:** `bindIdentity` also runs on WhatsApp admission (this predates the PR). The stranger-alias negative test is weak.
   - **Ready for the owner's merge.** The rollback-text fix for L2 is queued behind the message cap.
+
+- **13:53Z heartbeat:**
+  - #1092 fixes are at `fdfb23ca`, with CI running and a delta review running (no fan-out).
+  - #1088 is CLEAN at `1e1a4b39`, waiting for the owner's merge.
+  - Usage is 51%; the pace has slowed to about 15% an hour, so it should last to the 16:30Z reset.
+  - Context is at 82%. Open items are saved to memory for the compaction.
