@@ -4,7 +4,7 @@ import { expect, it } from 'vitest';
 import { approvalDesk } from '../src/channels/approvals';
 import { b64url, sha256Hex, type GoogleClient } from '../src/connectors/google';
 it('keeps account visible in approval and routes the approved send and calendar effect to it',async()=>{
- const stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName('selected-google-account'));
+ const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('selected-google-account'));
  await runInDurableObject(stub,async(_instance,state)=>{
   const routes:unknown[]=[];const cards:string[]=[];let id=0;
   const desk=approvalDesk(state.storage.sql,{call:async(_method,args)=>{cards.push(String((args as {text?:string}).text));return {message_id:1};},owner:42,google:async(intent,feature,account)=>{routes.push([feature,account]);return {account:{connection_id:'work',email:'work@example.com'},sendRaw:async()=>({message_id:'m'}),createEvent:async()=>({id:'e',title:'Event',start:'2026-10-08T00:00:00Z',end:'2026-10-08T01:00:00Z'})} as unknown as GoogleClient;},newId:()=>String(++id),now:()=>1000,timezone:'UTC',log:()=>{}});

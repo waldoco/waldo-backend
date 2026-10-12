@@ -21,13 +21,13 @@ type Resolved = Readonly<{ status: string; do_name?: string; provider?: string; 
 const hop = (status: string, hashPrefix: string) =>
   console.log(JSON.stringify({ trace: `connect:${hashPrefix}`, hop: 'connect_link', ok: status === 'ok', detail: status }));
 
-type ConnectEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: { idFromName(name: string): unknown; get(id: unknown): { fetch(input: string, init?: RequestInit): Promise<Response> } } }>;
+type ConnectEnv = OwnerDirectoryEnv & Readonly<{ TELEGRAM_OWNER_DO?: { idFromName(name: string): unknown; get(id: unknown): { fetch(input: string, init?: RequestInit): Promise<Response> } } }>;
 
 export const handleConnectTicket = async (request: Request, env: ConnectEnv): Promise<Response> => {
   const ticket = new URL(request.url).pathname.slice(CONNECT_LINK_PREFIX.length);
   if (!TICKET.test(ticket)) return new Response('not found', { status: 404, headers: { 'cache-control': 'no-store' } });
   const call = signedRpc(env);
-  const owners = env.OWNER_DO;
+  const owners = env.TELEGRAM_OWNER_DO;
   if (!call || !owners) return new Response('not found', { status: 404, headers: { 'cache-control': 'no-store' } });
   const hash = await ticketHash(ticket);
   const hashPrefix = hash.slice(0, 8);

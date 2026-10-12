@@ -1,6 +1,6 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
-import { OwnerDO } from '../src/channels/owner-do';
+import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 import {workspaceStore} from '@waldo/workspace';
 import {workspaceOwnerHost} from '../src/channels/workspace-host';
 import { configureCommonPublicBrowser } from '../src/channels/common-public-browser-configuration';
@@ -44,12 +44,12 @@ it('ordinary owner loop reads, types, reobserves and continues two public tabs w
   const now = Date.now(), ref = `public-proof-${crypto.randomUUID()}`;
   configureCommonPublicBrowser({ ref, doName, subject: String(subject), directoryOwnerId: proof.directoryOwner, createdAt: now - 1000, expiresAt: now + 60000, allowedOrigins: ['*'], maxAllocations: 2, maxReservedBrowserMs: 240000, lifetimeMs: 60000, maxScreenshotBytes: 1024 }, commonBrowserMeteredFixtureLoader,
     { policy: { ref, ownerId: `prn_${proof.directoryOwner.replaceAll('-', '')}`, validUntil: now + 60000, limitMicrousd: 10000, maxCalls: 100 }, quote: kind => kind === 'browser' ? 0 : 1, allocationMicrousd: 100 });
-  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName));
+  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(doName));
   await runInDurableObject(stub, async (_instance, state) => {
     const denied = vi.spyOn(globalThis, 'fetch').mockRejectedValue(Error('live network forbidden'));
     const binding = { fetch: vi.fn(async () => new Response('{}', { status: 200 })) };
     const publicEnv = { ...env, COMMON_OWNER_TASKS: '0', WALDO_ENVIRONMENT: 'staging', LANGFUSE_CAPTURE_TEXT: 'true', WALDO_EGRESS_ALLOWLIST: '*', WALDO_TOOL_OFFLOAD: '0', BROWSER: binding as never, TELEGRAM_BOT_TOKEN: '12345:fictional', TELEGRAM_WEBHOOK_SECRET: 'synthetic-public-browser-secret', OPENAI_API_KEY: 'synthetic-model-key' };
-    let instance = new OwnerDO(state, publicEnv);
+    let instance = new TelegramOwnerDO(state, publicEnv);
     let updateId = 9981000;
     const send = async (text: string) => {
       const id = ++updateId;
@@ -110,7 +110,7 @@ it('ordinary owner loop reads, types, reobserves and continues two public tabs w
       await vi.waitFor(()=>expect(commonBrowserFixture.ends).toBe(2));
       expect(commonBrowserFixture.pages).toHaveLength(0);
       expect(await (await commonBrowserMeteredFixtureLoader()).sessions(binding as never)).toEqual([]);
-      instance = new OwnerDO(state, publicEnv);
+      instance = new TelegramOwnerDO(state, publicEnv);
       expect(commonBrowserFixture.allocations).toBe(2); expect(commonBrowserFixture.ends).toBe(2);
       const ledger = state.storage.kv.get<any>(`common-spend:${ref}`);
       expect(ledger.reservedMicrousd).toBeGreaterThanOrEqual(100);

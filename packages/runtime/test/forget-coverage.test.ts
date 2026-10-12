@@ -7,7 +7,7 @@ import { durableConversationStore, redactConversationEntries } from '../src/chan
 
 let sequence = 0;
 const withSql = <T>(fn: (sql: SqlStorage) => T) =>
-  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`forget-coverage-${sequence++}`)), (_instance, state) => fn(state.storage.sql));
+  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`forget-coverage-${sequence++}`)), (_instance, state) => fn(state.storage.sql));
 
 const MARKER = 'zephyr-quinoa-anchor';
 const CLAIM_TEXT = `Owner uses the ${MARKER} code word`;
@@ -340,7 +340,7 @@ describe('forget coverage', () => {
 import { redactToolOutputLedger, toolOutputLedger } from '../src/conversation/tool-output-ledger';
 
 const withStorage = <T>(fn: (storage: DurableObjectStorage) => T | Promise<T>) =>
-  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`forget-conv-${sequence++}`)), (_instance, state) => fn(state.storage));
+  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`forget-conv-${sequence++}`)), (_instance, state) => fn(state.storage));
 
 describe('forget coverage - rolling conversation window', () => {
   // The scoped fix authorized on #196: forgetting redacts the text from persisted conversation

@@ -1,7 +1,7 @@
 import { appControlResultV1Schema } from '../../contracts/src/app/controls';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
-import { OwnerDO } from '../src/channels/owner-do';
+import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 import { handleApp } from '../src/channels/app-api';
 import { BEGIN_SESSION_PATH, ticketHash } from '../src/channels/connect-link';
 import { APP_RETURN_DEEP_LINK, consentPage } from '../src/channels/google-oauth';
@@ -14,8 +14,8 @@ vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof im
 const SECRET = 'fictional-connect-app-router-secret-0000000000', STATE_SECRET = 'fictional-connect-state-secret', DIRECTORY = 'https://connect-app.fixture.invalid', ORIGIN = 'https://app.fixture.invalid';
 const OWNER = '10000000-0000-0000-0000-000000000002', AUTH = '20000000-0000-0000-0000-000000000002', EMAIL = 'connect-owner@example.test';
 
-const fixture = async (google: boolean, run: (app: (path: string, body?: unknown, credential?: string) => Promise<Response>, issued: Record<string, string>[], instance: OwnerDO) => Promise<void>) => {
-  const name = `app-connect-owner-${crypto.randomUUID()}`, stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
+const fixture = async (google: boolean, run: (app: (path: string, body?: unknown, credential?: string) => Promise<Response>, issued: Record<string, string>[], instance: TelegramOwnerDO) => Promise<void>) => {
+  const name = `app-connect-owner-${crypto.randomUUID()}`, stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
   await runInDurableObject(stub, async (_unused, state) => {
     let hash: string | undefined, live = false;
     const created = new Date().toISOString(), expires = Date.now() + 3_600_000, issued: Record<string, string>[] = [];
@@ -43,8 +43,8 @@ const fixture = async (google: boolean, run: (app: (path: string, body?: unknown
     });
     const settings = { ...env, TELEGRAM_BOT_TOKEN: undefined, WALDO_OWNER_TELEGRAM_ID: undefined, OPENAI_API_KEY: 'synthetic-model-key', COMMON_OWNER_TASKS: '0', COMMON_BROWSER_REGISTRATION: undefined, WALDO_ENVIRONMENT: 'staging', WALDO_OWNER_DO_NAMESPACE: 'connect-app-owner', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_TOOL_OFFLOAD: '0', SUPABASE_PROJECT_URL: DIRECTORY, SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key', WALDO_ROUTER_HMAC_SECRET: SECRET, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) }, BROWSER: undefined,
       TELEGRAM_WEBHOOK_SECRET: STATE_SECRET, GOOGLE_CLIENT_ID: google ? 'fictional-client.apps.googleusercontent.com' : undefined, GOOGLE_CLIENT_SECRET: google ? 'fictional-client-secret' : undefined };
-    const instance = new OwnerDO(state, settings as never);
-    const routed = { ...settings, OWNER_DO: { idFromName: (n: string) => env.OWNER_DO!.idFromName(n), get: () => ({ fetch: (r: Request) => instance.fetch(r) }) } } as never;
+    const instance = new TelegramOwnerDO(state, settings as never);
+    const routed = { ...settings, TELEGRAM_OWNER_DO: { idFromName: (n: string) => env.TELEGRAM_OWNER_DO!.idFromName(n), get: () => ({ fetch: (r: Request) => instance.fetch(r) }) } } as never;
     const app = async (path: string, body?: unknown, credential?: string) => {
       const response = await handleApp(new Request(`${ORIGIN}/app/v1${path}`, { method: body === undefined ? 'GET' : 'POST', headers: { 'content-type': 'application/json', ...(credential ? { authorization: `Bearer ${credential}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), routed);
       expect(response).not.toBeNull(); return response!;

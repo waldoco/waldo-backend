@@ -1,6 +1,6 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
-import { OwnerDO } from '../src/channels/owner-do';
+import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 import { handleApp } from '../src/channels/app-api';
 import { CONSOLE_ACTION_PATH, consoleAccess } from '../src/channels/console';
 import { CONTROLS_PATH } from '../src/channels/dashboard-controls';
@@ -19,7 +19,7 @@ type Seen = { signouts: number; grant: () => Promise<string> };
 // console_signout_all deletes every directory session row for the owner, as the SQL function does,
 // so a revoked app credential is observed through the fixture's directory rather than asserted.
 const fixture = async (outcome: Outcome, run: (app: App, console: Console, seen: Seen) => Promise<void>) => {
-  const name = `signout-all-owner-${crypto.randomUUID()}`, stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
+  const name = `signout-all-owner-${crypto.randomUUID()}`, stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
   await runInDurableObject(stub, async (_unused, state) => {
     let hash: string | undefined, live = false;
     // The model call runs on the owner's boot day plan; the pool answers it with OpenAI's own rejection.
@@ -54,8 +54,8 @@ const fixture = async (outcome: Outcome, run: (app: App, console: Console, seen:
       throw Error(`Unlisted fixture RPC ${fn}`);
     });
     const settings = { ...env, TELEGRAM_BOT_TOKEN: '123:synthetic', WALDO_OWNER_TELEGRAM_ID: undefined, OPENAI_API_KEY: 'synthetic-model-key', COMMON_OWNER_TASKS: '0', COMMON_BROWSER_REGISTRATION: undefined, WALDO_ENVIRONMENT: 'staging', WALDO_OWNER_DO_NAMESPACE: 'signout-all-owner', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_TOOL_OFFLOAD: '0', SUPABASE_PROJECT_URL: DIRECTORY, SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key', WALDO_ROUTER_HMAC_SECRET: SECRET, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) }, BROWSER: undefined };
-    const instance = new OwnerDO(state, settings as never);
-    const routed = { ...settings, OWNER_DO: { idFromName: (n: string) => env.OWNER_DO!.idFromName(n), get: () => ({ fetch: (r: Request) => instance.fetch(r) }) } } as never;
+    const instance = new TelegramOwnerDO(state, settings as never);
+    const routed = { ...settings, TELEGRAM_OWNER_DO: { idFromName: (n: string) => env.TELEGRAM_OWNER_DO!.idFromName(n), get: () => ({ fetch: (r: Request) => instance.fetch(r) }) } } as never;
     const app: App = async (path, body, credential) => {
       const response = await handleApp(new Request(`${ORIGIN}/app/v1${path}`, { method: body === undefined ? 'GET' : 'POST', headers: { 'content-type': 'application/json', ...(credential ? { authorization: `Bearer ${credential}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), routed);
       expect(response).not.toBeNull(); return response!;

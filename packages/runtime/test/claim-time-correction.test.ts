@@ -5,7 +5,7 @@ import { applyClaimOps, claimStore } from '../src/memory/claims';
 
 let n = 0;
 const withSql = <T>(fn: (sql: SqlStorage, tx: <R>(work: () => R) => R) => T) =>
-  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`time-correction-${n++}`)), (_i, state) => fn(state.storage.sql, (work) => state.storage.transactionSync(work)));
+  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`time-correction-${n++}`)), (_i, state) => fn(state.storage.sql, (work) => state.storage.transactionSync(work)));
 const ops = (partial: Record<string, unknown>) => JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null, ...partial });
 const AT = '2026-10-02T18:00:00Z';
 

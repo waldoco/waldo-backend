@@ -2,7 +2,7 @@ import { appApprovalDecisionResultV1Schema, appApprovalListV1Schema } from '../.
 import { appHistoryResultV1Schema } from '../../contracts/src/app/core';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
-import { OwnerDO } from '../src/channels/owner-do';
+import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 import { handleApp } from '../src/channels/app-api';
 import { routerSignature } from '../src/identity/owner-directory';
 import { sha256Hex } from '../src/connectors/google';
@@ -30,7 +30,7 @@ vi.mock('../src/connectors/google', async load => {
 
 it('approves from the app with exactly one effect, refuses a stale digest, and retires the other surface', async () => {
   proof.outputs = []; proof.telegram = []; proof.moved = 0; proof.sentRaw = []; proof.eventTag = 'etag-3pm';
-  const name = `approvals-app-owner-${crypto.randomUUID()}`, stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
+  const name = `approvals-app-owner-${crypto.randomUUID()}`, stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
   await runInDurableObject(stub, async (_unused, state) => {
     const SECRET = 'fictional-approvals-router-secret-0000000000', DIRECTORY = 'https://approvals.fixture.invalid', OWNER = '10000000-0000-0000-0000-0000000000a1', AUTH = '20000000-0000-0000-0000-0000000000a1', EMAIL = 'owner@example.test', TELEGRAM = 424242;
     let hash: string | undefined, live = false; const created = new Date().toISOString(), expires = Date.now() + 3_600_000;
@@ -56,10 +56,10 @@ it('approves from the app with exactly one effect, refuses a stale digest, and r
     const settings = { ...env, TELEGRAM_BOT_TOKEN: 'fictional-telegram-token', TELEGRAM_WEBHOOK_SECRET: 'fictional-webhook-secret', WALDO_OWNER_TELEGRAM_ID: undefined, OPENAI_API_KEY: 'synthetic-model-key', COMMON_OWNER_TASKS: '0', COMMON_BROWSER_REGISTRATION: undefined,
       WALDO_ENVIRONMENT: 'staging', WALDO_OWNER_DO_NAMESPACE: 'approvals-app-owner', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_EGRESS_ALLOWLIST: '*', WALDO_TOOL_OFFLOAD: '0', SUPABASE_PROJECT_URL: DIRECTORY, SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key',
       WALDO_ROUTER_HMAC_SECRET: SECRET, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) }, BROWSER: undefined, GOOGLE_CLIENT_ID: 'fictional-client', GOOGLE_CLIENT_SECRET: 'fictional-secret' };
-    const instance = new OwnerDO(state, settings as never);
+    const instance = new TelegramOwnerDO(state, settings as never);
     state.storage.kv.put('do_name', name); state.storage.kv.put('origin', 'https://app.fixture.invalid'); state.storage.kv.put('telegram_subject', String(TELEGRAM));
     await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', scopes: null, refresh_token: 'fictional-not-a-token' }]);
-    const routed = { ...settings, OWNER_DO: { idFromName: (n: string) => env.OWNER_DO!.idFromName(n), get: () => ({ fetch: (r: Request) => instance.fetch(r) }) } } as never;
+    const routed = { ...settings, TELEGRAM_OWNER_DO: { idFromName: (n: string) => env.TELEGRAM_OWNER_DO!.idFromName(n), get: () => ({ fetch: (r: Request) => instance.fetch(r) }) } } as never;
     const app = async (path: string, body?: unknown, credential?: string) => {
       const response = await handleApp(new Request(`https://app.fixture.invalid/app/v1${path}`, { method: body === undefined ? 'GET' : 'POST', headers: { 'content-type': 'application/json', ...(credential ? { authorization: `Bearer ${credential}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), routed);
       expect(response).not.toBeNull(); return response!;

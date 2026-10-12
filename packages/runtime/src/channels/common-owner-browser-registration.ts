@@ -27,7 +27,7 @@ export function commonOwnerBrowserRegistration(options: Readonly<{
   const physical = () => {
     const doName = storage.kv.get<string>('do_name'), subject = storage.kv.get<string>('telegram_subject');
     if (!doName || !subject || storage.kv.get('telegram_unlinked') === true
-      || env.OWNER_DO?.idFromName(doName).toString() !== actualDoId) throw Error('automatic browser owner unavailable');
+      || env.TELEGRAM_OWNER_DO?.idFromName(doName).toString() !== actualDoId) throw Error('automatic browser owner unavailable');
     return { doName, subject };
   };
   const configuration = (registration: Record<string, any>, cleanupOnly: boolean) => {

@@ -2,7 +2,7 @@
 // /stop makes the ingress receipt independent of model/provider behavior.
 import { env, runInDurableObject } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { OwnerDO } from '../src/channels/owner-do';
+import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 import { handleWhatsAppWebhook } from '../src/channels/whatsapp-webhook';
 import { WA_UPDATE_BASE, WAMID_RETENTION_MS } from '../src/channels/whatsapp-api';
 import type { OwnerDirectory } from '../src/identity/owner-directory';
@@ -33,7 +33,7 @@ afterEach(() => vi.restoreAllMocks());
 describe('WhatsApp owner DO replay', () => {
   it('runs one turn for a signed payload replay, runs a new wamid, and sweeps expired claims', async () => {
     const name = 'whatsapp-owner-do-replay';
-    const namespace = env.OWNER_DO!;
+    const namespace = env.TELEGRAM_OWNER_DO!;
     await runInDurableObject(namespace.get(namespace.idFromName(name)), async (_instance, state) => {
       const now = Date.now();
       vi.spyOn(Date, 'now').mockReturnValue(now);
@@ -46,7 +46,7 @@ describe('WhatsApp owner DO replay', () => {
         sent.push(JSON.parse(String(init?.body)));
         return Response.json({ messages: [{ id: `wamid.out.${sent.length}` }] });
       });
-      const instance = new OwnerDO(state, {
+      const instance = new TelegramOwnerDO(state, {
         ...env, TELEGRAM_BOT_TOKEN: 'fictional-telegram-token', OPENAI_API_KEY: 'fictional-model-key', WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id',
       });
       // Pass-through spy: the actual turn executes, including owner checks and wa_offset.
@@ -74,7 +74,7 @@ describe('WhatsApp owner DO replay', () => {
       const deliver = async (payload: string) => {
         const pending: Promise<unknown>[] = [];
         const response = await handleWhatsAppWebhook(await signedRequest(payload), {
-          OWNER_DO: localNamespace, WHATSAPP_APP_SECRET: SECRET,
+          TELEGRAM_OWNER_DO: localNamespace, WHATSAPP_APP_SECRET: SECRET,
         }, work => { pending.push(work); }, directory);
         expect(response.status).toBe(200);
         await Promise.all(pending);

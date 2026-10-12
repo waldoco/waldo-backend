@@ -14,7 +14,7 @@ const request = async (payload: string) => new Request('https://w.test/whatsapp/
 const directory: OwnerDirectory = { byPresence: async (_p, subject) => ({ doName: `do-${subject}`, subject, timezone: null }), redeem: async () => null };
 const env = (fetch: (url: string, init?: RequestInit) => Promise<Response>): WhatsAppWebhookEnv => ({
   WHATSAPP_APP_SECRET: 'appsecret',
-  OWNER_DO: { idFromName: (name: string) => name, get: (name: string) => ({ fetch: (url: string, init?: RequestInit) => fetch(`${name}|${url}`, init) }) } as unknown as DurableObjectNamespace,
+  TELEGRAM_OWNER_DO: { idFromName: (name: string) => name, get: (name: string) => ({ fetch: (url: string, init?: RequestInit) => fetch(`${name}|${url}`, init) }) } as unknown as DurableObjectNamespace,
 });
 const handle = async (payload: string, e: WhatsAppWebhookEnv) => {
   const deferred: Promise<unknown>[] = [];

@@ -49,7 +49,7 @@ export function ownerBrowserRuntime(options: Readonly<{
   const assertOwner = async () => {
       const doName = options.storage.kv.get<string>('do_name'), subject = options.storage.kv.get<string>('telegram_subject');
       const physical = () => { if (!doName || !subject || options.storage.kv.get('do_name') !== doName || options.storage.kv.get('telegram_subject') !== subject
-        || options.storage.kv.get('telegram_unlinked') === true || options.env.OWNER_DO?.idFromName(doName).toString() !== options.actualDoId) throw new ClosedRunError(); };
+        || options.storage.kv.get('telegram_unlinked') === true || options.env.TELEGRAM_OWNER_DO?.idFromName(doName).toString() !== options.actualDoId) throw new ClosedRunError(); };
       physical(); const owner = await commonOwnerAuthority(options.env).resolve('telegram', subject!, doName!); physical();
       if (!owner) throw new ClosedRunError(); return { directoryOwnerId: owner.directoryOwnerId, custodyDigest: owner.custodyDigest };
     };
@@ -64,7 +64,7 @@ export function ownerBrowserRuntime(options: Readonly<{
       scope.admit();
       if (options.activeScope() !== scope || options.storage.kv.get('do_name') !== doName
         || options.storage.kv.get('telegram_subject') !== subject || options.storage.kv.get('telegram_unlinked') === true
-        || options.env.OWNER_DO?.idFromName(doName).toString() !== options.actualDoId) throw new ClosedRunError();
+        || options.env.TELEGRAM_OWNER_DO?.idFromName(doName).toString() !== options.actualDoId) throw new ClosedRunError();
       scope.admit();
     };
   };

@@ -1,6 +1,6 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
-import { OwnerDO } from '../src/channels/owner-do';
+import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 import { OpenAIResponsesAdapter } from '../src/llm/openai';
 const seen=vi.hoisted(()=>({sends:[] as unknown[],pause:false,entered:undefined as undefined|(()=>void),finish:undefined as undefined|((r:unknown)=>void)}));
 vi.mock('../src/channels/telegram-api',async(load)=>({...await load<typeof import('../src/channels/telegram-api')>(),createTelegramCaller:()=>async(method:string,body:unknown)=>{if(method==='sendMessage')seen.sends.push(body);return method==='sendMessage'?{message_id:seen.sends.length,chat:{id:42}}:true;}}));
@@ -9,8 +9,8 @@ vi.mock('openai',()=>({default:class {responses={create:async(body:unknown)=>{
  if(seen.pause&&!name){seen.entered?.();return new Promise(r=>{seen.finish=r;});}
  return {id:'fixture',output_text:name==='task_source_scope'?'{"decision":"retain","sources":[]}':name==='claim_ops'?'{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}':name==='reaction'?'{"reaction":"👌"}':'fenced answer',output:[],usage:{input_tokens:1,output_tokens:1}};
 }};}}));
-const setup=async(name:string,work:(i:OwnerDO,s:DurableObjectState)=>Promise<void>,omitHost=false)=>runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)),async(_i,s)=>{await s.storage.put({telegram_subject:'42',do_name:name,origin:'https://fixture.invalid'});const i=new OwnerDO(s,env);await work(i,s);});
-const admit=async(i:OwnerDO,s:DurableObjectState,id:number)=>{
+const setup=async(name:string,work:(i:TelegramOwnerDO,s:DurableObjectState)=>Promise<void>,omitHost=false)=>runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)),async(_i,s)=>{await s.storage.put({telegram_subject:'42',do_name:name,origin:'https://fixture.invalid'});const i=new TelegramOwnerDO(s,env);await work(i,s);});
+const admit=async(i:TelegramOwnerDO,s:DurableObjectState,id:number)=>{
  const {TelegramOwnerInbox}=await import('../src/channels/telegram-owner-inbox');const {persistInboxWake}=await import('../src/scheduler/alarm-slot');const inbox=new TelegramOwnerInbox(s.storage,persistInboxWake);
  await inbox.admit({bot:(env.TELEGRAM_BOT_TOKEN??'7:fixture').split(':')[0]!,subject:'42',doName:s.storage.kv.get<string>('do_name')!},id,JSON.stringify({update_id:id,message:{message_id:id,from:{id:42,is_bot:false},chat:{id:42,type:'private'},text:'hello'}}));return inbox;
 };

@@ -10,7 +10,7 @@ import { sha256Hex, type GoogleClient } from '../src/connectors/google';
 const CSRF = 'c'.repeat(64);
 
 it('lists app approvals and decides them once against the reviewed digest, with durable receipts', async () => {
-  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`app-approvals-${crypto.randomUUID()}`));
+  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`app-approvals-${crypto.randomUUID()}`));
   await runInDurableObject(stub, async (_instance, state) => {
     let n = 0, sends = 0, eventTag = 'e1', current = 0;
     const client = {
@@ -77,7 +77,7 @@ it('lists app approvals and decides them once against the reviewed digest, with 
 });
 
 it('app receipts carry fixed text, never provider errors or the desk message', async () => {
-  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`app-approvals-receipts-${crypto.randomUUID()}`));
+  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`app-approvals-receipts-${crypto.randomUUID()}`));
   await runInDurableObject(stub, async (_instance, state) => {
     let n = 0, providerDown = true;
     const client = { sendRaw: async () => ({ message_id: 'g1' }), findSentByMessageId: async (id: string) => ({ message_id: 'g1', thread_id: 't', rfc822_message_id: id, label_ids: ['SENT'] }) } as unknown as GoogleClient;
@@ -99,7 +99,7 @@ it('app receipts carry fixed text, never provider errors or the desk message', a
 });
 
 it('Not now keeps the approval open and its cards live, leaves it out of the default list, and a later decision by id still works', async () => {
-  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`app-approvals-defer-${crypto.randomUUID()}`));
+  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`app-approvals-defer-${crypto.randomUUID()}`));
   await runInDurableObject(stub, async (_instance, state) => {
     let n = 0, sends = 0;
     const client = { sendRaw: async () => { sends++; return { message_id: 'g1' }; }, findSentByMessageId: async (id: string) => ({ message_id: 'g1', thread_id: 't', rfc822_message_id: id, label_ids: ['SENT'] }) } as unknown as GoogleClient;
@@ -135,7 +135,7 @@ it('Not now keeps the approval open and its cards live, leaves it out of the def
 });
 
 it('a Not now the desk did not take is answered as not done, and the approval stays in the default list', async () => {
-  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`app-approvals-defer-refused-${crypto.randomUUID()}`));
+  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`app-approvals-defer-refused-${crypto.randomUUID()}`));
   await runInDurableObject(stub, async (_instance, state) => {
     let n = 0;
     const client = { sendRaw: async () => ({ message_id: 'g1' }) } as unknown as GoogleClient;
@@ -160,7 +160,7 @@ it('a Not now the desk did not take is answered as not done, and the approval st
 const deferDesk = async <T>(name: string, run: (tools: Readonly<{ desk: ReturnType<typeof approvalDesk>; clock: { at: number }; sql: SqlStorage;
   decide(body: unknown): Promise<Response>; list(query?: string): Promise<ReturnType<typeof appApprovalListV1Schema.parse>['approvals']>;
   propose(subject: string, body: string): Promise<string>; deferredAt(id: string): number | null }>) => Promise<T>) =>
-  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`${name}-${crypto.randomUUID()}`)), async (_instance, state) => {
+  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`${name}-${crypto.randomUUID()}`)), async (_instance, state) => {
     let n = 0;
     const clock = { at: Date.now() };
     const client = { sendRaw: async () => ({ message_id: 'g1' }) } as unknown as GoogleClient;
@@ -222,7 +222,7 @@ it('Not now on an approval past its expiry expires it and records no deferral', 
 });
 
 it('adds the deferral column to a ledger created before it, once, and keeps the rows', async () => {
-  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`app-approvals-defer-column-${crypto.randomUUID()}`));
+  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`app-approvals-defer-column-${crypto.randomUUID()}`));
   await runInDurableObject(stub, async (_instance, state) => {
     const sql = state.storage.sql;
     sql.exec(`CREATE TABLE ledger (id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL,

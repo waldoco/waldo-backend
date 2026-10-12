@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { applyClaimOps, claimStore, memoryPrompt, turnMemoryPrompt } from '../src/memory/claims';
 
 const withSql = <T>(fn: (sql: SqlStorage) => T) =>
-  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('memory-size')), (_instance, state) => fn(state.storage.sql));
+  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('memory-size')), (_instance, state) => fn(state.storage.sql));
 
 const tokens = (text: string) => Math.ceil(new TextEncoder().encode(text).byteLength / 4);
 const AT = '2026-09-24T04:00:00Z';

@@ -12,7 +12,7 @@ beforeEach(() => { seen.inputs = []; seen.outputs = []; });
 const SAID = 'my HbA1c was 9.1 last week';
 const tool = (name: string, args: unknown) => [{ type: 'function_call', call_id: name, name, arguments: JSON.stringify(args) }];
 const session = (name: string, work: (store: ReturnType<typeof claimStore>, turn: (text: string) => Promise<string>) => Promise<void>) =>
-  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_i, state) => {
+  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_i, state) => {
     const store = claimStore(state.storage.sql, fn => state.storage.transactionSync(fn));
     const tools = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', hideHistory: async () => undefined });
     const responder = createOwnerResponder('fixture', undefined, store, undefined, undefined, tools);

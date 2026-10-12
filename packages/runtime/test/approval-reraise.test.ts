@@ -19,7 +19,7 @@ const deskOn = async <T>(surface: 'app' | 'telegram' | 'whatsapp', name: string,
   list(query?: string): Promise<ReturnType<typeof appApprovalListV1Schema.parse>['approvals']>;
   propose(subject: string, body?: string): Promise<string>; deferredAt(id: string): number | null; shownCount(id: string): number;
 }>) => Promise<T>) =>
-  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`${name}-${crypto.randomUUID()}`)), async (_instance, state) => {
+  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`${name}-${crypto.randomUUID()}`)), async (_instance, state) => {
     let n = 0;
     const clock = { at: Date.now() }, runRef = { current: 'app-message-0006' as string | undefined }, sent: Sent[] = [], telegram = { deliver: true };
     const client = { sendRaw: async () => ({ message_id: 'g1' }) } as unknown as GoogleClient;

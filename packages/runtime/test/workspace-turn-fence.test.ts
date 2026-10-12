@@ -10,8 +10,8 @@ import { workspaceToolHandlers } from '../src/tools/live/workspace';
 // Host seam regression; the synthetic open interface does not prove DO registration.
 it.each(['mapping', 'body'] as const)('closed owner run cannot publish a workspace revision after its %s await', async phase => {
   const doName = `workspace-fence-gap-${crypto.randomUUID()}`;
-  const id = env.OWNER_DO!.idFromName(doName);
-  await runInDurableObject(env.OWNER_DO!.get(id), async (_instance, state) => {
+  const id = env.TELEGRAM_OWNER_DO!.idFromName(doName);
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(id), async (_instance, state) => {
     let live = true;
     let release!: () => void;
     let entered!: () => void;
@@ -64,8 +64,8 @@ it.each(['mapping', 'body'] as const)('closed owner run cannot publish a workspa
 });
 
 it('scoped metadata checks closure inside the atomic commit and rolls back failed work', async () => {
-  const id = env.OWNER_DO!.idFromName(`workspace-metadata-fence-${crypto.randomUUID()}`);
-  await runInDurableObject(env.OWNER_DO!.get(id), async (_instance, state) => {
+  const id = env.TELEGRAM_OWNER_DO!.idFromName(`workspace-metadata-fence-${crypto.randomUUID()}`);
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(id), async (_instance, state) => {
     let live = true;
     const scope = { runId: 'metadata-run', attempt: 'metadata-attempt', deadline: Date.now() + 60_000, signal: new AbortController().signal,
       admit() { if (!live) throw new ClosedRunError(); },

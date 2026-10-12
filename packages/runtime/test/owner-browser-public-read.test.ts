@@ -15,7 +15,7 @@ function fixture(){
  calls.length=0;alive=false;cleanupConfirmed=true;clock=Date.now();vi.spyOn(Date,'now').mockImplementation(()=>clock);const rows=new Map<string,any>([['do_name','public-owner'],['telegram_subject','81102']]);
  const storage={kv:{get:(key:string)=>rows.get(key),put:(key:string,value:unknown)=>{calls.push('reserve');rows.set(key,structuredClone(value));},list:({prefix}:{prefix:string})=>[...rows].filter(([key])=>key.startsWith(prefix))},transactionSync:<T>(work:()=>T)=>{const before=structuredClone([...rows]);try{return work();}catch(cause){rows.clear();for(const [key,value] of before)rows.set(key,value);throw cause;}}} as unknown as DurableObjectStorage;
  const scope={runId:'public-run',attempt:'attempt',deadline:Date.now()+60000,signal:new AbortController().signal,admit(){},commit:<T>(work:()=>T)=>work()};
- const env={WALDO_ENVIRONMENT:'staging',BROWSER:{},OWNER_DO:{idFromName:()=>({toString:()=> 'physical'})}} as never;
+ const env={WALDO_ENVIRONMENT:'staging',BROWSER:{},TELEGRAM_OWNER_DO:{idFromName:()=>({toString:()=> 'physical'})}} as never;
  const runtime=ownerBrowserRuntime({env,storage,actualDoId:'physical',activeScope:()=>scope});
  const fallback={name:'browse_page',handle:vi.fn(()=>{throw Error('No paid alternative');})} as never;
  const args={provider:'cloudflare_playwright' as const,url:'https://example.com/menu',instruction:'Read menu'};

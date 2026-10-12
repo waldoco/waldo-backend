@@ -12,7 +12,7 @@ it('guard unit: a topic containing a tab/newline is spelled by \\t / \\n in JSON
 });
 
 it('cleanup projection (memory_backups) with a tab-bearing topic must not read clean', async () => {
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('review-tab-topic')), (_i, state) => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('review-tab-topic')), (_i, state) => {
     const store = claimStore(state.storage.sql);
     const topic = 'alpha\tbeta secret';
     store.backup('fixture', { detail: `note ${topic} tail` }, at);
@@ -24,7 +24,7 @@ it('cleanup projection (memory_backups) with a tab-bearing topic must not read c
 });
 
 it('conversation store: JSON-escaped topic in a payload is held (unguarded forgetSources)', async () => {
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('review-conv')), async (_i, state) => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('review-conv')), async (_i, state) => {
     const entry = { id: 'e1', ownerId: 'owner', chatId: 'c', parentId: null, threadAnchorId: null, surface: 's', modelPayload: '{"t":"DLD-\\u0032026 secret"}', appPayload: 'x', modelProjection: { mode: 'include' } };
     await state.storage.put('conv:e1', entry);
     const r = await conversationForgetSources(state.storage as never, 'DLD-2026 secret');
@@ -33,7 +33,7 @@ it('conversation store: JSON-escaped topic in a payload is held (unguarded forge
 });
 
 it('end to end: non-strict JSON (trailing comma) hiding a tab-bearing topic behind \\t must not settle clean', async () => {
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('review-tab-json5')), (_i, state) => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('review-tab-json5')), (_i, state) => {
     const store = claimStore(state.storage.sql);
     const topic = 'alpha\tbeta secret';
     store.backup('fixture', { detail: 'x' }, at);
@@ -45,7 +45,7 @@ it('end to end: non-strict JSON (trailing comma) hiding a tab-bearing topic behi
   });
 });
 
-const convHold = async (name: string, payload: string, topic: string) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_i, state) => {
+const convHold = async (name: string, payload: string, topic: string) => runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_i, state) => {
   await state.storage.put('conv:e1', { id: 'e1', ownerId: 'owner', chatId: 'c', parentId: null, threadAnchorId: null, surface: 's', modelPayload: payload, appPayload: 'x', modelProjection: { mode: 'include' } });
   const r = await conversationForgetSources(state.storage as never, topic);
   return r.incomplete;

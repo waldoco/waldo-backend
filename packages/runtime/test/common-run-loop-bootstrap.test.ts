@@ -31,7 +31,7 @@ async function fixture() {
   const root = env.RUN_LOOP_DO.get(env.RUN_LOOP_DO.idFromName(`owner-root:sha256:${await digest(`waldo-owner-root\0${authority!.ownerId}`)}`)) as DurableObjectStub<RunLoopDO>;
   const ingress = await signCommonMessageIngress(secret, {
     provider: 'telegram', subject: row.subject, doName: row.do_name,
-    physicalDoId: env.OWNER_DO!.idFromName(row.do_name).toString(),
+    physicalDoId: env.TELEGRAM_OWNER_DO!.idFromName(row.do_name).toString(),
     occurrenceId: crypto.randomUUID(), text: 'Summarize these supplied notes.',
     at: Math.floor(Date.now() / 1000),
   });

@@ -56,7 +56,7 @@ describe('dashboard session routing', () => {
     const ns = { idFromName: vi.fn((name: string) => name), get: () => ({ fetch }) } as unknown as DurableObjectNamespace;
     const auth = { readOwnerCookie: vi.fn(async () => null) } as unknown as ConsoleAuth;
     for (const cookie of ['', 'waldo_owner=expired']) {
-      const response = await handleConsole(new Request(`https://w.test${DASHBOARD_OVERVIEW_PATH}`, { headers: { cookie } }), { OWNER_DO: ns }, auth);
+      const response = await handleConsole(new Request(`https://w.test${DASHBOARD_OVERVIEW_PATH}`, { headers: { cookie } }), { TELEGRAM_OWNER_DO: ns }, auth);
       expect(response?.status).toBe(401);
       for (const [key, value] of Object.entries(DASHBOARD_OVERVIEW_HEADERS)) expect(response?.headers.get(key)).toBe(value);
     }
@@ -68,7 +68,7 @@ describe('dashboard session routing', () => {
     const idFromName = vi.fn((name: string) => name);
     const ns = { idFromName, get: () => ({ fetch }) } as unknown as DurableObjectNamespace;
     const auth = { readOwnerCookie: vi.fn(async () => 'owner-a') } as unknown as ConsoleAuth;
-    const response = await handleConsole(new Request(`https://w.test${DASHBOARD_OVERVIEW_PATH}?owner=owner-b`, { headers: { cookie: 'waldo_owner=signed; waldo_console=session' } }), { OWNER_DO: ns }, auth);
+    const response = await handleConsole(new Request(`https://w.test${DASHBOARD_OVERVIEW_PATH}?owner=owner-b`, { headers: { cookie: 'waldo_owner=signed; waldo_console=session' } }), { TELEGRAM_OWNER_DO: ns }, auth);
     expect(await response?.json()).toEqual({ owner: 'owner-a' });
     expect(idFromName).toHaveBeenCalledWith('owner-a');
     expect(idFromName).not.toHaveBeenCalledWith('owner-b');
@@ -79,7 +79,7 @@ describe('dashboard session routing', () => {
     const fetch = vi.fn(async () => new Response('down', { status: 503, headers: { 'cache-control': 'public' } }));
     const ns = { idFromName: (name: string) => name, get: () => ({ fetch }) } as unknown as DurableObjectNamespace;
     const auth = { readOwnerCookie: vi.fn(async () => 'owner-a') } as unknown as ConsoleAuth;
-    const response = await handleConsole(new Request(`https://w.test${DASHBOARD_OVERVIEW_PATH}`, { headers: { cookie: 'waldo_owner=signed; waldo_console=session' } }), { OWNER_DO: ns }, auth);
+    const response = await handleConsole(new Request(`https://w.test${DASHBOARD_OVERVIEW_PATH}`, { headers: { cookie: 'waldo_owner=signed; waldo_console=session' } }), { TELEGRAM_OWNER_DO: ns }, auth);
     expect(response?.status).toBe(503);
     for (const [key, value] of Object.entries(DASHBOARD_OVERVIEW_HEADERS)) expect(response?.headers.get(key)).toBe(value);
   });
@@ -90,8 +90,8 @@ describe('owner DO read seam', () => {
     const { env } = await import('cloudflare:workers');
     const { runInDurableObject } = await import('cloudflare:test');
     const { consoleAccess } = await import('../src/channels/console');
-    const a = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('dashboard-owner-a'));
-    const b = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('dashboard-owner-b'));
+    const a = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('dashboard-owner-a'));
+    const b = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('dashboard-owner-b'));
     const aToken = await runInDurableObject(a, (_instance, state) => consoleAccess(state.storage).grant());
     const bToken = await runInDurableObject(b, (_instance, state) => consoleAccess(state.storage).grant());
     const fetch = (stub: typeof a, token?: string) => stub.fetch(`https://telegram-owner${DASHBOARD_OVERVIEW_PATH}`, { headers: token ? { cookie: `waldo_console=${token}` } : {} });

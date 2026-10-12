@@ -6,7 +6,7 @@ import { ownerEffectLedger } from '../src/channels/owner-effect-ledger';
 import { sha256Hex, type GoogleClient } from '../src/connectors/google';
 
 const base = { owner: 42, call: async () => ({}), google: async () => null, timezone: 'UTC', log: () => {} };
-const stubFor = (n: string) => env.OWNER_DO!.get(env.OWNER_DO!.idFromName(n));
+const stubFor = (n: string) => env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(n));
 const status = (state: DurableObjectState, id: string) => state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status;
 
 it('BREAK-1 pre-dispatch recovery must still honour proposal TTL (12h)', async () => {

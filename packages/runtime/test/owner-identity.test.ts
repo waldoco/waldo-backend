@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveOwnerTelegramId } from '../src/channels/owner-do';
+import { resolveOwnerTelegramId } from '../src/channels/telegram-owner-do';
 
 // Regression for the multi-user identity bug: a directory-backed DO whose owner had not linked
 // Telegram yet fell back to WALDO_OWNER_TELEGRAM_ID, so a second owner signing in through the

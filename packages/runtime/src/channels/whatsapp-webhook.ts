@@ -2,7 +2,7 @@ import { ownerDirectory, type OwnerDirectory, type OwnerDirectoryEnv } from '../
 import { createWhatsAppCaller, sendWhatsAppText } from './whatsapp-api';
 
 export type WhatsAppWebhookEnv = Readonly<{
-  OWNER_DO?: DurableObjectNamespace;
+  TELEGRAM_OWNER_DO?: DurableObjectNamespace;
   WHATSAPP_VERIFY_TOKEN?: string;
   WHATSAPP_APP_SECRET?: string;
   WHATSAPP_ACCESS_TOKEN?: string;
@@ -64,7 +64,7 @@ export const handleWhatsAppWebhook = async (
   waitUntil: (work: Promise<unknown>) => void,
   directory: OwnerDirectory = ownerDirectory(env),
 ): Promise<Response> => {
-  if (!env.OWNER_DO) return new Response('not found', { status: 404 });
+  if (!env.TELEGRAM_OWNER_DO) return new Response('not found', { status: 404 });
   const url = new URL(request.url);
   if (request.method === 'GET') {
     if (url.searchParams.get('hub.mode') === 'subscribe' && env.WHATSAPP_VERIFY_TOKEN && sameBytes(url.searchParams.get('hub.verify_token') ?? '', env.WHATSAPP_VERIFY_TOKEN)) {
@@ -78,7 +78,7 @@ export const handleWhatsAppWebhook = async (
   const expected = `sha256=${await hmacSha256Hex(env.WHATSAPP_APP_SECRET, body)}`;
   if (!sameBytes(signature, expected)) return new Response('forbidden', { status: 403 });
   const payload = JSON.parse(body) as WaBody;
-  const owners = env.OWNER_DO;
+  const owners = env.TELEGRAM_OWNER_DO;
   const origin = url.origin;
   // Admission before the ack: a payload is acknowledged only after each owner's Durable Object has durably admitted it.
   // A failed or refused admission answers 503, so Meta redelivers (its non-200 retry); the DO dedupes by wamid, so a

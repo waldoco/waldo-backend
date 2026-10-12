@@ -14,7 +14,7 @@ it('late old-run cleanup preserves the newer session; unlink reconstruction clea
  configureCommonPublicBrowser({ ref: 'runtime-policy', doName: 'runtime-owner', subject: '81102', directoryOwnerId: '10000000-0000-0000-0000-000000000002', createdAt: now - 1, expiresAt: now + 60000, allowedOrigins: ['*'], maxAllocations: 1, maxReservedBrowserMs: 120000, lifetimeMs: 60000, maxScreenshotBytes: 1024 }, commonBrowserMeteredFixtureLoader,
  { policy: { ref: 'runtime-policy', ownerId, validUntil: now + 60000, limitMicrousd: 10000, maxCalls: 100 }, quote: kind => kind === 'browser' ? 0 : 1, allocationMicrousd: 100 });
  const binding = { fetch: vi.fn(async () => new Response('{}')) };
- const env = { WALDO_ENVIRONMENT: 'staging', BROWSER: binding, OWNER_DO: { idFromName: (name: string) => ({ toString: () => name === 'runtime-owner' ? 'physical-owner' : 'foreign' }) } } as never;
+ const env = { WALDO_ENVIRONMENT: 'staging', BROWSER: binding, TELEGRAM_OWNER_DO: { idFromName: (name: string) => ({ toString: () => name === 'runtime-owner' ? 'physical-owner' : 'foreign' }) } } as never;
  const makeScope = (runId: string): RunEffectScope => ({ runId, attempt: runId, deadline: now + 60000, signal: new AbortController().signal, admit: vi.fn(), commit: work => work() });
  const old = makeScope('old'), newer = makeScope('new'); let active: RunEffectScope | undefined = newer;
  const options = { env, storage, actualDoId: 'physical-owner', activeScope: () => active };
@@ -57,7 +57,7 @@ it('late old-run cleanup preserves the newer session; unlink reconstruction clea
  const rows=new Map<string,unknown>([['do_name','fixture-only'],['telegram_subject','81102']]);
  const scope:RunEffectScope={runId:'fixture-run',attempt:'fixture-attempt',deadline:Date.now()+60000,signal:new AbortController().signal,admit(){},commit:work=>work()};
  const storage={kv:{get:(key:string)=>rows.get(key),put:(key:string,value:unknown)=>rows.set(key,value),list:({prefix}:{prefix:string})=>[...rows].filter(([key])=>key.startsWith(prefix))},transactionSync:<T>(work:()=>T)=>work(),getAlarm:async()=>null,setAlarm:async()=>{}} as unknown as DurableObjectStorage;
- const env={WALDO_ENVIRONMENT:'staging',OWNER_DO:{idFromName:()=>({toString:()=> 'fixture-physical'})}} as never;
+ const env={WALDO_ENVIRONMENT:'staging',TELEGRAM_OWNER_DO:{idFromName:()=>({toString:()=> 'fixture-physical'})}} as never;
  const runtime=ownerBrowserRuntime({env,storage,actualDoId:'fixture-physical',activeScope:()=>scope});
  const called=vi.fn(async()=>({ok:true as const,data:{fixture:true},source_taint:'external' as const}));
  const fallback={name:'browse_act',handle:called} as never;

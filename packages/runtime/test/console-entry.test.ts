@@ -8,7 +8,7 @@ const origin = 'https://waldo.invalid';
 describe('console entry across actual owner sessions', () => {
   it('serves the root shell after ticket redemption and preserves legacy JSON, notices and controls', async () => {
     const name = 'console-entry-owner';
-    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
     const ticket = await runInDurableObject(stub, (instance, state) => {
       Object.assign((instance as unknown as { env: Record<string, unknown> }).env, { TELEGRAM_BOT_TOKEN: '123:synthetic', OPENAI_API_KEY: 'synthetic-key' });
       state.storage.kv.put('do_name', name);

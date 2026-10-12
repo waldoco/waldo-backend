@@ -8,7 +8,7 @@ import { sha256Hex, type GoogleClient } from '../src/connectors/google';
 const base = { owner: 42, call: async () => ({}), google: async () => null, newId: () => 'one', now: () => 1000, timezone: 'UTC', log: () => {} };
 
 it('successful production-shaped MCP callback should settle a receipt', async () => {
- const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('adv-mcp'));
+ const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('adv-mcp'));
  await runInDurableObject(stub, async (_, state) => {
   let calls = 0;
   const effects = ownerEffectLedger(state.storage, () => 1000);
@@ -21,7 +21,7 @@ it('successful production-shaped MCP callback should settle a receipt', async ()
 });
 
 it('same message idempotency key on separate approved cards must not race two sends', async () => {
- const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('adv-message-race'));
+ const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('adv-message-race'));
  await runInDurableObject(stub, async (_, state) => {
   let id = 0, sends = 0;
   let release!: () => void;
@@ -39,7 +39,7 @@ it('same message idempotency key on separate approved cards must not race two se
 });
 
 it('oversized message card without an approve button must reject an approve action', async () => {
- const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('adv-message-review'));
+ const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('adv-message-review'));
  await runInDurableObject(stub, async (_, state) => {
   let sends = 0;
   const effects = ownerEffectLedger(state.storage, () => 1000);
@@ -51,7 +51,7 @@ it('oversized message card without an approve button must reject an approve acti
 });
 
 it('browser receipt persistence failure must remain unknown, not verified', async () => {
- const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('adv-browser-settle'));
+ const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('adv-browser-settle'));
  await runInDurableObject(stub, async (_, state) => {
   const storage = { kv: { get: state.storage.kv.get.bind(state.storage.kv), list: state.storage.kv.list.bind(state.storage.kv), put: (key: string, row: { state: string }) => { if (row.state === 'done') throw Error('storage down'); state.storage.kv.put(key, row); } }, transactionSync: state.storage.transactionSync.bind(state.storage) } as unknown as DurableObjectStorage;
   const effects = ownerEffectLedger(storage, () => 1000);
@@ -64,7 +64,7 @@ it('browser receipt persistence failure must remain unknown, not verified', asyn
 });
 
 it('calendar create readback must not mark a cancelled event as applied', async () => {
- const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('adv-calendar-cancelled'));
+ const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('adv-calendar-cancelled'));
  await runInDurableObject(stub, async (_, state) => {
   const effects = ownerEffectLedger(state.storage, () => 1000);
   const start = '2026-10-08T10:00:00Z', end = '2026-10-08T11:00:00Z';
@@ -76,7 +76,7 @@ it('calendar create readback must not mark a cancelled event as applied', async 
 });
 
 it('failure reserving an effect after SQL approval claim must remain recoverable', async () => {
- const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('adv-email-claim-gap'));
+ const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('adv-email-claim-gap'));
  await runInDurableObject(stub, async (_, state) => {
   let fail = true;
   const storage = { kv: { get: state.storage.kv.get.bind(state.storage.kv), list: state.storage.kv.list.bind(state.storage.kv), put: (key: string, row: { state: string }) => { if (row.state === 'reserved' && fail) throw Error('reservation failure'); state.storage.kv.put(key, row); } }, transactionSync: state.storage.transactionSync.bind(state.storage) } as unknown as DurableObjectStorage;
@@ -95,7 +95,7 @@ it('failure reserving an effect after SQL approval claim must remain recoverable
 });
 
 it('reuse of message idempotency key with changed content must not falsely report already sent', async () => {
- const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('adv-message-changed'));
+ const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('adv-message-changed'));
  await runInDurableObject(stub, async (_, state) => {
   let id = 0;
   const effects = ownerEffectLedger(state.storage, () => 1000);
@@ -110,7 +110,7 @@ it('reuse of message idempotency key with changed content must not falsely repor
 });
 
 it('oversized MCP card without an approve button must reject an approve action', async () => {
- const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('adv-mcp-review'));
+ const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('adv-mcp-review'));
  await runInDurableObject(stub, async (_, state) => {
   let calls = 0;
   const effects = ownerEffectLedger(state.storage, () => 1000);

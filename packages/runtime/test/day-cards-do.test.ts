@@ -90,7 +90,7 @@ describe('scheduled day cards', () => {
   });
 
   it('seeds default times once a day, then applies a plan without touching sent or past cards', async () => {
-    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('day-cards'));
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('day-cards'));
     await runInDurableObject(stub, async (_instance, state) => {
       ensureSchema(state.storage);
       const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
@@ -129,7 +129,7 @@ describe('day-plan memory budget', () => {
   const wireSize = (content: string) => JSON.stringify([{ role: 'user', content }]).length;
   const input = dayPlanInput({ localNow: '2026-10-04T08:00', calendar: 'No events.', cards: DAY_CARDS, proactivity: 'Quiet hours 23:00-07:00' });
   const withMemory = (name: string, work: (store: ReturnType<typeof claimStore>) => void) =>
-    runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), (_i, state) => work(claimStore(state.storage.sql)));
+    runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), (_i, state) => work(claimStore(state.storage.sql)));
   const add = (store: ReturnType<typeof claimStore>, text: string, evidence = text) =>
     store.add({ kind: 'routine', text, source: 'stated', evidence, origin: 'owner', source_ref: 'owner, synthetic-day-plan' }, '2026-10-04T00:00:00Z');
 

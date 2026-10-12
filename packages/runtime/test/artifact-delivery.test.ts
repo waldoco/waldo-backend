@@ -31,12 +31,12 @@ describe('private artifact delivery',()=>{
 
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
-import type { OwnerDO } from '../src/channels/owner-do';
+import type { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 import { artifactBook, r2ArtifactBodies } from '../src/channels/artifacts';
 import { consoleAccess, CONSOLE_COOKIE } from '../src/channels/console';
 it('real DO console requires its session and does not read another owner artifact',async()=>{
- const stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`artifact-owner-${crypto.randomUUID()}`)) as DurableObjectStub<OwnerDO>;
- const other=env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`artifact-other-${crypto.randomUUID()}`)) as DurableObjectStub<OwnerDO>;
+ const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`artifact-owner-${crypto.randomUUID()}`)) as DurableObjectStub<TelegramOwnerDO>;
+ const other=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`artifact-other-${crypto.randomUUID()}`)) as DurableObjectStub<TelegramOwnerDO>;
  const state=await runInDurableObject(stub,async(_i,s)=>{
   const book=artifactBook(s.storage.sql,r2ArtifactBodies((env as typeof env & {ARTIFACTS:R2Bucket}).ARTIFACTS,s.id.toString()),{timezone:'UTC',now:()=>new Date()},()=> 'integration');
   const meta=await book.create({name:'Private',kind:'document',body_markdown:'Owner-only body'},'test');

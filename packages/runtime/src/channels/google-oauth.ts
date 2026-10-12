@@ -70,7 +70,7 @@ const rejected = (reason: string) => console.log(JSON.stringify({ trace: 'oauth'
 // Google redirects the owner here after consent. The signed state names the owner's Durable Object and
 // a one-time attempt; that Durable Object settles the attempt, so a reloaded callback never exchanges twice.
 export const handleGoogleCallback = async (request: Request, env: TelegramWebhookEnv & OwnerDirectoryEnv): Promise<Response> => {
-  const { GOOGLE_CLIENT_ID: clientId, GOOGLE_CLIENT_SECRET: clientSecret, TELEGRAM_WEBHOOK_SECRET: secret, OWNER_DO: owners } = env;
+  const { GOOGLE_CLIENT_ID: clientId, GOOGLE_CLIENT_SECRET: clientSecret, TELEGRAM_WEBHOOK_SECRET: secret, TELEGRAM_OWNER_DO: owners } = env;
   if (!clientId || !clientSecret || !secret || !owners) return new Response('not found', { status: 404, headers: { 'cache-control': 'no-store' } });
   const params = new URL(request.url).searchParams;
   const error = params.get('error');

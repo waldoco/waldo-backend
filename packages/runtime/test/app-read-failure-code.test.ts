@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { OwnerDO } from '../src/channels/owner-do';
+import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 
 const OWNER_ID = '5b3c4d5e-6f70-4a8b-9cad-1e2f3a4b5c6d';
 const ownerHex = OWNER_ID.replaceAll('-', '');
@@ -25,11 +25,11 @@ afterEach(() => { vi.unstubAllGlobals(); });
 const entry = { id: 'stored-reply-1', ownerId: `prn_${ownerHex}`, chatId: 'main', parentId: null, threadAnchorId: null, surface: 'app', modelPayload: 'Stored reply.', appPayload: 'Stored reply.', modelProjection: { mode: 'include' }, role: 'assistant' };
 type Stored = Readonly<Record<string, unknown>>;
 // Reads the app route once and returns its status with the failure lines it logged.
-const read = (name: string, stored: Stored, path = '/app/v1/chat/main', before: (state: DurableObjectState) => void = () => undefined) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+const read = (name: string, stored: Stored, path = '/app/v1/chat/main', before: (state: DurableObjectState) => void = () => undefined) => runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
   state.storage.kv.put('do_name', name);
   before(state);
   for (const [key, value] of Object.entries(stored)) state.storage.kv.put(key, value);
-  const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TELEGRAM_ID: undefined });
+  const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TELEGRAM_ID: undefined });
   const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
   try {
     const response = await owner.fetch(new Request(`https://telegram-owner${path}`, { headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64) } }));

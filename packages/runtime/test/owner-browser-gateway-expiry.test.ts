@@ -11,7 +11,7 @@ it('an expired browser registration does not block an ordinary model call', asyn
   const now = Date.now(), ownerId = 'prn_10000000000000000000000000000002';
   configureCommonPublicBrowser({ ref: 'expiry-policy', doName: 'expiry-owner', subject: '81103', directoryOwnerId: '10000000-0000-0000-0000-000000000002', createdAt: now - 120000, expiresAt: now - 60000, allowedOrigins: ['*'], maxAllocations: 1, maxReservedBrowserMs: 120000, lifetimeMs: 60000, maxScreenshotBytes: 1000 } as never, (() => undefined) as never,
     { policy: { ref: 'expiry-policy', ownerId, validUntil: now - 60000, limitMicrousd: 10000, maxCalls: 100 }, quote: (kind: string) => kind === 'browser' ? 0 : 1, allocationMicrousd: 100 });
-  const env = { WALDO_ENVIRONMENT: 'staging', OPENAI_API_KEY: 'k', BROWSER: { fetch: async () => new Response('{}') }, OWNER_DO: { idFromName: () => ({ toString: () => 'physical-owner' }) } } as never;
+  const env = { WALDO_ENVIRONMENT: 'staging', OPENAI_API_KEY: 'k', BROWSER: { fetch: async () => new Response('{}') }, TELEGRAM_OWNER_DO: { idFromName: () => ({ toString: () => 'physical-owner' }) } } as never;
   const scope: RunEffectScope = { runId: 'r1', attempt: 'a1', deadline: now + 60000, signal: new AbortController().signal, admit: vi.fn(), commit: work => work() };
   const runtime = ownerBrowserRuntime({ env, storage, actualDoId: 'physical-owner', activeScope: () => scope });
   const gateway = runtime.gateway();

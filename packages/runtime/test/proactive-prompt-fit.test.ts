@@ -41,7 +41,7 @@ describe('fitPromptToBudget', () => {
 
 describe('proactive prompts through the owner responder', () => {
   it('admits an oversized scheduled prompt on a reduced form instead of failing the job', async () => {
-    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('proactive-fit')), async () => {
+    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('proactive-fit')), async () => {
       const requests: LLMGatewayRequest[] = [];
       const gateway: LLMGatewayAdapter = { complete: async request => { requests.push(request); return { ok: true, data: { model: request.request.model, text: 'ok', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } }; } };
       const args: Parameters<typeof createOwnerResponder> = ['fixture']; args[10] = gateway;
@@ -58,7 +58,7 @@ describe('proactive prompts through the owner responder', () => {
   });
 
   it('leaves a prompt that fits exactly as written', async () => {
-    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('proactive-fit-small')), async () => {
+    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('proactive-fit-small')), async () => {
       const requests: LLMGatewayRequest[] = [];
       const gateway: LLMGatewayAdapter = { complete: async request => { requests.push(request); return { ok: true, data: { model: request.request.model, text: 'ok', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } }; } };
       const args: Parameters<typeof createOwnerResponder> = ['fixture']; args[10] = gateway;

@@ -7,7 +7,7 @@ import { updateCardPrompt } from '../src/prompt/update-cards';
 
 let sequence = 0;
 const withSql = <T>(fn: (sql: SqlStorage) => T) =>
-  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`loops-${sequence++}`)), (_instance, state) => fn(state.storage.sql));
+  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`loops-${sequence++}`)), (_instance, state) => fn(state.storage.sql));
 const at = (iso: string) => Date.parse(iso);
 const run = (handler: ReturnType<typeof loopHandlers>[number], args: unknown) => (handler.handle as (input: unknown) => Promise<unknown>)(handler.schema.parse(args));
 

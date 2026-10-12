@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { ensureSchema } from '../src/tracer/schema';
-import { OwnerDO } from '../src/channels/owner-do';
+import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
@@ -16,7 +16,7 @@ const directory = { SUPABASE_PROJECT_URL: 'https://directory.invalid', SUPABASE_
 
 it.each(['missing-name', 'foreign-name', 'missing-subject', 'unlinked', 'invalid-subject', 'zero-subject', 'unsafe-subject', 'infinite-subject'])('unbound directory alarm %s retains data and transport wakes without provider setup', async mode => {
   const name = `unbound-alarm-${mode}`;
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
     ensureSchema(state.storage);
     const now = Date.now();
     const originalNow = Date.now; Date.now = () => now;
@@ -33,7 +33,7 @@ it.each(['missing-name', 'foreign-name', 'missing-subject', 'unlinked', 'invalid
     vi.stubGlobal('fetch', fetcher);
     try {
       // Missing model/bot configuration deliberately proves the alarm does not construct setup.
-      const owner = new OwnerDO(state, { ...env, ...directory, OPENAI_API_KEY: undefined, TELEGRAM_BOT_TOKEN: undefined });
+      const owner = new TelegramOwnerDO(state, { ...env, ...directory, OPENAI_API_KEY: undefined, TELEGRAM_BOT_TOKEN: undefined });
       await owner.alarm();
       expect(fetcher).not.toHaveBeenCalled();
       expect(state.storage.sql.exec('SELECT * FROM schedule').toArray()).toEqual(before);
@@ -56,11 +56,11 @@ it.each(['missing-name', 'foreign-name', 'missing-subject', 'unlinked', 'invalid
 
 it('restoring canonical binding resumes retained scheduled dispatch and normal arming', async () => {
   const name = 'unbound-restored-owner';
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
     ensureSchema(state.storage);
     const now = Date.now();
     state.storage.sql.exec("INSERT INTO schedule (id,kind,occurrence_at,due_at,payload_json,status,attempts,created_at,updated_at) VALUES ('retained-reminder','reminder',?,?, '{}','armed',0,?,?)", now, now, now, now);
-    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:fixture', OPENAI_API_KEY: 'fixture' });
+    const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:fixture', OPENAI_API_KEY: 'fixture' });
     vi.stubGlobal('fetch', vi.fn(async () => Response.json([])));
     try {
       await owner.alarm();

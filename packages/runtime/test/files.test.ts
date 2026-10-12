@@ -7,7 +7,7 @@ import { SAMPLE_CONSOLE_VIEW } from './fixtures/console-sample';
 
 describe('owner files', () => {
   it('records Telegram media references newest first and removes them', async () => {
-    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('owner-files'));
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('owner-files'));
     await runInDurableObject(stub, async (_instance, state) => {
       const book = fileBook(state.storage.sql);
       book.record({ kind: 'photo', fileId: 'a', fileName: null, mimeType: null, fileSize: 1000 }, '', 1);

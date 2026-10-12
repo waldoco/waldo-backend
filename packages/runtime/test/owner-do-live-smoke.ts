@@ -8,7 +8,7 @@ import { settleSmokeOwner } from '../scenarios/smoke-settle';
 import { smokeModelFetch, type SmokeRequestReceipt } from '../scenarios/smoke-model-fetch';
 import { matchesSmokeMailFacts } from '../scenarios/smoke-read-facts';
 import { isolatedGoogleClient } from '../scenarios/isolated-google-client';
-import type { OwnerDO } from '../src/channels/owner-do';
+import type { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 import type { OwnerDirectory } from '../src/identity/owner-directory';
 
 const sourceFacts = { from: 'Fictional Cedar Sender', subject: 'Fixture status', snippet: 'Cedar launch is ready for review.' };
@@ -45,7 +45,7 @@ const subject = 81201;
 const doName = `live-smoke-${crypto.randomUUID()}`;
 const directory: OwnerDirectory = { byPresence: async (provider, id) => provider === 'telegram' && id === String(subject)
   ? { doName, subject: String(subject), timezone: 'Asia/Kolkata' } : null, redeem: async () => null };
-const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName)) as DurableObjectStub<OwnerDO>;
+const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(doName)) as DurableObjectStub<TelegramOwnerDO>;
 afterEach(() => vi.unstubAllGlobals());
 it('reads only fictional owner mail with an actual model, captured tool path and zero provider mutations', async () => {
   const network = globalThis.fetch.bind(globalThis);

@@ -16,20 +16,20 @@ const controls=async(stub:DurableObjectStub,token:string,view:string):Promise<Re
 const postAction=(stub:DurableObjectStub,token:string,read:Read,fields:Record<string,string>)=>stub.fetch(root+CONTROL_ACTION_PATH,{method:'POST',headers:{...apiHeaders(token),'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({csrf:read.csrf,revision:read.revision,...fields})});
 describe('dashboard control owner route and real executors',()=>{
  it('keeps unsigned and cross-owner sessions out of reads and writes',async()=>{
-  const a=env.OWNER_DO!.get(env.OWNER_DO!.idFromName('control-owner-a')),b=env.OWNER_DO!.get(env.OWNER_DO!.idFromName('control-owner-b'));
+  const a=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('control-owner-a')),b=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('control-owner-b'));
   const token=await runInDurableObject(a,(_i,state)=>consoleAccess(state.storage).grant());
   for(const [path,method] of [[CONTROLS_PATH+'?view=day','GET'],[CONTROL_ACTION_PATH,'POST'],[MEMORY_CONTROL_PATH+'?id=foreign:claim:1','GET'],[OWNER_CONTROLS_PATH+'?view=account','GET'],[OWNER_CONTROLS_ACTION_PATH,'POST']])for(const [stub,cookie] of [[a,''],[b,token]] as const){const r=await stub.fetch(root+path,{method,headers:{cookie:'waldo_console='+cookie}});expect(r.status).toBe(401);expect(r.headers.get('cache-control')).toBe('private, no-store');}
  });
  it('routes APIs to the verified cookie owner and fails closed without a valid owner',async()=>{
   const requests:string[]=[];const ns={idFromName:(n:string)=>n,get:(n:string)=>({fetch:async()=>{requests.push(n);return Response.json({safe:true});}})} as unknown as DurableObjectNamespace;
   for(const path of [CONTROLS_PATH+'?view=day',CONTROL_ACTION_PATH]){
-   const r=await handleConsole(new Request(root+path,{headers:{cookie:'waldo_owner=signed; waldo_console=session'}}),{OWNER_DO:ns},{readOwnerCookie:async()=>null} as unknown as ConsoleAuth);expect(r?.status).toBe(401);
-   const owner=await handleConsole(new Request(root+path+'?owner=other',{headers:{cookie:'waldo_owner=signed; waldo_console=session'}}),{OWNER_DO:ns},{readOwnerCookie:async()=>'one'} as unknown as ConsoleAuth);expect(owner?.status).toBe(200);
+   const r=await handleConsole(new Request(root+path,{headers:{cookie:'waldo_owner=signed; waldo_console=session'}}),{TELEGRAM_OWNER_DO:ns},{readOwnerCookie:async()=>null} as unknown as ConsoleAuth);expect(r?.status).toBe(401);
+   const owner=await handleConsole(new Request(root+path+'?owner=other',{headers:{cookie:'waldo_owner=signed; waldo_console=session'}}),{TELEGRAM_OWNER_DO:ns},{readOwnerCookie:async()=>'one'} as unknown as ConsoleAuth);expect(owner?.status).toBe(200);
   }
   expect(requests).toEqual(['one','one']);
  });
  it('uses real card pin executors and serializes duplicate receipts before execution',async()=>{
-  const stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName('control-day-owner'));
+  const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('control-day-owner'));
   const token=await runInDurableObject(stub,(instance,state)=>{Object.assign((instance as unknown as {env:Record<string,unknown>}).env,{TELEGRAM_BOT_TOKEN:'123:synthetic',OPENAI_API_KEY:'synthetic-key'});return consoleAccess(state.storage).grant();});
   const headers={cookie:'waldo_console='+token};
   const read=async()=>{const r=await stub.fetch(root+CONTROLS_PATH+'?view=day',{headers});expect(r.status).toBe(200);return r.json() as Promise<{csrf:string;revision:string;data:Pick<ConsoleView,'cards'>}>;};
@@ -41,7 +41,7 @@ describe('dashboard control owner route and real executors',()=>{
   form.set('revision',after.revision);form.set('csrf','wrong');expect((await post()).status).toBe(403);
  });
  it('clears both console cookies and revokes access after the real signout executor',async()=>{
-  const stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName('control-signout-owner'));
+  const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('control-signout-owner'));
   const token=await seed(stub),read=await controls(stub,token,'connections');
   const response=await postAction(stub,token,read,{view:'connections',action:'session.signout',request_id:'signout-request-01'});
   expect(response.status).toBe(200);expect(await response.json()).toMatchObject({receipt:{state:'recorded',signed_out:true}});
@@ -51,7 +51,7 @@ describe('dashboard control owner route and real executors',()=>{
   expect((await postAction(stub,token,read,{view:'connections',action:'session.signout',request_id:'signout-request-01'})).status).toBe(401);
  });
  it('rejects a previously admitted queued mutation after its session is revoked',async()=>{
-  const stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName('control-queued-revocation-owner'));
+  const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('control-queued-revocation-owner'));
   const token=await seed(stub),read=await controls(stub,token,'day');
   type Gate={serial:(work:()=>Promise<Response>)=>Promise<Response>;qaAdmitted?:boolean;qaRelease?:()=>void;qaOriginal?:Gate['serial']};
   await runInDurableObject(stub,instance=>{
@@ -70,7 +70,7 @@ describe('dashboard control owner route and real executors',()=>{
   expect((after.data.cards as {id:string;pin:string|null}[]).find(card=>card.id==='card:close')?.pin).toBeNull();
  });
  it('rejects an old same-ID Memory review after its saved content changes',async()=>{
-  const stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName('control-memory-stale-owner'));
+  const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('control-memory-stale-owner'));
   const token=await seed(stub);await controls(stub,token,'day');
   const id=await runInDurableObject(stub,(_instance,state)=>{
    state.storage.sql.exec("INSERT INTO claims (kind,text,source,evidence,origin,created_at,last_seen_at) VALUES ('preference','Original saved preference','inferred','Owner quote','owner','2026-10-01','2026-10-01')");
@@ -89,7 +89,7 @@ describe('dashboard control owner route and real executors',()=>{
  it('rejects yesterday’s card.today revision across an owner-local date rollover',async()=>{
   const clock=vi.spyOn(Date,'now').mockReturnValue(Date.parse('2026-10-01T23:59:00Z'));
   try{
-   const stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName('control-midnight-owner')),token=await seed(stub);
+   const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('control-midnight-owner')),token=await seed(stub);
    const initial=await controls(stub,token,'day');
    const changed=await postAction(stub,token,initial,{view:'day',action:'timezone.set',value:'UTC',request_id:'midnight-zone-request'});expect(changed.status).toBe(200);
    const before=await controls(stub,token,'day');expect(before.data.date).toBe('2026-10-01');
@@ -103,7 +103,7 @@ describe('dashboard control owner route and real executors',()=>{
  it('retains a renewed session’s duplicate receipt when another session prunes the journal',async()=>{
   const started=Date.parse('2026-10-01T12:00:00Z'),clock=vi.spyOn(Date,'now').mockReturnValue(started);
   try{
-   const stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName('control-renewed-owner')),token=await seed(stub);
+   const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('control-renewed-owner')),token=await seed(stub);
    await runInDurableObject(stub,async(_instance,state)=>{const sessions=await state.storage.get<Record<string,{expires:number}>>('console:sessions');sessions![token]!.expires=started+10*60000;await state.storage.put('console:sessions',sessions!);});
    const read=await controls(stub,token,'day'),fields={view:'day',action:'card.pin',id:'card:close',value:'22:15',request_id:'renewed-pin-request'};
    expect((await postAction(stub,token,read,fields)).status).toBe(200);

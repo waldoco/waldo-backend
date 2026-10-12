@@ -8,7 +8,7 @@ import { conversationForgetSources } from '../src/channels/conversation-store';
 // Real owner-local SQL and retrieval. This is a desired-behaviour regression,
 // intentionally red until topic-associated source clauses have been selected.
 it('forgets a topic-associated preference while preserving mixed-source and unrelated preferences', async () => {
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('selective-forget-mixed-source')), (_instance, state) => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('selective-forget-mixed-source')), (_instance, state) => {
     const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
     const episodes = episodeIndex(state.storage.sql);
     episodes.add('tg-fixture-reply', 'waldo', 'Saved fictional DLD-20261002-M3 workshop preference: Friday at 09:10 UTC. Unrelated preference: tea after lunch.', 1);
@@ -49,7 +49,7 @@ it('bounds escaped sources beneath the complete selector request budget', () => 
 });
 
 it('rejects colliding custody and the real maximum span-byte budget before any destructive write', async () => {
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('selective-forget-collision-budget')), (_instance, state) => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('selective-forget-collision-budget')), (_instance, state) => {
     const store = claimStore(state.storage.sql);
     const at = '2026-10-03T12:00:00Z';
     const topic = 'DLD-20261002-M3';
@@ -70,7 +70,7 @@ it('rejects colliding custody and the real maximum span-byte budget before any d
 });
 
 it('redacts and independently verifies topic-bearing source references before settling custody', async () => {
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('selective-forget-source-ref')), (_instance, state) => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('selective-forget-source-ref')), (_instance, state) => {
     const store = claimStore(state.storage.sql);
     const topic = 'DLD-20261002-M3';
     const fact = `${topic} workshop preference: Friday at 09:10 UTC`;
@@ -89,7 +89,7 @@ it('redacts and independently verifies topic-bearing source references before se
 });
 
 it('preserves unsupported JSON projections with escaped topic text instead of destroying their association marker', async () => {
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('selective-forget-escaped-projection')), (_instance, state) => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('selective-forget-escaped-projection')), (_instance, state) => {
     const store = claimStore(state.storage.sql);
     const topic = 'DLD "workshop"';
     const at = '2026-10-03T12:00:00Z';
@@ -104,7 +104,7 @@ it('preserves unsupported JSON projections with escaped topic text instead of de
 });
 
 it('does not admit same-principal foreign-tenant history or forged witness labels to source selection', async () => {
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('selective-forget-source-tenant')), async (_instance, state) => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('selective-forget-source-tenant')), async (_instance, state) => {
     const topic = 'DLD-20261002-M3';
     const entry = { id: 'old', parentId: null, threadAnchorId: null, ownerId: 'owner', chatId: 'owner', createdAt: 1, role: 'user' as const, modelPayload: `${topic} workshop at 09:10 UTC`, appPayload: `${topic} workshop at 09:10 UTC`, modelProjection: { mode: 'include' as const } };
     await state.storage.put({
@@ -120,7 +120,7 @@ it('does not admit same-principal foreign-tenant history or forged witness label
 });
 
 it('preserves originals and incomplete custody when source coverage changes or cannot be proved', async () => {
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('selective-forget-incomplete')), (_instance, state) => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('selective-forget-incomplete')), (_instance, state) => {
     const store = claimStore(state.storage.sql);
     const episodes = episodeIndex(state.storage.sql);
     const topic = 'DLD-20261002-M3';
@@ -152,7 +152,7 @@ it('rejects foreign refs, altered substrings, markerless targets, truncated rows
 });
 
 it('canonicalises pending topic custody and never makes a failed barrier write literal-ready', async () => {
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('selective-forget-custody-failure')), (_instance, state) => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('selective-forget-custody-failure')), (_instance, state) => {
     let failBarrier = false;
     const sql = { exec: (...args: Parameters<SqlStorage['exec']>) => {
       if (failBarrier && String(args[0]).startsWith('INSERT INTO forget_barriers')) throw new Error('fixture barrier failure');
@@ -174,7 +174,7 @@ it('canonicalises pending topic custody and never makes a failed barrier write l
 
 for (const count of [32,33,64]) {
   it(`admits and authorises exact coverage for ${count} distinct source clauses`, async()=>{
-    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`forget-boundary-${count}`)),(_instance,state)=>{
+    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`forget-boundary-${count}`)),(_instance,state)=>{
       const topic='CAP'; const at='2026-10-05T00:00:00Z';
       const rows=Array.from({length:count},(_,i)=>({ref:`episodes:${i+1}:text`,text:`CAP note ${String(i).padStart(3,'0')}`}));
       const snapshot=forgetSnapshot(topic,rows);
@@ -196,7 +196,7 @@ it('does not authorise an over-limit source set or selected text set', async()=>
   const snapshot=forgetSnapshot('CAP',rows);
   expect(snapshot).toMatchObject({incomplete:true}); expect(snapshot.sources).toHaveLength(64);
   expect(selectedForgetTexts('CAP',snapshot,JSON.stringify({spans:rows,reviewed_refs:rows.map(row=>row.ref),complete:true}),snapshot)).toBeNull();
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('forget-boundary-over')),(_instance,state)=>{
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('forget-boundary-over')),(_instance,state)=>{
     const store=claimStore(state.storage.sql); const at='2026-10-05T00:00:00Z'; store.beginTopicCoverage('CAP',at);
     expect(()=>store.authoriseTopicCoverage('CAP',rows.map(row=>row.text),at)).toThrow('selected topic scope');
     expect(store.incompleteTopics()).toEqual(['CAP']); expect(store.pendingTopics()).toEqual([]);
@@ -212,7 +212,7 @@ it('keeps ordinary page exhaustion separate from unreadable inventory and never 
   expect(forgetSourceBatch('BAT',[rows[0]!,{...rows[0]!,text:'BAT changed note'}]).incomplete).toBe(true);
 });
 it('partial batch authorization settles only literals and retains original topic custody',async()=>{
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('forget-partial-custody')),(_instance,state)=>{
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('forget-partial-custody')),(_instance,state)=>{
     const memory=claimStore(state.storage.sql);const topic='BAT';const fact='BAT synthetic note';const at='2026-10-05T00:00:00Z';
     episodeIndex(state.storage.sql).add('partial','owner',fact,1);memory.beginTopicCoverage(topic,at);
     memory.authoriseTopicCoverage(topic,[fact],at,false);
@@ -226,7 +226,7 @@ it('partial batch authorization settles only literals and retains original topic
 });
 
 it('empty inventory recovery after interrupted admission preserves the forget barrier',async()=>{
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('forget-empty-crash')),(_instance,state)=>{
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('forget-empty-crash')),(_instance,state)=>{
     const memory=claimStore(state.storage.sql);const topic='BAT';const at='2026-10-05T00:00:00Z';
     memory.beginTopicCoverage(topic,at);
     expect(memory.barriers()).toEqual([]);
@@ -237,7 +237,7 @@ it('empty inventory recovery after interrupted admission preserves the forget ba
 });
 
 it('a failed empty recovery barrier leaves original custody incomplete',async()=>{
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('forget-empty-barrier-failure')),(_instance,state)=>{
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('forget-empty-barrier-failure')),(_instance,state)=>{
     const at='2026-10-05T00:00:00Z';const topic='BAT';let failing=false;
     const sql={exec:(...args:Parameters<SqlStorage['exec']>)=>{
       if(failing && args[0].includes('INTO forget_barriers'))throw new Error('synthetic barrier failure');

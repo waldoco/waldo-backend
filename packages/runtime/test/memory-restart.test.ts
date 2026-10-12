@@ -10,7 +10,7 @@ import { barrierPrompt, claimStore, turnMemoryPrompt } from '../src/memory/claim
 // not evict a real Durable Object, so it does not test the platform's eviction itself.
 const AT = '2026-02-01T00:00:00.000Z';
 const owner = (text: string, ref: string) => ({ kind: 'preference' as const, text, source: 'stated' as const, evidence: 'synthetic owner turn', origin: 'owner' as const, source_ref: `owner, ${ref}` });
-const stub = () => env.OWNER_DO!.get(env.OWNER_DO!.idFromName('memory-restart-a'));
+const stub = () => env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('memory-restart-a'));
 
 type Snapshot = { corrected: { oldId: number; newId: number }; kept: number; staleId: number; untrustedId: number; forgottenText: string; recall: Record<string, number[]> };
 const probes = { coffee: 'What is my favourite coffee order?', route: 'Which running route do I like?', seat: 'What flight seat do I want?', tea: 'Which tea blend do I drink?' };
@@ -70,7 +70,7 @@ describe('memory restart', () => {
   });
 
   it('another owner storage sees none of it', async () => {
-    const other = await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('memory-restart-b')), (_instance, state) => {
+    const other = await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('memory-restart-b')), (_instance, state) => {
       const store = claimStore(state.storage.sql);
       return { claims: store.claims().length, barriers: store.barriers().length, recall: store.recall(probes.coffee) };
     });

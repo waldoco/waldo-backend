@@ -13,7 +13,7 @@ vi.mock('../src/channels/telegram-api', async load => {
   } };
 });
 vi.mock('openai', () => ({ default: class { responses = { create: async () => { throw new Error('event fixture forbids model calls'); } }; } }));
-const { OwnerDO } = await import('../src/channels/owner-do');
+const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
 
 const directory = { presences: new Set<string>(), asked: 0, outage: false };
 const presence = (doName: string, subject: string) => `${doName}|telegram|${subject}`;
@@ -42,7 +42,7 @@ let sequence = 0;
 const driveEvent = async (identity: Record<string, string | boolean>, arrange?: () => void) => {
   const stub = env.TRACER_DO.get(env.TRACER_DO.idFromName(`event-owner-egress-${sequence++}`));
   return runInDurableObject(stub, async (_instance, state) => {
-    const owner = new OwnerDO(state, {
+    const owner = new TelegramOwnerDO(state, {
       ...env, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined,
       SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret',
     });

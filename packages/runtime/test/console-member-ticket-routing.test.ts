@@ -43,7 +43,7 @@ async function fixture(owner = MEMBER, issuedAt?: number) {
     }
     throw new Error('unexpected directory RPC');
   }));
-  const namespace = env.OWNER_DO!;
+  const namespace = env.TELEGRAM_OWNER_DO!;
   const member = namespace.get(namespace.idFromName(owner));
   const deploy = namespace.get(namespace.idFromName(DEPLOY));
   let link = '';
@@ -57,7 +57,7 @@ async function fixture(owner = MEMBER, issuedAt?: number) {
   const selected: string[] = [];
   const bindings = {
     ...env, ...directoryEnv, WALDO_OWNER_TELEGRAM_ID: SUBJECT,
-    OWNER_DO: {
+    TELEGRAM_OWNER_DO: {
       idFromName: (name: string) => { selected.push(name); return namespace.idFromName(name); },
       get: namespace.get.bind(namespace),
     },

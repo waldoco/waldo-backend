@@ -1,7 +1,7 @@
 // Exercise the deployed two-argument constructor. Provider and Telegram I/O stay local.
 import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi } from 'vitest';
-import { OwnerDO } from '../src/channels/owner-do';
+import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 
 vi.mock('../src/llm/transcriber', () => ({ selectTranscriber: () => ({ provider: 'openai', transcribe: async () => 'Deployed voice transcript marker' }) }));
 const seen = vi.hoisted(() => ({ requests: [] as unknown[] }));
@@ -29,7 +29,7 @@ it.each([
 ])('deployed two-argument constructor answers authenticated owner $kind with a fenced final', async ({ content, marker }) => {
   const id = ++sequence;
   const name = `deployed-mode-${id}`;
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const denyNetwork = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
       const url = String(input);
       if (url === 'https://api.telegram.org/bot12345:fictional/getFile') return Response.json({ ok: true, result: { file_path: 'fixture/bytes' } });
@@ -37,7 +37,7 @@ it.each([
       throw new Error('local proof denies unexpected network');
     });
     try {
-      const instance = new OwnerDO(state, { ...env, TELEGRAM_BOT_TOKEN: '12345:fictional', TELEGRAM_WEBHOOK_SECRET: 'fictional-inbox-secret', OPENAI_API_KEY: 'fictional-model-key' });
+      const instance = new TelegramOwnerDO(state, { ...env, TELEGRAM_BOT_TOKEN: '12345:fictional', TELEGRAM_WEBHOOK_SECRET: 'fictional-inbox-secret', OPENAI_API_KEY: 'fictional-model-key' });
       const response = await instance.fetch(new Request('https://local.invalid/enqueue', {
         method: 'POST', headers: { 'x-waldo-inbox-secret': 'fictional-inbox-secret', 'x-waldo-telegram-subject': '81101', 'x-waldo-do-name': name },
         body: JSON.stringify({ update_id: id, message: { message_id: id, from: { id: 81101, is_bot: false }, chat: { id: 81101, type: 'private' }, ...content } }),

@@ -2,7 +2,7 @@
 // an eviction gets one notice and is never replayed. Ids only are stored; the notice goes through the WhatsApp api, never Telegram.
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
-import { OwnerDO } from '../src/channels/owner-do';
+import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 import { WHATSAPP_PARTIAL_NOTICE } from '../src/channels/whatsapp-api';
 
 vi.mock('openai', () => ({ default: class {
@@ -10,22 +10,22 @@ vi.mock('openai', () => ({ default: class {
 } }));
 
 const SUBJECT = '15550001111';
-const harness = async (name: string, work: (ctx: { instance: OwnerDO; state: DurableObjectState; turn: ReturnType<typeof vi.fn>; urls: string[]; bodies: string[] }) => Promise<void>) => {
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+const harness = async (name: string, work: (ctx: { instance: TelegramOwnerDO; state: DurableObjectState; turn: ReturnType<typeof vi.fn>; urls: string[]; bodies: string[] }) => Promise<void>) => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const urls: string[] = []; const bodies: string[] = [];
     const net = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       urls.push(String(input)); bodies.push(String(init?.body)); return Response.json({ messages: [{ id: 'wamid.out' }] });
     });
-    const instance = new OwnerDO(state, { ...env, TELEGRAM_BOT_TOKEN: 'fictional-telegram-token', OPENAI_API_KEY: 'fictional-model-key', WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' });
+    const instance = new TelegramOwnerDO(state, { ...env, TELEGRAM_BOT_TOKEN: 'fictional-telegram-token', OPENAI_API_KEY: 'fictional-model-key', WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' });
     const turn = vi.spyOn(instance as unknown as { turn(): Promise<void> }, 'turn').mockImplementation(async () => undefined);
     try { await work({ instance, state, turn: turn as never, urls, bodies }); } finally { await state.storage.deleteAlarm(); turn.mockRestore(); net.mockRestore(); }
   });
 };
-const admit = (instance: OwnerDO, ids: string[], subject = SUBJECT) => instance.fetch(new Request('https://telegram-owner/whatsapp-admit', {
+const admit = (instance: TelegramOwnerDO, ids: string[], subject = SUBJECT) => instance.fetch(new Request('https://telegram-owner/whatsapp-admit', {
   method: 'POST', headers: { 'x-waldo-whatsapp-subject': subject },
   body: JSON.stringify({ messages: ids.map(id => ({ from: subject, id, type: 'text', text: { body: 'PRIVATE_WA_TEXT' } })) }),
 }));
-const settle = (instance: OwnerDO) => Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+const settle = (instance: TelegramOwnerDO) => Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
 const pending = (state: DurableObjectState) => [...state.storage.kv.list({ prefix: 'wa_pending:' })];
 
 it('admission writes an ids-only record before any turn runs, acks, and the record ends with the run', async () => {
@@ -176,7 +176,7 @@ it('reviewer repro: a cold instance restarting while the failure notice is in fl
     await admit(instance, ['wamid.review.notice']);
     await vi.waitFor(() => expect(release).toBeDefined());
     expect(pending(state)).toHaveLength(0);
-    const restarted = new OwnerDO(state, { ...env, TELEGRAM_BOT_TOKEN: 'fictional-telegram-token', OPENAI_API_KEY: 'fictional-model-key', WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' });
+    const restarted = new TelegramOwnerDO(state, { ...env, TELEGRAM_BOT_TOKEN: 'fictional-telegram-token', OPENAI_API_KEY: 'fictional-model-key', WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' });
     await restarted.alarm();
     expect(send).toHaveBeenCalledTimes(1);
     release(Response.json({ messages: [{ id: 'wamid.out' }] })); await settle(instance);

@@ -33,7 +33,7 @@ export function commonBrowserAllowanceDiagnostic(options: Readonly<{
  try {
   if(env.WALDO_ENVIRONMENT !== 'staging' || storage.kv.get('do_name') !== owner.doName
    || storage.kv.get('telegram_subject') !== owner.subject || storage.kv.get('telegram_unlinked') === true
-   || env.OWNER_DO?.idFromName(owner.doName).toString() !== options.actualDoId) return result;
+   || env.TELEGRAM_OWNER_DO?.idFromName(owner.doName).toString() !== options.actualDoId) return result;
   result.providerReady = cloudflareBrowserProviderReadiness(env);
   const ownerId = `prn_${owner.directoryOwnerId.toLowerCase().replaceAll('-', '')}`;
   const ledgers = [...storage.kv.list<any>({prefix:'common-spend:'})];

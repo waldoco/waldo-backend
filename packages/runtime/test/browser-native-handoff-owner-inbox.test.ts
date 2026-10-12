@@ -1,6 +1,6 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
-import { OwnerDO } from '../src/channels/owner-do';
+import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 import {workspaceStore} from '@waldo/workspace';
 import {workspaceOwnerHost} from '../src/channels/workspace-host';
 import {registerCommonBrowserSdk} from '../src/channels/common-staging-registration';
@@ -40,12 +40,12 @@ it.each(['resume','restart'])('protocol double: real owner inbox and console han
  commonBrowserFixture.reset();proof.inputs=[];proof.delivered=[];proof.outputs=[];proof.phase='main';proof.phaseCalls=0;proof.sessionHandle='';
  const doName=proof.doName=`native-handoff-${crypto.randomUUID()}`,subject=Number(proof.subject);
  if(mode==='resume')registerCommonBrowserSdk(commonBrowserMeteredFixtureLoader);
- const stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName));
+ const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(doName));
  await runInDurableObject(stub,async(_instance,state)=>{
   const denied=vi.spyOn(globalThis,'fetch').mockRejectedValue(Error('live network forbidden'));
   const binding={fetch:vi.fn(async()=>new Response('{}'))};
   const publicEnv={...env,COMMON_OWNER_TASKS:'0',WALDO_ENVIRONMENT:'staging',LANGFUSE_CAPTURE_TEXT:'true',WALDO_EGRESS_ALLOWLIST:'*',WALDO_TOOL_OFFLOAD:'0',BROWSER:binding as never,RESPONSIBILITY_RATE_LIMITER:{limit:async()=>({success:true})} as never,TELEGRAM_BOT_TOKEN:'12345:fictional',TELEGRAM_WEBHOOK_SECRET:'synthetic-handoff-secret',OPENAI_API_KEY:'synthetic-model-key'};
-  const instance=new OwnerDO(state,publicEnv);let updateId=9982100;
+  const instance=new TelegramOwnerDO(state,publicEnv);let updateId=9982100;
   const send=async(text:string)=>{
    const id=++updateId;expect((await instance.fetch(new Request('https://local.invalid/enqueue',{method:'POST',headers:{'x-waldo-inbox-secret':publicEnv.TELEGRAM_WEBHOOK_SECRET,'x-waldo-telegram-subject':String(subject),'x-waldo-do-name':doName},body:JSON.stringify({update_id:id,message:{message_id:id,from:{id:subject,is_bot:false},chat:{id:subject,type:'private'},text}})}))).status).toBe(200);
    for(let i=0;i<8;i++){await instance.alarm();const row=state.storage.kv.get<any[]>('telegram_owner_inbox_v1')?.find(row=>row.updateId===id);if(row?.closedAt!==undefined||row?.state==='completed'||row?.state==='consumed')return;}throw Error('Owner turn did not finish');
@@ -56,7 +56,7 @@ it.each(['resume','restart'])('protocol double: real owner inbox and console han
    expect(proof.outputs.at(-1)).toMatchObject({ok:true,data:{owner_login:'pending',console_url:'https://local.invalid/console/browser-handoff'}});
    expect(nativeHandoffDouble.commands.filter(command=>command==='Cloudflare.handoff')).toHaveLength(1);expect(nativeHandoffDouble.commands).not.toContain('Cloudflare.getLiveView');
    if(mode==='restart'){
-    const restarted=new OwnerDO(state,publicEnv);
+    const restarted=new TelegramOwnerDO(state,publicEnv);
     await vi.waitFor(async()=>{await restarted.alarm();expect(commonBrowserFixture.ends).toBe(1);},{timeout:3000,interval:50});
     expect(commonBrowserFixture.allocations).toBe(1);expect(commonBrowserFixture.pages).toHaveLength(0);return;
    }

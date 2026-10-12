@@ -7,14 +7,14 @@ it('missing owner-local store is honest unavailable; schema denies ownerID/conte
 // Exercise the real owner-local store, not just a permissive retrieval stub.
 it('real separate DO memory stores cannot cross owner, forget removes hits',async()=>{
  const {env}=await import('cloudflare:workers');const {runInDurableObject}=await import('cloudflare:test');const {claimStore}=await import('../src/memory/claims');
- const a=env.OWNER_DO!.get(env.OWNER_DO!.idFromName('context-read-a')),b=env.OWNER_DO!.get(env.OWNER_DO!.idFromName('context-read-b'));
+ const a=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('context-read-a')),b=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('context-read-b'));
  const result=await runInDurableObject(a,async(_i,state)=>{const s=claimStore(state.storage.sql);s.add({kind:'preference',text:'Cedar gym original',source:'owner-chat',evidence:'Cedar original',origin:'owner',source_ref:'owner-1'},'2026-09-30T01:00:00Z',77);const h=ownerContextHandler(s);const before=await h.handle({topic:'Cedar',limit:8},{} as never);s.forget(77);const after=await h.handle({topic:'Cedar',limit:8},{} as never);return{before,after};});
  expect(result.before).toMatchObject({data:{claims:[{text:'Cedar gym original'}]}});expect(result.after).toMatchObject({data:{claims:[]}});
  const other=await runInDurableObject(b,async(_i,state)=>ownerContextHandler(claimStore(state.storage.sql)).handle({topic:'Cedar',limit:8},{} as never));expect(other).toMatchObject({data:{claims:[]}});
 });
 
 it('real transactional correction returns only replacement with supersession evidence',async()=>{
- const {env}=await import('cloudflare:workers');const {runInDurableObject}=await import('cloudflare:test');const {claimStore}=await import('../src/memory/claims');const stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName('context-correct'));
+ const {env}=await import('cloudflare:workers');const {runInDurableObject}=await import('cloudflare:test');const {claimStore}=await import('../src/memory/claims');const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('context-correct'));
  const result=await runInDurableObject(stub,async(_i,state)=>{const s=claimStore(state.storage.sql,work=>state.storage.transactionSync(work));s.add({kind:'preference',text:'Birch gym mornings',source:'owner-chat',evidence:'old',origin:'owner',source_ref:'original'},'2026-09-30T01:00:00Z',77);expect(s.correct(77,{kind:'preference',text:'Birch gym evenings unless meeting',source:'owner-chat',evidence:'new conditional original',origin:'owner',source_ref:'correction'},'2026-09-30T02:00:00Z')).toBe(true);return ownerContextHandler(s).handle({topic:'Birch',limit:8},{} as never);});
  expect(result).toMatchObject({data:{claims:[{text:'Birch gym evenings unless meeting',supersedes_id:77,source_ref:'correction'}]}});expect((result as {data:{claims:unknown[]}}).data.claims).toHaveLength(1);
 });

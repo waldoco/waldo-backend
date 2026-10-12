@@ -211,7 +211,7 @@ describe('google callback in the Worker', () => {
       },
     };
   };
-  const env = (ns: unknown) => ({ GOOGLE_CLIENT_ID: 'cid', GOOGLE_CLIENT_SECRET: 'cs', TELEGRAM_WEBHOOK_SECRET: SECRET, OWNER_DO: ns }) as never;
+  const env = (ns: unknown) => ({ GOOGLE_CLIENT_ID: 'cid', GOOGLE_CLIENT_SECRET: 'cs', TELEGRAM_WEBHOOK_SECRET: SECRET, TELEGRAM_OWNER_DO: ns }) as never;
   const callback = (query: string) => new Request(`https://w.example/oauth/google/callback?${query}`);
 
   it('forwards a verified attempt to the owner Durable Object and renders its outcome', async () => {

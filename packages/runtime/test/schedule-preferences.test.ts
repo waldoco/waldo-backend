@@ -20,7 +20,7 @@ const NOW = Date.parse('2026-10-07T02:00:00Z');
 const TZ = 'Asia/Kolkata';
 const deps = (): Deps => ({ now: () => NOW, newRunId: () => 'run-fixed', newOutboxId: () => 'out-fixed', sha256Hex: async () => 'sha-fixed' });
 const withOwner = <T>(work: (ctx: ReturnType<typeof build>) => Promise<T>) =>
-  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`sched-prefs-${sequence++}`)), async (_i, state) => {
+  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`sched-prefs-${sequence++}`)), async (_i, state) => {
     ensureSchema(state.storage);
     return work(build(state));
   });

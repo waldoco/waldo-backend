@@ -6,7 +6,7 @@ import { claimStore } from '../src/memory/claims';
 // Custody is owner-local: the same topic in two owners' stores never crosses. Owner B's incomplete topic and source row stay B's
 // when A completes and clears the same topic.
 const open = <T>(name: string, run: (sql: SqlStorage, store: ReturnType<typeof claimStore>) => T) =>
-  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), (_i, state) => run(state.storage.sql, claimStore(state.storage.sql, work => state.storage.transactionSync(work))));
+  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), (_i, state) => run(state.storage.sql, claimStore(state.storage.sql, work => state.storage.transactionSync(work))));
 it('same topic in two owners: clearing one leaves the other incomplete with its source intact', async () => {
   const topic = 'ISO-757-TOPIC', fact = `${topic} likes cobalt paper`, at = '2026-10-05T00:00:00Z';
   await open('iso-owner-b', (sql, store) => { episodeIndex(sql).add('b-src', 'owner', fact, 1); store.beginTopicCoverage(topic, at); });

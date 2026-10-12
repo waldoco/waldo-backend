@@ -5,7 +5,7 @@ import { WALDO_CHAT_MODEL } from '@waldo/contracts';
 import { evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OwnerDirectory, OwnerRoute } from '../src/identity/owner-directory';
-import type { OwnerDO } from '../src/channels/owner-do';
+import type { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 import { IsolatedSourceWorld } from '../scenarios/isolated-source-world';
 import { isolatedCalendarEffectClient, isolatedGoogleClient } from '../scenarios/isolated-google-client';
 import { captureFixtureAdapters } from '../evals/fixture-adapter-capture';
@@ -13,8 +13,8 @@ import { auditIsolatedWorld } from '../evals/isolated-world-audit';
 import {commonBrowserFixture,commonBrowserFixtureLoader} from './fixtures/common-browser-sdk';
 import type { NativeManifest } from '../evals/native-manifest';
 
-vi.mock('../src/channels/owner-do', async load => {
-  const original = await load<typeof import('../src/channels/owner-do')>();
+vi.mock('../src/channels/telegram-owner-do', async load => {
+  const original = await load<typeof import('../src/channels/telegram-owner-do')>();
   const { OpenAIResponsesAdapter } = await import('../src/llm/openai');
   const {configureCommonPublicBrowser}=await import('../src/channels/common-public-browser-configuration');
   const {commonBrowserFixtureLoader:registeredFixtureLoader}=await import('./fixtures/common-browser-sdk');
@@ -195,7 +195,7 @@ const callback = async (subject: number, from: number, data: string, updateId: n
   await drained(subject);
   return response;
 };
-const doStub = (subject: number) => env.OWNER_DO!.get(env.OWNER_DO!.idFromName(route(subject).doName)) as DurableObjectStub<OwnerDO>;
+const doStub = (subject: number) => env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(route(subject).doName)) as DurableObjectStub<TelegramOwnerDO>;
 
 afterEach(() => { vi.useRealTimers(); });
 describe('actual owner interruption recovery', () => {

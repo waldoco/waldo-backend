@@ -16,7 +16,7 @@ const auth = {
   readOwnerCookie: async () => null,
 } as unknown as ConsoleAuth;
 const env = {
-  OWNER_DO: { idFromName: (name: string) => name, get: () => ({ fetch: async () => new Response('fixture-console-cookie') }) } as unknown as DurableObjectNamespace,
+  TELEGRAM_OWNER_DO: { idFromName: (name: string) => name, get: () => ({ fetch: async () => new Response('fixture-console-cookie') }) } as unknown as DurableObjectNamespace,
   RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } as RateLimit,
 };
 createServer(async (req, res) => {

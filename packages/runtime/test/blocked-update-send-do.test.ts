@@ -37,16 +37,16 @@ vi.mock('../src/channels/telegram-turn', async load => {
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
-const { OwnerDO } = await import('../src/channels/owner-do');
+const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
 
 it.each([true, false])('update card pushed state follows the send: blocked=%s', async blocked => {
   const name = `blocked-update-${blocked}`;
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const originalNow = Date.now;
     const at = Date.parse('2026-10-03T08:05:00Z');
     Date.now = () => at;
     try {
-      const owner = new OwnerDO(state, { ...env, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' });
+      const owner = new TelegramOwnerDO(state, { ...env, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' });
       state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
       await state.storage.put('origin', 'https://fixture.invalid');
       await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);

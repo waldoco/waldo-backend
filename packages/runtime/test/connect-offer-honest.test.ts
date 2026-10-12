@@ -40,7 +40,7 @@ vi.mock('../src/connectors/google', async load => {
     calendarPage: async () => { health('invalid_grant'); throw new original.GoogleError(401, 'invalid_grant'); },
   }) };
 });
-const { OwnerDO } = await import('../src/channels/owner-do');
+const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
 
 const OWNER_ID = '6b1c2d3e-4f50-4a61-8b72-93a4b5c6d7e8';
 const google = { GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', TELEGRAM_WEBHOOK_SECRET: 'synthetic-state-secret' };
@@ -69,11 +69,11 @@ const traceHops = (state: DurableObjectState) => state.storage.sql.exec<{ hop: s
 describe('connecting Google from a chat turn', () => {
   it('on the app, no button is sent or claimed, no link is minted, and the model is told where the owner connects', async () => {
     const name = 'connect-app-turn';
-    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
       claimStore(state.storage.sql); ensureSchema(state.storage);
       state.storage.kv.put('do_name', name);
       await state.storage.put('origin', 'https://fixture.invalid');
-      const owner = new OwnerDO(state, { ...env, ...directory, ...google, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+      const owner = new TelegramOwnerDO(state, { ...env, ...directory, ...google, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
       try {
         const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ client_message_id: 'client-connect-0001', text: ASK }) }));
         expect(sent.status).toBe(202);
@@ -95,12 +95,12 @@ describe('connecting Google from a chat turn', () => {
 
   it('on the app, a grant that stops working mints no link: the Connections screen shows it needs a reconnect', async () => {
     const name = 'connect-app-reauth';
-    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
       claimStore(state.storage.sql); ensureSchema(state.storage);
       state.storage.kv.put('do_name', name);
       await state.storage.put('origin', 'https://fixture.invalid');
       await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
-      const owner = new OwnerDO(state, { ...env, ...directory, ...google, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+      const owner = new TelegramOwnerDO(state, { ...env, ...directory, ...google, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
       try {
         const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ client_message_id: 'client-reauth-0001', text: READ }) }));
         expect(sent.status).toBe(202);
@@ -121,12 +121,12 @@ describe('connecting Google from a chat turn', () => {
     ['blocked', false],
   ] as const)('on Telegram, the model hears of a button only when one was delivered (%s)', async (_case, deliver) => {
     const name = `connect-telegram-${deliver}`;
-    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
       const originalNow = Date.now;
       let now = Date.parse('2026-10-12T06:00:00Z');
       Date.now = () => now;
       telegram.deliver = deliver;
-      const owner = new OwnerDO(state, { ...env, ...directory, ...google, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture' });
+      const owner = new TelegramOwnerDO(state, { ...env, ...directory, ...google, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture' });
       state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
       await state.storage.put('origin', 'https://fixture.invalid');
       try {

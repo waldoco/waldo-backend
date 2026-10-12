@@ -49,8 +49,8 @@ describe('actual owner DO admin route',()=>{
  it('keeps session isolation, JSON dispatch and CSRF ahead of signed writes',async()=>{
   const {env:bindings}=await import('cloudflare:workers');const {runInDurableObject}=await import('cloudflare:test');
   const {consoleAccess}=await import('../src/channels/console');
-  const stub=bindings.OWNER_DO!.get(bindings.OWNER_DO!.idFromName('admin-json-test'));
-  const other=bindings.OWNER_DO!.get(bindings.OWNER_DO!.idFromName('admin-json-other'));
+  const stub=bindings.TELEGRAM_OWNER_DO!.get(bindings.TELEGRAM_OWNER_DO!.idFromName('admin-json-test'));
+  const other=bindings.TELEGRAM_OWNER_DO!.get(bindings.TELEGRAM_OWNER_DO!.idFromName('admin-json-other'));
   const token=await runInDurableObject(stub,(_instance,state)=>consoleAccess(state.storage).grant());
   const cookie=`waldo_console=${token}`;
   expect((await other.fetch('https://w.test/console/admin',{headers:{cookie,accept:'application/json'}})).status).toBe(401);

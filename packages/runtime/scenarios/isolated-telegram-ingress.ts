@@ -71,7 +71,7 @@ export const isolatedTelegramIngress = (
       const response = await handleTelegramWebhook(new Request('https://fixture.invalid/telegram/webhook', {
         method: 'POST', headers: { 'x-telegram-bot-api-secret-token': 'fixture-secret' },
         body: JSON.stringify({ update_id: ++sequence, message: { from: { id: subject }, chat: { id: subject, type: 'private' }, text } }),
-      }), { TELEGRAM_WEBHOOK_SECRET: 'fixture-secret', OWNER_DO: namespace }, (work) => pending.push(work), directory);
+      }), { TELEGRAM_WEBHOOK_SECRET: 'fixture-secret', TELEGRAM_OWNER_DO: namespace }, (work) => pending.push(work), directory);
       if (response.status !== 200) throw new Error(`test ingress returned ${response.status}`);
       await Promise.all(pending);
       return snapshot(owner);

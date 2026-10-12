@@ -12,7 +12,7 @@ import { TelegramRejection } from '../src/channels/telegram-api';
 
 
 it('persists heartbeat intent without claiming delivery or starting cooldown', async () => {
-  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('heartbeat-outbox-tracer'));
+  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('heartbeat-outbox-tracer'));
   await runInDurableObject(stub, async (_instance, state) => {
     ensureSchema(state.storage);
     const now = Date.parse('2026-09-26T10:30:00Z');
@@ -39,7 +39,7 @@ const withTransport = async (work: (f: {
   tick: () => Promise<unknown>; advance: (ms?: number) => void; now: () => number;
   drain: (send: (p: { chat_id: number; text: string }) => Promise<unknown>, allowed?: boolean) => Promise<void>;
 }) => Promise<void>) => {
-  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`heartbeat-transport-${sequence++}`));
+  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`heartbeat-transport-${sequence++}`));
   await runInDurableObject(stub, async (_instance, state) => {
     ensureSchema(state.storage);
     let now = Date.parse('2026-09-26T10:30:00Z');

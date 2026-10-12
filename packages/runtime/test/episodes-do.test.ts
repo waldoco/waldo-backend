@@ -22,7 +22,7 @@ describe('episode history', () => {
   });
 
   it('indexes saved turns, backfills old ones, searches and reads a day back', async () => {
-    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('episodes'));
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('episodes'));
     await runInDurableObject(stub, async (_instance, state) => {
       const kv = durableConversationStore(state.storage);
       await kv.save([entry('tg-1', 'My knee hurts after running')], 'tg-1');
@@ -54,7 +54,7 @@ describe('episode history', () => {
   });
 
   it('re-anchors a future stale-zone nightly row without replaying an occurrence', async () => {
-    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('nightly-zone-reconcile'));
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('nightly-zone-reconcile'));
     await runInDurableObject(stub, async (_instance, state) => {
       ensureSchema(state.storage);
       const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
@@ -82,7 +82,7 @@ describe('episode history', () => {
   });
 
   it('arms one nightly memory pass at 03:00 owner time', async () => {
-    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('nightly'));
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('nightly'));
     await runInDurableObject(stub, async (_instance, state) => {
       ensureSchema(state.storage);
       const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
@@ -99,7 +99,7 @@ describe('episode history', () => {
   // (price, time) outside the fragment was unrecoverable, and the model asserted an older
   // answer as the latest. The hit now names its source turn and the full text is retrievable.
   it('a hit names its exact row and the full text behind a truncated snippet is retrievable', async () => {
-    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('episodes-source'));
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('episodes-source'));
     await runInDurableObject(stub, async (_instance, state) => {
       const index = episodeIndex(state.storage.sql);
       const full = `latest options test arrive ${'so '.repeat(30)}A leaves 16:30 for 22k, B leaves 17:45 for 18.5k, C leaves 19:10 for 15k`;
@@ -115,7 +115,7 @@ describe('episode history', () => {
   });
 
   it('the same entry_id indexed twice keeps both rows, and each hit recovers its own body', async () => {
-    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('episodes-dup'));
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('episodes-dup'));
     await runInDurableObject(stub, async (_instance, state) => {
       const index = episodeIndex(state.storage.sql);
       index.add('tg-5', 'owner', 'budget is 22k for the trip', 100);
@@ -131,7 +131,7 @@ describe('episode history', () => {
   });
 
   it('search stays relevance-ranked: a newer, less relevant turn is not promoted', async () => {
-    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('episodes-order'));
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('episodes-order'));
     await runInDurableObject(stub, async (_instance, state) => {
       const index = episodeIndex(state.storage.sql);
       index.add('tg-1', 'owner', 'flight options', Date.parse('2026-09-30T10:00:00Z'));

@@ -7,7 +7,7 @@ import { OWNER_REQUEST_HOP, parseHarnessCommand, traceBook } from '../src/channe
 
 let sequence = 0;
 const withSql = <T>(fn: (sql: SqlStorage) => T) =>
-  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`harness-${sequence++}`)), (_instance, state) => fn(state.storage.sql));
+  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`harness-${sequence++}`)), (_instance, state) => fn(state.storage.sql));
 
 describe('owner harness', () => {
   it('parses fire, trace and e2e commands and ignores ordinary text', () => {

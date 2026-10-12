@@ -8,7 +8,7 @@ const AT = '2026-10-01T00:00:00.000Z';
 const HEALTH_SAID = 'my HbA1c was 9.1 last week and I take metformin 500mg';
 const CONTACT_SAID = 'Riya number is 98765 43210 and her email is riya@example.com';
 const withMemory = async (name: string, work: (s: ReturnType<typeof setup>) => Promise<void>) =>
-  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), (_i, state) => work(setup(state)));
+  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), (_i, state) => work(setup(state)));
 const setup = (state: DurableObjectState) => {
   const store = claimStore(state.storage.sql, fn => state.storage.transactionSync(fn));
   const handlers = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', now: () => new Date(AT), hideHistory: async () => undefined });

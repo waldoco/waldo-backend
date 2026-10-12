@@ -21,7 +21,7 @@ export const CONSOLE_OTP_VERIFY_LIMIT = 10;
 export const CONSOLE_AUTH_IP_LIMIT = 30;
 export const CONSOLE_AUTH_WINDOW_SECONDS = 15 * 60;
 
-type ConsoleEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
+type ConsoleEnv = OwnerDirectoryEnv & Readonly<{ TELEGRAM_OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
 
 const DOWNLOAD_RETURN_PATTERN = /^\/console\/workspace\/file\?id=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})&revision=([1-9]\d*)$/;
 // A continuation is a read-only file locator, never an arbitrary redirect or grant.
@@ -175,7 +175,7 @@ const signinCodeForm = (email: string, phone: string, invite: string, note = '',
 // Returns null when Supabase is not configured; the caller keeps the Telegram one-time link sign-in.
 export const handleConsole = async (request: Request, env: ConsoleEnv, auth: ConsoleAuth | null = consoleAuth(env), requestTrace: string = consoleTrace()): Promise<Response | null> => {
   if (new URL(request.url).pathname === CONSOLE_SIGNUP_PATH || new URL(request.url).pathname.startsWith(`${CONSOLE_SIGNUP_PATH}/`)) return withConsoleTrace(await handleSignup(request, env, auth, undefined, requestTrace), requestTrace);
-  const owners = env.OWNER_DO;
+  const owners = env.TELEGRAM_OWNER_DO;
   if (!auth || !owners) return null;
   const url = new URL(request.url);
   const trace = requestTrace;

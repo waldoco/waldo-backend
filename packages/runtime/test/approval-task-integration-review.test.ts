@@ -11,7 +11,7 @@ import { taskSourceFetch } from '../src/tools/task-source-io';
 
 const args = { source: 'google_tasks' as const, account: 'owner@example.test', action: 'create' as const, task_list_id: 'list-a', changes: { title: 'Exact task' }, reason: 'Owner asked' };
 const taskFixture = async (name: string, work: (state: DurableObjectState) => Promise<void>) => {
-  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
+  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
   await runInDurableObject(stub, async (_instance, state) => work(state));
 };
 const adapter = () => ({

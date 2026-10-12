@@ -24,7 +24,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
-const { OwnerDO } = await import('../src/channels/owner-do');
+const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
 
 const OWNER_ID = '7c2e9a14-3b5d-4f60-8a71-92b3c4d5e6f7';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
@@ -43,15 +43,15 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
-type Owner = InstanceType<typeof OwnerDO>;
+type Owner = InstanceType<typeof TelegramOwnerDO>;
 const headers = (name: string) => ({ 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' });
 const withOwner = <T>(name: string, work: (owner: Owner, state: DurableObjectState) => Promise<T>) =>
-  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql);
     ensureSchema(state.storage);
     state.storage.kv.put('do_name', name);
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     try { return await work(owner, state); } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
   });
 const send = async (owner: Owner, state: DurableObjectState, name: string, clientId: string, text: string) => {

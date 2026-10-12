@@ -23,7 +23,7 @@ const FULL = `latest options test arrive ${'so '.repeat(30)}A leaves 16:30 for 2
 
 // Model-call layer: the scripted model calls search_episodes through the real owner turn,
 // dispatcher and hooks, and the next model input must carry what the tool returned.
-const run = (name: string, args: Record<string, unknown>, body = FULL) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_i, state) => {
+const run = (name: string, args: Record<string, unknown>, body = FULL) => runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_i, state) => {
   calls.inputs = []; calls.args = args; calls.readSlice = name.startsWith('se-big');
   const index = episodeIndex(state.storage.sql);
   index.add('tg-9', 'owner', body, Date.parse('2026-10-01T02:31:18Z'));

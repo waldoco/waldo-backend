@@ -21,7 +21,7 @@ const setup = () => {
   const now = Date.now();
   const operator = { scope: 'verified_owners', policy: { ref: 'automatic-test', createdAt: now - 1000, expiresAt: now + 60000, allowedOrigins: ['*'], maxAllocations: 1, maxReservedBrowserMs: 120000, lifetimeMs: 60000, maxScreenshotBytes: 1024 }, billing: { cloudflareAccountId: 'a'.repeat(32), conservativeWorstCase: true }, spend: { limitMicrousd: 10000000, maxCalls: 100, validUntil: now + 60000 } };
   const binding = { fetch: vi.fn(async () => new Response('{}')) };
-  const env = { WALDO_ENVIRONMENT: 'staging', COMMON_BROWSER_REGISTRATION: JSON.stringify(operator), OPENAI_API_KEY: 'synthetic-model-key', BROWSER: binding, OWNER_DO: { idFromName: (name: string) => ({ toString: () => name === 'automatic-owner' ? 'physical-owner' : 'foreign' }) } };
+  const env = { WALDO_ENVIRONMENT: 'staging', COMMON_BROWSER_REGISTRATION: JSON.stringify(operator), OPENAI_API_KEY: 'synthetic-model-key', BROWSER: binding, TELEGRAM_OWNER_DO: { idFromName: (name: string) => ({ toString: () => name === 'automatic-owner' ? 'physical-owner' : 'foreign' }) } };
   const scope: RunEffectScope = { runId: crypto.randomUUID(), attempt: crypto.randomUUID(), deadline: now + 60000, signal: new AbortController().signal, admit: vi.fn(), commit: work => work() };
   let activeScope=scope;
   const runtime = () => ownerBrowserRuntime({ env: env as never, storage, actualDoId: 'physical-owner', activeScope: () => activeScope });

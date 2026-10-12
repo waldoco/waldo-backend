@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { claimStore } from '../src/memory/claims';
 
-const owner = (name: string) => env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
+const owner = (name: string) => env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
 const base = { kind: 'preference', source: 'stated', evidence: 'synthetic owner turn', origin: 'owner', source_ref: 'owner, alias-fixture' };
 const AT = '2026-10-02T00:00:00Z';
 

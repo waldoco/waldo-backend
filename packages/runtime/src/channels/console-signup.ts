@@ -32,7 +32,7 @@ const withCookie = (response: Response, value: string) => {
   return response;
 };
 const redirect = (value: string, notice: 'unconfirmed' | 'throttled' | null = null) => withCookie(new Response(null, { status: 303, headers: { location: notice ? `${CONSOLE_SIGNUP_PATH}?send=${notice}` : CONSOLE_SIGNUP_PATH, 'cache-control': 'no-store', 'referrer-policy': 'same-origin' } }), value);
-type SignupEnv = OwnerDirectoryEnv & Readonly<{ RESPONSIBILITY_RATE_LIMITER?: RateLimit; OWNER_DO?: DurableObjectNamespace }>;
+type SignupEnv = OwnerDirectoryEnv & Readonly<{ RESPONSIBILITY_RATE_LIMITER?: RateLimit; TELEGRAM_OWNER_DO?: DurableObjectNamespace }>;
 // Completion admits only the verified invite identity. Phone collection never grants channel authority.
 export const handleSignup = async (request: Request, env: SignupEnv, auth: ConsoleAuth | null, signup: SignupAuth | null = signupAuth(env), trace = consoleTrace()): Promise<Response> => {
   const url = new URL(request.url);
@@ -96,7 +96,7 @@ export const handleSignup = async (request: Request, env: SignupEnv, auth: Conso
     const rawPhone = String(form.get('phone') ?? '');
     const compact = rawPhone.replace(/[\s().-]/g, '');
     if (compact !== '' && !/^\+[1-9]\d{6,14}$/.test(compact)) return finish(progress!, 'Enter a phone with country code, or leave it blank.');
-    if (action === '/complete' && !env.OWNER_DO) return finish(progress!, unavailable);
+    if (action === '/complete' && !env.TELEGRAM_OWNER_DO) return finish(progress!, unavailable);
     let value: string | null;
     try { value = await signup.collectPhone(progress!, compact); }
     catch { return finish(progress!, unavailable); }
@@ -110,7 +110,7 @@ export const handleSignup = async (request: Request, env: SignupEnv, auth: Conso
       const doName = await signup.complete(saved, compact);
       if (!doName) return withCookie(finish(saved, unavailableCompletion), value);
       const grant = await withRequestTimeout(async signal => {
-        const response = await env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName))
+        const response = await env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(doName))
           .fetch('https://telegram-owner/grant-console', { method: 'POST', headers: { 'x-waldo-do-name': doName }, signal });
         return response.ok ? await response.text() : null;
       });

@@ -12,8 +12,6 @@
 - [Trace lookup (September 29)](architecture/OBSERVABILITY_LOOKUP_2026-09-29.md): Activity trace keys, privacy-safe reason codes, console request correlation and receipt caveats.
 - [New developer map (September 28)](architecture/NEW_DEVELOPER_GUIDE_2026-09-28.md): current owner routing, turn, tool, memory, dashboard, health and verification paths. This supersedes old capability assumptions in dated source maps; it is not a release receipt.
 
-- Rename (12 October 2026): the per-owner Durable Object is `OwnerDO` in `packages/runtime/src/channels/owner-do.ts`, bound as `OWNER_DO` (wrangler migration v6 renames the class; storage is unchanged). Older documents below still say `TelegramOwnerDO`, `TELEGRAM_OWNER_DO` and `telegram-owner-do.ts`; read them as the same object.
-
 ## Supporting references
 
 - [Implementation contracts](planning/waldo-agent-mvp/IMPLEMENTATION_CONTRACTS.md): staged conversation publication/deletion, capability dispatch, connections and provider recovery.

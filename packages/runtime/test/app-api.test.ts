@@ -23,7 +23,7 @@ const fakeAuth = (over: Partial<ConsoleAuth> = {}) => {
 };
 const forwards: Request[] = [];
 const env = () => ({
-  OWNER_DO: { idFromName: (n: string) => n, get: () => ({ fetch: async (r: Request) => { forwards.push(r); return Response.json({ forwarded: true }); } }) },
+  TELEGRAM_OWNER_DO: { idFromName: (n: string) => n, get: () => ({ fetch: async (r: Request) => { forwards.push(r); return Response.json({ forwarded: true }); } }) },
   RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) },
   SUPABASE_PROJECT_URL:'https://directory.fixture.invalid',SUPABASE_PUBLISHABLE_KEY:'fictional-public-key',WALDO_ROUTER_HMAC_SECRET:'fictional-router-secret-00000000000000000',
 }) as never;
@@ -174,7 +174,7 @@ it('fences again once the session is revoked, and a failed second fence does not
   const owners={idFromName:(n:string)=>n,get:()=>({fetch:async()=>{calls.push('fence');return new Response('{}',{status:calls.filter(call=>call==='fence').length===1?200:503});}})};
   const fetcher=vi.spyOn(globalThis,'fetch').mockImplementation(async()=>{calls.push('push');return Response.json(0);});
   try{
-    const response=await handleApp(post('/app/v1/auth/signout',{},{authorization:`Bearer ${CREDENTIAL}`}),{...env() as object,OWNER_DO:owners} as never,auth);
+    const response=await handleApp(post('/app/v1/auth/signout',{},{authorization:`Bearer ${CREDENTIAL}`}),{...env() as object,TELEGRAM_OWNER_DO:owners} as never,auth);
     expect([response!.status,await response!.json()]).toEqual([200,{result:'revoked'}]);
     expect(calls).toEqual(['fence','push','revoke','fence']);
   }finally{fetcher.mockRestore();}
@@ -184,7 +184,7 @@ it('fences the session\'s in-flight work before revoking it, and revokes nothing
   const fences:Request[]=[];
   const owners=(status:number)=>({idFromName:(n:string)=>n,get:()=>({fetch:async(r:Request)=>{fences.push(r);return new Response('{}',{status});}})});
   const headers={authorization:`Bearer ${CREDENTIAL}`};
-  const withOwners=(status:number)=>({...env() as object,OWNER_DO:owners(status)}) as never;
+  const withOwners=(status:number)=>({...env() as object,TELEGRAM_OWNER_DO:owners(status)}) as never;
   const fetcher=vi.spyOn(globalThis,'fetch').mockImplementation(async()=>Response.json(0));
   try{
     const failing=fakeAuth();

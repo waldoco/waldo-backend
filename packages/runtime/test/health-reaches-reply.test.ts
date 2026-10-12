@@ -52,7 +52,7 @@ const expectAbsent = (instructions: string) => {
 const responderWith = (health: boolean, log?: (entry: TurnLogEntry) => void) =>
   createOwnerResponder('fixture', undefined, undefined, log, undefined, [], undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, async () => health ? readNow() : null);
 const inOwner = <T,>(name: string, work: () => Promise<T>) =>
-  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), work);
+  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), work);
 const lastInstructions = () => seen.bodies.at(-1)?.instructions ?? '';
 
 it('a messaging owner turn tells the model the shared health context, in its own measured section', async () => {

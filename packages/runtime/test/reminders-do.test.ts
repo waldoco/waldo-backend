@@ -9,7 +9,7 @@ import { productionDeps } from '../src/seams/deps';
 
 describe('reminder book on the Telegram owner object', () => {
   it('schedules, lists, fires and cancels reminders beside chat memory', async () => {
-    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('reminder-book'));
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('reminder-book'));
     await runInDurableObject(stub, async (_instance, state) => {
       claimStore(state.storage.sql);
       ensureSchema(state.storage);
@@ -35,7 +35,7 @@ describe('reminder book on the Telegram owner object', () => {
 
 describe('owner-scoped bulk reminder cancellation', () => {
   it('removes all reminder rows and notes, preserving other schedule kinds', async () => {
-    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('reminder-bulk-cancel'));
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('reminder-bulk-cancel'));
     await runInDurableObject(stub, async (_instance, state) => {
       claimStore(state.storage.sql);
       ensureSchema(state.storage);
@@ -64,7 +64,7 @@ describe('owner-local reminder recurrence', () => {
     ['weekly', '2026-03-01T09:00', '2026-03-01T15:00:00Z', '2026-03-08T13:00:00Z', undefined],
     ['cron', '2026-10-09T09:00', '2026-10-09T15:00:00Z', '2026-10-12T13:00:00Z', '0 9 * * 1-5'],
   ] as const)('sets and round-trips %s with owner timezone, including DST', async (repeat, at, nowText, expected, cron) => {
-    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`reminder-recurrence-${repeat}`));
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`reminder-recurrence-${repeat}`));
     await runInDurableObject(stub, async (_instance, state) => {
       claimStore(state.storage.sql);
       ensureSchema(state.storage);
@@ -86,7 +86,7 @@ describe('owner-local reminder recurrence', () => {
 
 describe('first recurrence in a DST gap', () => {
   it('uses the first valid minute on the requested local date, not the following day', async () => {
-    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('reminder-first-dst-gap'));
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('reminder-first-dst-gap'));
     await runInDurableObject(stub, async (_instance, state) => {
       claimStore(state.storage.sql); ensureSchema(state.storage);
       const now = Date.parse('2026-03-07T15:00:00Z');
@@ -101,7 +101,7 @@ describe('first recurrence in a DST gap', () => {
 
 describe('future cron start boundary', () => {
   it('does not fire before the requested at time on a future date', async () => {
-    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('reminder-cron-start'));
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('reminder-cron-start'));
     await runInDurableObject(stub, async (_instance, state) => {
       claimStore(state.storage.sql); ensureSchema(state.storage);
       const now = Date.parse('2026-10-08T08:00:00Z');

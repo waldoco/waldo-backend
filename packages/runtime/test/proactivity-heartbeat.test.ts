@@ -9,10 +9,10 @@ import { Scheduler, type ScheduleExecutors } from '../src/scheduler/multiplexer'
 import { ensureSchema } from '../src/tracer/schema';
 import type { Deps } from '../src/seams/deps';
 import { TelegramFinalOutbox, type HeartbeatReceipt } from '../src/channels/telegram-final-outbox';
-import type { OwnerDO } from '../src/channels/owner-do';
+import type { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 
 let sequence = 0;
-const stub = () => env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`proactivity-${sequence++}`)) as DurableObjectStub<OwnerDO>;
+const stub = () => env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`proactivity-${sequence++}`)) as DurableObjectStub<TelegramOwnerDO>;
 const at = (iso: string) => Date.parse(iso);
 const TZ = 'Asia/Kolkata';
 const deps = (now: number): Deps => ({ now: () => now, newRunId: () => 'run-fixed', newOutboxId: () => 'out-fixed', sha256Hex: async () => 'sha-fixed' });

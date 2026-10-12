@@ -10,7 +10,7 @@
 //           --live    include the live-send receipt probe (sends ONE real Telegram message to
 //                     the owner; capture mode never sends). Off by default.
 //
-// Endpoint contract (packages/runtime/src/channels/probe-turn.ts + owner-do.ts):
+// Endpoint contract (packages/runtime/src/channels/probe-turn.ts + telegram-owner-do.ts):
 //   404 non-staging/unconfigured/wrong method; 403 missing or wrong token;
 //   400 malformed JSON / empty text / text > 4000 chars; 429 past 20 probes per minute;
 //   503 owner var unset; 200 JSON { trace: "tg-<n>"|null, outcome: string, captured: array|null }.

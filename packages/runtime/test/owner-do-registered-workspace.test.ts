@@ -3,7 +3,7 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi, type MockInstance } from 'vitest';
 import type { WorkspaceState } from '@waldo/workspace';
-import { OwnerDO } from '../src/channels/owner-do';
+import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 import { routerSignature } from '../src/identity/owner-directory';
 import * as dispatcher from '../src/tools/dispatcher';
 import { Scheduler } from '../src/scheduler/multiplexer';
@@ -63,7 +63,7 @@ async function proof(work: (h: {
   onPut(fn: () => void): void; dispatches: MockInstance<typeof dispatcher.dispatchTool>;
 }) => Promise<void>, numericWorkspaceIdsAfter?: number, extraEnv: Record<string, string> = {}) {
   const name = `registered-workspace-${++sequence}`;
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const nativeUuid = crypto.randomUUID.bind(crypto);
     let workspaceIds = 0;
     // Inject at the production workspace host's newId boundary, not run ids/canaries.
@@ -123,7 +123,7 @@ async function proof(work: (h: {
         ? { admission_revision: '1', auth_user_id: OWNER, do_name: name, owner_id: OWNER, presence_id: PRESENCE, provider: 'telegram', subject: '81101', state_version: 0 } : null);
     });
     const dispatches = vi.spyOn(dispatcher, 'dispatchTool'); // Observes original dispatcher, including losing async continuations.
-    let instance = new OwnerDO(state, fixtureEnv);
+    let instance = new TelegramOwnerDO(state, fixtureEnv);
     const enqueue = async (text: string, id = ++sequence, subject = '81101', doName = name, entities?: readonly { type: string; offset: number; length: number }[]) => ({ id, response: await instance.fetch(new Request('https://local.invalid/enqueue', {
       method: 'POST', headers: { 'x-waldo-inbox-secret': fixtureEnv.TELEGRAM_WEBHOOK_SECRET, 'x-waldo-telegram-subject': subject, 'x-waldo-do-name': doName },
       body: JSON.stringify({ update_id: id, message: { message_id: id, from: { id: Number(subject), is_bot: false }, chat: { id: Number(subject), type: 'private' }, text, ...(entities ? { entities } : {}) } }),
@@ -143,7 +143,7 @@ async function proof(work: (h: {
       const row = state.storage.sql.exec<{ state_json: string }>('SELECT state_json FROM workspace_manifest WHERE singleton=1').toArray()[0];
       return row ? JSON.parse(row.state_json) as WorkspaceState : null;
     };
-    try { await work({ state, name, bytes, puts, gets, rpc, enqueue, send, alarm: () => instance.alarm(), request: request => instance.fetch(request), restart: () => { instance = new OwnerDO(state, fixtureEnv); }, manifest, mapping,
+    try { await work({ state, name, bytes, puts, gets, rpc, enqueue, send, alarm: () => instance.alarm(), request: request => instance.fetch(request), restart: () => { instance = new TelegramOwnerDO(state, fixtureEnv); }, manifest, mapping,
       workspace: () => workspaceOwnerHost(fixtureEnv, state.storage, state.id.toString(), name),
       absent: () => { missing = true; }, unlinked: () => { state.storage.kv.put('telegram_unlinked', true); },
       pauseMapping: (afterReservation = false) => { pauseAfterReservation = afterReservation; mappingPause = deferred(); pauses.push(mappingPause); return mappingPause; }, pausePut: () => { putPause = deferred(); pauses.push(putPause); return putPause; }, onPut: fn => { afterPut = fn; }, dispatches });
@@ -181,7 +181,7 @@ it.each([
     expect(new Uint8Array(await download.arrayBuffer())).toEqual(bytes);
     const reads = h.gets.length;
     expect((await h.request(new Request(receipt.url))).status).toBe(401);
-    const otherStub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`${h.name}-foreign-import`));
+    const otherStub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`${h.name}-foreign-import`));
     const otherSession = await runInDurableObject(otherStub, (_instance, state) => consoleAccess(state.storage).grant());
     expect((await h.request(new Request(receipt.url, { headers: { cookie: `${CONSOLE_COOKIE}=${otherSession}` } }))).status).toBe(401);
     expect((await otherStub.fetch(receipt.url, { headers: { cookie: `${CONSOLE_COOKIE}=${session}` } })).status).toBe(401);
@@ -419,7 +419,7 @@ it.each([['pdf', undefined], ['docx', undefined], ['docx', 2]] as const)('defaul
     const reads = h.gets.length;
     expect((await h.request(new Request(rendered.data.delivery.url))).status).toBe(401);
     const otherName = `${h.name}-foreign-download`;
-    const otherStub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(otherName));
+    const otherStub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(otherName));
     const otherSession = await runInDurableObject(otherStub, async (_instance,state) => {
       const otherAccess = consoleAccess(state.storage);
       const link = await otherAccess.mintLink('https://local.invalid');
@@ -428,7 +428,7 @@ it.each([['pdf', undefined], ['docx', undefined], ['docx', 2]] as const)('defaul
     expect((await h.request(new Request(rendered.data.delivery.url,{headers:{cookie:`${CONSOLE_COOKIE}=${otherSession}`}}))).status).toBe(401);
     expect((await otherStub.fetch(rendered.data.delivery.url,{headers})).status).toBe(401);
     // Exercise the continuation through the real DO session/file admission boundary.
-    const authEnv = { OWNER_DO: {
+    const authEnv = { TELEGRAM_OWNER_DO: {
       idFromName: (name: string) => name,
       get: (name: string) => ({ fetch: (input: RequestInfo, init?: RequestInit) => {
         const request = input instanceof Request ? input : new Request(String(input), init);
