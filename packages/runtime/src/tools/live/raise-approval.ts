@@ -13,7 +13,7 @@ const note = (result: ReraiseOutcome): string => {
     unshown: 'Its card could not be shown, so it is still put off. Nothing was sent.',
   }[result.outcome];
   if (result.on_this_reply) return 'Its card is on this reply.';
-  return result.shown_on.includes('telegram') ? 'A fresh card with its buttons was sent to the owner.' : "It is back in the owner's approvals list; no card is on this reply.";
+  return result.shown_on.some(surface => surface !== 'app') ? 'A fresh card with its buttons was sent to the owner.' : "It is back in the owner's approvals list; no card is on this reply.";
 };
 
 export const approvalHandlers = (desk: Pick<ApprovalDesk, 'waiting' | 'reraise'>) => [

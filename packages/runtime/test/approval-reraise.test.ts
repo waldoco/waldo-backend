@@ -7,12 +7,13 @@ import { appApprovalParts, approvalDesk, PROPOSAL_TTL_MS } from '../src/channels
 import { appApprovalLink, appCaller } from '../src/channels/surfaces/app';
 import { sha256Hex, type GoogleClient } from '../src/connectors/google';
 import { approvalHandlers } from '../src/tools/live/raise-approval';
+import { receiptsFromLoopEvents } from '../src/hooks/claim-hook';
 
 const CSRF = 'c'.repeat(64);
 type Sent = { method: string; body: { text?: string; reply_markup?: { inline_keyboard: { text: string; callback_data: string }[][] } } };
 
 // One owner DO with a desk on the given surface. The Telegram fake records every call and acknowledges sends unless told to drop them.
-const deskOn = async <T>(surface: 'app' | 'telegram', name: string, run: (tools: Readonly<{
+const deskOn = async <T>(surface: 'app' | 'telegram' | 'whatsapp', name: string, run: (tools: Readonly<{
   desk: ReturnType<typeof approvalDesk>; clock: { at: number }; runRef: { current: string | undefined }; sql: SqlStorage; sent: Sent[]; telegram: { deliver: boolean };
   raise(args: unknown): Promise<{ ok: boolean; data?: Record<string, unknown> }>;
   list(query?: string): Promise<ReturnType<typeof appApprovalListV1Schema.parse>['approvals']>;
@@ -147,4 +148,21 @@ it('a review-only Telegram card offers Not now and Don\'t do this', async () => 
     await propose('Huge', 'y'.repeat(5_000));
     expect(keyboard(sent.find(message => message.method === 'sendMessage'))).toEqual(['Not now=d', "Don't do this=s"]);
   });
+});
+
+it('on WhatsApp, a raise sends a fresh card and the model is told so', async () => {
+  await deskOn('whatsapp', 'raise-whatsapp', async ({ desk, sent, raise, propose }) => {
+    const id = await propose('Wa');
+    await desk.decide(id, 'd', 't', { surface: 'whatsapp' });
+    const before = sent.filter(message => message.method === 'sendMessage').length;
+    expect((await raise({ operation: 'raise', approval_id: id })).data).toMatchObject({ outcome: 'raised', shown_on: ['whatsapp'], note: 'A fresh card with its buttons was sent to the owner.' });
+    expect(sent.filter(message => message.method === 'sendMessage').length).toBe(before + 1);
+  });
+});
+
+it('a raise backs no done claim: listing or raising changes nothing outside the desk', () => {
+  expect(receiptsFromLoopEvents([
+    { seq: 1, call: { name: 'raise_approval', args: { operation: 'list' } }, ok: true },
+    { seq: 2, call: { name: 'raise_approval', args: { operation: 'raise', approval_id: 'p1' } }, ok: true },
+  ] as never)).toEqual([]);
 });
