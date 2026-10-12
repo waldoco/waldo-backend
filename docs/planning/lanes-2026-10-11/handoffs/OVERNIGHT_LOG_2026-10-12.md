@@ -1490,3 +1490,5 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - **MEDIUM:** the new ledger line says unreadable reminders can't be changed, but cancel-all deletes them. Fix the wording.
   - **LOW:** the console unpin text, and the dashboard's "try again" on a permanent rejection.
   - **Queued for L1** (message cap). L1 may see the red CI on its own.
+
+- **14:01Z heartbeat:** no new heads. #1092 is still red at `fdfb23ca`. #1094 is a draft with CI running. #1088 is CLEAN and waits for the owner. My messages to L1, L2 and L4 are held by the message cap until the owner types here.
