@@ -10,9 +10,13 @@ export type ProducerDeps = Readonly<{
   readSeries: (range: { from: string; to: string; signals: readonly string[] }) => Promise<unknown>;
   writeContext: (payload: string) => Promise<unknown>;
   compute: (input: DailyScoresInput) => DailyScores;
+  // Busy minutes per local day across the owner's calendars, for Weight. Absent or failing, Weight is unavailable.
+  readDemand?: (range: { from: string; to: string; timezone: string }) => Promise<unknown>;
 }>;
 
 const WINDOW_DAYS = 30;
+const HOUR_MS = 3_600_000;
+const MAX_BUSY_MINUTES = 1500;
 const SIGNALS = ['sleep_duration', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration', 'workout'];
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/;
@@ -98,6 +102,31 @@ const daysOf = (readings: readonly Reading[], fallbackZone: string): Readonly<{ 
   return { days, zoneChanged };
 };
 
+// Movement minutes, plus workout minutes in hours that carry no movement reading, so a workout the movement count
+// already holds is not counted twice. Known only on a day the phone reported hourly readings or a workout.
+const physicalLoadOf = (day: DayRecord): number | null => {
+  if (!day.hourly.length && !day.workouts.length) return null;
+  const moving = day.hourly.filter(bucket => bucket.movementMinutes !== null);
+  const workoutMs = day.workouts.reduce((sum, workout) => {
+    const from = Date.parse(workout.startAt), to = Date.parse(workout.endAt);
+    if (!(from < to)) return sum;
+    const counted = moving.reduce((inside, bucket) => { const start = Date.parse(bucket.startAt); return inside + Math.max(0, Math.min(to, start + HOUR_MS) - Math.max(from, start)); }, 0);
+    return sum + to - from - counted;
+  }, 0);
+  return moving.reduce((sum, bucket) => sum + bucket.movementMinutes!, 0) + Math.round(workoutMs / 60_000);
+};
+
+// A day the calendar could not be read is missing here, so it reads as no calendar demand rather than a free day.
+const busyByDay = (answer: unknown): ReadonlyMap<string, number> => {
+  const a = asRecord(answer);
+  if (a?.state !== 'available' || !Array.isArray(a.days)) return new Map();
+  return new Map(a.days.flatMap((raw): [string, number][] => {
+    const d = asRecord(raw);
+    return d && typeof d.day === 'string' && DAY.test(d.day) && typeof d.busy_minutes === 'number' && Number.isFinite(d.busy_minutes)
+      && d.busy_minutes >= 0 && d.busy_minutes <= MAX_BUSY_MINUTES ? [[d.day, d.busy_minutes]] : [];
+  }));
+};
+
 const localDay = (at: number, timeZone: string): string =>
   new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(at));
 
@@ -132,7 +161,9 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     // One source's readings are computed on its own. Two phones' step counts or sleep for one night are not added up.
     const chosen = [...parsed.series.sources].filter(s => s.readings.length > 0).sort((a, b) => b.readings.length - a.readings.length || a.source.localeCompare(b.source))[0];
     if (!chosen) return 'no_readings';
-    const { days, zoneChanged } = daysOf(chosen.readings, at.timezone);
+    const { days: readingDays, zoneChanged } = daysOf(chosen.readings, at.timezone);
+    const busy = deps.readDemand ? busyByDay(await deps.readDemand({ from: shiftDay(today, -WINDOW_DAYS), to: today, timezone: at.timezone }).catch(() => null)) : new Map<string, number>();
+    const days = readingDays.map((day): DayRecord => ({ ...day, demand: { meetingMinutes: busy.get(day.day) ?? null, messageCount: null, openTaskMinutes: null, physicalLoad: physicalLoadOf(day) } }));
     const outcomes: ReturnType<typeof writeOutcome>[] = [];
     for (const targetDay of [shiftDay(today, -1), today]) {
       const scores = deps.compute({ access: 'granted', targetDay, days, sleepNeedMinutes: null, asOf: parsed.series.readAt });

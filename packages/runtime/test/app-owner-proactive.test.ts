@@ -12,6 +12,8 @@ import { DAY_CARDS } from '../src/prompt/day-cards';
 import { claimStore } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
+import { readOwnerDemand } from '../src/health/calendar-demand-route';
+import { shiftDay } from '../src/health/scores/time';
 import { ensureSchema } from '../src/tracer/schema';
 
 const CARD_TEXT = 'Your morning is clear until noon.';
@@ -245,5 +247,22 @@ describe('proactive work for an owner who only uses the app', () => {
       expect(stored).not.toContain('640 kcal');
       expect(stored).not.toContain('37 min');
     });
+  });
+});
+
+describe('Weight\'s calendar demand route on the owner object', () => {
+  it('answers only the Worker\'s signed request for this owner, reads no calendar without Google, and arms nothing for an unconfirmed owner', async () => {
+    await withAppOwner('demand-unconfirmed', {}, async (owner, state) => {
+      const owners = { idFromName: (name: string) => name as never, get: () => ({ fetch: (request: Request) => owner.fetch(request) }) };
+      const today = localIso(Date.now(), 'Europe/London').slice(0, 10);
+      const range = { from: shiftDay(today, -2), to: today, timezone: 'Europe/London' };
+      expect(await readOwnerDemand(owners, directory.WALDO_ROUTER_HMAC_SECRET, 'demand-unconfirmed', range)).toEqual({ state: 'unavailable', reason: 'not_connected' });
+      await owner.setup('app').ready;
+      expect(ownJobs(state)).toEqual([]);
+      await expect(readOwnerDemand(owners, 'forged-router-secret', 'demand-unconfirmed', range)).rejects.toThrow('calendar demand unavailable');
+      await expect(readOwnerDemand(owners, directory.WALDO_ROUTER_HMAC_SECRET, 'someone-else', range)).rejects.toThrow('calendar demand unavailable');
+    });
+    expect(model.calls).toBe(0);
+    expect(wire.telegramSent).toBe(0);
   });
 });

@@ -43,12 +43,13 @@ const seriesOf = (samples: Sample[], over: { source?: string; epoch?: number; tr
 });
 
 type Harness = { deps: ProducerDeps; writes: Record<string, unknown>[]; reads: Record<string, unknown>[]; inputs: DailyScoresInput[] };
-const harness = (series: unknown, writeResult: unknown = { written: true }, compute = computeDailyScores): Harness => {
+const harness = (series: unknown, writeResult: unknown = { written: true }, compute = computeDailyScores, extra: Partial<ProducerDeps> = {}): Harness => {
   const h: Harness = { writes: [], reads: [], inputs: [], deps: null as never };
   h.deps = {
     readSeries: async range => { h.reads.push(range); return series; },
     writeContext: async payload => { h.writes.push(JSON.parse(payload)); return writeResult; },
     compute: input => { h.inputs.push(input); return compute(input); },
+    ...extra,
   };
   return h;
 };
@@ -83,6 +84,39 @@ describe('produceHealthScores', () => {
     expect(row.timezone).toBe('UTC');
     expect(row.basis).toEqual([{ source: 'apple', consent_epoch: 3 }]);
     expect(row.freshness).toBe('fresh');
+  });
+
+  it('computes Weight from the calendar\'s busy minutes and the day\'s physical load', async () => {
+    const asked: unknown[] = [];
+    const busy = Array.from({ length: 31 }, (_, i) => ({ day: addDays(TODAY, -i), busy_minutes: Math.round(240 + wobble(i, 40)) }));
+    const h = harness(seriesOf(history(25)), undefined, undefined, { readDemand: async range => { asked.push(range); return { state: 'available', days: busy }; } });
+    await run(h);
+    expect(asked).toEqual([{ from: addDays(TODAY, -30), to: TODAY, timezone: 'UTC' }]);
+    const today = h.inputs.find(input => input.targetDay === TODAY)!.days.find(d => d.day === TODAY)!;
+    expect(today.demand).toEqual({ meetingMinutes: busy[0]!.busy_minutes, messageCount: null, openTaskMinutes: null, physicalLoad: 96 });
+    const weight = h.writes.find(w => w.day === TODAY)!.weight as Record<string, unknown>;
+    expect(typeof weight.score).toBe('number');
+    expect(weight.confidence).toBe(0.55);
+    expect(weight.activation).toBe('candidate_unaccepted');
+  });
+
+  it('leaves Weight unavailable, and still writes Recovery and Form, when the calendar cannot be read', async () => {
+    for (const readDemand of [async () => { throw new Error('do down'); }, async () => ({ state: 'unavailable', reason: 'not_connected' }), async () => ({ state: 'available', days: [{ day: TODAY, busy_minutes: -5 }, { day: addDays(TODAY, -1), busy_minutes: 5000 }] })]) {
+      const h = harness(seriesOf(history(25)), undefined, undefined, { readDemand });
+      expect(await run(h)).toBe('written');
+      const row = h.writes.find(w => w.day === TODAY)!;
+      expect(row.weight).toEqual({ reason: 'calendar_demand_unavailable' });
+      expect(typeof (row.recovery as Record<string, unknown>).score).toBe('number');
+    }
+  });
+
+  it('counts a workout toward physical load only in hours movement did not already cover', async () => {
+    const workout = (start: string, end: string) => sample('workout', TODAY, { start_at: `${TODAY}T${start}:00.000Z`, end_at: `${TODAY}T${end}:00.000Z`, value: 60, activity: 'run' });
+    const h = harness(seriesOf([...history(25), workout('06:00', '07:00'), workout('09:00', '09:30')]), undefined, undefined, { readDemand: async () => ({ state: 'available', days: [] }) });
+    await run(h);
+    const today = h.inputs.find(input => input.targetDay === TODAY)!.days.find(d => d.day === TODAY)!;
+    // 8 hours x 12 movement minutes, plus the 06:00 workout; the 09:00 one falls in an hour movement already counts.
+    expect(today.demand?.physicalLoad).toBe(96 + 60);
   });
 
   it('writes only keys the database accepts, and every pillar is either a score or a reason', async () => {
@@ -152,7 +186,8 @@ describe('produceHealthScores', () => {
     expect(today.workouts).toEqual([{ startAt: `${TODAY}T06:00:00.000Z`, endAt: `${TODAY}T06:45:00.000Z` }]);
     expect(today.hourly).toHaveLength(8);
     expect(today.hourly[0]).toMatchObject({ startAt: `${TODAY}T08:00:00.000Z`, daylightMinutes: 20, movementMinutes: 12, hrvMethod: 'rmssd' });
-    expect(today.demand).toBeNull();
+    // Without a calendar reader only physical load is known: 8 hours x 12 movement minutes plus the 45-minute run.
+    expect(today.demand).toEqual({ meetingMinutes: null, messageCount: null, openTaskMinutes: null, physicalLoad: 96 + 45 });
   });
 
   it('computes from the source with the most readings and names only that source as the basis', async () => {
