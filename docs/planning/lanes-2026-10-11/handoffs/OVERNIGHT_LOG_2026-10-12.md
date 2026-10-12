@@ -1510,3 +1510,4 @@ These can't reach L4 yet: the message cap applies, and L4 is asking the owner di
   - D16 sends host-minted facts only for external rows, seeds nothing, and adds no collateral.
   - L2 is told to stop the seed.
   - The cross-turn taint design goes to the owner as an option.
+- **15:32Z, D16 implementation:** L2's option (b). Show null-taint rows only and remove the seed. Evidence: with D15 built, `curated-skills-owner-do` failed 4/4, and its expectation stays unchanged.

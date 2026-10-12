@@ -160,3 +160,5 @@ The decision stands: skip the row, and don't widen the validator.
 **Option for the owner** (not the default): carry external content across turns with cross-turn taint, accepting the collateral listed above.
 
 **Reverse.** If the owner chooses the option, switch to cross-turn taint.
+
+**D16 implementation (15:32Z).** L2's option (b): the block shows only null-taint rows (own tool results and desk state lines); external rows are omitted entirely, and the seed is removed. An optional one-line count-only stub ("N earlier external reads not shown") is allowed. L2 found that with the seed built, `curated-skills-owner-do` failed all 4 cases (a /skills disable after workspace reads was refused), and that the taint would persist indefinitely if later turns call no tools. Keeping that test unchanged is the no-collateral pin.
