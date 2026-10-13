@@ -538,13 +538,17 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             const hop = (name: string, ok: boolean, code: string, from: number) => deps.log({ trace, hop: name, ms: deps.now() - from, ok, code });
             let sent: Awaited<ReturnType<GoogleClient['sendRaw']>> | undefined;
             let refused = false;
+            const pause = deps.wait ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+            // The thread the copy must be in: the proposal's, or else the one the send returned.
+            const intendedThread = () => ep.thread_id ?? sent?.thread_id;
             const check = async (name: 'email_verify' | 'email_reconcile'): Promise<Readonly<{ code: string; landed?: SentEvidence }>> => {
               const from = deps.now();
               try {
                 const landed = await client.findSentByMessageId(ep.message_id, ep.thread_id, sent?.message_id);
-                const code = sentCheck(landed, ep.message_id, ep.thread_id, sent?.message_id);
-                hop(name, code === 'verified', code, from);
-                return code === 'verified' ? { code, landed: landed as SentEvidence } : { code };
+                const code = sentCheck(landed, ep.message_id, intendedThread(), sent?.message_id);
+                const proven = code === 'verified' || code === 'rfc822_rewritten';
+                hop(name, proven, code, from);
+                return proven ? { code, landed: landed as SentEvidence } : { code };
               } catch { hop(name, false, 'unreadable', from); return { code: 'unreadable' }; }
             };
             const readback = async (name: 'email_verify' | 'email_reconcile') => (await check(name)).landed ?? null;
@@ -554,13 +558,14 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
               for (let attempt = 0; ; attempt++) {
                 const result = await check('email_verify');
                 if (result.code !== 'not_found' || attempt === SENT_RESEARCHES) return result;
-                await (deps.wait ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))))(SENT_RESEARCH_GAP_MS);
+                await pause(SENT_RESEARCH_GAP_MS);
               }
             };
             // After a miss, whether the sent copy carries our Message-ID tells a slow search from a rewritten header.
-            const diagnose = async () => {
+            const diagnose = async (): Promise<string | undefined> => {
               const from = deps.now();
               let code = 'unavailable';
+              let header: string | undefined;
               if (sent?.thread_id && client.threadPage) {
                 try {
                   code = 'not_in_thread';
@@ -568,13 +573,30 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
                   for (let page = 0; page < 5; page++) {
                     const read = await client.threadPage(sent.thread_id, 20, cursor);
                     const copy = read.messages.find(message => message.id === sent!.message_id);
-                    if (copy) { code = copy.message_id === ep.message_id ? 'header_matches' : copy.message_id ? 'header_differs' : 'header_absent'; break; }
+                    if (copy) { code = copy.message_id === ep.message_id ? 'header_matches' : copy.message_id ? 'header_differs' : 'header_absent'; header = code === 'header_differs' ? copy.message_id : undefined; break; }
                     if (!read.cursor) break;
                     cursor = read.cursor;
                   }
                 } catch { code = 'unreadable'; }
               }
               hop('email_diagnose', false, code, from);
+              return header;
+            };
+            // Gmail can rewrite the Message-ID of an API send, so a search by ours never finds it. The header Gmail
+            // gave the copy the send returned is searched strictly instead: SENT, that exact header, the intended
+            // thread and the same Gmail id. A lost response has no id, so it never gets here and stays unknown.
+            const rewritten = async (header: string): Promise<SentEvidence | null> => {
+              for (let attempt = 0; ; attempt++) {
+                const from = deps.now();
+                let code: string;
+                let landed: unknown;
+                try { landed = await client.findSentByMessageId(header, ep.thread_id); code = sentCheck(landed, header, intendedThread(), sent!.message_id); }
+                catch { code = 'unreadable'; }
+                hop('email_verify', code === 'verified', code === 'verified' ? 'rfc822_rewritten' : code, from);
+                if (code === 'verified') return landed as SentEvidence;
+                if (code !== 'not_found' || attempt === 1) return null;
+                await pause(SENT_RESEARCH_GAP_MS);
+              }
             };
             hop('email_thread', true, ep.thread_id ? 'thread_set' : 'no_thread', deps.now());
             try {
@@ -586,8 +608,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
                 // A search that also filters by the intended thread misses a copy Gmail filed in another thread.
                 if (ep.thread_id) hop('email_thread_match', sent.thread_id === ep.thread_id, sent.thread_id === ep.thread_id ? 'same_thread' : 'other_thread', from);
                 const { code, landed } = await searched();
-                if (!landed) { if (code === 'not_found') await diagnose(); throw new EffectUnknownError(); }
-                return { provider_id: landed.message_id, result: landed };
+                const header = !landed && code === 'not_found' ? await diagnose() : undefined;
+                const proof = landed ?? (header ? await rewritten(header) : null);
+                if (!proof) throw new EffectUnknownError();
+                return { provider_id: proof.message_id, result: proof };
               }, async () => {
                 const landed = await readback('email_reconcile');
                 return landed ? { status: 'done', receipt: { provider_id: landed.message_id, result: landed } } : refused ? { status: 'not_applied' } : { status: 'unknown' };
