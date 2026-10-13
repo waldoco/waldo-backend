@@ -4,7 +4,7 @@ import { IMESSAGE_OUTBOX_MAX_RECORDS, IMessageFinalOutbox } from '../src/channel
 import { redactIMessageEntries } from '../src/channels/imessage/forget';
 import type { IMessageInboxRecord } from '../src/channels/imessage/owner-inbox';
 
-const stub = () => env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`imsg-outbox-${crypto.randomUUID()}`));
+const stub = () => env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`imsg-outbox-${crypto.randomUUID()}`));
 const turn = (id: string, text = 'hello', state: IMessageInboxRecord['state'] = 'completed') => ({ id, updateId: 1, dedupKey: id, digest: '0'.repeat(64), text, conversationRef: 'c',
   binding: {} as never, bindingDigest: 'b', revision: '1', environment: 'test', bridgeDoName: 'bridge', ownerDoName: 'owner', commandId: `cmd-${id}`,
   occurredAt: 1, admittedAt: 1, state }) as IMessageInboxRecord;
