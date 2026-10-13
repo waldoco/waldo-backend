@@ -843,4 +843,4 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **The App lane's two questions:**
   - **The Brief row** uses `cards[].latest` when it's present, and otherwise claims nothing the server hasn't said. "Fill `latest`" was asked of the backend builder on #1103 (6137537343).
   - **R3:** the four Home placeholders are removed, including the Patrol and Spots cards. The names, screens and menu rows are kept.
-- **App #1116's sibling, app #103** (the follow-up), is in review.
+- **Also in review:** app #103 (the follow-up).
