@@ -1645,3 +1645,20 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
     - the "Ask Waldo about these" navigate is untested;
     - the scrim clamp is unasserted.
   - The delta after the fix is comment-only plus a main merge, so the orchestrator verifies it without a new review.
+
+## 09:39Z (from `date -u`): #120 merged; Air build pinned; time correction
+
+- **Time correction:** the two entries above stamped "About 09:45Z" (#109 merged) and "About 09:50Z" (#120 PASS, #116 FAIL) were guessed and run ahead of the clock. `date -u` read 09:35:17Z right after them. Both events happened between about 09:30Z and 09:35Z. From here on, every stamp comes from a `date -u` call.
+- **App #120 merged** at `351a9f25`, pinned to the reviewed head `83bb8030`: PASS, green CI, advisor check. None of its 7 files overlaps anything #113 or #109 changed on main. The follow-ups are on the PR (6142710171).
+  - App CI never runs on pushes to main, so the combined tree (#109 + #113 + #120) has not been tested as one. #116's CI (with main merged in) or a local typecheck and test run covers it.
+- **#116:** L4 pushed `aafc5f95`, which has the comment fix plus a clean merge of `db7e06b9`. L4 is now merging `351a9f25` (#120 also edits TodaySummary).
+  - Any conflict resolution is new code, and the orchestrator reads it.
+  - An explicit re-review PASS goes on the PR, after green CI, before the merge.
+- **The Air build is main at `351a9f25`**, done by N4. N4's earlier question assumed #109 was unmerged. Before the install:
+  - check that `node_modules/expo-health` is the symlink to `modules/health`;
+  - do the read-only consent check on `useHealthData.ts` and `useHealthSnapshot.ts`;
+  - run a local typecheck and tests on `351a9f25`;
+  - on the Air, read-only checks only.
+- **expo-health trap (found by L4):** a worktree whose `expo-health` came from an install-time copy keeps the pre-#109 module. Typecheck then fails, and Xcode compiles the old native module, because `Podfile.lock` reads `../node_modules/expo-health/ios`. The fix is the recorded setup step: relink to `modules/health`, with no install and the lockfile untouched.
+- **Disk:** 7.4 GB free at 09:35Z, against a 6 GB floor. One Xcode build at a time: N4's Air build goes first, and L4 holds. Freeing more space is the owner's call.
+- **Connectors (L2):** the owner told L2 directly to start the calendar read bug now, before the 12:30Z reset. It's a read-only diagnosis from source, with no subagents. L2 asked the owner for the connector-proxy `calendarPage` log line (method, status and code only), and reports the root cause in one sentence before any fix.
