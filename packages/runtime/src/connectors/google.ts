@@ -344,11 +344,12 @@ const htmlText = (html: string): string => {
   const mark = (separator: string) => { if (!suppressed) chunks.push(separator); };
   new Parser({
     onopentag(name) { if (name === 'script' || name === 'style') suppressed++; else if (blocks.has(name)) mark('\n'); },
-    // Source whitespace is layout, not text: a browser shows a run of it, line breaks included, as one space.
+    // A run of source whitespace, line breaks included, becomes one space. Preformatted text collapses too: its layout
+    // is lost, its words are kept.
     ontext(text) { if (!suppressed) chunks.push(text.replace(/\s+/g, ' ')); },
     onclosetag(name) { if (name === 'script' || name === 'style') suppressed = Math.max(0, suppressed - 1); else if (blocks.has(name)) mark('\n'); else if (cells.has(name)) mark(' '); },
   }, { decodeEntities: true }).end(html);
-  // Rendered the way a browser lays it out: a block or row ends a line, a cell ends with a space.
+  // A block or row ends a line, a cell ends with a space.
   return chunks.join('').replace(/\s+/g, (run) => (run.includes('\n') ? '\n' : ' ')).trim();
 };
 const threadBody = (payload: GmailPayload | undefined): string => {

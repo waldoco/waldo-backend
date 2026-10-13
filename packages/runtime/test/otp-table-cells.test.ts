@@ -41,6 +41,24 @@ describe('the extractor', () => {
     ['Your code\n' + digits.join('\n' + ' '.repeat(40)), '482913'],
     ['Your code \r\n' + digits.join(' \r\n' + ' '.repeat(30)), '482913'],
     ['Your code\n\n' + digits.join('\n\n      \n    '), '482913'],
+    // Glued to the next cell's text, as a minified table renders before the cell separator.
+    ['Verification code482913Valid', '482913'],
+    ['482913is your verification code', '482913'],
+    // Invisible characters between digits: zero-width space, non-joiner, joiner, word joiner, soft hyphen. The last
+    // one has spaces around it, so stripping must come before whitespace is collapsed.
+    ['Your code is 4\u200b8\u200b2\u200b9\u200b1\u200b3', '482913'],
+    ['Your code is 482\u200c913', '482913'],
+    ['Your code is 4829\u200d13', '482913'],
+    ['Your code is 48\u206029\u206013', '482913'],
+    ['Your code is 4\u00ad8\u00ad2\u00ad9\u00ad1\u00ad3', '482913'],
+    ['Your code is 4 \u200b 8 \u200b 2 \u200b 9 \u200b 1 \u200b 3', '482913'],
+    // Uneven and hyphenated splits. A hyphenated code relays as written, like "123-456".
+    ['Your code is 4829 13', '482913'],
+    ['Your code is 48 2913', '482913'],
+    ['Your code is 482 9 13', '482913'],
+    ['Your code is 4 829 13', '482913'],
+    ['Your code is 1234-5678', '1234-5678'],
+    ['1234-5678 is your verification code', '1234-5678'],
   ])('catches a code glued to its label or spaced out: %s', (text, code) => {
     const found = extractArtifacts(text);
     expect(found.artifacts).toEqual([{ kind: 'otp', value: code }]);
@@ -49,6 +67,28 @@ describe('the extractor', () => {
 
   it('relays the code\'s own capture, never another digit run nearby', () => {
     expect(extractArtifacts('Acme2024 verification code 482913')).toEqual({ text: 'Acme2024 [quarantined: otp artifact - view in the source app]', artifacts: [{ kind: 'otp', value: '482913' }] });
+  });
+
+  it.each([
+    ['Your code482913Expires in 10 minutes', 'Your [quarantined: otp artifact - view in the source app]Expires in 10 minutes', '482913'],
+    ['Your code 482 913 10 minutes', 'Your [quarantined: otp artifact - view in the source app] 10 minutes', '482913'],
+    ['Your code 48 29 13 5 minutes', 'Your [quarantined: otp artifact - view in the source app] 5 minutes', '482913'],
+    ['Your code 4 8 2 9 1 3 10 minutes', 'Your [quarantined: otp artifact - view in the source app] 10 minutes', '482913'],
+    ['Your code 482913 10 minutes', 'Your [quarantined: otp artifact - view in the source app] 10 minutes', '482913'],
+    ['Total: $12.99\n092893 is your log-in code.', 'Total: $12.99\n[quarantined: otp artifact - view in the source app].', '092893'],
+  ])('relays the code exactly when other digits are near it: %s', (text, shown, code) => {
+    expect(extractArtifacts(text)).toEqual({ text: shown, artifacts: [{ kind: 'otp', value: code }] });
+  });
+
+  // Catching a code comes before relaying it accurately, so a keyword followed by digits is quarantined even when
+  // they are not a code. Pinned, so a narrowing changes these on purpose.
+  it.each([
+    ['Dress code 1920s', '1920'],
+    ['Promo code 2024SALE', '2024'],
+    ['Area code 020 7946', '0207946'],
+    ['Your code 4829 13\n10 minutes', '48291310'],
+  ])('quarantines digits after a keyword even when they are not a code: %s', (text, relayed) => {
+    expect(extractArtifacts(text).artifacts).toEqual([{ kind: 'otp', value: relayed }]);
   });
 
   it.each(['Postcode12345 area', 'see codes 1234 below', 'room 4 8 2 9 is free', 'code 1 2 3 is too short', 'error code 404', 'Room 4021'])('leaves ordinary text alone: %s', (text) => {
@@ -95,8 +135,8 @@ describe('codes in HTML table cells', () => {
     expect(relays).toEqual([[{ kind: 'otp', value: code }]]);
   });
 
-  // Staged: until the gap narrows to a space after the connector-proxy redeploy, a code joins digits on the next
-  // row. The code is still hidden; the relay carries the extra digits. The follow-up must flip these on purpose.
+  // A gap may be a newline, so a code joins digits that start the next row. The code is still hidden; the relay
+  // carries the extra digits. Pinned exactly, so narrowing the gap changes these on purpose.
   it.each([
     ['a "2026 Acme" row', '<tr><td>Your code</td><td>4829</td></tr><tr><td>2026 Acme</td></tr>', '48292026', ''],
     ['a "10:00" row', '<tr><td>Your code</td><td>48 29 13</td></tr><tr><td>10:00</td></tr>', '48291310', '00'],
