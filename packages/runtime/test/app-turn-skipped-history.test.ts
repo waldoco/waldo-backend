@@ -270,8 +270,8 @@ describe('an app turn over a history that holds a row failing the entry shape', 
     const rows = [user('u1', 'First question.', null), reply('u1-reply', 'First answer.', 'u1'), stray as Row];
     await withOwner(name, history(rows, 'u1-reply', { unwitnessed: [FIRST_TURN] }), async (owner, state, lines) => {
       expect((await send(owner, state, name, 'client-reuse-0001', 'Next question.')).outcome).toBe('interrupted');
-      expect(state.storage.kv.get(`${PREFIX}count`)).toBe(3);
-      expect(links(await shown(owner, name))).toEqual([['u1', null], ['u1-reply', 'u1']]);
+      expect(state.storage.kv.get(`${PREFIX}count`)).toBe(4);
+      expect(links(await shown(owner, name))).toEqual([['u1', null], ['u1-reply', 'u1'], [`${FIRST_TURN}-did-not-finish`, 'u1-reply']]);
       expect(lines().filter(line => line.hop === 'app_turn')).toEqual([{ hop: 'app_turn', ok: false, code: 'history_conflict' }]);
     });
   });
