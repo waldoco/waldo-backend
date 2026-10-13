@@ -44,7 +44,7 @@ const store = async (doName: string, email: string, scopes: readonly string[], t
   return id ? reply({ id, email: email.toLowerCase(), scopes }) : fail(404, 'unknown owner');
 };
 
-type Body = Readonly<{ intent_id?: string; read_only?: boolean; do_name: string; op: 'exchange' | 'adopt' | 'call' | 'mcp_call'; server_url?: string; tool?: string; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[]; calendar_details?: boolean }>;
+type Body = Readonly<{ intent_id?: string; read_only?: boolean; do_name: string; op: 'exchange' | 'adopt' | 'call' | 'mcp_call'; server_url?: string; tool?: string; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[]; calendar_details?: boolean; calendar_owner_status?: boolean }>;
 const nonStoringRead = (body: Body): boolean => body.op === 'mcp_call' && body.read_only === true && /^mcpread:[0-9a-f]{64}$/.test(body.intent_id ?? '') && isRegisteredMcpRead(body.server_url, body.tool);
 const READ_FAILURE_CODES = new Set(['intent_unavailable', 'insufficient scopes', 'google_refresh_failed', 'google_reauth_needed', 'google_scope_missing', 'mcp_read_rejected', 'mcp_read_failed']);
 // The proxy's own fixed failure codes. Any other message is provider or runtime text, which can repeat a
