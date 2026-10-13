@@ -83,7 +83,7 @@ it('a failing grant keeps its tools so the call can ask for a reconnect, and an 
 
 it('deploy configuration decides MCP, browse and Drive eligibility', async () => {
   const verdict = async (handler: { eligible?: () => unknown }) => handler.eligible ? await handler.eligible() : { ok: true };
-  const readable = JSON.stringify([{ name: 'drive', url: 'https://mcp.example.test', auth: 'google', requires: 'drive', allow_tools: ['search_files'], read_tools: ['search_files'] }]);
+  const readable = JSON.stringify([{ name: 'drive', url: 'https://drivemcp.googleapis.com/mcp/v1', auth: 'google', requires: 'drive', allow_tools: ['search_files'], read_tools: ['search_files'] }]);
   const plain = JSON.stringify([{ name: 'tools', url: 'https://mcp.example.test' }]);
   const missing = { ok: false, reason: 'not_configured' };
   expect(await verdict(callMcpToolHandler(undefined))).toEqual(missing);
