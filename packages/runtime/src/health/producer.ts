@@ -204,11 +204,16 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     if (read && read.kind !== 'answer') console.log(JSON.stringify({ hop: 'weight_demand', ok: false, code: read.kind === 'late' ? 'demand_late' : 'demand_failed' }));
     const busy = busyByDay(read?.kind === 'answer' ? read.answer : null);
     const days = readingDays.map((day): DayRecord => ({ ...day, demand: { meetingMinutes: busy.get(day.day)?.minutes ?? null, messageCount: null, openTaskMinutes: null, physicalLoad: overlapped.has(day.day) ? null : physicalLoadOf(day) } }));
+    // A day the calendar reports and the phone sent nothing for still counts toward Weight. It carries no health reading,
+    // so Recovery, Form and sleep debt read it as missing, and its physical load is unknown.
+    for (const [day, { minutes }] of busy) {
+      if (!days.some(d => d.day === day)) days.push({ day, timezone: at.timezone, sleep: null, overnightHrv: null, restingHeartRate: null, hourly: [], workouts: [], demand: { meetingMinutes: minutes, messageCount: null, openTaskMinutes: null, physicalLoad: null } });
+    }
     const outcomes: ReturnType<typeof writeOutcome>[] = [];
     for (const targetDay of [shiftDay(today, -1), today]) {
       const scores = deps.compute({ access: 'granted', targetDay, days, sleepNeedMinutes: null, asOf: parsed.series.readAt });
       const nothingToShow = [scores.recovery, scores.form, scores.weight].every(p => p.state === 'unavailable');
-      if (nothingToShow && !days.some(d => d.day === targetDay)) continue;
+      if (nothingToShow && !readingDays.some(d => d.day === targetDay)) continue;
       // A day read without a calendar Google reported gone says so, since its Weight saw less than every calendar.
       const tags = [...(zoneChanged.has(targetDay) ? ['zone_changed'] : []), ...(scores.weight.state === 'available' && busy.get(targetDay)?.partial ? ['calendar_partial'] : [])];
       const row = rowOf(targetDay, scores, chosen, parsed.series.readAt, at.timezone, tags);
