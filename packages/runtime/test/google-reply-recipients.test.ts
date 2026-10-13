@@ -21,6 +21,14 @@ describe('address lists from mail headers', () => {
     expect(addressList('sam@example.com (Sam Lee), pat@example.org (PM, \\) team)')).toEqual(['sam@example.com', 'pat@example.org']);
     expect(addressList('Ana (desk (2)) <ana@example.com>')).toEqual(['ana@example.com']);
   });
+  it('turns away an address longer than 320 characters before checking it, so a hostile header cannot stall the reader', () => {
+    const started = performance.now();
+    expect(addressList(`a@${'b.'.repeat(50_000)}>, ok@example.com`)).toEqual(['ok@example.com']);
+    expect(performance.now() - started).toBeLessThan(250);
+    const longest = `${'a'.repeat(64)}@${'b'.repeat(251)}.io`;
+    expect(addressList(`${longest}, ${longest.replace('@', '@xx')}`)).toEqual([longest]);
+    expect(addressList(`"${'x'.repeat(100_000)}" <ok@example.com>`)).toEqual(['ok@example.com']);
+  });
   it('drops what is not an address and keeps a repeated address once', () => {
     expect(addressList('not an address, <also bad>, "x" <ok@example.com>')).toEqual(['ok@example.com']);
     expect(addressList('Sam <sam@example.com>, SAM@example.com, pat@example.org, sam@example.com')).toEqual(['sam@example.com', 'pat@example.org']);
