@@ -1769,3 +1769,18 @@ Verdicts come from a scan of PR comments at 09:57Z. "@head" means the verdict na
 - **L4's queue after the reset:** the Weight reason wording, then Patrol (`view=activity`), then Spots (`view=constellation` claims).
 
 **Local-only work:** lanes reported everything pushed in their #1103 state notes at about 09:30Z. N4's `4250f85e` is an obsolete merge and is intentionally not pushed.
+
+## 10:02Z (from `date -u`): backend #1134, #1130 and #1145 merged; one deploy pending
+
+- **#1134** (day cards speak about the body only from shared health): merged `8328deff`, pinned to `9b962051`.
+- **#1130** (Weight counts every calendar day): merged `66d6828c`, pinned to `74743e3f`.
+- Both merged on the cloud lane's independent PASS at head and green CI (6 of 6), after one batch advisor check naming #1145, #1134 and #1130. None of their files changed on `beta-mvp` since the review base `6ddbd85e`. The nits are on the PRs.
+- **#1145** (the calendar-read fix): merged `ea41bb0e`, pinned to `bfd3a2c9`.
+  - The Sonnet reviewer passed `5eda4680` with no blockers. It confirmed the root cause and found the base also leaked the marker to the model on the legacy path, which the PR closes.
+  - The delta to `bfd3a2c9` is test-only: a compile-time check that every `CalendarItem` key is named in the schema, typechecked by `verify`.
+  - Follow-ups for Connectors after the reset: a 64-hex guard in `toItem` (an empty or over-1024 foreign `waldoOperation` still rejects the page); a schema valid/invalid pair; optionally a shared strip helper.
+- **Not merged:**
+  - #1128: edits `telegram-owner-do.ts`, which stays frozen until #1119, still open, lands.
+  - #1129: needs main merged in and CI re-run, because it conflicts with #1130 on `ALGORITHM` and `health-producer.test.ts`.
+- **`beta-mvp` tip `ea41bb0e`:** CI is running on it, with a background wait. When it's 6 of 6 green, the owner runs one staging-gate deploy for that exact SHA, avoiding :00 and :30. The gate stays the check: no migrations, wrangler or app-contract paths in `a94d7fa5..ea41bb0e`.
+- **Connectors' wording fixes** wait for the reset, as told.
