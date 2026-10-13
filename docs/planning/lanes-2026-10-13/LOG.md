@@ -1067,3 +1067,14 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - the OpenAI key is sent to Browserbase;
   - there's no health filter on `instruction` (unverified).
 - The findings are on #1110. There's no merge until a fresh PASS.
+
+## 05:02:38Z heartbeat (the owner is awake and replying, so asleep-mode is off)
+
+- **Staging** is `77d7329c`. **`beta-mvp`** is `6ddbd85e` (#1100), waiting for the owner's deploy.
+- **Nothing is merge-ready:**
+  - #1114 waits for Connectors' fold-in (head still `2c329a19`).
+  - #1110 (`47cdf735`, CLEAN) waits for its test and contract fixes.
+  - App #104 waits for the App lane's fixes.
+  - #1119 and #1108 follow #1110.
+- **Policy change:** I'm no longer holding backend merges for the deploy. When a PR passes the gate, it merges, and the owner gets the current tip's command. A stale command stops at the gate script's tip check, before anything deploys.
+- **Pushes:** the log goes up once per cycle, because each push runs the full CI on #1077.
