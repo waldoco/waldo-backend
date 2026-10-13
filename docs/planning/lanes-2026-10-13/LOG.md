@@ -1249,3 +1249,50 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - Next: app #109 (N4, `08c1de7d`) and #1120.
 - **"To send" v1** is recipients plus the review line: `email_send` has no subject or body field. The full sheet waits on ask D.
 - **The brief for the backend lane** is 6140220362. The owner relays it.
+
+## 07:52:40Z: #1122 merged; full state snapshot (read this first after a compaction)
+
+- **Merged #1122** (`cards[].latest`) as `917032a1` at 07:51:04Z.
+  - **Gate:**
+    - review PASS at `a2608b77`;
+    - CI green;
+    - CLEAN;
+    - the app's pinned contract (`backend-999/controls.ts:49,53`) parses `latest` with the identical shape;
+    - `APP_CARD_EXCERPT_MAX_V1 = 280` matches the app's `max(280)`;
+    - the advisor agreed.
+  - The follow-ups are on the PR (6140928981): an older day's write wipes today's record; a KV read outside the try; the unbounded transcript scan; test gaps.
+- **The next deploy is the beta-mvp tip after push CI is 6/6 green.** If #1114's delta PASSes in time, merge it first and deploy once.
+  - The owner's command needs the prefix `ALLOW_APP_CONTRACTS=reviewed`, because #1122 touched `packages/contracts/src/app/controls.ts` and the shape was checked against the app's pin.
+  - Every later tip whose range from live includes #1122 needs it too.
+  - After the deploy, L4's Pro Max check is that the Home Brief row shows the excerpt.
+- **Reviews running** (one subagent each):
+  - app #106 (`3e92f644`) with #108 (`575f7104`);
+  - #1114's delta (`61f9bc47`);
+  - app #109 (N4, `08c1de7d`);
+  - #1123 (send-turn-one, `09c509dc`).
+- **Gate queue after them:**
+  1. app #110 (the Watch, `481411c5`, when CI is green);
+  2. #1126 (the calendar-move exit, `84bda213`, when CI is green);
+  3. #1110 (the Cloudflare re-cut, `a123b38b`);
+  4. #1120 and #1113 (needs owner);
+  5. #1119 (retarget after #1110; the owner deploys it alone);
+  6. #1108 (stacked on #1119).
+  - L5's `sleep_debt` migration PR is held for the owner.
+- **Live runs waiting:**
+  - L4's quasarplum search check (running).
+  - The calendar QA run, after #1126 deploys: on L4's Pro Max, 1 QA event (Add, then Move 4pm→5pm). The budget is ≤3; used: 0.
+- **Lanes:**
+  - **L4** (`local_5eb95055`): the Overview build; A, B and D proposals; the mic package proposal before installing.
+  - **Connectors** (`local_83ce6587`): A (effect labels), after L4's shape.
+  - **N4/Watch** (`local_d8e5db79`): the WatchConnectivity scores PR, stacked on #110; the Air waits for the owner's new-account sign-in.
+  - **L5** (`local_3f1a3357`, "backend lane 2"): `sleep_debt` (a), then H and G, the trail, then B after #1122.
+  - **Ansh's lane** (cloud, via #1103): PRs for its Form, Weight, ageing (align to ADR-0081 §2), wake-fix and Expo-token branches; the search diagnosis; #1110.
+- **Owner rulings 07:45Z (via L4):** the mic install yes (an on-device package, proposed first); Undo on Home approvals yes.
+- **Owner items:**
+  1. sign in the new test owner on the Air (Watch lane's panel, Create account);
+  2. P1 run 3b (before about 08:40Z);
+  3. Google re-consent with the scopes, and the OAuth-publish decision (Testing refresh tokens expire in 7 days);
+  4. the Expo keys;
+  5. the next deploy command.
+- **Usage:** 18% at 07:52Z, rising fast. Hold new reviews until running ones finish.
+- **Context:** the orchestrator is at 82%, so a compaction is near.
