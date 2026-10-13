@@ -5,6 +5,7 @@ import { OwnerDO } from '../src/channels/owner-do';
 import { handleApp } from '../src/channels/app-api';
 import { routerSignature } from '../src/identity/owner-directory';
 import { armAlarm } from '../src/scheduler/alarm-slot';
+import { episodeIndex } from '../src/channels/episodes';
 
 vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(), createTelegramCaller: () => async () => { throw Error('No Telegram binding exists'); } }));
 
@@ -91,6 +92,21 @@ it('an app-only owner deletes their account from the app: the directory removes 
     expect((await app('/actions/delete-request-0001', undefined, credential)).status).toBe(401);
     expect((await app('/chat/main/messages', { client_message_id: 'after-delete-0001', text: 'hello' }, credential)).status).toBe(401);
     expect(seen.deletes).toBe(1);
+    expect(stored(seen.state)).toBe(0);
+  });
+});
+
+// App replies can carry the owner's own health numbers, and app turns index them into the full-text episodes table.
+it('deleting the account leaves no episodes row holding an app reply that carried a health number', async () => {
+  await fixture('deleted', async (app, seen) => {
+    const credential = await signIn(app);
+    const reply = 'Your resting heart rate was 52 this morning, a little under your usual.';
+    const episodes = episodeIndex(seen.state.storage.sql);
+    episodes.add('app-8000000000001-reply', 'waldo', reply, Date.now());
+    expect(episodes.search('resting heart rate', 5).map(hit => hit.entry_id)).toEqual(['app-8000000000001-reply']);
+    const view = await account(app, credential);
+    expect((await app('/actions', remove(view.revision, 'delete-episodes-0001'), credential)).status).toBe(200);
+    expect(seen.state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM sqlite_master WHERE name = 'episodes'").one().n).toBe(0);
     expect(stored(seen.state)).toBe(0);
   });
 });
