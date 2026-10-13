@@ -16,7 +16,7 @@ const repeat = async (name: string, second: (first: EmailSendProposal) => Promis
   const cards: string[] = [];
   let now = SENT_AT, next = 0;
   let firstId = '', secondId = '';
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const client: Partial<GoogleClient> = firstOutcome === 'unknown'
       ? { sendRaw: (async () => { throw new TypeError('network connection lost'); }) as GoogleClient['sendRaw'], findSentByMessageId: (async () => false) as GoogleClient['findSentByMessageId'] }
       : { sendRaw: (async () => ({ message_id: 'g1', thread_id: 't1' })) as GoogleClient['sendRaw'],
