@@ -1,4 +1,5 @@
 import { Parser } from 'htmlparser2';
+import { extractArtifacts } from '../security/artifact-hygiene.ts';
 // Google connector for the owner's own accounts: OAuth offline grants, Calendar reads and Gmail.
 // Consent asks once for the combined set (owner ruling 2026-09-24 13:31, reversing W3's per-feature asks):
 // calendar + mail + tasks in a single dialog. Scope is not permission: each tool still gates its own effects.
@@ -323,24 +324,53 @@ type GmailPayload = Readonly<{ mimeType?: string; filename?: string; body?: { da
 type GmailFullMessage = Readonly<{ id?: string; threadId?: string; snippet?: string; internalDate?: string; payload?: GmailPayload }>;
 const LINK_SCAN_CAP = 100;
 // Artifact extraction backtracks across an unbroken run, so its cost grows with the square of a link's
-// length. A longer target is skipped; link targets are only scanned, never shown.
+// length. A longer target is left out of the scan, which feeds only the relay; the Links list below has
+// its own, tighter bound.
 const LINK_TARGET_MAX = 2_048;
+// Rendering keeps an anchor's text and drops its target, so the targets a reader could follow are listed
+// after the body. These are parsing bounds; which link matters is the model's call. Mail, image-only and
+// over-long links are left out, and so are verification artifacts, which go only to the relay.
+const LINK_LIST_MAX = 20;
+const LINK_LIST_CHARS = 2_000;
+const LINK_LISTED_TARGET_MAX = 300;
+const LINK_LABEL_MAX = 100;
+const linkList = (anchors: readonly Readonly<{ target: string; label: string }>[]): string => {
+  const listed: string[] = [];
+  const seen = new Set<string>();
+  let chars = 0;
+  for (const { target, label } of anchors) {
+    if (!label || target.length > LINK_LISTED_TARGET_MAX || seen.has(target) || extractArtifacts(target).artifacts.length) continue;
+    const text = label.slice(0, LINK_LABEL_MAX).trim();
+    const line = text === target ? `- ${target}` : `- ${text}: ${target}`;
+    if (listed.length === LINK_LIST_MAX || chars + line.length + 1 > LINK_LIST_CHARS) break;
+    listed.push(line);
+    seen.add(target);
+    chars += line.length + 1;
+  }
+  return listed.length ? `\n\nLinks:\n${listed.join('\n')}` : '';
+};
 const htmlText = (html: string): Readonly<{ text: string; links: readonly string[] }> => {
   const blocks = new Set(['p', 'div', 'br', 'li', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'section', 'article', 'hr']);
   let suppressed = 0;
   const chunks: string[] = [];
   const links: string[] = [];
+  const anchors: { target: string; label: string }[] = [];
+  let anchor: { target: string; text: string[] } | null = null;
   const boundary = () => { if (!suppressed && chunks.length && chunks.at(-1) !== '\n') chunks.push('\n'); };
   new Parser({
     onopentag(name, attributes) {
       if (name === 'script' || name === 'style') suppressed++;
       else if (blocks.has(name)) boundary();
       if (name === 'a' && /^https?:\/\//i.test(attributes.href ?? '') && attributes.href!.length <= LINK_TARGET_MAX && links.length < LINK_SCAN_CAP) links.push(attributes.href!);
+      if (name === 'a') anchor = /^https?:\/\//i.test(attributes.href ?? '') ? { target: attributes.href!, text: [] } : null;
     },
-    ontext(text) { if (!suppressed) chunks.push(text); },
-    onclosetag(name) { if (name === 'script' || name === 'style') suppressed = Math.max(0, suppressed - 1); else if (blocks.has(name)) boundary(); },
+    ontext(text) { if (!suppressed) { chunks.push(text); anchor?.text.push(text); } },
+    onclosetag(name) {
+      if (name === 'script' || name === 'style') suppressed = Math.max(0, suppressed - 1); else if (blocks.has(name)) boundary();
+      if (name === 'a' && anchor) { anchors.push({ target: anchor.target, label: anchor.text.join('').replace(/\s+/g, ' ').trim() }); anchor = null; }
+    },
   }, { decodeEntities: true }).end(html);
-  return { text: chunks.join('').trim(), links };
+  return { text: chunks.join('').trim() + linkList(anchors), links };
 };
 // A huge text part held by attachmentId is left to the snippet rather than decoded whole.
 const MAX_FETCHED_BODY_BYTES = 1_000_000;
