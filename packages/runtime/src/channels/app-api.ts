@@ -8,6 +8,7 @@ import { linkCodeHash, type OwnerDirectoryEnv } from '../identity/owner-director
 import { signedRpc } from '../identity/owner-directory';
 import { computeDailyScores } from '../health/scores';
 import { APP_HEALTH_PATH, handleAppHealth } from './app-health';
+import { appDeviceMutationResultV1Schema, appDeviceRegisterV1Schema, appDeviceRevokeV1Schema, appDevicesResultV1Schema } from '../../../contracts/src/app/devices';
 import { CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS, CONSOLE_OTP_SEND_LIMIT, CONSOLE_OTP_VERIFY_LIMIT } from './console-signin';
 
 export const APP_PATH = '/app/v1';
@@ -15,6 +16,7 @@ export const APP_CHAT_PATH = `${APP_PATH}/chat/main`;
 export const APP_CHAT_SEND_PATH = `${APP_CHAT_PATH}/messages`;
 export const APP_APPROVALS_PATH = `${APP_PATH}/approvals`;
 export const APP_APPROVAL_DECISIONS_PATH = `${APP_APPROVALS_PATH}/decisions`;
+export const APP_DEVICES_PATH = `${APP_PATH}/devices`;
 const MAX_BODY_BYTES = 8192;
 
 type AppEnv = OwnerDirectoryEnv & Readonly<{ TELEGRAM_OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
@@ -102,6 +104,46 @@ const fenceSession = async (env: AppEnv, owners: NonNullable<AppEnv['TELEGRAM_OW
   return false;
 };
 
+// The installation's push registration, held in the directory's Vault custody for this session. A token goes to the
+// directory once and never comes back: answers carry the device without it.
+const sha256Hex = async (text: string) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))].map(byte => byte.toString(16).padStart(2, '0')).join('');
+const withoutDelivery = (row: unknown) => { const { delivery: _delivery, ...device } = (row ?? {}) as Record<string, unknown>; return device; };
+const devicesRequest = async (request: Request, path: string, who: { doName: string; credential: string }, call: ReturnType<typeof signedRpc>): Promise<Response> => {
+  const sessionId = sessionIdOf(who.credential);
+  if (!call || !sessionId) return fail(503);
+  const hash = await linkCodeHash(sessionId), doName = who.doName;
+  const stale = () => Response.json({ error: 'conflict', code: 'stale_read' }, { status: 409, headers: { 'cache-control': 'no-store' } });
+  let answer: unknown;
+  if (path === APP_DEVICES_PATH) {
+    if (request.method !== 'GET') return fail(405);
+    try { answer = await call('app_push_list', `app.push.list.${doName}.${hash}`, { p_do_name: doName, p_session_hash: hash }); } catch { return fail(503); }
+    if (answer === null) return fail(401);
+    const listed = appDevicesResultV1Schema.safeParse({ devices: Array.isArray(answer) ? answer.map(withoutDelivery) : answer });
+    return listed.success ? ok(listed.data) : fail(503);
+  }
+  if (request.method !== 'POST') return fail(405);
+  const body = await readJson(request);
+  if (path === `${APP_DEVICES_PATH}/register`) {
+    const asked = appDeviceRegisterV1Schema.safeParse(body);
+    if (!asked.success) return Response.json({ error: 'invalid_request' }, { status: 400, headers: { 'cache-control': 'no-store' } });
+    const { installation_id: installation, provider, environment, expected_device_epoch: epoch, operation_id: operation, token } = asked.data;
+    try {
+      answer = await call('app_push_register', `app.push.register.${doName}.${hash}.${installation}.${provider}.${environment}.${epoch}.${operation}.${await sha256Hex(token)}`,
+        { p_do_name: doName, p_session_hash: hash, p_installation_id: installation, p_provider: provider, p_environment: environment, p_expected_epoch: epoch, p_operation_id: operation, p_token: token });
+    } catch { return fail(503); }
+  } else {
+    const asked = appDeviceRevokeV1Schema.safeParse(body);
+    if (!asked.success) return Response.json({ error: 'invalid_request' }, { status: 400, headers: { 'cache-control': 'no-store' } });
+    const { installation_id: installation, expected_device_epoch: epoch, operation_id: operation } = asked.data;
+    try { answer = await call('app_push_revoke', `app.push.revoke.${doName}.${hash}.${installation}.${epoch}.${operation}`,
+      { p_do_name: doName, p_session_hash: hash, p_installation_id: installation, p_expected_epoch: epoch, p_operation_id: operation }); } catch { return fail(503); }
+  }
+  if (answer === null) return stale();
+  const mutation = answer as { device?: unknown; result?: unknown };
+  const parsed = appDeviceMutationResultV1Schema.safeParse({ device: withoutDelivery(mutation.device), result: mutation.result });
+  return parsed.success ? ok(parsed.data) : fail(503);
+};
+
 // App sign-in and the shared main chat. Returns null for paths outside /app/v1 so the caller keeps routing.
 export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth | null = consoleAuth(env), defer?: (work: Promise<unknown>) => void): Promise<Response | null> => {
   const url = new URL(request.url);
@@ -156,7 +198,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     return handleAppHealth({ request, url, doName, rpc: signedRpc(env), readBody: readBoundedBody, defer, compute: computeDailyScores,
       ...(secret ? { readDemand: (range: { from: string; to: string; timezone: string }) => readOwnerDemand(owners, secret, doName, range) } : {}) });
   }
-  const bucket = request.method !== 'POST' ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : url.pathname === `${APP_PATH}/auth/renew` ? 'app-renew' : 'app-chat-send';
+  const bucket = request.method !== 'POST' ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : url.pathname === `${APP_PATH}/auth/renew` ? 'app-renew' : url.pathname.startsWith(APP_DEVICES_PATH) ? 'app-devices' : 'app-chat-send';
   try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `${bucket}:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
 
   if (url.pathname === `${APP_PATH}/session`) {
@@ -171,6 +213,10 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     let revoked: boolean;
     try { const hash=await linkCodeHash(sessionId); const call=signedRpc(env); if(!call) return fail(503); if(!(await fenceSession(env,owners,who.doName,hash))) return fail(503); const push=await call('app_push_revoke_session', `app.push.revoke-session.${who.doName}.${hash}`, {p_do_name:who.doName,p_session_hash:hash}); if(typeof push!=='number'||!Number.isSafeInteger(push)||push<0)return fail(503); revoked=await auth.revokeSession(who.doName,hash); if((await auth.listSessions(who.doName)).some(row=>row.session===hash))return fail(503); await fenceSession(env,owners,who.doName,hash); } catch { return fail(503); }
     return ok({ result: revoked ? 'revoked' : 'already_gone' });
+  }
+
+  if (url.pathname === APP_DEVICES_PATH || url.pathname === `${APP_DEVICES_PATH}/register` || url.pathname === `${APP_DEVICES_PATH}/revoke`) {
+    return devicesRequest(request, url.pathname, who, signedRpc(env));
   }
 
   if (url.pathname === `${APP_PATH}/auth/renew`) {

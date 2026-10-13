@@ -24,3 +24,13 @@ it('never returns a token, and lists devices with their epoch', () => {
   expect(appDeviceMutationResultV1Schema.safeParse({ device, result: 'pending' }).success).toBe(false);
   expect(appDeviceRoutesV1.map(route => `${route.method} ${route.path}`)).toEqual(['GET /app/v1/devices', 'POST /app/v1/devices/register', 'POST /app/v1/devices/revoke']);
 });
+
+it('registers an Expo push token under the expo provider, and only there', () => {
+  const expo = { ...register, provider: 'expo', environment: 'production', token: 'ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]' };
+  expect(appDeviceRegisterV1Schema.safeParse(expo).success).toBe(true);
+  expect(appDeviceRegisterV1Schema.safeParse({ ...expo, token: 'ExpoPushToken[AbC_dEf-1234567890]' }).success).toBe(true);
+  for (const token of ['a'.repeat(64), 'ExponentPushToken[short]', 'ExponentPushToken[has space here ok]', 'ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]x', `ExponentPushToken[${'x'.repeat(129)}]`])
+    expect(appDeviceRegisterV1Schema.safeParse({ ...expo, token }).success).toBe(false);
+  for (const provider of ['apns', 'fcm']) expect(appDeviceRegisterV1Schema.safeParse({ ...register, provider, token: 'ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]' }).success).toBe(false);
+  expect(appDevicesResultV1Schema.safeParse({ devices: [{ ...device, provider: 'expo', environment: 'production' }] }).success).toBe(true);
+});
