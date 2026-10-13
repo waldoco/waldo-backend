@@ -635,3 +635,15 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 
 ### Test sends
 1 of 5 used: the word "probe", to the test account's own address, at 23:24:02Z.
+
+## 00:55Z: #1111 merged and deployed; P1 go
+
+- **Merged #1111 as `652b5fcf`** (the send fix).
+  - **Gate:** review PASS at `b6718577`. The requested delta `574061fd` was checked by hand: a 2-line, content-free `email_thread_match` flag (`same_thread`/`other_thread`) plus its test. The PR body is corrected. CI 6/6 and CLEAN, as the advisor planned.
+- **Push CI** on `652b5fcf` succeeded.
+- **Deployed `652b5fcf` to staging at 00:54:48Z** [verified].
+  - **Gate script:** GATE PASS. Tip; CI 6/6; 11 files since `3bc1bb54`; no wrangler, deploy or migration change; preflight 55 applied, 0 pending.
+  - **Worker `8b48dad2`.** Rollback target `9c973463` (`3bc1bb54`).
+  - **This tip carries** #1106 (tests), #1107 (a no-op until the proxy redeploys) and #1111.
+  - **Smoke:** `/healthz` shows `652b5fcf`. Signed-out `/app/v1/session` and `/app/v1/chat/main` return 401, and `POST /probe/turn` returns 403. The tail shows version `8b48dad2`.
+- **P1 go sent to the App lane:** test send 2 of 5, which also counts as QA step 4. It includes the look-only check for #98 when the card shows. I read the hops from the tail.
