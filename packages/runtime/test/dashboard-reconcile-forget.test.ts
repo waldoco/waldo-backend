@@ -3,7 +3,7 @@ import {expect,it,vi} from 'vitest';
 import {claimStore} from '../src/memory/claims';
 import {TelegramFinalOutbox,FINAL_OUTBOX_KEY} from '../src/channels/telegram-final-outbox';
 it.each([false,true])('node forget cleans source-final stores and reports write failure: %s',async(fail)=>{
- const name='console-forget-reconcile-'+crypto.randomUUID();const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
+ const name='console-forget-reconcile-'+crypto.randomUUID();const stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
  await runInDurableObject(stub,async(instance,state)=>{
   Object.assign((instance as unknown as {env:Record<string,unknown>}).env,{TELEGRAM_BOT_TOKEN:'123:synthetic',OPENAI_API_KEY:'synthetic-key'});state.storage.kv.put('do_name',name);
   const memory=claimStore(state.storage.sql,work=>state.storage.transactionSync(work));

@@ -445,7 +445,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     if ((this.envBindings as Cloudflare.Env & {COMMON_OWNER_TASKS?:string}).COMMON_OWNER_TASKS !== '1') throw Error('common tasks held');
     await verifyCommonMessageIngress(this.envBindings.WALDO_ROUTER_HMAC_SECRET,ingress,this.deps.now());
     await verifyCommonExecutionRequest(this.envBindings.WALDO_ROUTER_HMAC_SECRET!,ingress,request);
-    const physical=this.envBindings.TELEGRAM_OWNER_DO;
+    const physical=this.envBindings.OWNER_DO;
     if (!physical || physical.idFromName(ingress.doName).toString()!==ingress.physicalDoId) throw Error('common host locator rejected');
     const directory=commonOwnerAuthority(this.envBindings);
     const authority=await directory.resolve(ingress.provider,ingress.subject,ingress.doName);
@@ -564,7 +564,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     if ((this.envBindings as Cloudflare.Env & { COMMON_OWNER_TASKS?: string }).COMMON_OWNER_TASKS !== '1') throw Error('common tasks held');
     await verifyCommonMessageIngress(this.envBindings.WALDO_ROUTER_HMAC_SECRET, ingress, this.deps.now());
     await verifyCommonTaskSourceRequest(this.envBindings.WALDO_ROUTER_HMAC_SECRET!, ingress, request);
-    const physical = this.envBindings.TELEGRAM_OWNER_DO;
+    const physical = this.envBindings.OWNER_DO;
     if (!physical || physical.idFromName(ingress.doName).toString() !== ingress.physicalDoId) throw Error('common host locator rejected');
     const directory = commonOwnerAuthority(this.envBindings);
     const authority = await directory.resolve(ingress.provider, ingress.subject, ingress.doName);

@@ -56,8 +56,8 @@ it('browse/download keeps two owners isolated and uses the requested immutable r
  await a.tombstone(first.file_id,2);expect((await request(a,`/console/workspace/file?id=${first.file_id}&revision=1`)).status).toBe(404);
 });
 it('real owner console rejects unsigned and another owner session for both browse and download',async()=>{
- const a=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`console-file-a-${crypto.randomUUID()}`));
- const b=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`console-file-b-${crypto.randomUUID()}`));
+ const a=env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`console-file-a-${crypto.randomUUID()}`));
+ const b=env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`console-file-b-${crypto.randomUUID()}`));
  const token=await runInDurableObject(a,async(_instance,state)=>consoleAccess(state.storage).grant());
  for(const path of ['/console/workspace','/console/workspace/file?id=00000000-0000-4000-8000-000000000001&revision=1']){
   expect((await a.fetch('https://fixture'+path)).status).toBe(401);

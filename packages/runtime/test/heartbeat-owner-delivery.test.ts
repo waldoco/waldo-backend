@@ -23,12 +23,12 @@ vi.mock('../src/scheduler/alarm-slot', async load => {
   } };
 });
 vi.mock('openai', () => ({ default: class { responses = { create: async () => { throw new Error('heartbeat fixture forbids model calls'); } }; } }));
-const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO } = await import('../src/channels/owner-do');
 let sequence = 0;
 it.each(['ack', 'blocked', 'unlink', 'enqueueCrash', 'enqueueFailure'])('actual owner alarm keeps heartbeat background delivery truthful: %s', async mode => {
   const stub = env.TRACER_DO.get(env.TRACER_DO.idFromName(`heartbeat-owner-${sequence++}`));
   await runInDurableObject(stub, async (_instance, state) => {
-    const owner = new TelegramOwnerDO(state, { ...env, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC' });
+    const owner = new OwnerDO(state, { ...env, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC' });
     state.storage.kv.put('do_name', 'synthetic-owner'); state.storage.kv.put('telegram_subject', '7');
     try {
       await owner.alarm();

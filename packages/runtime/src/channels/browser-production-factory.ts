@@ -9,7 +9,7 @@ import { fixtureDigest, publicFixtureBrowser } from './public-fixture-browser';
 
 export type BrowserProductionEnv = OwnerDirectoryEnv & Readonly<{
   WALDO_ENVIRONMENT?: string; WALDO_OWNER_DO_NAMESPACE?: string;
-  TELEGRAM_OWNER_DO?: DurableObjectNamespace; BROWSER?: BrowserWorker;
+  OWNER_DO?: DurableObjectNamespace; BROWSER?: BrowserWorker;
 }>;
 // A deployment-code decision, never an environment variable or model argument.
 export type BrowserTrialPolicy = Readonly<{ enabled: boolean; doName: string; fixtureOrigin: string }>;
@@ -26,7 +26,7 @@ export const browserOwnerBindingReader = (options: Options, doName: string, subj
   const environment = env.WALDO_ENVIRONMENT, namespace = env.WALDO_OWNER_DO_NAMESPACE;
   const physical = () => environment === 'staging' && Boolean(namespace && /^[a-zA-Z0-9_-]{1,240}$/.test(namespace))
     && storage.kv.get('do_name') === doName && storage.kv.get('telegram_subject') === subject
-    && storage.kv.get('telegram_unlinked') !== true && env.TELEGRAM_OWNER_DO?.idFromName(doName).toString() === actualDoId;
+    && storage.kv.get('telegram_unlinked') !== true && env.OWNER_DO?.idFromName(doName).toString() === actualDoId;
   const call = signedRpc(env, async (input, init) => {
     const response = await (options.fetcher ?? fetch)(input, init);
     if (!response.body) return response;
