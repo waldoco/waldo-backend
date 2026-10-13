@@ -939,3 +939,25 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - **Interim reading (a):** chat text follows the account lifecycle. The owner is to ratify it.
   - **Not deployed.** Two checks come first: whether a rollback stays clean for Telegram chats, and whether the staging owners' directory rows resolve.
 - **The owner sent a message at about 04:18Z.** The orchestrator stopped and is reporting. No deploy until the owner answers.
+
+## 04:32:23Z: #1114 third review FAIL on the brief's bar; strictly better than today
+
+- **Not merged or posted yet.** The owner is awake, and I've asked whether to continue.
+- **The fuzz:** 2,554 of 4,000 table mails leak a code today. With #1114, none leak, before or after the proxy redeploy. No catches were lost in 20,000 plain code mails, and none differ in 5,000 link mails. Timing stays under the bound on every path #1114 touches.
+- **Blocker 1** (only until the proxy redeploys; base leaks it too): a code glued to the next text cell in minified HTML leaks whole. A trailing `(?!\d)` fixes it, but also quarantines "Dress code 1920s" and similar text.
+- **Blocker 2** (pre-existing, at every stage): these leak:
+  - zero-width characters between digits;
+  - `1234-5678` shows its second half;
+  - the split groups `4829 13` and `48 2913`.
+  - The reviewer's probe fix catches them in about 3 ms.
+- **Non-blocking:**
+  - Rows can merge into a wrong relay, including an undisclosed same-row case.
+  - Area, post and SKU codes are newly quarantined.
+  - When a code is present, the whole body's whitespace is normalized.
+  - `<pre>` is collapsed.
+  - The deploy-state comments will go stale.
+  - Behaviour change: WhatsApp now forwards `Acme [quarantined…]`, where it used to send its generic marker.
+- **Recommendation (for the owner):**
+  1. Merge #1114 now, because it closes the larger live leak.
+  2. Deploy the Worker.
+  3. Connectors opens a small follow-up for blocker 2's shapes before the proxy redeploy. Blocker 1 ends with the redeploy.
