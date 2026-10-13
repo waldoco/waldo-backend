@@ -14,12 +14,15 @@ type Account = Readonly<{ connection_id: string | null; email: string | null }>;
 const read = async (args: Record<string, unknown>, respond: (url: URL) => unknown, owner: Account = account) => {
   const fetcher = (async (input: RequestInfo | URL) => {
     const url = new URL(String(input));
-    return Response.json(url.hostname === 'oauth2.googleapis.com' ? { access_token: 'fixture' } : respond(url));
+    if (url.hostname === 'oauth2.googleapis.com') return Response.json({ access_token: 'fixture' });
+    const answer = respond(url);
+    return answer instanceof Response ? answer : Response.json(answer);
   }) as typeof fetch;
   const client = googleClient(app, { refresh_token: 'grant' }, fetcher, undefined, owner);
   const handler = googleHandlers({ client: async () => client } as never, desk, clock).find(h => h.name === 'query_calendar')!;
   return await handler.handle(queryCalendarArgsSchema.parse(args)) as { ok: boolean; data?: { next_page_token: string | null } };
 };
+const providerFails = (status: number) => () => Response.json({ error: { code: status, message: `provider says ${status} for ${TEAM}` } }, { status });
 
 let log: ReturnType<typeof vi.spyOn>;
 const lines = () => (log.mock.calls as unknown[][]).map(([line]) => String(line));
@@ -78,5 +81,23 @@ describe('the calendar read log line', () => {
     expect(readLines()).toHaveLength(2);
     // The default window starts at the clock's now.
     for (const line of lines()) for (const secret of [TEAM, account.email, account.connection_id, 'Board review', '2026-10-13T07:17', '2026-10-14T07:17', '2026-10-10T00:00']) expect([secret, line.toLowerCase().includes(secret.toLowerCase())]).toEqual([secret, false]);
+  });
+
+  it('logs a failed read by its operation and result code, and never the provider\'s words, the calendar or the account', async () => {
+    log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    expect((await read({ calendar_id: TEAM }, providerFails(500))).ok).toBe(false);
+    expect((await read({}, providerFails(401))).ok).toBe(false);
+    expect((await read({ operation: 'list_calendars' }, providerFails(503))).ok).toBe(false);
+    const unreadable = { client: async () => ({ account, calendarPage: async () => ({ events: [], next_page_token: null, fetched_count: 0, account, observed_at: '2026-10-10T00:00:00Z', undeclared_field: TEAM }) }) };
+    const handler = googleHandlers(unreadable as never, desk, clock).find(h => h.name === 'query_calendar')!;
+    expect(await handler.handle(queryCalendarArgsSchema.parse({ calendar_id: TEAM }))).toMatchObject({ ok: false, code: 'rejected' });
+    expect(readLines()).toEqual([
+      { hop: 'calendar_read', ok: false, code: 'op_events:transient' },
+      { hop: 'calendar_read', ok: false, code: 'op_events:auth_failed:reauth_needed' },
+      { hop: 'calendar_read', ok: false, code: 'op_calendars:transient' },
+      { hop: 'calendar_read', ok: false, code: 'op_events:unreadable_answer' },
+    ]);
+    for (const line of readLines()) expect(line.code).toMatch(/^[a-z0-9_:]{1,64}$/);
+    for (const line of lines()) for (const secret of [TEAM, account.email, account.connection_id, 'provider says']) expect([secret, line.toLowerCase().includes(secret.toLowerCase())]).toEqual([secret, false]);
   });
 });

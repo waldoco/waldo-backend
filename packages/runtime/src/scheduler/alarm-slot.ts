@@ -40,7 +40,9 @@ export async function rearmSharedAlarm(storage: DurableObjectStorage, scheduleDu
   // iMessage owner inbox and frozen-reply outbox (keys owned by channels/imessage/owner-inbox.ts and final-outbox.ts).
   const imessageInboxDue = (await storage.get<number | null>('imessage_owner_inbox_due_v1')) ?? null;
   const imessageOutboxDue = (await storage.get<number | null>('imessage_final_outbox_due_v1')) ?? null;
-  const bounds = [imessageInboxDue, imessageOutboxDue, appDue, commonExecutionDue, scheduleDue, outboxDue, inboxDue, linkDue, browserDue, commonBrowserDue, whatsappDue].filter((v): v is number => v !== null);
+  // use_mac result follow-ups (key owned by devices/mac-delivery.ts).
+  const macDue = (await storage.get<number | null>('mac_results_due_v1')) ?? null;
+  const bounds = [macDue, imessageInboxDue, imessageOutboxDue, appDue, commonExecutionDue, scheduleDue, outboxDue, inboxDue, linkDue, browserDue, commonBrowserDue, whatsappDue].filter((v): v is number => v !== null);
   if (!bounds.length) { await storage.deleteAlarm(); return; }
   await armAlarm(storage, Math.max(Math.min(...bounds), now + retryDelayMs));
 }

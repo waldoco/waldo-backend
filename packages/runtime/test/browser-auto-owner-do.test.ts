@@ -4,6 +4,7 @@ import { OwnerDO } from '../src/channels/owner-do';
 import { registerCommonBrowserSdk } from '../src/channels/common-staging-registration';
 import { routerSignature } from '../src/identity/owner-directory';
 import type { CloudflareBrowserSdkLoader } from '../src/channels/public-fixture-browser';
+import { toolOutput } from './fixtures/tool-output';
 
 const proof = vi.hoisted(() => ({ subject: 81101, inputs: [] as { subject: number; input: any }[], delivered: [] as { subject: number; text: string }[] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: any) => {
@@ -103,7 +104,7 @@ it('one explicit bounded operator policy serves two existing owners and a newly 
         await send('Use Cloudflare to read A, B, then revisit A.');
         const final = proof.inputs.filter(row => row.subject === owner.subject).map(row => row.input).find(input => Array.isArray(input.input) && input.input.filter((item: any) => item.type === 'function_call_output').length === 3);
         expect(final).toBeDefined();
-        const outputs = final.input.filter((item: any) => item.type === 'function_call_output').map((item: any) => JSON.parse(item.output));
+        const outputs = final.input.filter((item: any) => item.type === 'function_call_output').map((item: any) => toolOutput(item.output));
         expect(outputs).toHaveLength(3); expect(outputs.slice(0, 2).every((row: any) => row.ok && row.data.text.includes(`cookie-${owner.subject}`))).toBe(true);
         expect(outputs[2]).toMatchObject({ok:false,code:'repeat_refusal'});
         expect(new Set(outputs.slice(0,2).map((row: any) => row.data.session_handle)).size).toBe(1);

@@ -78,10 +78,23 @@ it('draft and every calendar mutation claim before dispatch and settled replay n
  }
 });
 it('effect-bearing MCP uses the same durable intent rail and foreign replay stays blocked',async()=>{
- const f=fixture();const input={do_name:'owner',op:'mcp_call',connection:'conn',server_url:'https://fixture.googleapis.com/mcp',tool:'synthetic_write',args:[{value:'fixture'}],intent_id:'approval:mcp'};
+ const f=fixture();const input={do_name:'owner',op:'mcp_call',connection:'conn',server_url:'https://drivemcp.googleapis.com/mcp/v1',tool:'search_files',args:[{value:'fixture'}],intent_id:'approval:mcp'};
  const first=await(await serve(await request(input))).json();expect(first).toMatchObject({data:[{type:'text',text:'synthetic result'}]});
  expect(await(await serve(await request(input))).json()).toEqual(first);expect(f.effects()).toBe(1);expect(f.hops.filter(h=>h==='token')).toHaveLength(1);expect(f.hops.indexOf('proxy_idem_claim')).toBeLessThan(f.hops.indexOf('token'));
  expect(await(await serve(await request({...input,args:[{value:'changed'}]}))).json()).toMatchObject({error:{message:'intent_conflict'}});expect(f.effects()).toBe(1);
+});
+
+it('the effect rail refuses a tool that is not a catalogue read before any token or claim, and logs the code',async()=>{
+ const cases:[string,string][]=[['https://fixture.googleapis.com/mcp','synthetic_write'],['https://drivemcp.googleapis.com/mcp/v1','create_file'],['https://gmailmcp.googleapis.com/mcp/v1','send_message'],['https://drivemcp.googleapis.com/mcp/v1/','search_files']];
+ const failed:string[]=[];
+ for(const [server_url,tool] of cases){
+  const f=fixture();const logged:string[]=[];const quiet=vi.spyOn(console,'log').mockImplementation((line:string)=>{logged.push(String(line));});
+  const input={do_name:'owner',op:'mcp_call',connection:'conn',server_url,tool,args:[{value:'fixture'}],intent_id:'approval:mcp'};
+  const body=await(await serve(await request(input))).json() as {error?:{status:number;message:string}};
+  quiet.mockRestore();
+  if(body.error?.status!==403||body.error.message!=='google_mcp_read_only'||f.hops.length!==0||f.effects()!==0||!logged.some(line=>line.includes('"error":"google_mcp_read_only"'))||logged.some(line=>line.includes(tool)||line.includes(server_url)))failed.push(`${server_url} ${tool}`);
+ }
+ expect(failed).toEqual([]);
 });
 
 it('every mutation retains an unknown result and never dispatches again after synthetic loss',async()=>{
@@ -90,7 +103,7 @@ it('every mutation retains an unknown result and never dispatches again after sy
   {...body,method:'createEvent',args:[{title:'fixture',start:'2026-10-01T00:00:00Z',end:'2026-10-01T01:00:00Z'}]},
   {...body,method:'moveEvent',args:['event-one','2026-10-01T00:00:00Z','2026-10-01T01:00:00Z']},
   {...body,method:'cancelEvent',args:['event-one']},
-  {do_name:'owner',op:'mcp_call',connection:'conn',server_url:'https://fixture.googleapis.com/mcp',tool:'synthetic_write',args:[{}],intent_id:'approval:mcp'},
+  {do_name:'owner',op:'mcp_call',connection:'conn',server_url:'https://drivemcp.googleapis.com/mcp/v1',tool:'search_files',args:[{}],intent_id:'approval:mcp'},
  ];
  for(const input of calls){const f=fixture();f.lose();
   expect(await(await serve(await request(input))).json()).toMatchObject({error:{message:'intent_pending'}});
@@ -376,4 +389,31 @@ it('logs provider_error for text that only starts with one of its codes, and onl
  const lines=logs.mock.calls.map(call=>JSON.parse(String(call[0])) as {hop:string;op?:string;method?:string;error?:string}).filter(line=>line.hop==='connector_proxy');
  expect(lines.map(({op,method,error})=>[op,method,error])).toEqual([['call','searchMail','provider_error'],['call','unknown','unknown operation'],['unknown',undefined,expect.any(String)]]);
  expect(JSON.stringify(logs.mock.calls)).not.toContain('friend@example.test');
+});
+
+const watchBody = {do_name:'owner',op:'calendar_watch',connection:'conn',channel_id:'chan-1',token:'v1.fixture',address:'https://w.test/events/gcal'};
+const withWatch = () => {
+ const inner = fetch;const seen:string[]=[];
+ vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
+  const url=String(input);
+  if(url==='https://www.googleapis.com/calendar/v3/calendars/primary/events/watch'){seen.push(String(init?.body));return Response.json({id:JSON.parse(String(init?.body)).id,resourceId:'res-1',expiration:'1760000000000'});}
+  if(url==='https://www.googleapis.com/calendar/v3/channels/stop'){seen.push(String(init?.body));return new Response(null,{status:204});}
+  return inner(input,init);
+ }));
+ return seen;
+};
+it('a signed calendar watch on a calendar grant starts the channel at the edge, with no ledger row',async()=>{
+ const f=fixture();const seen=withWatch();
+ expect(await(await serve(await request(watchBody))).json()).toEqual({data:{channelId:'chan-1',resourceId:'res-1',expiration:1760000000000}});
+ expect(JSON.parse(seen[0]!)).toMatchObject({id:'chan-1',type:'web_hook',address:'https://w.test/events/gcal',token:'v1.fixture'});
+ expect(f.hops).toContain('proxy_access');expect(f.hops).not.toContain('proxy_idem_claim');expect(f.rows.size).toBe(0);
+ expect(await(await serve(await request({do_name:'owner',op:'channel_stop',connection:'conn',channel_id:'chan-1',resource_id:'res-1'}))).json()).toEqual({data:null});
+ expect(JSON.parse(seen[1]!)).toEqual({id:'chan-1',resourceId:'res-1'});
+});
+it('a calendar watch without a calendar scope, on a foreign connection or to a foreign path never reaches Google',async()=>{
+ for(const [input,scopes] of [[watchBody,['https://www.googleapis.com/auth/gmail.send']],[{...watchBody,connection:'foreign'},undefined],[{...watchBody,address:'https://w.test/elsewhere'},undefined]] as const){
+  const f=fixture();if(scopes)f.scope(scopes);const seen=withWatch();
+  const out=await(await serve(await request(input))).json() as {error?:{message:string}};
+  expect(out.error).toBeDefined();expect(seen).toHaveLength(0);expect(f.hops).not.toContain('token');
+ }
 });

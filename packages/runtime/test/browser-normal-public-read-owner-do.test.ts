@@ -2,6 +2,7 @@ import {env,runInDurableObject} from 'cloudflare:test';
 import {expect,it,vi} from 'vitest';
 import {OwnerDO} from '../src/channels/owner-do';
 import {registerCommonBrowserSdk} from '../src/channels/common-staging-registration';
+import { toolOutput } from './fixtures/tool-output';
 const proof=vi.hoisted(()=>({inputs:[] as any[],sent:[] as string[],calls:[] as string[]}));
 vi.mock('../src/identity/common-owner-authority',()=>({commonOwnerAuthority:()=>({resolve:async()=>({directoryOwnerId:'10000000-0000-0000-0000-000000000002',custodyDigest:'b'.repeat(64)})})}));
 vi.mock('openai',()=>({default:class{responses={create:async(input:any)=>{
@@ -23,7 +24,7 @@ it.each(['absent','expired'])('ordinary two-argument ownerDO returns useful publ
   const response=await instance.fetch(new Request('https://fixture.invalid/enqueue',{method:'POST',headers:{'content-type':'application/json','x-waldo-inbox-secret':'normal-public-fake-secret','x-waldo-telegram-subject':String(subject),'x-waldo-do-name':doName},body:JSON.stringify({update_id:81102001,message:{message_id:1,date:Math.floor(Date.now()/1000),chat:{id:subject,type:'private'},from:{id:subject,is_bot:false,first_name:'Fixture'},text:'Use Cloudflare to read the public menu.'}})}));expect(response.status).toBe(200);
   await vi.waitFor(async()=>{await instance.alarm();expect(proof.sent.some(text=>text.includes('Vegetarian pasta'))).toBe(true);},{timeout:10000,interval:50});
   const output=proof.inputs.flatMap(input=>Array.isArray(input.input)?input.input:[]).find((row:any)=>row.type==='function_call_output');
-  expect(JSON.parse(output.output)).toMatchObject({ok:true,data:{data:{text:'Vegetarian pasta'}}});
+  expect(toolOutput(output.output)).toMatchObject({ok:true,data:{data:{text:'Vegetarian pasta'}}});
   const accounting=state.storage.kv.get<any>('owner-public-browser-spend:v2');
   expect(accounting).toMatchObject({ownerId:'prn_10000000000000000000000000000002',reservations:[{settled:true}]});
   expect(accounting.reservedMicrousd).toBeLessThanOrEqual(1250);

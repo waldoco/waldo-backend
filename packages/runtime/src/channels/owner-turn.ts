@@ -134,6 +134,7 @@ export const createOwnerResponder = (
   const cleanupLedger = toolLedger;
   let backgroundCurrent: (() => Promise<void>) | undefined;
   let transientDecision = false;
+  let backgroundSourceTaint: 'external' | null = null;
   const assertCurrent = async () => { privateRunScope?.admit(); await context?.assertCurrent(); await skills?.admission?.assertCurrent(); await backgroundCurrent?.(); privateRunScope?.admit(); };
   const ownerId = invocation.verified_authority.principal_ref;
   const CANARIES = newSessionCanaryTokens();
@@ -170,7 +171,7 @@ export const createOwnerResponder = (
   const turnOnlyOutput = new Set<string>(handlers.filter((handler) => 'turn_only_output' in handler && handler.turn_only_output === true).map((handler) => handler.name));
   const recentOwnerTurns = new Map<string, import('../tools/live/memory').MemoryOwnerTurn>();
   let activeOwnerTurn: OwnerTurnEnvelope | undefined;
-  const memoryContext = () => activeOwnerTurn ? { memoryTurn: {
+  const memoryContext = () => activeOwnerTurn ? { ownerInitiated:true, memoryTurn: {
     ownerId: safety.authenticatedUserId, conversationRef: activeOwnerTurn.conversationRef,
     current: { message_ref: activeOwnerTurn.messageRef?.id ?? activeOwnerTurn.traceId, text: activeOwnerTurn.text, sourceQuoteRanges: activeOwnerTurn.sourceQuoteRanges },
     recent: [...recentOwnerTurns.values()].filter(turn => !holdsHeldTopic(turn.text)).concat(control.heard().map((text, index) => ({ message_ref: `${traceId}-steer-${index}`, text }))),
@@ -397,7 +398,7 @@ export const createOwnerResponder = (
           const result = await runChildLoop(task, {
           handlers: childHandlers,
           budget: turnBudget,
-          ctx: { ...safety, ...memoryContext(), ...(turnReplyContext && !turnReplyOwnAuthored ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
+          ctx: { ...safety, ...memoryContext(), ...((backgroundSourceTaint || turnReplyContext && !turnReplyOwnAuthored) ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
           controlRound: consumeRound,
           complete: async (content, tools, turns) => {
             await assertCurrent();
@@ -424,7 +425,7 @@ export const createOwnerResponder = (
         budget: turnBudget,
         ...(offloadStore === undefined ? {} : { offload: offloadStore }),
         maxSteps: MAX_TOOL_ROUNDS,
-        ctx: { ...safety, ...memoryContext(), ...(turnReplyContext && !turnReplyOwnAuthored ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
+        ctx: { ...safety, ...memoryContext(), ...((backgroundSourceTaint || turnReplyContext && !turnReplyOwnAuthored) ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
         step: async (tools, turns) => {
           const added = await consumeRound();
           if (added === null) return { text: STOPPED_REPLY };
@@ -692,7 +693,8 @@ export const createOwnerResponder = (
       pending = undefined;
       return converse(id, conversationRef, `[Reminder due now, set earlier by the owner: "${note}"] Send the reminder briefly in your own words. Do not add a sentence explaining that they asked for it.`, time, false, surface);
     },
-    async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext) {
+    async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint) {
+      backgroundSourceTaint = sourceTaint ?? null;
       // Cards read in seconds, so a job's prompt gets half the provider budget; the guard keeps the opening and closing and cuts the data between.
       const said = fitPromptToBudget(jobText, Math.floor(deriveContextBudgetChars(model, SANITISE_DESTINATION_POLICIES.internal_context.max_chars) / 2));
       backgroundCurrent = current;
@@ -701,6 +703,11 @@ export const createOwnerResponder = (
         await assertCurrent();
         await restored();
         pending = undefined;
+        // A job retried after a crash (e.g. a Mac result follow-up) replays the reply already
+        // saved for this exact id and text instead of asking the model again; request and reply
+        // are saved together, so re-adding the request would otherwise fail.
+        const replayed = tree.get(`${id}-reply`);
+        if (!decision && replayed && tree.get(id)?.modelPayload === said) return replayed.appPayload;
         if (decision) {
           if (!current || !toolNames || toolNames.length) throw new Error('transient decision requires currentness and no tools');
           const source = promptMemory();
@@ -714,7 +721,7 @@ export const createOwnerResponder = (
         }
         promptContext = turnContext ?? '';
         return await converse(id, conversationRef, said, time, false, surface, toolNames);
-      } finally { backgroundCurrent = undefined; transientDecision = false; promptContext = ''; }
+      } finally { backgroundCurrent = undefined; transientDecision = false; promptContext = ''; backgroundSourceTaint = null; }
     },
     async consolidate(trace, day, sides) {
       if (!memory) return 'no memory';

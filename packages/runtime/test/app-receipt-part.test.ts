@@ -7,7 +7,8 @@ import { claimStore } from '../src/memory/claims';
 import { sha256Hex, stableJson } from '../src/context-composer/canonical';
 import { ensureSchema } from '../src/tracer/schema';
 
-// An app reply carries the turn's effect receipts as a typed part; its text no longer ends with the receipt line.
+// An app reply carries the turn's effect receipts as a typed part, and its text still ends with the receipt line: a build
+// without the part shows the line in the text, a build with the part hides that exact line.
 const QUIET = { quiet_start: '21:00', quiet_end: '07:00', volume: 'normal' };
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
@@ -52,14 +53,19 @@ const replyTo = async (name: string, text: string) => runInDurableObject(env.OWN
   } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
 });
 
-it('an effect turn\'s reply carries a receipt part, and its text no longer ends with the receipt line', async () => {
+it('an effect turn\'s reply carries a receipt part, and its text still ends with the same receipt line', async () => {
   const before = Date.now();
   const reply = await replyTo('app-receipt-effect', 'please set quiet hours');
-  expect(reply.text).toBe('Done.');
-  expect(reply.parts).toEqual([{ type: 'text', text: 'Done.' }, {
+  expect(reply.text).toBe('Done.\n\nDone: proactivity set');
+  expect(reply.parts).toEqual([{ type: 'text', text: 'Done.\n\nDone: proactivity set' }, {
     type: 'receipt', more: 0, fallback_text: 'Done: proactivity set',
     items: [{ kind: 'proactivity_set', target: null, outcome: 'accepted', via_task: false, at: expect.any(Number), digest: `sha256:${await sha256Hex(stableJson(QUIET))}` }],
   }]);
+  // A build that predates the receipt part drops it and shows `text`: the line is still there, byte for byte the part's fallback.
+  const receipt = reply.parts.find((part): part is Extract<typeof part, { type: 'receipt' }> => part.type === 'receipt')!;
+  const shownByOldBuild = { ...reply, parts: reply.parts.filter(part => part.type === 'text') };
+  expect(shownByOldBuild.text.endsWith(`\n\n${receipt.fallback_text}`)).toBe(true);
+  expect(shownByOldBuild.parts).toEqual([{ type: 'text', text: reply.text }]);
   const at = (reply.parts[1] as { items: readonly { at: number }[] }).items[0]!.at;
   expect(at).toBeGreaterThanOrEqual(before);
   expect(at).toBeLessThanOrEqual(Date.now());

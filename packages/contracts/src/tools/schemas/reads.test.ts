@@ -414,6 +414,12 @@ describe('Calendar page receipts',()=>{
   const full={...page,events:[event],fetched_count:1};
   expect(calendarPageSchema.parse(full)).toEqual(full);
  });
+ it('admits the operation marker on an event Waldo changed, and refuses an empty or oversized one',()=>{
+  const event={id:'e1',title:'QA',start:'2026-10-13T10:30:00Z',end:'2026-10-13T11:30:00Z',all_day:false};
+  const withMarker=(operation_marker:string)=>({...page,events:[{...event,operation_marker}],fetched_count:1});
+  expect(calendarPageSchema.safeParse(withMarker('a'.repeat(64))).success).toBe(true);
+  for(const marker of ['','a'.repeat(1025)])expect(calendarPageSchema.safeParse(withMarker(marker)).success).toBe(false);
+ });
  it('admits empty exhausted pages with explicitly unavailable account metadata',()=>{
   expect(calendarPageSchema.parse(page)).toEqual(page);
  });

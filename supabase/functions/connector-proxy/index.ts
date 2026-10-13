@@ -5,7 +5,8 @@ import { driveRestClient, DRIVE_REST_METHODS, DriveRestError, type DriveRestMeth
 import { googleAccessToken, GoogleTokenError } from '../../../packages/runtime/src/connectors/google.ts';
 import { executeProxyIntent, ProxyIntentError, type IntentClaim } from '../../../packages/runtime/src/connectors/proxy-intent.ts';
 import { callMcpTransport, McpAuthError, McpHttpError, McpToolError } from '../../../packages/runtime/src/connectors/mcp-transport.ts';
-import { googleMcpServer, isGoogleMcpRead } from '../../../packages/runtime/src/connectors/google-mcp.ts';
+import { GOOGLE_MCP_READ_ONLY, googleMcpServer, isGoogleMcpRead } from '../../../packages/runtime/src/connectors/google-mcp.ts';
+import { CALENDAR_PUSH_PATH, GooglePushError, startCalendarWatch, stopChannel } from '../../../packages/runtime/src/connectors/google-push.ts';
 import { safeMcpErrorDiagnostic, type McpErrorDiagnostic } from '../../../packages/runtime/src/connectors/mcp-error-diagnostic.ts';
 
 declare const Deno: {env:{get(name:string):string|undefined};serve(handler:(request:Request)=>Promise<Response>):unknown};
@@ -41,20 +42,21 @@ const store = async (doName: string, email: string, scopes: readonly string[], t
   return id ? reply({ id, email: email.toLowerCase(), scopes }) : fail(404, 'unknown owner');
 };
 
-type Body = Readonly<{ intent_id?: string; read_only?: boolean; do_name: string; op: 'exchange' | 'adopt' | 'call' | 'mcp_call'; server_url?: string; tool?: string; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[]; calendar_details?: boolean }>;
+type Body = Readonly<{ intent_id?: string; read_only?: boolean; do_name: string; op: 'exchange' | 'adopt' | 'call' | 'mcp_call' | 'calendar_watch' | 'channel_stop'; channel_id?: string; token?: string; address?: string; resource_id?: string; server_url?: string; tool?: string; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[]; calendar_details?: boolean }>;
 // Edge-owned, exact read authority from the shared catalogue. Never accept a request-supplied registry or a generic Google host match.
 const nonStoringRead = (body: Body): boolean => body.op === 'mcp_call' && body.read_only === true && /^mcpread:[0-9a-f]{64}$/.test(body.intent_id ?? '') && isGoogleMcpRead(body.server_url, body.tool);
 const READ_FAILURE_CODES = new Set(['intent_unavailable', 'insufficient scopes', 'google_refresh_failed', 'google_reauth_needed', 'google_scope_missing', 'mcp_read_rejected', 'mcp_read_unavailable', 'mcp_read_failed']);
 // The proxy's own fixed failure codes. Any other message is provider or runtime text, which can repeat a
 // recipient or other mail details, so the log carries one code in its place. The reply keeps the message.
-const LOGGED_CODES = new Set([...READ_FAILURE_CODES, 'unknown owner', 'connector proxy is not configured', 'unsigned proxy call', 'unknown operation', 'connection unavailable',
+const LOGGED_CODES = new Set([...READ_FAILURE_CODES, GOOGLE_MCP_READ_ONLY, 'unknown owner', 'connector proxy is not configured', 'unsigned proxy call', 'unknown operation', 'connection unavailable',
   'intent_required', 'intent_conflict', 'intent_pending', 'unreadable response', 'google token failed: invalid_grant', 'google token transient failure', 'google token configuration failure',
   'google token protocol failure', 'drive_invalid_request', 'drive_invalid_response', 'drive_auth_failed', 'drive_access_denied', 'drive_scope_missing', 'drive_service_disabled',
-  'drive_not_found', 'drive_rate_limited', 'drive_read_failed', 'drive_source_changed', 'drive_content_unsupported']);
+  'drive_not_found', 'drive_rate_limited', 'drive_read_failed', 'drive_source_changed', 'drive_content_unsupported',
+  'google_push_invalid_request', 'google_push_auth', 'google_push_refused', 'google_push_transient', 'google_push_malformed']);
 
 // One structured line per call: operation, method, outcome and duration. Never the code, verifier,
 // token, account or arguments. The operation and method come from the request body, so only known ones are logged.
-const LOGGED_OPS = new Set(['exchange', 'adopt', 'call', 'mcp_call', 'unconfigured', 'unsigned']);
+const LOGGED_OPS = new Set(['exchange', 'adopt', 'call', 'mcp_call', 'calendar_watch', 'channel_stop', 'unconfigured', 'unsigned']);
 const logged = async (started: number, op: unknown, method: unknown, response: Response, read = false) => {
   const outcome = await response.clone().json().then(value => (value as {error?:{status:number;message:string;provider_diagnostic?:unknown}}).error ?? null).catch(() => ({ status: response.status, message: 'unreadable response' }));
   const message = !outcome ? undefined : read && !READ_FAILURE_CODES.has(outcome.message) ? 'mcp_read_failed' : LOGGED_CODES.has(outcome.message) ? outcome.message : 'provider_error';
@@ -90,12 +92,38 @@ const handle = async (body: Body): Promise<Response> => {
     }
     // One-time move of a token saved in the Durable Object before this proxy existed.
     if (body.op === 'adopt' && body.refresh_token) return store(body.do_name, body.email ?? 'google', body.scopes ?? [], body.refresh_token);
+    // Calendar push channels for a Vault-backed grant. Starting one is not an owner-visible effect (a push
+    // only wakes the owner's own update check), so there is no ledger row; a repeat start makes a channel
+    // that simply expires.
+    if (body.op === 'calendar_watch' || body.op === 'channel_stop') {
+      const channelId = body.channel_id ?? '';
+      let address: URL | null = null;
+      try { address = body.op === 'calendar_watch' ? new URL(body.address ?? '') : null; } catch { address = null; }
+      if (!body.connection || !/^[A-Za-z0-9_-]{1,64}$/.test(channelId)) return fail(404, 'unknown operation');
+      if (body.op === 'calendar_watch' && (!address || address.protocol !== 'https:' || address.pathname !== CALENDAR_PUSH_PATH || !body.token)) return fail(400, 'google_push_invalid_request');
+      if (body.op === 'channel_stop' && !body.resource_id) return fail(400, 'google_push_invalid_request');
+      const access = await db('proxy_access', { p_do_name: body.do_name, p_connection: body.connection }) as {secret:string;scopes:unknown}[];
+      const grant = Array.isArray(access) ? access[0] : undefined;
+      if (!grant || typeof grant.secret !== 'string' || !grant.secret) return fail(401, 'connection unavailable');
+      if (!googleHas(Array.isArray(grant.scopes) ? grant.scopes : undefined, 'calendar')) return fail(403, 'insufficient scopes');
+      try {
+        const bearer = await googleAccessToken(app, { refresh_token: grant.secret }, fetch);
+        if (body.op === 'channel_stop') { await stopChannel(fetch, bearer, { channelId, resourceId: body.resource_id! }); return reply({ data: null }); }
+        return reply({ data: await startCalendarWatch(fetch, bearer, { channelId, token: body.token!, address: address!.toString() }) });
+      } catch (error) {
+        if (error instanceof GooglePushError) return fail(error.status, error.message);
+        if (error instanceof GoogleTokenError) return fail(error.status, 'google_refresh_failed');
+        return fail(502, 'google_push_transient');
+      }
+    }
     // Google-auth MCP servers: the runtime names server/tool/args; the token never leaves the edge.
     if (body.op === 'mcp_call') {
       // A non-retaining read request must never silently fall back to the retaining
       // effect rail. Ordinary calls (no read flag) keep their existing ledger.
       if (body.read_only === true && !nonStoringRead(body)) return fail(400, 'mcp_read_rejected');
       if (!body.connection || !body.server_url || !body.tool || !/^https:\/\/([a-z0-9-]+\.)?googleapis\.com\//.test(body.server_url)) return fail(404, 'unknown operation');
+      // The catalogue governs both rails: a tool that is not one of its reads never reaches Google with the owner's token.
+      if (!isGoogleMcpRead(body.server_url, body.tool)) return fail(403, GOOGLE_MCP_READ_ONLY);
       // Each signed read is an independent observation on this explicit connection.
       // No exactly-once/result replay promise and no effect-ledger claim or result storage.
       const read = nonStoringRead(body);
