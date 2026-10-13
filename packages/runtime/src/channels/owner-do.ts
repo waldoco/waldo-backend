@@ -856,7 +856,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     await this.writeAppNotices();
     for(const pending of this.appInbox.records().filter(row=>row.state==='admitted')){
       let current=false;
-      try{await this.appAuthority(pending.owner,pending.sessionHash);current=true;}catch(error){if(error instanceof AppSessionAuthorityError&&error.kind==='unavailable'){this.appInbox.deferWake(30_000);await rearmSharedAlarm(this.ctx.storage,null,Date.now(),30_000);return;}}
+      try{await this.appAuthority(pending.owner,pending.sessionHash);current=true;}catch(error){if(error instanceof AppSessionAuthorityError&&error.kind==='unavailable'){this.appInbox.deferWake(30_000);await this.rearmWithSchedule();return;}}
       const record=this.appInbox.claim(pending.id,current);if(!record)continue;
       this.appAttempts.add(record.attempt!);this.activeApp=record;
       const abort=new AbortController(),scope=this.appInbox.scope(record,abort.signal);
@@ -870,7 +870,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       finally{clearTimeout(timeout);this.appInbox.settle(record,completed);abort.abort();this.appAttempts.delete(record.attempt!);this.activeApp=null;if(this.activeScope===scope){this.activeScope=undefined;this.activeAbort=undefined;}}
       await this.writeAppNotices();
     }
-    await rearmSharedAlarm(this.ctx.storage,null,Date.now());
+    await this.rearmWithSchedule();
+  }
+  // The schedule's next wake goes into every re-arm after app work, or an app message would drop or delay the alarm for the
+  // owner's next scheduled job.
+  private async rearmWithSchedule(): Promise<void> {
+    ensureSchema(this.ctx.storage);
+    await new Scheduler(this.ctx.storage.sql,this.ctx.storage,productionDeps()).rearm();
   }
 
   // WhatsApp ingress (WHATSAPP_CHANNEL_SPEC W3). The webhook has already verified Meta's
@@ -2774,7 +2780,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const receipt = await sentOrThrow(api.sendMessage({ chat_id: owner, text })) as { app_row_id?: unknown };
           if (typeof receipt.app_row_id === 'string') recordCardDelivery(this.ctx.storage.kv, day, card.id, receipt.app_row_id, Date.now());
         }
-        plans.sent(day, card.id);
+        if (skipped) plans.skipped(day, card.id); else plans.sent(day, card.id);
         updates.fold(now);
         log({ trace, hop: 'day_card', ms: Date.now() - started, ok: true, detail: skipped ? `${card.id} skipped` : card.id, text: { input: said, output: text } });
         log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'day_card' });
@@ -2829,7 +2835,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           nodes: memory.nodes(), edges: memory.edges(), barriers: memory.barriers().length,
           cards: DAY_CARDS.map((card) => {
             const row = planned.get(card.id);
-            return { id: card.id, name: card.name, defaultTime: card.defaultTime, time: row ? row.time : card.defaultTime, reason: row?.reason ?? 'not planned yet', sent: row?.sent ?? false, pin: pins[card.id] ?? null };
+            return { id: card.id, name: card.name, defaultTime: card.defaultTime, time: row ? row.time : card.defaultTime, reason: row?.reason ?? 'not planned yet', sent: row?.sent ?? false, pin: pins[card.id] ?? null,
+              ...(row ? (row.state ? { state: row.state } : {}) : { state: 'pending' as const }) };
           }),
           ledger: await ledger(), proactivity: loops.proactivity(), schedules: schedPrefs.all(), files: files.list(), steps: traces.steps(clock.timezone), lastRequest: traces.lastRequest(clock.timezone), trace: tracePage.rows,
           runs: runPage.rows.map((row) => ({ id: row.id, kind: row.kind, status: row.status, summary: row.summary, parent_id: row.parent_id, started: localIso(row.started_at, clock.timezone).slice(5, 16).replace('T', ' '), ended: row.ended_at === null ? null : localIso(row.ended_at, clock.timezone).slice(5, 16).replace('T', ' ') })),

@@ -47,6 +47,10 @@ export const appControlActionV1Schema = z.strictObject({
 // UTF-16 code units, of the text the chat shows for that row, cut at read time and never stored. A row
 // that is gone or has no text gives latest null.
 export const APP_CARD_EXCERPT_MAX_V1 = 280;
+// Where today's card stands. sent keeps its meaning, finished for today; state says how: sent (handed to the owner's
+// channel), skipped (it came due and nothing went out), held (kept back in quiet hours) or pending (not fired yet).
+// Absent when the Worker cannot tell, as for a card finished before it kept the outcome.
+export const appDayCardStateV1Schema = z.enum(['pending', 'held', 'sent', 'skipped']);
 const latestDelivery = z.strictObject({ message_id: text.min(1), delivered_at: z.int().positive(), excerpt: text.min(1).max(APP_CARD_EXCERPT_MAX_V1) });
 // The first page of open work the Home shows; total counts every open item, so the app can say how many more there are.
 export const APP_OVERVIEW_PAGE_MAX_V1 = 20;
@@ -66,7 +70,8 @@ const openLoop = z.strictObject({ id: text.min(1).max(100), title: workTitle, du
 // timezone_confirmed is true once the owner set the zone themselves (timezone.set); absent from a Worker that does not say.
 export const appControlDayDataV1Schema = z.strictObject({
   timezone: text, timezone_confirmed: z.boolean().optional(), date: text,
-  cards: z.array(z.strictObject({ id: text, name: text, defaultTime: text, time: text.nullable(), reason: text, sent: z.boolean(), pin: text.nullable(), latest: latestDelivery.nullable().optional() })),
+  cards: z.array(z.strictObject({ id: text, name: text, defaultTime: text, time: text.nullable(), reason: text, sent: z.boolean(), pin: text.nullable(), latest: latestDelivery.nullable().optional(),
+    state: appDayCardStateV1Schema.optional() }).refine(card => card.state === undefined || card.sent === (card.state === 'sent' || card.state === 'skipped'), { error: 'state and sent disagree', path: ['state'] })),
   proactivity: z.strictObject({ quiet_start: text.nullable(), quiet_end: text.nullable(), volume: z.enum(['low', 'normal', 'high']) }),
   schedules: z.strictObject({ daily_brief: z.boolean(), followups: z.boolean(), event_briefs: z.boolean(), nightly: z.boolean(), heartbeat: z.boolean() }),
   carrying: firstPage(carried).optional(),

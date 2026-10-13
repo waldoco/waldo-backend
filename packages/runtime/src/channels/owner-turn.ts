@@ -14,7 +14,7 @@ import type { ConversationEntry, ConversationModelMessage } from '@waldo/contrac
 import { MODEL_CONTEXT_MAX_CHARS } from '@waldo/contracts';
 import { PROBE_STRIPPED_TOOLS } from './probe-turn';
 import { runToolLoop } from '../conversation/tool-loop';
-import { receiptLine } from '../hooks/receipt-line';
+import { turnReceipt } from '../hooks/receipt-line';
 import type { LoopEventLike } from '../hooks/claim-hook';
 import { delegateTaskHandler, runChildLoop, SUBAGENT_SYSTEM_PROMPT, withDelegation } from '../conversation/subagent';
 import { inMemoryToolOutputStore } from '../conversation/tool-output-store';
@@ -526,7 +526,7 @@ export const createOwnerResponder = (
         onTool: (event) => {
           // Typed receipt input for the owner reply's last line (receiptLine reads no wording).
           const receipt = event.call.name === 'remember' && event.ok ? JSON.parse(event.output) as { data?: { status?: string } } : undefined;
-          if (receipt?.data?.status !== 'duplicate') turnToolEvents.push({ seq: turnToolEvents.length + 1, call: { name: event.call.name, args: parseToolArgs(event.call.arguments, event.call.name) }, ok: event.ok, ...(event.code ? { code: event.code } : {}) });
+          if (receipt?.data?.status !== 'duplicate') turnToolEvents.push({ seq: turnToolEvents.length + 1, call: { name: event.call.name, args: parseToolArgs(event.call.arguments, event.call.name) }, ok: event.ok, at: Date.now(), ...(event.code ? { code: event.code } : {}) });
           privateRunScope?.admit();
           log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: event.call.arguments, output: event.output } });
           privateRunScope?.admit();
@@ -618,11 +618,11 @@ export const createOwnerResponder = (
       privateRunScope?.admit();
       await assertCurrent();
       const reply = tree.get(publication.leafId)!.appPayload;
-      // Native delivery reads durable history, so the visible effect receipt belongs in that row.
-      const receipts = fromOwner ? receiptLine(turnToolEvents) : null;
-      const out = receipts ? `${reply}\n\n${receipts}` : reply;
+      // Native delivery reads durable history, so the visible effect receipt belongs in that row, as text and typed.
+      const receipt = fromOwner ? await turnReceipt(turnToolEvents) : null;
+      const out = receipt ? `${reply}\n\n${receipt.line}` : reply;
       const redact = literalTextRedactor([...removedTopics], FORGOTTEN);
-      const savedEntries = [tree.get(id)!, { ...tree.get(publication.leafId)!, ...(context ? { appPayload: out } : {}) }].map(entry => redactConversationEntry(entry, redact));
+      const savedEntries = [tree.get(id)!, { ...tree.get(publication.leafId)!, ...(context ? { appPayload: out, ...(receipt ? { receipt } : {}) } : {}) }].map(entry => redactConversationEntry(entry, redact));
       await conversationStore?.save(savedEntries, publication.leafId, privateRunScope);
       for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); }
       privateRunScope?.admit();
@@ -634,7 +634,7 @@ export const createOwnerResponder = (
       // What the turn's tools already did stays on the record for the next turn while the run is still admitted; a
       // closed run writes nothing.
       const redact = literalTextRedactor([...removedTopics], FORGOTTEN);
-      const landed = fromOwner && privateRunScope ? receiptLine(turnToolEvents) : null;
+      const landed = fromOwner && privateRunScope ? (await turnReceipt(turnToolEvents))?.line ?? null : null;
       if (landed) conversationStore?.noteUnfinished?.(redact(landed), privateRunScope!);
       try { for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); } }
       catch (flush) { if (!(flush instanceof ClosedRunError)) throw flush; }
