@@ -70,5 +70,6 @@ it('late old-run cleanup preserves the newer session; unlink reconstruction clea
  const withBrowserbase=ownerBrowserRuntime({env:{...env as object,BROWSERBASE_API_KEY:'synthetic',BROWSERBASE_PROJECT_ID:'synthetic'} as never,storage,actualDoId:'fixture-physical',activeScope:()=>scope,typedHost:()=>true}).act(fallback);
  expect(await withBrowserbase.handle({...args,command:undefined,session_handle:'retained-common-session'},ctx)).toMatchObject({ok:false});expect(called).toHaveBeenCalledTimes(1);
  expect(await withBrowserbase.handle({...args,command:undefined},ctx)).toMatchObject({ok:false,code:'rejected'});expect(called).toHaveBeenCalledTimes(1);
+ expect(await withBrowserbase.handle({...args,command:undefined,provider:'browserbase_stagehand_http_v3'},ctx)).toMatchObject({ok:false,code:'rejected'});expect(called).toHaveBeenCalledTimes(1);
  expect(await withBrowserbase.handle(args,ctx)).toMatchObject({ok:true,data:{fixture:true}});expect(called).toHaveBeenCalledTimes(2);
  });

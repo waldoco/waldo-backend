@@ -30,7 +30,8 @@ it('a configured Cloudflare reader serves the read even when Browserbase keys ar
   let paid = 0, cloudflare = 0;
   const handler = browsePageHandler('bb', 'project', undefined, (async () => { paid++; throw Error('paid'); }) as typeof fetch, { cloudflare: (async () => { cloudflare++; return { ok: true }; }) as never, allowBrowserbase: true });
   await handler.handle(browsePageArgsSchema.parse(args), context);
-  expect(paid).toBe(0); expect(cloudflare).toBe(1);
+  await handler.handle(browsePageArgsSchema.parse({ ...args, provider: 'browserbase_stagehand_http_v3' }), context);
+  expect(paid).toBe(0); expect(cloudflare).toBe(2);
 });
 it('refuses a read with neither Browserbase keys nor a Cloudflare reader, without any paid call', async () => {
   let paid = 0;

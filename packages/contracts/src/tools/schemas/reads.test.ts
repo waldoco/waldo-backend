@@ -220,8 +220,14 @@ describe('executeActionArgs', () => {
 });
 
 describe('browsePageArgs', () => {
-  it('refuses a model-chosen provider and authority or session arguments: the host picks the browser', () => {
-    for (const extra of [{ provider: 'cloudflare_playwright' }, { provider: 'browserbase_stagehand_http_v3' }, { provider: 'auto' }, { session_id: 'foreign' }, { owner_id: 'foreign' }, { allow_hosts: ['*'] }]) {
+  it('still accepts a provider the earlier contract named, which the host ignores', () => {
+    for (const provider of ['cloudflare_playwright', 'browserbase_stagehand_http_v3']) {
+      expect(browsePageArgsSchema.safeParse({ url: 'https://example.com', instruction: 'read', provider }).success).toBe(true);
+      expect(browseActArgsSchema.safeParse({ url: 'https://example.com', task: 'read', provider }).success).toBe(true);
+    }
+  });
+  it('refuses an unknown provider and authority or session arguments', () => {
+    for (const extra of [{ provider: 'auto' }, { session_id: 'foreign' }, { owner_id: 'foreign' }, { allow_hosts: ['*'] }]) {
       expect(browsePageArgsSchema.safeParse({ url: 'https://example.com', instruction: 'read', ...extra }).success).toBe(false);
       expect(browseActArgsSchema.safeParse({ url: 'https://example.com', task: 'read', ...extra }).success).toBe(false);
     }
