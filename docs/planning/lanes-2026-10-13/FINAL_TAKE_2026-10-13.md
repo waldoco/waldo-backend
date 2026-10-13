@@ -41,13 +41,13 @@ Mac orchestrator, 13 Oct 2026, 19:08Z. For the owner, the backend lead (Fable), 
 | Who | Builds tonight, in order | Touches | Stops when |
 |---|---|---|---|
 | **Backend lead (Fable)** | 1. **A0:** the guard ratchet (`scripts/guards/guard-surface-neutral-core.mjs`)<br>2. **A1:** the canonical turn with authorship<br>3. **A2:** waits for #1108<br><br>Final say at the gate. | Guards, inbound turn types; `owner-do.ts` only in its queue slot | A1 is up for review, or its budget runs low (post a status line first) |
-| **Cloud orchestrator (Ansh's)** | **Independent reviews:**<br>- #1149 at `c7f80fbc`<br>- #1186<br>- A0 and A1<br>- the Mac's PRs<br>- a post-merge review of #1178, next to the running #1017/#1162 review<br><br>**Also:**<br>- answers the builder's item 4 question;<br>- folds section 7's corrections into plan rev 14. | No code | The review queue is empty |
+| **Cloud orchestrator (Ansh's)** | **Independent reviews:**<br>- #1149 at `c7f80fbc`<br>- #1186<br>- A0 and A1<br>- the Mac's PRs<br>- a post-merge review of #1178, next to the running #1017/#1162 review<br><br>**Also:**<br>- relays the owner's answer on the builder's item 4 (owner step 6);<br>- folds section 7's corrections into plan rev 14. | No code | The review queue is empty |
 | **Builder** | 1. the #1149 fixes<br>2. #1180<br>3. #1186<br>4. item 3, the failure notice<br>5. item 4, the check-back machine turn, if approved<br>6. #1108, before A2 needs it | Scheduler; `owner-do.ts` in its slot | As now |
 | **Google lane** | 1. The flaky Google tools: #1171, #1165, #1174, #1150<br>2. #1185, once its keys land | Connectors, eval | As now |
 | **Mac lane T (tool layer)** | M1, then M2 (below) | `tools/`, handler modules, the `llm/` adapter; `owner-do.ts` only if given a slot | M2's first PR is open with CI green and a review asked |
 | **Mac lane P (proof)** | M3, then M4, then M5 (below) | `scripts/`, eval fixtures, `llm/` retries, `.github/workflows` (M5 merges only on the owner's yes) | M4 is up for review |
 | **Mac orchestrator (this session)** | - gate pre-checks<br>- hand-off 3<br>- the #1133 renumber<br>- the post-deploy smoke and baseline re-run<br>- heartbeat and LOG | Docs; one added commit on #1133 | Morning |
-| **Ashish** | The host's real send, then a staging round trip; fixes from the post-merge reviews | `waldo-imessage-host` | The round trip is proven, or it is blocked |
+| **Ashish** | The host's real send and the fixes from the post-merge reviews; then the staging round trip, once Ansh turns the connector on (owner step 7) | `waldo-imessage-host` | The round trip is proven, or it is blocked |
 | **Suyash** | The UI/UX map. Nothing backend tonight | App | |
 
 Suyash's #41 (live updates) rides A4 later.
@@ -77,7 +77,7 @@ Done when:
   - transient: retry once;
   - needs the owner: ask.
 
-  Validation errors name the issue path.
+  Validation errors name the issue path, redacted.
 - **Strict schemas** in the OpenAI adapter, each with a valid and an invalid test and an eval re-run. Strict mode makes every field required, so a tool with optional arguments changes meaning.
 - **A "tool output is data" rule,** plus a fence around live external results, with an injection scenario.
 
@@ -89,7 +89,7 @@ Done when:
 
 It is written in #1185's format, so the nightly eval picks it up. It can also be run by hand on the Simulator app after each deploy. The judge is not the candidate model (Bible §7 Phase 4).
 
-**M4, the time budget** (Harness items 21–22):
+**M4, the time budget** (Harness item 22):
 - model-call retries capped at 0 or 1, behind a per-turn deadline;
 - a timeout per tool;
 - p50 and p90 per hop.
@@ -104,13 +104,17 @@ The baseline found that most turn time isn't model time.
 
 It changes CI, so it merges only on the owner's yes.
 
+**Deferred Harness-tab Mac items:**
+- **Item 20:** staging's own R2 bucket and rate-limit namespace. It waits for Ansh to provision them.
+- **Item 21:** one owner id in traces, and a trace key returned on app send. It waits for the app's re-pin, because the key is an app.v1 emit.
+
 **The Mac's usage cap.** On 12 Oct, fanning out to many agents used up the shared window and stopped every lane for an hour. Tonight:
 - no more than two build lanes;
 - one open PR per lane;
 - no fan-out inside a lane;
 - each lane stops and posts a status line if the 5-hour window passes about 70%.
 
-The lanes are new Claude Code sessions in their own worktrees, briefed from this file and #1103. The heartbeat and the gate pre-checks keep running.
+This session launches both lanes itself, after the owner's yes, as background agents in their own git worktrees. Nobody has to open a session. The lanes report to this session, which posts their status on #1103. The heartbeat and the gate pre-checks keep running.
 
 ### Where the Instinct catch-up stands
 
@@ -156,7 +160,7 @@ The lead keeps the gate, as it said at 17:22Z.
 
 The Mac then posts "gate-ready", so the lead's merge is one step.
 
-**When the Mac merges:** only under Ansh's 16:55Z rule. That is when the lead posts that it is stopping, or when a gate-ready PR has waited two hours with no post from the lead. The Mac never merges its own PRs.
+**When the Mac merges:** only under Ansh's 16:55Z rule, that is, when the lead posts that it is stopping. [proposed, for Ansh and the lead to accept] Also when a gate-ready PR has waited two hours with no post from the lead. The Mac never merges its own PRs.
 
 **Nobody self-merges.** #1017, #1162 and #1178 merged without a gate review; #1178's description says it overrides the lane gate. The migration clash below is the cost.
 
@@ -225,18 +229,22 @@ Each rule is tied to what the baseline saw:
 
 **What is real** [verified]:
 - the connector is merged default-off (#1017, #1162);
-- staging runs the older `e040a306`, and the staging config keeps the connector off;
+- staging runs the older `e040a306`;
+- even at `a9161905`, the staging config has `IMESSAGE_CONNECTOR_ENABLED` at `0` and an empty policy, so the bridge stays off after hand-off 2 until Ansh sets both. That is a wrangler change. The policy is a set of limits plus a source id, and the code carries a proposed local test policy;
 - the host's real send is off;
 - no message has made a round trip.
 
 **The order:**
 1. hand-off 2;
-2. the console onboarding run: pair a host, set the sender with the challenge, confirm;
-3. the host's real send;
-4. a staging round trip with a trace id;
-5. proactive delivery (ruling 27), and the approval link with `approval: 'none'` (ruling 28).
+2. Ansh turns the staging connector on: the flag and a policy;
+3. the console onboarding run: pair a host, set the sender with the challenge, confirm;
+4. the host's real send;
+5. a staging round trip with a trace id;
+6. proactive delivery (ruling 27), and the approval link with `approval: 'none'` (ruling 28).
 
-Step 5 touches `owner-do.ts:1517` and `:2133`, which are A5 and A6. The lead decides whether a small interim lands first, in its queue. Health text follows ruling 29.
+If step 2 doesn't happen tonight, the round trip moves to tomorrow.
+
+Step 6 touches `owner-do.ts:1517` and `:2133`, which are A5 and A6. The lead decides whether a small interim lands first, in its queue. Health text follows ruling 29.
 
 ## 7. Answer to the plan review (#1103)
 
@@ -301,35 +309,36 @@ Step 5 touches `owner-do.ts:1517` and `:2133`, which are A5 and A6. The lead dec
 | D | - M1 and M4 traces<br>- a forced model failure answered by the fallback<br>- a deploy that breaks `/healthz` stopped by M5 | As each lands |
 | E | The scorecard moves from the baseline on each re-run; nightly once #1185 has keys | Baseline re-run tonight, after the deploy |
 | F | An app owner's compare-prices question gets a cited answer with a screenshot; a submit phrase stops at an approval | After #1120 and #1110 |
-| iMessage | - Owner text reaches the host, then the Worker, and the reply lands on the device with a trace id<br>- a Brief arrives on iMessage for an iMessage-bound owner<br>- an approval link opens the card in the app | After hand-off 2 and the host's real send |
+| iMessage | - Owner text reaches the host, then the Worker, and the reply lands on the device with a trace id<br>- a Brief arrives on iMessage for an iMessage-bound owner<br>- an approval link opens the card in the app | After hand-off 2, the staging connector flag (Ansh) and the host's real send |
 | G, H | Proposed: Body serves only what the health plane holds, with an unavailable reason otherwise; the owner is still signed in after day one without a code | After the app resumes |
 
 ## 8. Owner steps
 
 **Before you sleep (these block tonight):**
-1. Ansh's go on the lead's design, so A0 starts.
-2. Deploy hand-off 2: the edge, the migration `20261012000000`, then the Worker at `a9161905`. The Mac smokes it and re-runs the baseline.
-3. Sign in to Langfuse in the Mac's built-in browser, so the tests can read traces.
-4. Share the Build Bible (§6b, §7) with the lead's account.
-5. Confirm that no `20261013000000` migration has been applied anywhere.
-6. A yes or no on this split. That includes:
+1. **Ansh:** the go on the lead's design, so A0 starts.
+2. **Ansh:** deploy hand-off 2: the edge, the migration `20261012000000`, then the Worker at `a9161905`. The Mac smokes it and re-runs the baseline.
+3. **Shivansh:** sign in to Langfuse in this Mac's built-in browser, so the tests can read traces.
+4. **Ansh:** share the Build Bible (§6b, §7) with the lead's account. Or say yes, and the Mac mirrors those two sections (rev 115) into the docs branch as a read-only copy.
+5. **Ansh:** confirm that no `20261013000000` migration has been applied anywhere.
+6. **Shivansh:** a yes or no on this split. The cloud orchestrator relays the answer to the builder. It covers:
    - the Mac taking M1–M5;
    - the builder's item 4, the check-back machine turn. It changes the heartbeat decision H1. I recommend yes: S7 is the live evidence.
+7. **Ansh, optional:** to test iMessage tonight, turn the staging connector on (the flag and a policy). Without it, the round trip moves to tomorrow.
 
 **These block later work:**
-1. **#1182,** the compaction ADR (B2).
-2. **#1185:**
+1. **Shivansh: #1182,** the compaction ADR (B2).
+2. **Ansh: #1185:**
    - the eval keys, with a judge that isn't the candidate model;
    - the schedule;
    - the storage.
-3. **#1120,** the staging browser binding.
-4. **App.v1 emits during the freeze.** I recommend that contracts may land additive and unused, and that Worker emits wait for the app's re-pin, as #1138 and #1167 already do.
-5. **Health visibility.**
+3. **Ansh: #1120,** the staging browser binding.
+4. **Shivansh and Ansh: app.v1 emits during the freeze.** I recommend that contracts may land additive and unused, and that Worker emits wait for the app's re-pin, as #1138 and #1167 already do.
+5. **Shivansh: health visibility.**
    - **The conflict:** the lead's A3 test says health-derived rows never reach a Telegram or iMessage context or reply, and Bible law 2 says they are "app-only by default". Ruling 29 allows health text in iMessage replies.
    - **My proposed reading:** `app_only` rows (Body cards, scores, health-log entries) never replay into another surface's context. Replies to the owner on iMessage or Telegram may carry the owner's own health text, per ruling 29.
 
    Your call. It blocks A3's wording, not A0 or A1.
-6. **M5 changes CI.** It merges only on your yes.
+6. **Ansh or Shivansh: M5 changes CI.** It merges only on a yes from one of you.
 
 ## 9. What we learned today
 
