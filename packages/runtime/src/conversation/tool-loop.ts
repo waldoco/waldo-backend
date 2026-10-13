@@ -199,6 +199,10 @@ export async function runToolLoop(input: Readonly<{
         ...(typed?.reason ? { reason: typed.reason } : {}),
         ...(typed?.guard ? { guard: typed.guard } : {}),
       });
+      if(call.name==='use_mac' && result.ok && result.data && typeof result.data==='object' && 'request_id' in result.data && typeof result.data.request_id==='string') {
+       input.onSettle?.('completed');
+       return `Sent to your Mac for approval. Request: ${result.data.request_id}`;
+      }
     }
   }
 }
