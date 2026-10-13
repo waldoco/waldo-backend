@@ -13,7 +13,7 @@ const MESSAGE_ID = '<fixture@waldo-send>';
 const sentEvidence = (overrides: Record<string, unknown> = {}) => ({ message_id: 'g1', thread_id: 't1', rfc822_message_id: MESSAGE_ID, label_ids: ['SENT'], ...overrides });
 type Hop = Readonly<{ hop: string; ok?: boolean; code?: string; error?: string }>;
 
-const approve = async (name: string, client: Partial<GoogleClient>, withLedger = true) => {
+const approve = async (name: string, client: Partial<GoogleClient>, withLedger = true, threadId?: string) => {
   let result!: { toast: string; message: string };
   const hops: Hop[] = [];
   let ledgerState: string | undefined;
@@ -23,7 +23,7 @@ const approve = async (name: string, client: Partial<GoogleClient>, withLedger =
     const effects = withLedger ? ownerEffectLedger(state.storage, () => 1000) : undefined;
     const desk = approvalDesk(state.storage.sql, { owner: 42, call: async () => ({}), google: async () => client as GoogleClient, newId: () => 'one', now: () => 1000, timezone: 'UTC', log: (entry: Hop) => { hops.push(entry); }, wait: async () => { waits++; }, ...(effects ? { effects } : {}) });
     const raw = 'approved bytes';
-    const id = await desk.proposeSendEmail({ to: ['friend@example.test'], subject: 'Hi', body: 'Hello', raw, digest: await sha256Hex(raw), message_id: MESSAGE_ID });
+    const id = await desk.proposeSendEmail({ to: ['friend@example.test'], subject: 'Hi', body: 'Hello', raw, digest: await sha256Hex(raw), message_id: MESSAGE_ID, ...(threadId ? { thread_id: threadId } : {}) });
     result = await desk.decide(id, 'a', 'test');
     ledgerState = effects?.get(`approval:${id}:apply`)?.state;
     status = state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status;
@@ -54,6 +54,15 @@ describe('an approved send that landed', () => {
     expect(lagging.waits).toBe(2);
     const rewritten = await approve('send-verify-rewritten', { ...sends(async () => ({ message_id: 'g1', thread_id: 't1' })), findSentByMessageId: (async () => false) as GoogleClient['findSentByMessageId'], ...thread('<CArewritten@mail.gmail.com>') });
     expect(rewritten.codes).toContain('email_diagnose:header_differs');
+  });
+
+  it('logs whether Gmail kept the send in the proposal\'s thread, so a miss tells lag from another thread', async () => {
+    const missing = { findSentByMessageId: (async () => false) as GoogleClient['findSentByMessageId'] };
+    const other = await approve('send-verify-other-thread', { ...sends(async () => ({ message_id: 'g1', thread_id: 't2' })), ...missing }, true, 't1');
+    expect(other.codes.slice(0, 3)).toEqual(['email_thread:thread_set', 'email_send:sent', 'email_thread_match:other_thread']);
+    const same = await approve('send-verify-same-thread', { ...sends(async () => ({ message_id: 'g1', thread_id: 't1' })), ...missing }, true, 't1');
+    expect(same.codes.slice(0, 3)).toEqual(['email_thread:thread_set', 'email_send:sent', 'email_thread_match:same_thread']);
+    for (const hop of [...other.hops, ...same.hops].filter(h => h.hop === 'email_thread_match')) expect(Object.keys(hop).sort()).toEqual(['code', 'hop', 'ms', 'ok', 'trace']);
   });
 
   it('is Sent when a search that trailed the send finds it on a retry', async () => {

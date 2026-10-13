@@ -583,6 +583,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
                 try { sent = await client.sendRaw(ep.raw, ep.thread_id); }
                 catch (error) { refused = sendRefused(error); hop('email_send', false, refused ? 'refused' : 'unknown', from); throw error; }
                 hop('email_send', true, 'sent', from);
+                // A search that also filters by the intended thread misses a copy Gmail filed in another thread.
+                if (ep.thread_id) hop('email_thread_match', sent.thread_id === ep.thread_id, sent.thread_id === ep.thread_id ? 'same_thread' : 'other_thread', from);
                 const { code, landed } = await searched();
                 if (!landed) { if (code === 'not_found') await diagnose(); throw new EffectUnknownError(); }
                 return { provider_id: landed.message_id, result: landed };
