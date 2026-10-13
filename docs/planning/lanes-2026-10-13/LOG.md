@@ -2156,3 +2156,10 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
     - Findings: most turn time isn't model time; `browse_page` is offered but fails `auth_failed`; check-backs and watches are echoes; the mail follow-up mechanism goes unused; a visible self-correction.
     - The S1 recall goes in a later session, and then the fact is forgotten.
   - **Tool note:** the auto-mode classifier refused one Simulator swipe ("Unverifiable Deletion Target"). Shorter scroll swipes worked.
+
+## 19:12Z — final take posted
+
+- Final take for tonight posted on #1103 (6153185827); file `FINAL_TAKE_2026-10-13.md` at `79d3c256`. It answers the Agent Plan review (stale list, missing items, done-when per workstream) and splits work by usage: lead A0→A1 and the gate; cloud orchestrator reviews; builder C1–C4 and #1108; Mac lanes T (M1 eligibility, M2 tool contract pass) and P (M3 scenarios, M4 time budget, M5 deploy gate), at most two, launched by this session after the owner's yes.
+- Verified while writing: staging still serves `e040a306` (19:06Z), so hand-off 2 is not deployed; #1178's `20261013000000` migration clashes with open #1133; #1178 adds no DO class; the staging iMessage connector stays off after hand-off 2 (flag `0`, empty policy) until Ansh sets both.
+- Read the Build Bible (rev 115) §6b, §7, §8 and the Harness verification tab through the docs connector; Bible law 2 ("app-only by default") and ruling 29 put to the owner as a question.
+- Waiting on owner steps 1–7 (section 8). Lanes do not start before the owner's yes.
