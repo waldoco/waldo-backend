@@ -71,7 +71,7 @@ import { redactConversationEntries, durableConversationStore, scrubConversationH
 import { egressGuardedCaller, redactSecretUrls } from './egress-guard';
 import { parseEgressAllowlistEnv } from '../hooks/egress-policy';
 import { toolOutputLedger , redactToolOutputLedger } from '../conversation/tool-output-ledger';
-import { armNightly, backfillEpisodes, consolidationDay, episodeIndex, indexedConversationStore, transcript } from './episodes';
+import { armNightly, backfillEpisodes, consolidationDay, episodeIndex, indexedConversationStore, NIGHTLY_BACKLOG_DAYS, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, NIGHTLY_CHUNKS, NIGHTLY_THROUGH_KEY, transcript } from './episodes';
 import { nightlyDiagnostic } from './nightly-diagnostic';
 import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
 import { schedulePreferences, schedulePreferencesLine, schedulePreferenceHandlers, applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePreferences, replanDayCards, type ScheduleHold, type ScheduleKind } from './schedule-preferences';
@@ -2456,24 +2456,50 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         throw error;
       }
     };
+    // Memory learns from the conversation since the last pass that finished, oldest first and a bounded chunk at a time, so
+    // a night that failed or never ran is caught up later. Only a consolidated chunk moves the mark.
+    const consolidateBacklog = async (trace: string, now: number): Promise<'done' | 'more' | 'failed'> => {
+      const dayMs = 24 * 60 * 60_000;
+      let through = Math.max(storage.kv.get<number>(NIGHTLY_THROUGH_KEY) ?? now - dayMs, now - NIGHTLY_BACKLOG_DAYS * dayMs);
+      for (let chunk = 0; chunk < NIGHTLY_CHUNKS; chunk += 1) {
+        const rows = episodes.after(through, 40_000);
+        if (rows.length === 0) { if (chunk === 0) log({ trace, hop: 'nightly_memory', ms: 0, ok: true, detail: 'quiet day' }); return 'done'; }
+        const day = consolidationDay(rows);
+        if (day.length > 0) {
+          const started = Date.now();
+          try {
+            const owner = day.filter((episode) => episode.speaker === 'owner');
+            const sides = {
+              owner: owner.map((episode) => episode.text).join('\n'),
+              waldo: day.filter((episode) => episode.speaker === 'waldo').map((episode) => episode.text).join('\n'),
+              ownerMessages: owner.map((episode) => ({ ref: episode.entry_id, text: episode.text })),
+            };
+            const { done, detail } = await responder.consolidate(trace, transcript(day, clock.timezone), sides);
+            log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: done, detail: `${day.length} turns; ${detail}` });
+            if (!done) return 'failed';
+          } catch (error) {
+            log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' });
+            return 'failed';
+          }
+        }
+        through = rows.at(-1)!.at;
+        storage.kv.put(NIGHTLY_THROUGH_KEY, through);
+      }
+      return episodes.after(through, 0).length > 0 ? 'more' : 'done';
+    };
     const nightly = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`;
       const started = Date.now();
+      if (entry.id === NIGHTLY_CATCH_UP_ID) {
+        // A catch-up that fails again is retried by the scheduler, which backs off and then pauses it; the next night resumes.
+        if (await consolidateBacklog(trace, entry.occurrence_at) === 'failed') throw new Error('nightly consolidation incomplete');
+        return;
+      }
       try {
         await migrateCoreFiles(`${trace}:migration`);
-        const day = consolidationDay(episodes.since(entry.occurrence_at - 24 * 60 * 60_000, 40_000));
-        if (day.length === 0) log({ trace, hop: 'nightly_memory', ms: 0, ok: true, detail: 'quiet day' });
-        else {
-          try {
-            const sides = {
-              owner: day.filter((episode) => episode.speaker === 'owner').map((episode) => episode.text).join('\n'),
-              waldo: day.filter((episode) => episode.speaker === 'waldo').map((episode) => episode.text).join('\n'),
-            };
-            const detail = await responder.consolidate(trace, transcript(day, clock.timezone), sides);
-            log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: true, detail: `${day.length} turns; ${detail}` });
-          } catch (error) {
-            log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' });
-          }
+        if (await consolidateBacklog(trace, entry.occurrence_at) !== 'done' && schedPrefs.enabled('nightly')) {
+          const at = Date.now() + NIGHTLY_CATCH_UP_DELAY_MS;
+          await scheduler.schedule({ id: NIGHTLY_CATCH_UP_ID, kind: 'dreaming', payloadRefs: { id: NIGHTLY_CATCH_UP_ID }, occurrenceAt: at, dueAt: at, recurrence: null });
         }
         const promoting = Date.now();
         await responder.promote(trace)

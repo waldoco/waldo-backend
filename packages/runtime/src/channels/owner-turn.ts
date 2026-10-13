@@ -698,12 +698,11 @@ export const createOwnerResponder = (
       } finally { backgroundCurrent = undefined; transientDecision = false; promptContext = ''; }
     },
     async consolidate(trace, day, sides) {
-      if (!memory) return 'no memory';
-      if (memory.incompleteTopics().length) return 'historical memory consolidation deferred: forgetting coverage incomplete';
+      if (!memory) return { done: true, detail: 'no memory' };
+      if (memory.incompleteTopics().length) return { done: false, detail: 'historical memory consolidation deferred: forgetting coverage incomplete' };
 
       const raw = await ask(trace, 'nightly_memory', NIGHTLY_MEMORY_INSTRUCTION, nightlyInput(promptMemory()!, day), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, memoryModel);
-      const grounding = sides ? { owner: sides.owner, waldo: sides.waldo } : { owner: day };
-      return applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`, undefined, grounding, false);
+      return { done: true, detail: applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`, undefined, sides ?? { owner: day }, false) };
     },
     async migrate(trace, input) {
       if (!memory) return 'no memory';

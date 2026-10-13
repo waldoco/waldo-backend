@@ -17,6 +17,7 @@ export type EpisodeIndex = Readonly<{
   get(ref: string): Episode | null;
   search(query: string, limit: number, from?: number, to?: number): readonly EpisodeHit[];
   since(at: number, maxChars: number): readonly Episode[];
+  after(at: number, maxChars: number): readonly Episode[];
 }>;
 
 export const speakerOf = (entryId: string): Speaker => (entryId.endsWith('-reply') ? 'waldo' : entryId.startsWith('tg-') ? 'owner' : 'system');
@@ -65,6 +66,18 @@ export const episodeIndex = (sql: SqlStorage): EpisodeIndex => {
       }
       return kept.reverse();
     },
+    // Oldest first, so a reader that moves past what it read never skips a row: rows that share a time stay together,
+    // and the first row always comes, so one long row cannot stall it.
+    after(at, maxChars) {
+      const kept: Episode[] = [];
+      let total = 0;
+      for (const row of sql.exec<Episode>('SELECT entry_id, speaker, at, text FROM episodes WHERE at > ? ORDER BY at, rowid', at)) {
+        const last = kept.at(-1);
+        if (last && row.at !== last.at && total + row.text.length > maxChars) break;
+        kept.push(row); total += row.text.length;
+      }
+      return kept;
+    },
   };
 };
 
@@ -93,6 +106,13 @@ export const consolidationDay = (episodes: readonly Episode[]): readonly Episode
 
 export const NIGHTLY_ID = 'nightly-memory';
 export const NIGHTLY_TIME = '03:00';
+// A one-off pass that only consolidates, armed when a night could not finish its backlog.
+export const NIGHTLY_CATCH_UP_ID = 'nightly-memory-catch-up';
+export const NIGHTLY_CATCH_UP_DELAY_MS = 15 * 60_000;
+// The time of the last episode a finished pass consolidated. A pass looks back at most a week and reads at most three chunks.
+export const NIGHTLY_THROUGH_KEY = 'nightly_consolidated_through_v1';
+export const NIGHTLY_BACKLOG_DAYS = 7;
+export const NIGHTLY_CHUNKS = 3;
 
 export const armNightly = async (scheduler: Scheduler, timezone: string, now: number): Promise<void> => {
   const found = scheduler.lookup(NIGHTLY_ID);
