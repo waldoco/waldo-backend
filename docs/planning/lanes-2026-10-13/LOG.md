@@ -555,7 +555,7 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **Then:** merge at the new head after a hand check of the delta, push CI, deploy alone, smoke, and the App lane's P1 re-run (test send 2 of 5; it is also QA step 4, so there's no separate "qa" send).
 - **Existing exposure, for the summary:** `connector-proxy/index.ts:57` logs Gmail's error text, which can repeat recipient details. It's live in v17 and goes on the must-merge-before-redeploy list.
 
-## Morning summary for the owner (13 Oct; rewritten 01:46Z)
+## Morning summary for the owner (13 Oct; rewritten 01:46Z, updated 03:54Z)
 
 **In one line:** approvals now raise a card in app chat, and an approved email really goes out. The app said "Outcome not confirmed" because Gmail rewrites the Message-ID we set, so the backend's proof could never pass. #1115, deployed at 01:36Z, proves a send by Gmail's own id instead. The last live check, P1 run 3b, needs you: the App session's permission check refused its keystrokes. Mail reading, meeting prep and calendar details are built but wait for your connector-proxy redeploy, and several security fixes must land before it.
 
@@ -581,6 +581,8 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - #1107: calendar join link, attachments and attendee emails, with a fixed digest. It's a no-op until the proxy redeploys.
   - #1111: send hops and the re-check.
   - #1115: proof by Gmail's id.
+  - #1118: code and link extraction stays linear on hostile mail (the ReDoS fix).
+  - #1116: the proxy logs only its own fixed codes, never Gmail's text. It takes effect with the proxy redeploy.
 - **App (`main`):**
   - #96: App CI.
   - #92: the #89 follow-ups.
@@ -588,6 +590,12 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - #93: the approvals re-read honours the server's wait.
   - #94: the words pass, with per-action approve labels.
   - #95: the screens pass.
+  - #98: chat shown as one conversation, with one More menu.
+  - #99: state words that claim no more than the server knows (Confirmed, Unconfirmed, Review not confirmed).
+  - #100: the Form ring takes its zone's colour.
+  - #101: one Sign out, at the bottom of Settings.
+  - #102: the test-build consent line shows whenever the app talks to staging.
+  - #103: "Unconfirmed" on an unconfirmed message, and one rule for a row's time.
 
 ### Your decisions, most urgent first
 1. **Approve or run P1 run 3b** (above). It's the last live proof of approvals.
@@ -596,32 +604,34 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
    - **Order matters:** deploy the Worker that carries #1114 *before* the proxy, and roll back proxy first, then Worker. A new proxy in front of an old Worker leaks spaced codes. Connectors derived this by running the old extractor on the new `htmlText` output.
    - **After the redeploy:** a follow-up narrows the code gap to spaces only. Until then, a code next to a row of numbers can be relayed merged with that row's digits. That merged relay is the only cost, because the code itself is always caught.
    - **First, these must merge:**
-     - #1114: codes in HTML table cells reach the model in chat `read_thread`; that's live today. It's CI green and gets its review after the reset.
+     - #1114: codes in HTML table cells reach the model in chat `read_thread`; that's live today. Its third review starts once CI is green on the head that folds in the next item.
+     - #1118's one narrowing. #1118 merged at 03:52Z. A code whose adjective has more than 40 word characters glued onto it, with "pin" or "-", now passes unredacted, where base caught it. The shape is synthetic, and no real sender writes it [inference]. The repro test, plus a bounded fix or a documented narrowing, is being folded into #1114.
      - #1105: choosing the right mail body.
      - #1112: links.
      - #1109's fixes, which include an organizer-or-accepted gate.
-     - A fix for `connector-proxy/index.ts:57` logging Gmail's error text, which can repeat recipient details. It's live in v17.
+     - The proxy logging Gmail's error text, which can repeat recipient details (`connector-proxy/index.ts:57`, live in v17). Fixed by #1116, merged at 03:52Z, which takes effect with this redeploy.
      - The chunk PR, if ready.
    - **What the redeploy switches on:**
      - #1107: attendee emails reach model context, and `conference_url` is kept whole (D1), so it can carry a passcode, and a third party's invite can set its own video link.
      - #1109's attendee search.
      - #1105's body choice.
      - #1111 and #1115's direct by-id send check.
-4. **App deletion PR (draft, "needs owner"):** the App lane's inventory found 81 unreachable JS/TS files and 25 uncompiled Swift files: the old Supabase client, local scoring, old sync and dead components. It's one draft PR, with separate JS and Swift commits. It's held because the parked list includes the dormant-stack deletion. `targets/widgets` (Live Activities) is kept for your call.
 4. **The scribe's health false positives:** options A, B and C are on #1103.
 5. **Where Patrol and Spots go once the side menu goes** (R1). R1 and the backend's "where Connections is" line wait for this.
 6. **#1109's ADR versus your ruling:**
    - "Links" is read as verification codes and links only.
    - The prep note is stored like any message.
    - Staging traces capture prompt text, under your 10 Oct ruling.
-7. **Not a claim yet:** on staging's proxy path, a send that Gmail refuses still shows "unknown", not "Not done".
-8. **Possibly the same flaw in drafts** (unverified): `findDraftByMessageId` keys on our Message-ID, and Waldo drafts on every first ask.
-9. **Your own tasks:**
+7. **App deletion PR (draft, "needs owner"):** the App lane's inventory found 81 unreachable JS/TS files and 25 uncompiled Swift files: the old Supabase client, local scoring, old sync and dead components. It's one draft PR, with separate JS and Swift commits. It's held because the parked list includes the dormant-stack deletion. `targets/widgets` (Live Activities) is kept for your call.
+8. **Not a claim yet:** on staging's proxy path, a send that Gmail refuses still shows "unknown", not "Not done".
+9. **Possibly the same flaw in drafts** (unverified): `findDraftByMessageId` keys on our Message-ID, and Waldo drafts on every first ask.
+10. **Your own tasks:**
    - sign in again on `iPhone 17 Pro` (`iPhone 17` is signed in until about 08:40Z);
    - upload the Expo keys (APNs key, FCM service account);
    - close #1072 (superseded);
    - the React Native text-drawing dependency patch;
-   - #1113 (guard changes and cost ledger), held for you or Ansh.
+   - #1113 (guard changes and cost ledger), held for you or Ansh;
+   - delete `scratchpad-r1118` under `/private/tmp/claude-501/` (in the elastic-rubin worktree's folder). It's a review subagent's leftover synthetic test copies. The permission check refused its `rm -rf`, and I didn't delete it on the subagent's behalf.
 
 ### Held, or waiting for review
 - **#1100** has two unmet conditions:
@@ -629,13 +639,12 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   2. No test shows that deletion clears `episodes`.
 
   The backend lane is on both. The rename PR and #1108 wait behind it.
-- **After the 02:30Z usage reset,** reviews run for:
-  - #1114 (table cells);
+- **Waiting for review:**
+  - #1114 (table cells): the third review, after the fold-in;
+  - #1109 (prep mail): re-review after #1114;
   - #1110 (A2, browsing from the app);
-  - app #98 (chat chrome; its look-only check on an open card passed);
-  - app #99 (state words);
-  - app #100 (the Form ring);
-  - app #101 (one sign-out, plain words).
+  - the #1105 → #1112 → #1117 stack, after #1114;
+  - app #104 (the Home Brief row and R3).
 - **`created_at` on chat rows** (reply times): the backend lane adds it without a migration.
 - **#1115 follow-ups:**
   - a thread-precedence test (one mutation survived);
@@ -875,3 +884,24 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **App #104** (the Home Brief row and R3) is open at `d2461250`. Its review follows #1118's.
 - **The App lane's inventory:** 81 unreachable JS/TS files and 25 uncompiled Swift files. **Decision:** one draft PR labelled "needs owner", with separate JS and Swift commits, the scan test and a Simulator walk of every route. It's not merged tonight (the parked dormant-stack deletion is the owner's). `targets/widgets` is kept. It's added to the summary's decisions.
 - **`sleep_debt`** in app.v1 was asked of the backend builder on #1103. The app marks it "awaiting backend".
+
+## 03:54Z: #1118 and #1116 merged; deploy after push CI
+
+- **Merged #1118 as `89b4f04d`** (the ReDoS fix: code and link extraction stays linear).
+  - **Gate:** review PASS at `5ab4b947`.
+    - 25 hostile shapes at 200K characters: the slowest took 26 ms. Base runs past 2.5 s on 8 of the test's 10.
+    - Identical output on 19 ordinary examples and on a 120K-string fuzz.
+    - Each mutant is caught.
+    - CI 6/6 and CLEAN. The advisor agreed.
+  - **One narrowing.** It doesn't block this merge, but must land before the proxy redeploy. More than 40 word characters glued onto the adjective, with "pin" or "-", now pass unredacted, where base caught them.
+    - The repro and follow-ups are on #1118 (6137848148).
+    - The fix is folded into #1114, along with the stale "At base … took" comment. Connectors was told.
+- **Merged #1116 as `77d7329c`** (the proxy logs only fixed codes).
+  - **Gate:** delta review PASS at `25b8963d`. CI 6/6 and CLEAN. The advisor agreed.
+  - It takes effect only with the owner's proxy redeploy.
+  - Optional hardening is on #1116 (6137848490).
+- **Follow-up on #1103:** the pre-existing `onlyArtifacts` quadratic. Only the WhatsApp paths call it, and their input is capped near 4,096 characters [inference].
+- **Not done:** the permission check refused the reviewer's `rm -rf` of its scratch folder. I didn't delete the folder for the subagent; it's an owner task in the summary.
+- **#1114's third review** reruns #1118's timing shapes and the narrowing repro on its own head, because its whitespace normalization feeds every pattern.
+- **Summary updated:** merges; decision 3's must-merge list; decisions renumbered (the deletion PR is 7); and the review queue.
+- **Next:** push CI on `77d7329c`, then a deploy between 04:05Z and 04:25Z, smoke checks and a log entry.
