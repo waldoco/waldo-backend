@@ -57,6 +57,9 @@ pnpm --filter @waldo/runtime test
   test seam. It is accepted only with `WALDO_ENV=test|local`, and ingress fails closed
   when the binding is absent or shorter than 16 characters. The Vitest pool supplies a
   non-secret synthetic value in `vitest.config.ts`.
+- `EXPO_ACCESS_TOKEN`, provisioned with `wrangler secret put`, is Expo's access token for
+  the app's push project. Without it the owner object's app push is not configured: it reads
+  no device tokens and sends nothing.
 
 ### Responsibility public adapter
 
