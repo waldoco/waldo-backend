@@ -143,6 +143,21 @@ describe('health scores read', () => {
     expect(healthScoresV1Schema.safeParse({ ...scores, recovery: { ...scores.recovery, zone: null } }).success).toBe(true);
     rejected(healthScoresV1Schema, [{ ...scores, recovery: { ...scores.recovery, zone: 'unknown' } }, { ...scores, recovery: { ...scores.recovery, zone: undefined } }]);
   });
+  it('carries sleep debt in its own states, so a missing night or a missing key never reads as zero', () => {
+    const version = { algorithm_version: 'sleep-debt.candidate.v1', activation: 'candidate_unaccepted' };
+    const debt = { state: 'available', debt_minutes: 630, need_basis: 'own_average', ...version };
+    for (const sleep_debt of [{ state: 'unavailable', reason: 'missing_sleep' }, { state: 'partial', confidence: 0.6, ...version }, debt, { ...debt, debt_minutes: 0, need_basis: 'owner_confirmed' }]) {
+      expect(healthScoresV1Schema.safeParse({ ...scores, sleep_debt }).success, JSON.stringify(sleep_debt)).toBe(true);
+    }
+    expect(healthScoresResponseV1Schema.safeParse({ ...scores, sleep_debt: debt }).success).toBe(true);
+    rejected(healthScoresV1Schema, [
+      { ...scores, sleep_debt: null }, { ...scores, sleep_debt: { state: 'unavailable' } }, { ...scores, sleep_debt: { state: 'unavailable', reason: 'made_up' } },
+      { ...scores, sleep_debt: { state: 'partial', confidence: 0.6, debt_minutes: 630, ...version } }, { ...scores, sleep_debt: { state: 'partial', confidence: 1.5, ...version } },
+      { ...scores, sleep_debt: { ...debt, need_basis: undefined } }, { ...scores, sleep_debt: { ...debt, need_basis: 'guessed' } }, { ...scores, sleep_debt: { ...debt, zone: 'heavy' } },
+      { ...scores, sleep_debt: { ...debt, debt_minutes: -1 } }, { ...scores, sleep_debt: { ...debt, debt_minutes: 20_161 } }, { ...scores, sleep_debt: { ...debt, debt_minutes: null } },
+      { ...scores, sleep_debt: { ...debt, algorithm_version: 'sleep debt' } }, { ...scores, sleep_debt: { ...debt, activation: 'live' } },
+    ]);
+  });
   it('answers a day with no row as unavailable with a reason, not as an error or a zero', () => {
     for (const reason of ['not_linked', 'consent_required', 'consent_withdrawn', 'no_readings']) expect(healthScoresResponseV1Schema.safeParse({ state: 'unavailable', day: '2026-10-10', reason }).success).toBe(true);
     expect(healthScoresResponseV1Schema.safeParse({ state: 'unavailable', day: null, reason: 'not_linked' }).success).toBe(true);

@@ -20,7 +20,7 @@ const sectionsAddUp = (shape: NonNullable<TurnLogEntry['shape']>) => {
 };
 
 it('the reply call reports what fills its context, and the system sections add up to the system prompt', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('owner-turn-context-shape')), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('owner-turn-context-shape')), async (_instance, state) => {
     const store = claimStore(state.storage.sql, fn => state.storage.transactionSync(fn));
     const tools = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', hideHistory: async () => undefined });
     const logged: TurnLogEntry[] = [];
@@ -53,7 +53,7 @@ const appTurn = async (occurrenceKey: string, text: string, now: Date) => {
   const logged: TurnLogEntry[] = [];
   seen.instructions = [];
   const responder = createOwnerResponder('fixture', undefined, undefined, entry => { logged.push(entry); }, { timezone: 'Asia/Kolkata', now: () => now }, [], undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, [], runScope, undefined, { context });
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`prefix-${occurrenceKey}`)), () =>
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`prefix-${occurrenceKey}`)), () =>
     responder.respond({ traceId: `app-${occurrenceKey}`, conversationRef: context.conversationRef, surface: 'app', text }, (_name, work) => work()));
   return { instructions: new TextEncoder().encode(seen.instructions.at(-1)!), shape: logged.find(entry => entry.hop === 'llm_reply')!.shape! };
 };

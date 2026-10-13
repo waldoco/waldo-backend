@@ -72,6 +72,12 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (body: u
 const directoryState=vi.hoisted(()=>({linked:new Map<string,string>(),target:'',sends:[] as any[],gate:null as null|Promise<void>,gateAt:0,calls:0}));
 vi.mock('../src/identity/owner-directory',async load=>({...await load<typeof import('../src/identity/owner-directory')>(),ownerDirectory:()=>({byPresence:async (_p:string,s:string)=>{const answer=directoryState.linked.has(s)?{doName:directoryState.linked.get(s),subject:s}:null;directoryState.calls++;if(directoryState.gateAt&&directoryState.calls===directoryState.gateAt)await directoryState.gate;return answer;},redeemHashed:async (_p:string,s:string)=>{directoryState.linked.set(s,directoryState.target);return {kind:'redeemed'};}})}));
 vi.mock('../src/identity/console-auth',async load=>({...await load<typeof import('../src/identity/console-auth')>(),consoleAuth:()=>({assertChannelPresence:async(n:string,_p:string,s:string)=>directoryState.linked.get(s)===n,saveSettings:async()=>true,unlinkTelegram:async(n:string)=>{for(const [subject,name] of directoryState.linked)if(name===n)directoryState.linked.delete(subject);return true;},listSessions:async()=>[]})}));
+// Every Telegram turn asks the directory which owner holds its subject; the in-memory directory above answers.
+vi.mock('../src/identity/common-owner-authority',async load=>{const actual=await load<typeof import('../src/identity/common-owner-authority')>();
+ const owner='00000000-0000-4000-8000-000000000071',presence='00000000-0000-4000-8000-000000000072';
+ const answer=async(_input:RequestInfo|URL,init?:RequestInit)=>{const a=JSON.parse(String(init?.body));
+  return Response.json(directoryState.linked.get(a.p_subject)===a.p_do_name?{admission_revision:'1',auth_user_id:owner,do_name:a.p_do_name,owner_id:owner,presence_id:presence,provider:a.p_provider,state_version:1,subject:a.p_subject}:null);};
+ return {...actual,commonOwnerAuthority:(env:Parameters<typeof actual.commonOwnerAuthority>[0])=>actual.commonOwnerAuthority({...env,SUPABASE_PROJECT_URL:'https://directory.fixture.invalid',SUPABASE_PUBLISHABLE_KEY:'fictional-publishable',WALDO_ROUTER_HMAC_SECRET:'fictional-router-secret'},answer)};});
 // Replace only transport capture, never the registered owner DO or its inbox/listener/outbox.
 vi.mock('../src/channels/telegram-api',async load=>({...await load<typeof import('../src/channels/telegram-api')>(),createTelegramCaller:()=>async(m:string,p:any)=>{directoryState.sends.push({m,p});return m==='getMe'?{username:'fixture_bot'}:m==='sendMessage'?{message_id:directoryState.sends.length,chat:{id:p.chat_id}}:true;}}));
 const {handleTelegramWebhook}=await import('../src/channels/telegram-webhook');
@@ -93,7 +99,7 @@ const drain=async(name:string,id:number)=>runInDurableObject(stub(name),async(in
  for(let n=0;n<4;n++){const finals=state.storage.kv.get<any[]>('telegram_final_outbox_v1')??[];for(const f of finals)if(f.status==='pending')f.dueAt=0;state.storage.kv.put('telegram_final_outbox_v1',finals);await instance.alarm!();}
  const row=(await inbox.records()).find(r=>r.updateId===id);await state.storage.deleteAlarm();return row;
 });
-const stub=(name:string)=>env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
+const stub=(name:string)=>env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
 beforeEach(()=>{seen.requests.length=0;seen.onReply=undefined;directoryState.sends.length=0;vi.stubGlobal('fetch',()=>{throw Error('network forbidden');});});
 afterEach(()=>vi.unstubAllGlobals());
 it.each(['console-first','telegram-first','preexisting','eviction'])('ADV registered full webhook/link/owner/inbox/alarm pipeline %s',async(mode)=>{

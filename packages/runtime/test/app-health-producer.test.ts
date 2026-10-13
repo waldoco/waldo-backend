@@ -8,7 +8,7 @@ const SECRET = 'fictional-router-secret-00000000000000000';
 const CREDENTIAL = `owner-1.${'a'.repeat(32)}.sig`;
 const auth = { readAppCredential: async (credential: string) => (credential === CREDENTIAL ? 'owner-1' : null) } as unknown as ConsoleAuth;
 const env = () => ({
-  TELEGRAM_OWNER_DO: { idFromName: (n: string) => n, get: () => ({ fetch: async () => Response.json({ forwarded: true }) }) },
+  OWNER_DO: { idFromName: (n: string) => n, get: () => ({ fetch: async () => Response.json({ forwarded: true }) }) },
   RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) },
   SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key', WALDO_ROUTER_HMAC_SECRET: SECRET,
 }) as never;

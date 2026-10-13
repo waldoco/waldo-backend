@@ -12,7 +12,7 @@ const post = (token: string | null, body: unknown = { text: 'probe ping' }) => n
 });
 const staging = (ns: DurableObjectNamespace): ProbeTurnEnv => ({
   WALDO_ENVIRONMENT: 'staging', WALDO_PROBE_TOKEN: 'probe-secret',
-  WALDO_OWNER_TELEGRAM_ID: '42', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata', TELEGRAM_OWNER_DO: ns,
+  WALDO_OWNER_TELEGRAM_ID: '42', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata', OWNER_DO: ns,
 });
 const directory: OwnerDirectory = {
   byPresence: async () => ({ doName: 'do-a', subject: '42', timezone: 'Asia/Kolkata' }),

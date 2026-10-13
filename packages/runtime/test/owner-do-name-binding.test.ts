@@ -2,15 +2,15 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 
-const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO } = await import('../src/channels/owner-do');
 
 // The DO learns its own name from the router's header. Only a name that addresses this very object may bind it,
 // the same rule /enqueue and the app route already apply.
 const grantWith = async (addressedAs: string, stored: string | null, header: string) => {
-  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(addressedAs));
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(addressedAs));
   return runInDurableObject(stub, async (_instance, state) => {
     if (stored) state.storage.kv.put('do_name', stored);
-    const owner = new TelegramOwnerDO(state, { ...env, WALDO_OWNER_TELEGRAM_ID: undefined });
+    const owner = new OwnerDO(state, { ...env, WALDO_OWNER_TELEGRAM_ID: undefined });
     const response = await owner.fetch(new Request('https://telegram-owner/grant-console', { method: 'POST', headers: { 'x-waldo-do-name': header } }));
     return { status: response.status, doName: state.storage.kv.get<string>('do_name') ?? null };
   });

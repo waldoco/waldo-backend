@@ -338,3 +338,42 @@ it('maps calendar detail fields only for a Worker that asks for them, so either 
  const newer=await(await serve(await request({...input,calendar_details:true}))).json() as {data:{events:Record<string,unknown>[]}};
  expect(newer.data.events[0]).toMatchObject({conference_url:'https://meet.example.test/abc-defg-hij',attachments:[{title:'Q4 plan',file_id:'drive-file-1'}],attendee_emails:['asha@example.test']});
 });
+
+it('answers a Sent readback that carries the id the send returned, on a proxy that predates it and one that reads it',async()=>{
+ const searches:string[]=[];
+ vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
+  const url=String(input);const args=url.startsWith('https://db.invalid/')?JSON.parse(String(init?.body??'{}')):{};const fn=url.split('/').at(-1)!;
+  if(fn==='proxy_access')return Response.json(args.p_connection==='conn'&&args.p_do_name==='owner'?[{secret:'fictional-refresh',scopes:['https://www.googleapis.com/auth/gmail.send']}]:[]);
+  if(fn==='proxy_secret')return Response.json('fictional-refresh');
+  if(fn==='proxy_health')return Response.json(true);
+  if(url==='https://oauth2.googleapis.com/token')return Response.json({access_token:'fictional-access'});
+  if(url.includes('gmail.googleapis.com/gmail/v1/users/me/messages?')){searches.push(url);return Response.json({messages:[{id:'g1'}]});}
+  if(url.includes('gmail.googleapis.com/gmail/v1/users/me/messages/g1?'))return Response.json({id:'g1',threadId:'t1',labelIds:['SENT'],payload:{headers:[{name:'Message-ID',value:'<fixture@waldo-send>'}]}});
+  throw new Error('unexpected fictional transport');
+ }));
+ // The Worker drops only trailing undefined arguments, so an absent thread id crosses the wire as null.
+ const answer=await(await serve(await request({do_name:'owner',op:'call',connection:'conn',method:'findSentByMessageId',args:['<fixture@waldo-send>',null,'g1']}))).json();
+ expect(answer).toEqual({data:{message_id:'g1',thread_id:'t1',rfc822_message_id:'<fixture@waldo-send>',label_ids:['SENT']}});
+});
+it('logs a fixed code, never the provider\'s error text, and keeps its own codes', async () => {
+ fixture();const inner=globalThis.fetch;
+ vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>String(input).includes('gmail.googleapis.com')?Response.json({error:{code:400,message:'Invalid To header: friend@example.test'}},{status:400}):inner(input,init)));
+ const logs=vi.spyOn(console,'log').mockImplementation(()=>{});
+ const refused=await(await serve(await request({do_name:'owner',op:'call',connection:'conn',method:'searchMail',args:['in:sent',5]}))).json();
+ expect(refused).toMatchObject({error:{status:400}});
+ const {intent_id,...missing}=body;void intent_id;await serve(await request(missing));
+ const lines=logs.mock.calls.map(call=>JSON.parse(String(call[0])) as {hop:string;error?:string}).filter(line=>line.hop==='connector_proxy');
+ expect(lines.map(line=>line.error)).toEqual(['provider_error','intent_required']);
+ for(const leaked of ['friend@example.test','Invalid To header'])expect(JSON.stringify(logs.mock.calls)).not.toContain(leaked);
+});
+it('logs provider_error for text that only starts with one of its codes, and only known operations and methods', async () => {
+ fixture();const inner=globalThis.fetch;
+ vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{if(String(input).includes('gmail.googleapis.com'))throw new Error('unknown owner friend@example.test');return inner(input,init);}));
+ const logs=vi.spyOn(console,'log').mockImplementation(()=>{});
+ await serve(await request({do_name:'owner',op:'call',connection:'conn',method:'searchMail',args:['in:sent',5]}));
+ await serve(await request({do_name:'owner',op:'call',connection:'conn',method:'friend@example.test',args:[]}));
+ await serve(await request({do_name:'owner',op:'friend@example.test',connection:'conn'}));
+ const lines=logs.mock.calls.map(call=>JSON.parse(String(call[0])) as {hop:string;op?:string;method?:string;error?:string}).filter(line=>line.hop==='connector_proxy');
+ expect(lines.map(({op,method,error})=>[op,method,error])).toEqual([['call','searchMail','provider_error'],['call','unknown','unknown operation'],['unknown',undefined,expect.any(String)]]);
+ expect(JSON.stringify(logs.mock.calls)).not.toContain('friend@example.test');
+});
