@@ -32,6 +32,8 @@ export type TelegramWebhookEnv = Readonly<{
   BROWSER?: import('@cloudflare/playwright').BrowserWorker;
   BROWSERBASE_PROJECT_ID?: string;
   ELEVENLABS_API_KEY?: string;
+  // Expo's access token for app push. Missing means push is not configured.
+  EXPO_ACCESS_TOKEN?: string;
   WALDO_STT_PROVIDER?: string;
   WALDO_TOOL_OFFLOAD?: string;
   GOOGLE_CLIENT_ID?: string;

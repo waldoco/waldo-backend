@@ -1,6 +1,7 @@
 -- Expo push tokens join the existing Vault custody under their own provider, so the app can register what
--- expo-notifications returns. app_push_targets releases an owner's active tokens, decrypted, only to a router-signed
--- caller: the owner's Durable Object reads them to send a push and keeps nothing.
+-- expo-notifications returns. app_push_targets releases an owner's active Expo tokens, decrypted, only to a router-signed
+-- caller: the owner's Durable Object reads them to send a push and keeps nothing. app_push_retire lets it drop a token
+-- Expo reports the device no longer holds.
 alter table waldo.app_push_devices drop constraint app_push_devices_provider_check;
 alter table waldo.app_push_devices add constraint app_push_devices_provider_check check (provider in ('apns','fcm','expo'));
 
@@ -48,12 +49,30 @@ begin
   if waldo.router_signed('app.push.targets.' || p_do_name, p_at, p_sig) is distinct from true then
     raise exception 'unsigned or invalid call' using errcode = '42501';
   end if;
-  select coalesce(jsonb_agg(jsonb_build_object('installation_id', d.installation_id, 'provider', d.provider, 'token', v.decrypted_secret)
+  select coalesce(jsonb_agg(jsonb_build_object('installation_id', d.installation_id, 'device_epoch', d.device_epoch, 'token', v.decrypted_secret)
     order by d.registered_at desc), '[]'::jsonb) into result
   from (select d.* from waldo.app_push_devices d join waldo.owners o on o.id = d.owner_id
-        where o.do_name = p_do_name and o.state = 'active' and d.state = 'active' order by d.registered_at desc limit 10) d
+        where o.do_name = p_do_name and o.state = 'active' and d.state = 'active' and d.provider = 'expo' order by d.registered_at desc limit 10) d
   join vault.decrypted_secrets v on v.id = d.secret_id;
   return result;
 end $$;
-revoke all on function waldo.app_push_targets(text,bigint,text) from public,anon,authenticated,service_role;
-grant execute on function waldo.app_push_targets(text,bigint,text) to anon;
+
+-- Fenced on the epoch the sender read, so a registration made since then is never retired by a stale answer.
+create function waldo.app_push_retire(p_do_name text, p_installation_id text, p_device_epoch bigint, p_at bigint, p_sig text) returns boolean
+language plpgsql security definer set search_path = '' as $$
+declare v_device waldo.app_push_devices;
+begin
+  if waldo.router_signed('app.push.retire.' || p_do_name || '.' || p_installation_id || '.' || p_device_epoch, p_at, p_sig) is distinct from true
+    or p_installation_id !~ '^[a-f0-9-]{36}$' or p_device_epoch < 1 then
+    raise exception 'unsigned or invalid call' using errcode = '42501';
+  end if;
+  select d.* into v_device from waldo.app_push_devices d join waldo.owners o on o.id = d.owner_id
+    where o.do_name = p_do_name and d.installation_id = p_installation_id::uuid and d.state = 'active' and d.device_epoch = p_device_epoch for update of d;
+  if not found then return false; end if;
+  if v_device.secret_id is not null then delete from vault.secrets where id = v_device.secret_id; end if;
+  update waldo.app_push_devices set secret_id = null, state = 'revoked', device_epoch = device_epoch + 1
+    where owner_id = v_device.owner_id and installation_id = v_device.installation_id;
+  return true;
+end $$;
+revoke all on function waldo.app_push_targets(text,bigint,text), waldo.app_push_retire(text,text,bigint,bigint,text) from public,anon,authenticated,service_role;
+grant execute on function waldo.app_push_targets(text,bigint,text), waldo.app_push_retire(text,text,bigint,bigint,text) to anon;

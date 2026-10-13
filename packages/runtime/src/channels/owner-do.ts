@@ -2154,13 +2154,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const ledger = async () => [await promptLedger(), await healthLogLines()].filter((section) => section !== '').join('\n\n');
     const quiet = () => isQuiet(loops.proactivity(), Date.now(), clock.timezone);
     // The app's push: fixed text to the owner's own devices, read from the directory for each send.
-    const push = ownerPush({ kv: identity, send: fetch, quiet, today: () => localIso(Date.now(), clock.timezone).slice(0, 10),
-      targets: async () => {
-        const call = signedRpc(this.env), doName = identity.get<string>('do_name');
-        if (!call || !doName) throw new Error('push targets unavailable');
-        return call('app_push_targets', `app.push.targets.${doName}`, { p_do_name: doName });
+    const pushDirectory = () => {
+      const call = signedRpc(this.env), doName = identity.get<string>('do_name');
+      if (!call || !doName) throw new Error('push directory unavailable');
+      return { call, doName };
+    };
+    const push = ownerPush({ accessToken: this.env.EXPO_ACCESS_TOKEN, kv: identity, send: fetch, quiet, today: () => localIso(Date.now(), clock.timezone).slice(0, 10),
+      targets: async () => { const { call, doName } = pushDirectory(); return call('app_push_targets', `app.push.targets.${doName}`, { p_do_name: doName }); },
+      retire: async ({ installation_id: installation, device_epoch: epoch }) => {
+        const { call, doName } = pushDirectory();
+        return call('app_push_retire', `app.push.retire.${doName}.${installation}.${epoch}`, { p_do_name: doName, p_installation_id: installation, p_device_epoch: epoch });
       },
-      log: (code, sent) => log({ trace: `push:${Date.now()}`, hop: 'app_push', ms: 0, ok: code === 'sent', code, detail: `${code}: ${sent}` }) });
+      log: (code, count) => log({ trace: `push:${Date.now()}`, hop: 'app_push', ms: 0, ok: code === 'sent' || code === 'retired', code, detail: `${code}: ${count}` }) });
     // Media reads are per-channel: Telegram file ids go through getFile; WhatsApp media ids go
     // through the Graph two-step (W4). Both feed the same transcriber/attachment pipeline.
     const download = channel === 'app'

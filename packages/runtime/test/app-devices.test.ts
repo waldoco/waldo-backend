@@ -7,7 +7,7 @@ import { linkCodeHash, routerSignature } from '../src/identity/owner-directory';
 const SECRET = 'fictional-devices-router-secret-0000000000', DIRECTORY = 'https://devices.fixture.invalid', NAME = 'devices-owner', SESSION = 'c'.repeat(32);
 const INSTALLATION = '43000000-0000-4000-8000-000000000001', EXPO = 'ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]';
 const env = { SUPABASE_PROJECT_URL: DIRECTORY, SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key', WALDO_ROUTER_HMAC_SECRET: SECRET,
-  RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) }, TELEGRAM_OWNER_DO: { idFromName: (n: string) => n, get: () => ({ fetch: async () => new Response('', { status: 500 }) }) } } as never;
+  RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) }, OWNER_DO: { idFromName: (n: string) => n, get: () => ({ fetch: async () => new Response('', { status: 500 }) }) } } as never;
 const sha256 = async (text: string) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))].map(b => b.toString(16).padStart(2, '0')).join('');
 const view = (epoch: number, state: 'active' | 'revoked') => ({ installation_id: INSTALLATION, provider: 'expo', environment: 'production', device_epoch: epoch, state, registered_at: 1_791_700_000_000, delivery: 'native_ack_unverified' });
 const directory = { calls: [] as { fn: string; args: Record<string, unknown> }[], answer: undefined as unknown };
