@@ -241,8 +241,9 @@ it('a media-only message on a directory-backed deploy continues the Telegram cha
   });
 });
 
-// Only inbox text turns run as the owner today; the other paths that write the Telegram chain still use the fixture stand-in.
-it('turns outside the inbox text path still write under the fixture principal, on the same chain', async () => {
+// Inbox text turns and scheduled jobs run as the owner; the other paths that write the Telegram chain still use the
+// fixture stand-in, on the same chain.
+it('inbox text and a scheduled reminder write under the owner\'s principal, the other paths under the fixture, on one chain', async () => {
   const name = 'telegram-principal-paths';
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql);
@@ -251,7 +252,8 @@ it('turns outside the inbox text path still write under the fixture principal, o
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const owner = new OwnerDO(state, { ...env, ...directory, WALDO_ENVIRONMENT: 'staging', TELEGRAM_BOT_TOKEN: '7.fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC' });
     const host = owner as unknown as { drainInbox(): Promise<void>; probeTurn(body: string): Promise<Response>; turn(update: unknown): Promise<void>;
-      setup(channel: 'telegram'): { reminders: { set(args: { note: string; at: string; repeat: 'none' }): Promise<{ id: string }> }; scheduler: { read(id: string): unknown }; fire(entry: unknown): Promise<void> } };
+      setup(channel: 'telegram'): { reminders: { set(args: { note: string; at: string; repeat: 'none' }): Promise<{ id: string }> }; scheduler: { read(id: string): unknown }; fire(entry: unknown): Promise<void> };
+      asOwnerJob(job: 'reminder', occurrenceKey: string, work: () => Promise<void>): Promise<void> };
     const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
     const update = (id: number, body: object) => ({ update_id: id, message: { message_id: id, from: { id: 42, is_bot: false }, chat: { id: 42, type: 'private' }, ...body } });
     const admitted = async (id: number, body: object) => {
@@ -263,14 +265,15 @@ it('turns outside the inbox text path still write under the fixture principal, o
       expect(await admitted(960001, { text: 'Is the dentist booked?' })).toBe('awaiting_delivery');
       expect(await admitted(960002, { voice: { file_id: 'voice-1', file_unique_id: 'voice-u1', duration: 1, mime_type: 'audio/ogg', file_size: 10 } })).toBe('awaiting_delivery');
       const runtime = host.setup('telegram');
-      await runtime.fire(runtime.scheduler.read((await runtime.reminders.set({ note: 'Call Sam.', at: '2099-01-01T09:00', repeat: 'none' })).id));
+      const reminder = runtime.scheduler.read((await runtime.reminders.set({ note: 'Call Sam.', at: '2099-01-01T09:00', repeat: 'none' })).id);
+      await host.asOwnerJob('reminder', 'reminder:call-sam', () => runtime.fire(reminder));
       expect((await host.probeTurn(JSON.stringify({ text: 'Probe: anything due?' }))).status).toBe(200);
       await host.turn(update(960003, { text: 'Root route: and tomorrow?' }));
       expect(await admitted(960004, { text: 'What did we cover?' })).toBe('awaiting_delivery');
       const rows = [...(await state.storage.list<{ id: string; ownerId: string; chatId: string; parentId: string | null; role: string }>({ prefix: 'conv:' })).values()];
       rows.forEach((row, index) => expect(row).toMatchObject({ chatId: 'telegram-42', parentId: index === 0 ? null : rows[index - 1]!.id }));
       expect(rows.filter(row => row.role === 'user').map(row => [row.id.startsWith('reminder:') ? 'reminder' : row.id, row.ownerId])).toEqual([
-        ['tg-960001', PRINCIPAL], ['tg-960002', FIXTURE_PRINCIPAL], ['reminder', FIXTURE_PRINCIPAL], ['tg--1', FIXTURE_PRINCIPAL], ['tg-960003', FIXTURE_PRINCIPAL], ['tg-960004', PRINCIPAL],
+        ['tg-960001', PRINCIPAL], ['tg-960002', FIXTURE_PRINCIPAL], ['reminder', PRINCIPAL], ['tg--1', FIXTURE_PRINCIPAL], ['tg-960003', FIXTURE_PRINCIPAL], ['tg-960004', PRINCIPAL],
       ]);
       const last = model.requests.at(-1)!;
       expect(last).toContain(`Authenticated owner ${PRINCIPAL}`);
