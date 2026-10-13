@@ -1983,3 +1983,27 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 - **N4's #126:** sends the canonical device zone, not the saved zone. The batch labels hours in the zone they were recorded in, and the saved zone governs scheduling. This corrects the orchestrator's earlier wording to the owner.
 - **Mac disk is at 5.8 GB, under the floor,** so there are no builds. Proofs come from tests and CI until the owner frees space (OWNER STEP).
 - **Research running:** the Waldo-versus-Instinct capability gap with a 20-task test set, and an agent UX/HCI review. Results go to `docs/research/`, with backend items for the cloud lanes.
+
+## 13:28Z (from `date -u`): usage 37% (fast burn); L5 paused with its handoff; L4's new heads; UX research landed
+
+- **Usage was 37% at about 13:27Z.** It was 5% at 12:51Z, and it resets at 17:30Z. The research agents, the reviewers and two active app lanes are burning it fast.
+  - **Throttle:** at most one reviewer at a time, after the running one. Lanes finish their current item, then pause until the review queue drains.
+- **L5 paused at 13:25Z.** Its handoff is on #1103 (6146607126). #1095 (iMessage) is carried at `1dc7e2dd`, with OwnerDO and v7, and is waiting for the backend lead's gate and a security review. The owner steps are on #1103 (6146356100). L5 also opened #1159 (history contract) and #1161 (history migration `20261013140000` plus the Worker, **needs owner**) before it saw the pause.
+- **L4's heads, with pin bytes re-checked by the orchestrator** (all MATCH):
+  - #124 `076466d4` (`core.ts` and `parts.ts`@`93ffdd2f`);
+  - #125 `570fcd4a` (`approvals.ts` and `parts.ts`@`868f6ccd`);
+  - #132 `95d575c5`, pin (a) (`controls.ts`@`37e5466e`);
+  - #127 `02522a47` (receipts, with decision (i)'s exact-line hide);
+  - #128 `028d9347` (approval wording UI, tolerant of the missing fields);
+  - #121 `8fa30fa6` (blocker fixed: "On Telegram" / "Channel: Telegram");
+  - #131 `30519feb` (Weight reason wording).
+- **Travel zone test: PASS**, Simulator-only, relaunched with the Europe/London zone. Times moved and the saved zone stayed Kolkata. Schedule offered the device zone and didn't write it.
+- **The agent UX/HCI research is committed** as `docs/research/AGENT_UX_HCI_RESEARCH_2026-10-13.md`: 18 principles, a per-surface audit at app `7e09317c`, 17 ranked gaps and 8 usability probes. The top gaps:
+  1. a step timeline for 10–40 s turns (needs a backend progress part);
+  2. Stop and steer;
+  3. coming back after leaving (push; needs the owner's package yes);
+  4. **failure copy leaks HTTP status** (`appRuntime.ts:21-23,107`, `ChatPane.tsx:564`), an app-only quick fix for L4;
+  5. approval completion details.
+
+  Also: no offline state, and the Brief card is conditional.
+- **Review running:** #126, #129 and #130. Next: the pins #124, #125 and #132, plus #121 and #131. Then #127 and #128. Then #115.
