@@ -32,6 +32,9 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '7d5e6f70-8a9b-4cad-9e0f-2a3b4c5d6e7f';
 const OWNER_PRINCIPAL = `prn_${OWNER_ID.replaceAll('-', '')}`;
+const OTHER_ID = '9f8e7d6c-5b4a-4392-8180-7f6e5d4c3b2a';
+// The directory's owner for each object name; any name not listed belongs to OWNER_ID.
+const OWNERS: Readonly<Record<string, string>> = { 'jobs-contrast-other': OTHER_ID };
 const PRESENCE_ID = '8e6f7081-9bac-4dbe-8f10-3b4c5d6e7f80';
 const FIXTURE_PRINCIPAL = 'prn_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const AT = Date.parse('2026-10-03T09:00:00Z');
@@ -50,7 +53,8 @@ beforeEach(() => {
     if (fn) wire.asked.push(fn);
     if (fn === 'common_owner_authority') {
       if (wire.telegramAuthority === 'outage') throw new Error('directory unavailable');
-      return Response.json(wire.telegramAuthority === 'revoked' ? null : { owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: asked.p_do_name, presence_id: PRESENCE_ID,
+      const owner = OWNERS[asked.p_do_name!] ?? OWNER_ID;
+      return Response.json(wire.telegramAuthority === 'revoked' ? null : { owner_id: owner, auth_user_id: owner, do_name: asked.p_do_name, presence_id: PRESENCE_ID,
         provider: asked.p_provider, subject: asked.p_subject, state_version: 1, admission_revision: '3' });
     }
     if (fn === 'owner_runtime_authority') {
@@ -114,10 +118,11 @@ const requestFor = (marker: string) => fixture.requests.find(sent => sent.includ
 const armed = (state: DurableObjectState) => state.storage.sql.exec<{ id: string }>('SELECT id FROM schedule').toArray().map(row => row.id);
 const admissionLog = (state: DurableObjectState) => state.storage.sql.exec<{ ok: number; note: string | null }>("SELECT ok, note FROM trace_log WHERE hop = 'scheduled_admission'").toArray();
 
-const expectOwnerRequest = (marker: string) => {
+// The cache key is exactly the owner's principal: nothing derived from a surface subject (a chat id, the app subject).
+const expectOwnerRequest = (marker: string, principal = OWNER_PRINCIPAL) => {
   const request = requestFor(marker);
-  expect(request).toContain(`Authenticated owner ${OWNER_PRINCIPAL}`);
-  expect(request).toContain(`waldo:${OWNER_PRINCIPAL}`);
+  expect(request).toContain(`Authenticated owner ${principal}`);
+  expect((JSON.parse(request!) as { cache_key?: string }).cache_key).toBe(`waldo:${principal}`);
   expect(request).not.toContain(FIXTURE_PRINCIPAL);
 };
 
@@ -171,6 +176,23 @@ describe('scheduled jobs run as the owner the directory admits', () => {
       expectOwnerRequest('[Scheduled card');
       expect(wire.telegramSent).toEqual([CARD_TEXT]);
     });
+  });
+
+  it('two objects the directory maps to different owners each compose as their own owner, never the other', async () => {
+    const seen: string[] = [];
+    for (const name of ['jobs-contrast-owner', 'jobs-contrast-other']) {
+      await withOwner(name, { telegram: true, app: false, directory: true }, async (owner, state) => {
+        await dueReminder(state);
+        await schedulePass(owner, state);
+        seen.push(requestFor('[Reminder due now')!);
+      });
+    }
+    const other = `prn_${OTHER_ID.replaceAll('-', '')}`;
+    for (const [request, principal, foreign] of [[seen[0]!, OWNER_PRINCIPAL, other], [seen[1]!, other, OWNER_PRINCIPAL]] as const) {
+      expect(request).toContain(`Authenticated owner ${principal}`);
+      expect((JSON.parse(request) as { cache_key?: string }).cache_key).toBe(`waldo:${principal}`);
+      expect(request).not.toContain(foreign);
+    }
   });
 
   it('with no directory configured the fixture owner stands and nothing asks a directory', async () => {
