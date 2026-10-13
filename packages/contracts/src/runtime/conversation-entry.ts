@@ -24,6 +24,19 @@ export type ConversationEntry = Readonly<{
   role?: ConversationRole;
   // Canonical owner-history ingress evidence; older rows remain unstamped.
   inputOrigin?: 'owner' | 'machine';
+  // Epoch ms when the path that appends the entry made it. Rows stored before the time was kept have none.
+  createdAt?: number;
+  // A row Waldo writes about one of the owner's app messages rather than in reply to it: that message's id, and what became of it.
+  operation?: Readonly<{ id: string; state: 'interrupted' }>;
+  // The turn's effect receipts, typed. `line` is the text form appended to appPayload, so a surface that shows
+  // only text still shows it.
+  receipt?: ConversationReceipt;
+}>;
+
+export type ConversationReceipt = Readonly<{
+  line: string;
+  items: readonly Readonly<{ kind: string; target: string | null; outcome: 'accepted' | 'failed' | 'unconfirmed'; via_task: boolean; at: number; digest: string | null }>[];
+  more: number;
 }>;
 
 // Privacy redaction uses literal text only; it never decides what the owner meant.
@@ -86,6 +99,8 @@ export const redactConversationEntry = (entry: ConversationEntry, redact: (value
   modelPayload: redact(entry.modelPayload), appPayload: redact(entry.appPayload),
   modelProjection: entry.modelProjection.mode === 'replace'
     ? { mode: 'replace', payload: redact(entry.modelProjection.payload) } : entry.modelProjection,
+  ...(entry.receipt ? { receipt: { ...entry.receipt, line: redact(entry.receipt.line),
+    items: entry.receipt.items.map(item => (item.target === null ? item : { ...item, target: redact(item.target) })) } } : {}),
 });
 
 export class ConversationTree {

@@ -4,13 +4,14 @@ import type { TelegramInboundTurn } from './telegram-polling';
 import { loadTelegramMedia, type MediaReaders } from './telegram-media';
 import type { TelegramOwnerListenerOptions, TurnTimer } from './telegram-listener';
 import { TELEGRAM_REACTIONS } from './reactions';
+import { surfaceChatRef } from '../context-composer/owner-turn';
 
 // Compatibility exports keep the durable object and existing callers stable.
 // Only this adapter knows Telegram's numeric update/chat IDs and media formats.
 export const telegramOwnerApproval = ownerToolApproval;
 export const telegramTurnEnvelope = (turn: TelegramInboundTurn, surface = 'telegram'): OwnerTurnEnvelope => ({
   traceId: ownerTurnTrace(surface, turn.updateId),
-  conversationRef: `${surface}-${turn.chatId}`,
+  conversationRef: surfaceChatRef(surface, turn.chatId),
   surface,
   presentation: { surface, delivery: { text: true, approval: surface === 'telegram' || surface === 'app' ? 'native_buttons' : surface === 'whatsapp' ? 'text_callback' : 'none', reactions: surface === 'telegram', attachments: false }, commands: surface === 'telegram' ? ['/stop','/ledger'] : [] },
   text: turn.text,
@@ -37,7 +38,7 @@ export const createTelegramResponder = (...args: [...AdapterArgs, surface?: stri
   return {
     ...core, respond,
     chooseReaction: (turn: TelegramInboundTurn) => core.chooseReaction(envelope(turn)),
-    remind: (id: string, chatId: number, note: string, time: TurnTimer) => core.remind(id, `${surface}-${chatId}`, note, time, surface),
-    prompt: (id: string, chatId: number, said: string, time: TurnTimer, toolNames?: Parameters<typeof core.prompt>[5], current?: Parameters<typeof core.prompt>[6], decision?: Parameters<typeof core.prompt>[7], turnContext?: string) => core.prompt(id, `${surface}-${chatId}`, said, time, surface, toolNames, current, decision, turnContext),
+    remind: (id: string, chatId: number, note: string, time: TurnTimer) => core.remind(id, surfaceChatRef(surface, chatId), note, time, surface),
+    prompt: (id: string, chatId: number, said: string, time: TurnTimer, toolNames?: Parameters<typeof core.prompt>[5], current?: Parameters<typeof core.prompt>[6], decision?: Parameters<typeof core.prompt>[7], turnContext?: string) => core.prompt(id, surfaceChatRef(surface, chatId), said, time, surface, toolNames, current, decision, turnContext),
   };
 };

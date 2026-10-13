@@ -78,6 +78,16 @@ describe('app sign-in and main chat routes', () => {
     expect(forwards[0]!.headers.get('x-waldo-do-name')).toBe('owner-1');
     expect(new URL(forwards[0]!.url).pathname).toBe('/app/v1/chat/main/messages');
   });
+  it('forwards a stop to the owner DO and counts it as a read, not a send', async () => {
+    forwards.length = 0;
+    const keys: string[] = [];
+    const counted = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async ({ key }: { key: string }) => { keys.push(key); return { success: true }; } } } as never;
+    const response = await handleApp(new Request('https://w.test/app/v1/chat/main/messages/client-msg-0001/cancel', { method: 'POST', headers: { authorization: `Bearer ${CREDENTIAL}` } }), counted, fakeAuth().auth);
+    expect(await response!.json()).toEqual({ forwarded: true });
+    expect(forwards[0]!.method).toBe('POST');
+    expect(new URL(forwards[0]!.url).pathname).toBe('/app/v1/chat/main/messages/client-msg-0001/cancel');
+    expect(keys).toEqual(['app-read:owner-1']);
+  });
   it('rate limits chat sends per owner and fails closed without the limiter', async () => {
     const auth = fakeAuth().auth;
     const limited = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: false }) } } as never;
@@ -129,6 +139,15 @@ describe('main chat transcript page', () => {
     expect(older.messages.map(m => m.text)).toEqual(['text 2', 'text 1', 'text 0']);
     expect(older.messages[2]!.channel).toBe('telegram');
     expect(older.next_cursor).toBeNull();
+  });
+  it('shows a stored receipt as a part and drops its line from the text, only when the text ends with exactly that line', () => {
+    const receipt = { line: 'Done: reminder set', items: [{ kind: 'reminder_set', target: null, outcome: 'accepted' as const, via_task: false, at: Date.UTC(2026, 9, 13, 8), digest: null }], more: 0 };
+    const part = { type: 'receipt', items: receipt.items, more: 0, fallback_text: 'Done: reminder set' };
+    const shown = (appPayload: string) => appTranscriptPage([{ ...entry(20, 'assistant', 'app'), appPayload, receipt }], null, 5).messages[0]!;
+    expect(shown('Set for 9.\n\nDone: reminder set')).toMatchObject({ text: 'Set for 9.', parts: [{ type: 'text', text: 'Set for 9.' }, part] });
+    expect(shown('Set for 9. Done: reminder set')).toMatchObject({ text: 'Set for 9. Done: reminder set', parts: [{ type: 'text' }, part] });
+    expect(shown('\n\nDone: reminder set')).toMatchObject({ text: '\n\nDone: reminder set', parts: [{ type: 'text' }, part] });
+    expect(appTranscriptPage([entry(21, 'assistant', 'app')], null, 5).messages[0]!.parts).toEqual([{ type: 'text', text: 'text 21' }]);
   });
   it('attaches the approval parts presented for a run to the assistant reply to that run', () => {
     const part: import('../src/channels/surfaces/app').AppApprovalPart = { type: 'approval', approval_id: 'p1', kind: 'calendar_change', review: 'Proposed: Walk', payload_digest: `sha256:${'b'.repeat(64)}`, actions: ['approve', 'edit', 'skip'], expires_at: Date.UTC(2026, 9, 10, 15), fallback_text: 'Walk' };
