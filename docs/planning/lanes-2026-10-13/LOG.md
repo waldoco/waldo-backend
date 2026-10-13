@@ -510,3 +510,18 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **#95** follows #94.
 - **#99** (R9 state words, stacked on #95) and **#98** (chrome; held for the P1 re-run) are reviewed after the 02:30Z usage reset.
 - **Usage:** about 67%. The next full review is saved for Connectors' send-verify PR.
+
+## 00:15Z heartbeat: app #94 merged; #1111 (send fix) in review
+
+- **Merged app #94 as `7bb149fa`** (the words pass, P1–P8, plus the P8 per-action labels).
+  - **Gate:** the P8 delta was checked by hand. The head `2ea0fc8a` is an empty CI commit. App checks passed against `main`, the diff is its own files, and the advisor's plan was followed.
+- **App #95** is retargeted to `main`; its diff is its own files (P9–P13). It merges after its CI runs (an empty commit from the App lane).
+- **New PRs:**
+  - **#1111** (Connectors, the send fix), head `b6718577`: approvals.ts, google.ts and tests. **Its full review is running** alongside CI, and it's the next merge on P1's path. If it passes, it gets its own deploy, and then the App lane re-runs P1 (test send 2 of 5).
+  - **#1112** (links), stacked on #1105.
+  - **#1110** (backend builder's A2: an app-only owner can browse).
+  - **App #99** (R9 state words) and **app #100** (R13: the Form ring's zone colour).
+
+  #1110, #99 and #100 get their reviews after the 02:30Z usage reset.
+- **Connectors' wall plan accepted:** CI per head is the gate. Full local walls run at the stack top plus the send, table-cells and #1109 heads.
+- **Told Connectors** that `APP_CONNECT_GUIDANCE` is off its queue (the backend builder owns it, and it ships with R1).
