@@ -103,6 +103,19 @@ export class IMessageOwnerInbox {
     };
     return { runId: record.id, attempt: record.attempt!, deadline: record.deadline!, signal, admit, commit: (work) => this.storage.transactionSync(() => { admit(); return work(); }) };
   }
+  /**
+   * Literal owner forget: admitted (not yet started) turns are redacted before they run. A running turn is
+   * left alone (it is usually the forget request itself) and its text is cleared when it closes; finished
+   * rows hold no text. Returns the rows rewritten and the not-running rows still holding a forgotten literal.
+   */
+  forget(redact: (text: string) => string, holds: (text: string) => boolean): Readonly<{ rewritten: number; remaining: number }> {
+    let rewritten = 0;
+    for (const r of this.records()) {
+      if (r.state !== 'admitted' || !r.text || !holds(r.text)) continue;
+      r.text = redact(r.text); this.storage.kv.put(PREFIX + r.id, r); rewritten += 1;
+    }
+    return { rewritten, remaining: this.records().filter((r) => r.state !== 'running' && r.text && holds(r.text)).length };
+  }
   /** Called inside the scope's commit transaction together with the frozen reply. */
   closeFinal(record: IMessageInboxRecord): void {
     const r = this.storage.kv.get<IMessageInboxRecord>(PREFIX + record.id);

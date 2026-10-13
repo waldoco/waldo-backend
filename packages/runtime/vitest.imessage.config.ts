@@ -5,7 +5,7 @@ import { defineConfig } from 'vitest/config';
 // here. Runtime traffic in these tests is in-isolate: signed RPCs go to an in-memory fixture model,
 // the model is a scripted OpenAI mock and the host is simulated.
 export default defineConfig({
-  test: { include: ['test/imessage-bridge-store.test.ts', 'test/imessage-bridge-do.test.ts', 'test/imessage-e2e.test.ts'], fileParallelism: false },
+  test: { include: ['test/imessage-bridge-store.test.ts', 'test/imessage-bridge-do.test.ts', 'test/imessage-e2e.test.ts', 'test/imessage-final-outbox.test.ts'], fileParallelism: false },
   plugins: [cloudflareTest({
     miniflare: { bindings: {
       WALDO_ENV: 'test', RUN_LOOP_PROVIDER_MODE: 'fake', WALDO_ENVIRONMENT: 'test',
