@@ -84,12 +84,17 @@ it('effect-bearing MCP uses the same durable intent rail and foreign replay stay
  expect(await(await serve(await request({...input,args:[{value:'changed'}]}))).json()).toMatchObject({error:{message:'intent_conflict'}});expect(f.effects()).toBe(1);
 });
 
-it('the effect rail refuses a tool that is not a catalogue read before any token or claim',async()=>{
- for(const [server_url,tool] of [['https://fixture.googleapis.com/mcp','synthetic_write'],['https://drivemcp.googleapis.com/mcp/v1','create_file'],['https://gmailmcp.googleapis.com/mcp/v1','send_message']]){
-  const f=fixture();const input={do_name:'owner',op:'mcp_call',connection:'conn',server_url,tool,args:[{value:'fixture'}],intent_id:'approval:mcp'};
-  expect(await(await serve(await request(input))).json()).toMatchObject({error:{status:403,message:'google_mcp_read_only'}});
-  expect(f.hops).not.toContain('token');expect(f.hops).not.toContain('proxy_idem_claim');expect(f.hops).not.toContain('proxy_secret');expect(f.effects()).toBe(0);
+it('the effect rail refuses a tool that is not a catalogue read before any token or claim, and logs the code',async()=>{
+ const cases:[string,string][]=[['https://fixture.googleapis.com/mcp','synthetic_write'],['https://drivemcp.googleapis.com/mcp/v1','create_file'],['https://gmailmcp.googleapis.com/mcp/v1','send_message'],['https://drivemcp.googleapis.com/mcp/v1/','search_files']];
+ const failed:string[]=[];
+ for(const [server_url,tool] of cases){
+  const f=fixture();const logged:string[]=[];const quiet=vi.spyOn(console,'log').mockImplementation((line:string)=>{logged.push(String(line));});
+  const input={do_name:'owner',op:'mcp_call',connection:'conn',server_url,tool,args:[{value:'fixture'}],intent_id:'approval:mcp'};
+  const body=await(await serve(await request(input))).json() as {error?:{status:number;message:string}};
+  quiet.mockRestore();
+  if(body.error?.status!==403||body.error.message!=='google_mcp_read_only'||f.hops.length!==0||f.effects()!==0||!logged.some(line=>line.includes('"error":"google_mcp_read_only"'))||logged.some(line=>line.includes(tool)||line.includes(server_url)))failed.push(`${server_url} ${tool}`);
  }
+ expect(failed).toEqual([]);
 });
 
 it('every mutation retains an unknown result and never dispatches again after synthetic loss',async()=>{

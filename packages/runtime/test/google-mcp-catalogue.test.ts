@@ -127,6 +127,15 @@ describe('Google MCP servers are read-only by construction', () => {
     await executeMcp(server('drive'), 'search_files', { query: 'q', excludeContentSnippets: false }, auth, fetch, { id: 'approval:mcp' });
     await executeMcp(server('gmail'), 'get_thread', { id: 'th' }, auth, fetch, { id: 'approval:mcp' });
     expect(sent).toEqual([{ tool: 'search_files', args: { query: 'q', excludeContentSnippets: true } }, { tool: 'get_thread', args: { id: 'th' } }]);
+    const wire: Array<Record<string, unknown>> = [];
+    const bearer: McpGoogleAuth = { resolve: async () => ({ mode: 'bearer', token: 'synthetic-bearer' }), proxy: async () => { throw new Error('not the proxy rail'); } };
+    const transport: typeof fetch = async (_input, init) => {
+      const rpc = JSON.parse(String(init?.body)) as { method: string; params?: { arguments?: Record<string, unknown> } };
+      if (rpc.method === 'tools/call') wire.push(rpc.params?.arguments ?? {});
+      return rpc.method === 'notifications/initialized' ? new Response(null, { status: 202 }) : Response.json({ result: rpc.method === 'initialize' ? { protocolVersion: '2025-06-18' } : { content: [{ type: 'text', text: 'ok' }] } });
+    };
+    await executeMcp(server('drive'), 'search_files', { query: 'q', excludeContentSnippets: false }, bearer, transport);
+    expect(wire).toEqual([{ query: 'q', excludeContentSnippets: true }]);
   });
 });
 

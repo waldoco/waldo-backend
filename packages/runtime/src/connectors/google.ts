@@ -22,7 +22,6 @@ export const GOOGLE_FEATURE_SCOPES = {
 export type GoogleFeature = keyof typeof GOOGLE_FEATURE_SCOPES;
 // Never granted implicitly: legacy null-scope grants do not hold these.
 const WORKSPACE_READ_FEATURES: readonly GoogleFeature[] = ['drive', 'docs', 'sheets', 'slides'];
-// Features whose only scopes are read-only (GOOGLE_FEATURE_SCOPES lists no write scope for them).
 export const isGoogleFeature = (value: string): value is GoogleFeature => Object.hasOwn(GOOGLE_FEATURE_SCOPES, value);
 // Legacy null grants retain old features, never a newly introduced availability or calendar-list scope.
 export const googleHas = (scopes: readonly string[] | null | undefined, feature: GoogleFeature): boolean =>
