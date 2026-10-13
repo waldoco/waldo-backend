@@ -2216,3 +2216,25 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
   - A research lane is compiling sourced references for the open decisions. It is read-only and writes to the scratchpad; the Mac reviews the note before it lands here.
 - The comment-6154509927 stamp was corrected from a guessed time to 20:25Z.
 - Usage at 20:40Z: 23% of the 5-hour window, 19% weekly.
+
+## 21:07Z — lane R on B3; P0 re-run done; reference note published
+
+- **The lead posted the build specs** on #1103:
+  - A1 (6154346852), which waits for #1149 to merge; its slot is after #1180 and #1186;
+  - A2 (6154843733), after A1 and #1108;
+  - B3/B4 (6154593035);
+  - B2 compaction (6154753866), after A3;
+  - C7 durable tasks (6154789747), after A2.
+
+  #1149's 20:08Z delta review asks for the tip merge and the R8 fix. That's the builder's, and the builder resumed at 19:55Z.
+- **Lane R** builds B3, recall by relevance, on `mac/b3-recall-by-relevance`. The brief is `MAC_LANE_R_B3_BRIEF.md` (`c79f4f53`) and the claim with its files is 6154925722. It works around #1149 without stacking on it. B4 waits for the owner's consent and DPA steps.
+- **Lane T** (M4) received the bar, a verify clarification (`verify:supabase` NOT RUN, since the local stack is shared) and the research leads on retry layers.
+- **#1190:** the `Verify (core)` failure was environmental; the Supabase CLI's linux-x64 binary failed to install. Posted 6154830402; the lead pushed `0d06f297`.
+- **P0 is complete** (scorecard 6155218639). Seven comparable turns took +8.8% in total, but the median fell, and turn time follows model rounds.
+  - S5's `browse_page` still fails, now across 3 rounds.
+  - S7 still echoes; its check-back has no tools.
+  - S2 offers a free hour that overlaps an event.
+  - Forget works, after an `invalid_args` first call.
+  - The S1 fact is now forgotten; plant it again before any recall test.
+- **The reference note** `HARNESS_PRACTICE_REFERENCES.md` (`cee45ed9`) is reviewed, spot-checked on the tip, and digest item 35 points to it. Its proposals went to the lead: a tool-error guard after M4, a check-back with read tools, free windows from the calendar tool.
+- **Usage at 21:07Z:** 37% of the 5-hour window (resets 22:30Z). Two build lanes are running (T and R), which is the cap.
