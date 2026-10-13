@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { handleEventIngress, type EventIngressEnv } from '../src/channels/event-ingress';
+import { handleEventIngress, parseEventSources, type EventIngressEnv } from '../src/channels/event-ingress';
 import { calendarChannelToken } from '../src/connectors/google-push';
 
 const SECRET = 'router-secret-fixture-0000000000';
@@ -43,6 +43,15 @@ describe('Calendar push ingress', () => {
     expect((await handleEventIngress(await push(), { OWNER_DO: ns }, () => undefined)).status).toBe(404);
     expect((await handleEventIngress(new Request('https://w.test/events/gcal'), { OWNER_DO: ns, WALDO_ROUTER_HMAC_SECRET: SECRET }, () => undefined)).status).toBe(404);
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('an owner object that does not take pushes is acknowledged, so Google stops retrying', async () => {
+    const { ns } = namespace(404);
+    expect((await handleEventIngress(await push(), { OWNER_DO: ns, WALDO_ROUTER_HMAC_SECRET: SECRET }, () => undefined)).status).toBe(200);
+  });
+
+  it('a configured event source cannot take the push path name', () => {
+    expect(Object.keys(parseEventSources(JSON.stringify({ gcal: { secret: 'x' }, github: { secret: 'y' } })))).toEqual(['github']);
   });
 
   it('an owner object that cannot take the wake gets a retry from Google', async () => {

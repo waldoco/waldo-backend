@@ -27,26 +27,23 @@ describe('push admission', () => {
 
 describe('the wake pulls the existing update sweep forward', () => {
   const entry = (over: Partial<ScheduleEntry> = {}): ScheduleEntry => ({ id: BRIEF_SWEEP_ID, kind: 'pre_activity_spot', occurrence_at: 10 * 60_000, due_at: 10 * 60_000, recurrence: { type: 'interval', every_ms: 600_000, phase_ms: 0 }, payload_refs: { id: BRIEF_SWEEP_ID }, status: 'armed', attempts: 0, last_fired_at: null, quarantined_until: null, created_at: 0, updated_at: 0, ...over } as ScheduleEntry);
-  const scheduler = (found: ScheduleEntry | null) => ({ lookup: vi.fn(() => found ? { state: 'entry' as const, entry: found } : { state: 'absent' as const }), schedule: vi.fn(async () => found!) });
-  it('moves the next run to now, keeping its kind, payload and recurrence', async () => {
+  const scheduler = (found: ScheduleEntry | null) => ({ lookup: vi.fn(() => found ? { state: 'entry' as const, entry: found } : { state: 'absent' as const }), pullForward: vi.fn(async () => true) });
+  it('asks the scheduler to move only the next run, to now', async () => {
     const s = scheduler(entry());
     expect(await wakeBriefSweep(s, 1000)).toBe(true);
-    expect(s.schedule).toHaveBeenCalledWith({ id: BRIEF_SWEEP_ID, kind: 'pre_activity_spot', payloadRefs: { id: BRIEF_SWEEP_ID }, occurrenceAt: 1000, dueAt: 1000, recurrence: { type: 'interval', every_ms: 600_000, phase_ms: 0 } });
+    expect(s.pullForward).toHaveBeenCalledWith(BRIEF_SWEEP_ID, 1000);
   });
-  it('waits a minute after the last run, and never pushes a sooner run later', async () => {
+  it('asks for no sooner than a minute after the last run', async () => {
     const recent = scheduler(entry({ last_fired_at: 900 }));
     await wakeBriefSweep(recent, 1000);
-    expect(recent.schedule).toHaveBeenCalledWith(expect.objectContaining({ dueAt: 60_900 }));
-    const soon = scheduler(entry({ due_at: 1200, occurrence_at: 1200, last_fired_at: 900 }));
-    expect(await wakeBriefSweep(soon, 1000)).toBe(false);
-    expect(soon.schedule).not.toHaveBeenCalled();
+    expect(recent.pullForward).toHaveBeenCalledWith(BRIEF_SWEEP_ID, 60_900);
   });
   it('does nothing when the owner has no sweep (opted out, or a zone not confirmed) or it is quarantined', async () => {
     const absent = scheduler(null);
     expect(await wakeBriefSweep(absent, 1000)).toBe(false);
     const held = scheduler(entry({ status: 'quarantined' }));
     expect(await wakeBriefSweep(held, 1000)).toBe(false);
-    expect(held.schedule).not.toHaveBeenCalled();
+    expect(held.pullForward).not.toHaveBeenCalled();
   });
 });
 
@@ -106,6 +103,16 @@ describe('the watch is kept fresh on the sweep', () => {
       expect(await ensureCalendarWatch(base)).toBe('skipped');
       expect(base.proxy.calendarWatch).not.toHaveBeenCalled();
     }
+  });
+
+  it('without a Google account it waits before asking again, rather than on every sweep', async () => {
+    const resolve = vi.fn(async () => null);
+    const { base } = deps({ resolve });
+    expect(await ensureCalendarWatch(base)).toBe('skipped');
+    expect(await ensureCalendarWatch({ ...base, now: HOUR })).toBe('fresh');
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(await ensureCalendarWatch({ ...base, now: 7 * HOUR })).toBe('skipped');
+    expect(resolve).toHaveBeenCalledTimes(2);
   });
 
   it('a locally held grant starts the watch with a bearer minted for this call', async () => {
