@@ -1,5 +1,6 @@
-// The run's settings, all from the environment. Recorded mode (the default) needs nothing and
-// reaches no network; live mode needs the model key, the judge key and model, and a call budget.
+// The run's settings, all from the environment. The mode is always named, so a scheduled host never
+// gets the dry run by accident. Recorded mode needs nothing and reaches no network; live mode needs
+// the model key, the judge key and model, and a call budget.
 import OpenAI from 'openai';
 import { modelNameSchema, OPENAI_PROVIDER, PROVIDER_OF, WALDO_CHAT_MODEL } from '@waldo/contracts';
 import { OpenAIResponsesAdapter } from '../../src/llm/openai';
@@ -23,12 +24,13 @@ const required = (env: Env, name: string): string => {
   return value;
 };
 
-// The dry run: the responder answers with fixed text and every trial passes. It proves the harness
-// runs end to end, never the model's quality; its scorecard names the judge "recorded".
-const recordedJudge: Judge = async () => ({ outcome: 'pass' });
+// The dry run: the responder answers with fixed text and nothing is graded, so its card shows no pass
+// rate at all. It proves the harness runs end to end, never the model's quality.
+const recordedJudge: Judge = async () => ({ outcome: 'judge_error' });
 
 export const nightlyConfig = (env: Env): NightlyRun => {
-  const mode = env.WALDO_EVAL_MODE ?? 'recorded';
+  const mode = env.WALDO_EVAL_MODE;
+  if (mode !== 'recorded' && mode !== 'live') throw new Error('WALDO_EVAL_MODE must be recorded or live');
   const trials = positive(env, 'WALDO_EVAL_TRIALS', '3');
   if (mode === 'recorded') {
     return {
@@ -37,7 +39,6 @@ export const nightlyConfig = (env: Env): NightlyRun => {
       judge: recordedJudge, candidate: 'recorded', judgeModel: 'recorded',
     };
   }
-  if (mode !== 'live') throw new Error('WALDO_EVAL_MODE must be recorded or live');
   const model = modelNameSchema.parse(env.WALDO_EVAL_MODEL ?? WALDO_CHAT_MODEL);
   if (PROVIDER_OF[model] !== OPENAI_PROVIDER) throw new Error('WALDO_EVAL_MODEL must be an OpenAI roster model');
   const apiKey = required(env, 'OPENAI_API_KEY');

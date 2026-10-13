@@ -56,6 +56,7 @@ const packet = (input: JudgeInput) => [
 const decide = (input: JudgeInput, text: string): Verdict => {
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
+  if (start < 0 || end < start) return { outcome: 'judge_error' };
   let parsed: z.infer<typeof verdictSchema>;
   try { parsed = verdictSchema.parse(JSON.parse(text.slice(start, end + 1))); } catch { return { outcome: 'judge_error' }; }
   const asked = input.rubric.must_ask === undefined || parsed.asked_first.met === true;

@@ -34,6 +34,10 @@ describe('nightly eval scorecard', () => {
     expect(result.pains.follow_through).toEqual({ scenarios: 1, graded: 1, pass_rate: 1, pass_k_rate: 0 });
   });
 
+  it('labels a scenario with no graded trial as ungraded', () => {
+    expect(card([run('unread', 'context', ['judge_error', 'judge_error', 'harness_error'])]).scenarios[0]).toMatchObject({ status: 'ungraded', pass_rate: null, pass_k: false });
+  });
+
   it('has an empty pain with null rates rather than a perfect score', () => {
     expect(card([]).pains.judgment).toEqual({ scenarios: 0, graded: 0, pass_rate: null, pass_k_rate: null });
   });

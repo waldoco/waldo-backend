@@ -39,6 +39,13 @@ describe('nightly eval suite', () => {
     expect(card.scenarios.at(-1)).toMatchObject({ status: 'incomplete', pass_k: false });
   });
 
+  it('never judges or passes a trial whose model gave an empty reply', async () => {
+    const silent = () => scriptedGateway({ rules: [{ match: /hello/, rounds: [{ text: '' }] }] });
+    const card = await runNightly([quick('quiet')], { trials: 1, budget: callBudget(10), gateway: silent, judge: passing, candidate: 'model-a', judgeModel: 'model-b' });
+    expect(judgeCalls).toEqual([]);
+    expect(card.scenarios[0]).toMatchObject({ status: 'ungraded', passed: 0, pass_rate: null, pass_k: false });
+  });
+
   it('does not judge a trial the harness could not finish', async () => {
     const broken = quick('broken', { steps: [{ advance_to: '2026-09-23T09:00:00+05:30' }] });
     const card = await runNightly([broken], { trials: 1, budget: callBudget(10), gateway: reply, judge: passing, candidate: 'model-a', judgeModel: 'model-b' });
@@ -52,6 +59,9 @@ describe('nightly eval suite', () => {
     const card = await runNightly(SCENARIOS, config);
     expect(card.scenarios).toHaveLength(SCENARIOS.length);
     expect(card.judge_model).toBe('recorded');
+    // A dry run grades nothing: its card can never read as a pass rate.
+    expect(card.overall).toMatchObject({ pass_rate: null, pass_k_rate: null });
+    expect(card.scenarios.every((row) => row.status === 'blocked' || row.status === 'ungraded')).toBe(true);
     const text = JSON.stringify(card);
     for (const scenario of SCENARIOS) {
       for (const step of scenario.steps) if ('say' in step) expect(text).not.toContain(step.say);
@@ -97,8 +107,9 @@ describe('nightly eval config', () => {
     expect(() => nightlyConfig({ ...live, WALDO_EVAL_JUDGE_MODEL: WALDO_CHAT_MODEL })).toThrow(/judge must differ/);
   });
 
-  it('defaults to three trials and the recorded mode', () => {
-    expect(nightlyConfig({ ...live, WALDO_EVAL_MODE: undefined }).judgeModel).toBe('recorded');
+  it('needs the mode named, so a host never gets the dry run by accident, and defaults to three trials', () => {
+    expect(() => nightlyConfig({ ...live, WALDO_EVAL_MODE: undefined })).toThrow('WALDO_EVAL_MODE');
+    expect(nightlyConfig({ WALDO_EVAL_MODE: 'recorded' }).judgeModel).toBe('recorded');
     expect(nightlyConfig(live).trials).toBe(3);
     expect(() => nightlyConfig({ ...live, WALDO_EVAL_TRIALS: '0' })).toThrow('WALDO_EVAL_TRIALS');
   });

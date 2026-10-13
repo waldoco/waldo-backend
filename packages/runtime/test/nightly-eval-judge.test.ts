@@ -56,6 +56,7 @@ describe('nightly eval judge', () => {
 
   it('reads an unreadable verdict, a provider error or a network failure as a judge error, never a fail', async () => {
     expect((await judgeWith(async () => reply('not json')).judge(input)).outcome).toBe('judge_error');
+    expect((await judgeWith(async () => reply('}{')).judge(input)).outcome).toBe('judge_error');
     expect((await judgeWith(async () => reply(verdict(true, true, true), 529)).judge(input)).outcome).toBe('judge_error');
     expect((await judgeWith(async () => { throw new Error('offline'); }).judge(input)).outcome).toBe('judge_error');
   });
