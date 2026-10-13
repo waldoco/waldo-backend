@@ -123,9 +123,27 @@ it('shows the first page of each and counts the rest, and shows empty pages when
 it('keeps the day when open work cannot be shown, rather than failing the Home', async () => {
   await appOwner('open-work-unshowable', async (owner, sql) => {
     responsibilityBook(sql, ids);
-    sql.exec("INSERT INTO responsibilities (id, title, intent, status, created_from, created_at) VALUES ('r-long', ?, 'x', 'open', 'chat', ?)", 'x'.repeat(201), AT);
+    sql.exec("INSERT INTO responsibilities (id, title, intent, status, created_from, created_at) VALUES ('r-long', ?, 'x', 'open', 'chat', ?)", 'Q'.repeat(201), AT);
+    const logged = vi.spyOn(console, 'error');
     const data = await dayData(owner, 'open-work-unshowable');
     expect(Array.isArray(data.cards)).toBe(true);
     expect(data.carrying).toBeUndefined();
+    // The fallback says only that open work was left out, never what it was.
+    const lines = logged.mock.calls.flat().map(String);
+    expect(lines.some(line => line.includes('"hop":"app_open_work"'))).toBe(true);
+    expect(lines.join('\n')).not.toContain('QQQQ');
+  });
+});
+
+it('shows titles and ids at their maxima', async () => {
+  await appOwner('open-work-maxima', async (owner, sql) => {
+    let n = 0;
+    const long = { newId: () => `${'m'.repeat(97)}${String((n += 1)).padStart(2, '0')}`, now: () => AT };
+    const work = responsibilityBook(sql, long).track({ title: 'W'.repeat(200), intent: 'x', items: [{ title: 'S'.repeat(200), owner: 'waldo', depends_on: [] }], next_check_at: null }, 'chat');
+    const loop = loopBook(sql, long).open({ title: 'L'.repeat(200), due: null });
+    expect([work.responsibility.id.length, loop.id.length]).toEqual([100, 100]);
+    const data = await dayData(owner, 'open-work-maxima');
+    expect(data.carrying?.items).toEqual([{ id: work.responsibility.id, title: 'W'.repeat(200), state: 'open', next: { title: 'S'.repeat(200), holder: 'waldo' }, check_at: null }]);
+    expect(data.open_loops?.items).toEqual([{ id: loop.id, title: 'L'.repeat(200), due: null, source: 'chat' }]);
   });
 });
