@@ -154,6 +154,12 @@ Review subagents get these rules:
 - **Three read-only audits are running in the old session:** proactivity, day planning and calendar; the health plane, sync and scores (including why Form and Weight are unavailable); and an app screen-by-screen wiring matrix.
   - When they return, the old session writes `docs/planning/lanes-2026-10-13/CAPABILITY_STATUS.md`, messages you, and posts on #1103.
   - Don't rerun them.
+- **Two more reviews are running in the old session.** Don't duplicate them; their verdicts will be relayed to you.
+  - #1114's delta at `6d4129d2`.
+  - App #104 (a delta at `38b697b1`) together with app #106, the Home-load fix (`8e6122f0`, stacked on #104).
+- **Connectors decisions (05:22Z):**
+  - A repeated send is handled by prompt context, with no deterministic rule.
+  - Connectors may make a minimal edit to `prompt/messaging-behavior.ts:54`, so turn 1 raises the proposal. It announces the edit on #1103.
 - **The old session stops merging** as soon as you confirm your heartbeat exists. It then deletes its own heartbeat.
 
 ## 7. Takeover steps
