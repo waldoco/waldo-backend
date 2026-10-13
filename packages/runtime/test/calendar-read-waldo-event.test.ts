@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { queryCalendarArgsSchema } from '@waldo/contracts';
-import { googleClient } from '../src/connectors/google';
+import type { z } from 'zod';
+import { calendarPageSchema, queryCalendarArgsSchema } from '@waldo/contracts';
+import { googleClient, type CalendarItem } from '../src/connectors/google';
 import { googleHandlers } from '../src/tools/live/google';
 
 // Synthetic events only. An event Waldo created, moved or cancelled through the approval desk carries its operation
@@ -46,6 +47,13 @@ describe('reading a calendar that holds an event Waldo created', () => {
 
 // The page the Worker accepts must name every field the connector reports, or one event rejects the whole read.
 describe('reading an event with every field the connector reads', () => {
+  it('names every field the connector can report in the page schema', () => {
+    // The check is the type: a field added to CalendarItem but not to the schema fails to compile.
+    type PageEvent = z.infer<typeof calendarPageSchema>['events'][number];
+    const named: Exclude<keyof CalendarItem, keyof PageEvent> extends never ? true : false = true;
+    expect(named).toBe(true);
+  });
+
   it('returns it', async () => {
     const everything = { ...created, location: 'Room 4', description: 'Agenda in the doc.', created: '2026-10-12T08:00:00Z', updated: '2026-10-12T08:00:00.000Z',
       recurringEventId: 'series1', originalStartTime: { dateTime: '2026-10-13T16:00:00+05:30' }, htmlLink: 'https://www.google.com/calendar/event?eid=abc',
