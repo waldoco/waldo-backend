@@ -43,6 +43,8 @@ const authFailed = (reason: ConnectIntent['reason'], feature: GoogleFeature): To
   connect: { status: 'auth_required', service: 'google', reason, feature },
 });
 
+const UNREADABLE_ANSWER = "Nothing was read: the connector's answer was not in a form Waldo can read. What this read covers was not seen, so it is not known to be empty or free. The same read fails the same way until that is fixed.";
+
 async function withGoogle<T extends object>(google: GoogleAccess, feature: GoogleFeature, ctx: ToolDispatcherContext | undefined, work: (client: GoogleClient) => Promise<T>, account?: string): Promise<ToolResult<T>> {
   try {
   const client = await google.client(feature, undefined, ctx?.assertTaskSourceCurrent, account);
@@ -63,6 +65,9 @@ async function withGoogle<T extends object>(google: GoogleAccess, feature: Googl
     if (error instanceof GoogleError && error.status === 403 && error.reason === 'ACCESS_TOKEN_SCOPE_INSUFFICIENT') return authFailed('scope_missing', feature);
     if (error instanceof GoogleError && error.status === 403) return { ok: false, code: 'rejected', error: `Google refused the request (403${error.reason === 'SERVICE_DISABLED' ? ', the API is disabled for this project' : ''}): ${error.message}`, source_taint: 'external' };
     if (error instanceof GoogleError && error.status === 401) return authFailed('reauth_needed', feature);
+    // An answer that fails its schema fails the same way on every retry until one side is redeployed, so it is refused.
+    // The model hears fixed words: the parse error names fields, never what the owner needs to hear.
+    if (error instanceof Error && error.name === 'ZodError') return { ok: false, code: 'rejected', error: UNREADABLE_ANSWER, source_taint: 'external' };
     return { ok: false, code: 'transient', error: error instanceof Error ? error.message : String(error), source_taint: 'external' };
   }
 }
@@ -139,6 +144,12 @@ const relayThreadMessage = async <T extends { subject: string; body: string; fro
   return { ...item, subject: relayed ? relayedMarker(subject.text) : subject.text, body: relayed ? relayedMarker(body.text) : body.text, quarantined: kinds };
 };
 
+// One content-free line per failed calendar read: which operation and how it failed, never the provider's words.
+const loggedCalendarRead = <T>(operation: QueryCalendarArgs['operation'], result: ToolResult<T>): ToolResult<T> => {
+  if (!result.ok) console.log(JSON.stringify({ hop: 'calendar_read', ok: false, code: `op_${operation === 'list_calendars' ? 'calendars' : 'events'}:${result.code}${result.connect ? `:${result.connect.reason}` : ''}` }));
+  return result;
+};
+
 export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, relayArtifact?: ArtifactRelay, effects?: OwnerEffectLedger) => [
   {
     name: 'query_calendar',
@@ -148,7 +159,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     autonomy_gated: false,
     requires_connector: true,
     eligible: granted(google, 'calendar'),
-    handle: ({ date_range, include_declined, limit, calendar_id = 'primary', page_token, account, operation, include_hidden = false }: QueryCalendarArgs, ctx?: ToolDispatcherContext) => withGoogle(google, operation === 'list_calendars' ? 'calendar_list' : 'calendar', ctx, async (client) => {
+    handle: async ({ date_range, include_declined, limit, calendar_id = 'primary', page_token, account, operation, include_hidden = false }: QueryCalendarArgs, ctx?: ToolDispatcherContext) => loggedCalendarRead(operation, await withGoogle(google, operation === 'list_calendars' ? 'calendar_list' : 'calendar', ctx, async (client) => {
       if (operation === 'list_calendars') {
         if (!client.calendarListsPage) throw new Error('Calendar discovery adapter unavailable');
         const page = googleCalendarListPageSchema.parse(await client.calendarListsPage(limit, include_hidden, page_token));
@@ -187,7 +198,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
           limitation:page?'One account and calendar. Each result contains only its current page. A local null connection_id means host canonical mapping is unavailable; email is grant metadata, not permission.':'Legacy sampled primary-calendar read; account and pagination are unknown. Empty does not prove absence.',
         },
       };
-    }, account),
+    }, account)),
   } satisfies ToolHandler<QueryCalendarArgs, unknown, ToolDispatcherContext>,
   {
     name: 'get_communication',
