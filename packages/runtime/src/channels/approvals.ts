@@ -178,7 +178,8 @@ const reviewText = (entry: LedgerRow): string => {
   if (entry.kind === 'mcp_call') return `Run this MCP tool? ${describeMcp(p)}\n\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}`;
   if (entry.kind === 'browser_submit') return `Approve this browser action? ${describeBrowser(p)}`;
   if (entry.kind === 'google_task_change') return reviewGoogleTaskChange(googleTaskProposalSchema.parse(p));
-  return `Proposed: ${entry.summary}`;
+  // Notes go to Google with the event and every guest can read them, so the owner reviews them word for word.
+  return `Proposed: ${entry.summary}${p.description ? `\n\nNotes on the event${p.attendees?.length ? ', which every guest can read' : ''}:\n${p.description}` : ''}`;
 };
 // The app's review: the same full review as a card, approvable while it fits the app's reply budget.
 const appReview = (entry: LedgerRow): Readonly<{ text: string; full: boolean }> => {
@@ -400,7 +401,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     (entry.kind === 'browser_submit' && (p as unknown as BrowserSubmitProposal).approvalExpiresAt !== undefined && (!Number.isSafeInteger((p as unknown as BrowserSubmitProposal).approvalExpiresAt) || deps.now() >= (p as unknown as BrowserSubmitProposal).approvalExpiresAt!)) ||
     deps.now() - entry.created_at > (entry.kind === 'browser_submit' ? BROWSER_SUBMIT_TTL_MS : PROPOSAL_TTL_MS) || (entry.kind !== 'browser_submit' && p.start !== undefined && Date.parse(p.start) <= deps.now());
   const apply = async (client: GoogleClient, p: Stored, eventId?: string, marker?: string): Promise<Undo | null | 'stale'> => {
-    const target = { ...(p.calendar_id ? { calendarId: p.calendar_id } : {}), ...(p.send_updates ? { sendUpdates: p.send_updates } : {}) };
+    // No choice sends no options, so a change proposed before calendars and emailing existed keeps its intent bytes.
+    const target = p.calendar_id || p.send_updates ? { ...(p.calendar_id ? { calendarId: p.calendar_id } : {}), ...(p.send_updates ? { sendUpdates: p.send_updates } : {}) } : undefined;
     const undoTarget = { ...(p.calendar_id ? { calendar_id: p.calendar_id } : {}), ...(p.send_updates ? { send_updates: p.send_updates } : {}) };
     if (p.action === 'create') {
       const applied = await client.createEvent({ title: p.title!, start: p.start!, end: p.end!, ...(eventId ? { id: eventId } : {}), ...(marker ? { operationMarker:marker } : {}), ...target,
@@ -425,7 +427,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     // Legacy entries have no applied version. A fresh owner edit never grants Undo authority.
     if (!undo.applied_etag) return 'unavailable';
     // Undo reaches the same calendar and emails the guests exactly as the change did.
-    const target = { ...(undo.calendar_id ? { calendarId: undo.calendar_id } : {}), ...(undo.send_updates ? { sendUpdates: undo.send_updates } : {}) };
+    const target = undo.calendar_id || undo.send_updates ? { ...(undo.calendar_id ? { calendarId: undo.calendar_id } : {}), ...(undo.send_updates ? { sendUpdates: undo.send_updates } : {}) } : undefined;
     const current = await client.event(undo.id, undo.calendar_id);
     if (current.etag !== undo.applied_etag) return 'stale';
     try {
