@@ -27,7 +27,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
 });
 // The Telegram test below sends through the bot API; nothing leaves the fixture.
 vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(), createTelegramCaller: () => async (method: string) => method === 'getMe' ? { username: 'fixture_bot' } : method === 'sendMessage' ? { message_id: 1 } : true }));
-const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '7c2e9a14-3b5d-4f60-8a71-92b3c4d5e6f7';
 const PRINCIPAL = `prn_${OWNER_ID.replaceAll('-', '')}`;
@@ -48,16 +48,16 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
-type Owner = InstanceType<typeof TelegramOwnerDO>;
+type Owner = InstanceType<typeof OwnerDO>;
 const headers = (name: string) => ({ 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' });
 const withOwner = <T>(name: string, seed: (state: DurableObjectState) => void, work: (owner: Owner, state: DurableObjectState) => Promise<T>) =>
-  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql);
     ensureSchema(state.storage);
     state.storage.kv.put('do_name', name);
     seed(state);
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     try { return await work(owner, state); } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
   });
 const send = async (owner: Owner, state: DurableObjectState, name: string, text: string) => {
@@ -118,14 +118,14 @@ it('a skill the owner disabled on Telegram stays disabled on the app', async () 
 });
 
 it('no reviewed rows yet means no seeded custody', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('app-skills-empty')), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('app-skills-empty')), async (_instance, state) => {
     expect(seededSkillCustody(state.storage.sql)).toBeUndefined();
   });
 });
 
 it('an app-first owner keeps the principal key when Telegram links later: no second custody, the skill loads on Telegram', async () => {
   const name = 'telegram-after-app-skills';
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql);
     ensureSchema(state.storage);
     // The app seeded the book under the owner principal; then the owner linked Telegram chat 42.
@@ -133,7 +133,7 @@ it('an app-first owner keeps the principal key when Telegram links later: no sec
     expect(custodies(state)).toEqual([PRINCIPAL]);
     await state.storage.put({ telegram_subject: '42', do_name: name });
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const owner = new TelegramOwnerDO(state, { ...env, TELEGRAM_BOT_TOKEN: '7.fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC' });
+    const owner = new OwnerDO(state, { ...env, TELEGRAM_BOT_TOKEN: '7.fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC' });
     const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
     const update = 910001;
     try {
@@ -149,7 +149,7 @@ it('an app-first owner keeps the principal key when Telegram links later: no sec
 });
 
 it('rows the book would not admit never vote on the custody: foreign names, an over-long source, a provisional row', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('skills-custody-vote')), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('skills-custody-vote')), async (_instance, state) => {
     const sql = state.storage.sql;
     telegramBook(state);
     expect(seededSkillCustody(sql)).toBe(TELEGRAM_CUSTODY);
