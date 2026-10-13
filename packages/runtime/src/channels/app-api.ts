@@ -206,8 +206,10 @@ export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor:
     const ownText = receiptSuffix && entry.appPayload.endsWith(receiptSuffix) && entry.appPayload.slice(0, -receiptSuffix.length).trim() ? entry.appPayload.slice(0, -receiptSuffix.length) : entry.appPayload;
     // A reader that cannot parse a part shows only `text`, and a decided card is no longer a part, so a reply that presented cards is never textless.
     const text = ownText.trim() || !presented.fallbacks.length ? ownText : presented.fallbacks.join('\n\n');
+    const operation = entry.operation ? [{ type: 'operation' as const, operation_id: entry.operation.id, state: entry.operation.state, message: text }] : [];
     const receipt = entry.receipt ? [{ type: 'receipt' as const, items: [...entry.receipt.items], more: entry.receipt.more, fallback_text: entry.receipt.line }] : [];
-    return { id: entry.id, role: entry.role, text, parts: [{ type: 'text' as const, text }, ...presented.live, ...receipt], channel: entry.surface, parent_id: entry.parentId };
+    return { id: entry.id, role: entry.role, text, parts: [{ type: 'text' as const, text }, ...operation, ...presented.live, ...receipt], channel: entry.surface, parent_id: entry.parentId,
+      ...(entry.createdAt === undefined ? {} : { created_at: entry.createdAt }) };
   });
   return { messages, next_cursor: start > 0 ? `before:${shown[start]!.id}` : null };
 };
