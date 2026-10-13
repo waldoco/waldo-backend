@@ -2330,3 +2330,18 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 - **Side effect noted:** `guard-pgtap` rewrote `~/pgdg/sources.list` on the Mac. That directory already existed from 25 Sep, and nothing was deleted.
 
 - 23:45Z: #1149 PR body updated for `7242f371`. The split-time text is replaced, with commit and evidence lines added. The body was compared before the edit to confirm nobody had changed it. Notice posted on the PR.
+
+## 23:58Z — the lead landed 8; the Mac picks up re-reviews; tip flake; staging unchanged since 20:26Z
+
+- **The lead landed eight PRs through the gate**, putting the tip at `9876314d`: #1190, #1154, #1171, #1163, #1155, #1166, #1165 and #1150 (6157572787).
+- **Asks of the Mac:**
+  - #1182 re-review at `0e4b42a8`;
+  - #1110 delta review at `4705f2a0`, which lands ahead of #1180, #1186 and #1108;
+  - #1192: move `<recalled>` into the owner turn, fenced;
+  - a small `owner-do.ts` PR for `sourceTaint`, after B3.
+- **Started:** one reviewer for #1182 and #1110 (it posts its verdicts on the PRs), and lane R resumed for #1192. Board post: 6157736903.
+- **The tip is red on shard 1** in `owner-skills-private.test.ts:104`. It's flaky: the minute rolled between two prompts that each carry a clock line. The fix is to pin the clock. Don't re-run it to green.
+- **Staging Worker:**
+  - a secret change at 20:16Z and a deployment at 20:26Z (`57cb1f87`, source unknown). [inference] Ashish's.
+  - Workers Builds on the tip made no deployment.
+- **Usage:** 29% (resets 03:30Z). The orchestrator's context is at 75%.
