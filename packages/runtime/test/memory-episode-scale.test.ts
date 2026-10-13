@@ -20,7 +20,7 @@ const PLANTED = [
 
 describe('episode history at thread scale', () => {
   it('finds planted turns among 2,000, respects limit and date range, and does not rank by recency', async () => {
-    const report = await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('episode-scale-a')), (_instance, state) => {
+    const report = await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('episode-scale-a')), (_instance, state) => {
       const index = episodeIndex(state.storage.sql);
       for (let i = 0; i < 2000; i++) {
         const topic = TOPICS[i % TOPICS.length]!; const other = TOPICS[(i * 7 + 3) % TOPICS.length]!;
@@ -48,7 +48,7 @@ describe('episode history at thread scale', () => {
   });
 
   it('a purge clears the forgotten literal from every episode row, and search cannot bring it back', async () => {
-    const out = await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('episode-scale-b')), (_instance, state) => {
+    const out = await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('episode-scale-b')), (_instance, state) => {
       const index = episodeIndex(state.storage.sql);
       const store = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
       for (let i = 0; i < 300; i++) index.add(`tg-${i}`, 'owner', `chat ${i}: nothing special, just the usual ${TOPICS[i % TOPICS.length]} talk`, START + i * DAY);

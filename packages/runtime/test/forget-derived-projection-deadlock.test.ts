@@ -8,7 +8,7 @@ const topic = 'jasmine pearl';
 // A derived update card that carries the topic holds the forget, and its documented exit is the purge. The purge used to do nothing while
 // coverage was incomplete, and coverage cannot complete while a hold keeps the selector from running, so the hold could never clear.
 it('a derived update card holding an incomplete forget is blanked by the purge, so the hold can clear and the selector can run', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('derived-projection-deadlock')), (_i, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('derived-projection-deadlock')), (_i, state) => {
     const sql = state.storage.sql;
     const store = claimStore(sql);
     sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0)`);
@@ -30,7 +30,7 @@ it('a derived update card holding an incomplete forget is blanked by the purge, 
 });
 
 it('the early purge removes no claims and keeps the topic pending and incomplete', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('derived-projection-episodes')), (_i, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('derived-projection-episodes')), (_i, state) => {
     const sql = state.storage.sql;
     const store = claimStore(sql);
     sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0)`);

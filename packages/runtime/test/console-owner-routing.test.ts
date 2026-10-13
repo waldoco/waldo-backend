@@ -17,7 +17,7 @@ const supabaseEnv = {
 };
 const baseEnv = {
   WALDO_OWNER_TELEGRAM_ID: '5458446350',
-  TELEGRAM_OWNER_DO: ownerDo(),
+  OWNER_DO: ownerDo(),
 } as const;
 
 afterEach(() => vi.unstubAllGlobals());
@@ -27,10 +27,10 @@ it('retains a read-only download intent when the legacy ticket session expires',
   const ns = { idFromName: (name: string) => name, get: () => ({ fetch: async () => new Response('unauthorized', { status: 401 }) }) };
   const target = '/console/workspace/file?id=def993c9-db4d-49c4-8998-8465bed3606e&revision=1';
   const request = () => new Request(`https://waldo.invalid${target}`, { headers: { cookie: 'waldo_console=expired-ticket' } });
-  const result = await worker.fetch(request(), { ...baseEnv, ...supabaseEnv, TELEGRAM_OWNER_DO: ns } as unknown as Cloudflare.Env);
+  const result = await worker.fetch(request(), { ...baseEnv, ...supabaseEnv, OWNER_DO: ns } as unknown as Cloudflare.Env);
   expect(result.status).toBe(303);
   expect(result.headers.get('location')).toBe(`/console/signin?return_to=${encodeURIComponent(target)}`);
-  const unconfigured = await worker.fetch(request(), { ...baseEnv, TELEGRAM_OWNER_DO: ns } as unknown as Cloudflare.Env);
+  const unconfigured = await worker.fetch(request(), { ...baseEnv, OWNER_DO: ns } as unknown as Cloudflare.Env);
   expect(unconfigured.status).toBe(401);
 });
 
@@ -72,7 +72,7 @@ it('replaces caller-supplied owner routing headers on the ticket fallback before
  const seen: string[] = [];
  const ns = { idFromName: (name: string) => name, get: (name: string) => ({ fetch: async (request: Request) => { seen.push(request.headers.get('x-waldo-do-name')!); return new Response(name + ':' + request.headers.get('x-waldo-do-name')); } }) };
  for (const path of ['/console/legacy', '/console/dashboard']) {
-  const response = await worker.fetch(new Request('https://waldo.invalid' + path, { headers: { cookie: 'waldo_console=invalid', 'x-waldo-do-name': 'attacker-selected-owner' } }), { ...baseEnv, TELEGRAM_OWNER_DO: ns, ASSETS: { fetch: async () => new Response('shell') } } as unknown as Cloudflare.Env);
+  const response = await worker.fetch(new Request('https://waldo.invalid' + path, { headers: { cookie: 'waldo_console=invalid', 'x-waldo-do-name': 'attacker-selected-owner' } }), { ...baseEnv, OWNER_DO: ns, ASSETS: { fetch: async () => new Response('shell') } } as unknown as Cloudflare.Env);
   expect(await response.text()).toBe(path.endsWith('/dashboard') ? 'shell' : '5458446350:5458446350');
   expect(seen.at(-1)).toBe('5458446350');
  }
@@ -81,7 +81,7 @@ it('never selects a legacy console DO when directory lookup fails', async () => 
   const get = vi.fn();
   vi.stubGlobal('fetch', vi.fn(async () => new Response('unavailable', { status: 503 })));
   const result = await worker.fetch(new Request('https://waldo.invalid/console', { headers: { cookie: 'waldo_console=a.b.c' } }),
-    { ...baseEnv, ...supabaseEnv, TELEGRAM_OWNER_DO: { idFromName: (name: string) => name, get } } as unknown as Cloudflare.Env);
+    { ...baseEnv, ...supabaseEnv, OWNER_DO: { idFromName: (name: string) => name, get } } as unknown as Cloudflare.Env);
   expect(result.status).toBe(503);
   expect(get).not.toHaveBeenCalled();
 });

@@ -10,7 +10,7 @@ const observeMail = (book: UpdateBook, source_ref: string, thread_id: string, de
 };
 
 it('grounds a pending mail follow-up, revisits without new mail once, and respects owner closure', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('mail-follow-up')), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('mail-follow-up')), async (_instance, state) => {
     let now = Date.parse('2026-10-03T08:00:00Z');
     const updates = updateBook(state.storage.sql);
     const loops = loopBook(state.storage.sql, { now: () => now, newId: () => 'mail' });
@@ -35,7 +35,7 @@ it('grounds a pending mail follow-up, revisits without new mail once, and respec
 });
 
 it('treats changed due times as a new occurrence and survives book reconstruction', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('mail-follow-up-due-change')), (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('mail-follow-up-due-change')), (_instance, state) => {
     const sql = state.storage.sql;
     observeMail(updateBook(sql), 'mail:thread', 'thread', '{"subject":"Deadline changed"}', 1);
     let book = loopBook(sql, { now: () => 2, newId: () => '1' });
@@ -62,7 +62,7 @@ it('keeps mail-review judgment grounded, uncertain and read-only', async () => {
 it('runs the periodic mail-review lane without new mail, defers through quiet, ACKs once and suppresses closed pending work', async () => {
   const { reviewMailFollowup } = await import('../src/channels/update-cards');
   const { TelegramFinalOutbox } = await import('../src/channels/telegram-final-outbox');
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('mail-follow-up-outbox')), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('mail-follow-up-outbox')), async (_instance, state) => {
     let now = Date.parse('2026-10-03T08:30:00Z');
     let quiet = true;
     const updates = updateBook(state.storage.sql);
@@ -95,7 +95,7 @@ it('runs the periodic mail-review lane without new mail, defers through quiet, A
 });
 
 it('retains held mail for later extraction even when the next provider delta is empty', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('mail-held-ingestion')), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('mail-held-ingestion')), async (_instance, state) => {
     const book = updateBook(state.storage.sql);
     const now = Date.parse('2026-10-03T02:00:00Z');
     await collectChanges(book, { changedEvents: async () => [], newMail: async () => [] } as unknown as GoogleClient, now, true);
@@ -110,7 +110,7 @@ it('retains held mail for later extraction even when the next provider delta is 
 
 it('does not let a skipped first candidate starve another due loop, and unchanged observations retain identity', async () => {
   const { reviewMailFollowup } = await import('../src/channels/update-cards');
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('mail-review-fairness')), async (_i, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('mail-review-fairness')), async (_i, state) => {
     const sql = state.storage.sql;
     const updates = updateBook(sql);
     const now = Date.parse('2026-10-03T09:00:00Z');
@@ -135,7 +135,7 @@ it('does not let a skipped first candidate starve another due loop, and unchange
 });
 
 it('a newer message invalidates pending source text even with the same deadline', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('mail-newer-evidence')), (_i, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('mail-newer-evidence')), (_i, state) => {
     const updates = updateBook(state.storage.sql);
     const loops = loopBook(state.storage.sql, { now: () => 3, newId: () => 'newer' });
     observeMail(updates, 'mail:t1', 't1', '{"subject":"Review at 10"}', 1, 'm1');
@@ -151,7 +151,7 @@ it('a newer message invalidates pending source text even with the same deadline'
 
 it('retries a known pre-send denial with the same frozen intent and never retries uncertain sends', async () => {
   const { TelegramFinalOutbox } = await import('../src/channels/telegram-final-outbox');
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('mail-blocked-recovery')), async (_i, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('mail-blocked-recovery')), async (_i, state) => {
     let now = 1000;
     let allowed = false;
     let sends = 0;
@@ -178,7 +178,7 @@ it('retries a known pre-send denial with the same frozen intent and never retrie
 });
 
 it('keeps per-owner observations isolated and cannot fabricate a source in another owner book', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('mail-other-owner')), (_i, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('mail-other-owner')), (_i, state) => {
     const loops = loopBook(state.storage.sql, { now: () => 1, newId: () => 'other' });
     expect(() => loops.open({ title: 'Other owner task', due: '2026-10-03T10:00', source_ref: 'mail:t1' })).toThrow('unobserved source');
     expect(loops.list()).toEqual([]);
@@ -186,7 +186,7 @@ it('keeps per-owner observations isolated and cannot fabricate a source in anoth
 });
 
 it('stores observation pointers only and expires unattached pointers after seven days', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('mail-pointer-retention')), (_i, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('mail-pointer-retention')), (_i, state) => {
     const updates = updateBook(state.storage.sql);
     const loops = loopBook(state.storage.sql, { now: () => 2, newId: () => 'retention' });
     observeMail(updates, 'mail:t1', 't1', '{"subject":"Synthetic source"}', 1, 'm1');
@@ -203,7 +203,7 @@ it('stores observation pointers only and expires unattached pointers after seven
 
 it.each(['done', 'dropped', 'deadline', 'timezone'])('suppresses frozen work invalidated before delivery: %s', async mode => {
   const { TelegramFinalOutbox } = await import('../src/channels/telegram-final-outbox');
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`mail-stale-${mode}`)), async (_i, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`mail-stale-${mode}`)), async (_i, state) => {
     const updates = updateBook(state.storage.sql);
     const loops = loopBook(state.storage.sql, { now: () => 1, newId: () => mode });
     observeMail(updates, 'mail:t1', 't1', '{"subject":"Review by 10"}', 1, 'm1');
@@ -224,7 +224,7 @@ it.each(['done', 'dropped', 'deadline', 'timezone'])('suppresses frozen work inv
 it('retains a missing-result ACK as unknown and cannot safely re-arm it', async () => {
   const { TelegramFinalOutbox } = await import('../src/channels/telegram-final-outbox');
   const { createTelegramCaller } = await import('../src/channels/telegram-api');
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('mail-missing-ack')), async (_i, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('mail-missing-ack')), async (_i, state) => {
     let now = 1;
     const updates = updateBook(state.storage.sql);
     const loops = loopBook(state.storage.sql, { now: () => now, newId: () => 'ack' });
@@ -249,7 +249,7 @@ it('retains a missing-result ACK as unknown and cannot safely re-arm it', async 
 
 it('atomically re-arms a known pre-send denial and its source claim across reconstruction', async () => {
   const { TelegramFinalOutbox } = await import('../src/channels/telegram-final-outbox');
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('mail-atomic-rearm')), async (_i, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('mail-atomic-rearm')), async (_i, state) => {
     let now = 1;
     const updates = updateBook(state.storage.sql);
     let loops = loopBook(state.storage.sql, { now: () => now, newId: () => 'atomic' });
@@ -274,7 +274,7 @@ it('atomically re-arms a known pre-send denial and its source claim across recon
 
 it('never re-arms a terminal intent whose payload expired', async () => {
   const { TelegramFinalOutbox } = await import('../src/channels/telegram-final-outbox');
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('mail-expired-intent')), async (_i, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('mail-expired-intent')), async (_i, state) => {
     let now = 1;
     const updates = updateBook(state.storage.sql);
     const loops = loopBook(state.storage.sql, { now: () => now, newId: () => 'expired' });
@@ -331,7 +331,7 @@ it('source-forget KV failure retains pending work for restart and never revives 
 
 it('forgotten text cancels a previously released unsent occurrence even when its loop title differs', async () => {
   const { TelegramFinalOutbox, redactMailFollowupEntries } = await import('../src/channels/telegram-final-outbox');
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('mail-forget-released')), async (_i, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('mail-forget-released')), async (_i, state) => {
     let now = 1;
     const loops = loopBook(state.storage.sql, { now: () => now, newId: () => 'forgot-released' });
     observeMail(updateBook(state.storage.sql), 'mail:released', 'released', '{"subject":"Review"}', now, 'released-message');

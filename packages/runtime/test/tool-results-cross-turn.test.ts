@@ -26,7 +26,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
-const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO } = await import('../src/channels/owner-do');
 
 const seedLedger = (state: DurableObjectState) => toolOutputLedger(state.storage).record({ tool: 'search_episodes', ok: true, at: Date.now(), taint: null, origin: 'owner', summary: `Pat sent the ${MARKER} invoice for ${SENTINEL} on Tuesday.` });
 // Six results of about 1.5 KB each (three bytes a character): only the newest two fit the gate's 4096 bytes.
@@ -42,11 +42,11 @@ const storedText = (state: DurableObjectState) => {
 };
 const copies = (state: DurableObjectState) => storedText(state).split(SENTINEL).length - 1;
 
-const telegramTurn = async (name: string, forgetting: boolean, seed = seedLedger) => runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+const telegramTurn = async (name: string, forgetting: boolean, seed = seedLedger) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
   const originalNow = Date.now;
   let now = Date.parse('2026-10-12T06:59:00Z');
   Date.now = () => now;
-  const owner = new TelegramOwnerDO(state, { ...env, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture' });
+  const owner = new OwnerDO(state, { ...env, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture' });
   state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
   try {
     await seed(state);
@@ -71,11 +71,11 @@ const appTurn = async (name: string, forgetting: boolean, seed = seedLedger) => 
     if (fn === 'health_context_read') return Response.json(null);
     return new Response('unexpected', { status: 500 });
   });
-  return runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  return runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql);
     ensureSchema(state.storage);
     state.storage.kv.put('do_name', name);
-    const owner = new TelegramOwnerDO(state, { ...env, SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const owner = new OwnerDO(state, { ...env, SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     try {
       await seed(state);
       if (forgetting) claimStore(state.storage.sql).beginTopicCoverage(MARKER, new Date(Date.now() - 60_000).toISOString());
@@ -124,7 +124,7 @@ describe('an earlier tool result in the ledger, then one owner turn', () => {
   });
 
   it('a job prompt carries no earlier tool results; an owner turn on the same responder does', async () => {
-    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('cross-turn-job')), async (_instance, state) => {
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('cross-turn-job')), async (_instance, state) => {
       await seedLedger(state);
       const requests: LLMGatewayRequest['request'][] = [];
       const gateway: LLMGatewayAdapter = { async complete(request) {
@@ -148,7 +148,7 @@ describe('an earlier tool result in the ledger, then one owner turn', () => {
   // A capture-mode probe presents synthetic text with owner authority and returns what the reply says, so it never
   // sees live provider results from earlier turns.
   it('a capture-mode probe turn carries no earlier tool results', async () => {
-    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('cross-turn-probe')), async (_instance, state) => {
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('cross-turn-probe')), async (_instance, state) => {
       await seedLedger(state);
       const requests: LLMGatewayRequest['request'][] = [];
       const gateway: LLMGatewayAdapter = { async complete(request) {

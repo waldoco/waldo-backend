@@ -137,7 +137,7 @@ it('renders provider failure honestly and keeps invite denial non-enumerating', 
 it('finishes verified signup with an optional blank phone and both owner-scoped console cookies', async () => {
   const s = setup();
   const grant = vi.fn(async () => new Response('console-ticket'));
-  const e = { ...env, TELEGRAM_OWNER_DO: { idFromName: vi.fn((name: string) => name), get: vi.fn(() => ({ fetch: grant })) } as unknown as DurableObjectNamespace };
+  const e = { ...env, OWNER_DO: { idFromName: vi.fn((name: string) => name), get: vi.fn(() => ({ fetch: grant })) } as unknown as DurableObjectNamespace };
   const a = { ...s.a, ownerCookie: vi.fn(async () => 'owner-session') };
   const { cookie, progress } = await start(s);
   const verified = await handleSignup(post('/verify', { csrf: progress.csrf, code: '123456' }, cookie), e, a, s.signup);
@@ -160,7 +160,7 @@ it.each(['grant', 'session', 'response'])('retains verified proof and optional c
   const s = setup();
   let failed = true;
   const grant = vi.fn(async () => new Response('ticket', { status: failed && failure === 'grant' ? 503 : 200 }));
-  const e = { ...env, TELEGRAM_OWNER_DO: { idFromName: vi.fn((name: string) => name), get: vi.fn(() => ({ fetch: grant })) } as unknown as DurableObjectNamespace };
+  const e = { ...env, OWNER_DO: { idFromName: vi.fn((name: string) => name), get: vi.fn(() => ({ fetch: grant })) } as unknown as DurableObjectNamespace };
   const a = { ...s.a, ownerCookie: vi.fn(async () => failed && failure === 'session' ? null : 'owner-cookie') };
   const { cookie, progress } = await start(s);
   const verifiedCookie = cookieFrom(await handleSignup(post('/verify', { csrf: progress.csrf, code: '123456' }, cookie), e, a, s.signup));
@@ -209,7 +209,7 @@ it('routes two fresh email-only members and an existing member to distinct canon
     throw new Error('unexpected fixture endpoint');
   });
   const ns = { idFromName: (name: string) => name, get: (name: string) => ({ fetch: async (input: RequestInfo) => new Response(String(input).endsWith('/grant-console') ? `ticket-${name}` : `console-${name}`) }) } as unknown as DurableObjectNamespace;
-  const e = { ...env, TELEGRAM_OWNER_DO: ns };
+  const e = { ...env, OWNER_DO: ns };
   const auth = createAuth(e, fetcher)!; const signup = signupAuth(e, fetcher)!;
   const existing = await auth.ownerCookie('owner-existing');
   const initial = await handleSignup(post('/send', { email: 'person@example.com', invite: 'ABCDEFGHJKLMNPQRSTUV' }), e, auth, signup);
@@ -242,7 +242,7 @@ it('can finish with verified proof when the OTP-send budget is exhausted', async
   const s = setup(); const { cookie, progress } = await start(s);
   const verifiedCookie = cookieFrom(await handleSignup(post('/verify', { csrf: progress.csrf, code: '123456' }, cookie), env, s.a, s.signup));
   const a = { ...s.a, throttle: vi.fn(async (key: string) => !key.startsWith('send:')), ownerCookie: vi.fn(async () => 'session') };
-  const e = { ...env, TELEGRAM_OWNER_DO: { idFromName: (name: string) => name, get: () => ({ fetch: async () => new Response('ticket') }) } as unknown as DurableObjectNamespace };
+  const e = { ...env, OWNER_DO: { idFromName: (name: string) => name, get: () => ({ fetch: async () => new Response('ticket') }) } as unknown as DurableObjectNamespace };
   const complete = vi.fn(async () => 'owner-new');
   const result = await handleSignup(post('/complete', { csrf: progress.csrf, phone: '' }, verifiedCookie), e, a, { ...s.signup, complete });
   expect(result.status).toBe(303);
@@ -254,7 +254,7 @@ it.each(['fetch', 'body'])('bounds hanging console grant %s and retains signup r
   const proof = cookieFrom(await handleSignup(post('/verify', { csrf: progress.csrf, code: '123456' }, cookie), env, s.a, s.signup));
   const hang = () => new Promise<never>(() => {});
   const grant = vi.fn(async () => phase === 'fetch' ? hang() : ({ ok: true, text: hang } as unknown as Response));
-  const e = { ...env, TELEGRAM_OWNER_DO: { idFromName: (name: string) => name, get: () => ({ fetch: grant }) } as unknown as DurableObjectNamespace };
+  const e = { ...env, OWNER_DO: { idFromName: (name: string) => name, get: () => ({ fetch: grant }) } as unknown as DurableObjectNamespace };
   const a = { ...s.a, ownerCookie: vi.fn(async () => 'session') };
   vi.useFakeTimers();
   try {

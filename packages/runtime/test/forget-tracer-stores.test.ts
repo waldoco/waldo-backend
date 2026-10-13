@@ -18,7 +18,7 @@ const AT = '2026-10-02T00:00:00Z';
 let seq = 0;
 
 const withStorage = <T>(fn: (storage: DurableObjectStorage) => T) =>
-  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`forget-tracer-${seq++}`)), (_i, state) => fn(state.storage));
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`forget-tracer-${seq++}`)), (_i, state) => fn(state.storage));
 
 const survivors = (sql: SqlStorage) => {
   const n = (table: string, column: string) => sql.exec<{ n: number }>(`SELECT count(*) AS n FROM ${table} WHERE ${column} LIKE ?`, `%${MARKER}%`).one().n;
