@@ -2103,3 +2103,8 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
   - **Posted:**
     - on #1103 (6148782177): gate #1017, then #1162, and close #1095 after moving the setup doc across; build proactive routing, then the approval link;
     - on #1017 (6148786167): status and the host items left for Ashish.
+
+- **15:26Z heartbeat.**
+  - **Usage:** 55%, resetting 17:30Z.
+  - **Backend:** the `beta-mvp` tip is `d69ce8ea` (#1006, Ashish's device-bridge trace hardening, merged 14:58). #1172 is still open at `51d46d78`, so hand-off 2 hasn't been called.
+  - **Quiet:** nothing new on #1103, #1017, #1162 or #1095 since 15:14Z. The lead's log was last updated at 14:07. Nothing from Suyash in waldo-app.
