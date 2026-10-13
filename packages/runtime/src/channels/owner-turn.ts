@@ -10,7 +10,7 @@ import {
   deriveContextBudgetChars, EXTERNAL_ORIGIN_TOOLS, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, SANITISE_DESTINATION_POLICIES, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
   type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
 } from '@waldo/contracts';
-import type { ConversationModelMessage } from '@waldo/contracts';
+import type { ConversationEntry, ConversationModelMessage } from '@waldo/contracts';
 import { MODEL_CONTEXT_MAX_CHARS } from '@waldo/contracts';
 import { PROBE_STRIPPED_TOOLS } from './probe-turn';
 import { runToolLoop } from '../conversation/tool-loop';
@@ -64,7 +64,7 @@ const EXTERNAL_DATA_MAX_BYTES = 4096;
 // Staging responder: the fixture invocation stands in for real per-user admission,
 // which the production tenancy work replaces.
 export type OwnerSkillHost = Readonly<{ browserAttachments?(scope?: RunEffectScope): readonly LLMAttachment[]; prepare(turn: OwnerTurnEnvelope, contextOwnerId: string, scope: RunEffectScope): Promise<OwnerSkillCapability | undefined> }>;
-export type OwnerContextHost = Readonly<{ prepare(turn: OwnerTurnEnvelope, scope: RunEffectScope): Promise<OwnerContextCapability> }>;
+export type OwnerContextHost = Readonly<{ prepare(turn: OwnerTurnEnvelope, scope: RunEffectScope): Promise<OwnerContextCapability | undefined> }>;
 export type OwnerHistoryFactory = (context: OwnerContextCapability, scope: RunEffectScope) => ConversationStore;
 export type OwnerContextIntegration = Readonly<{ contextHost: OwnerContextHost; history?: OwnerHistoryFactory }>;
 type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory }>;
@@ -580,7 +580,10 @@ export const createOwnerResponder = (
   };
   let restorePromise: Promise<void> | undefined;
   const restored = async () => {
-    await (restorePromise ??= conversationStore ? conversationStore.load().then(({entries,leafId}) => { for(const entry of entries){tree.append(entry);conversationLeaves.set(entry.chatId,entry.id);} }) : Promise.resolve());
+    // The per-object store holds one owner's chains. Rows saved before turns ran under the directory owner carry the
+    // fixture stand-in, so every row reads as this turn's owner and old and new turns stay one chain.
+    const own = conversationStore === store ? (entry: ConversationEntry) => entry.ownerId === ownerId ? entry : { ...entry, ownerId } : (entry: ConversationEntry) => entry;
+    await (restorePromise ??= conversationStore ? conversationStore.load().then(({entries,leafId}) => { for(const entry of entries){tree.append(own(entry));conversationLeaves.set(entry.chatId,entry.id);} }) : Promise.resolve());
     const ids = forgettingState?.claims('purging').map(claim => claim.id) ?? [];
     const topics = forgettingState?.pendingTopics() ?? [];
     if (forgettingState && (ids.length || topics.length)) {
