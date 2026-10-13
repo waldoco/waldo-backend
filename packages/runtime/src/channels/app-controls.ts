@@ -10,6 +10,8 @@ export type AppControlsHost = Readonly<{
   csrf:string; expires:number; storage:DurableObjectStorage;
   assertCurrent():Promise<void>; sessions():Promise<readonly {csrf:string;expires:number}[]>;
   view(page?:{traceBefore?:number;runsBefore?:number}):Promise<ConsoleView>;
+  // The day read's cards with the Main chat row each was delivered to. It reads the chat, so only that read asks for it.
+  cardsLatest?(view:ConsoleView):Promise<ConsoleView['cards']>;
   act(action:ConsoleAction):Promise<boolean|string|ControlReceipt>;
   account:Pick<OwnerControlsDeps,'owner'|'auth'|'requestUrl'|'purgeOwnerFiles'|'eraseOwnerStorage'>;
 }>;
@@ -64,8 +66,10 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     }
     const page={...(query.data.trace_before?{traceBefore:Number(query.data.trace_before)}:{}),...(query.data.runs_before?{runsBefore:Number(query.data.runs_before)}:{})};
     const result=await projection(query.data.view,undefined,page);if(!result)return reply({error:'not_found'},404);
-    const {csrf:_csrf,...shown}=result;
-    const parsed=appControlProjectionV1Schema.safeParse({...shown,revision:await controlRevision(result)});
+    // The revision guards what an action changes, so it is taken before latest is added: an action rebuilds the day without it.
+    const revision=await controlRevision(result);
+    const {csrf:_csrf,...shown}=query.data.view==='day'&&host.cardsLatest&&built?projectControls({...built,cards:await host.cardsLatest(built)},'day'):result;
+    const parsed=appControlProjectionV1Schema.safeParse({...shown,revision});
     await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
   }
   if(path!=='/app/v1/actions')return reply({error:'not_found'},404);

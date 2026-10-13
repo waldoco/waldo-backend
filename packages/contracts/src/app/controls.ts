@@ -51,7 +51,8 @@ export const appControlActionV1Schema = z.strictObject({
 // message_id is the main-chat history row; delivered_at is epoch ms. The excerpt is a prefix, up to 280
 // UTF-16 code units, of the text the chat shows for that row, cut at read time and never stored. A row
 // that is gone or has no text gives latest null.
-const latestDelivery = z.strictObject({ message_id: text.min(1), delivered_at: z.int().positive(), excerpt: text.min(1).max(280) });
+export const APP_CARD_EXCERPT_MAX_V1 = 280;
+const latestDelivery = z.strictObject({ message_id: text.min(1), delivered_at: z.int().positive(), excerpt: text.min(1).max(APP_CARD_EXCERPT_MAX_V1) });
 // timezone_confirmed is true once the owner set the zone themselves (timezone.set); absent from a Worker that does not say.
 export const appControlDayDataV1Schema = z.strictObject({
   timezone: text, timezone_confirmed: z.boolean().optional(), date: text,
