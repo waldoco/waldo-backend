@@ -2007,3 +2007,21 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 
   Also: no offline state, and the Brief card is conditional.
 - **Review running:** #126, #129 and #130. Next: the pins #124, #125 and #132, plus #121 and #131. Then #127 and #128. Then #115.
+
+## 13:30Z (from `date -u`): Instinct gap analysis landed; queue state for the next session
+
+- **Committed** `docs/research/WALDO_VS_INSTINCT_CAPABILITY_GAP_2026-10-13.md` (`de660d4d`). It holds a source-grounded matrix, a 15-item build plan and 20 real-world scenario tests.
+  - **Verdict:** Waldo matches the personal-admin core and leads on health-aware day cards. It trails on reach and on how much of this the app shows.
+  - **Top gaps:**
+    1. visible follow-through: deploy the queue, then carrying and open loops, receipts and a push sender;
+    2. text-only app input, while photos and voice work only on Telegram;
+    3. the browser for app owners (#1110 plus the owner's #1120);
+    4. ask-versus-assume, limits and personality exist only as prompt text, with no evals;
+    5. people and outbound reach need owner rulings.
+  - **Routed** to the backend lead and Ansh's lanes on #1103 (6146676613), with the UX doc's backend asks: a progress part, Stop and steer, push.
+  - The privacy scan's one hit was a false match ("sk-" inside "Ask-versus-assume").
+- **L5 is idle:** handoff 6146607126 plus addendum 6146637997. Nothing local-only.
+- **L4 #133** (`ea910cd4`, stacked on #132) words cards by their served `state`. L4's review queue is #121, #124, #125, #127, #128, #129, #130, #131, #132 and #133, plus #117 after #125. L4 pauses after #133. Its next item after the pause is the UX quick win: failure copy that leaks HTTP status.
+- **N4** finishes its #123 follow-up PR (including honouring a refused or lost withdrawal), then pauses.
+- **Reviewer running:** #126, #129 and #130. Then, one at a time: the pins (#124, #125, #132) with #121 and #131; then #127, #128 and #133; then #115.
+- **Owner steps queued:** the hand deploy, waiting on the two blockers (the #1139 receipt line and the approvals emit timing); freeing Mac disk (under 6 GB); migrations #1127, #1133 and #1161; #1120; #1147; the GCP project ID; and the rulings in the gap doc (people and contacts, outbound reach, photo and voice storage, booking and spending).
