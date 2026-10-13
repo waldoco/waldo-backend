@@ -325,4 +325,25 @@ describe('CloudflareAIGatewayAdapter', () => {
     await expect(adapter.complete(request())).resolves.toMatchObject({ ok: true });
     expect(signal).toBeInstanceOf(AbortSignal);
   });
+
+  it('aborts the in-flight fetch when the run it serves is stopped', async () => {
+    const stop = new AbortController();
+    const runScope = { runId: 'run-1', attempt: 'attempt-1', deadline: Date.now() + 60_000, signal: stop.signal, admit: () => undefined, commit: <T,>(work: () => T) => work() };
+    let signal: AbortSignal | undefined;
+    const adapter = new CloudflareAIGatewayAdapter({
+      accountId: 'account-123',
+      gatewayId: 'waldo-staging',
+      credential: credential(),
+      timeoutMs: 60_000,
+      fetch: (_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+        signal = init?.signal as AbortSignal;
+        signal.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')), { once: true });
+      }),
+    } as never);
+
+    const pending = adapter.complete({ ...request(), runScope });
+    stop.abort();
+    await expect(pending).resolves.toEqual({ ok: false, code: 'transient', error: 'gateway_fetch_failed' });
+    expect(signal?.aborted).toBe(true);
+  });
 });

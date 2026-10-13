@@ -7,17 +7,15 @@ import { AppInbox } from '../src/channels/app-inbox';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 
-// Stop: the owner cancels a message. A running turn stops at its next fence, an admitted one never runs, a finished one
-// keeps its receipt, and no "did not finish" reply is written, because the owner asked.
-const gate = vi.hoisted(() => ({ release: null as null | (() => void), held: 0, asked: [] as string[] }));
+const gate = vi.hoisted(() => ({ release: null as null | (() => void), held: 0, asked: [] as string[], signal: null as AbortSignal | null }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
-  const gateway = { async complete({ request }: LLMGatewayRequest) {
+  const gateway = { async complete({ request, runScope }: LLMGatewayRequest) {
     const done = (text: string) => ({ ok: true as const, data: { model: request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
     if (request.response_format) return done(request.response_format.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[]}');
     const asked = String(request.messages.at(-1)?.content ?? '');
     gate.asked.push(asked);
-    if (asked.includes('slowly')) { gate.held += 1; await new Promise<void>(resolve => { gate.release = resolve; }); }
+    if (asked.includes('slowly')) { gate.held += 1; gate.signal = runScope?.signal ?? null; await new Promise<void>(resolve => { gate.release = resolve; }); }
     return done('Done.');
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
@@ -28,7 +26,7 @@ const OWNER_ID = '4b3a2918-0f7e-4d6c-9b5a-4c3d2e1f0a9b';
 const HASH = 'a'.repeat(64);
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 beforeEach(() => {
-  gate.release = null; gate.held = 0; gate.asked = [];
+  gate.release = null; gate.held = 0; gate.asked = []; gate.signal = null;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
@@ -59,7 +57,7 @@ const receipt = async (owner: InstanceType<typeof OwnerDO>, name: string, client
 const history = async (owner: InstanceType<typeof OwnerDO>, name: string) => appHistoryResultV1Schema.parse(await (await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main', { headers: headers(name) }))).json());
 const record = (state: DurableObjectState, id: string) => state.storage.kv.get<{ state: string; notice?: string; landed?: string; effectsUnconfirmed?: boolean }>(`app:inbox-record:${id}`)!;
 
-it('stops a running turn at its next fence, leaves its effects unconfirmed, and writes no "did not finish" reply', async () => {
+it('stops a running turn, aborting its model request, leaves its effects unconfirmed, and writes no "did not finish" reply', async () => {
   const name = 'app-stop-running';
   await withOwner(name, async (owner, state) => {
     const id = await send(owner, name, 'stop-client-0001', 'QA: please answer slowly');
@@ -67,6 +65,7 @@ it('stops a running turn at its next fence, leaves its effects unconfirmed, and 
     const stopped = await cancel(owner, name, 'stop-client-0001');
     expect(stopped.status).toBe(200);
     expect(appMessageReceiptV1Schema.parse(await stopped.json())).toEqual({ accepted: true, message_id: id, state: 'interrupted', closed_reason: 'cancelled', effects_unconfirmed: true });
+    expect(gate.signal?.aborted).toBe(true);
     gate.release!();
     await vi.waitFor(() => expect((owner as unknown as { activeApp: unknown }).activeApp).toBeNull(), { timeout: 10_000, interval: 20 });
     expect(record(state, id)).toMatchObject({ state: 'interrupted', effectsUnconfirmed: true });
