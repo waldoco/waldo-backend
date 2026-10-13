@@ -62,3 +62,19 @@ it('the read_drive tool hands Sheet CSV to the model and says it is the first sh
  const out=await h.handle(readDriveArgsSchema.parse({action:'content',file_id:id,connection_id:'selected',expected_modified_time:at}),ctx as never);
  expect(out).toMatchObject({ok:true,data:{contentMimeType:'text/csv',text:'Month,Spend\nJan,120\n'}});
 });
+
+it('a file on a shared drive is read across shared drives: the metadata before, the download and the version check after',async()=>{
+ const f=content('text/plain','Shared notes','text/plain');
+ expect(await f.client.driveReadFileContent({fileId:id,expectedModifiedTime:at})).toMatchObject({text:'Shared notes'});
+ expect(f.urls.map(url=>[url.searchParams.get('alt'),url.searchParams.get('supportsAllDrives')])).toEqual([[null,'true'],['media','true'],[null,'true']]);
+});
+
+it('the read_drive tool refuses content whose type is not the export its file calls for, whatever the connector says',async()=>{
+ const file={id,name:'Budget',mimeType:'application/vnd.google-apps.spreadsheet',modifiedTime:at,webViewLink:null,size:null};
+ const account={connection_id:'selected',email:null};
+ const result={file,text:'Month,Spend',contentMimeType:'text/plain' as const,version:'4',truncated:false,returnedBytes:11,observedAt:at};
+ const h=readDriveHandler({client:async()=>({account,driveReadFileContent:async()=>result}) as unknown as GoogleClient},true,true);
+ const ctx={authenticatedUserId:'owner',turnId:'t',trigger:'user_message' as const,session:buildSessionState({trigger:'user_message',canary_tokens:['1111111111111111','2222222222222222','3333333333333333'],started_at:1}),hasApproval:()=>false,sourceTaint:null,toolArgSourceTaint:null,sanitise};
+ expect(await h.handle(readDriveArgsSchema.parse({action:'content',file_id:id,connection_id:'selected',expected_modified_time:at}),ctx as never))
+  .toEqual({ok:false,code:'rejected',error:'Invalid Google Drive content response.',source_taint:'external'});
+});
