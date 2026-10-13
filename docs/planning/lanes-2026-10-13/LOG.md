@@ -1354,3 +1354,19 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **Waiting for CI:** app #106 (`3595c8c1`; merge on green once the merge shows only main's files), app #111 (Patrol and Spots as Settings rows, `949b63ae`), and app #110 (the Watch).
 - **#1114:** back with Connectors (fifth FAIL), with the structural fix direction.
 - **Connectors rulings sent:** the backend owns the approval vocabulary (A); RSVP after the calendar-move exit; the meeting-prep live check is parked (an attendee would receive an invite email), for the owner.
+
+## About 08:12Z: #1126 PASS, #109 FAIL, app #112 open, #1125 in review
+
+- **#1126 (the calendar-move card, `84bda213`): PASS.** No app.v1 schema change; text only. The merge is held until the owner deploys `917032a1`, then it merges with #1123 (both after the advisor). Notes for the PR:
+  - add a negative readback test (marker set, instant off, "Outcome unknown");
+  - fix the wording across midnight;
+  - say when an all-day event becomes timed;
+  - the date-only edge case.
+- **App #109 (N4): FAIL.** A wake on a running app uses cached consent rows, not the server's live answer, so a withdrawal elsewhere still leads to one read and upload. Back with the N4 lane, with the fix (reload consent before any wake read, plus a test).
+- **#1125** (the contract-only `sleep_debt` optional key, `3601fe76`): review running. Its merge is held until after the deploy.
+- **#1127** (L5's `sleep_debt` migration): CI is re-running after a CASE-in-IF fix. It needs the owner.
+- **App #112** (the Overview, stacked on #106, `70a19431`): review after #106 merges and #112 is retargeted to main.
+- **L4's A, B and D shapes** are posted on #1103 (6141231799).
+- **L4's Simulator findings:**
+  1. The Brief card is gone from Home on the shared account. The suspicion is #108's `timezone_confirmed === false` gate with an unconfirmed zone. L4 is checking.
+  2. Approvals that expired days ago are still served as `open`. Sent to Connectors: adopt or rebuild the local branch `l3/approval-expiry-on-read` (93de9d5d).
