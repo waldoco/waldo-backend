@@ -171,9 +171,10 @@ describe('day-plan memory budget', () => {
 
   it('does not impose a fact-count cap when all facts fit', async () => {
     await withMemory('day-plan-no-count-cap', (store) => {
-      for (let i = 0; i < 250; i++) add(store, `Routine ${i}`);
+      // 120 short facts fill most of the uncurated profile's two block budgets (1,500 + 2,500 characters).
+      for (let i = 0; i < 120; i++) add(store, `Routine ${i}`);
       const content = composeDayPlanInput(input, store);
-      for (let i = 0; i < 250; i++) expect(content).toContain(`- [owner-grounded] Routine ${i}\n`);
+      for (let i = 0; i < 120; i++) expect(content).toContain(`- [owner-grounded] Routine ${i}\n`);
       expect(content).not.toContain('older owner facts are not shown here');
       expect(wireSize(content)).toBeLessThanOrEqual(limit);
     });

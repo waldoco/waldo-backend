@@ -1015,7 +1015,7 @@ export const memoryPrompt = (store: ClaimStore): string => {
     'Profile, built only from what the owner said or confirmed:',
     ...profile(claims).map((section) => `<profile section="${section.title}">\n${section.lines.map(fence).join('\n')}\n</profile>`),
     'Claims. stated = the owner said it; confirmed = the owner agreed with Waldo\'s read; inferred = Waldo\'s read, offer it as such. An unverified provenance label means a legacy claim, not an authenticated quote.',
-    ...claims.map((claim) => `<claim id="${claim.id}" kind="${claim.kind}" source="${claim.source}" provenance="${claim.verification_status ?? 'unverified'}" seen="${claim.seen_count}" last="${claim.last_seen_at.slice(0, 10)}">${fence(claim.text)} | evidence${evidenceLabel(claim)}: ${fence(claim.evidence)}${claim.source_ref ? ` | source ref: ${fence(claim.source_ref)}` : ''}</claim>`),
+    ...claims.map((claim) => `<claim id="${claim.id}" kind="${claim.kind}" source="${claim.source}" provenance="${claim.verification_status ?? 'unverified'}" seen="${claim.seen_count}" last="${claim.last_seen_at.slice(0, 10)}"${claim.pinned ? ` pinned="${claim.pinned}" order="${claim.pin_order ?? 0}"` : ''}>${fence(claim.text)} | evidence${evidenceLabel(claim)}: ${fence(claim.evidence)}${claim.source_ref ? ` | source ref: ${fence(claim.source_ref)}` : ''}</claim>`),
     ...nodes.map((node) => `<node id="${node.id}" domain="${node.domain}" strength="${node.strength}">${fence(node.label)}: ${fence(node.summary)}</node>`),
     ...store.edges().filter((edge) => byId.has(edge.from_id) && byId.has(edge.to_id)).map((edge) => `<edge>${fence(byId.get(edge.from_id)!)} ${edge.relation} ${fence(byId.get(edge.to_id)!)} (strength ${edge.strength})</edge>`),
   ].join('\n');
@@ -1099,10 +1099,19 @@ export const MEMORY_INSTRUCTION = [
   'Most exchanges add nothing; reply with empty lists then.',
 ].join('\n');
 
+const PIN_RULES = [
+  'Two pinned blocks are shown to Waldo on every turn; every other claim stays in memory and is found by search when a message needs it. Curate the blocks with pin and unpin.',
+  `owner_profile, up to ${PROFILE_BLOCK_MAX_CHARS} characters: who the owner is, their stable preferences and routines, and how much autonomy they give Waldo.`,
+  `owner_facts, up to ${FACTS_BLOCK_MAX_CHARS} characters: standing decisions, and the people and places the owner relies on.`,
+  'Only owner-grounded claims of kind fact, preference, routine, goal or health can be pinned. pin sets a claim\'s block and its order (lower comes first); pinning a pinned claim moves or reorders it. unpin takes a claim out of its block, never out of memory.',
+  'Keep each block within its budget: pin what Waldo needs on most days, and unpin what has gone stale. While nothing is pinned, Waldo shows the newest claims instead.',
+];
+
 export const NIGHTLY_MEMORY_INSTRUCTION = [
   'It is night. Review the last day of conversation between the owner and Waldo and bring the claims up to date.',
   'Add what the day showed that is still missing, mark claims the day repeated as seen, and dismiss follow-ups that are settled.',
   ...CLAIM_RULES,
+  ...PIN_RULES,
 ].join('\n');
 
 export const MIGRATION_INSTRUCTION = [
@@ -1112,10 +1121,11 @@ export const MIGRATION_INSTRUCTION = [
   'Skip anything an existing claim already covers, and anything the owner asked to forget.',
   ...CLAIM_RULES.slice(1, 2),
   'corrections, seen, confirm, dismiss, forget_claims and forget_nodes stay empty and forget_topic is null.',
+  'pin and unpin stay empty.',
 ].join('\n');
 
 export const CLAIM_OPS_SCHEMA = {
-  type: 'object', additionalProperties: false, required: ['add', 'corrections', 'seen', 'confirm', 'dismiss', 'forget_claims', 'forget_nodes', 'forget_topic'],
+  type: 'object', additionalProperties: false, required: ['add', 'corrections', 'seen', 'confirm', 'dismiss', 'forget_claims', 'forget_nodes', 'forget_topic', 'pin', 'unpin'],
   properties: {
     add: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['kind', 'text', 'source', 'evidence', 'touches_forgotten', 'aliases', 'aliases_touch_forgotten'],
       properties: { kind: { type: 'string', enum: [...CLAIM_KINDS] }, text: { type: 'string' }, source: { type: 'string', enum: ['stated', 'inferred'] }, evidence: { type: 'string' }, touches_forgotten: { type: 'boolean' }, aliases_touch_forgotten: { type: 'boolean' }, aliases: { type: 'array', maxItems: MAX_ALIASES, items: { type: 'string' } } } } },
@@ -1126,6 +1136,8 @@ export const CLAIM_OPS_SCHEMA = {
     forget_claims: { type: 'array', items: { type: 'integer' } },
     forget_nodes: { type: 'array', items: { type: 'integer' } },
     forget_topic: { type: ['string', 'null'] },
+    pin: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['id', 'block', 'order'], properties: { id: { type: 'integer' }, block: { type: 'string', enum: [...PIN_BLOCKS] }, order: { type: 'integer' } } } },
+    unpin: { type: 'array', items: { type: 'integer' } },
   },
 };
 
@@ -1134,8 +1146,18 @@ export const exchangeInput = (store: ClaimStore, owner: string, shared: string, 
   `<owner>\n${fence(owner)}\n</owner>`, ...(shared ? [`<shared_content>\n${fence(shared)}\n</shared_content>`] : []), `<waldo>\n${fence(reply)}\n</waldo>`,
 ].join('\n\n');
 
+// How full each pinned block is, measured as a turn renders it: the model cannot count characters, and the budget is in them.
+const pinnedUsage = (store: ClaimStore): string => {
+  const eligible = [...store.claims(), ...store.claims('promoted')].filter(profileEligible);
+  const usage = ([['owner_profile', 'profile', PROFILE_BLOCK_MAX_CHARS], ['owner_facts', 'facts', FACTS_BLOCK_MAX_CHARS]] as const).map(([tag, block, budget]) => {
+    const lines = pinnedIn(eligible, block).map(profileLine);
+    return `${tag}: ${lines.length} pinned, ${lines.join('\n').length} of ${budget} characters`;
+  });
+  return `Pinned blocks now: ${usage.join('; ')}.`;
+};
+
 export const nightlyInput = (store: ClaimStore, day: string): string =>
-  [memoryPrompt(store), barrierPrompt(store), `The last day of conversation:\n<conversation>\n${fence(day)}\n</conversation>`].join('\n\n');
+  [memoryPrompt(store), barrierPrompt(store), pinnedUsage(store), `The last day of conversation:\n<conversation>\n${fence(day)}\n</conversation>`].join('\n\n');
 
 // Slice 4 admission gate: candidate claims are grounded against the exchange sections before
 // admission. 'stated' must ground in the owner's own words; evidence that only matches Waldo's
@@ -1174,10 +1196,15 @@ export const ground = (evidence: string, sections: ClaimGrounding): GroundingVer
 };
 
 const refForCorrection = (evidence: string): string | undefined => /^owner, tg-[\w-]+$/.test(evidence) ? evidence : undefined;
-type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolean; aliases_touch_forgotten?: boolean })[]; corrections?: readonly { old_id: number; kind: string; text: string; evidence: string }[]; seen: readonly number[]; confirm: readonly number[]; dismiss: readonly number[]; forget_claims: readonly number[]; forget_nodes: readonly number[]; forget_topic: string | null }>;
+// pin and unpin are unknown[]: older replies and fixtures omit them, and each entry is checked before it is applied.
+type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolean; aliases_touch_forgotten?: boolean })[]; corrections?: readonly { old_id: number; kind: string; text: string; evidence: string }[]; seen: readonly number[]; confirm: readonly number[]; dismiss: readonly number[]; forget_claims: readonly number[]; forget_nodes: readonly number[]; forget_topic: string | null; pin?: readonly unknown[]; unpin?: readonly unknown[] }>;
+const pinOp = (value: unknown): value is Readonly<{ id: number; block: PinBlock; order: number }> => {
+  const op = value as { id?: unknown; block?: unknown; order?: unknown } | null;
+  return typeof op === 'object' && op !== null && Number.isSafeInteger(op.id) && PIN_BLOCKS.includes(op.block as PinBlock) && Number.isSafeInteger(op.order);
+};
 
 // What this application of claim ops actually did, as counts the caller can report truthfully.
-export type ClaimOutcome = Readonly<{ written: number; held: number; holdReasons: readonly string[]; downgraded: number; corrected: number; confirmed: number; dismissed: number; forgetClaimsAttempted: number; forgetClaimsRemoved: number; forgetNodes: number; forgetAllowed: boolean; purgeIncomplete: readonly string[]; episodesRedacted?: number }>;
+export type ClaimOutcome = Readonly<{ written: number; held: number; holdReasons: readonly string[]; downgraded: number; corrected: number; confirmed: number; dismissed: number; forgetClaimsAttempted: number; forgetClaimsRemoved: number; forgetNodes: number; forgetAllowed: boolean; purgeIncomplete: readonly string[]; episodesRedacted?: number; pinned: number; unpinned: number }>;
 export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed', onPurged?: (texts: readonly string[], ids: readonly number[], topics?: readonly string[]) => void, grounding?: ClaimGrounding, forgetAllowed?: boolean, onOutcome?: (outcome: ClaimOutcome) => void): string => {
   // Background extraction does not infer permission for destructive effects.
   const forgetsAllowed = forgetAllowed === true;
@@ -1284,6 +1311,12 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     }
   }
   for (const id of forgetsAllowed ? ops.forget_nodes.filter((id) => nodes.has(id)) : []) store.forgetNode(id);
+  // Curation of the pinned blocks, after this reply's dismissals and forgets so a retired claim is never pinned. Unpins land
+  // first, so an unpin and a pin of the same claim is a move.
+  let unpinned = 0;
+  for (const id of new Set(ops.unpin ?? [])) if (Number.isSafeInteger(id) && store.unpin(id as number)) unpinned += 1;
+  let pinned = 0;
+  for (const pin of (ops.pin ?? []).filter(pinOp)) if (store.pin(pin.id, pin.block, pin.order)) pinned += 1;
   const leftover = purge ? [...Object.keys(purge.remaining), ...purge.failed.map((store) => `${store}(failed)`)] : [];
   onOutcome?.({
     written, held: held.length + heldCorrections, holdReasons: [...holdReasons], downgraded, corrected: corrected.size,
@@ -1292,11 +1325,11 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     // Unique ids, so a repeated id counts once; removed only when every store verified clean.
     forgetClaimsAttempted: new Set(forgetIds).size, forgetClaimsRemoved: purge?.ready ? new Set(forgetIds).size : 0,
     forgetNodes: forgetsAllowed ? new Set(ops.forget_nodes.filter((id) => nodes.has(id))).size : 0,
-    forgetAllowed: forgetsAllowed, purgeIncomplete: leftover, episodesRedacted: purge?.receipt.redacted.episodes ?? 0,
+    forgetAllowed: forgetsAllowed, purgeIncomplete: leftover, episodesRedacted: purge?.receipt.redacted.episodes ?? 0, pinned, unpinned,
   });
   const reasons = holdReasons.size ? `(${[...holdReasons].join(',')})` : '';
   const blockedForgets = forgetsAllowed ? 0 : ops.forget_claims.length + ops.forget_nodes.length + (ops.forget_topic?.trim() ? 1 : 0);
-  return `+${written} held${held.length + heldCorrections}${reasons} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${ops.dismiss.length} forgot${forgetIds.length + (forgetsAllowed ? ops.forget_nodes.length : 0)}${blockedForgets ? ` forget-blocked${blockedForgets}(no-intent)` : ''}${downgraded ? ` downgraded${downgraded}` : ''}${corrected.size ? ` corrected${corrected.size}` : ''}${topic ? ' barrier' : ''}${purge ? (leftover.length ? ` purge-incomplete:${leftover.join(',')}` : ' purged') : ''}`;
+  return `+${written} held${held.length + heldCorrections}${reasons} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${ops.dismiss.length} forgot${forgetIds.length + (forgetsAllowed ? ops.forget_nodes.length : 0)}${blockedForgets ? ` forget-blocked${blockedForgets}(no-intent)` : ''}${downgraded ? ` downgraded${downgraded}` : ''}${corrected.size ? ` corrected${corrected.size}` : ''}${pinned ? ` pinned${pinned}` : ''}${unpinned ? ` unpinned${unpinned}` : ''}${topic ? ' barrier' : ''}${purge ? (leftover.length ? ` purge-incomplete:${leftover.join(',')}` : ' purged') : ''}`;
 };
 
 export const PROMOTION_INSTRUCTION = [
