@@ -844,3 +844,10 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - **The Brief row** uses `cards[].latest` when it's present, and otherwise claims nothing the server hasn't said. "Fill `latest`" was asked of the backend builder on #1103 (6137537343).
   - **R3:** the four Home placeholders are removed, including the Patrol and Spots cards. The names, screens and menu rows are kept.
 - **Also in review:** app #103 (the follow-up).
+
+## 03:37Z: app #103 merged
+
+- **Merged app #103** (the follow-up).
+  - **What it changes:** the pending bubble reads "Unconfirmed", "New draft" replaces "New local draft", and a draft's header reads "Draft · not sent". State words come from the schema options, checked with strict equality, and `keptTime` is the one time rule.
+  - **Gate:** the review's two items were checked by hand at `40bcdfe7`: a negative test that Main chat never shows "Draft · not sent", and a reworded comment. CI passed, and the merge state is CLEAN.
+- **The App lane's next item:** the Home Brief row and R3. The row follows the latest delivered scheduled message by `delivered_at`; without it, the lines come only from `sent` and the schedule.
