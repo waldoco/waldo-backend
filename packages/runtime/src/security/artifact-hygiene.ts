@@ -18,9 +18,11 @@ export type Quarantine = Readonly<{
 
 export const artifactMarker = (kind: ArtifactKind): string => `[quarantined: ${kind} artifact - view in the source app]`;
 
-// A code is digits only: 4-8 plain digits ("123456") or the split form ("123-456"). Alphanumeric
-// order/tracking ids never match.
-const CODE = String.raw`(?:\d{3}-\d{3}|\d{4,8})`;
+// A code is digits only: 4-8 plain digits ("123456"), the split form ("123-456", "123 456"), or one digit
+// per space ("1 2 3 4 5 6"), as mail laid out in table cells renders. Alphanumeric order/tracking ids never match.
+const CODE = String.raw`(?:\d{3}[- \u00a0]\d{3}|\d(?:[ \u00a0]\d){3,7}|\d{4,8})`;
+// The keyword may run straight into the code ("Verification code482913") when its table cell had no separator.
+const KEYWORD_END = String.raw`(?![a-z])`;
 
 // URL boundary: stop at whitespace or the punctuation that commonly wraps a pasted link.
 const URL_TAIL = String.raw`[^\s"'<>)\]]*`;
@@ -37,10 +39,10 @@ const PATTERNS: ReadonlyArray<{ kind: ArtifactKind; re: RegExp }> = [
   // "Your Google verification code is 123456", "login code: 123-456", "security code 123456".
   {
     kind: 'otp',
-    re: new RegExp(String.raw`\b[\w-]*\s?(?:verification|one[- ]?time|login|log[- ]?in|sign[- ]?in|security|authentication|confirmation|access)\s+(?:code|passcode|pin|otp)\b\s*(?:is|:|-)?\s*#?\s*` + CODE + String.raw`\b`, 'gi'),
+    re: new RegExp(String.raw`\b[\w-]*\s?(?:verification|one[- ]?time|login|log[- ]?in|sign[- ]?in|security|authentication|confirmation|access)\s+(?:code|passcode|pin|otp)` + KEYWORD_END + String.raw`\s*(?:is|:|-)?\s*#?\s*` + CODE + String.raw`\b`, 'gi'),
   },
   // "code: 123456", "OTP: 123456", "passcode is 123456" - the bare form, no vendor adjective needed.
-  { kind: 'otp', re: new RegExp(String.raw`\b(?:code|otp|passcode)\b\s*(?:is|:)?\s*#?\s*` + CODE + String.raw`\b`, 'gi') },
+  { kind: 'otp', re: new RegExp(String.raw`\b(?:code|otp|passcode)` + KEYWORD_END + String.raw`\s*(?:is|:)?\s*#?\s*` + CODE + String.raw`\b`, 'gi') },
   // Google's SMS/mail prefix form runs first: "G-123456 is your Google verification code" would
   // otherwise lose its prefix to the generic "is your" pattern below before extraction sees it.
   { kind: 'otp', re: new RegExp(String.raw`\bG-\d{6}\b`, 'g') },
@@ -72,7 +74,7 @@ export const extractArtifacts = (text: string): { text: string; artifacts: reado
       // OTP patterns match the surrounding phrase ("Your login code is 123456"); the relay value
       // is the code itself. Links relay whole. The G- prefix form must be tried first - its six
       // digits would otherwise match the plain-digit alternative.
-      const value = kind === 'otp' ? (match.match(/G-\d{6}|\d{3}-\d{3}|\d{4,8}/)?.[0] ?? match) : match;
+      const value = kind === 'otp' ? (match.match(/G-\d{6}|\d{3}-\d{3}|\d{3}[ \u00a0]\d{3}|\d(?:[ \u00a0]\d){3,7}|\d{4,8}/)?.[0]?.replace(/[ \u00a0]/g, '') ?? match) : match;
       if (!seen.has(value)) {
         seen.add(value);
         artifacts.push({ kind, value });
