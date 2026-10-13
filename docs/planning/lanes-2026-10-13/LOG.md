@@ -1948,3 +1948,38 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
   - migrations #1127 and #1133;
   - the #1120 binding;
   - the #1147 steps.
+
+## 13:15Z (from `date -u`): app batch merged; review queue; open blockers; backend handed to the cloud
+
+- **Time correction:** four #1103 comments carried guessed stamps; their real `created_at` times are:
+  - the resume post "about 12:58Z" (6146016905) was 12:54:46Z;
+  - the receipt-line blocker "about 13:10Z" (6146160503) was 13:02:34Z;
+  - the division post "about 13:15Z" (6146274220) was 13:08:42Z;
+  - the emit-timing correction "about 13:30Z" (6146392114) was 13:15:01Z, ahead of the clock.
+
+  From here on, stamps come only from `date -u` or `created_at`.
+- **App merged** (independent PASS, green CI, one batch advisor check, pinned heads):
+  - #119 `a54a9414` (controls and health-ingest re-pin from `a94d7fa5`);
+  - #122 `93c537f1` ("Done" label);
+  - #123 `f4b65478` (consent follow-ups).
+
+  App `main` is `f4b65478`. Each PR has its notes.
+- **#121 FAIL:** for `message_send`, the "To:" line prints the channel name, because the backend sets `to: [p.channel]` (`approvals.ts:192`). It goes back to L4 with the fix.
+- **Review queue,** two reviewers at a time:
+  1. #124 then #125, after `main` is merged in, with a byte re-check;
+  2. #127, after the change to an exact-line hide;
+  3. #128;
+  4. #126 (canonical zone);
+  5. #129 (Patrol) and #130 (Spots), which overlap in `settings.tsx`;
+  6. #115 (Watch scores, the big one);
+  7. #117, after #125 is rebased; #121, after its fix.
+- **Open blockers for any staging deploy that includes them:**
+  - **#1139:** the receipt line must stay in `text` (6146160503);
+  - **the #1140 emit half:** it waits until an app build with #125 and #128 runs on the Air and the lane Simulators, because approvals are read strictly (6146392114);
+  - the emitter check must widen to scores, approvals, session and actions.
+
+  The OwnerDO `v6` makes the next deploy forward-only.
+- **Owner's division** (6146274220): all backend implementation goes to the cloud sessions (the backend lead, Ansh's builder and Google lanes). L5 and Connectors push their work in progress, post handoffs and pause. This account spends on the app, testing, reviews, merges and deploy prep.
+- **N4's #126:** sends the canonical device zone, not the saved zone. The batch labels hours in the zone they were recorded in, and the saved zone governs scheduling. This corrects the orchestrator's earlier wording to the owner.
+- **Mac disk is at 5.8 GB, under the floor,** so there are no builds. Proofs come from tests and CI until the owner frees space (OWNER STEP).
+- **Research running:** the Waldo-versus-Instinct capability gap with a 20-task test set, and an agent UX/HCI review. Results go to `docs/research/`, with backend items for the cloud lanes.
