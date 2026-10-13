@@ -57,6 +57,14 @@ describe('the extractor', () => {
     ['Your code is 48\u206029\u206013', '482913'],
     ['Your code is 4\u00ad8\u00ad2\u00ad9\u00ad1\u00ad3', '482913'],
     ['Your code is 4 \u200b 8 \u200b 2 \u200b 9 \u200b 1 \u200b 3', '482913'],
+    // Direction marks, isolates and the combining grapheme joiner render nothing too. A keyword split by one still
+    // reads whole, and digits joined only by them read as one run when it is no longer than a code.
+    ['Your code is 482\u200e913', '482913'],
+    ['Your code is 48\u206629\u206913', '482913'],
+    ['Your code is 4\u034f8\u034f2\u034f9\u034f1\u034f3', '482913'],
+    ['Your co\u200bde is 482913', '482913'],
+    ['45\u00ad53\u00ad6\u00ad6 is your code', '455366'],
+    ['2\u00ad4\u00ad9\u00ad6\u00ad912\u00ad4 is your code', '24969124'],
     // Uneven and hyphenated splits. A hyphenated code relays as written, like "123-456".
     ['Your code is 4829 13', '482913'],
     ['Your code is 48 2913', '482913'],
@@ -82,6 +90,14 @@ describe('the extractor', () => {
     ['Your code 482913 10 minutes', 'Your [quarantined: otp artifact - view in the source app] 10 minutes', '482913'],
     ['Total: $12.99\n092893 is your log-in code.', 'Total: $12.99\n[quarantined: otp artifact - view in the source app].', '092893'],
     ['482913 is your verification codeValid for 10 minutes', '[quarantined: otp artifact - view in the source app]Valid for 10 minutes', '482913'],
+    // A longer run joined only by invisible characters is split at them, so a code never joins the digits beside it.
+    ['Your code is 482913\u200b2026', 'Your [quarantined: otp artifact - view in the source app] 2026', '482913'],
+    ['2026\u200b482913 is your code', '2026 [quarantined: otp artifact - view in the source app]', '482913'],
+    ['Your code is 482913\u200c2026 Acme', 'Your [quarantined: otp artifact - view in the source app] 2026 Acme', '482913'],
+    // Before "is your", a split starts at a word boundary, so it never takes digits from a token like "Acme2024".
+    ['Acme2024 5209 is your sign-in code', 'Acme2024 [quarantined: otp artifact - view in the source app]', '5209'],
+    ['Card ending x1234\n5209 is your verification code', 'Card ending x1234\n[quarantined: otp artifact - view in the source app]', '5209'],
+    ['Account AB12\n48 29 13 is your code', 'Account AB12\n[quarantined: otp artifact - view in the source app]', '482913'],
   ])('relays the code exactly when other digits are near it: %s', (text, shown, code) => {
     expect(extractArtifacts(text)).toEqual({ text: shown, artifacts: [{ kind: 'otp', value: code }] });
   });

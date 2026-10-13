@@ -22,16 +22,28 @@ export const artifactMarker = (kind: ArtifactKind): string => `[quarantined: ${k
 // any size. The even splits come first, so they relay exactly; after a keyword, then any split whose first group
 // has at most four digits, joined up to eight; then the plain run. So "1234 5678" is never cut to "1234", and
 // "482913 10" stays "482913". A code ends where no digit follows, so text glued after it ("482913Expires") never
-// hides it. Alphanumeric order/tracking ids never match.
+// hides it. Digits after a keyword, or before "is your … code", are taken as a code whatever they are: catching a
+// code comes before relaying it accurately, so an id or a date there is quarantined too.
 // Extraction first turns each whitespace run into one space or one newline, so a gap is one character. A gap may be
 // a newline, so a code can join digits that start the next row: the code stays hidden and the relay carries them.
 const GAP = String.raw`[ \n]`;
 const SEP = String.raw`(?:-|${GAP})`;
 const EVEN = String.raw`\d{3}${SEP}\d{3}|\d{4}${SEP}\d{4}|\d{2}(?:${GAP}\d{2}){1,3}|\d(?:${GAP}\d){3,7}`;
 const CODE = String.raw`(?<code>${EVEN}|(?=\d{1,4}${SEP}\d)\d(?:${SEP}?\d){3,7}|\d{4,8})(?!\d)`;
-// Before "is your", nothing anchors where a code starts, and an uneven split would reach back into digits ending the
-// line before ("$12.99" then "092893 is your code" relayed 99092893). Even splits and the plain run only.
-const CODE_BEFORE = String.raw`(?<code>${EVEN}|\d{4,8})(?!\d)`;
+// Before "is your", nothing anchors where a code starts. An uneven split would reach back into digits ending the line
+// before ("$12.99" then "092893 is your code" relayed 99092893), so only even splits and the plain run apply. A split
+// starts at a word boundary, so it never takes digits from a token like "Acme2024"; a plain run may start right
+// after a word ("Hello482913 is your code").
+const CODE_BEFORE = String.raw`(?<code>\b(?:${EVEN})|\d{4,8})(?!\d)`;
+// Characters that render nothing: the soft hyphen, the combining grapheme joiner, zero-width spaces and joiners,
+// direction marks, embeddings and isolates, the word joiner and invisible operators. Digits joined only by them read as one run when the run is no
+// longer than a code ("45­53­6­6"); a longer run is split at them, so a code never joins the digits beside it
+// ("482913​2026"). Anywhere else they are dropped, so a keyword they split still reads whole.
+const INVISIBLE = String.raw`[\u00ad\u034f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069]`;
+// It starts only where a digit run starts: tried from inside a long run, it backtracked quadratically.
+const INVISIBLE_SPLIT_DIGITS = new RegExp(String.raw`(?<!\d)\d+(?:${INVISIBLE}+\d+)+`, 'g');
+const INVISIBLE_ANYWHERE = new RegExp(`${INVISIBLE}+`, 'g');
+const CODE_MAX_DIGITS = 8;
 // The keyword may run straight into the code ("Verification code482913") when its table cell had no separator.
 const KEYWORD_END = String.raw`(?![a-z])`;
 
@@ -101,11 +113,10 @@ export const extractArtifacts = (text: string): { text: string; artifacts: reado
     }
     return artifactMarker(kind);
   };
-  // Invisible characters go first: zero-width spaces and joiners, the word joiner and the soft hyphen split a code
-  // without showing. Then each whitespace run becomes one character: a newline if it breaks a line, else a space.
-  // That bounds every gap a code can be split by, whatever the source formatting. Text with no artifact comes back
-  // untouched.
-  const normalized = text.replace(/[\u00ad\u200b-\u200d\u2060]/g, '').replace(/\s+/g, (run) => (/[\n\r\u2028\u2029]/.test(run) ? '\n' : ' '));
+  // Invisible characters go first, then each whitespace run becomes one character: a newline if it breaks a line,
+  // else a space. That bounds every gap a code can be split by, whatever the source formatting. Text with no artifact
+  // comes back untouched.
+  const normalized = text.replace(INVISIBLE_SPLIT_DIGITS, (run) => run.replace(INVISIBLE_ANYWHERE, run.replace(INVISIBLE_ANYWHERE, '').length > CODE_MAX_DIGITS ? ' ' : '')).replace(INVISIBLE_ANYWHERE, '').replace(/\s+/g, (run) => (/[\n\r\u2028\u2029]/.test(run) ? '\n' : ' '));
   // Links relay whole; the first matching kind names the run.
   let redacted = normalized.replace(URL_RUN, (url) => {
     const link = LINKS.find(({ re }) => re.test(url));

@@ -21,6 +21,8 @@ describe('artifact extraction on hostile text', () => {
     ['a keyword, then digits between long CRLF runs', 'code ' + ('1' + ' \r\n'.repeat(50)).repeat(N / 151)],
     ['a keyword, then digits between newline-and-indentation runs', 'code' + ('\n' + ' '.repeat(40) + '1').repeat(N / 42)],
     ['a keyword, then digits between zero-width spaces', 'code ' + '1\u200b'.repeat(N / 2)],
+    ['long digit runs between zero-width spaces', ('1'.repeat(50) + '\u200b').repeat(N / 51) + 'a'],
+    ['digits and invisible characters in turn, then "is your"', '1\u200c'.repeat(N / 2) + ' is your code'],
     ['a keyword, then digits between soft hyphens and spaces', 'code ' + '1 \u00ad '.repeat(N / 4)],
     ['a keyword, then digits split by hyphens and spaces in turn', 'code ' + '1-1 '.repeat(N / 4)],
     ['uneven digit groups, then "is your"', '12 345 6789 '.repeat(N / 12) + 'is your code'],
