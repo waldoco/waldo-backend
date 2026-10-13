@@ -105,3 +105,9 @@ it('admitted plural loaded images reach the model in order without truncation', 
   expect(body).toContain('data:image/png;base64,Ag==');
   expect(body.indexOf('AQ==')).toBeLessThan(body.indexOf('Ag=='));
 });
+
+it('a surface chat is its own chain everywhere but the app, whose chain is the owner principal\'s', async () => {
+  const { ownerChainRef, surfaceChatRef } = await import('../src/context-composer/owner-turn');
+  expect([surfaceChatRef('telegram', 42), surfaceChatRef('whatsapp', '4915112345678'), surfaceChatRef('app', 7000000000001)]).toEqual(['telegram-42', 'whatsapp-4915112345678', 'app-7000000000001']);
+  expect([ownerChainRef('telegram', 42), ownerChainRef('whatsapp', 42), ownerChainRef('app', 'prn_abc')]).toEqual(['telegram-42', 'whatsapp-42', 'owner:prn_abc']);
+});
