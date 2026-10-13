@@ -10,6 +10,7 @@ const DAY_MS = 24 * 60 * 60_000;
 
 type Sql = Pick<SqlStorage, 'exec'>;
 export type CardPlan = Readonly<{ card: CardId; time: string | null; reason: string }>;
+export type CardState = 'pending' | 'held' | 'sent' | 'skipped';
 
 // The day_plan hop is whitelisted for the gated trace sinks, so its detail must stay
 // content-free: planned times reveal the owner's daily schedule, so the trace keeps the count.
@@ -24,6 +25,8 @@ export const dayPlanBook = (sql: Sql) => {
     day TEXT NOT NULL, card TEXT NOT NULL, time TEXT, reason TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (day, card))`);
   sql.exec('CREATE TABLE IF NOT EXISTS card_pins (card TEXT PRIMARY KEY, time TEXT NOT NULL)');
+  // Whether a finished card went out or was skipped. Cards finished before the column existed have none.
+  if (!sql.exec<{ name: string }>('PRAGMA table_info(day_plan)').toArray().some(column => column.name === 'outcome')) sql.exec('ALTER TABLE day_plan ADD COLUMN outcome TEXT');
   return {
     pins(): Readonly<Record<string, string>> {
       return Object.fromEntries(sql.exec<{ card: string; time: string }>('SELECT card, time FROM card_pins').toArray().map((row) => [row.card, row.time]));
@@ -32,10 +35,13 @@ export const dayPlanBook = (sql: Sql) => {
       if (time === null) sql.exec('DELETE FROM card_pins WHERE card = ?', card);
       else sql.exec('INSERT INTO card_pins (card, time) VALUES (?, ?) ON CONFLICT (card) DO UPDATE SET time = excluded.time', card, time);
     },
-    read(day: string): readonly Readonly<{ card: CardId; time: string | null; reason: string; sent: boolean }>[] {
-      return sql.exec<{ card: CardId; time: string | null; reason: string; sent: number }>(
-        'SELECT card, time, reason, sent FROM day_plan WHERE day = ? ORDER BY card', day,
-      ).toArray().map((row) => ({ ...row, sent: row.sent === 1 }));
+    read(day: string): readonly Readonly<{ card: CardId; time: string | null; reason: string; sent: boolean; state?: CardState }>[] {
+      return sql.exec<{ card: CardId; time: string | null; reason: string; sent: number; outcome: 'sent' | 'skipped' | null }>(
+        'SELECT card, time, reason, sent, outcome FROM day_plan WHERE day = ? ORDER BY card', day,
+      ).toArray().map(({ outcome, ...row }) => {
+        const state = row.sent === 1 ? outcome ?? undefined : row.sent === 2 ? 'held' : 'pending';
+        return { ...row, sent: row.sent === 1, ...(state ? { state } : {}) };
+      });
     },
     pending(day: string): readonly DayCard[] {
       const sent = new Set(this.read(day).filter((row) => row.sent).map((row) => row.card));
@@ -50,8 +56,17 @@ export const dayPlanBook = (sql: Sql) => {
     },
     sent(day: string, card: CardId): void {
       sql.exec(
-        `INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?, ?, NULL, 'sent', 1)
-         ON CONFLICT (day, card) DO UPDATE SET sent = 1`,
+        `INSERT INTO day_plan (day, card, time, reason, sent, outcome) VALUES (?, ?, NULL, 'sent', 1, 'sent')
+         ON CONFLICT (day, card) DO UPDATE SET sent = 1, outcome = 'sent'`,
+        day, card,
+      );
+    },
+    // A card that came due and sent nothing finishes for the day as skipped. A card that already finished keeps what it
+    // recorded, so a send is never turned into a skip and an unknown outcome is never turned into one.
+    skipped(day: string, card: CardId): void {
+      sql.exec(
+        `INSERT INTO day_plan (day, card, time, reason, sent, outcome) VALUES (?, ?, NULL, 'skipped', 1, 'skipped')
+         ON CONFLICT (day, card) DO UPDATE SET sent = 1, outcome = CASE WHEN day_plan.sent = 1 THEN day_plan.outcome ELSE 'skipped' END`,
         day, card,
       );
     },

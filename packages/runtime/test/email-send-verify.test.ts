@@ -19,7 +19,7 @@ const approve = async (name: string, client: Partial<GoogleClient>, withLedger =
   let ledgerState: string | undefined;
   let status: string | undefined;
   let waits = 0;
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const effects = withLedger ? ownerEffectLedger(state.storage, () => 1000) : undefined;
     const desk = approvalDesk(state.storage.sql, { owner: 42, call: async () => ({}), google: async () => client as GoogleClient, newId: () => 'one', now: () => 1000, timezone: 'UTC', log: (entry: Hop) => { hops.push(entry); }, wait: async () => { waits++; }, ...(effects ? { effects } : {}) });
     const raw = 'approved bytes';
