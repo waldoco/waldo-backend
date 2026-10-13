@@ -1662,3 +1662,19 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **expo-health trap (found by L4):** a worktree whose `expo-health` came from an install-time copy keeps the pre-#109 module. Typecheck then fails, and Xcode compiles the old native module, because `Podfile.lock` reads `../node_modules/expo-health/ios`. The fix is the recorded setup step: relink to `modules/health`, with no install and the lockfile untouched.
 - **Disk:** 7.4 GB free at 09:35Z, against a 6 GB floor. One Xcode build at a time: N4's Air build goes first, and L4 holds. Freeing more space is the owner's call.
 - **Connectors (L2):** the owner told L2 directly to start the calendar read bug now, before the 12:30Z reset. It's a read-only diagnosis from source, with no subagents. L2 asked the owner for the connector-proxy `calendarPage` log line (method, status and code only), and reports the root cause in one sentence before any fix.
+
+## 09:42Z (from `date -u`): #116 merged; one build for the Air and L4; usage 84%
+
+- **Time correction, extended:** "About 09:36Z: the handoff page is published" was also logged ahead of the 09:35:17Z `date -u` reading. The orchestrator's message to N4 also said "#116 merged at 09:43Z"; the merge actually happened between the 09:41:05Z CI reading and 09:42:55Z.
+- **App #116 merged** at `7e09317c`, pinned to `ea6bb420`.
+  - The orchestrator's re-review PASS is on the PR (6142745783). Against main, #116's added and removed lines match the reviewed `5e77138e` line for line except the fixed comment. The rest is clean merges of main.
+  - CI was green on the combined tree, with an advisor check before the merge.
+  - The merge commit's tree equals `ea6bb420`'s (`75696232`), so that CI run tested exactly the new main.
+- **The Air build is main at `7e09317c`**, done by N4. The local typecheck and test step is dropped, because CI ran on the identical tree. The expo-health symlink check and the read-only consent check stay.
+- **L4** installs N4's `.app` with `simctl install` for the #116 tabs proof and the zone record. There is no second build.
+- **Build note from L4:** main from `481411c5` on carries the Watch privacy manifest. The old pod-install pbxproj patch no longer applies, so builds go straight from main.
+- **Usage was 84% at about 09:41Z** (get_usage); it resets at 12:30Z. The rise from 77% at 09:26Z includes the 266k-token review subagent, so the steady rate is probably lower [inference].
+  - Paused until 12:30Z: L4, with nothing mid-edit.
+  - Running: N4 (the Air build), Connectors (on the owner's direct go) and the orchestrator's merge gate.
+  - No reviewers until the next measurement, at about 09:52Z.
+- **App #122 opened by L4** (head `5705940e`): the `done` state reads "Done" instead of "Confirmed"; `outcome_unknown` stays "Unconfirmed". It's 4 files and 9 lines: check exit 0, 909 tests passed, 4 of 4 deliberate faults caught. Its review waits for usage.
