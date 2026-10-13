@@ -21,7 +21,7 @@ export type AppInboxRecord = {
   owner: string; sessionHash: string; conversationRef: string; admittedAt: number;
   state: 'admitted' | 'running' | 'completed' | 'interrupted' | 'revoked';
   attempt?: string; deadline?: number; closedAt?: number;
-  closedReason?: 'interrupted' | 'session_revoked'; effectsUnconfirmed?: boolean;
+  closedReason?: 'interrupted' | 'session_revoked' | 'cancelled'; effectsUnconfirmed?: boolean;
   // An interrupted turn owes the owner a "did not finish" reply in their transcript: due until written, or dropped
   // when the directory no longer admits the account.
   notice?: 'due' | 'written' | 'dropped';
@@ -85,11 +85,25 @@ export class AppInbox {
       for(const row of this.records()){
         if(row.sessionHash!==sessionHash||(row.state!=='admitted'&&row.state!=='running'))continue;
         const ran=row.state==='running';
-        row.state='revoked';row.closedReason='session_revoked';row.effectsUnconfirmed=ran;row.closedAt=this.now();clear(row);
+        row.state='revoked';row.closedReason='session_revoked';row.effectsUnconfirmed=ran;row.closedAt=this.now();clear(row);delete row.landed;
         this.storage.kv.put(PREFIX+row.id,row);fenced+=1;
       }
       this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.records(),this.now()));
       return fenced;
+    });
+  }
+  // The owner stops a message. A running attempt is closed here first, so its scope throws at its next admit and the
+  // drain's settle finds nothing left to flip; an admitted message never runs. Neither owes a "did not finish" reply:
+  // the owner asked for the stop. An effect dispatched before the stop stays unconfirmed. A closed row returns as it is.
+  cancel(owner:string,clientId:string):AppInboxRecord|null {
+    return this.storage.transactionSync(()=>{
+      const row=this.records().find(row=>row.owner===owner&&row.clientId===clientId);
+      if(!row)return null;
+      if(row.state!=='admitted'&&row.state!=='running')return row;
+      row.effectsUnconfirmed=row.state==='running';
+      row.state='interrupted';row.closedReason='cancelled';row.closedAt=this.now();clear(row);delete row.landed;
+      this.storage.kv.put(PREFIX+row.id,row);this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.records(),this.now()));
+      return row;
     });
   }
   claim(id:string,sessionCurrent:boolean):AppInboxRecord|null {
