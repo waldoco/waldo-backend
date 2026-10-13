@@ -2141,3 +2141,18 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
     8. S9: watch.
     9. S7: check-back, last, with a 7-minute quiet wait.
   - The scorecard goes to #1103.
+
+- **17:22Z to 18:27Z: the lead is back, hand-off 2 is posted, and the baseline is scored.**
+  - **The lead** resumed at 17:22Z and took the gate back (6151279030). Ansh's 16:55Z ruling (6150654066) had moved merges to the Mac. No Mac merge was in flight; I stopped and posted 6152023182.
+  - **Merged by the lead:** #1169, #1172, #1183, #1170, #1168 and #1184.
+  - **Hand-off 2** (6151728094, plus addendum 6151798873):
+    - the Worker from `165d17ab` or `a9161905` (push `verify` green on both, which I checked);
+    - the edge from `a9161905` first;
+    - migration `20261012000000` first;
+    - forward-only (`v6` and `v7`).
+  - **Also posted:** #1182 (the compaction ADR draft, needs owner); #1185 (the nightly eval harness, Google lane, needs owner); #1180 (the alarm fallback re-arm, builder). #1149 is blocked on review.
+  - **Baseline:** the subagent stalled after sending all nine. Steps were recovered from the tail and replies read on the device.
+    - Scorecard on #1103 (6152381089): 5 PASS, 4 PARTIAL, 0 FAIL.
+    - Findings: most turn time isn't model time; `browse_page` is offered but fails `auth_failed`; check-backs and watches are echoes; the mail follow-up mechanism goes unused; a visible self-correction.
+    - The S1 recall goes in a later session, and then the fact is forgotten.
+  - **Tool note:** the auto-mode classifier refused one Simulator swipe ("Unverifiable Deletion Target"). Shorter scroll swipes worked.
