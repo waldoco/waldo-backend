@@ -2278,3 +2278,15 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 - **#1186:** PASS WITH NITS on its own diff (6156425528). It is gated on #1180's fix and on the tip carry, which adds `mac_results_due_v1` to `WAKE_DUE_KEYS`.
 - **Lead's design calls** (summary 6156431069): back off the arbiter's 250 ms floor, stop the in-handler delete, and key the retry wake. The rule also applies to #1169 §3.2.
 - **Lesson:** a test that fabricates platform inputs (`AlarmInvocationInfo`) proves only the author's model of the platform. For platform semantics, run the real scheduler. The first suggested fix was itself wrong until probed across every throw shape.
+
+## 22:56Z — #1110 PASS WITH NITS; the Mac takes #1149; #1182 review running
+
+- **Ansh's sessions are back.** The review session posted a roll-up at 22:50Z (6156881042): #1190 A0 is PASS WITH NITS and ready for the lead; #1108 is FAIL. The Mac keeps the reviews of #1180, #1186, #1110 and #1182.
+- **#1110** (`5bb3b46a`): PASS WITH NITS (6156943336). It is safe to merge and deploy on its own; the browse tools become `not_configured` until #1120.
+  - M-1, the eligibility binding check, must land before or with #1120.
+  - M-2: a surface switch leaves the spend ledger digest stale.
+  - The merge waits for the lead's `owner-do.ts` slot and order decision. There is no deploy tonight, so it costs nothing to wait.
+- **#1149:** no builder activity since 20:08Z, so the Mac lane takes the tip carry and R8. It pushes only if the head is still `c7f80fbc` (compare-and-swap), with merge commits only. Claim: 6156946554.
+- **#1182:** the Mac's review is running.
+- **Correction posted:** Langfuse has been signed in on the Mac since about 20:20Z.
+- **Running:** T (M4), R (B3), the #1149 lane and the #1182 review. The usage window reset at 22:30Z.
