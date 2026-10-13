@@ -23,7 +23,7 @@ const walk = (start: number, title = 'Walk') => ({ action: 'create' as const, ti
 
 describe('approval expiry', () => {
   it('closes a request at its expiry on every reader, and offers no decision after it', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-expiry-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-expiry-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       const { desk, statusOf, logs, clock } = deskIn(state);
       const first = await desk.propose(walk(NOW + HOUR));
@@ -32,7 +32,7 @@ describe('approval expiry', () => {
 
       clock.set(NOW + HOUR - 1);
       expect(desk.ledger([])).toMatch(/- Add "Walk".*\(waiting on you\)/);
-      expect((await desk.approvals(clock.get(), { id: first }))[0]).toMatchObject({ state: 'open', actions: ['approve', 'edit', 'skip'] });
+      expect((await desk.approvals(clock.get(), { id: first }))[0]).toMatchObject({ state: 'open', actions: ['approve', 'edit', 'skip', 'defer'] });
 
       // Exactly at expires_at the request is closed, and the ledger read alone records it.
       clock.set(NOW + HOUR);
@@ -61,7 +61,7 @@ describe('approval expiry', () => {
   });
 
   it('answers any decision on an expired request with its expiry and records nothing new', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-expiry-decide-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-expiry-decide-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       const { desk, statusOf, clock } = deskIn(state);
       const skipped = await desk.proposeSendMessage({ channel: 'whatsapp', content: 'Running late.', idempotency_key: 'a'.repeat(64) });
@@ -77,7 +77,7 @@ describe('approval expiry', () => {
   });
 
   it('also closes a request the owner asked to change, or whose card was never confirmed', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-expiry-other-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-expiry-other-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       const { desk, statusOf, clock } = deskIn(state);
       const edited = await desk.proposeSendMessage({ channel: 'whatsapp', content: 'Running late.', idempotency_key: 'c'.repeat(64) });
@@ -108,7 +108,7 @@ describe('approval expiry', () => {
   }) as unknown as GoogleClient;
 
   it('never closes a request whose approved change is already in flight', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-expiry-inflight-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-expiry-inflight-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       const created: string[] = [], dispatch = gated();
       const { desk, statusOf, clock } = deskIn(state, calendarClient(created, dispatch));
@@ -128,7 +128,7 @@ describe('approval expiry', () => {
   });
 
   it('reconciles, after expiry, an approval whose change Google already applied, and never writes it twice', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-expiry-recorded-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-expiry-recorded-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       const events = new Map<string, Record<string, unknown>>(), writes: string[] = [], reads: string[] = [];
       const client = {
@@ -158,7 +158,7 @@ describe('approval expiry', () => {
   });
 
   it('applies nothing when a read closes the request before its change starts', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-expiry-race-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-expiry-race-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       const created: string[] = [], fetching = gated();
       const client = calendarClient(created);
@@ -178,7 +178,7 @@ describe('approval expiry', () => {
     });
   });
   it('tells the owner an email expired, not that it was handled, when a read closes it before the claim', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-expiry-email-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-expiry-email-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       const sent: string[] = [], fetching = gated();
       let gate = false;

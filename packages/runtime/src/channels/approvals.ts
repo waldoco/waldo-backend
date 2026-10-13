@@ -830,19 +830,21 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   return {
     decide: decideOnce,
     waiting() {
+      expireDue();
       return sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status IN ('open', 'review_only') ORDER BY created_at").toArray()
-        .filter(entry => waitingRow(entry) && !expired(entry, JSON.parse(entry.payload_json) as Stored))
+        .filter(waitingRow)
         .map(entry => ({ approval_id: entry.id, kind: entry.kind, summary: summaryOf(entry), state: entry.status as 'open' | 'review_only', put_off: entry.deferred_at != null }));
     },
     async reraise(id) {
+      expireDue(id);
       const entry = row(id);
-      if (!entry || !waitingRow(entry)) return { outcome: 'not_waiting' };
-      if (raising.has(id)) return { outcome: 'not_put_off' };
-      if (expired(entry, JSON.parse(entry.payload_json) as Stored)) {
-        setStatus(id, 'expired');
+      // A read may already have closed it at its expiry: that answer is the expiry, not that nothing waits.
+      if (entry?.status === 'expired' && PROPOSAL_KINDS.includes(entry.kind) && entry.id.startsWith('p')) {
         await retire(id, { surface });
         return { outcome: 'expired' };
       }
+      if (!entry || !waitingRow(entry)) return { outcome: 'not_waiting' };
+      if (raising.has(id)) return { outcome: 'not_put_off' };
       if (entry.deferred_at == null) return { outcome: 'not_put_off' };
       raising.add(id);
       try {
