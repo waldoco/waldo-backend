@@ -3,9 +3,10 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { parseJsonc } from '../jsonc.mjs';
 const guard = resolve('scripts/guards/guard-runtime-preview-config.mjs');
 const raw = readFileSync('packages/runtime/wrangler.jsonc', 'utf8');
-const cfg = JSON.parse(raw.replace(/\/\/[^\n]*/g, '').replace(/,(\s*[}\]])/g, '$1'));
+const cfg = parseJsonc(raw);
 const wrapper = readFileSync('scripts/deploy-runtime-preview.sh', 'utf8');
 const dir = mkdtempSync(resolve(tmpdir(), 'waldo-preview-guard-'));
 try {

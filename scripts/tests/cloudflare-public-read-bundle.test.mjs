@@ -5,6 +5,7 @@ import { mkdtempSync, readFileSync, realpathSync, writeFileSync, rmSync } from '
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+import { parseJsonc } from '../jsonc.mjs';
 
 // A local compatibility probe, never a deployment or browser workload. Import the
 // actual pinned SDK alongside the complete Worker so lazy-import tree shaking
@@ -12,7 +13,7 @@ import { resolve } from 'node:path';
 test('activated staging entrypoint selects Cloudflare while the full Worker and pinned SDK start with documented compatibility', { timeout: 120000 }, async () => {
   const runtime = resolve('packages/runtime');
   const { Miniflare } = createRequire(resolve(realpathSync(resolve(runtime, 'node_modules/@cloudflare/vitest-pool-workers')), 'package.json'))('miniflare');
-  const source = JSON.parse(readFileSync(resolve(runtime, 'wrangler.jsonc'), 'utf8').replace(/\/\/[^\n]*/g, ''));
+  const source = parseJsonc(readFileSync(resolve(runtime, 'wrangler.jsonc'), 'utf8'));
   const staging = source.env.staging;
   const dir = mkdtempSync(resolve(tmpdir(), 'waldo-cf-public-bundle-'));
   const entry = resolve(dir, 'configured.ts'), out = resolve(dir, 'bundle');

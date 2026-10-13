@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-const cfg = JSON.parse(readFileSync('packages/runtime/wrangler.jsonc', 'utf8').replace(/\/\/[^\n]*/g, '').replace(/,(\s*[}\]])/g, '$1'));
+import { parseJsonc } from '../jsonc.mjs';
+const cfg = parseJsonc(readFileSync('packages/runtime/wrangler.jsonc', 'utf8'));
 const p = cfg.previews;
 assert(p, 'PR previews require an explicit block');
 assert.deepEqual(Object.keys(p).sort(), ['vars','observability','durable_objects','ratelimits'].sort(), 'preview keys are allowlisted, not just denied individually');
