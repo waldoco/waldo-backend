@@ -187,3 +187,30 @@ describe('the background decision', () => {
     });
   });
 });
+
+describe('a machine turn', () => {
+  it('never recalls a health claim by the words of an externally tainted job; an untainted job with the same words does', async () => {
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('turn-recall-external-job')), async (_instance, state) => {
+      const memory = claimStore(state.storage.sql);
+      owned(memory, 'Knee physio exercises every morning before the standup', 'tg-41', 'health');
+      owned(memory, 'Works from the Pune office on Tuesdays before the standup', 'tg-42');
+      // Curated with the office fact only, so the health claim can reach the prompt by recall alone.
+      expect(memory.pin(memory.claims().find((claim) => claim.kind === 'fact')!.id, 'facts', 1)).toBe(true);
+      const systemFor = async (id: string, taint?: 'external') => {
+        const requests: LLMGatewayRequest[] = [];
+        const gateway: LLMGatewayAdapter = { complete: async (request) => {
+          requests.push(request);
+          return { ok: true, data: { model: request.request.model, text: 'Done.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
+        } };
+        const responder = createOwnerResponder('fixture', undefined, memory, undefined, undefined, [], undefined, false, undefined, undefined, gateway);
+        await responder.prompt(id, 'owner', 'Report this device result briefly: knee physio, the Pune office and the standup.', async (_hop, work) => work(), 'telegram', [], undefined, undefined, undefined, taint);
+        return requests[0]!.request.system ?? '';
+      };
+      const recalled = (system: string) => /<recalled>[\s\S]*?<\/recalled>/.exec(system)?.[0] ?? '';
+      const external = await systemFor('job-external', 'external');
+      expect(recalled(external)).toContain('Works from the Pune office on Tuesdays');
+      expect(external).not.toContain('Knee physio');
+      expect(recalled(await systemFor('job-owner'))).toContain('Knee physio exercises every morning');
+    });
+  });
+});

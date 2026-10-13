@@ -303,13 +303,15 @@ export const createOwnerResponder = (
   });
   // Owner memory for a system prompt: the pinned blocks, then what recall finds for this text, inside the room left. Past
   // messages and the previous owner message join only the owner's own turn; a machine turn (a reminder or a job) and a
-  // background decision recall claims only.
+  // background decision recall claims only. A job built from external data recalls by words the owner did not write, so
+  // those words never select a health claim (the blocks do not depend on the text and stay as they are).
   const episodeSearch = tools.find((handler) => handler.name === 'search_episodes');
   const ownerMemory = async (source: ClaimStore, text: string, room: number, ownerTurn?: string): Promise<string> => {
     const blocks = turnMemoryPrompt(source, text, room);
     const previous = ownerTurn === undefined ? undefined : previousOwnerMessage((id) => tree.get(id), ownerTurn);
     const episodes = ownerTurn === undefined || !episodeSearch ? undefined : episodesFromSearchTool(episodeSearch, { ...safety, turnId: ownerTurn, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) });
-    const recalled = await recallForTurn({ claims: source, question: text, room: room - blocks.length - 2, holds: holdsIn(heldTopics()), ...(previous === undefined ? {} : { previous }), ...(episodes && ownerTurn !== undefined ? { episodes, current: ownerTurn } : {}) });
+    const claims: Pick<ClaimStore, 'recall'> = backgroundSourceTaint === 'external' ? { recall: (query, limit) => source.recall(query, limit).filter((claim) => claim.kind !== 'health') } : source;
+    const recalled = await recallForTurn({ claims, question: text, room: room - blocks.length - 2, holds: holdsIn(heldTopics()), ...(previous === undefined ? {} : { previous }), ...(episodes && ownerTurn !== undefined ? { episodes, current: ownerTurn } : {}) });
     // Recall fails open: the turn goes on with what the other leg found, and the trace names the failed leg without any text.
     if (recalled.failed.length) log({ trace: traceId, hop: 'memory_recall', ms: 0, ok: false, code: 'recall_failed', detail: recalled.failed.join(',') });
     return [blocks, recalled.text].filter(Boolean).join('\n\n');
