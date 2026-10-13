@@ -95,7 +95,7 @@ describe('the calendar read log line', () => {
       { hop: 'calendar_read', ok: false, code: 'op_events:transient' },
       { hop: 'calendar_read', ok: false, code: 'op_events:auth_failed:reauth_needed' },
       { hop: 'calendar_read', ok: false, code: 'op_calendars:transient' },
-      { hop: 'calendar_read', ok: false, code: 'op_events:rejected' },
+      { hop: 'calendar_read', ok: false, code: 'op_events:unreadable_answer' },
     ]);
     for (const line of readLines()) expect(line.code).toMatch(/^[a-z0-9_:]{1,64}$/);
     for (const line of lines()) for (const secret of [TEAM, account.email, account.connection_id, 'provider says']) expect([secret, line.toLowerCase().includes(secret.toLowerCase())]).toEqual([secret, false]);

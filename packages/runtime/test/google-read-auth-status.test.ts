@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { GoogleError } from '../src/connectors/google';
 import { googleHandlers, type GoogleAccess } from '../src/tools/live/google';
 
@@ -97,6 +98,15 @@ describe('google read tools: a connector answer that fails its schema is refused
       expect((r as { error: string }).error).not.toMatch(/undeclared_field|unrecognized|Zod|invalid_type|expected/i);
     });
   }
+  it('a calendar card that fails its own schema is never told to the owner as a failed read', async () => {
+    const cardFails = { ...desk, propose: async () => z.strictObject({ review: z.string() }).parse({ review: 1 }) };
+    const access: GoogleAccess = { client: async () => ({ account: { connection_id: 'c1', email: 'owner@example.com' } }) as never };
+    const r = await googleHandlers(access, cardFails as never, clock).find((h) => h.name === 'propose_calendar_change')!
+      .handle({ action: 'create', title: 'Design review', start: '2026-10-04T10:00:00+05:30', end: '2026-10-04T10:30:00+05:30', reason: 'asked' } as never);
+    expect(r).toMatchObject({ ok: false });
+    expect(r).not.toMatchObject({ code: 'rejected' });
+    expect((r as { error: string }).error).not.toContain('Nothing was read');
+  });
   it('a provider 500 on the same read stays transient', async () => {
     expect(await run(failing(500), 'query_calendar', { include_declined: false, limit: 20 })).toMatchObject({ ok: false, code: 'transient' });
   });
