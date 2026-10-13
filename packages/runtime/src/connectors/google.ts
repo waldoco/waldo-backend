@@ -321,15 +321,18 @@ type GmailPayload = Readonly<{ mimeType?: string; body?: { data?: string }; part
 type GmailFullMessage = Readonly<{ id?: string; threadId?: string; snippet?: string; internalDate?: string; payload?: GmailPayload }>;
 const htmlText = (html: string): string => {
   const blocks = new Set(['p', 'div', 'br', 'li', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'section', 'article', 'hr']);
+  // Adjacent cells would otherwise run together ("Verification code482913"), hiding a code from extraction.
+  const cells = new Set(['td', 'th']);
   let suppressed = 0;
   const chunks: string[] = [];
   const boundary = () => { if (!suppressed && chunks.length && chunks.at(-1) !== '\n') chunks.push('\n'); };
+  const cellEnd = () => { if (!suppressed && chunks.length && !/\s$/.test(chunks.at(-1)!)) chunks.push(' '); };
   new Parser({
     onopentag(name) { if (name === 'script' || name === 'style') suppressed++; else if (blocks.has(name)) boundary(); },
     ontext(text) { if (!suppressed) chunks.push(text); },
-    onclosetag(name) { if (name === 'script' || name === 'style') suppressed = Math.max(0, suppressed - 1); else if (blocks.has(name)) boundary(); },
+    onclosetag(name) { if (name === 'script' || name === 'style') suppressed = Math.max(0, suppressed - 1); else if (blocks.has(name)) boundary(); else if (cells.has(name)) cellEnd(); },
   }, { decodeEntities: true }).end(html);
-  return chunks.join('').trim();
+  return chunks.join('').replace(/ \n/g, '\n').trim();
 };
 const threadBody = (payload: GmailPayload | undefined): string => {
   const partText = (part: GmailPayload, mime: string): string => {
