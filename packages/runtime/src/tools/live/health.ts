@@ -12,7 +12,8 @@ import type { OwnerClock } from './get-context';
 // scores producer already uses; consent for both purposes is checked on every call; the result lives in the turn that
 // asked (turn_only_output), so no value reaches the tool ledger, memory, logs or storage.
 type SignedCall = (fn: string, message: string, args: Record<string, string | number>) => Promise<unknown>;
-type ConsentState = 'granted' | 'consent_required' | 'consent_withdrawn' | 'not_linked' | 'read_failed';
+type ConsentRefusal = 'consent_required' | 'consent_withdrawn' | 'not_linked' | 'read_failed';
+type ConsentState = Readonly<{ kind: 'granted'; sources: ReadonlySet<string> }> | Readonly<{ kind: ConsentRefusal }>;
 type SeriesRange = Readonly<{ from: string; to: string; signals: readonly string[] }>;
 
 export type HealthReadBook = Readonly<{
@@ -21,30 +22,45 @@ export type HealthReadBook = Readonly<{
 }>;
 
 const REQUIRED_PURPOSES = ['storage_compute', 'model_processing'] as const;
+type ConsentRow = Readonly<{ source: string; purpose: string; status: string; epoch: number }>;
+const consentRow = (raw: unknown): ConsentRow | null => {
+  const row = raw as Partial<ConsentRow> | null;
+  return row && typeof row === 'object' && typeof row.source === 'string' && typeof row.purpose === 'string' && typeof row.status === 'string' && typeof row.epoch === 'number' ? (row as ConsentRow) : null;
+};
 
-// The newest consent row per purpose decides, so a withdrawal is seen on the next call and no cached value survives it.
+// Consent is kept per source and purpose, and a source's epoch counts only its own rows. A source is readable when its
+// own newest row for each purpose is granted; the series is cut to those sources, so a withdrawal on one source never
+// reads through another. The refusal names what the owner would recognise: a withdrawal anywhere beats "not asked yet".
 const consentState = (raw: unknown): ConsentState => {
+  if (raw && typeof raw === 'object' && (raw as { error?: unknown }).error === 'not_linked') return { kind: 'not_linked' };
   const rows = (raw as { consents?: unknown } | null)?.consents;
-  if (!Array.isArray(rows)) return 'read_failed';
-  if (rows.length === 0) return 'not_linked';
-  let state: ConsentState = 'granted';
-  for (const purpose of REQUIRED_PURPOSES) {
-    const newest = rows
-      .filter((row): row is { purpose: string; status: string; epoch: number } => !!row && typeof row === 'object' && (row as { purpose?: unknown }).purpose === purpose)
-      .sort((a, b) => Number(b.epoch) - Number(a.epoch))[0];
-    if (newest?.status === 'withdrawn') return 'consent_withdrawn';
-    if (newest?.status !== 'granted') state = 'consent_required';
+  if (!Array.isArray(rows)) return { kind: 'read_failed' };
+  const bySource = new Map<string, Map<string, ConsentRow>>();
+  for (const row of rows.map(consentRow)) {
+    if (!row) continue;
+    const purposes = bySource.get(row.source) ?? new Map<string, ConsentRow>();
+    const newest = purposes.get(row.purpose);
+    if (!newest || row.epoch > newest.epoch) purposes.set(row.purpose, row);
+    bySource.set(row.source, purposes);
   }
-  return state;
+  const sources = new Set<string>();
+  let withdrawn = false;
+  for (const [source, purposes] of bySource) {
+    const statuses = REQUIRED_PURPOSES.map((purpose) => purposes.get(purpose)?.status);
+    if (statuses.every((status) => status === 'granted')) sources.add(source);
+    else if (statuses.includes('withdrawn')) withdrawn = true;
+  }
+  if (sources.size > 0) return { kind: 'granted', sources };
+  return { kind: withdrawn ? 'consent_withdrawn' : 'consent_required' };
 };
 
 export const healthReadBook = (call: SignedCall | null, doName: string | null): HealthReadBook => ({
   async consent() {
-    if (!call || !doName) return 'not_linked';
+    if (!call || !doName) return { kind: 'not_linked' };
     try {
       return consentState(await call('health_consent_list', `health.consent_list.${doName}.${md5Hex('{}')}`, { p_do_name: doName, p_payload: '{}' }));
     } catch {
-      return 'read_failed';
+      return { kind: 'read_failed' };
     }
   },
   async series(range) {
@@ -71,8 +87,9 @@ const FRESH_MS = 36 * 3_600_000;
 const STALE_MS = 72 * 3_600_000;
 
 const round1 = (value: number): number => Math.round(value * 10) / 10;
+// A reading's instant is when it ended, so a night's sleep ages from waking, not from falling asleep.
 const instantOf = (reading: Reading, timezone: string): number =>
-  reading.startAt ? Date.parse(reading.startAt) : reading.endAt ? Date.parse(reading.endAt) : localDayWindow(reading.day, reading.timezone ?? timezone).end;
+  reading.endAt ? Date.parse(reading.endAt) : reading.startAt ? Date.parse(reading.startAt) : localDayWindow(reading.day, reading.timezone ?? timezone).end;
 const localDayOf = (now: Date, timeZone: string): string => {
   const parts = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now);
   const get = (type: string) => parts.find((part) => part.type === type)?.value ?? '';
@@ -124,7 +141,7 @@ export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolH
     if (daysBetween(args.to, today) < 0) return { ok: false, code: 'invalid_args', error: `to must not be after today (${today}) in the owner's time zone` };
     const unavailable = (reason: Extract<GetHealthResult, { state: 'unavailable' }>['reason']): ReturnType<typeof result> => result({ state: 'unavailable', reason });
     const consent = await book.consent();
-    if (consent !== 'granted') return unavailable(consent);
+    if (consent.kind !== 'granted') return unavailable(consent.kind);
     const signals = [...new Set(args.signals)];
     let raw: unknown;
     try {
@@ -136,13 +153,14 @@ export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolH
     const parsed = parseSeries(raw);
     if (parsed.kind === 'no_consent') return unavailable('consent_required');
     if (parsed.kind === 'failed') return unavailable('read_failed');
+    const sources = parsed.series.sources.filter((source) => consent.sources.has(source.source));
     const days: string[] = [];
     for (let day = args.from; daysBetween(day, args.to) >= 0; day = shiftDay(day, 1)) days.push(day);
     let newest = Number.NEGATIVE_INFINITY;
     let valued = 0;
     const series: Extract<GetHealthResult, { state: 'available' }>['signals'] = [];
     for (const signal of signals) {
-      const group = chooseGroup(signal, parsed.series.sources);
+      const group = chooseGroup(signal, sources);
       if (!group) continue;
       const byDay = new Map<string, Reading[]>();
       for (const reading of group.readings) {
@@ -155,7 +173,7 @@ export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolH
       valued += present.length;
       const base = { signal, unit: SIGNALS[signal].unit, source: group.source as 'apple' | 'samsung' | 'health_connect', method: methodOf(signal, group) };
       series.push(args.aggregation === 'summary'
-        ? { ...base, summary: { mean: present.length ? round1(present.reduce((total, value) => total + value, 0) / present.length) : 0, min: present.length ? Math.min(...present) : 0, max: present.length ? Math.max(...present) : 0, days_with_value: present.length } }
+        ? { ...base, summary: { mean: present.length ? round1(present.reduce((total, value) => total + value, 0) / present.length) : null, min: present.length ? Math.min(...present) : null, max: present.length ? Math.max(...present) : null, days_with_value: present.length } }
         : { ...base, days: values });
     }
     if (valued === 0) return unavailable('no_readings');

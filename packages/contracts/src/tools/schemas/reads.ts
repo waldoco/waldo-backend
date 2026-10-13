@@ -60,7 +60,8 @@ export const getHealthResultSchema = z.discriminatedUnion('state', [
       source: z.enum(['apple', 'samsung', 'health_connect']),
       method: z.enum(['asleep', 'rmssd', 'sdnn']).nullable(),
       days: z.array(z.strictObject({ day: healthReadDaySchema, value: z.number().nullable() })).optional(),
-      summary: z.strictObject({ mean: z.number(), min: z.number(), max: z.number(), days_with_value: z.int().nonnegative() }).optional(),
+      // Null when no asked day has a value: nothing is invented.
+      summary: z.strictObject({ mean: z.number().nullable(), min: z.number().nullable(), max: z.number().nullable(), days_with_value: z.int().nonnegative() }).optional(),
     })).max(8),
     // From the newest reading used: fresh within 36 hours, stale within 72, expired after (the source-data bounds of
     // ADR-0081 section 2).

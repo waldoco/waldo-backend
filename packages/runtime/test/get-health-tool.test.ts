@@ -5,10 +5,10 @@ import { getHealthHandler, healthReadBook } from '../src/tools/live/health';
 
 // Synthetic readings only. The owner's local day is Asia/Kolkata; "now" is 12:00 IST on 13 Oct 2026.
 const clock = { timezone: 'Asia/Kolkata', now: () => new Date('2026-10-13T06:30:00Z') };
-const consent = (storage: string, model: string) => ({ consents: [
-  { consent_class: 'health_processing', source: 'apple', purpose: 'storage_compute', version: 2, status: storage, epoch: 3, granted_at: '2026-10-01T00:00:00Z', withdrawn_at: null, deletion_state: 'not_required' },
-  { consent_class: 'health_processing', source: 'apple', purpose: 'model_processing', version: 2, status: model, epoch: 3, granted_at: '2026-10-01T00:00:00Z', withdrawn_at: null, deletion_state: 'not_required' },
-] });
+const row = (source: string, purpose: string, status: string, epoch: number) =>
+  ({ consent_class: 'health_processing', source, purpose, version: 2, status, epoch, granted_at: '2026-10-01T00:00:00Z', withdrawn_at: null, deletion_state: 'not_required' });
+const consent = (storage: string, model: string, source = 'apple', epoch = 3) => ({ consents: [row(source, 'storage_compute', storage, epoch), row(source, 'model_processing', model, epoch)] });
+const both = (...lists: { consents: unknown[] }[]) => ({ consents: lists.flatMap(list => list.consents) });
 const reading = (signal: string, day: string, value: number, extra: Record<string, unknown> = {}) => ({ signal, day, value, start_at: null, end_at: null, timezone: 'Asia/Kolkata', method: null, ...extra });
 const series = {
   access: 'granted', read_at: '2026-10-13T06:00:00.000Z',
@@ -99,12 +99,35 @@ describe('get_health', () => {
     const asked = { signals: ['sleep' as const], from: '2026-10-12', to: '2026-10-12', aggregation: 'daily' as const };
     const reason = async (answers: Parameters<typeof fake>[0]) => { const result = await fake(answers).handler.handle(asked, ctx); return result.ok ? result.data : result; };
     expect(await reason({ consent: consent('not_granted', 'granted') })).toEqual({ state: 'unavailable', reason: 'consent_required' });
-    expect(await reason({ consent: { consents: [] } })).toEqual({ state: 'unavailable', reason: 'not_linked' });
+    expect(await reason({ consent: { consents: [] } })).toEqual({ state: 'unavailable', reason: 'consent_required' });
+    expect(await reason({ consent: { error: 'not_linked' } })).toEqual({ state: 'unavailable', reason: 'not_linked' });
     expect(await reason({ series: { error: 'not_linked' } })).toEqual({ state: 'unavailable', reason: 'not_linked' });
     expect(await reason({ series: { access: 'granted', read_at: '2026-10-13T06:00:00.000Z', sources: [] } })).toEqual({ state: 'unavailable', reason: 'no_readings' });
     expect(await reason({ series: new Error('router down') })).toEqual({ state: 'unavailable', reason: 'read_failed' });
     expect(await reason({ consent: new Error('router down') })).toEqual({ state: 'unavailable', reason: 'read_failed' });
     expect(await reason({ series: { access: 'granted' } })).toEqual({ state: 'unavailable', reason: 'read_failed' });
+  });
+
+  it('reads only the sources whose own purposes are both granted, whatever their epochs say', async () => {
+    // Apple withdrew model use at its epoch 2; Samsung granted both at its epoch 3. Apple has more readings, and none of them may be used.
+    const mixed = both(consent('granted', 'withdrawn', 'apple', 2), consent('granted', 'granted', 'samsung', 3));
+    const result = await fake({ consent: mixed }).handler.handle({ signals: ['sleep'], from: '2026-10-11', to: '2026-10-12', aggregation: 'daily' }, ctx);
+    expect(result.ok && result.data.state === 'available' && result.data.signals[0]).toEqual({ signal: 'sleep', unit: 'minutes', source: 'samsung', method: 'asleep', days: [{ day: '2026-10-11', value: null }, { day: '2026-10-12', value: 300 }] });
+    // The other way round: Apple's withdrawal at a higher epoch does not hide Samsung's live consent.
+    const later = both(consent('withdrawn', 'withdrawn', 'apple', 4), consent('granted', 'granted', 'samsung', 1));
+    const live = await fake({ consent: later }).handler.handle({ signals: ['sleep'], from: '2026-10-12', to: '2026-10-12', aggregation: 'daily' }, ctx);
+    expect(live.ok && live.data.state === 'available' && live.data.signals[0]?.source).toBe('samsung');
+    // Storage granted but model use never asked on the only source: not withdrawn, not granted.
+    const asked = await fake({ consent: consent('granted', 'not_granted') }).handler.handle({ signals: ['sleep'], from: '2026-10-12', to: '2026-10-12', aggregation: 'daily' }, ctx);
+    expect(asked).toEqual({ ok: true, data: { state: 'unavailable', reason: 'consent_required' }, source_taint: null });
+  });
+
+  it('summarises a signal with no reading in the range as nulls, never as zeros', async () => {
+    const result = await fake({}).handler.handle({ signals: ['heart_rate', 'resting_hr'], from: '2026-10-12', to: '2026-10-12', aggregation: 'summary' }, ctx);
+    expect(result.ok && result.data.state === 'available' && result.data.signals.map(signal => signal.summary)).toEqual([
+      { mean: 70, min: 70, max: 70, days_with_value: 1 },
+      { mean: null, min: null, max: null, days_with_value: 0 },
+    ]);
   });
 
   it('refuses a range that ends after today in the owner\'s zone, before any read', async () => {

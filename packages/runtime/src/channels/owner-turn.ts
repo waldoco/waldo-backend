@@ -15,8 +15,6 @@ import { MODEL_CONTEXT_MAX_CHARS } from '@waldo/contracts';
 import { PROBE_STRIPPED_TOOLS } from './probe-turn';
 import { runToolLoop } from '../conversation/tool-loop';
 import { turnReceipt } from '../hooks/receipt-line';
-
-const TURN_ONLY_OUTPUT = JSON.stringify({ retained: false, reason: 'turn_only_output' });
 import type { LoopEventLike } from '../hooks/claim-hook';
 import { delegateTaskHandler, runChildLoop, SUBAGENT_SYSTEM_PROMPT, withDelegation } from '../conversation/subagent';
 import { inMemoryToolOutputStore } from '../conversation/tool-output-store';
@@ -42,6 +40,8 @@ import type { LLMAttachment } from '@waldo/contracts';
 import { STOPPED_REPLY, turnControl } from './turn-control';
 import type { RunBook } from './background-runs';
 import { toolOutputLedger } from '../conversation/tool-output-ledger';
+
+const TURN_ONLY_OUTPUT = JSON.stringify({ retained: false, reason: 'turn_only_output' });
 
 // The owner's approval line (owner direction 2026-09-27): first-party state - his own memory,
 // tasks, sheets, drafts - proceeds without a per-action card. Anything that could reach another
