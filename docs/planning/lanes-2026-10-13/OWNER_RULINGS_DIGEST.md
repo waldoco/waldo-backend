@@ -1,4 +1,4 @@
-# Owner rulings digest, as of 13 Oct 2026, 14:38Z
+# Owner rulings digest, as of 13 Oct 2026, 15:13Z
 
 This digest lets cloud sessions follow the owner's rulings. The full notes live in the orchestrator's memory on the owner's Mac, which cloud sessions can't read. Rulings decide what is wanted; source and tests decide what is shipped. Where a later ruling conflicts with an earlier one, the later one wins.
 
@@ -59,6 +59,10 @@ This digest lets cloud sessions follow the owner's rulings. The full notes live 
     - The scorecard goes to #1103, with no health values in the output and a bounded number of model calls per night.
     - It starts from the 20-task set, plus recall and check-back scenarios.
 26. **The conversation compaction ADR: yes, draft it.** The owner reviews it before anything is built. The transcript keeps every row.
+
+27. **iMessage becomes Waldo's surface while Suyash reworks the app (15:13Z).** Proactive work goes to an owner who uses iMessage: the Brief, reminders, check-backs and standing orders, under the same quiet hours and delivery gate. The app keeps its copy.
+28. **Approvals asked for on iMessage.** For now, a one-tap app link in the reply. Later, numbered replies bound to the exact pending approval, after a security review. Until then the surface contract says `approval: 'none'`.
+29. **Health text in iMessage replies is allowed, the same as Telegram.** It is the owner's own health context, in replies to them, and never in logs. The host Mac's message history falls under the same retention and forget rules, and it needs a destination note.
 
 ## Still open (ask the owner)
 

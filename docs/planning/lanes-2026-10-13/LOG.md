@@ -2088,3 +2088,18 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
   - **Backend:** the `beta-mvp` tip is `93632841` (#1141). Nothing new on #1103 since 14:41Z. The lead's log was last updated at 14:07.
   - **App:** no new PRs or issues from Suyash.
   - **Heartbeat:** the job is now `e8600e07` (it was `e0e8cd06`), re-created to match the 14:38Z rulings. It no longer reviews or merges app PRs and gives no new items to Mac lanes. Its one live trigger is the lead calling hand-off 2 ready.
+
+- **15:13Z: iMessage review and owner rulings 27–29.**
+  - **Found:** nothing has done a live round trip. The backend connector exists twice:
+    - Ashish's #1017 `b0deeee2` is on `08350959` with CI green. Stacked on it, #1162 `95ca91b9` fixes the security review's M1 and M2 and is CI green.
+    - L5's #1095 `1dc7e2dd` carries the same 41 files. It is 22 behind, with one red shard (a browser test).
+    - Both add DO tag `v7`.
+  - **Host** (`waldo-imessage-host` #1, `27b94381`, draft): fixture-verified, with the real send off and no real-backend interop yet. The LaunchAgent, CI and live checks are still open.
+  - **Agent on iMessage** (checked at `95ca91b9`): proactive work goes to the app and Telegram only (`owner-do.ts:1517`), and approvals show only in the app (`owner-do.ts:2133`).
+  - **Rulings** (digest items 27–29):
+    - proactive work goes to an iMessage-bound owner;
+    - approvals: an app link now, numbered replies later after a security review;
+    - health text on iMessage is allowed, the same as Telegram, with a destination note.
+  - **Posted:**
+    - on #1103 (6148782177): gate #1017, then #1162, and close #1095 after moving the setup doc across; build proactive routing, then the approval link;
+    - on #1017 (6148786167): status and the host items left for Ashish.
