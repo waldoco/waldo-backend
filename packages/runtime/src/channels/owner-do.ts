@@ -626,7 +626,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const drop = (id: string) => { try { this.appInbox.closeNotice(id, 'dropped'); } catch (error) { if (!(error instanceof ClosedRunError)) throw error; } };
     for (const record of due) {
       if (found.kind === 'dormant') { drop(record.id); continue; }
-      const text = `${RUN_DID_NOT_FINISH}\n\n${this.requestReceived(record.admittedAt)}`;
+      const text = `${RUN_DID_NOT_FINISH}${record.landed ? `\n\n${record.landed}` : ''}\n\n${this.requestReceived(record.admittedAt)}`;
       try {
         await this.appAssistantRow({ subject: found.authority.doName, occurrence: `notice:${record.id}`, text: 'Tell the owner a message did not finish.' }, ({ entries, leafId }, ownerRef) => {
           const id = `${record.id}-did-not-finish`, parentId = entries.some(entry => entry.id === record.id) ? record.id : leafId;
@@ -2331,7 +2331,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const context=await this.appContext(record.owner,record.sessionHash,record.text,record.id,record.admittedAt,scope,{health:()=>health??=healthContext.latest(turn.traceId)});
         if(context.conversationRef!==record.conversationRef)throw new ClosedRunError();
         return context;
-      }},history:context=>indexedConversationStore(canonicalOwnerConversationStore(this.ctx.storage,context,this.logSkippedLoad),episodes,()=>Date.now())} : telegramContext,
+      }},history:context=>({...indexedConversationStore(canonicalOwnerConversationStore(this.ctx.storage,context,this.logSkippedLoad),episodes,()=>Date.now()),
+        noteUnfinished:(line,scope)=>this.appInbox.noteLanded(scope.runId,scope.attempt,line)})} : telegramContext,
     );
     // A job prompt built on the ledger: the owner's health logs reach the model as this turn's context.
     const ledgerJob = async (trace: string, said: string, toolNames?: Parameters<typeof responder.prompt>[4]) =>

@@ -25,6 +25,8 @@ export type AppInboxRecord = {
   // An interrupted turn owes the owner a "did not finish" reply in their transcript: due until written, or dropped
   // when the directory no longer admits the account.
   notice?: 'due' | 'written' | 'dropped';
+  // What the interrupted turn's tools already did, as its receipt line, for that reply; cleared when the reply closes.
+  landed?: string;
 };
 const due = (rows: readonly AppInboxRecord[], now: number) => rows.some(row => row.state === 'admitted' || row.notice === 'due') ? now + 250 : null;
 const clear = (row: AppInboxRecord) => { row.text = ''; };
@@ -111,17 +113,24 @@ export class AppInbox {
     this.storage.transactionSync(()=>{
       const row=this.storage.kv.get<AppInboxRecord>(PREFIX+record.id);if(!row||row.state!=='running'||row.attempt!==record.attempt)return;
       row.state=completed?'completed':'interrupted';row.closedAt=this.now();clear(row);
-      if(!completed){row.closedReason='interrupted';row.effectsUnconfirmed=true;row.notice='due';}
+      if(completed)delete row.landed;else{row.closedReason='interrupted';row.effectsUnconfirmed=true;row.notice='due';}
       this.storage.kv.put(PREFIX+row.id,row);this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.records(),this.now()));
     });
   }
   noticesDue():AppInboxRecord[] { return this.records().filter(row=>row.notice==='due'); }
+  // Kept only while the same attempt still runs: a run that was revoked or replaced owes no reply.
+  noteLanded(id:string,attempt:string,line:string):void {
+    this.storage.transactionSync(()=>{
+      const row=this.storage.kv.get<AppInboxRecord>(PREFIX+id);if(!row||row.state!=='running'||row.attempt!==attempt)return;
+      row.landed=line;this.storage.kv.put(PREFIX+id,row);
+    });
+  }
   // Closes a due notice. `work` writes the reply in the same transaction, so a notice is written at most once;
   // when the notice is no longer due, nothing commits.
   closeNotice(id:string,outcome:'written'|'dropped',work:()=>void=()=>undefined):void {
     this.storage.transactionSync(()=>{
       const row=this.storage.kv.get<AppInboxRecord>(PREFIX+id);if(row?.notice!=='due')throw new ClosedRunError();
-      row.notice=outcome;this.storage.kv.put(PREFIX+id,row);work();
+      row.notice=outcome;delete row.landed;this.storage.kv.put(PREFIX+id,row);work();
       this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.records(),this.now()));
     });
   }

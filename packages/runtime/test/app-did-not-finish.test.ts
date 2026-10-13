@@ -104,7 +104,11 @@ describe('an app turn that does not finish', () => {
     const name = 'app-did-not-finish-ledger';
     await withOwner(name, {}, async (owner, state) => {
       model.effectThenFail = true;
-      expect((await send(owner(), state, name, 'ledger-client-01', 'Set quiet hours from 9pm to 7am.')).outcome).toBe('interrupted');
+      const unfinished = await send(owner(), state, name, 'ledger-client-01', 'Set quiet hours from 9pm to 7am.');
+      expect(unfinished.outcome).toBe('interrupted');
+      // The reply that says the run did not finish also says what its tools already did; the inbox keeps no copy.
+      expect(notices(await shown(owner(), name))[0]!.text).toMatch(/^[^\n]+\n\nDone: proactivity set\n\nRequest received: /);
+      expect(record(state, unfinished.id).landed).toBeUndefined();
       model.effectThenFail = false; model.requests = [];
       expect((await send(owner(), state, name, 'ledger-client-02', 'Are my quiet hours set?')).outcome).toBe('completed');
       const next = model.requests.find(request => request.includes('Are my quiet hours set?'))!;
@@ -188,6 +192,26 @@ describe('an app turn that does not finish', () => {
       expect(await state.storage.get<number>(APP_INBOX_DUE_KEY)).toBeGreaterThanOrEqual(at + 30_000);
       expect(await state.storage.getAlarm()).toBeGreaterThanOrEqual(at + 30_000);
       owners.runtime = 'admitted';
+      await owner().alarm();
+      expect(notices(await shown(owner(), name)).map(message => message.parent_id)).toEqual([id]);
+    });
+  });
+
+  it('a directory outage that starts during the write keeps the reply due for 30 s, like one before it', async () => {
+    const name = 'did-not-finish-outage-mid-write';
+    const id = `app-${APP_UPDATE_BASE + 1}`;
+    const stored = { ...history([user(id, 'Book the dentist for Friday.', null)], id), [`app:inbox-record:${id}`]: running(id, Date.now() - 60_000), app_seq: 1 };
+    await withOwner(name, stored, async (owner, state) => {
+      const directoryFetch = globalThis.fetch;
+      let lookups = 0;
+      vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) =>
+        String(input instanceof Request ? input.url : input).endsWith('/rpc/owner_runtime_authority') && ++lookups > 1 ? new Response('', { status: 503 }) : directoryFetch(input, init));
+      const at = Date.now();
+      await owner().alarm();
+      expect(record(state, id).notice).toBe('due');
+      expect(state.storage.kv.get(`${PREFIX}count`)).toBe(1);
+      expect(await state.storage.get<number>(APP_INBOX_DUE_KEY)).toBeGreaterThanOrEqual(at + 30_000);
+      vi.stubGlobal('fetch', directoryFetch);
       await owner().alarm();
       expect(notices(await shown(owner(), name)).map(message => message.parent_id)).toEqual([id]);
     });

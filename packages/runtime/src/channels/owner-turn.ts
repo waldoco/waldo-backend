@@ -634,6 +634,8 @@ export const createOwnerResponder = (
       // What the turn's tools already did stays on the record for the next turn while the run is still admitted; a
       // closed run writes nothing.
       const redact = literalTextRedactor([...removedTopics], FORGOTTEN);
+      const landed = fromOwner && privateRunScope ? receiptLine(turnToolEvents) : null;
+      if (landed) conversationStore?.noteUnfinished?.(redact(landed), privateRunScope!);
       try { for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); } }
       catch (flush) { if (!(flush instanceof ClosedRunError)) throw flush; }
       throw error;
