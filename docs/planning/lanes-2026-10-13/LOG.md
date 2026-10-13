@@ -1915,3 +1915,13 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
   - it has autonomy within the phases.
 - **New `OWNER_RULINGS_DIGEST.md`** is a committed digest of the owner's rulings, because the cloud can't read Mac memory. It covers standing rulings, 13 Oct items 1–22, and the open questions.
 - **To track the cloud lead later:** `git fetch origin claude/backend-lead-log`, then `git show origin/claude/backend-lead-log:docs/planning/backend-lead/LOG.md`, plus #1103.
+
+## 11:48Z (from `date -u`): iMessage check (owner asked to merge, deploy and update Ashish)
+
+- **#1095 isn't mergeable now.** It's a draft, about a day behind, +3615 lines in 42 files, with a new `IMessageBridgeDO`, a `wrangler.jsonc` change and Supabase migration `20261012100000`.
+  - It **clashes with #1119** ("rename the per-owner DO to OwnerDO, migration v6"; CI green; needs the owner): both claim DO migration tag v6.
+  - #1095 also edits the frozen `telegram-owner-do.ts`.
+  - **Order:** #1119 (owner's go), then #1128 (the wake bug), then #1095 rebased with DO tag v7 and the `OwnerDO` naming, a fresh migration timestamp if anything newer is applied, and a security review.
+  - After the merge, the owner applies the migration, sets the bridge secrets, and deploys directly.
+- **Critical path is the host:** `waldo-imessage-host` is fixtures-only. A live round trip needs live `chat.db` reading, HTTPS transport, a pull/result loop and AppleScript send.
+- **Posted** the status and questions for Ashish on #1095 (6144…), and moved #1095 into the cloud lead's scope on #1103 after #1119.
