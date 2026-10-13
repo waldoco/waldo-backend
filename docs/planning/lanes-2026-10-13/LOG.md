@@ -2056,3 +2056,18 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
   - **A reviewer is running** on #127, #128, and the #129 and #130 deltas. Still queued: #131, #133, #134, #135, #115 (its own pass on a stronger model), #117 (after #125), and N4's #123 follow-up (not opened yet).
   - **Usage:** 49% at 14:05Z, up from 37% at 13:27Z, resetting at 17:30Z. One reviewer at a time. L4 is told to start no new feature work.
   - **Time correction:** my message to L4 was stamped "14:12Z" but was sent at about 14:06Z (`date -u` read 14:05Z before it and 14:08Z after).
+
+- **14:16Z to 14:38Z: the owner stopped app work, and the focus moved to the backend and the agent loop.**
+  - **App stopped** (owner, about 14:15Z). Suyash is making UI/UX changes and mapping what doesn't work. I stopped my reviewer partway through #127–#130 (no verdicts) and the CI watch, and merged nothing more. #124, #121, #131 and #133 are reviewed but unmerged. L4 confirmed it is paused; its heads are #121 `c01558bd`, #124 `4e8b1b06`, #125 `f1e2ffd2`, #127 `60bf8654`, #128 `902cce04`, #131 `5182eed3` and #133 `7078c115`, and it will merge onto Suyash's changes rather than rebase. N4 is paused with #136 (`3e16c61a`, the #123 follow-ups), unreviewed. The known gap: the withdrawal hold lives in memory, so it needs an ADR-0082 review.
+  - **Focus** (owner, about 14:16Z): backend capabilities and the agent loop. Posted to the lead on #1103 (6147639308): re-order the gate so agent-loop items follow #1172; hand-off 2 must be safe for app `7e09317c`, the last build I know is on the phone.
+  - **Owner answers at 14:38Z** (digest items 24–26; on #1103, 6148076153):
+    - the pains are "loses context", "weak follow-through" and "judgment";
+    - the nightly eval on staging is a yes;
+    - the compaction ADR draft is a yes.
+  - **Suggested order to the lead:**
+    1. hand-off 2;
+    2. #1149, then the compaction ADR;
+    3. the alarm re-arm, the wake arbiter and surfacing schedule failures;
+    4. the eval harness, then soul-file prompt amendments.
+  - **The Mac's role now:** owner hand deploys, end-to-end agent-loop checks on staging after each deploy, and evidence on #1103.
+  - **Backend lead state:** hand-off 1 is withdrawn. The #1139 fix is #1172 (`51d46d78`). The `beta-mvp` tip is `4a964b6f` (#1160 Stop).

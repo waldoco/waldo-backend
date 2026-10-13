@@ -1,4 +1,4 @@
-# Owner rulings digest, as of 13 Oct 2026, 10:53Z
+# Owner rulings digest, as of 13 Oct 2026, 14:38Z
 
 This digest lets cloud sessions follow the owner's rulings. The full notes live in the orchestrator's memory on the owner's Mac, which cloud sessions can't read. Rulings decide what is wanted; source and tests decide what is shipped. Where a later ruling conflicts with an earlier one, the later one wins.
 
@@ -49,6 +49,16 @@ This digest lets cloud sessions follow the owner's rulings. The full notes live 
 20. **Suyash's design pass: yes.** Sample data must carry a visible "Sample" label and live only in `src/prototype/`.
 21. **iMessage becomes the messaging surface, and Telegram is retired,** eventually. Keep Telegram until iMessage has carried real use. #1095 is a draft, and the Mac host (Ashish) is the critical path.
 22. **The memory and proactive-logic audit:** planned for after the reset. The owner approves the scope.
+
+## 13 Oct afternoon (about 14:15Z to 14:38Z)
+
+23. **App work is stopped for now.** Suyash is making UI/UX changes and mapping what doesn't work; afterwards, each item is made to work with the backend. The open app PRs stay unmerged at their heads. Nothing that needs a new app pin is emitted (#1167 stays held). Hand-off 2 must be safe for the installed app.
+24. **The focus is Waldo's backend capabilities and the agent loop itself.** The pains, in the owner's words, are "loses context", "weak follow-through" and "judgment" (asks when it should act, or assumes when it should ask). Slow turns were not picked, so latency comes after these.
+25. **The nightly model-graded eval on staging: yes.**
+    - It runs on a separate test owner with synthetic data, and a model grades the outcomes.
+    - The scorecard goes to #1103, with no health values in the output and a bounded number of model calls per night.
+    - It starts from the 20-task set, plus recall and check-back scenarios.
+26. **The conversation compaction ADR: yes, draft it.** The owner reviews it before anything is built. The transcript keeps every row.
 
 ## Still open (ask the owner)
 
