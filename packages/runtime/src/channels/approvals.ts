@@ -33,7 +33,8 @@ const SENT_RESEARCH_GAP_MS = 1_500;
 export const UNDO_WINDOW_MS = 10 * 60_000;
 export const PROPOSAL_TTL_MS = 12 * 60 * 60_000;
 
-type Stored = ProposeCalendarChangeArgs & { seen_etag?: string; operation_ref?: string };
+// seen_start/seen_end: the event's time when the card was made, so a move shows what it moves from.
+type Stored = ProposeCalendarChangeArgs & { seen_etag?: string; seen_start?: string; seen_end?: string; operation_ref?: string };
 
 // B-tool-3: the exact thing the owner approved. The executor replays it in a fresh browser
 // session and re-reads the binding from the page before acting - a changed price/item/destination
@@ -132,6 +133,9 @@ const approveActions = (entry: LedgerRow): AppApprovalPart['actions'] => buttons
 // Not now is offered wherever a card is open or review-only; it is desk state, so it never depends on the surface.
 // Not now is offered once: an approval already put off offers only the decisions that move it.
 const withDefer = (entry: LedgerRow, actions: AppApprovalPart['actions']): AppApprovalPart['actions'] => entry.deferred_at == null ? [...actions, 'defer'] : actions;
+
+// Google writes an event's time in its calendar's offset; the proposal may name the same instant in another.
+const sameInstant = (a: string, b: string) => a === b || Date.parse(a) === Date.parse(b);
 
 // The approval card IS the owner's review of a send. Telegram caps a message at 4096 chars:
 // when the full content fits, the card shows every recipient + the complete body and carries
@@ -269,10 +273,13 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   let proposalTurn: string | undefined;
   const calendarProposals = new Map<string, Promise<string>>();
   const when = (iso: string) => new Intl.DateTimeFormat('en-GB', { timeZone: deps.timezone, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
-  const describe = (p: ProposeCalendarChangeArgs) => {
+  const day = (iso: string) => new Intl.DateTimeFormat('en-GB', { timeZone: deps.timezone, year: 'numeric', month: 'numeric', day: 'numeric' }).format(new Date(iso));
+  const hour = (iso: string) => new Intl.DateTimeFormat('en-GB', { timeZone: deps.timezone, hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
+  const span = (start: string, end: string) => day(start) === day(end) ? `${when(start)}–${hour(end)}` : `${when(start)} to ${when(end)}`;
+  const describe = (p: Stored) => {
     const name = p.title ? `"${p.title}"` : 'the event';
     if (p.action === 'create') return `Add ${name}, ${when(p.start!)} to ${when(p.end!)}${p.account ? ` (${p.account})` : ''}`;
-    if (p.action === 'move') return `Move ${name} to ${when(p.start!)} to ${when(p.end!)}${p.account ? ` (${p.account})` : ''}`;
+    if (p.action === 'move') return `Move ${name}${p.seen_start && p.seen_end ? ` from ${span(p.seen_start, p.seen_end)}` : ''} to ${span(p.start!, p.end!)}${p.account ? ` (${p.account})` : ''}`;
     return `Cancel ${name}${p.account ? ` (${p.account})` : ''}`;
   };
   const row = (id: string) => sql.exec<LedgerRow>('SELECT * FROM ledger WHERE id = ?', id).toArray()[0];
@@ -707,7 +714,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             try {
               const current = await client.event(eventId);
               if (current.operation_marker !== marker) return {status:'unknown'};
-              if (proposal.action !== 'cancel' && current.status !== 'cancelled' && (proposal.action !== 'create' || current.title === proposal.title) && current.start === proposal.start && current.end === proposal.end && current.etag
+              if (proposal.action !== 'cancel' && current.status !== 'cancelled' && (proposal.action !== 'create' || current.title === proposal.title) && sameInstant(current.start, proposal.start!) && sameInstant(current.end, proposal.end!) && current.etag
                 && (!proposal.seen_etag || current.etag !== proposal.seen_etag)) {
                 // A marker can survive a later owner edit. Recovery proves the effect, but
                 // cannot establish the exact applied ETag needed for safe Undo.
@@ -927,10 +934,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         if((p.event_id || p.account)&&!client)throw new Error('The calendar account is unavailable; no proposal was prepared.');
         if (p.account && client?.account?.email?.toLowerCase() !== p.account.toLowerCase()) throw new Error('Selected calendar account is unavailable');
         const bound = { ...p, ...(client?.account?.email ? {account:client.account.email} : {}) };
-        const summary = `${describe(bound)}. ${bound.reason}`;
         const before = client && bound.event_id ? await client.event(bound.event_id) : undefined;
         const seen = before?.etag;
-        const stored: Stored = { ...bound, ...(seen ? { seen_etag: seen } : {}), ...(operationRef ? { operation_ref: operationRef } : {}) };
+        const seenTime = before && !before.all_day && before.start && before.end ? { seen_start: before.start, seen_end: before.end } : {};
+        const stored: Stored = { ...bound, ...(seen ? { seen_etag: seen } : {}), ...seenTime, ...(operationRef ? { operation_ref: operationRef } : {}) };
+        const summary = `${describe(stored)}. ${bound.reason}`;
         sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'calendar_change', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(stored), deps.now());
         bindOrigin(id, originRunRef);
         await present(id);
