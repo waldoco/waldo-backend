@@ -2,7 +2,7 @@ import { signedRpc, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { sha256Hex } from './signing';
 import { capabilities, identifier, record, type RedeemBody } from './wire';
 import { REDEEM_THROTTLES, type Capability } from './contract';
-export type DeviceAuth = { owner_id: string; pubkey: string; capabilities: Capability[] };
+export type DeviceAuth = { owner_id: string; pubkey: string; capabilities: Capability[]; do_name: string; contract_version: string };
 export type ListedDevice = { device_id: string; label: string; capabilities: string; created_at: string; last_seen_at: string | null };
 export const deviceDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch) => {
   const rpc = signedRpc(env, fetcher);
@@ -25,15 +25,16 @@ export const deviceDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch = 
     async redeemPairing(body: RedeemBody, digest: string): Promise<{ device_id: string; owner_id: string } | null> {
       const labelHex = [...new TextEncoder().encode(body.label)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
       const caps = body.declared_capabilities.join(',');
-      const result = await call('redeem_device_pairing', `devredeem.${digest}.${body.device_pubkey}.${labelHex}.${caps}`, { p_code_hash: digest, p_pubkey: body.device_pubkey, p_label: body.label, p_capabilities: caps });
+      const consent=body.session_consent===true?'true':'false';
+      const result = await call('redeem_device_pairing_v030', `devredeem030.${digest}.${body.device_pubkey}.${labelHex}.${caps}.${consent}`, { p_code_hash: digest, p_pubkey: body.device_pubkey, p_label: body.label, p_capabilities: caps, p_session_consent:consent });
       const row = Array.isArray(result) && result.length === 1 ? result[0] : null;
       return record(row) && identifier(row.device_id) && identifier(row.owner_id) ? { device_id: row.device_id, owner_id: row.owner_id } : null;
     },
     async deviceForAuth(device: string): Promise<DeviceAuth | null> {
-      const result = await call('device_for_auth', `devauth.${device}`, { p_device_id: device });
+      const result = await call('device_for_auth_v030', `devauth030.${device}`, { p_device_id: device });
       const row = Array.isArray(result) && result.length === 1 ? result[0] : null;
       const caps = record(row) && typeof row.capabilities === 'string' ? capabilities(row.capabilities.split(',')) : null;
-      return record(row) && identifier(row.owner_id) && typeof row.pubkey === 'string' && caps ? { owner_id: row.owner_id, pubkey: row.pubkey, capabilities: caps } : null;
+      return record(row) && identifier(row.owner_id) && typeof row.pubkey === 'string' && caps && row.contract_version==='0.3.0' && identifier(row.do_name) ? { owner_id: row.owner_id, pubkey: row.pubkey, capabilities: caps, do_name:row.do_name,contract_version:row.contract_version } : null;
     },
     touchDevice: async (device: string): Promise<boolean> => await call('device_touch', `devtouch.${device}`, { p_device_id: device }) === true,
     async listDevices(owner: string): Promise<ListedDevice[]> {
