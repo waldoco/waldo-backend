@@ -86,12 +86,15 @@ export const scrubConversationHistory = async (storage: KeyValueStorage): Promis
 // entry (owner-canonical-history.ts). load() requires row and witness to be identical, so both are rewritten together.
 const CANONICAL_PREFIX = 'canonical-owner-v1:';
 type Witness = { entry: ConversationEntry } & Record<string, unknown>;
-// Row kind from the key structure, not substring luck: canonical-owner-v1:<principal>:<tenant>:(conv|witness):<rest>.
-const canonicalKind = (key: string): 'conv' | 'witness' | null => {
+// Row kind and chain from the key structure, not substring luck:
+// canonical-owner-v1:<principal>:<tenant>:[thread:<thread id>:](conv|witness):<rest>. A row's witness lives in its own chain.
+const canonicalRow = (key: string): Readonly<{ chain: string; kind: 'conv' | 'witness' }> | null => {
   if (!key.startsWith(CANONICAL_PREFIX)) return null;
-  const kind = key.slice(CANONICAL_PREFIX.length).split(':')[2];
-  return kind === 'conv' || kind === 'witness' ? kind : null;
+  const parts = key.slice(CANONICAL_PREFIX.length).split(':');
+  const at = parts[2] === 'thread' ? 4 : 2, kind = parts[at];
+  return kind === 'conv' || kind === 'witness' ? { chain: `${CANONICAL_PREFIX}${parts.slice(0, at).join(':')}:`, kind } : null;
 };
+const canonicalKind = (key: string): 'conv' | 'witness' | null => canonicalRow(key)?.kind ?? null;
 type ExpectedForgetOwner = Readonly<{ principal_ref: string; tenant_ref: string }>;
 export const conversationForgetSources = async (storage: KeyValueStorage, topic: string, expected?: ExpectedForgetOwner) =>
   conversationSourcesFromRows(await storage.list<ConversationEntry>({ prefix: 'conv:' }), await storage.list<ConversationEntry | Witness>({ prefix: CANONICAL_PREFIX }), topic, expected);
@@ -116,7 +119,7 @@ const conversationSourcesFromRows = (legacy: Map<string, ConversationEntry>, can
   const verified = (key: string, entry: ConversationEntry) => {
     if (!expected || !expectedPrefix) return true;
     if (!key.startsWith(expectedPrefix) || entry.ownerId !== expected.principal_ref) return false;
-    const witness = canonical.get(`${expectedPrefix}witness:${entry.id}`) as Witness | undefined;
+    const witness = canonical.get(`${canonicalRow(key)!.chain}witness:${entry.id}`) as Witness | undefined;
     if (!witness || witness.lineage !== 'canonical_v1' || witness.principal_ref !== expected.principal_ref || witness.tenant_ref !== expected.tenant_ref || JSON.stringify(witness.entry) !== JSON.stringify(entry)) return false;
     return JSON.stringify(ownEntries.get(entry.id)) === JSON.stringify(entry);
   };
@@ -179,7 +182,7 @@ export const redactConversationEntries = async (
         if (taken.has(key)) continue;
         const unit = [key];
         if (canonicalKind(key) === 'conv') {
-          const witnessKey = `${key.split(':').slice(0, 3).join(':')}:witness:${(value as ConversationEntry).id}`;
+          const witnessKey = `${canonicalRow(key)!.chain}witness:${(value as ConversationEntry).id}`;
           if (witnessKey in writes) unit.push(witnessKey);
         }
         for (const k of unit) taken.add(k);
