@@ -37,7 +37,7 @@ import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { receiptUrl } from '../conversation/artifact-link-guard';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
-import { APP_INBOX_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, armWhatsappPendingWake, persistInboxWake, persistTransportWake, rearmSharedAlarm } from '../scheduler/alarm-slot';
+import { APP_INBOX_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, armFallbackWake, armWhatsappPendingWake, persistInboxWake, persistTransportWake, rearmSharedAlarm } from '../scheduler/alarm-slot';
 import { admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
 import { TelegramFinalOutbox, redactMailFollowupEntries, redactCalendarPrepEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
@@ -57,7 +57,7 @@ import { SCHEDULE_KINDS, setProactivityArgsSchema, type ConnectIntent, type Conv
 import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, claimStore, profile } from '../memory/claims';
 import { isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine } from './loops';
-import { armHeartbeat, heartbeatTick, heartbeatEligible, settleHeartbeat } from './heartbeat';
+import { armHeartbeat, HEARTBEAT_EVERY_MS, heartbeatTick, heartbeatEligible, settleHeartbeat } from './heartbeat';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
 import { consoleAuth, presenceRecheck, type OwnerSettings } from '../identity/console-auth';
@@ -198,6 +198,7 @@ type OwnerRuntime = Readonly<{
 }>;
 
 const LATE_FIRE_MS = 5 * 60_000;
+const PLATFORM_ALARM_RETRIES = 6;
 // A directory outage at the alarm leaves the app owner's scheduled work waiting; this is how soon the alarm asks again.
 const APP_ADMISSION_RETRY_MS = 60_000;
 
@@ -1438,7 +1439,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return { outcome, bot };
   }
 
-  override async alarm(): Promise<void> {
+  // Whatever an alarm's work throws, the owner keeps a next wake, no later than one heartbeat away. While the platform
+  // still retries a throwing alarm (six times), the error goes back to it; on its last retry the fallback wake is the retry.
+  override async alarm(info?: AlarmInvocationInfo): Promise<void> {
+    try { await this.alarmWork(); }
+    catch (error) {
+      await armFallbackWake(this.ctx.storage, Date.now(), HEARTBEAT_EVERY_MS);
+      const last = (info?.retryCount ?? 0) >= PLATFORM_ALARM_RETRIES;
+      console.error(JSON.stringify({ hop: 'alarm', ok: false, code: last ? 'fallback' : 'rethrown' }));
+      if (!last) throw error;
+    }
+  }
+  private async alarmWork(): Promise<void> {
     await this.browserReady;
     await this.recoverWhatsappPending();
     const mode=this.ctx.storage.kv.get<LinkBinding>(LINK_MODE);

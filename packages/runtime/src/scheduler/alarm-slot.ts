@@ -26,6 +26,13 @@ export async function armWhatsappPendingWake(storage: DurableObjectStorage, due:
   await armAlarm(storage, existing === null ? due : Math.min(existing, due));
 }
 
+// The alarm handler's last resort after a throw: an earlier future wake already armed stands, otherwise the owner wakes
+// again after delayMs. Whatever threw, the object is never left without a next alarm.
+export async function armFallbackWake(storage: Pick<DurableObjectStorage, 'getAlarm' | 'setAlarm'>, now: number, delayMs: number): Promise<void> {
+  const existing = await storage.getAlarm();
+  await armAlarm(storage, existing !== null && existing > now ? Math.min(existing, now + delayMs) : now + delayMs);
+}
+
 // One arbiter for schedule and Telegram transport. Every scheduler rearm includes
 // persisted transport due time, including an empty schedule (formerly deleteAlarm).
 export async function rearmSharedAlarm(storage: DurableObjectStorage, scheduleDue: number | null, now: number, retryDelayMs = 250): Promise<void> {
