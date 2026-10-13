@@ -1296,3 +1296,19 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   5. the next deploy command.
 - **Usage:** 18% at 07:52Z, rising fast. Hold new reviews until running ones finish.
 - **Context:** the orchestrator is at 82%, so a compaction is near.
+
+## 07:55:09Z: app #108 merged; #106 PASS (needs main merged in); the search question settled
+
+- **Merged app #108** as `92423c81` at 07:54:38Z.
+  - **Gate:**
+    - review PASS for #106 and #108 (one reviewer);
+    - CI green at `575f7104`;
+    - CLEAN;
+    - the advisor agreed.
+  - #108's CI ran before #107 merged. Main's change since #108's base is only #107's three files (`_layout.tsx` and `useSessionRestore.ts` plus its test). #108's files (`briefView.ts` and its test) don't overlap them or import them.
+  - **Process slip, owned:** the first import check silently didn't run. It used `for f in $PR` in zsh, which doesn't word-split, so both paths went into one URL. I re-ran it correctly right after the merge: `briefView.ts` imports only `@/settings/schedule` and `@/format/when`. The condition held.
+- **App #106: PASS.**
+  - L4 merges main into it (no force-push). If the merge is clean, the PASS stands, and it merges on green CI. If L4 resolved a conflict, it gets a short delta review first.
+  - Follow-ups went to L4: a client timeout, Retry-After inside `run()`, naming the `loadDay` change in the body, and #108 render tests.
+- **The quasarplum check:** FOUND. The turn was about 90 s old, with an exact timestamp, and no memory was stored. The index works, and the morning's miss was ranking. #1100's check counts as 4 of 4.
+- **Still running:** #1114's delta, #109 (N4) and #1123.
