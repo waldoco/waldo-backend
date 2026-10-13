@@ -2108,3 +2108,11 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
   - **Usage:** 55%, resetting 17:30Z.
   - **Backend:** the `beta-mvp` tip is `d69ce8ea` (#1006, Ashish's device-bridge trace hardening, merged 14:58). #1172 is still open at `51d46d78`, so hand-off 2 hasn't been called.
   - **Quiet:** nothing new on #1103, #1017, #1162 or #1095 since 15:14Z. The lead's log was last updated at 14:07. Nothing from Suyash in waldo-app.
+
+- **15:56Z heartbeat: the iMessage connector landed on `beta-mvp`, default-off.**
+  - **The merge:** Ashish merged #1017 (`101b2bc8`) and #1162 (`aae96328`) himself at 15:46Z, with no gate review at those heads.
+  - **CI:** the `verify` push runs passed at both merges.
+  - **On the tip now:** DO tag `v7` and migration `20261012000000`, which is older than every queued owner migration (#1127, #1133, #1161, #1177).
+  - **Flagged to the lead** (#1103 6149659751): a post-merge review at `aae96328` (M1, M2, L1, L2, and `approval: 'none'`); close #1095; hand-off 2 now carries `v7`; the migration must be applied first or in timestamp order.
+  - **Builder:** threads slices 1 and 2 are ready (#1173, #1176). Push E is #1177 ("needs owner": migration `20261013160000` after #1133's, plus the Expo access token secret). Slice 3a is claimed.
+  - **Unchanged:** #1172 is still open. Usage is 55%.
