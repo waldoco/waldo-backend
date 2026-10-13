@@ -555,87 +555,100 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **Then:** merge at the new head after a hand check of the delta, push CI, deploy alone, smoke, and the App lane's P1 re-run (test send 2 of 5; it is also QA step 4, so there's no separate "qa" send).
 - **Existing exposure, for the summary:** `connector-proxy/index.ts:57` logs Gmail's error text, which can repeat recipient details. It's live in v17 and goes on the must-merge-before-redeploy list.
 
-## Morning summary for the owner (13 Oct; written 00:38Z, updated below if anything lands later)
+## Morning summary for the owner (13 Oct; rewritten 01:46Z)
 
-**In one line:** approvals now raise a card in app chat, and an approved email really goes out. The app showed "Outcome not confirmed" only because the backend's check after sending missed it. That fix (#1111) passed review and merges after one small diagnostic commit, followed by its own deploy and a P1 re-run. Mail reading, meeting prep and calendar details are built, but they wait for your connector-proxy redeploy, and several security fixes have to land before it.
+**In one line:** approvals now raise a card in app chat, and an approved email really goes out. The app said "Outcome not confirmed" because Gmail rewrites the Message-ID we set, so the backend's proof could never pass. #1115, deployed at 01:36Z, proves a send by Gmail's own id instead. The last live check, P1 run 3b, needs you: the App session's permission check refused its keystrokes. Mail reading, meeting prep and calendar details are built but wait for your connector-proxy redeploy, and several security fixes must land before it.
 
 ### What works on staging, with Simulator evidence
-- **Staging is `3bc1bb54`** (Worker `9c973463`, rollback `a446c445`), deployed at 22:05Z. `/healthz` was verified at 00:37Z.
-- **P1 (approve an email in the app),** on `iPhone 17` with main's build, 23:16–23:24Z:
-  - "Send it now." raised the approval card in chat. #1104 works.
-  - Tapping "Send it" sent the mail: the App lane's read-only check at 23:52Z found it in the test account's Sent. But the app said "Outcome not confirmed", because the backend's immediate search of Sent missed it.
-  - #1111 adds a bounded re-check and coded hops that name the cause. #990's strict proof rule is unchanged.
-- **On the first ask ("send it once I approve"),** Waldo only drafted and said "tell me to send it". The card came on the second ask. This is prompt context, not a rule, and isn't fixed tonight.
-- **Waldo gave the sent time 30 minutes off.** [inference] The model did the time-zone arithmetic itself. Queued: tools hand times to the model already in your zone.
+- **Staging is `19d05d02`** (Worker `5cade547`, rollback `8b48dad2`), deployed at 01:36Z. The deploys before it were `652b5fcf` at 00:54Z and `3bc1bb54` at 22:05Z.
+- **P1 (approve an email in the app)** on `iPhone 17`, main's build:
+  - **The card:** "Send it now." raises it in chat (#1104). On the first ask ("…send it once I approve"), Waldo only drafts, in every run so far. That's queued as prompt context.
+  - **The send:** both approved "probe" sends went out (23:24Z and 00:59Z, confirmed in Sent). Both still read "Outcome not confirmed", and always will: the ledger kept no Gmail id for them, and app.v1 gives that state no actions.
+  - **The cause [verified]:** the hop `email_diagnose:header_differs` at 01:00Z. Gmail rewrites our Message-ID. #990's proof (search Sent by our Message-ID) never met real Gmail before tonight.
+  - **The fix:**
+    - #1111 (deployed at 00:54Z) added coded hops and a bounded re-check.
+    - #1115 (deployed at 01:36Z) proves the send by the Gmail id the send returned, with the SENT label and the thread still required.
+    - A send whose response is lost stays unknown, and is never retried or called done.
+  - **Run 3 sent nothing:** Waldo rightly refused to send an identical "probe" again while the old two are unknown.
+  - **Run 3b ("QA"), test send 3 of 5:** ready, but the App session's classifier refused the input. It waits for you to approve it in that session, or to run it yourself: "Draft a note to myself saying 'QA' and send it once I approve", then "Send it now.", then approve. Success reads "Done".
+- **Read-only check:** mail search found the sent probe. Waldo's stated sent time was 30 minutes off [inference: the model did the zone arithmetic itself].
 
 ### Merged tonight
 - **Backend (`beta-mvp`):**
   - #1102: the flaky run-loop test.
   - #1104: the app approval card.
   - #1106: test follow-ups.
-  - #1107: calendar join link, attachments and attendee emails, with a fixed digest so no meeting is prepped again. It's a no-op until the proxy redeploys.
+  - #1107: calendar join link, attachments and attendee emails, with a fixed digest. It's a no-op until the proxy redeploys.
+  - #1111: send hops and the re-check.
+  - #1115: proof by Gmail's id.
 - **App (`main`):**
   - #96: App CI.
   - #92: the #89 follow-ups.
   - #97: a reply's last line is no longer clipped.
-  - #93: the approvals re-read honours the server's wait, including in the real transport.
+  - #93: the approvals re-read honours the server's wait.
   - #94: the words pass, with per-action approve labels.
   - #95: the screens pass.
 
 ### Your decisions, most urgent first
-1. **Redeploy connector-proxy** (from the same SHA as the Worker). The classifier refused it for me.
+1. **Approve or run P1 run 3b** (above). It's the last live proof of approvals.
+2. **Ratify #1115's rule change.** The proof identity for an approved send moved from our Message-ID to Gmail's returned id. Consequence: a send whose response was lost can never be reconciled, and stays "unknown" for good. That's honest, but it's a change to #990's rule.
+3. **Redeploy connector-proxy** (from the Worker's SHA). The classifier refused it for me.
    - **First, these must merge:**
-     - #1114, the table-cells fix. Verification codes in HTML table cells currently reach the model in chat `read_thread`; that's live today.
-     - #1105, choosing the right mail body.
-     - #1112, links.
-     - #1109's fixes, which include an organizer-or-accepted gate, so an outsider's invite can't choose which of your mail is read.
-     - A fix for `connector-proxy/index.ts:57` logging Gmail's error text. It can repeat recipient details, and it's live in v17 now.
-     - The chunk PR, if it's ready.
+     - #1114: codes in HTML table cells reach the model in chat `read_thread`; that's live today. It's CI green and gets its review after the reset.
+     - #1105: choosing the right mail body.
+     - #1112: links.
+     - #1109's fixes, which include an organizer-or-accepted gate.
+     - A fix for `connector-proxy/index.ts:57` logging Gmail's error text, which can repeat recipient details. It's live in v17.
+     - The chunk PR, if ready.
    - **What the redeploy switches on:**
-     - #1107's calendar fields. Attendee emails reach model context, and `conference_url` is kept whole (D1), so it can carry a passcode, and a third party's invite can set its own video link.
+     - #1107: attendee emails reach model context, and `conference_url` is kept whole (D1), so it can carry a passcode, and a third party's invite can set its own video link.
      - #1109's attendee search.
      - #1105's body choice.
-     - #1111's direct by-id send check.
-2. **The scribe's health false positives:** options A, B and C are on #1103. There's no safe narrowing, because the pairs are lexically identical.
-3. **Where Patrol and Spots go once the side menu goes** (R1, three tabs). The App lane builds R1 to wait for your call. The backend's "where Connections is" line ships with it.
-4. **#1109's ADR versus your ruling:**
-   - "Links stay quarantined" is read as verification codes and links only, which matches chat.
+     - #1111 and #1115's direct by-id send check.
+4. **The scribe's health false positives:** options A, B and C are on #1103.
+5. **Where Patrol and Spots go once the side menu goes** (R1). R1 and the backend's "where Connections is" line wait for this.
+6. **#1109's ADR versus your ruling:**
+   - "Links" is read as verification codes and links only.
    - The prep note is stored like any message.
    - Staging traces capture prompt text, under your 10 Oct ruling.
-5. **D-b, only if #1111's hops show `header_differs`** (Gmail rewrote our Message-ID). The proof would move to the Gmail id that send returned. The conservative form can ship. Anything that retries or completes a lost send waits for you.
-6. **Not a claim yet:** on staging's proxy path, a send Gmail refuses still shows "unknown", not "Not done". The proxy needs its own refusal code; that's later work.
-7. **Your own tasks:**
-   - sign in again on `iPhone 17 Pro` (signed out at about 21:52Z; `iPhone 17`'s session lasts until about 08:40Z);
-   - upload the Expo keys (the APNs key and an FCM service account);
-   - close #1072 (superseded by #1102 and #1106);
-   - the React Native text-drawing dependency patch the App lane raised;
-   - #1113, the guard changes and cost ledger. It's held for you or Ansh, as ruled.
+7. **Not a claim yet:** on staging's proxy path, a send that Gmail refuses still shows "unknown", not "Not done".
+8. **Possibly the same flaw in drafts** (unverified): `findDraftByMessageId` keys on our Message-ID, and Waldo drafts on every first ask.
+9. **Your own tasks:**
+   - sign in again on `iPhone 17 Pro` (`iPhone 17` is signed in until about 08:40Z);
+   - upload the Expo keys (APNs key, FCM service account);
+   - close #1072 (superseded);
+   - the React Native text-drawing dependency patch;
+   - #1113 (guard changes and cost ledger), held for you or Ansh.
 
 ### Held, or waiting for review
-- **#1100** (one agent on every surface) has two unmet conditions:
+- **#1100** has two unmet conditions:
   1. Telegram text turns still fork off the `telegram-<subject>` chain.
   2. No test shows that deletion clears `episodes`.
 
-  The backend lane is on both. The rename PR and #1108 wait behind it, in order.
+  The backend lane is on both. The rename PR and #1108 wait behind it.
 - **After the 02:30Z usage reset,** reviews run for:
   - #1114 (table cells);
   - #1110 (A2, browsing from the app);
-  - app #98 (chat chrome, held for the P1 re-run's look-only check);
+  - app #98 (chat chrome; its look-only check on an open card passed);
   - app #99 (state words);
   - app #100 (the Form ring);
   - app #101 (one sign-out, plain words).
-- **`created_at` on chat rows** (reply times): the backend lane adds it without a migration. Older rows show no time.
+- **`created_at` on chat rows** (reply times): the backend lane adds it without a migration.
+- **#1115 follow-ups:**
+  - a thread-precedence test (one mutation survived);
+  - the diagnosis only for a valid Gmail id;
+  - diagnosing after the first miss.
 
 ### Process slips (all logged)
-- **The orchestrator drove `iPhone 17` for P1** while it was the App lane's device, because messages were capped. It collided with the App lane, and the device was handed back.
-- **The App lane force-pushed #94** (`--force-with-lease`). Nothing was lost; it was self-reported, and the lane merges only from now on.
-- **The orchestrator posted one deploy note on #116** (6133481055) against the board-only rule.
-- **The orchestrator called R1 a go,** against ruling 7. It was corrected at 23:51Z.
-- **Usage:** the shared window reached 78% at 00:38Z. Every lane paused non-critical work until the 02:30Z reset.
+- **The orchestrator drove `iPhone 17` for P1** while it was the App lane's device, because messages were capped. The device was handed back.
+- **The App lane force-pushed #94** (`--force-with-lease`). Nothing was lost, and it was self-reported.
+- **One orchestrator deploy note went to #116** (6133481055), against the board-only rule.
+- **The orchestrator called R1 a go,** against ruling 7. Corrected at 23:51Z.
+- **Usage:** the shared window reached 81%. Lanes paused non-critical work until 02:30Z, except the send fix.
+- **Refusals by the classifier,** each left for you: the connector-proxy deploy (orchestrator) and P1 run 3b's typing (App session).
 
 ### Test sends
-1 of 5 used: the word "probe", to the test account's own address, at 23:24:02Z.
-
+**2 of 5 used**, both "probe", to the test account's own address, at 23:24:02Z and 00:59:56Z. Run 3 sent nothing. Run 3b is held.
 ## 00:55Z: #1111 merged and deployed; P1 go
 
 - **Merged #1111 as `652b5fcf`** (the send fix).
@@ -709,3 +722,9 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - Nothing was approved, and nothing was sent. Test sends used are still **2 of 5**.
 - **Reading:** the two earlier "probe" sends are permanently `outcome_unknown`. The ledger kept no Gmail id for them, so #1115 can't re-prove them, and app.v1 gives that state no actions. Refusing an identical send is the correct duplicate guard.
 - **Run 3b go:** the same P1 steps with the word "QA" (allowed by ruling 6), so it isn't a duplicate. The same stop rule applies.
+
+## 01:46Z: P1 run 3b refused by the App session's classifier; summary rewritten
+
+- **The App lane's turn-1 keystrokes for run 3b** ("…saying 'QA'…") were refused by its auto-mode classifier as a real-world transaction [verified by the App lane]. Nothing was typed or sent. Test sends used are still 2 of 5.
+- **Per the README rule,** it isn't routed around: the orchestrator won't drive the device for it. It waits for the owner, as decision 1 in the summary.
+- **The morning summary above** is rewritten in place for the current state.
