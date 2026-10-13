@@ -105,9 +105,8 @@ None of this is evidence of parity with any product. Parity needs the same conse
 | Recurring events: moves act on one instance only, with no choice of scope | `connectors/google.ts:797` | Offer "this event" (an instance) or "the series" (the recurring master), shown on the card. |
 | Mail list fetches metadata one request per message | `connectors/google.ts:541` | Batch the metadata reads. |
 | `read_thread` re-fetches the whole thread for every page | `connectors/google.ts:548`, `:560` | Fetch once and cursor locally, or use `messages.get` per page. |
-| Drive search is name-only, own-drive only, 6 fields | `connectors/drive-rest.ts:84`, `:38` | `fullText contains`, shared drives (`corpora=allDrives`), and `webViewLink` and owners in the result. |
-| Drive content reads Docs and plain text only; Sheets and Slides are rejected | `connectors/drive-rest.ts:106` | Export Sheets as CSV and Slides as text. PDFs and Office files get text extraction, with an explicit "could not extract" when it fails. |
-| Truncation is silent | `connectors/google.ts:335`, `connectors/drive-rest.ts:114` | Add a fixed "content truncated" marker, as other harnesses do, so the model knows it saw part of the item. |
+| Uploaded PDFs and Office files have no text; Drive cannot export them | `connectors/drive-rest.ts` content read | Extract text at the edge, size-capped, with an explicit "could not extract" when it fails. |
+| A long mail body is cut at 32,000 characters with no marker, so the model can't tell it saw only part of it. The Drive read already flags truncation and tells the model. | `connectors/google.ts:335`, `:356` | Return a `truncated` flag with the thread, like the Drive read. |
 | `write_sheet_cell`, `propose_schedule` and `search_connector` are permitted but have no handler | `packages/contracts/src/tools/permissions.ts:49-51` | Build them, or remove them from the permission table (post-mvp-cleanup). |
 | Mail and Tasks reads have no per-method scope check at the edge | `connector-proxy/index.ts:154-158` | Add the check, so a missing scope reads as `insufficient scopes` before any Google call. |
 
@@ -152,7 +151,7 @@ None of this is evidence of parity with any product. Parity needs the same conse
 
 **Not for personal accounts:** Chat, Keep and the org directory need Workspace accounts. Meet transcripts and recordings likely need a paid edition [inference].
 
-**Scope plan:**
+**Scope plan (approved):**
 - Replace `gmail.readonly` with `gmail.modify`.
 - Add `contacts.readonly`, `contacts.other.readonly` and `drive.file`.
 - Keep `drive.readonly` for reading the owner's existing files.
