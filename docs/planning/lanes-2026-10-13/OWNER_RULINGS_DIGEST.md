@@ -1,4 +1,4 @@
-# Owner rulings digest, as of 13 Oct 2026, 20:42Z
+# Owner rulings digest, as of 13 Oct 2026, 21:35Z
 
 This digest lets cloud sessions follow the owner's rulings. The full notes live in the orchestrator's memory on the owner's Mac, which cloud sessions can't read. Rulings decide what is wanted; source and tests decide what is shipped. Where a later ruling conflicts with an earlier one, the later one wins.
 
@@ -89,6 +89,13 @@ This digest lets cloud sessions follow the owner's rulings. The full notes live 
     - When a design point is ambiguous, check how mature agent systems handle it. Look first at Anthropic's docs and its engineers' posts.
     - Cite what you find in the PR. Where you depart from that practice, say why.
     - The sourced reference note is `HARNESS_PRACTICE_REFERENCES.md` on this branch. It covers the time budget and retries, compaction, tool errors, memory retrieval, latency, evals, forgetting and running long lanes.
+36. **The Mac takes over idle sessions' work (about 21:28Z).** When Ansh's sessions or the lead's are idle or at their usage limits, the Mac may take over their work if needed. The claim and its boundaries are on #1103 (6155674385). While the lead is inactive, the Mac reviews and merges only with:
+    - an independent PASS;
+    - CI 6 of 6 at the exact head;
+    - the `owner-do.ts` queue order;
+    - the advisor.
+
+    Builders' in-flight branches stay theirs unless the Mac posts a claim first.
 
 ## Still open (ask the owner)
 
