@@ -792,3 +792,18 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
     - an unused import;
     - re-run CI on current `main`.
 - **App `main`** now has #93, #94, #95, #97, #98, #99 and #100.
+
+## 03:13Z: app #101 merged
+
+- **Merged app #101** (R7: one sign-out; R8: plain words).
+  - **Gate:**
+    - The required fixes were checked by hand at `734f653a`.
+    - The draft line is true now ("This draft stays on this phone and is not sent."). The Settings card no longer calls preferences fixed. The unused import is gone.
+    - The merge resolution keeps #98's hold guard on both decision buttons (2 of 2, the same as `main`). ApprovalCard differs from `main` only by "the server" → "Waldo".
+    - CI passed on current `main`, and the sign-out and delete paths were verified sound by the review.
+- **Next for the App lane:** the follow-up PR, covering:
+  - "Unconfirmed";
+  - the test rename;
+  - the states taken from the schema options;
+  - the replyTime/wroteWhen rule;
+  - More's draft words.
