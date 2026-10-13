@@ -630,6 +630,13 @@ export const createOwnerResponder = (
       conversationLeaves.set(conversationRef,publication.leafId);
       lastReply = out;
       return out;
+    } catch (error) {
+      // What the turn's tools already did stays on the record for the next turn while the run is still admitted; a
+      // closed run writes nothing.
+      const redact = literalTextRedactor([...removedTopics], FORGOTTEN);
+      try { for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); } }
+      catch (flush) { if (!(flush instanceof ClosedRunError)) throw flush; }
+      throw error;
     } finally { activeOwnerTurn = undefined; }
   };
   return {
