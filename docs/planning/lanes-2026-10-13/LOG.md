@@ -1412,3 +1412,24 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **Usage:** 37% at 08:17Z (18% at 07:52Z), with the reset at 12:30Z. At this pace the window fills at about 09:40Z.
 - **L4's map of the website's chat example:** new backend asks I (a prepared bundle, where one "Do it" decides several effects) and J (live turn events, streamed) join E, F and A. J is a new stream contract, so the released-contract rule applies (additive, no silent widening).
 - **Reviewers running:** the #109 delta with the #110 gate; #111 with #113.
+
+## 08:35:14Z: app #110 and #111 merged; #109 and #113 FAIL; #112 and #114 in review; the zone ruling; the tabs request
+
+- **App #110 (the Watch, `481411c5`) is merged (`c4c4d32f`).** PASS; it changes only Watch files and 4 project-file lines, with no overlap with main and no shared imports.
+  - Note: the placeholder Watch app now ships inside the iPhone app on main. Under guideline 4.2, nothing goes to the App Store until the WatchConnectivity PR lands, unless the Watch target is removed first.
+- **App #111 (Patrol and Spots as Settings rows, `949b63ae`) is merged (`a5016dab`).** PASS. Nits for L4's next settings push: the comment at `settings.tsx:16` is false (Home and the inline cards still link there), and there is a dated comment.
+- **App #109 delta (`120f6511`): FAIL,** verified in code by the orchestrator. The reviewer filed it as non-blocking.
+  - The defect: `RequestScope.isCurrent()` changes only with the session, so a consent read in flight is applied after the owner withdraws on the same phone. Even discarded, the rows read "granted" until the refresh read lands. Either way the run can `arm()` and read from Apple Health after a withdrawal.
+  - The rule: after a tap on withdraw, no arm and no read until a fresh "granted".
+  - The traps: don't null the rows (that skips the disarm); set them to withdrawn, and re-check consent immediately before `arm()`.
+  - Three tests, each red on the old head. Main is merged into the same push. `120f6511` is never installed on the Air.
+- **App #113 (Skip, `d563df89`): FAIL.**
+  1. A final no still reads "Skipped" (`approvalsView.ts:12`). L4 asks the owner for the word.
+  2. No test asserts that "Don't do this" sends `skip`.
+- **The backend follow-up from #113** (dormant until the backend offers `defer`): the backend still says "Not now" in `messaging-behavior.ts:51,54`, `google.ts:316`, `messaging.ts:33` and Telegram. Route it to a backend lane later.
+- **The zone ruling,** relayed by L4 and answered in L4's chat: "Confirm automatically". Only a zone already equal to the phone's is confirmed, and Schedule's one-tap row stays the only path for a mismatch. It's in app #114.
+- **#112 retarget:** a retarget alone doesn't start CI (app-checks runs on `pull_request` with the default event types), so L4 pushed the empty commit `5801fdc4`. Rule for stacked PRs: after a retarget, push to start CI.
+- **In review now:** #112 (Overview, `5801fdc4`) and #114 (zone confirm, `fce12730`, security focus).
+- **The owner's direct request,** relayed by N4 from its chat: Home has no bottom tabs (the three-tab ruling stands), and the side-menu animation is too strong and broken. Routed to L4 ahead of rating and Stop, built on #112.
+- **The Air account:** N4 reports the owner is signed in and Home shows a real Recovery score. N4 asked whether it's the new app-only account before seeding. Seeding and installs are held until the owner confirms; asked in the orchestrator chat.
+- **Disk:** 1.8 GB free at 08:35Z. DerivedData is still present, so the owner's cleanup is not done yet. The deploy is still waiting.
