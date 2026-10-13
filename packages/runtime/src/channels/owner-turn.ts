@@ -10,7 +10,7 @@ import {
   deriveContextBudgetChars, EXTERNAL_ORIGIN_TOOLS, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, SANITISE_DESTINATION_POLICIES, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
   type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
 } from '@waldo/contracts';
-import type { ConversationEntry, ConversationModelMessage } from '@waldo/contracts';
+import type { ConversationModelMessage } from '@waldo/contracts';
 import { MODEL_CONTEXT_MAX_CHARS } from '@waldo/contracts';
 import { PROBE_STRIPPED_TOOLS } from './probe-turn';
 import { runToolLoop } from '../conversation/tool-loop';
@@ -40,6 +40,8 @@ import type { LLMAttachment } from '@waldo/contracts';
 import { STOPPED_REPLY, turnControl } from './turn-control';
 import type { RunBook } from './background-runs';
 import { toolOutputLedger } from '../conversation/tool-output-ledger';
+
+const TURN_ONLY_OUTPUT = JSON.stringify({ retained: false, reason: 'turn_only_output' });
 
 // The owner's approval line (owner direction 2026-09-27): first-party state - his own memory,
 // tasks, sheets, drafts - proceeds without a per-action card. Anything that could reach another
@@ -164,6 +166,8 @@ export const createOwnerResponder = (
     ...(offloadStore === undefined ? {} : { toolOutputStore: offloadStore }),
   };
   const handlers = [getContextHandler(clock), ownerContextHandler(memory), ...tools, ...(skills?.handlers ?? []), ...(offloadStore === undefined ? [] : [readToolOutputHandler(offloadStore)])];
+  // A turn-only output (the owner's health values) reaches the model in this turn and nowhere else: the ledger keeps a content-free line.
+  const turnOnlyOutput = new Set<string>(handlers.filter((handler) => 'turn_only_output' in handler && handler.turn_only_output === true).map((handler) => handler.name));
   const recentOwnerTurns = new Map<string, import('../tools/live/memory').MemoryOwnerTurn>();
   let activeOwnerTurn: OwnerTurnEnvelope | undefined;
   const memoryContext = () => activeOwnerTurn ? { memoryTurn: {
@@ -530,7 +534,7 @@ export const createOwnerResponder = (
           privateRunScope?.admit();
           log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: event.call.arguments, output: event.output } });
           privateRunScope?.admit();
-          pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: event.taint, origin: ownerTurnActive && !probeGuard?.stripLiveTools ? 'owner' : 'machine', summary: event.output });
+          pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: event.taint, origin: ownerTurnActive && !probeGuard?.stripLiveTools ? 'owner' : 'machine', summary: turnOnlyOutput.has(event.call.name) ? TURN_ONLY_OUTPUT : event.output });
         },
         ...(offerConnect ? { onConnect: offerConnect } : {}),
       });
@@ -579,11 +583,17 @@ export const createOwnerResponder = (
     }
   };
   let restorePromise: Promise<void> | undefined;
+  const fixturePrincipal = localTrustedBriefScheduleInput().admission.verified_authority.principal_ref;
   const restored = async () => {
-    // The per-object store holds one owner's chains. Rows saved before turns ran under the directory owner carry the
-    // fixture stand-in, so every row reads as this turn's owner and old and new turns stay one chain.
-    const own = conversationStore === store ? (entry: ConversationEntry) => entry.ownerId === ownerId ? entry : { ...entry, ownerId } : (entry: ConversationEntry) => entry;
-    await (restorePromise ??= conversationStore ? conversationStore.load().then(({entries,leafId}) => { for(const entry of entries){tree.append(own(entry));conversationLeaves.set(entry.chatId,entry.id);} }) : Promise.resolve());
+    // The per-object store holds one owner's chains, written under the fixture stand-in or under the one principal this
+    // object serves; both read as this turn's owner so old and new turns stay one chain. A second principal is refused.
+    const load = async (history: ConversationStore) => {
+      const { entries } = await history.load();
+      const legacy = history === store;
+      if (legacy && new Set([ownerId, ...entries.map(entry => entry.ownerId)].filter(id => id !== fixturePrincipal)).size > 1) throw new Error('conversation history owner mismatch');
+      for (const entry of entries) { tree.append(legacy ? { ...entry, ownerId } : entry); conversationLeaves.set(entry.chatId, entry.id); }
+    };
+    await (restorePromise ??= conversationStore ? load(conversationStore) : Promise.resolve());
     const ids = forgettingState?.claims('purging').map(claim => claim.id) ?? [];
     const topics = forgettingState?.pendingTopics() ?? [];
     if (forgettingState && (ids.length || topics.length)) {
