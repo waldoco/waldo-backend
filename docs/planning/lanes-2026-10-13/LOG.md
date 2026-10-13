@@ -1078,3 +1078,26 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - #1119 and #1108 follow #1110.
 - **Policy change:** I'm no longer holding backend merges for the deploy. When a PR passes the gate, it merges, and the owner gets the current tip's command. A stale command stops at the gate script's tip check, before anything deploys.
 - **Pushes:** the log goes up once per cycle, because each push runs the full CI on #1077.
+
+## 05:13:24Z: owner rulings (Cloudflare browser, threads, push); the Home cards; three audits
+
+- **The owner's rulings:**
+  - The browser runs on Cloudflare, not Browserbase. #1110 is to be re-cut with Browserbase off; posted on #1110 and #1103.
+  - Threads: yes.
+  - Push: yes to its migration. Whether that covers B2 is being asked. Hosted migrations stay with the owner.
+- **The Home cards "not loading"** [verified]:
+  - The staging tail shows 200 for every Home call: controls ×172, scores ×48, approvals ×134.
+  - The app's 8 vendored contract files are byte-identical to staging's.
+  - So the cause is app-side. Leading hypothesis [inference]: `TodaySummary.tsx:34` loads only when all stores are idle, and never retries. The App lane is reproducing and fixing it first.
+- **Briefs are generated:** `day_card` hops ran at 21:30Z and 02:30Z. The Home row can't show their text, because `cards[].latest` isn't filled.
+- **Form and Weight requirements** [verified in source]:
+  - **Form** needs Recovery available, hourly intraday inputs that are fresh, and one of daylight, movement or stress.
+  - **Weight** needs the calendar demand's meeting minutes and a calendar baseline.
+- **N4/Watch lane answered:**
+  - workspace setup is a go;
+  - create a new Watch Simulator rather than unpairing;
+  - the on-active restore retry goes to the App lane;
+  - hold the WatchConnectivity scores path, which is a new health destination for the owner to rule on;
+  - its file claims are OK;
+  - no signed-in end-to-end run.
+- **Audits running:** A (proactivity and calendar), B (health plane, sync and scores) and C (app wiring matrix).
