@@ -554,3 +554,84 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - **Tail check [verified]:** all new hops use `hop` and `code`: `email_thread` (`thread_set`/`no_thread`), `email_send` (`sent`/`refused`/`unknown`), `email_verify`, and `email_diagnose` (`header_*`). `tailx.py` keeps them.
 - **Then:** merge at the new head after a hand check of the delta, push CI, deploy alone, smoke, and the App lane's P1 re-run (test send 2 of 5; it is also QA step 4, so there's no separate "qa" send).
 - **Existing exposure, for the summary:** `connector-proxy/index.ts:57` logs Gmail's error text, which can repeat recipient details. It's live in v17 and goes on the must-merge-before-redeploy list.
+
+## Morning summary for the owner (13 Oct; written 00:38Z, updated below if anything lands later)
+
+**In one line:** approvals now raise a card in app chat, and an approved email really goes out. The app showed "Outcome not confirmed" only because the backend's check after sending missed it. That fix (#1111) passed review and merges after one small diagnostic commit, followed by its own deploy and a P1 re-run. Mail reading, meeting prep and calendar details are built, but they wait for your connector-proxy redeploy, and several security fixes have to land before it.
+
+### What works on staging, with Simulator evidence
+- **Staging is `3bc1bb54`** (Worker `9c973463`, rollback `a446c445`), deployed at 22:05Z. `/healthz` was verified at 00:37Z.
+- **P1 (approve an email in the app),** on `iPhone 17` with main's build, 23:16–23:24Z:
+  - "Send it now." raised the approval card in chat. #1104 works.
+  - Tapping "Send it" sent the mail: the App lane's read-only check at 23:52Z found it in the test account's Sent. But the app said "Outcome not confirmed", because the backend's immediate search of Sent missed it.
+  - #1111 adds a bounded re-check and coded hops that name the cause. #990's strict proof rule is unchanged.
+- **On the first ask ("send it once I approve"),** Waldo only drafted and said "tell me to send it". The card came on the second ask. This is prompt context, not a rule, and isn't fixed tonight.
+- **Waldo gave the sent time 30 minutes off.** [inference] The model did the time-zone arithmetic itself. Queued: tools hand times to the model already in your zone.
+
+### Merged tonight
+- **Backend (`beta-mvp`):**
+  - #1102: the flaky run-loop test.
+  - #1104: the app approval card.
+  - #1106: test follow-ups.
+  - #1107: calendar join link, attachments and attendee emails, with a fixed digest so no meeting is prepped again. It's a no-op until the proxy redeploys.
+- **App (`main`):**
+  - #96: App CI.
+  - #92: the #89 follow-ups.
+  - #97: a reply's last line is no longer clipped.
+  - #93: the approvals re-read honours the server's wait, including in the real transport.
+  - #94: the words pass, with per-action approve labels.
+  - #95: the screens pass.
+
+### Your decisions, most urgent first
+1. **Redeploy connector-proxy** (from the same SHA as the Worker). The classifier refused it for me.
+   - **First, these must merge:**
+     - #1114, the table-cells fix. Verification codes in HTML table cells currently reach the model in chat `read_thread`; that's live today.
+     - #1105, choosing the right mail body.
+     - #1112, links.
+     - #1109's fixes, which include an organizer-or-accepted gate, so an outsider's invite can't choose which of your mail is read.
+     - A fix for `connector-proxy/index.ts:57` logging Gmail's error text. It can repeat recipient details, and it's live in v17 now.
+     - The chunk PR, if it's ready.
+   - **What the redeploy switches on:**
+     - #1107's calendar fields. Attendee emails reach model context, and `conference_url` is kept whole (D1), so it can carry a passcode, and a third party's invite can set its own video link.
+     - #1109's attendee search.
+     - #1105's body choice.
+     - #1111's direct by-id send check.
+2. **The scribe's health false positives:** options A, B and C are on #1103. There's no safe narrowing, because the pairs are lexically identical.
+3. **Where Patrol and Spots go once the side menu goes** (R1, three tabs). The App lane builds R1 to wait for your call. The backend's "where Connections is" line ships with it.
+4. **#1109's ADR versus your ruling:**
+   - "Links stay quarantined" is read as verification codes and links only, which matches chat.
+   - The prep note is stored like any message.
+   - Staging traces capture prompt text, under your 10 Oct ruling.
+5. **D-b, only if #1111's hops show `header_differs`** (Gmail rewrote our Message-ID). The proof would move to the Gmail id that send returned. The conservative form can ship. Anything that retries or completes a lost send waits for you.
+6. **Not a claim yet:** on staging's proxy path, a send Gmail refuses still shows "unknown", not "Not done". The proxy needs its own refusal code; that's later work.
+7. **Your own tasks:**
+   - sign in again on `iPhone 17 Pro` (signed out at about 21:52Z; `iPhone 17`'s session lasts until about 08:40Z);
+   - upload the Expo keys (the APNs key and an FCM service account);
+   - close #1072 (superseded by #1102 and #1106);
+   - the React Native text-drawing dependency patch the App lane raised;
+   - #1113, the guard changes and cost ledger. It's held for you or Ansh, as ruled.
+
+### Held, or waiting for review
+- **#1100** (one agent on every surface) has two unmet conditions:
+  1. Telegram text turns still fork off the `telegram-<subject>` chain.
+  2. No test shows that deletion clears `episodes`.
+
+  The backend lane is on both. The rename PR and #1108 wait behind it, in order.
+- **After the 02:30Z usage reset,** reviews run for:
+  - #1114 (table cells);
+  - #1110 (A2, browsing from the app);
+  - app #98 (chat chrome, held for the P1 re-run's look-only check);
+  - app #99 (state words);
+  - app #100 (the Form ring);
+  - app #101 (one sign-out, plain words).
+- **`created_at` on chat rows** (reply times): the backend lane adds it without a migration. Older rows show no time.
+
+### Process slips (all logged)
+- **The orchestrator drove `iPhone 17` for P1** while it was the App lane's device, because messages were capped. It collided with the App lane, and the device was handed back.
+- **The App lane force-pushed #94** (`--force-with-lease`). Nothing was lost; it was self-reported, and the lane merges only from now on.
+- **The orchestrator posted one deploy note on #116** (6133481055) against the board-only rule.
+- **The orchestrator called R1 a go,** against ruling 7. It was corrected at 23:51Z.
+- **Usage:** the shared window reached 78% at 00:38Z. Every lane paused non-critical work until the 02:30Z reset.
+
+### Test sends
+1 of 5 used: the word "probe", to the test account's own address, at 23:24:02Z.
