@@ -202,3 +202,42 @@ describe('confirmed time zone', () => {
     for (const invalid of [{ timezone_confirmed: 'yes' }, { timezone_confirmed: null }, { timezone_confirmed: 1 }]) expect(appControlProjectionV1Schema.safeParse(day(invalid)).success).toBe(false);
   });
 });
+
+describe('what Waldo is carrying and the open loops', () => {
+  const day = (extra: object) => ({
+    version: 1, state: 'available', revision, view: 'day',
+    data: { timezone: 'Europe/London', date: '2026-10-13', cards: [], proactivity: { quiet_start: null, quiet_end: null, volume: 'normal' }, schedules: { daily_brief: true, followups: true, event_briefs: true, nightly: true, heartbeat: true }, ...extra },
+  });
+  const carried = { id: 'r1a2b3c4', title: 'Get the venue quote signed', state: 'open', next: { title: 'Send the quote to finance', holder: 'waldo' }, check_at: '2026-10-14T09:00' };
+  const loop = { id: 'o1a2b3c4', title: 'Reply about the lease renewal', due: '2026-10-15', source: 'gmail' };
+  const page = (items: object[], total = items.length) => ({ items, total });
+  const parses = (extra: object) => appControlProjectionV1Schema.safeParse(day(extra)).success;
+
+  it('carries open work with its next move, who holds it and when Waldo checks again, and stays optional', () => {
+    for (const valid of [
+      {}, { carrying: page([]), open_loops: page([]) },
+      { carrying: page([carried, { ...carried, state: 'waiting', next: null, check_at: null }, { ...carried, state: 'uncertain', next: { title: 'Confirm the date', holder: 'owner' }, check_at: '2026-10-14' }], 7) },
+      { carrying: page(Array.from({ length: 20 }, (_, i) => ({ ...carried, id: `r${i}` }))) },
+    ]) expect(parses(valid), JSON.stringify(valid)).toBe(true);
+  });
+
+  it('refuses closed work, an unknown holder, a malformed check time, extra detail and an inconsistent count', () => {
+    for (const invalid of [
+      { carrying: null }, { carrying: { items: [] } }, { carrying: page([carried], 0) }, { carrying: page([carried], -1) }, { carrying: page([carried], 1.5) },
+      { carrying: page(Array.from({ length: 21 }, (_, i) => ({ ...carried, id: `r${i}` }))) },
+      { carrying: page([{ ...carried, state: 'done' }]) }, { carrying: page([{ ...carried, state: 'dropped' }]) },
+      { carrying: page([{ ...carried, next: { title: 'Ask Priya', holder: 'priya' } }]) }, { carrying: page([{ ...carried, next: { holder: 'waldo' } }]) },
+      { carrying: page([{ ...carried, next: { title: '', holder: 'waldo' } }]) }, { carrying: page([{ ...carried, title: 'x'.repeat(201) }]) },
+      { carrying: page([{ ...carried, check_at: '2026-10-14 09:00' }]) }, { carrying: page([{ ...carried, check_at: 'tomorrow' }]) },
+      { carrying: page([{ ...carried, intent: 'The full ask' }]) }, { carrying: page([{ ...carried, id: '' }]) },
+    ]) expect(parses(invalid), JSON.stringify(invalid)).toBe(false);
+  });
+
+  it('lists open loops soonest first with where each came from, never the thread itself', () => {
+    for (const valid of [{ open_loops: page([loop, { ...loop, due: '2026-10-15T17:30' }, { ...loop, due: null, source: 'chat' }], 12) }]) expect(parses(valid)).toBe(true);
+    for (const invalid of [
+      { open_loops: null }, { open_loops: page([{ ...loop, source: 'telegram' }]) }, { open_loops: page([{ ...loop, due: 'Friday' }]) },
+      { open_loops: page([{ ...loop, thread_id: 'thread-1' }]) }, { open_loops: page([{ ...loop, title: '' }]) }, { open_loops: page([loop, loop], 1) },
+    ]) expect(parses(invalid), JSON.stringify(invalid)).toBe(false);
+  });
+});
