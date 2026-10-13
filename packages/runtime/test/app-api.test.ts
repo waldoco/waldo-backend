@@ -78,6 +78,16 @@ describe('app sign-in and main chat routes', () => {
     expect(forwards[0]!.headers.get('x-waldo-do-name')).toBe('owner-1');
     expect(new URL(forwards[0]!.url).pathname).toBe('/app/v1/chat/main/messages');
   });
+  it('forwards a stop to the owner DO and counts it as a read, not a send', async () => {
+    forwards.length = 0;
+    const keys: string[] = [];
+    const counted = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async ({ key }: { key: string }) => { keys.push(key); return { success: true }; } } } as never;
+    const response = await handleApp(new Request('https://w.test/app/v1/chat/main/messages/client-msg-0001/cancel', { method: 'POST', headers: { authorization: `Bearer ${CREDENTIAL}` } }), counted, fakeAuth().auth);
+    expect(await response!.json()).toEqual({ forwarded: true });
+    expect(forwards[0]!.method).toBe('POST');
+    expect(new URL(forwards[0]!.url).pathname).toBe('/app/v1/chat/main/messages/client-msg-0001/cancel');
+    expect(keys).toEqual(['app-read:owner-1']);
+  });
   it('rate limits chat sends per owner and fails closed without the limiter', async () => {
     const auth = fakeAuth().auth;
     const limited = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: false }) } } as never;
