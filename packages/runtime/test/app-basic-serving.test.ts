@@ -98,7 +98,9 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
       await vi.waitFor(()=>expect(state.storage.kv.get<any>(`app:inbox-record:${effected.message_id}`)?.state).toBe('completed'));
       instance=new TelegramOwnerDO(state,settings as never);
       const withReceipt=await (await app('/chat/main',undefined,credential)).json() as any;
-      expect(withReceipt.messages.find((message:any)=>message.role==='assistant'&&message.parent_id===effected.message_id)?.text).toContain('Receipts: workspace file written proof-missing.txt (failed)');
+      const effectedReply=withReceipt.messages.find((message:any)=>message.role==='assistant'&&message.parent_id===effected.message_id);
+      expect(effectedReply?.text).not.toContain('Receipts:');
+      expect(effectedReply?.parts.at(-1)).toMatchObject({type:'receipt',fallback_text:'Receipts: workspace file written proof-missing.txt (failed)',items:[{kind:'workspace_file_written',target:'proof-missing.txt',outcome:'failed'}]});
       instance=new TelegramOwnerDO(state,settings as never);
       let finishReady!:()=>void;(instance as any).browserReady=new Promise<void>(resolve=>{finishReady=resolve;});
       const beforeRevokedReady=proof.inputs.length;

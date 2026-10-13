@@ -52,6 +52,19 @@ export const replyVoicePartV1Schema = z.strictObject({
   type: z.literal('voice'), audio_ref: opaqueRefV1Schema, transcript: visibleText(8_000), fallback_text: fallbackTextV1Schema,
 });
 
+export const RECEIPT_MAX_ITEMS = 20;
+// What a turn's effect tools did, from their typed receipts, never from the model's words. accepted means the tool
+// accepted the effect, not that the source system holds it. digest is sha256 over the tool's validated arguments.
+export const replyReceiptPartV1Schema = z.strictObject({
+  type: z.literal('receipt'),
+  items: z.array(z.strictObject({
+    kind: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/), target: z.string().min(1).max(200).nullable(),
+    outcome: z.enum(['accepted', 'failed', 'unconfirmed']), via_task: z.boolean(), at: epochMsV1Schema, digest: payloadDigestV1Schema.nullable(),
+  })).min(1).max(RECEIPT_MAX_ITEMS),
+  more: z.int().nonnegative(),
+  fallback_text: fallbackTextV1Schema,
+});
+
 export type ApprovalKindV1 = z.infer<typeof approvalKindV1Schema>;
 export type ApprovalActionV1 = z.infer<typeof approvalActionV1Schema>;
 export type ReplyVisibilityV1 = z.infer<typeof replyVisibilityV1Schema>;
