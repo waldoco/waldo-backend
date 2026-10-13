@@ -807,3 +807,16 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - the states taken from the schema options;
   - the replyTime/wroteWhen rule;
   - More's draft words.
+
+## 03:18Z: #1114 re-review FAIL; a pre-existing regex blow-up found; app #102 open
+
+- **#1114 at `dc3480e2`: FAIL again** (PR comment 6137430932).
+  - **Leaks:** whitespace gaps over 32 characters (LF plus 32 or 40, CRLF plus 30, template loops).
+  - **Wrong relays:** GAP spans rows, so a code merges with the next row's digits.
+- **Pre-existing, live today: a regex blow-up (ReDoS)** in older artifact patterns. An unbroken space run after a keyword takes more than 6 s at 4K. Any sender can trigger it.
+- **Decision (security first):**
+  1. A separate Worker PR for the blow-up comes first.
+  2. Then #1114: Worker-side whitespace normalization; on v17, GAP spans one newline (a code is caught rather than leaked, and the wrong-relay risk is disclosed); `htmlText` collapses like a browser; GAP is narrowed after the redeploy. The rollout is staged, so "either order is safe" is dropped.
+  3. #1109 waits behind them.
+- **App #102** (the beta-logging origin check, consent disclosure): its review is next. With a trailing slash or `:443` in the origin, the app talked to staging but hid the beta-logging line.
+- **Run 3b's build:** the App lane installs current `main` (with #98–#101), so the owner tests what ships, and updates its note to "Confirmed".
