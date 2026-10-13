@@ -248,7 +248,7 @@ describe('approval desk', () => {
         owner: 42, google: async () => client, newId: () => String(++n), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
       });
       const id = await desk.propose({ action: 'move', event_id: 'e1', title: 'Gym', start: iso('2026-09-23T19:00:00+05:30'), end: iso('2026-09-23T20:00:00+05:30'), reason: 'you have a call at 6' });
-      expect(sent[0]!.body.text).toBe('Proposed: Move "Gym" from Wed 23 Sept, 18:00–19:00 to Wed 23 Sept, 19:00–20:00. you have a call at 6');
+      expect(sent[0]!.body.text).toBe('Move "Gym" from Wed 23 Sept, 18:00–19:00 to Wed 23 Sept, 19:00–20:00. you have a call at 6');
       expect(JSON.stringify(sent[0]!.body.reply_markup)).toContain(`a:${id}`);
       expect(google).toEqual([]);
 
