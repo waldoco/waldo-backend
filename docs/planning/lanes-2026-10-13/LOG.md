@@ -2345,3 +2345,13 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
   - a secret change at 20:16Z and a deployment at 20:26Z (`57cb1f87`, source unknown). [inference] Ashish's.
   - Workers Builds on the tip made no deployment.
 - **Usage:** 29% (resets 03:30Z). The orchestrator's context is at 75%.
+
+## 23:58Z — #1193 revised at `2824f791` (CI 6 of 6); review asked
+
+- **Both regressions are fixed, red first.**
+  - 429: one cancellable resend that honours `retry-after` when the wait fits the budget, and none when `x-should-retry` is false.
+  - Background decision: one line in `owner-turn.ts` at 201.
+- **The deadline test through the real responder passes,** so the WeakMap ships. The explicit parameter is a follow-up.
+- **`merge-tree`** is clean against #1192, #1149 and the tip.
+- **The red CI at `d9c95943`** was a runner fault: port 54322 in use.
+- Board post: 6157744096. Lane T is done.
