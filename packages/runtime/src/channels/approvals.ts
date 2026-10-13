@@ -178,7 +178,8 @@ const reviewText = (entry: LedgerRow): string => {
   if (entry.kind === 'mcp_call') return `Run this MCP tool? ${describeMcp(p)}\n\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}`;
   if (entry.kind === 'browser_submit') return `Approve this browser action? ${describeBrowser(p)}`;
   if (entry.kind === 'google_task_change') return reviewGoogleTaskChange(googleTaskProposalSchema.parse(p));
-  return `Proposed: ${entry.summary}`;
+  // A calendar change states the change itself, so the same text reads true before the owner decides and after it is done.
+  return entry.summary;
 };
 // The app's review: the same full review as a card, approvable while it fits the app's reply budget.
 const appReview = (entry: LedgerRow): Readonly<{ text: string; full: boolean }> => {

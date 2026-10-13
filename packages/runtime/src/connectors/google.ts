@@ -22,8 +22,6 @@ export const GOOGLE_FEATURE_SCOPES = {
 export type GoogleFeature = keyof typeof GOOGLE_FEATURE_SCOPES;
 // Never granted implicitly: legacy null-scope grants do not hold these.
 const WORKSPACE_READ_FEATURES: readonly GoogleFeature[] = ['drive', 'docs', 'sheets', 'slides'];
-// Features whose only scopes are read-only (GOOGLE_FEATURE_SCOPES lists no write scope for them).
-export const isReadOnlyGoogleFeature = (feature: GoogleFeature): boolean => WORKSPACE_READ_FEATURES.includes(feature);
 export const isGoogleFeature = (value: string): value is GoogleFeature => Object.hasOwn(GOOGLE_FEATURE_SCOPES, value);
 // Legacy null grants retain old features, never a newly introduced availability or calendar-list scope.
 export const googleHas = (scopes: readonly string[] | null | undefined, feature: GoogleFeature): boolean =>
@@ -791,7 +789,8 @@ const toItem = (event: GoogleEvent, details: boolean): CalendarItem => ({
   ...(event.description?.trim() ? { description: event.description.trim().slice(0, 2000) } : {}),
   ...(event.attendees?.length ? { attendees: event.attendees.length } : {}),
   ...(event.etag ? { etag: event.etag } : {}),
-  ...(typeof event.extendedProperties?.private?.waldoOperation === 'string' ? { operation_marker: event.extendedProperties.private.waldoOperation } : {}),
+  // Waldo's markers are 64 lowercase hex characters; any other value there isn't Waldo's, so it is never reported as one.
+  ...(typeof event.extendedProperties?.private?.waldoOperation === 'string' && /^[0-9a-f]{64}$/.test(event.extendedProperties.private.waldoOperation) ? { operation_marker: event.extendedProperties.private.waldoOperation } : {}),
   ...(['confirmed', 'tentative', 'cancelled'].includes(event.status ?? '') ? { status: event.status as CalendarItem['status'] } : {}),
   ...(typeof event.updated === 'string' && validCalendarInstant(event.updated) ? { updated: event.updated } : {}),
   ...(typeof event.recurringEventId === 'string' ? { recurring_event_id: event.recurringEventId.slice(0, 1024) } : {}),
