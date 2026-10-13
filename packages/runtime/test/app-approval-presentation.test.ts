@@ -14,7 +14,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
 const { telegramTurnEnvelope } = await import('../src/channels/telegram-turn');
-const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '5d1f8b3a-6c2e-4a90-9b17-30c4e5f6a7b8';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
@@ -49,13 +49,13 @@ describe('the approval delivery each surface tells the model', () => {
 
   it('a real app turn tells the model its approvals arrive as buttons, never that it has no approval delivery', async () => {
     const name = 'app-approval-presentation';
-    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
       claimStore(state.storage.sql);
       ensureSchema(state.storage);
       state.storage.kv.put('do_name', name);
       const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       try {
-        const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+        const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
         const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers: headers(name), body: JSON.stringify({ client_message_id: 'client-approval-0001', text: 'Email Sam that Thursday works.' }) }));
         expect(sent.status).toBe(202);
         const { message_id: id } = await sent.json() as { message_id: string };

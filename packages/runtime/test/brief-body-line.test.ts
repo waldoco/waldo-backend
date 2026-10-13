@@ -25,7 +25,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
-const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '4c5d6e7f-8091-4a2b-9c3d-4e5f6a7b8c9d';
 const AT = Date.parse('2026-10-03T09:00:00Z');
@@ -56,7 +56,7 @@ afterEach(() => { vi.unstubAllGlobals(); });
 type Owner = Readonly<{ setup(channel: string): { ready: Promise<unknown> }; alarm(): Promise<void>; serial(work: () => Promise<void>): Promise<void> }>;
 
 const briefFor = async (name: string, run: (state: DurableObjectState) => void) => {
-  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   await runInDurableObject(stub, async (_instance, state) => {
     const originalNow = Date.now;
     Date.now = () => AT;
@@ -66,7 +66,7 @@ const briefFor = async (name: string, run: (state: DurableObjectState) => void) 
       state.storage.kv.put('app_subject', String(appSubjectFor(name)));
       state.storage.kv.put('timezone', 'UTC');
       state.storage.kv.put('timezone_confirmed', true);
-      const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined }) as unknown as Owner;
+      const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined }) as unknown as Owner;
       await owner.setup('app').ready;
       await owner.serial(async () => undefined);
       state.storage.sql.exec('DELETE FROM schedule');

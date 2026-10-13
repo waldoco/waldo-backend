@@ -25,7 +25,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
-const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '5b1f0c2a-7d3e-4c91-8f62-0a1b2c3d4e5f';
 const ownerHex = OWNER_ID.replaceAll('-', '');
@@ -65,18 +65,18 @@ const history = (rows: readonly Row[], leaf: string) => {
 const running = (id: string, admittedAt: number): AppInboxRecord => ({ id, updateId: APP_UPDATE_BASE + 1, clientId: `client-${id}`, digest: 'd', text: 'Book the dentist for Friday.',
   owner: '', sessionHash: 'a'.repeat(64), conversationRef: CHAT, admittedAt, state: 'running', attempt: 'attempt-of-a-gone-instance', deadline: admittedAt + 15 * 60_000 });
 
-type Owner = InstanceType<typeof TelegramOwnerDO>;
+type Owner = InstanceType<typeof OwnerDO>;
 type Shown = readonly Readonly<{ id: string; role: string; text: string; parts: readonly unknown[]; parent_id: string | null; created_at?: number }>[];
 const headers = (name: string) => ({ 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' });
 const withOwner = <T>(name: string, stored: Readonly<Record<string, unknown>>, work: (owner: () => Owner, state: DurableObjectState, lines: () => readonly Record<string, unknown>[]) => Promise<T>) =>
-  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql);
     ensureSchema(state.storage);
     state.storage.kv.put('do_name', name);
     state.storage.kv.put('app_subject', String(appSubjectFor(name)));
     for (const [key, value] of Object.entries(stored)) state.storage.kv.put(key, value);
     const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const make = () => new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const make = () => new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     let current = make();
     const lines = () => logged.mock.calls.map(([line]) => String(line)).filter(line => line.startsWith('{"hop":"app_')).map(line => JSON.parse(line) as Record<string, unknown>);
     try { return await work(() => current, state, lines); } finally { logged.mockRestore(); await state.storage.deleteAlarm(); void (current = make()); }

@@ -17,7 +17,7 @@ export const APP_APPROVALS_PATH = `${APP_PATH}/approvals`;
 export const APP_APPROVAL_DECISIONS_PATH = `${APP_APPROVALS_PATH}/decisions`;
 const MAX_BODY_BYTES = 8192;
 
-type AppEnv = OwnerDirectoryEnv & Readonly<{ TELEGRAM_OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
+type AppEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
 
 // Errors before authentication share one shape so the app cannot learn who is invited.
 const fail = (status: 401 | 403 | 404 | 405 | 413 | 429 | 503) => Response.json({ error: 'unavailable' }, { status, headers: { 'cache-control': 'no-store', ...(status === 429 ? { 'retry-after': '60' } : {}) } });
@@ -85,7 +85,7 @@ const sessionView = async (auth: ConsoleAuth, doName: string, credential: string
 
 // Closes the session's queued work and stops its running turn in the owner Durable Object; false when it cannot be confirmed.
 // Signout calls it before the revoke, which makes a retry safe, and again after it for work admitted in between.
-const fenceSession = async (env: AppEnv, owners: NonNullable<AppEnv['TELEGRAM_OWNER_DO']>, doName: string, sessionHash: string): Promise<boolean> => {
+const fenceSession = async (env: AppEnv, owners: NonNullable<AppEnv['OWNER_DO']>, doName: string, sessionHash: string): Promise<boolean> => {
   const secret = env.WALDO_ROUTER_HMAC_SECRET;
   if (!secret) return false;
   try {
@@ -103,7 +103,7 @@ const fenceSession = async (env: AppEnv, owners: NonNullable<AppEnv['TELEGRAM_OW
 export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth | null = consoleAuth(env), defer?: (work: Promise<unknown>) => void): Promise<Response | null> => {
   const url = new URL(request.url);
   if (url.pathname !== APP_PATH && !url.pathname.startsWith(`${APP_PATH}/`)) return null;
-  const owners = env.TELEGRAM_OWNER_DO;
+  const owners = env.OWNER_DO;
   if (!auth || !owners) return fail(404);
 
   if (url.pathname === `${APP_PATH}/auth/code`) {

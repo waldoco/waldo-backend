@@ -20,7 +20,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
-const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '7c2e9a14-3b5d-4f60-8a71-92b3c4d5e6f7';
 const ownerHex = OWNER_ID.replaceAll('-', '');
@@ -61,17 +61,17 @@ const history = (rows: readonly Row[], leaf: string, options: Readonly<{ unwitne
   return stored;
 };
 
-type Owner = InstanceType<typeof TelegramOwnerDO>;
+type Owner = InstanceType<typeof OwnerDO>;
 type Shown = readonly Readonly<{ id: string; role: string; text: string; parent_id: string | null }>[];
 const headers = (name: string) => ({ 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' });
 const withOwner = <T>(name: string, stored: Readonly<Record<string, unknown>>, work: (owner: Owner, state: DurableObjectState, lines: () => readonly Record<string, unknown>[]) => Promise<T>) =>
-  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql);
     ensureSchema(state.storage);
     state.storage.kv.put('do_name', name);
     for (const [key, value] of Object.entries(stored)) state.storage.kv.put(key, value);
     const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     const lines = () => logged.mock.calls.map(([line]) => String(line)).filter(line => line.startsWith('{"hop":"app_')).map(line => JSON.parse(line) as Record<string, unknown>);
     try { return await work(owner, state, lines); } finally { logged.mockRestore(); await state.storage.deleteAlarm(); }
   });

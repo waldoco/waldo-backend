@@ -99,7 +99,7 @@ const drain=async(name:string,id:number)=>runInDurableObject(stub(name),async(in
  for(let n=0;n<4;n++){const finals=state.storage.kv.get<any[]>('telegram_final_outbox_v1')??[];for(const f of finals)if(f.status==='pending')f.dueAt=0;state.storage.kv.put('telegram_final_outbox_v1',finals);await instance.alarm!();}
  const row=(await inbox.records()).find(r=>r.updateId===id);await state.storage.deleteAlarm();return row;
 });
-const stub=(name:string)=>env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
+const stub=(name:string)=>env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
 beforeEach(()=>{seen.requests.length=0;seen.onReply=undefined;directoryState.sends.length=0;vi.stubGlobal('fetch',()=>{throw Error('network forbidden');});});
 afterEach(()=>vi.unstubAllGlobals());
 it.each(['console-first','telegram-first','preexisting','eviction'])('ADV registered full webhook/link/owner/inbox/alarm pipeline %s',async(mode)=>{
