@@ -1370,3 +1370,27 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **L4's Simulator findings:**
   1. The Brief card is gone from Home on the shared account. The suspicion is #108's `timezone_confirmed === false` gate with an unconfirmed zone. L4 is checking.
   2. Approvals that expired days ago are still served as `open`. Sent to Connectors: adopt or rebuild the local branch `l3/approval-expiry-on-read` (93de9d5d).
+
+## 08:15:25Z: the tip is green after one rerun; deploy command handed to the owner; #1125 PASS (held)
+
+- **The tip `917032a1` is green on all six named checks** after the one rerun of shard 4 (run 38365329784). The first failure stays classified as a flake: same tree as the green PR head, one rerun, now green. If `approval-receipt-next-turn.test.ts` fails again on any tip, it reproduces: investigate, don't rerun.
+- **What the deploy ships over staging `6ddbd85e`:** only #1122 (the day-card `latest` excerpt). That is 9 files, with no wrangler, migration or deploy paths.
+  - The contract file `packages/contracts/src/app/controls.ts` is in it, so the gate needs `ALLOW_APP_CONTRACTS=reviewed`.
+  - The app already pins `latest` (strict object, excerpt at most 280) and #108 is merged, so the order rule holds: the contract lands, the app re-pins, then the Worker emits.
+- **The deploy command for `917032a1` was handed to the owner.** The rollback target is the current Worker `043c5a0c`.
+- **After the deploy:**
+  1. verify (healthz, 401s, probe 403);
+  2. the advisor;
+  3. merge #1123, #1126 and #1125;
+  4. post their notes;
+  5. hand over the next deploy command;
+  6. give L4 the go for the calendar QA run;
+  7. L4 checks that the Home Brief row shows its excerpt.
+- **#1125 (the contract-only `sleep_debt` key, `3601fe76`): PASS.** Merge held until after the deploy. Notes for the Worker step (b), not this PR:
+  1. The route safeParses the whole body, so one bad `sleep_debt` blanks all three pillars. Project exactly: coverage maps to confidence; a partial result carries no figure; omit the key rather than send null; ideally drop only `sleep_debt` on a failed parse.
+  2. The producer's bound is about 15,120 minutes. Cap an owner-confirmed need at 1,440 when it is wired.
+  3. `own_average` 0 means "at your usual", not "rested". The copy must say so.
+  4. `debt_minutes` is fractional, so the app rounds it.
+  5. The value passes through the owner DO's `scores_read` and must stay transit-only; `health_context_read` stays untouched.
+  - Ansh's scope question (6138720798): the owner's 13 Oct yes to the second backend lane included item 12 (`sleep_debt`), so it is in scope.
+- **Running:** one reviewer covers the app #109 delta (consent fix `120f6511`) and the app #110 gate (Watch, `481411c5`).
