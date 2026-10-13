@@ -1784,3 +1784,22 @@ Verdicts come from a scan of PR comments at 09:57Z. "@head" means the verdict na
   - #1129: needs main merged in and CI re-run, because it conflicts with #1130 on `ALGORITHM` and `health-producer.test.ts`.
 - **`beta-mvp` tip `ea41bb0e`:** CI is running on it, with a background wait. When it's 6 of 6 green, the owner runs one staging-gate deploy for that exact SHA, avoiding :00 and :30. The gate stays the check: no migrations, wrangler or app-contract paths in `a94d7fa5..ea41bb0e`.
 - **Connectors' wording fixes** wait for the reset, as told.
+
+## 10:07Z (from `date -u`): owner-requested audit of memory and proactive logic (decision with the owner; after the reset)
+
+- **The owner's question,** relayed by L4: is the logic behind Patrol, Spots and Constellations, and memory in general, truly proactive and well built? That covers what's stored, how it's processed, how the model reasons over memory and writes it, and what's logged, measured against the website, the design review and the agent's overall behaviour. Nothing starts before 12:30Z, and the owner decides whether it runs.
+- **L4's first pass** (V = checked in code):
+  - **Works [V]:** claims, interpretations and links served as Constellations; the memory gate and its "Held at the gate" list; proactive delivery to the app.
+  - **Promised by the website, missing in the backend [V]:**
+    - Patrol "fixes small problems overnight": the heartbeat only lists past-due loops and needs the grant system first;
+    - health-derived spots: health is excluded from memory by design (`memory/claims.ts:378-400`), so this needs a destination ruling;
+    - the `acts` line ("keeps Tuesday mornings clear…"), which has no field;
+    - connector patterns we don't have yet.
+  - **Never audited:** judgement quality. That means what the model chooses to store, how claims are merged, corrected and decayed, whether memory shapes later turns, and when it acts unprompted.
+- **Orchestrator's recommendation:** run it after the reset as one bounded backend-lane audit, read-only first:
+  - read the memory, scheduling and heartbeat code and run real conversations on the app-only test owner, never the owner's own account;
+  - label every finding verified or inferred;
+  - flag any fixed rule that makes a judgement call (CLAUDE.md), as distinct from hard privacy boundaries like the health exclusion;
+  - output gaps as #1103 tasks with scenario tests.
+- **Prerequisite:** L4's source table `Docs/audits/WEBSITE_EXAMPLES_APP_REQUIREMENTS_2026-10-13.md` is UNTRACKED in the main waldo-app checkout. Commit it in a docs PR before the audit cites it.
+- **L4's open check before the Spots PR:** whether the console's Spots list and the app's `memory_view=claims` projection show the same items.
