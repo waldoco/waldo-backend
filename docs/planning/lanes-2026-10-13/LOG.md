@@ -1741,3 +1741,31 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - Not tied to Telegram. The backend serves `view=activity` and `view=constellation` on the app.v1 controls route (`app-controls.ts:46,53`), and the app's pinned contract already has both.
   - The app's `patrol.tsx` and `spots.tsx` only render `UnavailableFeature`; they were never wired.
   - App-only work. It's queued as L4's first item after the reset, unless the owner wants it sooner.
+
+## 09:59Z (from `date -u`): OPEN-WORK INVENTORY for the new account (usage 89%)
+
+The owner asked to consolidate and merge everything. The plan:
+- **Now:** #1145, plus a small batch of PRs with an independent PASS at their head (#1134; #1128 if the owner-DO file isn't frozen; #1130 if budget remains). Then one deploy, run by the owner.
+- **The new account:** everything else, through the gate, in the order below.
+
+Verdicts come from a scan of PR comments at 09:57Z. "@head" means the verdict names the current head.
+
+**Backend (base `beta-mvp`, tip `a94d7fa5` = staging):**
+
+| Group | PRs |
+|---|---|
+| In the gate now | #1145 calendar fix (head `bfd3a2c9`, test-only delta after review launch) · #1134 day cards (`9b962051`, cloud PASS @head) · #1128 alarm re-arm (`5404bbff`, cloud PASS @head; edits `telegram-owner-do.ts`) · #1130 Weight (`74743e3f`, cloud PASS @head) |
+| PASS @head, but reviewed against `6ddbd85e` and overlapping #1130 (`recovery.ts`, `health-producer.test.ts`) | #1129 Form. Merge main, re-run CI, then merge. |
+| PASS, but the head moved since | #1135 day-card delivery state; #1132 "this run did not finish". Re-review the delta. |
+| Last verdict FAIL | #1114 (delta `8fd50286` vs `61f9bc47`); #1109 meeting-prep mail; #1105 Gmail body |
+| Contract-ordered (contract, then app pin, then emit) | #1139 receipts typed part (PASS @head); #1124 devices push token (PASS @head); #1140 approval question and labels, with app #118; #1138 carrying (draft, held for re-pin) |
+| No verdict yet | #1144 index app message on store; #1143 docs; #1142 test clock; #1141 #1100 follow-ups; #1131 score ageing; #1083 Form v2 (ADR amendment); #1082 and #1081 CI action pins |
+| Needs the owner | #1127 sleep_debt migration; #1133 30-day sign-in (migration); #1113 guards; #1120 staging browser binding |
+| Check first | whether #1110 (browse from the app, PASS @head) needs #1120's binding |
+
+**App (base `main`, tip `7e09317c`, installed on the Air):** all open PRs have green CI and none has a verdict yet.
+- **Ready for review after the reset:** #122 "Done" label (`5705940e`); #123 #109 follow-ups (`e14f3ed8`); #121 To send (`99977b3a`); #117 Undo on Home (`0d1deeff`); #119 re-pin (`72f333db`).
+- **Drafts:** #118 ask A pin; #115 phone-to-Watch scores.
+- **L4's queue after the reset:** the Weight reason wording, then Patrol (`view=activity`), then Spots (`view=constellation` claims).
+
+**Local-only work:** lanes reported everything pushed in their #1103 state notes at about 09:30Z. N4's `4250f85e` is an obsolete merge and is intentionally not pushed.
