@@ -11,6 +11,7 @@ import { CALENDAR_PUSH_PATH, parseCalendarPush, verifyCalendarChannel } from '..
 // ride episode recall into the model's context.
 
 export const EVENT_INGRESS_PREFIX = '/events/';
+const PUSH_SOURCES = [CALENDAR_PUSH_PATH].map((path) => path.slice(EVENT_INGRESS_PREFIX.length));
 
 export type EventSourceConfig = Readonly<{
   secret: string;
@@ -41,7 +42,9 @@ export const parseEventSources = (raw: string | undefined): Readonly<Record<stri
   if (!raw) return {};
   try {
     const parsed = JSON.parse(raw) as Record<string, EventSourceConfig>;
-    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? parsed : {};
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
+    // A Google push path is served before the configured sources, so a source of the same name would never be reached.
+    return Object.fromEntries(Object.entries(parsed).filter(([name]) => !PUSH_SOURCES.includes(name)));
   } catch {
     return {};
   }
@@ -117,6 +120,8 @@ const handleCalendarPush = async (request: Request, env: EventIngressEnv): Promi
       headers: { 'x-waldo-gcal-channel': push.channelId, 'x-waldo-gcal-state': push.state, 'x-waldo-gcal-number': String(push.messageNumber) },
     });
     void response.body?.cancel();
+    // An owner object that does not take pushes (link mode) never will; a push is only a nudge, so stop Google retrying.
+    if (response.status === 404) return new Response('ok');
     if (!response.ok) return new Response('owner unavailable', { status: 503 });
     return new Response('ok');
   } catch {

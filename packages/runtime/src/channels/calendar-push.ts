@@ -34,18 +34,14 @@ export type CalendarPushBook = ReturnType<typeof calendarPushBook>;
 
 type SweepScheduler = Readonly<{
   lookup(id: string): Readonly<{ state: 'absent' } | { state: 'entry'; entry: ScheduleEntry } | { state: 'unreadable' }>;
-  schedule(input: Readonly<{ id: string; kind: ScheduleEntry['kind']; payloadRefs: ScheduleEntry['payload_refs']; occurrenceAt: number; dueAt: number; recurrence: ScheduleEntry['recurrence'] }>): Promise<unknown>;
+  pullForward(id: string, at: number): Promise<boolean>;
 }>;
 
 // No sweep means the owner turned these updates off or their zone is not confirmed yet: a push changes nothing then.
 export const wakeBriefSweep = async (scheduler: SweepScheduler, now: number): Promise<boolean> => {
   const found = scheduler.lookup(BRIEF_SWEEP_ID);
   if (found.state !== 'entry' || found.entry.status !== 'armed') return false;
-  const { entry } = found;
-  const at = Math.max(now, (entry.last_fired_at ?? -Infinity) + WAKE_GAP_MS);
-  if (entry.due_at <= at) return false;
-  await scheduler.schedule({ id: entry.id, kind: entry.kind, payloadRefs: entry.payload_refs, occurrenceAt: at, dueAt: at, recurrence: entry.recurrence });
-  return true;
+  return scheduler.pullForward(BRIEF_SWEEP_ID, Math.max(now, (found.entry.last_fired_at ?? -Infinity) + WAKE_GAP_MS));
 };
 
 type WatchProxy = Readonly<{
@@ -62,7 +58,8 @@ export const ensureCalendarWatch = async (deps: Readonly<{
   if (!deps.origin || !deps.secret || !deps.doName) return 'skipped';
   try {
     const route = await deps.resolve();
-    if (route === null || (route.mode === 'proxy' && !deps.proxy)) return 'skipped';
+    // Nothing to watch with: wait as after a failure, instead of looking up the grant on every sweep.
+    if (route === null || (route.mode === 'proxy' && !deps.proxy)) { book.fail(now); return 'skipped'; }
     const channelId = deps.newId();
     const input = { channelId, token: await calendarChannelToken(deps.secret, deps.doName, channelId), address: new URL(CALENDAR_PUSH_PATH, deps.origin).toString() };
     const watch = route.mode === 'bearer' ? await startCalendarWatch(deps.fetcher, route.token, input) : await deps.proxy!.calendarWatch(deps.doName, route.connection, input);

@@ -2797,14 +2797,20 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           && !quiet() && loops.proactivity().volume !== 'low' && proactiveEnabled(this.env.CALENDAR_GROUNDED_PREP, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity());
       } catch { return false; }
     };
+    // Push-channel upkeep runs after the sweep, so a renewal never delays the update check.
     const briefs = async (entry: ScheduleEntry) => {
+      try { await briefSweep(entry); } finally {
+        const started = Date.now();
+        const watch = await ensureCalendarWatch({
+          book: calendarPushBook(identity), now: started, origin: identity.get<string>('origin') ?? null, secret: this.env.WALDO_ROUTER_HMAC_SECRET, doName: identity.get<string>('do_name'),
+          resolve: () => mcpGoogleAuth.resolve(undefined, 'calendar'), proxy: vault, fetcher: fetch, newId: () => crypto.randomUUID(),
+        });
+        if (watch === 'started' || watch === 'failed') log({ trace: `${entry.id}:${entry.occurrence_at}`, hop: 'calendar_watch', ms: Date.now() - started, ok: watch === 'started', code: `calendar_watch_${watch}` });
+      }
+    };
+    const briefSweep = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`;
       const started = Date.now();
-      const watch = await ensureCalendarWatch({
-        book: calendarPushBook(identity), now: started, origin: identity.get<string>('origin') ?? null, secret: this.env.WALDO_ROUTER_HMAC_SECRET, doName: identity.get<string>('do_name'),
-        resolve: () => mcpGoogleAuth.resolve(undefined, 'calendar'), proxy: vault, fetcher: fetch, newId: () => crypto.randomUUID(),
-      });
-      if (watch === 'started' || watch === 'failed') log({ trace, hop: 'calendar_watch', ms: Date.now() - started, ok: watch === 'started', code: `calendar_watch_${watch}` });
       try {
         if (proactiveEnabled(this.env.CALENDAR_GROUNDED_PREP, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity())) {
           if ((channel !== 'telegram' && channel !== 'app') || loops.proactivity().volume === 'low') return;
