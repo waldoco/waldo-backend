@@ -6,7 +6,7 @@ import {
   callMcpToolResultSchema,
   connectServiceArgsSchema,
   executeActionArgsSchema,
-  getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema,
+  getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, searchContactsArgsSchema,
   queryAvailabilityArgsSchema, readOwnerContextArgsSchema,
   getContextArgsSchema,
   getCrsArgsSchema,
@@ -357,6 +357,18 @@ describe('date_range guidance and strictness', () => {
     expect(description).toContain('seconds');
     expect(description).toContain('offset');
     expect(description).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+  });
+});
+
+describe('searchContactsArgs', () => {
+  it('needs a name or address of 1 to 100 characters and caps the limit at 10, defaulting to 5', () => {
+    expect(searchContactsArgsSchema.parse({ query: 'Priya' })).toEqual({ query: 'Priya', limit: 5 });
+    expect(searchContactsArgsSchema.safeParse({ query: 'priya@', limit: 10, account: 'owner@example.com' }).success).toBe(true);
+    for (const bad of [{}, { query: '' }, { query: 'x'.repeat(101) }, { query: 'x', limit: 0 }, { query: 'x', limit: 11 }, { query: 'x', account: 'not-an-address' }, { query: 'x', phone: true }])
+      expect(searchContactsArgsSchema.safeParse(bad).success).toBe(false);
+  });
+  it('lets a connect intent name the contacts feature', () => {
+    expect(connectIntentSchema.safeParse({ status: 'auth_required', service: 'google', reason: 'scope_missing', feature: 'contacts' }).success).toBe(true);
   });
 });
 

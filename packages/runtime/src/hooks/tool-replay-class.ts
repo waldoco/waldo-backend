@@ -20,7 +20,7 @@ const NOT_INSPECTED = 'local owner-DO write; key and duplicate behavior not insp
 const NO_HANDLER = 'no live handler in this tree (see TOOL_CLAIM_EFFECT)';
 
 export const TOOL_REPLAY_CLASS: Readonly<Record<ToolName, ToolReplayRow>> = {
-  get_crs: read(), get_health: read(), query_calendar: read(), get_communication: read(), search_communication: read(),
+  get_crs: read(), get_health: read(), query_calendar: read(), get_communication: read(), search_communication: read(), search_contacts: read(),
   read_thread: read(), get_tasks: read(), get_master_metrics: read(), get_context: read('pure clock read (tools/live/get-context.ts)'), query_availability: read(),
   read_owner_context: read(), read_memory: read(), search_episodes: read(), propose_action: unknown('proposal handler not inspected'),
   web_search: read(), read_document: read(), list_artifacts: read(), read_artifact: read(), read_mcp_tool: read('read-only MCP allowlist; every call goes through the proxy intent ledger (tools/live/mcp.ts); the remote server is trusted to be read-only'),

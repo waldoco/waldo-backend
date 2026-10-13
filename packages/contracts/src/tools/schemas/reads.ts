@@ -137,6 +137,15 @@ export const searchCommunicationArgsSchema = z.strictObject({
 });
 export type SearchCommunicationArgs = z.infer<typeof searchCommunicationArgsSchema>;
 
+// People search over the owner's own contacts and "other contacts" (people they have mailed).
+// Google matches name and address prefixes; the result carries names and addresses only.
+export const searchContactsArgsSchema = z.strictObject({
+  account: z.email().optional(),
+  query: z.string().min(1).max(100),
+  limit: z.int().min(1).max(10).default(5),
+});
+export type SearchContactsArgs = z.infer<typeof searchContactsArgsSchema>;
+
 export const readThreadArgsSchema = z.strictObject({
   account: z.email().optional(),
   cursor: z.string().min(1).max(4096).optional(),

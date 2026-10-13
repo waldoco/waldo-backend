@@ -18,10 +18,12 @@ export const GOOGLE_FEATURE_SCOPES = {
   docs: [`${AUTH}drive.readonly`, `${AUTH}documents.readonly`],
   sheets: [`${AUTH}drive.readonly`, `${AUTH}spreadsheets.readonly`],
   slides: [`${AUTH}drive.readonly`, `${AUTH}presentations.readonly`],
+  // Saved contacts and the people the owner has mailed (Google's "other contacts"), read only.
+  contacts: [`${AUTH}contacts.readonly`, `${AUTH}contacts.other.readonly`],
 } as const;
 export type GoogleFeature = keyof typeof GOOGLE_FEATURE_SCOPES;
 // Never granted implicitly: legacy null-scope grants do not hold these.
-const WORKSPACE_READ_FEATURES: readonly GoogleFeature[] = ['drive', 'docs', 'sheets', 'slides'];
+const EXPLICIT_FEATURES: readonly GoogleFeature[] = ['drive', 'docs', 'sheets', 'slides', 'contacts'];
 export const isGoogleFeature = (value: string): value is GoogleFeature => Object.hasOwn(GOOGLE_FEATURE_SCOPES, value);
 // Legacy null grants retain old features, never a newly introduced availability or calendar-list scope.
 export const googleHas = (scopes: readonly string[] | null | undefined, feature: GoogleFeature): boolean =>
@@ -29,7 +31,7 @@ export const googleHas = (scopes: readonly string[] | null | undefined, feature:
     ? ['calendar.events.freebusy','calendar.freebusy','calendar.readonly','calendar'].some(scope => scopes?.includes(`${AUTH}${scope}`) ?? false)
     : feature === 'calendar_list'
     ? ['calendar.calendarlist.readonly','calendar.calendarlist','calendar.readonly','calendar'].some(scope => scopes?.includes(`${AUTH}${scope}`) ?? false)
-    : WORKSPACE_READ_FEATURES.includes(feature)
+    : EXPLICIT_FEATURES.includes(feature)
       ? GOOGLE_FEATURE_SCOPES[feature].every((scope) => scopes?.includes(scope) ?? false)
       : scopes === null || GOOGLE_FEATURE_SCOPES[feature].every((scope) => scopes?.includes(scope) ?? false);
 
@@ -82,7 +84,7 @@ export async function readConsentState(secret: string, state: string): Promise<R
   return (await sign(secret, `${owner}.${nonce}`)) === mac ? { owner, nonce } : null;
 }
 
-export const GOOGLE_CONSENT_SCOPES: readonly string[] = ['openid', 'email', ...GOOGLE_FEATURE_SCOPES.calendar, ...GOOGLE_FEATURE_SCOPES.availability, ...GOOGLE_FEATURE_SCOPES.calendar_list, ...GOOGLE_FEATURE_SCOPES.mail, ...GOOGLE_FEATURE_SCOPES.tasks, ...new Set([...GOOGLE_FEATURE_SCOPES.drive, ...GOOGLE_FEATURE_SCOPES.docs, ...GOOGLE_FEATURE_SCOPES.sheets, ...GOOGLE_FEATURE_SCOPES.slides])];
+export const GOOGLE_CONSENT_SCOPES: readonly string[] = ['openid', 'email', ...GOOGLE_FEATURE_SCOPES.calendar, ...GOOGLE_FEATURE_SCOPES.availability, ...GOOGLE_FEATURE_SCOPES.calendar_list, ...GOOGLE_FEATURE_SCOPES.mail, ...GOOGLE_FEATURE_SCOPES.tasks, ...new Set([...GOOGLE_FEATURE_SCOPES.drive, ...GOOGLE_FEATURE_SCOPES.docs, ...GOOGLE_FEATURE_SCOPES.sheets, ...GOOGLE_FEATURE_SCOPES.slides]), ...GOOGLE_FEATURE_SCOPES.contacts];
 
 export function googleConsentUrl(app: GoogleApp, state: string, codeChallenge: string): string {
   const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
@@ -243,6 +245,24 @@ export type GoogleTaskResource = Readonly<{ id: string; task_list_id: string; ti
 export type GoogleTaskPatch = GoogleTaskChanges & Readonly<{ status?: 'todo' | 'done' }>;
 
 const validPageLimit = (value: number, max: number) => Number.isSafeInteger(value) && value >= 1 && value <= max;
+
+export type ContactMatch = Readonly<{ name: string | null; emails: readonly string[]; source: 'contacts' | 'other_contacts' }>;
+// One row per person, saved contacts first; a person already listed by an address is not repeated.
+const contactMatches = (sources: readonly Readonly<{ source: ContactMatch['source']; results: unknown }>[], limit: number): readonly ContactMatch[] => {
+  const seen = new Set<string>();
+  const matches: ContactMatch[] = [];
+  for (const { source, results } of sources) for (const result of Array.isArray(results) ? results : []) {
+    const person = isObject(result) && isObject(result.person) ? result.person : {};
+    const named = Array.isArray(person.names) ? person.names.find((entry) => isObject(entry) && typeof entry.displayName === 'string' && entry.displayName.trim()) : undefined;
+    const emails = [...new Set((Array.isArray(person.emailAddresses) ? person.emailAddresses : [])
+      .map((entry) => (isObject(entry) && typeof entry.value === 'string' ? entry.value.trim().toLowerCase() : ''))
+      .filter((email) => email.includes('@') && email.length <= 320 && !seen.has(email)))].slice(0, 3);
+    if (emails.length === 0) continue;
+    emails.forEach((email) => seen.add(email));
+    matches.push({ name: isObject(named) ? String(named.displayName).trim().slice(0, 200) : null, emails, source });
+  }
+  return matches.slice(0, limit);
+};
 const validGoogleId = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 1024 && !/[\r\n\0]/.test(value);
 const validProviderToken = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 2048;
 const optionalText = (value: unknown, max: number) => value === undefined || (typeof value === 'string' && value.length <= max);
@@ -314,13 +334,14 @@ export type GoogleClient = Readonly<{
   searchMail(query: string, limit: number): Promise<readonly MailItem[]>;
   readThread(threadId: string, limit: number): Promise<readonly ThreadMessage[]>;
   threadPage?(threadId: string, limit: number, cursor?: string): Promise<Readonly<{messages: readonly ThreadMessage[]; cursor: string | null}>>;
+  searchContacts?(query: string, limit: number): Promise<readonly ContactMatch[]>;
   tasks(status: TaskStatusFilter, limit: number): Promise<readonly TaskItem[]>;
 }>;
 
 // Single source for the connector-proxy allowlist: the runtime's vault client and the Supabase
 // connector-proxy Edge Function both build from this list, so a method added to GoogleClient but
 // missed here fails `satisfies` / the parity test instead of breaking live calls on Vault installs.
-export const GOOGLE_METHODS = ['calendarPage','calendarListsPage','taskListsPage','tasksPage','allTasksPage','taskList','task','createTask','patchTask','mailPage','freeBusy', 'events', 'draft', 'findDraftByMessageId', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents','changedEventsPage', 'newMail', 'searchMail', 'readThread', 'threadPage', 'tasks', 'driveListFiles', 'driveSearchFiles', 'driveGetFileMetadata','driveReadFileContent'] as const satisfies readonly (keyof GoogleClient)[];
+export const GOOGLE_METHODS = ['calendarPage','calendarListsPage','taskListsPage','tasksPage','allTasksPage','taskList','task','createTask','patchTask','mailPage','freeBusy', 'events', 'draft', 'findDraftByMessageId', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents','changedEventsPage', 'newMail', 'searchMail', 'readThread', 'threadPage', 'tasks', 'driveListFiles', 'driveSearchFiles', 'driveGetFileMetadata','driveReadFileContent','searchContacts'] as const satisfies readonly (keyof GoogleClient)[];
 export type GoogleMethod = (typeof GOOGLE_METHODS)[number];
 
 const b64urlDecode = (data: string): string => {
@@ -604,6 +625,17 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       // marker later is ambiguous, even if a provider returns 404 or a bare cancelled event.
       if (operationMarker) await send(`${EVENTS}/${encodeURIComponent(id)}`, 'PATCH', { status: 'cancelled', ...calendarMarker(operationMarker) }, etag);
       else await call(`${EVENTS}/${encodeURIComponent(id)}`, { method: 'DELETE', headers: match(etag) });
+    },
+    async searchContacts(query, limit) {
+      if (typeof query !== 'string' || !query || query.length > 100 || !validPageLimit(limit, 10)) throw new Error('invalid contacts search');
+      // Google asks for an empty-query request before each search so the contact cache is current.
+      const search = async (path: string) => {
+        const url = (text: string) => `https://people.googleapis.com/v1/${path}?${new URLSearchParams({ query: text, readMask: 'names,emailAddresses', pageSize: String(limit) })}`;
+        await call(url(''), { signal: AbortSignal.timeout(15_000) });
+        return (await call(url(query), { signal: AbortSignal.timeout(15_000) })).results;
+      };
+      const [saved, other] = await Promise.all([search('people:searchContacts'), search('otherContacts:search')]);
+      return contactMatches([{ source: 'contacts', results: saved }, { source: 'other_contacts', results: other }], limit);
     },
     async calendarPage(calendarId, from, to, limit, includeDeclined, pageToken) {
       if (typeof calendarId !== 'string' || !calendarId.trim() || calendarId.length > 254 || ![from,to].every(v => validCalendarInstant(v)) || Date.parse(from) >= Date.parse(to) || !Number.isSafeInteger(limit) || limit < 1 || limit > 50 || typeof includeDeclined !== 'boolean' || (pageToken !== undefined && (typeof pageToken !== 'string' || !pageToken || pageToken.length > 4096))) throw new Error('invalid Calendar page request');

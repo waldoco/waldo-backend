@@ -35,6 +35,7 @@ const fixture=()=>{
   if(url.includes('www.googleapis.com/calendar/')){effects++;if(lost)throw new Error('synthetic response loss');return init?.method==='DELETE'?new Response(null,{status:204}):Response.json({id:'event-one',summary:'fixture',start:{dateTime:'2026-10-01T00:00:00Z'},end:{dateTime:'2026-10-01T01:00:00Z'}});}
   if(url.includes('tasks.googleapis.com')){effects++;if(lost)throw new Error('synthetic response loss');return Response.json({kind:'tasks#task',id:'task-one',title:'fixture',status:'needsAction',etag:'"v1"'});}
   if(url.includes('gmail.googleapis.com')){effects++;if(lost)throw new Error('synthetic response loss');return Response.json({id:'provider-one'});}
+  if(url.startsWith('https://people.googleapis.com/v1/'))return Response.json({results:[{person:{names:[{displayName:'Fictional Person'}],emailAddresses:[{value:'person@example.test'}]}}]});
   throw new Error('unexpected fictional transport');
  }));return{hops,rows,effects:()=>effects,lose:()=>{lost=true;},scope:(value:unknown)=>{scopes=value;},healthFail:()=>{healthFail=true;},revoke:()=>{revoked=true;},suspend:()=>{active=false;},providerError:(text:string)=>{providerError=text;}};
 };
@@ -130,6 +131,13 @@ it('actual signed freebusy entry requires provider-compatible scope, uses owner 
  for(const scopes of [null,[],['https://www.googleapis.com/auth/calendar.events']]){const f=fixture();f.scope(scopes);expect(await(await serve(await request(input))).json()).toMatchObject({error:{status:403,message:'insufficient scopes'}});expect(f.hops).not.toContain('token');}
  for(const scope of ['calendar.events.freebusy','calendar.freebusy','calendar.readonly','calendar']){const f=fixture();f.scope([`https://www.googleapis.com/auth/${scope}`]);expect(await(await serve(await request(input))).json()).toMatchObject({data:{calendars:{primary:{busy:[]}}}});expect(f.hops).toContain('proxy_access');expect(f.hops).not.toContain('proxy_idem_claim');expect(f.effects()).toBe(0);}
  const f=fixture();f.scope(['https://www.googleapis.com/auth/calendar.events.freebusy']);expect(await(await serve(await request({...input,connection:'foreign'}))).json()).toMatchObject({error:{status:401}});expect(f.hops).not.toContain('token');
+});
+
+it('actual signed contacts search requires both contact scopes and never an effect intent',async()=>{
+ const input={do_name:'owner',op:'call',connection:'conn',method:'searchContacts',args:['Fictional',5]};
+ for(const scopes of [null,[],['https://www.googleapis.com/auth/contacts.readonly'],['https://www.googleapis.com/auth/contacts.other.readonly']]){const f=fixture();f.scope(scopes);expect(await(await serve(await request(input))).json()).toMatchObject({error:{status:403,message:'insufficient scopes'}});expect(f.hops).not.toContain('token');}
+ const f=fixture();f.scope(['https://www.googleapis.com/auth/contacts.readonly','https://www.googleapis.com/auth/contacts.other.readonly']);
+ expect(await(await serve(await request(input))).json()).toEqual({data:[{name:'Fictional Person',emails:['person@example.test'],source:'contacts'}]});expect(f.hops).not.toContain('proxy_idem_claim');expect(f.effects()).toBe(0);
 });
 
 const readBody = async () => ({do_name:'owner',op:'mcp_call',connection:'conn',server_url:'https://drivemcp.googleapis.com/mcp/v1',tool:'search_files',args:[{query:'fictional'}],intent_id:`mcpread:${'a'.repeat(64)}`,read_only:true});
