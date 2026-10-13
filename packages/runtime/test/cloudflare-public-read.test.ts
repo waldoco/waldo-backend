@@ -137,9 +137,9 @@ it('isolates concurrent owners into distinct private sessions and never restores
   for (const f of [a,b]) expect(f.calls.filter(x => x === 'acquire')).toHaveLength(1);
 });
 
-it("ordinary source configuration preserves today's Browserbase default with no Cloudflare activation or fixture dependency", async () => {
+it('ordinary source configuration allows no Browserbase and activates no Cloudflare reader without registered provider code', async () => {
   const { browserPublicReadConfiguration } = await import('../src/channels/browser-public-read-configuration');
-  for (const environment of ['staging', 'production']) expect(browserPublicReadConfiguration({ WALDO_ENVIRONMENT: environment, BROWSER: {} as never })).toEqual({ allowBrowserbase: true, cloudflare: undefined });
+  for (const environment of ['staging', 'production']) expect(browserPublicReadConfiguration({ WALDO_ENVIRONMENT: environment, BROWSER: {} as never })).toEqual({ allowBrowserbase: false, cloudflare: undefined });
 });
 
 it('follows vetted same-host top-level redirects in the same private session without following prohibited ports', async () => {
