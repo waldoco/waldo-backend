@@ -5,7 +5,7 @@ export type DrivePageArgs = Readonly<{pageSize?:number;pageToken?:string}>;
 export type DriveSearchArgs = DrivePageArgs & Readonly<{nameContains:string}>;
 export type DriveGetArgs = Readonly<{fileId:string}>;
 export type DriveContentArgs = Readonly<{fileId:string;expectedModifiedTime:string}>;
-export type DriveFileContent = Readonly<{file:DriveFileMetadata;text:string;contentMimeType:'text/plain';version:string;truncated:boolean;returnedBytes:number;observedAt:string}>;
+export type DriveFileContent = Readonly<{file:DriveFileMetadata;text:string;contentMimeType:'text/plain'|'text/csv';version:string;truncated:boolean;returnedBytes:number;observedAt:string}>;
 export type DriveRestClient = Readonly<{
  driveListFiles(args:DrivePageArgs):Promise<DriveMetadataPage>;
  driveSearchFiles(args:DriveSearchArgs):Promise<DriveMetadataPage>;
@@ -36,6 +36,16 @@ const pageArgs = (value:unknown,search=false) => {
  return {pageSize,pageToken:args.pageToken as string|undefined,nameContains:args.nameContains as string|undefined};
 };
 const FIELDS = 'id,name,mimeType,modifiedTime,webViewLink,size';
+// What each readable type is exported as. A Sheet exports only its first sheet as CSV.
+export const DRIVE_CONTENT_EXPORTS: Readonly<Record<string,'text/plain'|'text/csv'>> = {
+ 'text/plain':'text/plain',
+ 'application/vnd.google-apps.document':'text/plain',
+ 'application/vnd.google-apps.presentation':'text/plain',
+ 'application/vnd.google-apps.spreadsheet':'text/csv',
+};
+export const driveContentExport = (mimeType:string):'text/plain'|'text/csv'|undefined => Object.hasOwn(DRIVE_CONTENT_EXPORTS,mimeType)?DRIVE_CONTENT_EXPORTS[mimeType]:undefined;
+// Shared drives are searched and read like My Drive; a personal account simply has none.
+const ALL_DRIVES = {corpora:'allDrives',includeItemsFromAllDrives:'true',supportsAllDrives:'true'} as const;
 const ROOT = 'https://www.googleapis.com/drive/v3/files';
 const file = (value:unknown):DriveFileMetadata => {
  if(!object(value)||!text(value.id,256)||!text(value.name,1024)||!text(value.mimeType,256))return malformed();
@@ -81,7 +91,8 @@ export const driveRestClient = (fetcher:typeof fetch,bearer:()=>Promise<string>)
  const list = async(value:unknown,search:boolean):Promise<DriveMetadataPage> => {
   const args=pageArgs(value,search);const url=new URL(ROOT);
   const escaped=args.nameContains?.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
-  url.search=new URLSearchParams({spaces:'drive',corpora:'user',q:`trashed = false${search?` and name contains '${escaped}'`:''}`,orderBy:'recency desc',pageSize:String(args.pageSize),fields:`nextPageToken,incompleteSearch,files(${FIELDS})`,...(args.pageToken?{pageToken:args.pageToken}:{})}).toString();
+  // Drive refuses a sort order on full-text queries; those come back by relevance.
+  url.search=new URLSearchParams({spaces:'drive',...ALL_DRIVES,q:`trashed = false${search?` and (name contains '${escaped}' or fullText contains '${escaped}')`:''}`,...(search?{}:{orderBy:'recency desc'}),pageSize:String(args.pageSize),fields:`nextPageToken,incompleteSearch,files(${FIELDS})`,...(args.pageToken?{pageToken:args.pageToken}:{})}).toString();
   const data=await read(url);if(!object(data))return malformed();
   const files=data.files===undefined?[]:data.files;
   if(!Array.isArray(files)||files.length>args.pageSize)return malformed();
@@ -96,20 +107,21 @@ export const driveRestClient = (fetcher:typeof fetch,bearer:()=>Promise<string>)
    const controller=new AbortController();const signal=controller.signal;
    const work=async():Promise<DriveFileContent>=>{
     const url=new URL(`${ROOT}/${encodeURIComponent(args.fileId as string)}`);
-    url.search=new URLSearchParams({fields:`${FIELDS},version,capabilities(canDownload)`}).toString();
+    url.search=new URLSearchParams({fields:`${FIELDS},version,capabilities(canDownload)`,supportsAllDrives:'true'}).toString();
     const before=await read(url,signal);
     if(!object(before))return malformed();
     const selected=file(before);
     if(selected.id!==args.fileId||selected.modifiedTime!==args.expectedModifiedTime)throw new DriveRestError(409,'drive_source_changed');
     if(!text(before.version,30)||!/^\d+$/.test(before.version))return malformed();
     if(!object(before.capabilities)||before.capabilities.canDownload!==true)throw new DriveRestError(403,'drive_access_denied');
-    if(!['application/vnd.google-apps.document','text/plain'].includes(selected.mimeType))throw new DriveRestError(400,'drive_content_unsupported');
+    const exported=driveContentExport(selected.mimeType);
+    if(!exported)throw new DriveRestError(400,'drive_content_unsupported');
     const contentUrl=new URL(`${ROOT}/${encodeURIComponent(selected.id)}${selected.mimeType==='text/plain'?'':'/export'}`);
-    contentUrl.search=new URLSearchParams(selected.mimeType==='text/plain'?{alt:'media'}:{mimeType:'text/plain'}).toString();
+    contentUrl.search=new URLSearchParams(selected.mimeType==='text/plain'?{alt:'media',supportsAllDrives:'true'}:{mimeType:exported}).toString();
     const token=await bearer();signal.throwIfAborted();
     const response=await fetcher(contentUrl.toString(),{method:'GET',redirect:'error',signal,headers:{authorization:`Bearer ${token}`}});
     if(!response.ok)return httpFailure(response.status);
-    if(response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase()!=='text/plain'||!response.body)return malformed();
+    if(response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase()!==exported||!response.body)return malformed();
     const reader=response.body.getReader();const chunks:Uint8Array[]=[];let size=0;let truncated=false;
     try{for(;;){const {done,value:chunk}=await reader.read();if(done)break;const remaining=8192-size;chunks.push(chunk.slice(0,remaining));size+=Math.min(chunk.byteLength,remaining);if(chunk.byteLength>remaining){truncated=true;await reader.cancel();break;}}}finally{reader.releaseLock();}
     const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
@@ -120,7 +132,7 @@ export const driveRestClient = (fetcher:typeof fetch,bearer:()=>Promise<string>)
     if(content.length&&/[\uD800-\uDBFF]/.test(content.at(-1)!)){content=content.slice(0,-1);truncated=true;}
     const after=await read(url,signal);
     if(!object(after)||after.id!==selected.id||after.version!==before.version||after.modifiedTime!==selected.modifiedTime||after.mimeType!==selected.mimeType)throw new DriveRestError(409,'drive_source_changed');
-    return {file:selected,text:content,contentMimeType:'text/plain',version:before.version,truncated,returnedBytes:new TextEncoder().encode(content).byteLength,observedAt:new Date().toISOString()};
+    return {file:selected,text:content,contentMimeType:exported,version:before.version,truncated,returnedBytes:new TextEncoder().encode(content).byteLength,observedAt:new Date().toISOString()};
    };
    // Bound token refresh and custom transport implementations as well as native fetch/stream.
    let timeout:ReturnType<typeof setTimeout>|undefined;
@@ -132,7 +144,7 @@ export const driveRestClient = (fetcher:typeof fetch,bearer:()=>Promise<string>)
   driveSearchFiles:args=>list(args,true),
   driveGetFileMetadata:async value=>{
    const args=argsObject(value,['fileId']);if(!text(args.fileId,256)||!/^[-_a-zA-Z0-9]+$/.test(args.fileId))return invalid();
-   const url=new URL(`${ROOT}/${encodeURIComponent(args.fileId)}`);url.search=new URLSearchParams({fields:FIELDS}).toString();
+   const url=new URL(`${ROOT}/${encodeURIComponent(args.fileId)}`);url.search=new URLSearchParams({fields:FIELDS,supportsAllDrives:'true'}).toString();
    return file(await read(url));
   },
  };
