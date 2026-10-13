@@ -1175,3 +1175,35 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - the Expo keys;
   - signing in the separate test owner;
   - whether the phone-to-Watch scores path is allowed.
+
+## 06:28:04Z: `6ddbd85e` (#1100) deployed by the owner; app #107 merged; a usage hold
+
+- **05:54Z:** usage hit 90% and was climbing about 0.5 points a minute.
+  - L4, Connectors and the N4/Watch lane reached safe points (all work pushed) and are holding until the 07:30Z reset.
+  - My recurring heartbeat is swapped for a one-shot wake at 07:33Z (`591269fe`), which re-creates it.
+  - The climb fell to about 0.1–0.2 points a minute.
+- **06:07:18Z: merged app #107** as `b7526309`.
+  - **Gate:**
+    - review PASS at `a1a4ecae`;
+    - L4 merged main in as `66099e73`, with no overlapping files;
+    - #104's `appRuntime.ts` change only adds `rereadDay()` (`run()` and `mayPass` are unchanged), checked from the diff;
+    - CI green;
+    - CLEAN;
+    - the advisor agreed.
+- **The deploy:**
+  - **Refused by the permission check** ("Production Deploy"): the orchestrator's deploy of `6ddbd85e`, three times, including a check-only run; a read-only `gh pr diff`; and a staging smoke curl. None were routed around.
+  - **The owner ran the gate script.** Before 06:28Z:
+    - GATE PASS;
+    - Worker `043c5a0c`;
+    - rollback `579a47e0`;
+    - `/healthz` shows `6ddbd85e`;
+    - signed-out session and chat return 401.
+  - `POST /probe/turn` wasn't checked: the permission check refused my curl.
+- **L4 has the go** for one install of #106's head (`3e92f644`): #1100's four checks plus the #106 Home-load walk.
+- **Connectors' and L4's sessions stopped running** while they held. `SendMessage` can't reach a stopped session, so use `send_message` with the session id. Connectors is `local_83ce6587`.
+- **Still the owner's:**
+  - signing in the separate test owner;
+  - Google re-consent;
+  - P1 run 3b (before about 08:40Z);
+  - the Expo keys;
+  - whether the phone-to-Watch scores path is allowed.
