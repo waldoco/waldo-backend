@@ -12,7 +12,7 @@ authorizes deployment, a real Apple account, native sends, hosted migrations or 
 | `IMESSAGE_CREDENTIAL_WRAPPING_KEY` | 64-hex AES-256 key that wraps host credentials. Secret store only, never chat or a repo. |
 | `WALDO_ENVIRONMENT` | Bound into credential associated data and DO names. |
 | `SUPABASE_PROJECT_URL`, `SUPABASE_PUBLISHABLE_KEY`, `WALDO_ROUTER_HMAC_SECRET` | Router-signed RPC boundary; no service-role key. |
-| `IMESSAGE_BRIDGE_DO`, `TELEGRAM_OWNER_DO` | Durable Object bindings (wrangler migration `v6`). |
+| `IMESSAGE_BRIDGE_DO`, `OWNER_DO` | Durable Object bindings (wrangler migration `v7`; `v6` is beta-mvp's TelegramOwnerDO -> OwnerDO rename). |
 
 The proposed local test policy (signature 60s, heartbeat/capability 90s, request 128 KiB, 16 MiB /
 4096 records per bridge, pull wait 0, delivery 20s, mutation 30s, commitment 30s, setup 10 min,

@@ -129,7 +129,7 @@ try {
   const consoleSession = async (name, owner) => {
     const session = randomBytes(16).toString('hex');
     psql(`insert into waldo.console_sessions(owner_id, session_hash) values ('${owner}', '${sha256(session.trim().toUpperCase())}');`);
-    const ownerNs = await mf.getDurableObjectNamespace('TELEGRAM_OWNER_DO');
+    const ownerNs = await mf.getDurableObjectNamespace('OWNER_DO');
     const grant = await (ownerNs.get(ownerNs.idFromName(name))).fetch('http://owner.invalid/grant-console', { method: 'POST', headers: { 'x-waldo-do-name': name } });
     const consoleToken = await grant.text();
     const cookie = `waldo_console=${consoleToken}; waldo_owner=${encodeURIComponent(name)}.${session}.${hmac(routerSecret, `0.cookie.${name}.${session}`)}`;

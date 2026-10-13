@@ -339,7 +339,7 @@ it('two owners on two bridges are isolated: keys, commands, replies and status n
   // Second owner in the same directory, its own console session and simulated host.
   const bName = `imsg-owner-b-${crypto.randomUUID()}`;
   a.fx.owners.push({ do_name: bName, owner_id: '10000000-0000-4000-8000-0000000000b1', state: 'active', state_version: 1, admission_revision: 1 });
-  const bStub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(bName));
+  const bStub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(bName));
   let bSession = '', bCsrf = '';
   await runInDurableObject(bStub, async (_i, state) => { state.storage.kv.put('do_name', bName); bSession = await consoleAccess(state.storage).grant(); bCsrf = (await consoleAccess(state.storage).session(bSession))!.csrf; });
   const bCookie = `waldo_console=${bSession}; waldo_owner=${bName}.session_fixture.${await routerSignature(SECRET, 0, `cookie.${bName}.session_fixture`)}`;
