@@ -455,7 +455,7 @@ describe('createRuntimePromptBuilder', () => {
         gatewayCalls += 1;
         return request.step.model === ROSTER.fallback
           ? { ok: true, data: providerResponse(request.request.model) }
-          : { ok: false, error: 'provider unavailable', code: 'transient' };
+          : { ok: false, error: 'provider saturated', code: 'rate_limited' };
       },
     };
     const provider = new RuntimeLLMProvider({

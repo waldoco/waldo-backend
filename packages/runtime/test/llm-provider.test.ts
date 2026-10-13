@@ -426,7 +426,7 @@ describe('RuntimeLLMProvider', () => {
     const gateway = new ScriptedGateway((request) =>
       request.step.model === ROSTER.fallback
         ? { ok: true, data: response(request.request.model) }
-        : { ok: false, error: 'provider unavailable', code: 'transient' },
+        : { ok: false, error: 'provider saturated', code: 'rate_limited' },
     );
     const factoryCalls: Array<{
       model: ModelName;
@@ -647,7 +647,7 @@ describe('RuntimeLLMProvider', () => {
     const gateway = new ScriptedGateway((request) => {
       calls += 1;
       return calls <= 2
-        ? { ok: false, error: 'provider unavailable', code: 'transient' }
+        ? { ok: false, error: 'provider saturated', code: 'rate_limited' }
         : { ok: true, data: response(request.request.model) };
     });
     const provider = new RuntimeLLMProvider({ gateway });
@@ -698,7 +698,7 @@ describe('RuntimeLLMProvider', () => {
     ]);
   });
 
-  it.each(['rate_limited', 'auth_failed', 'forbidden', 'not_found', 'rejected'] as const)(
+  it.each(['auth_failed', 'forbidden', 'not_found', 'rejected'] as const)(
     'does not send a model the same request again after %s, and still tries the fallback rung',
     async (code) => {
       const gateway = new ScriptedGateway((request) =>
@@ -751,7 +751,7 @@ describe('RuntimeLLMProvider', () => {
     });
     const gateway = new ScriptedGateway((request) =>
       request.step.provider === 'workers_ai'
-        ? { ok: false, error: 'primary down', code: 'transient' }
+        ? { ok: false, error: 'primary down', code: 'rate_limited' }
         : { ok: true, data: response(request.request.model, 'fallback ok') },
     );
     const provider = new RuntimeLLMProvider({ gateway, circuitBreaker: breaker });

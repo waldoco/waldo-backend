@@ -5,7 +5,7 @@ import {
   PROVIDER_OF,
   type ModelName,
 } from '@waldo/contracts';
-import type { LLMGatewayAdapter, LLMGatewayRequest, LLMGatewayResult } from './provider';
+import type { LLMGatewayAdapter, LLMGatewayRequest, LLMGatewayResult, ProviderRetryAdvice } from './provider';
 import { callTimeLeftMs, MODEL_CALL_TIMEOUT_MS } from './time-budget';
 
 export type OpenAIResponsesClient = Pick<OpenAI, 'responses'>;
@@ -114,7 +114,8 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
       const detail = error instanceof OpenAI.APIError
         ? ` (${[error.status, error.code, error.param].filter((part) => part !== undefined && part !== null && part !== '').join(' ')})`
         : '';
-      return { ok: false, code: openAIErrorCode(error), error: `OpenAI request failed${detail}` };
+      const retry = error instanceof OpenAI.APIError ? retryAdvice(error.headers) : undefined;
+      return { ok: false, code: openAIErrorCode(error), error: `OpenAI request failed${detail}`, ...(retry ? { retry } : {}) };
     } finally {
       clearTimeout(timeout);
       input.runScope?.signal.removeEventListener('abort', abortRun);
@@ -177,6 +178,21 @@ function responseText(response: OpenAI.Responses.Response): string {
       return item.content.flatMap((part) => part.type === 'output_text' ? [part.text] : []);
     })
     .join('\n');
+}
+
+// The retry headers the OpenAI SDK reads: retry-after-ms, else retry-after in seconds or as a date, and x-should-retry.
+function retryAdvice(headers: Headers | undefined): ProviderRetryAdvice | undefined {
+  if (!headers) return undefined;
+  const millis = Number.parseFloat(headers.get('retry-after-ms') ?? '');
+  const after = headers.get('retry-after');
+  const seconds = Number.parseFloat(after ?? '');
+  const afterMs = millis > 0 ? millis : after === null ? undefined : Number.isNaN(seconds) ? Date.parse(after) - Date.now() : seconds * 1000;
+  const flag = headers.get('x-should-retry');
+  const advice = {
+    ...(afterMs !== undefined && Number.isFinite(afterMs) ? { afterMs } : {}),
+    ...(flag === 'true' || flag === 'false' ? { allowed: flag === 'true' } : {}),
+  };
+  return Object.keys(advice).length > 0 ? advice : undefined;
 }
 
 function openAIErrorCode(error: unknown): 'auth_failed' | 'not_found' | 'rate_limited' | 'oversize' | 'invalid_args' | 'transient' {

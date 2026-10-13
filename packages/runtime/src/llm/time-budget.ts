@@ -11,6 +11,11 @@ export const MODEL_CALL_TIMEOUT_MS = 30_000;
 export const TURN_TIME_BUDGET_MS = 90_000;
 // No tool round starts unless one full model call is left for the final answer.
 export const FINAL_ANSWER_RESERVE_MS = MODEL_CALL_TIMEOUT_MS;
+// The longest wait a provider may ask for before a failed call is sent again; the OpenAI SDK honours a retry-after
+// only below 60 s. A longer one fails the call at once.
+export const PROVIDER_WAIT_MAX_MS = 60_000;
+// The wait before resending a rate-limited call that named none: the OpenAI SDK's first backoff, less up to 25% jitter.
+export const RATE_LIMIT_BACKOFF_MS = 500;
 
 // The tool loop is the only writer: it sets the turn's deadline on the run's scope for each model step, and the
 // provider and the model adapter read it, so a retry or a late call never runs past the turn. Keyed by the scope

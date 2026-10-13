@@ -1,13 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildSessionState, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, routingPolicySchema } from '@waldo/contracts';
 import { OpenAIResponsesAdapter } from '../src/llm/openai';
-import { RuntimeLLMProvider, type LLMGatewayRequest, type RuntimeLLMRequest } from '../src/llm/provider';
+import { RuntimeLLMProvider, type LLMGatewayRequest, type LLMGatewayResult, type RuntimeLLMRequest } from '../src/llm/provider';
+import { createOwnerResponder } from '../src/channels/owner-turn';
+import { CALENDAR_PREP_FORMAT } from '../src/channels/event-briefs';
 import { OUT_OF_TIME_REPLY, runToolLoop, type LoopExit, type ToolLoopEvent, type ToolLoopStep } from '../src/conversation/tool-loop';
 import { ClosedRunError, type RunEffectScope } from '../src/channels/run-effect-scope';
 import { TURN_TIMEOUT_MS } from '../src/channels/telegram-listener';
 import { googleHandlers } from '../src/tools/live/google';
 import { sanitise } from '../src/scribe/sanitiser';
-import { FINAL_ANSWER_RESERVE_MS, MODEL_CALL_TIMEOUT_MS, TURN_TIME_BUDGET_MS } from '../src/llm/time-budget';
+import { FINAL_ANSWER_RESERVE_MS, MODEL_CALL_TIMEOUT_MS, RATE_LIMIT_BACKOFF_MS, TURN_TIME_BUDGET_MS, withCallDeadline } from '../src/llm/time-budget';
 import type { HookRuntimeContext } from '../src/hooks/registry';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 
@@ -26,9 +28,9 @@ const said = (text: string) => ({
   output: [{ type: 'message', id: 'msg_1', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text, annotations: [] }] }],
   usage: usage(4, 2),
 });
-const asksForCalendar = (n: number) => ({
+const asksForCalendar = (n: number, tool = 'query_calendar') => ({
   id: `resp_tool_${n}`, object: 'response', status: 'completed',
-  output: [{ type: 'function_call', id: `fc_${n}`, call_id: `call_${n}`, name: 'query_calendar', arguments: '{}', status: 'completed' }],
+  output: [{ type: 'function_call', id: `fc_${n}`, call_id: `call_${n}`, name: tool, arguments: '{}', status: 'completed' }],
   usage: usage(4, 2),
 });
 const reasoningOnly = { id: 'resp_reasoning', object: 'response', status: 'completed', output: [{ type: 'reasoning', id: 'rs_1', summary: [] }], usage: usage(4, 3) };
@@ -158,11 +160,17 @@ describe('one model request: the real SDK behind the adapter', () => {
     expect(api.requests).toHaveLength(1);
   });
 
-  it('returns a rate-limit reply when it arrives instead of sleeping out its retry-after', async () => {
+  it('returns a rate-limit reply when it arrives, with the wait the provider asked for, instead of sleeping it out', async () => {
     const api = fakeOpenAI(() => ({ after: 29_900, status: 429, body: providerError, headers: { 'retry-after-ms': '59000' } }));
     const run = await settle(new OpenAIResponsesAdapter({ apiKey: SYNTHETIC_KEY }).complete(gatewayRequest()));
-    expect(run).toMatchObject({ ms: 29_900, value: { ok: false, code: 'rate_limited' } });
+    expect(run).toMatchObject({ ms: 29_900, value: { ok: false, code: 'rate_limited', retry: { afterMs: 59_000 } } });
     expect(api.requests).toHaveLength(1);
+  });
+
+  it('passes a retry-after in seconds and a refusal to retry up to the provider', async () => {
+    fakeOpenAI(() => ({ after: 50, status: 503, body: providerError, headers: { 'retry-after': '3', 'x-should-retry': 'false' } }));
+    const run = await settle(new OpenAIResponsesAdapter({ apiKey: SYNTHETIC_KEY }).complete(gatewayRequest()));
+    expect(run.value).toMatchObject({ ok: false, code: 'transient', retry: { afterMs: 3_000, allowed: false } });
   });
 
   it('a run-scope stop aborts a request in flight at once', async () => {
@@ -202,11 +210,60 @@ describe('one model step: the provider is the only retry owner', () => {
     expect(api.requests).toHaveLength(2);
   });
 
-  it.each([[401, 'auth_failed'], [404, 'not_found'], [429, 'rate_limited']] as const)('does not send a %i again', async (status, code) => {
+  it.each([[401, 'auth_failed'], [404, 'not_found']] as const)('does not send a %i again', async (status, code) => {
     const api = fakeOpenAI(() => ({ after: 50, status, body: providerError }));
     const run = await settle(step().complete(ownerRequest(), hookCtx()));
     expect(api.requests).toHaveLength(1);
     expect(run.value).toMatchObject({ ok: false, attempts: [{ outcome: 'failure', code }] });
+  });
+
+  it('resends a rate-limited step once, after the wait the provider asked for', async () => {
+    const api = fakeOpenAI((n) => (n === 0
+      ? { after: 50, status: 429, body: providerError, headers: { 'retry-after-ms': '2000' } }
+      : { after: 50, body: said('Here is your plan.') }));
+    const run = await settle(step().complete(ownerRequest(), hookCtx()));
+    expect(api.requests.map((request) => request.at)).toEqual([0, 2_050]);
+    expect(run).toMatchObject({
+      ms: 2_100,
+      value: { ok: true, response: { text: 'Here is your plan.' }, attempts: [{ outcome: 'failure', code: 'rate_limited' }, { outcome: 'success' }] },
+    });
+  });
+
+  it('backs off briefly before resending a rate limit that names no wait', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const api = fakeOpenAI((n) => (n === 0 ? { after: 50, status: 429, body: providerError } : { after: 50, body: said('Done.') }));
+    const run = await settle(step().complete(ownerRequest(), hookCtx()));
+    expect(api.requests.map((request) => request.at)).toEqual([0, 50 + RATE_LIMIT_BACKOFF_MS]);
+    expect(run.value).toMatchObject({ ok: true });
+  });
+
+  it.each([
+    ['is longer than a step may wait', 120_000, undefined],
+    ['would leave no full call inside the turn', 15_000, 40_000],
+  ] as const)('fails at once when the wait a rate limit asks for %s', async (_case, waitMs, turnLeftMs) => {
+    const api = fakeOpenAI(() => ({ after: 50, status: 429, body: providerError, headers: { 'retry-after-ms': String(waitMs) } }));
+    const { scope } = runScope();
+    const call = () => step().complete(ownerRequest(scope), hookCtx());
+    const run = await settle(turnLeftMs === undefined ? call() : withCallDeadline(scope, Date.now() + turnLeftMs, call));
+    expect(api.requests).toHaveLength(1);
+    expect(run).toMatchObject({ ms: 50, value: { ok: false, attempts: [{ outcome: 'failure', code: 'rate_limited' }] } });
+  });
+
+  it('a stop during the wait ends the step at once', async () => {
+    const api = fakeOpenAI(() => ({ after: 50, status: 429, body: providerError, headers: { 'retry-after-ms': '5000' } }));
+    const { scope, stop } = runScope();
+    setTimeout(stop, 1_000);
+    const run = await settle(step().complete(ownerRequest(scope), hookCtx()));
+    expect(run.error).toBeInstanceOf(ClosedRunError);
+    expect(run.ms).toBeLessThanOrEqual(1_200);
+    expect(api.requests).toHaveLength(1);
+  });
+
+  it('does not resend when the provider says not to retry', async () => {
+    const api = fakeOpenAI(() => ({ after: 50, status: 500, body: providerError, headers: { 'x-should-retry': 'false' } }));
+    const run = await settle(step().complete(ownerRequest(), hookCtx()));
+    expect(api.requests).toHaveLength(1);
+    expect(run.value).toMatchObject({ ok: false, attempts: [{ outcome: 'failure', code: 'transient' }] });
   });
 
   it('retries a reasoning-only reply once, visibly, and still counts its tokens', async () => {
@@ -309,5 +366,59 @@ describe('one turn: the tool loop spends one time budget', () => {
     expect(await child.done).toBe('child report');
     expect(offered).toEqual([false]);
     expect(child.exit()).toBe('time_exhausted');
+  });
+});
+
+const sameTime = <T>(_hop: string, work: () => Promise<T>) => work();
+
+describe('one owner turn through the responder', () => {
+  it('cuts the answer call to what is left of the turn', async () => {
+    const slowRead = TURN_TIME_BUDGET_MS - FINAL_ANSWER_RESERVE_MS + 5_000;
+    const api = fakeOpenAI((n) => (n === 0 ? { after: 0, body: asksForCalendar(0) } : 'hang'));
+    const { scope } = runScope();
+    // The calendar read is offered without its connection check, and takes 65 s.
+    const { eligible: _connected, ...slowCalendar } = calendar(slowRead);
+    const responder = createOwnerResponder(SYNTHETIC_KEY, undefined, undefined, undefined, clock, [slowCalendar]);
+    const run = await settle(responder.respond({ traceId: 'slow-turn', conversationRef: 'owner', surface: 'telegram', text: 'What is on my calendar?', memoryWrites: false, runScope: scope }, sameTime));
+    expect(api.requests).toHaveLength(2);
+    // The answer call starts with 25 s of the turn left and is cut there, not at its own 30 s limit.
+    expect(api.ended[1]! - api.requests[1]!.at).toBe(TURN_TIME_BUDGET_MS - slowRead);
+    expect(run.value).toBe(OUT_OF_TIME_REPLY);
+  });
+});
+
+describe('background decisions: one resend, and the breaker counts only what was sent', () => {
+  const answer = (request: LLMGatewayRequest): LLMGatewayResult => ({
+    ok: true, data: { model: request.request.model, text: '{"kind":"no_op","text":""}', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 },
+  });
+  const miss = (): LLMGatewayResult => ({ ok: false, code: 'transient', error: 'synthetic miss' });
+  // The owner DO's base responder, with a scripted model, running calendar-prep decisions.
+  const decisions = (script: Array<(request: LLMGatewayRequest) => LLMGatewayResult>) => {
+    const sent: Array<Readonly<{ decision: string; request: LLMGatewayRequest }>> = [];
+    let decision = '';
+    const args: Parameters<typeof createOwnerResponder> = ['fixture'];
+    args[10] = { complete: async (request) => { sent.push({ decision, request }); return script.shift()!(request); } };
+    const responder = createOwnerResponder(...args);
+    const decide = (id: string) => {
+      decision = id;
+      return settle(responder.prompt(id, 'owner', '[Meeting prep decision] Calendar facts only', sameTime, 'telegram', [], async () => undefined, CALENDAR_PREP_FORMAT));
+    };
+    return { sent, decide };
+  };
+
+  it('resends a missed decision once, unchanged', async () => {
+    const { sent, decide } = decisions([miss, answer]);
+    expect((await decide('prep')).value).toBe('{"kind":"no_op","text":""}');
+    expect(sent).toHaveLength(2);
+    expect(sent[1]!.request.request).toEqual(sent[0]!.request.request);
+  });
+
+  it('opens the shared breaker on the third failed request in a row, after a success cleared the count', async () => {
+    const { sent, decide } = decisions([miss, answer, miss, miss, miss, answer]);
+    expect((await decide('a')).value).toBe('{"kind":"no_op","text":""}');
+    expect((await decide('b')).error).toBeInstanceOf(Error);
+    expect((await decide('c')).error).toBeInstanceOf(Error);
+    // a's answer clears its miss; b's two misses and c's first make three, so c's resend is never sent.
+    expect(sent.map((entry) => entry.decision)).toEqual(['a', 'a', 'b', 'b', 'c']);
   });
 });
