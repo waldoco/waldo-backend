@@ -593,6 +593,8 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 1. **Approve or run P1 run 3b** (above). It's the last live proof of approvals.
 2. **Ratify #1115's rule change.** The proof identity for an approved send moved from our Message-ID to Gmail's returned id. Consequence: a send whose response was lost can never be reconciled, and stays "unknown" for good. That's honest, but it's a change to #990's rule.
 3. **Redeploy connector-proxy** (from the Worker's SHA). The classifier refused it for me.
+   - **Order matters:** deploy the Worker that carries #1114 *before* the proxy, and roll back proxy first, then Worker. A new proxy in front of an old Worker leaks spaced codes. Connectors derived this by running the old extractor on the new `htmlText` output.
+   - **After the redeploy:** a follow-up narrows the code gap to spaces only. Until then, a code next to a row of numbers can be relayed merged with that row's digits. That merged relay is the only cost, because the code itself is always caught.
    - **First, these must merge:**
      - #1114: codes in HTML table cells reach the model in chat `read_thread`; that's live today. It's CI green and gets its review after the reset.
      - #1105: choosing the right mail body.
@@ -851,3 +853,18 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - **What it changes:** the pending bubble reads "Unconfirmed", "New draft" replaces "New local draft", and a draft's header reads "Draft · not sent". State words come from the schema options, checked with strict equality, and `keptTime` is the one time rule.
   - **Gate:** the review's two items were checked by hand at `40bcdfe7`: a negative test that Main chat never shows "Draft · not sent", and a reworded comment. CI passed, and the merge state is CLEAN.
 - **The App lane's next item:** the Home Brief row and R3. The row follows the latest delivered scheduled message by `delivered_at`; without it, the lines come only from `sent` and the schedule.
+
+## 03:41Z: #1114 reworked (staged deploy order); summary updated
+
+- **#1114 is at `c6232052`,** with #1118 merged in. The merge order is #1118 → #1114 → #1109.
+  - **Worker side:** whitespace is normalized before extraction, and GAP is `[ \n]`. Text with no artifact comes back untouched.
+  - **`htmlText`** collapses whitespace the way a browser does.
+  - **Pins:** the v17 shapes, the six read_thread shapes, and the three row cases, pinned as wrong relays with no leak.
+  - **Mutations:** 16/16 caught.
+- **Deploy order (new, now in the summary's decision 3):**
+  1. the Worker with #1114;
+  2. then the proxy;
+  3. rollback is proxy first, then Worker.
+
+  A new proxy in front of an old Worker leaks spaced codes.
+- **Next:** #1118's review, which is running. Then #1114's third review, then #1109's.
