@@ -539,3 +539,18 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 
   Reviews for #99, #100 and #101 run after the 02:30Z reset.
 - **Usage:** the App lane reports the 5-hour window at 75%. Every session is holding non-critical work until the reset. The #1111 review is the one critical item running.
+
+## 00:37Z: #1111 (send fix) review PASS; one diagnostic commit before merge
+
+- **Review PASS at `b6718577`:**
+  - 48/48 tests on the two files and 232/232 on the related set;
+  - 9 of 9 mutations caught, including mapping a 5xx or a network error to refused;
+  - #990's rule intact;
+  - no content in the hops.
+
+  Posted on the PR.
+- **One commit requested before merge** (advisor). It adds a content-free same-thread flag, so a failing P1 re-run tells index lag (H1) apart from a thread mismatch (H4). Without it, settling the question could cost a third test send.
+  - **The PR body is corrected:** on staging's proxy path, every send error still ends unknown. "Refused → not done" works only on the local-token path.
+  - **Tail check [verified]:** all new hops use `hop` and `code`: `email_thread` (`thread_set`/`no_thread`), `email_send` (`sent`/`refused`/`unknown`), `email_verify`, and `email_diagnose` (`header_*`). `tailx.py` keeps them.
+- **Then:** merge at the new head after a hand check of the delta, push CI, deploy alone, smoke, and the App lane's P1 re-run (test send 2 of 5; it is also QA step 4, so there's no separate "qa" send).
+- **Existing exposure, for the summary:** `connector-proxy/index.ts:57` logs Gmail's error text, which can repeat recipient details. It's live in v17 and goes on the must-merge-before-redeploy list.
