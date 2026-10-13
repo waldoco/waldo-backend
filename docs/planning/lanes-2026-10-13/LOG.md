@@ -1893,3 +1893,11 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
     3. a harness comparison against mature agent systems, with primary sources;
     4. an owner test script;
   - the per-item working method, owner asks, and don'ts.
+
+## 10:51Z (from `date -u`): the new-account backend lead starts now; old orchestrator goes passive
+
+- The owner is starting the new-account session (Fable 5.1) on `HANDOFF_BACKEND_FINALIZER.md` now, and runs both accounts.
+- **The brief now opens with a division of work.**
+  - After the 12:30Z reset, the old account's L4, N4 and Connectors resume only their small queued items (listed there).
+  - The new backend lead takes everything else and is the **single gatekeeper** for both repos. The lanes post review-ready PRs on #1103.
+- **The old orchestrator** cancelled its 12:35Z heartbeat auto-resume (one-shot `5aa60008`), so there is no second gate. It stays passive until the owner brings the new session's results back.

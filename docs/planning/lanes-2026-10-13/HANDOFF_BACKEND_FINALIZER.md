@@ -1,5 +1,12 @@
 # Backend finalizer handoff, 13 Oct 2026, 10:46Z
 
+> **Update, about 10:50Z: the owner is running both accounts.** The old account's sessions are not gone yet. After the 12:30Z reset, three of its lanes resume these small items, so skip them:
+> - **L4 (app):** the Weight reason text; Patrol from `view=activity`; Spots from `view=constellation` claims; the travel zone test.
+> - **N4 (app health):** the saved-zone upload fix (`healthIngestDeps.ts:44`); app #123 and #115 follow-ups.
+> - **Connectors:** the three wording fixes ("Done: calendar change proposed", "Proposed:" after done, expiry on read); the #1145 follow-ups.
+>
+> **You are the only gatekeeper:** review and merge for both repos, including those lanes' PRs, which they post on #1103. The old orchestrator stays passive until the owner brings your results back to it. Claim everything else on #1103 before you start.
+
 This is for a session on a **new Claude account** (model: Fable 5.1), working on the owner's Mac. The old account's sessions (orchestrator, L4 app, N4 health, Connectors, L5) are gone after the switch. Their work survives in GitHub, in the local checkouts and in `docs/planning/lanes-2026-10-13/LOG.md` on branch `docs/overnight-2026-10-12`.
 
 **Your role:** backend lead. Finish Waldo's backend building blocks, expose them to the app through app.v1, integrate them with the app, then review the harness against mature agent systems and fix what is wrong. Ansh's cloud lanes (another account) and Suyash's design pass run in parallel: complement them, don't duplicate them.
