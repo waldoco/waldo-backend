@@ -82,7 +82,9 @@ export const callMcp = async (server: McpTransportServer, tool: string, args: Re
 export const executeMcp = async (config: McpServerConfig, tool: string, args: Record<string, unknown>, googleAuth?: McpGoogleAuth, fetcher: typeof fetch = fetch, intent?: ProxyIntent): Promise<{ content: unknown; protocolVersion: string }> => {
   if (isGoogleHost(config.url) && !isGoogleMcpRead(config.url, tool)) throw new McpReadOnlyError(config.name, tool);
   const server = governed(config);
-  const google = googleMcpServer(server.url) !== undefined;
+  const catalogue = googleMcpServer(server.url), google = catalogue !== undefined;
+  // The catalogue's fixed arguments land after the model's on every rail, so no entry point can drop them.
+  const values = catalogue?.fixed_args ? { ...args, ...catalogue.fixed_args } : args;
   if (server.allow_tools !== undefined && !server.allow_tools.includes(tool)) throw new ToolExecutionError(`tool "${tool}" is not allowed on MCP server "${server.name}"`);
   if (server.requires !== undefined) {
     if (server.allow_tools === undefined) throw new ToolExecutionError(`MCP server "${server.name}" requires an explicit tool allowlist`);
@@ -94,7 +96,7 @@ export const executeMcp = async (config: McpServerConfig, tool: string, args: Re
     if (resolved === null) throw new McpConnectError('not_connected', 'Google is not connected', server.requires);
     if (resolved.mode === 'proxy') {
       try {
-        const content = await googleAuth.proxy(server.url, tool, args, resolved.connection, intent);
+        const content = await googleAuth.proxy(server.url, tool, values, resolved.connection, intent);
         return { content, protocolVersion: 'proxied' };
       } catch (error) {
         const status = (error as { status?: number }).status;
@@ -110,7 +112,7 @@ export const executeMcp = async (config: McpServerConfig, tool: string, args: Re
     // flow's job (RFC 9728), not this shortcut's.
     if (!/^https:\/\/([a-z0-9-]+\.)?googleapis\.com\//.test(server.url)) throw new McpConnectError('scope_missing', 'google bearer refused for a non-Google MCP host', server.requires);
     try {
-      return await callMcpTransport(server, tool, args, fetcher, async () => resolved.token);
+      return await callMcpTransport(server, tool, values, fetcher, async () => resolved.token);
     } catch (error) {
       if (google && ((error instanceof McpAuthError && error.status === 403) || (error instanceof McpHttpError && error.status === 404))) throw new McpUnavailableError(server.name);
       if (error instanceof McpAuthError) throw new McpConnectError(error.status === 401 ? 'reauth_needed' : 'scope_missing', `google MCP ${error.status}`, server.requires);
@@ -119,7 +121,7 @@ export const executeMcp = async (config: McpServerConfig, tool: string, args: Re
     }
   }
   try {
-    return await callMcpTransport(server, tool, args, fetcher);
+    return await callMcpTransport(server, tool, values, fetcher);
   } catch (error) {
     if (error instanceof McpToolError) throw new ToolExecutionError(error.message);
     throw error;
@@ -206,7 +208,7 @@ export const readMcpToolHandler = (serversRaw: string | undefined, googleAuth?: 
     if (!google) {
       return { ok: false, code: 'forbidden', error: `MCP server "${server}" is not a read-only server; use call_mcp_tool for it.`, source_taint: 'external' };
     }
-    if (isGoogleHost(found.url) && !isGoogleMcpRead(found.url, tool)) return refusal(new McpReadOnlyError(server, tool))!;
+    if (!google.read_tools.includes(tool)) return refusal(new McpReadOnlyError(server, tool))!;
     // Deploy config may have narrowed this server's reads.
     if (!(found.read_tools ?? []).includes(tool)) {
       return { ok: false, code: 'forbidden', error: `tool "${tool}" is not on the read allowlist of MCP server "${server}"`, source_taint: 'external' };
@@ -225,7 +227,7 @@ export const readMcpToolHandler = (serversRaw: string | undefined, googleAuth?: 
         await ctx.assertTaskSourceCurrent?.();
         return result;
       } };
-      const { content, protocolVersion } = await executeMcp(found, tool, { ...args, ...google.fixed_args }, scopedAuth, async (input, init) => {
+      const { content, protocolVersion } = await executeMcp(found, tool, args, scopedAuth, async (input, init) => {
         await ctx.assertTaskSourceCurrent?.();
         const response = await fetch(input, init);
         await ctx.assertTaskSourceCurrent?.();
