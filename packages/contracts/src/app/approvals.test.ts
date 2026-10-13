@@ -167,3 +167,40 @@ describe('not now', () => {
     expect(replyApprovalPartV1Schema.safeParse({ ...part, actions: ['defer', 'defer'] }).success).toBe(false);
   });
 });
+
+describe('the wording the server serves with an approval', () => {
+  const worded = { ...email, question: 'Send "Friday" to sam@example.com?', labels: { approve: 'Send email', edit: 'Change it', skip: 'Skip' } } as const;
+  const card = (approval: Readonly<Record<string, unknown>>) => {
+    const { approval_id, kind, review, payload_digest, expires_at, actions, labels } = approval;
+    return { type: 'approval', approval_id, kind, review, payload_digest, expires_at, actions, fallback_text: review, labels };
+  };
+
+  it('accepts a one-line question in the list, and a label for each action offered in the list and on the chat card', () => {
+    expect(appApprovalV1Schema.safeParse(worded).success).toBe(true);
+    expect(replyApprovalPartV1Schema.safeParse(card(worded)).success).toBe(true);
+  });
+
+  it('is optional, so an approval without it parses as before', () => {
+    expect(appApprovalV1Schema.safeParse(email).success).toBe(true);
+    expect(replyApprovalPartV1Schema.safeParse({ ...card(email), labels: undefined }).success).toBe(true);
+  });
+
+  it.each([
+    ['a question on two lines', { question: 'Send "Friday"\nto sam@example.com?' }],
+    ['a blank question', { question: '   ' }],
+    ['a question over 160 characters', { question: `Send "${'x'.repeat(160)}"?` }],
+  ])('rejects %s', (_shape, change) => {
+    expect(appApprovalV1Schema.safeParse({ ...worded, ...change }).success).toBe(false);
+  });
+
+  it.each([
+    ['a label over 20 characters', { labels: { ...worded.labels, approve: 'Send this email right now' } }],
+    ['a blank label', { labels: { ...worded.labels, skip: ' ' } }],
+    ['a label for an action not offered', { labels: { ...worded.labels, defer: 'Not now' } }],
+    ['an action offered without a label', { labels: { approve: 'Send email', skip: 'Skip' } }],
+    ['a label for an unknown action', { labels: { ...worded.labels, later: 'Later' } }],
+  ])('rejects %s, in the list and on the chat card', (_shape, change) => {
+    expect(appApprovalV1Schema.safeParse({ ...worded, ...change }).success).toBe(false);
+    expect(replyApprovalPartV1Schema.safeParse(card({ ...worded, ...change })).success).toBe(false);
+  });
+});

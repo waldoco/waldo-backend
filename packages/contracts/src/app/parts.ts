@@ -23,12 +23,20 @@ export const approvalReviewV1Schema = visibleText(REPLY_TEXT_MAX_CHARS);
 export const payloadDigestV1Schema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 export const replyVisibilityV1Schema = z.enum(['shared', 'app_only']);
 
+// The server's wording for an approval: what the owner decides, in one line (in the approvals list), and each action
+// it offers named by its effect. The review stays what a decision is made on; a reader given no wording uses its own.
+export const approvalQuestionV1Schema = z.string().max(160).regex(/\S/).regex(/^[^\n\r\u2028\u2029]*$/);
+export const approvalLabelsV1Schema = z.partialRecord(approvalActionV1Schema, visibleText(QUICK_REPLY_LABEL_MAX_CHARS));
+export const labelsNameActions = ({ actions, labels }: Readonly<{ actions: readonly string[]; labels?: Readonly<Partial<Record<string, string>>> }>) =>
+  labels === undefined || (Object.keys(labels).length === actions.length && actions.every(action => labels[action] !== undefined));
+
 export const replyApprovalPartV1Schema = z.strictObject({
   type: z.literal('approval'), approval_id: approvalIdV1Schema, kind: approvalKindV1Schema,
   review: approvalReviewV1Schema, payload_digest: payloadDigestV1Schema,
   actions: z.array(approvalActionV1Schema.exclude(['undo'])).min(1).max(4).refine(distinct, 'actions repeat'),
   expires_at: epochMsV1Schema, fallback_text: fallbackTextV1Schema,
-});
+  labels: approvalLabelsV1Schema.optional(),
+}).refine(labelsNameActions, { error: 'labels must name each action offered', path: ['labels'] });
 export const replyQuickRepliesPartV1Schema = z.strictObject({
   type: z.literal('quick_replies'),
   choices: z.array(z.strictObject({ id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), label: visibleText(QUICK_REPLY_LABEL_MAX_CHARS) }))
