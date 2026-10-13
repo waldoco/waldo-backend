@@ -62,14 +62,15 @@ it('confirmed send binds the host turn/call identity, not a model operation id',
 });
 
 
-it.each(['missing SENT', 'wrong Message-ID', 'wrong thread', 'legacy search hit'] as const)('approved send remains uncertain with %s evidence and replay never resends', async fault => {
+// A different Message-ID counts only for the Gmail id the send returned (Gmail can rewrite it); on another message it never does.
+it.each(['missing SENT', 'wrong Message-ID on another message', 'wrong thread', 'legacy search hit'] as const)('approved send remains uncertain with %s evidence and replay never resends', async fault => {
   const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`effect-send-evidence-${fault}`));
   await runInDurableObject(stub, async (_instance, state) => {
     const effects = ownerEffectLedger(state.storage, () => 1000);
     let sends = 0;
     const evidence = { message_id: 'provider', thread_id: 'intended-thread', rfc822_message_id: '<fixture@waldo-send>', label_ids: ['SENT'] };
     if (fault === 'missing SENT') evidence.label_ids = ['INBOX'];
-    if (fault === 'wrong Message-ID') evidence.rfc822_message_id = '<other@waldo-send>';
+    if (fault === 'wrong Message-ID on another message') Object.assign(evidence, { message_id: 'other-provider', rfc822_message_id: '<other@waldo-send>' });
     if (fault === 'wrong thread') evidence.thread_id = 'other-thread';
     const client = {
       sendRaw: async () => { sends++; return { message_id: 'provider' }; },
