@@ -15,7 +15,7 @@ import { MODEL_CONTEXT_MAX_CHARS } from '@waldo/contracts';
 import { PROBE_STRIPPED_TOOLS } from './probe-turn';
 import { runToolLoop } from '../conversation/tool-loop';
 import { turnReceipt } from '../hooks/receipt-line';
-import { threadOfChain } from './app-threads';
+import { THREAD_TITLE_FORMAT, THREAD_TITLE_INSTRUCTION, threadOfChain } from './app-threads';
 import type { LoopEventLike } from '../hooks/claim-hook';
 import { delegateTaskHandler, runChildLoop, SUBAGENT_SYSTEM_PROMPT, withDelegation } from '../conversation/subagent';
 import { inMemoryToolOutputStore } from '../conversation/tool-output-store';
@@ -726,6 +726,7 @@ export const createOwnerResponder = (
       const grounding = sides ? { owner: sides.owner, waldo: sides.waldo } : { owner: day };
       return applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`, undefined, grounding, false);
     },
+    threadTitle: (trace, exchange) => ask(trace, 'thread_title', THREAD_TITLE_INSTRUCTION, exchange, THREAD_TITLE_FORMAT, undefined, undefined, undefined, memoryModel),
     async migrate(trace, input) {
       if (!memory) return 'no memory';
       if (holdsAnyHeldTopic()) throw new Error('historical memory migration deferred: forgetting coverage incomplete');

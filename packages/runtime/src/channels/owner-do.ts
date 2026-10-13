@@ -124,7 +124,7 @@ import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
 import { APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_THREADS_PATH, APP_UPDATE_BASE, appSubjectFor, appTranscriptPage, ownerPrincipalRef, parseAppSend } from './app-api';
-import { appThreadsRequest, threadChainRef, threadOfChain, threadRecord, touchThread, type AppThreadsHost } from './app-threads';
+import { appThreadsRequest, askThreadTitle, nameThread, redactThreadTitles, threadChainRef, threadOfChain, threadRecord, threadRowsOfChain, threadRowsPrefix, touchThread, type AppThreadsHost } from './app-threads';
 import { stableJson } from '../context-composer/canonical';
 import { APP_CONNECT_GUIDANCE, appApprovalLink, appCaller } from './surfaces/app';
 import { appApprovalsRequest } from './app-approvals';
@@ -191,6 +191,7 @@ type OwnerRuntime = Readonly<{
   timezone: string;
   ready: Promise<void>;
   log(entry: TurnLogEntry): void;
+  titleThread(trace: string, exchange: string): Promise<string>;
 }>;
 
 const LATE_FIRE_MS = 5 * 60_000;
@@ -798,9 +799,19 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql));
     }finally{abort.abort();}
   }
+  // The text the chat shows for each of a thread's messages that has any, from rows whose witness matches.
+  private *shownThreadRows(rows: string, newestFirst: boolean, limit: number): Generator<Readonly<{ role: 'user' | 'assistant'; text: string }>> {
+    const kv=this.ctx.storage.kv;
+    for(const [,entry] of kv.list<ConversationEntry>({prefix:`${rows}conv:`,reverse:newestFirst,limit})){
+      if(entry.role!=='user'&&entry.role!=='assistant')continue;
+      if(stableJson(kv.get<{entry:ConversationEntry}>(`${rows}witness:${entry.id}`)?.entry)!==stableJson(entry))continue;
+      const text=appTranscriptPage([entry],null,1).messages[0]?.text??'';
+      if(text)yield {role:entry.role,text};
+    }
+  }
   // The owner object's side of the app's threads: their messages ride the one app inbox and drain, on each thread's own chain.
   private threadsHost(name: string, hash: string, ownerId: string): AppThreadsHost {
-    const principal=ownerPrincipalRef(ownerId),chain=(thread:string)=>`canonical-owner-v1:${principal}:ten_${ownerId.replaceAll('-','').toLowerCase()}:thread:${thread}:`;
+    const principal=ownerPrincipalRef(ownerId),chain=(thread:string)=>threadRowsPrefix(principal,thread);
     const kv=this.ctx.storage.kv,at={step:'context'};
     return {storage:this.ctx.storage,now:()=>Date.now(),principal,messages:{
       admit:async(ref,clientId,text,assertCurrent,revision)=>{
@@ -820,16 +831,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         try{return await this.appChatPage(name,hash,thread,cursor,limit,at);}
         catch(error){logAppReadFailure('app_history_read',at.step,error);throw error;}
       },
-      // The text the chat shows for the newest message that has any, from a row whose witness matches, cut at read time.
-      preview:thread=>{
-        for(const [,entry] of kv.list<ConversationEntry>({prefix:`${chain(thread)}conv:`,reverse:true,limit:8})){
-          if(entry.role!=='user'&&entry.role!=='assistant')continue;
-          if(stableJson(kv.get<{entry:ConversationEntry}>(`${chain(thread)}witness:${entry.id}`)?.entry)!==stableJson(entry))continue;
-          const text=appTranscriptPage([entry],null,1).messages[0]?.text??'';
-          if(text)return text.slice(0,280);
-        }
-        return null;
-      },
+      // The newest shown text, cut at read time.
+      preview:thread=>{for(const row of this.shownThreadRows(chain(thread),true,8))return row.text.slice(0,280);return null;},
       erase:thread=>{
         const rows=[...kv.list<ConversationEntry>({prefix:chain(thread)})];
         const entries=rows.filter(([key])=>key.startsWith(`${chain(thread)}conv:`)).map(([,entry])=>entry);
@@ -932,6 +935,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async drainApp(): Promise<void> {
     this.appInbox.recover(this.appAttempts);
     await this.writeAppNotices();
+    const untitled=new Map<string,string>();
     for(const pending of this.appInbox.records().filter(row=>row.state==='admitted')){
       let current=false;
       try{await this.appAuthority(pending.owner,pending.sessionHash);current=true;}catch(error){if(error instanceof AppSessionAuthorityError&&error.kind==='unavailable'){this.appInbox.deferWake(30_000);await this.rearmWithSchedule();return;}}
@@ -945,10 +949,27 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await this.turn({update_id:record.updateId,message:{message_id:record.updateId,from:{id:subject,is_bot:false},chat:{id:subject,type:'private'},text:record.text}},'app',true,scope);
         await this.appAuthority(record.owner,record.sessionHash);scope.admit();completed=true;
       }catch(error){console.error('app execution outcome unconfirmed');const code=canonicalHistoryFault(error);if(code)console.error(JSON.stringify({hop:'app_turn',ok:false,code}));}
-      finally{clearTimeout(timeout);this.appInbox.settle(record,completed);if(completed&&thread)this.ctx.storage.transactionSync(()=>touchThread(this.ctx.storage.kv,thread,Date.now()));abort.abort();this.appAttempts.delete(record.attempt!);this.activeApp=null;if(this.activeScope===scope){this.activeScope=undefined;this.activeAbort=undefined;}}
+      finally{clearTimeout(timeout);this.appInbox.settle(record,completed);if(completed&&thread){this.ctx.storage.transactionSync(()=>touchThread(this.ctx.storage.kv,thread,Date.now()));untitled.set(thread,threadRowsOfChain(record.conversationRef)!);}abort.abort();this.appAttempts.delete(record.attempt!);this.activeApp=null;if(this.activeScope===scope){this.activeScope=undefined;this.activeAbort=undefined;}}
       await this.writeAppNotices();
     }
+    // Named after the queue drains, so a message already queued never waits on a title.
+    for(const [thread,rows] of untitled){try{await this.titleThread(thread,rows);}catch{console.error(JSON.stringify({hop:'thread_title',ok:false,code:'unavailable'}));}}
     await this.rearmWithSchedule();
+  }
+  // The model may name a thread once, from its first exchange; see askThreadTitle for when the title lands.
+  private async titleThread(thread: string, rows: string): Promise<void> {
+    const shown=[...this.shownThreadRows(rows,false,16)],said=shown.find(row=>row.role==='user'),reply=shown.find(row=>row.role==='assistant');
+    if(!said)return;
+    const kv=this.ctx.storage.kv;
+    if(!this.ctx.storage.transactionSync(()=>askThreadTitle(kv,thread)))return;
+    const runtime=this.setup('app'),trace=`thread-title:${Date.now()}`,started=Date.now();
+    let outcome:string;
+    try{
+      await runtime.ready;
+      const answer=await runtime.titleThread(trace,[`Owner: ${said.text.slice(0,2000)}`,...(reply?[`Waldo: ${reply.text.slice(0,2000)}`]:[])].join('\n\n'));
+      outcome=this.ctx.storage.transactionSync(()=>nameThread(kv,thread,answer));
+    }catch{outcome='model_failed';}
+    runtime.log({trace,hop:'thread_title',ms:Date.now()-started,ok:outcome==='named',code:outcome});
   }
   // The schedule's next wake goes into every re-arm after app work, or an app message would drop or delay the alarm for the
   // owner's next scheduled job.
@@ -2392,7 +2413,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope);
           const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
           const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
-          if (result.remaining + mail.remaining + prep.remaining) throw new Error('Memory history cleanup is incomplete');
+          const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope);
+          if (result.remaining + mail.remaining + prep.remaining + titles.remaining) throw new Error('Memory history cleanup is incomplete');
           const scrubEpisodes = () => {
             const redact = literalTextRedactor(texts, FORGOTTEN);
             for (const row of storage.sql.exec<{ ref: number; text: string }>('SELECT rowid AS ref, text FROM episodes').toArray()) {
@@ -2408,7 +2430,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const ownerKey = await currentTaskOwnerKey(); await context.assertTaskSourceCurrent();
         browserSources.capture(payload, ownerKey);
         const id = await desk.proposeBrowserSubmit(payload); await context.assertTaskSourceCurrent(); return id;
-      }, placement: id => desk.placement(id), stopAdmission: async context => { await this.ownerBrowser.current(context)(); this.ownerBrowser.stop(); await this.browserTasks.revoke(); } }), () => this.browserTasks.principal)), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), ...loopHandlers(loops), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable }))], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining }; }), undefined,
+      }, placement: id => desk.placement(id), stopAdmission: async context => { await this.ownerBrowser.current(context)(); this.ownerBrowser.stop(); await this.browserTasks.revoke(); } }), () => this.browserTasks.principal)), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), ...loopHandlers(loops), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable }))], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + titles.remaining }; }), undefined,
       (opt) => opt ? openLoopsPrompt(loops, clock.timezone, opt.loopsRoom) : standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
@@ -2974,6 +2996,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
               kvRemaining += (await redactConversationEntries(this.ctx.storage, result.texts, FORGOTTEN)).remaining;
               kvRemaining += redactMailFollowupEntries(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
               kvRemaining += redactCalendarPrepEntries(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
+              kvRemaining += redactThreadTitles(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
               await redactToolOutputLedger(this.ctx.storage, result.texts, FORGOTTEN);
             }
             if (result.failed.length || Object.keys(result.remaining).length || kvRemaining > 0) {
@@ -3000,6 +3023,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           await clean(() => redactToolOutputLedger(this.ctx.storage, [node.label], FORGOTTEN).then(() => undefined));
           await clean(() => redactMailFollowupEntries(this.ctx.storage.kv, [node.label], FORGOTTEN));
           await clean(() => redactCalendarPrepEntries(this.ctx.storage.kv, [node.label], FORGOTTEN));
+          await clean(() => redactThreadTitles(this.ctx.storage.kv, [node.label], FORGOTTEN));
           if (remaining > 0) {
             log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: false, detail: 'node.forget retained-copy redaction incomplete' });
             return 'node.forget.incomplete';
@@ -3038,6 +3062,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           return null;
         }
       },
+      titleThread: (trace, exchange) => responder.threadTitle(trace, exchange),
       timezone: clock.timezone, ready };
     this.runtimes[channel] = runtime; this.runtimeOwners[channel] = owner;
     return runtime;

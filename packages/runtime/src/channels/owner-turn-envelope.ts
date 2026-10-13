@@ -51,6 +51,8 @@ export type OwnerResponder = Readonly<{
   migrate(trace: string, input: string): Promise<string>;
   promote(trace: string): Promise<string>;
   planDay(trace: string, input: string): Promise<string>;
+  // The model's raw answer naming a thread from its first exchange; the caller checks it against the contract.
+  threadTitle(trace: string, exchange: string): Promise<string>;
   control: ReturnType<typeof turnControl>;
 }>;
 
