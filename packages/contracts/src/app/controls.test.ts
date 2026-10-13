@@ -253,3 +253,31 @@ describe('what Waldo is carrying and the open loops', () => {
     ]) expect(parses(invalid), JSON.stringify(invalid)).toBe(false);
   });
 });
+
+describe("today's update cards", () => {
+  const day = (extra: object) => ({
+    version: 1, state: 'available', revision, view: 'day',
+    data: { timezone: 'Europe/London', date: '2026-10-13', cards: [], proactivity: { quiet_start: null, quiet_end: null, volume: 'normal' }, schedules: { daily_brief: true, followups: true, event_briefs: true, nightly: true, heartbeat: true }, ...extra },
+  });
+  const update = { message_id: 'entry-9', delivered_at: 1_791_900_000_000, excerpt: 'Update\nThe 3pm review moved to 4pm, so the afternoon block is shorter.' };
+  const updates = (items: object[], total = items.length, checked_at: number | null = 1_791_900_600_000) => ({ updates: { items, total, checked_at } });
+  const parses = (extra: object) => appControlProjectionV1Schema.safeParse(day(extra)).success;
+
+  it('lists them like a card delivery with when Waldo last checked, and stays optional', () => {
+    for (const valid of [
+      {}, updates([]), updates([], 0, null), updates([update, { ...update, message_id: 'entry-8', excerpt: 'x'.repeat(280) }], 5),
+      updates(Array.from({ length: 20 }, (_, i) => ({ ...update, message_id: `entry-${i}` })), 31),
+    ]) expect(parses(valid), JSON.stringify(valid)).toBe(true);
+  });
+
+  it('refuses a malformed card, the full text, an inconsistent count and a check time that is not epoch ms', () => {
+    const { excerpt: _excerpt, ...noExcerpt } = update;
+    for (const invalid of [
+      { updates: null }, { updates: { items: [], total: 0 } }, { updates: { items: [], checked_at: null } }, updates([update], 0), updates([], -1), updates([], 1.5),
+      updates(Array.from({ length: 21 }, (_, i) => ({ ...update, message_id: `entry-${i}` })), 21),
+      updates([{ ...update, excerpt: '' }]), updates([{ ...update, excerpt: 'x'.repeat(281) }]), updates([noExcerpt]), updates([{ ...update, text: 'the full card' }]),
+      updates([{ ...update, source: 'gmail' }]), updates([{ ...update, message_id: '' }]), updates([{ ...update, delivered_at: 0 }]),
+      updates([], 0, 0), updates([], 0, 1.5), updates([], 0, '2026-10-13T10:40:00Z' as unknown as number), { updates: { ...updates([]).updates, held: 2 } },
+    ]) expect(parses(invalid), JSON.stringify(invalid)).toBe(false);
+  });
+});
