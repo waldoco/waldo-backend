@@ -19,9 +19,10 @@ describe('google-auth MCP servers', () => {
       seenAuth = new Headers(init?.headers).get('authorization') ?? seenAuth;
       return fixtureMcpFetch('https://mcp.fixture/rpc', init);
     }) as typeof fetch;
-    const out = await executeMcp({ name: 'drivemcp', url: 'https://drivemcp.googleapis.com/mcp/v1', auth: 'google' }, 'pipeline_status', {}, bearerAuth('ya29.test-token'), fetchSpy);
+    const out = await executeMcp({ name: 'drivemcp', url: 'https://drivemcp.googleapis.com/mcp/v1', auth: 'google' }, 'search_files', {}, bearerAuth('ya29.test-token'), fetchSpy).catch((error: Error) => error);
+    // The fixture answers only its own tools, so the call reaches tools/call and comes back as a tool error.
+    expect(out).toMatchObject({ message: expect.stringContaining('unknown tool search_files') });
     expect(seenAuth).toBe('Bearer ya29.test-token');
-    expect(out.protocolVersion).toBe('2025-06-18');
   });
 
   it('no serving account maps to the not_connected connect intent', async () => {
@@ -35,13 +36,13 @@ describe('google-auth MCP servers', () => {
     }
   });
 
-  it('a 401 from the server maps to reauth_needed; a 403 to scope_missing', async () => {
+  it('a 401 from a Google server maps to reauth_needed; a 403 means the preview is not available', async () => {
     const fetch401: typeof fetch = (async () => new Response('nope', { status: 401 })) as typeof fetch;
-    await expect(executeMcp({ name: 'g', url: 'https://drivemcp.googleapis.com/mcp/v1', auth: 'google' }, 't', {}, bearerAuth('tok'), fetch401))
+    await expect(executeMcp({ name: 'g', url: 'https://drivemcp.googleapis.com/mcp/v1', auth: 'google' }, 'search_files', {}, bearerAuth('tok'), fetch401))
       .rejects.toMatchObject({ name: 'McpConnectError', reason: 'reauth_needed' });
     const fetch403: typeof fetch = (async () => new Response('nope', { status: 403 })) as typeof fetch;
-    await expect(executeMcp({ name: 'g', url: 'https://drivemcp.googleapis.com/mcp/v1', auth: 'google' }, 't', {}, bearerAuth('tok'), fetch403))
-      .rejects.toMatchObject({ name: 'McpConnectError', reason: 'scope_missing' });
+    await expect(executeMcp({ name: 'g', url: 'https://drivemcp.googleapis.com/mcp/v1', auth: 'google' }, 'search_files', {}, bearerAuth('tok'), fetch403))
+      .rejects.toMatchObject({ name: 'McpUnavailableError' });
   });
 
   it('proxy mode routes server/tool/args plus the connection id edge-side; no token crosses', async () => {
@@ -53,8 +54,8 @@ describe('google-auth MCP servers', () => {
         return [{ text: 'edge result' }];
       },
     };
-    const out = await executeMcp({ name: 'drivemcp', url: 'https://drivemcp.googleapis.com/mcp/v1', auth: 'google' }, 'list_files', { max: 3 }, proxyAuth);
-    expect(seen).toEqual([{ serverUrl: 'https://drivemcp.googleapis.com/mcp/v1', tool: 'list_files', args: { max: 3 }, connection: 'conn_123' }]);
+    const out = await executeMcp({ name: 'drivemcp', url: 'https://drivemcp.googleapis.com/mcp/v1', auth: 'google' }, 'search_files', { max: 3 }, proxyAuth);
+    expect(seen).toEqual([{ serverUrl: 'https://drivemcp.googleapis.com/mcp/v1', tool: 'search_files', args: { max: 3 }, connection: 'conn_123' }]);
     expect(out.content).toEqual([{ text: 'edge result' }]);
     expect(JSON.stringify(seen)).not.toContain('Bearer');
   });
