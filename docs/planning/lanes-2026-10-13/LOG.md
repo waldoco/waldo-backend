@@ -2328,3 +2328,5 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 - **Found while reading source, for A3:** iMessage turns never reach the episode index (`owner-do.ts:2495`).
 - **`beta-mvp` moved from `9440ec6a` to `944ae97d`.** Merged: #1190 (A0), #1154, #1171, #1163, #1155 and #1166, so the lead or the review session is merging again. Ashish's next deploy of head carries these.
 - **Side effect noted:** `guard-pgtap` rewrote `~/pgdg/sources.list` on the Mac. That directory already existed from 25 Sep, and nothing was deleted.
+
+- 23:45Z: #1149 PR body updated for `7242f371`. The split-time text is replaced, with commit and evidence lines added. The body was compared before the edit to confirm nobody had changed it. Notice posted on the PR.
