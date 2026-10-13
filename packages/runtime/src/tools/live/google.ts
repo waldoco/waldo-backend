@@ -9,11 +9,12 @@ import {
   connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolEligibility, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
-import { b64url, buildMime, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type GoogleClient, type GoogleFeature } from '../../connectors/google';
+import { b64url, buildMime, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type GoogleClient, type GoogleFeature, type ThreadMessage } from '../../connectors/google';
 import { EmailProposalError, proposalStatus, type CardPlacement, type EmailSendProposal } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
 import { connectNeededText } from './connect-text';
+import { sanitise } from '../../scribe/sanitiser';
 
 export type GoogleAccess = Readonly<{
   client(feature?: GoogleFeature, intent?: ProxyIntent, assertTaskSourceCurrent?: () => Promise<void>, account?: string): Promise<GoogleClient | null>;
@@ -126,22 +127,79 @@ export type ArtifactRelay = (from: string, artifacts: readonly ExtractedArtifact
 // never a truncated snippet) and relayed to the owner on his chat channel - the Instinct behavior
 // without the code ever entering model context, episodes, or traces. The tool result carries only
 // the marker; a failed or absent relay falls back to the source-app copy, never a false claim.
-const relayThreadMessage = async <T extends { subject: string; body: string; from: string; artifact_scan?: string }>(item: T, relay: ArtifactRelay | undefined): Promise<Omit<T, 'artifact_scan'> & { quarantined?: readonly ArtifactKind[] }> => {
-  const { artifact_scan: scan, ...visible } = item;
-  const subject = extractArtifacts(visible.subject);
-  const body = extractArtifacts(visible.body);
-  const shown = [...subject.artifacts, ...body.artifacts.filter((b) => !subject.artifacts.some((s) => s.value === b.value))];
-  const linked = extractArtifacts(scan ?? '').artifacts.filter((l) => !shown.some((s) => s.value === l.value));
-  const artifacts = [...shown, ...linked];
-  if (artifacts.length === 0) return visible;
-  const kinds = [...new Set(artifacts.map((artifact) => artifact.kind))].sort();
-  const relayed = relay !== undefined && await relay(item.from, artifacts).then(() => true, () => false);
-  // Only the matched spans are replaced; the rest of subject and body stays readable. An artifact
-  // found only in an HTML link target has no span to replace, so its marker is appended. A failed or
-  // absent relay keeps the source-app marker, never a false sent claim.
-  const bodyText = [body.text, ...new Set(linked.map((artifact) => artifactMarker(artifact.kind)))].join('\n');
-  const relayedMarker = (text: string): string => kinds.reduce((t, kind) => t.replaceAll(artifactMarker(kind), `[${kind} artifact - sent to the owner in a separate message]`), text);
-  return { ...visible, subject: relayed ? relayedMarker(subject.text) : subject.text, body: relayed ? relayedMarker(bodyText) : bodyText, quarantined: kinds };
+// Thread bodies reach the model in chunks. Each read prepares the whole body the same way before cutting
+// it, and offsets count the prepared text, so no code, link or health reading is split across chunks and
+// every read of a message lines up:
+// - unbroken runs longer than RUN_MAX are omitted, because extraction backtracks across a run and its
+//   cost grows with the square of the run's length (11 seconds for a hostile 200,000-character run);
+// - verification artifacts are extracted;
+// - when the connector cut the body at its bound, the cut word and the text just before it are dropped,
+//   since the cut can fall inside a code or link that then matches no pattern;
+// - the scribe withholds health readings over the whole body, because it sees one tool result at a time.
+// A chunk fits one tool result without offloading, and one read's bodies fit the tool-output store, so no
+// message is cut silently; the rest of each body is read by offset.
+const BODY_CHUNK = 12_000;
+const READ_BODY_BUDGET = 40_000;
+const RUN_MAX = 2_048;
+const CUT_GUARD = 256;
+const omitLongRuns = (text: string): string => text.replace(/[^\s"'<>)\]]+/g, (run) => run.length > RUN_MAX ? `[${run.length} characters of unbroken text omitted]` : run);
+const dropCutTail = (text: string): string => {
+  let end = text.length;
+  while (end > 0 && !/\s/.test(text[end - 1]!)) end--;
+  return text.slice(0, Math.max(0, end - CUT_GUARD));
+};
+const scribedBody = (text: string, canaries: readonly string[]): string => {
+  const scribed = sanitise({ payload: { body: text }, destination: 'internal_context', source_taint: 'external', canary_tokens: [...canaries] });
+  if (!scribed.ok) throw new Error('mail body refused by the scribe');
+  return (scribed.payload as { body: string }).body;
+};
+const freshCanaries = () => Array.from({ length: 3 }, () => crypto.randomUUID().replaceAll('-', '').slice(0, 16));
+type BodyRead = Readonly<{ relay?: ArtifactRelay; offset: number; first: boolean; canaries: readonly string[] }>;
+// A connector-proxy older than the messageId read ignores it and returns the thread's first message, so the
+// message is then found by paging the thread, within the reply-parent lookup's budget of 10 pages.
+const messageById = async (client: GoogleClient, threadId: string, messageId: string): Promise<ThreadMessage> => {
+  const direct = await client.threadPage!(threadId, 1, undefined, { fullBodies: true, bodyChunks: true, messageId });
+  if (direct.messages.length === 1 && direct.messages[0]!.id === messageId) return direct.messages[0]!;
+  let cursor: string | undefined;
+  for (let pageNumber = 0; pageNumber < 10; pageNumber++) {
+    const page = await client.threadPage!(threadId, 20, cursor, { fullBodies: true, bodyChunks: true });
+    const found = page.messages.find(message => message.id === messageId);
+    if (found) return found;
+    if (!page.cursor) break;
+    cursor = page.cursor;
+  }
+  throw new Error('unknown message in thread');
+};
+
+const readMessages = async (messages: readonly ThreadMessage[], read: BodyRead) => {
+  let budget = read.first ? READ_BODY_BUDGET : BODY_CHUNK;
+  const shownMessages = [];
+  for (const item of messages) {
+    const { artifact_scan: scan, body_full_chars: clipped, attachments: listed, ...visible } = item;
+    const subject = extractArtifacts(omitLongRuns(visible.subject));
+    const body = extractArtifacts(omitLongRuns(visible.body));
+    const names = (listed ?? []).map((attachment) => ({ attachment, name: extractArtifacts(attachment.filename) }));
+    const shown = [...subject.artifacts, ...body.artifacts, ...names.flatMap(({ name }) => name.artifacts)].filter((artifact, index, all) => all.findIndex((other) => other.value === artifact.value) === index);
+    const linked = extractArtifacts(omitLongRuns(scan ?? '')).artifacts.filter((artifact) => !shown.some((other) => other.value === artifact.value));
+    const artifacts = [...shown, ...linked];
+    // An artifact found only in an HTML link target has no span to replace, so its marker is appended.
+    const prepared = [scribedBody(clipped === undefined ? body.text : dropCutTail(body.text), read.canaries), ...new Set(linked.map((artifact) => artifactMarker(artifact.kind)))].join('\n');
+    if (!Number.isSafeInteger(read.offset) || read.offset < 0 || (read.offset > 0 && read.offset >= prepared.length)) throw new Error('invalid body offset');
+    const end = read.offset + Math.min(BODY_CHUNK, budget);
+    const chunk = prepared.slice(read.offset, end);
+    budget -= chunk.length;
+    // The position comes before the body, so it stays in view when a long result is shown only in part.
+    const position = { ...(end < prepared.length ? { body_total_chars: prepared.length, body_next_offset: end } : {}), ...(clipped !== undefined ? { body_truncated: true as const } : {}) };
+    const files = read.first && listed ? { attachments: names.map(({ attachment, name }) => ({ ...attachment, filename: name.text })) } : {};
+    if (artifacts.length === 0) { shownMessages.push({ ...position, ...visible, ...files, subject: subject.text, body: chunk }); continue; }
+    const kinds = [...new Set(artifacts.map((artifact) => artifact.kind))].sort();
+    const relayed = read.relay !== undefined && await read.relay(item.from, artifacts).then((sent) => sent === true, () => false);
+    // Only the matched spans are replaced; the rest stays readable. A failed or absent relay (a later read
+    // never relays again) keeps the source-app marker, never a false sent claim.
+    const present = (text: string): string => relayed ? kinds.reduce((t, kind) => t.replaceAll(artifactMarker(kind), `[${kind} artifact - sent to the owner in a separate message]`), text) : text;
+    shownMessages.push({ ...position, ...visible, ...files, subject: present(subject.text), body: present(chunk), quarantined: kinds });
+  }
+  return shownMessages;
 };
 
 export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, relayArtifact?: ArtifactRelay, effects?: OwnerEffectLedger) => [
@@ -258,16 +316,21 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<SearchCommunicationArgs, unknown, ToolDispatcherContext>,
   {
     name: 'read_thread',
-    description: "Read one Gmail thread by thread_id - the messages with sender, subject, time and body. Use after get_communication or search_communication surfaces a thread the owner asks about, before drafting a reply. Continue with cursor and the same thread/account; changed threads require restarting. body_source says what each body was read from: 'snippet' means only Gmail's short preview was readable, so say so rather than reading it as the full message.",
+    description: "Read one Gmail thread by thread_id - the messages with sender, subject, time and body. Use after get_communication or search_communication surfaces a thread the owner asks about, before drafting a reply. Continue with cursor and the same thread/account; changed threads require restarting. A message with body_next_offset has more body than this read showed (body_total_chars in all): read the next part with body_message_id (that message's id) and body_offset set to body_next_offset, without a cursor. body_truncated means the message is longer than Waldo reads, so say the end is missing. attachments lists attached files by name, type and size; their contents are not read. body_source says what each body was read from: 'snippet' means only Gmail's short preview was readable, so say so rather than reading it as the full message.",
     schema: readThreadArgsSchema,
     trigger_allowlist: allowlist('read_thread'),
     autonomy_gated: false,
     requires_connector: true,
     eligible: granted(google, 'mail'),
-    handle: ({ thread_id, limit, cursor, account }: ReadThreadArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'mail', ctx, async (client) => {
+    handle: ({ thread_id, limit, cursor, account, body_message_id, body_offset }: ReadThreadArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'mail', ctx, async (client) => {
       if (!client.threadPage) throw new Error('Gmail thread pagination adapter unavailable');
-      const page = await client.threadPage(thread_id, limit, cursor, { fullBodies: true });
-      return {thread_id, account: client.account ?? {connection_id:null,email:null}, cursor: page.cursor, messages: await Promise.all(page.messages.map(message => relayThreadMessage(message, relayArtifact)))};
+      const canaries = ctx?.session?.canary_tokens ?? freshCanaries();
+      if (body_message_id !== undefined) {
+        const message = await messageById(client, thread_id, body_message_id);
+        return {thread_id, account: client.account ?? {connection_id:null,email:null}, cursor: null, messages: await readMessages([message], { offset: body_offset ?? 0, first: false, canaries })};
+      }
+      const page = await client.threadPage(thread_id, limit, cursor, { fullBodies: true, bodyChunks: true });
+      return {thread_id, account: client.account ?? {connection_id:null,email:null}, cursor: page.cursor, messages: await readMessages(page.messages, { relay: relayArtifact, offset: 0, first: true, canaries })};
     }, account),
   } satisfies ToolHandler<ReadThreadArgs, unknown, ToolDispatcherContext>,
   {
