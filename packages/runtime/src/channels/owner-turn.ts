@@ -1,4 +1,4 @@
-import { createOwnerTurnContext, type OwnerContextCapability } from '../context-composer/owner-turn';
+import { createOwnerTurnContext, ownerChainRef, type OwnerContextCapability } from '../context-composer/owner-turn';
 import type { OwnerMessageAdmission } from '../identity/owner-message-admission';
 import { OWNER_REQUEST_HOP } from './harness';
 import { narrowHeldJson, withholdHeldTurns } from '../conversation/held-turns';
@@ -603,14 +603,15 @@ export const createOwnerResponder = (
     }
   };
   // Machine work outside an owner turn runs in a responder bound to the owner the job host admitted, so its cache key,
-  // composed context and tools' authenticated owner are that owner's. Its history is the owner's own chain, the one an
-  // owner-admitted turn writes, never a chain whose rows name another principal.
-  const asOwnerJob = async <T>(trace: string, work: (responder: OwnerResponder) => Promise<T>): Promise<T | undefined> => {
+  // composed context and tools' authenticated owner are that owner's. A job that converses writes its surface's chain, the
+  // one that surface's owner turns read: the chat's on Telegram and WhatsApp, the owner's principal chain on the app.
+  const asOwnerJob = async <T>(trace: string, work: (responder: OwnerResponder) => Promise<T>, chat?: Readonly<{ surface: string | undefined; chain: string }>): Promise<T | undefined> => {
     if (context || !privateOwner?.jobHost) return undefined;
     const admission = await privateOwner.jobHost.admit();
     if (!admission) return undefined;
     let healthRead: Promise<ContextHealthMaterial | null> | undefined;
     const jobContext = createOwnerTurnContext(admission, {
+      ...(chat ? { conversationRef: chat.surface === 'app' ? ownerChainRef('app', admission.invocation.verified_authority.principal_ref) : chat.chain } : {}),
       toolOutputs: recentToolResults,
       ...(health ? { health: () => healthRead ??= health(trace) } : {}),
       onPhase: (phase, previousMs) => log({ trace, hop: 'composer_phase', ms: previousMs, ok: true, detail: phase }),
@@ -691,14 +692,14 @@ export const createOwnerResponder = (
       }
     },
     async remind(id, conversationRef, note, time, surface) {
-      const asOwner = await asOwnerJob(id, job => job.remind(id, conversationRef, note, time, surface));
+      const asOwner = await asOwnerJob(id, job => job.remind(id, conversationRef, note, time, surface), { surface, chain: conversationRef });
       if (asOwner !== undefined) return asOwner;
       await restored();
       pending = undefined;
       return converse(id, conversationRef, `[Reminder due now, set earlier by the owner: "${note}"] Send the reminder briefly in your own words. Do not add a sentence explaining that they asked for it.`, time, false, surface);
     },
     async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext) {
-      const asOwner = await asOwnerJob(id, job => job.prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext));
+      const asOwner = await asOwnerJob(id, job => job.prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext), { surface, chain: conversationRef });
       if (asOwner !== undefined) return asOwner;
       // Cards read in seconds, so a job's prompt gets half the provider budget; the guard keeps the opening and closing and cuts the data between.
       const said = fitPromptToBudget(jobText, Math.floor(deriveContextBudgetChars(model, SANITISE_DESTINATION_POLICIES.internal_context.max_chars) / 2));

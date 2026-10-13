@@ -134,6 +134,26 @@ describe('scheduled jobs run as the owner the directory admits', () => {
     });
   });
 
+  it('a reminder for a Telegram-bound owner stays on the Telegram chain, and the next Telegram turn sees it', async () => {
+    await withOwner('jobs-telegram-continuity', { telegram: true, app: false, directory: true }, async (owner, state) => {
+      await dueReminder(state);
+      await schedulePass(owner, state);
+      expectOwnerRequest('[Reminder due now');
+      const rows = [...state.storage.kv.list<{ chatId: string; ownerId: string; appPayload: string }>({ prefix: 'conv:' })].map(([, row]) => row);
+      expect(rows.find(row => row.appPayload === REMINDER_TEXT)).toMatchObject({ chatId: 'telegram-7', ownerId: OWNER_PRINCIPAL });
+      const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
+      const { persistInboxWake } = await import('../src/scheduler/alarm-slot');
+      const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+      await inbox.admit({ bot: '7:synthetic-fixture', subject: '7', doName: 'jobs-telegram-continuity' }, 940001,
+        JSON.stringify({ update_id: 940001, message: { message_id: 940001, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: 'Did I call Sam?' } }));
+      fixture.requests = [];
+      await (owner as unknown as { drainInbox(): Promise<void> }).drainInbox();
+      const reply = fixture.requests.find(sent => sent.includes('Did I call Sam?') && !sent.includes('"response_format"'));
+      expect(reply).toContain(`Authenticated owner ${OWNER_PRINCIPAL}`);
+      expect(reply).toContain(REMINDER_TEXT);
+    });
+  });
+
   it('an app-bound owner\'s Brief composes as that owner, resolved once through the runtime authority', async () => {
     await withOwner('jobs-app-owner', { telegram: false, app: true, directory: true }, async (owner, state) => {
       await dueBrief(state);
