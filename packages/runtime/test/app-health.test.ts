@@ -170,13 +170,31 @@ describe('app health scores', () => {
     expect(response.status).toBe(200);
     expect(healthScoresResponseV1Schema.safeParse(body).success).toBe(true);
     expect(body).toMatchObject({
-      day: '2026-10-10', timezone: 'Asia/Kolkata', compiled_at: '2026-10-10T08:30:00.000Z', freshness: 'fresh',
+      day: '2026-10-10', timezone: 'Asia/Kolkata', compiled_at: '2026-10-10T08:30:00.000Z',
       form: { state: 'available', score: 72, zone: 'steady', algorithm_version: 'form.v1', activation: 'candidate_unaccepted', confidence: 0.8, hrv_method: null },
       recovery: { state: 'available', score: 64, zone: 'mixed', hrv_method: 'rmssd' },
       weight: { state: 'unavailable', reason: 'missing_sleep' },
     });
     expect(rpcs[0]!.fn).toBe('health_scores_read');
     expect(rpcs[0]!.body.p_payload).toBe('{}');
+  });
+  it('ages a stored row by ADR-0081 §2 when read, whatever freshness it was written with', async () => {
+    const realNow = Date.now;
+    const freshnessAt = async (instant: string, stored: Record<string, unknown> = {}) => {
+      Date.now = () => Date.parse(instant);
+      try {
+        rpcResult = { scores: { ...row, freshness: 'stale', ...stored } };
+        return (await (await get('/app/v1/health/scores')).json() as { freshness: string }).freshness;
+      } finally { Date.now = realNow; }
+    };
+    // The row is the 10th in Kolkata, compiled at 08:30 UTC on the 10th.
+    expect(await freshnessAt('2026-10-10T14:30:00Z')).toBe('fresh');
+    expect(await freshnessAt('2026-10-10T14:30:01Z', { freshness: 'fresh' })).toBe('stale');
+    expect(await freshnessAt('2026-10-11T18:00:00Z', { freshness: 'fresh' })).toBe('stale');
+    expect(await freshnessAt('2026-10-13T08:30:00Z')).toBe('stale');
+    expect(await freshnessAt('2026-10-13T08:30:01Z', { freshness: 'fresh' })).toBe('expired');
+    // Compiled two hours before the read, but by then the row's day is two local days back.
+    expect(await freshnessAt('2026-10-11T22:00:00Z', { compiled_at: '2026-10-11T20:00:00.000Z', freshness: 'fresh' })).toBe('stale');
   });
   it('reads a Weight score by its meaning: a stored high is a peak day', async () => {
     rpcResult = { scores: { ...row, weight: available({ score: 91, zone: 'high', algorithm_version: 'weight.v1' }) } };
@@ -215,7 +233,8 @@ describe('app health scores', () => {
   it('does not invent a pillar the contract cannot express', async () => {
     rpcResult = { scores: { ...row, form: available({ zone: 'excellent' }) } };
     expect((await get('/app/v1/health/scores')).status).toBe(503);
-    rpcResult = { scores: { ...row, freshness: null } };
+    // A row in a zone the platform does not know cannot be aged, so it is not shown with a guessed freshness.
+    rpcResult = { scores: { ...row, timezone: 'Mars/Olympus_Mons' } };
     expect((await get('/app/v1/health/scores')).status).toBe(503);
   });
 });

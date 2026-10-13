@@ -24,6 +24,10 @@ export type ConversationEntry = Readonly<{
   role?: ConversationRole;
   // Canonical owner-history ingress evidence; older rows remain unstamped.
   inputOrigin?: 'owner' | 'machine';
+  // Epoch ms when the path that appends the entry made it. Rows stored before the time was kept have none.
+  createdAt?: number;
+  // A row Waldo writes about one of the owner's app messages rather than in reply to it: that message's id, and what became of it.
+  operation?: Readonly<{ id: string; state: 'interrupted' }>;
   // The turn's effect receipts, typed. `line` is the text form appended to appPayload, so a surface that shows
   // only text still shows it.
   receipt?: ConversationReceipt;
