@@ -10,7 +10,7 @@ export const turnFailureCode = (error: unknown): string => {
   if (/parameter bindings/.test(message)) return 'sql_binding_mismatch';
   if (/^illegal transition /.test(message)) return 'journal_transition';
   if (message === 'conversation model returned empty output') return 'model_empty';
-  if (message === 'conversation owner authentication mismatch' || message === 'conversation invocation owner mismatch') return 'owner_mismatch';
+  if (message === 'conversation owner authentication mismatch' || message === 'conversation invocation owner mismatch' || message === 'conversation history owner mismatch') return 'owner_mismatch';
   if (/^turn timed out after /.test(message)) return 'turn_timeout';
   return 'unknown';
 };

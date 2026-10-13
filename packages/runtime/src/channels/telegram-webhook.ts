@@ -4,7 +4,7 @@ import { OWNER_TRACE_HEADER } from '../observability/owner-trace-identity';
 import {linkCodeHash} from '../identity/owner-directory';
 
 export type TelegramWebhookEnv = Readonly<{
-  TELEGRAM_OWNER_DO?: DurableObjectNamespace;
+  OWNER_DO?: DurableObjectNamespace;
   RUN_LOOP_DO?: DurableObjectNamespace<import('../run-loop/do').RunLoopDO>;
   // Held off until connected common-task execution and recovery acceptance.
   COMMON_BROWSER_REGISTRATION?: string;
@@ -86,7 +86,7 @@ const handle = async (
   directory: OwnerDirectory = ownerDirectory(env),
 ): Promise<Response> => {
   const secret = env.TELEGRAM_WEBHOOK_SECRET;
-  if (request.method !== 'POST' || !secret || !env.TELEGRAM_OWNER_DO) {
+  if (request.method !== 'POST' || !secret || !env.OWNER_DO) {
     return outcome(request.method !== 'POST' ? 'not_post' : 'not_configured', new Response('not found', { status: 404 }));
   }
   if (!sameSecret(request.headers.get('x-telegram-bot-api-secret-token') ?? '', secret)) {
@@ -98,7 +98,7 @@ const handle = async (
   if (!update || typeof update !== 'object') return outcome('ignored_shape', new Response('ok'));
   const subject = sender(update);
   if (!subject) return outcome('no_sender', new Response('ok'));
-  const owners = env.TELEGRAM_OWNER_DO;
+  const owners = env.OWNER_DO;
   const origin = new URL(request.url).origin;
   const coded = parseCodedSetup(update);
   if (coded) {

@@ -5,7 +5,7 @@ import { WALDO_CHAT_MODEL } from '@waldo/contracts';
 import { evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OwnerDirectory, OwnerRoute } from '../src/identity/owner-directory';
-import type { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
+import type { OwnerDO } from '../src/channels/owner-do';
 import { IsolatedSourceWorld } from '../scenarios/isolated-source-world';
 import { isolatedCalendarEffectClient, isolatedGoogleClient } from '../scenarios/isolated-google-client';
 import { captureFixtureAdapters } from '../evals/fixture-adapter-capture';
@@ -13,8 +13,8 @@ import { auditIsolatedWorld } from '../evals/isolated-world-audit';
 import {commonBrowserFixture,commonBrowserFixtureLoader} from './fixtures/common-browser-sdk';
 import type { NativeManifest } from '../evals/native-manifest';
 
-vi.mock('../src/channels/telegram-owner-do', async load => {
-  const original = await load<typeof import('../src/channels/telegram-owner-do')>();
+vi.mock('../src/channels/owner-do', async load => {
+  const original = await load<typeof import('../src/channels/owner-do')>();
   const { OpenAIResponsesAdapter } = await import('../src/llm/openai');
   const {configureCommonPublicBrowser}=await import('../src/channels/common-public-browser-configuration');
   const {commonBrowserFixtureLoader:registeredFixtureLoader}=await import('./fixtures/common-browser-sdk');
@@ -53,6 +53,9 @@ vi.mock('../src/run-loop/do',async load=>{
 });
 
 const outbox: { method: string; body: Record<string, unknown> }[] = [];
+// An approval card is the message carrying an approve button; its text is the review itself, with no fixed prefix.
+const approvalCard = (item: { method: string; body: Record<string, unknown> }) => item.method === 'sendMessage'
+  && ((item.body.reply_markup as { inline_keyboard?: { callback_data?: string }[][] } | undefined)?.inline_keyboard?.flat().some((button) => button.callback_data?.startsWith('a:')) ?? false);
 const modelInputs: unknown[] = [];
 let onCommonOriginalBeforeClassify:(()=>Promise<void>)|undefined;
 let commonWorkspaceJourney=false;let commonRealHostJourney=false;
@@ -195,7 +198,7 @@ const callback = async (subject: number, from: number, data: string, updateId: n
   await drained(subject);
   return response;
 };
-const doStub = (subject: number) => env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(route(subject).doName)) as DurableObjectStub<TelegramOwnerDO>;
+const doStub = (subject: number) => env.OWNER_DO!.get(env.OWNER_DO!.idFromName(route(subject).doName)) as DurableObjectStub<OwnerDO>;
 
 afterEach(() => { vi.useRealTimers(); });
 describe('actual owner interruption recovery', () => {
@@ -581,7 +584,7 @@ describe('real owner-DO ingress in a sealed test world', () => {
     outbox.length = 0; modelInputs.length = 0;
     const update = 300000 + ++sequence * 10;
     expect((await send(81101, 'Propose a fixture calendar event, but do not commit it.', update)).status).toBe(200);
-    const cards = outbox.filter((item) => item.method === 'sendMessage' && String(item.body.text).startsWith('Proposed:'));
+    const cards = outbox.filter((item) => approvalCard(item));
     expect(sourceWorld.outbox('a@example.invalid')).toEqual([]);
     expect(cards).toHaveLength(1);
     expect(cards[0]!.body.chat_id).toBe(81101);
@@ -624,14 +627,14 @@ describe('real owner-DO ingress in a sealed test world', () => {
     expect(await ledgerState()).toEqual([{ kind: 'calendar_change', status: 'skipped' }]);
     expect(outbox.some((item) => item.method === 'answerCallbackQuery' && item.body.callback_query_id === `fixture-query-${update + 4}` && item.body.text === 'Already handled.')).toBe(true);
     expect((await send(81101, 'Propose a fixture calendar event, but do not commit it.', update)).status).toBe(200);
-    expect(outbox.filter((item) => item.method === 'sendMessage' && String(item.body.text).startsWith('Proposed:'))).toHaveLength(1);
+    expect(outbox.filter((item) => approvalCard(item))).toHaveLength(1);
   });
   it('intercepts a calendar provider write only after the bound owner approves the card', async () => {
     sourceWorld = new IsolatedSourceWorld({ clock: '2026-09-29T13:00:00Z', owners: [{ id: 'a@example.invalid' }, { id: 'b@example.invalid' }], sources: {} });
     interceptCalendarEffects = true; outbox.length = 0; modelInputs.length = 0;
     const update = 400000 + ++sequence * 10;
     expect((await send(81101, 'Propose a fixture calendar event for my review.', update)).status).toBe(200);
-    const card = outbox.find((item) => item.method === 'sendMessage' && String(item.body.text).startsWith('Proposed:'))!.body;
+    const card = outbox.find((item) => approvalCard(item))!.body;
     const keyboard = card.reply_markup as { inline_keyboard: { callback_data: string }[][] };
     const approve = keyboard.inline_keyboard.flat().find((button) => button.callback_data.startsWith('a:'))!.callback_data;
     expect(sourceWorld.outbox('a@example.invalid')).toEqual([]);

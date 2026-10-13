@@ -78,10 +78,23 @@ it('draft and every calendar mutation claim before dispatch and settled replay n
  }
 });
 it('effect-bearing MCP uses the same durable intent rail and foreign replay stays blocked',async()=>{
- const f=fixture();const input={do_name:'owner',op:'mcp_call',connection:'conn',server_url:'https://fixture.googleapis.com/mcp',tool:'synthetic_write',args:[{value:'fixture'}],intent_id:'approval:mcp'};
+ const f=fixture();const input={do_name:'owner',op:'mcp_call',connection:'conn',server_url:'https://drivemcp.googleapis.com/mcp/v1',tool:'search_files',args:[{value:'fixture'}],intent_id:'approval:mcp'};
  const first=await(await serve(await request(input))).json();expect(first).toMatchObject({data:[{type:'text',text:'synthetic result'}]});
  expect(await(await serve(await request(input))).json()).toEqual(first);expect(f.effects()).toBe(1);expect(f.hops.filter(h=>h==='token')).toHaveLength(1);expect(f.hops.indexOf('proxy_idem_claim')).toBeLessThan(f.hops.indexOf('token'));
  expect(await(await serve(await request({...input,args:[{value:'changed'}]}))).json()).toMatchObject({error:{message:'intent_conflict'}});expect(f.effects()).toBe(1);
+});
+
+it('the effect rail refuses a tool that is not a catalogue read before any token or claim, and logs the code',async()=>{
+ const cases:[string,string][]=[['https://fixture.googleapis.com/mcp','synthetic_write'],['https://drivemcp.googleapis.com/mcp/v1','create_file'],['https://gmailmcp.googleapis.com/mcp/v1','send_message'],['https://drivemcp.googleapis.com/mcp/v1/','search_files']];
+ const failed:string[]=[];
+ for(const [server_url,tool] of cases){
+  const f=fixture();const logged:string[]=[];const quiet=vi.spyOn(console,'log').mockImplementation((line:string)=>{logged.push(String(line));});
+  const input={do_name:'owner',op:'mcp_call',connection:'conn',server_url,tool,args:[{value:'fixture'}],intent_id:'approval:mcp'};
+  const body=await(await serve(await request(input))).json() as {error?:{status:number;message:string}};
+  quiet.mockRestore();
+  if(body.error?.status!==403||body.error.message!=='google_mcp_read_only'||f.hops.length!==0||f.effects()!==0||!logged.some(line=>line.includes('"error":"google_mcp_read_only"'))||logged.some(line=>line.includes(tool)||line.includes(server_url)))failed.push(`${server_url} ${tool}`);
+ }
+ expect(failed).toEqual([]);
 });
 
 it('every mutation retains an unknown result and never dispatches again after synthetic loss',async()=>{
@@ -90,7 +103,7 @@ it('every mutation retains an unknown result and never dispatches again after sy
   {...body,method:'createEvent',args:[{title:'fixture',start:'2026-10-01T00:00:00Z',end:'2026-10-01T01:00:00Z'}]},
   {...body,method:'moveEvent',args:['event-one','2026-10-01T00:00:00Z','2026-10-01T01:00:00Z']},
   {...body,method:'cancelEvent',args:['event-one']},
-  {do_name:'owner',op:'mcp_call',connection:'conn',server_url:'https://fixture.googleapis.com/mcp',tool:'synthetic_write',args:[{}],intent_id:'approval:mcp'},
+  {do_name:'owner',op:'mcp_call',connection:'conn',server_url:'https://drivemcp.googleapis.com/mcp/v1',tool:'search_files',args:[{}],intent_id:'approval:mcp'},
  ];
  for(const input of calls){const f=fixture();f.lose();
   expect(await(await serve(await request(input))).json()).toMatchObject({error:{message:'intent_pending'}});
@@ -212,11 +225,11 @@ const dispatchActualRead=async()=>{
  const proxy=realSignedProxy();const handlers=[readMcpToolHandler(JSON.stringify([{name:'drive',url:'https://drivemcp.googleapis.com/mcp/v1',auth:'google',requires:'drive',allow_tools:['search_files'],read_tools:['search_files']}]),{resolve:async()=>({mode:'proxy' as const,connection:'conn'}),proxy:(url,tool,args,connection,intent)=>proxy.mcpCall('owner',connection,url,tool,args,intent)},true)];
  return dispatchTool({id:'fixture-read-call',name:'read_mcp_tool',args:{server:'drive',tool:'search_files',args:{query:'fictional'}}},{authenticatedUserId:'owner',turnId:'fixture-turn',trigger:'user_message',session:buildSessionState({trigger:'user_message',canary_tokens:['1111111111111111','2222222222222222','3333333333333333'],started_at:1}),hasApproval:()=>false,sourceTaint:null,toolArgSourceTaint:null,sanitise},{handlers});
 };
-it('actual dispatcher-wire-Edge provider 401/403 reaches typed reconnect without storing read results',async()=>{
+it('actual dispatcher-wire-Edge provider 401 reaches typed reconnect and 403 reads as not available, without storing read results',async()=>{
  for(const status of [401,403]){
   const f=fixture();f.scope(['https://www.googleapis.com/auth/drive.readonly']);const provider=fetch;
   vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>String(input)==='https://drivemcp.googleapis.com/mcp/v1'?new Response('PRIVATE_WIRE_AUTH_CANARY',{status}):provider(input,init)));
-  const out=await dispatchActualRead();expect(out).toMatchObject({ok:false,code:'auth_failed',source_taint:'external',connect:{status:'auth_required',service:'google',reason:status===401?'reauth_needed':'scope_missing',feature:'drive'}});expect(JSON.stringify(out)).not.toContain('PRIVATE_WIRE_AUTH_CANARY');expect(f.rows.size).toBe(0);expect(f.effects()).toBe(0);
+  const out=await dispatchActualRead();expect(out).toMatchObject(status===401?{ok:false,code:'auth_failed',source_taint:'external',connect:{status:'auth_required',service:'google',reason:'reauth_needed',feature:'drive'}}:{ok:false,code:'not_found',source_taint:'external',error:expect.stringContaining('google_mcp_unavailable')});expect(JSON.stringify(out)).not.toContain('PRIVATE_WIRE_AUTH_CANARY');expect(f.rows.size).toBe(0);expect(f.effects()).toBe(0);
  }
 });
 it('actual signed wire read rejection is a stable non-auth 400, not a reconnect or intent-uncertainty error',async()=>{

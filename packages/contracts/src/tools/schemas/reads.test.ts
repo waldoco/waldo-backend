@@ -14,7 +14,7 @@ import {
   getMasterMetricsArgsSchema,
   getTasksArgsSchema,
   readDriveArgsSchema,
-  healthMetricSelectorSchema,
+  getHealthResultSchema,
   calendarPageSchema, queryCalendarArgsSchema, googleCalendarListPageSchema,
   readDocumentArgsSchema,
   readDocumentResultSchema,
@@ -66,21 +66,30 @@ describe('getCrsArgs', () => {
   });
 });
 
-describe('healthMetricSelector', () => {
-  it('is exactly the six selectors, in order', () => {
-    expect(healthMetricSelectorSchema.options).toEqual([
-      'hrv',
-      'hr',
-      'sleep',
-      'spo2',
-      'strain',
-      'recovery',
-    ]);
+describe('getHealthArgsSchema', () => {
+  it('accepts local days, a signal list and an aggregation, and defaults the aggregation to daily', () => {
+    const parsed = getHealthArgsSchema.safeParse({ signals: ['sleep', 'hrv'], from: '2026-10-01', to: '2026-10-07' });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.aggregation).toBe('daily');
+    expect(getHealthArgsSchema.safeParse({ signals: ['heart_rate'], from: '2026-09-07', to: '2026-10-07', aggregation: 'summary' }).success).toBe(true);
   });
 
-  it('accepts a selector list and rejects an out-of-domain metric', () => {
-    expect(getHealthArgsSchema.safeParse({ metrics: ['hrv', 'sleep'] }).success).toBe(true);
-    expect(getHealthArgsSchema.safeParse({ metrics: ['glucose'] }).success).toBe(false);
+  it('rejects an unknown signal, an empty list, a reversed range, a range over 31 days and a smuggled argument', () => {
+    expect(getHealthArgsSchema.safeParse({ signals: ['spo2'], from: '2026-10-01', to: '2026-10-07' }).success).toBe(false);
+    expect(getHealthArgsSchema.safeParse({ signals: [], from: '2026-10-01', to: '2026-10-07' }).success).toBe(false);
+    expect(getHealthArgsSchema.safeParse({ signals: ['sleep'], from: '2026-10-08', to: '2026-10-07' }).success).toBe(false);
+    expect(getHealthArgsSchema.safeParse({ signals: ['sleep'], from: '2026-09-06', to: '2026-10-07' }).success).toBe(false);
+    expect(getHealthArgsSchema.safeParse({ signals: ['sleep'], from: '2026-10-01', to: '2026-10-07', metrics: ['hrv'] }).success).toBe(false);
+    expect(getHealthArgsSchema.safeParse({ signals: ['sleep'], from: '2026-10-01T00:00:00Z', to: '2026-10-07' }).success).toBe(false);
+  });
+
+  it('types the result: values by day or a summary, or a reason', () => {
+    const available = { state: 'available', timezone: 'Asia/Kolkata', from: '2026-10-01', to: '2026-10-02', read_at: '2026-10-02T03:00:00.000Z', freshness: 'fresh', coverage: 0.5,
+      signals: [{ signal: 'hrv', unit: 'ms', source: 'apple', method: 'sdnn', days: [{ day: '2026-10-01', value: 48 }, { day: '2026-10-02', value: null }] }] };
+    expect(getHealthResultSchema.safeParse(available).success).toBe(true);
+    expect(getHealthResultSchema.safeParse({ state: 'unavailable', reason: 'consent_withdrawn' }).success).toBe(true);
+    expect(getHealthResultSchema.safeParse({ ...available, signals: [{ ...available.signals[0], unit: 'kg' }] }).success).toBe(false);
+    expect(getHealthResultSchema.safeParse({ state: 'unavailable', reason: 'stale' }).success).toBe(false);
   });
 });
 
@@ -396,6 +405,12 @@ describe('Calendar page receipts',()=>{
   const event={id:'e1',title:'Standup',start:'2026-10-06T09:00:00Z',end:'2026-10-06T09:30:00Z',all_day:false,status:'confirmed' as const,updated:'2026-10-05T10:00:00Z',recurring_event_id:'series1',original_start:'2026-10-06T09:00:00Z',source_url:'https://calendar.google.com/event?eid=abc',attendee_names:['A B']};
   const full={...page,events:[event],fetched_count:1};
   expect(calendarPageSchema.parse(full)).toEqual(full);
+ });
+ it('admits the operation marker on an event Waldo changed, and refuses an empty or oversized one',()=>{
+  const event={id:'e1',title:'QA',start:'2026-10-13T10:30:00Z',end:'2026-10-13T11:30:00Z',all_day:false};
+  const withMarker=(operation_marker:string)=>({...page,events:[{...event,operation_marker}],fetched_count:1});
+  expect(calendarPageSchema.safeParse(withMarker('a'.repeat(64))).success).toBe(true);
+  for(const marker of ['','a'.repeat(1025)])expect(calendarPageSchema.safeParse(withMarker(marker)).success).toBe(false);
  });
  it('admits empty exhausted pages with explicitly unavailable account metadata',()=>{
   expect(calendarPageSchema.parse(page)).toEqual(page);

@@ -7,7 +7,7 @@ import type { ConsoleAuth } from '../src/identity/console-auth';
 
 const browser = async (target = '') => {
   const response = await handleConsole(new Request('https://fixture.test/console/signin'),
-    { TELEGRAM_OWNER_DO: {} as DurableObjectNamespace }, {} as ConsoleAuth);
+    { OWNER_DO: {} as DurableObjectNamespace }, {} as ConsoleAuth);
   const script = (await response!.text()).match(/<script>([\s\S]*?)<\/script>/)![1]!;
   const events: Record<string, (event?: any) => Promise<void> | void> = {};
   const history: unknown[] = [];
