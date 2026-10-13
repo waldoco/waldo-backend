@@ -961,3 +961,12 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   1. Merge #1114 now, because it closes the larger live leak.
   2. Deploy the Worker.
   3. Connectors opens a small follow-up for blocker 2's shapes before the proxy redeploy. Blocker 1 ends with the redeploy.
+
+## 04:36:27Z: owner, awake: "continue the build"; Telegram is set aside, the app comes first
+
+- **The owner's words:** "you can continue the build", then "fuck telegram for now / gotta finlize the app". From now, app-facing work comes first, and Telegram risk is accepted.
+- **#1100 rollback check** [inference from source at `77d7329c` and `6ddbd85e`]:
+  - **App chat is unaffected.** The canonical store has its own custody, and old app turns don't load the older `conv:*` rows.
+  - **Telegram breaks.** Old code reloads every `conv:*` row without relabelling. Once a Telegram text turn runs under #1100 (which writes `prn_`-owned rows onto older chains), a rollback fails that account's Telegram history load with "conversation parent boundary mismatch".
+  - **So #1100's deploy is forward-only for Telegram,** and the bad-deploy plan is to fix forward. Accepted under the owner's ruling.
+- **Directory rows:** app owners resolve by construction, because the app route requires `do_name` and `owner_principal_ref`. A Telegram-only owner without a row fails closed, which is accepted. I didn't query the directory: it needs credentials, so it isn't done. Instead, the post-deploy watch tails app turns and the next scheduled tick.
