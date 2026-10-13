@@ -8,7 +8,8 @@ export type ConversationStore = Readonly<{
   load(): Promise<Readonly<{ entries: readonly ConversationEntry[]; leafId: string | null }>>;
   save(entries: readonly ConversationEntry[], leafId: string, scope?: RunEffectScope): Promise<void>;
   persistOwnerInput?(entry: ConversationEntry, scope: RunEffectScope): Promise<void>;
-  // The quoted ranges of an owner message as received (`text`), for the index to keep apart from the owner's own words.
+  // An owner message as received (`text`) and its quoted ranges, for the index to keep the owner's own words apart from
+  // what they quote and from what was stored with the message.
   noteQuoteRanges?(entryId: string, text: string, ranges: readonly Readonly<{ start: number; end: number }>[]): void;
   // The receipt line of what an owner turn that did not finish already did, for the reply that says it did not finish.
   noteUnfinished?(receiptLine: string, scope: RunEffectScope): void;

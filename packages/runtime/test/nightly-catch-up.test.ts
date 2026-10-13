@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { appSubjectFor } from '../src/channels/app-api';
-import { episodeIndex, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, NIGHTLY_ID, NIGHTLY_THROUGH_KEY } from '../src/channels/episodes';
+import { episodeIndex, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, NIGHTLY_ID, NIGHTLY_THROUGH_KEY, OWNER_ROWS_SINCE_KEY } from '../src/channels/episodes';
 import { traceBook } from '../src/channels/harness';
 import { claimStore } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
@@ -64,6 +64,8 @@ const withOwner = (name: string, work: (run: Run) => Promise<void>) =>
       const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
       await (owner as unknown as { setup(channel: string): { ready: Promise<unknown> } }).setup('app').ready;
       state.storage.sql.exec('DELETE FROM schedule');
+      // The rows these tests seed stand for ones an index that splits owner messages wrote.
+      state.storage.kv.put(OWNER_ROWS_SINCE_KEY, NOW - 30 * DAY);
       const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
       const fire = async (id: string) => {
         await scheduler.schedule({ id, kind: 'dreaming', payloadRefs: { id }, occurrenceAt: now - 1000, dueAt: now - 1000, recurrence: null });
@@ -119,5 +121,22 @@ it('a night that cannot consolidate keeps its mark and arms a catch-up, which on
     expect(new Set(model.asked)).toEqual(new Set(['claim_ops']));
     expect(learned(state)).toEqual(GROUNDED);
     expect(state.storage.kv.get(NIGHTLY_THROUGH_KEY)).toBe(NOW - 2 * HOUR);
+  });
+});
+
+it('a mark older than the backlog window is logged as clamped, and the night consolidates only the window', async () => {
+  await withOwner('nightly-catch-up-clamped', async ({ state, fire }) => {
+    const lines = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      state.storage.kv.put(NIGHTLY_THROUGH_KEY, NOW - 10 * DAY);
+      const episodes = episodeIndex(state.storage.sql);
+      episodes.add('app-1000006', 'owner', 'I swim every Friday before work', NOW - 9 * DAY);
+      episodes.add('app-1000008', 'owner', 'my sister is called Mira', NOW - 2 * HOUR);
+      await fire(NIGHTLY_ID);
+      const nightly = lines.mock.calls.map(call => String(call[0])).filter(line => line.includes('"hop":"nightly_memory"')).map(line => JSON.parse(line) as { code?: string });
+      expect(nightly.map(entry => entry.code)).toContain('backlog_clamped');
+      expect(model.nights.join('\n')).not.toContain('I swim every Friday');
+      expect(learned(state)).toEqual([GROUNDED[0]]);
+    } finally { lines.mockRestore(); }
   });
 });

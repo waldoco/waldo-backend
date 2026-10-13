@@ -77,7 +77,7 @@ import { redactConversationEntries, durableConversationStore, scrubConversationH
 import { egressGuardedCaller, redactSecretUrls } from './egress-guard';
 import { parseEgressAllowlistEnv } from '../hooks/egress-policy';
 import { toolOutputLedger , redactToolOutputLedger } from '../conversation/tool-output-ledger';
-import { armNightly, backfillEpisodes, consolidationDay, episodeIndex, indexedConversationStore, NIGHTLY_BACKLOG_DAYS, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, NIGHTLY_CHUNKS, NIGHTLY_THROUGH_KEY, transcript } from './episodes';
+import { armNightly, backfillEpisodes, consolidationDay, consolidationSides, episodeIndex, indexedConversationStore, NIGHTLY_BACKLOG_DAYS, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, NIGHTLY_CHUNKS, NIGHTLY_THROUGH_KEY, OWNER_ROWS_SINCE_KEY, transcript } from './episodes';
 import { nightlyDiagnostic } from './nightly-diagnostic';
 import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
 import { schedulePreferences, schedulePreferencesLine, schedulePreferenceHandlers, applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePreferences, replanDayCards, type ScheduleHold, type ScheduleKind } from './schedule-preferences';
@@ -2176,6 +2176,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
     });
     const episodes = episodeIndex(storage.sql);
+    if (storage.kv.get(OWNER_ROWS_SINCE_KEY) === undefined) storage.kv.put(OWNER_ROWS_SINCE_KEY, Date.now());
     const kv = durableConversationStore(storage);
     const plans = dayPlanBook(storage.sql);
     const memory = claimStore(storage.sql, (work) => storage.transactionSync(work));
@@ -2622,13 +2623,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (day.length > 0) {
           const started = Date.now();
           try {
-            const owner = day.filter((episode) => episode.speaker === 'owner');
-            const sides = {
-              owner: owner.map((episode) => episode.text).join('\n'),
-              shared: day.filter((episode) => episode.speaker === 'quoted').map((episode) => episode.text).join('\n'),
-              waldo: day.filter((episode) => episode.speaker === 'waldo').map((episode) => episode.text).join('\n'),
-              ownerMessages: owner.map((episode) => ({ ref: episode.entry_id, text: episode.text })),
-            };
+            const sides = consolidationSides(day, storage.kv.get<number>(OWNER_ROWS_SINCE_KEY) ?? Infinity);
             const { done, detail } = await responder.consolidate(trace, transcript(day, clock.timezone), sides);
             log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: done, detail: `${day.length} turns; ${detail}` });
             if (!done) return 'failed';

@@ -679,7 +679,7 @@ export const createOwnerResponder = (
         turnReplyContext = await quoteContext(turn.replyTo);
         turnReplyOwnAuthored = turn.replyTo?.provenance !== undefined && turn.replyTo.provenance.author !== 'other' && !turn.replyTo.provenance.forwarded;
         const said = [turn.text, media?.note].filter(Boolean).join('\n');
-        if (turn.sourceQuoteRanges?.length) conversationStore?.noteQuoteRanges?.(id, turn.text, turn.sourceQuoteRanges);
+        conversationStore?.noteQuoteRanges?.(id, turn.text ?? '', turn.sourceQuoteRanges ?? []);
         return await converse(id, turn.conversationRef, said, time, true, turn.surface);
       } finally {
         recentOwnerTurns.set(turn.traceId, { message_ref: turn.messageRef?.id ?? turn.traceId, text: turn.text, sourceQuoteRanges: turn.sourceQuoteRanges });

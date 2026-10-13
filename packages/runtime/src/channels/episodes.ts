@@ -86,7 +86,8 @@ export const episodeIndex = (sql: SqlStorage): EpisodeIndex => {
 
 type QuoteRanges = readonly Readonly<{ start: number; end: number }>[];
 // An owner message as index rows: its own words as 'owner', each quoted range as 'quoted', in order. The ranges index the
-// message as received; when the stored text no longer starts with it (a forgotten topic was redacted), or a range is
+// message as received; what was stored after it (a media note, which can carry someone else's speech) is 'quoted' too.
+// When the stored text no longer starts with the message as received (a forgotten topic was redacted), or a range is
 // malformed, the whole message is 'quoted', so it can never ground a claim as the owner's own words.
 export const ownerRows = (stored: string, received: string, ranges: QuoteRanges): readonly Readonly<{ speaker: Speaker; text: string }>[] => {
   const sorted = [...ranges].sort((a, b) => a.start - b.start);
@@ -101,7 +102,8 @@ export const ownerRows = (stored: string, received: string, ranges: QuoteRanges)
     if (range.end > end) push('quoted', stored.slice(Math.max(end, range.start), range.end));
     end = Math.max(end, range.end);
   }
-  push('owner', stored.slice(end));
+  push('owner', stored.slice(end, received.length));
+  push('quoted', stored.slice(received.length));
   return rows;
 };
 
@@ -120,7 +122,7 @@ export const indexedConversationStore = (store: ConversationStore, index: Episod
   return {
     ...store,
     load: () => store.load(),
-    noteQuoteRanges(entryId, text, ranges) { if (ranges.length) quoted.set(entryId, { text, ranges }); },
+    noteQuoteRanges(entryId, text, ranges) { quoted.set(entryId, { text, ranges }); },
     ...(persistOwnerInput ? { async persistOwnerInput(entry: ConversationEntry, scope: RunEffectScope) {
       await persistOwnerInput(entry, scope);
       scope.commit(() => add(entry, now()));
@@ -147,6 +149,20 @@ export const backfillEpisodes = async (store: ConversationStore, index: EpisodeI
 // Nightly consolidation learns from what the owner and Waldo said. Machine-written entries
 // (reminder and scheduled prompts) are not the owner's words and never become memory.
 export const consolidationDay = (episodes: readonly Episode[]): readonly Episode[] => episodes.filter((episode) => episode.speaker !== 'system');
+
+// When this owner's index began splitting owner messages into their own words and what they quote. An 'owner' row from
+// before it is a whole message, quotes and media notes included, so it is only ever shared text, never the owner's words.
+export const OWNER_ROWS_SINCE_KEY = 'episode_owner_rows_since_v1';
+export const consolidationSides = (day: readonly Episode[], ownerRowsSince: number) => {
+  const owner = day.filter((episode) => episode.speaker === 'owner' && episode.at >= ownerRowsSince);
+  const texts = (keep: (episode: Episode) => boolean) => day.filter(keep).map((episode) => episode.text).join('\n');
+  return {
+    owner: owner.map((episode) => episode.text).join('\n'),
+    shared: texts((episode) => episode.speaker === 'quoted' || (episode.speaker === 'owner' && episode.at < ownerRowsSince)),
+    waldo: texts((episode) => episode.speaker === 'waldo'),
+    ownerMessages: owner.map((episode) => ({ ref: episode.entry_id, text: episode.text })),
+  };
+};
 
 export const NIGHTLY_ID = 'nightly-memory';
 export const NIGHTLY_TIME = '03:00';
