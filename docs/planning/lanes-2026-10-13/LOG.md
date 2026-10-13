@@ -1433,3 +1433,29 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **The owner's direct request,** relayed by N4 from its chat: Home has no bottom tabs (the three-tab ruling stands), and the side-menu animation is too strong and broken. Routed to L4 ahead of rating and Stop, built on #112.
 - **The Air account:** N4 reports the owner is signed in and Home shows a real Recovery score. N4 asked whether it's the new app-only account before seeding. Seeding and installs are held until the owner confirms; asked in the orchestrator chat.
 - **Disk:** 1.8 GB free at 08:35Z. DerivedData is still present, so the owner's cleanup is not done yet. The deploy is still waiting.
+
+## 08:47:05Z: `917032a1` DEPLOYED to staging (by the owner); old deploy checkouts removed; the Air is the owner's own account
+
+- **The owner ran the gate:**
+  - GATE PASS (tip, CI 6/6, 9 files, no wrangler/deploy/migration change; preflight 55 applied, 0 pending);
+  - Worker version `316ed3eb`;
+  - healthz release `917032a1`;
+  - unauthenticated session and chat_main both 401;
+  - rollback target `043c5a0c`.
+  - The probe-403 check was not run this time.
+- **The disk:** the owner removed 14 old deploy checkouts, keeping only the live `6ddbd85e`. `du` reported 640 MB each, but they shared pnpm-hardlinked files, so only about 1.4 GB came back: 3.2 GB free at 08:45Z.
+  - The build-cache cleanup (DerivedData, both lanes' build folders, brew) is still with the owner. App builds stay held until then.
+  - Structural fix (proposed): the gate should remove its own `deploy-<sha>` checkout after a successful deploy.
+- **The Air is signed into the owner's own account** (answered 08:4xZ). On it:
+  - no seeding;
+  - no consent-withdrawal or sign-out tests, because a withdrawal deletes the owner's stored Apple Health data on the server;
+  - those need a separate test account on another Simulator, later.
+
+  N4 is checking read-only whether that Simulator's sample Health data was ingested into the owner's account.
+- **The audit session** (website examples, `local_1e3639d1`) is done. Bible tab "App requirements (website examples)".
+  - Verified at `917032a1`: the rating, threads and devices routes are unserved, and no runtime emitters exist for quick_replies or chart_series. Cancel/Stop being unserved is inferred.
+  - L4's order is now: tabs, then follow-ups, then Undo on Home (served). Rating, Stop, quick_replies and threads wait for the backend.
+  - Owner batch, later: "Checked N things" vs the step-count ban; trail text naming items; inline draft editing; "Confirmed" vs "Done"; four health-destination reviews.
+- **App #116** (the owner's tabs and side-menu request, `48cb082a`) is queued for review. **#1114 `8fd50286`** (the structural pass order) is queued for its delta review.
+- **Connectors' A:** split into a contract-only PR first, then L4's re-pin, then the emit PR. Labels per the ruling: defer "Skip", skip "Don't do this", final state "Not doing".
+- **Running reviews:** #112 with #114; and #113's delta with #1136 and #1137 (on Sonnet, to save usage). Usage was 51% at 08:39Z, and the owner is asked whether to pause Connectors until 10:30Z.
