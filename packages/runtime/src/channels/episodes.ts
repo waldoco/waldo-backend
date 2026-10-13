@@ -26,10 +26,12 @@ export const speakerOf = (entryId: string): Speaker => (entryId.endsWith('-reply
 export const speakerOfEntry = (entry: Pick<ConversationEntry, 'id' | 'role' | 'inputOrigin'>): Speaker =>
   entry.role === 'assistant' ? 'waldo' : entry.inputOrigin === 'owner' ? 'owner' : entry.inputOrigin === 'machine' ? 'system' : speakerOf(entry.id);
 
-// Model text becomes plain quoted terms, so FTS5 operators and quotes in a question can't
-// break the query; OR keeps recall and BM25 does the ranking.
+// Model text becomes plain terms (letters and digits, first occurrence order, at most 16), so FTS5
+// operators and quotes in a question can't break the query.
+export const ftsTerms = (text: string): readonly string[] => [...new Set(text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])].slice(0, 16);
+// Each term quoted; OR keeps recall and BM25 does the ranking.
 export const ftsQuery = (text: string): string | null => {
-  const terms = [...new Set(text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])].slice(0, 16);
+  const terms = ftsTerms(text);
   return terms.length ? terms.map((term) => `"${term}"`).join(' OR ') : null;
 };
 
