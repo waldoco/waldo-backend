@@ -1207,3 +1207,23 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - P1 run 3b (before about 08:40Z);
   - the Expo keys;
   - whether the phone-to-Watch scores path is allowed.
+
+## 06:35:49Z: #1100's Simulator check (3 PASS, 1 PARTIAL); #106's walk PASS; `/probe/turn` 403
+
+- **Smoke:** the owner ran `POST /probe/turn` without a token, and it returned 403. Every smoke check on `6ddbd85e` passes.
+- **#1100's check** (L4's Pro Max, from one install of #106's `3e92f644`, about 06:28–06:34Z):
+  - **PASS:** the turn completes; the skills list answers (16 skills).
+  - **PASS with a caveat:** the second turn sees the first, but it may have used memory, because turn one stored one.
+  - **PARTIAL:** search found 12 Oct app turns, but not today's.
+  - The question of when app turns are indexed is on #1103.
+- **#106's Home-load walk: PASS.** A cold launch into Approvals, then Home loads every card. Try again after a live failure wasn't run; the counted tests (15/15 faults) cover it.
+- **A test memory ("marigold")** now sits on the shared account. The owner can forget it.
+- **Privacy note for lanes:** keep score values out of cross-session messages. One QA report quoted a score.
+- **Usage was 94% at 06:36Z**, so reviews wait for the 07:30Z reset.
+- **After the reset, in order:**
+  1. L4's decisive search check: a fresh unique word, not stored in memory, then a search for it.
+  2. #106's delta review.
+  3. #108's review.
+  4. #1114's delta review (Connectors is at `61f9bc47`).
+  5. Restart Connectors with `send_message` to `local_83ce6587`: the send-turn-one PR, then the calendar move.
+  6. Restart the N4/Watch lane.
