@@ -33,7 +33,8 @@ const CODE = String.raw`(?<code>${EVEN}|(?=\d{1,4}${SEP}\d)\d(?:${SEP}?\d){3,7}|
 // Before "is your", nothing anchors where a code starts. An uneven split would reach back into digits ending the line
 // before ("$12.99" then "092893 is your code" relayed 99092893), so only even splits and the plain run apply. A split
 // starts at a word boundary, so it never takes digits from a token like "Acme2024"; a plain run may start right
-// after a word ("Hello482913 is your code").
+// after a word ("Hello482913 is your code"). Digits joined by an invisible character are already one run, so
+// "Acme2024\u200b5209" is taken whole.
 const CODE_BEFORE = String.raw`(?<code>\b(?:${EVEN})|\d{4,8})(?!\d)`;
 // Characters that render nothing: the soft hyphen, the combining grapheme joiner, zero-width spaces and joiners,
 // direction marks, embeddings and isolates, the word joiner and invisible operators. They are dropped, so a keyword or

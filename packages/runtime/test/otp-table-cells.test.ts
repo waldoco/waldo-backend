@@ -65,6 +65,7 @@ describe('the extractor', () => {
     ['Your co\u200bde is 482913', '482913'],
     ['Your code\u200b482913', '482913'],
     ['Your code is \u200b482913', '482913'],
+    ['482913\u200b is your code', '482913'],
     ['45\u00ad53\u00ad6\u00ad6 is your code', '455366'],
     ['2\u00ad4\u00ad9\u00ad6\u00ad912\u00ad4 is your code', '24969124'],
     // Uneven and hyphenated splits. A hyphenated code relays as written, like "123-456".
