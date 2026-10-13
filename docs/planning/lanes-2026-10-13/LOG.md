@@ -2116,3 +2116,10 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
   - **Flagged to the lead** (#1103 6149659751): a post-merge review at `aae96328` (M1, M2, L1, L2, and `approval: 'none'`); close #1095; hand-off 2 now carries `v7`; the migration must be applied first or in timestamp order.
   - **Builder:** threads slices 1 and 2 are ready (#1173, #1176). Push E is #1177 ("needs owner": migration `20261013160000` after #1133's, plus the Expo access token secret). Slice 3a is claimed.
   - **Unchanged:** #1172 is still open. Usage is 55%.
+
+- **16:26Z heartbeat: the gate looks stalled.**
+  - **The backend lead hasn't been seen on GitHub since about 14:12Z.** Its last merge was #1141 at 14:12, its last #1103 post was about 14:03, and its log was last updated at 14:07. Every merge since (#1006, #1017, #1162) was Ashish's own.
+  - **Still waiting on it:** #1172 (so hand-off 2), threads #1173 and #1176, the Connectors PRs, and the post-merge iMessage review.
+  - **New owner-step PR:** #1175 (Gmail push wake: a migration plus the GCP project).
+  - **Unchanged:** usage 55%. Nothing from Suyash. Nothing new on #1103 since 15:58Z.
+  - **Told the owner** to check the lead's cloud session on the other account. [inference] It may have stopped or hit its own usage limit.
