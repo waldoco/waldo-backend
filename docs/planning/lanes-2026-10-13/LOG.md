@@ -1479,3 +1479,47 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **Posted on #1103:** the coordination note for the cloud orchestrator. It covers the state, a request for one priority order across its 10 PRs, the offer that its lane run reviews on its own usage window, and the correction.
 - **Usage:** 61% at 08:55Z, at about 0.63 points a minute, so it runs out around 10:00Z. Review capacity is the binding constraint.
 - **The owner's question** (blockers to the website examples): answered in the orchestrator chat, grounded in the audit page and the cloud harness reading.
+
+## 09:00Z: STATE TO RESUME FROM. The cut is merged and frozen at `a94d7fa5`; the deploy command is handed over; the review queue in order
+
+- **The backend cut, frozen until the owner deploys:** `917032a1` (live, version `316ed3eb`) plus:
+  - #1123 `d897a4ad`;
+  - #1126 `37a34dd8`;
+  - #1125 `8499d796`;
+  - #1136 `3e532c72`;
+  - #1137 `a94d7fa5`, the tip.
+
+  CI on `a94d7fa5` started at about 09:00Z.
+- **The command handed to the owner:**
+  `ALLOW_APP_CONTRACTS=reviewed bash <L1 scratchpad>/staging-gate.sh /Users/shivanshfulper/Developer/Pin4sf/waldo-backend <L1 scratchpad> a94d7fa53700d526fbdd725e84f71673c40db4fa --deploy`
+  - Run it after CI is green (about 09:20Z) and outside :00/:30.
+  - The gate stops on any check that is not completed and green (`staging-gate.sh:24`).
+  - If shard 4 fails on `approval-receipt-next-turn`, #1123 is the first suspect: investigate, don't rerun.
+  - After the deploy: verify, then let Connectors and L5 merge again (#1140 contract-only, #1138 after the app pin, #1114 after its delta).
+- **App main** now also has #113 (`de948f42`).
+- **L4's open PRs:**
+  - #116, tabs: merge main in, then review. #112's chat and health route pushes must become tab switches.
+  - #117, Undo on Home: retarget and push.
+  - #118, the A pin: a draft until #1140 merges.
+  - #119, the `sleep_debt` pin: health-data review.
+  - **The pin rule:** copy from the final beta-mvp merge commit, and land the pin PRs one at a time.
+- **The review queue, in order:**
+  1. N4's #109 delta (the consent race) when pushed.
+  2. #116 once main is merged in.
+  3. #117 with #119, on Sonnet, if there's headroom.
+  4. After 12:30Z, or done by the cloud lane's own reviewers:
+     - #118 with #1140;
+     - #1114's delta (`8fd50286` against `61f9bc47`);
+     - #1127 (migration, owner);
+     - the cloud PRs: #1110, then #1119 deployed alone by the owner, then #1129 and the rest.
+- **Stop (cancel)** is verified unserved by L4: `telegram-owner-do.ts:688-694` has no handler, so it waits behind #1119 with B and C.
+- **Usage:** 63% at 09:00Z, at about 0.4 points a minute, so it runs out around 10:30Z.
+- **Owner items:**
+  - the deploy above;
+  - the build-cache cleanup (about 16 GB; builds are held until then);
+  - the decisions list (in the orchestrator chat, about 09:00Z);
+  - publishing the Google OAuth app;
+  - Expo keys;
+  - #1110 and then #1119;
+  - the usage plan.
+- **Outstanding from N4:** whether the Air's sample health data was ingested into the owner's real account.
