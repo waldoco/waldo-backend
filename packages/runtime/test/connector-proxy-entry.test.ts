@@ -434,8 +434,8 @@ it('a signed Gmail watch on a mail grant starts the watch at the edge into the n
  expect(await(await serve(await request(gmailWatchBody))).json()).toEqual({data:{historyId:'555',expiration:1760600000000}});
  expect(JSON.parse(seen[0]!)).toEqual({topicName:'projects/waldo-dev/topics/waldo-gmail-push',labelIds:['INBOX'],labelFilterBehavior:'INCLUDE'});
  expect(f.hops).not.toContain('proxy_idem_claim');expect(f.rows.size).toBe(0);
- expect(await(await serve(await request({do_name:'owner',op:'gmail_stop',connection:'conn'}))).json()).toEqual({data:null});
- expect(seen[1]).toBe('stop');
+ expect(await(await serve(await request({do_name:'owner',op:'gmail_stop',connection:'conn'}))).json()).toMatchObject({error:{message:'unknown operation'}});
+ expect(seen).toHaveLength(1);
 });
 it('a Gmail watch without a mail scope, on a foreign connection or into another topic never reaches Google',async()=>{
  for(const [input,scopes] of [[gmailWatchBody,['https://www.googleapis.com/auth/calendar.events']],[{...gmailWatchBody,connection:'foreign'},undefined],[{...gmailWatchBody,topic:'projects/evil/topics/steal'},undefined]] as const){

@@ -12,7 +12,7 @@ import { signedRpc } from '../identity/owner-directory';
 // ride episode recall into the model's context.
 
 export const EVENT_INGRESS_PREFIX = '/events/';
-const PUSH_SOURCES = [CALENDAR_PUSH_PATH].map((path) => path.slice(EVENT_INGRESS_PREFIX.length));
+const PUSH_SOURCES = [CALENDAR_PUSH_PATH, GMAIL_PUSH_PATH].map((path) => path.slice(EVENT_INGRESS_PREFIX.length));
 
 export type EventSourceConfig = Readonly<{
   secret: string;
@@ -154,7 +154,8 @@ export const handleGmailPush = async (request: Request, env: EventIngressEnv, co
         method: 'POST', signal: AbortSignal.timeout(5000), headers: { 'x-waldo-gmail-connection': connection, 'x-waldo-gmail-history': push.historyId },
       });
       void response.body?.cancel();
-      return response.ok;
+      // As for Calendar: an owner object that does not take pushes never will, and the push is only a nudge.
+      return response.ok || response.status === 404;
     }));
     return results.every(Boolean) ? new Response('ok') : new Response('owner unavailable', { status: 503 });
   } catch {

@@ -11,7 +11,6 @@ export const gmailPushBook = (kv: Kv) => {
   const read = () => kv.get<Stored>(KEY) ?? null;
   return {
     state: (): GmailWatchState | null => { const stored = read(); return stored === null ? null : 'failedAt' in stored ? { failedAt: stored.failedAt } : { startedAt: stored.startedAt, expiration: stored.expiration }; },
-    connection: (): string | undefined => { const stored = read(); return stored && 'connection' in stored ? stored.connection : undefined; },
     record: (watch: GmailWatch, connection: string, now: number) => kv.put(KEY, { connection, historyId: watch.historyId, startedAt: now, expiration: watch.expiration }),
     fail: (now: number) => kv.put(KEY, { failedAt: now }),
     // History ids only grow per mailbox: an equal or older one is a redelivery or an out-of-order push.
@@ -27,7 +26,6 @@ export type GmailPushBook = ReturnType<typeof gmailPushBook>;
 
 type WatchProxy = Readonly<{
   gmailWatch(doName: string, connection: string, topic: string): Promise<GmailWatch>;
-  gmailStop(doName: string, connection: string): Promise<void>;
 }>;
 
 export const ensureGmailWatch = async (deps: Readonly<{
@@ -39,11 +37,11 @@ export const ensureGmailWatch = async (deps: Readonly<{
   if (!deps.config || !deps.doName || !deps.proxy) return 'skipped';
   try {
     const route = await deps.resolve();
-    if (route === null || route.mode !== 'proxy') return 'skipped';
-    const previous = book.connection();
+    // Nothing to watch with: wait as after a failure, instead of looking up the grant on every sweep.
+    if (route === null || route.mode !== 'proxy') { book.fail(now); return 'skipped'; }
+    // A previous mailbox's watch is left to lapse within seven days: Gmail keeps one watch per mailbox, which
+    // another owner of the same mailbox may still rely on.
     book.record(await deps.proxy.gmailWatch(deps.doName, route.connection, deps.config.topic), route.connection, now);
-    // A mailbox has one watch; the old one only lapses on its own, so stop it when the mailbox changed.
-    if (previous && previous !== route.connection) await deps.proxy.gmailStop(deps.doName, previous).catch(() => undefined);
     return 'started';
   } catch {
     book.fail(now);

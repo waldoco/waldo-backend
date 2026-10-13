@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { handleGmailPush, type EventIngressEnv } from '../src/channels/event-ingress';
+import { handleGmailPush, parseEventSources, type EventIngressEnv } from '../src/channels/event-ingress';
 import { gmailPush } from '../src/connectors/google-push';
 
 const config = gmailPush('waldo-dev')!;
@@ -30,6 +30,16 @@ describe('Gmail push ingress', () => {
       { name: 'owner-b', headers: { 'x-waldo-gmail-connection': 'conn-b', 'x-waldo-gmail-history': '98765' } },
     ]);
     vi.unstubAllGlobals();
+  });
+
+  it('an owner object that does not take pushes is acknowledged, so Pub/Sub stops retrying', async () => {
+    const { env, verify } = setup([{ do_name: 'owner-a', connection: 'conn-a' }], 404);
+    expect((await handleGmailPush(request(), env, config, verify)).status).toBe(200);
+    vi.unstubAllGlobals();
+  });
+
+  it('a configured event source cannot take the Gmail push path name', () => {
+    expect(Object.keys(parseEventSources(JSON.stringify({ gmail: { secret: 'x' }, gcal: { secret: 'x' }, github: { secret: 'y' } })))).toEqual(['github']);
   });
 
   it('a token that does not check out is refused before any lookup', async () => {

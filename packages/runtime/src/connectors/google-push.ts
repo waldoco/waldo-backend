@@ -96,7 +96,6 @@ export const watchDue = (state: CalendarWatchState | null, now: number): boolean
 export const GMAIL_PUSH_PROJECT = '';
 export const GMAIL_PUSH_PATH = '/events/gmail';
 export const GMAIL_WATCH_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/watch';
-export const GMAIL_STOP_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/stop';
 const GMAIL_RENEW_EVERY_MS = 24 * 3_600_000;
 
 export type GmailPushConfig = Readonly<{ topic: string; serviceAccount: string }>;
@@ -105,7 +104,7 @@ export const gmailPush = (project: string = GMAIL_PUSH_PROJECT): GmailPushConfig
 
 export type GmailWatch = Readonly<{ historyId: string; expiration: number }>;
 export type GmailWatchState = Readonly<{ startedAt: number; expiration: number }> | Readonly<{ failedAt: number }>;
-export type GmailPush = Readonly<{ account: string; historyId: string; messageId: string }>;
+export type GmailPush = Readonly<{ account: string; historyId: string }>;
 
 const jsonPart = (part: string): Record<string, unknown> | null => {
   const raw = bytes(part);
@@ -139,7 +138,9 @@ let googleKeys: { keys: Map<string, CryptoKey>; until: number; fetchedAt: number
 export const googlePushKeys = (fetcher: typeof fetch = fetch, now: () => number = Date.now) => async (kid: string): Promise<CryptoKey | null> => {
   const known = googleKeys.keys.get(kid);
   if (known && now() < googleKeys.until) return known;
-  if (now() - googleKeys.fetchedAt < 60_000 && now() < googleKeys.until) return null;
+  // At most one fetch a minute, failed ones included, so a failing cert endpoint is not asked on every push.
+  if (now() - googleKeys.fetchedAt < 60_000) return null;
+  googleKeys = { ...googleKeys, fetchedAt: now() };
   try {
     const response = await fetcher('https://www.googleapis.com/oauth2/v3/certs', { signal: AbortSignal.timeout(5000) });
     if (!response.ok) return null;
@@ -159,14 +160,13 @@ export const googlePushKeys = (fetcher: typeof fetch = fetch, now: () => number 
 // The push body names only the mailbox and its new history point; no mail content.
 export const parseGmailPush = (raw: string): GmailPush | null => {
   try {
-    const body = JSON.parse(raw.length <= 16_384 ? raw : '') as { message?: { data?: unknown; messageId?: unknown } };
-    const messageId = body.message?.messageId;
-    if (typeof body.message?.data !== 'string' || typeof messageId !== 'string' || !/^\d{1,30}$/.test(messageId)) return null;
+    const body = JSON.parse(raw.length <= 16_384 ? raw : '') as { message?: { data?: unknown } };
+    if (typeof body.message?.data !== 'string') return null;
     const data = JSON.parse(atob(body.message.data.replace(/-/g, '+').replace(/_/g, '/'))) as { emailAddress?: unknown; historyId?: unknown };
     const account = typeof data.emailAddress === 'string' ? data.emailAddress.toLowerCase() : '';
     const historyId = typeof data.historyId === 'number' || typeof data.historyId === 'string' ? String(data.historyId) : '';
     if (!/^[^\s@<>"(),;:]+@[^\s@<>"(),;:]+\.[^\s@<>"(),;:]+$/.test(account) || account.length > 320 || !/^\d{1,30}$/.test(historyId)) return null;
-    return { account, historyId, messageId };
+    return { account, historyId };
   } catch {
     return null;
   }
@@ -179,11 +179,6 @@ export const startGmailWatch = async (fetcher: typeof fetch, bearer: string, top
   try { data = JSON.parse(text.length <= 4096 ? text : '') as typeof data; } catch { throw new GooglePushError(502, 'malformed'); }
   if (typeof data.historyId !== 'string' || !/^\d{1,30}$/.test(data.historyId) || typeof data.expiration !== 'string' || !/^\d{1,15}$/.test(data.expiration)) throw new GooglePushError(502, 'malformed');
   return { historyId: data.historyId, expiration: Number(data.expiration) };
-};
-
-export const stopGmailWatch = async (fetcher: typeof fetch, bearer: string): Promise<void> => {
-  const response = await post(fetcher, bearer, GMAIL_STOP_URL, {});
-  void response.body?.cancel();
 };
 
 // Google asks for the watch to be renewed daily; it lapses after seven days without one.

@@ -17,7 +17,6 @@ export type GoogleProxy = Readonly<{
   calendarWatch(doName: string, connection: string, input: Readonly<{ channelId: string; token: string; address: string }>): Promise<CalendarWatch>;
   stopChannel(doName: string, connection: string, channel: Readonly<{ channelId: string; resourceId: string }>): Promise<void>;
   gmailWatch(doName: string, connection: string, topic: string): Promise<GmailWatch>;
-  gmailStop(doName: string, connection: string): Promise<void>;
   revoke(doName: string, connection: string): Promise<boolean>;
 }>;
 
@@ -88,7 +87,6 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       if (typeof data?.historyId !== 'string' || !/^\d{1,30}$/.test(data.historyId) || typeof data.expiration !== 'number' || !Number.isSafeInteger(data.expiration)) throw new Error('gmail watch reply malformed');
       return { historyId: data.historyId, expiration: data.expiration };
     },
-    gmailStop: async (doName, connection) => { await post({ do_name: doName, op: 'gmail_stop', connection }); },
     revoke: async (doName, connection) => (await rpc('connection_revoke', `connrevoke.${doName}.${connection}`, { p_do_name: doName, p_connection: connection })) === true,
   };
 };

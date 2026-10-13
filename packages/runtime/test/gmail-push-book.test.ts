@@ -22,7 +22,7 @@ describe('Gmail push admission', () => {
 
 describe('Gmail watch upkeep', () => {
   const deps = (over: Record<string, unknown> = {}) => {
-    const proxy = { gmailWatch: vi.fn(async () => ({ historyId: '700', expiration: 7 * DAY })), gmailStop: vi.fn(async () => undefined) };
+    const proxy = { gmailWatch: vi.fn(async () => ({ historyId: '700', expiration: 7 * DAY })) };
     return { book: gmailPushBook(kv()), now: 0, config, doName: 'owner-a', resolve: async () => ({ mode: 'proxy' as const, connection: 'conn' }), proxy, ...over };
   };
 
@@ -35,15 +35,29 @@ describe('Gmail watch upkeep', () => {
     expect(d.book.admit('conn', '701')).toBe('wake');
   });
 
-  it('moving to another mailbox stops the old watch', async () => {
+  it('stops no watch, on a renewal or a move to another mailbox, since another owner may share it', async () => {
     const d = deps();
+    const stop = vi.fn();
+    const proxy = { ...d.proxy, gmailStop: stop };
+    d.book.record({ historyId: '1', expiration: 7 * DAY }, 'conn', -2 * DAY);
+    expect(await ensureGmailWatch({ ...d, proxy })).toBe('started');
     d.book.record({ historyId: '1', expiration: 7 * DAY }, 'old-conn', -2 * DAY);
-    expect(await ensureGmailWatch(d)).toBe('started');
-    expect(d.proxy.gmailStop).toHaveBeenCalledWith('owner-a', 'old-conn');
+    expect(await ensureGmailWatch({ ...d, proxy })).toBe('started');
+    expect(d.proxy.gmailWatch).toHaveBeenCalledTimes(2);
+    expect(stop).not.toHaveBeenCalled();
+    expect(d.book.admit('conn', '701')).toBe('wake');
+  });
+
+  it('without a Google account it waits before asking again, rather than on every sweep', async () => {
+    const resolve = vi.fn(async () => null);
+    const d = deps({ resolve });
+    expect(await ensureGmailWatch(d)).toBe('skipped');
+    expect(await ensureGmailWatch({ ...d, now: 3_600_000 })).toBe('fresh');
+    expect(resolve).toHaveBeenCalledTimes(1);
   });
 
   it('a failed start leaves the poll in charge and waits six hours', async () => {
-    const d = deps({ proxy: { gmailWatch: vi.fn(async () => { throw new Error('refused'); }), gmailStop: vi.fn() } });
+    const d = deps({ proxy: { gmailWatch: vi.fn(async () => { throw new Error('refused'); }) } });
     expect(await ensureGmailWatch(d)).toBe('failed');
     expect(await ensureGmailWatch({ ...d, now: 5 * 3_600_000 })).toBe('fresh');
   });

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { gmailPush, gmailWatchDue, GMAIL_WATCH_URL, GMAIL_STOP_URL, parseGmailPush, startGmailWatch, stopGmailWatch, verifyPushToken } from '../src/connectors/google-push';
+import { gmailPush, gmailWatchDue, GMAIL_WATCH_URL, parseGmailPush, startGmailWatch, verifyPushToken } from '../src/connectors/google-push';
 
 const AUD = 'https://w.test/events/gmail';
 const SA = 'waldo-gmail-push@waldo-dev.iam.gserviceaccount.com';
@@ -40,8 +40,8 @@ describe('Pub/Sub push token', () => {
 
 describe('Pub/Sub Gmail message', () => {
   const body = (data: unknown, messageId = '123') => JSON.stringify({ message: { data: b64url(JSON.stringify(data)), messageId }, subscription: 'projects/p/subscriptions/s' });
-  it('reads the mailbox, history id and message id', () => {
-    expect(parseGmailPush(body({ emailAddress: 'Sam@Example.com', historyId: 98765432101 }))).toEqual({ account: 'sam@example.com', historyId: '98765432101', messageId: '123' });
+  it('reads the mailbox and history id', () => {
+    expect(parseGmailPush(body({ emailAddress: 'Sam@Example.com', historyId: 98765432101 }))).toEqual({ account: 'sam@example.com', historyId: '98765432101' });
   });
   it.each([body({ emailAddress: 'not an address', historyId: 1 }), body({ emailAddress: 'a@b.co' }), body({ emailAddress: 'a@b.co', historyId: 'x' }), '{}', 'not json', JSON.stringify({ message: { data: '!!!' } })])('refuses %j', (raw) => {
     expect(parseGmailPush(raw)).toBeNull();
@@ -56,10 +56,19 @@ describe('Gmail watch', () => {
     expect(url).toBe(GMAIL_WATCH_URL);
     expect(JSON.parse(String(init.body))).toEqual({ topicName: 'projects/waldo-dev/topics/waldo-gmail-push', labelIds: ['INBOX'], labelFilterBehavior: 'INCLUDE' });
   });
-  it('stops the watch', async () => {
-    const fetcher = vi.fn(async () => new Response(null, { status: 204 }));
-    await stopGmailWatch(fetcher as unknown as typeof fetch, 'ya29.t');
-    expect((fetcher.mock.calls[0] as unknown as [string])[0]).toBe(GMAIL_STOP_URL);
+  it('asks a failing cert endpoint at most once a minute', async () => {
+    vi.resetModules();
+    const { googlePushKeys: fresh } = await import('../src/connectors/google-push');
+    const fetcher = vi.fn(async () => new Response('unavailable', { status: 503 }));
+    let now = 10_000_000;
+    const keys = fresh(fetcher as unknown as typeof fetch, () => now);
+    expect(await keys('kid-1')).toBeNull();
+    now += 30_000;
+    expect(await keys('kid-1')).toBeNull();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    now += 31_000;
+    await keys('kid-1');
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
   it('renews daily, a day before expiry, and six hours after a failure', () => {
     const DAY = 86_400_000;
