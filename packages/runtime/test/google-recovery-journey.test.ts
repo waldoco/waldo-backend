@@ -137,7 +137,7 @@ it('registered Calendar move/Undo: date-only original survives lost Undo respons
 it.each(['marker missing','marker foreign','later edit'] as const)('Calendar uncertain apply rejects field-only confirmation: %s',async fault=>{
  const j=journey();try{const f=j.open();const id=(await f.invoke('propose_calendar_change',move)).data.proposal_id;j.provider.loseCalendar=true;await f.desk.decide(id,'a','test');j.provider.readFail=false;
  if(fault==='marker missing')delete (j.provider.event.extendedProperties.private as Record<string,string>).waldoOperation;
- if(fault==='marker foreign')(j.provider.event.extendedProperties.private as Record<string,string>).waldoOperation='foreign';
+ if(fault==='marker foreign')(j.provider.event.extendedProperties.private as Record<string,string>).waldoOperation='f'.repeat(64);
  if(fault==='later edit')j.provider.event.start={dateTime:'2026-10-11T12:00:00Z'};
  expect((await j.open().desk.decide(id,'a','restart')).toast).toBe('Outcome unknown');expect(j.provider.writes).toHaveLength(1);
  }finally{j.close();}
