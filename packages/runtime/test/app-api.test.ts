@@ -88,6 +88,18 @@ describe('app sign-in and main chat routes', () => {
     expect(new URL(forwards[0]!.url).pathname).toBe('/app/v1/chat/main/messages/client-msg-0001/cancel');
     expect(keys).toEqual(['app-read:owner-1']);
   });
+  it('forwards thread calls to the credential owner DO: a list as a read, a change as a send', async () => {
+    forwards.length = 0;
+    const keys: string[] = [];
+    const counted = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async ({ key }: { key: string }) => { keys.push(key); return { success: true }; } } } as never;
+    const bearer = { authorization: `Bearer ${CREDENTIAL}` };
+    expect(await (await handleApp(new Request('https://w.test/app/v1/threads?state=active', { headers: bearer }), counted, fakeAuth().auth))!.json()).toEqual({ forwarded: true });
+    const rename = post('/app/v1/threads/thr_11111111-2222-4333-8444-555555555555/rename', { operation_id: '0b6f3c1e-8a2d-4f5b-9c7e-000000000001', expected_title_revision: 1, title: 'Trip' }, bearer);
+    expect(await (await handleApp(rename, counted, fakeAuth().auth))!.json()).toEqual({ forwarded: true });
+    expect(forwards.map(request => [request.method, new URL(request.url).pathname + new URL(request.url).search, request.headers.get('x-waldo-do-name')])).toEqual([
+      ['GET', '/app/v1/threads?state=active', 'owner-1'], ['POST', '/app/v1/threads/thr_11111111-2222-4333-8444-555555555555/rename', 'owner-1']]);
+    expect(keys).toEqual(['app-read:owner-1', 'app-chat-send:owner-1']);
+  });
   it('rate limits chat sends per owner and fails closed without the limiter', async () => {
     const auth = fakeAuth().auth;
     const limited = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: false }) } } as never;
