@@ -1009,3 +1009,14 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - There's no Android SDK, so neither the APK nor the Samsung Kotlin can build.
   - iOS builds need the owner's Apple signing.
   - It held expo-dev-client, because builds are deferred.
+
+## 04:51:14Z: Android waits; iOS Simulator plus Watch; a parallel-chat chip is offered
+
+- **The owner's words to the App lane, at about 04:40Z:** "okay for android let's wait I will connect my phone directly with this macbook then we can take up the android testing/build but completethe iOS build via simulator iphone + apple watch".
+- **The App lane offered the owner a parallel-chat chip.** Its scope:
+  - N4: background health delivery through HealthKit observers after H3, gated on storage consent.
+  - The Watch app: remove its fixed numbers (N1), and show real data or an honest unavailable state.
+  - Its device is the iPhone Air (`3C3634A0`) paired with the Series 11 Watch (`CD20F5C4`).
+  - **Overlap:** its files overlap #105's `src/health/**` deletions. So it starts after #105 merges, or stays off the deleted paths.
+- **Open for the owner:** the Watch target (build order §7.5). Is it isolated and kept, or dev-only? The owner's words read as kept [inference].
+- **The App lane is on #104's blockers.** The Pro Max is waiting for the owner's sign-in.
