@@ -136,7 +136,6 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
 // holds ONLY while it is unreachable: any change granting it an ACL MUST add it here in
 // the same change (pinned by handler.test's zero-ACL coupling guard).
 export const PRIVILEGED_ACTION_TOOLS: readonly ToolName[] = [
-  'use_mac',
   'execute_action',
   'send_message',
   'call_mcp_tool',
@@ -153,6 +152,7 @@ export const PRIVILEGED_ACTION_TOOLS: readonly ToolName[] = [
   // Changing durable procedure availability is owner-controlled, never provider-authorized.
   'skills_install',
   'skills_disable',
+  'use_mac',
 ];
 
 // The single authority of the ADR-0049 taint gate, pure so hook and dispatcher share one law:
