@@ -55,8 +55,8 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
         while (wireArgs.length > 0 && wireArgs[wireArgs.length - 1] === undefined) wireArgs.pop();
         const effect = ['draft','sendRaw','createEvent','moveEvent','cancelEvent','createTask','patchTask'].includes(method);
         if(effect&&!intent)throw new ProxyIntentError('intent_required');
-        // This Worker reads calendar detail fields, so it asks for them; a proxy that predates them ignores the key.
-        const { data } = await post({ do_name: doName, op: 'call', connection, method, args: wireArgs, calendar_details: true, ...(effect?{intent_id:intent!.id}:{}) });
+        // This Worker reads calendar detail fields and the owner's status, so it asks for both; a proxy that predates either ignores its key.
+        const { data } = await post({ do_name: doName, op: 'call', connection, method, args: wireArgs, calendar_details: true, calendar_owner_status: true, ...(effect?{intent_id:intent!.id}:{}) });
         health?.('');
         return data;
       } catch (error) {
