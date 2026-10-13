@@ -1118,3 +1118,42 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **The new orchestrator** is session `local_c6bd97f4` ("Take over orchestration: app-first Waldo build"), with heartbeat job 48aea065.
 - **The old session** deleted its heartbeat (cron 1880182e) and stopped merging. It relays only two verdicts: #1114's delta, and app #104 with #106.
 - **The new session** received a list of in-flight items not in the handoff, including five owner questions still unanswered.
+
+## 05:46:21Z: new orchestrator takes over; app #104 merged; #1114 delta FAIL; usage 86%
+
+- **Takeover.** From 05:34Z, the orchestrator is the session "Take over orchestration: app-first Waldo build" (`local_c6bd97f4`).
+  - Its heartbeat is `48aea065`, at :13 and :43 UTC.
+  - The old session deleted its heartbeat (`1880182e`) and stopped merging. From now, the new orchestrator owns this LOG.
+  - Board posts: 6139013828 (takeover) and the Phase-1 exit owners.
+- **Merged app #104** as `2896aa2e` at 05:43:29Z (the Brief row and screen; R3).
+  - **Gate:**
+    - review PASS at `38b697b1` (the old session's reviewer, relayed);
+    - CI green, on a pull_request run from 05:08Z;
+    - 0 commits behind main, so it contains #105;
+    - CLEAN;
+    - the advisor agreed.
+  - **Follow-up to L4:** gate "is set for" on `timezone_confirmed`, before the new-account test on the iPhone 17 Pro.
+- **App #106: FAIL** (relayed).
+  - Re-reads ignore a 429's Retry-After.
+  - "Try again" can do nothing.
+  - It's back with L4, which retargets it to main.
+- **#1114: delta FAIL at `6d4129d2`** (relayed).
+  - A regression: removing invisible characters glues a code to the digits beside it.
+  - An undisclosed merged relay.
+  - It's back with Connectors. The old gap (a code after "is:" or "-") gets its own issue.
+- **App #107** (session-restore retry, `a1a4ecae`): review running.
+- **Deploy:** `6ddbd85e` (#1100) passes the gate's pre-checks:
+  - CI 6/6;
+  - no wrangler, deploy or migration path;
+  - no app-contract change.
+  The command is with the owner. #1100's Simulator check runs on L4's Pro Max.
+- **Assigned:**
+  - **Connectors:** the calendar-move exit (the live run waits for the owner's yes on a QA event), the meeting-prep live check, then RSVP.
+  - **Backend lane:** the calendar line, profile and the Spots actions, after the Phase-1 items.
+  - **To the owner:** the health-detail series and pattern nudges.
+- **Usage:** 86% at 05:46Z; it resets at 07:30Z. No new subagents.
+- **Read for the plan:**
+  - Bible §7 Phase 1 and the Reconciliation tab;
+  - `CAPABILITY_STATUS.md`;
+  - `PILLAR_SCORECARD_2026-10-12.md`.
+  The design system and design pass v2 are deferred until after the reset.
