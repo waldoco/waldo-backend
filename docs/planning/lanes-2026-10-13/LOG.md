@@ -1678,3 +1678,26 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - Running: N4 (the Air build), Connectors (on the owner's direct go) and the orchestrator's merge gate.
   - No reviewers until the next measurement, at about 09:52Z.
 - **App #122 opened by L4** (head `5705940e`): the `done` state reads "Done" instead of "Confirmed"; `outcome_unknown` stays "Unconfirmed". It's 4 files and 9 lines: check exit 0, 909 tests passed, 4 of 4 deliberate faults caught. Its review waits for usage.
+
+## 09:46Z (from `date -u`): calendar-read root cause; Air on `db7e06b9`, launch blocked
+
+- **The calendar-read bug's root cause (from Connectors, confirmed in source at `a94d7fa5`):** query_calendar fails whenever an event in the read window carries Waldo's operation marker.
+  - `google.ts:794` emits `operation_marker`.
+  - `calendarPageSchema` (`contracts/src/tools/schemas/reads.ts:64-69`) is a strictObject without that field, so the whole page is rejected as `transient`.
+  - It isn't a scope, token-path or time-zone problem. Only the model's query_calendar uses this schema, so meeting prep and day cards are unaffected.
+  - Tying it to L4's QA failure is [inference] until the owner's proxy log line shows the page arriving with `ok:true`.
+- **Effect today:** the "QA" event (it stays in place, per the owner's ruling) makes every default-window calendar read on the shared test account fail. That lasts until the fix deploys, or about 24 hours after the event's creation. Don't read it as a new bug.
+- **The fix** (Connectors, PR next, red 3 of 3 at `a94d7fa5`) is Worker-only and safe in either deploy order:
+  - declare the field in the schema;
+  - strip the marker once, possibly reusing `calendarPromptProjection` at `google.ts:142`;
+  - add a cross-check test from `toItem`'s real output, also run on #1109's branch.
+
+  It's the first review once green, and the owner deploys through the gate.
+- **The Air:** N4 installed main `db7e06b9` at 09:39:47Z, before seeing #120 and #116 merge. The read-only Health-store check at 09:39Z found no live sample of a type Waldo is authorized for.
+  - The Watch has main's Watch app (the #110 unavailable screen).
+  - N4 is rebuilding `7e09317c` incrementally and will send the `.app` path to L4.
+- **Blocked on the owner:** the permission check refused N4's launch of Waldo on the Air ("PII Data Handling"). The owner either opens Waldo on the Air or allows that action in N4's session. Nobody routes around it.
+- **N4's finding:** on the device, the connect screens and "Apple Health, latest readings" (`wearable.tsx`) read HealthKit snapshots before storage consent, once iOS read access allows it.
+  - Nothing leaves the phone: the data sits in component state or the in-memory cache, is rendered only, and isn't persisted or logged.
+  - Not an install blocker. It's a follow-up in N4's small PR, along with disarm on any ended withdrawal and the lost forced run.
+- **App #115:** retargeted to main with `db7e06b9` merged in (`1c23a41b`). CI started after an empty push (`7b1e0222`). Locally: 932 passed. It's still a draft, and its review comes after the reset.
