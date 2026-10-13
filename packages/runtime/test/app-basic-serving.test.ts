@@ -98,7 +98,9 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
       await vi.waitFor(()=>expect(state.storage.kv.get<any>(`app:inbox-record:${effected.message_id}`)?.state).toBe('completed'));
       instance=new OwnerDO(state,settings as never);
       const withReceipt=await (await app('/chat/main',undefined,credential)).json() as any;
-      expect(withReceipt.messages.find((message:any)=>message.role==='assistant'&&message.parent_id===effected.message_id)?.text).toContain('Receipts: workspace file written proof-missing.txt (failed)');
+      const effectedReply=withReceipt.messages.find((message:any)=>message.role==='assistant'&&message.parent_id===effected.message_id);
+      expect(effectedReply?.text).not.toContain('Receipts:');
+      expect(effectedReply?.parts.at(-1)).toMatchObject({type:'receipt',fallback_text:'Receipts: workspace file written proof-missing.txt (failed)',items:[{kind:'workspace_file_written',target:'proof-missing.txt',outcome:'failed'}]});
       instance=new OwnerDO(state,settings as never);
       let finishReady!:()=>void;(instance as any).browserReady=new Promise<void>(resolve=>{finishReady=resolve;});
       const beforeRevokedReady=proof.inputs.length;
@@ -124,7 +126,7 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
       expect(await (await app(`/chat/main/messages/${queuedId}`,undefined,credential)).json()).toMatchObject({state:'completed'});
       await vi.waitFor(()=>expect(proof.inputs.filter(i=>!i.text?.format)).toHaveLength(ordinaryBefore+2));
       const afterRecovery=await (await app('/chat/main',undefined,credential)).json() as any;
-      expect(afterRecovery.messages.filter((m:any)=>m.role==='assistant'&&m.parent_id===blocked.message_id)).toHaveLength(0);expect(afterRecovery.messages.filter((m:any)=>m.role==='assistant'&&m.parent_id===queued.message_id)).toHaveLength(1);
+      const unfinished=afterRecovery.messages.filter((m:any)=>m.role==='assistant'&&m.parent_id===blocked.message_id);expect(unfinished).toHaveLength(1);expect(unfinished[0].text).toMatch(/^This run did not finish\./);expect(afterRecovery.messages.filter((m:any)=>m.role==='assistant'&&m.parent_id===queued.message_id)).toHaveLength(1);
       const retryInterrupted=await app('/chat/main/messages',{client_message_id:blockedId,text:'Interrupted in-flight turn'},credential);expect(await retryInterrupted.json()).toMatchObject({state:'interrupted'});
       const inbox=new AppInbox(state.storage),pending=await inbox.admit(name,hash!,'revoked-pending-client','Pending then revoked',`owner:prn_${OWNER.replaceAll('-','')}`);expect(pending.kind).toBe('admitted');
       directoryUnavailable=true;const outageAt=Date.now();await instance.alarm();expect(inbox.receipt(name,'revoked-pending-client')?.state).toBe('admitted');

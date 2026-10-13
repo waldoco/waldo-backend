@@ -23,12 +23,20 @@ export const approvalReviewV1Schema = visibleText(REPLY_TEXT_MAX_CHARS);
 export const payloadDigestV1Schema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 export const replyVisibilityV1Schema = z.enum(['shared', 'app_only']);
 
+// The server's wording for an approval: what the owner decides, in one line, and actions it offers named by their
+// effect. The review stays what a decision is made on; an action without a label keeps the reader's own word.
+export const approvalQuestionV1Schema = z.string().max(120).regex(/\S/).regex(/^[^\n\r\u2028\u2029]*$/);
+export const approvalLabelsV1Schema = z.partialRecord(approvalActionV1Schema, z.string().max(40).regex(/\S/));
+export const labelsOfferedActions = ({ actions, labels }: Readonly<{ actions: readonly string[]; labels?: Readonly<Partial<Record<string, string>>> }>) =>
+  labels === undefined || Object.keys(labels).every(action => actions.includes(action));
+
 export const replyApprovalPartV1Schema = z.strictObject({
   type: z.literal('approval'), approval_id: approvalIdV1Schema, kind: approvalKindV1Schema,
   review: approvalReviewV1Schema, payload_digest: payloadDigestV1Schema,
   actions: z.array(approvalActionV1Schema.exclude(['undo'])).min(1).max(4).refine(distinct, 'actions repeat'),
   expires_at: epochMsV1Schema, fallback_text: fallbackTextV1Schema,
-});
+  question: approvalQuestionV1Schema.optional(), labels: approvalLabelsV1Schema.optional(),
+}).refine(labelsOfferedActions, { error: 'labels name only actions offered', path: ['labels'] });
 export const replyQuickRepliesPartV1Schema = z.strictObject({
   type: z.literal('quick_replies'),
   choices: z.array(z.strictObject({ id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), label: visibleText(QUICK_REPLY_LABEL_MAX_CHARS) }))
@@ -50,6 +58,20 @@ export const replyFilePartV1Schema = z.strictObject({
 });
 export const replyVoicePartV1Schema = z.strictObject({
   type: z.literal('voice'), audio_ref: opaqueRefV1Schema, transcript: visibleText(8_000), fallback_text: fallbackTextV1Schema,
+});
+
+export const RECEIPT_MAX_ITEMS = 20;
+// What a turn's effect tools did, from their typed receipts, never from the model's words. accepted means the tool
+// accepted the effect, not that the source system holds it. digest is sha256 over the arguments the model gave the tool,
+// as parsed JSON in canonical key order: not the payload the tool validated, so it never matches an approval's payload_digest.
+export const replyReceiptPartV1Schema = z.strictObject({
+  type: z.literal('receipt'),
+  items: z.array(z.strictObject({
+    kind: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/), target: z.string().min(1).max(200).nullable(),
+    outcome: z.enum(['accepted', 'failed', 'unconfirmed']), via_task: z.boolean(), at: epochMsV1Schema, digest: payloadDigestV1Schema.nullable(),
+  })).min(1).max(RECEIPT_MAX_ITEMS),
+  more: z.int().nonnegative(),
+  fallback_text: fallbackTextV1Schema,
 });
 
 export type ApprovalKindV1 = z.infer<typeof approvalKindV1Schema>;

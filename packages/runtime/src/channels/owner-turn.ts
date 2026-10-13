@@ -14,7 +14,7 @@ import type { ConversationEntry, ConversationModelMessage } from '@waldo/contrac
 import { MODEL_CONTEXT_MAX_CHARS } from '@waldo/contracts';
 import { PROBE_STRIPPED_TOOLS } from './probe-turn';
 import { runToolLoop } from '../conversation/tool-loop';
-import { receiptLine } from '../hooks/receipt-line';
+import { turnReceipt } from '../hooks/receipt-line';
 import type { LoopEventLike } from '../hooks/claim-hook';
 import { delegateTaskHandler, runChildLoop, SUBAGENT_SYSTEM_PROMPT, withDelegation } from '../conversation/subagent';
 import { inMemoryToolOutputStore } from '../conversation/tool-output-store';
@@ -40,6 +40,8 @@ import type { LLMAttachment } from '@waldo/contracts';
 import { STOPPED_REPLY, turnControl } from './turn-control';
 import type { RunBook } from './background-runs';
 import { toolOutputLedger } from '../conversation/tool-output-ledger';
+
+const TURN_ONLY_OUTPUT = JSON.stringify({ retained: false, reason: 'turn_only_output' });
 
 // The owner's approval line (owner direction 2026-09-27): first-party state - his own memory,
 // tasks, sheets, drafts - proceeds without a per-action card. Anything that could reach another
@@ -164,6 +166,8 @@ export const createOwnerResponder = (
     ...(offloadStore === undefined ? {} : { toolOutputStore: offloadStore }),
   };
   const handlers = [getContextHandler(clock), ownerContextHandler(memory), ...tools, ...(skills?.handlers ?? []), ...(offloadStore === undefined ? [] : [readToolOutputHandler(offloadStore)])];
+  // A turn-only output (the owner's health values) reaches the model in this turn and nowhere else: the ledger keeps a content-free line.
+  const turnOnlyOutput = new Set<string>(handlers.filter((handler) => 'turn_only_output' in handler && handler.turn_only_output === true).map((handler) => handler.name));
   const recentOwnerTurns = new Map<string, import('../tools/live/memory').MemoryOwnerTurn>();
   let activeOwnerTurn: OwnerTurnEnvelope | undefined;
   const memoryContext = () => activeOwnerTurn ? { memoryTurn: {
@@ -526,11 +530,11 @@ export const createOwnerResponder = (
         onTool: (event) => {
           // Typed receipt input for the owner reply's last line (receiptLine reads no wording).
           const receipt = event.call.name === 'remember' && event.ok ? JSON.parse(event.output) as { data?: { status?: string } } : undefined;
-          if (receipt?.data?.status !== 'duplicate') turnToolEvents.push({ seq: turnToolEvents.length + 1, call: { name: event.call.name, args: parseToolArgs(event.call.arguments, event.call.name) }, ok: event.ok, ...(event.code ? { code: event.code } : {}) });
+          if (receipt?.data?.status !== 'duplicate') turnToolEvents.push({ seq: turnToolEvents.length + 1, call: { name: event.call.name, args: parseToolArgs(event.call.arguments, event.call.name) }, ok: event.ok, at: Date.now(), ...(event.code ? { code: event.code } : {}) });
           privateRunScope?.admit();
           log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: event.call.arguments, output: event.output } });
           privateRunScope?.admit();
-          pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: event.taint, origin: ownerTurnActive && !probeGuard?.stripLiveTools ? 'owner' : 'machine', summary: event.output });
+          pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: event.taint, origin: ownerTurnActive && !probeGuard?.stripLiveTools ? 'owner' : 'machine', summary: turnOnlyOutput.has(event.call.name) ? TURN_ONLY_OUTPUT : event.output });
         },
         ...(offerConnect ? { onConnect: offerConnect } : {}),
       });
@@ -606,7 +610,7 @@ export const createOwnerResponder = (
     turnToolEvents = [];
     control.begin(fromOwner);
     try {
-      const userEntry = tree.get(id) ?? { id, ownerId, chatId: conversationRef, parentId: conversationLeaves.get(conversationRef) ?? null, threadAnchorId: null, surface, modelPayload: said, appPayload: said, modelProjection: { mode: 'include' as const }, role:'user' as const, inputOrigin: fromOwner ? 'owner' as const : 'machine' as const };
+      const userEntry = tree.get(id) ?? { id, ownerId, chatId: conversationRef, parentId: conversationLeaves.get(conversationRef) ?? null, threadAnchorId: null, surface, modelPayload: said, appPayload: said, modelProjection: { mode: 'include' as const }, role:'user' as const, inputOrigin: fromOwner ? 'owner' as const : 'machine' as const, createdAt: Date.now() };
       if(fromOwner && context && privateRunScope) await conversationStore?.persistOwnerInput?.(userEntry,privateRunScope);
       const publication = await time('joined_path', () => path.submit({
         ...(privateRunScope ? { runScope: privateRunScope } : {}),
@@ -618,11 +622,11 @@ export const createOwnerResponder = (
       privateRunScope?.admit();
       await assertCurrent();
       const reply = tree.get(publication.leafId)!.appPayload;
-      // Native delivery reads durable history, so the visible effect receipt belongs in that row.
-      const receipts = fromOwner ? receiptLine(turnToolEvents) : null;
-      const out = receipts ? `${reply}\n\n${receipts}` : reply;
+      // Native delivery reads durable history, so the visible effect receipt belongs in that row, as text and typed.
+      const receipt = fromOwner ? await turnReceipt(turnToolEvents) : null;
+      const out = receipt ? `${reply}\n\n${receipt.line}` : reply;
       const redact = literalTextRedactor([...removedTopics], FORGOTTEN);
-      const savedEntries = [tree.get(id)!, { ...tree.get(publication.leafId)!, ...(context ? { appPayload: out } : {}) }].map(entry => redactConversationEntry(entry, redact));
+      const savedEntries = [tree.get(id)!, { ...tree.get(publication.leafId)!, ...(context ? { appPayload: out, ...(receipt ? { receipt } : {}) } : {}) }].map(entry => redactConversationEntry(entry, redact));
       await conversationStore?.save(savedEntries, publication.leafId, privateRunScope);
       for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); }
       privateRunScope?.admit();
@@ -630,6 +634,15 @@ export const createOwnerResponder = (
       conversationLeaves.set(conversationRef,publication.leafId);
       lastReply = out;
       return out;
+    } catch (error) {
+      // What the turn's tools already did stays on the record for the next turn while the run is still admitted; a
+      // closed run writes nothing.
+      const redact = literalTextRedactor([...removedTopics], FORGOTTEN);
+      const landed = fromOwner && privateRunScope ? (await turnReceipt(turnToolEvents))?.line ?? null : null;
+      if (landed) conversationStore?.noteUnfinished?.(redact(landed), privateRunScope!);
+      try { for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); } }
+      catch (flush) { if (!(flush instanceof ClosedRunError)) throw flush; }
+      throw error;
     } finally { activeOwnerTurn = undefined; }
   };
   return {

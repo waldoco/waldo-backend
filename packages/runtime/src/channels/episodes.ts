@@ -1,5 +1,6 @@
 import type { ConversationEntry } from '@waldo/contracts';
 import type { ConversationStore } from './conversation-store';
+import type { RunEffectScope } from './run-effect-scope';
 import { localIso, localToEpoch, nextAfter } from './reminders';
 import type { Scheduler } from '../scheduler/multiplexer';
 
@@ -81,16 +82,28 @@ export const episodeIndex = (sql: SqlStorage): EpisodeIndex => {
   };
 };
 
-export const indexedConversationStore = (store: ConversationStore, index: EpisodeIndex, now: () => number): ConversationStore => ({
-  ...store,
-  load: () => store.load(),
-  async save(entries, leafId, scope) {
-    await store.save(entries, leafId, scope);
-    const at = now();
-    const commit = () => { for (const entry of entries) index.add(entry.id, speakerOfEntry(entry), entry.appPayload, at); };
-    if (scope) scope.commit(commit); else commit();
-  },
-});
+// The owner's input is indexed when it is stored, before the turn runs, so it is searchable even if the turn never
+// finishes; the turn's save then skips it.
+export const indexedConversationStore = (store: ConversationStore, index: EpisodeIndex, now: () => number): ConversationStore => {
+  const indexedInputs = new Set<string>();
+  const persistOwnerInput = store.persistOwnerInput;
+  return {
+    ...store,
+    load: () => store.load(),
+    ...(persistOwnerInput ? { async persistOwnerInput(entry: ConversationEntry, scope: RunEffectScope) {
+      await persistOwnerInput(entry, scope);
+      scope.commit(() => index.add(entry.id, speakerOfEntry(entry), entry.appPayload, now()));
+      indexedInputs.add(entry.id);
+    } } : {}),
+    async save(entries, leafId, scope) {
+      await store.save(entries, leafId, scope);
+      const at = now();
+      const unindexed = entries.filter(entry => !indexedInputs.delete(entry.id));
+      const commit = () => { for (const entry of unindexed) index.add(entry.id, speakerOfEntry(entry), entry.appPayload, at); };
+      if (scope) scope.commit(commit); else commit();
+    },
+  };
+};
 
 // Turns saved before the index existed carry no time, so they come back undated.
 export const backfillEpisodes = async (store: ConversationStore, index: EpisodeIndex): Promise<number> => {

@@ -9,6 +9,7 @@ const newParts = [
   { type: 'chart_series', title: 'Focus blocks', unit: 'blocks', series: [{ label: 'Week', points: [{ t: 1, v: 2 }] }], alt_text: 'Two focus blocks.', fallback_text },
   { type: 'file', file_ref: 'file:1', name: 'notes.txt', mime: 'text/plain', bytes: 12, sha256: 'e'.repeat(64), fallback_text },
   { type: 'voice', audio_ref: 'audio:1', transcript: 'Done.', fallback_text },
+  { type: 'receipt', items: [{ kind: 'reminder_set', target: null, outcome: 'accepted', via_task: false, at: 1_760_000_000_000, digest: null }], more: 0, fallback_text },
 ] as const;
 
 describe('app history rows', () => {
