@@ -2174,3 +2174,11 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 - Owner (about 19:17Z): the Mac owns most of the legwork; coordinating with Ansh's cloud session matters most; Ansh will start a new cloud session for this; reuse existing PRs and drafts first; don't start until the owner says go.
 - Take updated (`d3c0b622`) and posted (6153340521). The lead keeps A's design, A0, reviews and the gate; by default the Mac implements A1 onward to the lead's spec. The builder finishes in-flight items; new build work goes to the Mac (two lanes, a third only under 50% usage). Reuse list maps open PRs to M1–M5; close candidates are left to the lead or Ansh.
 - Langfuse: the built-in browser's Google chooser shows every account signed out, so sign-in needs the owner (no passwords or codes from the Mac). Left on the chooser.
+
+## 19:54Z — hand-off 2: edge done, migrations already applied, Worker waits on the owner
+
+- The owner gave the Mac all deploys and migrations, staging and production (Ansh and the cloud sessions can't run migrations). Ansh's new cloud session (reviews and coordination) agreed with the plan and added three things: threads count as in flight; a context lane (the lead specs, the Mac's third lane builds); Fable designs every hard piece and the Mac implements.
+- Edge `connector-proxy` deployed from `a9161905` and boots (refuses unsigned calls).
+- Read-only history: hosted staging has 57 applied, i.e. `a9161905`'s 56 plus `20261013000000` (#1178 device bridge). The iMessage `20261012000000` was already applied. No recorded applier; asked on #1103 (6153929182). #1133 must renumber, and hand-off 3 needs no migration step.
+- Worker in two steps per the v6 ruling: `fa8a8758` (#1119 rename only, CI 6/6), then `a9161905`. The auto-mode permission check refused the Mac's Worker deploy prep ("Production Deploy"), so the owner runs both; the Mac smokes and checks on the Simulator that chat history survives v6 between them.
+- Production: no Worker exists on the account (checked 19:49Z).
