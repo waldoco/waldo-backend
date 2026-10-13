@@ -14,7 +14,7 @@ it('late old-run cleanup preserves the newer session; unlink reconstruction clea
  configureCommonPublicBrowser({ ref: 'runtime-policy', doName: 'runtime-owner', subject: '81102', directoryOwnerId: '10000000-0000-0000-0000-000000000002', createdAt: now - 1, expiresAt: now + 60000, allowedOrigins: ['*'], maxAllocations: 1, maxReservedBrowserMs: 120000, lifetimeMs: 60000, maxScreenshotBytes: 1024 }, commonBrowserMeteredFixtureLoader,
  { policy: { ref: 'runtime-policy', ownerId, validUntil: now + 60000, limitMicrousd: 10000, maxCalls: 100 }, quote: kind => kind === 'browser' ? 0 : 1, allocationMicrousd: 100 });
  const binding = { fetch: vi.fn(async () => new Response('{}')) };
- const env = { WALDO_ENVIRONMENT: 'staging', BROWSER: binding, TELEGRAM_OWNER_DO: { idFromName: (name: string) => ({ toString: () => name === 'runtime-owner' ? 'physical-owner' : 'foreign' }) } } as never;
+ const env = { WALDO_ENVIRONMENT: 'staging', BROWSER: binding, BROWSERBASE_API_KEY: 'synthetic', BROWSERBASE_PROJECT_ID: 'synthetic', TELEGRAM_OWNER_DO: { idFromName: (name: string) => ({ toString: () => name === 'runtime-owner' ? 'physical-owner' : 'foreign' }) } } as never;
  const makeScope = (runId: string): RunEffectScope => ({ runId, attempt: runId, deadline: now + 60000, signal: new AbortController().signal, admit: vi.fn(), commit: work => work() });
  const old = makeScope('old'), newer = makeScope('new'); let active: RunEffectScope | undefined = newer;
  const options = { env, storage, actualDoId: 'physical-owner', activeScope: () => active };
@@ -53,7 +53,7 @@ it('late old-run cleanup preserves the newer session; unlink reconstruction clea
  expect(fallbackHandle).not.toHaveBeenCalled();
 });
 
- it('keeps an unselected typed fixture host, never pays Browserbase for a native command, and sends a plain staging action to Browserbase only when it is configured',async()=>{
+ it('keeps an unselected typed fixture host for typed commands, and refuses a plain action without paying Browserbase, keys or not',async()=>{
  const rows=new Map<string,unknown>([['do_name','fixture-only'],['telegram_subject','81102']]);
  const scope:RunEffectScope={runId:'fixture-run',attempt:'fixture-attempt',deadline:Date.now()+60000,signal:new AbortController().signal,admit(){},commit:work=>work()};
  const storage={kv:{get:(key:string)=>rows.get(key),put:(key:string,value:unknown)=>rows.set(key,value),list:({prefix}:{prefix:string})=>[...rows].filter(([key])=>key.startsWith(prefix))},transactionSync:<T>(work:()=>T)=>work(),getAlarm:async()=>null,setAlarm:async()=>{}} as unknown as DurableObjectStorage;
@@ -69,6 +69,6 @@ it('late old-run cleanup preserves the newer session; unlink reconstruction clea
  expect(await handler.handle({...args,command:undefined},ctx)).toMatchObject({ok:false});expect(called).toHaveBeenCalledTimes(1);
  const withBrowserbase=ownerBrowserRuntime({env:{...env as object,BROWSERBASE_API_KEY:'synthetic',BROWSERBASE_PROJECT_ID:'synthetic'} as never,storage,actualDoId:'fixture-physical',activeScope:()=>scope,typedHost:()=>true}).act(fallback);
  expect(await withBrowserbase.handle({...args,command:undefined,session_handle:'retained-common-session'},ctx)).toMatchObject({ok:false});expect(called).toHaveBeenCalledTimes(1);
- expect(await withBrowserbase.handle({...args,command:undefined},ctx)).toMatchObject({ok:true});expect(called).toHaveBeenCalledTimes(2);
- expect(await withBrowserbase.handle(args,ctx)).toMatchObject({ok:true,data:{fixture:true}});expect(called).toHaveBeenCalledTimes(3);
+ expect(await withBrowserbase.handle({...args,command:undefined},ctx)).toMatchObject({ok:false,code:'rejected'});expect(called).toHaveBeenCalledTimes(1);
+ expect(await withBrowserbase.handle(args,ctx)).toMatchObject({ok:true,data:{fixture:true}});expect(called).toHaveBeenCalledTimes(2);
  });

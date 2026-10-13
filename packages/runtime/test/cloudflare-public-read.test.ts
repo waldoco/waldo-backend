@@ -26,11 +26,11 @@ it('on a host without Browserbase keys, browse_page returns real page text throu
   expect(JSON.stringify(result)).not.toContain('private-id'); expect(paid).toBe(0);
   expect(f.calls).toEqual(['acquire', 'connect', 'navigate', 'context.close', 'Browser.close', 'disconnect']);
 });
-it('reads through Browserbase by default when its keys are configured, with a Cloudflare reader also present', async () => {
+it('a configured Cloudflare reader serves the read even when Browserbase keys are configured, never paying Browserbase', async () => {
   let paid = 0, cloudflare = 0;
   const handler = browsePageHandler('bb', 'project', undefined, (async () => { paid++; throw Error('paid'); }) as typeof fetch, { cloudflare: (async () => { cloudflare++; return { ok: true }; }) as never, allowBrowserbase: true });
   await handler.handle(browsePageArgsSchema.parse(args), context);
-  expect(paid).toBeGreaterThan(0); expect(cloudflare).toBe(0);
+  expect(paid).toBe(0); expect(cloudflare).toBe(1);
 });
 it('refuses a read with neither Browserbase keys nor a Cloudflare reader, without any paid call', async () => {
   let paid = 0;

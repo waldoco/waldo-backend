@@ -44,12 +44,10 @@ export function ownerBrowserRuntime(options: Readonly<{
     } : {}) });
   };
   const selectedConfiguration = async (cleanupOnly = false, normalRead = false) => automatic.selected || automatic.hasRetained() ? automatic.configuration(cleanupOnly) : configuration(cleanupOnly, normalRead);
-  // A held session serves browsing; the owner's Cloudflare host serves only where its binding and provider code exist;
-  // otherwise the fallback's Browserbase keys decide.
-  const cloudflareReady = () => Boolean(options.env.BROWSER && (commonBrowserSdk() || commonPublicBrowserConfigured()));
-  const browserbaseReady = () => Boolean(options.env.BROWSERBASE_API_KEY && options.env.BROWSERBASE_PROJECT_ID);
-  const eligibleWith = (fallback: Readonly<{ eligible?(): ToolEligibility | Promise<ToolEligibility> }>, typed = false) => (): ToolEligibility | Promise<ToolEligibility> =>
-    active || typed && options.typedHost?.() || cloudflareReady() && (options.env.WALDO_ENVIRONMENT === 'staging' || options.env.COMMON_BROWSER_REGISTRATION || automatic.selected || automatic.hasRetained()) ? { ok: true } : fallback.eligible?.() ?? { ok: true };
+  // A held session, or the enabled typed task host for browse_act, serves browsing; otherwise only the owner's Cloudflare
+  // host does, on a staging Worker that registered its provider code and holds a browser binding. Browserbase keys never do.
+  const cloudflareReady = () => options.env.WALDO_ENVIRONMENT === 'staging' && Boolean(options.env.BROWSER && (commonBrowserSdk() || commonPublicBrowserConfigured()));
+  const eligibleWith = (typed = false) => (): ToolEligibility => active || typed && options.typedHost?.() || cloudflareReady() ? { ok: true } : { ok: false, reason: 'not_configured' };
   // The browser serves the owner bound to this physical object, through Telegram or the app; the directory confirms it.
   const binding = () => localOwnerBinding(options.storage.kv, options.env.TELEGRAM_OWNER_DO, options.actualDoId);
   const bound = (held: NonNullable<ReturnType<typeof binding>>) => ownerBindingCurrent(options.storage.kv, options.env.TELEGRAM_OWNER_DO, options.actualDoId, held);
@@ -133,12 +131,9 @@ export function ownerBrowserRuntime(options: Readonly<{
       } };
     },
     read(fallback: ToolHandler<BrowsePageArgs, unknown, ToolDispatcherContext>): ToolHandler<BrowsePageArgs, unknown, ToolDispatcherContext> {
-      return { ...fallback, eligible: eligibleWith(fallback), schema: browsePageArgsSchema, description: fallback.description+' For interactive tasks use retain_session:true to receive DOM/accessibility, a PNG and session_handle, then call browse_act with that handle and current refs. Omit for a one-shot read.', async handle(args, ctx) {
+      return { ...fallback, eligible: eligibleWith(), schema: browsePageArgsSchema, description: fallback.description+' For interactive tasks use retain_session:true to receive DOM/accessibility, a PNG and session_handle, then call browse_act with that handle and current refs. Omit for a one-shot read.', async handle(args, ctx) {
         try {
           const assertCurrent = current(ctx); await assertCurrent();
-          // A one-shot read goes to Browserbase when it is configured, and always outside staging; a retained session stays
-          // on the owner's Cloudflare host. A Cloudflare failure never switches providers.
-          if (!args.session_handle && !args.retain_session && (browserbaseReady() || options.env.WALDO_ENVIRONMENT !== 'staging')) return fallback.handle(args, { ...ctx, assertTaskSourceCurrent: assertCurrent });
           // Omitted lifecycle fields must not silently discard an owner's
           // unsent page state or buy a second browser during a retained journey.
           const heldPointer=options.storage.kv.get<{taskId:string;sessionHandle:string}>(continuationKey);
@@ -176,14 +171,13 @@ export function ownerBrowserRuntime(options: Readonly<{
       } };
     },
     act(fallback:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>):ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>{
-      return {...fallback,eligible:eligibleWith(fallback,true),schema:browseActArgsSchema,description:'Use the selected Cloudflare owner browser through observed refs. Read with browse_page retain_session:true first, then use its session_handle. Native actions: type, click, select, set_checked, scroll, goto, open_tab, switch_tab, close_tab, read, inspect, screenshot, download, owner_login, resume_owner_login, cancel. download uses an observed link for an authenticated GET attachment, stores and verifies bytes in your private workspace, and returns an exact-revision owner download link. Blob/data and POST exports are unsupported. owner_login pauses this turn for human sign-in in the authenticated console; end the turn and ask the owner to reply after Done. Resume only on that later owner reply, then verify the intended signed-in account from fresh evidence. session_handle explicitly continues an existing owner session. File selection and page sends are unsupported; uncertain effects cannot repeat.',async handle(args,ctx){
+      return {...fallback,eligible:eligibleWith(true),schema:browseActArgsSchema,description:'Use the selected Cloudflare owner browser through observed refs. Read with browse_page retain_session:true first, then use its session_handle. Native actions: type, click, select, set_checked, scroll, goto, open_tab, switch_tab, close_tab, read, inspect, screenshot, download, owner_login, resume_owner_login, cancel. download uses an observed link for an authenticated GET attachment, stores and verifies bytes in your private workspace, and returns an exact-revision owner download link. Blob/data and POST exports are unsupported. owner_login pauses this turn for human sign-in in the authenticated console; end the turn and ask the owner to reply after Done. Resume only on that later owner reply, then verify the intended signed-in account from fresh evidence. session_handle explicitly continues an existing owner session. File selection and page sends are unsupported; uncertain effects cannot repeat.',async handle(args,ctx){
         try{
           const assertCurrent=current(ctx);await assertCurrent();
-          // Without a session handle: outside staging the fallback serves; a plain action goes to Browserbase when it is
-          // configured; a typed command goes to the enabled task host when one is configured and no common browser is held,
-          // otherwise to the owner's Cloudflare host. Native commands are never reinterpreted as a paid Browserbase action.
-          if(!args.session_handle&&(options.env.WALDO_ENVIRONMENT!=='staging'||!args.command&&browserbaseReady()
-            ||args.command&&options.typedHost?.()&&!options.env.COMMON_BROWSER_REGISTRATION&&!automatic.hasRetained()&&!active))return fallback.handle(args,{...ctx,assertTaskSourceCurrent:assertCurrent});
+          // The owner's Cloudflare host acts only through a typed command; a plain action has no browser to run on.
+          if(!args.command)return {ok:false,code:'rejected',error:'browse_act needs a typed command on a session from browse_page retain_session:true.',source_taint:'external'};
+          // A typed command goes to the enabled task host while no common browser is held, otherwise to the owner's Cloudflare host.
+          if(!args.session_handle&&options.typedHost?.()&&!options.env.COMMON_BROWSER_REGISTRATION&&!automatic.hasRetained()&&!active)return fallback.handle(args,{...ctx,assertTaskSourceCurrent:assertCurrent});
           const bound=await bindHost(ctx,args.session_handle);
           const result=await bound.active.host.actionHandler.handle(args,bound.context);
           if(args.command?.operation==='owner_login'&&result.ok){const origin=options.storage.kv.get<string>('origin');if(origin&&new URL(origin).protocol==='https:'&&'data' in result&&result.data&&typeof result.data==='object')Object.assign(result.data,{console_url:new URL('/console/browser-handoff',origin).href});}

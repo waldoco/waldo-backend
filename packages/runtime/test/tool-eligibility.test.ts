@@ -102,18 +102,15 @@ it('deploy configuration decides MCP, browse and Drive eligibility', async () =>
   expect(await verdict(readDriveHandler({ client: async () => null }, true))).toEqual({ ok: true });
 });
 
-it('the owner browser keeps browse tools where it serves them natively, and otherwise follows the fallback provider', async () => {
+it('the owner browser offers browse tools only where its Cloudflare host can serve them, whatever the Browserbase keys say', async () => {
   const storage = { kv: { get: () => undefined, put: () => undefined, list: () => [] } } as unknown as DurableObjectStorage;
   const missing = { ok: false, reason: 'not_configured' };
-  const runtime = (environment: string, binding = true) => ownerBrowserRuntime({ env: { WALDO_ENVIRONMENT: environment, ...(binding ? { BROWSER: {} } : {}) } as never, storage, actualDoId: 'physical', activeScope: () => undefined });
-  // Staging serves natively only where its browser binding and provider code exist; without them the fallback's keys decide.
-  expect(await runtime('staging', false).read(browsePageHandler(undefined, undefined, undefined)).eligible!()).toEqual(missing);
-  expect(await runtime('staging', false).act(browseActHandler(undefined, undefined, undefined)).eligible!()).toEqual(missing);
-  expect(await runtime('staging', false).read(browsePageHandler('key', 'project', undefined)).eligible!()).toEqual({ ok: true });
+  const runtime = (environment: string, binding = true) => ownerBrowserRuntime({ env: { WALDO_ENVIRONMENT: environment, BROWSERBASE_API_KEY: 'key', BROWSERBASE_PROJECT_ID: 'project', ...(binding ? { BROWSER: {} } : {}) } as never, storage, actualDoId: 'physical', activeScope: () => undefined });
+  expect(await runtime('staging', false).read(browsePageHandler('key', 'project', undefined)).eligible!()).toEqual(missing);
+  expect(await runtime('staging', false).act(browseActHandler('key', 'project', undefined)).eligible!()).toEqual(missing);
   registerCommonBrowserSdk(async () => ({}) as never);
-  expect(await runtime('production').read(browsePageHandler(undefined, undefined, undefined)).eligible!()).toEqual(missing);
-  expect(await runtime('production').act(browseActHandler(undefined, undefined, undefined)).eligible!()).toEqual(missing);
-  expect(await runtime('production').read(browsePageHandler('key', 'project', undefined)).eligible!()).toEqual({ ok: true });
+  expect(await runtime('production').read(browsePageHandler('key', 'project', undefined)).eligible!()).toEqual(missing);
+  expect(await runtime('production').act(browseActHandler('key', 'project', undefined)).eligible!()).toEqual(missing);
   expect(await runtime('staging').read(browsePageHandler(undefined, undefined, undefined)).eligible!()).toEqual({ ok: true });
   expect(await runtime('staging').act(browseActHandler(undefined, undefined, undefined)).eligible!()).toEqual({ ok: true });
 });

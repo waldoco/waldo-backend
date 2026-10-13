@@ -43,15 +43,18 @@ it('browser-off ordinary gateway selection adds no extra model adapter', () => {
   expect(proof.directory).not.toHaveBeenCalled(); expect(f.put).not.toHaveBeenCalled(); expect(f.alarm).not.toHaveBeenCalled();
 });
 
-it('browser-off routing refuses the Cloudflare host with no browser binding, and reads through Browserbase once its keys are configured', async () => {
+it('with no browser binding every browse call is refused, Browserbase keys or not, without provider I/O or durable writes', async () => {
   const handle = vi.fn(async () => ({ ok: true as const, data: { selected: 'legacy' }, source_taint: 'external' as const }));
   const args = { url: 'https://example.com', instruction: 'Read page' };
-  const unconfigured = fixture();
-  expect(await unconfigured.runtime.read({ name: 'browse_page', handle } as never).handle(args, unconfigured.ctx)).toMatchObject({ ok: false });
+  const keys = { BROWSERBASE_API_KEY: 'synthetic', BROWSERBASE_PROJECT_ID: 'synthetic' };
+  for (const env of [{}, keys, { ...keys, WALDO_ENVIRONMENT: 'production' }]) {
+    const f = fixture(env), network = vi.spyOn(globalThis, 'fetch').mockRejectedValue(Error('No external I/O allowed'));
+    try {
+      expect(await f.runtime.read({ name: 'browse_page', handle } as never).handle(args, f.ctx)).toMatchObject({ ok: false, code: 'auth_failed' });
+      expect(await f.runtime.act({ name: 'browse_act', handle } as never).handle({ url: args.url, task: 'Read page', max_actions: 1 }, f.ctx)).toMatchObject({ ok: false, code: 'rejected' });
+      expect(network).not.toHaveBeenCalled(); expect(proof.directory).not.toHaveBeenCalled(); expect(proof.gateway).not.toHaveBeenCalled();
+      expect(f.put).not.toHaveBeenCalled(); expect(f.alarm).not.toHaveBeenCalled(); expect(f.transaction).not.toHaveBeenCalled();
+    } finally { network.mockRestore(); }
+  }
   expect(handle).not.toHaveBeenCalled();
-  const f = fixture({ BROWSERBASE_API_KEY: 'synthetic', BROWSERBASE_PROJECT_ID: 'synthetic' });
-  expect(await f.runtime.read({ name: 'browse_page', handle } as never).handle(args, f.ctx)).toMatchObject({ ok: true });
-  expect(handle).toHaveBeenCalledTimes(1);
-  expect(proof.directory).not.toHaveBeenCalled(); expect(proof.gateway).not.toHaveBeenCalled();
-  expect(f.put).not.toHaveBeenCalled(); expect(f.alarm).not.toHaveBeenCalled(); expect(f.transaction).not.toHaveBeenCalled();
 });
