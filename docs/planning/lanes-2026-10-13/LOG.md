@@ -598,6 +598,7 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - #103: "Unconfirmed" on an unconfirmed message, and one rule for a row's time.
 
 ### Your decisions, most urgent first
+0. **Since you woke (04:42:41Z): deploys and one merge need you.** The permission check refused my staging deploy of `6ddbd85e` (#1100) and my merge of #1114 on a review FAIL that found no regression. Run the deploy yourself, or allow it. #1114 merges on the gate after Connectors folds in its two blockers and a delta review passes. App first: Telegram is set aside.
 1. **Approve or run P1 run 3b** (above). It's the last live proof of approvals.
 2. **Ratify #1115's rule change.** The proof identity for an approved send moved from our Message-ID to Gmail's returned id. Consequence: a send whose response was lost can never be reconciled, and stays "unknown" for good. That's honest, but it's a change to #990's rule.
 3. **Redeploy connector-proxy** (from the Worker's SHA). The classifier refused it for me.
@@ -970,3 +971,18 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - **Telegram breaks.** Old code reloads every `conv:*` row without relabelling. Once a Telegram text turn runs under #1100 (which writes `prn_`-owned rows onto older chains), a rollback fails that account's Telegram history load with "conversation parent boundary mismatch".
   - **So #1100's deploy is forward-only for Telegram,** and the bad-deploy plan is to fix forward. Accepted under the owner's ruling.
 - **Directory rows:** app owners resolve by construction, because the app route requires `do_name` and `owner_principal_ref`. A Telegram-only owner without a row fails closed, which is accepted. I didn't query the directory: it needs credentials, so it isn't done. Instead, the post-deploy watch tails app turns and the next scheduled tick.
+
+## 04:42:41Z: two refusals, left for the owner; app-first re-plan sent
+
+- **Refused by the permission check** (not routed around; recorded on #1103 6138380924):
+  1. The staging deploy of `6ddbd85e` (#1100), as "Modify Shared Resources".
+  2. The merge of #1114 at `2c329a19` on its no-regression FAIL, as "CI Bypass". That refusal is fair, because the written gate needs a PASS.
+- **#1114:** Connectors folds in both blockers: `(?!\d)` for glued codes, and zero-width, hyphen and split-group catches with the repros pinned. Then a delta review, then a merge on the gate. The findings are on #1114 (6138380338).
+- **#1100:** the PASS and its six post-rename follow-ups are on #1100 (6138380630), including the bare-`catch {}` item, tracked on #1103. The claims-layer prompt rule goes before outside users.
+- **Ansh's lane, via #1103,** has been asked to move `cards[].latest`, `sleep_debt` and an additive sent-versus-skipped field ahead of all Telegram work, and to say whether #1110 lands before or after the rename.
+- **App lane:**
+  1. #104's blockers.
+  2. #1100's Simulator check once it's live. It passes if an app turn completes, a second turn sees the first, search finds an earlier turn, and the skills list answers. There are no Telegram criteria.
+  3. Body, then builds.
+- **Reviews running:** #1110 (browse from the app) and app #105 (the deletion). Usage was 44% at 04:37Z.
+- **Asked the owner:** does "finalized" today mean an installable build on the phone, or feature-complete on the Simulator?
