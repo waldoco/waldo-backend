@@ -342,8 +342,7 @@ const BODY_CAP = 32_000;
 type GmailPayload = Readonly<{ mimeType?: string; filename?: string; body?: { data?: string; attachmentId?: string; size?: number }; parts?: GmailPayload[]; headers?: { name: string; value: string }[] }>;
 type GmailFullMessage = Readonly<{ id?: string; threadId?: string; snippet?: string; internalDate?: string; payload?: GmailPayload }>;
 const LINK_SCAN_CAP = 100;
-// Artifact extraction backtracks across an unbroken run, so its cost grows with the square of a link's
-// length. A longer target is skipped; link targets are only scanned, never shown.
+// Bounds the link scan per mail: a longer target is skipped. Link targets are only scanned, never shown.
 const LINK_TARGET_MAX = 2_048;
 const htmlText = (html: string): Readonly<{ text: string; links: readonly string[] }> => {
   const blocks = new Set(['p', 'div', 'br', 'li', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'section', 'article', 'hr']);
