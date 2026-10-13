@@ -59,7 +59,12 @@ export type EmailSendProposal = Readonly<{
   operation_ref?: string;
   to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[];
   account?: string; subject: string; body: string; inReplyTo?: string; references?: readonly string[]; thread_id?: string; message_id: string; raw: string; digest: string; dedupe_key?: string;
+  // When an identical earlier send is still of unknown outcome: its time, in the owner's zone, for the card.
+  earlier_unknown_at?: string;
 }>;
+// What the owner would receive: two proposals with the same content send the same email.
+const emailContent = ({ account, to, cc, bcc, subject, body, thread_id, inReplyTo, references }: EmailSendProposal) =>
+  JSON.stringify({ account, to, cc, bcc, subject, body, thread_id, inReplyTo, references });
 
 // send_message proposals (ADR-0054): the exact channel + content the owner approved, replayed
 // verbatim on Send it; the idempotency key collapses a second approval onto the first send.
@@ -164,7 +169,7 @@ const summaryOf = (entry: LedgerRow) => {
 // The full review a card shows for each kind, rebuilt from the frozen payload.
 const reviewText = (entry: LedgerRow): string => {
   const p = JSON.parse(entry.payload_json);
-  if (entry.kind === 'email_send') return `Send this email? ${reviewEmail(p)}`;
+  if (entry.kind === 'email_send') return `Send this email?${p.earlier_unknown_at ? ` An identical email from ${p.earlier_unknown_at} may already have gone out; check Gmail's Sent folder before sending it again.\n` : ' '}${reviewEmail(p)}`;
   if (entry.kind === 'message_send') return `Send this message on ${p.channel}?\n\n${reviewMessage(p)}`;
   if (entry.kind === 'mcp_call') return `Run this MCP tool? ${describeMcp(p)}\n\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}`;
   if (entry.kind === 'browser_submit') return `Approve this browser action? ${describeBrowser(p)}`;
@@ -846,13 +851,16 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         ? sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND json_extract(payload_json, '$.dedupe_key') = ? ORDER BY created_at DESC LIMIT 1", payload.dedupe_key).toArray()[0]
         : sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND json_extract(payload_json, '$.message_id') = ? ORDER BY created_at DESC LIMIT 1", payload.message_id).toArray()[0];
       if (prior) {
-        const was = JSON.parse(prior.payload_json) as EmailSendProposal;
-        const semantic = ({ account, to, cc, bcc, subject, body, thread_id, inReplyTo, references }: EmailSendProposal) => JSON.stringify({ account, to, cc, bcc, subject, body, thread_id, inReplyTo, references });
-        if (semantic(was) !== semantic(payload)) throw new EmailProposalError('identifier_reused');
+        if (emailContent(JSON.parse(prior.payload_json) as EmailSendProposal) !== emailContent(payload)) throw new EmailProposalError('identifier_reused');
         if (prior.status === 'open' || prior.status === 'review_only') return prior.id;
         if (prior.status === 'card_unconfirmed') throw new EmailProposalError('card_unconfirmed');
         throw new EmailProposalError('already_handled');
       }
+      // A new turn may ask for the same email again. It is the owner's call, so the card says when an identical
+      // send's outcome is still unknown instead of refusing.
+      const unknown = sql.exec<{ payload_json: string; decided_at: number | null }>("SELECT payload_json, decided_at FROM ledger WHERE kind = 'email_send' AND status = 'uncertain' AND json_extract(payload_json, '$.subject') = ? ORDER BY decided_at DESC", payload.subject).toArray()
+        .find(earlier => emailContent(JSON.parse(earlier.payload_json) as EmailSendProposal) === emailContent(payload));
+      if (unknown?.decided_at != null) payload = { ...payload, earlier_unknown_at: when(new Date(unknown.decided_at).toISOString()) };
       const id = `p${deps.newId()}`;
       const summary = describeEmail(payload);
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'email_send', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
