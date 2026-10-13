@@ -3,7 +3,7 @@ import { sameSecret } from './telegram-webhook';
 
 // Staging-only synthetic turn trigger: lets the probe harness run one real owner turn on
 // waldo-runtime-staging without the Telegram webhook secret and without touching the update-id
-// dedupe offset. The DO side (telegram-owner-do.ts) builds the synthetic update.
+// dedupe offset. The DO side (owner-do.ts) builds the synthetic update.
 export const PROBE_TURN_PATH = '/probe/turn';
 export const PROBE_TURN_DO_URL = 'https://telegram-owner/probe-turn';
 const PROBE_TOKEN_HEADER = 'x-waldo-probe-token';
@@ -66,7 +66,7 @@ export type ProbeTurnEnv = Readonly<{
   WALDO_PROBE_TOKEN?: string;
   WALDO_OWNER_TELEGRAM_ID?: string;
   WALDO_OWNER_TIMEZONE?: string;
-  TELEGRAM_OWNER_DO?: DurableObjectNamespace;
+  OWNER_DO?: DurableObjectNamespace;
 }> & OwnerDirectoryEnv;
 
 export const handleProbeTurn = async (
@@ -76,7 +76,7 @@ export const handleProbeTurn = async (
 ): Promise<Response> => {
   // Hidden outside staging: same 404 shape the worker gives unknown paths.
   if ((env.WALDO_ENVIRONMENT ?? 'development') !== 'staging') return new Response('not found', { status: 404 });
-  if (request.method !== 'POST' || !env.WALDO_PROBE_TOKEN || !env.TELEGRAM_OWNER_DO) {
+  if (request.method !== 'POST' || !env.WALDO_PROBE_TOKEN || !env.OWNER_DO) {
     return new Response('not found', { status: 404 });
   }
   if (!sameSecret(request.headers.get(PROBE_TOKEN_HEADER) ?? '', env.WALDO_PROBE_TOKEN)) {
@@ -107,6 +107,6 @@ export const handleProbeTurn = async (
   };
   const timezone = route?.timezone ?? env.WALDO_OWNER_TIMEZONE;
   if (timezone) headers['x-waldo-timezone'] = timezone;
-  return env.TELEGRAM_OWNER_DO.get(env.TELEGRAM_OWNER_DO.idFromName(doName))
+  return env.OWNER_DO.get(env.OWNER_DO.idFromName(doName))
     .fetch(PROBE_TURN_DO_URL, { method: 'POST', body: JSON.stringify({ text: text.trim(), live }), headers });
 };
