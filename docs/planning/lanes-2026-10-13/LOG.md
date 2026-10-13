@@ -2038,3 +2038,5 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 - **A cross-cutting claim** (unverified, and conflicting with the backend lead's tolerant-reader check): a backend at `c9c841f9` or later, with day-card `state`, might fail the app's day-view parse until pin #132 lands. Either way, #132 merges before any deploy.
 - **The next review batch is running** (one reviewer): #124, #125, #132, #121, #131 and #133. Still queued: #127, #128, #134, #135 (N4, Body day history), and #115 (`a8291308`, `main` merged in).
 - **N4's last item before it pauses** is the #123 follow-up PR, which also clears held scores on a confirmed withdrawal (`onPurge` → `healthScores.reset()`).
+
+- **About 13:40Z, L4 fixes pushed:** #129 at `1ccebde0` (titled by kind; step notes dropped) and #130 at `419ba1c9` (reads every page up to 1,000 then sorts; clears the read when one is held back; copy fixed). Both need a delta re-review in the next batch. They conflict (keep-both): merge one, then L4 merges main into the other. L4 is paused and its worktree is clean.
