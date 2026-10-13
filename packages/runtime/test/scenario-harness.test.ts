@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { SCENARIOS } from '../scenarios/catalog';
 import { checkScenario, runScenario, type ScenarioRun } from '../scenarios/run-l1';
 import { scriptedGateway } from '../src/testing/scripted-gateway';
+import { sanitise } from '../src/scribe/sanitiser';
 import type { Scenario } from '../scenarios/types';
 
 describe('L1 scenario harness', () => {
@@ -111,5 +112,9 @@ describe('recall by relevance', () => {
     expect(checkScenario(scenario, run)).toEqual([]);
     const block = recalled(run, 2);
     for (const text of ['pay.example.com/inv-77', 'billing@example.com', 'heart rate 52 bpm']) expect(block).toContain(text);
+    // The fixture does trip the health scan: the same block as external content is refused, as owner context it passes unchanged.
+    const scribe = (source_taint: 'external' | null) => sanitise({ payload: block, destination: 'system_prompt', source_taint, canary_tokens: ['1111111111111111', '2222222222222222', '3333333333333333'] });
+    expect(scribe('external')).toMatchObject({ ok: false, reason: 'health_value_leak' });
+    expect(scribe(null)).toMatchObject({ ok: true, payload: block });
   });
 });
