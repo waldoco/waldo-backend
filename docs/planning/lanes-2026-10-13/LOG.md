@@ -2271,3 +2271,10 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 - The fix was verified on the real scheduler for all three throw shapes. The pre-existing ~4 Hz loop (case c) drops to 3 calls in 9 s.
 - M2, M3 and M4 (the arbiter floor, the in-handler delete, and keying the retry wake for #1186) are flagged for the builder and the lead.
 - The #1186 review is next.
+
+## 22:20Z — alarm reviews done (#1180 FAIL at rev 2.1, #1186 PASS WITH NITS)
+
+- **#1180:** revision 2.1 (6156425016) supersedes 2, which superseded 1. It recommends F2′: a handler-owned backoff from a stored streak, `now + min(2 s·2^(n−1), 30 min)`, then return. Verified on the real scheduler for four throw shapes. Reset-on-success, jitter and typecheck are not yet verified.
+- **#1186:** PASS WITH NITS on its own diff (6156425528). It is gated on #1180's fix and on the tip carry, which adds `mac_results_due_v1` to `WAKE_DUE_KEYS`.
+- **Lead's design calls** (summary 6156431069): back off the arbiter's 250 ms floor, stop the in-handler delete, and key the retry wake. The rule also applies to #1169 §3.2.
+- **Lesson:** a test that fabricates platform inputs (`AlarmInvocationInfo`) proves only the author's model of the platform. For platform semantics, run the real scheduler. The first suggested fix was itself wrong until probed across every throw shape.
