@@ -2,7 +2,8 @@ import { fromRowZone } from '@waldo/contracts';
 import {
   HEALTH_INGEST_MAX_REQUEST_BYTES_V1,
   healthApiErrorV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema, healthConsentListV1Schema, healthConsentWithdrawV1Schema,
-  healthIngestReceiptV1Schema, healthIngestV1Schema, healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresUnavailableV1Schema,
+  healthIngestReceiptV1Schema, healthIngestV1Schema, healthScoresHistoryQueryV1Schema, healthScoresHistoryResponseV1Schema, healthScoresQueryV1Schema,
+  healthScoresResponseV1Schema, healthScoresUnavailableV1Schema,
 } from '../../../contracts/src/app/health-ingest';
 import { rowFreshness } from './health-context';
 import { md5Hex } from './md5';
@@ -93,34 +94,58 @@ const pillarView = (pillar: Pillar, stored: unknown): object | null => {
   };
 };
 
+// No row to show is an answer, not an error: a 200 that says why, never a zero score.
+const nothing = (day: string | null, reason: unknown): Response => {
+  const body = healthScoresUnavailableV1Schema.safeParse({ state: 'unavailable', day, reason });
+  if (body.success) return reply(body.data);
+  console.error('app health scores reason');
+  return refuse('unavailable');
+};
+
+// A stored row as the app reads it. The stored freshness is the row's at write time; the row is aged when read instead,
+// by its compile time and its own day in its own zone.
+const scoresView = (stored: Record<string, unknown> | null): object | null => {
+  if (!stored) return null;
+  const aged = typeof stored.day === 'string' && typeof stored.timezone === 'string' && knownZone(stored.timezone) ? rowFreshness(stored.compiled_at, stored.day, stored.timezone, Date.now()) : null;
+  return {
+    day: stored.day, timezone: stored.timezone, compiled_at: stored.compiled_at, freshness: aged,
+    recovery: pillarView('recovery', stored.recovery), form: pillarView('form', stored.form), weight: pillarView('weight', stored.weight),
+  };
+};
+
 const scores = async (input: AppHealthInput): Promise<Response> => {
   const { url, doName, rpc } = input;
   const unknown = [...url.searchParams.keys()].some(key => key !== 'day');
   const query = healthScoresQueryV1Schema.safeParse({ ...(url.searchParams.has('day') ? { day: url.searchParams.get('day') } : {}) });
   if (unknown || !query.success) return refuse('invalid_request');
   const day = query.data.day ?? null;
-  // No row to show is an answer, not an error: a 200 that says why, never a zero score.
-  const nothing = (reason: unknown): Response => {
-    const body = healthScoresUnavailableV1Schema.safeParse({ state: 'unavailable', day, reason });
-    if (body.success) return reply(body.data);
-    console.error('app health scores reason');
-    return refuse('unavailable');
-  };
   const result = asObject(await invoke(rpc, doName, 'scores_read', JSON.stringify(query.data)));
-  if (result?.error === 'not_linked') return nothing('not_linked');
+  if (result?.error === 'not_linked') return nothing(day, 'not_linked');
   const failed = failure(result);
   if (failed) return failed;
-  if (typeof result?.unavailable === 'string') return nothing(result.unavailable);
-  const stored = asObject(result?.scores);
-  // The stored freshness is the row's at write time; the row is aged when read instead, by its compile time and its own day in its own zone.
-  const aged = typeof stored?.day === 'string' && typeof stored.timezone === 'string' && knownZone(stored.timezone) ? rowFreshness(stored.compiled_at, stored.day, stored.timezone, Date.now()) : null;
-  const body = stored && {
-    day: stored.day, timezone: stored.timezone, compiled_at: stored.compiled_at, freshness: aged,
-    recovery: pillarView('recovery', stored.recovery), form: pillarView('form', stored.form), weight: pillarView('weight', stored.weight),
-  };
-  const parsed = healthScoresResponseV1Schema.safeParse(body);
+  if (typeof result?.unavailable === 'string') return nothing(day, result.unavailable);
+  const parsed = healthScoresResponseV1Schema.safeParse(scoresView(asObject(result?.scores)));
   if (parsed.success) return reply(parsed.data);
   console.error('app health scores shape');
+  return refuse('unavailable');
+};
+
+// The detail chart's window in one signed read. A day the contract cannot show fails the whole answer rather than leave
+// a gap that would read as a missing day.
+const history = async (input: AppHealthInput): Promise<Response> => {
+  const { url, doName, rpc } = input;
+  const keys = [...url.searchParams.keys()];
+  const query = healthScoresHistoryQueryV1Schema.safeParse({ from: url.searchParams.get('from'), to: url.searchParams.get('to') });
+  if (keys.length !== 2 || keys.some(key => key !== 'from' && key !== 'to') || !query.success) return refuse('invalid_request');
+  const result = asObject(await invoke(rpc, doName, 'scores_history', JSON.stringify(query.data)));
+  if (result?.error === 'not_linked') return nothing(null, 'not_linked');
+  const failed = failure(result);
+  if (failed) return failed;
+  if (typeof result?.unavailable === 'string') return nothing(null, result.unavailable);
+  const days = Array.isArray(result?.history) ? result.history.map(row => scoresView(asObject(row))) : null;
+  const parsed = healthScoresHistoryResponseV1Schema.safeParse(days && { state: 'available', ...query.data, days });
+  if (parsed.success) return reply(parsed.data);
+  console.error('app health history shape');
   return refuse('unavailable');
 };
 
@@ -147,6 +172,7 @@ export const handleAppHealth = async (input: AppHealthInput): Promise<Response> 
   };
   if (route === '/consents' && request.method === 'GET') return settle(await invoke(rpc, doName, 'consent_list', '{}'), healthConsentListV1Schema);
   if (route === '/scores') return request.method === 'GET' ? scores(input) : refuse('unavailable', 405);
+  if (route === '/scores/history') return request.method === 'GET' ? history(input) : refuse('unavailable', 405);
   const write = writes[route];
   if (!write) return refuse('unavailable', 404);
   if (request.method !== 'POST') return refuse('unavailable', 405);

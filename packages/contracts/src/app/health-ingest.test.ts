@@ -212,7 +212,7 @@ describe('health scores history', () => {
 describe('health routes', () => {
   it('declares authenticated routes, an idempotency key on every write, and the streamed body bound', () => {
     expect(appHealthRoutesV1.map(route => `${route.method} ${route.path}`)).toEqual([
-      'GET /app/v1/health/consents', 'POST /app/v1/health/consents', 'POST /app/v1/health/consents/withdraw', 'POST /app/v1/health/ingest', 'GET /app/v1/health/scores',
+      'GET /app/v1/health/consents', 'POST /app/v1/health/consents', 'POST /app/v1/health/consents/withdraw', 'POST /app/v1/health/ingest', 'GET /app/v1/health/scores', 'GET /app/v1/health/scores/history',
     ]);
     for (const route of appHealthRoutesV1) {
       expect(route.authenticated).toBe(true);

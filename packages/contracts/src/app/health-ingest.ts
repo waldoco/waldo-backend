@@ -249,6 +249,7 @@ export const appHealthRoutesV1 = [
   { method: 'POST', path: '/app/v1/health/consents/withdraw', request: healthConsentWithdrawV1Schema, response: healthConsentChangeV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: HEALTH_INGEST_MAX_REQUEST_BYTES_V1 },
   { method: 'POST', path: '/app/v1/health/ingest', request: healthIngestV1Schema, response: healthIngestReceiptV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: HEALTH_INGEST_MAX_REQUEST_BYTES_V1 },
   { method: 'GET', path: '/app/v1/health/scores', query: healthScoresQueryV1Schema, response: healthScoresResponseV1Schema, authenticated: true, success_status: 200 },
+  { method: 'GET', path: '/app/v1/health/scores/history', query: healthScoresHistoryQueryV1Schema, response: healthScoresHistoryResponseV1Schema, authenticated: true, success_status: 200 },
 ] as const;
 
 export type HealthIngestV1 = z.infer<typeof healthIngestV1Schema>;

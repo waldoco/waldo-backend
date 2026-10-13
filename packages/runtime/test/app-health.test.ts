@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { appHealthRoutesV1, healthApiErrorV1Schema, healthScoresResponseV1Schema } from '../../contracts/src/app/health-ingest';
+import { appHealthRoutesV1, healthApiErrorV1Schema, healthScoresHistoryResponseV1Schema, healthScoresResponseV1Schema } from '../../contracts/src/app/health-ingest';
 import { handleApp } from '../src/channels/app-api';
 import { md5Hex } from '../src/channels/md5';
 import { routerSignature } from '../src/identity/owner-directory';
@@ -239,10 +239,73 @@ describe('app health scores', () => {
   });
 });
 
+describe('app health score history', () => {
+  const stored = (day: string, over: Record<string, unknown> = {}) => ({ ...row, day, compiled_at: `${day}T08:30:00.000Z`, ...over });
+  const WEEK = '/app/v1/health/scores/history?from=2026-10-07&to=2026-10-13';
+
+  it('returns each stored day in the window as the scores route reads it, oldest first, through one signed call', async () => {
+    rpcResult = { history: [stored('2026-10-08'), stored('2026-10-10', { weight: available({ score: 91, zone: 'high', algorithm_version: 'weight.v1' }) })] };
+    const response = await get(WEEK);
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    expect(healthScoresHistoryResponseV1Schema.safeParse(body).success).toBe(true);
+    expect(body).toMatchObject({ state: 'available', from: '2026-10-07', to: '2026-10-13', days: [
+      { day: '2026-10-08', form: { state: 'available', zone: 'steady' }, recovery: { zone: 'mixed', hrv_method: 'rmssd' }, weight: { state: 'unavailable', reason: 'missing_sleep' } },
+      { day: '2026-10-10', weight: { state: 'available', zone: 'peak' } },
+    ] });
+    expect(rpcs.map(call => [call.fn, call.body.p_payload])).toEqual([['health_scores_history', '{"from":"2026-10-07","to":"2026-10-13"}']]);
+  });
+
+  it('ages every day when read, whatever freshness it was written with', async () => {
+    const realNow = Date.now;
+    Date.now = () => Date.parse('2026-10-13T08:30:01Z');
+    try {
+      rpcResult = { history: [stored('2026-10-10', { freshness: 'fresh' }), stored('2026-10-13', { compiled_at: '2026-10-13T06:00:00.000Z', freshness: 'expired' })] };
+      const { days } = await (await get(WEEK)).json() as { days: { day: string; freshness: string }[] };
+      expect(days.map(day => [day.day, day.freshness])).toEqual([['2026-10-10', 'expired'], ['2026-10-13', 'fresh']]);
+    } finally { Date.now = realNow; }
+  });
+
+  it('refuses a window it cannot serve before any database call', async () => {
+    for (const query of ['', '?from=2026-10-07', '?to=2026-10-13', '?from=2026-10-14&to=2026-10-13', '?from=2026-09-12&to=2026-10-13', '?from=2026-10-07&to=2026-10-13&owner=x',
+      '?from=2026-10-07&from=2026-10-01&to=2026-10-13', '?from=2026-02-30&to=2026-03-01', '?day=2026-10-13']) {
+      expect((await get(`/app/v1/health/scores/history${query}`)).status, query).toBe(400);
+    }
+    expect(rpcs).toEqual([]);
+  });
+
+  it('says why there is nothing to show as a 200, never a number', async () => {
+    for (const reason of ['consent_required', 'consent_withdrawn', 'no_readings']) {
+      rpcResult = { unavailable: reason };
+      expect(await (await get(WEEK)).json()).toEqual({ state: 'unavailable', day: null, reason });
+    }
+    rpcResult = { error: 'not_linked' };
+    expect(await (await get(WEEK)).json()).toEqual({ state: 'unavailable', day: null, reason: 'not_linked' });
+  });
+
+  it('keeps faults as errors, never a partial chart', async () => {
+    for (const answer of [
+      new Error('directory 500'), { history: 'nope' }, { history: [stored('2026-10-08', { form: available({ zone: 'excellent' }) })] },
+      { history: [stored('2026-10-06')] }, { history: [stored('2026-10-10'), stored('2026-10-08')] }, { history: [stored('2026-10-08'), stored('2026-10-08')] },
+      { history: [stored('2026-10-08', { timezone: 'Mars/Olympus_Mons' })] }, { history: [stored('2026-10-08'), null] }, { unavailable: 'because' }, { error: 'unavailable' },
+    ]) {
+      rpcResult = answer;
+      expect((await get(WEEK)).status, JSON.stringify(answer instanceof Error ? 'thrown' : answer).slice(0, 80)).toBe(503);
+    }
+  });
+
+  it('answers only a GET, and only with a valid credential', async () => {
+    expect((await post('/app/v1/health/scores/history?from=2026-10-07&to=2026-10-13', {})).status).toBe(405);
+    const anonymous = await handleApp(new Request(`https://w.test${WEEK}`), env(), auth);
+    expect([anonymous!.status, await anonymous!.json()]).toEqual([401, { error: 'unavailable' }]);
+    expect(rpcs).toEqual([]);
+  });
+});
+
 describe('app health route table', () => {
   it('serves exactly the routes the contract declares', () => {
     expect(appHealthRoutesV1.map(route => `${route.method} ${route.path}`)).toEqual([
-      'GET /app/v1/health/consents', 'POST /app/v1/health/consents', 'POST /app/v1/health/consents/withdraw', 'POST /app/v1/health/ingest', 'GET /app/v1/health/scores',
+      'GET /app/v1/health/consents', 'POST /app/v1/health/consents', 'POST /app/v1/health/consents/withdraw', 'POST /app/v1/health/ingest', 'GET /app/v1/health/scores', 'GET /app/v1/health/scores/history',
     ]);
   });
 });
