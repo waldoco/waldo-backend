@@ -3,6 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { appSubjectFor } from '../src/channels/app-api';
 import { BRIEF_SWEEP_ID } from '../src/channels/event-briefs';
+import { episodeIndex } from '../src/channels/episodes';
 import { traceBook } from '../src/channels/harness';
 import { armHeartbeat, HEARTBEAT_ID } from '../src/channels/heartbeat';
 import { reminderBook } from '../src/channels/reminders';
@@ -110,6 +111,7 @@ const driveAlarm = async (name: string, identity: Identity) => {
         sweepRuns: state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM schedule_runs WHERE schedule_id = ?", BRIEF_SWEEP_ID).one().n,
         dropped: state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM trace_log WHERE hop IN ('scheduled_drop', 'scheduled_hold')").one().n,
         outcomes: state.storage.sql.exec<{ outcome: string }>("SELECT outcome FROM schedule_runs WHERE schedule_id = ?", reminder.id).toArray().map(row => row.outcome),
+        episodes: episodeIndex(state.storage.sql).since(0, 100_000).map(({ speaker, text }) => ({ speaker, text })),
       };
     } finally { await state.storage.deleteAlarm(); }
   });
@@ -191,6 +193,16 @@ describe('scheduled reminders for a Telegram-linked owner', () => {
     expect(model.requests.filter(sent => sent.includes('Reminder due now'))).toEqual([]);
     if (asksAgain) expect(outcome.retriesAt).toBeGreaterThan(30_000);
     else expect(outcome.retriesAt).toBeNull();
+  });
+});
+
+describe('the episode index after a scheduled app message', () => {
+  it.each([['app-only', { app: 'own' }, []], ['telegram-copy', { telegram: true, app: 'own' }, [{ chat_id: 7, text: REMINDER_TEXT }]]] as const)('holds the reply once, as Waldo, next to its machine prompt (%s)', async (label, identity, copies) => {
+    const outcome = await driveAlarm(`scheduled-episodes-${label}`, identity);
+    expect(outcome.transcript).toEqual([{ role: 'assistant', surface: 'app', text: REMINDER_TEXT }]);
+    expect(outcome.episodes.filter(episode => episode.text === REMINDER_TEXT)).toEqual([{ speaker: 'waldo', text: REMINDER_TEXT }]);
+    expect(outcome.episodes.map(episode => episode.speaker).sort()).toEqual(['system', 'waldo']);
+    expect(wire.telegramSent).toEqual(copies);
   });
 });
 

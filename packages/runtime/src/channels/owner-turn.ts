@@ -10,7 +10,7 @@ import {
   deriveContextBudgetChars, EXTERNAL_ORIGIN_TOOLS, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, SANITISE_DESTINATION_POLICIES, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
   type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
 } from '@waldo/contracts';
-import type { ConversationEntry, ConversationModelMessage } from '@waldo/contracts';
+import type { ConversationModelMessage } from '@waldo/contracts';
 import { MODEL_CONTEXT_MAX_CHARS } from '@waldo/contracts';
 import { PROBE_STRIPPED_TOOLS } from './probe-turn';
 import { runToolLoop } from '../conversation/tool-loop';
@@ -579,11 +579,17 @@ export const createOwnerResponder = (
     }
   };
   let restorePromise: Promise<void> | undefined;
+  const fixturePrincipal = localTrustedBriefScheduleInput().admission.verified_authority.principal_ref;
   const restored = async () => {
-    // The per-object store holds one owner's chains. Rows saved before turns ran under the directory owner carry the
-    // fixture stand-in, so every row reads as this turn's owner and old and new turns stay one chain.
-    const own = conversationStore === store ? (entry: ConversationEntry) => entry.ownerId === ownerId ? entry : { ...entry, ownerId } : (entry: ConversationEntry) => entry;
-    await (restorePromise ??= conversationStore ? conversationStore.load().then(({entries,leafId}) => { for(const entry of entries){tree.append(own(entry));conversationLeaves.set(entry.chatId,entry.id);} }) : Promise.resolve());
+    // The per-object store holds one owner's chains, written under the fixture stand-in or under the one principal this
+    // object serves; both read as this turn's owner so old and new turns stay one chain. A second principal is refused.
+    const load = async (history: ConversationStore) => {
+      const { entries } = await history.load();
+      const legacy = history === store;
+      if (legacy && new Set([ownerId, ...entries.map(entry => entry.ownerId)].filter(id => id !== fixturePrincipal)).size > 1) throw new Error('conversation history owner mismatch');
+      for (const entry of entries) { tree.append(legacy ? { ...entry, ownerId } : entry); conversationLeaves.set(entry.chatId, entry.id); }
+    };
+    await (restorePromise ??= conversationStore ? load(conversationStore) : Promise.resolve());
     const ids = forgettingState?.claims('purging').map(claim => claim.id) ?? [];
     const topics = forgettingState?.pendingTopics() ?? [];
     if (forgettingState && (ids.length || topics.length)) {
