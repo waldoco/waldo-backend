@@ -2290,3 +2290,13 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 - **#1182:** the Mac's review is running.
 - **Correction posted:** Langfuse has been signed in on the Mac since about 20:20Z.
 - **Running:** T (M4), R (B3), the #1149 lane and the #1182 review. The usage window reset at 22:30Z.
+
+## 23:14Z — B3 opened as #1192; A1 brief ready
+
+- **Lane R opened #1192** (`51fe939e`): B3, recall by relevance, in 11 files.
+  - No `owner-do.ts`, contracts, app.v1, Supabase or wrangler.
+  - Every local stage passed except `guard-pgtap` (UNAVAILABLE) and Supabase (NOT RUN).
+  - The board post (6157178112) asks the review session to review it and the lead to gate it. It covers three spec departures (nightly-only pins, episodes read through the `search_episodes` handler, and a no-health view for externally tainted jobs) and four questions for the lead.
+- **The core lane brief** `MAC_LANE_C_A1_BRIEF.md` is written. It launches once #1149 merges.
+- **Running:** T (M4), the #1149 lane, and the #1182 review. Lane R is done.
+- **Lesson saved:** `pgrep -f 'vitest.mjs'` matches its own waiting shell, so use `[v]itest[.]mjs`.
