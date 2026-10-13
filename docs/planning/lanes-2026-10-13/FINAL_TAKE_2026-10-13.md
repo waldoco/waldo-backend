@@ -2,6 +2,60 @@
 
 Mac orchestrator, 13 Oct 2026, 19:08Z. For the owner, the backend lead (Fable), Ansh's cloud orchestrator, the builder, the Google lane, Ashish and Suyash.
 
+## Update, 19:20Z: the Mac owns most of the building, and reuse comes first
+
+The owner's word after the take:
+- the Mac has the most usage, so it owns most of the legwork;
+- the cloud sessions' budgets go to design, review and coordination;
+- existing PRs and drafts are reused before anything new is written;
+- Ansh will start a new cloud session for this work.
+
+Nothing starts until the owner says go. Where this update and section 1 differ, this update wins.
+
+**The split, revised:**
+- **Backend lead (Fable):** A's design, A0, review of every A slice, and the gate. For A1 onward, the default is that the lead posts each slice's spec and the Mac implements it as the single writer. The lead says on #1103 if it would rather write a slice itself.
+- **Cloud orchestrator and Ansh's new session:**
+  - independent reviews;
+  - plan upkeep;
+  - Ansh's owner steps;
+  - coordination on #1103.
+
+  The builder finishes what is in flight: #1149, #1180, #1186, items 3 and 4, the #1133 renumber, and #1108. New build work goes to the Mac.
+- **Mac:** two build lanes at a time. A third starts only if usage stays under 50% after two hours.
+  - **Core lane:** A slices to the lead's spec, in the `owner-do.ts` queue (section 2).
+  - **Tools-and-proof lane:** M1 to M5, each starting from the reuse list below.
+  - **This session:** gate pre-checks, deploy smokes, baseline re-runs, and coordination.
+
+**How we coordinate, on #1103:**
+- Claim before you start: the PR or branch, the files, and the `owner-do.ts` slot.
+- Post when you stop or hand off.
+- The Mac posts only when something changed.
+- Anything urgent goes through the owner.
+
+**Reuse before writing.** This list comes from PR titles and states; each lane reads the PR before building on it.
+
+| For | Reuse | State |
+|---|---|---|
+| M1, eligibility | #1110 (admits the browser on the owner's binding) | Ready, the builder's; M1 builds on it |
+| M2, the tool contract | #1155 (tool output is data; live results labelled) | Ready, in review |
+| M2, small tools | #1043 (`get_weather`, Open-Meteo) | Draft, 11 Oct |
+| Flaky Google tools | #1171 (refuse reads that fail their schema); #912 (circuit-break dead grants) | #1171 ready; #912 a draft on an old base |
+| M3, scenarios | #1185 (nightly eval, 22 scenarios, independent judge); #1037 (task catalog and gold references) | #1185 ready, needs owner; #1037 ready |
+| M3, the runner | #433, #436, #453 (native36 eval chunks) | Drafts, 30 Sep to 2 Oct; check them before building a runner |
+| M4, the time budget | #1078 (counts the history each call leaves out); #931 (a stable static prompt block) | Drafts |
+| M5, the deploy gate | #1081 and #1082 (pin workflow actions to SHAs); #460 (migration preflight dispatch, on `main`) | Ready |
+| A, as reference | #915 (core loop spec, slices A–L) | Draft; the lead's seam design supersedes it |
+| C | #711 (owner proactivity controls); #1072 (alarm retry in tests) | Drafts |
+| G | #1083 (the Form v2 candidate) | Ready |
+
+**Likely to close.** The lead or Ansh decides; the Mac closes nothing.
+- #998: the Bible says stop its re-cut.
+- #520 and #555: the skill host landed.
+- #1042: [inference] #1117 supersedes it.
+- #228: [inference] the roster already pins the model.
+- #903, #910, #913 and #919: they sit on an old stacked branch.
+- The 26 Sep to 8 Oct drafts that nobody claims.
+
 **Read for this:**
 - **Planning docs:**
   - the Waldo Agent Plan (rev 13);
