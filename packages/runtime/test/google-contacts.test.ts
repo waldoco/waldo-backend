@@ -86,6 +86,13 @@ describe('Google contacts lookup', () => {
     expect(JSON.stringify(result)).not.toMatch(/555 0100|Studio Ltd|ana\.jpg|Broken Row/);
   });
 
+  it('drops only the address that fails the contract, keeping the person when another address holds', async () => {
+    const result = await tool({ searchContacts: async () => [
+      { name: 'Ana Ruiz', emails: ['ana@studio', 'ana@studio.example'], source: 'contacts' },
+    ] }).handle({ query: 'A', limit: 5 } as never);
+    expect(result).toMatchObject({ ok: true, data: { contacts: [{ name: 'Ana Ruiz', emails: ['ana@studio.example'], source: 'contacts' }] } });
+  });
+
   it('reaches the model marked as external text through the real dispatcher', async () => {
     const context = { authenticatedUserId: 'owner', trigger: 'user_message' as const, session: buildSessionState({ trigger: 'user_message', canary_tokens: ['1111111111111111', '2222222222222222', '3333333333333333'], started_at: 1 }), hasApproval: () => false, sourceTaint: null, toolArgSourceTaint: null, sanitise };
     const handler = tool({ searchContacts: async () => [{ name: 'Meera', emails: ['meera@family.example'], source: 'contacts' }] });

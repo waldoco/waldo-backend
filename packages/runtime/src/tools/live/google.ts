@@ -263,7 +263,8 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       if (!client.searchContacts) throw new Error('Google contacts adapter unavailable');
       // Only the contract's fields are picked, so a phone, organisation or photo can never ride along.
       const contacts = (await client.searchContacts(query, limit)).flatMap(({ name, emails, source }) => {
-        const match = contactMatchSchema.safeParse({ name, emails, source });
+        // An address the contract refuses is dropped on its own, so one odd address never hides the person.
+        const match = contactMatchSchema.safeParse({ name, emails: emails.filter((email) => contactMatchSchema.shape.emails.element.safeParse(email).success), source });
         return match.success ? [match.data] : [];
       });
       return { query, contacts, coverage: {
