@@ -1,4 +1,5 @@
 import { sameSecret } from './telegram-webhook';
+import { CALENDAR_PUSH_PATH, parseCalendarPush, verifyCalendarChannel } from '../connectors/google-push';
 
 // Verified source events await bounded owner admission. A provider ack means the owner
 // durably recorded the event, never that its optional notification was delivered.
@@ -30,6 +31,7 @@ export type EventEnvelope = Readonly<{
 
 export type EventIngressEnv = Readonly<{
   OWNER_DO?: DurableObjectNamespace;
+  WALDO_ROUTER_HMAC_SECRET?: string;
   WALDO_EVENT_SOURCES?: string;
 }>;
 
@@ -100,12 +102,36 @@ const githubEnvelope = (event: string, payload: Record<string, unknown>): EventE
   return null;
 };
 
+// A Calendar push names its owner in the channel token Waldo minted; it carries no event data.
+// The owner object gets only channel, state and message number, and runs its own update check.
+const handleCalendarPush = async (request: Request, env: EventIngressEnv): Promise<Response> => {
+  if (request.method !== 'POST' || !env.OWNER_DO || !env.WALDO_ROUTER_HMAC_SECRET) return new Response('not found', { status: 404 });
+  void request.body?.cancel();
+  const push = parseCalendarPush(request.headers);
+  if (!push) return new Response('ok');
+  const doName = await verifyCalendarChannel(env.WALDO_ROUTER_HMAC_SECRET, push.token, push.channelId);
+  if (!doName) return new Response('forbidden', { status: 403 });
+  try {
+    const response = await env.OWNER_DO.get(env.OWNER_DO.idFromName(doName)).fetch('https://owner/google-push', {
+      method: 'POST', signal: AbortSignal.timeout(5000),
+      headers: { 'x-waldo-gcal-channel': push.channelId, 'x-waldo-gcal-state': push.state, 'x-waldo-gcal-number': String(push.messageNumber) },
+    });
+    void response.body?.cancel();
+    if (!response.ok) return new Response('owner unavailable', { status: 503 });
+    return new Response('ok');
+  } catch {
+    console.log(JSON.stringify({ hop: 'calendar_push', ok: false, code: 'admission_unavailable' }));
+    return new Response('owner unavailable', { status: 503 });
+  }
+};
+
 export const handleEventIngress = async (
   request: Request,
   env: EventIngressEnv,
   _waitUntil: (work: Promise<unknown>) => void,
 ): Promise<Response> => {
   const url = new URL(request.url);
+  if (url.pathname === CALENDAR_PUSH_PATH) return handleCalendarPush(request, env);
   const source = url.pathname.slice(EVENT_INGRESS_PREFIX.length).replace(/\/+$/, '');
   const config = parseEventSources(env.WALDO_EVENT_SOURCES)[source];
   if (request.method !== 'POST' || !config || !env.OWNER_DO || !source || source.length>60 || source.includes('/')) {
