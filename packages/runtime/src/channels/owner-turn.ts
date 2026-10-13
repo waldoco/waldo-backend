@@ -309,7 +309,7 @@ export const createOwnerResponder = (
     const blocks = turnMemoryPrompt(source, text, room);
     const previous = ownerTurn === undefined ? undefined : previousOwnerMessage((id) => tree.get(id), ownerTurn);
     const episodes = ownerTurn === undefined || !episodeSearch ? undefined : episodesFromSearchTool(episodeSearch, { ...safety, turnId: ownerTurn, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) });
-    const recalled = await recallForTurn({ claims: source, question: text, room: room - blocks.length - 2, holds: holdsHeldTopic, ...(previous === undefined ? {} : { previous }), ...(episodes && ownerTurn !== undefined ? { episodes, current: ownerTurn } : {}) });
+    const recalled = await recallForTurn({ claims: source, question: text, room: room - blocks.length - 2, holds: holdsIn(heldTopics()), ...(previous === undefined ? {} : { previous }), ...(episodes && ownerTurn !== undefined ? { episodes, current: ownerTurn } : {}) });
     // Recall fails open: the turn goes on with claims only, and the trace says so without any text.
     if (recalled.episodeError) log({ trace: traceId, hop: 'memory_recall', ms: 0, ok: false, code: 'episode_recall_failed' });
     return [blocks, recalled.text].filter(Boolean).join('\n\n');
