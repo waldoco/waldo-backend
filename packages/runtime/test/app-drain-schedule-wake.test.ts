@@ -18,10 +18,14 @@ vi.mock('../src/channels/telegram-turn', async load => {
 const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
 
 const OWNER_ID = '3d2c1b0a-9e8f-4a7b-8c6d-5e4f3a2b1c0d';
+// The directory answers the first session checks, then can go dark: the route admits the message, the drain cannot.
+const directory = { sessionChecks: 0, answeredChecks: Infinity };
 beforeEach(() => {
+  directory.sessionChecks = 0; directory.answeredChecks = Infinity;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
+    if (fn === 'app_session_authority' && ++directory.sessionChecks > directory.answeredChecks) throw new TypeError('directory unreachable');
     if (fn === 'app_session_authority') return Response.json({ owner_id: OWNER_ID, do_name: asked.p_do_name, session_hash: asked.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 });
     if (fn === 'owner_runtime_authority') return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: asked.p_do_name, state_version: 1, admission_revision: '5' });
     if (fn === 'health_context_read') return Response.json(null);
@@ -71,5 +75,22 @@ it('a repeated send of a message already answered, which drains nothing, leaves 
     expect(await again.json()).toMatchObject({ message_id: id, state: 'completed' });
     await serial.serial(async () => undefined);
     expect(await state.storage.getAlarm()).toBe(armed);
+  });
+});
+
+it('a drain that cannot reach the directory still wakes for a job due before its own retry', async () => {
+  const name = 'app-drain-outage-keeps-wake';
+  await withReminder(name, async (owner, state) => {
+    const soon = Date.now() + 10_000;
+    await new Scheduler(state.storage.sql, state.storage, productionDeps())
+      .schedule({ id: 'rem-soon', kind: 'reminder', payloadRefs: { id: 'rem-soon' }, occurrenceAt: soon, dueAt: soon, recurrence: null });
+    expect(await state.storage.getAlarm()).toBe(soon);
+    directory.answeredChecks = 1;
+    const sent = await send(owner, name, 'wake-client-0003');
+    expect(sent.status).toBe(202);
+    const { message_id: id } = await sent.json() as { message_id: string };
+    await (owner as unknown as { serial(work: () => Promise<void>): Promise<void> }).serial(async () => undefined);
+    expect(state.storage.kv.get<{ state: string }>(`app:inbox-record:${id}`)?.state).toBe('admitted');
+    expect(await state.storage.getAlarm()).toBe(soon);
   });
 });

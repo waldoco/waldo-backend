@@ -776,7 +776,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     this.appInbox.recover(this.appAttempts);
     for(const pending of this.appInbox.records().filter(row=>row.state==='admitted')){
       let current=false;
-      try{await this.appAuthority(pending.owner,pending.sessionHash);current=true;}catch(error){if(error instanceof AppSessionAuthorityError&&error.kind==='unavailable'){this.appInbox.deferWake(30_000);await rearmSharedAlarm(this.ctx.storage,null,Date.now(),30_000);return;}}
+      try{await this.appAuthority(pending.owner,pending.sessionHash);current=true;}catch(error){if(error instanceof AppSessionAuthorityError&&error.kind==='unavailable'){this.appInbox.deferWake(30_000);await this.rearmWithSchedule();return;}}
       const record=this.appInbox.claim(pending.id,current);if(!record)continue;
       this.appAttempts.add(record.attempt!);this.activeApp=record;
       const abort=new AbortController(),scope=this.appInbox.scope(record,abort.signal);
@@ -789,7 +789,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       }catch(error){console.error('app execution outcome unconfirmed');const code=canonicalHistoryFault(error);if(code)console.error(JSON.stringify({hop:'app_turn',ok:false,code}));}
       finally{clearTimeout(timeout);this.appInbox.settle(record,completed);abort.abort();this.appAttempts.delete(record.attempt!);this.activeApp=null;if(this.activeScope===scope){this.activeScope=undefined;this.activeAbort=undefined;}}
     }
-    // The schedule's next wake goes into the re-arm too, or an app message would drop the alarm for the next scheduled job.
+    await this.rearmWithSchedule();
+  }
+  // The schedule's next wake goes into every re-arm after app work, or an app message would drop or delay the alarm for the
+  // owner's next scheduled job.
+  private async rearmWithSchedule(): Promise<void> {
     ensureSchema(this.ctx.storage);
     await new Scheduler(this.ctx.storage.sql,this.ctx.storage,productionDeps()).rearm();
   }
