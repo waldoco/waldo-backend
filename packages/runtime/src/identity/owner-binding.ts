@@ -21,20 +21,22 @@ export function localOwnerBinding(kv: BindingKv, owners: OwnerNamespace, actualD
   return undefined;
 }
 
+const bindingKey = (binding: OwnerBinding) => JSON.stringify([binding.surface, binding.doName, binding.subject]);
 export function ownerBindingCurrent(kv: BindingKv, owners: OwnerNamespace, actualDoId: string, binding: OwnerBinding): boolean {
   const current = localOwnerBinding(kv, owners, actualDoId);
-  return !!current && current.surface === binding.surface && current.doName === binding.doName && current.subject === binding.subject;
+  return !!current && bindingKey(current) === bindingKey(binding);
 }
 
 const sha256 = async (value: string) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))].map(b => b.toString(16).padStart(2, '0')).join('');
 
 // The directory's current answer for a binding; null when it no longer admits the owner. The custody digest changes when
 // the binding or its admission does, so custody pinned under one answer is not reused under another.
-export async function verifyOwnerBinding(env: OwnerDirectoryEnv, binding: OwnerBinding, actualDoId: string, owners: OwnerNamespace): Promise<VerifiedOwnerBinding | null> {
-  if (binding.surface === 'telegram') {
-    const found = await commonOwnerAuthority(env).resolve('telegram', binding.subject, binding.doName);
-    return found ? { directoryOwnerId: found.directoryOwnerId, custodyDigest: found.custodyDigest, stateVersion: found.stateVersion, doName: found.doName, subject: found.subject } : null;
-  }
+type BindingVerifier = (env: OwnerDirectoryEnv, binding: OwnerBinding, actualDoId: string, owners: OwnerNamespace) => Promise<VerifiedOwnerBinding | null>;
+const verifyTelegramBinding: BindingVerifier = async (env, binding) => {
+  const found = await commonOwnerAuthority(env).resolve('telegram', binding.subject, binding.doName);
+  return found ? { directoryOwnerId: found.directoryOwnerId, custodyDigest: found.custodyDigest, stateVersion: found.stateVersion, doName: found.doName, subject: found.subject } : null;
+};
+const verifyAppBinding: BindingVerifier = async (env, binding, actualDoId, owners) => {
   if (!owners) throw new Error('owner runtime authority rejected');
   let found;
   try {
@@ -45,4 +47,7 @@ export async function verifyOwnerBinding(env: OwnerDirectoryEnv, binding: OwnerB
   }
   const custodyDigest = await sha256(JSON.stringify(['app', found.ownerId, found.authenticatedUserId, found.doName, binding.subject, found.stateVersion, found.admissionRevision]));
   return { directoryOwnerId: found.ownerId, custodyDigest, stateVersion: found.stateVersion, doName: found.doName, subject: binding.subject };
-}
+};
+// One verifier per surface an object can be bound through: the record is the surface list, never a branch on it.
+const verifiers: Record<OwnerBinding['surface'], BindingVerifier> = { telegram: verifyTelegramBinding, app: verifyAppBinding };
+export const verifyOwnerBinding: BindingVerifier = (env, binding, actualDoId, owners) => verifiers[binding.surface](env, binding, actualDoId, owners);
