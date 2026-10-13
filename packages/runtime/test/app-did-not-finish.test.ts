@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { appHistoryResultV1Schema } from '../../contracts/src/app/core';
 import { APP_UPDATE_BASE, appSubjectFor } from '../src/channels/app-api';
 import type { AppInboxRecord } from '../src/channels/app-inbox';
 import { APP_INBOX_DUE_KEY } from '../src/scheduler/alarm-slot';
@@ -65,7 +66,7 @@ const running = (id: string, admittedAt: number): AppInboxRecord => ({ id, updat
   owner: '', sessionHash: 'a'.repeat(64), conversationRef: CHAT, admittedAt, state: 'running', attempt: 'attempt-of-a-gone-instance', deadline: admittedAt + 15 * 60_000 });
 
 type Owner = InstanceType<typeof TelegramOwnerDO>;
-type Shown = readonly Readonly<{ id: string; role: string; text: string; parent_id: string | null; created_at?: number }>[];
+type Shown = readonly Readonly<{ id: string; role: string; text: string; parts: readonly unknown[]; parent_id: string | null; created_at?: number }>[];
 const headers = (name: string) => ({ 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' });
 const withOwner = <T>(name: string, stored: Readonly<Record<string, unknown>>, work: (owner: () => Owner, state: DurableObjectState, lines: () => readonly Record<string, unknown>[]) => Promise<T>) =>
   runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
@@ -91,7 +92,9 @@ const send = async (owner: Owner, state: DurableObjectState, name: string, clien
 const shown = async (owner: Owner, name: string): Promise<Shown> => {
   const response = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main', { headers: headers(name) }));
   expect(response.status).toBe(200);
-  return [...(await response.json() as { messages: Shown }).messages].reverse();
+  const page = await response.json() as { messages: Shown };
+  expect(appHistoryResultV1Schema.safeParse(page).success).toBe(true);
+  return [...page.messages].reverse();
 };
 const notices = (messages: Shown) => messages.filter(message => message.role === 'assistant' && message.text.startsWith(NOTICE));
 const record = (state: DurableObjectState, id: string) => state.storage.kv.get<AppInboxRecord>(`app:inbox-record:${id}`)!;
@@ -120,11 +123,15 @@ describe('an app turn that does not finish', () => {
       expect(messages.map(message => [message.role, message.parent_id])).toEqual([['user', null], ['assistant', failed.id]]);
       expect(notices(messages)).toHaveLength(1);
       expect(notices(messages)[0]!.text).toMatch(/\n\nRequest received: \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\.$/);
+      const notice = notices(messages)[0]!;
+      expect(notice.parts).toEqual([{ type: 'text', text: notice.text }, { type: 'operation', operation_id: failed.id, state: 'interrupted', message: notice.text }]);
       model.fail = false;
       const next = await send(owner(), state, name, 'client-next-0001', 'Did that happen?');
       expect(next.outcome).toBe('completed');
       expect(model.requests.at(-1)).toContain(NOTICE);
-      expect((await shown(owner(), name)).map(message => message.parent_id)).toEqual([null, failed.id, `${failed.id}-did-not-finish`, next.id]);
+      const after = await shown(owner(), name);
+      expect(after.map(message => message.parent_id)).toEqual([null, failed.id, `${failed.id}-did-not-finish`, next.id]);
+      expect(after.at(-1)!.parts.map(part => (part as { type: string }).type)).toEqual(['text']);
     });
   });
 

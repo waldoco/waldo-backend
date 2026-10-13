@@ -631,7 +631,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await this.appAssistantRow({ subject: found.authority.doName, occurrence: `notice:${record.id}`, text: 'Tell the owner a message did not finish.' }, ({ entries, leafId }, ownerRef) => {
           const id = `${record.id}-did-not-finish`, parentId = entries.some(entry => entry.id === record.id) ? record.id : leafId;
           return { entry: { id, ownerId: ownerRef, chatId: `owner:${ownerRef}`, parentId, threadAnchorId: null, surface: 'app',
-            modelPayload: text, appPayload: text, modelProjection: { mode: 'include' }, role: 'assistant', createdAt: Date.now() },
+            modelPayload: text, appPayload: text, modelProjection: { mode: 'include' }, role: 'assistant', createdAt: Date.now(),
+            operation: { id: record.id, state: 'interrupted' } },
           leafId: leafId === null || parentId === leafId ? id : leafId };
         }, work => { let written!: ReturnType<typeof work>; this.appInbox.closeNotice(record.id, 'written', () => { written = work(); }); return written; });
       } catch (error) {

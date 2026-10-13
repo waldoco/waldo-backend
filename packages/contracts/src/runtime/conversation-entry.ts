@@ -26,6 +26,8 @@ export type ConversationEntry = Readonly<{
   inputOrigin?: 'owner' | 'machine';
   // Epoch ms when the path that appends the entry made it. Rows stored before the time was kept have none.
   createdAt?: number;
+  // A row Waldo writes about one of the owner's app messages rather than in reply to it: that message's id, and what became of it.
+  operation?: Readonly<{ id: string; state: 'interrupted' }>;
 }>;
 
 // Privacy redaction uses literal text only; it never decides what the owner meant.
