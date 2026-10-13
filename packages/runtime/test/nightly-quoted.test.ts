@@ -2,7 +2,8 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
-import { episodeIndex, NIGHTLY_ID, NIGHTLY_THROUGH_KEY, ownerRows } from '../src/channels/episodes';
+import { durableConversationStore } from '../src/channels/conversation-store';
+import { consolidationSides, episodeIndex, indexedConversationStore, NIGHTLY_ID, NIGHTLY_THROUGH_KEY, ownerRows } from '../src/channels/episodes';
 import { claimStore, turnMemoryPrompt } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
@@ -32,15 +33,16 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 
 it('splits an owner message into its own words and the quoted ranges, and quotes all of it when the ranges no longer fit', () => {
   const received = `${OWN}${QUOTE}`, ranges = [{ start: OWN.length, end: received.length }];
-  expect(ownerRows(`${received}\n[photo]`, received, ranges)).toEqual([{ speaker: 'owner', text: OWN }, { speaker: 'quoted', text: QUOTE }, { speaker: 'quoted', text: '\n[photo]' }]);
-  expect(ownerRows(`${CAPTION}\n[audio: ${QUOTE}]`, CAPTION, [])).toEqual([{ speaker: 'owner', text: CAPTION }, { speaker: 'quoted', text: `\n[audio: ${QUOTE}]` }]);
+  expect(ownerRows(`${received}\n[photo]`, received, ranges)).toEqual([{ speaker: 'owner_said', text: OWN }, { speaker: 'quoted', text: QUOTE }, { speaker: 'quoted', text: '\n[photo]' }]);
+  expect(ownerRows(`${CAPTION}\n[audio: ${QUOTE}]`, CAPTION, [])).toEqual([{ speaker: 'owner_said', text: CAPTION }, { speaker: 'quoted', text: `\n[audio: ${QUOTE}]` }]);
   expect(ownerRows(`[audio: ${QUOTE}]`, '', [])).toEqual([{ speaker: 'quoted', text: `[audio: ${QUOTE}]` }]);
   expect(ownerRows(received.replace('Mira', '[forgotten]'), received, ranges)).toEqual([{ speaker: 'quoted', text: received.replace('Mira', '[forgotten]') }]);
   expect(ownerRows(received, received, [{ start: 3, end: received.length + 1 }])).toEqual([{ speaker: 'quoted', text: received }]);
 });
 
-type Seed = Readonly<{ update?: Record<string, unknown>; earlier?: string }>;
-// One message (or a row indexed before this owner's index split owner messages), then the nightly pass over it.
+type Seed = Readonly<{ update?: Record<string, unknown>; earlier?: string; reverted?: string }>;
+// One message (or a row indexed before this owner's index split owner messages, or by a reverted build after it did), then
+// the nightly pass over it.
 const consolidated = (name: string, seed: Seed, check: (rows: readonly (readonly [string, string])[], said: string | undefined, claim: (text: string) => readonly unknown[] | undefined, profile: string) => void) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const realNow = Date.now;
@@ -56,13 +58,16 @@ const consolidated = (name: string, seed: Seed, check: (rows: readonly (readonly
         expect((await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify(update) }))).status).toBe(200);
         for (let i = 0; i < 3; i++) { now += 61_000; state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm(); }
       } else await owner.alarm();
+      // A reverted build, an hour after this one first ran, indexes each owner message whole, as one 'owner' row.
+      if (seed.reverted) { now += 3_600_000; episodeIndex(state.storage.sql).add('tg-reverted', 'owner', seed.reverted, now); }
       const rows = episodeIndex(state.storage.sql).after(0, 100_000).filter(row => row.speaker !== 'waldo');
 
       state.storage.kv.put(NIGHTLY_THROUGH_KEY, now - 10_800_000);
       state.storage.sql.exec('DELETE FROM schedule');
       await new Scheduler(state.storage.sql, state.storage, productionDeps()).schedule({ id: NIGHTLY_ID, kind: 'dreaming', payloadRefs: { id: NIGHTLY_ID }, occurrenceAt: now - 1000, dueAt: now - 1000, recurrence: null });
       state.storage.kv.put('owner_alarm_last_v1', 0);
-      // The night runs in a new owner object, as after an eviction, so the split time has to outlive the first one.
+      // The night runs in a new owner object, as after an eviction or a re-land, so what marks the owner's own words has to be
+      // stored with them.
       await build().alarm();
 
       const claims = claimStore(state.storage.sql).claims();
@@ -104,3 +109,25 @@ it('a whole message indexed before the split, inside the first night\'s window, 
     expect(profile).not.toContain('Has a sister called Mira');
   });
 }, 30_000);
+
+it('a whole message a reverted build indexed after the split began, inside the next night\'s window, grounds nothing as the owner\'s words', async () => {
+  await consolidated('nightly-quoted-reverted', { reverted: `${OWN}${QUOTE}` }, (_rows, _said, claim, profile) => {
+    expect(claim('Has a sister called Mira')).toEqual(UNTRUSTED);
+    expect(claim('Swims every Friday before work')).toEqual(UNTRUSTED);
+    expect(profile).not.toContain('Swims every Friday');
+    expect(profile).not.toContain('Has a sister called Mira');
+  });
+}, 30_000);
+
+it('only a message its turn noted is stored as the owner\'s own words; one saved without a note stays shared text', async () => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('nightly-quoted-unnoted')), async (_instance, state) => {
+    const index = episodeIndex(state.storage.sql);
+    const store = indexedConversationStore(durableConversationStore(state.storage), index, () => Date.parse('2026-10-13T05:00:00Z'));
+    const entry = (id: string, text: string) => ({ id, ownerId: 'o', chatId: 'telegram-7', parentId: null, threadAnchorId: null, surface: 'telegram', modelPayload: text, appPayload: text, modelProjection: { mode: 'include' as const } });
+    store.noteQuoteRanges!('tg-1', CAPTION, []);
+    await store.save([entry('tg-1', CAPTION), entry('tg-2', `${OWN}${QUOTE}`)], 'tg-2');
+    const sides = consolidationSides(index.after(0, 10_000));
+    expect(sides.ownerMessages).toEqual([{ ref: 'tg-1', text: CAPTION }]);
+    expect(sides.shared).toBe(`${OWN}${QUOTE}`);
+  });
+});

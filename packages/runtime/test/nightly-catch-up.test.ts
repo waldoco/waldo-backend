@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { appSubjectFor } from '../src/channels/app-api';
-import { episodeIndex, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, NIGHTLY_ID, NIGHTLY_THROUGH_KEY, OWNER_ROWS_SINCE_KEY } from '../src/channels/episodes';
+import { episodeIndex, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, NIGHTLY_ID, NIGHTLY_THROUGH_KEY, OWNER_SAID } from '../src/channels/episodes';
 import { traceBook } from '../src/channels/harness';
 import { claimStore } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
@@ -64,8 +64,6 @@ const withOwner = (name: string, work: (run: Run) => Promise<void>) =>
       const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
       await (owner as unknown as { setup(channel: string): { ready: Promise<unknown> } }).setup('app').ready;
       state.storage.sql.exec('DELETE FROM schedule');
-      // The rows these tests seed stand for ones an index that splits owner messages wrote.
-      state.storage.kv.put(OWNER_ROWS_SINCE_KEY, NOW - 30 * DAY);
       const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
       const fire = async (id: string) => {
         await scheduler.schedule({ id, kind: 'dreaming', payloadRefs: { id }, occurrenceAt: now - 1000, dueAt: now - 1000, recurrence: null });
@@ -76,11 +74,12 @@ const withOwner = (name: string, work: (run: Run) => Promise<void>) =>
       await work({ scheduler, state, fire });
     } finally { Date.now = realNow; quiet.mockRestore(); await state.storage.deleteAlarm(); }
   });
+// The owner rows these tests seed are the owner's own words as the index that splits owner messages stores them.
 const said = (state: DurableObjectState) => {
   const episodes = episodeIndex(state.storage.sql);
-  episodes.add('app-1000007', 'owner', 'I swim every Friday before work', NOW - 2.5 * DAY);
+  episodes.add('app-1000007', OWNER_SAID, 'I swim every Friday before work', NOW - 2.5 * DAY);
   episodes.add('app-1000007-reply', 'waldo', 'Noted.', NOW - 2.5 * DAY + 1);
-  episodes.add('app-1000008', 'owner', 'my sister is called Mira', NOW - 2 * HOUR);
+  episodes.add('app-1000008', OWNER_SAID, 'my sister is called Mira', NOW - 2 * HOUR);
 };
 const learned = (state: DurableObjectState) => claimStore(state.storage.sql).claims().map(claim => [claim.text, claim.source_ref, claim.verification_status]).sort();
 const GROUNDED = [['Has a sister called Mira', 'owner, app-1000008', 'owner-grounded'], ['Swims every Friday before work', 'owner, app-1000007', 'owner-grounded']];
@@ -130,8 +129,8 @@ it('a mark older than the backlog window is logged as clamped, and the night con
     try {
       state.storage.kv.put(NIGHTLY_THROUGH_KEY, NOW - 10 * DAY);
       const episodes = episodeIndex(state.storage.sql);
-      episodes.add('app-1000006', 'owner', 'I swim every Friday before work', NOW - 9 * DAY);
-      episodes.add('app-1000008', 'owner', 'my sister is called Mira', NOW - 2 * HOUR);
+      episodes.add('app-1000006', OWNER_SAID, 'I swim every Friday before work', NOW - 9 * DAY);
+      episodes.add('app-1000008', OWNER_SAID, 'my sister is called Mira', NOW - 2 * HOUR);
       await fire(NIGHTLY_ID);
       const nightly = lines.mock.calls.map(call => String(call[0])).filter(line => line.includes('"hop":"nightly_memory"')).map(line => JSON.parse(line) as { code?: string });
       expect(nightly.map(entry => entry.code)).toContain('backlog_clamped');

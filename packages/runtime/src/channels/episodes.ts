@@ -9,13 +9,20 @@ import type { Scheduler } from '../scheduler/multiplexer';
 // 'quoted' is text the owner pasted inside a quote (a Telegram blockquote, pre or code range): searchable, but never the
 // owner's own words.
 export type Speaker = 'owner' | 'waldo' | 'system' | 'quoted';
-export type Episode = Readonly<{ entry_id: string; speaker: Speaker; at: number; text: string }>;
+// Only the index that splits an owner message stores its own words, as OWNER_SAID; reads show them as 'owner', with `own`
+// set. Any other 'owner' row is a whole message, quotes and media notes included (stored before this index split messages,
+// or by a build that does not), so it is never the owner's own words. The mark is on the row, not inferred from its time.
+export const OWNER_SAID = 'owner_said';
+type StoredSpeaker = Speaker | typeof OWNER_SAID;
+type StoredEpisode = Readonly<{ entry_id: string; speaker: StoredSpeaker; at: number; text: string }>;
+export type Episode = Readonly<{ entry_id: string; speaker: Speaker; at: number; text: string; own?: boolean }>;
+const episodeOf = ({ speaker, ...row }: StoredEpisode): Episode => (speaker === OWNER_SAID ? { ...row, speaker: 'owner', own: true } : { ...row, speaker });
 // ref is the index row's own id: unique per stored row, so a snippet traces to exactly its row
 // even if the same entry_id was indexed twice (entry_id is informational, not unique).
 export type EpisodeHit = Readonly<{ ref: string; entry_id: string; speaker: Speaker; at: string | null; snippet: string }>;
 
 export type EpisodeIndex = Readonly<{
-  add(entryId: string, speaker: Speaker, text: string, at: number): void;
+  add(entryId: string, speaker: StoredSpeaker, text: string, at: number): void;
   count(): number;
   get(ref: string): Episode | null;
   search(query: string, limit: number, from?: number, to?: number): readonly EpisodeHit[];
@@ -46,26 +53,27 @@ export const episodeIndex = (sql: SqlStorage): EpisodeIndex => {
     get(ref) {
       const row = Number(ref);
       if (!Number.isSafeInteger(row) || row < 1 || String(row) !== ref) return null;
-      return sql.exec<Episode>('SELECT entry_id, speaker, at, text FROM episodes WHERE rowid = ?', row).toArray()[0] ?? null;
+      const found = sql.exec<StoredEpisode>('SELECT entry_id, speaker, at, text FROM episodes WHERE rowid = ?', row).toArray()[0];
+      return found ? episodeOf(found) : null;
     },
     search(query, limit, from, to) {
       const match = ftsQuery(query);
       if (match === null) return [];
-      return sql.exec<{ ref: number; entry_id: string; speaker: Speaker; at: number; snippet: string }>(
+      return sql.exec<{ ref: number; entry_id: string; speaker: StoredSpeaker; at: number; snippet: string }>(
         `SELECT rowid AS ref, entry_id, speaker, at, snippet(episodes, 3, '[', ']', '...', 16) AS snippet FROM episodes
          WHERE episodes MATCH ? AND (? IS NULL OR at >= ?) AND (? IS NULL OR at <= ?)
          ORDER BY bm25(episodes) LIMIT ?`,
         match, from ?? null, from ?? null, to ?? null, to ?? null, limit,
-      ).toArray().map((row) => ({ ref: String(row.ref), entry_id: row.entry_id, speaker: row.speaker, at: row.at > 0 ? new Date(row.at).toISOString() : null, snippet: row.snippet }));
+      ).toArray().map((row) => ({ ref: String(row.ref), entry_id: row.entry_id, speaker: row.speaker === OWNER_SAID ? 'owner' : row.speaker, at: row.at > 0 ? new Date(row.at).toISOString() : null, snippet: row.snippet }));
     },
     since(at, maxChars) {
-      const rows = sql.exec<Episode>('SELECT entry_id, speaker, at, text FROM episodes WHERE at > ? ORDER BY at DESC', at).toArray();
+      const rows = sql.exec<StoredEpisode>('SELECT entry_id, speaker, at, text FROM episodes WHERE at > ? ORDER BY at DESC', at).toArray();
       const kept: Episode[] = [];
       let total = 0;
       for (const row of rows) {
         total += row.text.length;
         if (total > maxChars) break;
-        kept.push(row);
+        kept.push(episodeOf(row));
       }
       return kept.reverse();
     },
@@ -74,10 +82,10 @@ export const episodeIndex = (sql: SqlStorage): EpisodeIndex => {
     after(at, maxChars) {
       const kept: Episode[] = [];
       let total = 0;
-      for (const row of sql.exec<Episode>('SELECT entry_id, speaker, at, text FROM episodes WHERE at > ? ORDER BY at, rowid', at)) {
+      for (const row of sql.exec<StoredEpisode>('SELECT entry_id, speaker, at, text FROM episodes WHERE at > ? ORDER BY at, rowid', at)) {
         const last = kept.at(-1);
         if (last && row.at !== last.at && total + row.text.length > maxChars) break;
-        kept.push(row); total += row.text.length;
+        kept.push(episodeOf(row)); total += row.text.length;
       }
       return kept;
     },
@@ -85,24 +93,24 @@ export const episodeIndex = (sql: SqlStorage): EpisodeIndex => {
 };
 
 type QuoteRanges = readonly Readonly<{ start: number; end: number }>[];
-// An owner message as index rows: its own words as 'owner', each quoted range as 'quoted', in order. The ranges index the
+// An owner message as index rows: its own words as OWNER_SAID, each quoted range as 'quoted', in order. The ranges index the
 // message as received; what was stored after it (a media note, which can carry someone else's speech) is 'quoted' too.
 // When the stored text no longer starts with the message as received (a forgotten topic was redacted), or a range is
 // malformed, the whole message is 'quoted', so it can never ground a claim as the owner's own words.
-export const ownerRows = (stored: string, received: string, ranges: QuoteRanges): readonly Readonly<{ speaker: Speaker; text: string }>[] => {
+export const ownerRows = (stored: string, received: string, ranges: QuoteRanges): readonly Readonly<{ speaker: StoredSpeaker; text: string }>[] => {
   const sorted = [...ranges].sort((a, b) => a.start - b.start);
   if (!stored.startsWith(received) || sorted.some(range => !Number.isInteger(range.start) || !Number.isInteger(range.end) || range.start < 0 || range.end < range.start || range.end > received.length)) {
     return [{ speaker: 'quoted', text: stored }];
   }
-  const rows: { speaker: Speaker; text: string }[] = [];
-  const push = (speaker: Speaker, text: string) => { if (text.trim()) rows.push({ speaker, text }); };
+  const rows: { speaker: StoredSpeaker; text: string }[] = [];
+  const push = (speaker: StoredSpeaker, text: string) => { if (text.trim()) rows.push({ speaker, text }); };
   let end = 0;
   for (const range of sorted) {
-    if (range.start > end) push('owner', stored.slice(end, range.start));
+    if (range.start > end) push(OWNER_SAID, stored.slice(end, range.start));
     if (range.end > end) push('quoted', stored.slice(Math.max(end, range.start), range.end));
     end = Math.max(end, range.end);
   }
-  push('owner', stored.slice(end, received.length));
+  push(OWNER_SAID, stored.slice(end, received.length));
   push('quoted', stored.slice(received.length));
   return rows;
 };
@@ -150,15 +158,14 @@ export const backfillEpisodes = async (store: ConversationStore, index: EpisodeI
 // (reminder and scheduled prompts) are not the owner's words and never become memory.
 export const consolidationDay = (episodes: readonly Episode[]): readonly Episode[] => episodes.filter((episode) => episode.speaker !== 'system');
 
-// When this owner's index began splitting owner messages into their own words and what they quote. An 'owner' row from
-// before it is a whole message, quotes and media notes included, so it is only ever shared text, never the owner's words.
-export const OWNER_ROWS_SINCE_KEY = 'episode_owner_rows_since_v1';
-export const consolidationSides = (day: readonly Episode[], ownerRowsSince: number) => {
-  const owner = day.filter((episode) => episode.speaker === 'owner' && episode.at >= ownerRowsSince);
+// Only the owner's own words, as the splitting index stored them, are the owner side. A whole-message 'owner' row is only
+// ever shared text.
+export const consolidationSides = (day: readonly Episode[]) => {
+  const owner = day.filter((episode) => episode.own);
   const texts = (keep: (episode: Episode) => boolean) => day.filter(keep).map((episode) => episode.text).join('\n');
   return {
     owner: owner.map((episode) => episode.text).join('\n'),
-    shared: texts((episode) => episode.speaker === 'quoted' || (episode.speaker === 'owner' && episode.at < ownerRowsSince)),
+    shared: texts((episode) => episode.speaker === 'quoted' || (episode.speaker === 'owner' && !episode.own)),
     waldo: texts((episode) => episode.speaker === 'waldo'),
     ownerMessages: owner.map((episode) => ({ ref: episode.entry_id, text: episode.text })),
   };
