@@ -2168,3 +2168,9 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 
 - The cloud orchestrator's 19:05Z note (6152969658) came in just before my take: the builder renumbers #1133 (into #1177), the lead writes hand-off 3, and item 4 (the check-back machine turn) has its yes. Take updated to match (`4ae5043d`) and posted (6153232378). The Mac doesn't touch #1133 and pre-checks hand-off 3.
 - Staging still `e040a306`; hand-off 2 not deployed. beta-mvp `7ba2e7f9`; the lead's log last moved at 18:27Z; no new app PRs or issues since 17:00Z. Usage 7% (5-hour), 19% weekly.
+
+## 19:21Z — owner: the Mac owns most of the building; reuse first; don't start yet
+
+- Owner (about 19:17Z): the Mac owns most of the legwork; coordinating with Ansh's cloud session matters most; Ansh will start a new cloud session for this; reuse existing PRs and drafts first; don't start until the owner says go.
+- Take updated (`d3c0b622`) and posted (6153340521). The lead keeps A's design, A0, reviews and the gate; by default the Mac implements A1 onward to the lead's spec. The builder finishes in-flight items; new build work goes to the Mac (two lanes, a third only under 50% usage). Reuse list maps open PRs to M1–M5; close candidates are left to the lead or Ansh.
+- Langfuse: the built-in browser's Google chooser shows every account signed out, so sign-in needs the owner (no passwords or codes from the Mac). Left on the chooser.
