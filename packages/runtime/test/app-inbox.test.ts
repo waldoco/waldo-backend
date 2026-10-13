@@ -135,8 +135,10 @@ it('revoking a session closes its admitted and running messages and nobody else\
     await inbox.admit(name,other,'other-waiting-0001','other text','owner:prn_fixture');
     const [first]=inbox.records();const running=inbox.claim(first!.id,true)!;
     const scope=inbox.scope(running,new AbortController().signal);expect(()=>scope.admit()).not.toThrow();
+    inbox.noteLanded(running.id,running.attempt!,'Sent one message.');
     expect(inbox.revokeSession(mine)).toBe(2);
     expect(()=>scope.admit()).toThrow();
+    expect(inbox.records().find(row=>row.id===running.id)?.landed).toBeUndefined();
     expect(inbox.receipt(name,'mine-running-0001')).toMatchObject({state:'revoked',closed_reason:'session_revoked',effects_unconfirmed:true});
     expect(inbox.receipt(name,'mine-waiting-0001')).toMatchObject({state:'revoked',closed_reason:'session_revoked',effects_unconfirmed:false});
     expect(inbox.receipt(name,'other-waiting-0001')).toMatchObject({state:'admitted'});
