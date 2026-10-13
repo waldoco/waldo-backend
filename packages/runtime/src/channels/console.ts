@@ -25,7 +25,8 @@ export type ConsoleSession = Readonly<{ token: string; csrf: string; expires: nu
 
 // One row per live browser session. The store keeps only an expiry that each sign-in resets to now + SESSION_MS, so
 // signed_in is the latest sign-in on that browser; no device name or last-seen time is recorded. Tokens never leave this function.
-export type ConsoleSessionRow = Readonly<{ signed_in: string; until: string; current: boolean }>;
+// ref names a directory-held session, so the app can sign that device out; browser rows from this store have none.
+export type ConsoleSessionRow = Readonly<{ signed_in: string; until: string; current: boolean; ref?: string }>;
 export const consoleSessionRows = (sessions: readonly ConsoleSession[], current: ConsoleSession, timezone: string): readonly ConsoleSessionRow[] =>
   [...sessions].sort((a, b) => b.expires - a.expires).map((session) => ({
     signed_in: localIso(session.expires - SESSION_MS, timezone).slice(0, 16).replace('T', ' '),
@@ -104,7 +105,7 @@ export const signInPage = (token: string): Response => new Response(
 export const sessionCookie = (request: Request): string | null =>
   (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim().split('=')).find(([name]) => name === CONSOLE_COOKIE)?.[1] ?? null;
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'session.revoke', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke'] as const;
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
 
 // The trace detail for a console action. The form id is free-form text (parseConsoleAction

@@ -31,9 +31,9 @@ select is(waldo.console_session_revoke('basic-owner',repeat('a',64),pg_temp.at()
 select is(pg_temp.authority('basic-owner',repeat('a',64)),null,'revoked session no longer admits app work');
 select is(jsonb_array_length(waldo.console_session_list('basic-owner',pg_temp.at(),pg_temp.sig('consolesess.list.basic-owner'))),0,'fresh inventory proves signout');
 select is(waldo.console_session_open('basic-owner',repeat('b',64),pg_temp.at(),pg_temp.sig('consolesess.open.basic-owner.'||repeat('b',64))),true,'new session can be opened');
-update waldo.console_sessions set created_at=now()-interval '12 hours 1 second' where session_hash=repeat('b',64);
-select is(pg_temp.authority('basic-owner',repeat('b',64)),null,'absolute expiry remains fixed');
-update waldo.console_sessions set created_at=now() where session_hash=repeat('b',64);
+update waldo.console_sessions set expires_at=now()-interval '1 second' where session_hash=repeat('b',64);
+select is(pg_temp.authority('basic-owner',repeat('b',64)),null,'an expired session admits no app work');
+update waldo.console_sessions set expires_at=now()+interval '12 hours' where session_hash=repeat('b',64);
 update waldo.owners set state='suspended' where do_name='basic-owner';
 select is(pg_temp.authority('basic-owner',repeat('b',64)),null,'suspended account denied');
 update waldo.owners set state='active' where do_name='basic-owner';

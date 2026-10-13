@@ -22,8 +22,10 @@ export const appControlQueryV1Schema = z.strictObject({
   if (query.view !== 'activity' && (query.trace_before !== undefined || query.runs_before !== undefined)) ctx.addIssue({ code: 'custom', message: 'Activity cursors require the activity view' });
   if (query.view !== 'constellation' && (query.memory_view ?? query.cursor ?? query.limit ?? query.id ?? query.max_nodes ?? query.max_links) !== undefined) ctx.addIssue({ code: 'custom', message: 'Memory paging requires the constellation view' });
 });
+// A signed-in device, as its connections row names it for session.revoke.
+const sessionRef = z.string().regex(/^sess_[a-f0-9]{64}$/);
 export const appControlActionV1Schema = z.strictObject({
-  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'account.delete']),
+  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'account.delete', 'session.revoke']),
   id: text.max(256).optional(), value: text.max(4096).optional(),
   quiet_start: text.max(5).optional(), quiet_end: text.max(5).optional(), volume: z.enum(['low', 'normal', 'high']).optional(),
   confirmation: z.literal('DELETE').optional(),
@@ -32,6 +34,9 @@ export const appControlActionV1Schema = z.strictObject({
   if (action.action === 'channel.unlink' && !messagingSurfaceV1Schema.safeParse(action.id).success) ctx.addIssue({ code: 'custom', path: ['id'], message: 'channel.unlink names a messaging channel in id' });
   // The receipt's navigation is the first-party /c/<ticket> path; the backend decides which features exist.
   if (action.action === 'google.connect' && (action.view !== 'connections' || !action.value || action.value.length > 64)) ctx.addIssue({ code: 'custom', path: ['value'], message: 'google.connect starts from the connections view and names a Google feature in value' });
+  // Signs another device out. The current session signs out through /auth/signout, which revokes push first.
+  if (action.action === 'session.revoke' && (action.view !== 'connections' || !sessionRef.safeParse(action.value).success
+    || (action.id ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation) !== undefined)) ctx.addIssue({ code: 'custom', path: ['value'], message: 'session.revoke starts from the connections view and names one session_ref in value' });
   // Deletion signs out every session, so its recorded receipt cannot be read back: a replay is refused
   // as signed out. An unconfirmed receipt can be read back, and resending the same request_id never
   // runs a second deletion.
@@ -85,7 +90,7 @@ export const appChannelStatusV1Schema = z.strictObject({
 export const appControlConnectionsDataV1Schema = z.strictObject({
   google: z.strictObject({ connectAvailable: z.boolean(), accounts: z.array(z.strictObject({ id: text, email: text, calendar: z.boolean(), mail: z.boolean(), tasks: z.boolean(), health: z.enum(['needs_reconnect', 'access_granted']) })) }),
   telegram: z.strictObject({ linked: z.boolean(), unlinkAvailable: z.boolean() }),
-  sessions: z.strictObject({ until: text, count, items: z.array(z.strictObject({ signed_in: text, until: text, current: z.boolean() })) }),
+  sessions: z.strictObject({ until: text, count, items: z.array(z.strictObject({ signed_in: text, until: text, current: z.boolean(), session_ref: sessionRef.optional() })) }),
   channels: z.array(appChannelStatusV1Schema).max(messagingSurfaceV1Schema.options.length)
     .refine(channels => new Set(channels.map(status => status.channel)).size === channels.length, 'A channel is listed once').optional(),
 });
