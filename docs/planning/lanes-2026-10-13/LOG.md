@@ -569,7 +569,7 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
     - #1111 (deployed at 00:54Z) added coded hops and a bounded re-check.
     - #1115 (deployed at 01:36Z) proves the send by the Gmail id the send returned, with the SENT label and the thread still required.
     - A send whose response is lost stays unknown, and is never retried or called done.
-  - **Run 3 sent nothing:** Waldo rightly refused to send an identical "probe" again while the old two are unknown.
+  - **Run 3 sent nothing.** The model declined to send an identical "probe" while the old two are unknown. That was the model's judgment, not a guard: no code refuses a repeated send, and every new turn gets a new card (Connectors, from source, 05:22Z). The fix is prompt context that names the risk, with no new rule.
   - **Run 3b ("QA"), test send 3 of 5:** ready, but the App session's classifier refused the input. It waits for you to approve it in that session, or to run it yourself: "Draft a note to myself saying 'QA' and send it once I approve", then "Send it now.", then approve. Success reads "Done" on the installed `1f14eb72` build, or "Confirmed" on any build with app #99 (merged at about 02:52Z).
 - **Read-only check:** mail search found the sent probe. Waldo's stated sent time was 30 minutes off [inference: the model did the zone arithmetic itself].
 
@@ -1106,3 +1106,9 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 
 - The owner asked for a new orchestrator session. The handoff is [HANDOFF_ORCHESTRATOR.md](HANDOFF_ORCHESTRATOR.md).
 - The old session keeps receiving the three audits, writes `CAPABILITY_STATUS.md`, and stops merging once the new session confirms its heartbeat.
+
+## 05:22Z: correction: no duplicate-send guard exists
+
+- **Connectors found in source:** the proposal key includes the turn's trace id. So an identical repeat on a new turn gets a new card, and approving it would send a second copy. Run 3's refusal was the model's judgment.
+- **Decision (a):** handle it through prompt context. When an identical earlier send is still unknown, the proposal names it and the owner decides. There is no deterministic rule.
+- **Connectors may make a minimal edit** to `prompt/messaging-behavior.ts:54` and the `send_email` description, so turn 1 raises the proposal. It announces the edit on #1103 first and adds a scenario test.
