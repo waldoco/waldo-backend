@@ -402,3 +402,30 @@ it('logs provider_error for text that only starts with one of its codes, and onl
  expect(lines.map(({op,method,error})=>[op,method,error])).toEqual([['call','searchMail','provider_error'],['call','unknown','unknown operation'],['unknown',undefined,expect.any(String)]]);
  expect(JSON.stringify(logs.mock.calls)).not.toContain('friend@example.test');
 });
+
+const watchBody = {do_name:'owner',op:'calendar_watch',connection:'conn',channel_id:'chan-1',token:'v1.fixture',address:'https://w.test/events/gcal'};
+const withWatch = () => {
+ const inner = fetch;const seen:string[]=[];
+ vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
+  const url=String(input);
+  if(url==='https://www.googleapis.com/calendar/v3/calendars/primary/events/watch'){seen.push(String(init?.body));return Response.json({id:JSON.parse(String(init?.body)).id,resourceId:'res-1',expiration:'1760000000000'});}
+  if(url==='https://www.googleapis.com/calendar/v3/channels/stop'){seen.push(String(init?.body));return new Response(null,{status:204});}
+  return inner(input,init);
+ }));
+ return seen;
+};
+it('a signed calendar watch on a calendar grant starts the channel at the edge, with no ledger row',async()=>{
+ const f=fixture();const seen=withWatch();
+ expect(await(await serve(await request(watchBody))).json()).toEqual({data:{channelId:'chan-1',resourceId:'res-1',expiration:1760000000000}});
+ expect(JSON.parse(seen[0]!)).toMatchObject({id:'chan-1',type:'web_hook',address:'https://w.test/events/gcal',token:'v1.fixture'});
+ expect(f.hops).toContain('proxy_access');expect(f.hops).not.toContain('proxy_idem_claim');expect(f.rows.size).toBe(0);
+ expect(await(await serve(await request({do_name:'owner',op:'channel_stop',connection:'conn',channel_id:'chan-1',resource_id:'res-1'}))).json()).toEqual({data:null});
+ expect(JSON.parse(seen[1]!)).toEqual({id:'chan-1',resourceId:'res-1'});
+});
+it('a calendar watch without a calendar scope, on a foreign connection or to a foreign path never reaches Google',async()=>{
+ for(const [input,scopes] of [[watchBody,['https://www.googleapis.com/auth/gmail.send']],[{...watchBody,connection:'foreign'},undefined],[{...watchBody,address:'https://w.test/elsewhere'},undefined]] as const){
+  const f=fixture();if(scopes)f.scope(scopes);const seen=withWatch();
+  const out=await(await serve(await request(input))).json() as {error?:{message:string}};
+  expect(out.error).toBeDefined();expect(seen).toHaveLength(0);expect(f.hops).not.toContain('token');
+ }
+});

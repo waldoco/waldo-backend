@@ -1,5 +1,6 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
+import { toolOutput } from './fixtures/tool-output';
 
 const calls = vi.hoisted(() => ({ inputs: [] as string[], args: {} as Record<string, unknown>, readSlice: false }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
@@ -77,7 +78,7 @@ it('a large recovered turn is offloaded and its exact deep value is readable thr
   expect(readIndex).toBeGreaterThanOrEqual(0);
   const readOutput = request.input[readIndex]!.output;
   expect(readOutput).toBeDefined();
-  const receipt = JSON.parse(readOutput!) as { ok?: boolean; source_taint?: string };
+  const receipt = toolOutput<{ ok?: boolean; source_taint?: string }>(readOutput!);
   expect(receipt.ok).toBe(true);
   expect(receipt.source_taint).toBe('external');
   expect(readOutput).toContain('18.5k');
