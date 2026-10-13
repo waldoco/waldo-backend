@@ -1726,3 +1726,18 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **Open, waiting for the reset or the owner:**
   - app #117, #119, #121, #122 and #123 (all green), and #115 and #118 (drafts);
   - backend: the green queue (#1110, #1114 delta, #1124, #1128–#1135, #1139–#1144), plus #1127, #1133, #1113 and #1120, which need the owner.
+
+## 09:54Z (from `date -u`): Air on `7e09317c`; #116 proof PASS; #1145 in review; Patrol and Spots
+
+- **The Air:** N4 installed main `7e09317c` (Release, bundle `269d958b`) at 09:49:52Z. The Health check was read-only and found no live sample of a type Waldo reads. Opening Waldo on the Air still waits for the owner, and N4 is paused until 12:30Z.
+- **L4's proof** used N4's build, installed with `simctl`; L4 did no build of its own.
+  - **#116 tabs: PASS** on the Simulator. The dock shows Home, Body and Waldo. "Ask Waldo" opens chat with the composer focused, which #112 failed this morning.
+  - **Zone:** Schedule shows Asia/Kolkata, saved, and the Brief is back. The raw name the device reports is inferred from the host, not observed.
+- **Owner question in L4's session** (why Form and Weight aren't calculated):
+  - **Form:** Simulator readings are stale [inferred].
+  - **Weight:** the calendar's busy minutes were attached only to days with uploaded readings (`producer.ts:206,211`). Backend #1130 (cloud, CI green) fixes it and waits for review after the reset. The app's Weight explanation text (`scoresView.ts`) may be stale [inferred], and L4 checks it after the reset.
+- **Backend #1145** (the calendar fix): CI 6 of 6 green at `5eda4680` (09:50:41Z). A budgeted Sonnet reviewer, read-only, is running. Connectors is paused until 12:30Z but reachable for findings.
+- **Patrol and Spots (owner question):**
+  - Not tied to Telegram. The backend serves `view=activity` and `view=constellation` on the app.v1 controls route (`app-controls.ts:46,53`), and the app's pinned contract already has both.
+  - The app's `patrol.tsx` and `spots.tsx` only render `UnavailableFeature`; they were never wired.
+  - App-only work. It's queued as L4's first item after the reset, unless the owner wants it sooner.
