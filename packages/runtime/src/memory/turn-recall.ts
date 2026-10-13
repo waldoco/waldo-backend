@@ -18,7 +18,8 @@ export type RecallEpisodes = Readonly<{
   search(query: string, limit: number): Promise<readonly EpisodeHit[]>;
   get(ref: string): Promise<RecalledEpisode | null>;
 }>;
-export type TurnRecall = Readonly<{ text: string; episodeError: boolean }>;
+export type RecallLeg = 'claims' | 'episodes';
+export type TurnRecall = Readonly<{ text: string; failed: readonly RecallLeg[] }>;
 type Holds = (...values: readonly (string | null | undefined)[]) => boolean;
 
 export const recallTerms = (question: string, previous?: string): readonly string[] => {
@@ -64,9 +65,9 @@ const sourceEntry = (claim: Claim) => claim.source_ref?.startsWith(OWNER_REF) ? 
 
 // claims is read through its recall(), so a caller's filter (held topics, the decision path's owner-only, no-health view)
 // applies. holds() withholds anything that carries a topic whose forgetting is still in progress; an episode is judged by its
-// stored row, because a snippet can cut the topic in half. Without episodes, recall is claims only. The episode leg fails open
-// (claims only, episodeError set) and a row that cannot be read back is left out. The block, cut line included, stays within
-// room and RECALL_MAX_CHARS; '' when nothing matched or nothing honest fits.
+// stored row, because a snippet can cut the topic in half. Without episodes, recall is claims only. Each leg fails open: the
+// turn goes on with what the other leg found, and failed names the leg; a row that cannot be read back is left out. The
+// block, cut line included, stays within room and RECALL_MAX_CHARS; '' when nothing matched or nothing honest fits.
 export const recallForTurn = async ({ claims, episodes, question, previous, room, holds, current }: Readonly<{
   claims: Pick<ClaimStore, 'recall'>;
   episodes?: RecallEpisodes;
@@ -78,30 +79,37 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
   current?: string;
 }>): Promise<TurnRecall> => {
   const terms = recallTerms(question, previous !== undefined && !holds(previous) ? previous : undefined);
-  if (!terms.length) return { text: '', episodeError: false };
+  if (!terms.length) return { text: '', failed: [] };
   const query = terms.join(' ');
-  const recalled = claims.recall(query, RECALL_CLAIMS).filter((claim) => !holds(claim.text, claim.evidence, claim.source_ref, (claim as Claim & { aliases?: string | null }).aliases));
+  const failed: RecallLeg[] = [];
+  let recalled: readonly Claim[] = [];
+  try {
+    recalled = claims.recall(query, RECALL_CLAIMS).filter((claim) => !holds(claim.text, claim.evidence, claim.source_ref, (claim as Claim & { aliases?: string | null }).aliases));
+  } catch {
+    failed.push('claims');
+  }
   // A claim and the message it was learned from count once: the claim wins.
   const sources = new Set(recalled.map(sourceEntry));
-  let episodeError = false;
+  let episodesFailed = false;
   let hits: readonly EpisodeHit[] = [];
   if (episodes) {
     try {
       // Machine-written rows (reminder and job prompts) are instructions to Waldo from another moment, not something said.
       const found = (await episodes.search(query, RECALL_EPISODES)).filter((hit) => hit.speaker !== 'system' && hit.entry_id !== current && !sources.has(hit.entry_id));
       const rows = await Promise.all(found.map(async (hit) => {
-        try { return await episodes.get(hit.ref); } catch { episodeError = true; return null; }
+        try { return await episodes.get(hit.ref); } catch { episodesFailed = true; return null; }
       }));
       hits = found.filter((hit, index) => { const row = rows[index]; return row !== null && row !== undefined && !holds(row.text, row.entry_id, row.speaker, hit.snippet); });
     } catch {
-      episodeError = true;
+      episodesFailed = true;
     }
   }
+  if (episodesFailed) failed.push('episodes');
   const lines = [...recalled.map(claimLine), ...hits.map(episodeLine)];
   const budget = Math.min(RECALL_MAX_CHARS, room);
   const reserve = cutLine(lines.length).length + 1;
   let used = ['<recalled>', HEADER, '</recalled>'].join('\n').length;
-  if (!lines.length || used + reserve > budget) return { text: '', episodeError };
+  if (!lines.length || used + reserve > budget) return { text: '', failed };
   // A line that does not fit is skipped, not cut, and a shorter one after it may still fit.
   const kept: string[] = [];
   for (const line of lines) {
@@ -109,5 +117,5 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
     kept.push(line); used += line.length + 1;
   }
   const cut = lines.length - kept.length;
-  return { text: ['<recalled>', HEADER, ...kept, ...(cut > 0 ? [cutLine(cut)] : []), '</recalled>'].join('\n'), episodeError };
+  return { text: ['<recalled>', HEADER, ...kept, ...(cut > 0 ? [cutLine(cut)] : []), '</recalled>'].join('\n'), failed };
 };

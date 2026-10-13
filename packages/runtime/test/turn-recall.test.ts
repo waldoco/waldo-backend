@@ -54,7 +54,7 @@ describe('recallForTurn', () => {
       index.add('tg-904957878-reply', 'waldo', 'Noted: gym locker 214.', T);
       index.add('tg-904957880', 'owner', 'The gym locker room was packed again', T + 60_000);
       const recalled = await recallForTurn({ claims: store, episodes: fromIndex(index), question: 'I am at the gym. What was my locker number again?', room: 100_000, holds: nothingHeld });
-      expect(recalled.episodeError).toBe(false);
+      expect(recalled.failed).toEqual([]);
       expect(recalled.text.startsWith('<recalled>\n')).toBe(true);
       expect(recalled.text.endsWith('\n</recalled>')).toBe(true);
       expect(recalled.text).toContain('- [fact, stated, owner-grounded, 2026-10-13] Gym locker is number 214, the one with the blue door');
@@ -118,24 +118,29 @@ describe('recallForTurn', () => {
     });
   });
 
-  it('fails open on the episode leg and closed on a row it cannot read back', async () => {
+  it('fails open on either leg and closed on a row it cannot read back', async () => {
     await withMemory(async (store, index) => {
       owned(store, 'Locker is on the second floor', 'tg-13');
       index.add('tg-21', 'owner', 'locker by the window', T);
       index.add('tg-22', 'owner', 'locker near the stairs', T);
       const failing: RecallEpisodes = { search: async () => { throw new Error('index unavailable'); }, get: async () => null };
       const open = await recallForTurn({ claims: store, episodes: failing, question: 'my locker', room: 100_000, holds: nothingHeld });
-      expect(open.episodeError).toBe(true);
+      expect(open.failed).toEqual(['episodes']);
       expect(open.text).toContain('Locker is on the second floor');
       expect(open.text).not.toMatch(/ref \d+\]/);
+      const brokenClaims = { recall: () => { throw new Error('claim index unavailable'); } };
+      const episodesOnly = await recallForTurn({ claims: brokenClaims, episodes: fromIndex(index), question: 'my locker', room: 100_000, holds: nothingHeld });
+      expect(episodesOnly.failed).toEqual(['claims']);
+      expect(episodesOnly.text).toContain('ref 1]');
+      expect(episodesOnly.text).not.toContain('second floor');
       const gone: RecallEpisodes = { ...fromIndex(index), get: async (ref) => (ref === '1' ? null : index.get(ref)) };
       const closed = await recallForTurn({ claims: store, episodes: gone, question: 'my locker', room: 100_000, holds: nothingHeld });
-      expect(closed.episodeError).toBe(false);
+      expect(closed.failed).toEqual([]);
       expect(closed.text).not.toContain('ref 1]');
       expect(closed.text).toContain('ref 2]');
       const broken: RecallEpisodes = { ...fromIndex(index), get: async (ref) => { if (ref === '1') throw new Error('read failed'); return index.get(ref); } };
       const unreadable = await recallForTurn({ claims: store, episodes: broken, question: 'my locker', room: 100_000, holds: nothingHeld });
-      expect(unreadable.episodeError).toBe(true);
+      expect(unreadable.failed).toEqual(['episodes']);
       expect(unreadable.text).not.toContain('ref 1]');
       expect(unreadable.text).toContain('ref 2]');
     });

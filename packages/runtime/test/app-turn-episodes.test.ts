@@ -88,7 +88,11 @@ it('an app turn is indexed as owner and waldo episodes, searchable on the next a
 
     expect(await send(owner, state, name, 'client-episode-0002', 'When is the physio?')).toBe('completed');
     expect(model.requests).toHaveLength(3);
-    expect(model.requests[1]).not.toContain('[physio]');
+    // Recall puts the earlier turn in front of the model before it searches. The message being answered is indexed before
+    // its turn runs on the app path, and is not recalled to itself.
+    const recalled = /<recalled>.*?<\/recalled>/.exec(model.requests[1]!)?.[0] ?? '';
+    expect(recalled).toContain('Booked [physio] with Dr Mehta');
+    expect(recalled).not.toContain('[When]');
     expect(model.requests[2]).toContain('[physio]');
     expect(await shownReplies(owner, name)).toContain(ANSWER);
   });
