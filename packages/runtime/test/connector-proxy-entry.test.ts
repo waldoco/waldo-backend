@@ -212,11 +212,11 @@ const dispatchActualRead=async()=>{
  const proxy=realSignedProxy();const handlers=[readMcpToolHandler(JSON.stringify([{name:'drive',url:'https://drivemcp.googleapis.com/mcp/v1',auth:'google',requires:'drive',allow_tools:['search_files'],read_tools:['search_files']}]),{resolve:async()=>({mode:'proxy' as const,connection:'conn'}),proxy:(url,tool,args,connection,intent)=>proxy.mcpCall('owner',connection,url,tool,args,intent)},true)];
  return dispatchTool({id:'fixture-read-call',name:'read_mcp_tool',args:{server:'drive',tool:'search_files',args:{query:'fictional'}}},{authenticatedUserId:'owner',turnId:'fixture-turn',trigger:'user_message',session:buildSessionState({trigger:'user_message',canary_tokens:['1111111111111111','2222222222222222','3333333333333333'],started_at:1}),hasApproval:()=>false,sourceTaint:null,toolArgSourceTaint:null,sanitise},{handlers});
 };
-it('actual dispatcher-wire-Edge provider 401/403 reaches typed reconnect without storing read results',async()=>{
+it('actual dispatcher-wire-Edge provider 401 reaches typed reconnect and 403 reads as not available, without storing read results',async()=>{
  for(const status of [401,403]){
   const f=fixture();f.scope(['https://www.googleapis.com/auth/drive.readonly']);const provider=fetch;
   vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>String(input)==='https://drivemcp.googleapis.com/mcp/v1'?new Response('PRIVATE_WIRE_AUTH_CANARY',{status}):provider(input,init)));
-  const out=await dispatchActualRead();expect(out).toMatchObject({ok:false,code:'auth_failed',source_taint:'external',connect:{status:'auth_required',service:'google',reason:status===401?'reauth_needed':'scope_missing',feature:'drive'}});expect(JSON.stringify(out)).not.toContain('PRIVATE_WIRE_AUTH_CANARY');expect(f.rows.size).toBe(0);expect(f.effects()).toBe(0);
+  const out=await dispatchActualRead();expect(out).toMatchObject(status===401?{ok:false,code:'auth_failed',source_taint:'external',connect:{status:'auth_required',service:'google',reason:'reauth_needed',feature:'drive'}}:{ok:false,code:'not_found',source_taint:'external',error:expect.stringContaining('google_mcp_unavailable')});expect(JSON.stringify(out)).not.toContain('PRIVATE_WIRE_AUTH_CANARY');expect(f.rows.size).toBe(0);expect(f.effects()).toBe(0);
  }
 });
 it('actual signed wire read rejection is a stable non-auth 400, not a reconnect or intent-uncertainty error',async()=>{

@@ -71,6 +71,20 @@ it('a recent finished message keeps its receipt and a retry of it stays a duplic
   });
 });
 
+it('keeps an old interrupted message whose "did not finish" reply is still due, and prunes it once written',async()=>{
+  const name=`app-inbox-notice-${crypto.randomUUID()}`,stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
+  await runInDurableObject(stub,async(_instance,state)=>{
+    const now=Date.now(),old=now-APP_INBOX_RETENTION_MS-60_000,inbox=new AppInbox(state.storage,()=>now);
+    seed(state.storage,'app-old-notice','interrupted',old);state.storage.kv.put('app:inbox-record:app-old-notice',{...inbox.records()[0]!,notice:'due'});
+    await inbox.admit(name,'b'.repeat(64),'notice-client-0001','hello','owner:prn_fixture');
+    expect(inbox.noticesDue().map(row=>row.id)).toEqual(['app-old-notice']);
+    inbox.closeNotice('app-old-notice','written');
+    expect(()=>inbox.closeNotice('app-old-notice','written')).toThrow();
+    await inbox.admit(name,'b'.repeat(64),'notice-client-0002','hello again','owner:prn_fixture');
+    expect(inbox.records().some(row=>row.id==='app-old-notice')).toBe(false);
+  });
+});
+
 it('never prunes a message that is still admitted or running, and still refuses past the cap',async()=>{
   const name=`app-inbox-active-${crypto.randomUUID()}`,stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   await runInDurableObject(stub,async(_instance,state)=>{
@@ -121,8 +135,10 @@ it('revoking a session closes its admitted and running messages and nobody else\
     await inbox.admit(name,other,'other-waiting-0001','other text','owner:prn_fixture');
     const [first]=inbox.records();const running=inbox.claim(first!.id,true)!;
     const scope=inbox.scope(running,new AbortController().signal);expect(()=>scope.admit()).not.toThrow();
+    inbox.noteLanded(running.id,running.attempt!,'Sent one message.');
     expect(inbox.revokeSession(mine)).toBe(2);
     expect(()=>scope.admit()).toThrow();
+    expect(inbox.records().find(row=>row.id===running.id)?.landed).toBeUndefined();
     expect(inbox.receipt(name,'mine-running-0001')).toMatchObject({state:'revoked',closed_reason:'session_revoked',effects_unconfirmed:true});
     expect(inbox.receipt(name,'mine-waiting-0001')).toMatchObject({state:'revoked',closed_reason:'session_revoked',effects_unconfirmed:false});
     expect(inbox.receipt(name,'other-waiting-0001')).toMatchObject({state:'admitted'});

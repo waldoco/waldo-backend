@@ -16,6 +16,18 @@ import { md5Hex } from './md5';
 // carry a number (drivers/tags) is dropped before it can ride the narrative. Absence is
 // truthful: no rows, no link, or no readable Recovery compose as "no derived health context".
 
+// ADR-0081 §2, aged when read because a row never changes once the phone stops sending: fresh for six hours after it
+// was compiled while its day is still today or yesterday in its zone, expired three days after it was compiled, stale
+// between. The row is recompiled when its inputs arrive, so its compile time stands in for their age; a compile time
+// that cannot be read is expired, never fresh.
+const HOUR_MS = 3_600_000;
+export const rowFreshness = (compiledAt: unknown, day: string, timezone: string, now: number): 'fresh' | 'stale' | 'expired' => {
+  const age = now - (typeof compiledAt === 'string' ? Date.parse(compiledAt) : Number.NaN);
+  if (!(age <= 72 * HOUR_MS)) return 'expired';
+  const recent = day === localIso(now, timezone).slice(0, 10) || day === localIso(now - 24 * HOUR_MS, timezone).slice(0, 10);
+  return age <= 6 * HOUR_MS && recent ? 'fresh' : 'stale';
+};
+
 type SignedCall = (fn: string, message: string, args: Record<string, string | number>) => Promise<unknown>;
 
 // The waldo.health_context_read RPC payload (supabase/migrations/20260928160000_waldo_health_context.sql).
@@ -102,11 +114,26 @@ export const toContextHealthMaterial = (
             : 'steady';
 
     const now = clock.now().getTime();
-    const today = localIso(now, clock.timezone).slice(0, 10);
-    const yesterday = localIso(now - 86_400_000, clock.timezone).slice(0, 10);
-    const freshness: DerivedHealthDestinationView['freshness'] =
-      context.day === today || context.day === yesterday ? 'fresh' : 'stale';
-
+    // compiled_at is the row's own compilation time (app updated_at), never the read time:
+    // prepareHealth requires it at or before the turn's snapshot time, and a read-time stamp
+    // is always after the fixture snapshot created at responder construction. An unparseable
+    // stamp degrades to absence rather than guessing one.
+    const compiledAt =
+      typeof context.compiled_at === 'string' && Number.isSafeInteger(Date.parse(context.compiled_at))
+        ? new Date(Date.parse(context.compiled_at)).toISOString()
+        : null;
+    if (compiledAt === null) {
+      onError?.(new Error('health context row has no valid compiled_at'));
+      return null;
+    }
+    // A stamp ahead of this read (clock skew) cannot be attested before the turn's snapshot.
+    if (Date.parse(compiledAt) > now) {
+      onError?.(new Error('health context row compiled_at is in the future'));
+      return null;
+    }
+    // An expired row is absence for the prompt, as no row is.
+    const freshness = rowFreshness(compiledAt, context.day, clock.timezone, now);
+    if (freshness === 'expired') return null;
 
     const confidence = typeof context.confidence === 'number' && Number.isFinite(context.confidence) ? context.confidence : null;
     const confidenceBand: DerivedHealthDestinationView['confidence_band'] =
@@ -126,26 +153,6 @@ export const toContextHealthMaterial = (
     if (drivers.length > 0) summaryParts.push(`Drivers: ${drivers.join('; ')}.`);
     if (tags.length > 0) summaryParts.push(`Tags: ${tags.join(', ')}.`);
 
-    // Fail closed before compose: a material that violates the contracts schemas degrades to
-    // absence here (logged) instead of throwing 'health_context_invalid' inside the composer
-    // and killing the owner's turn. Parsing also stamps the branded ISO8601 compiled_at type.
-    // compiled_at is the row's own compilation time (app updated_at), never the read time:
-    // prepareHealth requires it at or before the turn's snapshot time, and a read-time stamp
-    // is always after the fixture snapshot created at responder construction. An unparseable
-    // stamp degrades to absence rather than guessing one.
-    const compiledAt =
-      typeof context.compiled_at === 'string' && Number.isSafeInteger(Date.parse(context.compiled_at))
-        ? new Date(Date.parse(context.compiled_at)).toISOString()
-        : null;
-    if (compiledAt === null) {
-      onError?.(new Error('health context row has no valid compiled_at'));
-      return null;
-    }
-    // A stamp ahead of this read (clock skew) cannot be attested before the turn's snapshot.
-    if (Date.parse(compiledAt) > now) {
-      onError?.(new Error('health context row compiled_at is in the future'));
-      return null;
-    }
     const viewParsed = derivedHealthDestinationViewSchema.safeParse(view);
     const narrativeParsed = narrativeContextSchema.safeParse({
       ...(zone === undefined ? {} : { zone }),
@@ -156,6 +163,9 @@ export const toContextHealthMaterial = (
       upcoming_high_stakes: [],
       compiled_at: compiledAt,
     });
+    // A material that violates the contracts schemas degrades to absence here (logged) instead of throwing
+    // 'health_context_invalid' inside the composer and killing the owner's turn. Parsing also stamps the branded
+    // ISO8601 compiled_at type.
     if (!viewParsed.success || !narrativeParsed.success) {
       onError?.(new Error('health context material failed contract validation'));
       return null;

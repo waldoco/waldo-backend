@@ -111,9 +111,9 @@ describe('scheduled day cards', () => {
       expect(scheduler.read('card:midday')).toBeNull();
       expect(scheduler.read('card:close')?.due_at).toBe(Date.parse('2026-09-23T16:45:00Z'));
       expect(book.read('2026-09-23')).toEqual([
-        { card: 'card:brief', time: '08:00', reason: 'default time', sent: true },
-        { card: 'card:close', time: '22:15', reason: 'winds down at 23:15', sent: false },
-        { card: 'card:midday', time: '15:00', reason: 'already past', sent: false },
+        { card: 'card:brief', time: '08:00', reason: 'default time', sent: true, state: 'sent' },
+        { card: 'card:close', time: '22:15', reason: 'winds down at 23:15', sent: false, state: 'pending' },
+        { card: 'card:midday', time: '15:00', reason: 'already past', sent: false, state: 'pending' },
       ]);
       await applyDayPlan(scheduler, book, tz, now, [{ card: 'card:close', time: null, reason: 'owner asked for no close tonight' }]);
       expect(scheduler.read('card:close')).toBeNull();
