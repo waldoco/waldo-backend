@@ -41,6 +41,8 @@ import { STOPPED_REPLY, turnControl } from './turn-control';
 import type { RunBook } from './background-runs';
 import { toolOutputLedger } from '../conversation/tool-output-ledger';
 
+const TURN_ONLY_OUTPUT = JSON.stringify({ retained: false, reason: 'turn_only_output' });
+
 // The owner's approval line (owner direction 2026-09-27): first-party state - his own memory,
 // tasks, sheets, drafts - proceeds without a per-action card. Anything that could reach another
 // person or an outside service (messages, browser submits, MCP calls) needs his clear yes, so
@@ -164,6 +166,8 @@ export const createOwnerResponder = (
     ...(offloadStore === undefined ? {} : { toolOutputStore: offloadStore }),
   };
   const handlers = [getContextHandler(clock), ownerContextHandler(memory), ...tools, ...(skills?.handlers ?? []), ...(offloadStore === undefined ? [] : [readToolOutputHandler(offloadStore)])];
+  // A turn-only output (the owner's health values) reaches the model in this turn and nowhere else: the ledger keeps a content-free line.
+  const turnOnlyOutput = new Set<string>(handlers.filter((handler) => 'turn_only_output' in handler && handler.turn_only_output === true).map((handler) => handler.name));
   const recentOwnerTurns = new Map<string, import('../tools/live/memory').MemoryOwnerTurn>();
   let activeOwnerTurn: OwnerTurnEnvelope | undefined;
   const memoryContext = () => activeOwnerTurn ? { memoryTurn: {
@@ -530,7 +534,7 @@ export const createOwnerResponder = (
           privateRunScope?.admit();
           log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: event.call.arguments, output: event.output } });
           privateRunScope?.admit();
-          pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: event.taint, origin: ownerTurnActive && !probeGuard?.stripLiveTools ? 'owner' : 'machine', summary: event.output });
+          pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: event.taint, origin: ownerTurnActive && !probeGuard?.stripLiveTools ? 'owner' : 'machine', summary: turnOnlyOutput.has(event.call.name) ? TURN_ONLY_OUTPUT : event.output });
         },
         ...(offerConnect ? { onConnect: offerConnect } : {}),
       });
