@@ -1927,3 +1927,24 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 - **Posted** the status and questions for Ashish on #1095 (6144…), and moved #1095 into the cloud lead's scope on #1103 after #1119.
 
 - Correction: the first #1095 post failed on shell quoting. It was reposted from a file: https://github.com/waldoco/waldo-backend/pull/1095#issuecomment-6144868531
+
+## 12:55Z (from `date -u`): orchestrator resumed; the owner is away; split gates; lanes back on
+
+- **Owner, about 12:50Z:** continue every session and resolve end to end without waiting. They're away from the Mac. Usage reset at 12:30Z (5% at 12:51Z).
+- **The cloud backend lead,** since 11:35Z (log on `claude/backend-lead-log`, PR #1151):
+  - **Merged:** #1119 (OwnerDO rename, DO migration v6), #1129 (honest Form), #1135, #1139, #1128 (the wake fix), #1131 (score ageing per ADR-0081 §2), #1140 (approval question, labels and `undo_until`; contract only), #1144 and #1132. The `beta-mvp` tip is `c9c841f9`.
+  - #1149 FAILed review.
+  - **Deploy hand-off 1** (tip `6f240568`, a hand deploy because of the `v6` wrangler rename) is waiting for the owner. Staging is still `ea41bb0e`.
+  - **Phase 2 claims:** chat Stop and rating; `get_health`; #1138 after app #119; the threads runtime; the Spots actions and the profile route.
+  - **The CI lineage rule:** `verify` needs the current tip to be an ancestor of the PR head.
+- **Gates split by repo:** the cloud lead keeps `waldo-backend`, and the Mac orchestrator takes back `waldo-app`. Posted on #1103 (6146016905).
+- **App reviews running:** #119, #122 and #121 (one Sonnet reviewer) and #123 (another). #117 now conflicts and needs the `undo_until` pin. #118 is superseded by L4's new pin from `868f6ccd`.
+- **Lanes resumed with their queues:** L4 (three pins, then wiring, Patrol, Spots, Weight text, the travel test), N4 (saved-zone fix, #123, #115), Connectors (wording fixes, #1145 follow-ups, the #1140 emit half) and L5 (sweep-cards shape, then carrying #1095 onto OwnerDO with DO tag v7, then the health detail series).
+- **iMessage:** Ashish (`Developerr86`) has host PR `waldoco/waldo-imessage-host` #1, an http-v1 Mac host worker, fixture-verified with the native path disabled. It pins the #1017 contract at `8a1386b1`. Mentioned him on #1095 (6146017374).
+- **Heartbeat re-created** (`e0e8cd06`, :13 and :43) with the owner-away and split-gate rules.
+- **OWNER STEPS queued on #1103:**
+  - the hand deploy of the latest gated tip;
+  - the GCP project ID for Gmail push;
+  - migrations #1127 and #1133;
+  - the #1120 binding;
+  - the #1147 steps.
