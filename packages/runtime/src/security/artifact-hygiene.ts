@@ -61,16 +61,19 @@ const LINKS: ReadonlyArray<{ kind: Exclude<ArtifactKind, 'otp'>; re: RegExp }> =
 
 const OTPS: readonly RegExp[] = [
   // "Your Google verification code is 123456", "login code: 123-456", "security code 123456".
-  // The phrase starts at the adjective, even mid-word: text glued onto it ("Xverification pin 123456") must not
-  // hide the code, and scanning a vendor word before it cost time on every word start.
-  new RegExp(String.raw`(?:verification|one[- ]?time|login|log[- ]?in|sign[- ]?in|security|authentication|confirmation|access)\s+(?:code|passcode|pin|otp)` + KEYWORD_END + LEAD + CODE, 'gi'),
-  // "code: 123456", "OTP: 123456", "passcode is 123456" - the bare form, no vendor adjective needed.
-  new RegExp(String.raw`\b(?:code|otp|passcode)` + KEYWORD_END + BARE_LEAD + CODE, 'gi'),
+  // Glue on either side of a word must not hide a code, since a table cell can end right against the next one:
+  // the phrase starts at the adjective, even mid-word ("Xverification pin 123456"), and the noun may follow it
+  // directly ("verificationcode"). Scanning a vendor word before the adjective also cost time on every word start.
+  new RegExp(String.raw`(?:verification|one[- ]?time|login|log[- ]?in|sign[- ]?in|security|authentication|confirmation|access)\s*(?:code|passcode|pin|otp)` + KEYWORD_END + LEAD + CODE, 'gi'),
+  // "code: 123456", "OTP: 123456", "passcode is 123456" - the bare form, no vendor adjective needed. It starts
+  // mid-word too ("Enter thiscode: 482913"), so a postcode or barcode followed by digits is quarantined as well.
+  new RegExp(String.raw`(?:code|otp|passcode)` + KEYWORD_END + BARE_LEAD + CODE, 'gi'),
   // Google's SMS/mail prefix form runs first: "G-123456 is your Google verification code" would
   // otherwise lose its prefix to the generic "is your" pattern below before extraction sees it.
   new RegExp(String.raw`\bG-\d{6}\b`, 'g'),
-  // "123456 is your Google verification code", "123-456 is your WhatsApp code", "482913is your code".
-  new RegExp(String.raw`\b` + CODE_BEFORE + String.raw`\s*is\s+your\s+(?:[\w-]+\s){0,3}(?:code|passcode|otp)\b`, 'gi'),
+  // "123456 is your Google verification code", "123-456 is your WhatsApp code", "482913is your code". The code may
+  // start right after a word ("Hello482913 is your code"), and the keyword may run into the next word.
+  new RegExp(String.raw`(?<!\d)` + CODE_BEFORE + String.raw`\s*is\s+your\s+(?:[\w-]+\s){0,3}(?:code|passcode|otp)`, 'gi'),
 ];
 
 // Replace every artifact match with a typed marker. Returns the redacted text plus the distinct

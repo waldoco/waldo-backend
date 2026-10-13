@@ -25,6 +25,9 @@ describe('artifact extraction on hostile text', () => {
     ['a keyword, then digits split by hyphens and spaces in turn', 'code ' + '1-1 '.repeat(N / 4)],
     ['uneven digit groups, then "is your"', '12 345 6789 '.repeat(N / 12) + 'is your code'],
     ['one digit run glued to "is your"', '1'.repeat(N) + 'is your code'],
+    ['"code" glued to itself', 'code'.repeat(N / 4) + ' 1'],
+    ['letters and digits in turn, then "is your"', 'a1'.repeat(N / 2) + ' is your code'],
+    ['an adjective glued to itself', 'verification'.repeat(N / 12) + 'code 1'],
   ])('stays linear: %s', (_shape, text) => {
     const started = performance.now();
     extractArtifacts(text);

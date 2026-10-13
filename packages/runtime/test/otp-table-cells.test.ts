@@ -44,6 +44,11 @@ describe('the extractor', () => {
     // Glued to the next cell's text, as a minified table renders before the cell separator.
     ['Verification code482913Valid', '482913'],
     ['482913is your verification code', '482913'],
+    // Glued to the previous cell's text.
+    ['Your verificationcode: 482913', '482913'],
+    ['Your verificationPIN482913', '482913'],
+    ['Enter thiscode: 482913', '482913'],
+    ['Hello482913 is your code', '482913'],
     // Invisible characters between digits: zero-width space, non-joiner, joiner, word joiner, soft hyphen. The last
     // one has spaces around it, so stripping must come before whitespace is collapsed.
     ['Your code is 4\u200b8\u200b2\u200b9\u200b1\u200b3', '482913'],
@@ -76,6 +81,7 @@ describe('the extractor', () => {
     ['Your code 4 8 2 9 1 3 10 minutes', 'Your [quarantined: otp artifact - view in the source app] 10 minutes', '482913'],
     ['Your code 482913 10 minutes', 'Your [quarantined: otp artifact - view in the source app] 10 minutes', '482913'],
     ['Total: $12.99\n092893 is your log-in code.', 'Total: $12.99\n[quarantined: otp artifact - view in the source app].', '092893'],
+    ['482913 is your verification codeValid for 10 minutes', '[quarantined: otp artifact - view in the source app]Valid for 10 minutes', '482913'],
   ])('relays the code exactly when other digits are near it: %s', (text, shown, code) => {
     expect(extractArtifacts(text)).toEqual({ text: shown, artifacts: [{ kind: 'otp', value: code }] });
   });
@@ -86,12 +92,13 @@ describe('the extractor', () => {
     ['Dress code 1920s', '1920'],
     ['Promo code 2024SALE', '2024'],
     ['Area code 020 7946', '0207946'],
+    ['Postcode12345 area', '12345'],
     ['Your code 4829 13\n10 minutes', '48291310'],
   ])('quarantines digits after a keyword even when they are not a code: %s', (text, relayed) => {
     expect(extractArtifacts(text).artifacts).toEqual([{ kind: 'otp', value: relayed }]);
   });
 
-  it.each(['Postcode12345 area', 'see codes 1234 below', 'room 4 8 2 9 is free', 'code 1 2 3 is too short', 'error code 404', 'Room 4021'])('leaves ordinary text alone: %s', (text) => {
+  it.each(['see codes 1234 below', 'room 4 8 2 9 is free', 'code 1 2 3 is too short', 'error code 404', 'Room 4021'])('leaves ordinary text alone: %s', (text) => {
     expect(extractArtifacts(text).artifacts).toEqual([]);
   });
 });
