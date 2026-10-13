@@ -49,8 +49,8 @@ business route. Apple can restrict an account that sends like a bot. Keep early 
 
 ## Software order
 
-1. **Backend on current `beta-mvp`** (this branch). The connector sits on the `OwnerDO` rename: its
-   migration is `20261013130000`, its Durable Object takes wrangler tag `v7`, and its suites pass locally.
+1. **Backend on current `beta-mvp`** (merged). The connector sits on the `OwnerDO` rename: its
+   migration is `20261012000000`, its Durable Object takes wrangler tag `v7`, and its suites pass in CI.
 2. **Host live mode** in `waldoco/waldo-imessage-host`, following the
    [compatibility packet](fixtures/HOST_COMPATIBILITY.md):
    read the real Messages database, redeem the pairing invitation, send signed events and heartbeats
