@@ -1101,3 +1101,8 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - its file claims are OK;
   - no signed-in end-to-end run.
 - **Audits running:** A (proactivity and calendar), B (health plane, sync and scores) and C (app wiring matrix).
+
+## 05:17:09Z: handoff to a new orchestrator session
+
+- The owner asked for a new orchestrator session. The handoff is [HANDOFF_ORCHESTRATOR.md](HANDOFF_ORCHESTRATOR.md).
+- The old session keeps receiving the three audits, writes `CAPABILITY_STATUS.md`, and stops merging once the new session confirms its heartbeat.
