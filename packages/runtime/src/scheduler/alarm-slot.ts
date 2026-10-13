@@ -20,6 +20,15 @@ export const COMMON_EXECUTION_DUE_KEY = 'common_execution_due_v1';
 
 export const WHATSAPP_PENDING_DUE_KEY = 'whatsapp_pending_due_v1';
 
+// Every wake the owner object keeps, one persisted due key per lane. The arbiter arms the earliest of them, so a lane that
+// arms a wake writes its key first and no re-arm can drop it. guard-wake-due-keys fails on a due key written in the
+// runtime but missing here, and on a lane that arms the alarm without naming one.
+export const WAKE_DUE_KEYS = [
+  'imessage_owner_inbox_due_v1', 'imessage_final_outbox_due_v1', APP_INBOX_DUE_KEY, COMMON_EXECUTION_DUE_KEY,
+  'telegram_final_outbox_due_v1', 'telegram_owner_inbox_due_v1', 'telegram_link_due_v1',
+  'browser_owner_task_due_v1', 'common_browser_due_v1', 'common_browser_lease_due_v1', WHATSAPP_PENDING_DUE_KEY,
+] as const;
+
 // Wake for a WhatsApp payload admitted but not finished. Keeps an earlier alarm; never touches the Telegram due keys.
 export async function armWhatsappPendingWake(storage: DurableObjectStorage, due: number): Promise<void> {
   const existing = await storage.getAlarm();
@@ -33,21 +42,14 @@ export async function armFallbackWake(storage: Pick<DurableObjectStorage, 'getAl
   await armAlarm(storage, existing !== null && existing > now ? Math.min(existing, now + delayMs) : now + delayMs);
 }
 
-// One arbiter for schedule and Telegram transport. Every scheduler rearm includes
-// persisted transport due time, including an empty schedule (formerly deleteAlarm).
+// The one arbiter: arms the earliest of the schedule's next entry and every listed lane's wake, never sooner than the
+// retry delay, and clears the alarm when nothing is due.
 export async function rearmSharedAlarm(storage: DurableObjectStorage, scheduleDue: number | null, now: number, retryDelayMs = 250): Promise<void> {
-  const outboxDue = (await storage.get<number | null>('telegram_final_outbox_due_v1')) ?? null;
-  const inboxDue = (await storage.get<number | null>('telegram_owner_inbox_due_v1')) ?? null;
-  const linkDue = (await storage.get<number | null>('telegram_link_due_v1')) ?? null;
-  const browserDue = (await storage.get<number | null>('browser_owner_task_due_v1')) ?? null;
-  const commonBrowserDue=(await storage.get<number|null>('common_browser_due_v1'))??null;
-  const whatsappDue = (await storage.get<number | null>(WHATSAPP_PENDING_DUE_KEY)) ?? null;
-  const commonExecutionDue = (await storage.get<number | null>(COMMON_EXECUTION_DUE_KEY)) ?? null;
-  const appDue = (await storage.get<number | null>(APP_INBOX_DUE_KEY)) ?? null;
-  // iMessage owner inbox and frozen-reply outbox (keys owned by channels/imessage/owner-inbox.ts and final-outbox.ts).
-  const imessageInboxDue = (await storage.get<number | null>('imessage_owner_inbox_due_v1')) ?? null;
-  const imessageOutboxDue = (await storage.get<number | null>('imessage_final_outbox_due_v1')) ?? null;
-  const bounds = [imessageInboxDue, imessageOutboxDue, appDue, commonExecutionDue, scheduleDue, outboxDue, inboxDue, linkDue, browserDue, commonBrowserDue, whatsappDue].filter((v): v is number => v !== null);
+  const bounds = scheduleDue === null ? [] : [scheduleDue];
+  for (const key of WAKE_DUE_KEYS) {
+    const due = (await storage.get<number | null>(key)) ?? null;
+    if (due !== null) bounds.push(due);
+  }
   if (!bounds.length) { await storage.deleteAlarm(); return; }
   await armAlarm(storage, Math.max(Math.min(...bounds), now + retryDelayMs));
 }

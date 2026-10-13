@@ -18,6 +18,10 @@ import {reserveOwnerPublicBrowser} from './owner-public-browser-spend';
 const browserFailureClass=(cause:unknown)=>cause instanceof CommonBrowserRegistrationUnavailable?'CommonBrowserRegistrationUnavailable':cause instanceof ClosedRunError?'ClosedRunError':cause instanceof TypeError?'TypeError':cause instanceof RangeError?'RangeError':cause instanceof SyntaxError?'SyntaxError':cause instanceof Error?'Error':'UnknownError';
 const traceBrowserFailure=(operation:string,cause:unknown)=>console.warn(JSON.stringify({event:'owner_browser_failure',operation,error_class:browserFailureClass(cause)}));
 
+// The run lease's wake: maintenance runs when the lease's run deadline, its configuration or its session lifetime ends,
+// whichever comes first. It is a listed wake key, so an arbiter re-arm keeps it.
+export const COMMON_BROWSER_LEASE_DUE='common_browser_lease_due_v1';
+
 // The browser task follows the authenticated owner run. It needs no topic classifier
 // or canonical execution activation; provider identity and budget stay in the DO.
 export function ownerBrowserRuntime(options: Readonly<{
@@ -107,6 +111,7 @@ export function ownerBrowserRuntime(options: Readonly<{
     lease={scope,deadline:scope.deadline,assertCurrent};
     options.storage.kv.put(`common-browser-run:${scope.runId}`,active.taskId);
     const wake=Math.min(scope.deadline,config.expiresAt,Date.now()+config.lifetimeMs),prior=await options.storage.getAlarm();
+    options.storage.kv.put(COMMON_BROWSER_LEASE_DUE,wake);
     await armAlarm(options.storage,Math.max(Date.now()+250,prior===null?wake:Math.min(prior,wake)));await assertCurrent();
     return {active,context:{...ctx,authenticatedUserId:config.ownerId,assertTaskSourceCurrent:assertCurrent}};
   };
@@ -244,13 +249,16 @@ export function ownerBrowserRuntime(options: Readonly<{
     },
     async finish(scope?: RunEffectScope) {
       if (!scope || active?.scope !== scope) return;
-      active.host.resetAttachments();active.scope=undefined;lease=undefined;
+      active.host.resetAttachments();active.scope=undefined;lease=undefined;options.storage.kv.put(COMMON_BROWSER_LEASE_DUE,null);
       // Keep the disposable context/CDP connection under the original paid
       // session deadline. Idle requests fail admission until explicit continuation.
     },
     stop() { revokeCommonBrowsers(options.storage, Date.now()); },
     maintain() {
       return maintenance??=(async()=>{
+        // A lease wake that has come keeps a live lease's deadline, or goes, so no past wake stays for the arbiter to re-arm.
+        const leaseDue=options.storage.kv.get<number|null>(COMMON_BROWSER_LEASE_DUE);
+        if(typeof leaseDue==='number'&&leaseDue<=Date.now())options.storage.kv.put(COMMON_BROWSER_LEASE_DUE,lease&&lease.deadline>Date.now()?lease.deadline:null);
         if(active){await active.host.maintainHandoff();const row=options.storage.kv.get<{cleanup?:string;cleanupFailed?:boolean;session:{expiresAt:number}}>(`common-browser:${active.taskId}`);if(row&&!row.cleanupFailed&&(row.cleanup||row.session.expiresAt<=Date.now())){const held=active;await held.host.cancel();if(active===held){active=undefined;lease=undefined;}}}
         const config=await automatic.configuration(true)??(automatic.selected?undefined:configuration(true));
         if(config)await maintainCommonBrowsers(options.storage,config,Date.now());

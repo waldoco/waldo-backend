@@ -96,7 +96,7 @@ import { browserTrialConsent, BROWSER_TRIAL_PATH, BROWSER_TRIAL_PENDING_KEY, BRO
 import { browserOwnerAuthority } from './browser-owner-authority';
 import { browserTaskSourceCustody } from './browser-task-source';
 import { browserTaskHandler, browserTaskApprovalBridge } from '../tools/live/browser-task';
-import { ownerBrowserRuntime } from './owner-browser-runtime';
+import { COMMON_BROWSER_LEASE_DUE, ownerBrowserRuntime } from './owner-browser-runtime';
 import { COMMON_BROWSER_DUE } from './common-browser-host';
 import { browserPublicReadConfiguration } from './browser-public-read-configuration';
 import { browseActHandler, browsePageHandler, executeBrowserSubmit } from '../tools/live/browser';
@@ -1471,8 +1471,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const appOwner = telegramBound ? null : await this.appOwnerLookup();
         if (appOwner?.kind === 'admitted') { channel = 'app'; this.scheduledAppDelivery = this.appDeliveryFor(appOwner.authority); }
         if (!telegramBound && appOwner?.kind !== 'admitted') {
-          if (Math.min(this.ctx.storage.kv.get<number>('browser_owner_task_due_v1') ?? Infinity,
-            this.ctx.storage.kv.get<number>(COMMON_BROWSER_DUE) ?? Infinity) <= Date.now()) this.ctx.waitUntil(Promise.all([this.browserTasks.maintain(), this.ownerBrowser.maintain()]));
+          if (Math.min(this.ctx.storage.kv.get<number>('browser_owner_task_due_v1') ?? Infinity, this.ctx.storage.kv.get<number>(COMMON_BROWSER_DUE) ?? Infinity,
+            this.ctx.storage.kv.get<number>(COMMON_BROWSER_LEASE_DUE) ?? Infinity) <= Date.now()) this.ctx.waitUntil(Promise.all([this.browserTasks.maintain(), this.ownerBrowser.maintain()]));
           await rearmSharedAlarm(this.ctx.storage, appOwner?.kind === 'retry' ? Date.now() + APP_ADMISSION_RETRY_MS : null, Date.now(), 30_000);
           return;
         }
@@ -1493,7 +1493,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       try { await this.notifyUncertainRecovery(); } catch { console.error('uncertainty notice deferred to host recovery'); }
       const dueInbox = (await this.inbox.records()).some(r => r.state === 'admitted');
       const dueTransport = finals.some(r => r.status === 'attempting' || (r.status === 'pending' && r.dueAt <= Date.now()) || (r.status !== 'pending' && !r.settled));
-      const browserDue = Math.min(this.ctx.storage.kv.get<number>('browser_owner_task_due_v1') ?? Infinity, this.ctx.storage.kv.get<number>(COMMON_BROWSER_DUE) ?? Infinity);
+      const browserDue = Math.min(this.ctx.storage.kv.get<number>('browser_owner_task_due_v1') ?? Infinity, this.ctx.storage.kv.get<number>(COMMON_BROWSER_DUE) ?? Infinity,
+        this.ctx.storage.kv.get<number>(COMMON_BROWSER_LEASE_DUE) ?? Infinity);
       const readyKinds = [dueInbox, dueTransport, scheduler.hasDue(), browserDue !== undefined && browserDue !== null && browserDue <= Date.now()];
       const last = this.ctx.storage.kv.get<number>('owner_alarm_last_v1') ?? 2;
       let selected = -1;
