@@ -1523,3 +1523,28 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - #1110 and then #1119;
   - the usage plan.
 - **Outstanding from N4:** whether the Air's sample health data was ingested into the owner's real account.
+
+## About 09:15Z: CI green on `a94d7fa5` (09:07:00Z); Home rulings from L4; the Air answer; GCP and Google MCP checked
+
+- **Tip `a94d7fa5`:** all 6 checks green at 09:07:00Z. The command is handed to the owner, who runs it before 09:27Z or after 09:32Z.
+- **Owner rulings on Home, relayed by L4** from its chat:
+  1. A swipeable **updates stack** at the top of Home, with the Brief always present and a status line when nothing is new. Needs, To send, Done and the Ask bar stay below.
+  2. **`message_send` moves to To send.**
+  3. **A new backend/agent ask, "sweep cards":** Waldo fetches the latest across connected tools and posts update cards into the stack.
+     - Routed to L5 (day-view data). The shape goes on #1103 after the 12:30Z reset; the build comes after #1119, because card delivery lives in the frozen owner-object file.
+     - Preferred shape: a new card kind on the existing delivery path, with the model judging what's worth an update.
+     - Health values in those cards wait on the destination ruling.
+- **The Air (N4, read-only):**
+  - The seeded samples were deleted at 05:39Z and 05:41Z, before the owner's sign-in. The one live sample is a type Waldo can't read, so the expected sent count is 0 (inferred).
+  - The Air runs #109 at `08c1de7d`, which failed review, signed into the owner's account with wakes armed. It can't send anything, because nothing readable is in the store.
+  - Recommended: replace it with the fixed build after PASS and the owner's OK. The owner is asked.
+- **GCP (Waldo-Dev), read-only:**
+  - The OAuth app is in Testing (External, 7 of 100 users).
+  - Publish is blocked: the Branding home, privacy and terms links are empty, and `heywaldo.in` isn't an authorized domain. The `www.heywaldo.in` `/privacy` and `/terms` pages are live (200).
+  - The owner is asked to say yes before the orchestrator fills Branding and publishes.
+- **Google's managed MCP servers:** Gmail, Calendar, Drive, Docs, Sheets, Slides, Chat and Workspace. Gmail, Calendar and Drive MCP are enabled on Waldo-Dev.
+  - All are Developer Preview. Gmail MCP has no send tool; Calendar MCP has create, update, delete and RSVP tools.
+  - The backend already has a Google-auth MCP client: `callMcpToolHandler`/`readMcpToolHandler` with `mcpGoogleAuth`, configured by `WALDO_MCP_SERVERS`, with `MCP_READ_INTENTS=0` on staging.
+  - Recommendation: reads only, as a staging trial; writes stay on Waldo's typed effect path. Unknown: whether the preview works for consumer @gmail.com accounts.
+- **Reviews:** #116 with #120 running (Sonnet). Next: N4's #109 delta at full strength, then #117 with #119.
+- **Usage:** 67% at 09:09Z.
