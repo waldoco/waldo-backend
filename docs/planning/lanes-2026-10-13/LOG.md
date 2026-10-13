@@ -1312,3 +1312,24 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - Follow-ups went to L4: a client timeout, Retry-After inside `run()`, naming the `loadDay` change in the body, and #108 render tests.
 - **The quasarplum check:** FOUND. The turn was about 90 s old, with an exact timestamp, and no memory was stored. The index works, and the morning's miss was ranking. #1100's check counts as 4 of 4.
 - **Still running:** #1114's delta, #109 (N4) and #1123.
+
+## About 08:00Z: #1114 delta FAIL (fifth review); #106 has main merged; a CI flake on the tip
+
+- **#1114 at `61f9bc47`: FAIL** (on the PR). Three blockers:
+  1. A new link-token leak: invisible characters in a 9+-digit URL run become a space before the URL pass. 1626 of 4000 link samples leak, against none at base.
+  2. "is your … code" loses its noun to the keyword-first patterns, so the code leaks whole.
+  3. Invisible-joined digits merge into the relay.
+  - **Structural fix:** the pass order (links first, then "is your", then keyword-first), with cross-pass repro tests.
+  - **Systems note:** the fifth review of a regex pipeline whose passes interact, and every fix shape-patches. The leverage point is the pass order plus pinned cross-pass tests.
+- **App #106:** main merged in cleanly, new head `3595c8c1` (parents `3e92f644` and `92423c81`), and CI is running. When CI is green, check the merge adds only main's files, then merge. The PASS stands.
+- **Push CI on beta-mvp `917032a1`: runtime shard 4/4 failed.**
+  - The merge commit's tree (`8a6fa3f2`) is identical to #1122's head, which was green, so the same code got two results. Classified as flaky.
+  - The failing test name gets recorded when the run completes. Then rerun only the failed job, once. A second failure means it reproduces: investigate, don't rerun.
+  - The deploy waits for 6/6 green, then the owner gets `ALLOW_APP_CONTRACTS=reviewed bash …staging-gate.sh … 917032a1… --deploy`.
+- **Ansh's proposal** (relayed by the owner): its lane keeps the core queue, then three deep blocks (memory and recall, durable tasks with a progress feed, triggers and push). It asks whether to start a second cloud child on memory.
+  - **Corrections sent via the owner:**
+    - the Overview data is L5's;
+    - Form, Weight and ageing are built on Ansh's own branches, so open those PRs;
+    - the search defect is resolved (ranking);
+    - evals need keys, so the owner runs them.
+- **L4's Overview plan:** confirmed, except the skip label, which L4 asks the owner directly.
