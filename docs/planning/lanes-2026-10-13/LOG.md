@@ -622,7 +622,7 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
    - "Links" is read as verification codes and links only.
    - The prep note is stored like any message.
    - Staging traces capture prompt text, under your 10 Oct ruling.
-7. **App deletion PR (draft, "needs owner"):** the App lane's inventory found 81 unreachable JS/TS files and 25 uncompiled Swift files: the old Supabase client, local scoring, old sync and dead components. It's one draft PR, with separate JS and Swift commits. It's held because the parked list includes the dormant-stack deletion. `targets/widgets` (Live Activities) is kept for your call.
+7. **`targets/widgets` (Live Activities): delete or keep?** The App lane's deletion PR covers 81 unreachable JS/TS files and 25 uncompiled Swift files. It's on Ansh's list, so it goes through the gate. It keeps this one folder: there is no Xcode target and no plugin, so nothing builds it, but deleting it would pre-empt a Live Activities decision.
 8. **Not a claim yet:** on staging's proxy path, a send that Gmail refuses still shows "unknown", not "Not done".
 9. **Possibly the same flaw in drafts** (unverified): `findDraftByMessageId` keys on our Message-ID, and Waldo drafts on every first ask.
 10. **Your own tasks:**
@@ -644,7 +644,8 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - #1109 (prep mail): re-review after #1114;
   - #1110 (A2, browsing from the app);
   - the #1105 → #1112 → #1117 stack, after #1114;
-  - app #104 (the Home Brief row and R3).
+  - app #104 (the Home Brief row and R3): FAIL at `d2461250`, being fixed. It said "has gone out" for skipped cards, said "is set for" with the brief off or the time past, and removed the Patrol and Spots cards;
+  - the app deletion PR, when it opens.
 - **`created_at` on chat rows** (reply times): the backend lane adds it without a migration.
 - **#1115 follow-ups:**
   - a thread-precedence test (one mutation survived);
@@ -656,6 +657,7 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **The App lane force-pushed #94** (`--force-with-lease`). Nothing was lost, and it was self-reported.
 - **One orchestrator deploy note went to #116** (6133481055), against the board-only rule.
 - **The orchestrator called R1 a go,** against ruling 7. Corrected at 23:51Z.
+- **The orchestrator held the app deletion PR for you** by misreading the parked "dormant-stack deletion". The deletion is on Ansh's list (APP.md 6.3). Corrected at 04:14Z.
 - **Usage:** the shared window reached 81%. Lanes paused non-critical work until 02:30Z, except the send fix.
 - **Refusals by the classifier,** each left for you: the connector-proxy deploy (orchestrator) and P1 run 3b's typing (App session).
 
@@ -917,3 +919,15 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - The stale cost-test comment is gone.
   - Its third review starts when CI is green. The brief covers #1118's 25 timing shapes, the earlier whitespace and row shapes, the narrowing repros, over-matching, and everything that reads the marker.
 - **Reviews running:** #1100 at `5353f095` and app #104 at `d2461250`.
+
+## 04:14Z: app #104 review FAIL; the deletion PR is un-held
+
+- **App #104 at `d2461250`: FAIL.** CI is green. The findings are on #104 (6138077519).
+  1. "has gone out" shows for skipped cards. The backend writes `sent = 1` for a skip [verified in source at `77d7329c`: `plans.sent` runs after the skip check].
+  2. "is set for" ignores the daily-brief switch and the clock.
+  3. The Patrol and Spots Home cards are removed. APP.md says they stay, and ruling 7 keeps them.
+  - Also asked for in this PR: re-read the day on focus and at day change, cut the Brief text on code points, and drop the line pointers in comments.
+- **Backend follow-up (Ansh's lane, after the rename):** telling sent from skipped needs an additive field. `pending()` treats an unsent card as due, so a skip can't simply stay unsent.
+- **Correction:** I had held the app deletion PR for the owner, citing the parked "dormant-stack deletion". APP.md 6.3, Ansh's list, includes the deletion, and the owner ruled the App lane follows that list. So the PR now goes through the normal gate: separate JS and Swift commits, the scan test, and a Simulator walk of every route. `targets/widgets` stays, and it's now summary decision 7. Logged as a process slip.
+- **Connectors, rehearsed locally and not yet pushed:** #1109 merges #1114 cleanly. #1105's `htmlText` conflict is resolved, and a stale cost comment is fixed at the real merge. The merge then carries up to #1112 and #1117, with the full wall at #1117.
+- **Reviews running:** #1100 and #1114.
