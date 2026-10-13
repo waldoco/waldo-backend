@@ -1036,3 +1036,9 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - no edits to `src/health/**` until #105 merges.
   The App lane was told to dismiss its own chip.
 - **The owner's "done" at about 04:52Z:** staging is still `77d7329c` and there are no deploy artifacts, so #1100 isn't deployed. It was probably the Pro Max sign-in.
+
+## 04:54:03Z: the parallel chat is running from the App lane's chip; mine is withdrawn
+
+- **The owner's "done"** was starting the App lane's chip (`task_8972cb2c`). That parallel lane runs N4 and the Watch work under the #105 overlap rule, keeps the Watch isolated until §7.5 is ruled, and reports on #1103.
+- **My duplicate chip (`task_0120d6a8`) is withdrawn.**
+- **The Pro Max is still not signed in** at about 04:57Z.
