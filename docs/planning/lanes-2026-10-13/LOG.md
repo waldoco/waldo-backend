@@ -1925,3 +1925,5 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
   - After the merge, the owner applies the migration, sets the bridge secrets, and deploys directly.
 - **Critical path is the host:** `waldo-imessage-host` is fixtures-only. A live round trip needs live `chat.db` reading, HTTPS transport, a pull/result loop and AppleScript send.
 - **Posted** the status and questions for Ashish on #1095 (6144…), and moved #1095 into the cloud lead's scope on #1103 after #1119.
+
+- Correction: the first #1095 post failed on shell quoting. It was reposted from a file: https://github.com/waldoco/waldo-backend/pull/1095#issuecomment-6144868531
