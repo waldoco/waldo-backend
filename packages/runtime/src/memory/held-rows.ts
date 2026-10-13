@@ -17,7 +17,7 @@ export const HELD_ROW_TABLES: Readonly<Record<string, readonly string[]>> = {
 type Sql = Pick<SqlStorage, 'exec'>;
 export type HeldTopic = Readonly<{ topic: string; state: 'incomplete' | 'pending' }>;
 
-// The harness reply is cut at this length before it is sent (telegram-owner-do), so the output is capped to it and the cut is announced inside it.
+// The harness reply is cut at this length before it is sent (owner-do), so the output is capped to it and the cut is announced inside it.
 export const HARNESS_MESSAGE_LIMIT = 4000;
 
 const escapeCounts = (value: string) => {

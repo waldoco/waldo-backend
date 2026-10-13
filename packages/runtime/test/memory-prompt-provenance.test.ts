@@ -8,7 +8,7 @@ import { claimStore, turnMemoryPrompt } from '../src/memory/claims';
 const AT = '2026-03-01T00:00:00.000Z';
 describe('turn memory prompt provenance', () => {
   it('shows owner-grounded claims with their status; hides inferred, superseded and untrusted claims', async () => {
-    const prompt = await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('memory-prompt-provenance')), (_instance, state) => {
+    const prompt = await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('memory-prompt-provenance')), (_instance, state) => {
       const store = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
       store.add({ kind: 'preference', text: 'Favourite tea blend is jasmine', source: 'stated', evidence: 'owner said so', origin: 'owner', source_ref: 'owner, tg-10' }, AT);
       store.add({ kind: 'preference', text: 'Favourite tea blend is probably oolong', source: 'inferred', evidence: 'read from a chat', origin: 'agent' }, AT);

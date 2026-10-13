@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
-import type { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
+import type { OwnerDO } from '../src/channels/owner-do';
 import { artifactBook, r2ArtifactBodies } from '../src/channels/artifacts';
 import { artifactExports, r2ArtifactBinaries } from '../src/channels/artifact-exports';
 import { ARTIFACT_EXPORT_PATH, exportDownloadUrl } from '../src/channels/artifact-export-download';
@@ -10,7 +10,7 @@ import { consoleAccess, CONSOLE_COOKIE } from '../src/channels/console';
 // J6a: the export download route lives in the owner DO behind its console session, per-owner store and bucket prefix.
 const bucket = (env as typeof env & { ARTIFACTS: R2Bucket }).ARTIFACTS;
 const clock = { timezone: 'UTC', now: () => new Date() };
-const owner = (name: string) => env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`${name}-${crypto.randomUUID()}`)) as DurableObjectStub<TelegramOwnerDO>;
+const owner = (name: string) => env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`${name}-${crypto.randomUUID()}`)) as DurableObjectStub<OwnerDO>;
 
 it('real DO: export download needs the owner session, serves the PDF, and another owner cannot read it by id', async () => {
   const a = owner('export-a'), b = owner('export-b');

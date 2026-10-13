@@ -8,7 +8,7 @@ const { OWNER_REQUEST_HOP, traceBook } = await import('../src/channels/harness')
 
 // The console's "last request" starts at this marker, so every owner turn must log it once, before any other hop of that trace.
 it('each owner turn logs the owner_request marker once, ahead of its other hops', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('owner-request-hop')), async (_i, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('owner-request-hop')), async (_i, state) => {
     const entries: { trace: string; hop: string }[] = [];
     const responder = createOwnerResponder('fixture', undefined, claimStore(state.storage.sql) as never, (entry) => { entries.push(entry as { trace: string; hop: string }); });
     for (const trace of ['tg-1', 'tg-2']) await responder.respond({ traceId: trace, conversationRef: 'owner', surface: 'telegram', text: `ping ${trace}` }, (_n, work) => work());
@@ -23,7 +23,7 @@ it('each owner turn logs the owner_request marker once, ahead of its other hops'
 
 // End to end inside one owner DO: owner turn -> the same record sink the DO uses -> lastRequest.
 it('an owner turn recorded through the trace book becomes the console last request', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('owner-request-e2e')), async (_i, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('owner-request-e2e')), async (_i, state) => {
     const book = traceBook(state.storage.sql);
     const responder = createOwnerResponder('fixture', undefined, claimStore(state.storage.sql) as never, (entry) => { book.record(entry as never, Date.now()); });
     await responder.respond({ traceId: 'tg-e2e-1', conversationRef: 'owner', surface: 'telegram', text: 'ping' }, (_n, work) => work());

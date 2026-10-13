@@ -131,6 +131,18 @@ describe('day card latest delivery', () => {
       { ...latest, message_id: '' }, {},
     ]) expect(appControlProjectionV1Schema.safeParse(day([{ ...card, latest: invalid }])).success).toBe(false);
   });
+
+  it('accepts a card state that agrees with sent, and a card without one', () => {
+    for (const valid of [card, { ...card, state: 'sent' }, { ...card, state: 'skipped' }, { ...card, state: 'skipped', latest: null }, { ...card, state: 'sent', latest },
+      { ...card, sent: false, state: 'pending' }, { ...card, sent: false, state: 'held' }, { ...card, sent: false, time: null, state: 'pending' }])
+      expect(appControlProjectionV1Schema.safeParse(day([valid])).success).toBe(true);
+  });
+
+  it('refuses a card state that contradicts sent, or one outside the four', () => {
+    for (const invalid of [{ ...card, sent: false, state: 'sent' }, { ...card, sent: false, state: 'skipped' }, { ...card, state: 'pending' }, { ...card, state: 'held' },
+      { ...card, state: 'failed' }, { ...card, state: 'delivered' }, { ...card, state: '' }, { ...card, state: null }, { ...card, state: 1 }])
+      expect(appControlProjectionV1Schema.safeParse(day([invalid])).success).toBe(false);
+  });
 });
 
 describe('constellation view', () => {

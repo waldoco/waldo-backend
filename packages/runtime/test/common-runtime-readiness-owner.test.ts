@@ -6,7 +6,7 @@ import {handleConsole} from '../src/channels/console-signin';
 import type {ConsoleAuth} from '../src/identity/console-auth';
 const path='https://telegram-owner/console/diagnostics/common-runtime-readiness';
 it('actual owner DO denies unsigned and cross-owner cookies; valid owner gets fixed receipt without exposing authority or opening unlinked workspace',async()=>{
- const a=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('diag-a')),b=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('diag-b'));
+ const a=env.OWNER_DO!.get(env.OWNER_DO!.idFromName('diag-a')),b=env.OWNER_DO!.get(env.OWNER_DO!.idFromName('diag-b'));
  const token=await runInDurableObject(a,(instance,state)=>{
   Object.assign((instance as unknown as {env:Record<string,unknown>}).env,{TELEGRAM_BOT_TOKEN:'synthetic',OPENAI_API_KEY:'synthetic',WALDO_ENVIRONMENT:'staging',SUPABASE_PROJECT_URL:'https://togdshayyxycitzckpqv.supabase.co',SUPABASE_PUBLISHABLE_KEY:'private-key',WALDO_ROUTER_HMAC_SECRET:'private-hmac',RESPONSIBILITY_RATE_LIMITER:{limit:async()=>({success:true})}});
   return consoleAccess(state.storage).grant();

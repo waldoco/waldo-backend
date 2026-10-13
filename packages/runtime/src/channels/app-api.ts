@@ -17,7 +17,7 @@ export const APP_APPROVALS_PATH = `${APP_PATH}/approvals`;
 export const APP_APPROVAL_DECISIONS_PATH = `${APP_APPROVALS_PATH}/decisions`;
 const MAX_BODY_BYTES = 8192;
 
-type AppEnv = OwnerDirectoryEnv & Readonly<{ TELEGRAM_OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
+type AppEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
 
 // Errors before authentication share one shape so the app cannot learn who is invited.
 const fail = (status: 401 | 403 | 404 | 405 | 413 | 429 | 503) => Response.json({ error: 'unavailable' }, { status, headers: { 'cache-control': 'no-store', ...(status === 429 ? { 'retry-after': '60' } : {}) } });
@@ -89,7 +89,7 @@ const sessionView = async (auth: ConsoleAuth, doName: string, credential: string
 
 // Closes the session's queued work and stops its running turn in the owner Durable Object; false when it cannot be confirmed.
 // Signout calls it before the revoke, which makes a retry safe, and again after it for work admitted in between.
-const fenceSession = async (env: AppEnv, owners: NonNullable<AppEnv['TELEGRAM_OWNER_DO']>, doName: string, sessionHash: string): Promise<boolean> => {
+const fenceSession = async (env: AppEnv, owners: NonNullable<AppEnv['OWNER_DO']>, doName: string, sessionHash: string): Promise<boolean> => {
   const secret = env.WALDO_ROUTER_HMAC_SECRET;
   if (!secret) return false;
   try {
@@ -107,7 +107,7 @@ const fenceSession = async (env: AppEnv, owners: NonNullable<AppEnv['TELEGRAM_OW
 export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth | null = consoleAuth(env), defer?: (work: Promise<unknown>) => void): Promise<Response | null> => {
   const url = new URL(request.url);
   if (url.pathname !== APP_PATH && !url.pathname.startsWith(`${APP_PATH}/`)) return null;
-  const owners = env.TELEGRAM_OWNER_DO;
+  const owners = env.OWNER_DO;
   if (!auth || !owners) return fail(404);
 
   if (url.pathname === `${APP_PATH}/auth/code`) {
@@ -157,7 +157,9 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     return handleAppHealth({ request, url, doName, rpc: signedRpc(env), readBody: readBoundedBody, defer, compute: computeDailyScores,
       ...(secret ? { readDemand: (range: { from: string; to: string; timezone: string }) => readOwnerDemand(owners, secret, doName, range) } : {}) });
   }
-  const bucket = request.method !== 'POST' ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : url.pathname === `${APP_PATH}/auth/renew` ? 'app-renew' : 'app-chat-send';
+  // A stop is a control on a message already paid for, so it counts as a read, not a send.
+  const stop = url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) && url.pathname.endsWith('/cancel');
+  const bucket = request.method !== 'POST' || stop ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : url.pathname === `${APP_PATH}/auth/renew` ? 'app-renew' : 'app-chat-send';
   try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `${bucket}:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
 
   if (url.pathname === `${APP_PATH}/session`) {
@@ -230,9 +232,15 @@ export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor:
   const newestReply = new Map(shown.filter(entry => entry.role === 'assistant' && entry.parentId).map(entry => [entry.parentId!, entry.id]));
   const messages = shown.slice(start, end).reverse().map(entry => {
     const presented = entry.parentId && newestReply.get(entry.parentId) === entry.id ? cards(entry.parentId) : NO_CARDS;
+    // The receipt line rides at the end of the stored text for surfaces that show only text; here the receipt part carries it.
+    const receiptSuffix = entry.receipt ? `\n\n${entry.receipt.line}` : null;
+    const ownText = receiptSuffix && entry.appPayload.endsWith(receiptSuffix) && entry.appPayload.slice(0, -receiptSuffix.length).trim() ? entry.appPayload.slice(0, -receiptSuffix.length) : entry.appPayload;
     // A reader that cannot parse a part shows only `text`, and a decided card is no longer a part, so a reply that presented cards is never textless.
-    const text = entry.appPayload.trim() || !presented.fallbacks.length ? entry.appPayload : presented.fallbacks.join('\n\n');
-    return { id: entry.id, role: entry.role, text, parts: [{ type: 'text' as const, text }, ...presented.live], channel: entry.surface, parent_id: entry.parentId };
+    const text = ownText.trim() || !presented.fallbacks.length ? ownText : presented.fallbacks.join('\n\n');
+    const operation = entry.operation ? [{ type: 'operation' as const, operation_id: entry.operation.id, state: entry.operation.state, message: text }] : [];
+    const receipt = entry.receipt ? [{ type: 'receipt' as const, items: [...entry.receipt.items], more: entry.receipt.more, fallback_text: entry.receipt.line }] : [];
+    return { id: entry.id, role: entry.role, text, parts: [{ type: 'text' as const, text }, ...operation, ...presented.live, ...receipt], channel: entry.surface, parent_id: entry.parentId,
+      ...(entry.createdAt === undefined ? {} : { created_at: entry.createdAt }) };
   });
   return { messages, next_cursor: start > 0 ? `before:${shown[start]!.id}` : null };
 };

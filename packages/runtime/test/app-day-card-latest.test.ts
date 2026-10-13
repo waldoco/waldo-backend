@@ -23,7 +23,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
-const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '4b5c6d7e-8f90-4a1b-9c2d-3e4f5a6b7c8d';
 const AT = Date.parse('2026-10-03T09:00:00Z');
@@ -55,7 +55,7 @@ type Ctx = { owner: Owner; state: DurableObjectState; name: string; clock: { now
 
 // An app-only owner with nothing scheduled; `deliver` fires one day card now through the real alarm.
 const appOwner = async (name: string, check: (ctx: Ctx) => Promise<void>) => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const originalNow = Date.now, clock = { now: AT };
     Date.now = () => clock.now;
     try {
@@ -64,7 +64,7 @@ const appOwner = async (name: string, check: (ctx: Ctx) => Promise<void>) => {
       state.storage.kv.put('app_subject', String(appSubjectFor(name)));
       state.storage.kv.put('timezone', 'UTC');
       state.storage.kv.put('timezone_confirmed', true);
-      const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC',
+      const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC',
         WALDO_OWNER_TELEGRAM_ID: undefined }) as unknown as Owner;
       await owner.setup('app').ready;
       state.storage.sql.exec('DELETE FROM schedule');

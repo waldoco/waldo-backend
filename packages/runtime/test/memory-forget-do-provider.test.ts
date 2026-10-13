@@ -15,7 +15,7 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (body: u
   return { id: 'fixture', ...(seen.status ? { status: seen.status } : {}), output_text: name === 'reaction' ? '{"reaction":null}' : name === 'day_plan' ? '{"cards":[]}' : 'Done', output: name ? [] : seen.outputs.shift() ?? [], usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
 } }; } }));
 beforeEach(() => { seen.inputs.length = 0; seen.outputs.length = 0; seen.sent.length = 0; seen.status = undefined; });
-const stub = (name: string) => env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
+const stub = (name: string) => env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
 const turn = async (name: string, id: number, text: string) => {
   await runInDurableObject(stub(name), async (instance, state) => {
     await state.storage.put({ telegram_subject: '42', do_name: name, origin: 'https://fixture.invalid' });
