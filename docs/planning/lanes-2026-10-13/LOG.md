@@ -570,7 +570,7 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
     - #1115 (deployed at 01:36Z) proves the send by the Gmail id the send returned, with the SENT label and the thread still required.
     - A send whose response is lost stays unknown, and is never retried or called done.
   - **Run 3 sent nothing:** Waldo rightly refused to send an identical "probe" again while the old two are unknown.
-  - **Run 3b ("QA"), test send 3 of 5:** ready, but the App session's classifier refused the input. It waits for you to approve it in that session, or to run it yourself: "Draft a note to myself saying 'QA' and send it once I approve", then "Send it now.", then approve. Success reads "Done".
+  - **Run 3b ("QA"), test send 3 of 5:** ready, but the App session's classifier refused the input. It waits for you to approve it in that session, or to run it yourself: "Draft a note to myself saying 'QA' and send it once I approve", then "Send it now.", then approve. Success reads "Done" on the installed `1f14eb72` build, or "Confirmed" on any build with app #99 (merged at about 02:52Z).
 - **Read-only check:** mail search found the sent probe. Waldo's stated sent time was 30 minutes off [inference: the model did the zone arithmetic itself].
 
 ### Merged tonight
@@ -756,3 +756,14 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 
   Sent to the App lane.
 - **Running:** the app #99 review. App #100 and #101, and #1110, follow.
+
+## 02:53Z: app #99 merged
+
+- **Merged app #99 as `a8ac0d73`** (R9 state words).
+  - **Gate:** review PASS. Every state maps to its ruled word, and all 11 are distinct. The mapping is exhaustive at compile time, and no old words are left. CI passed against `main`. The advisor agreed.
+- **The summary's run 3b line** now says: "Done" on the installed `1f14eb72` build, "Confirmed" on any build with #99.
+- **Follow-up for the App lane** (a small PR after #98):
+  - `ChatPane.tsx:418` still says "Not confirmed". Align it with the state it labels.
+  - Rename the test at `approvalsView.test.ts:58`.
+  - Take the state list from `appApprovalStateV1Schema.options`.
+- **Reviews next:** #100 (short) and #101 (account safety). The #1114 re-review starts as soon as Connectors pushes.
