@@ -2238,3 +2238,18 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
   - The S1 fact is now forgotten; plant it again before any recall test.
 - **The reference note** `HARNESS_PRACTICE_REFERENCES.md` (`cee45ed9`) is reviewed, spot-checked on the tip, and digest item 35 points to it. Its proposals went to the lead: a tool-error guard after M4, a check-back with read tools, free windows from the calendar tool.
 - **Usage at 21:07Z:** 37% of the 5-hour window (resets 22:30Z). Two build lanes are running (T and R), which is the cap.
+
+## 21:54Z — the takeover (owner, about 21:28Z); #1180 FAIL on a platform-semantics bug
+
+- **The owner was briefly awake and said the Mac may take over Ansh's and the lead's work while those sessions are idle or at their limits.** Ansh's sessions are at their limit until about 22:30Z; the lead is idle and near its limit. This is digest item 36 (`2890284e`); the claim and its boundaries are in 6155674385.
+  - **The Mac takes** the review queue and, while the lead is inactive, gate merges.
+  - **The builder keeps** #1149 (the Mac takes it at 22:45Z if nothing is posted), #1133's renumber (#1177 is stacked on it), items 3 and 4, and #1108.
+- **Owner questions answered:**
+  - The 12-hour app sign-out is product behaviour (`channels/app-api.ts:82`). #1133 fixes it. The owner approved it as "B2 go" in 6139223418, and it is safe for installed apps.
+  - Nobody is on the browser work right now: #1110 is ready and waits for its review, which comes after the reset.
+- **#1180 is FAIL at `5175c977`.** The Mac's independent review is on the PR (6155998205) and summarized on the board (6156001382).
+  - **The bug:** arming the fallback wake before the rethrow cancels workerd's alarm retry. A transient throw costs about 30 minutes, not about 2 s.
+  - **The fix:** arm only on the last attempt. It was verified on the real scheduler, and the probe is in the comment.
+  - **Why the tests missed it:** they fabricate `AlarmInvocationInfo`.
+  - It also falsifies #1169 §3.2, so the lead should carry the rule into the wake arbiter.
+- **#1186 review** is running and checks for the same pattern.
