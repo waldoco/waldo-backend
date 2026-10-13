@@ -767,3 +767,16 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - Rename the test at `approvalsView.test.ts:58`.
   - Take the state list from `appApprovalStateV1Schema.options`.
 - **Reviews next:** #100 (short) and #101 (account safety). The #1114 re-review starts as soon as Connectors pushes.
+
+## 03:00Z: app #98 merged; #100 FAIL (a missing token test); #1114 re-review running
+
+- **Merged app #98 as `5c173d13`** (chat chrome: R5, R6 and R11).
+  - **Gate:**
+    - The review's required items were checked by hand at `9b5f355d`.
+    - Decision and Retry buttons ignore a hold (a no-op `onLongPress`, 350 ms), tested through RN's Pressability.
+    - Android More has three choices and `cancelable: true`.
+    - The dead code is removed and the comments are fixed.
+    - The faults (28/28) were caught by the App lane. CI passed at `b2fd9bc6`, which includes #99.
+- **App #100: FAIL** (PR comment 6137214965). No test ties the palette's zone colours to the `zone-*-mark` tokens, so a swap would pass. The code itself is right.
+- **Decision:** `ChatPane:418`'s "Not confirmed" (a chat message whose send wasn't confirmed) becomes "Unconfirmed": one word for one meaning. It goes in the App lane's follow-up PR.
+- **Running:** the #1114 re-review (dc3480e2) and the #101 review.
