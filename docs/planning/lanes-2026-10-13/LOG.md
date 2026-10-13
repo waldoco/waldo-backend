@@ -1588,3 +1588,31 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 
   The owner decides on publishing and on the prep split.
 - **Calendar QA:** the owner approved all three steps (add "QA" 16:00–16:30, move it to 17:00, cancel). It's one event, on the shared test account. L4 is running it on the installed Pro Max build.
+
+## 09:27Z: STATE TO RESUME FROM (supersedes the 09:00Z entry). The calendar QA found a read bug; usage 77%; the orchestrator's context is at 84%
+
+- **Staging:** `a94d7fa5` (version `6574d610`, rollback `316ed3eb`). The beta-mvp freeze is lifted.
+- **The calendar QA** (L4, Pro Max #112 build, shared test account, 2 of 3 approved decisions used):
+  - **Add:** worked. Card, approve, "Confirmed", "Done.", then Undo offered.
+  - **Move:** STOPPED. Waldo said "the calendar read failed" about a minute after the successful write, and honestly refused to propose. **This blocks the Phase 1 exit.**
+  - **Removal:** Undo of the add showed "Undone". Whether the event is gone from Google Calendar is UNVERIFIED; the owner is asked to look.
+  - The move and cancel paths need a re-run after the fix, with a fresh owner yes.
+  - **Backend wording bugs:**
+    - the chat line "Done: calendar change proposed" breaks the owner ruling (Done only after the action is checked);
+    - the review text still reads "Proposed:" after done.
+  - **App findings (L4):**
+    - (a) the inline approval card vanished from the chat after the move reply (L4 investigating on main);
+    - (b) the Ask bar doesn't focus the composer in the #112 build (#116 should fix it);
+    - (c) old expired approvals still read "Needs you", which is Connectors' expiry-on-read fix.
+- **The calendar-read bug goes to Connectors, FIRST after the 12:30Z reset.** Read-only diagnosis first, the root cause in one sentence, then the fix with a red-first test.
+  - Hypotheses:
+    1. **Scope mismatch:** the read path now needs the calendar_list or freebusy scope, which is pending the owner's Google re-consent, while the write uses `calendar.events`. Falsifier: the failed read's error is not an insufficient-scope 403.
+    2. **A different token path** for reads and writes (edge proxy or Vault versus desk mint).
+    3. **A window or time-zone bug** in the read after #1126.
+    4. **A transient** Google error.
+- **The health read tool** (owner YES): L5 posted the shape on #1103 (6142461531). It reuses `get_health` (no handler yet), with consent checked on every call and nothing logged. The build comes after 12:30Z; registration comes after #1119.
+- **Disk:** 16 GB free at 09:21Z after the owner's cleanup. L4 and N4 are building; each keeps one folder and at least 6 GB free.
+- **The Air:** owner YES to the latest build against staging. N4 installs after #109's PASS, read-only checks only (the owner's real account).
+- **Reviews running:** #109's delta (full strength), and #116 with #120 (Sonnet).
+- **Next merges on PASS:** #109, then #115 retargeted; #116 and #120; then #117 and #119 (Sonnet), #118 with #1140, #1143, #1114's delta, and the cloud PRs (#1110 first, then #1119 deployed alone).
+- **Owner rulings today** are in memory `owner-rulings-2026-10-13-morning.md`, batches 7–10 (Google later; Ansh owns the Google plan, posted as #1103 6142379186).
