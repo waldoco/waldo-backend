@@ -15,6 +15,7 @@ export default defineConfig({
       IMESSAGE_CONNECTOR_ENABLED: '1', // Pinned equal to PROPOSED_LOCAL_TEST_POLICY by test/imessage-bridge-do.test.ts.
       IMESSAGE_CONNECTOR_POLICY: '{"signatureMaxAgeMs":60000,"heartbeatMaxAgeMs":90000,"capabilityMaxAgeMs":90000,"maxRequestBytes":131072,"maxRetainedBytes":16777216,"maxRecords":4096,"pullMaxWaitMs":0,"deliveryDeadlineMs":20000,"mutationDeadlineMs":30000,"commitmentMaxAgeMs":30000,"setupLifetimeMs":600000,"replyHandoffMaxAgeMs":600000,"source":"handoff-2026-10-10-proposed-local-test-profile"}',
       IMESSAGE_CREDENTIAL_WRAPPING_KEY: 'f'.repeat(64),
+      GOOGLE_CLIENT_ID: 'fictional-imessage-google-client', GOOGLE_CLIENT_SECRET: 'fictional-imessage-google-secret', // approval-surface case only; Google itself is mocked
     } },
     wrangler: { configPath: './wrangler.jsonc' },
   })],

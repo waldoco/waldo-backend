@@ -11,19 +11,22 @@ import { fixtureDirectory, type FixtureOwner } from './helpers/imessage-fixture-
 import { SimulatedHost } from './helpers/imessage-sim-host';
 
 // Scripted model: every non-structured responses.create call is one owner turn.
-const proof = vi.hoisted(() => ({ turns: [] as string[], reply: 'Scripted owner reply.', hold: null as null | (() => Promise<void>) }));
+const proof = vi.hoisted(() => ({ turns: [] as string[], reply: 'Scripted owner reply.', hold: null as null | (() => Promise<void>), outputs: [] as any[][] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: any) => {
   const format = input.text?.format?.name;
   if (!format) { proof.turns.push(JSON.stringify(input.input ?? '')); if (proof.hold) { const h = proof.hold; proof.hold = null; await h(); } }
-  return { id: 'scripted', output: [], output_text: format === 'claim_ops' ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : format ? '{}' : proof.reply, usage: { input_tokens: 1, output_tokens: 1 } };
+  return { id: 'scripted', output: format ? [] : proof.outputs.shift() ?? [], output_text: format === 'claim_ops' ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : format ? '{}' : proof.reply, usage: { input_tokens: 1, output_tokens: 1 } };
 } }; } }));
+vi.mock('../src/connectors/google', async load => ({ ...await load<typeof import('../src/connectors/google')>(), googleClient: () => ({
+  event: async (id: string) => ({ id, etag: 'etag-3pm', title: 'Design review', status: 'confirmed', start: '2030-01-02T15:00:00Z', end: '2030-01-02T16:00:00Z' }),
+}) }));
 
 const ORIGIN = 'https://imessage-directory.fixture.invalid', SECRET = 'fictional-imessage-router-secret-0000000000';
 const HOST_ORIGIN = 'https://imessage.fixture.invalid';
 const SUBJECT = 'owner@example.invalid', CHAT = `iMessage;-;${SUBJECT}`;
 const forbiddenEgress: string[] = [];
 
-afterEach(() => { vi.restoreAllMocks(); proof.turns = []; proof.hold = null; });
+afterEach(() => { vi.restoreAllMocks(); proof.turns = []; proof.hold = null; proof.outputs = []; });
 
 async function world(ownerName = `imsg-owner-${crypto.randomUUID()}`, ownerId = '10000000-0000-4000-8000-000000000001') {
   const owners: FixtureOwner[] = [{ do_name: ownerName, owner_id: ownerId, state: 'active', state_version: 1, admission_revision: 1 }];
@@ -139,6 +142,26 @@ it('a signed direct message runs one genuine owner turn and its frozen reply rea
   await w.pump(2);
   expect(proof.turns).toHaveLength(1);
   expect((await w.host.pull()).delivery).toBeNull();
+  expect(forbiddenEgress).toEqual([]);
+});
+
+it('an approval proposed on an iMessage turn is shown only in the app; the iMessage reply stays plain text', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await runInDurableObject(w.ownerStub, async (_i, state) => { await state.storage.put('origin', 'https://imessage.fixture.invalid'); await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', scopes: null, refresh_token: 'fictional-not-a-token' }]); });
+  proof.outputs.push([{ type: 'function_call', call_id: 'move-3pm', name: 'propose_calendar_change', arguments: JSON.stringify({ action: 'move', event_id: 'ev-3pm', title: 'Design review', start: '2030-01-02T16:00:00Z', end: '2030-01-02T17:00:00Z', reason: 'Owner asked to move it to 4' }) }], []);
+  expect((await w.host.send(w.host.message('Move my 3pm to 4'))).status).toBe(200);
+  await w.pump();
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    const shown = state.storage.sql.exec<{ surface: string }>('SELECT surface FROM approval_presentations').toArray();
+    expect(shown.length).toBeGreaterThan(0);
+    expect(shown.map(row => row.surface)).toEqual(shown.map(() => 'app'));
+  });
+  const { delivery } = await w.host.pull();
+  const command = JSON.parse(delivery!.body);
+  expect(command).toMatchObject({ operation: 'send', attachments: [] });
+  expect(command.text.startsWith(proof.reply)).toBe(true);
+  expect(command.text).not.toMatch(/approve|Design review|waldo:\/\//i); // no card text, buttons or app link went to iMessage
   expect(forbiddenEgress).toEqual([]);
 });
 

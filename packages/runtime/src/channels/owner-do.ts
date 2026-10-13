@@ -2129,7 +2129,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const destination = (name: string) => name === channel && channel !== 'app' ? { call: routedCall, owner } : name === 'telegram' || name === 'whatsapp' ? this.setup(name) : null;
     const desk = approvalDesk(storage.sql, {
       effects, googleTasks: () => googleTasks, currentRunRef, appReplyRef: () => this.activeApp?.id, ownerRef, ownerRefAliases,
-      surface: channel, appLink: appApprovalLink, commit: work => storage.transactionSync(work),
+      // iMessage is plain text and can never approve: its turns use the app's desk rules, so cards show only in the app.
+      surface: channel === 'imessage' ? 'app' : channel, appLink: appApprovalLink, commit: work => storage.transactionSync(work),
       retire: async ({ surface, message_ref }) => {
         const [chat = '', message = ''] = message_ref.split(':');
         if (surface !== 'telegram' || !/^-?\d+$/.test(chat) || !/^\d+$/.test(message)) return;
