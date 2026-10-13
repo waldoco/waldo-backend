@@ -1042,3 +1042,13 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **The owner's "done"** was starting the App lane's chip (`task_8972cb2c`). That parallel lane runs N4 and the Watch work under the #105 overlap rule, keeps the Watch isolated until §7.5 is ruled, and reports on #1103.
 - **My duplicate chip (`task_0120d6a8`) is withdrawn.**
 - **The Pro Max is still not signed in** at about 04:57Z.
+
+## 04:56:42Z: app #105 merged; a correction on Patrol; backend merges held for the owner's deploy
+
+- **Merged app #105 as `7d0ea15b`** (the cleanup).
+  - **Gate:** review PASS at `6c6501ad`. All 852 import paths resolve, no route is deleted, and no deleted Swift type is referenced. CI is green and the state was CLEAN. The advisor agreed.
+  - Follow-ups are on #105: a Keychain cleanup of the old Supabase session (an App-lane item after #104), the scan test, and the unused packages.
+  - **Owner task:** revoke the old project's sessions on the server.
+- **The parallel lane** ("Build background health reads and an honest Watch app") is told that `src/health/**` is unblocked.
+- **Correction:** `view=activity` is a diagnostics projection: steps, hops, the raw trace and runs. So Patrol v1 shows runs and job steps only, never the raw trace. Spots (constellation claims) is wiring-only. The App lane checks the live payloads on its device first. Corrected on #1103.
+- **Backend merges are held** until the owner deploys `6ddbd85e`, because the gate script refuses any SHA that isn't the tip.
