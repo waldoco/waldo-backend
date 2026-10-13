@@ -728,3 +728,10 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **The App lane's turn-1 keystrokes for run 3b** ("…saying 'QA'…") were refused by its auto-mode classifier as a real-world transaction [verified by the App lane]. Nothing was typed or sent. Test sends used are still 2 of 5.
 - **Per the README rule,** it isn't routed around: the orchestrator won't drive the device for it. It waits for the owner, as decision 1 in the summary.
 - **The morning summary above** is rewritten in place for the current state.
+
+## 02:34Z heartbeat: usage reset; reviews resume, two at a time
+
+- **The 5-hour window reset** to 0% at 02:30Z. The next reset is 07:29Z.
+- **Reviews running:** #1114 (codes in table cells; its Worker half closes a live exposure on v17) and app #98 (chat chrome).
+- **Next pair:** app #99 and #100, then #101 and #1110 (A2).
+- **Still held:** #1113 (the owner), #1100 (its 2 conditions), and P1 run 3b (the owner; refused by the App session's classifier).
