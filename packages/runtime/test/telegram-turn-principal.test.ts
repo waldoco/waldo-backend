@@ -20,7 +20,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
 vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(), createTelegramCaller: () => async (method: string) => method === 'getMe' ? { username: 'fixture_bot' } : method === 'sendMessage' ? { message_id: 1 } : true }));
-const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '7c2e9a14-3b5d-4f60-8a71-92b3c4d5e6f7';
 const PRESENCE_ID = '0d6b1f22-9c4e-4a7b-8e21-5f3a9c7d1b44';
@@ -45,12 +45,12 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 const telegramTurn = async (name: string, withDirectory: boolean, text: string) =>
-  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql);
     ensureSchema(state.storage);
     await state.storage.put({ telegram_subject: '42', do_name: name });
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const owner = new TelegramOwnerDO(state, { ...env, ...(withDirectory ? directory : {}), TELEGRAM_BOT_TOKEN: '7.fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC' });
+    const owner = new OwnerDO(state, { ...env, ...(withDirectory ? directory : {}), TELEGRAM_BOT_TOKEN: '7.fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC' });
     const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
     const update = 920001;
     try {
@@ -82,7 +82,7 @@ const legacyRow = (index: number, id: string, role: 'user' | 'assistant', text: 
   modelProjection: { mode: 'include' }, role, ...(inputOrigin ? { inputOrigin } : {}) }] as const;
 it('a directory-backed Telegram turn continues the Telegram chain: it sees the earlier turns and a reminder, and the next turn sees it', async () => {
   const name = 'telegram-principal-chain';
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql);
     ensureSchema(state.storage);
     await state.storage.put({ telegram_subject: '42', do_name: name });
@@ -94,7 +94,7 @@ it('a directory-backed Telegram turn continues the Telegram chain: it sees the e
     ]));
     await state.storage.put({ 'conv-count': 4, 'conv-leaf': 'reminder-1-reply' });
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7.fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC' });
+    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7.fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC' });
     const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
     const turn = async (update: number, text: string, host = owner) => {
       await inbox.admit({ bot: '7.fixture', subject: '42', doName: name }, update, JSON.stringify({ update_id: update, message: { message_id: update, from: { id: 42, is_bot: false }, chat: { id: 42, type: 'private' }, text } }));
@@ -112,7 +112,7 @@ it('a directory-backed Telegram turn continues the Telegram chain: it sees the e
       expect(await turn(930002, 'And the dentist?')).toBe('awaiting_delivery');
       expect(model.requests.at(-1)).toContain('Did I call Sam yet?');
       // A turn that still runs under the fixture principal, as a media-only turn does, continues the same chain.
-      const local = new TelegramOwnerDO(state, { ...env, TELEGRAM_BOT_TOKEN: '7.fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC' });
+      const local = new OwnerDO(state, { ...env, TELEGRAM_BOT_TOKEN: '7.fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC' });
       expect(await turn(930003, 'Anything else today?', local)).toBe('awaiting_delivery');
       expect(model.requests.at(-1)).toContain('And the dentist?');
     } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
