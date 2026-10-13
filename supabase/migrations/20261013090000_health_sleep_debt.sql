@@ -64,10 +64,10 @@ begin
   if v_body ? 'sleep_debt' then
     v_p := v_body->'sleep_debt';
     if jsonb_typeof(v_p) is distinct from 'object' or jsonb_typeof(v_p->'state') is distinct from 'string'
-      or (select array_agg(k order by k) from jsonb_object_keys(v_p) k) is distinct from case v_p->>'state'
+      or (select array_agg(k order by k) from jsonb_object_keys(v_p) k) is distinct from (case v_p->>'state'
         when 'unavailable' then array['reason','state']
         when 'partial' then array['activation','algorithm_version','confidence','state']
-        when 'available' then array['activation','algorithm_version','debt_minutes','need_basis','state'] end
+        when 'available' then array['activation','algorithm_version','debt_minutes','need_basis','state'] end)
       or (v_p->>'state' = 'unavailable' and (jsonb_typeof(v_p->'reason') is distinct from 'string' or v_p->>'reason' not in ('not_linked','consent_required','consent_withdrawn','no_readings','baseline_immature','missing_sleep',
         'missing_resting_signal','stale_inputs','conflicting_inputs','intraday_inputs_unavailable','calendar_demand_unavailable')))
       or (v_p->>'state' <> 'unavailable' and (
