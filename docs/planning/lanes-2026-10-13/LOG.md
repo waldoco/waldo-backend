@@ -647,3 +647,27 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - **This tip carries** #1106 (tests), #1107 (a no-op until the proxy redeploys) and #1111.
   - **Smoke:** `/healthz` shows `652b5fcf`. Signed-out `/app/v1/session` and `/app/v1/chat/main` return 401, and `POST /probe/turn` returns 403. The tail shows version `8b48dad2`.
 - **P1 go sent to the App lane:** test send 2 of 5, which also counts as QA step 4. It includes the look-only check for #98 when the card shows. I read the hops from the tail.
+
+## 01:02Z: P1 run 2 (test send 2 of 5): the cause is H3, Gmail rewrites our Message-ID; D-b is being built
+
+- **App lane, main's build `1f14eb72`:**
+  - Turn 1 (00:56:29Z) drafted only, again.
+  - Turn 2, "Send it now." (00:57:55Z), raised the card in chat ("Send an email · Waiting for you"; buttons Send email, Change it, Don't do this, Not now).
+  - #98's look-only check passed on its build.
+  - Approve tapped at 00:59:56Z. The result was "Outcome not confirmed" again.
+- **Hops (Worker `8b48dad2`, 00:59:52–01:00:00Z):**
+  - `email_thread:no_thread`, so H4 is ruled out;
+  - `email_send:sent`;
+  - `email_verify:not_found` ×3;
+  - **`email_diagnose:header_differs`**;
+  - `email_reconcile:not_found`;
+  - then a 503.
+- **Conclusion [verified in source at `652b5fcf`]:** threadPage's `message_id` is the trimmed, validated Message-ID header, and `id` is the Gmail id. So Gmail rewrote our Message-ID, and #990's rfc822msgid proof can never succeed for an API send on any proxy version. #990 made no live sends, so this was never seen before.
+- **D-b, conservative form, decided** (pre-agreed with the advisor at 23:41Z) and sent to Connectors as its one critical item before the reset:
+  - **Identity:** the Gmail id and thread that send returned.
+  - **On v17:** threadPage finds the copy by the Gmail id. Its actual header then goes through the strict search, which requires SENT, the exact header, the thread and the id.
+  - **On the new proxy:** the by-id check requires the id, SENT and the thread. A rewritten header is logged with a fixed code.
+  - **A lost response** stays unknown: never retried, never done, and no matching by subject or time.
+  - **For the owner's summary:** this changes #990's proof identity.
+- **Usage:** 81% at 01:02Z, rising about 0.13 points a minute while the lanes pause. D-b is the only active build. A focused review follows, then a deploy and P1 test send 3 of 5.
+- **Turn-1 drafting has now happened twice in a row.** It's a backend prompt-context item, queued.
