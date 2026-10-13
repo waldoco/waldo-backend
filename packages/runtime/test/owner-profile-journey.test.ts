@@ -7,7 +7,7 @@ import { applyClaimOps, claimStore, turnMemoryPrompt } from '../src/memory/claim
 const AT = '2026-10-04T00:00:00.000Z';
 const ops = (add: unknown[]) => JSON.stringify({ add, seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null });
 const withStore = <T>(name: string, work: (store: ReturnType<typeof claimStore>) => T) =>
-  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), (_i, state) => work(claimStore(state.storage.sql)));
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), (_i, state) => work(claimStore(state.storage.sql)));
 const profile = (prompt: string) => prompt.slice(prompt.indexOf('<owner_profile>'), prompt.indexOf('</owner_profile>'));
 
 it('every owner-stated fact reaches <owner_profile>, not just the first eight', async () => {
@@ -48,7 +48,7 @@ it('with a room limit the newest owner facts stay, the rest are counted, and not
 });
 
 it('active and promoted owner facts are ordered newest-first together', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('owner-profile-interleaved')), (_i, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('owner-profile-interleaved')), (_i, state) => {
     const store = claimStore(state.storage.sql);
     const add = (i: number) => store.add({ kind: 'fact', text: `Order ${i}`, source: 'stated', evidence: `owner, tg-${i}: "x"`, origin: 'owner', source_ref: `owner, tg-${i}` }, AT);
     [0, 1, 2, 3].forEach(add);

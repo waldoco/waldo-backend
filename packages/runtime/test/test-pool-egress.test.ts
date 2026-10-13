@@ -2,7 +2,7 @@ import {describe,it,expect} from 'vitest';
 import {env} from 'cloudflare:workers';
 import {runInDurableObject} from 'cloudflare:test';
 
-const egress=(url:string,init?:RequestInit)=>runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('test-pool-egress')),async()=>{
+const egress=(url:string,init?:RequestInit)=>runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('test-pool-egress')),async()=>{
  const response=await fetch(url,init);
  return {status:response.status,marker:response.headers.get('x-waldo-test-egress'),body:await response.text()};
 });

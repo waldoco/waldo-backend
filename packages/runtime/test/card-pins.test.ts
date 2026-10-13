@@ -8,7 +8,7 @@ import { productionDeps } from '../src/seams/deps';
 
 describe('card pins', () => {
   it('pinned times override the planner until cleared; a today-only time ignores the pin', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('card-pins'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('card-pins'));
     await runInDurableObject(stub, async (_instance, state) => {
       ensureSchema(state.storage);
       const now = Date.parse('2036-09-23T01:00:00Z');

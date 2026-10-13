@@ -24,7 +24,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
-const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e8f';
 const AT = Date.parse('2026-10-03T09:00:00Z');
@@ -50,7 +50,7 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 const inObject = async (name: string, run: (state: DurableObjectState) => Promise<void>) =>
-  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => run(state));
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => run(state));
 
 it('an object whose day plan predates the outcome gains it once, and its finished cards say neither sent nor skipped', async () => {
   await inObject('card-state-upgrade', async state => {
@@ -108,7 +108,7 @@ const briefComesDue = async (name: string, before: (owner: Owner) => Promise<voi
       state.storage.kv.put('app_subject', String(appSubjectFor(name)));
       state.storage.kv.put('timezone', 'UTC');
       state.storage.kv.put('timezone_confirmed', true);
-      const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC',
+      const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC',
         WALDO_OWNER_TELEGRAM_ID: undefined }) as unknown as Owner;
       await owner.setup('app').ready;
       await before(owner);
