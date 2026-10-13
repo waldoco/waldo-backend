@@ -20,3 +20,14 @@ it('an edge refusal surfaces as an error with its status, and a malformed reply 
   await expect(proxy({ error: { status: 403, message: 'insufficient scopes' } }).calendarWatch('owner', 'conn', { channelId: 'c', token: 't', address: 'https://w.test/events/gcal' })).rejects.toMatchObject({ status: 403 });
   await expect(proxy({ data: { channelId: 'other', resourceId: 'r', expiration: 1 } }).calendarWatch('owner', 'conn', { channelId: 'c', token: 't', address: 'https://w.test/events/gcal' })).rejects.toThrow();
 });
+
+it('a Vault-backed Gmail watch and stop cross to the edge as typed ops', async () => {
+  sent.length = 0;
+  expect(await proxy({ data: { historyId: '555', expiration: 1760600000000 } }).gmailWatch('owner', 'conn', 'projects/waldo-dev/topics/waldo-gmail-push')).toEqual({ historyId: '555', expiration: 1760600000000 });
+  await proxy({ data: null }).gmailStop('owner', 'conn');
+  expect(sent).toEqual([
+    { do_name: 'owner', op: 'gmail_watch', connection: 'conn', topic: 'projects/waldo-dev/topics/waldo-gmail-push' },
+    { do_name: 'owner', op: 'gmail_stop', connection: 'conn' },
+  ]);
+  await expect(proxy({ data: { historyId: 'x', expiration: 1 } }).gmailWatch('owner', 'conn', 'projects/waldo-dev/topics/waldo-gmail-push')).rejects.toThrow();
+});

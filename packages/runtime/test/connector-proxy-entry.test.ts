@@ -404,3 +404,30 @@ it('a calendar watch without a calendar scope, on a foreign connection or to a f
   expect(out.error).toBeDefined();expect(seen).toHaveLength(0);expect(f.hops).not.toContain('token');
  }
 });
+
+const gmailWatchBody = {do_name:'owner',op:'gmail_watch',connection:'conn',topic:'projects/waldo-dev/topics/waldo-gmail-push'};
+const withGmailWatch = () => {
+ const inner = fetch;const seen:string[]=[];
+ vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
+  const url=String(input);
+  if(url==='https://gmail.googleapis.com/gmail/v1/users/me/watch'){seen.push(String(init?.body));return Response.json({historyId:'555',expiration:'1760600000000'});}
+  if(url==='https://gmail.googleapis.com/gmail/v1/users/me/stop'){seen.push('stop');return new Response(null,{status:204});}
+  return inner(input,init);
+ }));
+ return seen;
+};
+it('a signed Gmail watch on a mail grant starts the watch at the edge into the named topic, with no ledger row',async()=>{
+ const f=fixture();f.scope(['https://www.googleapis.com/auth/gmail.readonly','https://www.googleapis.com/auth/gmail.send','https://www.googleapis.com/auth/gmail.compose']);const seen=withGmailWatch();
+ expect(await(await serve(await request(gmailWatchBody))).json()).toEqual({data:{historyId:'555',expiration:1760600000000}});
+ expect(JSON.parse(seen[0]!)).toEqual({topicName:'projects/waldo-dev/topics/waldo-gmail-push',labelIds:['INBOX'],labelFilterBehavior:'INCLUDE'});
+ expect(f.hops).not.toContain('proxy_idem_claim');expect(f.rows.size).toBe(0);
+ expect(await(await serve(await request({do_name:'owner',op:'gmail_stop',connection:'conn'}))).json()).toEqual({data:null});
+ expect(seen[1]).toBe('stop');
+});
+it('a Gmail watch without a mail scope, on a foreign connection or into another topic never reaches Google',async()=>{
+ for(const [input,scopes] of [[gmailWatchBody,['https://www.googleapis.com/auth/calendar.events']],[{...gmailWatchBody,connection:'foreign'},undefined],[{...gmailWatchBody,topic:'projects/evil/topics/steal'},undefined]] as const){
+  const f=fixture();f.scope(scopes??['https://www.googleapis.com/auth/gmail.readonly','https://www.googleapis.com/auth/gmail.send','https://www.googleapis.com/auth/gmail.compose']);const seen=withGmailWatch();
+  const out=await(await serve(await request(input))).json() as {error?:{message:string}};
+  expect(out.error).toBeDefined();expect(seen).toHaveLength(0);expect(f.hops).not.toContain('token');
+ }
+});

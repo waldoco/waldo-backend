@@ -1,7 +1,7 @@
 import { routerSignature, signedRpc, hex, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { ProxyIntentError, type ProxyIntent } from './proxy-intent';
 import { GOOGLE_METHODS, GoogleError, type GoogleClient, type GoogleTokens } from './google';
-import type { CalendarWatch } from './google-push';
+import type { CalendarWatch, GmailWatch } from './google-push';
 
 // Google tokens live in Supabase Vault and are used only inside the connector-proxy Edge Function.
 // The runtime holds a connection id and gets data back; it never sees a bearer or refresh token.
@@ -16,6 +16,8 @@ export type GoogleProxy = Readonly<{
   // Calendar push channels: the edge starts and stops them with the grant's token.
   calendarWatch(doName: string, connection: string, input: Readonly<{ channelId: string; token: string; address: string }>): Promise<CalendarWatch>;
   stopChannel(doName: string, connection: string, channel: Readonly<{ channelId: string; resourceId: string }>): Promise<void>;
+  gmailWatch(doName: string, connection: string, topic: string): Promise<GmailWatch>;
+  gmailStop(doName: string, connection: string): Promise<void>;
   revoke(doName: string, connection: string): Promise<boolean>;
 }>;
 
@@ -81,6 +83,12 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       return { channelId: input.channelId, resourceId: data.resourceId, expiration: data.expiration };
     },
     stopChannel: async (doName, connection, channel) => { await post({ do_name: doName, op: 'channel_stop', connection, channel_id: channel.channelId, resource_id: channel.resourceId }); },
+    gmailWatch: async (doName, connection, topic) => {
+      const { data } = await post({ do_name: doName, op: 'gmail_watch', connection, topic }) as { data?: { historyId?: unknown; expiration?: unknown } };
+      if (typeof data?.historyId !== 'string' || !/^\d{1,30}$/.test(data.historyId) || typeof data.expiration !== 'number' || !Number.isSafeInteger(data.expiration)) throw new Error('gmail watch reply malformed');
+      return { historyId: data.historyId, expiration: data.expiration };
+    },
+    gmailStop: async (doName, connection) => { await post({ do_name: doName, op: 'gmail_stop', connection }); },
     revoke: async (doName, connection) => (await rpc('connection_revoke', `connrevoke.${doName}.${connection}`, { p_do_name: doName, p_connection: connection })) === true,
   };
 };
