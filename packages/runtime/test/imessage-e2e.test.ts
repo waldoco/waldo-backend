@@ -7,6 +7,8 @@ import { iMessageBridgeName } from '../src/channels/imessage/bridge-do';
 import { sha256Hex } from '../src/channels/imessage/crypto';
 import { IMessageFinalOutbox } from '../src/channels/imessage/final-outbox';
 import { IMessageOwnerInbox } from '../src/channels/imessage/owner-inbox';
+import { BridgeStore } from '../src/channels/imessage/bridge-store';
+import { PROPOSED_LOCAL_TEST_POLICY } from '../src/channels/imessage/policy';
 import { fixtureDirectory, type FixtureOwner } from './helpers/imessage-fixture-directory';
 import { SimulatedHost } from './helpers/imessage-sim-host';
 
@@ -129,7 +131,7 @@ it('a signed direct message runs one genuine owner turn and its frozen reply rea
   await runInDurableObject(w.ownerStub, async (_i, state) => {
     const rows = new IMessageFinalOutbox(state.storage).records();
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ state: 'settled', text: proof.reply, result: { state: 'local_recorded' } });
+    expect(rows[0]).toMatchObject({ state: 'settled', text: '', result: { state: 'local_recorded' } }); // settled: identity and result kept, reply text pruned
     expect(new IMessageOwnerInbox(state.storage).records()[0]).toMatchObject({ state: 'completed', closedReason: 'final_committed', text: '' });
   });
   expect(w.host.nativeSends).toHaveLength(1);
@@ -378,4 +380,87 @@ it('a host that sees an expired commitment returns not_started; the lane stays u
   await replyFor(w, 'Next one');
   expect((await w.host.pull()).delivery).not.toBeNull();
   expect(w.host.nativeSends).toHaveLength(0);
+});
+
+// ---- review rev3 follow-ups: pre-DO hardening, revoke at the cap, quarantine recovery ----------------------
+const forged = (w: Awaited<ReturnType<typeof world>>, bridgeId: string, accountId: string, ip: string) => w.call(new Request(`${HOST_ORIGIN}/channels/imessage/v1/heartbeat`, {
+  method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': ip,
+    'x-waldo-imessage-s2': JSON.stringify({ version: 1, bridgeId, accountId, atMs: Date.now(), nonce: crypto.randomUUID(), signature: '0'.repeat(64) }) },
+  body: JSON.stringify({ version: 1, bridgeId, accountId, databaseGeneration: 'g', status: 'online' }) }));
+
+it('non-minted ids never reach a bridge; an unknown tuple leaves no storage; one address is limited at the edge', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  const lookups = () => w.fx.calls.filter((c) => c === 'imessage_bridge_authority').length, before = lookups();
+  for (const [b, a] of [['not-minted', w.host.accountId], [w.host.bridgeId, 'ima_short'], [`IMB_${'a'.repeat(32)}`, w.host.accountId], [w.host.bridgeId, `${w.host.accountId}x`]])
+    expect((await forged(w, b!, a!, '192.0.2.10')).status).toBe(401);
+  expect(lookups()).toBe(before); // refused before any directory lookup or Durable Object
+  const ghost = { bridgeId: `imb_${'a'.repeat(32)}`, accountId: `ima_${'b'.repeat(32)}` };
+  expect((await forged(w, ghost.bridgeId, ghost.accountId, '192.0.2.11')).status).toBe(401);
+  await runInDurableObject(env.IMESSAGE_BRIDGE_DO!.get(env.IMESSAGE_BRIDGE_DO!.idFromName(iMessageBridgeName('test', ghost.bridgeId, ghost.accountId))), async (_i, state) => {
+    const tables = state.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type='table'").toArray().map((r) => r.name).filter((n) => !n.startsWith('_cf'));
+    expect(tables).toEqual([]); // the unsigned request created no bridge tables
+  });
+  const ip = `198.51.100.${1 + Math.floor(Math.random() * 250)}`;
+  const statuses: number[] = [];
+  for (let i = 0; i < 130; i++) statuses.push((await forged(w, ghost.bridgeId, ghost.accountId, ip)).status);
+  expect(statuses.filter((s) => s === 429).length).toBeGreaterThan(0);
+  expect(statuses.filter((s) => s !== 401 && s !== 429)).toEqual([]);
+  expect((await w.host.heartbeat()).status).toBe(200); // another address is unaffected
+});
+
+it('a revoke on a full bridge store is still recorded and the host gets 401, not 503', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await runInDurableObject(w.bridgeStub(), async (_i, state) => {
+    const now = Date.now(); // held evidence is never pruned early, so this store cannot recover by pruning
+    for (let i = 0; i < PROPOSED_LOCAL_TEST_POLICY.maxRecords + 10; i++)
+      state.storage.sql.exec("INSERT INTO events(generation,event_id,digest,body,kind,state,created_at) VALUES('fill',?,?,'','message','held',?)", `fill-${i}`, '0'.repeat(64), now);
+  });
+  expect((await w.host.heartbeat()).status).toBe(503); // backpressure while bound
+  expect((await w.action('imessage.revoke', { id: w.host.bridgeId })).status).toBe(303);
+  expect((await w.host.heartbeat()).status).toBe(401);
+  expect((await w.host.pull()).status).toBe(401);
+  await runInDurableObject(w.bridgeStub(), async (_i, state) => { expect(new BridgeStore(state.storage, PROPOSED_LOCAL_TEST_POLICY).revokedRevision()).not.toBeNull(); });
+});
+
+it('quarantine recovery is revoke + re-pair: the new bridge has a clean lane and replies flow again', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  const t0 = Date.now();
+  vi.useFakeTimers({ toFake: ['Date'], now: t0 }); // one forward-only clock for the whole recovery
+  try {
+  await replyFor(w, 'Before the quarantine');
+  expect((await w.host.pull()).delivery).not.toBeNull(); // pulled, never resulted
+  vi.setSystemTime(t0 + PROPOSED_LOCAL_TEST_POLICY.mutationDeadlineMs + 2_000);
+  expect((await w.host.heartbeat()).status).toBe(200);
+  await w.pump(3);
+  expect((await w.bridgeStub().status()).quarantine).toBe('mutation_deadline');
+  await replyFor(w, 'Still quarantined');
+  expect((await outbox(w.ownerStub)).at(-1)).toMatchObject({ state: 'settled', result: { reason: 'mutation_lane_poisoned' } });
+  const old = { bridgeId: w.host.bridgeId, stub: w.bridgeStub() };
+  expect((await w.action('imessage.revoke', { id: old.bridgeId })).status).toBe(303);
+  // Fresh invitation -> new host identity -> new bridge Durable Object with an empty lane.
+  const host = new SimulatedHost(w.call, HOST_ORIGIN);
+  const code = (await (await w.action('imessage.pair')).text()).split('\n')[0]!;
+  expect((await host.redeem(code)).status).toBe(200);
+  expect(host.bridgeId).not.toBe(old.bridgeId);
+  const challenge = (await (await w.action('imessage.verify', { id: host.bridgeId, subject: SUBJECT, chat: CHAT })).text()).split('\n')[0]!;
+  expect((await host.send(host.message(challenge))).status).toBe(200);
+  expect((await w.action('imessage.activate', { id: host.bridgeId, subject: SUBJECT, chat: CHAT })).status).toBe(303);
+  expect((await host.heartbeat()).status).toBe(200); expect((await host.capabilities()).status).toBe(200);
+  const stub = env.IMESSAGE_BRIDGE_DO!.get(env.IMESSAGE_BRIDGE_DO!.idFromName(iMessageBridgeName('test', host.bridgeId, host.accountId)));
+  expect((await stub.status()).quarantine).toBeNull();
+  expect((await host.send(host.message('After the re-pair'))).status).toBe(200);
+  for (let i = 0; i < 6; i++) { await runDurableObjectAlarm(stub); await w.settle(); await runDurableObjectAlarm(w.ownerStub); await w.settle(); }
+  const { delivery } = await host.pull();
+  expect(delivery).not.toBeNull();
+  const result = await host.execute(delivery!);
+  expect(result.state).toBe('local_recorded');
+  expect((await host.postResult(delivery!, result)).status).toBe(200);
+  for (let i = 0; i < 3; i++) { await runDurableObjectAlarm(stub); await w.settle(); await runDurableObjectAlarm(w.ownerStub); await w.settle(); }
+  expect((await outbox(w.ownerStub)).at(-1)).toMatchObject({ state: 'settled', result: { state: 'local_recorded' } });
+  expect((await old.stub.status()).quarantine).toBe('mutation_deadline'); // the old lane keeps its evidence
+  expect(forbiddenEgress).toEqual([]);
+  } finally { vi.useRealTimers(); }
 });

@@ -8,6 +8,8 @@ import { errorResponse, IMESSAGE_HTTP_PREFIX, invalidRequest, jsonResponse, pars
 const HOST_ROUTES: Record<string, HostRoute> = {
   '/events': 'events', '/heartbeat': 'heartbeat', '/capabilities': 'capabilities', '/commands/pull': 'commands/pull', '/commands/result': 'commands/result',
 };
+// Only ids minted by mintBridgeIdentity can name a bridge Durable Object.
+const BRIDGE_ID = /^imb_[0-9a-f]{32}$/, ACCOUNT_ID = /^ima_[0-9a-f]{32}$/;
 // PROPOSED redeem throttle windows (source: this connector's local profile), independent per key.
 const REDEEM_THROTTLES = [{ prefix: 'imredeem.code', limit: 5, seconds: 600 }, { prefix: 'imredeem.source', limit: 20, seconds: 3600 }] as const;
 
@@ -25,8 +27,12 @@ export async function handleIMessageHost(request: Request, env: IMessageEnv, fet
   if ((request.headers.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase() !== 'application/json') return errorResponse(415, 'unsupported_media_type');
   const raw = await readBoundedBody(request, composition.policy.maxRequestBytes);
   if (!raw.ok) return raw.status === 413 ? errorResponse(413, 'request_too_large') : errorResponse(400, 'invalid_body');
+  const headers = suffix === '/pair/redeem' ? null : parseS2Header(request);
+  if (suffix !== '/pair/redeem' && (!headers || !BRIDGE_ID.test(headers.bridgeId) || !ACCOUNT_ID.test(headers.accountId))) return invalidRequest();
+  // Edge limit per source IP before any directory or Durable Object work (the app API's limiter pattern).
+  const admitted = await edgeLimit(env, request, suffix === '/pair/redeem' ? 'redeem' : 'host');
+  if (admitted !== 'ok') return admitted === 'limited' ? errorResponse(429, 'throttled') : errorResponse(503, 'unavailable');
   if (suffix === '/pair/redeem') return redeem(request, raw.text, env, composition, fetcher);
-  const headers = parseS2Header(request);
   if (!headers) return invalidRequest();
   const ns = env.IMESSAGE_BRIDGE_DO as unknown as DurableObjectNamespace<IMessageBridgeDO>;
   try {
@@ -35,6 +41,15 @@ export async function handleIMessageHost(request: Request, env: IMessageEnv, fet
     return new Response(reply.json, { status: reply.status, headers: { 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'content-type': 'application/json' } });
   } catch { return errorResponse(503, 'unavailable'); }
 }
+
+// One limiter key per source IP and route class. A paired host polls about 35 times a minute, well inside the
+// binding's 120/60 s window; a flood of unsigned or failed-auth requests from one address is cut off at the edge.
+const edgeLimit = async (env: IMessageEnv, request: Request, kind: 'redeem' | 'host'): Promise<'ok' | 'limited' | 'unavailable'> => {
+  if (!env.RESPONSIBILITY_RATE_LIMITER) return 'unavailable';
+  const ip = request.headers.get('cf-connecting-ip') ?? 'unknown';
+  try { return (await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `imessage-${kind}-ip:${ip}` })).success ? 'ok' : 'limited'; }
+  catch { return 'unavailable'; }
+};
 
 async function redeem(request: Request, text: string, env: IMessageEnv, composition: NonNullable<ReturnType<typeof iMessageComposition>>, fetcher: typeof fetch): Promise<Response> {
   // Setup is unsigned by design (no credential exists yet); request headers carry no authority.

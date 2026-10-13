@@ -20,6 +20,7 @@ export type IMessageEnv = OwnerDirectoryEnv & Readonly<{
   IMESSAGE_CREDENTIAL_WRAPPING_KEY?: string;
   IMESSAGE_BRIDGE_DO?: DurableObjectNamespace;
   OWNER_DO?: DurableObjectNamespace;
+  RESPONSIBILITY_RATE_LIMITER?: RateLimit;
 }>;
 
 /** Composition gate: every piece must be present, otherwise the connector is disabled (no fallback). */
@@ -91,18 +92,21 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
     const c = this.composition();
     if (!c) return fixed(503, 'unavailable');
     if (!this.owns(c.environment, headers.bridgeId, headers.accountId)) return invalid();
-    const store = this.store(c.policy);
     let authority: BridgeAuthority | null;
     try { authority = await this.directory().authority(c.environment, headers.bridgeId, headers.accountId); }
     catch { return fixed(503, 'unavailable'); }
-    if (!authority || (authority.state !== 'pending' && authority.state !== 'active')) {
-      if (authority) this.applyRevocation(store, authority.revision);
+    // No storage is opened for an unknown tuple: an unsigned request for a made-up bridge leaves nothing behind.
+    if (!authority) return invalid();
+    if (authority.state !== 'pending' && authority.state !== 'active') {
+      // Revoked/expired: record it locally, but the host always gets the 401 that tells it to stop.
+      try { this.applyRevocation(this.store(c.policy), authority.revision); } catch { console.error('imessage revoke record deferred'); }
       return invalid();
     }
     const key = await this.key(authority, c.environment, c.wrappingKey);
     if (!key || !(await verifyS2(body, headers, key))) return invalid();
     const now = Date.now();
     if (headers.atMs > now || now - headers.atMs > c.policy.signatureMaxAgeMs) return invalid();
+    const store = this.store(c.policy);
     this.remember(c.environment, headers.bridgeId, headers.accountId, store);
     const parsed = parseJson(body);
     try {
