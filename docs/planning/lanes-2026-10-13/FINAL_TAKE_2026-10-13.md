@@ -41,12 +41,12 @@ Mac orchestrator, 13 Oct 2026, 19:08Z. For the owner, the backend lead (Fable), 
 | Who | Builds tonight, in order | Touches | Stops when |
 |---|---|---|---|
 | **Backend lead (Fable)** | 1. **A0:** the guard ratchet (`scripts/guards/guard-surface-neutral-core.mjs`)<br>2. **A1:** the canonical turn with authorship<br>3. **A2:** waits for #1108<br><br>Final say at the gate. | Guards, inbound turn types; `owner-do.ts` only in its queue slot | A1 is up for review, or its budget runs low (post a status line first) |
-| **Cloud orchestrator (Ansh's)** | **Independent reviews:**<br>- #1149 at `c7f80fbc`<br>- #1186<br>- A0 and A1<br>- the Mac's PRs<br>- a post-merge review of #1178, next to the running #1017/#1162 review<br><br>**Also:**<br>- relays the owner's answer on the builder's item 4 (owner step 6);<br>- folds section 7's corrections into plan rev 14. | No code | The review queue is empty |
-| **Builder** | 1. the #1149 fixes<br>2. #1180<br>3. #1186<br>4. item 3, the failure notice<br>5. item 4, the check-back machine turn, if approved<br>6. #1108, before A2 needs it | Scheduler; `owner-do.ts` in its slot | As now |
+| **Cloud orchestrator (Ansh's)** | **Independent reviews:**<br>- #1149 at `c7f80fbc`<br>- #1186<br>- A0 and A1<br>- the Mac's PRs<br>- a post-merge review of #1178, next to the running #1017/#1162 review<br><br>**Also:**<br>- said yes to the builder's item 4 at 19:05Z, with conditions (6152969658);<br>- folds section 7's corrections into plan rev 14. | No code | The review queue is empty |
+| **Builder** | 1. the #1149 fixes<br>2. #1180<br>3. #1186<br>4. item 3, the failure notice<br>5. the #1133 renumber, carried into #1177 (6152969658)<br>6. item 4, the check-back machine turn (yes, 6152969658)<br>7. #1108, before A2 needs it | Scheduler; `owner-do.ts` in its slot | As now |
 | **Google lane** | 1. The flaky Google tools: #1171, #1165, #1174, #1150<br>2. #1185, once its keys land | Connectors, eval | As now |
 | **Mac lane T (tool layer)** | M1, then M2 (below) | `tools/`, handler modules, the `llm/` adapter; `owner-do.ts` only if given a slot | M2's first PR is open with CI green and a review asked |
 | **Mac lane P (proof)** | M3, then M4, then M5 (below) | `scripts/`, eval fixtures, `llm/` retries, `.github/workflows` (M5 merges only on the owner's yes) | M4 is up for review |
-| **Mac orchestrator (this session)** | - gate pre-checks<br>- hand-off 3<br>- the #1133 renumber<br>- the post-deploy smoke and baseline re-run<br>- heartbeat and LOG | Docs; one added commit on #1133 | Morning |
+| **Mac orchestrator (this session)** | - gate pre-checks, including hand-off 3<br>- the post-deploy smoke and baseline re-run<br>- heartbeat and LOG | Docs | Morning |
 | **Ashish** | The host's real send and the fixes from the post-merge reviews; then the staging round trip, once Ansh turns the connector on (owner step 7) | `waldo-imessage-host` | The round trip is proven, or it is blocked |
 | **Suyash** | The UI/UX map. Nothing backend tonight | App | |
 
@@ -139,7 +139,7 @@ The order:
 1. **Builder:** #1180, then #1186, then item 3 (in flight).
 2. **Builder:** #1108; A2 depends on it.
 3. **Lead:** A1, if it touches the file. A0 doesn't.
-4. **Builder:** item 4, the check-back machine turn, if approved.
+4. **Builder:** item 4, the check-back machine turn (yes from the cloud orchestrator, 6152969658).
 5. **Builder:** the threads, #1173, then #1176, then #1179.
 6. **Mac:** M1's wiring, only if the tool list can't be filtered outside the file.
 7. **Lead:** A2 onward.
@@ -179,14 +179,16 @@ It is forward-only, because of DO `v6` and `v7`. Apply migrations from that SHA'
 - [inference] Supabase keys migrations by version, so one of the two would be rejected or skipped.
 - [verified] #1178 adds no DO class: both SHAs bind `DEVICE_BRIDGE_DO`, from `v5`.
 
-**The fix.** The Mac renumbers #1133 to a version after `20261013000000`:
-- in one added commit, with no force-push, unless its author does it first;
-- `scripts/verify-supabase-migrations.mjs` is updated in the same PR;
-- #1177 follows.
+**The fix.** The builder renumbers #1133, as the cloud orchestrator assigned at 19:05Z (6152969658):
+- the smallest bump that keeps today's order, for example `20261013000100`;
+- in both canonical lists, including `scripts/verify-supabase-migrations.mjs`;
+- carried into #1177.
+
+The Mac doesn't touch #1133.
 
 The owner first confirms that no `20261013000000` migration has been applied anywhere.
 
-**Hand-off 3.** The Mac writes it after:
+**Hand-off 3.** The lead writes it (6152969658), and the Mac pre-checks it. It waits for:
 - the #1178 post-merge review;
 - #1149;
 - M1.
@@ -320,9 +322,9 @@ Step 6 touches `owner-do.ts:1517` and `:2133`, which are A5 and A6. The lead dec
 3. **Shivansh:** sign in to Langfuse in this Mac's built-in browser, so the tests can read traces.
 4. **Ansh:** share the Build Bible (§6b, §7) with the lead's account. Or say yes, and the Mac mirrors those two sections (rev 115) into the docs branch as a read-only copy.
 5. **Ansh:** confirm that no `20261013000000` migration has been applied anywhere.
-6. **Shivansh:** a yes or no on this split. The cloud orchestrator relays the answer to the builder. It covers:
-   - the Mac taking M1–M5;
-   - the builder's item 4, the check-back machine turn. It changes the heartbeat decision H1. I recommend yes: S7 is the live evidence.
+6. **Shivansh:** a yes or no on the Mac taking M1–M5.
+
+   The builder's item 4 (the check-back machine turn) already has the cloud orchestrator's yes from 19:05Z, unless you or the lead object. It changes the heartbeat decision H1, which its PR names for Ansh.
 7. **Ansh, optional:** to test iMessage tonight, turn the staging connector on (the flag and a policy). Without it, the round trip moves to tomorrow.
 
 **These block later work:**
