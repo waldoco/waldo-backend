@@ -2081,3 +2081,10 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
     - on #1103 (6148133946): hand-off 2 must be compatible with both app `7e09317c` and app `main` `8e8c73e7`;
     - on #1170: recall and ask-versus-assume checks.
   - **Next:** the lead gates #1172, then hand-off 2 as the owner's hand deploy. The Mac then runs end-to-end checks on staging.
+
+- **14:43Z heartbeat.**
+  - **Usage:** 54%, resetting 17:30Z.
+  - **#1172:** `51d46d78` is MERGEABLE, with CI 6 of 6 green, waiting on the lead's review.
+  - **Backend:** the `beta-mvp` tip is `93632841` (#1141). Nothing new on #1103 since 14:41Z. The lead's log was last updated at 14:07.
+  - **App:** no new PRs or issues from Suyash.
+  - **Heartbeat:** the job is now `e8600e07` (it was `e0e8cd06`), re-created to match the 14:38Z rulings. It no longer reviews or merges app PRs and gives no new items to Mac lanes. Its one live trigger is the lead calling hand-off 2 ready.
