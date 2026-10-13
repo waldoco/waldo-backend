@@ -189,14 +189,15 @@ export const verifiedSent = (value: unknown, messageId: string, threadId?: strin
   isObject(value) && typeof value.message_id === 'string' && !!value.message_id && typeof value.thread_id === 'string' && !!value.thread_id
   && value.rfc822_message_id === messageId && Array.isArray(value.label_ids) && value.label_ids.includes('SENT') && (!threadId || value.thread_id === threadId);
 // The first check a Sent readback fails, for fixed-code hops. 'verified' only when verifiedSent holds and, given
-// the id the send returned, the readback is that message.
-export type SentCheck = 'verified' | 'not_found' | 'id_mismatch' | 'not_sent_label' | 'rfc822_mismatch' | 'thread_mismatch';
+// the id the send returned, the readback is that message. Gmail can rewrite the Message-ID of an API send, so
+// for the id the send returned, a SENT copy in the intended thread is 'rfc822_rewritten': sent, under Gmail's header.
+export type SentCheck = 'verified' | 'rfc822_rewritten' | 'not_found' | 'id_mismatch' | 'not_sent_label' | 'rfc822_mismatch' | 'thread_mismatch';
 export const sentCheck = (value: unknown, messageId: string, threadId?: string, sentId?: string): SentCheck =>
   !isObject(value) || typeof value.message_id !== 'string' || !value.message_id || typeof value.thread_id !== 'string' || !value.thread_id ? 'not_found'
     : sentId !== undefined && value.message_id !== sentId ? 'id_mismatch'
       : !Array.isArray(value.label_ids) || !value.label_ids.includes('SENT') ? 'not_sent_label'
-        : value.rfc822_message_id !== messageId ? 'rfc822_mismatch'
-          : threadId && value.thread_id !== threadId ? 'thread_mismatch' : 'verified';
+        : threadId && value.thread_id !== threadId ? 'thread_mismatch'
+          : value.rfc822_message_id === messageId ? 'verified' : sentId !== undefined ? 'rfc822_rewritten' : 'rfc822_mismatch';
 // Gmail checks a send before it goes out, so a token failure or a 400, 401, 403 or 429 answer means nothing
 // was sent. A server error or a lost response can follow a send, so those stay unknown.
 export const sendRefused = (error: unknown): boolean =>

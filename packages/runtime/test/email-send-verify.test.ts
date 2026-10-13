@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { approvalDesk } from '../src/channels/approvals';
 import { ownerEffectLedger } from '../src/channels/owner-effect-ledger';
 import { ProxyIntentError } from '../src/connectors/proxy-intent';
-import { GoogleError, GoogleTokenError, googleClient, sha256Hex, type GoogleClient } from '../src/connectors/google';
+import { GoogleError, GoogleTokenError, googleClient, sentCheck, sha256Hex, type GoogleClient } from '../src/connectors/google';
 
 // Synthetic mail only. An approved send is Sent only on Gmail metadata with SENT, our exact Message-ID
 // and the intended thread; these tests separate a send that landed but was not yet searchable, a
@@ -74,11 +74,77 @@ describe('an approved send that landed', () => {
   });
 
   it('names the check that failed when the returned id does not verify', async () => {
-    for (const [overrides, code] of [[{ label_ids: ['DRAFT'] }, 'not_sent_label'], [{ rfc822_message_id: '<other@example.test>' }, 'rfc822_mismatch'], [{ message_id: 'g2' }, 'id_mismatch']] as const) {
+    for (const [overrides, code] of [[{ label_ids: ['DRAFT'] }, 'not_sent_label'], [{ message_id: 'g2' }, 'id_mismatch']] as const) {
       const { codes, status } = await approve(`send-verify-${code}`, { ...sends(async () => ({ message_id: 'g1', thread_id: 't1' })), findSentByMessageId: (async (_m: string, _t?: string, sentId?: string) => sentId ? sentEvidence(overrides) : false) as GoogleClient['findSentByMessageId'] });
       expect(status).toBe('uncertain');
       expect(codes).toEqual(['email_thread:no_thread', 'email_send:sent', `email_verify:${code}`, `email_reconcile:${code}`]);
     }
+  });
+});
+
+describe('an approved send whose Message-ID Gmail rewrote', () => {
+  const REWRITTEN = '<CArewritten@mail.gmail.com>';
+  const landed = sends(async () => ({ message_id: 'g1', thread_id: 't1' }));
+  // The deployed proxy ignores the returned id and searches by Message-ID; its search returns only verified Sent evidence.
+  const searchOnly = (found: (messageId: string) => unknown, copies: readonly unknown[] = [{ id: 'g1', message_id: REWRITTEN }]) => ({
+    findSentByMessageId: (async (messageId: string) => found(messageId)) as GoogleClient['findSentByMessageId'],
+    threadPage: (async (threadId: string) => ({ messages: threadId === 't1' ? [{ id: 'g0', message_id: '<earlier@example.test>' }, ...copies] : [], cursor: null })) as unknown as GoogleClient['threadPage'],
+  });
+  const byHeader = (evidence: Record<string, unknown>) => (messageId: string) => messageId === REWRITTEN ? sentEvidence({ rfc822_message_id: REWRITTEN, ...evidence }) : false;
+
+  it('is Sent on the deployed proxy, by a strict search for the header Gmail gave the copy the send returned', async () => {
+    const { result, codes, ledgerState } = await approve('send-rewritten-search', { ...landed, ...searchOnly(byHeader({})) });
+    expect(result.toast).toBe('Sent');
+    expect(ledgerState).toBe('done');
+    expect(codes).toEqual(['email_thread:no_thread', 'email_send:sent', 'email_verify:not_found', 'email_verify:not_found', 'email_verify:not_found', 'email_diagnose:header_differs', 'email_verify:rfc822_rewritten']);
+  });
+
+  it('searches for the rewritten header once more when it trails', async () => {
+    let searches = 0;
+    const { result, codes, waits } = await approve('send-rewritten-search-retry', { ...landed, ...searchOnly(messageId => messageId === REWRITTEN && ++searches > 1 ? sentEvidence({ rfc822_message_id: REWRITTEN }) : false) });
+    expect(result.toast).toBe('Sent');
+    expect(codes.slice(-3)).toEqual(['email_diagnose:header_differs', 'email_verify:not_found', 'email_verify:rfc822_rewritten']);
+    expect(waits).toBe(3);
+  });
+
+  it('is Sent on a proxy that reads by id, when the id, SENT and the thread all hold', async () => {
+    const { result, codes } = await approve('send-rewritten-by-id', { ...landed, findSentByMessageId: (async (_m: string, _t?: string, sentId?: string) => sentId === 'g1' ? sentEvidence({ rfc822_message_id: REWRITTEN }) : false) as GoogleClient['findSentByMessageId'] });
+    expect(result.toast).toBe('Sent');
+    expect(codes).toEqual(['email_thread:no_thread', 'email_send:sent', 'email_verify:rfc822_rewritten']);
+  });
+
+  it('is never Sent by id without SENT, the returned id or the intended thread', async () => {
+    for (const [overrides, code] of [[{ label_ids: ['DRAFT'] }, 'not_sent_label'], [{ message_id: 'g2' }, 'id_mismatch'], [{ thread_id: 't2' }, 'thread_mismatch']] as const) {
+      const { status, codes } = await approve(`send-rewritten-by-id-${code}`, { ...landed, findSentByMessageId: (async (_m: string, _t?: string, sentId?: string) => sentId ? sentEvidence({ rfc822_message_id: REWRITTEN, ...overrides }) : false) as GoogleClient['findSentByMessageId'] });
+      expect(status).toBe('uncertain');
+      expect(codes).toContain(`email_verify:${code}`);
+    }
+  });
+
+  it('is never Sent by a search hit for another Gmail id, without SENT, or from a thread copy with another id', async () => {
+    for (const [name, client] of [
+      ['other-id', searchOnly(byHeader({ message_id: 'g9' }))],
+      ['no-sent', searchOnly(byHeader({ label_ids: ['DRAFT'] }))],
+      ['other-thread', searchOnly(byHeader({ thread_id: 't2' }))],
+      ['other-copy', searchOnly(byHeader({}), [{ id: 'g9', message_id: REWRITTEN }])],
+    ] as const) {
+      const { status, result } = await approve(`send-rewritten-search-${name}`, { ...landed, ...client });
+      expect(status).toBe('uncertain');
+      expect(result.toast).toBe('Outcome unknown');
+    }
+  });
+
+  it('accepts Gmail\'s header only for the id the send returned, so a recovery without it never does', () => {
+    const copy = sentEvidence({ rfc822_message_id: REWRITTEN });
+    expect(sentCheck(copy, MESSAGE_ID, 't1', 'g1')).toBe('rfc822_rewritten');
+    expect(sentCheck(copy, MESSAGE_ID, 't1')).toBe('rfc822_mismatch');
+    expect(sentCheck(copy, MESSAGE_ID)).toBe('rfc822_mismatch');
+  });
+
+  it('stays unknown when the send response was lost, whatever the thread holds', async () => {
+    const { status, codes } = await approve('send-rewritten-lost', { ...sends(async () => { throw new TypeError('network connection lost'); }), ...searchOnly(byHeader({})) });
+    expect(status).toBe('uncertain');
+    expect(codes.some(code => code.startsWith('email_diagnose'))).toBe(false);
   });
 });
 
