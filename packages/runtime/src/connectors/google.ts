@@ -188,6 +188,20 @@ export type SentEvidence = Readonly<{ message_id: string; thread_id: string; rfc
 export const verifiedSent = (value: unknown, messageId: string, threadId?: string): value is SentEvidence =>
   isObject(value) && typeof value.message_id === 'string' && !!value.message_id && typeof value.thread_id === 'string' && !!value.thread_id
   && value.rfc822_message_id === messageId && Array.isArray(value.label_ids) && value.label_ids.includes('SENT') && (!threadId || value.thread_id === threadId);
+// The first check a Sent readback fails, for fixed-code hops. 'verified' only when verifiedSent holds and, given
+// the id the send returned, the readback is that message. Gmail can rewrite the Message-ID of an API send, so
+// for the id the send returned, a SENT copy in the intended thread is 'rfc822_rewritten': sent, under Gmail's header.
+export type SentCheck = 'verified' | 'rfc822_rewritten' | 'not_found' | 'id_mismatch' | 'not_sent_label' | 'rfc822_mismatch' | 'thread_mismatch';
+export const sentCheck = (value: unknown, messageId: string, threadId?: string, sentId?: string): SentCheck =>
+  !isObject(value) || typeof value.message_id !== 'string' || !value.message_id || typeof value.thread_id !== 'string' || !value.thread_id ? 'not_found'
+    : sentId !== undefined && value.message_id !== sentId ? 'id_mismatch'
+      : !Array.isArray(value.label_ids) || !value.label_ids.includes('SENT') ? 'not_sent_label'
+        : threadId && value.thread_id !== threadId ? 'thread_mismatch'
+          : value.rfc822_message_id === messageId ? 'verified' : sentId !== undefined ? 'rfc822_rewritten' : 'rfc822_mismatch';
+// Gmail checks a send before it goes out, so a token failure or a 400, 401, 403 or 429 answer means nothing
+// was sent. A server error or a lost response can follow a send, so those stay unknown.
+export const sendRefused = (error: unknown): boolean =>
+  error instanceof GoogleTokenError || (error instanceof GoogleError && [400, 401, 403, 429].includes(error.status) && error.message !== 'intent_pending');
 
 // Canonical MIME for the send rail: fixed header order, CRLF, no display names. The digest the
 // owner approves binds these exact bytes; Message-ID (set by us) is the reconciliation handle
@@ -288,7 +302,9 @@ export type GoogleClient = Readonly<{
   findDraftByMessageId?(messageId: string): Promise<Readonly<{ draft_id: string; message_id?: string }> | null>;
   draft(input: DraftInput): Promise<Readonly<{ draft_id: string; message_id?: string; thread_id?: string }>>;
   sendRaw(raw: string, threadId?: string): Promise<Readonly<{ message_id: string; thread_id?: string }>>;
-  findSentByMessageId(messageId: string, threadId?: string): Promise<boolean | SentEvidence | Readonly<{ message_id: string }>>;
+  // sentId, the id messages.send returned, reads that message's metadata directly: a search can miss a message
+  // sent moments ago. The answer is returned unchecked for sentCheck. A proxy that predates it searches.
+  findSentByMessageId(messageId: string, threadId?: string, sentId?: string): Promise<boolean | SentEvidence | Readonly<{ message_id: string }>>;
   event(id: string): Promise<CalendarItem>;
   createEvent(input: Readonly<{ title: string; start: string; end: string; id?: string; operationMarker?: string }>): Promise<CalendarItem>;
   moveEvent(id: string, start: string, end: string, etag?: string, operationMarker?: string): Promise<CalendarItem>;
@@ -705,17 +721,21 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       }) as { id: string; threadId?: string };
       return { message_id: json.id, ...(json.threadId ? { thread_id: json.threadId } : {}) };
     },
-    async findSentByMessageId(messageId, threadId) {
+    async findSentByMessageId(messageId, threadId, sentId) {
       if (!validMessageId(messageId)) throw new Error('invalid Sent Message-ID');
+      const metadata = async (id: string) => {
+        const value = await call(`${GMAIL}/${encodeURIComponent(id)}?format=metadata&metadataHeaders=Message-ID`) as { id?: string; threadId?: string; labelIds?: string[]; payload?: GmailPayload };
+        const ids = value.payload?.headers?.filter(h => h.name.toLowerCase() === 'message-id');
+        return { value, evidence: { message_id: value.id, thread_id: value.threadId, label_ids: value.labelIds, rfc822_message_id: ids?.length === 1 ? ids[0]!.value.trim() : undefined } };
+      };
+      if (validGoogleId(sentId)) return (await metadata(sentId)).evidence as SentEvidence;
       const list = new URL(GMAIL);
       list.search = new URLSearchParams({ q: `in:sent rfc822msgid:${messageId.slice(1,-1)}`, maxResults: '10' }).toString();
       const { messages = [] } = await call(list.toString()) as { messages?: { id: string }[] };
       if (!Array.isArray(messages) || messages.length > 10) throw new Error('invalid Sent search response');
       for (const candidate of messages) {
         if (typeof candidate?.id !== 'string' || !candidate.id) continue;
-        const value = await call(`${GMAIL}/${encodeURIComponent(candidate.id)}?format=metadata&metadataHeaders=Message-ID`) as { id?: string; threadId?: string; labelIds?: string[]; payload?: GmailPayload };
-        const ids = value.payload?.headers?.filter(h => h.name.toLowerCase() === 'message-id');
-        const evidence = { message_id: value.id, thread_id: value.threadId, label_ids: value.labelIds, rfc822_message_id: ids?.length === 1 ? ids[0]!.value.trim() : undefined };
+        const { value, evidence } = await metadata(candidate.id);
         if (value.id === candidate.id && verifiedSent(evidence, messageId, threadId)) return evidence;
       }
       return false;
