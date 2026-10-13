@@ -2253,3 +2253,13 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
   - **Why the tests missed it:** they fabricate `AlarmInvocationInfo`.
   - It also falsifies #1169 §3.2, so the lead should carry the rule into the wake arbiter.
 - **#1186 review** is running and checks for the same pattern.
+
+## 22:01Z — correction: #1180's suggested fix withdrawn
+
+- The reviewer's follow-up probe on the real scheduler found that "arm only on the last attempt" stalls the alarm. When `drainApp`'s re-arm has already deleted it inside the handler, a later throw leaves no retry and no alarm.
+- B1 is narrower than first written: only throws before that re-arm lose the ~2 s retry.
+- New, and present before the PR: a past-due wake key plus a later-lane throw loops about every 250 ms with no cap.
+- Corrections:
+  - a banner on the review comment and a correction comment on #1180 (6156102299);
+  - a banner on the board summary, and a correction on #1103 (6156102697).
+- A replacement fix is being probed: handler-owned backoff from a stored streak, with a floor and a 30-minute cap, then return. #1180 stays FAIL.
