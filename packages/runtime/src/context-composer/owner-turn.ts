@@ -32,12 +32,12 @@ export type OwnerContextSources = Readonly<{
   retentionEpoch?(): Promise<string>;
 }>;
 
-// Authenticated host admission supplies identity and input. Source callbacks retain their
-// existing account/audience/grant checks; neither model text nor channel fields select them.
 // The conversation chain a turn on a surface reads and writes. Until the single transcript each surface keeps its own: the
 // app's chat is the owner principal's chain, Telegram's and WhatsApp's the chat's.
 export const ownerChainRef = (surface: string, chat: number | string): string => surface === 'app' ? `owner:${chat}` : `${surface}-${chat}`;
 
+// Authenticated host admission supplies identity and input. Source callbacks retain their
+// existing account/audience/grant checks; neither model text nor channel fields select them.
 export function createOwnerTurnContext(admission: OwnerMessageAdmission, sources: OwnerContextSources = {}): OwnerContextCapability {
   const invocation = admission.invocation;
   const principal = invocation.verified_authority.principal_ref;
