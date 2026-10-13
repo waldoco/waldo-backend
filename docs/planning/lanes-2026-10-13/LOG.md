@@ -2123,3 +2123,21 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
   - **New owner-step PR:** #1175 (Gmail push wake: a migration plus the GCP project).
   - **Unchanged:** usage 55%. Nothing from Suyash. Nothing new on #1103 since 15:58Z.
   - **Told the owner** to check the lead's cloud session on the other account. [inference] It may have stopped or hit its own usage limit.
+
+- **16:51Z to 16:58Z: the catch-up plan, and the Phase 0 baseline started.**
+  - **Plan:** the owner asked where Waldo is behind Instinct and how we catch up. `AGENT_CATCH_UP_PLAN.md` (`1aaf497d`) is posted on #1103 (6150662444).
+  - **Baseline started** (owner: "you can test it out using the current app build"):
+    - **Device:** the iPhone Air Simulator (`3C3634A0`), the only one signed in. My iPhone 17 and the iPhone 17 Pro sit at sign-in. This follows the owner's latest instruction over gap doc §6's "the Air is read-only", which came from the no-seeding ruling.
+    - **Footprint:** no seeding, no settings, and no approval taps. N4 was unreachable to notify.
+    - **Traces:** Cloudflare live logs through `wrangler tail --env staging`, filtered to log messages. Langfuse in the built-in browser needs the owner's sign-in (OWNER STEP).
+  - **Nine messages, in order:**
+    1. S1: plant a recall fact ("Priya … Q4 launch contact"). Recall is asked in a later session, and the fact is forgotten after that.
+    2. S2: calendar.
+    3. S3: listen first.
+    4. S4: limits.
+    5. S5: research.
+    6. S6: ask versus assume.
+    7. S8: what still needs me.
+    8. S9: watch.
+    9. S7: check-back, last, with a 7-minute quiet wait.
+  - The scorecard goes to #1103.
