@@ -5,7 +5,7 @@ import { driveRestClient, DRIVE_REST_METHODS, DriveRestError, type DriveRestMeth
 import { googleAccessToken, GoogleTokenError } from '../../../packages/runtime/src/connectors/google.ts';
 import { executeProxyIntent, ProxyIntentError, type IntentClaim } from '../../../packages/runtime/src/connectors/proxy-intent.ts';
 import { callMcpTransport, McpAuthError, McpHttpError, McpToolError } from '../../../packages/runtime/src/connectors/mcp-transport.ts';
-import { googleMcpServer, isGoogleMcpRead } from '../../../packages/runtime/src/connectors/google-mcp.ts';
+import { GOOGLE_MCP_READ_ONLY, googleMcpServer, isGoogleMcpRead } from '../../../packages/runtime/src/connectors/google-mcp.ts';
 import { safeMcpErrorDiagnostic, type McpErrorDiagnostic } from '../../../packages/runtime/src/connectors/mcp-error-diagnostic.ts';
 
 declare const Deno: {env:{get(name:string):string|undefined};serve(handler:(request:Request)=>Promise<Response>):unknown};
@@ -44,7 +44,7 @@ const store = async (doName: string, email: string, scopes: readonly string[], t
 type Body = Readonly<{ intent_id?: string; read_only?: boolean; do_name: string; op: 'exchange' | 'adopt' | 'call' | 'mcp_call'; server_url?: string; tool?: string; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[]; calendar_details?: boolean }>;
 // Edge-owned, exact read authority from the shared catalogue. Never accept a request-supplied registry or a generic Google host match.
 const nonStoringRead = (body: Body): boolean => body.op === 'mcp_call' && body.read_only === true && /^mcpread:[0-9a-f]{64}$/.test(body.intent_id ?? '') && isGoogleMcpRead(body.server_url, body.tool);
-const READ_FAILURE_CODES = new Set(['intent_unavailable', 'insufficient scopes', 'google_refresh_failed', 'google_reauth_needed', 'google_scope_missing', 'mcp_read_rejected', 'mcp_read_unavailable', 'mcp_read_failed']);
+const READ_FAILURE_CODES = new Set(['intent_unavailable', 'insufficient scopes', 'google_refresh_failed', 'google_reauth_needed', 'google_scope_missing', 'mcp_read_rejected', 'mcp_read_unavailable', 'mcp_read_failed', GOOGLE_MCP_READ_ONLY]);
 // The proxy's own fixed failure codes. Any other message is provider or runtime text, which can repeat a
 // recipient or other mail details, so the log carries one code in its place. The reply keeps the message.
 const LOGGED_CODES = new Set([...READ_FAILURE_CODES, 'unknown owner', 'connector proxy is not configured', 'unsigned proxy call', 'unknown operation', 'connection unavailable',
@@ -96,6 +96,8 @@ const handle = async (body: Body): Promise<Response> => {
       // effect rail. Ordinary calls (no read flag) keep their existing ledger.
       if (body.read_only === true && !nonStoringRead(body)) return fail(400, 'mcp_read_rejected');
       if (!body.connection || !body.server_url || !body.tool || !/^https:\/\/([a-z0-9-]+\.)?googleapis\.com\//.test(body.server_url)) return fail(404, 'unknown operation');
+      // The catalogue governs both rails: a tool that is not one of its reads never reaches Google with the owner's token.
+      if (!isGoogleMcpRead(body.server_url, body.tool)) return fail(403, GOOGLE_MCP_READ_ONLY);
       // Each signed read is an independent observation on this explicit connection.
       // No exactly-once/result replay promise and no effect-ledger claim or result storage.
       const read = nonStoringRead(body);

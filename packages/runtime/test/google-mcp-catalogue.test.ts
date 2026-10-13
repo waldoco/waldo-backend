@@ -120,6 +120,14 @@ describe('Google MCP servers are read-only by construction', () => {
     expect(await handler.handle({ server: 'gmail', tool: 'create_draft', args: {} }, ctx)).toMatchObject({ ok: false, code: 'forbidden' });
     expect(sent).toHaveLength(2);
   });
+
+  it('the fixed arguments land on the effect rail too, so an approved call cannot drop them', async () => {
+    const sent: Array<{ tool: string; args: Record<string, unknown> }> = [];
+    const auth: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async (_url, tool, args) => { sent.push({ tool, args }); return [{ type: 'text', text: 'ok' }]; } };
+    await executeMcp(server('drive'), 'search_files', { query: 'q', excludeContentSnippets: false }, auth, fetch, { id: 'approval:mcp' });
+    await executeMcp(server('gmail'), 'get_thread', { id: 'th' }, auth, fetch, { id: 'approval:mcp' });
+    expect(sent).toEqual([{ tool: 'search_files', args: { query: 'q', excludeContentSnippets: true } }, { tool: 'get_thread', args: { id: 'th' } }]);
+  });
 });
 
 describe('a preview that is not available reads as not available, never an error that degrades the turn', () => {

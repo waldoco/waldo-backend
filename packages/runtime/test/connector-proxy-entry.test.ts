@@ -78,10 +78,18 @@ it('draft and every calendar mutation claim before dispatch and settled replay n
  }
 });
 it('effect-bearing MCP uses the same durable intent rail and foreign replay stays blocked',async()=>{
- const f=fixture();const input={do_name:'owner',op:'mcp_call',connection:'conn',server_url:'https://fixture.googleapis.com/mcp',tool:'synthetic_write',args:[{value:'fixture'}],intent_id:'approval:mcp'};
+ const f=fixture();const input={do_name:'owner',op:'mcp_call',connection:'conn',server_url:'https://drivemcp.googleapis.com/mcp/v1',tool:'search_files',args:[{value:'fixture'}],intent_id:'approval:mcp'};
  const first=await(await serve(await request(input))).json();expect(first).toMatchObject({data:[{type:'text',text:'synthetic result'}]});
  expect(await(await serve(await request(input))).json()).toEqual(first);expect(f.effects()).toBe(1);expect(f.hops.filter(h=>h==='token')).toHaveLength(1);expect(f.hops.indexOf('proxy_idem_claim')).toBeLessThan(f.hops.indexOf('token'));
  expect(await(await serve(await request({...input,args:[{value:'changed'}]}))).json()).toMatchObject({error:{message:'intent_conflict'}});expect(f.effects()).toBe(1);
+});
+
+it('the effect rail refuses a tool that is not a catalogue read before any token or claim',async()=>{
+ for(const [server_url,tool] of [['https://fixture.googleapis.com/mcp','synthetic_write'],['https://drivemcp.googleapis.com/mcp/v1','create_file'],['https://gmailmcp.googleapis.com/mcp/v1','send_message']]){
+  const f=fixture();const input={do_name:'owner',op:'mcp_call',connection:'conn',server_url,tool,args:[{value:'fixture'}],intent_id:'approval:mcp'};
+  expect(await(await serve(await request(input))).json()).toMatchObject({error:{status:403,message:'google_mcp_read_only'}});
+  expect(f.hops).not.toContain('token');expect(f.hops).not.toContain('proxy_idem_claim');expect(f.hops).not.toContain('proxy_secret');expect(f.effects()).toBe(0);
+ }
 });
 
 it('every mutation retains an unknown result and never dispatches again after synthetic loss',async()=>{
@@ -90,7 +98,7 @@ it('every mutation retains an unknown result and never dispatches again after sy
   {...body,method:'createEvent',args:[{title:'fixture',start:'2026-10-01T00:00:00Z',end:'2026-10-01T01:00:00Z'}]},
   {...body,method:'moveEvent',args:['event-one','2026-10-01T00:00:00Z','2026-10-01T01:00:00Z']},
   {...body,method:'cancelEvent',args:['event-one']},
-  {do_name:'owner',op:'mcp_call',connection:'conn',server_url:'https://fixture.googleapis.com/mcp',tool:'synthetic_write',args:[{}],intent_id:'approval:mcp'},
+  {do_name:'owner',op:'mcp_call',connection:'conn',server_url:'https://drivemcp.googleapis.com/mcp/v1',tool:'search_files',args:[{}],intent_id:'approval:mcp'},
  ];
  for(const input of calls){const f=fixture();f.lose();
   expect(await(await serve(await request(input))).json()).toMatchObject({error:{message:'intent_pending'}});
