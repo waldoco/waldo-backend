@@ -21,8 +21,12 @@ const awakeRestingBuckets = (day: DayRecord): readonly HourlyBucket[] =>
     const start = Date.parse(bucket.startAt);
     return !(day.sleep && overlaps(start, day.sleep)) && !day.workouts.some(workout => overlaps(start, workout));
   });
-const sum = (values: readonly (number | null)[]): number => values.reduce<number>((total, value) => total + (value ?? 0), 0);
-const dayTotal = (day: DayRecord, pick: (bucket: HourlyBucket) => number | null): number | null => (day.hourly.length >= MIN_DAY_BUCKETS ? sum(day.hourly.map(pick)) : null);
+// The phone sends a summed signal only for hours that hold some of it, so on a day that carries the signal an hour
+// without it is none. A day with no reading for it is unknown, not zero: the source may not measure it at all.
+const dayTotal = (day: DayRecord, pick: (bucket: HourlyBucket) => number | null): number | null => {
+  const readings = day.hourly.flatMap(bucket => { const value = pick(bucket); return value === null ? [] : [value]; });
+  return day.hourly.length >= MIN_DAY_BUCKETS && readings.length > 0 ? readings.reduce((total, value) => total + value, 0) : null;
+};
 const stressReading = (day: DayRecord): Readonly<{ heartRate: number; hrv: number | null }> | null => {
   const buckets = awakeRestingBuckets(day);
   const heartRates = buckets.flatMap(bucket => (bucket.heartRate === null ? [] : [bucket.heartRate]));
