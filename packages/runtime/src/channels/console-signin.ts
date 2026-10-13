@@ -21,7 +21,7 @@ export const CONSOLE_OTP_VERIFY_LIMIT = 10;
 export const CONSOLE_AUTH_IP_LIMIT = 30;
 export const CONSOLE_AUTH_WINDOW_SECONDS = 15 * 60;
 
-type ConsoleEnv = OwnerDirectoryEnv & Readonly<{ TELEGRAM_OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
+type ConsoleEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
 
 const DOWNLOAD_RETURN_PATTERN = /^\/console\/workspace\/file\?id=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})&revision=([1-9]\d*)$/;
 // A continuation is a read-only file locator, never an arbitrary redirect or grant.
@@ -175,7 +175,7 @@ const signinCodeForm = (email: string, phone: string, invite: string, note = '',
 // Returns null when Supabase is not configured; the caller keeps the Telegram one-time link sign-in.
 export const handleConsole = async (request: Request, env: ConsoleEnv, auth: ConsoleAuth | null = consoleAuth(env), requestTrace: string = consoleTrace()): Promise<Response | null> => {
   if (new URL(request.url).pathname === CONSOLE_SIGNUP_PATH || new URL(request.url).pathname.startsWith(`${CONSOLE_SIGNUP_PATH}/`)) return withConsoleTrace(await handleSignup(request, env, auth, undefined, requestTrace), requestTrace);
-  const owners = env.TELEGRAM_OWNER_DO;
+  const owners = env.OWNER_DO;
   if (!auth || !owners) return null;
   const url = new URL(request.url);
   const trace = requestTrace;
@@ -300,11 +300,17 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
   // this one - die at their next validation, then clears the cookies on this browser too.
   if (url.pathname === `${CONSOLE_PATH}/signout-all` && request.method === 'POST') {
     const doName = await auth.readOwnerCookie(request);
+    if (doName) {
+      try { await auth.signOutAll(doName); }
+      catch {
+        event('console_route', false, 'signout_all_unconfirmed');
+        return finish(new Response('Signing out everywhere did not finish. This browser is still signed in; go back and try again.', { status: 503, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } }));
+      }
+    }
     const headers = new Headers({ location: CONSOLE_SIGNIN_PATH });
     const clear = `Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=0`;
     headers.append('set-cookie', `${CONSOLE_COOKIE}=; ${clear}`);
     headers.append('set-cookie', `${OWNER_COOKIE}=; ${clear}`);
-    if (doName) await auth.signOutAll(doName);
     event('console_route', true, 'signed_out_all');
     return finish(new Response(null, { status: 303, headers }));
   }

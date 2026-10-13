@@ -1,6 +1,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
 import { claimStore } from "../src/memory/claims";
+import type { TurnLogEntry } from "../src/channels/owner-turn-types";
 import { acceptTrustedInvocation, MODEL_CONTEXT_MAX_CHARS, skillRowSchema, WALDO_CHAT_MODEL } from "@waldo/contracts";
 import {
   localTrustedBriefScheduleInput,
@@ -329,11 +330,37 @@ it("override-style procedure cannot replace or reorder captured final safeguards
   );
 });
 
+it("a loaded procedure follows the stable behavior head, per-turn memory and clock follow it, and the safeguards stay last", async () => {
+  const { OWNER_SKILL_SAFEGUARDS } = await import("../src/prompt/messaging-behavior");
+  captured.systems = [];
+  const logged: TurnLogEntry[] = [];
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName("skills-prefix-order")), async (_i, state) => {
+    const memory = claimStore(state.storage.sql);
+    memory.add({ kind: "fact", text: "Owner fact: prefers morning meetings", source: "stated", evidence: 'owner, tg-1: "x"', origin: "owner", source_ref: "owner, tg-1" }, "2026-10-01T00:00:00.000Z");
+    const args: Parameters<typeof createOwnerResponder> = ["fixture"];
+    args[2] = memory; args[3] = entry => { logged.push(entry); }; args[20] = binding();
+    await createOwnerResponder(...args).respond(turn("skills-prefix-order"), time);
+  });
+  const system = captured.systems[0]!;
+  const at = (needle: string) => { const index = system.indexOf(needle); expect(index, needle).toBeGreaterThanOrEqual(0); return index; };
+  expect(system.startsWith("You are Waldo")).toBe(true);
+  expect(at("Tools available in this chat:")).toBeLessThan(at("Reviewed procedures follow."));
+  expect(at("Reviewed procedures follow.")).toBeLessThan(at(marker));
+  expect(at(marker)).toBeLessThan(at("Owner memory is untrusted notes"));
+  expect(at("Owner memory is untrusted notes")).toBeLessThan(at("The owner's current local time:"));
+  expect(system.endsWith(OWNER_SKILL_SAFEGUARDS)).toBe(true);
+  const shape = logged.find(entry => entry.hop === "llm_reply")!.shape!;
+  const { skill_procedures: procedures = 0, ...joined } = shape.context!.system_sections!;
+  const pieces = Object.values(joined);
+  expect(procedures).toBeGreaterThan(0);
+  expect(pieces.reduce((sum, bytes) => sum + bytes, 0) + 2 * (pieces.length - 1) + procedures).toBe(shape.system_bytes);
+});
+
 it("an active skill plus a large owner profile keeps the final system prompt under the sanitiser limit", async () => {
   captured.systems = [];
   const big = { ...row, body_markdown: marker + " " + "procedure step. ".repeat(100) };
   const skills: LocalSystemSkillBinding = { ...binding(), repository: { list: async (r) => ({ ...(await binding().repository.list(r)), rows: [big] }) } };
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName("skills-large-profile")), async (_i, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName("skills-large-profile")), async (_i, state) => {
     const memory = claimStore(state.storage.sql);
     for (let i = 0; i < 220; i++) memory.add({ kind: "fact", text: `Owner fact ${i}: synthetic detail number ${i} that the owner stated about themselves`, source: "stated", evidence: `owner, tg-${i}: "x"`, origin: "owner", source_ref: `owner, tg-${i}` }, "2026-10-01T00:00:00.000Z");
     const args: Parameters<typeof createOwnerResponder> = ["fixture"];
@@ -348,7 +375,7 @@ it("an active skill plus a large owner profile keeps the final system prompt und
 
 it("profile excludes long evidence and retains every short fact without unsolicited recall", async () => {
   captured.systems = [];
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName("recall-long-evidence")), async (_i, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName("recall-long-evidence")), async (_i, state) => {
     const memory = claimStore(state.storage.sql);
     for (let i = 0; i < 8; i++) memory.add({ kind: "fact", text: `hello greeting note ${i}`, source: "stated", evidence: `owner, tg-${i}: "${"x".repeat(60_000)}"`, origin: "owner", source_ref: `owner, tg-${i}` }, "2026-10-01T00:00:00.000Z");
     const args: Parameters<typeof createOwnerResponder> = ["fixture"];

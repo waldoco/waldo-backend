@@ -13,7 +13,7 @@ const request=async(body:unknown,at=Math.floor(Date.now()/1000))=>{
  return new Request('https://edge.invalid',{method:'POST',body:raw,headers:{'x-waldo-at':String(at),'x-waldo-sig':await routerSignature(cfg.WALDO_ROUTER_HMAC_SECRET!,at,`proxy.${digest}`)}});
 };
 const fixture=()=>{
- const rows=new Map<string,{digest:string;result?:unknown;done?:boolean}>();const hops:string[]=[];let effects=0;let lost=false;let scopes:unknown=['https://www.googleapis.com/auth/gmail.send','https://www.googleapis.com/auth/gmail.compose','https://www.googleapis.com/auth/calendar.events'];let healthFail=false;let revoked=false;let active=true;let providerError='';
+ const rows=new Map<string,{digest:string;result?:unknown;done?:boolean}>();const hops:string[]=[];let effects=0;let lost=false;let scopes:unknown=['https://www.googleapis.com/auth/gmail.send','https://www.googleapis.com/auth/gmail.compose','https://www.googleapis.com/auth/calendar.events','https://www.googleapis.com/auth/tasks'];let healthFail=false;let revoked=false;let active=true;let providerError='';
  vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
   const url=String(input);const args=url.startsWith('https://db.invalid/')?JSON.parse(String(init?.body??'{}')):{};const fn=url.split('/').at(-1)!;hops.push(fn);
   if(fn==='proxy_access')return Response.json(args.p_connection==='conn'&&args.p_do_name==='owner'&&!revoked&&active?[{secret:'fictional-refresh',scopes}]:[]);
@@ -31,7 +31,9 @@ const fixture=()=>{
    effects++;if(lost)throw new Error('synthetic response loss');if(providerError)return Response.json({result:{isError:true,content:[{type:'text',text:providerError}]}});return Response.json({result:{content:[{type:'text',text:'synthetic result'}]}});
   }
   if(url==='https://www.googleapis.com/calendar/v3/freeBusy'){const payload=JSON.parse(String(init?.body));return Response.json({timeMin:payload.timeMin,timeMax:payload.timeMax,calendars:Object.fromEntries(payload.items.map((item:{id:string})=>[item.id,{busy:[]}]))});}
+  if(url.startsWith('https://www.googleapis.com/calendar/v3/users/me/calendarList'))return Response.json({kind:'calendar#calendarList',items:[{id:'primary-calendar',summary:'Primary',accessRole:'owner',primary:true,selected:true}]});
   if(url.includes('www.googleapis.com/calendar/')){effects++;if(lost)throw new Error('synthetic response loss');return init?.method==='DELETE'?new Response(null,{status:204}):Response.json({id:'event-one',summary:'fixture',start:{dateTime:'2026-10-01T00:00:00Z'},end:{dateTime:'2026-10-01T01:00:00Z'}});}
+  if(url.includes('tasks.googleapis.com')){effects++;if(lost)throw new Error('synthetic response loss');return Response.json({kind:'tasks#task',id:'task-one',title:'fixture',status:'needsAction',etag:'"v1"'});}
   if(url.includes('gmail.googleapis.com')){effects++;if(lost)throw new Error('synthetic response loss');return Response.json({id:'provider-one'});}
   throw new Error('unexpected fictional transport');
  }));return{hops,rows,effects:()=>effects,lose:()=>{lost=true;},scope:(value:unknown)=>{scopes=value;},healthFail:()=>{healthFail=true;},revoke:()=>{revoked=true;},suspend:()=>{active=false;},providerError:(text:string)=>{providerError=text;}};
@@ -67,6 +69,8 @@ it('draft and every calendar mutation claim before dispatch and settled replay n
   ['createEvent',[{title:'fixture',start:'2026-10-01T00:00:00Z',end:'2026-10-01T01:00:00Z'}]],
   ['moveEvent',['event-one','2026-10-01T00:00:00Z','2026-10-01T01:00:00Z']],
   ['cancelEvent',['event-one']],
+  ['createTask',['list-a',{title:'fixture'}]],
+  ['patchTask',['list-a','task-one',{title:'renamed'},'"v1"']],
  ] as const){
   const f=fixture();const input={...body,method,args,intent_id:`approval:${method}`};
   const first=await(await serve(await request(input))).json();expect(first).toHaveProperty('data');
@@ -100,6 +104,12 @@ it('lost-response intent retains uncertainty when its pinned grant is later revo
   if(change==='revoke')f.revoke();else f.scope([]);
   expect(await(await serve(await request(body))).json()).toMatchObject({error:{message:'intent_unavailable'}});expect(f.effects()).toBe(1);
  }
+});
+
+it('actual signed calendar-list entry requires its own read scope and never an effect intent',async()=>{
+ const input={do_name:'owner',op:'call',connection:'conn',method:'calendarListsPage',args:[20,false]};
+ for(const scopes of [null,[],['https://www.googleapis.com/auth/calendar.events'],['https://www.googleapis.com/auth/calendar.events.freebusy']]){const f=fixture();f.scope(scopes);expect(await(await serve(await request(input))).json()).toMatchObject({error:{status:403,message:'insufficient scopes'}});expect(f.hops).not.toContain('token');}
+ for(const scope of ['calendar.calendarlist.readonly','calendar.calendarlist','calendar.readonly','calendar']){const f=fixture();f.scope([`https://www.googleapis.com/auth/${scope}`]);expect(await(await serve(await request(input))).json()).toMatchObject({data:{items:[{id:'primary-calendar',title:'Primary',access_role:'owner'}]}});expect(f.hops).toContain('proxy_access');expect(f.hops).not.toContain('proxy_idem_claim');expect(f.effects()).toBe(0)}
 });
 
 it('actual signed freebusy entry requires provider-compatible scope, uses owner access and never an effect intent',async()=>{
@@ -308,4 +318,62 @@ it('effect refresh outage retains pending custody and never retries provider aft
  expect(await(await serve(await request(body))).json()).toMatchObject({error:{message:'intent_pending',status:503}});
  failing=false;expect(await(await serve(await request(body))).json()).toMatchObject({error:{message:'intent_pending'}});
  expect(f.effects()).toBe(0);expect(f.rows.size).toBe(1);expect(f.hops).not.toContain('proxy_idem_store');expect(f.hops).not.toContain('proxy_health');
+});
+
+it('maps calendar detail fields only for a Worker that asks for them, so either deploy order is safe',async()=>{
+ const event={id:'e1',status:'confirmed',summary:'Weekly sync',updated:'2026-10-01T09:00:00.000Z',start:{dateTime:'2026-10-03T10:30:00+05:30'},end:{dateTime:'2026-10-03T11:00:00+05:30'},hangoutLink:'https://meet.example.test/abc-defg-hij',attachments:[{fileId:'drive-file-1',title:'Q4 plan'}],attendees:[{email:'asha@example.test',responseStatus:'accepted'}]};
+ vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
+  const url=String(input);const args=url.startsWith('https://db.invalid/')?JSON.parse(String(init?.body??'{}')):{};const fn=url.split('/').at(-1)!;
+  if(fn==='proxy_access')return Response.json(args.p_connection==='conn'&&args.p_do_name==='owner'?[{secret:'fictional-refresh',scopes:['https://www.googleapis.com/auth/calendar.events']}]:[]);
+  if(fn==='proxy_secret')return Response.json('fictional-refresh');
+  if(fn==='proxy_health')return Response.json(true);
+  if(url==='https://oauth2.googleapis.com/token')return Response.json({access_token:'fictional-access'});
+  if(url.includes('www.googleapis.com/calendar/'))return Response.json({kind:'calendar#events',items:[event]});
+  throw new Error('unexpected fictional transport');
+ }));
+ const input={do_name:'owner',op:'call',connection:'conn',method:'calendarPage',args:['primary','2026-10-03T04:00:00Z','2026-10-03T06:00:00Z',10,false]};
+ const older=await(await serve(await request(input))).json() as {data:{events:Record<string,unknown>[]}};
+ expect(older.data.events[0]).toMatchObject({id:'e1',title:'Weekly sync'});
+ for(const field of ['conference_url','attachments','attendee_emails'])expect(older.data.events[0]).not.toHaveProperty(field);
+ const newer=await(await serve(await request({...input,calendar_details:true}))).json() as {data:{events:Record<string,unknown>[]}};
+ expect(newer.data.events[0]).toMatchObject({conference_url:'https://meet.example.test/abc-defg-hij',attachments:[{title:'Q4 plan',file_id:'drive-file-1'}],attendee_emails:['asha@example.test']});
+});
+
+it('answers a Sent readback that carries the id the send returned, on a proxy that predates it and one that reads it',async()=>{
+ const searches:string[]=[];
+ vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
+  const url=String(input);const args=url.startsWith('https://db.invalid/')?JSON.parse(String(init?.body??'{}')):{};const fn=url.split('/').at(-1)!;
+  if(fn==='proxy_access')return Response.json(args.p_connection==='conn'&&args.p_do_name==='owner'?[{secret:'fictional-refresh',scopes:['https://www.googleapis.com/auth/gmail.send']}]:[]);
+  if(fn==='proxy_secret')return Response.json('fictional-refresh');
+  if(fn==='proxy_health')return Response.json(true);
+  if(url==='https://oauth2.googleapis.com/token')return Response.json({access_token:'fictional-access'});
+  if(url.includes('gmail.googleapis.com/gmail/v1/users/me/messages?')){searches.push(url);return Response.json({messages:[{id:'g1'}]});}
+  if(url.includes('gmail.googleapis.com/gmail/v1/users/me/messages/g1?'))return Response.json({id:'g1',threadId:'t1',labelIds:['SENT'],payload:{headers:[{name:'Message-ID',value:'<fixture@waldo-send>'}]}});
+  throw new Error('unexpected fictional transport');
+ }));
+ // The Worker drops only trailing undefined arguments, so an absent thread id crosses the wire as null.
+ const answer=await(await serve(await request({do_name:'owner',op:'call',connection:'conn',method:'findSentByMessageId',args:['<fixture@waldo-send>',null,'g1']}))).json();
+ expect(answer).toEqual({data:{message_id:'g1',thread_id:'t1',rfc822_message_id:'<fixture@waldo-send>',label_ids:['SENT']}});
+});
+it('logs a fixed code, never the provider\'s error text, and keeps its own codes', async () => {
+ fixture();const inner=globalThis.fetch;
+ vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>String(input).includes('gmail.googleapis.com')?Response.json({error:{code:400,message:'Invalid To header: friend@example.test'}},{status:400}):inner(input,init)));
+ const logs=vi.spyOn(console,'log').mockImplementation(()=>{});
+ const refused=await(await serve(await request({do_name:'owner',op:'call',connection:'conn',method:'searchMail',args:['in:sent',5]}))).json();
+ expect(refused).toMatchObject({error:{status:400}});
+ const {intent_id,...missing}=body;void intent_id;await serve(await request(missing));
+ const lines=logs.mock.calls.map(call=>JSON.parse(String(call[0])) as {hop:string;error?:string}).filter(line=>line.hop==='connector_proxy');
+ expect(lines.map(line=>line.error)).toEqual(['provider_error','intent_required']);
+ for(const leaked of ['friend@example.test','Invalid To header'])expect(JSON.stringify(logs.mock.calls)).not.toContain(leaked);
+});
+it('logs provider_error for text that only starts with one of its codes, and only known operations and methods', async () => {
+ fixture();const inner=globalThis.fetch;
+ vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{if(String(input).includes('gmail.googleapis.com'))throw new Error('unknown owner friend@example.test');return inner(input,init);}));
+ const logs=vi.spyOn(console,'log').mockImplementation(()=>{});
+ await serve(await request({do_name:'owner',op:'call',connection:'conn',method:'searchMail',args:['in:sent',5]}));
+ await serve(await request({do_name:'owner',op:'call',connection:'conn',method:'friend@example.test',args:[]}));
+ await serve(await request({do_name:'owner',op:'friend@example.test',connection:'conn'}));
+ const lines=logs.mock.calls.map(call=>JSON.parse(String(call[0])) as {hop:string;op?:string;method?:string;error?:string}).filter(line=>line.hop==='connector_proxy');
+ expect(lines.map(({op,method,error})=>[op,method,error])).toEqual([['call','searchMail','provider_error'],['call','unknown','unknown operation'],['unknown',undefined,expect.any(String)]]);
+ expect(JSON.stringify(logs.mock.calls)).not.toContain('friend@example.test');
 });

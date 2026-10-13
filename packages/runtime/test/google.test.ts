@@ -15,7 +15,8 @@ const fakeFetch = (calls: { url: string; init?: RequestInit }[]) => (async (inpu
     { id: 'e3', summary: 'Declined sync', attendees: [{ self: true, responseStatus: 'declined' }, {}], start: { dateTime: '2026-09-23T20:00:00+05:30' }, end: { dateTime: '2026-09-23T20:30:00+05:30' } },
   ] });
   if (url.includes('/gmail/v1/users/me/drafts')) return Response.json({ id: 'd1', message: { id: 'm1', threadId: 't1' } });
-  if (url.includes('tasks.googleapis.com/tasks/v1/lists/@default/tasks')) return Response.json({ items: [
+  if (url.includes('tasks.googleapis.com/tasks/v1/users/@me/lists')) return Response.json({ kind: 'tasks#taskLists', items: [{ id: '@default', title: 'Tasks' }] });
+  if (url.includes('tasks.googleapis.com/tasks/v1/lists/%40default/tasks') || url.includes('tasks.googleapis.com/tasks/v1/lists/@default/tasks')) return Response.json({ kind: 'tasks#tasks', items: [
     { id: 't1', title: 'Buy stamps', status: 'needsAction', updated: '2026-09-23T06:00:00Z' },
     { id: 't2', title: 'Pay rent', status: 'needsAction', due: '2026-09-30T00:00:00Z', updated: '2026-09-22T06:00:00Z' },
     { id: 't3', title: 'Renew license', status: 'completed', updated: '2026-09-21T06:00:00Z' },
@@ -46,6 +47,7 @@ describe('google oauth state', () => {
       'openid', 'email',
       'https://www.googleapis.com/auth/calendar.events',
       'https://www.googleapis.com/auth/calendar.events.freebusy',
+      'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
       'https://www.googleapis.com/auth/gmail.readonly',
       'https://www.googleapis.com/auth/gmail.send',
       'https://www.googleapis.com/auth/gmail.compose',
@@ -123,7 +125,7 @@ describe('google tools', () => {
     const result = await query!.handle({ include_declined: false, limit: 20 } as never);
     expect(result).toMatchObject({
       ok: false, code: 'auth_failed',
-      error: expect.stringContaining('connect button'),
+      error: 'Google (calendar) is not connected.',
       connect: { status: 'auth_required', service: 'google', reason: 'not_connected', feature: 'calendar' },
     });
     expect(JSON.stringify(result)).not.toMatch(/https?:|state=|accounts\.google/);

@@ -1,6 +1,6 @@
 // Typed connector proxy. The only place a Google token is read, refreshed or used: the runtime
 // sends a connection id and a typed operation, signed with the router secret, and gets data back.
-import { exchangeGoogleCode, GOOGLE_METHODS, googleClient, googleHas, GoogleError, type GoogleErrorReason, type GoogleClient, type GoogleMethod } from '../../../packages/runtime/src/connectors/google.ts';
+import { exchangeGoogleCode, GOOGLE_METHODS, googleClient, googleHas, GoogleError, proxyClientOptions, type GoogleErrorReason, type GoogleClient, type GoogleMethod } from '../../../packages/runtime/src/connectors/google.ts';
 import { driveRestClient, DRIVE_REST_METHODS, DriveRestError, type DriveRestMethod } from '../../../packages/runtime/src/connectors/drive-rest.ts';
 import { googleAccessToken, GoogleTokenError } from '../../../packages/runtime/src/connectors/google.ts';
 import { executeProxyIntent, ProxyIntentError, type IntentClaim } from '../../../packages/runtime/src/connectors/proxy-intent.ts';
@@ -44,17 +44,24 @@ const store = async (doName: string, email: string, scopes: readonly string[], t
   return id ? reply({ id, email: email.toLowerCase(), scopes }) : fail(404, 'unknown owner');
 };
 
-type Body = Readonly<{ intent_id?: string; read_only?: boolean; do_name: string; op: 'exchange' | 'adopt' | 'call' | 'mcp_call'; server_url?: string; tool?: string; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[] }>;
+type Body = Readonly<{ intent_id?: string; read_only?: boolean; do_name: string; op: 'exchange' | 'adopt' | 'call' | 'mcp_call'; server_url?: string; tool?: string; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[]; calendar_details?: boolean }>;
 const nonStoringRead = (body: Body): boolean => body.op === 'mcp_call' && body.read_only === true && /^mcpread:[0-9a-f]{64}$/.test(body.intent_id ?? '') && isRegisteredMcpRead(body.server_url, body.tool);
 const READ_FAILURE_CODES = new Set(['intent_unavailable', 'insufficient scopes', 'google_refresh_failed', 'google_reauth_needed', 'google_scope_missing', 'mcp_read_rejected', 'mcp_read_failed']);
+// The proxy's own fixed failure codes. Any other message is provider or runtime text, which can repeat a
+// recipient or other mail details, so the log carries one code in its place. The reply keeps the message.
+const LOGGED_CODES = new Set([...READ_FAILURE_CODES, 'unknown owner', 'connector proxy is not configured', 'unsigned proxy call', 'unknown operation', 'connection unavailable',
+  'intent_required', 'intent_conflict', 'intent_pending', 'unreadable response', 'google token failed: invalid_grant', 'google token transient failure', 'google token configuration failure',
+  'google token protocol failure', 'drive_invalid_request', 'drive_invalid_response', 'drive_auth_failed', 'drive_access_denied', 'drive_scope_missing', 'drive_service_disabled',
+  'drive_not_found', 'drive_rate_limited', 'drive_read_failed', 'drive_source_changed', 'drive_content_unsupported']);
 
 // One structured line per call: operation, method, outcome and duration. Never the code, verifier,
-// token, account or arguments.
-const logged = async (started: number, op: string, method: string | undefined, response: Response, read = false) => {
+// token, account or arguments. The operation and method come from the request body, so only known ones are logged.
+const LOGGED_OPS = new Set(['exchange', 'adopt', 'call', 'mcp_call', 'unconfigured', 'unsigned']);
+const logged = async (started: number, op: unknown, method: unknown, response: Response, read = false) => {
   const outcome = await response.clone().json().then(value => (value as {error?:{status:number;message:string;provider_diagnostic?:unknown}}).error ?? null).catch(() => ({ status: response.status, message: 'unreadable response' }));
-  const message = outcome && read && !READ_FAILURE_CODES.has(outcome.message) ? 'mcp_read_failed' : outcome?.message;
+  const message = !outcome ? undefined : read && !READ_FAILURE_CODES.has(outcome.message) ? 'mcp_read_failed' : LOGGED_CODES.has(outcome.message) ? outcome.message : 'provider_error';
   const diagnostic = read && outcome && 'provider_diagnostic' in outcome ? safeMcpErrorDiagnostic(outcome.provider_diagnostic) : undefined;
-  console.log(JSON.stringify({ hop: 'connector_proxy', op, ...(method ? { method } : {}), ok: !outcome, ms: Date.now() - started, ...(outcome ? { status: outcome.status, error: message } : {}), ...(diagnostic ? { provider_diagnostic: diagnostic } : {}) }));
+  console.log(JSON.stringify({ hop: 'connector_proxy', op: LOGGED_OPS.has(op as string) ? op : 'unknown', ...(method !== undefined ? { method: METHODS.includes(method as Method) ? method : 'unknown' } : {}), ok: !outcome, ms: Date.now() - started, ...(outcome ? { status: outcome.status, error: message } : {}), ...(diagnostic ? { provider_diagnostic: diagnostic } : {}) }));
   return response;
 };
 
@@ -147,13 +154,14 @@ const handle = async (body: Body): Promise<Response> => {
     }
     if(body.method==='calendarPage'&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'calendar'))return fail(403,'insufficient scopes');
     if(body.method==='freeBusy'&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'availability'))return fail(403,'insufficient scopes');
-    const required = body.method==='sendRaw' ? 'gmail.send' : body.method==='draft' ? 'gmail.compose' : ['createEvent','moveEvent','cancelEvent'].includes(body.method!) ? 'calendar.events' : null;
+    if(body.method==='calendarListsPage'&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'calendar_list'))return fail(403,'insufficient scopes');
+    const required = body.method==='sendRaw' ? 'gmail.send' : body.method==='draft' ? 'gmail.compose' : ['createTask','patchTask'].includes(body.method!) ? 'tasks' : ['createEvent','moveEvent','cancelEvent'].includes(body.method!) ? 'calendar.events' : null;
     if(required && (!Array.isArray(grant.scopes)||!grant.scopes.includes(`https://www.googleapis.com/auth/${required}`)))return fail(body.intent_id?503:403,body.intent_id?'intent_unavailable':'insufficient scopes');
     const token=grant.secret;
-    const client = googleClient(app, { refresh_token: token }, fetch, undefined, {connection_id:body.connection,email:null});
+    const client = googleClient(app, { refresh_token: token }, fetch, undefined, {connection_id:body.connection,email:null}, proxyClientOptions(body));
     try {
       const dispatch=async()=> (await (client[body.method as Method] as (...args: unknown[]) => Promise<unknown>)(...(body.args ?? [])))??null;
-      const data = ['draft','sendRaw','createEvent','moveEvent','cancelEvent'].includes(body.method!) ? await intentDispatch(body,dispatch) : await dispatch();
+      const data = ['draft','sendRaw','createEvent','moveEvent','cancelEvent','createTask','patchTask'].includes(body.method!) ? await intentDispatch(body,dispatch) : await dispatch();
       await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: '' }).catch(()=>{console.log(JSON.stringify({hop:'connector_proxy_health',ok:false,code:'unavailable'}));});
       return reply({ data: data ?? null });
     } catch (error) {

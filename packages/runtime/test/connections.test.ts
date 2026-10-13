@@ -34,12 +34,37 @@ describe('google proxy', () => {
       expect(error).toMatchObject({ status: 403, reason: expected });
     }
   });
+  it('asks the proxy for calendar details on every call, so a new proxy maps them only for a Worker that reads them', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ data: { events: [], next_page_token: null, fetched_count: 0, account: { connection_id: 'c-1', email: null }, observed_at: '2026-10-03T04:00:00.000Z' } })));
+    await proxyOf(fetcher).client('do-a', 'c-1').calendarPage!('primary', '2026-10-03T04:00:00Z', '2026-10-03T06:00:00Z', 10, false);
+    expect(JSON.parse(String(sent(fetcher)[1].body))).toMatchObject({ method: 'calendarPage', args: ['primary', '2026-10-03T04:00:00Z', '2026-10-03T06:00:00Z', 10, false], calendar_details: true });
+  });
   it('drops an omitted trailing optional arg instead of sending null across the wire', async () => {
     const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ data: { message_id: 'm1' } })));
     await proxyOf(fetcher).client('do-a', 'c-1', undefined, {id:'approval:fixture'}).sendRaw('raw-mime');
-    expect(JSON.parse(String(sent(fetcher)[1].body))).toEqual({ do_name: 'do-a', op: 'call', connection: 'c-1', method: 'sendRaw', args: ['raw-mime'], intent_id:'approval:fixture' });
+    expect(JSON.parse(String(sent(fetcher)[1].body))).toEqual({ do_name: 'do-a', op: 'call', connection: 'c-1', method: 'sendRaw', args: ['raw-mime'], calendar_details: true, intent_id:'approval:fixture' });
   });
 
+
+  it('sends Google Tasks writes with their approval intent, as the edge only dispatches them through the intent ledger', async () => {
+    const fetcher = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ data: { id: 't1' } })));
+    const client = proxyOf(fetcher).client('do-a', 'c-1', undefined, { id: 'approval:fixture:apply' });
+    await client.createTask!('list-a', { title: 'Task' });
+    await client.patchTask!('list-a', 't1', { title: 'Task' }, 'etag-1');
+    for (const call of [0, 1]) expect(JSON.parse(String(sent(fetcher, call)[1].body))).toMatchObject({ method: call ? 'patchTask' : 'createTask', intent_id: 'approval:fixture:apply' });
+  });
+  it('refuses a Google Tasks write that has no approval intent before anything leaves the runtime', async () => {
+    const fetcher = vi.fn();
+    const client = proxyOf(fetcher).client('do-a', 'c-1');
+    await expect(client.createTask!('list-a', { title: 'Task' })).rejects.toMatchObject({ message: 'intent_required' });
+    await expect(client.patchTask!('list-a', 't1', { title: 'Task' }, 'etag-1')).rejects.toMatchObject({ message: 'intent_required' });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it('does not require an intent for a Google Tasks read', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ data: { id: 't1' } })));
+    await proxyOf(fetcher).client('do-a', 'c-1').task!('list-a', 't1');
+    expect(JSON.parse(String(sent(fetcher)[1].body))).not.toHaveProperty('intent_id');
+  });
 
   it('is off without Supabase', () => {
     expect(googleProxy({})).toBeNull();
@@ -51,7 +76,7 @@ describe('google proxy', () => {
     const [url, init] = sent(fetcher);
     expect(url).toBe('https://db.test/functions/v1/connector-proxy');
     const raw = String(init.body);
-    expect(JSON.parse(raw)).toEqual({ do_name: 'do-a', op: 'call', connection: 'c-1', method: 'events', args: ['a', 'b', 5, false] });
+    expect(JSON.parse(raw)).toEqual({ do_name: 'do-a', op: 'call', connection: 'c-1', method: 'events', args: ['a', 'b', 5, false], calendar_details: true });
     const hash = hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw)));
     expect((init.headers as Record<string, string>)['x-waldo-sig']).toBe(await routerSignature('router', at, `proxy.${hash}`));
   });

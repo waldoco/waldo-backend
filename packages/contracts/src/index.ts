@@ -4,6 +4,7 @@ export * from './core/trigger';
 export * from './model/roster';
 export * from './model/context-budget';
 export * from './health/crs';
+export * from './health/zone-bridge';
 export * from './memory/pattern-id';
 export * from './memory/trust';
 export * from './memory/sanitise';
@@ -41,6 +42,7 @@ export * from './tools/schemas/health';
 export * from './tools/schemas/responsibilities';
 export * from './tools/schemas/standing-orders';
 export * from './tools/schemas/loops';
+export * from './tools/schemas/approvals';
 export * from './tools/schemas/calendar';
 export * from './tools/schemas/threading';
 export * from './runtime/delivery-policy';
@@ -63,6 +65,8 @@ export * from './runtime/conversation-core';
 export * from './runtime/conversation-entry';
 export * from './runtime/conversation-export';
 export * from './runtime/management-workspace';
+export * from './runtime/reply-parts';
+export * from './runtime/surface-capabilities';
 export {
   actorRefSchema,
   agentSessionActivityObservationPayloadSchema,

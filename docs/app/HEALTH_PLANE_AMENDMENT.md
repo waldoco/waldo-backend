@@ -17,12 +17,29 @@ Status: owner-ruled scope, not yet implemented. Applies to ADR-0081, ADR-0024 an
 ## What stays blocked
 - Third-party egress (send_message, draft_email, draft_document): health values blocked unless the owner explicitly asks to share a specific item.
 - Externally tainted content (mail, web, files): redaction stays.
-- Traces, Langfuse, logs, audit records, R2 summaries, browser jobs: no health values.
+- Logs, audit records, R2 summaries, browser jobs: no health values.
+- Traces: during alpha and beta, by owner ruling (10 October 2026), the staging Langfuse project captures model text for opted-in testers, health included. Production never captures text (enforced in code); revisit before production.
 - Secrets, canaries, forget and withdrawal guarantees.
-- Long-term memory: no bulk readings; qualitative patterns only, with the existing distinct-day evidence rule.
+- Long-term memory: no bulk readings; qualitative patterns only, with the existing distinct-day evidence rule. Numeric pattern evidence (owner ruling, 10 October 2026) lives in the Supabase health plane, with memory holding the qualitative pattern and a pointer.
 - Provider requests set `store: false`.
 
 ## Retention and access (recommendation the owner approved in scope, "90 d raw / 24 mo aggregate")
-- Raw readings: 90 days in owner-only tables. Daily aggregates and scores: while the account is active, at most 24 months. All deleted on withdrawal or account delete.
+- Raw readings: 90 days in owner-only tables. Daily aggregates and scores: while the account is active, at most 24 months. All deleted when storage consent is withdrawn or the account is deleted. Withdrawing model use alone stops Waldo using health in conversation and deletes nothing (owner ruling, 10 October).
 - Encrypted at rest and in transit; row-level security per owner; writes only from the ingest route with service credentials; agent reads through the signed owner-scoped RPC; raw reads leave count-only receipts.
 - No health values in analytics, traces or error text.
+
+## Addendum: continuous ingest (owner decisions of 10 October 2026)
+Design: `docs/app/HEALTH_INGEST_DESIGN_2026-10-10.md`. Contract: `packages/contracts/src/app/health-ingest.ts`.
+- **Intraday window summaries.** The app may upload point records and window summaries (heart-rate min/mean/max, an RMSSD or SDNN value with its beat count, SpO2, respiratory rate, step and energy windows, workouts). They are raw readings under the retention above. Beat-to-beat series and the 24 h heart-rate stream stay on the phone. This reverses the app's earlier decision that intraday data never leaves the device. Consent copy version 2 names it.
+- **Scores.** The backend computes the official scores from stored readings and is the only writer of `public.health_context_daily`. A phone may show a provisional score; a device score cannot become canonical by upload (ADR-0081 stands). Candidate-labelled scores may reach owner replies with their algorithm version.
+- **HRV.** RMSSD is canonical. SDNN is accepted only as a labelled fallback with its own baseline and lower confidence, never blended.
+- **Time.** Every upload carries an IANA zone and each reading its UTC offset. A day holding two zones is allowed and flagged. The owner-settings timezone stays the agent's default.
+- **Zone vocabulary.** The stored row keeps `low|moderate|good|high|unknown` for every pillar, mapped by `packages/contracts/src/health/zone-bridge.ts`, direction by meaning (the heavier the day, the higher the stored word). Reads for the app use the meaning-bearing words.
+
+## Addendum: the Brief's sleep chip (owner ruling of 13 October 2026)
+Ruling: a chip on a Brief card may show last night's raw sleep duration (#1103 comments 6140376774 and 6140220362, item 6). ADR-0081's matrix keeps raw and normalised sleep duration out of the morning Brief DTO. This is the one exception, for one field at one destination.
+- **Where it shows.** Only as the label of a `sleep` ref on a card's `latest` in the app's day view (`GET /app/v1/controls?view=day`). It shows for the owner's own authenticated session only.
+- **Where it comes from.** It is filled when that view is read, from the Supabase health plane, through the signed `health_series_read`. The read covers one local day and `sleep_duration`, time asleep only. The owner's health storage consent covers it. Model-use consent is not needed, only because no model reads it.
+- **When it is gone.** The chip is left out entirely, never shown empty or as zero, in three cases: there is no reading, storage consent is withdrawn, or the health connection is lost (the read fails or reports the owner not linked).
+- **What never holds it.** The card text on any surface, including the Telegram copy and push text. The model's input and output, the card delivery record, Durable Object storage, R2, memory, traces, logs and metrics. The number never leaves the health plane except into that one response.
+- **Proof before it ships.** Tests show that the stored card text and the delivery record never hold the duration. They show the label is absent without storage consent or without a reading, and that the Telegram copy carries no number.

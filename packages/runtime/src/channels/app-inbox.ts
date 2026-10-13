@@ -64,6 +64,13 @@ export class AppInbox {
       this.storage.kv.put(APP_INBOX_DUE_KEY,due(rows,this.now()));
     });
   }
+  // While the directory is unavailable, admitted work stays queued. Its wake moves out so the shared
+  // alarm, which takes the earliest due time, does not refire every 250 ms for the length of the outage.
+  deferWake(delayMs:number):void {
+    this.storage.transactionSync(()=>{
+      if(this.records().some(row=>row.state==='admitted'))this.storage.kv.put(APP_INBOX_DUE_KEY,this.now()+delayMs);
+    });
+  }
   // Signing out closes the session's admitted and running messages through the one durable writer. A running turn's
   // scope.admit() re-reads its row before every effect, so it stops at its next check; its effects are unconfirmed.
   revokeSession(sessionHash:string):number {

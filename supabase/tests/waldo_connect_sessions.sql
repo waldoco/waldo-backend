@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(19);
+select plan(22);
 delete from vault.secrets where name = 'waldo_router_hmac';
 select vault.create_secret('test-router-secret', 'waldo_router_hmac');
 create function pg_temp.at() returns bigint language sql as $$ select extract(epoch from now())::bigint $$;
@@ -52,6 +52,11 @@ update waldo.connect_sessions set expires_at = now() - interval '1 second' where
 select is(waldo.connect_session_resolve('hash6', pg_temp.at(), pg_temp.sig('connsess.resolve.hash6'))->>'status', 'expired', 'a reopened clicked ticket past its window reads expired to the owner');
 select is((select status from waldo.connect_sessions where ticket_hash = 'hash6'), 'clicked', 'the crossed-clock resolve leaves the row clicked, not expired');
 select is(waldo.connect_session_complete('hash6', pg_temp.at(), pg_temp.sig('connsess.complete.hash6')), true, 'the in-flight flow still completes after the crossed-clock resolve');
+
+-- The app is a connect surface; any other channel is still refused by the check.
+select lives_ok($$ select waldo.connect_session_issue('do-a', 'google', 'app', 'hash7', pg_temp.at(), pg_temp.sig('connsess.issue.do-a.google.app.hash7')) $$, 'the app can issue a connect ticket');
+select is((select channel from waldo.connect_sessions where ticket_hash = 'hash7'), 'app', 'the ticket records the app as its channel');
+select throws_ok($$ select waldo.connect_session_issue('do-a', 'google', 'sms', 'hash8', pg_temp.at(), pg_temp.sig('connsess.issue.do-a.google.sms.hash8')) $$, '23514', null, 'an unknown channel is still rejected');
 
 select * from finish();
 rollback;

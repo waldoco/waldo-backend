@@ -9,12 +9,12 @@ Sources: the owner's rulings of 2026-09-24 (via WhatsApp), WaldoBrain (`01-Waldo
 | Term | Meaning | Rules |
 |---|---|---|
 | **Form** | The owner's body capacity right now. The one headline score. | Computed in code, never by the model. A number only shows once it is validated for this owner. |
-| **Load** | What the day is asking of the owner: its demand and pressure, compared with their own normal. | Meetings, tasks, messages and commitments drive it. Signal pressure and task pileup are drivers, not separate scores. |
+| **Weight** | What the day is asking of the owner: its demand and pressure, compared with their own normal. | Meetings, tasks, messages, commitments and physical strain drive it. Signal pressure and task pileup are drivers, not separate scores. A question about weight in kilos or pounds still means body mass. |
+| **Load** | The physical part of Weight (training and activity strain). | A component, not a headline score. |
 | **Recovery** | What last night gave back. A driver of Form, not a headline. | Fixed at wake. |
-| **Weight** | Body mass only. | Never used for day demand. |
 | **The Slope** | The 4-week trajectory: is the long arc going up or down? | Shown weekly, never alarmist. |
 
-Retired from owner copy: Readiness, Readiness Score, CRS, "Today's Weight" as demand, Mind State score. The WaldoBrain rings become Form / Load / Recovery.
+Retired from owner copy: Readiness, Readiness Score, CRS, Mind State score. The three scores are Form, Recovery and Weight, as the website and app show them (owner ruling of 2026-10-10, which replaced this doc's earlier "Weight is body mass only; Load is day demand").
 
 Always compare the owner to their own normal, never to population averages. Detailed health stays out of channel messages.
 

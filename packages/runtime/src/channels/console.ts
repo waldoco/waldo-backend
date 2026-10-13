@@ -1,4 +1,5 @@
 import type { ApprovalItem, ApprovalReview } from './approvals';
+import type { CardLatest } from './day-cards';
 import { SCHEDULE_KINDS } from '@waldo/contracts';
 import { SCHEDULE_LABELS, type SchedulePreferences } from './schedule-preferences';
 import type { Claim, ConstellationEdge, ConstellationNode, profile } from '../memory/claims';
@@ -145,6 +146,7 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'card.today': 'Card time set for today.',
   'card.pin': 'Card pinned. Waldo will use this time every day.',
   'card.unpin': 'Pin cleared. Waldo plans this card again.',
+  'card.unreadable.failed': "This card's schedule is stored in a form this version can't read, so it can't be changed here. Nothing was changed.",
   'google.disconnect': 'Google disconnected. Waldo no longer reads your calendar or mail.',
   'google.connected': 'Google connected.',
   'google.connect.failed': 'Google connect could not start. Try again.',
@@ -153,11 +155,15 @@ export const NOTICES: Readonly<Record<string, string>> = {
   invalid: 'That change could not be applied.',
 };
 
-export type ConsoleCard = Readonly<{ id: string; name: string; defaultTime: string; time: string | null; reason: string; sent: boolean; pin: string | null }>;
+// latest is the Main chat row today's card was delivered to; only the app's day view reads it.
+export type ConsoleCard = Readonly<{ id: string; name: string; defaultTime: string; time: string | null; reason: string; sent: boolean; pin: string | null;
+  latest?: CardLatest | null }>;
 
 export type ConsoleView = Readonly<{
   release: string;
   timezone: string;
+  // True once the owner chose the zone themselves (timezone.set); a stored or fallback zone is not confirmed.
+  timezoneConfirmed: boolean;
   now: string;
   sessionUntil: string;
   sessionCount: number;
@@ -229,7 +235,7 @@ const connectors = (view: ConsoleView) => {
       google.connectAvailable ? form(csrf, 'google.connect', google.accounts.length ? 'Add account' : 'Connect Google', { value: 'calendar' }, { tone: google.accounts.length ? 'quiet' : 'primary' }) : '<span class="note">OAuth app keys are not set on this server yet</span>'),
     row('Telegram', 'Your owner DM. Chat, cards and reminders arrive here, and it is how you sign in to this console.', status(telegram.linked, telegram.linked ? 'Connected' : 'Unlinked'), telegramAction),
     row('Console session', `Signed in until ${esc(view.sessionUntil)} on ${view.sessionCount} ${view.sessionCount === 1 ? 'browser' : 'browsers'}. Send /console on Telegram for a fresh link.`, status(true, 'Active'),
-      form(csrf, 'session.signout', 'Sign out') + (view.sessionCount > 1 ? form(csrf, 'session.signout.all', 'Sign out everywhere', {}, { tone: 'danger', confirm: 'Sign out of every browser?' }) : '')),
+      form(csrf, 'session.signout', 'Sign out') + form(csrf, 'session.signout.all', 'Sign out everywhere', {}, { tone: 'danger', confirm: 'Sign out of every browser and the app?' })),
     row('WhatsApp', 'The channel route exists, but this page cannot verify a linked WhatsApp number or live delivery. Ask Waldo in chat before relying on it.', chip('Status unknown here', 'provisional'), ''),
     row('Phone number and OTP sign-in', 'This console currently offers invite-gated email OTP and Telegram one-time links, not phone OTP sign-in.', chip('Not available', 'muted'), ''),
     row('Health data', 'Apple Health / Apple Watch first, then Health Connect, Samsung and WHOOP.', chip('Not built yet', 'muted'), ''),
@@ -257,7 +263,7 @@ const serviceStatus = (view: ConsoleView) => {
 // Sends need a bound sender account and exact destination in addition to words. The current
 // proposal stores neither for every channel, so console APPROVAL stays chat-only for sends.
 // Dismissal is the safe direction - it can only prevent a send, never cause one - so the
-// console offers Not now for open send proposals. That also un-strands proposals whose
+// console offers Don't do this for open send proposals. That also un-strands proposals whose
 // Telegram approval card lost its inline keyboard (2026-09-28 staging receipt).
 // Open email/message send proposals the console may only dismiss (approve stays in chat).
 export const consoleMayDismiss = (item: ApprovalItem): boolean =>
@@ -266,11 +272,16 @@ export const consoleMayApprove = (item: ApprovalItem | undefined): boolean => Bo
 
 const APPROVAL_LABELS: Readonly<Record<string, string>> = {
   calendar_change: 'Calendar adjustment', email_send: 'Email send', message_send: 'Message send',
-  browser_submit: 'Browser action', mcp_call: 'MCP tool call',
+  browser_submit: 'Browser action', mcp_call: 'MCP tool call', google_task_change: 'Google task change',
 };
 const reviewDetails = (review: ApprovalReview): string => {
   if (review.kind === 'email_send') return `<div class="approval-review"><div>To: ${esc(review.to.join(', '))}</div>${review.cc.length ? `<div>CC: ${esc(review.cc.join(', '))}</div>` : ''}${review.bcc.length ? `<div>BCC: ${esc(review.bcc.join(', '))}</div>` : ''}<div>Subject: ${esc(review.subject)}</div><pre>${esc(review.body)}</pre></div>`;
   if (review.kind === 'message_send') return `<div class="approval-review"><div>Channel: ${esc(review.channel)}</div><pre>${esc(review.content)}</pre></div>`;
+  if (review.kind === 'google_task_change') {
+    const { args, list, before } = review.proposal;
+    const task = args.changes?.title ?? before?.title;
+    return `<div class="approval-review"><div>Account: ${esc(review.account)}</div><div>List: ${esc(list.title)}</div><div>Action: ${esc(args.action)}</div>${task ? `<div>Task: ${esc(task)}</div>` : ''}${args.changes?.notes ? `<pre>${esc(args.changes.notes)}</pre>` : ''}${args.changes?.due_date ? `<div>Due: ${esc(args.changes.due_date)}</div>` : ''}<div>Reason: ${esc(args.reason)}</div></div>`;
+  }
   return `<div class="approval-review"><div>Action: ${esc(review.action)}</div>${review.title ? `<div>Event: ${esc(review.title)}</div>` : ''}${review.event_id ? `<div>Event ID: ${esc(review.event_id)}</div>` : ''}${review.start ? `<div>Start: ${esc(review.start)}</div>` : ''}${review.end ? `<div>End: ${esc(review.end)}</div>` : ''}<div>Reason: ${esc(review.reason)}</div></div>`;
 };
 const approvals = (view: ConsoleView) => {
@@ -283,13 +294,13 @@ const approvals = (view: ConsoleView) => {
     // closes the loop. Approving a send stays in chat with the exact words on the card.
     const dismissible = consoleMayDismiss(item);
     const actions = canApprove
-      ? form(view.csrf, 'approval.approve', 'Do it', { id: item.id }, { tone: 'primary' }) + form(view.csrf, 'approval.skip', 'Not now', { id: item.id })
+      ? form(view.csrf, 'approval.approve', 'Do it', { id: item.id }, { tone: 'primary' }) + form(view.csrf, 'approval.skip', "Don't do this", { id: item.id })
       : item.state === 'open' || item.state === 'review_only'
-        ? dismissible ? form(view.csrf, 'approval.skip', 'Not now', { id: item.id }) : ''
+        ? dismissible ? form(view.csrf, 'approval.skip', "Don't do this", { id: item.id }) : ''
         : item.undoable ? form(view.csrf, 'approval.undo', 'Undo', { id: item.id }, { tone: 'danger', confirm: 'Undo this calendar change?' }) : '';
     const review = safeReview ? reviewDetails(safeReview) : '';
     const holdReason = item.state === 'review_only' ? '<div class="sub">The full email did not fit in the chat card, so no Send it button was offered. Nothing has been sent. Ask for a shorter version or a draft to review.</div>' : item.state === 'unconfirmed' ? '<div class="sub">Review card delivery was not confirmed. This email cannot be approved here or in chat; nothing has been sent. Check chat before making a fresh request.</div>' : item.state !== 'open' || canApprove ? '' : item.kind === 'email_send' || item.kind === 'message_send'
-      ? '<div class="sub">Review the exact sender, recipient and words in your chat - approving this send happens there. Not now dismisses it, here or in chat.</div>'
+      ? '<div class="sub">Review the exact sender, recipient and words in your chat - approving this send happens there. Don\'t do this dismisses it, here or in chat.</div>'
       : '<div class="sub">Full action details are not available here. This console cannot approve or dismiss it. Ask Waldo to show the proposal in full before deciding.</div>';
     const changeHint = (item.state === 'open' || item.state === 'review_only') && ['calendar_change', 'email_send', 'message_send'].includes(item.kind)
       ? '<div class="sub">Want to change it? Ask Waldo to prepare a new proposal before approving.</div>' : '';

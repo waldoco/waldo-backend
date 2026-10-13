@@ -3,7 +3,7 @@ import {runInDurableObject} from 'cloudflare:test';
 import {expect,it} from 'vitest';
 import {eventAdmission} from '../src/channels/event-admission';
 it('durable event admission survives reconstruction, binds raw digest and never reclaims unknown notifications',async()=>{
- const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('event-admission-custody'));
+ const stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName('event-admission-custody'));
  await runInDurableObject(stub,async(_instance,state)=>{
   const inbox=eventAdmission(state.storage);
   expect(inbox.admit('github','id:one','a','fixture')).toBe('admitted');
@@ -15,8 +15,8 @@ it('durable event admission survives reconstruction, binds raw digest and never 
   expect(state.storage.sql.exec<{state:string}>("SELECT state FROM event_admissions WHERE source='github'").one().state).toBe('unknown');
  });
 });
-it('actual owner event entry acknowledges durable admission, prevents duplicate notification and preserves unknown after loss',async()=>{
- const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('event-admission-entry'));
+it('actual owner event entry acknowledges durable admission, prevents duplicate notification and preserves unknown after loss, and records a refused send as not sent',async()=>{
+ const stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName('event-admission-entry'));
  await runInDurableObject(stub,async(instance,state)=>{
   const entry=instance as unknown as {recordEvent(r:Request,b:string):Promise<Response>;setup():unknown};
   const setup=entry.setup;let sends=0;let lose=false;let skipped=false;const finished:{status:string;summary:string}[]=[];
@@ -28,7 +28,9 @@ it('actual owner event entry acknowledges durable admission, prevents duplicate 
    expect((await entry.recordEvent(request('one','b'.repeat(64)),body)).status).toBe(409);expect(sends).toBe(1);
    lose=true;expect((await entry.recordEvent(request('lost'),body)).status).toBe(200);expect((await entry.recordEvent(request('lost'),body)).status).toBe(200);expect(sends).toBe(2);expect(finished.at(-1)).toEqual({status:'stopped',summary:'github: notification outcome unknown; not retried'});
    expect(state.storage.sql.exec<{state:string}>("SELECT state FROM event_admissions WHERE delivery='id:lost'").one().state).toBe('unknown');
-   lose=false;skipped=true;expect((await entry.recordEvent(request('skipped'),body)).status).toBe(200);expect(finished.at(-1)?.status).toBe('stopped');expect(state.storage.sql.exec<{state:string}>("SELECT state FROM event_admissions WHERE delivery='id:skipped'").one().state).toBe('unknown');
+   lose=false;skipped=true;const before=sends;expect((await entry.recordEvent(request('skipped'),body)).status).toBe(200);expect(finished.at(-1)).toEqual({status:'stopped',summary:"github: notification not sent; refused at the ownership check"});expect(state.storage.sql.exec<{state:string}>("SELECT state FROM event_admissions WHERE delivery='id:skipped'").one().state).toBe('undelivered');
+   // A refused send is terminal too: redelivery never notifies later, even once the owner can be reached.
+   skipped=false;expect((await entry.recordEvent(request('skipped'),body)).status).toBe(200);expect(sends).toBe(before+1);
   }finally{entry.setup=setup;}
  });
 });

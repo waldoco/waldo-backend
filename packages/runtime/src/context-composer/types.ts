@@ -258,6 +258,8 @@ export type ContextCompositionResult =
       prompt: string;
       // Provider-ready admitted skill section, never parsed back out of prompt text.
       skillPrompt?: string;
+      // The admitted health rendering inside prompt, for callers that build their own system prompt.
+      healthPrompt?: string;
       checkpoint: RuntimeContextCheckpoint;
       evidence: ContextCompositionEvidence;
     }>

@@ -17,7 +17,7 @@ it('native Telegram presentation stays distinct from common authority and task c
 
 it('reviewed-skill safety wrapper does not restore false surface delivery promises',()=>{
  const presentation={surface:'whatsapp',delivery:{text:true,approval:'text_callback' as const,reactions:false,attachments:false},commands:[]};
- const prompt=withOwnerSkillProcedures(messagingSystemPrompt([],presentation),'Reviewed file procedure',presentation);
+ const prompt=withOwnerSkillProcedures(messagingSystemPrompt([],presentation),'Reviewed file procedure');
  expect(prompt).not.toContain('Connection links arrive as buttons');
  expect(prompt).not.toContain('Do it / Modify / Not now buttons');
  expect(prompt).toContain('Apply existing tool and approval checks');

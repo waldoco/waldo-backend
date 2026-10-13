@@ -26,14 +26,16 @@ const safeReview = (review: ApprovalReview | null): ApprovalReview | null => {
   if (!review) return null;
   if (review.kind === 'email_send') return { kind: review.kind, to: [...review.to], cc: [...review.cc], bcc: [...review.bcc], subject: review.subject, body: review.body };
   if (review.kind === 'message_send') return { kind: review.kind, channel: review.channel, content: review.content };
+  if (review.kind === 'google_task_change') return { kind: review.kind, account: review.account, proposal: review.proposal, proposal_digest: review.proposal_digest };
   return { kind: review.kind, action: review.action, title: review.title, event_id: review.event_id, start: review.start, end: review.end, reason: review.reason };
 };
 
 const projections = {
   day: (view: ConsoleView) => ({
     timezone: view.timezone,
+    timezone_confirmed: view.timezoneConfirmed,
     date: view.now.slice(0,10),
-    cards: view.cards.map((card) => ({ id: card.id, name: card.name, defaultTime: card.defaultTime, time: card.time, reason: card.reason, sent: card.sent, pin: card.pin })),
+    cards: view.cards.map((card) => ({ id: card.id, name: card.name, defaultTime: card.defaultTime, time: card.time, reason: card.reason, sent: card.sent, pin: card.pin, ...(card.latest === undefined ? {} : { latest: card.latest }) })),
     proactivity: { quiet_start: view.proactivity.quiet_start, quiet_end: view.proactivity.quiet_end, volume: view.proactivity.volume },
     schedules: view.schedules,
   }),

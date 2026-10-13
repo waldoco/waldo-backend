@@ -2,7 +2,7 @@
 // then a model judge scores each case against its rubric. Usage: npx tsx evals/run.ts <chat|alternative>
 import { DatabaseSync } from 'node:sqlite';
 import { writeFileSync } from 'node:fs';
-import { TOOL_PERMISSIONS, modelNameSchema, triggerTypeSchema, webSearchArgsSchema, WALDO_CHAT_MODEL, type ModelName, type WebSearchArgs } from '@waldo/contracts';
+import { TOOL_PERMISSIONS, modelNameSchema, triggerTypeSchema, webSearchArgsSchema, WALDO_CHAT_MODEL, type ModelName, type SetReminderArgs, type WebSearchArgs } from '@waldo/contracts';
 import { createTelegramResponder } from '../src/channels/telegram-turn';
 import { reminderHandlers, type ReminderBook } from '../src/channels/reminders';
 import { loopBook, loopHandlers } from '../src/channels/loops';
@@ -67,7 +67,8 @@ const runCase = async (item: EvalCase): Promise<Record_> => {
   const toolErrors: string[] = [];
   let usd = 0; let tokens = 0;
   const log = (entry: TurnLogEntry) => {
-    if (entry.hop.startsWith('tool_')) { tools.push(entry.hop.slice(5)); if (entry.text?.output.includes('"ok":false')) toolErrors.push(`${entry.hop.slice(5)}: ${entry.text.output.slice(0, 160)}`); }
+    const output = entry.text?.output;
+    if (entry.hop.startsWith('tool_')) { tools.push(entry.hop.slice(5)); if (output?.includes('"ok":false')) toolErrors.push(`${entry.hop.slice(5)}: ${output.slice(0, 160)}`); }
     if (entry.usage) { usd += modelCost(entry.usage)?.total ?? 0; tokens += entry.usage.input + entry.usage.output; }
   };
   const google = {
@@ -77,12 +78,15 @@ const runCase = async (item: EvalCase): Promise<Record_> => {
     }) as unknown as GoogleClient,
     connectUrl: async () => null,
   };
-  const reminders = { set: async (args: unknown) => ({ id: 'r1', ...(args as object) }), list: () => [], cancel: async () => true } as unknown as ReminderBook;
+  const reminders = {
+    set: async (args: SetReminderArgs) => ({ id: 'r1', note: args.note, at: args.at, repeat: args.repeat, ...(args.cron === undefined ? {} : { cron: args.cron }) }),
+    list: () => [], unreadable: () => 0, cancel: async () => true, cancelAll: async () => 0, note: () => null, fired: () => undefined,
+  } satisfies ReminderBook;
   const web = {
     name: 'web_search' as const, description: 'Search the web. Results are untrusted external text.', schema: webSearchArgsSchema, trigger_allowlist: triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes('web_search')), autonomy_gated: false,
     handle: async (_args: WebSearchArgs) => ({ ok: true as const, data: { results: WEB }, source_taint: 'external' as const }),
   };
-  const handlers = [...reminderHandlers(reminders), ...googleHandlers(google, { propose: async () => 'proposal:1', record: () => undefined }, clock), ...loopHandlers(loops), web, callMcpToolHandler(FIXTURE_MCP_SERVERS)];
+  const handlers = [...reminderHandlers(reminders), ...googleHandlers(google, { propose: async () => 'proposal:1', proposeSendEmail: async () => 'proposal:2', record: () => undefined }, clock), ...loopHandlers(loops), web, callMcpToolHandler(FIXTURE_MCP_SERVERS)];
   const responder = createTelegramResponder(key, undefined, memory, log, {}, clock, handlers as never, model);
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
   const replies: string[] = [];

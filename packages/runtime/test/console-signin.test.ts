@@ -6,24 +6,24 @@ const downloadTarget = '/console/workspace/file?id=def993c9-db4d-49c4-8998-8465b
 it('returns expired DO download sessions to sign-in while preserving the exact file intent', async () => {
   const ns = { idFromName: (name: string) => name, get: () => ({ fetch: async () => new Response('unauthorized', { status: 401 }) }) } as unknown as DurableObjectNamespace;
   const response = (await handleConsole(new Request(`https://w.test${downloadTarget}`, { headers: { cookie: 'waldo_owner=signed' } }),
-    { TELEGRAM_OWNER_DO: ns }, auth({ readOwnerCookie: async () => 'do-a' })))!;
+    { OWNER_DO: ns }, auth({ readOwnerCookie: async () => 'do-a' })))!;
   expect(response.status).toBe(303);
   expect(response.headers.get('location')).toBe(`/console/signin?return_to=${encodeURIComponent(downloadTarget)}`);
 });
 it('retains download intent when authentication is absent without reading file metadata', async () => {
   const ns = owners();
-  const response = (await handleConsole(new Request(`https://w.test${downloadTarget}`), { TELEGRAM_OWNER_DO: ns.ns }, auth()))!;
+  const response = (await handleConsole(new Request(`https://w.test${downloadTarget}`), { OWNER_DO: ns.ns }, auth()))!;
   expect(response.status).toBe(303);
   expect(response.headers.get('location')).toBe(`/console/signin?return_to=${encodeURIComponent(downloadTarget)}`);
   expect(ns.fetch).not.toHaveBeenCalled();
-  const page = (await handleConsole(new Request(`https://w.test/console/signin?return_to=${encodeURIComponent(downloadTarget)}`), { TELEGRAM_OWNER_DO: ns.ns }, auth()))!;
+  const page = (await handleConsole(new Request(`https://w.test/console/signin?return_to=${encodeURIComponent(downloadTarget)}`), { OWNER_DO: ns.ns }, auth()))!;
   const html = await page.text();
   expect(html).toContain('Continue to download');
   expect(html).toContain('name="return_to"');
 });
 it('finishes download OTP with an HTML link and unchanged cookie protections', async () => {
   const response = (await handleConsole(form('/console/verify', { email: 'owner@example.com', code: '123456', return_to: downloadTarget }),
-    { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } as unknown as RateLimit },
+    { OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } as unknown as RateLimit },
     auth({ verify: async () => 'do-a' })))!;
   expect(response.status).toBe(200);
   expect(response.headers.get('location')).toBeNull();
@@ -40,6 +40,7 @@ const auth = (overrides: Partial<ConsoleAuth> = {}): ConsoleAuth => ({
   sendCode: vi.fn(async () => true),
   throttle: vi.fn(async () => true),
   verify: vi.fn(async () => null),
+  verifyOrJoin: vi.fn(async () => null),
   issueLinkCode: vi.fn(async () => null),
   saveSettings: vi.fn(async () => true),
   unlinkTelegram: vi.fn(async () => true),
@@ -66,7 +67,7 @@ describe('handleConsole', () => {
     const signOutAll = vi.fn(async () => 3);
     const response = await handleConsole(
       new Request('https://w.test/console/signout-all', { method: 'POST' }),
-      { TELEGRAM_OWNER_DO: owners().ns },
+      { OWNER_DO: owners().ns },
       auth({ readOwnerCookie: vi.fn(async () => 'do-a'), signOutAll }),
     );
     expect(response?.status).toBe(303);
@@ -76,10 +77,27 @@ describe('handleConsole', () => {
     expect(cleared).toContain('Max-Age=0');
   });
 
+  it('sign-out-everywhere that the directory does not confirm keeps this browser signed in and says so generically', async () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const response = await handleConsole(
+        new Request('https://w.test/console/signout-all', { method: 'POST' }),
+        { OWNER_DO: owners().ns },
+        auth({ readOwnerCookie: vi.fn(async () => 'do-a'), signOutAll: vi.fn(async () => { throw new Error('session revocation unavailable'); }) }),
+      );
+      expect(response?.status).toBe(503);
+      expect(response?.headers.get('set-cookie')).toBeNull();
+      const body = await response!.text();
+      expect(body).toContain('still signed in');
+      expect(body).not.toContain('revocation unavailable');
+      expect(JSON.stringify(spy.mock.calls)).not.toContain('do-a');
+    } finally { spy.mockRestore(); }
+  });
+
   it('correlates a failed auth request without logging email, phone, or code', async () => {
     const spy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     try {
-      const response = await handleConsole(form('/console/signin', { email: 'private@example.com', phone: '+14155550100' }), { TELEGRAM_OWNER_DO: owners().ns }, auth());
+      const response = await handleConsole(form('/console/signin', { email: 'private@example.com', phone: '+14155550100' }), { OWNER_DO: owners().ns }, auth());
       expect(response?.status).toBe(200);
       const trace = response?.headers.get('x-waldo-trace');
       expect(trace).toMatch(/^console-[0-9a-f-]{36}$/);
@@ -97,35 +115,35 @@ describe('handleConsole', () => {
     const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
     const ownerCookie = vi.fn(async () => 'cookie');
     const response = await handleConsole(form('/console/verify', { email: 'owner@example.com', phone: '+14155550100', code: '123456' }),
-      { TELEGRAM_OWNER_DO: ns, RESPONSIBILITY_RATE_LIMITER: limiter }, auth({ verify: vi.fn(async () => 'do-a'), ownerCookie }));
+      { OWNER_DO: ns, RESPONSIBILITY_RATE_LIMITER: limiter }, auth({ verify: vi.fn(async () => 'do-a'), ownerCookie }));
     expect(response?.status).toBe(200);
     expect(await response?.text()).toContain('Sign-in is having trouble');
     expect(ownerCookie).not.toHaveBeenCalled();
   });
 
   it('stays out of the way when Supabase sign-in is not configured', async () => {
-    expect(await handleConsole(new Request('https://w.test/console'), { TELEGRAM_OWNER_DO: owners().ns }, null)).toBeNull();
+    expect(await handleConsole(new Request('https://w.test/console'), { OWNER_DO: owners().ns }, null)).toBeNull();
   });
 
   it('lets the Telegram one-time ticket link fall through to the owner DO console', async () => {
     // Staging receipt 2026-09-28: with Supabase console auth configured, GET /console?t=<ticket>
     // 303'd to the email form and the bot's sign-in link could never redeem. The ticket flow
     // (GET with ?t=, and the redeem POST back to /console) belongs to the owner DO's branch.
-    expect(await handleConsole(new Request('https://w.test/console?t=ticket123'), { TELEGRAM_OWNER_DO: owners().ns }, auth())).toBeNull();
-    expect(await handleConsole(form('/console', { t: 'ticket123' }), { TELEGRAM_OWNER_DO: owners().ns }, auth())).toBeNull();
+    expect(await handleConsole(new Request('https://w.test/console?t=ticket123'), { OWNER_DO: owners().ns }, auth())).toBeNull();
+    expect(await handleConsole(form('/console', { t: 'ticket123' }), { OWNER_DO: owners().ns }, auth())).toBeNull();
   });
 
   it('lets a request carrying the DO console cookie fall through to the owner DO', async () => {
     // The ticket session lives in the waldo_console cookie; without this fallthrough a
     // redeemed ticket still 303'd every page to the email form.
     const req = new Request('https://w.test/console', { headers: { cookie: 'waldo_console=abc.def.ghi' } });
-    expect(await handleConsole(req, { TELEGRAM_OWNER_DO: owners().ns }, auth())).toBeNull();
+    expect(await handleConsole(req, { OWNER_DO: owners().ns }, auth())).toBeNull();
   });
 
   it('routes an email-code member using the signed owner cookie despite also carrying a DO cookie', async () => {
     const { ns, fetch, idFromName } = owners();
     const req = new Request('https://w.test/console', { headers: { cookie: 'waldo_console=member-session; waldo_owner=member-do.signed' } });
-    const result = await handleConsole(req, { TELEGRAM_OWNER_DO: ns }, auth({ readOwnerCookie: vi.fn(async () => 'member-do') }));
+    const result = await handleConsole(req, { OWNER_DO: ns }, auth({ readOwnerCookie: vi.fn(async () => 'member-do') }));
     expect(await result?.text()).toBe('console page');
     expect(idFromName).toHaveBeenCalledWith('member-do');
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -134,20 +152,20 @@ describe('handleConsole', () => {
   it('does not use a ticket URL to switch an email-code member to the deploy owner', async () => {
     const { ns, idFromName } = owners();
     const req = new Request('https://w.test/console?t=other-owners-ticket', { headers: { cookie: 'waldo_console=member-session; waldo_owner=member-do.signed' } });
-    const result = await handleConsole(req, { TELEGRAM_OWNER_DO: ns }, auth({ readOwnerCookie: vi.fn(async () => 'member-do') }));
+    const result = await handleConsole(req, { OWNER_DO: ns }, auth({ readOwnerCookie: vi.fn(async () => 'member-do') }));
     expect(await result?.text()).toBe('console page');
     expect(idFromName).toHaveBeenCalledWith('member-do');
   });
 
   it('does not fall back to deploy owner if a signed-owner cookie is invalid', async () => {
     const req = new Request('https://w.test/console', { headers: { cookie: 'waldo_console=some-session; waldo_owner=invalid' } });
-    const result = await handleConsole(req, { TELEGRAM_OWNER_DO: owners().ns }, auth({ readOwnerCookie: vi.fn(async () => null) }));
+    const result = await handleConsole(req, { OWNER_DO: owners().ns }, auth({ readOwnerCookie: vi.fn(async () => null) }));
     expect(result?.status).toBe(303);
     expect(result?.headers.get('location')).toBe('/console/signin');
   });
 
   it('sends a signed-out visitor to the email form', async () => {
-    const response = await handleConsole(new Request('https://w.test/console'), { TELEGRAM_OWNER_DO: owners().ns }, auth());
+    const response = await handleConsole(new Request('https://w.test/console'), { OWNER_DO: owners().ns }, auth());
     expect(response?.status).toBe(303);
     expect(response?.headers.get('location')).toBe('/console/signin');
   });
@@ -157,7 +175,7 @@ describe('handleConsole', () => {
     const throttle = vi.fn(async (key: string) => !key.startsWith('send:'));
     const a = auth({ sendCode, throttle });
     const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
-    const response = (await handleConsole(form('/console/signin', { email: 'owner@example.com', phone: '+14155550100' }), { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter }, a))!;
+    const response = (await handleConsole(form('/console/signin', { email: 'owner@example.com', phone: '+14155550100' }), { OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter }, a))!;
     expect(await response.text()).toContain('Too many attempts');
     expect(sendCode).not.toHaveBeenCalled();
     expect(throttle).toHaveBeenCalledWith('send:owner@example.com', 5, 900);
@@ -167,7 +185,7 @@ describe('handleConsole', () => {
     const sendCode = vi.fn(async () => true);
     const a = auth({ sendCode, throttle: vi.fn(async () => { throw new Error('directory down'); }) });
     const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
-    const response = (await handleConsole(form('/console/signin', { email: 'owner@example.com', phone: '+14155550100' }), { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter }, a))!;
+    const response = (await handleConsole(form('/console/signin', { email: 'owner@example.com', phone: '+14155550100' }), { OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter }, a))!;
     expect(await response.text()).toContain('Too many attempts');
     expect(sendCode).not.toHaveBeenCalled();
   });
@@ -178,7 +196,7 @@ describe('handleConsole', () => {
     const ns = owners().ns;
     const a = auth({ verify, throttle });
     const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
-    const response = (await handleConsole(form('/console/verify', { email: 'owner@example.com', phone: '+14155550100', code: '123456' }), { TELEGRAM_OWNER_DO: ns, RESPONSIBILITY_RATE_LIMITER: limiter }, a))!;
+    const response = (await handleConsole(form('/console/verify', { email: 'owner@example.com', phone: '+14155550100', code: '123456' }), { OWNER_DO: ns, RESPONSIBILITY_RATE_LIMITER: limiter }, a))!;
     expect(await response.text()).toContain('Too many attempts');
     expect(verify).not.toHaveBeenCalled();
     expect(throttle).toHaveBeenCalledWith('verify:owner@example.com', 10, 900);
@@ -188,8 +206,8 @@ describe('handleConsole', () => {
   it('gives the same answer for an invited and an unknown address', async () => {
     const a = auth();
     const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
-    const known = await (await handleConsole(form('/console/signin', { email: 'owner@example.com', phone: '+14155550100' }), { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter }, a))!.text();
-    const unknown = await (await handleConsole(form('/console/signin', { email: 'nobody@example.com', phone: '+14155550100' }), { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter }, a))!.text();
+    const known = await (await handleConsole(form('/console/signin', { email: 'owner@example.com', phone: '+14155550100' }), { OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter }, a))!.text();
+    const unknown = await (await handleConsole(form('/console/signin', { email: 'nobody@example.com', phone: '+14155550100' }), { OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter }, a))!.text();
     expect(known.replaceAll('owner@example.com', 'X')).toBe(unknown.replaceAll('nobody@example.com', 'X'));
     expect(a.sendCode).toHaveBeenCalledTimes(2);
   });
@@ -197,7 +215,7 @@ describe('handleConsole', () => {
   it('a verified code gets a session from that owner DO and both cookies', async () => {
     const { ns, fetch, idFromName } = owners();
     const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
-    const response = (await handleConsole(form('/console/verify', { email: 'owner@example.com', phone: '+14155550100', code: '123456' }), { TELEGRAM_OWNER_DO: ns, RESPONSIBILITY_RATE_LIMITER: limiter }, auth({ verify: vi.fn(async () => 'do-a') })))!;
+    const response = (await handleConsole(form('/console/verify', { email: 'owner@example.com', phone: '+14155550100', code: '123456' }), { OWNER_DO: ns, RESPONSIBILITY_RATE_LIMITER: limiter }, auth({ verify: vi.fn(async () => 'do-a') })))!;
     expect(response.status).toBe(303);
     expect(idFromName).toHaveBeenCalledWith('do-a');
     expect(fetch.mock.calls[0]?.[0]).toBe('https://telegram-owner/grant-console');
@@ -209,7 +227,7 @@ describe('handleConsole', () => {
   it('a wrong code wakes no owner DO', async () => {
     const { ns, fetch } = owners();
     const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
-    const response = (await handleConsole(form('/console/verify', { email: 'owner@example.com', phone: '+14155550100', code: '000000' }), { TELEGRAM_OWNER_DO: ns, RESPONSIBILITY_RATE_LIMITER: limiter }, auth()))!;
+    const response = (await handleConsole(form('/console/verify', { email: 'owner@example.com', phone: '+14155550100', code: '000000' }), { OWNER_DO: ns, RESPONSIBILITY_RATE_LIMITER: limiter }, auth()))!;
     expect(response.status).toBe(200);
     expect(await response.text()).toContain('did not work');
     expect(fetch).not.toHaveBeenCalled();
@@ -217,7 +235,7 @@ describe('handleConsole', () => {
 
   it('routes a signed-in request to the owner named by the verified cookie only', async () => {
     const { ns, fetch, idFromName } = owners();
-    await handleConsole(new Request('https://w.test/console'), { TELEGRAM_OWNER_DO: ns }, auth({ readOwnerCookie: vi.fn(async () => 'do-b') }));
+    await handleConsole(new Request('https://w.test/console'), { OWNER_DO: ns }, auth({ readOwnerCookie: vi.fn(async () => 'do-b') }));
     expect(idFromName).toHaveBeenCalledWith('do-b');
     expect((fetch.mock.calls[0]?.[0] as Request).headers.get('x-waldo-do-name')).toBe('do-b');
   });
@@ -228,7 +246,7 @@ describe('invite-gated signup', () => {
     const sendCode = vi.fn(async () => true);
     const verify = vi.fn(async () => 'owner-1');
     const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
-    const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter };
+    const env = { OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter };
     const signIn = await handleConsole(form('/console/signin', { email: 'invitee@example.com', phone: '+14155550100', invite: ' abc<123 ' }), env, auth({ sendCode, verify }));
     expect(sendCode).toHaveBeenCalledWith('invitee@example.com', 'ABC<123');
     expect(await signIn!.text()).toContain('name="invite" value="ABC&#60;123"');
@@ -241,7 +259,7 @@ describe('invite-gated signup', () => {
     const verify = vi.fn(async () => 'owner-abc');
     const a = auth({ verify });
     const limiter = { limit: vi.fn(async () => ({ success: true })) as unknown as RateLimit['limit'] } as unknown as RateLimit;
-    const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter };
+    const env = { OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter };
     const send = await handleConsole(form('/console/signin', { email: 'New@Example.com', phone: '+91 98765 43210' }), env, a);
     const html = await send!.text();
     expect(html).toContain('name="phone" value="+919876543210"');
@@ -253,7 +271,7 @@ describe('invite-gated signup', () => {
 
   it('allows code send without a phone, and refuses an un-normalizable supplied phone', async () => {
     const sendCode = vi.fn(async () => true);
-    const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit };
+    const env = { OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit };
     const missing = await handleConsole(form('/console/signin', { email: 'a@b.com' }), env, auth({ sendCode }));
     expect(await missing!.text()).toContain('Email sign-in code');
     const bad = await handleConsole(form('/console/signin', { email: 'a@b.com', phone: 'call me maybe' }), env, auth({ sendCode }));
@@ -263,7 +281,7 @@ describe('invite-gated signup', () => {
 
   it('a tampered verify form with an invalid hidden phone never reaches auth.verify', async () => {
     const verify = vi.fn(async () => 'owner-abc');
-    const done = await handleConsole(form('/console/verify', { email: 'a@b.com', phone: '1', code: '123456' }), { TELEGRAM_OWNER_DO: owners().ns }, auth({ verify }));
+    const done = await handleConsole(form('/console/verify', { email: 'a@b.com', phone: '1', code: '123456' }), { OWNER_DO: owners().ns }, auth({ verify }));
     expect(await done!.text()).toContain('Enter your phone number');
     expect(verify).not.toHaveBeenCalled();
   });
@@ -271,7 +289,7 @@ describe('invite-gated signup', () => {
   it('throttles code sends per email and per IP', async () => {
     const sendCode = vi.fn(async () => true);
     const limit = vi.fn(async ({ key }: { key: string }) => ({ success: !key.includes('repeat@x.com') }));
-    const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit } as unknown as RateLimit };
+    const env = { OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit } as unknown as RateLimit };
     const blocked = await handleConsole(
       new Request('https://w.test/console/signin', { method: 'POST', body: new URLSearchParams({ email: 'repeat@x.com', phone: '+14155550100' }), headers: { 'cf-connecting-ip': '1.2.3.4' } }),
       env, auth({ sendCode }));
@@ -287,7 +305,7 @@ describe('invite-gated signup', () => {
   it('throttles verify attempts per email and per IP: auth.verify never runs', async () => {
     const verify = vi.fn(async () => 'owner-abc');
     const limit = vi.fn(async ({ key }: { key: string }) => ({ success: !key.includes('guess@x.com') }));
-    const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit } as unknown as RateLimit };
+    const env = { OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit } as unknown as RateLimit };
     const blocked = await handleConsole(
       new Request('https://w.test/console/verify', { method: 'POST', body: new URLSearchParams({ email: 'guess@x.com', phone: '+14155550100', code: '123456' }), headers: { 'cf-connecting-ip': '1.2.3.4' } }),
       env, auth({ verify }));
@@ -301,7 +319,7 @@ describe('invite-gated signup', () => {
 
   it('verify fails CLOSED without the limiter binding: no code check happens', async () => {
     const verify = vi.fn(async () => 'owner-abc');
-    const response = await handleConsole(form('/console/verify', { email: 'a@b.com', phone: '+14155550100', code: '123456' }), { TELEGRAM_OWNER_DO: owners().ns }, auth({ verify }));
+    const response = await handleConsole(form('/console/verify', { email: 'a@b.com', phone: '+14155550100', code: '123456' }), { OWNER_DO: owners().ns }, auth({ verify }));
     const html = await response!.text();
     expect(html).toContain('temporarily unavailable');
     expect(html).toContain('name="phone" value="+14155550100"');
@@ -312,7 +330,7 @@ describe('invite-gated signup', () => {
     const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
     const response = await handleConsole(
       form('/console/verify', { email: 'a@b.com', phone: '+14155550100', code: '123456' }),
-      { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter },
+      { OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter },
       auth({ verify: vi.fn(async () => 'do-a'), ownerCookie: vi.fn(async () => null) }));
     const html = await response!.text();
     expect(html).toContain('having trouble');
@@ -322,7 +340,7 @@ describe('invite-gated signup', () => {
 
   it('fails CLOSED without the limiter binding: no code is sent on a public endpoint', async () => {
     const sendCode = vi.fn(async () => true);
-    const response = await handleConsole(form('/console/signin', { email: 'a@b.com', phone: '+14155550100' }), { TELEGRAM_OWNER_DO: owners().ns }, auth({ sendCode }));
+    const response = await handleConsole(form('/console/signin', { email: 'a@b.com', phone: '+14155550100' }), { OWNER_DO: owners().ns }, auth({ sendCode }));
     expect(await response!.text()).toContain('temporarily unavailable');
     expect(sendCode).not.toHaveBeenCalled();
   });
@@ -330,7 +348,7 @@ describe('invite-gated signup', () => {
 
 it('associates visible legacy labels and preserves a labelled OTP retry after transport failure', async () => {
   const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
-  const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter };
+  const env = { OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter };
   const a = auth({ verify: vi.fn(async () => { throw new Error('synthetic timeout'); }) });
   const html = await (await handleConsole(new Request('https://w.test/console/signin'), env, a))!.text();
   for (const control of ['email', 'phone', 'invite']) {
@@ -348,7 +366,7 @@ it('associates visible legacy labels and preserves a labelled OTP retry after tr
 it('keeps editable details after a send refusal without retaining an OTP', async () => {
   const response = await handleConsole(form('/console/signin', {
     email: 'person@test.invalid', phone: 'bad phone', invite: 'A<"B', code: 'synthetic-secret-otp',
-  }), { TELEGRAM_OWNER_DO: owners().ns }, auth());
+  }), { OWNER_DO: owners().ns }, auth());
   const html = await response!.text();
   expect(html).toContain('value="person@test.invalid"');
   expect(html).toContain('value="bad phone"');
@@ -359,7 +377,7 @@ it('keeps editable details after a send refusal without retaining an OTP', async
 it('opens populated resend details without requesting or checking a code', async () => {
   const a = auth();
   const limit = vi.fn(async () => ({ success: true }));
-  const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit } as unknown as RateLimit };
+  const env = { OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit } as unknown as RateLimit };
   const html = await (await handleConsole(form('/console/verify', { email: 'person@test.invalid', phone: '+14155550100', invite: 'ABC', code: 'synthetic-secret-otp' }), env, a))!.text();
   expect(html).toContain('name="intent" value="edit"');
   expect(html).not.toContain('href="/console/signin"');
@@ -383,14 +401,14 @@ it.each([
   ['durable throttle', { email: 'person@test.invalid', phone: '+14155550100', invite: 'ABC' }, 'durable'],
 ])('retains details on %s refusal', async (_name, details, mode) => {
   const a = auth({ throttle: vi.fn(async () => mode !== 'durable') });
-  const env = { TELEGRAM_OWNER_DO: owners().ns, ...(mode === 'absent' ? {} : { RESPONSIBILITY_RATE_LIMITER: { limit: vi.fn(async () => ({ success: mode !== 'binding' })) } as unknown as RateLimit }) };
+  const env = { OWNER_DO: owners().ns, ...(mode === 'absent' ? {} : { RESPONSIBILITY_RATE_LIMITER: { limit: vi.fn(async () => ({ success: mode !== 'binding' })) } as unknown as RateLimit }) };
   const html = await (await handleConsole(form('/console/signin', details), env, a))!.text();
   for (const value of Object.values(details)) expect(html).toContain(`value="${value}"`);
   expect(a.sendCode).not.toHaveBeenCalled();
 });
 
 it('offers explicit loading messages on request, verify and edit forms', async () => {
-  const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } as RateLimit };
+  const env = { OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } as RateLimit };
   const start = await (await handleConsole(new Request('https://w.test/console/signin'), env, auth()))!.text();
   expect(start).toContain('data-pending="Requesting an email code…"');
   const retry = await (await handleConsole(form('/console/verify', { email: 'person@test.invalid', phone: '+14155550100', code: '000000' }), env, auth()))!.text();
@@ -404,7 +422,7 @@ it.each(['send unavailable', 'verify unavailable', 'invalid or expired code', 'i
     sendCode: async () => { throw new Error('synthetic send unavailable'); },
     verify: async () => { if (mode === 'verify unavailable') throw new Error('synthetic verify unavailable'); return null; },
   });
-  const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } as RateLimit };
+  const env = { OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } as RateLimit };
   const response = (await handleConsole(form(mode === 'send unavailable' ? '/console/signin' : '/console/verify', fields), env, a))!;
   const html = await response.text();
   for (const value of [fields.email, fields.phone, fields.invite]) expect(html).toContain(`value="${value}"`);
@@ -424,21 +442,21 @@ it.each([
   '/console/workspace/remove',
 ])('rejects unsafe or noncanonical continuation %s', async target => {
   expect(downloadReturnTarget([target])).toBeNull();
-  const response = (await handleConsole(new Request(`https://w.test/console/signin?return_to=${encodeURIComponent(target)}`), { TELEGRAM_OWNER_DO: owners().ns }, auth()))!;
+  const response = (await handleConsole(new Request(`https://w.test/console/signin?return_to=${encodeURIComponent(target)}`), { OWNER_DO: owners().ns }, auth()))!;
   expect(await response.text()).not.toContain('Continue to download');
 });
 it('rejects duplicate continuation fields on GET and POST', async () => {
   const query = `return_to=${encodeURIComponent(downloadTarget)}&return_to=${encodeURIComponent(downloadTarget)}`;
-  const page = (await handleConsole(new Request(`https://w.test/console/signin?${query}`), { TELEGRAM_OWNER_DO: owners().ns }, auth()))!;
+  const page = (await handleConsole(new Request(`https://w.test/console/signin?${query}`), { OWNER_DO: owners().ns }, auth()))!;
   expect(await page.text()).not.toContain('Continue to download');
   const body = new URLSearchParams({ email: 'owner@example.com', code: '123456' });
   body.append('return_to', downloadTarget); body.append('return_to', downloadTarget);
   const done = (await handleConsole(new Request('https://w.test/console/verify', { method: 'POST', body }),
-    { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } as unknown as RateLimit }, auth({ verify: async () => 'do-a' })))!;
+    { OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } as unknown as RateLimit }, auth({ verify: async () => 'do-a' })))!;
   expect(done.status).toBe(303); expect(done.headers.get('location')).toBe('/console');
 });
 it('keeps download intent and recipient across OTP retry, edit and resend', async () => {
-  const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } as unknown as RateLimit };
+  const env = { OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } as unknown as RateLimit };
   const a = auth();
   for (const fields of [
     { email: 'owner@example.com', return_to: downloadTarget },
@@ -455,7 +473,7 @@ it('keeps download intent and recipient across OTP retry, edit and resend', asyn
 });
 it('keeps dashboard control JSON authentication failures private without download HTML recovery',async()=>{
  for(const path of ['/console/dashboard/api/v1/controls','/console/dashboard/api/v1/actions','/console/dashboard/api/v1/memory-controls','/console/dashboard/api/v1/owner','/console/dashboard/api/v1/owner/actions','/console/workspace']){
-  const ns=owners();const response=(await handleConsole(new Request('https://w.test'+path,{headers:{accept:'application/json'}}),{TELEGRAM_OWNER_DO:ns.ns},auth()))!;
+  const ns=owners();const response=(await handleConsole(new Request('https://w.test'+path,{headers:{accept:'application/json'}}),{OWNER_DO:ns.ns},auth()))!;
   expect(response.status).toBe(401);expect(response.headers.get('cache-control')).toBe('private, no-store');expect(response.headers.get('location')).toBeNull();expect(ns.fetch).not.toHaveBeenCalled();
  }
 });

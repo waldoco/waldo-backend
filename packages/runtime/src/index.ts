@@ -22,7 +22,8 @@ import { CONNECT_LINK_PREFIX, handleConnectTicket } from './channels/connect-lin
 import { GOOGLE_CALLBACK_PATH } from './connectors/google';
 import { CONSOLE_PATH } from './channels/console';
 import { handleApp } from './channels/app-api';
-import { ownerDirectory } from './identity/owner-directory';
+import { ownerDirectory, signedRpc } from './identity/owner-directory';
+import { sweepHealthRetention } from './health/retention-sweep';
 import { downloadReturnTarget, handleConsole, CONSOLE_SIGNIN_PATH } from './channels/console-signin';
 import { consoleAuth, OWNER_COOKIE } from './identity/console-auth';
 import { readConsoleTicket } from './identity/console-ticket';
@@ -47,7 +48,7 @@ import {
 // own modules, never re-exported here (pinned by test/worker-entry-exports.test.ts).
 export { RunLoopDO } from './run-loop/do';
 export { DeviceBridgeDO } from './devices/device-bridge-do';
-export { TelegramOwnerDO } from './channels/telegram-owner-do';
+export { OwnerDO } from './channels/owner-do';
 export { TracerDO } from './tracer/tracer-do';
 import type { RunLoopDO } from './run-loop/do';
 import type { TracerDO } from './tracer/tracer-do';
@@ -73,7 +74,7 @@ declare global {
       WALDO_ROUTER_HMAC_SECRET?: string;
       RUN_LOOP_LOCAL_INGRESS_TOKEN?: string;
       TRACER_DO: DurableObjectNamespace<TracerDO>;
-      TELEGRAM_OWNER_DO?: DurableObjectNamespace;
+      OWNER_DO?: DurableObjectNamespace;
       DEVICE_BRIDGE_DO?: DurableObjectNamespace<DeviceBridgeDO>;
       TELEGRAM_BOT_TOKEN?: string;
       TELEGRAM_WEBHOOK_SECRET?: string;
@@ -124,13 +125,13 @@ export class RuntimeProbeDO extends DurableObject<Env> {
 }
 
 const forwardTicketConsole = async (request: Request, env: Env, issuer?: string): Promise<Response> => {
-  if (!env.TELEGRAM_OWNER_DO || (!issuer && !env.WALDO_OWNER_TELEGRAM_ID)) return new Response('unauthorized', { status: 401 });
+  if (!env.OWNER_DO || (!issuer && !env.WALDO_OWNER_TELEGRAM_ID)) return new Response('unauthorized', { status: 401 });
   const ownerRoute = issuer ? { doName: issuer } : await ownerDirectory(env).byPresence('telegram', env.WALDO_OWNER_TELEGRAM_ID!);
   if (!ownerRoute) return new Response('owner unavailable', { status: 503 });
   const doName = ownerRoute.doName;
   const forwarded = new Request(request);
   forwarded.headers.set('x-waldo-do-name', doName);
-  return env.TELEGRAM_OWNER_DO.get(env.TELEGRAM_OWNER_DO.idFromName(doName)).fetch(forwarded);
+  return env.OWNER_DO.get(env.OWNER_DO.idFromName(doName)).fetch(forwarded);
 };
 
 const routedConsoleTicket = async (request: Request, env: Env): Promise<Response | null> => {
@@ -164,7 +165,7 @@ export default {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     const ticketResponse = await routedConsoleTicket(request, env);
     if (ticketResponse) return ticketResponse;
-    const appResponse = await handleApp(request, env);
+    const appResponse = await handleApp(request, env, undefined, (work) => ctx?.waitUntil(work));
     if (appResponse) return appResponse;
     const devicePath = new URL(request.url).pathname;
     if (devicePath === '/devices/redeem') return request.method === 'POST' ? handleDeviceRedeem(request, env) : genericReject();
@@ -194,7 +195,7 @@ export default {
       const signedIn = await handleConsole(request, env, undefined, consoleRequestTrace);
       if (signedIn) return signedIn;
     }
-    if (new URL(request.url).pathname.startsWith(CONSOLE_PATH) && env.TELEGRAM_OWNER_DO && env.WALDO_OWNER_TELEGRAM_ID) {
+    if (new URL(request.url).pathname.startsWith(CONSOLE_PATH) && env.OWNER_DO && env.WALDO_OWNER_TELEGRAM_ID) {
       // The console must land on the owner's REAL DO - the one the Telegram webhook routes his
       // turns to. With Supabase configured that name comes from the owner directory (e.g.
       // 'owner-<uuid>' from console signup), not the env telegram id. Routing by the env id
@@ -243,6 +244,10 @@ export default {
         },
       });
     }
+  },
+  // Declared only under env.staging in wrangler.jsonc; the production Worker has no cron trigger.
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(sweepHealthRetention(signedRpc(env)).then((outcome) => console.log(`health retention sweep ${outcome.state} owners=${outcome.owners} rounds=${outcome.rounds}`)));
   },
 } satisfies ExportedHandler<Env>;
 

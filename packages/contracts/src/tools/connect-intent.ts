@@ -8,6 +8,6 @@ export const connectIntentSchema = z.strictObject({
   status: z.literal('auth_required'),
   service: z.literal('google'),
   reason: z.enum(['not_connected', 'scope_missing', 'reauth_needed']),
-  feature: z.enum(['calendar', 'mail', 'tasks', 'availability', 'drive', 'docs', 'sheets', 'slides']).optional(),
+  feature: z.enum(['calendar', 'calendar_list', 'mail', 'tasks', 'availability', 'drive', 'docs', 'sheets', 'slides']).optional(),
 });
 export type ConnectIntent = z.infer<typeof connectIntentSchema>;

@@ -8,7 +8,7 @@ import { delegateTaskHandler, CHILD_READ_TOOLS } from '../src/conversation/subag
 
 let sequence = 0;
 const withSql = <T>(fn: (sql: SqlStorage) => T) =>
-  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`resp-${sequence++}`)), (_instance, state) => fn(state.storage.sql));
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`resp-${sequence++}`)), (_instance, state) => fn(state.storage.sql));
 const mk = (sql: SqlStorage) => { let n = 0; return responsibilityBook(sql, { newId: () => String(++n), now: () => 1000 + n }); };
 const call = (handler: { schema: { parse(v: unknown): unknown }; handle: unknown }, args: unknown) => (handler.handle as (a: unknown, c: unknown) => Promise<{ ok: boolean; data?: unknown }>)(handler.schema.parse(args), { trigger: 'user_message' });
 const delegateArgs = (task: string, extra: object = {}) => delegateArgsSchemaParse({ task, ...extra });

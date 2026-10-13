@@ -216,8 +216,8 @@ describe('owner console', () => {
     expect(html).toContain('Hello, full message.');
     expect(html).not.toContain('>Send it</button>');
     expect(html).not.toContain('value="approval.approve"');
-    expect(html).toContain('approving this send happens there. Not now dismisses it');
-    // Dismissal is the safe direction: open send proposals carry Not now, never Do it.
+    expect(html).toContain("approving this send happens there. Don't do this dismisses it");
+    // Dismissal is the safe direction: open send proposals carry Don't do this, never Do it.
     expect(html).toContain('value="approval.skip"');
     expect(html).toContain('This console cannot approve or dismiss it.');
     // Exactly the two open send proposals are dismissible; mcp/browser stay undecidable here.
@@ -354,10 +354,11 @@ describe('owner console', () => {
     expect(html).toContain('invite-gated email OTP');
   });
 
-  it('shows the browser count and offers sign-out-everywhere only when more than one browser is signed in', () => {
+  it('shows the browser count and always offers sign-out-everywhere, which also covers app sign-ins this count omits', () => {
     const one = renderConsole({ ...SAMPLE_CONSOLE_VIEW, sessionCount: 1 }, 'connections');
     expect(one).toContain('on 1 browser.');
-    expect(one).not.toContain('session.signout.all');
+    expect(one).toContain('session.signout.all');
+    expect(one).toContain('Sign out of every browser and the app?');
     const two = renderConsole({ ...SAMPLE_CONSOLE_VIEW, sessionCount: 2 }, 'connections');
     expect(two).toContain('on 2 browsers.');
     expect(two).toContain('session.signout.all');

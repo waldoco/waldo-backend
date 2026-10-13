@@ -12,6 +12,7 @@ export const channelNameSchema = z.enum([
   'discord',
   'slack',
   'in_app',
+  'imessage',
 ]);
 export type ChannelName = z.infer<typeof channelNameSchema>;
 

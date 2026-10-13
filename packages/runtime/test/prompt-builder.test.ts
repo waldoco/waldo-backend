@@ -313,6 +313,16 @@ describe('createRuntimePromptBuilder', () => {
     }
   });
 
+  it('states a missing Form zone and Load instead of printing undefined', async () => {
+    const builder = createRuntimePromptBuilder({ loadForTrigger: async () => ({ selected: [], excluded: [] }), recall: async () => EMPTY_RECALL });
+    const base = context();
+    const prompt = await builder({ ...base, canvas: { ...base.canvas, healthContext: narrativeContextSchema.parse({ recovery_descriptor: 'solid', day_summary: 'Recovery solid; load unavailable.', compiled_at: '2026-07-13T06:30:00Z' }) } });
+    expect(prompt).toContain('Form zone: unavailable.');
+    expect(prompt).toContain('Recovery: solid.');
+    expect(prompt).toContain('Load: unavailable.');
+    expect(prompt).not.toContain('undefined');
+  });
+
   it('adds the required functional framing instruction for a work-channel persona', async () => {
     const builder = createRuntimePromptBuilder({
       loadForTrigger: async () => ({ selected: [], excluded: [] }),

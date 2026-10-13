@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(32);
+select plan(33);
 
 select is(
   (select array_agg(column_name::text || ':' || udt_name || ':' || is_nullable || ':' || coalesce(column_default, '<null>') order by ordinal_position)
@@ -38,11 +38,11 @@ select is((select array_agg(policyname::text || ':' || cmd || ':' || roles::text
   from pg_policies where schemaname='public' and tablename='health_context_daily'),
   array['own rows:SELECT:{public}:(auth.uid() = user_id)']::text[], 'the sole historical owner SELECT policy is unchanged');
 select is_empty($q$with expected(grantee, privilege_type) as (values
-  ('authenticated','SELECT'), ('service_role','SELECT'), ('service_role','INSERT'), ('service_role','UPDATE')),
+  ('authenticated','SELECT'), ('service_role','SELECT')),
   actual as (select grantee::text, privilege_type::text from information_schema.table_privileges
     where table_schema='public' and table_name='health_context_daily' and grantee in ('PUBLIC','anon','authenticated','service_role'))
   (select * from actual except select * from expected) union all (select * from expected except select * from actual)$q$,
-  'exact table ACL is authenticated SELECT and trusted SELECT/INSERT/UPDATE only');
+  'exact table ACL is authenticated SELECT and trusted SELECT only; the signed backend function is the sole writer');
 select is_empty($q$select privilege_type from information_schema.column_privileges
   where table_schema='public' and table_name='health_context_daily' and grantee in ('PUBLIC','anon','authenticated')
   and privilege_type <> 'SELECT'$q$, 'no client column write privilege survives');
@@ -65,6 +65,12 @@ insert into waldo.owners(do_name,email,auth_user_id) values
 insert into public.health_context_daily(user_id,day,form,updated_at) values
   ('00000000-0000-0000-0000-00000000ac01','2026-09-30','{"zone":"low"}','2000-01-01T00:00:00Z'),
   ('00000000-0000-0000-0000-00000000ac02','2026-09-30','{"zone":"good"}','2000-01-01T00:00:00Z');
+insert into waldo.health_consents(owner_id,source,purpose,version,age_attested_18_plus)
+  select o.id,'apple',p,2,true from waldo.owners o, unnest(array['storage_compute','model_processing']) p where o.do_name in ('health-access-a','health-access-b');
+insert into waldo.health_scopes(owner_id,source,purpose,epoch,consent_id)
+  select c.owner_id,c.source,c.purpose,1,c.id from waldo.health_consents c join waldo.owners o on o.id=c.owner_id where o.do_name in ('health-access-a','health-access-b');
+insert into waldo.health_context_basis(owner_id,day,consent_basis,timezone)
+  select o.id,'2026-09-30','[{"source":"apple","consent_epoch":1}]'::jsonb,'UTC' from waldo.owners o where o.do_name in ('health-access-a','health-access-b');
 create temporary table health_before as select * from public.health_context_daily;
 
 set local role authenticated;
@@ -95,17 +101,20 @@ select is_empty($q$(select * from public.health_context_daily except select * fr
   'all rejected client writes left every historical row unchanged');
 
 set local role service_role;
-select lives_ok($q$insert into public.health_context_daily(user_id,day,form,updated_at) values
-  ('00000000-0000-0000-0000-00000000ac01','2026-09-30','{"zone":"moderate"}','2000-01-01T00:00:00Z')
-  on conflict(user_id,day) do update set form=excluded.form, updated_at=excluded.updated_at$q$,
-  'trusted upsert works with revoked direct helper execution');
-select is((select updated_at from public.health_context_daily where user_id='00000000-0000-0000-0000-00000000ac01'),
-  now(), 'trusted update fires the historical timestamp helper');
+select throws_ok($q$insert into public.health_context_daily(user_id,day,form) values
+  ('00000000-0000-0000-0000-00000000ac01','2026-10-02','{"zone":"low"}')$q$,
+  '42501','permission denied for table health_context_daily','trusted role cannot insert: the signed backend function is the only writer');
+select throws_ok($q$update public.health_context_daily set form='{"zone":"moderate"}'$q$,
+  '42501','permission denied for table health_context_daily','trusted role cannot update the read model');
 select throws_ok($q$delete from public.health_context_daily$q$,
   '42501','permission denied for table health_context_daily','trusted writer has no DELETE grant');
 select throws_ok($q$truncate public.health_context_daily$q$,
   '42501','permission denied for table health_context_daily','trusted writer has no TRUNCATE grant');
 reset role;
+update public.health_context_daily set form='{"zone":"moderate"}', updated_at='2000-01-01T00:00:00Z'
+  where user_id='00000000-0000-0000-0000-00000000ac01';
+select is((select updated_at from public.health_context_daily where user_id='00000000-0000-0000-0000-00000000ac01'),
+  now(), 'an owner-role update still fires the historical timestamp helper');
 select is((select form from public.health_context_daily where user_id='00000000-0000-0000-0000-00000000ac02'),
   '{"zone":"good"}'::jsonb,'trusted A update preserves B');
 

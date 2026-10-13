@@ -1,9 +1,10 @@
 import { appSessionV1Schema, appVerifyResultV1Schema, appHistoryResultV1Schema, appMessageReceiptV1Schema } from '../../contracts/src/app/core';
 import { appControlProjectionV1Schema, appControlResultV1Schema } from '../../contracts/src/app/controls';
 import { AppInbox } from '../src/channels/app-inbox';
+import { APP_INBOX_DUE_KEY } from '../src/scheduler/alarm-slot';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
-import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
+import { OwnerDO } from '../src/channels/owner-do';
 import { handleApp } from '../src/channels/app-api';
 import { routerSignature, linkCodeHash } from '../src/identity/owner-directory';
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../src/identity/app-session-fence';
@@ -17,10 +18,10 @@ vi.mock('../src/channels/telegram-api',async load=>({...await load<typeof import
 
 it('signed no-Telegram app signin, chat history, lost ACK restart readback, isolation and push-first signout',async()=>{
   proof.inputs=[];proof.outputs=[];proof.telegram=0;
-  const name=`basic-app-owner-${crypto.randomUUID()}`,stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
+  const name=`basic-app-owner-${crypto.randomUUID()}`,stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   await runInDurableObject(stub,async(_unused,state)=>{
     const SECRET='fictional-basic-app-router-secret-000000000000',DIRECTORY='https://basic-app.fixture.invalid',OWNER='10000000-0000-0000-0000-000000000001',AUTH='20000000-0000-0000-0000-000000000001',EMAIL='owner@example.test';
-    const calls:string[]=[];let hash:string|undefined,live=false,directoryUnavailable=false,settingsWrites=0;let savedZone='UTC';const created=new Date().toISOString(),expires=Date.now()+3600000;
+    const calls:string[]=[];let hash:string|undefined,live=false,directoryUnavailable=false,settingsWrites=0;let savedZone='UTC',healthReads=0;const created=new Date().toISOString(),expires=Date.now()+3600000;
     const fetcher=vi.spyOn(globalThis,'fetch').mockImplementation(async(input,init)=>{
       const url=new URL(String(input));expect(url.origin).toBe(DIRECTORY);const a=JSON.parse(String(init?.body));
       if(url.pathname==='/auth/v1/otp'){expect(a.email).toBe(EMAIL);calls.push('otp');return Response.json({});}
@@ -48,13 +49,14 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
       if(fn==='workspace_owner_binding')return Response.json({owner_id:OWNER,environment:'staging',namespace:'basic-app-owner',do_name:name,do_id:state.id.toString(),state_version:0,mapping_version:1});
       if(fn==='app_push_revoke_session'){expect(live).toBe(true);expect(a.p_do_name).toBe(name);expect(a.p_session_hash).toBe(hash);return Response.json(0);}
       if(fn==='console_session_revoke'){expect(calls.at(-2)).toBe('app_push_revoke_session');live=false;return Response.json(true);}
-      if(fn==='health_context_read'||fn==='health_plane')return Response.json(null);
+      if(fn==='health_context_read'){healthReads++;return Response.json({context:{id:'basic-health',day:new Date().toISOString().slice(0,10),form:{score:72,zone:'good'},recovery:{score:70,zone:'good'},weight:{score:45,zone:'moderate'},drivers:[],confidence:0.8,freshness:'fresh',tags:[],compiled_at:new Date(Date.now()-3600000).toISOString()},previous:null});}
+      if(fn==='health_plane')return Response.json(null);
       throw Error(`Unlisted fixture RPC ${fn}`);
     });
     const settings={...env,TELEGRAM_BOT_TOKEN:undefined,TELEGRAM_WEBHOOK_SECRET:undefined,WALDO_OWNER_TELEGRAM_ID:undefined,OPENAI_API_KEY:'synthetic-model-key',COMMON_OWNER_TASKS:'0',COMMON_BROWSER_REGISTRATION:undefined,WALDO_ENVIRONMENT:'staging',WALDO_OWNER_DO_NAMESPACE:'basic-app-owner',WALDO_OWNER_TIMEZONE:'UTC',WALDO_EGRESS_ALLOWLIST:'*',WALDO_TOOL_OFFLOAD:'0',SUPABASE_PROJECT_URL:DIRECTORY,SUPABASE_PUBLISHABLE_KEY:'fictional-public-key',WALDO_ROUTER_HMAC_SECRET:SECRET,RESPONSIBILITY_RATE_LIMITER:{limit:async()=>({success:true})},BROWSER:undefined};
-    let instance=new TelegramOwnerDO(state,settings as never);state.storage.kv.put('do_name',name);state.storage.kv.put('origin','https://app.fixture.invalid');
+    let instance=new OwnerDO(state,settings as never);state.storage.kv.put('do_name',name);state.storage.kv.put('origin','https://app.fixture.invalid');
     const forwards:Request[]=[];
-    const routed={...settings,TELEGRAM_OWNER_DO:{idFromName:(n:string)=>env.TELEGRAM_OWNER_DO!.idFromName(n),get:(id:DurableObjectId)=>{expect(id.toString()).toBe(state.id.toString());return {fetch:(r:Request)=>{forwards.push(r.clone());return instance.fetch(r).catch(e=>{throw Error('native route failed: '+String(e));});}};}}} as never;
+    const routed={...settings,OWNER_DO:{idFromName:(n:string)=>env.OWNER_DO!.idFromName(n),get:(id:DurableObjectId)=>{expect(id.toString()).toBe(state.id.toString());return {fetch:(r:Request)=>{forwards.push(r.clone());return instance.fetch(r).catch(e=>{throw Error('native route failed: '+String(e));});}};}}} as never;
     const request=(path:string,body?:unknown,credential?:string)=>new Request(`https://app.fixture.invalid/app/v1${path}`,{method:body===undefined?'GET':'POST',headers:{'content-type':'application/json',...(credential?{authorization:`Bearer ${credential}`}:{})},...(body===undefined?{}:{body:JSON.stringify(body)})});
     const app=async(path:string,body?:unknown,credential?:string)=>{const r=await handleApp(request(path,body,credential),routed);expect(r).not.toBeNull();return r!;};
     try{
@@ -68,7 +70,8 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
       expect(page.messages.find((m:any)=>m.role==='user')).toMatchObject({id:receipt.message_id,text:body.text,channel:'app'});
       expect(page.messages.find((m:any)=>m.role==='assistant')).toMatchObject({text:'Hello from the signed app owner.',parent_id:receipt.message_id,channel:'app'});
       expect(forwards[0]!.headers.get('x-waldo-app-session-hash')).toBe(hash);expect(proof.inputs.filter(i=>!i.text?.format)).toHaveLength(1);
-      const count=proof.inputs.length;instance=new TelegramOwnerDO(state,settings as never);
+      const told=proof.inputs.find(i=>!i.text?.format).instructions as string;expect(told.split('Form zone: steady.')).toHaveLength(2);expect(told).not.toContain('No derived health context');expect(healthReads).toBe(1);
+      const count=proof.inputs.length;instance=new OwnerDO(state,settings as never);
       const recovered=await app(`/chat/main/messages/${clientId}`,undefined,credential);expect(recovered.status).toBe(200);expect(await recovered.json()).toMatchObject({message_id:receipt.message_id,state:'completed'});
       const retried=await app('/chat/main/messages',body,credential);expect(retried.status).toBe(202);expect(await retried.json()).toMatchObject({message_id:receipt.message_id,state:'completed'});
       expect((await (await app('/chat/main',undefined,credential)).json() as any).messages).toEqual(page.messages);expect(proof.inputs.length).toBe(count);
@@ -93,10 +96,10 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
       proof.outputs.push([{type:'function_call',call_id:'native-failed-write',name:'workspace_write',arguments:JSON.stringify({path:'proof-missing.txt',text:'Synthetic evidence',mime:'text/plain',expected_revision:99})}],[]);
       const effected=await (await app('/chat/main/messages',{client_message_id:'tool-receipt-client-0001',text:'Revise my saved synthetic proof file.'},credential)).json() as any;
       await vi.waitFor(()=>expect(state.storage.kv.get<any>(`app:inbox-record:${effected.message_id}`)?.state).toBe('completed'));
-      instance=new TelegramOwnerDO(state,settings as never);
+      instance=new OwnerDO(state,settings as never);
       const withReceipt=await (await app('/chat/main',undefined,credential)).json() as any;
       expect(withReceipt.messages.find((message:any)=>message.role==='assistant'&&message.parent_id===effected.message_id)?.text).toContain('Receipts: workspace file written proof-missing.txt (failed)');
-      instance=new TelegramOwnerDO(state,settings as never);
+      instance=new OwnerDO(state,settings as never);
       let finishReady!:()=>void;(instance as any).browserReady=new Promise<void>(resolve=>{finishReady=resolve;});
       const beforeRevokedReady=proof.inputs.length;
       const duringReady=await (await app('/chat/main/messages',{client_message_id:'revoked-during-ready-0001',text:'A revoked initialization turn'},credential)).json() as any;
@@ -115,7 +118,7 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
       await vi.waitFor(()=>expect(proof.hold).toBeNull());
       const queuedId='queued-after-running-client',queued=await (await app('/chat/main/messages',{client_message_id:queuedId,text:'Queued durable turn'},credential)).json() as any;
       expect(state.storage.kv.get<any>(`app:inbox-record:${queued.message_id}`)?.state).toBe('admitted');expect(await state.storage.getAlarm()).not.toBeNull();
-      const old=instance;instance=new TelegramOwnerDO(state,settings as never);
+      const old=instance;instance=new OwnerDO(state,settings as never);
       await instance.alarm();release();
       const interrupted=await (await app(`/chat/main/messages/${blockedId}`,undefined,credential)).json() as any;expect(appMessageReceiptV1Schema.parse(interrupted)).toMatchObject({state:'interrupted',effects_unconfirmed:true});
       expect(await (await app(`/chat/main/messages/${queuedId}`,undefined,credential)).json()).toMatchObject({state:'completed'});
@@ -124,7 +127,8 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
       expect(afterRecovery.messages.filter((m:any)=>m.role==='assistant'&&m.parent_id===blocked.message_id)).toHaveLength(0);expect(afterRecovery.messages.filter((m:any)=>m.role==='assistant'&&m.parent_id===queued.message_id)).toHaveLength(1);
       const retryInterrupted=await app('/chat/main/messages',{client_message_id:blockedId,text:'Interrupted in-flight turn'},credential);expect(await retryInterrupted.json()).toMatchObject({state:'interrupted'});
       const inbox=new AppInbox(state.storage),pending=await inbox.admit(name,hash!,'revoked-pending-client','Pending then revoked',`owner:prn_${OWNER.replaceAll('-','')}`);expect(pending.kind).toBe('admitted');
-      directoryUnavailable=true;await instance.alarm();expect(inbox.receipt(name,'revoked-pending-client')?.state).toBe('admitted');directoryUnavailable=false;
+      directoryUnavailable=true;const outageAt=Date.now();await instance.alarm();expect(inbox.receipt(name,'revoked-pending-client')?.state).toBe('admitted');
+      expect(await state.storage.get<number>(APP_INBOX_DUE_KEY)).toBeGreaterThanOrEqual(outageAt+30_000);directoryUnavailable=false;
       expect(proof.inputs.some(input=>input.text?.format?.name==='reaction')).toBe(false);
       const total=proof.inputs.length;
       expect((await app('/chat/main',undefined,credential.slice(0,-1)+'!')).status).toBe(401);
@@ -140,11 +144,11 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
       // The privileged fence route answers only the Worker's own signature for this owner, and no client path reaches it.
       state.storage.kv.put('app:inbox-record:app-fence-probe',{id:'app-fence-probe',updateId:1,clientId:'fence-probe-client',digest:'d',text:'probe',owner:name,sessionHash:hash!,conversationRef:'owner:prn_probe',admittedAt:Date.now(),state:'admitted'});
       const probe=()=>state.storage.kv.get<any>('app:inbox-record:app-fence-probe');
-      const fencePost=async(over:{method?:string;doName?:string;hash?:string;sig?:string|null}={},host:TelegramOwnerDO=instance)=>{
+      const fencePost=async(over:{method?:string;doName?:string;hash?:string;sig?:string|null}={},host:OwnerDO=instance)=>{
         const n=over.doName??name,h=over.hash??hash!,sig=over.sig===undefined?await appSessionFenceSignature(SECRET,n,h):over.sig;
         return host.fetch(new Request(`https://telegram-owner${APP_SESSION_FENCE_PATH}`,{method:over.method??'POST',headers:{'x-waldo-do-name':n,'x-waldo-app-session-hash':h,...(sig===null?{}:{'x-waldo-fence-sig':sig})}}));
       };
-      const unsigned=new TelegramOwnerDO(state,{...settings,WALDO_ROUTER_HMAC_SECRET:undefined} as never);
+      const unsigned=new OwnerDO(state,{...settings,WALDO_ROUTER_HMAC_SECRET:undefined} as never);
       for(const [label,response] of Object.entries({
         forged:await fencePost({sig:'0'.repeat(64)}),unsigned:await fencePost({sig:null}),otherOwner:await fencePost({doName:'someone-else'}),
         otherSession:await fencePost({sig:await appSessionFenceSignature(SECRET,name,'c'.repeat(64))}),malformedHash:await fencePost({hash:'not-a-session-hash'}),
