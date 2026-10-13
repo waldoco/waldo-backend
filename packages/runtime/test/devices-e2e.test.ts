@@ -19,16 +19,16 @@ it('runs owner console pair -> signed redeem/connect/heartbeat -> revoke through
       console_session_touch: `consolesess.touch.${args.p_do_name}.${args.p_session_hash}`,
       issue_device_pairing_code: `devpair.${args.p_do_name}.${args.p_code_hash}`,
       device_bridge_throttle: `devthrottle.${args.p_key}.${args.p_limit}.${args.p_window_seconds}`,
-      redeem_device_pairing: `devredeem.${args.p_code_hash}.${args.p_pubkey}.${[...new TextEncoder().encode(String(args.p_label))].map((byte) => byte.toString(16).padStart(2, '0')).join('')}.${args.p_capabilities}`,
-      device_for_auth: `devauth.${args.p_device_id}`, device_touch: `devtouch.${args.p_device_id}`,
+      redeem_device_pairing_v030: `devredeem030.${args.p_code_hash}.${args.p_pubkey}.${[...new TextEncoder().encode(String(args.p_label))].map((byte) => byte.toString(16).padStart(2, '0')).join('')}.${args.p_capabilities}.${args.p_session_consent}`,
+      device_for_auth_v030: `devauth030.${args.p_device_id}`, device_touch: `devtouch.${args.p_device_id}`,
       list_devices: `devlist.${args.p_do_name}`, revoke_device: `devrevoke.${args.p_do_name}.${args.p_device_id}`,
     };
     expect(args.p_sig).toBe(await routerSignature(secret, Number(args.p_at), tags[path]!));
     let response: unknown;
     if (path === 'console_session_touch' || path === 'device_bridge_throttle') response = true;
     else if (path === 'issue_device_pairing_code') { digest = String(args.p_code_hash); response = true; }
-    else if (path === 'redeem_device_pairing') { response = args.p_code_hash === digest && !consumed ? [{ device_id: 'dev_fixture', owner_id: owner }] : []; if ((response as unknown[]).length) { consumed = true; exists = true; } }
-    else if (path === 'device_for_auth') response = exists && args.p_device_id === 'dev_fixture' ? [{ owner_id: owner, pubkey: 'A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg', capabilities: 'machine_state_query' }] : [];
+    else if (path === 'redeem_device_pairing_v030') { response = args.p_code_hash === digest && !consumed ? [{ device_id: 'dev_fixture', owner_id: owner }] : []; if ((response as unknown[]).length) { consumed = true; exists = true; } }
+    else if (path === 'device_for_auth_v030') response = exists && args.p_device_id === 'dev_fixture' ? [{ owner_id: owner, do_name:owner,contract_version:'0.3.0',pubkey: 'A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg', capabilities: 'machine_state_query' }] : [];
     else if (path === 'device_touch') { if (exists) touched++; response = exists; }
     else if (path === 'list_devices') response = exists ? [{ device_id: 'dev_fixture', label: '<script>bad</script>', capabilities: 'machine_state_query', created_at: 'fixture', last_seen_at: null }] : [];
     else if (path === 'revoke_device') { response = args.p_do_name === owner && args.p_device_id === 'dev_fixture' && exists; if (response) exists = false; }
@@ -56,17 +56,17 @@ it('runs owner console pair -> signed redeem/connect/heartbeat -> revoke through
     const timestamp = String(Math.floor(Date.now()/1000)), nonce = base64url(crypto.getRandomValues(new Uint8Array(16)));
     return { 'x-waldo-timestamp': timestamp, 'x-waldo-nonce': nonce, 'x-waldo-signature': await sign(httpSignatureBase(timestamp, nonce, method, path, await sha256Hex(new TextEncoder().encode(body)))) };
   };
-  const redeem = canonicalJson({ code, device_pubkey: 'A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg', label: 'Test Mac', declared_capabilities: ['machine_state_query'], contract_version: '0.2.3' });
+  const redeem = canonicalJson({ code, device_pubkey: 'A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg', label: 'Test Mac', declared_capabilities: ['machine_state_query'], contract_version: '0.3.0',session_consent:false });
   const redeemRequest = async () => call(new Request('https://bridge.test/devices/redeem', { method: 'POST', body: redeem, headers: await headers('POST', '/devices/redeem', redeem) }));
   expect((await redeemRequest()).status).toBe(200);
   expect((await redeemRequest()).status).toBe(401);
-  const path = '/devices/connect?contract_version=0.2.3&declared_capabilities=machine_state_query';
+  const path = '/devices/connect?contract_version=0.3.0&declared_capabilities=machine_state_query';
   const connect = async (target = path) => call(new Request(`https://bridge.test${target}`, { headers: { ...await headers('GET', target), 'x-waldo-device-id': 'dev_fixture', upgrade: 'websocket' } }));
   const rejects = [
     `${path}&extra=1`,
-    '/devices/connect?declared_capabilities=machine_state_query&contract_version=0.2.3',
-    '/devices/connect?contract_version=0.2.3&declared_capabilities=machine_state_query%2Cnotify_local',
-    '/devices/connect?contract_version=0.2.3&declared_capabilities=notify_local',
+    '/devices/connect?declared_capabilities=machine_state_query&contract_version=0.3.0',
+    '/devices/connect?contract_version=0.3.0&declared_capabilities=machine_state_query%2Cnotify_local',
+    '/devices/connect?contract_version=0.3.0&declared_capabilities=notify_local',
     '/devices/connect?contract_version=0.2.2&declared_capabilities=machine_state_query',
   ];
   for (const target of rejects) { const response = await connect(target); expect(response.status).toBe(401); expect(await response.text()).toBe('{"error":"invalid_request"}'); }
@@ -81,7 +81,7 @@ it('runs owner console pair -> signed redeem/connect/heartbeat -> revoke through
   const replaced = new Promise<number>((resolve) => replayResponse.webSocket!.addEventListener('close', (event) => resolve(event.code)));
   const connected = await connect(); expect(connected.status).toBe(101);
   const socket = connected.webSocket!; socket.accept(); expect(await replaced).toBe(1008);
-  const frame = { contract_version: '0.2.3', type: 'heartbeat', message_id: '01ARZ3NDEKTSV4RRFFQ69G5FAZ', device_id: 'dev_fixture', owner_id: owner, timestamp: Math.floor(Date.now()/1000), nonce: base64url(crypto.getRandomValues(new Uint8Array(16))), payload: { declared_capabilities: ['machine_state_query'], outbox_depth: 0 } };
+  const frame = { contract_version: '0.3.0', type: 'heartbeat', message_id: '01ARZ3NDEKTSV4RRFFQ69G5FAZ', device_id: 'dev_fixture', owner_id: owner, timestamp: Math.floor(Date.now()/1000), nonce: base64url(crypto.getRandomValues(new Uint8Array(16))), payload: { declared_capabilities: ['machine_state_query'], outbox_depth: 0 } };
   const signature = await sign(frameSignatureBase(frame.timestamp, frame.type, frame.message_id, frame.nonce, await sha256Hex(new TextEncoder().encode(canonicalJson(frame)))));
   socket.send(canonicalJson({ ...frame, signature }));
   await vi.waitFor(() => expect(touched).toBe(1));
