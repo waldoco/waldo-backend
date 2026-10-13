@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DerivedHealthDestinationView } from '@waldo/contracts';
-import { healthContextBook, toContextHealthMaterial, type HealthContextRow } from '../src/channels/health-context';
+import { healthContextBook, rowFreshness, toContextHealthMaterial, type HealthContextRow } from '../src/channels/health-context';
 import { localTrustedBriefTurnSnapshot } from '../src/run-loop/adapters';
 import { md5Hex } from '../src/channels/md5';
 
@@ -87,11 +87,21 @@ describe('toContextHealthMaterial', () => {
     expect(withPrevious(null)!.view.trend).toBe('insufficient');
   });
 
-  it('marks today and yesterday fresh, older days stale (owner-local days)', () => {
-    const on = (day: string) => toContextHealthMaterial(row({ context: { ...row().context!, day } }), clock);
-    expect(on('2026-09-28')!.view.freshness).toBe('fresh');
-    expect(on('2026-09-27')!.view.freshness).toBe('fresh');
-    expect(on('2026-09-26')!.view.freshness).toBe('stale');
+  it('ages a row by ADR-0081 §2: fresh six hours after compile on its day or the next, expired after three days, stale between', () => {
+    const errors: unknown[] = [];
+    const at = (compiled_at: string, day = '2026-09-28') => toContextHealthMaterial(row({ context: { ...row().context!, day, compiled_at } }), clock, error => errors.push(error));
+    expect(at('2026-09-28T04:00:00.000Z')!.view.freshness).toBe('fresh');
+    expect(at('2026-09-28T04:00:00.000Z', '2026-09-27')!.view.freshness).toBe('fresh');
+    expect(at('2026-09-28T04:00:00.000Z', '2026-09-26')!.view.freshness).toBe('stale');
+    expect(at('2026-09-28T03:59:59.999Z')!.view.freshness).toBe('stale');
+    expect(at('2026-09-25T10:00:00.000Z', '2026-09-25')!.view.freshness).toBe('stale');
+    // An expired row is absence for the prompt, as no row is, and not an error.
+    expect(at('2026-09-25T09:59:59.999Z', '2026-09-25')).toBeNull();
+    expect(errors).toEqual([]);
+  });
+
+  it('reads an unreadable compile time as expired, never fresh', () => {
+    for (const compiledAt of ['not-a-date', undefined, null, 0]) expect(rowFreshness(compiledAt, '2026-09-28', 'Asia/Kolkata', NOW.getTime())).toBe('expired');
   });
 
   it('bands confidence and treats a missing confidence as low', () => {

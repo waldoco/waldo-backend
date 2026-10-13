@@ -207,6 +207,9 @@ export interface ToolHandler<Args, Result, Ctx> {
   // The host derives the connector_backed list for ACL intersection from this declaration, never from a host-supplied
   // list that can be omitted (see connectorBackedTools in tools/acl-intersection.ts).
   requires_connector?: true;
+  // turn_only_output marks a result that may hold the owner's health values: it reaches the model in the turn that
+  // asked and nowhere else. The cross-turn tool ledger and the unfinished-turn flush record a content-free line for it.
+  turn_only_output?: true;
   // Absent means always eligible (connect_service must stay offered so an owner can connect).
   eligible?(): ToolEligibility | Promise<ToolEligibility>;
   handle(args: Args, ctx: Ctx): Promise<ToolResult<Result>>;

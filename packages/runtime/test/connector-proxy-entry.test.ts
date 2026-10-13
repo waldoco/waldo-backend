@@ -212,11 +212,11 @@ const dispatchActualRead=async()=>{
  const proxy=realSignedProxy();const handlers=[readMcpToolHandler(JSON.stringify([{name:'drive',url:'https://drivemcp.googleapis.com/mcp/v1',auth:'google',requires:'drive',allow_tools:['search_files'],read_tools:['search_files']}]),{resolve:async()=>({mode:'proxy' as const,connection:'conn'}),proxy:(url,tool,args,connection,intent)=>proxy.mcpCall('owner',connection,url,tool,args,intent)},true)];
  return dispatchTool({id:'fixture-read-call',name:'read_mcp_tool',args:{server:'drive',tool:'search_files',args:{query:'fictional'}}},{authenticatedUserId:'owner',turnId:'fixture-turn',trigger:'user_message',session:buildSessionState({trigger:'user_message',canary_tokens:['1111111111111111','2222222222222222','3333333333333333'],started_at:1}),hasApproval:()=>false,sourceTaint:null,toolArgSourceTaint:null,sanitise},{handlers});
 };
-it('actual dispatcher-wire-Edge provider 401/403 reaches typed reconnect without storing read results',async()=>{
+it('actual dispatcher-wire-Edge provider 401 reaches typed reconnect and 403 reads as not available, without storing read results',async()=>{
  for(const status of [401,403]){
   const f=fixture();f.scope(['https://www.googleapis.com/auth/drive.readonly']);const provider=fetch;
   vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>String(input)==='https://drivemcp.googleapis.com/mcp/v1'?new Response('PRIVATE_WIRE_AUTH_CANARY',{status}):provider(input,init)));
-  const out=await dispatchActualRead();expect(out).toMatchObject({ok:false,code:'auth_failed',source_taint:'external',connect:{status:'auth_required',service:'google',reason:status===401?'reauth_needed':'scope_missing',feature:'drive'}});expect(JSON.stringify(out)).not.toContain('PRIVATE_WIRE_AUTH_CANARY');expect(f.rows.size).toBe(0);expect(f.effects()).toBe(0);
+  const out=await dispatchActualRead();expect(out).toMatchObject(status===401?{ok:false,code:'auth_failed',source_taint:'external',connect:{status:'auth_required',service:'google',reason:'reauth_needed',feature:'drive'}}:{ok:false,code:'not_found',source_taint:'external',error:expect.stringContaining('google_mcp_unavailable')});expect(JSON.stringify(out)).not.toContain('PRIVATE_WIRE_AUTH_CANARY');expect(f.rows.size).toBe(0);expect(f.effects()).toBe(0);
  }
 });
 it('actual signed wire read rejection is a stable non-auth 400, not a reconnect or intent-uncertainty error',async()=>{
@@ -354,4 +354,26 @@ it('answers a Sent readback that carries the id the send returned, on a proxy th
  // The Worker drops only trailing undefined arguments, so an absent thread id crosses the wire as null.
  const answer=await(await serve(await request({do_name:'owner',op:'call',connection:'conn',method:'findSentByMessageId',args:['<fixture@waldo-send>',null,'g1']}))).json();
  expect(answer).toEqual({data:{message_id:'g1',thread_id:'t1',rfc822_message_id:'<fixture@waldo-send>',label_ids:['SENT']}});
+});
+it('logs a fixed code, never the provider\'s error text, and keeps its own codes', async () => {
+ fixture();const inner=globalThis.fetch;
+ vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>String(input).includes('gmail.googleapis.com')?Response.json({error:{code:400,message:'Invalid To header: friend@example.test'}},{status:400}):inner(input,init)));
+ const logs=vi.spyOn(console,'log').mockImplementation(()=>{});
+ const refused=await(await serve(await request({do_name:'owner',op:'call',connection:'conn',method:'searchMail',args:['in:sent',5]}))).json();
+ expect(refused).toMatchObject({error:{status:400}});
+ const {intent_id,...missing}=body;void intent_id;await serve(await request(missing));
+ const lines=logs.mock.calls.map(call=>JSON.parse(String(call[0])) as {hop:string;error?:string}).filter(line=>line.hop==='connector_proxy');
+ expect(lines.map(line=>line.error)).toEqual(['provider_error','intent_required']);
+ for(const leaked of ['friend@example.test','Invalid To header'])expect(JSON.stringify(logs.mock.calls)).not.toContain(leaked);
+});
+it('logs provider_error for text that only starts with one of its codes, and only known operations and methods', async () => {
+ fixture();const inner=globalThis.fetch;
+ vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{if(String(input).includes('gmail.googleapis.com'))throw new Error('unknown owner friend@example.test');return inner(input,init);}));
+ const logs=vi.spyOn(console,'log').mockImplementation(()=>{});
+ await serve(await request({do_name:'owner',op:'call',connection:'conn',method:'searchMail',args:['in:sent',5]}));
+ await serve(await request({do_name:'owner',op:'call',connection:'conn',method:'friend@example.test',args:[]}));
+ await serve(await request({do_name:'owner',op:'friend@example.test',connection:'conn'}));
+ const lines=logs.mock.calls.map(call=>JSON.parse(String(call[0])) as {hop:string;op?:string;method?:string;error?:string}).filter(line=>line.hop==='connector_proxy');
+ expect(lines.map(({op,method,error})=>[op,method,error])).toEqual([['call','searchMail','provider_error'],['call','unknown','unknown operation'],['unknown',undefined,expect.any(String)]]);
+ expect(JSON.stringify(logs.mock.calls)).not.toContain('friend@example.test');
 });

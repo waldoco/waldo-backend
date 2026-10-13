@@ -35,7 +35,7 @@ const projections = {
     timezone: view.timezone,
     timezone_confirmed: view.timezoneConfirmed,
     date: view.now.slice(0,10),
-    cards: view.cards.map((card) => ({ id: card.id, name: card.name, defaultTime: card.defaultTime, time: card.time, reason: card.reason, sent: card.sent, pin: card.pin })),
+    cards: view.cards.map((card) => ({ id: card.id, name: card.name, defaultTime: card.defaultTime, time: card.time, reason: card.reason, sent: card.sent, pin: card.pin, ...(card.latest === undefined ? {} : { latest: card.latest }), ...(card.state === undefined ? {} : { state: card.state }) })),
     proactivity: { quiet_start: view.proactivity.quiet_start, quiet_end: view.proactivity.quiet_end, volume: view.proactivity.volume },
     schedules: view.schedules,
   }),
@@ -45,7 +45,7 @@ const projections = {
       accounts: view.google.accounts.map((account) => ({ id: account.id, email: account.email, calendar: account.calendar, mail: account.mail, tasks: account.tasks, health: account.error ? 'needs_reconnect' as const : 'access_granted' as const })),
     },
     telegram: { linked: view.telegram.linked, unlinkAvailable: view.telegram.unlinkAvailable },
-    sessions: { until: view.sessionUntil, count: view.sessionCount, items: view.sessions.map((row) => ({ signed_in: row.signed_in, until: row.until, current: row.current, ...(row.ref ? { session_ref: row.ref } : {}) })) },
+    sessions: { until: view.sessionUntil, count: view.sessionCount, items: view.sessions.map((row) => ({ signed_in: row.signed_in, until: row.until, current: row.current })) },
   }),
   waiting: (view: ConsoleView) => ({
     // Proposal times are instants; the console draws them in this owner zone when it can read it.

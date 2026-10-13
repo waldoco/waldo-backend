@@ -4,11 +4,13 @@ import { DAY_CARDS, dayCardPrompt, SKIP_CARD, type CardId, type DayCard } from '
 import { calendarPromptProjection, type CalendarItem, type GoogleClient } from '../connectors/google';
 import type { Scheduler } from '../scheduler/multiplexer';
 import { localIso, localToEpoch } from './reminders';
+import { APP_CARD_EXCERPT_MAX_V1 } from '../../../contracts/src/app/controls';
 
 const DAY_MS = 24 * 60 * 60_000;
 
 type Sql = Pick<SqlStorage, 'exec'>;
 export type CardPlan = Readonly<{ card: CardId; time: string | null; reason: string }>;
+export type CardState = 'pending' | 'held' | 'sent' | 'skipped';
 
 // The day_plan hop is whitelisted for the gated trace sinks, so its detail must stay
 // content-free: planned times reveal the owner's daily schedule, so the trace keeps the count.
@@ -23,6 +25,8 @@ export const dayPlanBook = (sql: Sql) => {
     day TEXT NOT NULL, card TEXT NOT NULL, time TEXT, reason TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (day, card))`);
   sql.exec('CREATE TABLE IF NOT EXISTS card_pins (card TEXT PRIMARY KEY, time TEXT NOT NULL)');
+  // Whether a finished card went out or was skipped. Cards finished before the column existed have none.
+  if (!sql.exec<{ name: string }>('PRAGMA table_info(day_plan)').toArray().some(column => column.name === 'outcome')) sql.exec('ALTER TABLE day_plan ADD COLUMN outcome TEXT');
   return {
     pins(): Readonly<Record<string, string>> {
       return Object.fromEntries(sql.exec<{ card: string; time: string }>('SELECT card, time FROM card_pins').toArray().map((row) => [row.card, row.time]));
@@ -31,10 +35,13 @@ export const dayPlanBook = (sql: Sql) => {
       if (time === null) sql.exec('DELETE FROM card_pins WHERE card = ?', card);
       else sql.exec('INSERT INTO card_pins (card, time) VALUES (?, ?) ON CONFLICT (card) DO UPDATE SET time = excluded.time', card, time);
     },
-    read(day: string): readonly Readonly<{ card: CardId; time: string | null; reason: string; sent: boolean }>[] {
-      return sql.exec<{ card: CardId; time: string | null; reason: string; sent: number }>(
-        'SELECT card, time, reason, sent FROM day_plan WHERE day = ? ORDER BY card', day,
-      ).toArray().map((row) => ({ ...row, sent: row.sent === 1 }));
+    read(day: string): readonly Readonly<{ card: CardId; time: string | null; reason: string; sent: boolean; state?: CardState }>[] {
+      return sql.exec<{ card: CardId; time: string | null; reason: string; sent: number; outcome: 'sent' | 'skipped' | null }>(
+        'SELECT card, time, reason, sent, outcome FROM day_plan WHERE day = ? ORDER BY card', day,
+      ).toArray().map(({ outcome, ...row }) => {
+        const state = row.sent === 1 ? outcome ?? undefined : row.sent === 2 ? 'held' : 'pending';
+        return { ...row, sent: row.sent === 1, ...(state ? { state } : {}) };
+      });
     },
     pending(day: string): readonly DayCard[] {
       const sent = new Set(this.read(day).filter((row) => row.sent).map((row) => row.card));
@@ -49,8 +56,17 @@ export const dayPlanBook = (sql: Sql) => {
     },
     sent(day: string, card: CardId): void {
       sql.exec(
-        `INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?, ?, NULL, 'sent', 1)
-         ON CONFLICT (day, card) DO UPDATE SET sent = 1`,
+        `INSERT INTO day_plan (day, card, time, reason, sent, outcome) VALUES (?, ?, NULL, 'sent', 1, 'sent')
+         ON CONFLICT (day, card) DO UPDATE SET sent = 1, outcome = 'sent'`,
+        day, card,
+      );
+    },
+    // A card that came due and sent nothing finishes for the day as skipped. A card that already finished keeps what it
+    // recorded, so a send is never turned into a skip and an unknown outcome is never turned into one.
+    skipped(day: string, card: CardId): void {
+      sql.exec(
+        `INSERT INTO day_plan (day, card, time, reason, sent, outcome) VALUES (?, ?, NULL, 'skipped', 1, 'skipped')
+         ON CONFLICT (day, card) DO UPDATE SET sent = 1, outcome = CASE WHEN day_plan.sent = 1 THEN day_plan.outcome ELSE 'skipped' END`,
         day, card,
       );
     },
@@ -201,6 +217,32 @@ export const composeDayCard = async (
 };
 
 export const isSkip = (text: string): boolean => text.trim() === SKIP_CARD;
+
+// The Main chat row each of today's cards was delivered to in the app, and when. Only ids and times are kept, for one
+// day: the excerpt is cut from the row when it is read, so a forgotten or deleted row takes its text with it.
+const CARD_DELIVERY_KEY = 'day_card_delivery_v1';
+type Kv = Pick<DurableObjectStorage['kv'], 'get' | 'put'>;
+type CardDelivery = Readonly<{ message_id: string; delivered_at: number }>;
+type CardDeliveries = Readonly<{ day: string; cards: Readonly<Record<string, CardDelivery>> }>;
+export type CardLatest = CardDelivery & Readonly<{ excerpt: string }>;
+
+export const recordCardDelivery = (kv: Kv, day: string, card: string, messageId: string, at: number): void => {
+  const kept = kv.get<CardDeliveries>(CARD_DELIVERY_KEY);
+  kv.put(CARD_DELIVERY_KEY, { day, cards: { ...(kept?.day === day ? kept.cards : {}), [card]: { message_id: messageId, delivered_at: at } } });
+};
+
+export const cardDeliveries = (kv: Kv, day: string): ReadonlyMap<string, CardDelivery> => {
+  const kept = kv.get<CardDeliveries>(CARD_DELIVERY_KEY);
+  return new Map(kept?.day === day ? Object.entries(kept.cards) : []);
+};
+
+// The card's latest delivery as the app shows it: a prefix of the row's text, never splitting a surrogate pair. A row
+// that is gone or shows no text gives null.
+export const latestDelivery = (delivery: CardDelivery | undefined, shown: string | undefined): CardLatest | null => {
+  if (!delivery || !shown?.trim()) return null;
+  const max = APP_CARD_EXCERPT_MAX_V1, cut = shown.length > max && /[\uD800-\uDBFF]/.test(shown[max - 1]!) ? max - 1 : max;
+  return { message_id: delivery.message_id, delivered_at: delivery.delivered_at, excerpt: shown.slice(0, cut) };
+};
 
 // planDay sends this as one user message; the sanitiser budgets its JSON wire form.
 export const composeDayPlanInput = (input: string, memory?: ClaimStore, model: ModelName = WALDO_CHAT_MODEL): string => {

@@ -1,7 +1,7 @@
 import type { ConversationEntry } from '@waldo/contracts';
 import { APP_SEND_MAX_WIRE_BYTES, appCodeRequestSchema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
 import type { AppApprovalCards } from './approvals';
-import { consoleAuth, type ConsoleAuth } from '../identity/console-auth';
+import { consoleAuth, sessionFamily, type ConsoleAuth } from '../identity/console-auth';
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
 import { readOwnerDemand } from '../health/calendar-demand-route';
 import { linkCodeHash, type OwnerDirectoryEnv } from '../identity/owner-directory';
@@ -19,7 +19,7 @@ export const APP_APPROVAL_DECISIONS_PATH = `${APP_APPROVALS_PATH}/decisions`;
 export const APP_DEVICES_PATH = `${APP_PATH}/devices`;
 const MAX_BODY_BYTES = 8192;
 
-type AppEnv = OwnerDirectoryEnv & Readonly<{ TELEGRAM_OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
+type AppEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
 
 // Errors before authentication share one shape so the app cannot learn who is invited.
 const fail = (status: 401 | 403 | 404 | 405 | 413 | 429 | 503) => Response.json({ error: 'unavailable' }, { status, headers: { 'cache-control': 'no-store', ...(status === 429 ? { 'retry-after': '60' } : {}) } });
@@ -75,9 +75,10 @@ const admit = async (env: AppEnv, auth: ConsoleAuth, request: Request, kind: 'se
   } catch { return 'unavailable'; }
 };
 
-// The app renews a day into a 30-day session, halfway through a shorter one, and at once when a renewal already replaced it.
-const renewAfter = (created: number, expires: number, replaced: boolean) => replaced ? created : created + Math.min(24 * 60 * 60_000, Math.floor((expires - created) / 2));
-const sessionView = async (auth: ConsoleAuth, doName: string, credential: string) => {
+// The app renews a day into a 30-day session and halfway through a shorter one. Only /auth/renew says so: installed apps
+// read GET /session and /auth/verify with a strict parser that refuses any key they were not built with.
+const renewAfter = (created: number, expires: number) => created + Math.min(24 * 60 * 60_000, Math.floor((expires - created) / 2));
+const sessionView = async (auth: ConsoleAuth, doName: string, credential: string, renewal = false) => {
   const sessionId = sessionIdOf(credential);
   if (!sessionId) throw new Error('invalid session');
   const hash = await linkCodeHash(sessionId);
@@ -85,12 +86,12 @@ const sessionView = async (auth: ConsoleAuth, doName: string, credential: string
   const created = row ? Date.parse(row.created_at) : NaN, expires = row ? Date.parse(row.expires_at) : NaN;
   if (!Number.isFinite(created) || !Number.isFinite(expires) || expires <= Date.now()) throw new Error('expired session');
   return appSessionV1Schema.parse({ state: 'active', session_ref: `sess_${hash}`, account_ref: `acct_${await linkCodeHash(doName)}`, surface: 'app',
-    absolute_expires_at: expires, renew_after: renewAfter(created, expires, row!.replaced) });
+    absolute_expires_at: expires, ...(renewal ? { renew_after: renewAfter(created, expires) } : {}) });
 };
 
 // Closes the session's queued work and stops its running turn in the owner Durable Object; false when it cannot be confirmed.
 // Signout calls it before the revoke, which makes a retry safe, and again after it for work admitted in between.
-const fenceSession = async (env: AppEnv, owners: NonNullable<AppEnv['TELEGRAM_OWNER_DO']>, doName: string, sessionHash: string): Promise<boolean> => {
+const fenceSession = async (env: AppEnv, owners: NonNullable<AppEnv['OWNER_DO']>, doName: string, sessionHash: string): Promise<boolean> => {
   const secret = env.WALDO_ROUTER_HMAC_SECRET;
   if (!secret) return false;
   try {
@@ -148,7 +149,7 @@ const devicesRequest = async (request: Request, path: string, who: { doName: str
 export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth | null = consoleAuth(env), defer?: (work: Promise<unknown>) => void): Promise<Response | null> => {
   const url = new URL(request.url);
   if (url.pathname !== APP_PATH && !url.pathname.startsWith(`${APP_PATH}/`)) return null;
-  const owners = env.TELEGRAM_OWNER_DO;
+  const owners = env.OWNER_DO;
   if (!auth || !owners) return fail(404);
 
   if (url.pathname === `${APP_PATH}/auth/code`) {
@@ -198,7 +199,9 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     return handleAppHealth({ request, url, doName, rpc: signedRpc(env), readBody: readBoundedBody, defer, compute: computeDailyScores,
       ...(secret ? { readDemand: (range: { from: string; to: string; timezone: string }) => readOwnerDemand(owners, secret, doName, range) } : {}) });
   }
-  const bucket = request.method !== 'POST' ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : url.pathname === `${APP_PATH}/auth/renew` ? 'app-renew' : url.pathname.startsWith(APP_DEVICES_PATH) ? 'app-devices' : 'app-chat-send';
+  // A stop is a control on a message already paid for, so it counts as a read, not a send.
+  const stop = url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) && url.pathname.endsWith('/cancel');
+  const bucket = request.method !== 'POST' || stop ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : url.pathname === `${APP_PATH}/auth/renew` ? 'app-renew' : url.pathname.startsWith(APP_DEVICES_PATH) ? 'app-devices' : 'app-chat-send';
   try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `${bucket}:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
 
   if (url.pathname === `${APP_PATH}/session`) {
@@ -210,8 +213,18 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     if (request.method !== 'POST') return fail(405);
     const sessionId = sessionIdOf(who.credential);
     if (!sessionId) return fail(401);
-    let revoked: boolean;
-    try { const hash=await linkCodeHash(sessionId); const call=signedRpc(env); if(!call) return fail(503); if(!(await fenceSession(env,owners,who.doName,hash))) return fail(503); const push=await call('app_push_revoke_session', `app.push.revoke-session.${who.doName}.${hash}`, {p_do_name:who.doName,p_session_hash:hash}); if(typeof push!=='number'||!Number.isSafeInteger(push)||push<0)return fail(503); revoked=await auth.revokeSession(who.doName,hash); if((await auth.listSessions(who.doName)).some(row=>row.session===hash))return fail(503); await fenceSession(env,owners,who.doName,hash); } catch { return fail(503); }
+    let revoked = false;
+    // The device's sessions are the one in hand and those a renewal links to it: a turn admitted before a renewal still
+    // runs under the earlier one, and a renewal whose answer was lost left a later one holding the device's push.
+    try {
+      const hash=await linkCodeHash(sessionId); const call=signedRpc(env); if(!call) return fail(503);
+      const family=sessionFamily(await auth.listSessions(who.doName),hash);
+      for(const session of family) if(!(await fenceSession(env,owners,who.doName,session))) return fail(503);
+      for(const session of family){ const push=await call('app_push_revoke_session', `app.push.revoke-session.${who.doName}.${session}`, {p_do_name:who.doName,p_session_hash:session}); if(typeof push!=='number'||!Number.isSafeInteger(push)||push<0)return fail(503); }
+      for(const session of family) revoked=await auth.revokeSession(who.doName,session)||revoked;
+      if((await auth.listSessions(who.doName)).some(row=>family.includes(row.session)))return fail(503);
+      for(const session of family) await fenceSession(env,owners,who.doName,session);
+    } catch { return fail(503); }
     return ok({ result: revoked ? 'revoked' : 'already_gone' });
   }
 
@@ -226,7 +239,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     let credential: string | null;
     try { credential = await auth.renewAppCredential(who.doName, sessionId); } catch { return fail(503); }
     if (!credential) return fail(401);
-    try { return ok({ ...await sessionView(auth, who.doName, credential), credential }); } catch { return fail(503); }
+    try { return ok({ ...await sessionView(auth, who.doName, credential, true), credential }); } catch { return fail(503); }
   }
 
   if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname === `${APP_PATH}/controls` || url.pathname === `${APP_PATH}/actions` || url.pathname.startsWith(`${APP_PATH}/actions/`) || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_APPROVAL_DECISIONS_PATH) {
@@ -265,9 +278,15 @@ export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor:
   const newestReply = new Map(shown.filter(entry => entry.role === 'assistant' && entry.parentId).map(entry => [entry.parentId!, entry.id]));
   const messages = shown.slice(start, end).reverse().map(entry => {
     const presented = entry.parentId && newestReply.get(entry.parentId) === entry.id ? cards(entry.parentId) : NO_CARDS;
+    // The receipt line rides at the end of the stored text for surfaces that show only text; here the receipt part carries it.
+    const receiptSuffix = entry.receipt ? `\n\n${entry.receipt.line}` : null;
+    const ownText = receiptSuffix && entry.appPayload.endsWith(receiptSuffix) && entry.appPayload.slice(0, -receiptSuffix.length).trim() ? entry.appPayload.slice(0, -receiptSuffix.length) : entry.appPayload;
     // A reader that cannot parse a part shows only `text`, and a decided card is no longer a part, so a reply that presented cards is never textless.
-    const text = entry.appPayload.trim() || !presented.fallbacks.length ? entry.appPayload : presented.fallbacks.join('\n\n');
-    return { id: entry.id, role: entry.role, text, parts: [{ type: 'text' as const, text }, ...presented.live], channel: entry.surface, parent_id: entry.parentId };
+    const text = ownText.trim() || !presented.fallbacks.length ? ownText : presented.fallbacks.join('\n\n');
+    const operation = entry.operation ? [{ type: 'operation' as const, operation_id: entry.operation.id, state: entry.operation.state, message: text }] : [];
+    const receipt = entry.receipt ? [{ type: 'receipt' as const, items: [...entry.receipt.items], more: entry.receipt.more, fallback_text: entry.receipt.line }] : [];
+    return { id: entry.id, role: entry.role, text, parts: [{ type: 'text' as const, text }, ...operation, ...presented.live, ...receipt], channel: entry.surface, parent_id: entry.parentId,
+      ...(entry.createdAt === undefined ? {} : { created_at: entry.createdAt }) };
   });
   return { messages, next_cursor: start > 0 ? `before:${shown[start]!.id}` : null };
 };

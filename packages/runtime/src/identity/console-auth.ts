@@ -11,8 +11,20 @@ export type AdminOverview = Readonly<{
 
 export type OwnerSettings = Readonly<{ timezone: string; quiet_start: string | null; quiet_end: string | null; volume: string }>;
 
-// replaced: a renewal issued a newer session for the same device; this one still works until it expires.
-export type ConsoleSession = Readonly<{ session: string; created_at: string; last_seen_at: string; expires_at: string; replaced: boolean }>;
+// rotated_to: the session a renewal issued in this one's place for the same device; this one still works until it expires.
+export type ConsoleSession = Readonly<{ session: string; created_at: string; last_seen_at: string; expires_at: string; rotated_to: string | null }>;
+// A session and every listed session a renewal links to it, either way. They are one device: signing one out signs out all.
+export const sessionFamily = (rows: readonly ConsoleSession[], session: string): readonly string[] => {
+  const family = new Set([session]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const row of rows) {
+      const linked = family.has(row.session) ? row.rotated_to : row.rotated_to !== null && family.has(row.rotated_to) ? row.session : null;
+      if (linked !== null && !family.has(linked)) { family.add(linked); grew = true; }
+    }
+  }
+  return [...family];
+};
 // A directory from before the 30-day app session lists no expiry; every session it holds lasts 12 hours.
 const LEGACY_SESSION_MS = 12 * 60 * 60_000;
 
@@ -190,15 +202,15 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
         if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('session inventory unavailable');
         const row = raw as Record<string, unknown>;
         const keys = Object.keys(row).sort().join(',');
-        if ((keys !== 'created_at,last_seen_at,session' && keys !== 'created_at,expires_at,last_seen_at,replaced,session')
+        if ((keys !== 'created_at,last_seen_at,session' && keys !== 'created_at,expires_at,last_seen_at,rotated_to,session')
           || typeof row.session !== 'string' || !/^[a-f0-9]{64}$/.test(row.session) || seen.has(row.session)
           || typeof row.created_at !== 'string' || !Number.isFinite(Date.parse(row.created_at))
           || typeof row.last_seen_at !== 'string' || !Number.isFinite(Date.parse(row.last_seen_at))
           || (row.expires_at !== undefined && (typeof row.expires_at !== 'string' || !Number.isFinite(Date.parse(row.expires_at))))
-          || (row.replaced !== undefined && typeof row.replaced !== 'boolean')) throw new Error('session inventory unavailable');
+          || (row.rotated_to !== undefined && row.rotated_to !== null && (typeof row.rotated_to !== 'string' || !/^[a-f0-9]{64}$/.test(row.rotated_to)))) throw new Error('session inventory unavailable');
         seen.add(row.session);
         const expires = typeof row.expires_at === 'string' ? row.expires_at : new Date(Date.parse(row.created_at) + LEGACY_SESSION_MS).toISOString();
-        return { session: row.session, created_at: row.created_at, last_seen_at: row.last_seen_at, expires_at: expires, replaced: row.replaced === true };
+        return { session: row.session, created_at: row.created_at, last_seen_at: row.last_seen_at, expires_at: expires, rotated_to: typeof row.rotated_to === 'string' ? row.rotated_to : null };
       });
     },
     async revokeSession(doName, sessionHash) {

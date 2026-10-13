@@ -1,6 +1,6 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
-import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
+import { OwnerDO } from '../src/channels/owner-do';
 import {workspaceStore} from '@waldo/workspace';
 import {workspaceOwnerHost} from '../src/channels/workspace-host';
 import {registerCommonBrowserSdk} from '../src/channels/common-staging-registration';
@@ -45,12 +45,12 @@ it('unregistered ordinary owner loop performs six observations, select/check, PN
   const doName = proof.doName = `public-browser-two-arg-${crypto.randomUUID()}`, subject = Number(proof.subject);
   const now = Date.now(), ref = `public-proof-${crypto.randomUUID()}`;
   registerCommonBrowserSdk(commonBrowserMeteredFixtureLoader);
-  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(doName));
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName));
   await runInDurableObject(stub, async (_instance, state) => {
     const denied = vi.spyOn(globalThis, 'fetch').mockRejectedValue(Error('live network forbidden'));
     const binding = { fetch: vi.fn(async () => new Response('{}', { status: 200 })) };
     const publicEnv = { ...env, COMMON_OWNER_TASKS: '0', WALDO_ENVIRONMENT: 'staging', LANGFUSE_CAPTURE_TEXT: 'true', WALDO_EGRESS_ALLOWLIST: '*', WALDO_TOOL_OFFLOAD: '0', BROWSER: binding as never, TELEGRAM_BOT_TOKEN: '12345:fictional', TELEGRAM_WEBHOOK_SECRET: 'synthetic-public-browser-secret', OPENAI_API_KEY: 'synthetic-model-key' };
-    let instance = new TelegramOwnerDO(state, publicEnv);
+    let instance = new OwnerDO(state, publicEnv);
     let updateId = 9981000;
     const send = async (text: string) => {
       const id = ++updateId;
@@ -111,7 +111,7 @@ it('unregistered ordinary owner loop performs six observations, select/check, PN
       await vi.waitFor(()=>expect(commonBrowserFixture.ends).toBe(2));
       expect(commonBrowserFixture.pages).toHaveLength(0);
       expect(await (await commonBrowserMeteredFixtureLoader()).sessions(binding as never)).toEqual([]);
-      instance = new TelegramOwnerDO(state, publicEnv);
+      instance = new OwnerDO(state, publicEnv);
       expect(commonBrowserFixture.allocations).toBe(2); expect(commonBrowserFixture.ends).toBe(2);
       const ledger=state.storage.kv.get<any>('owner-public-browser-spend:v2');
       expect(ledger.reservations).toHaveLength(2);expect(ledger.reservations.every((row:any)=>row.settled)).toBe(true);

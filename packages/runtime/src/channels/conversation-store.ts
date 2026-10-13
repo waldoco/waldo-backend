@@ -8,6 +8,8 @@ export type ConversationStore = Readonly<{
   load(): Promise<Readonly<{ entries: readonly ConversationEntry[]; leafId: string | null }>>;
   save(entries: readonly ConversationEntry[], leafId: string, scope?: RunEffectScope): Promise<void>;
   persistOwnerInput?(entry: ConversationEntry, scope: RunEffectScope): Promise<void>;
+  // The receipt line of what an owner turn that did not finish already did, for the reply that says it did not finish.
+  noteUnfinished?(receiptLine: string, scope: RunEffectScope): void;
   forgetSources?(topic: string): Promise<{ sources: ForgetSource[]; incomplete: boolean }>;
   forgetSourceBatch?(topic: string): Promise<ForgetBatch>;
   forgetSourceBatchCurrent?(topic: string): ForgetBatch | null;

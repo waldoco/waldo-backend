@@ -4,12 +4,9 @@ import { exchangeGoogleCode, GOOGLE_METHODS, googleClient, googleHas, GoogleErro
 import { driveRestClient, DRIVE_REST_METHODS, DriveRestError, type DriveRestMethod } from '../../../packages/runtime/src/connectors/drive-rest.ts';
 import { googleAccessToken, GoogleTokenError } from '../../../packages/runtime/src/connectors/google.ts';
 import { executeProxyIntent, ProxyIntentError, type IntentClaim } from '../../../packages/runtime/src/connectors/proxy-intent.ts';
-import { callMcpTransport, McpAuthError, McpToolError } from '../../../packages/runtime/src/connectors/mcp-transport.ts';
+import { callMcpTransport, McpAuthError, McpHttpError, McpToolError } from '../../../packages/runtime/src/connectors/mcp-transport.ts';
+import { googleMcpServer, isGoogleMcpRead } from '../../../packages/runtime/src/connectors/google-mcp.ts';
 import { safeMcpErrorDiagnostic, type McpErrorDiagnostic } from '../../../packages/runtime/src/connectors/mcp-error-diagnostic.ts';
-// Edge-owned, exact read authority. Never accept a request-supplied registry or generic Google host match.
-const isRegisteredMcpRead = (serverUrl: string | undefined, tool: string | undefined) =>
-  serverUrl === 'https://drivemcp.googleapis.com/mcp/v1' &&
-  ['list_recent_files', 'search_files', 'get_file_metadata'].includes(tool ?? '');
 
 declare const Deno: {env:{get(name:string):string|undefined};serve(handler:(request:Request)=>Promise<Response>):unknown};
 
@@ -45,16 +42,24 @@ const store = async (doName: string, email: string, scopes: readonly string[], t
 };
 
 type Body = Readonly<{ intent_id?: string; read_only?: boolean; do_name: string; op: 'exchange' | 'adopt' | 'call' | 'mcp_call'; server_url?: string; tool?: string; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[]; calendar_details?: boolean }>;
-const nonStoringRead = (body: Body): boolean => body.op === 'mcp_call' && body.read_only === true && /^mcpread:[0-9a-f]{64}$/.test(body.intent_id ?? '') && isRegisteredMcpRead(body.server_url, body.tool);
-const READ_FAILURE_CODES = new Set(['intent_unavailable', 'insufficient scopes', 'google_refresh_failed', 'google_reauth_needed', 'google_scope_missing', 'mcp_read_rejected', 'mcp_read_failed']);
+// Edge-owned, exact read authority from the shared catalogue. Never accept a request-supplied registry or a generic Google host match.
+const nonStoringRead = (body: Body): boolean => body.op === 'mcp_call' && body.read_only === true && /^mcpread:[0-9a-f]{64}$/.test(body.intent_id ?? '') && isGoogleMcpRead(body.server_url, body.tool);
+const READ_FAILURE_CODES = new Set(['intent_unavailable', 'insufficient scopes', 'google_refresh_failed', 'google_reauth_needed', 'google_scope_missing', 'mcp_read_rejected', 'mcp_read_unavailable', 'mcp_read_failed']);
+// The proxy's own fixed failure codes. Any other message is provider or runtime text, which can repeat a
+// recipient or other mail details, so the log carries one code in its place. The reply keeps the message.
+const LOGGED_CODES = new Set([...READ_FAILURE_CODES, 'unknown owner', 'connector proxy is not configured', 'unsigned proxy call', 'unknown operation', 'connection unavailable',
+  'intent_required', 'intent_conflict', 'intent_pending', 'unreadable response', 'google token failed: invalid_grant', 'google token transient failure', 'google token configuration failure',
+  'google token protocol failure', 'drive_invalid_request', 'drive_invalid_response', 'drive_auth_failed', 'drive_access_denied', 'drive_scope_missing', 'drive_service_disabled',
+  'drive_not_found', 'drive_rate_limited', 'drive_read_failed', 'drive_source_changed', 'drive_content_unsupported']);
 
 // One structured line per call: operation, method, outcome and duration. Never the code, verifier,
-// token, account or arguments.
-const logged = async (started: number, op: string, method: string | undefined, response: Response, read = false) => {
+// token, account or arguments. The operation and method come from the request body, so only known ones are logged.
+const LOGGED_OPS = new Set(['exchange', 'adopt', 'call', 'mcp_call', 'unconfigured', 'unsigned']);
+const logged = async (started: number, op: unknown, method: unknown, response: Response, read = false) => {
   const outcome = await response.clone().json().then(value => (value as {error?:{status:number;message:string;provider_diagnostic?:unknown}}).error ?? null).catch(() => ({ status: response.status, message: 'unreadable response' }));
-  const message = outcome && read && !READ_FAILURE_CODES.has(outcome.message) ? 'mcp_read_failed' : outcome?.message;
+  const message = !outcome ? undefined : read && !READ_FAILURE_CODES.has(outcome.message) ? 'mcp_read_failed' : LOGGED_CODES.has(outcome.message) ? outcome.message : 'provider_error';
   const diagnostic = read && outcome && 'provider_diagnostic' in outcome ? safeMcpErrorDiagnostic(outcome.provider_diagnostic) : undefined;
-  console.log(JSON.stringify({ hop: 'connector_proxy', op, ...(method ? { method } : {}), ok: !outcome, ms: Date.now() - started, ...(outcome ? { status: outcome.status, error: message } : {}), ...(diagnostic ? { provider_diagnostic: diagnostic } : {}) }));
+  console.log(JSON.stringify({ hop: 'connector_proxy', op: LOGGED_OPS.has(op as string) ? op : 'unknown', ...(method !== undefined ? { method: METHODS.includes(method as Method) ? method : 'unknown' } : {}), ok: !outcome, ms: Date.now() - started, ...(outcome ? { status: outcome.status, error: message } : {}), ...(diagnostic ? { provider_diagnostic: diagnostic } : {}) }));
   return response;
 };
 
@@ -97,7 +102,7 @@ const handle = async (body: Body): Promise<Response> => {
       const access = read ? await db('proxy_access', { p_do_name: body.do_name, p_connection: body.connection }) as {secret:string;scopes:unknown}[] : undefined;
       const grant = Array.isArray(access) ? access[0] : undefined;
       if (read && (!grant || typeof grant.secret !== 'string' || !grant.secret)) return fail(503, 'intent_unavailable');
-      if (read && !googleHas(Array.isArray(grant?.scopes) ? grant.scopes : undefined, 'drive')) return fail(403, 'insufficient scopes');
+      if (read && !googleHas(Array.isArray(grant?.scopes) ? grant.scopes : undefined, googleMcpServer(body.server_url)!.feature)) return fail(403, 'insufficient scopes');
       const mcpToken = read ? grant?.secret : await db('proxy_secret', { p_do_name: body.do_name, p_connection: body.connection }) as string | null;
       if (!mcpToken) return fail(body.intent_id?503:401, body.intent_id?'intent_unavailable':'connection unavailable');
       try {
@@ -114,6 +119,7 @@ const handle = async (body: Body): Promise<Response> => {
         // response errors or health telemetry: logged() persists the error message.
         if (read) {
           if (error instanceof GoogleTokenError && error.kind === 'auth') await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: 'google_refresh_failed' }).catch(()=>{console.log(JSON.stringify({hop:'connector_proxy_health',ok:false,code:'unavailable'}));});
+          if (error instanceof McpHttpError && error.status === 404) return fail(404, 'mcp_read_unavailable');
           return fail(error instanceof GoogleTokenError ? error.status : error instanceof McpAuthError ? error.status : error instanceof McpToolError ? 400 : 502,
             error instanceof GoogleTokenError ? 'google_refresh_failed' : error instanceof McpAuthError ? error.status === 401 ? 'google_reauth_needed' : 'google_scope_missing' : error instanceof McpToolError ? 'mcp_read_rejected' : 'mcp_read_failed', error instanceof McpToolError ? safeMcpErrorDiagnostic(error.diagnostic) : undefined);
         }
