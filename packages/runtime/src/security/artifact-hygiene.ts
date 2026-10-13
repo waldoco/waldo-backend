@@ -55,8 +55,9 @@ const LINKS: ReadonlyArray<{ kind: Exclude<ArtifactKind, 'otp'>; re: RegExp }> =
 
 const OTPS: readonly RegExp[] = [
   // "Your Google verification code is 123456", "login code: 123-456", "security code 123456".
-  // The vendor word before the adjective is bounded: an unbounded run scanned to the end from every word start.
-  new RegExp(String.raw`\b[\w-]{0,40}\s?(?:verification|one[- ]?time|login|log[- ]?in|sign[- ]?in|security|authentication|confirmation|access)\s+(?:code|passcode|pin|otp)` + KEYWORD_END + LEAD + CODE + String.raw`\b`, 'gi'),
+  // The phrase starts at the adjective, even mid-word: text glued onto it ("Xverification pin 123456") must not
+  // hide the code, and scanning a vendor word before it cost time on every word start.
+  new RegExp(String.raw`(?:verification|one[- ]?time|login|log[- ]?in|sign[- ]?in|security|authentication|confirmation|access)\s+(?:code|passcode|pin|otp)` + KEYWORD_END + LEAD + CODE + String.raw`\b`, 'gi'),
   // "code: 123456", "OTP: 123456", "passcode is 123456" - the bare form, no vendor adjective needed.
   new RegExp(String.raw`\b(?:code|otp|passcode)` + KEYWORD_END + BARE_LEAD + CODE + String.raw`\b`, 'gi'),
   // Google's SMS/mail prefix form runs first: "G-123456 is your Google verification code" would

@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { extractArtifacts } from '../src/security/artifact-hygiene';
 
-// Synthetic text only. Any sender controls a mail body, so extraction must stay linear in its length. At base a
-// keyword followed by 4,000 spaces took over 10 s, and a 200,000-character run of links 11 s; the bound below
-// leaves room for a slow CI machine and still fails those by orders of magnitude.
+// Synthetic text only. Any sender controls a mail body, so extraction must stay linear in its length. The bound
+// leaves room for a slow CI machine; a quadratic or worse pattern exceeds it by orders of magnitude at this size.
 const N = 200_000;
 const BOUND_MS = 250;
 

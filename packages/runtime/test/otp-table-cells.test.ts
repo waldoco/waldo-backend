@@ -35,6 +35,10 @@ describe('the extractor', () => {
     ['verification code 48 29', '4829'],
     // The relayed value is the code's own capture, never another digit run in the phrase.
     ['Acme2024 verification code 482913', '482913'],
+    // Text glued straight onto the adjective, longer than any vendor word, with a noun or separator only the
+    // adjective form covers.
+    ['abcdefghij'.repeat(4) + 'Xverification pin 123456', '123456'],
+    ['abcdefghij'.repeat(4) + 'Xverification code - 123456', '123456'],
     // As a connector-proxy that predates the cell separator renders cells: indentation between them, any width.
     ['Your code\n' + digits.join('\n' + ' '.repeat(40)), '482913'],
     ['Your code \r\n' + digits.join(' \r\n' + ' '.repeat(30)), '482913'],
