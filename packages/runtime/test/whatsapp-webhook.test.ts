@@ -39,7 +39,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe('handleWhatsAppWebhook', () => {
   it('GET verify: echoes the challenge for the right token, 403 otherwise', async () => {
     const { ns } = namespace();
-    const env: WhatsAppWebhookEnv = { TELEGRAM_OWNER_DO: ns, WHATSAPP_VERIFY_TOKEN: 'vt' };
+    const env: WhatsAppWebhookEnv = { OWNER_DO: ns, WHATSAPP_VERIFY_TOKEN: 'vt' };
     const ok = await run(new Request('https://w.test/whatsapp/webhook?hub.mode=subscribe&hub.verify_token=vt&hub.challenge=ch123'), env);
     expect(ok.status).toBe(200);
     expect(await ok.text()).toBe('ch123');
@@ -48,7 +48,7 @@ describe('handleWhatsAppWebhook', () => {
 
   it('bad or missing signature is a 403 and never routes', async () => {
     const { fetch, ns } = namespace();
-    const env: WhatsAppWebhookEnv = { TELEGRAM_OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret' };
+    const env: WhatsAppWebhookEnv = { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret' };
     const body = payload([{ from: '15550001111' }]);
     expect((await run(await post(null, body), env)).status).toBe(403);
     expect((await run(new Request('https://w.test/whatsapp/webhook', { method: 'POST', body, headers: { 'x-hub-signature-256': 'sha256=deadbeef' } }), env)).status).toBe(403);
@@ -64,7 +64,7 @@ describe('handleWhatsAppWebhook', () => {
       },
       redeem: async () => null,
     };
-    const env: WhatsAppWebhookEnv = { TELEGRAM_OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret' };
+    const env: WhatsAppWebhookEnv = { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret' };
     const body = payload([{ from: '15550001111' }], true);
     expect((await run(await post('x', body), env, directory)).status).toBe(200);
     expect(idFromName).toHaveBeenCalledWith('do-a');
@@ -84,7 +84,7 @@ describe('handleWhatsAppWebhook', () => {
       byPresence: async (_p, subject) => ({ '15550001111': { doName: 'do-a', subject, timezone: null }, '15550002222': { doName: 'do-b', subject, timezone: null } })[subject] ?? null,
       redeem: async () => null,
     };
-    const env: WhatsAppWebhookEnv = { TELEGRAM_OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret' };
+    const env: WhatsAppWebhookEnv = { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret' };
     await run(await post('x', payload([{ from: '15550001111', text: 'one' }, { from: '15550002222', text: 'two' }])), env, directory);
     expect(fetch).toHaveBeenCalledTimes(2);
     for (const call of fetch.mock.calls) {
@@ -102,7 +102,7 @@ describe('handleWhatsAppWebhook', () => {
     const redeem = vi.fn(async (_p: string, _s: string, code: string) => code === 'GOOD12' ? { doName: 'do-a', subject: '15550003333', timezone: null } : null);
     const directory: OwnerDirectory = { byPresence: async () => null, redeem };
     const env: WhatsAppWebhookEnv = {
-      TELEGRAM_OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_ACCESS_TOKEN: 'wabearer-t0ken', WHATSAPP_PHONE_NUMBER_ID: 'pn1',
+      OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_ACCESS_TOKEN: 'wabearer-t0ken', WHATSAPP_PHONE_NUMBER_ID: 'pn1',
     };
     // unknown sender, no code: nothing happens
     await run(await post('x', payload([{ from: '15550003333', text: 'hello' }])), env, directory);
@@ -125,7 +125,7 @@ describe('handleWhatsAppWebhook', () => {
     vi.stubGlobal('fetch', vi.fn());
     const redeem = vi.fn(async () => null);
     const directory: OwnerDirectory = { byPresence: async () => null, redeem };
-    const env: WhatsAppWebhookEnv = { TELEGRAM_OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_ACCESS_TOKEN: 't', WHATSAPP_PHONE_NUMBER_ID: 'pn1' };
+    const env: WhatsAppWebhookEnv = { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_ACCESS_TOKEN: 't', WHATSAPP_PHONE_NUMBER_ID: 'pn1' };
     await run(await post('x', payload([{ from: '15550004444', text: 'GOOD12' }])), env, directory);
     await run(await post('x', payload([], true)), env, directory);
     expect(redeem).not.toHaveBeenCalled();

@@ -1,8 +1,8 @@
-import { EffectUnknownError, type OwnerEffectLedger, type EffectReceipt, type EffectReadback } from './owner-effect-ledger';
+import { EffectNotAppliedError, EffectUnknownError, type OwnerEffectLedger, type EffectReceipt, type EffectReadback } from './owner-effect-ledger';
 import type { ProxyIntent } from '../connectors/proxy-intent';
 import { ProxyIntentError } from '../connectors/proxy-intent';
 import { googleTaskProposalSchema, proposeGoogleTaskChangeArgsSchema, type BrowserTaskContinuation, type ProposeCalendarChangeArgs, type ProposeGoogleTaskChangeArgs } from '@waldo/contracts';
-import { GoogleError, sha256Hex, verifiedSent, type GoogleClient } from '../connectors/google';
+import { GoogleError, sendRefused, sentCheck, sha256Hex, type GoogleClient, type SentEvidence } from '../connectors/google';
 import { describeGoogleTaskChange, googleTaskExact, reviewGoogleTaskChange, type GoogleTaskApprovalAdapter, type GoogleTaskProposal } from './google-task-approvals';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { BrowserSubmitOutcome } from '../tools/live/browser';
@@ -28,10 +28,13 @@ export class EmailProposalError extends Error {
 }
 
 
+const SENT_RESEARCHES = 2;
+const SENT_RESEARCH_GAP_MS = 1_500;
 export const UNDO_WINDOW_MS = 10 * 60_000;
 export const PROPOSAL_TTL_MS = 12 * 60 * 60_000;
 
-type Stored = ProposeCalendarChangeArgs & { seen_etag?: string; operation_ref?: string };
+// seen_start/seen_end: the event's time when the card was made, so a move shows what it moves from.
+type Stored = ProposeCalendarChangeArgs & { seen_etag?: string; seen_start?: string; seen_end?: string; operation_ref?: string };
 
 // B-tool-3: the exact thing the owner approved. The executor replays it in a fresh browser
 // session and re-reads the binding from the page before acting - a changed price/item/destination
@@ -57,7 +60,12 @@ export type EmailSendProposal = Readonly<{
   operation_ref?: string;
   to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[];
   account?: string; subject: string; body: string; inReplyTo?: string; references?: readonly string[]; thread_id?: string; message_id: string; raw: string; digest: string; dedupe_key?: string;
+  // When an identical earlier send is still of unknown outcome: its time, in the owner's zone, for the card.
+  earlier_unknown_at?: string;
 }>;
+// What the owner would receive: two proposals with the same content send the same email.
+const emailContent = ({ account, to, cc, bcc, subject, body, thread_id, inReplyTo, references }: EmailSendProposal) =>
+  JSON.stringify({ account, to, cc, bcc, subject, body, thread_id, inReplyTo, references });
 
 // send_message proposals (ADR-0054): the exact channel + content the owner approved, replayed
 // verbatim on Send it; the idempotency key collapses a second approval onto the first send.
@@ -126,6 +134,9 @@ const approveActions = (entry: LedgerRow): AppApprovalPart['actions'] => buttons
 // Not now is offered once: an approval already put off offers only the decisions that move it.
 const withDefer = (entry: LedgerRow, actions: AppApprovalPart['actions']): AppApprovalPart['actions'] => entry.deferred_at == null ? [...actions, 'defer'] : actions;
 
+// Google writes an event's time in its calendar's offset; the proposal may name the same instant in another.
+const sameInstant = (a: string, b: string) => a === b || Date.parse(a) === Date.parse(b);
+
 // The approval card IS the owner's review of a send. Telegram caps a message at 4096 chars:
 // when the full content fits, the card shows every recipient + the complete body and carries
 // the Send it / Modify buttons; when it cannot fit, the card says so and carries NO approve
@@ -162,7 +173,7 @@ const summaryOf = (entry: LedgerRow) => {
 // The full review a card shows for each kind, rebuilt from the frozen payload.
 const reviewText = (entry: LedgerRow): string => {
   const p = JSON.parse(entry.payload_json);
-  if (entry.kind === 'email_send') return `Send this email? ${reviewEmail(p)}`;
+  if (entry.kind === 'email_send') return `Send this email?${p.earlier_unknown_at ? ` An identical email from ${p.earlier_unknown_at} may already have gone out; check Gmail's Sent folder before sending it again.\n` : ' '}${reviewEmail(p)}`;
   if (entry.kind === 'message_send') return `Send this message on ${p.channel}?\n\n${reviewMessage(p)}`;
   if (entry.kind === 'mcp_call') return `Run this MCP tool? ${describeMcp(p)}\n\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}`;
   if (entry.kind === 'browser_submit') return `Approve this browser action? ${describeBrowser(p)}`;
@@ -209,6 +220,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   timezone: string;
   reviewUrl?: () => Promise<string | null>;
   log(entry: TurnLogEntry): void;
+  // Pauses between Sent re-searches; defaults to a timer.
+  wait?: (ms: number) => Promise<void>;
   browserSubmit?: (proposal: BrowserSubmitProposal, approvalRef?: string) => Promise<BrowserSubmitOutcome>;
   browserReconcile?: (proposal: BrowserSubmitProposal, approvalRef: string) => Promise<BrowserSubmitOutcome>;
   browserDeny?: (proposal: BrowserSubmitProposal) => Promise<void>;
@@ -260,10 +273,13 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   let proposalTurn: string | undefined;
   const calendarProposals = new Map<string, Promise<string>>();
   const when = (iso: string) => new Intl.DateTimeFormat('en-GB', { timeZone: deps.timezone, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
-  const describe = (p: ProposeCalendarChangeArgs) => {
+  const day = (iso: string) => new Intl.DateTimeFormat('en-GB', { timeZone: deps.timezone, year: 'numeric', month: 'numeric', day: 'numeric' }).format(new Date(iso));
+  const hour = (iso: string) => new Intl.DateTimeFormat('en-GB', { timeZone: deps.timezone, hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
+  const span = (start: string, end: string) => day(start) === day(end) ? `${when(start)}–${hour(end)}` : `${when(start)} to ${when(end)}`;
+  const describe = (p: Stored) => {
     const name = p.title ? `"${p.title}"` : 'the event';
     if (p.action === 'create') return `Add ${name}, ${when(p.start!)} to ${when(p.end!)}${p.account ? ` (${p.account})` : ''}`;
-    if (p.action === 'move') return `Move ${name} to ${when(p.start!)} to ${when(p.end!)}${p.account ? ` (${p.account})` : ''}`;
+    if (p.action === 'move') return `Move ${name}${p.seen_start && p.seen_end ? ` from ${span(p.seen_start, p.seen_end)}` : ''} to ${span(p.start!, p.end!)}${p.account ? ` (${p.account})` : ''}`;
     return `Cancel ${name}${p.account ? ` (${p.account})` : ''}`;
   };
   const row = (id: string) => sql.exec<LedgerRow>('SELECT * FROM ledger WHERE id = ?', id).toArray()[0];
@@ -529,25 +545,103 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
               sql.exec("UPDATE ledger SET status = 'uncertain', decided_at = ? WHERE id = ? AND status = 'open'", deps.now(), id);
               if (sql.exec<{ claimed: number }>('SELECT changes() AS claimed').one().claimed !== 1) return { toast: 'Already handled.', message: 'Already handled.' };
             }
+            // Sent needs Gmail metadata with SENT, our exact Message-ID and the intended thread. Each step logs a
+            // fixed code, never content, so a send that ends unknown says which check failed.
+            const hop = (name: string, ok: boolean, code: string, from: number) => deps.log({ trace, hop: name, ms: deps.now() - from, ok, code });
+            let sent: Awaited<ReturnType<GoogleClient['sendRaw']>> | undefined;
+            let refused = false;
+            const pause = deps.wait ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+            // The thread the copy must be in: the proposal's, or else the one the send returned.
+            const intendedThread = () => ep.thread_id ?? sent?.thread_id;
+            const check = async (name: 'email_verify' | 'email_reconcile'): Promise<Readonly<{ code: string; landed?: SentEvidence }>> => {
+              const from = deps.now();
+              try {
+                const landed = await client.findSentByMessageId(ep.message_id, ep.thread_id, sent?.message_id);
+                const code = sentCheck(landed, ep.message_id, intendedThread(), sent?.message_id);
+                const proven = code === 'verified' || code === 'rfc822_rewritten';
+                hop(name, proven, code, from);
+                return proven ? { code, landed: landed as SentEvidence } : { code };
+              } catch { hop(name, false, 'unreadable', from); return { code: 'unreadable' }; }
+            };
+            const readback = async (name: 'email_verify' | 'email_reconcile') => (await check(name)).landed ?? null;
+            // Gmail search can trail a send by seconds, so a miss is searched twice more before it stays unknown.
+            // A copy that was found but failed a check is not searched again.
+            const searched = async () => {
+              for (let attempt = 0; ; attempt++) {
+                const result = await check('email_verify');
+                if (result.code !== 'not_found' || attempt === SENT_RESEARCHES) return result;
+                await pause(SENT_RESEARCH_GAP_MS);
+              }
+            };
+            // After a miss, whether the sent copy carries our Message-ID tells a slow search from a rewritten header.
+            const diagnose = async (): Promise<string | undefined> => {
+              const from = deps.now();
+              let code = 'unavailable';
+              let header: string | undefined;
+              if (sent?.thread_id && client.threadPage) {
+                try {
+                  code = 'not_in_thread';
+                  let cursor: string | undefined;
+                  for (let page = 0; page < 5; page++) {
+                    const read = await client.threadPage(sent.thread_id, 20, cursor);
+                    const copy = read.messages.find(message => message.id === sent!.message_id);
+                    if (copy) { code = copy.message_id === ep.message_id ? 'header_matches' : copy.message_id ? 'header_differs' : 'header_absent'; header = code === 'header_differs' ? copy.message_id : undefined; break; }
+                    if (!read.cursor) break;
+                    cursor = read.cursor;
+                  }
+                } catch { code = 'unreadable'; }
+              }
+              hop('email_diagnose', false, code, from);
+              return header;
+            };
+            // Gmail can rewrite the Message-ID of an API send, so a search by ours never finds it. The header Gmail
+            // gave the copy the send returned is searched strictly instead: SENT, that exact header, the intended
+            // thread and the same Gmail id. A lost response has no id, so it never gets here and stays unknown.
+            const rewritten = async (header: string): Promise<SentEvidence | null> => {
+              for (let attempt = 0; ; attempt++) {
+                const from = deps.now();
+                let code: string;
+                let landed: unknown;
+                try { landed = await client.findSentByMessageId(header, ep.thread_id); code = sentCheck(landed, header, intendedThread(), sent!.message_id); }
+                catch { code = 'unreadable'; }
+                hop('email_verify', code === 'verified', code === 'verified' ? 'rfc822_rewritten' : code, from);
+                if (code === 'verified') return landed as SentEvidence;
+                if (code !== 'not_found' || attempt === 1) return null;
+                await pause(SENT_RESEARCH_GAP_MS);
+              }
+            };
+            hop('email_thread', true, ep.thread_id ? 'thread_set' : 'no_thread', deps.now());
             try {
               await effect(`${operationRef}:apply`, 'send_email', ep, async () => {
-                const sent = await client.sendRaw(ep.raw, ep.thread_id);
-                const landed = await client.findSentByMessageId(ep.message_id, ep.thread_id);
-                if (!verifiedSent(landed, ep.message_id, ep.thread_id) || landed.message_id !== sent.message_id) throw new EffectUnknownError();
-                return { provider_id: landed.message_id, result: landed };
+                const from = deps.now();
+                try { sent = await client.sendRaw(ep.raw, ep.thread_id); }
+                catch (error) { refused = sendRefused(error); hop('email_send', false, refused ? 'refused' : 'unknown', from); throw error; }
+                hop('email_send', true, 'sent', from);
+                // A search that also filters by the intended thread misses a copy Gmail filed in another thread.
+                if (ep.thread_id) hop('email_thread_match', sent.thread_id === ep.thread_id, sent.thread_id === ep.thread_id ? 'same_thread' : 'other_thread', from);
+                const { code, landed } = await searched();
+                const header = !landed && code === 'not_found' ? await diagnose() : undefined;
+                const proof = landed ?? (header ? await rewritten(header) : null);
+                if (!proof) throw new EffectUnknownError();
+                return { provider_id: proof.message_id, result: proof };
               }, async () => {
-                const landed = await client.findSentByMessageId(ep.message_id, ep.thread_id);
-                return verifiedSent(landed, ep.message_id, ep.thread_id) ? { status: 'done', receipt: { provider_id: landed.message_id, result: landed } } : { status: 'unknown' };
+                const landed = await readback('email_reconcile');
+                return landed ? { status: 'done', receipt: { provider_id: landed.message_id, result: landed } } : refused ? { status: 'not_applied' } : { status: 'unknown' };
               });
               setStatus(id, 'done');
               out = { toast: 'Sent', message: `Sent: ${describeEmail(ep)}. This one can't be undone.` };
             } catch (error) {
-              if (!deps.effects && !(error instanceof ProxyIntentError)) {
-                const landed = await client.findSentByMessageId(ep.message_id, ep.thread_id).catch((readError) => { deps.log({ trace, hop: 'email_readback', ms: 0, ok: false, error: String(readError) }); return false; });
-                if (verifiedSent(landed, ep.message_id, ep.thread_id)) { setStatus(id, 'done'); return { toast: 'Sent', message: `Sent: ${describeEmail(ep)}. Gmail confirmed it after a hiccup; it went out exactly once.` }; }
+              if (!deps.effects && !(error instanceof ProxyIntentError) && await readback('email_reconcile')) {
+                setStatus(id, 'done');
+                return { toast: 'Sent', message: `Sent: ${describeEmail(ep)}. Gmail confirmed it after a hiccup; it went out exactly once.` };
               }
-              setStatus(id, 'uncertain');
-              out = { toast: 'Outcome unknown', message: 'The send outcome is unknown. Check Gmail before retrying; nothing was sent again.' };
+              if (error instanceof EffectNotAppliedError || (!deps.effects && refused)) {
+                setStatus(id, 'failed');
+                out = { toast: 'Not sent', message: `Gmail refused that send, so nothing went out: ${describeEmail(ep)}. Ask me again; if it keeps failing, reconnect Google.` };
+              } else {
+                setStatus(id, 'uncertain');
+                out = { toast: 'Outcome unknown', message: 'The send outcome is unknown. Check Gmail before retrying; nothing was sent again.' };
+              }
             }
           }
         }
@@ -620,7 +714,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             try {
               const current = await client.event(eventId);
               if (current.operation_marker !== marker) return {status:'unknown'};
-              if (proposal.action !== 'cancel' && current.status !== 'cancelled' && (proposal.action !== 'create' || current.title === proposal.title) && current.start === proposal.start && current.end === proposal.end && current.etag
+              if (proposal.action !== 'cancel' && current.status !== 'cancelled' && (proposal.action !== 'create' || current.title === proposal.title) && sameInstant(current.start, proposal.start!) && sameInstant(current.end, proposal.end!) && current.etag
                 && (!proposal.seen_etag || current.etag !== proposal.seen_etag)) {
                 // A marker can survive a later owner edit. Recovery proves the effect, but
                 // cannot establish the exact applied ETag needed for safe Undo.
@@ -764,13 +858,16 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         ? sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND json_extract(payload_json, '$.dedupe_key') = ? ORDER BY created_at DESC LIMIT 1", payload.dedupe_key).toArray()[0]
         : sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND json_extract(payload_json, '$.message_id') = ? ORDER BY created_at DESC LIMIT 1", payload.message_id).toArray()[0];
       if (prior) {
-        const was = JSON.parse(prior.payload_json) as EmailSendProposal;
-        const semantic = ({ account, to, cc, bcc, subject, body, thread_id, inReplyTo, references }: EmailSendProposal) => JSON.stringify({ account, to, cc, bcc, subject, body, thread_id, inReplyTo, references });
-        if (semantic(was) !== semantic(payload)) throw new EmailProposalError('identifier_reused');
+        if (emailContent(JSON.parse(prior.payload_json) as EmailSendProposal) !== emailContent(payload)) throw new EmailProposalError('identifier_reused');
         if (prior.status === 'open' || prior.status === 'review_only') return prior.id;
         if (prior.status === 'card_unconfirmed') throw new EmailProposalError('card_unconfirmed');
         throw new EmailProposalError('already_handled');
       }
+      // A new turn may ask for the same email again. It is the owner's call, so the card says when an identical
+      // send's outcome is still unknown instead of refusing.
+      const unknown = sql.exec<{ payload_json: string; decided_at: number | null }>("SELECT payload_json, decided_at FROM ledger WHERE kind = 'email_send' AND status = 'uncertain' AND json_extract(payload_json, '$.subject') = ? ORDER BY decided_at DESC", payload.subject).toArray()
+        .find(earlier => emailContent(JSON.parse(earlier.payload_json) as EmailSendProposal) === emailContent(payload));
+      if (unknown?.decided_at != null) payload = { ...payload, earlier_unknown_at: when(new Date(unknown.decided_at).toISOString()) };
       const id = `p${deps.newId()}`;
       const summary = describeEmail(payload);
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'email_send', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
@@ -837,10 +934,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         if((p.event_id || p.account)&&!client)throw new Error('The calendar account is unavailable; no proposal was prepared.');
         if (p.account && client?.account?.email?.toLowerCase() !== p.account.toLowerCase()) throw new Error('Selected calendar account is unavailable');
         const bound = { ...p, ...(client?.account?.email ? {account:client.account.email} : {}) };
-        const summary = `${describe(bound)}. ${bound.reason}`;
         const before = client && bound.event_id ? await client.event(bound.event_id) : undefined;
         const seen = before?.etag;
-        const stored: Stored = { ...bound, ...(seen ? { seen_etag: seen } : {}), ...(operationRef ? { operation_ref: operationRef } : {}) };
+        const seenTime = before && !before.all_day && before.start && before.end ? { seen_start: before.start, seen_end: before.end } : {};
+        const stored: Stored = { ...bound, ...(seen ? { seen_etag: seen } : {}), ...seenTime, ...(operationRef ? { operation_ref: operationRef } : {}) };
+        const summary = `${describe(stored)}. ${bound.reason}`;
         sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'calendar_change', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(stored), deps.now());
         bindOrigin(id, originRunRef);
         await present(id);

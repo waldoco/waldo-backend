@@ -168,7 +168,14 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
         }
       }
       if (!page && (page_token || calendar_id !== 'primary')) throw new Error('Calendar pagination or selected calendar adapter unavailable');
-      const events = page?.events ?? await client.events(from,to,limit,include_declined);
+      // The operation marker is for the desk's reconciliation of its own writes, not for the model.
+      const events = (page?.events ?? await client.events(from,to,limit,include_declined)).map(({ operation_marker: _marker, ...event }) => event);
+      // One content-free line per calendar read: which window and which kind of calendar were asked for, and how many
+      // events came back. Never the calendar id or the account, either of which can be an address. The primary calendar's
+      // id is the account address, so a read by that id counts as primary. The code stays within [a-z0-9_:]{1,64}, so a
+      // log viewer that whitelists hop codes by that charset keeps it.
+      const primary = calendar_id === 'primary' || calendar_id.toLowerCase() === client.account?.email?.toLowerCase();
+      console.log(JSON.stringify({ hop: 'calendar_read', ok: true, code: `window_${date_range ? 'date_range' : 'default'}:calendar_${primary ? 'primary' : 'other'}:page_${page_token ? 'next' : 'first'}`, count: events.length }));
       return {
         timezone: clock.timezone, from, to, events,
         observed_at: page?.observed_at ?? clock.now().toISOString(), next_page_token: page?.next_page_token ?? null,
@@ -344,7 +351,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<DraftEmailArgs, unknown, ToolDispatcherContext>,
   {
     name: 'send_email',
-    description: "Send an email from the owner's Gmail. The owner gets a review card showing the exact recipients, subject and body; nothing sends until they approve. Use draft_email instead when the owner wants to review or edit it in Gmail themselves. When the owner says to email themselves, read their connected account address with connect_service instead of asking for it.",
+    description: "Send an email from the owner's Gmail. The owner gets a review card showing the exact recipients, subject and body; nothing sends until they approve. A request to draft an email and send it once they approve is this tool: the card is the draft they approve. Use draft_email only when they want a saved Gmail draft to edit themselves. An earlier send whose outcome is unknown does not stop a new proposal the owner asks for: if an identical email may already have gone out, the card says so and the owner decides. When the owner says to email themselves, read their connected account address with connect_service instead of asking for it.",
     schema: sendEmailArgsSchema,
     trigger_allowlist: allowlist('send_email'),
     autonomy_gated: false,

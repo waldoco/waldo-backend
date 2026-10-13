@@ -19,7 +19,7 @@ it('policy has no hidden defaults: missing, partial or inconsistent policies are
 it('every missing composition piece disables the connector; disabled routes do not exist', async () => {
   const base = env as unknown as Record<string, unknown>;
   expect(iMessageComposition(base as never)).not.toBeNull();
-  for (const missing of ['IMESSAGE_CONNECTOR_ENABLED', 'IMESSAGE_CONNECTOR_POLICY', 'IMESSAGE_CREDENTIAL_WRAPPING_KEY', 'IMESSAGE_BRIDGE_DO', 'TELEGRAM_OWNER_DO', 'SUPABASE_PROJECT_URL', 'WALDO_ROUTER_HMAC_SECRET', 'WALDO_ENVIRONMENT']) {
+  for (const missing of ['IMESSAGE_CONNECTOR_ENABLED', 'IMESSAGE_CONNECTOR_POLICY', 'IMESSAGE_CREDENTIAL_WRAPPING_KEY', 'IMESSAGE_BRIDGE_DO', 'OWNER_DO', 'SUPABASE_PROJECT_URL', 'WALDO_ROUTER_HMAC_SECRET', 'WALDO_ENVIRONMENT']) {
     const partial = { ...base, [missing]: undefined };
     expect(iMessageComposition(partial as never), missing).toBeNull();
     const response = await handleIMessageHost(new Request('https://fixture.invalid/channels/imessage/v1/events', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }), partial as never);

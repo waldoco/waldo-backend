@@ -334,7 +334,7 @@ it("a loaded procedure follows the stable behavior head, per-turn memory and clo
   const { OWNER_SKILL_SAFEGUARDS } = await import("../src/prompt/messaging-behavior");
   captured.systems = [];
   const logged: TurnLogEntry[] = [];
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName("skills-prefix-order")), async (_i, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName("skills-prefix-order")), async (_i, state) => {
     const memory = claimStore(state.storage.sql);
     memory.add({ kind: "fact", text: "Owner fact: prefers morning meetings", source: "stated", evidence: 'owner, tg-1: "x"', origin: "owner", source_ref: "owner, tg-1" }, "2026-10-01T00:00:00.000Z");
     const args: Parameters<typeof createOwnerResponder> = ["fixture"];
@@ -360,7 +360,7 @@ it("an active skill plus a large owner profile keeps the final system prompt und
   captured.systems = [];
   const big = { ...row, body_markdown: marker + " " + "procedure step. ".repeat(100) };
   const skills: LocalSystemSkillBinding = { ...binding(), repository: { list: async (r) => ({ ...(await binding().repository.list(r)), rows: [big] }) } };
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName("skills-large-profile")), async (_i, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName("skills-large-profile")), async (_i, state) => {
     const memory = claimStore(state.storage.sql);
     for (let i = 0; i < 220; i++) memory.add({ kind: "fact", text: `Owner fact ${i}: synthetic detail number ${i} that the owner stated about themselves`, source: "stated", evidence: `owner, tg-${i}: "x"`, origin: "owner", source_ref: `owner, tg-${i}` }, "2026-10-01T00:00:00.000Z");
     const args: Parameters<typeof createOwnerResponder> = ["fixture"];
@@ -375,7 +375,7 @@ it("an active skill plus a large owner profile keeps the final system prompt und
 
 it("profile excludes long evidence and retains every short fact without unsolicited recall", async () => {
   captured.systems = [];
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName("recall-long-evidence")), async (_i, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName("recall-long-evidence")), async (_i, state) => {
     const memory = claimStore(state.storage.sql);
     for (let i = 0; i < 8; i++) memory.add({ kind: "fact", text: `hello greeting note ${i}`, source: "stated", evidence: `owner, tg-${i}: "${"x".repeat(60_000)}"`, origin: "owner", source_ref: `owner, tg-${i}` }, "2026-10-01T00:00:00.000Z");
     const args: Parameters<typeof createOwnerResponder> = ["fixture"];

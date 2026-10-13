@@ -8,7 +8,7 @@ import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 const limit=deriveContextBudgetChars(WALDO_CHAT_MODEL,SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
 const input=dayPlanInput({localNow:'2026-10-04T08:00',calendar:'No events.',cards:DAY_CARDS,proactivity:'Quiet hours 23:00-07:00'});
 it.each([false,true])('real planDay provider admission with 220 facts, escaping=%s',async escaping=>{
- await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`review738-${escaping}`)),async(_i,state)=>{
+ await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`review738-${escaping}`)),async(_i,state)=>{
  const memory=claimStore(state.storage.sql);
  for(let i=0;i<220;i++) {let text=`Routine ${i}: ${escaping?'"\\\n'.repeat(80):'synthetic detail '.repeat(20)}`;memory.add({kind:'routine',text,source:'stated',evidence:text,origin:'owner',source_ref:'owner, synthetic-day-plan'},'2026-10-04T00:00:00Z');}
  const requests:LLMGatewayRequest[]=[];

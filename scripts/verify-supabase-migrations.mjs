@@ -57,7 +57,7 @@ const expectedMigrations = [
   '20261011210000_health_retention_derived.sql',
   '20261011220000_health_retention_sweep.sql',
   '20261011230000_delete_owner_identity.sql',
-  '20261012100000_waldo_imessage_connector.sql',
+  '20261013130000_waldo_imessage_connector.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);

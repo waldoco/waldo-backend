@@ -1,5 +1,5 @@
 LOCAL trace: local-target guard ok (loopback origins only, local docker context, no inherited endpoints)
-LOCAL trace: real PostgreSQL 15: 56 canonical migrations applied (last 20261012100000_waldo_imessage_connector.sql)
+LOCAL trace: real PostgreSQL 15: 56 canonical migrations applied (last 20261013130000_waldo_imessage_connector.sql)
 LOCAL trace: PostgREST on 127.0.0.1 (loopback-published port)
 LOCAL trace: real workerd (production bundle) on 127.0.0.1; durable objects persisted to a scratch dir
 LOCAL trace: 1 invitation/redeem ok; pending credential: heartbeat 200, pull 401, owner turn 401; DB holds only wrapped credential
@@ -15,5 +15,5 @@ LOCAL trace: 10 group/SMS/echo/stranger produced no turns; cross-owner revoke an
 LOCAL trace: 9 revoke committed canonically; heartbeat/events/pull rejected afterwards; presence unlinked
 LOCAL trace: concurrency: 6 parallel redemptions -> 1 winner; 2 owners racing one sender -> 1 active binding (real PostgreSQL transactions)
 LOCAL trace: 12 outbound: 318 loopback database calls, 3 in-process scripted model calls, forbidden egress 0; 10256 bytes of worker stdout/stderr captured, none containing keys, codes, challenges or the sender handle
-LOCAL trace: PASS in 165789 ms. Simulated host only; real host, Apple delivery, recipient readback and deployment UNVERIFIED.
+LOCAL trace: PASS in 49105 ms. Simulated host only; real host, Apple delivery, recipient readback and deployment UNVERIFIED.
 LOCAL trace: owned containers and network removed

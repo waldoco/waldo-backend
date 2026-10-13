@@ -12,6 +12,8 @@ import { DAY_CARDS } from '../src/prompt/day-cards';
 import { claimStore } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
+import { readOwnerDemand } from '../src/health/calendar-demand-route';
+import { shiftDay } from '../src/health/scores/time';
 import { ensureSchema } from '../src/tracer/schema';
 
 const CARD_TEXT = 'Your morning is clear until noon.';
@@ -25,7 +27,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
-const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '4a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
 // A fallback zone that differs from the directory's 'UTC' default, so saving the fallback is observable.
@@ -56,7 +58,7 @@ type Owner = Readonly<{ setup(channel: string): Runtime; fetch(request: Request)
 type Stored = Readonly<{ zone?: string; confirmed?: boolean; pins?: Record<string, string>; capture?: boolean }>;
 
 const withAppOwner = async <T>(name: string, stored: Stored, run: (owner: Owner, state: DurableObjectState) => Promise<T>): Promise<T> => {
-  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   return runInDurableObject(stub, async (_instance, state) => {
     claimStore(state.storage.sql); ensureSchema(state.storage); traceBook(state.storage.sql);
     state.storage.kv.put('do_name', name);
@@ -64,7 +66,7 @@ const withAppOwner = async <T>(name: string, stored: Stored, run: (owner: Owner,
     if (stored.zone) state.storage.kv.put('timezone', stored.zone);
     if (stored.confirmed) state.storage.kv.put('timezone_confirmed', true);
     for (const [card, time] of Object.entries(stored.pins ?? {})) dayPlanBook(state.storage.sql).pin(card as never, time);
-    const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: FALLBACK, WALDO_OWNER_TELEGRAM_ID: undefined, ...(stored.capture ? { LANGFUSE_CAPTURE_TEXT: 'true', WALDO_ENVIRONMENT: 'staging' } : {}) }) as unknown as Owner;
+    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: FALLBACK, WALDO_OWNER_TELEGRAM_ID: undefined, ...(stored.capture ? { LANGFUSE_CAPTURE_TEXT: 'true', WALDO_ENVIRONMENT: 'staging' } : {}) }) as unknown as Owner;
     try { return await run(owner, state); } finally { await state.storage.deleteAlarm(); }
   });
 };
@@ -244,6 +246,58 @@ describe('proactive work for an owner who only uses the app', () => {
       expect(stored).toContain(CARD_TEXT);
       expect(stored).not.toContain('640 kcal');
       expect(stored).not.toContain('37 min');
+    });
+  });
+});
+
+describe('Weight\'s calendar demand route on the owner object', () => {
+  it('answers only the Worker\'s signed request for this owner, reads no calendar without Google, and arms nothing for an unconfirmed owner', async () => {
+    await withAppOwner('demand-unconfirmed', {}, async (owner, state) => {
+      const owners = { idFromName: (name: string) => name as never, get: () => ({ fetch: (request: Request) => owner.fetch(request) }) };
+      const today = localIso(Date.now(), 'Europe/London').slice(0, 10);
+      const range = { from: shiftDay(today, -2), to: today, timezone: 'Europe/London' };
+      expect(await readOwnerDemand(owners, directory.WALDO_ROUTER_HMAC_SECRET, 'demand-unconfirmed', range)).toEqual({ state: 'unavailable', reason: 'not_connected' });
+      // One content-free reason code per read.
+      expect(state.storage.sql.exec("SELECT ok, note FROM trace_log WHERE hop = 'calendar_demand'").toArray()).toEqual([{ ok: 0, note: 'not_connected' }]);
+      await owner.setup('app').ready;
+      expect(ownJobs(state)).toEqual([]);
+      await expect(readOwnerDemand(owners, 'forged-router-secret', 'demand-unconfirmed', range)).rejects.toThrow('calendar demand unavailable');
+      await expect(readOwnerDemand(owners, directory.WALDO_ROUTER_HMAC_SECRET, 'someone-else', range)).rejects.toThrow('calendar demand unavailable');
+    });
+    expect(model.calls).toBe(0);
+    expect(wire.telegramSent).toBe(0);
+  });
+
+  it('leaves a confirmed owner\'s armed jobs exactly as they were when a demand request boots the runtime again', async () => {
+    const name = 'demand-confirmed', today = localIso(Date.now(), 'Europe/London').slice(0, 10);
+    const range = { from: shiftDay(today, -2), to: today, timezone: 'Europe/London' };
+    const changed: unknown[] = [];
+    // Each pass is a fresh owner object on the same storage, as after an eviction, so the request boots the runtime again.
+    for (let pass = 0; pass < 3; pass += 1) {
+      await withAppOwner(name, { zone: 'Europe/London', confirmed: true }, async (owner, state) => {
+        const rows = () => state.storage.sql.exec('SELECT * FROM schedule ORDER BY id').toArray();
+        // A job part-way through its life, which has fired and failed twice: a boot must not hand it a fresh start.
+        if (pass > 0) state.storage.sql.exec('UPDATE schedule SET attempts = 2, last_fired_at = due_at - 60000 WHERE id = ?', HEARTBEAT_ID);
+        const before = rows();
+        const owners = { idFromName: (n: string) => n as never, get: () => ({ fetch: (request: Request) => owner.fetch(request) }) };
+        expect(await readOwnerDemand(owners, directory.WALDO_ROUTER_HMAC_SECRET, name, range)).toEqual({ state: 'unavailable', reason: 'not_connected' });
+        expect(ownJobs(state)).toEqual(expect.arrayContaining([NIGHTLY_ID, HEARTBEAT_ID, BRIEF_SWEEP_ID]));
+        if (pass > 0) changed.push(rows().filter((row, i) => JSON.stringify(row) !== JSON.stringify(before[i])).map(row => row.id));
+      });
+    }
+    expect(changed).toEqual([[], []]);
+    expect(model.calls).toBe(0);
+    expect(wire.telegramSent).toBe(0);
+  });
+
+  it('refuses a signed request on an object that has not been bound to that owner', async () => {
+    const name = 'demand-unbound';
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+      const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: FALLBACK, WALDO_OWNER_TELEGRAM_ID: undefined }) as unknown as Owner;
+      const owners = { idFromName: (n: string) => n as never, get: () => ({ fetch: (request: Request) => owner.fetch(request) }) };
+      const today = localIso(Date.now(), 'Europe/London').slice(0, 10);
+      await expect(readOwnerDemand(owners, directory.WALDO_ROUTER_HMAC_SECRET, name, { from: shiftDay(today, -2), to: today, timezone: 'Europe/London' })).rejects.toThrow('calendar demand unavailable');
+      expect(state.storage.kv.get('do_name')).toBeUndefined();
     });
   });
 });

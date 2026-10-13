@@ -35,7 +35,7 @@ const projections = {
     timezone: view.timezone,
     timezone_confirmed: view.timezoneConfirmed,
     date: view.now.slice(0,10),
-    cards: view.cards.map((card) => ({ id: card.id, name: card.name, defaultTime: card.defaultTime, time: card.time, reason: card.reason, sent: card.sent, pin: card.pin })),
+    cards: view.cards.map((card) => ({ id: card.id, name: card.name, defaultTime: card.defaultTime, time: card.time, reason: card.reason, sent: card.sent, pin: card.pin, ...(card.latest === undefined ? {} : { latest: card.latest }), ...(card.state === undefined ? {} : { state: card.state }) })),
     proactivity: { quiet_start: view.proactivity.quiet_start, quiet_end: view.proactivity.quiet_end, volume: view.proactivity.volume },
     schedules: view.schedules,
   }),

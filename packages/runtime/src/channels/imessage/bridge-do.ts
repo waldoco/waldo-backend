@@ -19,12 +19,12 @@ export type IMessageEnv = OwnerDirectoryEnv & Readonly<{
   IMESSAGE_CONNECTOR_POLICY?: string;
   IMESSAGE_CREDENTIAL_WRAPPING_KEY?: string;
   IMESSAGE_BRIDGE_DO?: DurableObjectNamespace;
-  TELEGRAM_OWNER_DO?: DurableObjectNamespace;
+  OWNER_DO?: DurableObjectNamespace;
 }>;
 
 /** Composition gate: every piece must be present, otherwise the connector is disabled (no fallback). */
 export const iMessageComposition = (env: IMessageEnv): { policy: IMessageConnectorPolicy; environment: string; wrappingKey: string } | null => {
-  if (env.IMESSAGE_CONNECTOR_ENABLED !== '1' || !env.IMESSAGE_BRIDGE_DO || !env.TELEGRAM_OWNER_DO) return null;
+  if (env.IMESSAGE_CONNECTOR_ENABLED !== '1' || !env.IMESSAGE_BRIDGE_DO || !env.OWNER_DO) return null;
   if (!env.SUPABASE_PROJECT_URL || !env.SUPABASE_PUBLISHABLE_KEY || !env.WALDO_ROUTER_HMAC_SECRET) return null;
   const environment = env.WALDO_ENVIRONMENT ?? '';
   const wrappingKey = env.IMESSAGE_CREDENTIAL_WRAPPING_KEY ?? '';
@@ -254,7 +254,7 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
   }
 
   private owner(doName: string): OwnerIMessagePort {
-    const ns = this.env.TELEGRAM_OWNER_DO!;
+    const ns = this.env.OWNER_DO!;
     return ns.get(ns.idFromName(doName)) as unknown as OwnerIMessagePort;
   }
 

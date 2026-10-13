@@ -1,4 +1,6 @@
+import type { ConversationEntry } from '@waldo/contracts';
 import type { ConversationStore } from './conversation-store';
+import type { RunEffectScope } from './run-effect-scope';
 import { localIso, localToEpoch, nextAfter } from './reminders';
 import type { Scheduler } from '../scheduler/multiplexer';
 
@@ -19,6 +21,10 @@ export type EpisodeIndex = Readonly<{
 }>;
 
 export const speakerOf = (entryId: string): Speaker => (entryId.endsWith('-reply') ? 'waldo' : entryId.startsWith('tg-') ? 'owner' : 'system');
+// A row stamped by the conversation path says who spoke, on any surface; an older, unstamped row
+// falls back to the Telegram-era id convention.
+export const speakerOfEntry = (entry: Pick<ConversationEntry, 'id' | 'role' | 'inputOrigin'>): Speaker =>
+  entry.role === 'assistant' ? 'waldo' : entry.inputOrigin === 'owner' ? 'owner' : entry.inputOrigin === 'machine' ? 'system' : speakerOf(entry.id);
 
 // Model text becomes plain quoted terms, so FTS5 operators and quotes in a question can't
 // break the query; OR keeps recall and BM25 does the ranking.
@@ -63,22 +69,34 @@ export const episodeIndex = (sql: SqlStorage): EpisodeIndex => {
   };
 };
 
-export const indexedConversationStore = (store: ConversationStore, index: EpisodeIndex, now: () => number): ConversationStore => ({
-  ...store,
-  load: () => store.load(),
-  async save(entries, leafId, scope) {
-    await store.save(entries, leafId, scope);
-    const at = now();
-    const commit = () => { for (const entry of entries) index.add(entry.id, speakerOf(entry.id), entry.appPayload, at); };
-    if (scope) scope.commit(commit); else commit();
-  },
-});
+// The owner's input is indexed when it is stored, before the turn runs, so it is searchable even if the turn never
+// finishes; the turn's save then skips it.
+export const indexedConversationStore = (store: ConversationStore, index: EpisodeIndex, now: () => number): ConversationStore => {
+  const indexedInputs = new Set<string>();
+  const persistOwnerInput = store.persistOwnerInput;
+  return {
+    ...store,
+    load: () => store.load(),
+    ...(persistOwnerInput ? { async persistOwnerInput(entry: ConversationEntry, scope: RunEffectScope) {
+      await persistOwnerInput(entry, scope);
+      scope.commit(() => index.add(entry.id, speakerOfEntry(entry), entry.appPayload, now()));
+      indexedInputs.add(entry.id);
+    } } : {}),
+    async save(entries, leafId, scope) {
+      await store.save(entries, leafId, scope);
+      const at = now();
+      const unindexed = entries.filter(entry => !indexedInputs.delete(entry.id));
+      const commit = () => { for (const entry of unindexed) index.add(entry.id, speakerOfEntry(entry), entry.appPayload, at); };
+      if (scope) scope.commit(commit); else commit();
+    },
+  };
+};
 
 // Turns saved before the index existed carry no time, so they come back undated.
 export const backfillEpisodes = async (store: ConversationStore, index: EpisodeIndex): Promise<number> => {
   if (index.count() > 0) return 0;
   const { entries } = await store.load();
-  for (const entry of entries) index.add(entry.id, speakerOf(entry.id), entry.appPayload, 0);
+  for (const entry of entries) index.add(entry.id, speakerOfEntry(entry), entry.appPayload, 0);
   return entries.length;
 };
 
@@ -90,7 +108,9 @@ export const NIGHTLY_ID = 'nightly-memory';
 export const NIGHTLY_TIME = '03:00';
 
 export const armNightly = async (scheduler: Scheduler, timezone: string, now: number): Promise<void> => {
-  const existing = scheduler.read(NIGHTLY_ID);
+  const found = scheduler.lookup(NIGHTLY_ID);
+  if (found.state === 'unreadable') return;
+  const existing = found.state === 'entry' ? found.entry : null;
   if (existing?.recurrence?.type === 'daily_local' && existing.recurrence.time === NIGHTLY_TIME && existing.recurrence.timezone === timezone) return;
   // A due occurrence must be dispatched (or recorded as missed) before replacing its row.
   // Keep the scheduler's one-second due lookahead intact; no manual fire or duplicate pass.

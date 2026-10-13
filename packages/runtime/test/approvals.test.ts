@@ -10,7 +10,7 @@ const iso = (s: string) => s as never;
 
 describe('approval desk', () => {
   it('promotes only host-checked receipts and passes the fresh desk approval reference', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-browser-checked-receipt'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-browser-checked-receipt'));
     await runInDurableObject(stub, async (_instance, state) => {
       let next = 0;
       for (const checked of [true, false, 'throws'] as const) {
@@ -28,7 +28,7 @@ describe('approval desk', () => {
     });
   });
   it('browser outcomes never claim Done without checked durable receipt, and consume replay/concurrent callbacks', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-browser-outcomes'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-browser-outcomes'));
     await runInDurableObject(stub, async (_instance, state) => {
       let n = 0; let calls = 0;
       const messages: string[] = [];
@@ -80,7 +80,7 @@ describe('approval desk', () => {
   });
 
   it('browser_submit: proposes with Do it / Not now, executes ONLY on approve, never undoes, expires in 30 minutes', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-browser'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-browser'));
     await runInDurableObject(stub, async (_instance, state) => {
       const sent: { method: string; body: Record<string, unknown> }[] = [];
       let now = 1_000_000;
@@ -134,7 +134,7 @@ describe('approval desk', () => {
   });
 
   it('message_send: proposes with Send it / Modify / Not now, executes verbatim ONLY on approve, collapses a repeated idempotency key', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-message'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-message'));
     await runInDurableObject(stub, async (_instance, state) => {
       const sent: { method: string; body: Record<string, unknown> }[] = [];
       const delivered: string[] = [];
@@ -190,7 +190,7 @@ describe('approval desk', () => {
   });
 
   it('mcp_call: proposes with Do it / Not now, executes ONLY on approve and reports a bounded outcome, never undoes', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-mcp'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-mcp'));
     await runInDurableObject(stub, async (_instance, state) => {
       const sent: { method: string; body: Record<string, unknown> }[] = [];
       const executed: string[] = [];
@@ -231,7 +231,7 @@ describe('approval desk', () => {
   });
 
   it('sends a card, applies only on Approve, undoes within the window, and keeps a ledger', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-desk'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-desk'));
     await runInDurableObject(stub, async (_instance, state) => {
       const sent: { method: string; body: Record<string, unknown> }[] = [];
       const google: string[] = [];
@@ -248,7 +248,7 @@ describe('approval desk', () => {
         owner: 42, google: async () => client, newId: () => String(++n), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
       });
       const id = await desk.propose({ action: 'move', event_id: 'e1', title: 'Gym', start: iso('2026-09-23T19:00:00+05:30'), end: iso('2026-09-23T20:00:00+05:30'), reason: 'you have a call at 6' });
-      expect(sent[0]!.body.text).toBe('Proposed: Move "Gym" to Wed 23 Sept, 19:00 to Wed 23 Sept, 20:00. you have a call at 6');
+      expect(sent[0]!.body.text).toBe('Proposed: Move "Gym" from Wed 23 Sept, 18:00–19:00 to Wed 23 Sept, 19:00–20:00. you have a call at 6');
       expect(JSON.stringify(sent[0]!.body.reply_markup)).toContain(`a:${id}`);
       expect(google).toEqual([]);
 
@@ -288,7 +288,7 @@ describe('approval desk', () => {
   });
 
   it('never applies an expired proposal or one whose event changed since the card', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-stale'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-stale'));
     await runInDurableObject(stub, async (_instance, state) => {
       const texts: string[] = [];
       const google: string[] = [];
@@ -340,7 +340,7 @@ describe('approval desk', () => {
   });
 
   it('console path: pending lists open proposals, decide applies/skips without Telegram, double-decide is safe', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-console'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-console'));
     await runInDurableObject(stub, async (_instance, state) => {
       const google: string[] = [];
       let now = 1_000_000;
@@ -431,7 +431,7 @@ describe('calendar Undo version protection', () => {
   };
 
   it.each(['create', 'move'] as const)('preserves later owner edits after approved %s', async (action) => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`undo-edited-${action}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`undo-edited-${action}`));
     await runInDurableObject(stub, async (_instance, state) => {
       const f = await setup(state, action);
       expect((await f.desk.decide(f.id, 'a', 't')).toast).toBe('Done');
@@ -445,7 +445,7 @@ describe('calendar Undo version protection', () => {
     });
   });
   it.each(['create', 'move'] as const)('undoes unchanged %s once using the persisted applied version', async (action) => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`undo-unchanged-${action}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`undo-unchanged-${action}`));
     await runInDurableObject(stub, async (_instance, state) => {
       const f = await setup(state, action);
       await f.desk.decide(f.id, 'a', 't');
@@ -463,7 +463,7 @@ describe('calendar Undo version protection', () => {
   });
 
   it.each(['create', 'move'] as const)('preserves a %s edit between fresh read and conditional Undo write', async (action) => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`undo-raced-${action}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`undo-raced-${action}`));
     await runInDurableObject(stub, async (_instance, state) => {
       const f = await setup(state, action);
       await f.desk.decide(f.id, 'a', 't');
@@ -479,7 +479,7 @@ describe('calendar Undo version protection', () => {
   });
 
   it.each(['create', 'move'] as const)('does not offer unsafe Undo when %s returns no applied etag', async (action) => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`undo-versionless-${action}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`undo-versionless-${action}`));
     await runInDurableObject(stub, async (_instance, state) => {
       const f = await setup(state, action);
       f.missingApplied();
@@ -493,7 +493,7 @@ describe('calendar Undo version protection', () => {
   });
 
   it.each(['create', 'move'] as const)('refuses legacy and missing current versions for %s without writing', async (action) => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`undo-legacy-${action}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`undo-legacy-${action}`));
     await runInDurableObject(stub, async (_instance, state) => {
       const f = await setup(state, action);
       await f.desk.decide(f.id, 'a', 't');
@@ -513,7 +513,7 @@ describe('calendar Undo version protection', () => {
   });
 
   it.each(['create', 'move'] as const)('keeps %s Undo failures honest and never retries with a newer version', async (action) => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`undo-failure-${action}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`undo-failure-${action}`));
     await runInDurableObject(stub, async (_instance, state) => {
       const f = await setup(state, action);
       await f.desk.decide(f.id, 'a', 't');
@@ -533,7 +533,7 @@ describe('calendar Undo version protection', () => {
   });
 
   it.each(['create', 'move'] as const)('concurrent %s Undo attempts preserve the confirmed undone ledger', async (action) => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`undo-concurrent-${action}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`undo-concurrent-${action}`));
     await runInDurableObject(stub, async (_instance, state) => {
       const f = await setup(state, action);
       await f.desk.decide(f.id, 'a', 't');
@@ -546,7 +546,7 @@ describe('calendar Undo version protection', () => {
   });
 
   it.each(['create', 'move'] as const)('retains confirmed %s Undo after a delayed duplicate proxy uncertainty', async (action) => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`undo-late-pending-${action}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`undo-late-pending-${action}`));
     await runInDurableObject(stub, async (_instance, state) => {
       const f = await setup(state, action);
       await f.desk.decide(f.id, 'a', 't');
@@ -591,7 +591,7 @@ describe('approval desk - email_send rail', () => {
   };
 
   it('the card is the full review: cc/bcc and the complete body are shown verbatim', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-review'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-email-review'));
     await runInDurableObject(stub, async (_i, state) => {
       const sent: { method: string; body: Record<string, unknown> }[] = [];
       const desk = approvalDesk(state.storage.sql, {
@@ -606,7 +606,7 @@ describe('approval desk - email_send rail', () => {
   });
 
   it('over-budget content is not approvable from the card: no Send it button, explicit notice', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-long'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-email-long'));
     await runInDurableObject(stub, async (_i, state) => {
       const sent: { method: string; body: Record<string, unknown> }[] = [];
       const desk = approvalDesk(state.storage.sql, {
@@ -628,7 +628,7 @@ describe('approval desk - email_send rail', () => {
   });
 
   it('proposes with Send it / Modify / Not now, sends the exact stored bytes on approve, never undoes, expires', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-1'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-email-1'));
     await runInDurableObject(stub, async (_i, state) => {
       const { desk, id, sent, sentRaw, tick } = await setup(state, {});
       expect(sent[0]!.body.text).toBe('Send this email? To: a@x.test\nSubject: Hello\n\nBody text');
@@ -652,7 +652,7 @@ describe('approval desk - email_send rail', () => {
   });
 
   it('adds a deterministic receipt and only a view-details link, never a second send button', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-receipt'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-email-receipt'));
     await runInDurableObject(stub, async (_i, state) => {
       const sent: { method: string; body: Record<string, unknown> }[] = [];
       const desk = approvalDesk(state.storage.sql, {
@@ -675,7 +675,7 @@ describe('approval desk - email_send rail', () => {
   });
 
   it('dedupes a retried owner turn despite fresh MIME Message-ID bytes, but not a later turn', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-turn-retry'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-email-turn-retry'));
     await runInDurableObject(stub, async (_i, state) => {
       let cards = 0;
       let next = 0;
@@ -697,7 +697,7 @@ describe('approval desk - email_send rail', () => {
   });
 
   it('strands an uncertain card safely and exposes it as unconfirmed, not approvable', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-uncertain'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-email-uncertain'));
     await runInDurableObject(stub, async (_i, state) => {
       const delivered: string[] = [];
       let first = true;
@@ -718,7 +718,7 @@ describe('approval desk - email_send rail', () => {
   });
 
   it('does not re-propose on secondary receipt failure after the review card arrives', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-receipt-failure'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-email-receipt-failure'));
     await runInDurableObject(stub, async (_i, state) => {
       let calls = 0;
       const desk = approvalDesk(state.storage.sql, {
@@ -735,7 +735,7 @@ describe('approval desk - email_send rail', () => {
   });
 
   it('fails closed when stored bytes no longer match the approved digest - nothing sends', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-2'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-email-2'));
     await runInDurableObject(stub, async (_i, state) => {
       const { desk, id, sentRaw, sql } = await setup(state, {});
       // tamper: rewrite the stored recipient after approval was requested
@@ -750,7 +750,7 @@ describe('approval desk - email_send rail', () => {
   });
 
   it('reconciles an ambiguous send through Sent mail: exactly-once, never a blind retry', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-3'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-email-3'));
     await runInDurableObject(stub, async (_i, state) => {
       const ok = await setup(state, { sendError: new Error('network timeout'), found: true });
       const out1 = await ok.desk.decide(ok.id, 'a', 't');
@@ -767,7 +767,7 @@ describe('approval desk - email_send rail', () => {
   });
 
   it('refuses honestly when Google is not connected', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-4'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-email-4'));
     await runInDurableObject(stub, async (_i, state) => {
       const { desk, id, sentRaw } = await setup(state, { connected: false });
       const out = await desk.decide(id, 'a', 't');
@@ -779,7 +779,7 @@ describe('approval desk - email_send rail', () => {
 
 it('approved email propagates ledger intent and pending proxy outcome remains uncertain, never false not-delivered',async()=>{
  const {ProxyIntentError}=await import('../src/connectors/proxy-intent');const {sha256Hex}=await import('../src/connectors/google');
- const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-proxy-${crypto.randomUUID()}`));
+ const stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-proxy-${crypto.randomUUID()}`));
  await runInDurableObject(stub,async(_instance,state)=>{
   const contexts:unknown[]=[];let sends=0;const raw='fixture-mime';
   const client={sendRaw:async()=>{sends++;throw new ProxyIntentError('intent_pending');},findSentByMessageId:async()=>false} as unknown as GoogleClient;
@@ -792,7 +792,7 @@ it('approved email propagates ledger intent and pending proxy outcome remains un
 
 describe('task source card ledger write', () => {
   it.each([true, false])('an approval card is open only once Telegram acknowledged it: blocked=%s', async blocked => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-blocked-card-${blocked}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-blocked-card-${blocked}`));
     await runInDurableObject(stub, async (_instance, state) => {
       let n = 0; let ran = 0;
       const desk = approvalDesk(state.storage.sql, { owner: 42, call: async () => (blocked ? undefined : { message_id: 1 }), google: async () => null, newId: () => `blocked-${++n}`, now: () => 1000, timezone: 'UTC', log: () => {},
@@ -819,7 +819,7 @@ describe('task source card ledger write', () => {
     });
   });
   it('a tap on an unconfirmed non-email card says nothing was done, and does not mention email', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-blocked-card-tap'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-blocked-card-tap'));
     await runInDurableObject(stub, async (_instance, state) => {
       let n = 0; let blocked = true; const said: string[] = [];
       const desk = approvalDesk(state.storage.sql, { owner: 42, google: async () => null, newId: () => `tap-${++n}`, now: () => 1000, timezone: 'UTC', log: () => {},
@@ -836,7 +836,7 @@ describe('task source card ledger write', () => {
 
 describe('calendar proposal dedupe within a turn', () => {
   it('reuses identical pending cards, but not different payloads, turns or decided cards', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('calendar-turn-dedupe'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('calendar-turn-dedupe'));
     await runInDurableObject(stub, async (_instance, state) => {
       let next = 0; let sent = 0;
       const desk = approvalDesk(state.storage.sql, { owner: 42, call: async () => { sent++; return {}; }, google: async () => null,
@@ -856,7 +856,7 @@ describe('calendar proposal dedupe within a turn', () => {
     });
   });
   it('collapses concurrent proposals and never reuses an unconfirmed card', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('calendar-turn-concurrent'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('calendar-turn-concurrent'));
     await runInDurableObject(stub, async (_instance, state) => {
       let next = 0; let sent = 0; let fail = false;
       const desk = approvalDesk(state.storage.sql, { owner: 42, call: async () => { sent++; return fail ? null : {}; }, google: async () => null,
@@ -885,7 +885,7 @@ describe('approval presentations', () => {
     const { appCaller } = await import('../src/channels/surfaces/app');
     const { appApprovalParts } = await import('../src/channels/approvals');
     const { sha256Hex } = await import('../src/connectors/google');
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-presentations-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-presentations-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       const sql = state.storage.sql; let n = 0; const appCalls: string[] = [];
       const base = { owner: 42, google: async () => null, newId: () => `pres${++n}`, now: () => NOW, timezone: 'UTC', log: () => {} };
@@ -934,7 +934,7 @@ describe('approval presentations', () => {
   it('a review too long for Telegram opens through the app, and an approve from Telegram is refused with the app link', async () => {
     const { appApprovalLink } = await import('../src/channels/surfaces/app');
     const { sha256Hex } = await import('../src/connectors/google');
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-presentations-long-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-presentations-long-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       const sql = state.storage.sql; let n = 0; let sends = 0;
       const sent: { method: string; body: Record<string, unknown> }[] = [];
@@ -974,7 +974,7 @@ describe('approval presentations', () => {
   });
 
   it('an app approve is refused for a card only ever shown on Telegram', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-presentations-telegram-only-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-presentations-telegram-only-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       const sent: string[] = [];
       const desk = approvalDesk(state.storage.sql, { owner: 42, google: async () => null, newId: () => 'tgonly', now: () => NOW, timezone: 'UTC', log: () => {},
@@ -1012,7 +1012,7 @@ describe('app approval projection', () => {
     const { appApprovalParts } = await import('../src/channels/approvals');
     const { ownerEffectLedger } = await import('../src/channels/owner-effect-ledger');
     const { sha256Hex } = await import('../src/connectors/google');
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-projection-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-projection-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       const sql = state.storage.sql; let n = 0; let now = NOW;
       const client = { createEvent: async () => ({ id: 'ev1', etag: 'e1' }), event: async () => ({ id: 'ev1', etag: 'e1', status: 'confirmed' }) } as unknown as GoogleClient;
@@ -1070,7 +1070,7 @@ describe('app approval projection', () => {
       expect((await desk.approvals(now, { state: 'done' })).map(item => item.approval_id)).toEqual([calendar]);
     });
 
-    const legacyStub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-projection-legacy-${crypto.randomUUID()}`));
+    const legacyStub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-projection-legacy-${crypto.randomUUID()}`));
     await runInDurableObject(legacyStub, async (_instance, state) => {
       const sql = state.storage.sql;
       sql.exec('CREATE TABLE ledger (id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL, undo_json TEXT, created_at INTEGER NOT NULL, decided_at INTEGER)');
@@ -1091,7 +1091,7 @@ describe('decisions from any surface', () => {
     const { appApprovalLink, appCaller } = await import('../src/channels/surfaces/app');
     const { ownerEffectLedger } = await import('../src/channels/owner-effect-ledger');
     const { sha256Hex } = await import('../src/connectors/google');
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-any-surface-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-any-surface-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       let n = 0, sends = 0; const telegram: { method: string; body: Record<string, unknown> }[] = []; const retired: unknown[] = [];
       const client = { sendRaw: async () => { sends++; return { message_id: 'g1' }; }, findSentByMessageId: async (id: string) => ({ message_id: 'g1', thread_id: 't', rfc822_message_id: id, label_ids: ['SENT'] }) } as unknown as GoogleClient;
@@ -1124,7 +1124,7 @@ describe('decisions from any surface', () => {
 
   it('a message to a channel this Waldo cannot send on is refused before it is claimed, and the console needs a full-review card', async () => {
     const { appCaller } = await import('../src/channels/surfaces/app');
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-any-surface-send-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-any-surface-send-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       let n = 0; const sent: string[] = [];
       const desk = approvalDesk(state.storage.sql, { owner: 7_000_000_000_001, surface: 'app', call: appCaller(), google: async () => null, newId: () => `send${++n}`, now: () => NOW, timezone: 'UTC', log: () => {},
@@ -1146,7 +1146,7 @@ describe('decisions from any surface', () => {
     const { appCaller } = await import('../src/channels/surfaces/app');
     const { ownerEffectLedger } = await import('../src/channels/owner-effect-ledger');
     const { sha256Hex } = await import('../src/connectors/google');
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-any-surface-exact-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-any-surface-exact-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       let n = 0;
       const before = { id: 't1', task_list_id: 'l1', title: 'Buy milk', status: 'todo' as const, notes: null, due_date: '2026-10-12', etag: '"e1"', parent: null, deleted: false, assigned: false };
@@ -1173,7 +1173,7 @@ describe('decisions from any surface', () => {
   });
 
   it('a retire that throws does not revert the decision', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-any-surface-retire-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-any-surface-retire-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       const logs: import('../src/channels/telegram-listener').TurnLogEntry[] = []; let sent = 0;
       const desk = approvalDesk(state.storage.sql, { owner: 42, google: async () => null, newId: () => 'retire1', now: () => NOW, timezone: 'UTC', log: entry => logs.push(entry), appIdentity: () => true,
@@ -1189,7 +1189,7 @@ describe('decisions from any surface', () => {
   });
 
   it('a WhatsApp reply, which carries message_id 0, decides through the WhatsApp card it answers', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-any-surface-whatsapp-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-any-surface-whatsapp-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       const sent: string[] = []; const answers: string[] = [];
       const desk = approvalDesk(state.storage.sql, { owner: 447700900123, surface: 'whatsapp', google: async () => null, newId: () => 'wa1', now: () => NOW, timezone: 'UTC', log: () => {},
@@ -1206,7 +1206,7 @@ describe('decisions from any surface', () => {
   it('tool results say where the card actually landed', async () => {
     const { sendMessageHandler } = await import('../src/tools/live/messaging');
     const { callMcpToolHandler } = await import('../src/tools/live/mcp');
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-any-surface-tool-status-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-any-surface-tool-status-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       let n = 0, telegramUp = true;
       const desk = approvalDesk(state.storage.sql, { owner: 42, google: async () => null, newId: () => `tool${++n}`, now: () => NOW, timezone: 'UTC', log: () => {}, appIdentity: () => true,
@@ -1236,7 +1236,7 @@ describe('decisions from any surface', () => {
 describe('approval desk round two', () => {
   const NOW = Date.UTC(2026, 9, 10, 9, 0, 0);
   it('a stored approvable flag never outruns what the app can show today', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-round-two-flag-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-round-two-flag-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       let ran = 0;
       const desk = approvalDesk(state.storage.sql, { owner: 42, google: async () => null, newId: () => 'flag1', now: () => NOW, timezone: 'UTC', log: () => {}, appIdentity: () => true, appLink: id => `waldo://approvals/${id}`,
@@ -1255,7 +1255,7 @@ describe('approval desk round two', () => {
 
   it('skipping a browser proposal that could only be reviewed releases its browser task', async () => {
     const { appCaller } = await import('../src/channels/surfaces/app');
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-round-two-deny-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-round-two-deny-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       const denied: string[] = [];
       const desk = approvalDesk(state.storage.sql, { owner: 7_000_000_000_001, surface: 'app', call: appCaller(), google: async () => null, newId: () => 'deny1', now: () => NOW, timezone: 'UTC', log: () => {},
@@ -1275,7 +1275,7 @@ describe('approval desk round two', () => {
     const { ownerEffectLedger } = await import('../src/channels/owner-effect-ledger');
     const { appCaller } = await import('../src/channels/surfaces/app');
     const { browseActArgsSchema } = await import('@waldo/contracts');
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-round-two-tools-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-round-two-tools-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       let n = 0, telegramUp = true;
       const args = { source: 'google_tasks' as const, action: 'create' as const, task_list_id: 'l1', changes: { title: 'Call Sam' }, reason: 'Owner asked' };
@@ -1299,7 +1299,7 @@ describe('approval desk round two', () => {
   it('history carries a card only while its approval is live, keeps every card readable, and one bad row drops only its card', async () => {
     const { appApprovalParts } = await import('../src/channels/approvals');
     const { appCaller } = await import('../src/channels/surfaces/app');
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-round-two-history-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-round-two-history-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       let n = 0;
       const desk = approvalDesk(state.storage.sql, { owner: 7_000_000_000_001, surface: 'app', call: appCaller(), google: async () => null, newId: () => `hist${++n}`, now: () => NOW, timezone: 'UTC', log: () => {}, currentRunRef: () => 'run-history-1',
@@ -1333,7 +1333,7 @@ describe('approval desk round four', () => {
     const { appApprovalParts } = await import('../src/channels/approvals');
     const { appCaller } = await import('../src/channels/surfaces/app');
     const { sha256Hex } = await import('../src/connectors/google');
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-round-four-mask-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-round-four-mask-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       const sql = state.storage.sql, cards: string[] = []; let n = 0;
       const desk = approvalDesk(sql, { owner: 42, google: async () => null, newId: () => `mask${++n}`, now: () => NOW, timezone: 'UTC', log: () => {}, appIdentity: () => true,
@@ -1367,7 +1367,7 @@ describe('approval desk round four', () => {
 
   it('rows stored before masking render from the payload, and an app card presented summary-only stays skip-only', async () => {
     const { appApprovalParts } = await import('../src/channels/approvals');
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-round-four-legacy-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-round-four-legacy-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       const sql = state.storage.sql; let n = 0, ran = 0;
       const desk = approvalDesk(sql, { owner: 42, google: async () => null, newId: () => `old${++n}`, now: () => NOW, timezone: 'UTC', log: () => {}, appIdentity: () => true, currentRunRef: () => 'run-old',
@@ -1388,7 +1388,7 @@ describe('approval desk round four', () => {
   });
 
   it('approvals that differ only in a URL parameter show the difference and bind different digests', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-round-four-query-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-round-four-query-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       let n = 0;
       const desk = approvalDesk(state.storage.sql, { owner: 42, google: async () => null, newId: () => `q${++n}`, now: () => NOW, timezone: 'UTC', log: () => {}, appIdentity: () => true,
@@ -1410,7 +1410,7 @@ describe('approval desk round four', () => {
 
   it('an approval decided in the app executes with the raw values the review masked', async () => {
     const { appCaller } = await import('../src/channels/surfaces/app');
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-round-four-raw-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-round-four-raw-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       let n = 0;
       const ran: unknown[] = [], submitted: unknown[] = [];
@@ -1433,7 +1433,7 @@ describe('approval desk round four', () => {
   });
 
   it('a reviewed URL keeps its encoding, masks hash-router parameters, and honours secret binding keys', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-round-four-url-${crypto.randomUUID()}`));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-round-four-url-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
       let n = 0;
       const desk = approvalDesk(state.storage.sql, { owner: 42, google: async () => null, newId: () => `u${++n}`, now: () => NOW, timezone: 'UTC', log: () => {}, appIdentity: () => true,
