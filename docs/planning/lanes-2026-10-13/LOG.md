@@ -735,7 +735,7 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - Turn 1 (01:37:32Z) drafted only.
   - Turn 2 (01:38:56Z), "Send it now.": Waldo declined. "I can't confirm whether the earlier send went through… I haven't sent it again." There was no card.
   - Nothing was approved, and nothing was sent. Test sends used are still **2 of 5**.
-- **Reading:** the two earlier "probe" sends are permanently `outcome_unknown`. The ledger kept no Gmail id for them, so #1115 can't re-prove them, and app.v1 gives that state no actions. Refusing an identical send is the correct duplicate guard.
+- **Reading:** the two earlier "probe" sends are permanently `outcome_unknown`. The ledger kept no Gmail id for them, so #1115 can't re-prove them, and app.v1 gives that state no actions. The refusal of an identical send was the model's judgment, not a guard; see the 05:22Z correction.
 - **Run 3b go:** the same P1 steps with the word "QA" (allowed by ruling 6), so it isn't a duplicate. The same stop rule applies.
 
 ## 01:46Z: P1 run 3b refused by the App session's classifier; summary rewritten
