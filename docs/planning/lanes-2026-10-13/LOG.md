@@ -780,3 +780,15 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **App #100: FAIL** (PR comment 6137214965). No test ties the palette's zone colours to the `zone-*-mark` tokens, so a swap would pass. The code itself is right.
 - **Decision:** `ChatPane:418`'s "Not confirmed" (a chat message whose send wasn't confirmed) becomes "Unconfirmed": one word for one meaning. It goes in the App lane's follow-up PR.
 - **Running:** the #1114 re-review (dc3480e2) and the #101 review.
+
+## 03:04Z: app #100 merged; #101 FAIL (one copy line)
+
+- **Merged app #100 as `e712aa2d`** (R13: the Form ring takes its zone's mark colour).
+  - **Gate:** the review passed apart from one missing test. That test was added at `5c9f79d3` and checked by hand: each palette zone equals its `zone-*-mark` token in light and dark. 14/14 faults were caught, and CI passed.
+- **App #101: FAIL** (PR comment 6137254477). The sign-out and delete paths are sound: Delete account still needs its typed confirmation, and no screen state lost its sign-out.
+  - **The blocking copy:** `ChatPane.tsx:343`'s "Nothing is sent until you sign in." is shown to signed-in users. It should read "This draft stays on this phone and is not sent."
+  - **Also:**
+    - `settings.tsx:22`'s "preferences cannot be changed" is false;
+    - an unused import;
+    - re-run CI on current `main`.
+- **App `main`** now has #93, #94, #95, #97, #98, #99 and #100.
