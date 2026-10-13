@@ -5,12 +5,12 @@ import { WALDO_CHAT_MODEL } from '@waldo/contracts';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { costLedger } from '../src/llm/cost-ledger';
 
-const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO } = await import('../src/channels/owner-do');
 type Owner = Readonly<{ setup(channel: string): { ready: Promise<unknown>; log(entry: TurnLogEntry): void; traces: { usage(at?: number): string } } }>;
 
 it('the owner object ledgers every priced model call, and /usage shows the month by kind', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('owner-cost-ledger')), async (_instance, state) => {
-    const owner = new TelegramOwnerDO(state, { ...env, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC' }) as unknown as Owner;
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('owner-cost-ledger')), async (_instance, state) => {
+    const owner = new OwnerDO(state, { ...env, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC' }) as unknown as Owner;
     const runtime = owner.setup('telegram');
     await runtime.ready;
     const usage = { model: WALDO_CHAT_MODEL, input: 12_000, output: 800, cached: 4_000 };
