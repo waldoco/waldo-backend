@@ -63,6 +63,8 @@ describe('the extractor', () => {
     ['Your code is 48\u206629\u206913', '482913'],
     ['Your code is 4\u034f8\u034f2\u034f9\u034f1\u034f3', '482913'],
     ['Your co\u200bde is 482913', '482913'],
+    ['Your code\u200b482913', '482913'],
+    ['Your code is \u200b482913', '482913'],
     ['45\u00ad53\u00ad6\u00ad6 is your code', '455366'],
     ['2\u00ad4\u00ad9\u00ad6\u00ad912\u00ad4 is your code', '24969124'],
     // Uneven and hyphenated splits. A hyphenated code relays as written, like "123-456".
@@ -110,12 +112,59 @@ describe('the extractor', () => {
     ['Area code 020 7946', '0207946'],
     ['Postcode12345 area', '12345'],
     ['Your code 4829 13\n10 minutes', '48291310'],
+    // Digits joined only by invisible characters read as one run up to eight digits, so a short code is relayed
+    // with the digits beside it.
+    ['Your code is 4829\u200b2026', '48292026'],
+    ['Acme2024\u200b5209 is your sign-in code', '20245209'],
   ])('quarantines digits after a keyword even when they are not a code: %s', (text, relayed) => {
     expect(extractArtifacts(text).artifacts).toEqual([{ kind: 'otp', value: relayed }]);
   });
 
   it.each(['see codes 1234 below', 'room 4 8 2 9 is free', 'code 1 2 3 is too short', 'error code 404', 'Room 4021'])('leaves ordinary text alone: %s', (text) => {
     expect(extractArtifacts(text).artifacts).toEqual([]);
+  });
+});
+
+// One pass must not hand the next a broken input. A link loses its invisible characters before digits are split, so
+// it stays whole; "… is your code" is read before the keyword patterns, so they never take its noun.
+describe('the passes, in order', () => {
+  const marker = (kind: string) => `[quarantined: ${kind} artifact - view in the source app]`;
+  const link = 'https://example.com/reset-password?uid=506705670&token=QJXZQJXZsecret';
+
+  it.each([['a zero-width space', '\u200b'], ['a soft hyphen', '\u00ad'], ['a word joiner', '\u2060']])('relay a reset link whole when %s splits its digits', (_char, invisible) => {
+    expect(extractArtifacts(`Reset: ${link.replace('506705670', `50670${invisible}5670`)} now`))
+      .toEqual({ text: `Reset: ${marker('password_reset')} now`, artifacts: [{ kind: 'password_reset', value: link }] });
+  });
+
+  it('show any other link whole, without its invisible characters', () => {
+    expect(extractArtifacts('Your code is 482913. Order: https://shop.example/orders/12345\u200b67890'))
+      .toEqual({ text: `Your ${marker('otp')}. Order: https://shop.example/orders/1234567890`, artifacts: [{ kind: 'otp', value: '482913' }] });
+  });
+
+  it.each([['&#8203;'], ['&shy;']])('keep a reset link from read_thread when %s splits its digits', async (entity) => {
+    const shown = link.replace('506705670', `50670${entity}5670`).replace('&token', '&amp;token');
+    const { shown: body, relays } = await readThread(html(`<p>Reset: <a href="${link.replace('&', '&amp;')}">${shown}</a> now</p>`));
+    for (const leaked of ['QJXZQJXZsecret', '5670']) expect(body).not.toContain(leaked);
+    expect(relays).toEqual([[{ kind: 'password_reset', value: link }]]);
+  });
+
+  it.each([
+    ['482913 is your Acme verification code\n1 800 555 0199', `${marker('otp')}\n1 800 555 0199`, '482913'],
+    ['482913 is your code\n13 10 2026', `${marker('otp')}\n13 10 2026`, '482913'],
+    ['4829 is your login code 12 34', `${marker('otp')} 12 34`, '4829'],
+    ['482913 is your verification code: 12 34', `${marker('otp')}: 12 34`, '482913'],
+  ])('read "… is your code" before a keyword takes its noun: %s', (text, shown, code) => {
+    expect(extractArtifacts(text)).toEqual({ text: shown, artifacts: [{ kind: 'otp', value: code }] });
+  });
+
+  it.each([
+    ['a phone number row', '<tr><td>482913</td><td>is your Acme verification code</td></tr><tr><td>1 800 555 0199</td></tr>', '18005550199'],
+    ['a date row', '<tr><td>482913 is your code</td></tr><tr><td>13 10 2026</td></tr>', '13102026'],
+  ])('relay "… is your code" in table cells followed by %s', async (_row, rows, left) => {
+    const { shown, relays } = await readThread(html(`<table>${rows}</table>`));
+    const result = JSON.parse(shown) as { data?: { messages: { body: string }[] }; messages?: { body: string }[] };
+    expect((result.data ?? result).messages![0]!.body.replace(/\D/g, '')).toBe(left);
+    expect(relays).toEqual([[{ kind: 'otp', value: '482913' }]]);
   });
 });
 
