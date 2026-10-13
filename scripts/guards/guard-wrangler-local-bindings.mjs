@@ -73,6 +73,23 @@ for (const [envName, envCfg] of Object.entries(cfg?.env ?? {})) {
 //    Workers Builds promote. Turn it on only in the PR that records a passing S0 run.
 if (staging?.browser !== undefined) bad.push('env.staging must not bind a browser until the S0 network-block test passes');
 
+// The throwaway S0 worker has its own config because named envs inherit the dashboard assets.
+// It may bind only a browser and carries no owner state. A recorded S0 result never relaxes rule 4.
+// Only a missing file skips the shape checks; a file that exists but does not parse is a failure.
+// Comments are stripped line-wise so a URL value is never mistaken for one.
+let s0Cfg;
+try {
+  const s0Raw = readFileSync(path.replace(/wrangler\.jsonc$/, 'wrangler.s0.jsonc'), 'utf8');
+  try { s0Cfg = JSON.parse(s0Raw.replace(/^\s*\/\/.*$/gm, '').replace(/,(\s*[}\]])/g, '$1')); }
+  catch { bad.push('wrangler.s0.jsonc must parse'); }
+} catch (error) { if (error?.code !== 'ENOENT') throw error; }
+if (cfg?.env?.s0) bad.push('env.s0 must not exist in wrangler.jsonc: use wrangler.s0.jsonc (named envs inherit assets)');
+if (s0Cfg) {
+  if (s0Cfg.name !== 'waldo-s0-staging') bad.push('wrangler.s0.jsonc name must be waldo-s0-staging');
+  for (const k of Object.keys(s0Cfg)) if (!['name', 'main', 'compatibility_date', 'compatibility_flags', 'vars', 'browser'].includes(k)) bad.push(`wrangler.s0.jsonc must not set ${k}`);
+  if (s0Cfg.vars?.WALDO_ENVIRONMENT !== 'staging') bad.push('wrangler.s0.jsonc WALDO_ENVIRONMENT must be staging');
+}
+
 if (bad.length) {
   process.stderr.write(`guard-wrangler-local-bindings: ${bad.join('; ')}\n`);
   process.exit(1);
