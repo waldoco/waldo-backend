@@ -10,7 +10,7 @@ afterEach(()=>vi.restoreAllMocks());
 function fixture(){
  const now=Date.now(),rows=new Map<string,any>([['do_name','PRIVATE_NAME'],['telegram_subject','1']]);
  const raw={policy:{ref:'PRIVATE_REF',doName:'PRIVATE_NAME',subject:'1',directoryOwnerId:proof.owner,createdAt:now-20000,expiresAt:now-1000,allowedOrigins:['*'],maxAllocations:2,maxReservedBrowserMs:40000,lifetimeMs:10000,maxScreenshotBytes:1024},billing:{cloudflareAccountId:'a'.repeat(32),conservativeWorstCase:true},spend:{limitMicrousd:10000000,maxCalls:100,validUntil:now-1000}};
- const env={WALDO_ENVIRONMENT:'staging',COMMON_BROWSER_REGISTRATION:JSON.stringify(raw),BROWSER:{fetch:vi.fn(()=>{throw Error('provider forbidden');})},TELEGRAM_OWNER_DO:{idFromName:()=>({toString:()=> 'PRIVATE_PHYSICAL'})}} as any;
+ const env={WALDO_ENVIRONMENT:'staging',COMMON_BROWSER_REGISTRATION:JSON.stringify(raw),BROWSER:{fetch:vi.fn(()=>{throw Error('provider forbidden');})},OWNER_DO:{idFromName:()=>({toString:()=> 'PRIVATE_PHYSICAL'})}} as any;
  const writes=vi.fn(()=>{throw Error('storage writes forbidden');});
  const storage={kv:{get:(key:string)=>rows.get(key),list:({prefix}:{prefix:string})=>[...rows].filter(([key])=>key.startsWith(prefix)),put:writes},transactionSync:writes} as unknown as DurableObjectStorage;
  const registered=commonStagingRegistration(env)!;
