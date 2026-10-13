@@ -153,6 +153,7 @@ export const PRIVILEGED_ACTION_TOOLS: readonly ToolName[] = [
   // Changing durable procedure availability is owner-controlled, never provider-authorized.
   'skills_install',
   'skills_disable',
+  'use_mac',
 ];
 
 // The single authority of the ADR-0049 taint gate, pure so hook and dispatcher share one law:

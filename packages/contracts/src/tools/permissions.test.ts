@@ -114,6 +114,7 @@ describe('toolName', () => {
       'skills_install',
       'skills_disable',
       'skills_load',
+      'use_mac',
       'search_contacts',
     ]);
   });
@@ -232,6 +233,7 @@ describe('TOOL_PERMISSIONS', () => {
       ],
       intervention: ['get_crs', 'get_health', 'read_memory', 'update_task', 'propose_action'],
       user_message: [
+        'use_mac',
         'get_crs',
         'get_health',
         'query_calendar',
@@ -397,7 +399,7 @@ describe('search_tools — ADR-0034 Option A, first-class', () => {
   });
 
   it('pins the always-on discovery and skill metadata set', () => {
-    expect(ALWAYS_ON_TOOLS).toEqual(['read_memory', 'remember', 'forget_memory', 'send_message', 'propose_action', 'search_tools', 'connect_service', 'skills_list']);
+    expect(ALWAYS_ON_TOOLS).toEqual(['read_memory', 'remember', 'forget_memory', 'send_message', 'propose_action', 'search_tools', 'connect_service', 'skills_list', 'use_mac']);
   });
 
   it('grants connect_service exactly where query_calendar is granted', () => {
