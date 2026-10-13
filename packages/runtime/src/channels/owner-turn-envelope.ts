@@ -2,7 +2,6 @@ import type { RunEffectScope } from './run-effect-scope';
 import { llmRequestSchema, type ToolName, type LLMAttachment } from '@waldo/contracts';
 import type { TurnTimer } from './owner-turn-types';
 import type { turnControl } from './turn-control';
-import type { ClaimGrounding } from '../memory/claims';
 
 // Auth and provider parsing happen in adapters. This is the admitted content
 // boundary consumed by the conversation, memory and tool loop.
@@ -49,7 +48,7 @@ export type OwnerResponder = Readonly<{
   // `turnContext` reaches the model with `said` on this turn only; it is never stored with the conversation.
   prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, turnContext?: string): Promise<string>;
   // done is false when the conversation was not consolidated and must be offered again.
-  consolidate(trace: string, day: string, sides?: ClaimGrounding): Promise<Readonly<{ done: boolean; detail: string }>>;
+  consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>): Promise<Readonly<{ done: boolean; detail: string }>>;
   migrate(trace: string, input: string): Promise<string>;
   promote(trace: string): Promise<string>;
   planDay(trace: string, input: string): Promise<string>;
