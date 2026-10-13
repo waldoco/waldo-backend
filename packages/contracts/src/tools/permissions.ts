@@ -97,6 +97,7 @@ export const toolNameSchema = z.enum([
   'skills_install',
   'skills_disable',
   'skills_load',
+  'use_mac',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -193,6 +194,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
   intervention: ['get_crs', 'get_health', 'read_memory', 'update_task', 'propose_action'],
   // Everything except execute_code (ADR-0050) — no trigger ever gets the full surface.
   user_message: [
+    'use_mac',
     'get_crs',
     'get_health',
     'query_calendar',
@@ -302,6 +304,7 @@ export const ALWAYS_ON_TOOLS: readonly ToolName[] = [
   'search_tools',
   'connect_service',
   'skills_list',
+  'use_mac',
 ];
 
 // search_tools returns top-K by query relevance only — "show me everything" is

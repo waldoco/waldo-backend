@@ -170,6 +170,7 @@ describe('privileged-action set — ADR-0049', () => {
       'update_thread_topics',
       'skills_install',
       'skills_disable',
+      'use_mac',
     ]);
   });
 
