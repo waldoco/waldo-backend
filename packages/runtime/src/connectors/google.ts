@@ -352,9 +352,8 @@ const ATTACHMENT_LIST_CAP = 50;
 type GmailPayload = Readonly<{ mimeType?: string; filename?: string; body?: { data?: string; attachmentId?: string; size?: number }; parts?: GmailPayload[]; headers?: { name: string; value: string }[] }>;
 type GmailFullMessage = Readonly<{ id?: string; threadId?: string; snippet?: string; internalDate?: string; payload?: GmailPayload }>;
 const LINK_SCAN_CAP = 100;
-// Artifact extraction backtracks across an unbroken run, so its cost grows with the square of a link's
-// length. A longer target is left out of the scan, which feeds only the relay; the Links list below has
-// its own, tighter bound.
+// Bounds the link scan per mail: a longer target is left out of the scan, which feeds only the relay; the
+// Links list below has its own, tighter bound.
 const LINK_TARGET_MAX = 2_048;
 // Rendering keeps an anchor's text and drops its target, so the targets a reader could follow are listed
 // after the body. These are parsing bounds; which link matters is the model's call. Mail, image-only and
