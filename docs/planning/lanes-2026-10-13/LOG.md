@@ -1701,3 +1701,18 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - Nothing leaves the phone: the data sits in component state or the in-memory cache, is rendered only, and isn't persisted or logged.
   - Not an install blocker. It's a follow-up in N4's small PR, along with disarm on any ended withdrawal and the lost forced run.
 - **App #115:** retargeted to main with `db7e06b9` merged in (`1c23a41b`). CI started after an empty push (`7b1e0222`). Locally: 932 passed. It's still a draft, and its review comes after the reset.
+
+## 09:47Z (from `date -u`): usage 86%; reviews wait for the reset, except the calendar fix
+
+- **Usage** (get_usage) was 86% at about 09:47Z, against 84% at about 09:41Z, and resets at 12:30Z. If the post-review pace of about 0.3 points a minute held, the window would run out around 10:30Z [inference].
+- **The remaining budget goes to:**
+  - Connectors' calendar-read fix: its review, merge and the owner's deploy;
+  - N4's rebuild of `7e09317c` and its install on the Air.
+- **N4** pauses after the install and the `.app` handoff to L4. **L4** stays paused.
+- **Waiting for after the reset:**
+  - **#122** (`5705940e`): CI green, 4 files.
+  - **#123** (`e14f3ed8`): the #109 follow-ups, CI green, 4 files, 7 mutants caught.
+  - **#115** (`7b1e0222`): a draft, CI green, 22 files.
+- **Owner decisions still open:**
+  - opening Waldo on the Air, or allowing that action in N4's session;
+  - whether Waldo's own consent should gate on-phone display reads.
