@@ -5,6 +5,7 @@ import {workspaceStore} from '@waldo/workspace';
 import {workspaceOwnerHost} from '../src/channels/workspace-host';
 import { configureCommonPublicBrowser } from '../src/channels/common-public-browser-configuration';
 import { commonBrowserFixture, commonBrowserMeteredFixtureLoader } from './fixtures/common-browser-sdk';
+import { toolOutput } from './fixtures/tool-output';
 
 const proof = vi.hoisted(() => ({ inputs: [] as any[], delivered: [] as string[], directoryOwner: '10000000-0000-0000-0000-000000000001', doName: '', subject: '81101',normalCalls:0,phase:'main',phaseCalls:0,sessionHandle:'',tabRef:'',outputs:[] as any[],bodies:new Map<string,Uint8Array>() }));
 vi.mock('../src/identity/common-owner-authority', () => ({ commonOwnerAuthority: () => ({ resolve: async () => ({ directoryOwnerId: proof.directoryOwner, custodyDigest: 'a'.repeat(64) }) }) }));
@@ -20,7 +21,7 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (input: 
   proof.inputs.push(structuredClone(input));
   const format = input.text?.format?.name;
   const previous = (Array.isArray(input.input) ? input.input : []).filter((item: any) => item.type === 'function_call_output');
-  const outputs=previous.map((row:any)=>JSON.parse(row.output));if(outputs.length){proof.outputs=outputs;const first=outputs.find((row:any)=>row.ok&&row.data?.session_handle);if(first){proof.sessionHandle=first.data.session_handle;proof.tabRef ||= first.data.tab_ref;}}
+  const outputs=previous.map((row:any)=>toolOutput(row.output));if(outputs.length){proof.outputs=outputs;const first=outputs.find((row:any)=>row.ok&&row.data?.session_handle);if(first){proof.sessionHandle=first.data.session_handle;proof.tabRef ||= first.data.tab_ref;}}
   const at=format?-1:proof.phase==='fresh'?12+proof.phaseCalls++:proof.normalCalls++;
   const calls=[
     {name:'browse_page',args:{provider:'cloudflare_playwright',url:'https://example.com/a',instruction:'Read the public page'}},
@@ -72,7 +73,7 @@ it('ordinary owner loop reads, types, reobserves and continues two public tabs w
       const replies = proof.inputs.filter(input => !input.text?.format);
       const final = replies.find(input => Array.isArray(input.input) && input.input.filter((item: any) => item.type === 'function_call_output').length === 4);
       expect(final).toBeDefined();
-      const outputs = final.input.filter((item: any) => item.type === 'function_call_output').map((item: any) => JSON.parse(item.output));
+      const outputs = final.input.filter((item: any) => item.type === 'function_call_output').map((item: any) => toolOutput(item.output));
       expect(outputs.every((row:any)=>row.ok===true)).toBe(true);
       expect(outputs.map((row:any)=>row.data.url)).toEqual(['https://example.com/a','https://example.com/a','https://example.com/a','https://www.iana.org/b']);
       expect(outputs[1].data.browser_action_session_handle).toBe(outputs[0].data.session_handle);expect(outputs[2].data.field_values[0].value).toBe('Owner retained note');
