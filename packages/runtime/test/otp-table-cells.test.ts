@@ -33,8 +33,6 @@ describe('the extractor', () => {
     ['Your code:\t4829\t1356', '48291356'],
     ['Your code is 1234 5678', '12345678'],
     ['verification code 48 29', '4829'],
-    // The relayed value is the code's own capture, never another digit run in the phrase.
-    ['Acme2024 verification code 482913', '482913'],
     // Text glued straight onto the adjective, longer than any vendor word, with a noun or separator only the
     // adjective form covers.
     ['abcdefghij'.repeat(4) + 'Xverification pin 123456', '123456'],
@@ -47,6 +45,10 @@ describe('the extractor', () => {
     const found = extractArtifacts(text);
     expect(found.artifacts).toEqual([{ kind: 'otp', value: code }]);
     expect(found.text.replace(/\D/g, '')).toBe('');
+  });
+
+  it('relays the code\'s own capture, never another digit run nearby', () => {
+    expect(extractArtifacts('Acme2024 verification code 482913')).toEqual({ text: 'Acme2024 [quarantined: otp artifact - view in the source app]', artifacts: [{ kind: 'otp', value: '482913' }] });
   });
 
   it.each(['Postcode12345 area', 'see codes 1234 below', 'room 4 8 2 9 is free', 'code 1 2 3 is too short', 'error code 404', 'Room 4021'])('leaves ordinary text alone: %s', (text) => {
