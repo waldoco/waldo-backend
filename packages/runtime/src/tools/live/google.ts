@@ -254,7 +254,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<SearchCommunicationArgs, unknown, ToolDispatcherContext>,
   {
     name: 'read_thread',
-    description: "Read one Gmail thread by thread_id - the messages with sender, subject, time and body. Use after get_communication or search_communication surfaces a thread the owner asks about, before drafting a reply. Continue with cursor and the same thread/account; changed threads require restarting.",
+    description: "Read one Gmail thread by thread_id - the messages with sender, recipients (to, cc, reply_to as plain addresses), subject, time and body. account.email is the owner's own address. To reply to all, take the recipients from the message being replied to. Use after get_communication or search_communication surfaces a thread the owner asks about, before drafting a reply. Continue with cursor and the same thread/account; changed threads require restarting.",
     schema: readThreadArgsSchema,
     trigger_allowlist: allowlist('read_thread'),
     autonomy_gated: false,
@@ -321,7 +321,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<ProposeCalendarChangeArgs, unknown, ToolDispatcherContext>,
   {
     name: 'draft_email',
-    description: "Save an email draft in the owner's Gmail. It is not sent; the owner reviews and sends it themselves. When the owner says to email themselves, read their connected account address with connect_service instead of asking for it.",
+    description: "Save an email draft in the owner's Gmail. It is not sent; the owner reviews and sends it themselves. When the owner says to email themselves, read their connected account address with connect_service instead of asking for it. To reply to all, address the replied-to message's reply_to (or its sender when there is none) and copy its to and cc, leaving out the owner's own address (account.email in read_thread); a plain reply goes to reply_to or the sender only.",
     schema: draftEmailArgsSchema,
     trigger_allowlist: allowlist('draft_email'),
     autonomy_gated: false,
@@ -351,7 +351,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<DraftEmailArgs, unknown, ToolDispatcherContext>,
   {
     name: 'send_email',
-    description: "Send an email from the owner's Gmail. The owner gets a review card showing the exact recipients, subject and body; nothing sends until they approve. A request to draft an email and send it once they approve is this tool: the card is the draft they approve. Use draft_email only when they want a saved Gmail draft to edit themselves. An earlier send whose outcome is unknown does not stop a new proposal the owner asks for: if an identical email may already have gone out, the card says so and the owner decides. When the owner says to email themselves, read their connected account address with connect_service instead of asking for it.",
+    description: "Send an email from the owner's Gmail. The owner gets a review card showing the exact recipients, subject and body; nothing sends until they approve. A request to draft an email and send it once they approve is this tool: the card is the draft they approve. Use draft_email only when they want a saved Gmail draft to edit themselves. An earlier send whose outcome is unknown does not stop a new proposal the owner asks for: if an identical email may already have gone out, the card says so and the owner decides. When the owner says to email themselves, read their connected account address with connect_service instead of asking for it. To reply to all, address the replied-to message's reply_to (or its sender when there is none) and copy its to and cc, leaving out the owner's own address (account.email in read_thread); a plain reply goes to reply_to or the sender only.",
     schema: sendEmailArgsSchema,
     trigger_allowlist: allowlist('send_email'),
     autonomy_gated: false,

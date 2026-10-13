@@ -179,7 +179,26 @@ export type CalendarChange = Omit<CalendarItem, 'status'> & Readonly<{ status: s
 export type MailItem = Readonly<{ id: string; thread_id: string; from: string; subject: string; snippet: string; at: string }>;
 // A1: a thread-read message carries the decoded body; the list projection (MailItem) stays
 // snippet-only so 'what is new' scans never pull bodies into a turn.
-export type ThreadMessage = Readonly<{ id: string; from: string; subject: string; at: string; body: string; message_id?: string; references?: readonly string[] }>;
+// to, cc and reply_to are bare addresses (no display names), so a reply or reply-all addresses exactly who is on the thread.
+export type ThreadMessage = Readonly<{ id: string; from: string; subject: string; at: string; body: string; message_id?: string; references?: readonly string[]; to?: readonly string[]; cc?: readonly string[]; reply_to?: readonly string[] }>;
+
+// RFC 5322 address-list header to its addresses: commas inside quotes or angle brackets don't split, a group's
+// name ("Team:") is dropped, and anything that isn't a plain address is left out.
+export const addressList = (header: string): string[] => {
+  const tokens: string[] = [];
+  let token = '', quoted = false, angled = false;
+  for (const char of header) {
+    if (char === '"' && !angled) quoted = !quoted;
+    else if (char === '<' && !quoted) angled = true;
+    else if (char === '>' && !quoted) angled = false;
+    if (!quoted && !angled && (char === ',' || char === ';')) { tokens.push(token); token = ''; continue; }
+    if (!quoted && !angled && char === ':') { token = ''; continue; }
+    token += char;
+  }
+  tokens.push(token);
+  return tokens.map((item) => (/<([^<>]*)>\s*$/.exec(item)?.[1] ?? item).trim())
+    .filter((address) => /^[^\s@<>"(),;:]+@[^\s@<>"(),;:]+\.[^\s@<>"(),;:]+$/.test(address)).slice(0, 50);
+};
 export type DraftInput = Readonly<{ to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[]; subject: string; body: string; threadId?: string; messageId?: string; inReplyTo?: string; references?: readonly string[] }>;
 
 // Conservative wire Message-ID validation: never interpolate model/provider header text.
@@ -562,7 +581,8 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
         const messageIds = message.payload?.headers?.filter(h => h.name.toLowerCase() === 'message-id') ?? [];
         const messageId = messageIds.length === 1 ? messageIds[0]!.value.trim() : '';
         const references = (message.payload?.headers?.filter(h => h.name.toLowerCase() === 'references').map(h => h.value).join(' ') ?? '').trim().split(/\s+/).filter(Boolean);
-        return { ...(validMessageId(messageId) ? {message_id:messageId} : {}), ...(references.length ? {references} : {}), id: message.id ?? '', from: header('From'), subject: header('Subject'), at: new Date(Number(message.internalDate ?? 0)).toISOString(), body: threadBody(message.payload) || (message.snippet ?? '').slice(0, BODY_CAP) };
+        const replyTo = addressList(header('Reply-To'));
+        return { ...(validMessageId(messageId) ? {message_id:messageId} : {}), ...(references.length ? {references} : {}), to: addressList(header('To')), cc: addressList(header('Cc')), ...(replyTo.length ? { reply_to: replyTo } : {}), id: message.id ?? '', from: header('From'), subject: header('Subject'), at: new Date(Number(message.internalDate ?? 0)).toISOString(), body: threadBody(message.payload) || (message.snippet ?? '').slice(0, BODY_CAP) };
       });
       const next = offset + messages.length;
       return {messages, cursor: next < ids.length ? b64url(new TextEncoder().encode(JSON.stringify({binding,offset:next}))) : null};
