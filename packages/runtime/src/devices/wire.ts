@@ -1,18 +1,21 @@
+import { macCommandPayload, macResultPayload, type MacPayload } from './mac-wire';
 import { CAPABILITIES, CONTRACT_VERSION, LABEL_BYTES, IDENTIFIER_BYTES, KEY_BYTES, NONCE_BYTES, SIGNATURE_BYTES, TIMESTAMP_MAX, OUTBOX_DEPTH_MAX, NOTIFY_TITLE_BYTES, NOTIFY_BODY_BYTES, type Capability } from './contract';
 import { decodeBase64url } from './signing';
 export const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 export const exact = (value: Record<string, unknown>, keys: readonly string[]): boolean => Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 export const identifier = (value: unknown): value is string => typeof value === 'string' && value.length >= 1 && value.length <= IDENTIFIER_BYTES && /^[A-Za-z0-9_-]+$/.test(value);
 export function capabilities(value: unknown): Capability[] | null {
-  if (!Array.isArray(value) || value.length < 1 || value.length > 2) return null;
+  if (!Array.isArray(value) || value.length < 1 || value.length > CAPABILITIES.length) return null;
   const ordered = CAPABILITIES.filter((entry) => value.includes(entry));
   return ordered.length === value.length && ordered.every((entry, index) => entry === value[index]) ? ordered : null;
 }
-const byteString = (value: unknown, min: number, max: number): value is string => typeof value === 'string' && new TextEncoder().encode(value).length >= min && new TextEncoder().encode(value).length <= max;
-export type RedeemBody = { code: string; device_pubkey: string; label: string; declared_capabilities: Capability[]; contract_version: '0.2.3' };
+export const byteString = (value: unknown, min: number, max: number): value is string => typeof value === 'string' && new TextEncoder().encode(value).length >= min && new TextEncoder().encode(value).length <= max;
+export type RedeemBody = { code: string; device_pubkey: string; label: string; declared_capabilities: Capability[]; contract_version: string; session_consent?: boolean };
 export function redeemBody(value: unknown): RedeemBody | null {
-  // Closed shape ensures signed data cannot silently widen transport capabilities.
-  if (!record(value) || !exact(value, ['code', 'device_pubkey', 'label', 'declared_capabilities', 'contract_version']) || value.contract_version !== CONTRACT_VERSION || typeof value.code !== 'string' || !decodeBase64url(value.code, KEY_BYTES) || typeof value.device_pubkey !== 'string' || !decodeBase64url(value.device_pubkey, KEY_BYTES) || !byteString(value.label, 1, LABEL_BYTES) || !capabilities(value.declared_capabilities)) return null;
+  if (!record(value)) return null;
+  const legacy=value.contract_version==='0.2.3';
+  const caps=capabilities(value.declared_capabilities);
+  if (!exact(value, legacy ? ['code','device_pubkey','label','declared_capabilities','contract_version'] : ['code','device_pubkey','label','declared_capabilities','contract_version','session_consent']) || (!legacy && value.contract_version!==CONTRACT_VERSION) || typeof value.code!=='string' || !decodeBase64url(value.code,KEY_BYTES) || typeof value.device_pubkey!=='string' || !decodeBase64url(value.device_pubkey,KEY_BYTES) || !byteString(value.label,1,LABEL_BYTES) || !caps || (legacy ? caps.some(c=>c!=='machine_state_query' && c!=='notify_local') : typeof value.session_consent!=='boolean' || (caps.some(c=>c==='session_query'||c==='session_control') && value.session_consent!==true))) return null;
   return value as RedeemBody;
 }
 export function connectDeclaration(path: string): Capability[] | null {
@@ -22,7 +25,9 @@ export function connectDeclaration(path: string): Capability[] | null {
 }
 export type Heartbeat = { contract_version: string; type: 'heartbeat'; message_id: string; device_id: string; owner_id: string; timestamp: number; nonce: string; signature: string; payload: { declared_capabilities: Capability[]; outbox_depth: number } };
 export function heartbeatFrame(value: unknown): Heartbeat | null {
-  if (!record(value) || !exact(value, ['contract_version', 'type', 'message_id', 'device_id', 'owner_id', 'timestamp', 'nonce', 'signature', 'payload']) || value.contract_version !== CONTRACT_VERSION || value.type !== 'heartbeat' || typeof value.message_id !== 'string' || !/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/.test(value.message_id) || !identifier(value.device_id) || !identifier(value.owner_id) || !Number.isSafeInteger(value.timestamp) || Number(value.timestamp) <= 0 || Number(value.timestamp) > TIMESTAMP_MAX || typeof value.nonce !== 'string' || !decodeBase64url(value.nonce, NONCE_BYTES) || typeof value.signature !== 'string' || !decodeBase64url(value.signature, SIGNATURE_BYTES) || !record(value.payload) || !exact(value.payload, ['declared_capabilities', 'outbox_depth']) || !capabilities(value.payload.declared_capabilities) || !Number.isInteger(value.payload.outbox_depth) || Number(value.payload.outbox_depth) < 0 || Number(value.payload.outbox_depth) > OUTBOX_DEPTH_MAX) return null;
+  if (!record(value) || !exact(value, ['contract_version', 'type', 'message_id', 'device_id', 'owner_id', 'timestamp', 'nonce', 'signature', 'payload']) || !['0.2.3',CONTRACT_VERSION].includes(String(value.contract_version)) || value.type !== 'heartbeat' || typeof value.message_id !== 'string' || !/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/.test(value.message_id) || !identifier(value.device_id) || !identifier(value.owner_id) || !Number.isSafeInteger(value.timestamp) || Number(value.timestamp) <= 0 || Number(value.timestamp) > TIMESTAMP_MAX || typeof value.nonce !== 'string' || !decodeBase64url(value.nonce, NONCE_BYTES) || typeof value.signature !== 'string' || !decodeBase64url(value.signature, SIGNATURE_BYTES) || !record(value.payload) || !exact(value.payload, ['declared_capabilities', 'outbox_depth']) || !capabilities(value.payload.declared_capabilities) || !Number.isInteger(value.payload.outbox_depth) || Number(value.payload.outbox_depth) < 0 || Number(value.payload.outbox_depth) > OUTBOX_DEPTH_MAX) return null;
+  const declared = capabilities(value.payload.declared_capabilities);
+  if (!declared || (value.contract_version === '0.2.3' && declared.some(capability => capability !== 'machine_state_query' && capability !== 'notify_local'))) return null;
   return value as Heartbeat;
 }
 
@@ -30,18 +35,18 @@ export type QueryKind = 'session_status' | 'attempt_status' | 'worktree_watch';
 export const queryKind = (value: unknown): value is QueryKind => value === 'session_status' || value === 'attempt_status' || value === 'worktree_watch';
 export type QueryPayload = { query_id: string; query_kind: QueryKind };
 export type NotifyPayload = { notification_id: string; title: string; body: string; severity: 'info' | 'warning' | 'error' };
-export function commandPayload(kind: unknown, value: unknown): value is QueryPayload | NotifyPayload {
+export function commandPayload(kind: unknown, value: unknown): value is QueryPayload | NotifyPayload | MacPayload {
   if (!record(value)) return false;
   if (kind === 'machine_state_query') return exact(value, ['query_id', 'query_kind']) && identifier(value.query_id) && queryKind(value.query_kind);
   if (kind === 'notify_local') return exact(value, ['notification_id', 'title', 'body', 'severity']) && identifier(value.notification_id) && byteString(value.title, 1, NOTIFY_TITLE_BYTES) && byteString(value.body, 1, NOTIFY_BODY_BYTES) && typeof value.severity === 'string' && ['info', 'warning', 'error'].includes(value.severity);
-  return false;
+  return macCommandPayload(kind,value);
 }
 export type CommandReference = { contract_version: string; type: 'ack' | 'result'; message_id: string; device_id: string; owner_id: string; command_id: string; revision: 1; idempotency_key: string; timestamp: number; nonce: string; signature: string };
 export type Ack = CommandReference & { type: 'ack'; payload: { state: 'accepted' | 'rejected' | 'expired'; reason?: string } };
-export type Result = CommandReference & { type: 'result'; payload: { status: 'answered' | 'delivered' | 'failed'; answer?: { query_id: string; query_kind: QueryKind; state: string }; reason?: string } };
+export type Result = CommandReference & { type: 'result'; payload: { status: 'answered' | 'delivered' | 'failed' | 'completed' | 'denied' | 'expired' | 'outcome_unknown'; answer?: { query_id?: string; query_kind?: QueryKind; state?: string; session_id?: string; status?: string; output_tail?: string; truncated?: boolean; sessions?: {session_id:string;project:string;agent:string;status:string}[] }; reason?: string; exit_code?: number; output_tail?: string; truncated?: boolean; session_id?: string } };
 function reference(value: unknown, type: string): value is CommandReference & { payload: Record<string, unknown> } {
   // Closed signed envelopes prevent reference or authority fields being smuggled through payloads.
-  return record(value) && exact(value, ['contract_version', 'type', 'message_id', 'device_id', 'owner_id', 'command_id', 'revision', 'idempotency_key', 'timestamp', 'nonce', 'signature', 'payload']) && value.contract_version === CONTRACT_VERSION && value.type === type && typeof value.message_id === 'string' && /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/.test(value.message_id) && identifier(value.device_id) && identifier(value.owner_id) && identifier(value.command_id) && value.revision === 1 && identifier(value.idempotency_key) && Number.isSafeInteger(value.timestamp) && Number(value.timestamp) > 0 && Number(value.timestamp) <= TIMESTAMP_MAX && typeof value.nonce === 'string' && !!decodeBase64url(value.nonce, NONCE_BYTES) && typeof value.signature === 'string' && !!decodeBase64url(value.signature, SIGNATURE_BYTES) && record(value.payload);
+  return record(value) && exact(value, ['contract_version', 'type', 'message_id', 'device_id', 'owner_id', 'command_id', 'revision', 'idempotency_key', 'timestamp', 'nonce', 'signature', 'payload']) && ['0.2.3',CONTRACT_VERSION].includes(String(value.contract_version)) && value.type === type && typeof value.message_id === 'string' && /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/.test(value.message_id) && identifier(value.device_id) && identifier(value.owner_id) && identifier(value.command_id) && value.revision === 1 && identifier(value.idempotency_key) && Number.isSafeInteger(value.timestamp) && Number(value.timestamp) > 0 && Number(value.timestamp) <= TIMESTAMP_MAX && typeof value.nonce === 'string' && !!decodeBase64url(value.nonce, NONCE_BYTES) && typeof value.signature === 'string' && !!decodeBase64url(value.signature, SIGNATURE_BYTES) && record(value.payload);
 }
 export function ackFrame(value: unknown): Ack | null {
   if (!reference(value, 'ack')) return null;
@@ -56,7 +61,14 @@ export function resultFrame(value: unknown): Result | null {
   const payload = value.payload;
   if (payload.status === 'delivered' && exact(payload, ['status'])) return value as Result;
   if (payload.status === 'failed' && exact(payload, ['status', 'reason']) && typeof payload.reason === 'string' && ['processing_failed', 'delivery_unknown'].includes(payload.reason)) return value as Result;
+  if (value.contract_version===CONTRACT_VERSION && macResultPayload(payload)) return value as Result;
   const answer = payload.answer;
   if (payload.status === 'answered' && exact(payload, ['status', 'answer']) && record(answer) && exact(answer, ['query_id', 'query_kind', 'state']) && identifier(answer.query_id) && queryKind(answer.query_kind) && typeof answer.state === 'string' && (answer.query_kind === 'worktree_watch' ? ['watching', 'stopped', 'unknown'] : ['idle', 'running', 'done', 'failed', 'unknown']).includes(answer.state)) return value as Result;
   return null;
+}
+
+export type SessionEvent = Omit<Heartbeat,'type'|'payload'> & {type:'session_event';payload:{session_id:string;project:string;event:'needs_input'|'blocked_on_tool'|'turn_finished'|'exited'}};
+export function sessionEventFrame(value: unknown): SessionEvent | null {
+ if (!record(value) || !exact(value,['contract_version','type','message_id','device_id','owner_id','timestamp','nonce','signature','payload']) || value.contract_version!==CONTRACT_VERSION || value.type!=='session_event' || typeof value.message_id!=='string' || !/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/.test(value.message_id) || !identifier(value.device_id) || !identifier(value.owner_id) || !Number.isSafeInteger(value.timestamp) || Number(value.timestamp)<=0 || Number(value.timestamp)>TIMESTAMP_MAX || typeof value.nonce!=='string' || !decodeBase64url(value.nonce,NONCE_BYTES) || typeof value.signature!=='string' || !decodeBase64url(value.signature,SIGNATURE_BYTES) || !record(value.payload) || !exact(value.payload,['session_id','project','event']) || !identifier(value.payload.session_id) || !byteString(value.payload.project,1,128) || !['needs_input','blocked_on_tool','turn_finished','exited'].includes(String(value.payload.event))) return null;
+ return value as SessionEvent;
 }
