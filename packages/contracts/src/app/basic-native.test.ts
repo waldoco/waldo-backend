@@ -22,7 +22,7 @@ it('exposes basic views and bounded settings actions',()=>{
   expect(appControlActionV1Schema.safeParse(action).success).toBe(true);
   expect(appControlActionV1Schema.safeParse({...action,action:'approval.approve'}).success).toBe(false);
 });
-it('a session may say when the app should renew it, and renewal answers a new credential in the session shape', () => {
+it('a session may say when the app should renew it, and renewal answers a new credential and when to renew that', () => {
   const session = { state: 'active', session_ref: `sess_${'a'.repeat(64)}`, account_ref: `acct_${'b'.repeat(64)}`, surface: 'app', absolute_expires_at: 1_791_700_000_000 };
   expect(appSessionV1Schema.safeParse({ ...session, renew_after: 1_791_600_000_000 }).success).toBe(true);
   for (const renew_after of [-1, 1.5, '2026-10-13T00:00:00Z', null]) expect(appSessionV1Schema.safeParse({ ...session, renew_after }).success).toBe(false);
@@ -31,5 +31,6 @@ it('a session may say when the app should renew it, and renewal answers a new cr
   expect(route && !('request' in route)).toBe(true);
   expect(appRenewResultV1Schema.safeParse({ ...session, renew_after: 1_791_600_000_000, credential: 'x'.repeat(40) }).success).toBe(true);
   expect(appRenewResultV1Schema.safeParse(session).success).toBe(false);
+  expect(appRenewResultV1Schema.safeParse({ ...session, credential: 'x'.repeat(40) }).success).toBe(false);
   expect(appRenewResultV1Schema.safeParse({ state: 'needs_invite' }).success).toBe(false);
 });

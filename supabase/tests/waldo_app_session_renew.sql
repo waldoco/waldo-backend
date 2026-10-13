@@ -22,7 +22,10 @@ select is((select expires_at from waldo.console_sessions where session_hash=repe
 select is((pg_temp.authority(repeat('b',64))->>'expires_at')::numeric,(extract(epoch from now()+interval '30 days')*1000)::numeric,'the authority reports the renewed expiry');
 select is(pg_temp.authority(repeat('a',64))->>'owner_id','11000000-0000-0000-0000-000000000001','the presented session still admits work for its 20 minutes');
 select is((select session_hash from waldo.app_push_devices where owner_id='11000000-0000-0000-0000-000000000001'),repeat('b',64),'push custody moves to the renewed session');
-select is((select jsonb_object_agg(e->>'session',e->'replaced') from jsonb_array_elements(pg_temp.listed()) e),jsonb_build_object(repeat('a',64),true,repeat('b',64),false),'the list marks the session a renewal replaced');
+select is((select jsonb_object_agg(e->>'session',e->'rotated_to') from jsonb_array_elements(pg_temp.listed()) e),jsonb_build_object(repeat('a',64),repeat('b',64),repeat('b',64),null),'the list names the session a renewal replaced each one with');
+select is(pg_temp.renew('renew-owner',repeat('a',64),repeat('7',64)),false,'a session renews once: the one a renewal replaced cannot renew again');
+select is((select count(*)::int from waldo.console_sessions where session_hash=repeat('7',64)),0,'and opens no session');
+select is((select rotated_to from waldo.console_sessions where session_hash=repeat('a',64)),repeat('b',64),'and keeps its successor');
 select is((select (e->>'expires_at')::timestamptz from jsonb_array_elements(pg_temp.listed()) e where e->>'session'=repeat('b',64)),now()+interval '30 days','the list carries each session''s expiry');
 select is(waldo.console_session_open('renew-owner',repeat('9',64),pg_temp.at(),pg_temp.sig('consolesess.open.renew-owner.'||repeat('9',64))),true,'a second device signs in');
 select is(pg_temp.renew('renew-owner',repeat('9',64),repeat('8',64)),true,'and renews');

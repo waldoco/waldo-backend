@@ -20,8 +20,8 @@ const invite = z.string().regex(/^[A-HJ-NP-Z2-9]{20}$/);
 export const appCodeRequestSchema = z.strictObject({ email: z.email().max(254), invite: invite.optional() });
 export const appCodeResultSchema = z.strictObject({ ok: z.literal(true) });
 export const appVerifyRequestV1Schema = z.strictObject({ email: z.email().max(254), code: z.string().regex(/^\d{4,10}$/), invite: invite.optional() });
-// absolute_expires_at is when this credential stops working. From renew_after, the app should call /auth/renew for a
-// new credential; a Worker that does not say has no renewal.
+// absolute_expires_at is when this credential stops working. renew_after, when sent, is when the app should call
+// /auth/renew for a new credential.
 export const appSessionV1Schema = z.strictObject({
   state: z.literal('active'), session_ref: z.string().regex(/^sess_[a-f0-9]{64}$/),
   account_ref: z.string().regex(/^acct_[a-f0-9]{64}$/), surface: z.literal('app'),
@@ -32,8 +32,9 @@ export const appVerifyResultV1Schema = z.union([
   z.strictObject({ state: z.literal('needs_invite') }),
 ]);
 export const appSignoutResultV1Schema = z.strictObject({ result: z.enum(['revoked', 'already_gone']) });
-// A new credential for a new session. The presented credential keeps working for 20 more minutes, then stops.
-export const appRenewResultV1Schema = appSessionV1Schema.extend({ credential: z.string().min(20).max(512) });
+// A new credential for a new session, and when to renew that. The presented credential keeps working for 20 more
+// minutes, then stops; it renews once, so a second renewal of it is refused.
+export const appRenewResultV1Schema = appSessionV1Schema.extend({ credential: z.string().min(20).max(512), renew_after: z.int().nonnegative() });
 export const appClientMessageIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/);
 export const appSendRequestV1Schema = z.strictObject({
   client_message_id: appClientMessageIdV1Schema, text: z.string().trim().min(1).max(4000),

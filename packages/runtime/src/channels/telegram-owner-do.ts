@@ -54,7 +54,7 @@ import { isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proacti
 import { armHeartbeat, heartbeatTick, heartbeatEligible, settleHeartbeat } from './heartbeat';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
-import { consoleAuth, presenceRecheck, type OwnerSettings } from '../identity/console-auth';
+import { consoleAuth, presenceRecheck, sessionFamily, type OwnerSettings } from '../identity/console-auth';
 import { commonOwnerAuthority } from '../identity/common-owner-authority';
 import { proactiveEnabled } from './proactive-gate';
 import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
@@ -659,13 +659,15 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if(this.activeApp?.sessionHash===hash)this.activeAbort?.abort();
     return Response.json({fenced},{headers:{'cache-control':'no-store'}});
   }
-  // Signs one of the owner's other devices out. Its queued and running app messages close before and after the directory
-  // drops the session; dropping it also revokes that session's push devices.
+  // Signs one of the owner's other devices out: the session named and those a renewal links to it. Their queued and
+  // running app messages close before and after the directory drops them; dropping them also revokes their push devices.
   private async revokeOwnerSession(doName: string, sessionHash: string): Promise<ControlReceipt> {
-    const auth=consoleAuth(this.env)!,fence=()=>{this.appInbox.revokeSession(sessionHash);if(this.activeApp?.sessionHash===sessionHash)this.activeAbort?.abort();};
+    const auth=consoleAuth(this.env)!,family=sessionFamily(await auth.listSessions(doName),sessionHash);
+    const fence=()=>{for(const session of family){this.appInbox.revokeSession(session);if(this.activeApp?.sessionHash===session)this.activeAbort?.abort();}};
     fence();
-    const revoked=await auth.revokeSession(doName,sessionHash);
-    if((await auth.listSessions(doName)).some(row=>row.session===sessionHash))return {state:'unconfirmed',message:'Signing that device out did not finish. Refresh and try again.'};
+    let revoked=false;
+    for(const session of family)revoked=await auth.revokeSession(doName,session)||revoked;
+    if((await auth.listSessions(doName)).some(row=>family.includes(row.session)))return {state:'unconfirmed',message:'Signing that device out did not finish. Refresh and try again.'};
     fence();
     return {state:'recorded',message:revoked?'That device is signed out.':'That device was already signed out.'};
   }
@@ -716,7 +718,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           const host={...session,storage:this.ctx.storage,assertCurrent:current,desk:runtime.desk,
             account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.ctx.storage.deleteAll()},
             sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.expires_at)})),
-            view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=(await auth.listSessions(name)).filter(row=>!row.replaced);return {...view,sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.created_at,until:new Date(Date.parse(row.expires_at)).toISOString(),current:row.session===hash,ref:`sess_${row.session}`}))};},
+            view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=(await auth.listSessions(name)).filter(row=>row.rotated_to===null);return {...view,sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.created_at,until:new Date(Date.parse(row.expires_at)).toISOString(),current:row.session===hash,ref:`sess_${row.session}`}))};},
             cardsLatest:(view:ConsoleView)=>this.appCardsLatest(view,name,hash),
             act:async(action:ConsoleAction)=>action.action==='google.connect'
               ?googleConnectReceipt(isGoogleFeature(action.value)?await runtime.googleConnectUrl(action.value,'app'):null,this.ctx.storage.kv.get<string>('origin'))

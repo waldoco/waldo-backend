@@ -15,7 +15,7 @@ const fakeAuth = (over: Partial<ConsoleAuth> = {}) => {
     verifyOrJoin: async (email: string, code: string) => (email === 'member@example.test' && code === '123456' ? 'owner-1' : null),
     ownerAppCredential: async () => CREDENTIAL,
     readAppCredential: async (credential: string) => (credential === CREDENTIAL ? 'owner-1' : null),
-    listSessions: async () => revoked ? [] : [{session:await linkCodeHash(SESSION),created_at:new Date().toISOString(),last_seen_at:new Date().toISOString(),expires_at:new Date(Date.now()+12*60*60_000).toISOString(),replaced:false}],
+    listSessions: async () => revoked ? [] : [{session:await linkCodeHash(SESSION),created_at:new Date().toISOString(),last_seen_at:new Date().toISOString(),expires_at:new Date(Date.now()+12*60*60_000).toISOString(),rotated_to:null}],
     revokeSession: async () => { calls.push('revoke'); revoked=true; return true; },
     ...over,
   } as unknown as ConsoleAuth;

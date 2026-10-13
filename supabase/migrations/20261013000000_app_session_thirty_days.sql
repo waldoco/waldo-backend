@@ -1,8 +1,9 @@
 -- The app session lasts 30 days and renews. app_session_rotate opens a fresh 30-day row and leaves the presented one
 -- 20 minutes, so requests and a running turn that hold it can finish; push devices move with it. The presented row
--- records what replaced it: the list marks it replaced, and revoking the new session ends it too. A session
--- opened through console_session_open, the web console's included, keeps 12 hours. Every lifetime check reads the row's
--- own expires_at instead of adding 12 hours to created_at.
+-- records what replaced it: the list names that successor, revoking the new session ends it too, and it cannot renew
+-- again. A session opened through console_session_open, the web console's included, keeps 12 hours. Every lifetime
+-- check reads the row's own expires_at instead of adding 12 hours to created_at.
+-- Forward-only, like every migration here: undoing it is a later migration, never an edit of this one.
 alter table waldo.console_sessions add column rotated_to text check (rotated_to ~ '^[a-f0-9]{64}$');
 alter table waldo.console_sessions add column expires_at timestamptz;
 update waldo.console_sessions set expires_at = created_at + interval '12 hours';
@@ -36,7 +37,7 @@ begin
       'created_at', s.created_at,
       'last_seen_at', s.last_seen_at,
       'expires_at', s.expires_at,
-      'replaced', s.rotated_to is not null) order by s.last_seen_at desc)
+      'rotated_to', s.rotated_to) order by s.last_seen_at desc)
     from waldo.console_sessions s where s.owner_id = v_owner
       and s.expires_at > now()
   ), '[]'::jsonb);
@@ -79,7 +80,8 @@ begin
     raise exception 'unsigned or invalid session call' using errcode = '42501';
   end if;
   select o.id into v_owner from waldo.owners o join waldo.console_sessions s on s.owner_id = o.id join auth.users u on u.id = o.auth_user_id
-    where o.do_name = p_do_name and o.state = 'active' and s.session_hash = p_session_hash and s.expires_at > now() for update of o, s;
+    where o.do_name = p_do_name and o.state = 'active' and s.session_hash = p_session_hash and s.expires_at > now() and s.rotated_to is null
+    for update of o, s;
   if v_owner is null then return false; end if;
   insert into waldo.console_sessions(owner_id, session_hash, expires_at) values (v_owner, p_new_session_hash, now() + interval '30 days');
   update waldo.console_sessions set expires_at = least(expires_at, now() + interval '20 minutes'), rotated_to = p_new_session_hash where session_hash = p_session_hash;
