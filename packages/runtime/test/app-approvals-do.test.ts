@@ -127,7 +127,7 @@ it('approves from the app with exactly one effect, refuses a stale digest, and r
       expect(note).toMatchObject({ presented_surfaces: ['app'], exact: { recipients: { to: ['telegram'], cc: [], bcc: [] } } });
       const messaged = await app('/approvals/decisions', { approval_id: message, action: 'approve', expected_digest: note!.payload_digest, request_id: 'message-decision-0001' }, credential);
       expect(appApprovalDecisionResultV1Schema.parse(await messaged.json())).toMatchObject({ receipt: { state: 'recorded' }, approval_state: 'done' });
-      expect(proof.telegram.filter(call => call.method === 'sendMessage').map(call => call.body)).toEqual([{ chat_id: TELEGRAM, text: 'Running ten minutes late.' }]);
+      expect(proof.telegram.filter(call => call.method === 'sendMessage').map(call => call.body)).toEqual([{ chat_id: TELEGRAM, text: 'Running ten minutes late.', link_preview_options: { is_disabled: true } }]);
 
       expect((await app('/approvals?state=approved', undefined, credential)).status).toBe(400);
       expect((await app('/approvals')).status).toBe(401);
