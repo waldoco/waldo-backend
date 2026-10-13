@@ -152,6 +152,36 @@ export const SCENARIOS: readonly Scenario[] = [
     },
   },
   {
+    // A fact said once, many turns back and never saved as a claim, reaches the last turn's system prompt by
+    // episode recall. The nightly suite grades the model's answer; this pins what the model is given.
+    id: 'r1-recall-across-day',
+    category: 'memory',
+    turns: [
+      'My locker at the gym is number 214, the one with the blue door.',
+      'Any idea for a quick vegetarian lunch?',
+      'Nice. What is 18% of 2450?',
+      'Thanks. Should I carry an umbrella in Pune this time of year?',
+      'Fair. What is a good way to start a short toast at a wedding?',
+      'Got it. How long should I steep green tea?',
+      'Cool, thanks.',
+      'I am at the gym. What was my locker number again?',
+    ],
+    llm: [
+      { match: /locker at the gym is number 214/, rounds: [{ text: 'Got it.' }] },
+      { match: /vegetarian lunch/, rounds: [{ text: 'A chickpea wrap.' }] },
+      { match: /18% of 2450/, rounds: [{ text: '441.' }] },
+      { match: /umbrella in Pune/, rounds: [{ text: 'Yes, in the monsoon months.' }] },
+      { match: /toast at a wedding/, rounds: [{ text: 'Open with how you know the couple.' }] },
+      { match: /steep green tea/, rounds: [{ text: 'Two to three minutes.' }] },
+      { match: /^Cool, thanks\./, rounds: [{ text: 'Anytime.' }] },
+      { match: /What was my locker number again/, rounds: [{ text: 'Locker 214, the one with the blue door.' }] },
+    ],
+    assert: {
+      replies: [/Got it/, /chickpea/, /441/, /monsoon/, /couple/, /minutes/, /Anytime/, /214/],
+      modelInput: [{ turn: 8, mustContain: ['<recalled>'] }],
+    },
+  },
+  {
     id: 'voice-greeting',
     category: 'voice',
     turns: ['hey'],

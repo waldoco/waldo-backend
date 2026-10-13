@@ -31,6 +31,7 @@ import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
 import { fitPromptToBudget } from '../prompt/fit-prompt';
 import { FORGOTTEN, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, type ClaimStore } from '../memory/claims';
+import { episodesFromSearchTool, previousOwnerMessage, recallForTurn } from '../memory/turn-recall';
 import type { ConversationStore } from './conversation-store';
 import { reactionInstruction, reactionSchema } from './reactions';
 import type { SystemSection, TurnLogEntry, TurnTimer } from './owner-turn-types';
@@ -300,6 +301,19 @@ export const createOwnerResponder = (
     claims: status => { const holds = holdsIn(heldTopics()); return memory!.claims(status).filter(claim => !holds(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases)); },
     recall: (query, limit) => { const holds = holdsIn(heldTopics()); return memory!.recall(query, limit).filter(claim => !holds(claim.text, claim.evidence, claim.source_ref, (claim as { aliases?: string | null }).aliases)); },
   });
+  // Owner memory for a system prompt: the pinned blocks, then what recall finds for this text, inside the room left. Past
+  // messages and the previous owner message join only the owner's own turn; a machine turn (a reminder or a job) and a
+  // background decision recall claims only.
+  const episodeSearch = tools.find((handler) => handler.name === 'search_episodes');
+  const ownerMemory = async (source: ClaimStore, text: string, room: number, ownerTurn?: string): Promise<string> => {
+    const blocks = turnMemoryPrompt(source, text, room);
+    const previous = ownerTurn === undefined ? undefined : previousOwnerMessage((id) => tree.get(id), ownerTurn);
+    const episodes = ownerTurn === undefined || !episodeSearch ? undefined : episodesFromSearchTool(episodeSearch, { ...safety, turnId: ownerTurn, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) });
+    const recalled = await recallForTurn({ claims: source, question: text, room: room - blocks.length - 2, holds: holdsHeldTopic, ...(previous === undefined ? {} : { previous }), ...(episodes && ownerTurn !== undefined ? { episodes, current: ownerTurn } : {}) });
+    // Recall fails open: the turn goes on with claims only, and the trace says so without any text.
+    if (recalled.episodeError) log({ trace: traceId, hop: 'memory_recall', ms: 0, ok: false, code: 'episode_recall_failed' });
+    return [blocks, recalled.text].filter(Boolean).join('\n\n');
+  };
   const consumeRound = async () => {
     const added = await control.roundAsync();
     if (added === null) return null;
@@ -486,7 +500,7 @@ export const createOwnerResponder = (
           const composed = context ? await composer.compose(invocation, contextInputs()) : undefined;
           if (composed && !composed.ok) throw new Error(`owner context failed: ${composed.failure.code}`);
           await assertCurrent();
-          const unboundSystem = (): SystemPrompt => {
+          const unboundSystem = async (): Promise<SystemPrompt> => {
             const wrapped = skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined);
             const reasons = composed?.ok ? composed.prompt : undefined;
             const behavior = messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation);
@@ -501,7 +515,7 @@ export const createOwnerResponder = (
             const tailWith = (memoryPart: readonly string[]) => [...memoryPart, reasons, toolResultsNote, healthSection, clockLine, taskContext, connections].filter(Boolean).join('\n\n');
             // Owner memory takes its room first; open loops get what the same reserve leaves, and the section names what it left out.
             const room = systemRoom(withOwnerSkillProcedures(headWith(), wrapped, tailWith([])));
-            const memoryPart = memory ? [turnMemoryPrompt(promptMemory()!, ownerCurrentText, room)] : [];
+            const memoryPart = memory ? [await ownerMemory(promptMemory()!, ownerCurrentText, room, ownerTurnActive ? trace : undefined)] : [];
             const loopsSection = loopsSectionFor(Math.max(0, systemRoom(withOwnerSkillProcedures(headWith(), wrapped, tailWith(memoryPart)))));
             const head = headWith(loopsSection);
             const tail = tailWith(memoryPart);
@@ -520,7 +534,7 @@ export const createOwnerResponder = (
           const browserImages = privateOwner?.skillHost?.browserAttachments?.(privateRunScope) ?? [];
           const attachments = [...(pending ?? []), ...browserImages];
           return complete(trace, 'reply',
-          unboundSystem(),
+          await unboundSystem(),
           entries,
           undefined,
           attachments.length ? attachments : undefined,
@@ -713,7 +727,7 @@ export const createOwnerResponder = (
           const source = promptMemory();
           const eligible = (claim: import('../memory/claims').Claim) => claim.origin === 'owner' && claim.kind !== 'health';
           const decisionBase = [messagingSystemPrompt([]), ownerClockLine(clock)].join('\n\n');
-          const context = source ? turnMemoryPrompt({ ...source, claims: status => source.claims(status).filter(eligible), recall: (query, limit) => source.recall(query, limit).filter(eligible) }, said, systemRoom(decisionBase)) : '';
+          const context = source ? await ownerMemory({ ...source, claims: status => source.claims(status).filter(eligible), recall: (query, limit) => source.recall(query, limit).filter(eligible) }, said, systemRoom(decisionBase)) : '';
           // No byte cliff: dropping ALL owner context past a size made a decision with more known about the owner worse than
           // one with less. The profile is short owner sentences; the owner-direction is full context.
           const bounded = context;

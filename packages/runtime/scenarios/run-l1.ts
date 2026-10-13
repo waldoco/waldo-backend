@@ -8,7 +8,7 @@ import { loopBook, loopHandlers } from '../src/channels/loops';
 import { googleHandlers } from '../src/tools/live/google';
 import { claimStore } from '../src/memory/claims';
 import { memoryHandlers } from '../src/tools/live/memory';
-import { episodeIndex } from '../src/channels/episodes';
+import { episodeIndex, indexedConversationStore } from '../src/channels/episodes';
 import { searchEpisodesHandler } from '../src/tools/live/search-episodes';
 import type { GoogleClient } from '../src/connectors/google';
 import type { TurnLogEntry } from '../src/channels/telegram-listener';
@@ -117,9 +117,11 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
     autonomy_gated: false,
     handle: async (_args: WebSearchArgs) => ({ ok: true as const, data: { results: scenario.fixtures?.web ?? [] }, source_taint: 'external' as const }),
   };
-  const handlers = [...memoryHandlers({ sql: sql as SqlStorage, store: memory, conversationRef: 'telegram-1', hideHistory: async () => undefined }), ...reminderHandlers(reminders), ...googleHandlers(google as never, { propose: async () => 'proposal:1', proposeSendEmail: async () => 'proposal:1', record: () => undefined }, CLOCK), ...loopHandlers(loops), searchEpisodesHandler(episodeIndex(sql)), web];
+  // Every saved turn is indexed, as the owner DO does, so recall and search_episodes see earlier turns.
+  const episodes = episodeIndex(sql);
+  const handlers = [...memoryHandlers({ sql: sql as SqlStorage, store: memory, conversationRef: 'telegram-1', hideHistory: async () => undefined }), ...reminderHandlers(reminders), ...googleHandlers(google as never, { propose: async () => 'proposal:1', proposeSendEmail: async () => 'proposal:1', record: () => undefined }, CLOCK), ...loopHandlers(loops), searchEpisodesHandler(episodes), web];
   const gateway = scriptedGateway({ rules: scenario.llm, ...(scenario.claimOps === undefined ? {} : { claimOps: scenario.claimOps }) });
-  const responder = createTelegramResponder('scenario-key', durableConversationStore(keyValueStorage()), memory, log, {}, CLOCK, handlers as never, WALDO_CHAT_MODEL, false, undefined, async (intent: ConnectIntent) => { connectOffers.push(intent); return true; }, gateway);
+  const responder = createTelegramResponder('scenario-key', indexedConversationStore(durableConversationStore(keyValueStorage()), episodes, () => CLOCK.now().getTime()), memory, log, {}, CLOCK, handlers as never, WALDO_CHAT_MODEL, false, undefined, async (intent: ConnectIntent) => { connectOffers.push(intent); return true; }, gateway);
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
 
   const replies: string[] = [];
