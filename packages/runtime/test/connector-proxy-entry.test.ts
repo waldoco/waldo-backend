@@ -355,3 +355,14 @@ it('answers a Sent readback that carries the id the send returned, on a proxy th
  const answer=await(await serve(await request({do_name:'owner',op:'call',connection:'conn',method:'findSentByMessageId',args:['<fixture@waldo-send>',null,'g1']}))).json();
  expect(answer).toEqual({data:{message_id:'g1',thread_id:'t1',rfc822_message_id:'<fixture@waldo-send>',label_ids:['SENT']}});
 });
+it('logs a fixed code, never the provider\'s error text, and keeps its own codes', async () => {
+ fixture();const inner=globalThis.fetch;
+ vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>String(input).includes('gmail.googleapis.com')?Response.json({error:{code:400,message:'Invalid To header: friend@example.test'}},{status:400}):inner(input,init)));
+ const logs=vi.spyOn(console,'log').mockImplementation(()=>{});
+ const refused=await(await serve(await request({do_name:'owner',op:'call',connection:'conn',method:'searchMail',args:['in:sent',5]}))).json();
+ expect(refused).toMatchObject({error:{status:400}});
+ const {intent_id,...missing}=body;void intent_id;await serve(await request(missing));
+ const lines=logs.mock.calls.map(call=>JSON.parse(String(call[0])) as {hop:string;error?:string}).filter(line=>line.hop==='connector_proxy');
+ expect(lines.map(line=>line.error)).toEqual(['provider_error','intent_required']);
+ for(const leaked of ['friend@example.test','Invalid To header'])expect(JSON.stringify(logs.mock.calls)).not.toContain(leaked);
+});

@@ -47,12 +47,18 @@ const store = async (doName: string, email: string, scopes: readonly string[], t
 type Body = Readonly<{ intent_id?: string; read_only?: boolean; do_name: string; op: 'exchange' | 'adopt' | 'call' | 'mcp_call'; server_url?: string; tool?: string; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[]; calendar_details?: boolean }>;
 const nonStoringRead = (body: Body): boolean => body.op === 'mcp_call' && body.read_only === true && /^mcpread:[0-9a-f]{64}$/.test(body.intent_id ?? '') && isRegisteredMcpRead(body.server_url, body.tool);
 const READ_FAILURE_CODES = new Set(['intent_unavailable', 'insufficient scopes', 'google_refresh_failed', 'google_reauth_needed', 'google_scope_missing', 'mcp_read_rejected', 'mcp_read_failed']);
+// The proxy's own fixed failure codes. Any other message is provider or runtime text, which can repeat a
+// recipient or other mail details, so the log carries one code in its place. The reply keeps the message.
+const LOGGED_CODES = new Set([...READ_FAILURE_CODES, 'unknown owner', 'connector proxy is not configured', 'unsigned proxy call', 'unknown operation', 'connection unavailable',
+  'intent_required', 'intent_conflict', 'intent_pending', 'unreadable response', 'google token failed: invalid_grant', 'google token transient failure', 'google token configuration failure',
+  'google token protocol failure', 'drive_invalid_request', 'drive_invalid_response', 'drive_auth_failed', 'drive_access_denied', 'drive_scope_missing', 'drive_service_disabled',
+  'drive_not_found', 'drive_rate_limited', 'drive_read_failed', 'drive_source_changed', 'drive_content_unsupported']);
 
 // One structured line per call: operation, method, outcome and duration. Never the code, verifier,
 // token, account or arguments.
 const logged = async (started: number, op: string, method: string | undefined, response: Response, read = false) => {
   const outcome = await response.clone().json().then(value => (value as {error?:{status:number;message:string;provider_diagnostic?:unknown}}).error ?? null).catch(() => ({ status: response.status, message: 'unreadable response' }));
-  const message = outcome && read && !READ_FAILURE_CODES.has(outcome.message) ? 'mcp_read_failed' : outcome?.message;
+  const message = !outcome ? undefined : read && !READ_FAILURE_CODES.has(outcome.message) ? 'mcp_read_failed' : LOGGED_CODES.has(outcome.message) ? outcome.message : 'provider_error';
   const diagnostic = read && outcome && 'provider_diagnostic' in outcome ? safeMcpErrorDiagnostic(outcome.provider_diagnostic) : undefined;
   console.log(JSON.stringify({ hop: 'connector_proxy', op, ...(method ? { method } : {}), ok: !outcome, ms: Date.now() - started, ...(outcome ? { status: outcome.status, error: message } : {}), ...(diagnostic ? { provider_diagnostic: diagnostic } : {}) }));
   return response;
