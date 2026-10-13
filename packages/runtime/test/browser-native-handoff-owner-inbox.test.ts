@@ -20,7 +20,7 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (input: 
   proof.inputs.push(structuredClone(input));
   const format = input.text?.format?.name;
   const previous = (Array.isArray(input.input) ? input.input : []).filter((item: any) => item.type === 'function_call_output');
-  const outputs=previous.map((row:any)=>JSON.parse(row.output));if(outputs.length){proof.outputs=outputs;const first=outputs.find((row:any)=>row.ok&&row.data?.session_handle);if(first){proof.sessionHandle=first.data.session_handle;proof.tabRef ||= first.data.tab_ref;}}
+  const outputs=previous.map((row:any)=>toolOutput(row.output));if(outputs.length){proof.outputs=outputs;const first=outputs.find((row:any)=>row.ok&&row.data?.session_handle);if(first){proof.sessionHandle=first.data.session_handle;proof.tabRef ||= first.data.tab_ref;}}
   const at=format?-1:proof.phaseCalls++;
   const call=format?undefined:proof.phase==='main'?[
     {name:'browse_page',args:{provider:'cloudflare_playwright',retain_session:true,url:'https://example.com/a',instruction:'Open the owner login page'}},
@@ -36,6 +36,7 @@ vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof im
 } }));
 
 import {consoleAccess,CONSOLE_COOKIE} from '../src/channels/console';
+import { toolOutput } from './fixtures/tool-output';
 it.each(['resume','restart'])('protocol double: real owner inbox and console handoff %s keep exact allocation custody',async(mode)=>{
  commonBrowserFixture.reset();proof.inputs=[];proof.delivered=[];proof.outputs=[];proof.phase='main';proof.phaseCalls=0;proof.sessionHandle='';
  const doName=proof.doName=`native-handoff-${crypto.randomUUID()}`,subject=Number(proof.subject);
