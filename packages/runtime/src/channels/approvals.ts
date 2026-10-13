@@ -15,7 +15,7 @@ import { appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from
 export type TelegramCall = (method: string, body: object) => Promise<unknown>;
 export type CallbackQuery = Readonly<{ id: string; from: { id: number }; data?: string; message?: { message_id: number; chat: { id: number } } }>;
 
-type Undo = ({ op: 'cancel'; id: string } | { op: 'move'; id: string; start: string; end: string }) & { applied_etag?: string };
+type Undo = ({ op: 'cancel'; id: string } | { op: 'move'; id: string; start: string; end: string }) & { applied_etag?: string; calendar_id?: string; send_updates?: 'all' | 'none' };
 type LedgerRow = { id: string; kind: string; status: string; summary: string; payload_json: string; undo_json: string | null; created_at: number; decided_at: number | null; proposal_digest?: string | null; origin_run_ref?: string | null; deferred_at?: number | null };
 type DeskStatus = 'card_unconfirmed' | 'open' | 'review_only' | 'changing' | 'skipped' | 'expired' | 'done' | 'rejected' | 'failed' | 'stale' | 'uncertain' | 'unverified' | 'undone';
 // One app state per desk status. An approval claimed before its effect resolves reads outcome_unknown, never done.
@@ -34,7 +34,7 @@ export const UNDO_WINDOW_MS = 10 * 60_000;
 export const PROPOSAL_TTL_MS = 12 * 60 * 60_000;
 
 // seen_start/seen_end: the event's time when the card was made, so a move shows what it moves from.
-type Stored = ProposeCalendarChangeArgs & { seen_etag?: string; seen_start?: string; seen_end?: string; operation_ref?: string };
+type Stored = ProposeCalendarChangeArgs & { seen_etag?: string; seen_start?: string; seen_end?: string; seen_guests?: number; operation_ref?: string };
 
 // B-tool-3: the exact thing the owner approved. The executor replays it in a fresh browser
 // session and re-reads the binding from the page before acting - a changed price/item/destination
@@ -276,11 +276,25 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const day = (iso: string) => new Intl.DateTimeFormat('en-GB', { timeZone: deps.timezone, year: 'numeric', month: 'numeric', day: 'numeric' }).format(new Date(iso));
   const hour = (iso: string) => new Intl.DateTimeFormat('en-GB', { timeZone: deps.timezone, hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
   const span = (start: string, end: string) => day(start) === day(end) ? `${when(start)}–${hour(end)}` : `${when(start)} to ${when(end)}`;
+  // Who gets an invite or an email is what the owner is approving, so the card always says it.
+  const guests = (p: Stored) => {
+    const count = p.action === 'create' ? p.attendees?.length ?? 0 : p.seen_guests ?? 0;
+    const people = `${count === 1 ? 'the guest' : `the ${count} guests`}`;
+    return [
+      ...(p.attendees?.length ? [`Guests: ${p.attendees.join(', ')}.`] : []),
+      ...(p.location ? [`Place: ${p.location}.`] : []),
+      ...(p.add_meet_link ? ['With a Meet link.'] : []),
+      ...(count ? [p.send_updates === 'all' ? `Google emails ${people}.` : `Google does not email ${people}.`] : []),
+    ].map((part) => ` ${part}`).join('');
+  };
   const describe = (p: Stored) => {
     const name = p.title ? `"${p.title}"` : 'the event';
-    if (p.action === 'create') return `Add ${name}, ${when(p.start!)} to ${when(p.end!)}${p.account ? ` (${p.account})` : ''}`;
-    if (p.action === 'move') return `Move ${name}${p.seen_start && p.seen_end ? ` from ${span(p.seen_start, p.seen_end)}` : ''} to ${span(p.start!, p.end!)}${p.account ? ` (${p.account})` : ''}`;
-    return `Cancel ${name}${p.account ? ` (${p.account})` : ''}`;
+    const where = `${p.calendar_id && p.calendar_id !== 'primary' ? ` on ${p.calendar_id}` : ''}${p.account ? ` (${p.account})` : ''}`;
+    const details = guests(p);
+    const tail = details ? `.${details.replace(/\.$/, '')}` : '';
+    if (p.action === 'create') return `Add ${name}, ${when(p.start!)} to ${when(p.end!)}${where}${tail}`;
+    if (p.action === 'move') return `Move ${name}${p.seen_start && p.seen_end ? ` from ${span(p.seen_start, p.seen_end)}` : ''} to ${span(p.start!, p.end!)}${where}${tail}`;
+    return `Cancel ${name}${where}${tail}`;
   };
   const row = (id: string) => sql.exec<LedgerRow>('SELECT * FROM ledger WHERE id = ?', id).toArray()[0];
   const setStatus = (id: string, status: DeskStatus, undo: Undo | null = null) =>
@@ -386,18 +400,21 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     (entry.kind === 'browser_submit' && (p as unknown as BrowserSubmitProposal).approvalExpiresAt !== undefined && (!Number.isSafeInteger((p as unknown as BrowserSubmitProposal).approvalExpiresAt) || deps.now() >= (p as unknown as BrowserSubmitProposal).approvalExpiresAt!)) ||
     deps.now() - entry.created_at > (entry.kind === 'browser_submit' ? BROWSER_SUBMIT_TTL_MS : PROPOSAL_TTL_MS) || (entry.kind !== 'browser_submit' && p.start !== undefined && Date.parse(p.start) <= deps.now());
   const apply = async (client: GoogleClient, p: Stored, eventId?: string, marker?: string): Promise<Undo | null | 'stale'> => {
+    const target = { ...(p.calendar_id ? { calendarId: p.calendar_id } : {}), ...(p.send_updates ? { sendUpdates: p.send_updates } : {}) };
+    const undoTarget = { ...(p.calendar_id ? { calendar_id: p.calendar_id } : {}), ...(p.send_updates ? { send_updates: p.send_updates } : {}) };
     if (p.action === 'create') {
-      const applied = await client.createEvent({ title: p.title!, start: p.start!, end: p.end!, ...(eventId ? { id: eventId } : {}), ...(marker ? { operationMarker:marker } : {}) });
-      return applied.etag ? { op: 'cancel', id: applied.id, applied_etag: applied.etag } : null;
+      const applied = await client.createEvent({ title: p.title!, start: p.start!, end: p.end!, ...(eventId ? { id: eventId } : {}), ...(marker ? { operationMarker:marker } : {}), ...target,
+        ...(p.attendees ? { attendees: p.attendees } : {}), ...(p.description ? { description: p.description } : {}), ...(p.location ? { location: p.location } : {}), ...(p.add_meet_link ? { meet: true } : {}) });
+      return applied.etag ? { op: 'cancel', id: applied.id, applied_etag: applied.etag, ...undoTarget } : null;
     }
-    const before = await client.event(p.event_id!);
+    const before = await client.event(p.event_id!, p.calendar_id);
     if (p.seen_etag && before.etag !== p.seen_etag) return 'stale';
     try {
       if (p.action === 'move') {
-        const applied = await client.moveEvent(p.event_id!, p.start!, p.end!, before.etag, marker);
-        return applied.etag ? { op: 'move', id: p.event_id!, start: before.start, end: before.end, applied_etag: applied.etag } : null;
+        const applied = await client.moveEvent(p.event_id!, p.start!, p.end!, before.etag, marker, target);
+        return applied.etag ? { op: 'move', id: p.event_id!, start: before.start, end: before.end, applied_etag: applied.etag, ...undoTarget } : null;
       }
-      await client.cancelEvent(p.event_id!, before.etag, marker);
+      await client.cancelEvent(p.event_id!, before.etag, marker, target);
     } catch (error) {
       if (error instanceof GoogleError && error.status === 412) return 'stale';
       throw error;
@@ -407,11 +424,13 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const revert = async (client: GoogleClient, undo: Undo, marker?: string): Promise<'undone' | 'stale' | 'unavailable'> => {
     // Legacy entries have no applied version. A fresh owner edit never grants Undo authority.
     if (!undo.applied_etag) return 'unavailable';
-    const current = await client.event(undo.id);
+    // Undo reaches the same calendar and emails the guests exactly as the change did.
+    const target = { ...(undo.calendar_id ? { calendarId: undo.calendar_id } : {}), ...(undo.send_updates ? { sendUpdates: undo.send_updates } : {}) };
+    const current = await client.event(undo.id, undo.calendar_id);
     if (current.etag !== undo.applied_etag) return 'stale';
     try {
-      if (undo.op === 'cancel') await client.cancelEvent(undo.id, undo.applied_etag, marker);
-      else await client.moveEvent(undo.id, undo.start, undo.end, undo.applied_etag, marker);
+      if (undo.op === 'cancel') await client.cancelEvent(undo.id, undo.applied_etag, marker, target);
+      else await client.moveEvent(undo.id, undo.start, undo.end, undo.applied_etag, marker, target);
     } catch (error) {
       if (error instanceof GoogleError && error.status === 412) return 'stale';
       throw error;
@@ -712,7 +731,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             return { provider_id: eventId, result: undo };
           }, async () => {
             try {
-              const current = await client.event(eventId);
+              const current = await client.event(eventId, proposal.calendar_id);
               if (current.operation_marker !== marker) return {status:'unknown'};
               if (proposal.action !== 'cancel' && current.status !== 'cancelled' && (proposal.action !== 'create' || current.title === proposal.title) && sameInstant(current.start, proposal.start!) && sameInstant(current.end, proposal.end!) && current.etag
                 && (!proposal.seen_etag || current.etag !== proposal.seen_etag)) {
@@ -740,7 +759,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           const receipt = await effect(`${operationRef}:undo`, 'calendar_undo', undo,
             async () => ({ provider_id: undo.id, result: await revert(client, undo, marker) }), async () => {
               try {
-                const current = await client.event(undo.id);
+                const current = await client.event(undo.id, undo.calendar_id);
                 if (current.operation_marker === marker && (undo.op === 'cancel' ? current.status === 'cancelled' : current.status !== 'cancelled' && current.start === undo.start && current.end === undo.end))
                   return {status:'done',receipt:{provider_id:undo.id,result:'undone'}};
               } catch (error) { deps.log({trace,hop:'calendar_undo_readback',ms:0,ok:false,error:String(error)}); }
@@ -934,10 +953,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         if((p.event_id || p.account)&&!client)throw new Error('The calendar account is unavailable; no proposal was prepared.');
         if (p.account && client?.account?.email?.toLowerCase() !== p.account.toLowerCase()) throw new Error('Selected calendar account is unavailable');
         const bound = { ...p, ...(client?.account?.email ? {account:client.account.email} : {}) };
-        const before = client && bound.event_id ? await client.event(bound.event_id) : undefined;
+        const before = client && bound.event_id ? await client.event(bound.event_id, bound.calendar_id) : undefined;
         const seen = before?.etag;
         const seenTime = before && !before.all_day && before.start && before.end ? { seen_start: before.start, seen_end: before.end } : {};
-        const stored: Stored = { ...bound, ...(seen ? { seen_etag: seen } : {}), ...seenTime, ...(operationRef ? { operation_ref: operationRef } : {}) };
+        const stored: Stored = { ...bound, ...(seen ? { seen_etag: seen } : {}), ...seenTime, ...(before?.attendees ? { seen_guests: before.attendees } : {}), ...(operationRef ? { operation_ref: operationRef } : {}) };
         const summary = `${describe(stored)}. ${bound.reason}`;
         sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'calendar_change', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(stored), deps.now());
         bindOrigin(id, originRunRef);
