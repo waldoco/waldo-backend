@@ -1548,3 +1548,20 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - Recommendation: reads only, as a staging trial; writes stay on Waldo's typed effect path. Unknown: whether the preview works for consumer @gmail.com accounts.
 - **Reviews:** #116 with #120 running (Sonnet). Next: N4's #109 delta at full strength, then #117 with #119.
 - **Usage:** 67% at 09:09Z.
+
+## About 09:14Z: `a94d7fa5` DEPLOYED to staging (by the owner); the freeze lifts
+
+- **The gate passed:** tip, CI 6/6, 13 files since `917032a1`, no wrangler/deploy/migration change, preflight 55 applied and 0 pending.
+  - Worker version `6574d610`;
+  - healthz release `a94d7fa5`;
+  - unauthenticated session and chat_main both 401;
+  - rollback target `316ed3eb`.
+- **What is live:** #1123 (send-turn-one), #1126 (the calendar move's before/after and lost-move readback), and the contract-only #1125, #1136 and #1137.
+- **Two earlier STOPs** ("shard 2 in_progress") were runs started before shard 2 finished at 09:06:47Z. The gate checks live. Not a fault.
+- **The freeze lifts.** Next merges, each after review:
+  - #1140 (A's contract half) with L4's #118;
+  - #1143 (docs);
+  - #1138 (H/G emitter, only after L4's `controls.ts` re-pin);
+  - #1114 after its delta review.
+- **The calendar QA go was sent to L4:** at most 3 events labelled "QA". Add one at 4pm, then ask "Move my 4pm to 5pm", then the card, approval and receipt.
+- **The #1122 excerpt check** still waits for a build with #114 or #120 (a confirmed zone). Builds wait for the owner's build-cache cleanup.
