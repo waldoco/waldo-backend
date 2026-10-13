@@ -70,4 +70,36 @@ Pending. The audit is still running.
 
 ## B. Health plane, background sync and scores (why Form and Weight are unavailable)
 
-Pending. The audit is still running.
+**Bottom line:** there's no background sync. iOS uploads only while the app is open, at most every 10 minutes (`useHealthIngest.ts:12-16`). Form and Weight fail for three reasons:
+1. stale stored rows;
+2. no qualifying data from an iPhone alone;
+3. logic gaps.
+
+| Score or path | Requires [verified in source] | Likely state, iPhone only or Simulator | Fix and owner |
+|---|---|---|---|
+| iOS upload | The app in front | Only while open; there's only an entitlement, no background code | N4 lane (running) |
+| Android, Watch | — | Samsung gives a snapshot only; upload is iOS-only; the Watch app only displays | App lane, later |
+| Recovery | Last night's time asleep and its midpoint; 14 earlier nights; HRV or resting heart rate with 14 days of history | `missing_sleep`: an iPhone alone records only time in bed, and those nights are dropped [inference] | Owner: the data source; App lane: hints |
+| Form (`form.candidate.v2`, live) | Recovery's inputs; the newest hourly reading under 6 h old; 8+ hours today and on 14 earlier days | `missing_sleep`, then `intraday_inputs_unavailable`: hourly readings need a Watch [inference] | Backend lane |
+| Weight | Meeting minutes today and on 14 earlier days, but only on days with health readings (`producer.ts:206,211`) | No row at all, so `no_readings` | Backend lane: stop tying Weight to health days |
+| Calendar demand | Google free/busy through a signed Worker call; the availability and calendar_list scopes | Wired end to end but never run. The 401s in the tail were L1's unsigned probes, which is expected. | Owner: connect Google with both scopes |
+| Sleep debt | 14 nights | Computed, then dropped: not stored and not in app.v1 | Backend lane |
+
+**Correctness bugs:**
+- **Form scores 100 on missing data** [verified]. `dayTotal` counts a missing value as 0 (`form.ts:25`). Heart-rate-only hours give z = 0 against an all-zero history, so the score is 100. That's invented readiness, which CLAUDE.md forbids. **Backend: fix first.**
+- **Stress ignores Apple's HRV:** it accepts only RMSSD, and Apple reports SDNN (`form.ts:30`).
+- **Stored scores never age:** they're always marked `fresh`, and nothing recomputes them. Between app opens, Form keeps its last value.
+- **The live account's stored row** predates Weight: the last uploads were at 13:24Z on 12 Oct, and Weight shipped at 19:34Z. Scores recompute only when an upload adds samples.
+- **Zone clipping:** on hold. #1083 (Form `safte-fast.v2`) is parked. It makes HRV required, so iPhone-only owners would lose Form, and the owner wants ADR-0081 amended first.
+
+**Body screen words:**
+- Weight still says the calendar isn't used "yet", which has been false since #1089.
+- The missing-sleep and missing-resting texts don't say what fixes them.
+- The "stale" and "expired" labels can never appear.
+
+**Getting scores on the Simulator, in priority order:**
+1. **The owner** decides whether seeded Simulator Health data is allowed under the real-data rule. With no data there's no upload, and no score.
+2. **App lane:** seed 15 or more days of sleep stages, HRV, resting heart rate and 8+ hourly readings a day. The keychain watermark then limits uploads to the last 24 h.
+3. **Backend lane:** connect Google with both scopes, and check the `calendar_demand` and `weight_demand` codes.
+4. **App lane:** fix the Weight text, add hints to use a Watch or a sleep app, and re-read scores after each upload.
+5. **Backend lane:** count missing values as missing, not 0; age stored scores; decide #1083.
