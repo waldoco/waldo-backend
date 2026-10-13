@@ -1052,3 +1052,18 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **The parallel lane** ("Build background health reads and an honest Watch app") is told that `src/health/**` is unblocked.
 - **Correction:** `view=activity` is a diagnostics projection: steps, hops, the raw trace and runs. So Patrol v1 shows runs and job steps only, never the raw trace. Spots (constellation claims) is wiring-only. The App lane checks the live payloads on its device first. Corrected on #1103.
 - **Backend merges are held** until the owner deploys `6ddbd85e`, because the gate script refuses any SHA that isn't the tip.
+
+## 05:01:32Z: #1110 (browse from the app) review FAIL: test evidence and contract
+
+- **Reviewed at `2d9a160b`; the head is now `47cdf735`** (rebased onto `6ddbd85e`, CLEAN). Read as code, the logic looks correct.
+- **Required:**
+  1. The app directory test can't fail: there's no `BROWSER` in the env, so it returns before `assertOwner`. Dropping `verifyOwnerBinding('app')` at the admission sites breaks no test.
+  2. Removing `provider` from two tool schemas isn't additive. Keep it optional and ignored, or document why removal is safe.
+  3. Fix the wording in the PR body, one comment and four docs.
+- **Before outside users** (these predate the PR; it extends them to app owners):
+  - Browserbase dispatch checks no owner;
+  - no DNS-rebinding defence, and no URL recheck after navigation;
+  - the default moves to Browserbase with no spend reservation;
+  - the OpenAI key is sent to Browserbase;
+  - there's no health filter on `instruction` (unverified).
+- The findings are on #1110. There's no merge until a fresh PASS.
