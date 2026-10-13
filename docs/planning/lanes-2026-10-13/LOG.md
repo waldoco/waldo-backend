@@ -2263,3 +2263,11 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
   - a banner on the review comment and a correction comment on #1180 (6156102299);
   - a banner on the board summary, and a correction on #1103 (6156102697).
 - A replacement fix is being probed: handler-owned backoff from a stored streak, with a floor and a 30-minute cap, then return. #1180 stays FAIL.
+
+## 22:08Z — #1180 review revision 2
+
+- Revision 2 is posted on the PR (6156216008); revision 1 is marked superseded. A summary is on #1103 (6156220669).
+- The verdict stays FAIL. Keep arm-on-every-throw, which fixes a pre-existing stall when `drainApp`'s in-handler delete is followed by a throw. Replace the fixed 30-minute delay with handler-owned backoff from a stored streak, with a 2 s floor that doubles and a 30-minute cap, then return.
+- The fix was verified on the real scheduler for all three throw shapes. The pre-existing ~4 Hz loop (case c) drops to 3 calls in 9 s.
+- M2, M3 and M4 (the arbiter floor, the in-handler delete, and keying the retry wake for #1186) are flagged for the builder and the lead.
+- The #1186 review is next.
