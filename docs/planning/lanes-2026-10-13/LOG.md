@@ -2196,3 +2196,9 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 - Lane T's first task proved `use_mac` is offered with no paired Mac (red test on `mac/m1-use-mac-eligibility` `4f2588a6`, test only, no PR). The owner then said `use_mac` is Ashish's Kennel work, so don't disturb it: claim withdrawn (6154442736) with an FYI for Ashish.
 - Lane T relaunched on M4, the turn time budget (brief `MAC_LANE_T_M4_BRIEF.md` at `5f962722`): measure first, then one retry owner and a per-turn deadline in `llm/`. No owner-do, responder, inbound turn, contracts or use_mac edits.
 - Lane P0 (the post-deploy baseline re-run on the Air) is still running.
+
+## 20:25Z — P0 stopped on the 12-hour app session; P1 (Telegram diagnostic) running
+
+- P0 measured S2 only: PARTIAL, 51.0 s against 40.2 s. The self-correction is gone, but the offered hour overlaps a listed event. At 20:16Z the Air's app session hit the fixed 12-hour expiry (signed in at 08:16Z; no refresh). That is #1133's problem, not a deploy regression; a human must sign in again. Scorecard: scratchpad `rerun-scorecard.md`; posted 6154509927.
+- The late-night "tomorrow" is the model's reading: `get_context` returns the owner-zone date.
+- Lane P1 runs the scenarios on Telegram Web (bot chat only), diagnostic per Bible law 10. Brief `MAC_LANE_P1_TELEGRAM_BRIEF.md` at `f06c3ce9`. Lane T (M4) is still running.
