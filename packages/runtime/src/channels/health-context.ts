@@ -16,6 +16,11 @@ import { md5Hex } from './md5';
 // carry a number (drivers/tags) is dropped before it can ride the narrative. Absence is
 // truthful: no rows, no link, or no readable Recovery compose as "no derived health context".
 
+// A derived row is fresh on its own day and the next by the owner's clock, and stale after that. It is aged when read,
+// since the row itself never changes once the phone stops sending.
+export const dayFreshness = (day: string, now: number, timezone: string): 'fresh' | 'stale' =>
+  day === localIso(now, timezone).slice(0, 10) || day === localIso(now - 86_400_000, timezone).slice(0, 10) ? 'fresh' : 'stale';
+
 type SignedCall = (fn: string, message: string, args: Record<string, string | number>) => Promise<unknown>;
 
 // The waldo.health_context_read RPC payload (supabase/migrations/20260928160000_waldo_health_context.sql).
@@ -102,10 +107,7 @@ export const toContextHealthMaterial = (
             : 'steady';
 
     const now = clock.now().getTime();
-    const today = localIso(now, clock.timezone).slice(0, 10);
-    const yesterday = localIso(now - 86_400_000, clock.timezone).slice(0, 10);
-    const freshness: DerivedHealthDestinationView['freshness'] =
-      context.day === today || context.day === yesterday ? 'fresh' : 'stale';
+    const freshness: DerivedHealthDestinationView['freshness'] = dayFreshness(context.day, now, clock.timezone);
 
 
     const confidence = typeof context.confidence === 'number' && Number.isFinite(context.confidence) ? context.confidence : null;

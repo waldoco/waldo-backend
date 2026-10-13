@@ -4,6 +4,7 @@ import {
   healthApiErrorV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema, healthConsentListV1Schema, healthConsentWithdrawV1Schema,
   healthIngestReceiptV1Schema, healthIngestV1Schema, healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresUnavailableV1Schema,
 } from '../../../contracts/src/app/health-ingest';
+import { dayFreshness } from './health-context';
 import { md5Hex } from './md5';
 import { produceHealthScores, type ProducerDeps } from '../health/producer';
 
@@ -111,8 +112,10 @@ const scores = async (input: AppHealthInput): Promise<Response> => {
   if (failed) return failed;
   if (typeof result?.unavailable === 'string') return nothing(result.unavailable);
   const stored = asObject(result?.scores);
+  // The stored freshness is the row's at write time; the row is aged by its own day in its own zone instead.
+  const aged = typeof stored?.day === 'string' && typeof stored.timezone === 'string' && knownZone(stored.timezone) ? dayFreshness(stored.day, Date.now(), stored.timezone) : null;
   const body = stored && {
-    day: stored.day, timezone: stored.timezone, compiled_at: stored.compiled_at, freshness: stored.freshness,
+    day: stored.day, timezone: stored.timezone, compiled_at: stored.compiled_at, freshness: aged,
     recovery: pillarView('recovery', stored.recovery), form: pillarView('form', stored.form), weight: pillarView('weight', stored.weight),
   };
   const parsed = healthScoresResponseV1Schema.safeParse(body);
