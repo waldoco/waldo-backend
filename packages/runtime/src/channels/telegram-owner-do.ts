@@ -17,7 +17,7 @@ import { taskSourceFetch } from '../tools/task-source-io';
 import {OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,ownerControlsView,ownerControlsRead,ownerControlsAction} from './dashboard-owner-controls';
 import {MEMORY_CONTROL_PATH,projectMemoryControl,resolveMemoryAction} from './dashboard-memory-actions';
 import {CONTROLS_PATH,readControlsQuery,projectControls} from './dashboard-controls';
-import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,googleConnectReceipt} from './dashboard-control-actions';
+import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,googleConnectReceipt,type ControlReceipt} from './dashboard-control-actions';
 import { createScopedCuratedSkillCapability } from '../skills/curated-host';
 import { ownerMessageAdmission } from '../identity/owner-message-admission';
 import { MEMORY_GRAPH_PATH, readMemoryGraph } from './memory-graph';
@@ -626,6 +626,16 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if(this.activeApp?.sessionHash===hash)this.activeAbort?.abort();
     return Response.json({fenced},{headers:{'cache-control':'no-store'}});
   }
+  // Signs one of the owner's other devices out. Its queued and running app messages close before and after the directory
+  // drops the session; dropping it also revokes that session's push devices.
+  private async revokeOwnerSession(doName: string, sessionHash: string): Promise<ControlReceipt> {
+    const auth=consoleAuth(this.env)!,fence=()=>{this.appInbox.revokeSession(sessionHash);if(this.activeApp?.sessionHash===sessionHash)this.activeAbort?.abort();};
+    fence();
+    const revoked=await auth.revokeSession(doName,sessionHash);
+    if((await auth.listSessions(doName)).some(row=>row.session===sessionHash))return {state:'unconfirmed',message:'Signing that device out did not finish. Refresh and try again.'};
+    fence();
+    return {state:'recorded',message:revoked?'That device is signed out.':'That device was already signed out.'};
+  }
   // Worker-to-DO only: Weight's busy minutes per day from the owner's own calendar connections. It sends nothing to the
   // owner and offers no connect link.
   private async calendarDemand(request: Request): Promise<Response> {
@@ -668,14 +678,15 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           const rows=await auth.listSessions(name),row=rows.find(row=>row.session===hash);
           if(!row)return fail();
           step=path.startsWith('/app/v1/approvals')?'approvals':'controls';
-          const expires=Date.parse(row.created_at)+12*60*60_000,session={token:hash,csrf:hash,expires};
+          const expires=Date.parse(row.expires_at),session={token:hash,csrf:hash,expires};
           const runtime=this.setup('app');
           const host={...session,storage:this.ctx.storage,assertCurrent:current,desk:runtime.desk,
             account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.ctx.storage.deleteAll()},
-            sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.created_at)+12*60*60_000})),
-            view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=await auth.listSessions(name);return {...view,sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.created_at,until:new Date(Date.parse(row.created_at)+12*60*60_000).toISOString(),current:row.session===hash}))};},
+            sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.expires_at)})),
+            view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=(await auth.listSessions(name)).filter(row=>!row.replaced);return {...view,sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.created_at,until:new Date(Date.parse(row.expires_at)).toISOString(),current:row.session===hash,ref:`sess_${row.session}`}))};},
             act:async(action:ConsoleAction)=>action.action==='google.connect'
               ?googleConnectReceipt(isGoogleFeature(action.value)?await runtime.googleConnectUrl(action.value,'app'):null,this.ctx.storage.kv.get<string>('origin'))
+              :action.action==='session.revoke'?this.revokeOwnerSession(name,action.value.slice('sess_'.length))
               :runtime.act(action,current),
           };
           return await (path.startsWith('/app/v1/approvals')?appApprovalsRequest(request,host):appControlsRequest(request,host));

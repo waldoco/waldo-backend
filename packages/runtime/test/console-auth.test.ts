@@ -154,3 +154,32 @@ it('malformed signed session inventory cannot prove absence or revocation', asyn
   const signout=consoleAuth(env,vi.fn(async()=>json('2')) as unknown as typeof fetch,now)!;
   await expect(signout.signOutAll('owner')).rejects.toThrow('session revocation unavailable');
 });
+
+it('a session inventory with expiry reads each row\'s own, and one from before the 30-day migration reads as 12 hours', async () => {
+  const created='2026-10-13T00:00:00.000Z',seen='2026-10-13T01:00:00.000Z',expires='2026-11-12T00:00:00.000Z';
+  const read=async(rows:unknown)=>consoleAuth(env,vi.fn().mockResolvedValue(json(rows)) as unknown as typeof fetch,now)!.listSessions('owner');
+  expect(await read([{session:'a'.repeat(64),created_at:created,last_seen_at:seen,expires_at:expires,replaced:true}]))
+    .toEqual([{session:'a'.repeat(64),created_at:created,last_seen_at:seen,expires_at:expires,replaced:true}]);
+  expect(await read([{session:'a'.repeat(64),created_at:created,last_seen_at:seen}]))
+    .toEqual([{session:'a'.repeat(64),created_at:created,last_seen_at:seen,expires_at:'2026-10-13T12:00:00.000Z',replaced:false}]);
+  const row={session:'a'.repeat(64),created_at:created,last_seen_at:seen,expires_at:expires,replaced:false};
+  for(const invalid of [{...row,expires_at:'invalid'},{...row,replaced:'yes'},(({replaced:_r,...rest})=>rest)(row),(({expires_at:_e,...rest})=>rest)(row)])
+    await expect(read([invalid])).rejects.toThrow('session inventory unavailable');
+});
+
+it('renewing signs the rotation of exactly the presented session into a fresh one, and answers its credential', async () => {
+  const fetcher=vi.fn().mockResolvedValueOnce(json(true));
+  const auth=consoleAuth(env,fetcher as unknown as typeof fetch,now)!;
+  const credential=await auth.renewAppCredential('do-owner-1','b'.repeat(32));
+  const [url,init]=fetcher.mock.calls[0] as [string,RequestInit],body=JSON.parse(String(init.body));
+  expect(url).toBe('https://db.test/rest/v1/rpc/app_session_rotate');
+  const presented=body.p_session_hash as string,fresh=body.p_new_session_hash as string;
+  expect(body.p_sig).toBe(await routerSignature('router',1_790_000_000,`appsess.rotate.do-owner-1.${presented}.${fresh}`));
+  const [name,sessionId,signature]=credential!.split('.');
+  expect(name).toBe('do-owner-1');
+  expect(sessionId).toMatch(/^[a-f0-9]{32}$/);
+  expect(sessionId).not.toBe('b'.repeat(32));
+  expect(signature).toBe(await routerSignature('router',0,`appbearer.do-owner-1.${sessionId}`));
+  expect(await consoleAuth(env,vi.fn().mockResolvedValue(json(false)) as unknown as typeof fetch,now)!.renewAppCredential('do-owner-1','b'.repeat(32))).toBeNull();
+  await expect(consoleAuth(env,vi.fn().mockResolvedValue(json('true')) as unknown as typeof fetch,now)!.renewAppCredential('do-owner-1','b'.repeat(32))).rejects.toThrow('session renewal unavailable');
+});

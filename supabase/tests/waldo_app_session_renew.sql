@@ -1,0 +1,50 @@
+begin;
+create extension if not exists pgtap with schema extensions;
+select no_plan();
+delete from vault.secrets where name='waldo_router_hmac';
+select vault.create_secret('fixture-router','waldo_router_hmac');
+create function pg_temp.at() returns bigint language sql as $$ select extract(epoch from now())::bigint $$;
+create function pg_temp.sig(msg text) returns text language sql as $$ select encode(extensions.hmac(pg_temp.at()::text||'.'||msg,'fixture-router','sha256'),'hex') $$;
+insert into auth.users(id) values ('31000000-0000-0000-0000-000000000001');
+insert into waldo.owners(id,do_name,auth_user_id) values ('11000000-0000-0000-0000-000000000001','renew-owner','31000000-0000-0000-0000-000000000001');
+create function pg_temp.authority(hash text) returns jsonb language sql as $$ select waldo.app_session_authority('renew-owner',hash,pg_temp.at(),pg_temp.sig('app.session.renew-owner.'||hash)) $$;
+create function pg_temp.renew(name text,old text,fresh text) returns boolean language sql as $$ select waldo.app_session_rotate(name,old,fresh,pg_temp.at(),pg_temp.sig('appsess.rotate.'||name||'.'||old||'.'||fresh)) $$;
+create function pg_temp.listed() returns jsonb language sql as $$ select waldo.console_session_list('renew-owner',pg_temp.at(),pg_temp.sig('consolesess.list.renew-owner')) $$;
+
+select is(waldo.console_session_open('renew-owner',repeat('a',64),pg_temp.at(),pg_temp.sig('consolesess.open.renew-owner.'||repeat('a',64))),true,'a session opens');
+select is((select expires_at-created_at from waldo.console_sessions where session_hash=repeat('a',64)),interval '12 hours','an opened session lasts 12 hours until it is renewed');
+insert into waldo.app_push_devices(owner_id,installation_id,session_hash,provider,environment,device_epoch,state,secret_id,token_hash)
+ values('11000000-0000-0000-0000-000000000001','41000000-0000-0000-0000-000000000001',repeat('a',64),'apns','sandbox',1,'active',vault.create_secret('synthetic-push-token'),repeat('c',64));
+
+select is(pg_temp.renew('renew-owner',repeat('a',64),repeat('b',64)),true,'a live session renews');
+select is((select expires_at from waldo.console_sessions where session_hash=repeat('b',64)),now()+interval '30 days','the renewed session lasts 30 days');
+select is((select expires_at from waldo.console_sessions where session_hash=repeat('a',64)),now()+interval '20 minutes','the presented session keeps 20 minutes');
+select is((pg_temp.authority(repeat('b',64))->>'expires_at')::numeric,(extract(epoch from now()+interval '30 days')*1000)::numeric,'the authority reports the renewed expiry');
+select is(pg_temp.authority(repeat('a',64))->>'owner_id','11000000-0000-0000-0000-000000000001','the presented session still admits work for its 20 minutes');
+select is((select session_hash from waldo.app_push_devices where owner_id='11000000-0000-0000-0000-000000000001'),repeat('b',64),'push custody moves to the renewed session');
+select is((select jsonb_object_agg(e->>'session',e->'replaced') from jsonb_array_elements(pg_temp.listed()) e),jsonb_build_object(repeat('a',64),true,repeat('b',64),false),'the list marks the session a renewal replaced');
+select is((select (e->>'expires_at')::timestamptz from jsonb_array_elements(pg_temp.listed()) e where e->>'session'=repeat('b',64)),now()+interval '30 days','the list carries each session''s expiry');
+select is(waldo.console_session_open('renew-owner',repeat('9',64),pg_temp.at(),pg_temp.sig('consolesess.open.renew-owner.'||repeat('9',64))),true,'a second device signs in');
+select is(pg_temp.renew('renew-owner',repeat('9',64),repeat('8',64)),true,'and renews');
+select is(waldo.console_session_revoke('renew-owner',repeat('8',64),pg_temp.at(),pg_temp.sig('consolesess.revoke.renew-owner.'||repeat('8',64))),true,'revoking that device''s session');
+select is((select count(*)::int from waldo.console_sessions where session_hash in (repeat('8',64),repeat('9',64))),0,'ends the session it replaced too');
+select is(pg_temp.authority(repeat('b',64))->>'owner_id','11000000-0000-0000-0000-000000000001','and leaves the other device signed in');
+
+update waldo.console_sessions set expires_at=now()-interval '1 second' where session_hash=repeat('a',64);
+select is(pg_temp.authority(repeat('a',64)),null,'after its 20 minutes the presented session stops');
+select is(jsonb_array_length(pg_temp.listed()),1,'and leaves the list');
+select is(waldo.console_session_touch('renew-owner',repeat('a',64),pg_temp.at(),pg_temp.sig('consolesess.touch.renew-owner.'||repeat('a',64))),false,'and its credential no longer validates');
+select is(pg_temp.renew('renew-owner',repeat('a',64),repeat('d',64)),false,'an expired session cannot renew');
+select is(pg_temp.renew('renew-owner',repeat('e',64),repeat('f',64)),false,'an unknown session cannot renew');
+select is(pg_temp.renew('other-owner',repeat('b',64),repeat('f',64)),false,'a session renews only under its own owner');
+select throws_ok($$select waldo.app_session_rotate('renew-owner',repeat('b',64),repeat('f',64),pg_temp.at(),'forged')$$,'42501','unsigned or invalid session call','a forged renewal is denied');
+select throws_ok($$select pg_temp.renew('renew-owner',repeat('b',64),repeat('b',64))$$,'42501','unsigned or invalid session call','a renewal to the same hash is denied');
+select throws_ok($$select pg_temp.renew('renew-owner',repeat('b',64),'short')$$,'42501','unsigned or invalid session call','a malformed new hash is denied');
+update waldo.owners set state='suspended' where do_name='renew-owner';
+select is(pg_temp.renew('renew-owner',repeat('b',64),repeat('f',64)),false,'a suspended account cannot renew');
+update waldo.owners set state='active' where do_name='renew-owner';
+select is(has_function_privilege('anon','waldo.app_session_rotate(text,text,text,bigint,text)','execute'),true,'the runtime key can renew; the signature is still required');
+select is(has_function_privilege('authenticated','waldo.app_session_rotate(text,text,text,bigint,text)','execute'),false,'a signed-in client cannot call it directly');
+select is(has_function_privilege('service_role','waldo.app_session_rotate(text,text,text,bigint,text)','execute'),false,'nor can the service role');
+select * from finish();
+rollback;

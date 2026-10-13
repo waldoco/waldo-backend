@@ -202,3 +202,22 @@ describe('confirmed time zone', () => {
     for (const invalid of [{ timezone_confirmed: 'yes' }, { timezone_confirmed: null }, { timezone_confirmed: 1 }]) expect(appControlProjectionV1Schema.safeParse(day(invalid)).success).toBe(false);
   });
 });
+
+describe('signing out another device from the app', () => {
+  const ref = `sess_${'c'.repeat(64)}`;
+  const revoke = { view: 'connections', action: 'session.revoke', value: ref, revision, request_id: 'revoke-0001' };
+  it('names the device by the session_ref its connections row carries', () => {
+    expect(appControlActionV1Schema.safeParse(revoke).success).toBe(true);
+    const item = { signed_in: '2026-10-12T20:00:00Z', until: '2026-11-11T20:00:00Z', current: false, session_ref: ref };
+    expect(appControlProjectionV1Schema.safeParse(projection({ ...connections, sessions: { until: '2026-11-11T20:00:00Z', count: 1, items: [item] } })).success).toBe(true);
+    const { session_ref: _ref, ...older } = item;
+    expect(appControlProjectionV1Schema.safeParse(projection({ ...connections, sessions: { until: '2026-11-11T20:00:00Z', count: 1, items: [older] } })).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse(projection({ ...connections, sessions: { until: '2026-11-11T20:00:00Z', count: 1, items: [{ ...item, session_ref: 'sess_short' }] } })).success).toBe(false);
+  });
+  it('refuses a revoke without a session_ref, from another view, or carrying other fields', () => {
+    expect(appControlActionV1Schema.safeParse({ ...revoke, value: undefined }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ ...revoke, value: 'c'.repeat(64) }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ ...revoke, view: 'day' }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ ...revoke, id: 'telegram' }).success).toBe(false);
+  });
+});

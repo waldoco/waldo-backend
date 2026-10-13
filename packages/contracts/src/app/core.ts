@@ -20,16 +20,20 @@ const invite = z.string().regex(/^[A-HJ-NP-Z2-9]{20}$/);
 export const appCodeRequestSchema = z.strictObject({ email: z.email().max(254), invite: invite.optional() });
 export const appCodeResultSchema = z.strictObject({ ok: z.literal(true) });
 export const appVerifyRequestV1Schema = z.strictObject({ email: z.email().max(254), code: z.string().regex(/^\d{4,10}$/), invite: invite.optional() });
+// absolute_expires_at is when this credential stops working. From renew_after, the app should call /auth/renew for a
+// new credential; a Worker that does not say has no renewal.
 export const appSessionV1Schema = z.strictObject({
   state: z.literal('active'), session_ref: z.string().regex(/^sess_[a-f0-9]{64}$/),
   account_ref: z.string().regex(/^acct_[a-f0-9]{64}$/), surface: z.literal('app'),
-  absolute_expires_at: z.int().nonnegative(),
+  absolute_expires_at: z.int().nonnegative(), renew_after: z.int().nonnegative().optional(),
 });
 export const appVerifyResultV1Schema = z.union([
   appSessionV1Schema.extend({ credential: z.string().min(20).max(512) }),
   z.strictObject({ state: z.literal('needs_invite') }),
 ]);
 export const appSignoutResultV1Schema = z.strictObject({ result: z.enum(['revoked', 'already_gone']) });
+// A new credential for a new session. The presented credential keeps working for 20 more minutes, then stops.
+export const appRenewResultV1Schema = appSessionV1Schema.extend({ credential: z.string().min(20).max(512) });
 export const appClientMessageIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/);
 export const appSendRequestV1Schema = z.strictObject({
   client_message_id: appClientMessageIdV1Schema, text: z.string().trim().min(1).max(4000),
@@ -70,6 +74,8 @@ export const appCoreRoutesV1 = [
   { method: 'POST', path: '/app/v1/auth/verify', request: appVerifyRequestV1Schema, response: appVerifyResultV1Schema, authenticated: false, success_status: 200 },
   { method: 'GET', path: '/app/v1/session', response: appSessionV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/auth/signout', response: appSignoutResultV1Schema, authenticated: true, success_status: 200 },
+  // A Worker without this route answers 404; the app then keeps its credential.
+  { method: 'POST', path: '/app/v1/auth/renew', response: appRenewResultV1Schema, authenticated: true, success_status: 200 },
   { method:'GET', path:'/app/v1/chat/main/messages/{client_message_id}',response:appMessageReceiptV1Schema,authenticated:true,success_status:200 },
   { method: 'GET', path: '/app/v1/chat/main', response: appHistoryResultV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/chat/main/messages', request: appSendRequestV1Schema, response: appSendResultV1Schema, authenticated: true, success_status: 202, max_request_bytes: APP_SEND_MAX_WIRE_BYTES },

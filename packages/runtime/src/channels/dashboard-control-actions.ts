@@ -16,7 +16,7 @@ export async function loadReceiptBook(store:Store,sessions:()=>Promise<readonly 
 }
 export const receiptCapacityReached=(book:Readonly<Record<string,StoredReceipt>>,session:string)=>Object.keys(book).filter(id=>id.startsWith(session+':')).length>=100||Object.keys(book).length>=1000;
 export type ControlActionDeps=Readonly<{csrf:string;expires:number;sessions():Promise<readonly {csrf:string;expires:number}[]>;projection(view:string,id?:string):Promise<Projection|null>;view():Promise<ConsoleView>;act(action:ConsoleAction):Promise<boolean|string|ControlReceipt>;store:Store}>;
-const allowed:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm','spot.dismiss','spot.forget','node.forget'],day:['timezone.set','proactivity.set','card.today','card.pin','card.unpin'],connections:['google.connect','google.disconnect','telegram.link','telegram.unlink','session.signout','session.signout.all'],waiting:['approval.approve','approval.skip','approval.undo'],files:['file.remove']};
+const allowed:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm','spot.dismiss','spot.forget','node.forget'],day:['timezone.set','proactivity.set','card.today','card.pin','card.unpin'],connections:['google.connect','google.disconnect','telegram.link','telegram.unlink','session.signout','session.signout.all','session.revoke'],waiting:['approval.approve','approval.skip','approval.undo'],files:['file.remove']};
 const reply=(value:object,status=200)=>Response.json(value,{status,headers:DASHBOARD_OVERVIEW_HEADERS});
 // The only destination a Google connect receipt may carry is this deployment's own /c/<ticket> path.
 export const googleConnectReceipt=(link:string|null,origin:string|undefined):ControlReceipt=>{
@@ -32,6 +32,7 @@ function eligible(action:ConsoleAction,view:ConsoleView):boolean {
  if(action.action==='google.disconnect')return view.google.accounts.some(a=>a.id===action.id);
  if(action.action==='telegram.unlink')return view.telegram.linked&&view.telegram.unlinkAvailable;
  if(action.action==='file.remove')return view.files.some(f=>String(f.id)===action.id);
+ if(action.action==='session.revoke')return view.sessions.some(row=>row.ref!==undefined&&row.ref===action.value&&!row.current);
  if(action.action.startsWith('approval.')) {
   const p=view.approvals.find(p=>p.id===action.id);if(!p)return false;
   if(action.action==='approval.approve')return consoleMayApprove(p);

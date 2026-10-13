@@ -11,7 +11,10 @@ export type AdminOverview = Readonly<{
 
 export type OwnerSettings = Readonly<{ timezone: string; quiet_start: string | null; quiet_end: string | null; volume: string }>;
 
-export type ConsoleSession = Readonly<{ session: string; created_at: string; last_seen_at: string }>;
+// replaced: a renewal issued a newer session for the same device; this one still works until it expires.
+export type ConsoleSession = Readonly<{ session: string; created_at: string; last_seen_at: string; expires_at: string; replaced: boolean }>;
+// A directory from before the 30-day app session lists no expiry; every session it holds lasts 12 hours.
+const LEGACY_SESSION_MS = 12 * 60 * 60_000;
 
 export type ConsoleAuth = Readonly<{
   sendCode(email: string, code?: string): Promise<boolean>;
@@ -42,6 +45,8 @@ export type ConsoleAuth = Readonly<{
   // accepted as a console cookie, and a console cookie is never accepted as an app bearer.
   ownerAppCredential(doName: string): Promise<string | null>;
   readAppCredential(credential: string): Promise<string | null>;
+  // A credential for a fresh 30-day app session; the presented session keeps 20 more minutes. null when it is no longer live.
+  renewAppCredential(doName: string, sessionId: string): Promise<string | null>;
   listSessions(doName: string): Promise<readonly ConsoleSession[]>;
   revokeSession(doName: string, sessionHash: string): Promise<boolean>;
   signOutAll(doName: string): Promise<number>;
@@ -169,6 +174,13 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     ),
     ownerAppCredential: (doName) => mint(doName, appSig),
     readAppCredential: (credential) => readSigned(credential, appSig),
+    async renewAppCredential(doName, sessionId) {
+      const fresh = newSessionId();
+      const [presented, renewed] = await Promise.all([linkCodeHash(sessionId), linkCodeHash(fresh)]);
+      const rotated = await rpc('app_session_rotate', `appsess.rotate.${doName}.${presented}.${renewed}`, { p_do_name: doName, p_session_hash: presented, p_new_session_hash: renewed });
+      if (typeof rotated !== 'boolean') throw new Error('session renewal unavailable');
+      return rotated ? `${encodeURIComponent(doName)}.${fresh}.${await appSig(doName, fresh)}` : null;
+    },
     async listSessions(doName) {
       const rows = await rpc('console_session_list', `consolesess.list.${doName}`, { p_do_name: doName });
       // An invalid authority response cannot prove that a session is absent.
@@ -177,12 +189,16 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       return rows.map((raw: unknown) => {
         if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('session inventory unavailable');
         const row = raw as Record<string, unknown>;
-        if (Object.keys(row).sort().join(',') !== 'created_at,last_seen_at,session'
+        const keys = Object.keys(row).sort().join(',');
+        if ((keys !== 'created_at,last_seen_at,session' && keys !== 'created_at,expires_at,last_seen_at,replaced,session')
           || typeof row.session !== 'string' || !/^[a-f0-9]{64}$/.test(row.session) || seen.has(row.session)
           || typeof row.created_at !== 'string' || !Number.isFinite(Date.parse(row.created_at))
-          || typeof row.last_seen_at !== 'string' || !Number.isFinite(Date.parse(row.last_seen_at))) throw new Error('session inventory unavailable');
+          || typeof row.last_seen_at !== 'string' || !Number.isFinite(Date.parse(row.last_seen_at))
+          || (row.expires_at !== undefined && (typeof row.expires_at !== 'string' || !Number.isFinite(Date.parse(row.expires_at))))
+          || (row.replaced !== undefined && typeof row.replaced !== 'boolean')) throw new Error('session inventory unavailable');
         seen.add(row.session);
-        return { session: row.session, created_at: row.created_at, last_seen_at: row.last_seen_at };
+        const expires = typeof row.expires_at === 'string' ? row.expires_at : new Date(Date.parse(row.created_at) + LEGACY_SESSION_MS).toISOString();
+        return { session: row.session, created_at: row.created_at, last_seen_at: row.last_seen_at, expires_at: expires, replaced: row.replaced === true };
       });
     },
     async revokeSession(doName, sessionHash) {
