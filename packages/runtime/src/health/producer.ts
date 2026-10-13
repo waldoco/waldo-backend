@@ -23,9 +23,9 @@ const SIGNALS = ['sleep_duration', 'sleep_midpoint', 'overnight_hrv', 'resting_h
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/;
 
-type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null }>;
+export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null }>;
 type Source = Readonly<{ source: string; epoch: number; readings: readonly Reading[] }>;
-type Series = Readonly<{ readAt: string; sources: readonly Source[] }>;
+export type Series = Readonly<{ readAt: string; sources: readonly Source[] }>;
 
 const asRecord = (value: unknown): Record<string, unknown> | null => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null);
 const instant = (value: unknown): string | null => (typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(Date.parse(value)).toISOString() : null);
@@ -40,8 +40,8 @@ const reading = (raw: unknown): Reading | null => {
   };
 };
 
-type Parsed = { kind: 'series'; series: Series } | { kind: 'no_consent' } | { kind: 'failed' };
-const parseSeries = (raw: unknown): Parsed => {
+export type Parsed = { kind: 'series'; series: Series } | { kind: 'no_consent' } | { kind: 'failed' };
+export const parseSeries = (raw: unknown): Parsed => {
   const body = asRecord(raw);
   if (!body) return { kind: 'failed' };
   if (body.error === 'not_linked') return { kind: 'no_consent' };
