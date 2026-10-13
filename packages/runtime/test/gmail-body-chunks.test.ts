@@ -98,12 +98,26 @@ describe('read_thread body chunks', () => {
     expect(result.ok).toBe(false);
   });
 
-  it('fails a continuation rather than return another message when the proxy ignores the message id', async () => {
-    // A connector-proxy deployed before this change reads only the first message of the page it was asked for.
-    const client = thread([plain('m1', long), plain('m2', 'short')]);
-    const stale = { ...client, threadPage: (id: string, limit: number) => client.threadPage!(id, limit, undefined, { fullBodies: true }) } as typeof client;
-    const result = await reader(stale).handle({ thread_id: 't', limit: 10, body_message_id: 'm2', body_offset: 0 } as never);
-    expect(result.ok).toBe(false);
+  // A connector-proxy older than this change ignores the message id (and, before #1105, the full-bodies opt-in
+  // too), returning the thread's first page. Its bodies stop at 32,000, so a continuation is still needed past 12,000.
+  const older = (client: ReturnType<typeof thread>, fullBodies: boolean) => ({ ...client, threadPage: (id: string, limit: number, cursor?: string | null) =>
+    client.threadPage!(id, limit, cursor ?? undefined, fullBodies ? { fullBodies: true } : undefined) }) as typeof client;
+  const marked = (count: number) => Array.from({ length: count }, (_, i) => plain(`m${i}`, `${words(12_500)} marker-${i}. ${words(10_000)}`));
+
+  it('finds the asked-for message by paging when the proxy ignores the message id', async () => {
+    for (const fullBodies of [true, false]) {
+      const [next] = shown(await reader(older(thread(marked(25)), fullBodies)).handle({ thread_id: 't', limit: 10, body_message_id: 'm22', body_offset: 12_000 } as never));
+      expect(next!.id).toBe('m22');
+      expect(next!.body).toContain('marker-22.');
+      expect(next!.body).not.toContain('marker-0.');
+    }
+  });
+
+  it('fails a continuation rather than return another message when paging cannot find it', async () => {
+    expect((await reader(older(thread(marked(3)), true)).handle({ thread_id: 't', limit: 10, body_message_id: 'nope', body_offset: 0 } as never)).ok).toBe(false);
+    // Paging stops after 10 pages of 20, as the reply-parent lookup does.
+    const far = [...Array.from({ length: 205 }, (_, i) => plain(`s${i}`, 'short')), plain('m0', long)];
+    expect((await reader(older(thread(far), true)).handle({ thread_id: 't', limit: 10, body_message_id: 'm0', body_offset: 0 } as never)).ok).toBe(false);
   });
 
   it('never shows part of a code or reset link that straddles a chunk boundary, and relays each once', async () => {

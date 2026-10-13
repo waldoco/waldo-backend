@@ -155,6 +155,22 @@ const scribedBody = (text: string, canaries: readonly string[]): string => {
 };
 const freshCanaries = () => Array.from({ length: 3 }, () => crypto.randomUUID().replaceAll('-', '').slice(0, 16));
 type BodyRead = Readonly<{ relay?: ArtifactRelay; offset: number; first: boolean; canaries: readonly string[] }>;
+// A connector-proxy older than the messageId read ignores it and returns the thread's first message, so the
+// message is then found by paging the thread, within the reply-parent lookup's budget of 10 pages.
+const messageById = async (client: GoogleClient, threadId: string, messageId: string): Promise<ThreadMessage> => {
+  const direct = await client.threadPage!(threadId, 1, undefined, { fullBodies: true, bodyChunks: true, messageId });
+  if (direct.messages.length === 1 && direct.messages[0]!.id === messageId) return direct.messages[0]!;
+  let cursor: string | undefined;
+  for (let pageNumber = 0; pageNumber < 10; pageNumber++) {
+    const page = await client.threadPage!(threadId, 20, cursor, { fullBodies: true, bodyChunks: true });
+    const found = page.messages.find(message => message.id === messageId);
+    if (found) return found;
+    if (!page.cursor) break;
+    cursor = page.cursor;
+  }
+  throw new Error('unknown message in thread');
+};
+
 const readMessages = async (messages: readonly ThreadMessage[], read: BodyRead) => {
   let budget = read.first ? READ_BODY_BUDGET : BODY_CHUNK;
   const shownMessages = [];
@@ -310,10 +326,8 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       if (!client.threadPage) throw new Error('Gmail thread pagination adapter unavailable');
       const canaries = ctx?.session?.canary_tokens ?? freshCanaries();
       if (body_message_id !== undefined) {
-        const page = await client.threadPage(thread_id, 1, undefined, { fullBodies: true, bodyChunks: true, messageId: body_message_id });
-        // A proxy older than the messageId read returns the thread's first message instead.
-        if (page.messages.length !== 1 || page.messages[0]!.id !== body_message_id) throw new Error('unknown message in thread');
-        return {thread_id, account: client.account ?? {connection_id:null,email:null}, cursor: null, messages: await readMessages(page.messages, { offset: body_offset ?? 0, first: false, canaries })};
+        const message = await messageById(client, thread_id, body_message_id);
+        return {thread_id, account: client.account ?? {connection_id:null,email:null}, cursor: null, messages: await readMessages([message], { offset: body_offset ?? 0, first: false, canaries })};
       }
       const page = await client.threadPage(thread_id, limit, cursor, { fullBodies: true, bodyChunks: true });
       return {thread_id, account: client.account ?? {connection_id:null,email:null}, cursor: page.cursor, messages: await readMessages(page.messages, { relay: relayArtifact, offset: 0, first: true, canaries })};
