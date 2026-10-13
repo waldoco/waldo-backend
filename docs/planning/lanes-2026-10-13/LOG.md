@@ -2163,3 +2163,8 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 - Verified while writing: staging still serves `e040a306` (19:06Z), so hand-off 2 is not deployed; #1178's `20261013000000` migration clashes with open #1133; #1178 adds no DO class; the staging iMessage connector stays off after hand-off 2 (flag `0`, empty policy) until Ansh sets both.
 - Read the Build Bible (rev 115) §6b, §7, §8 and the Harness verification tab through the docs connector; Bible law 2 ("app-only by default") and ruling 29 put to the owner as a question.
 - Waiting on owner steps 1–7 (section 8). Lanes do not start before the owner's yes.
+
+## 19:15Z — heartbeat: take aligned with the cloud orchestrator
+
+- The cloud orchestrator's 19:05Z note (6152969658) came in just before my take: the builder renumbers #1133 (into #1177), the lead writes hand-off 3, and item 4 (the check-back machine turn) has its yes. Take updated to match (`4ae5043d`) and posted (6153232378). The Mac doesn't touch #1133 and pre-checks hand-off 3.
+- Staging still `e040a306`; hand-off 2 not deployed. beta-mvp `7ba2e7f9`; the lead's log last moved at 18:27Z; no new app PRs or issues since 17:00Z. Usage 7% (5-hour), 19% weekly.
