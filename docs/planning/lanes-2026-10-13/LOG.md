@@ -2071,3 +2071,13 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
     4. the eval harness, then soul-file prompt amendments.
   - **The Mac's role now:** owner hand deploys, end-to-end agent-loop checks on staging after each deploy, and evidence on #1103.
   - **Backend lead state:** hand-off 1 is withdrawn. The #1139 fix is #1172 (`51d46d78`). The `beta-mvp` tip is `4a964b6f` (#1160 Stop).
+
+- **14:42Z: every Mac lane is paused.**
+  - **L2** paused at 14:18Z. Its handoff is #1103 6147655530, with nothing uncommitted. Its PRs for the lead's gate: #1156, #1158 and #1163 (wording); #1164 and #1171 (the #1145 follow-ups); #1167 (the emit, a held draft). It released the D shape, #1114 and the mail chain to the cloud sessions.
+  - **L4 and N4** paused because the app is stopped. **L5** paused at 13:25Z. **L1** stood down earlier.
+  - **Posted since 14:38Z:**
+    - "held" on app #124 and #121;
+    - two unverified leads on app #127 (an empty bubble when `text` is only the receipt line; copy and share drop the line);
+    - on #1103 (6148133946): hand-off 2 must be compatible with both app `7e09317c` and app `main` `8e8c73e7`;
+    - on #1170: recall and ask-versus-assume checks.
+  - **Next:** the lead gates #1172, then hand-off 2 as the owner's hand deploy. The Mac then runs end-to-end checks on staging.
