@@ -99,7 +99,7 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
       instance=new OwnerDO(state,settings as never);
       const withReceipt=await (await app('/chat/main',undefined,credential)).json() as any;
       const effectedReply=withReceipt.messages.find((message:any)=>message.role==='assistant'&&message.parent_id===effected.message_id);
-      expect(effectedReply?.text).not.toContain('Receipts:');
+      expect(effectedReply?.text).toContain('\n\nReceipts: workspace file written proof-missing.txt (failed)');
       expect(effectedReply?.parts.at(-1)).toMatchObject({type:'receipt',fallback_text:'Receipts: workspace file written proof-missing.txt (failed)',items:[{kind:'workspace_file_written',target:'proof-missing.txt',outcome:'failed'}]});
       instance=new OwnerDO(state,settings as never);
       let finishReady!:()=>void;(instance as any).browserReady=new Promise<void>(resolve=>{finishReady=resolve;});
