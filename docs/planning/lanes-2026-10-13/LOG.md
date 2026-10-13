@@ -1459,3 +1459,23 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **App #116** (the owner's tabs and side-menu request, `48cb082a`) is queued for review. **#1114 `8fd50286`** (the structural pass order) is queued for its delta review.
 - **Connectors' A:** split into a contract-only PR first, then L4's re-pin, then the emit PR. Labels per the ruling: defer "Skip", skip "Don't do this", final state "Not doing".
 - **Running reviews:** #112 with #114; and #113's delta with #1136 and #1137 (on Sonnet, to save usage). Usage was 51% at 08:39Z, and the owner is asked whether to pause Connectors until 10:30Z.
+
+## About 08:58Z: backend #1123, #1126 and #1125 merged; app #112 and #114 merged; the cut freezes after #1136 and #1137; harness claims checked
+
+- **Backend:** #1123 (`d897a4ad`), #1126 (`37a34dd8`) and #1125 (`8499d796`) merged, each pinned to its reviewed head, after the `917032a1` deploy. Their notes are posted on the PRs, and #1125 carries Ansh's scope answer.
+  - The tip is `8499d796`.
+  - **The cut freezes** after #1136 and #1137 if they PASS. No backend merges until the owner deploys.
+  - #1127 stays out until the owner applies it.
+  - The next deploy needs `ALLOW_APP_CONTRACTS=reviewed`.
+- **App:** #112 (the Overview) passed and is merged (`d8c0d926`); #114 (zone auto-confirm) passed and is merged (`a6dee649`).
+  - L4's follow-ups:
+    - inject the device zone in tests, because the host zone leaks in and CI on UTC can't catch it;
+    - remove the dated comments;
+    - record whether the phone reports Asia/Kolkata or Asia/Calcutta (if Calcutta, #114 does nothing for the owner, and the fix is a deterministic alias map);
+    - #116 must turn #112's chat and health route pushes into tab switches.
+- **The cloud harness reading, checked at beta-mvp:**
+  - "execute_code pre-allows host *" is NOT CONFIRMED, and it's a misreading. `egress-policy.ts:30` declares a path into the tool's `allow_hosts` argument, OPEN_PUBLIC applies only to `browse_page` and `browse_act` (`:21-25`), and execute_code has no handler.
+  - "Staging shares production R2 and rate limits" is CONFIRMED: `ARTIFACTS` bucket `waldo-artifacts` (body-only by design) and rate-limit namespace `1001` (`wrangler.jsonc:37,42,96,101`). Separating them needs owner-created resources.
+- **Posted on #1103:** the coordination note for the cloud orchestrator. It covers the state, a request for one priority order across its 10 PRs, the offer that its lane run reviews on its own usage window, and the correction.
+- **Usage:** 61% at 08:55Z, at about 0.63 points a minute, so it runs out around 10:00Z. Review capacity is the binding constraint.
+- **The owner's question** (blockers to the website examples): answered in the orchestrator chat, grounded in the audit page and the cloud harness reading.
