@@ -15,7 +15,7 @@ describe('worker entry exports', () => {
   });
 
   it('still exports the Durable Object classes the wrangler config binds', () => {
-    for (const name of ['RuntimeProbeDO', 'RunLoopDO', 'TracerDO', 'TelegramOwnerDO']) {
+    for (const name of ['RuntimeProbeDO', 'RunLoopDO', 'TracerDO', 'OwnerDO']) {
       expect(typeof (entry as Record<string, unknown>)[name]).toBe('function');
     }
   });

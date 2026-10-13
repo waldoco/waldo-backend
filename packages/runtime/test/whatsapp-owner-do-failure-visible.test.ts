@@ -2,20 +2,20 @@
 // turn never started releases its claim. Webhook already acked Meta, so the visible notice is the recovery path.
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
-import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
+import { OwnerDO } from '../src/channels/owner-do';
 import { WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE } from '../src/channels/whatsapp-api';
 
 vi.mock('openai', () => ({ default: class {
   responses = { create: async () => ({ id: 'fixture', output_text: '{}', output: [], usage: { input_tokens: 1, output_tokens: 1 } }) };
 } }));
 
-const harness = async (name: string, work: (instance: TelegramOwnerDO, state: DurableObjectState, turn: ReturnType<typeof vi.fn>, sent: string[]) => Promise<void>,mockTurn=true) => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+const harness = async (name: string, work: (instance: OwnerDO, state: DurableObjectState, turn: ReturnType<typeof vi.fn>, sent: string[]) => Promise<void>,mockTurn=true) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const sent: string[] = [];
     const graph = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
       sent.push(String(init?.body)); return Response.json({ messages: [{ id: 'wamid.out' }] });
     });
-    const instance = new TelegramOwnerDO(state, {
+    const instance = new OwnerDO(state, {
       ...env, TELEGRAM_BOT_TOKEN: 'fictional-telegram-token', OPENAI_API_KEY: 'fictional-model-key',
       WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id',
     });
@@ -24,11 +24,11 @@ const harness = async (name: string, work: (instance: TelegramOwnerDO, state: Du
     try { await work(instance, state, turn as never, sent); } finally { await state.storage.deleteAlarm(); turn.mockRestore(); graph.mockRestore(); }
   });
 };
-const postMany = (instance: TelegramOwnerDO, ids: string[]) => instance.fetch(new Request('https://telegram-owner/whatsapp-turn', {
+const postMany = (instance: OwnerDO, ids: string[]) => instance.fetch(new Request('https://telegram-owner/whatsapp-turn', {
   method: 'POST', headers: { 'x-waldo-whatsapp-subject': '15550001111' },
   body: JSON.stringify({ messages: ids.map(id => ({ from: '15550001111', id, type: 'text', text: { body: 'PRIVATE_WA_TEXT' } })) }),
 }));
-const post = (instance: TelegramOwnerDO, id: string) => instance.fetch(new Request('https://telegram-owner/whatsapp-turn', {
+const post = (instance: OwnerDO, id: string) => instance.fetch(new Request('https://telegram-owner/whatsapp-turn', {
   method: 'POST', headers: { 'x-waldo-whatsapp-subject': '15550001111' },
   body: JSON.stringify({ messages: [{ from: '15550001111', id, type: 'text', text: { body: 'PRIVATE_WA_TEXT' } }] }),
 }));

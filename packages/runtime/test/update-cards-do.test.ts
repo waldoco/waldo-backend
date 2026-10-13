@@ -15,7 +15,7 @@ const fake = (calendar: CalendarChange[], mail: MailItem[], asked: unknown[][] =
 
 describe('update cards', () => {
   it('seeds on the first check, then reports calendar and mail changes since the last check', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('update-cards'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('update-cards'));
     await runInDurableObject(stub, async (_instance, state) => {
       const book = updateBook(state.storage.sql);
       const asked: unknown[][] = [];
@@ -91,7 +91,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   return { ...original, createTelegramResponder: () => ({ prompt: async (_id: string, _chat: number, text: string) => { updateFixture.prompts.push(text); return 'Calendar update: Lunch added.'; } }) };
 });
-const { TelegramOwnerDO: UpdateOwner } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO: UpdateOwner } = await import('../src/channels/owner-do');
 const { loopBook: updateLoops } = await import('../src/channels/loops');
 const { dayPlanBook: updatePlans } = await import('../src/channels/day-cards');
 it.each(['normal', 'low', 'quiet', 'off', 'closed'] as const)('updates without a brief respect owner preferences: %s', async mode => {

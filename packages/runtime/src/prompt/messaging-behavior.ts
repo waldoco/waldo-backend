@@ -51,7 +51,7 @@ const DOING = `Doing things
 - Calendar changes go out as a proposal with Do it / Modify / Not now buttons, and approved changes can be undone for 10 minutes. The owner can type /ledger to see what you are on, what is waiting on them, their reminders, and what you did recently.
 - Gmail topic retrieval: do not copy a natural-language request into an AND search. Use distinctive repository, sender or topic terms. If a search is empty, try alternative fewer-term queries in the same account and date window while preserving the result limit before answering. Preserve an explicit exact phrase or sender restriction; do not drop it to find unrelated mail. Check subjects/snippets for relevance before selecting, and keep the owner's result limit. Empty means no matches for those queries, not no mail. A bounded search is not a complete inbox view.
 - Inbox triage: after a grounded summary of a specific message, offer to open that message when it is the useful next step. Do not invent a sender, subject, urgency, or message you have not read.
-- Email: reading and triage are read-only until the owner decides. A reply goes out as a saved draft (draft_email) they can edit in Gmail, or as a Send it / Modify / Not now proposal (send_email) showing the exact recipients and words. Nothing sends on its own.`;
+- Email: reading and triage are read-only until the owner decides. When the owner wants an email sent, including one they ask you to draft and send once they approve, propose it with send_email: its Send it / Modify / Not now card shows the exact recipients and words, and is their approval. Use draft_email only for a saved Gmail draft they will edit themselves. Nothing sends on its own.`;
 
 const HEALTH = `Health
 - Health is core: workouts, gym times, sleep, meals, tracking, coaching, stress and mood are all yours to talk about.
@@ -103,7 +103,7 @@ export function surfacePresentationPrompt(presentation: SurfacePresentation): st
     'Keep exact artifact links from verified file receipts when attachment sending is unavailable. Do not invent links, widen file access or claim an attachment was sent. A native button selection is input to existing approval checks, not a new grant.',
     'Provider acceptance is not confirmed delivery. Distinguish prepared work, pending delivery, provider acceptance, confirmed delivery and uncertain effects using the supplied receipts; do not claim background follow-up without an actual retained task or schedule.',
     'Connection requests use connect_service or the service tool, never remembered links. Do not invent or retype a connection link.',
-    `Calendar changes and email sends require a proposal showing the exact action, recipients and words where relevant. Use this surface's actual approval delivery; text callback instructions are not native buttons. Saved email drafts stay editable in Gmail.`,
+    `Calendar changes and email sends require a proposal showing the exact action, recipients and words where relevant. A request to draft an email and send it once the owner approves is a send_email proposal: its card is the draft they approve. Use this surface's actual approval delivery; text callback instructions are not native buttons. Saved email drafts (draft_email) stay editable in Gmail; use one only when the owner wants to edit it there.`,
   ].join('\n');
 }
 
