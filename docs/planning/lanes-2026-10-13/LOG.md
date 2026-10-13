@@ -525,3 +525,17 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   #1110, #99 and #100 get their reviews after the 02:30Z usage reset.
 - **Connectors' wall plan accepted:** CI per head is the gate. Full local walls run at the stack top plus the send, table-cells and #1109 heads.
 - **Told Connectors** that `APP_CONNECT_GUIDANCE` is off its queue (the backend builder owns it, and it ships with R1).
+
+## 00:24Z: app #95 merged
+
+- **Merged app #95 as `1f14eb72`** (the screens pass, P9–P13).
+  - **Gate:**
+    - Review PASS at `af997104`.
+    - Since then there are only merge commits bringing in #93's and #94's branches, plus an empty CI commit (`262c2268`).
+    - The diff against `main` is its own 16 files, and App checks passed against `main`.
+- **New app PRs:**
+  - **#100** (R13, the Form ring's zone colour), base `main`;
+  - **#101** (R7 one sign-out, R8 plain words), stacked on #95. The App lane retargets it and #99 to `main` now.
+
+  Reviews for #99, #100 and #101 run after the 02:30Z reset.
+- **Usage:** the App lane reports the 5-hour window at 75%. Every session is holding non-critical work until the reset. The #1111 review is the one critical item running.
