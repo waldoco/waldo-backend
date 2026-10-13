@@ -1227,3 +1227,25 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   4. #1114's delta review (Connectors is at `61f9bc47`).
   5. Restart Connectors with `send_message` to `local_83ce6587`: the send-turn-one PR, then the calendar move.
   6. Restart the N4/Watch lane.
+
+## 07:37:02Z: post-reset cycle; lane 2 started; three reviews running
+
+- **Usage reset at 07:30Z** (2% at 07:34Z). The heartbeat is re-created as `b5c0736d` (:13 and :43 UTC). L4, Connectors and N4/Watch are resumed.
+- **Owner, about 07:15Z: "yes for everything".**
+  - The sleep chip is confirmed.
+  - A second backend lane: yes.
+  - Phone-to-Watch scores: yes, bounded.
+  - Posted as 6140376774.
+- **Lane 2** ("Build health fixes and Overview data (backend lane 2)") started at about 07:17Z, from the first chip.
+  - That chip's queue was stale, so it's corrected by message. The owner's direction: build on the backend lane's work, never repeat it.
+  - The backend lane had already built Weight decoupling, score ageing, the Form fix, the wake fix and the Expo-token contract (#1103, 07:21Z).
+  - Lane 2 takes `sleep_debt` (with its migration, held for the owner), then H, G, B (after #1122) and the trail.
+  - A duplicate chip (`task_6643a962`) was withdrawn.
+- **#1100's search PARTIAL:** the backend lane rules out a missing index write; ranking is likeliest (#1103, 07:24Z). L4's unique-word check ("quasarplum") decides, run after its mock-up for the owner.
+- **Reviews running:**
+  - app #106 (`3e92f644`) with #108 (`575f7104`);
+  - #1122 (`a2608b77`, `cards[].latest`);
+  - #1114's delta (`61f9bc47`).
+  - Next: app #109 (N4, `08c1de7d`) and #1120.
+- **"To send" v1** is recipients plus the review line: `email_send` has no subject or body field. The full sheet waits on ask D.
+- **The brief for the backend lane** is 6140220362. The owner relays it.
