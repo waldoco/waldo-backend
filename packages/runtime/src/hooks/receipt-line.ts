@@ -1,3 +1,5 @@
+import { RECEIPT_MAX_ITEMS, type ConversationReceipt } from '@waldo/contracts';
+import { sha256Hex, stableJson } from '../context-composer/canonical';
 import { receiptsFromLoopEvents, type LoopEventLike } from './claim-hook';
 
 // Receipt-first status line: what this turn's effect tools actually did, from typed receipts only.
@@ -9,8 +11,11 @@ const MAX_NAMED = 5;
 const NOT_SHOWN = new Set(['skill_selected', 'browser_acted']);
 const STATE_WORD = { accepted: 'accepted', failed: 'failed', unresolved: 'unconfirmed' } as const;
 
+const shownReceipts = (events: readonly LoopEventLike[]) => receiptsFromLoopEvents(events).filter(r => !NOT_SHOWN.has(r.effect));
+const TARGET_MAX = 200;
+
 export const receiptLine = (events: readonly LoopEventLike[]): string | null => {
-  const receipts = receiptsFromLoopEvents(events).filter(r => !NOT_SHOWN.has(r.effect));
+  const receipts = shownReceipts(events);
   if (receipts.length === 0) return null;
   const stateOf = (r: (typeof receipts)[number]) => STATE_WORD[r.state ?? (r.ok ? 'accepted' : 'failed')];
   // A turn where every effect was accepted reads as plain words; any other state keeps every entry's state explicit.
@@ -22,4 +27,20 @@ export const receiptLine = (events: readonly LoopEventLike[]): string | null => 
   });
   const more = receipts.length - named.length;
   return `${plain ? 'Done' : 'Receipts'}: ${named.join('; ')}${more > 0 ? `; and ${more} more` : ''}`;
+};
+
+// The same receipts in typed form, with the line as their text. A target too long for the part is left out, not cut.
+export const turnReceipt = async (events: readonly LoopEventLike[]): Promise<ConversationReceipt | null> => {
+  const line = receiptLine(events);
+  if (line === null) return null;
+  const receipts = shownReceipts(events);
+  const items = await Promise.all(receipts.slice(0, RECEIPT_MAX_ITEMS).map(async receipt => {
+    const event = events.find(candidate => candidate.seq === receipt.seq)!;
+    return {
+      kind: receipt.effect, target: receipt.ref !== undefined && receipt.ref.length <= TARGET_MAX ? receipt.ref : null,
+      outcome: STATE_WORD[receipt.state ?? (receipt.ok ? 'accepted' : 'failed')], via_task: receipt.delegated === true,
+      at: event.at ?? Date.now(), digest: event.call.args === undefined ? null : `sha256:${await sha256Hex(stableJson(event.call.args))}`,
+    };
+  }));
+  return { line, items, more: receipts.length - items.length };
 };

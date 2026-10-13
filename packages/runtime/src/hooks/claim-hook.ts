@@ -14,6 +14,8 @@ export type LoopEventLike = Readonly<{
   code?: string;
   // The effect was done by a child task; the parent receipts it like its own so the reply can claim only receipted effects.
   delegated?: true;
+  // When the tool call returned, epoch ms.
+  at?: number;
 }>;
 
 // The ref a tool's receipt carries, taken from typed args only. A tool not listed has no ref.

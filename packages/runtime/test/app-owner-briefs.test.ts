@@ -42,7 +42,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
-const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '5b3c4d5e-6f70-4a8b-9c0d-1e2f3a4b5c6d';
 const AT = Date.parse('2026-10-03T09:00:00Z');
@@ -79,7 +79,7 @@ type Ctx = { now: number; built: Record<string, string> };
 // An owner who only uses the app, with Google connected and the clock pinned. The jobs the runtime arms on its first
 // build are noted, then cleared, so each test schedules exactly the work it means to run.
 const withAppOwner = async (name: string, confirmed: boolean, run: (owner: Owner, state: DurableObjectState, ctx: Ctx) => Promise<void>, flags: Record<string, string> = {}) => {
-  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   await runInDurableObject(stub, async (_instance, state) => {
     const originalNow = Date.now, ctx: Ctx = { now: AT, built: {} };
     Date.now = () => ctx.now;
@@ -92,7 +92,7 @@ const withAppOwner = async (name: string, confirmed: boolean, run: (owner: Owner
       await state.storage.put('origin', 'https://fixture.invalid');
       await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only',
         scopes: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/gmail.readonly'] }]);
-      const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC',
+      const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC',
         WALDO_OWNER_TELEGRAM_ID: undefined, GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', MAIL_SOURCE_FOLLOWUPS: '1', CALENDAR_GROUNDED_PREP: undefined, ...flags }) as unknown as Owner;
       await owner.setup('app').ready;
       ctx.built = schedule(state);
