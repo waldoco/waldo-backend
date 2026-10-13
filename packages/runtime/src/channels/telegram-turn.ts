@@ -39,6 +39,6 @@ export const createTelegramResponder = (...args: [...AdapterArgs, surface?: stri
     ...core, respond,
     chooseReaction: (turn: TelegramInboundTurn) => core.chooseReaction(envelope(turn)),
     remind: (id: string, chatId: number, note: string, time: TurnTimer) => core.remind(id, surfaceChatRef(surface, chatId), note, time, surface),
-    prompt: (id: string, chatId: number, said: string, time: TurnTimer, toolNames?: Parameters<typeof core.prompt>[5], current?: Parameters<typeof core.prompt>[6], decision?: Parameters<typeof core.prompt>[7], turnContext?: string) => core.prompt(id, surfaceChatRef(surface, chatId), said, time, surface, toolNames, current, decision, turnContext),
+    prompt: (id: string, chatId: number, said: string, time: TurnTimer, toolNames?: Parameters<typeof core.prompt>[5], current?: Parameters<typeof core.prompt>[6], decision?: Parameters<typeof core.prompt>[7], turnContext?: string, sourceTaint?: Parameters<typeof core.prompt>[9]) => core.prompt(id, surfaceChatRef(surface, chatId), said, time, surface, toolNames, current, decision, turnContext, sourceTaint),
   };
 };
