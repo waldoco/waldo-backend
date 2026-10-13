@@ -33,6 +33,10 @@ const parts = {
   file: { type: 'file', file_ref: 'file:7f3a', name: 'agenda.pdf', mime: 'application/pdf', bytes: 20480, sha256: 'b'.repeat(64), fallback_text },
   artifact: { type: 'artifact', artifact_id: 'art:plan-01', revision: 2, fallback_text },
   voice: { type: 'voice', audio_ref: 'audio:91c2', transcript: 'Your 4pm is confirmed.', fallback_text },
+  receipt: {
+    type: 'receipt', items: [{ kind: 'reminder_set', target: null, outcome: 'accepted', via_task: false, at: 1_760_000_000_000, digest }],
+    more: 0, fallback_text: 'Done: reminder set',
+  },
 } as const;
 const envelope = {
   reply_id: 'reply-0001', principal_ref: `prn_${'c'.repeat(32)}`, conversation_ref: 'owner:main',
@@ -40,9 +44,21 @@ const envelope = {
 } as const;
 
 describe('replyPartV1', () => {
+  it('a receipt names each effect from its typed receipt: kind, target, outcome, time and digest, never free text', () => {
+    const receipt = parts.receipt, item = receipt.items[0];
+    expect(replyPartV1Schema.safeParse({ ...receipt, items: [item, { ...item, kind: 'workspace_file_written', target: 'notes.md', outcome: 'unconfirmed', via_task: true, digest: null }], more: 3 }).success).toBe(true);
+    for (const bad of [
+      { ...receipt, items: [] }, { ...receipt, items: Array.from({ length: 21 }, () => item) }, { ...receipt, more: -1 },
+      { ...receipt, items: [{ ...item, kind: 'Reminder set' }] }, { ...receipt, items: [{ ...item, outcome: 'done' }] },
+      { ...receipt, items: [{ ...item, at: 1_760_000_000 }] }, { ...receipt, items: [{ ...item, digest: 'abc' }] },
+      { ...receipt, items: [{ ...item, target: '' }] }, { ...receipt, items: [{ ...item, note: 'free text' }] }, { ...receipt, fallback_text: ' ' },
+    ]) expect(replyPartV1Schema.safeParse(bad).success).toBe(false);
+  });
+
   it('reuses the app leaf schemas, so app and runtime share one representation', () => {
     for (const name of ['approvalIdV1Schema', 'approvalKindV1Schema', 'approvalActionV1Schema', 'payloadDigestV1Schema', 'replyVisibilityV1Schema',
-      'replyApprovalPartV1Schema', 'replyQuickRepliesPartV1Schema', 'replyChartSeriesPartV1Schema', 'replyFilePartV1Schema', 'replyVoicePartV1Schema'] as const) {
+      'replyApprovalPartV1Schema', 'replyQuickRepliesPartV1Schema', 'replyChartSeriesPartV1Schema', 'replyFilePartV1Schema', 'replyVoicePartV1Schema',
+      'replyReceiptPartV1Schema'] as const) {
       expect(runtimeParts[name]).toBe(appParts[name]);
     }
     expect(runtimeParts.REPLY_FALLBACK_MAX_CHARS).toBe(appParts.REPLY_FALLBACK_MAX_CHARS);

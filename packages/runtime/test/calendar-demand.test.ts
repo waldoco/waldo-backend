@@ -37,7 +37,7 @@ const fakeClient = (account: FakeAccount, calls: { from: string; to: string; ids
 });
 
 const withDemand = <T>(work: (sql: SqlStorage) => Promise<T>) =>
-  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`calendar-demand-${sequence++}`)), async (_i, state) => work(state.storage.sql));
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`calendar-demand-${sequence++}`)), async (_i, state) => work(state.storage.sql));
 
 const setup = (sql: SqlStorage, accounts: Record<string, FakeAccount>, options: { failing?: string[]; now?: () => number } = {}) => {
   const calls: { from: string; to: string; ids: readonly string[] }[] = [];
