@@ -126,17 +126,22 @@ export type ArtifactRelay = (from: string, artifacts: readonly ExtractedArtifact
 // never a truncated snippet) and relayed to the owner on his chat channel - the Instinct behavior
 // without the code ever entering model context, episodes, or traces. The tool result carries only
 // the marker; a failed or absent relay falls back to the source-app copy, never a false claim.
-const relayThreadMessage = async <T extends { subject: string; body: string; from: string }>(item: T, relay: ArtifactRelay | undefined): Promise<T & { quarantined?: readonly ArtifactKind[] }> => {
-  const subject = extractArtifacts(item.subject);
-  const body = extractArtifacts(item.body);
-  const artifacts = [...subject.artifacts, ...body.artifacts.filter((b) => !subject.artifacts.some((s) => s.value === b.value))];
-  if (artifacts.length === 0) return item;
+const relayThreadMessage = async <T extends { subject: string; body: string; from: string; artifact_scan?: string }>(item: T, relay: ArtifactRelay | undefined): Promise<Omit<T, 'artifact_scan'> & { quarantined?: readonly ArtifactKind[] }> => {
+  const { artifact_scan: scan, ...visible } = item;
+  const subject = extractArtifacts(visible.subject);
+  const body = extractArtifacts(visible.body);
+  const shown = [...subject.artifacts, ...body.artifacts.filter((b) => !subject.artifacts.some((s) => s.value === b.value))];
+  const linked = extractArtifacts(scan ?? '').artifacts.filter((l) => !shown.some((s) => s.value === l.value));
+  const artifacts = [...shown, ...linked];
+  if (artifacts.length === 0) return visible;
   const kinds = [...new Set(artifacts.map((artifact) => artifact.kind))].sort();
   const relayed = relay !== undefined && await relay(item.from, artifacts).then(() => true, () => false);
-  // Only the matched spans are replaced; the rest of subject and body stays readable. A failed or
+  // Only the matched spans are replaced; the rest of subject and body stays readable. An artifact
+  // found only in an HTML link target has no span to replace, so its marker is appended. A failed or
   // absent relay keeps the source-app marker, never a false sent claim.
+  const bodyText = [body.text, ...new Set(linked.map((artifact) => artifactMarker(artifact.kind)))].join('\n');
   const relayedMarker = (text: string): string => kinds.reduce((t, kind) => t.replaceAll(artifactMarker(kind), `[${kind} artifact - sent to the owner in a separate message]`), text);
-  return { ...item, subject: relayed ? relayedMarker(subject.text) : subject.text, body: relayed ? relayedMarker(body.text) : body.text, quarantined: kinds };
+  return { ...visible, subject: relayed ? relayedMarker(subject.text) : subject.text, body: relayed ? relayedMarker(bodyText) : bodyText, quarantined: kinds };
 };
 
 export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, relayArtifact?: ArtifactRelay, effects?: OwnerEffectLedger) => [
@@ -254,7 +259,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<SearchCommunicationArgs, unknown, ToolDispatcherContext>,
   {
     name: 'read_thread',
-    description: "Read one Gmail thread by thread_id - the messages with sender, subject, time and body. Use after get_communication or search_communication surfaces a thread the owner asks about, before drafting a reply. Continue with cursor and the same thread/account; changed threads require restarting.",
+    description: "Read one Gmail thread by thread_id - the messages with sender, subject, time and body. Use after get_communication or search_communication surfaces a thread the owner asks about, before drafting a reply. Continue with cursor and the same thread/account; changed threads require restarting. body_source says what each body was read from: 'snippet' means only Gmail's short preview was readable, so say so rather than reading it as the full message.",
     schema: readThreadArgsSchema,
     trigger_allowlist: allowlist('read_thread'),
     autonomy_gated: false,
@@ -262,7 +267,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     eligible: granted(google, 'mail'),
     handle: ({ thread_id, limit, cursor, account }: ReadThreadArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'mail', ctx, async (client) => {
       if (!client.threadPage) throw new Error('Gmail thread pagination adapter unavailable');
-      const page = await client.threadPage(thread_id, limit, cursor);
+      const page = await client.threadPage(thread_id, limit, cursor, { fullBodies: true });
       return {thread_id, account: client.account ?? {connection_id:null,email:null}, cursor: page.cursor, messages: await Promise.all(page.messages.map(message => relayThreadMessage(message, relayArtifact)))};
     }, account),
   } satisfies ToolHandler<ReadThreadArgs, unknown, ToolDispatcherContext>,
