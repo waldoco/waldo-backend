@@ -107,6 +107,26 @@ export const SCENARIOS: readonly Scenario[] = [
     },
   },
   {
+    // "Draft … and send it once I approve" is a send the owner approves on its card, not a saved Gmail draft.
+    // The scripted model makes the call; the assertion is that turn 1 raises the proposal and that the
+    // model is told the card is the approval.
+    id: 'tools-send-once-approved',
+    category: 'tools',
+    turns: ["Draft a note to myself saying 'QA' and send it once I approve"],
+    llm: [
+      { match: /send it once I approve/, rounds: [
+        { toolCalls: [{ name: 'send_email', arguments: { to: ['owner@example.com'], subject: 'QA', body_markdown: 'QA' } }] },
+        { text: 'The card above has your note saying QA. Nothing sends until you approve it.' },
+      ] },
+    ],
+    assert: {
+      mustCall: ['send_email'],
+      mustNotCall: ['draft_email'],
+      hops: [{ hop: 'tool_send_email', ok: true }],
+      modelInput: [{ turn: 1, mustContain: ['A request to draft an email and send it once the owner approves is a send_email proposal'] }],
+    },
+  },
+  {
     id: 'tools-no-needless-call',
     category: 'tools',
     turns: ['thanks, that is all for now'],
