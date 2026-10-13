@@ -1157,3 +1157,21 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - `CAPABILITY_STATUS.md`;
   - `PILLAR_SCORECARD_2026-10-12.md`.
   The design system and design pass v2 are deferred until after the reset.
+
+## 05:52:40Z: owner rulings (seeding, B2, the Watch, calendar QA); app #107 review PASS
+
+- **The owner's four answers** (all the recommended options; posted on #1103):
+  1. Seeded Simulator Health data, on a separate test owner only.
+  2. B2 is a go; the owner applies its hosted migration.
+  3. The Watch app ships.
+  4. Calendar QA, for "QA" events only: at most 3 today, through approval cards.
+- **QA calendar events used: 0 of 3.**
+- **App #107** (`a1a4ecae`, session-restore retry): independent review PASS. The notes went to L4.
+  - It merges after the 07:30Z reset, together with #108 (the zone gate), so one advisor call covers both while usage is high.
+- **Still the owner's:**
+  - the `6ddbd85e` deploy;
+  - Google re-consent with the availability and calendar_list scopes;
+  - P1 run 3b (before about 08:40Z);
+  - the Expo keys;
+  - signing in the separate test owner;
+  - whether the phone-to-Watch scores path is allowed.
