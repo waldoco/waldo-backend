@@ -692,3 +692,11 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - **Pass:** `email_verify:rfc822_rewritten`, a 200, and "Done" in the app.
   - **If `not_found` follows `header_differs`:** Gmail's own header is lagging in search too. Stop sending tonight, and keep sends 4 and 5 for the owner's check after the proxy redeploy.
   - Also watch the decision POST's wall time, against the app's 20 s abort.
+
+## 01:36Z: `19d05d02` deployed (D-b); P1 run 3 go
+
+- **Deployed `19d05d02` to staging at 01:36Z** [verified].
+  - **Gate script:** push CI green; GATE PASS; 4 files since `652b5fcf`; no wrangler, deploy or migration change; preflight 55/0.
+  - **Worker `5cade547`.** Rollback target `8b48dad2` (`652b5fcf`).
+  - **Smoke:** `/healthz` shows `19d05d02`; the signed-out routes return 401 and 401, and the probe returns 403. The tail is on `5cade547`.
+- **P1 run 3 go sent** (test send 3 of 5). Success is "Done". If it's "Outcome not confirmed" again, sending stops for the night.
