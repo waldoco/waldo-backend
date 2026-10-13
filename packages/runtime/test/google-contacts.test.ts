@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { GOOGLE_CONSENT_SCOPES, GOOGLE_FEATURE_SCOPES, GOOGLE_METHODS, GoogleError, googleClient, googleHas, type ContactMatch } from '../src/connectors/google';
+import { buildSessionState } from '@waldo/contracts';
+import { dispatchTool } from '../src/tools/dispatcher';
+import { sanitise } from '../src/scribe/sanitiser';
 import { googleHandlers } from '../src/tools/live/google';
 
 const AUTH = 'https://www.googleapis.com/auth/';
@@ -72,6 +75,24 @@ describe('Google contacts lookup', () => {
       .toMatchObject({ ok: false, connect: { status: 'auth_required', service: 'google', reason: 'not_connected', feature: 'contacts' } });
     expect(await tool({ searchContacts: async () => { throw new GoogleError(403, 'google 403: insufficient', 'ACCESS_TOKEN_SCOPE_INSUFFICIENT'); } }).handle({ query: 'Meera', limit: 5 } as never))
       .toMatchObject({ ok: false, connect: { reason: 'scope_missing', feature: 'contacts' } });
+  });
+
+  it('passes on only the contract fields, so nothing else a provider adds can reach the model', async () => {
+    const result = await tool({ searchContacts: async () => [
+      { name: 'Ana Ruiz', emails: ['ana@studio.example'], source: 'contacts', phone: '+1 555 0100', organization: 'Studio Ltd', photo: 'https://example.test/ana.jpg' },
+      { name: 'Broken Row', emails: ['not-an-address'], source: 'contacts' },
+    ] }).handle({ query: 'A', limit: 5 } as never);
+    expect(result).toMatchObject({ ok: true, data: { contacts: [{ name: 'Ana Ruiz', emails: ['ana@studio.example'], source: 'contacts' }] } });
+    expect(JSON.stringify(result)).not.toMatch(/555 0100|Studio Ltd|ana\.jpg|Broken Row/);
+  });
+
+  it('reaches the model marked as external text through the real dispatcher', async () => {
+    const context = { authenticatedUserId: 'owner', trigger: 'user_message' as const, session: buildSessionState({ trigger: 'user_message', canary_tokens: ['1111111111111111', '2222222222222222', '3333333333333333'], started_at: 1 }), hasApproval: () => false, sourceTaint: null, toolArgSourceTaint: null, sanitise };
+    const handler = tool({ searchContacts: async () => [{ name: 'Meera', emails: ['meera@family.example'], source: 'contacts' }] });
+    expect(await dispatchTool({ id: 'contacts-read', name: 'search_contacts', args: { query: 'Meera' } }, context, { handlers: [handler] }))
+      .toMatchObject({ ok: true, source_taint: 'external', data: { contacts: [{ name: 'Meera' }] } });
+    expect(await dispatchTool({ id: 'contacts-forged', name: 'search_contacts', args: { query: 'Meera', phone: true } }, context, { handlers: [handler] }))
+      .toMatchObject({ ok: false, code: 'invalid_args' });
   });
 
   it('tells the model to ask the owner rather than guess between people', () => {

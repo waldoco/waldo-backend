@@ -133,11 +133,15 @@ it('actual signed freebusy entry requires provider-compatible scope, uses owner 
  const f=fixture();f.scope(['https://www.googleapis.com/auth/calendar.events.freebusy']);expect(await(await serve(await request({...input,connection:'foreign'}))).json()).toMatchObject({error:{status:401}});expect(f.hops).not.toContain('token');
 });
 
-it('actual signed contacts search requires both contact scopes and never an effect intent',async()=>{
+it('actual signed contacts search requires both contact scopes, never an effect intent, and logs no contact',async()=>{
+ const printed:string[]=[];const spies=(['log','info','warn','error'] as const).map(level=>vi.spyOn(console,level).mockImplementation((...parts:unknown[])=>{printed.push(parts.map(part=>typeof part==='string'?part:JSON.stringify(part)).join(' '));}));
  const input={do_name:'owner',op:'call',connection:'conn',method:'searchContacts',args:['Fictional',5]};
  for(const scopes of [null,[],['https://www.googleapis.com/auth/contacts.readonly'],['https://www.googleapis.com/auth/contacts.other.readonly']]){const f=fixture();f.scope(scopes);expect(await(await serve(await request(input))).json()).toMatchObject({error:{status:403,message:'insufficient scopes'}});expect(f.hops).not.toContain('token');}
  const f=fixture();f.scope(['https://www.googleapis.com/auth/contacts.readonly','https://www.googleapis.com/auth/contacts.other.readonly']);
  expect(await(await serve(await request(input))).json()).toEqual({data:[{name:'Fictional Person',emails:['person@example.test'],source:'contacts'}]});expect(f.hops).not.toContain('proxy_idem_claim');expect(f.effects()).toBe(0);
+ spies.forEach(spy=>spy.mockRestore());
+ expect(printed.join('\n')).toMatch(/insufficient scopes/);
+ for(const text of ['Fictional Person','person@example.test'])expect(printed.join('\n')).not.toContain(text);
 });
 
 const readBody = async () => ({do_name:'owner',op:'mcp_call',connection:'conn',server_url:'https://drivemcp.googleapis.com/mcp/v1',tool:'search_files',args:[{query:'fictional'}],intent_id:`mcpread:${'a'.repeat(64)}`,read_only:true});

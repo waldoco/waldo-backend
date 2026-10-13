@@ -246,6 +246,7 @@ export type GoogleTaskPatch = GoogleTaskChanges & Readonly<{ status?: 'todo' | '
 
 const validPageLimit = (value: number, max: number) => Number.isSafeInteger(value) && value >= 1 && value <= max;
 
+// The edge imports this file, so the shape is checked here by hand; the tool checks it again against the contract.
 export type ContactMatch = Readonly<{ name: string | null; emails: readonly string[]; source: 'contacts' | 'other_contacts' }>;
 // One row per person, saved contacts first; a person already listed by an address is not repeated.
 const contactMatches = (sources: readonly Readonly<{ source: ContactMatch['source']; results: unknown }>[], limit: number): readonly ContactMatch[] => {
