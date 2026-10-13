@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { appControlProjectionV1Schema, appControlResultV1Schema } from '../../contracts/src/app/controls';
 import { appRenewResultV1Schema, appSessionV1Schema, appVerifyResultV1Schema } from '../../contracts/src/app/core';
 import { handleApp } from '../src/channels/app-api';
-import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
+import { OwnerDO } from '../src/channels/owner-do';
 import { linkCodeHash, routerSignature } from '../src/identity/owner-directory';
 
 const SECRET = 'fictional-renew-router-secret-0000000000000', DIRECTORY = 'https://renew.fixture.invalid', EMAIL = 'owner@example.test';
@@ -19,7 +19,7 @@ beforeEach(() => { directory.rows.clear(); directory.migrated = true; directory.
 afterEach(() => { vi.restoreAllMocks(); });
 
 const withOwner = (name: string, work: (app: (path: string, body?: unknown, credential?: string) => Promise<Response>, state: DurableObjectState) => Promise<void>) =>
-  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_unused, state) => {
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_unused, state) => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = new URL(String(input)); expect(url.origin).toBe(DIRECTORY);
       const a = JSON.parse(String(init?.body));
@@ -57,8 +57,8 @@ const withOwner = (name: string, work: (app: (path: string, body?: unknown, cred
     const settings = { ...env, TELEGRAM_BOT_TOKEN: undefined, TELEGRAM_WEBHOOK_SECRET: undefined, WALDO_OWNER_TELEGRAM_ID: undefined, OPENAI_API_KEY: 'synthetic-model-key', COMMON_OWNER_TASKS: '0', COMMON_BROWSER_REGISTRATION: undefined,
       WALDO_ENVIRONMENT: 'staging', WALDO_OWNER_TIMEZONE: 'UTC', SUPABASE_PROJECT_URL: DIRECTORY, SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key', WALDO_ROUTER_HMAC_SECRET: SECRET,
       RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) }, BROWSER: undefined };
-    const owner = new TelegramOwnerDO(state, settings as never); state.storage.kv.put('do_name', name); state.storage.kv.put('origin', 'https://app.fixture.invalid');
-    const routed = { ...settings, TELEGRAM_OWNER_DO: { idFromName: (n: string) => env.TELEGRAM_OWNER_DO!.idFromName(n), get: () => ({ fetch: (r: Request) => owner.fetch(r) }) } } as never;
+    const owner = new OwnerDO(state, settings as never); state.storage.kv.put('do_name', name); state.storage.kv.put('origin', 'https://app.fixture.invalid');
+    const routed = { ...settings, OWNER_DO: { idFromName: (n: string) => env.OWNER_DO!.idFromName(n), get: () => ({ fetch: (r: Request) => owner.fetch(r) }) } } as never;
     const app = async (path: string, body?: unknown, credential?: string) => (await handleApp(new Request(`https://app.fixture.invalid/app/v1${path}`, { method: body === undefined ? 'GET' : 'POST',
       headers: { 'content-type': 'application/json', ...(credential ? { authorization: `Bearer ${credential}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), routed))!;
     try { await work(app, state); } finally { (owner as any).ownerBrowser.stop(); await (owner as any).ownerBrowser.maintain(); await state.storage.deleteAlarm(); }
