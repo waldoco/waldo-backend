@@ -1112,3 +1112,9 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **Connectors found in source:** the proposal key includes the turn's trace id. So an identical repeat on a new turn gets a new card, and approving it would send a second copy. Run 3's refusal was the model's judgment.
 - **Decision (a):** handle it through prompt context. When an identical earlier send is still unknown, the proposal names it and the owner decides. There is no deterministic rule.
 - **Connectors may make a minimal edit** to `prompt/messaging-behavior.ts:54` and the `send_email` description, so turn 1 raises the proposal. It announces the edit on #1103 first and adds a scenario test.
+
+## 05:35:05Z: the orchestrator is handed over
+
+- **The new orchestrator** is session `local_c6bd97f4` ("Take over orchestration: app-first Waldo build"), with heartbeat job 48aea065.
+- **The old session** deleted its heartbeat (cron 1880182e) and stopped merging. It relays only two verdicts: #1114's delta, and app #104 with #106.
+- **The new session** received a list of in-flight items not in the handoff, including five owner questions still unanswered.
