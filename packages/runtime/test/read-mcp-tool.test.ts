@@ -111,22 +111,24 @@ describe('read_mcp_tool through the real dispatcher', () => {
     for (const a of got) expect(a.excludeContentSnippets).toBe(true);
   });
 
-  it('the staging Drive entry declares exactly the four read tools in read_tools', () => {
+  it('the staging Drive entry is narrowed to the catalogue metadata reads; file text and deletes drop out', () => {
     const drive = mcpServers(SERVERS).find((s) => s.name === 'drive');
-    expect(drive?.read_tools).toEqual(['search_files', 'list_recent_files', 'get_file_metadata', 'read_file_content']);
+    expect(drive?.read_tools).toEqual(['list_recent_files', 'search_files', 'get_file_metadata']);
+    expect(drive?.allow_tools).toEqual(['list_recent_files', 'search_files', 'get_file_metadata']);
   });
 
   it('the tool description names each read-only server and its exact read tools, and nothing from other servers', () => {
     const handler = readMcpToolHandler(SERVERS, auth, true);
     expect(handler.description).toContain('"drive"');
-    for (const tool of ['search_files', 'list_recent_files', 'get_file_metadata', 'read_file_content']) expect(handler.description).toContain(tool);
+    for (const tool of ['search_files', 'list_recent_files', 'get_file_metadata']) expect(handler.description).toContain(tool);
+    expect(handler.description).not.toContain('read_file_content');
     expect(handler.description).not.toContain('"mail"');
     expect(handler.description).not.toContain('delete_file');
     expect(readMcpToolHandler(undefined, auth, true).description).toContain('No read-only MCP servers');
   });
 
   it('a missing Drive grant yields a fixed, typed message naming the feature and reason, with no button claim and no link text', async () => {
-    const expired: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async () => { throw Object.assign(new Error('forbidden'), { status: 403 }); } };
+    const expired: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async () => { throw Object.assign(new Error('insufficient scopes'), { status: 403 }); } };
     const out = await dispatchTool({ id: 'scope', name: 'read_mcp_tool', args: { server: 'drive', tool: 'list_recent_files', args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, expired, true)] });
     expect(out).toMatchObject({ ok: false, code: 'auth_failed', connect: { status: 'auth_required', service: 'google', reason: 'scope_missing', feature: 'drive' } });
     const error = (out as { error: string }).error;

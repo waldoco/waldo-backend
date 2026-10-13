@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import { appControlRequestIdV1Schema, appControlResultV1Schema } from './controls';
 import {
-  approvalActionV1Schema, approvalIdV1Schema, approvalKindV1Schema, approvalReviewV1Schema, epochMsV1Schema, payloadDigestV1Schema,
-  type ApprovalActionV1, type ApprovalKindV1,
+  approvalActionV1Schema, approvalIdV1Schema, approvalKindV1Schema, approvalLabelsV1Schema, approvalQuestionV1Schema, approvalReviewV1Schema,
+  epochMsV1Schema, labelsOfferedActions, payloadDigestV1Schema, type ApprovalActionV1, type ApprovalKindV1,
 } from './parts';
 import { surfaceNameV1Schema } from './surfaces';
 
@@ -55,7 +55,11 @@ export const appApprovalV1Schema = z.strictObject({
   actions: z.array(approvalActionV1Schema).max(4),
   presented_surfaces: z.array(surfaceNameV1Schema).max(surfaceNameV1Schema.options.length)
     .refine(surfaces => new Set(surfaces).size === surfaces.length, 'surfaces repeat').optional(),
+  // undo_until is when the undo on offer closes, so the app can count it down; it comes only while undo is offered.
+  question: approvalQuestionV1Schema.optional(), labels: approvalLabelsV1Schema.optional(), undo_until: epochMsV1Schema.optional(),
 }).refine(approval => approval.exact[EXACT_BY_KIND[approval.kind]] !== undefined, { error: 'exact must name what this kind changes', path: ['exact'] })
+  .refine(labelsOfferedActions, { error: 'labels name only actions offered', path: ['labels'] })
+  .refine(approval => approval.undo_until === undefined || approval.actions.includes('undo'), { error: 'undo_until needs undo offered', path: ['undo_until'] })
   .refine(approval => new Set(approval.actions).size === approval.actions.length
     && approval.actions.every(action => DECISIONS_BY_STATE[approval.state]?.includes(action)), { error: 'actions must be decisions the desk accepts in this state', path: ['actions'] });
 export const appApprovalListQueryV1Schema = z.strictObject({ state: appApprovalStateV1Schema.optional() });

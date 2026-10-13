@@ -167,3 +167,45 @@ describe('not now', () => {
     expect(replyApprovalPartV1Schema.safeParse({ ...part, actions: ['defer', 'defer'] }).success).toBe(false);
   });
 });
+
+describe('the wording a server may send with an approval', () => {
+  const worded = { ...email, question: 'Send "Friday" to sam@example.com?', labels: { approve: 'Send email', skip: "Don't do this" } } as const;
+  const card = (approval: Readonly<Record<string, unknown>>) => {
+    const { approval_id, kind, review, payload_digest, expires_at, actions, question, labels } = approval;
+    return { type: 'approval', approval_id, kind, review, payload_digest, expires_at, actions, fallback_text: review,
+      ...(question === undefined ? {} : { question }), ...(labels === undefined ? {} : { labels }) };
+  };
+  const done = { ...calendar, state: 'done', actions: ['undo'], labels: { undo: 'Undo' }, undo_until: expiresAtMs } as const;
+
+  it('accepts a one-line question and labels for offered actions, in the list and on the chat card; an action may go unlabelled', () => {
+    expect(appApprovalV1Schema.safeParse(worded).success).toBe(true);
+    expect(replyApprovalPartV1Schema.safeParse(card(worded)).success).toBe(true);
+  });
+
+  it('accepts when undo closes, while undo is offered', () => {
+    expect(appApprovalV1Schema.safeParse(done).success).toBe(true);
+  });
+
+  it('is optional, so an approval without it parses as before', () => {
+    expect(appApprovalV1Schema.safeParse(email).success).toBe(true);
+    expect(replyApprovalPartV1Schema.safeParse(card(email)).success).toBe(true);
+  });
+
+  it.each([
+    ['a question on two lines', { question: 'Send "Friday"\nto sam@example.com?' }],
+    ['a blank question', { question: '   ' }],
+    ['a question over 120 characters', { question: `Send "${'x'.repeat(120)}"?` }],
+    ['a label over 40 characters', { labels: { approve: 'x'.repeat(41) } }],
+    ['a blank label', { labels: { skip: ' ' } }],
+    ['a label for an action not offered', { labels: { defer: 'Skip' } }],
+    ['a label for an unknown action', { labels: { later: 'Later' } }],
+  ])('rejects %s, in the list and on the chat card', (_shape, change) => {
+    expect(appApprovalV1Schema.safeParse({ ...worded, ...change }).success).toBe(false);
+    expect(replyApprovalPartV1Schema.safeParse(card({ ...worded, ...change })).success).toBe(false);
+  });
+
+  it('rejects when undo closes on an approval that offers no undo', () => {
+    expect(appApprovalV1Schema.safeParse({ ...worded, undo_until: expiresAtMs }).success).toBe(false);
+    expect(appApprovalV1Schema.safeParse({ ...done, actions: [], labels: undefined }).success).toBe(false);
+  });
+});
