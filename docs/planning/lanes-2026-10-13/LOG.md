@@ -735,3 +735,24 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **Reviews running:** #1114 (codes in table cells; its Worker half closes a live exposure on v17) and app #98 (chat chrome).
 - **Next pair:** app #99 and #100, then #101 and #1110 (A2).
 - **Still held:** #1113 (the owner), #1100 (its 2 conditions), and P1 run 3b (the owner; refused by the App session's classifier).
+
+## 02:48Z: #1114 FAIL (digits split by whitespace still leak); app #98 FAIL (a long press approves)
+
+- **#1114 at `46622cd9`:** better than today in every deploy order, and it closes the code-in-the-next-cell leak. **But digits split by whitespace still leak:**
+  - a code split across cells;
+  - 2+2+2;
+  - one digit per cell when pretty-printed;
+  - nbsp padding;
+  - double spaces.
+
+  An 8-digit 4+4 split relays the wrong code.
+  - **Not merged on a FAIL** (advisor: the ruling needs a passing review).
+  - Connectors pushes the completing commit first, ahead of #1109: a bounded whitespace run, 2- or 4-digit groups count-checked to 4–8 digits, six new `read_thread` tests, and a `test:52` that can fail. The PR comment has the details.
+  - A focused re-review follows, then a merge, a deploy, and one read-only QA turn checking that ordinary mail stays readable.
+- **App #98 at `b05442d4`: FAIL** (PR comment 6137077572).
+  - **Safety:** a long press on a decision button would decide, because RN fires `onPress` on release without an `onLongPress`, and #98 teaches long-press-to-share on replies.
+  - **Android:** More can't be dismissed (4 buttons; cancelable defaults to false).
+  - **Housekeeping:** dead code, and one stale comment.
+
+  Sent to the App lane.
+- **Running:** the app #99 review. App #100 and #101, and #1110, follow.
