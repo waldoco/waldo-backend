@@ -4,10 +4,9 @@ import {
   OPENAI_PROVIDER,
   PROVIDER_OF,
   type ModelName,
-  type AdapterResult,
-  type LLMResponse,
 } from '@waldo/contracts';
-import type { LLMGatewayAdapter, LLMGatewayRequest } from './provider';
+import type { LLMGatewayAdapter, LLMGatewayRequest, LLMGatewayResult } from './provider';
+import { callTimeLeftMs, MODEL_CALL_TIMEOUT_MS } from './time-budget';
 
 export type OpenAIResponsesClient = Pick<OpenAI, 'responses'>;
 
@@ -34,17 +33,19 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
   private readonly onResponseMetadata: ((metadata: OpenAIResponseMetadata) => void) | undefined;
 
   constructor(options: OpenAIAdapterOptions) {
-    this.timeoutMs = options.timeoutMs ?? 30_000;
+    this.timeoutMs = options.timeoutMs ?? MODEL_CALL_TIMEOUT_MS;
     this.onResponseMetadata = options.onResponseMetadata;
     this.missingKey = options.apiKey !== undefined ? !validModelCredential(options.apiKey) : options.client === undefined;
+    // The provider's attempt plan is the one retry owner. An SDK retry is invisible to the trace, the circuit breaker and
+    // the spend meter, and its backoff sleep outlasts both the turn's deadline and a stop.
     this.client = this.missingKey ? undefined : options.client ?? new OpenAI({
       apiKey: options.apiKey,
-      maxRetries: 2,
+      maxRetries: 0,
       timeout: this.timeoutMs,
     });
   }
 
-  async complete(input: LLMGatewayRequest): Promise<AdapterResult<LLMResponse>> {
+  async complete(input: LLMGatewayRequest): Promise<LLMGatewayResult> {
     if (PROVIDER_OF[input.request.model] !== OPENAI_PROVIDER || input.step.provider !== OPENAI_PROVIDER) {
       return { ok: false, code: 'invalid_args', error: 'OpenAI adapter received an unsupported route' };
     }
@@ -56,65 +57,58 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
     const controller = new AbortController();
     const abortRun = () => controller.abort();
     input.runScope?.signal.addEventListener('abort', abortRun, { once: true });
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    // The request's own limit, cut to what is left of the turn.
+    const timeout = setTimeout(() => controller.abort(), Math.max(0, Math.min(this.timeoutMs, callTimeLeftMs(input.runScope))));
     const startedAt = Date.now();
     try {
-      // A reply that is only reasoning (no text, no tool call) is a transient model miss, not a finished turn: ask once more before failing.
-      // Tokens spent on a discarded attempt are still spent: they ride into the final totals.
-      let spentInput = 0;
-      let spentOutput = 0;
-      let spentCached = 0;
-      for (let attempt = 0; ; attempt++) {
-        const response = await this.client.responses.create(
-          {
-            model: input.request.model,
-            instructions: input.request.system,
-            input: responsesInput(input.request),
-            max_output_tokens: input.request.max_tokens,
-            store: false,
-            reasoning: { effort: 'low', summary: 'auto' },
-            ...(input.request.cache_key ? { prompt_cache_key: input.request.cache_key } : {}),
-            ...(input.request.tools ? { tools: input.request.tools.map((tool) => ({ type: 'function' as const, name: tool.name, description: tool.description, parameters: tool.parameters, strict: false })) } : {}),
-            ...(input.request.response_format ? { text: { format: { type: 'json_schema' as const, name: input.request.response_format.name, schema: input.request.response_format.schema, strict: true } } } : {}),
-          },
-          { signal: controller.signal },
-        );
-        const text = responseText(response).trim();
-        const toolCalls = response.output.flatMap((item) => item.type === 'function_call' ? [{ call_id: item.call_id, name: item.name, arguments: item.arguments }] : []);
-        const incomplete = response.status === 'incomplete';
-        if (incomplete && text.length === 0 && toolCalls.length === 0) {
-          return { ok: false, code: 'oversize', error: `OpenAI output incomplete: ${response.incomplete_details?.reason ?? 'unknown'}` };
-        }
-        const parsed = {
+      const response = await this.client.responses.create(
+        {
           model: input.request.model,
-          text,
-          ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
-          input_tokens: spentInput + (response.usage?.input_tokens ?? 0),
-          output_tokens: spentOutput + (response.usage?.output_tokens ?? 0),
-          cache_read_input_tokens: spentCached + (response.usage?.input_tokens_details?.cached_tokens ?? 0),
-          output_items: response.output.map((item) => item as unknown as Record<string, unknown>),
-          latency_ms: Date.now() - startedAt,
-          ...(incomplete ? { truncated: true } : {}),
-        };
-        if (text.length === 0 && toolCalls.length === 0) {
-          if (attempt === 0) {
-            spentInput = parsed.input_tokens;
-            spentOutput = parsed.output_tokens;
-            spentCached = parsed.cache_read_input_tokens;
-            continue;
-          }
-          return { ok: false, code: 'invalid_args', error: 'OpenAI returned empty output' };
-        }
-        this.onResponseMetadata?.({
-          response_id: response.id,
-          model: input.request.model,
-          input_tokens: parsed.input_tokens,
-          output_tokens: parsed.output_tokens,
-          latency_ms: parsed.latency_ms,
-          ...(reasoningSummary(response) ? { reasoning: reasoningSummary(response) } : {}),
-        });
-        return { ok: true, data: parsed };
+          instructions: input.request.system,
+          input: responsesInput(input.request),
+          max_output_tokens: input.request.max_tokens,
+          store: false,
+          reasoning: { effort: 'low', summary: 'auto' },
+          ...(input.request.cache_key ? { prompt_cache_key: input.request.cache_key } : {}),
+          ...(input.request.tools ? { tools: input.request.tools.map((tool) => ({ type: 'function' as const, name: tool.name, description: tool.description, parameters: tool.parameters, strict: false })) } : {}),
+          ...(input.request.response_format ? { text: { format: { type: 'json_schema' as const, name: input.request.response_format.name, schema: input.request.response_format.schema, strict: true } } } : {}),
+        },
+        { signal: controller.signal },
+      );
+      const text = responseText(response).trim();
+      const toolCalls = response.output.flatMap((item) => item.type === 'function_call' ? [{ call_id: item.call_id, name: item.name, arguments: item.arguments }] : []);
+      const incomplete = response.status === 'incomplete';
+      if (incomplete && text.length === 0 && toolCalls.length === 0) {
+        return { ok: false, code: 'oversize', error: `OpenAI output incomplete: ${response.incomplete_details?.reason ?? 'unknown'}` };
       }
+      const spent = {
+        input_tokens: response.usage?.input_tokens ?? 0,
+        output_tokens: response.usage?.output_tokens ?? 0,
+        cache_read_input_tokens: response.usage?.input_tokens_details?.cached_tokens ?? 0,
+      };
+      // A reply that is only reasoning (no text, no tool call) is a transient model miss: the provider asks once more,
+      // and the tokens it cost still count.
+      if (text.length === 0 && toolCalls.length === 0) {
+        return { ok: false, code: 'transient', error: 'OpenAI returned empty output', spent };
+      }
+      const parsed = {
+        model: input.request.model,
+        text,
+        ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+        ...spent,
+        output_items: response.output.map((item) => item as unknown as Record<string, unknown>),
+        latency_ms: Date.now() - startedAt,
+        ...(incomplete ? { truncated: true } : {}),
+      };
+      this.onResponseMetadata?.({
+        response_id: response.id,
+        model: input.request.model,
+        input_tokens: parsed.input_tokens,
+        output_tokens: parsed.output_tokens,
+        latency_ms: parsed.latency_ms,
+        ...(reasoningSummary(response) ? { reasoning: reasoningSummary(response) } : {}),
+      });
+      return { ok: true, data: parsed };
     } catch (error) {
       // Only identifiers cross into the trace (status, provider error code, offending parameter name); the provider's message can quote the request.
       const detail = error instanceof OpenAI.APIError
