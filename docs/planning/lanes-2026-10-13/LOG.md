@@ -830,3 +830,17 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - #1116, proxy logs keep only fixed codes. It must merge before the proxy redeploy.
   - App #103, the follow-up: "Unconfirmed", "New draft", strict state words, one time rule.
 - **The App lane's next items** come from Ansh's list 6.3: the Home Brief row pointing at the latest scheduled row, then Body's candidate recovery and sleep debt, then the unreachable-file inventory.
+
+## 03:30Z: #1118 (regex blow-up fix) and #1116's delta in review; Brief and R3 answers
+
+- **#1118** (Connectors, head `5ab4b947`) fixes the pre-existing regex blow-up:
+  - a bounded separator and vendor word;
+  - link runs tested once each, anchored at their start (the URL patterns were quadratic too: about 11 s at base on a 200K `https://a` run);
+  - a timing test of ten hostile 200K shapes, under 250 ms.
+
+  **It's in review together with #1116's delta** (`25b8963d`: the prefix-shaped log test, plus `op` and `method` bounded). If both pass, they merge and deploy (#1118 is Worker-side; #1116 waits for the proxy redeploy).
+- **#1114's rework** (on top of #1118) is in progress at Connectors.
+- **The App lane's two questions:**
+  - **The Brief row** uses `cards[].latest` when it's present, and otherwise claims nothing the server hasn't said. "Fill `latest`" was asked of the backend builder on #1103 (6137537343).
+  - **R3:** the four Home placeholders are removed, including the Patrol and Spots cards. The names, screens and menu rows are kept.
+- **App #1116's sibling, app #103** (the follow-up), is in review.
