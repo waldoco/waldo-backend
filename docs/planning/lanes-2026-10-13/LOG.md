@@ -1830,3 +1830,12 @@ Verdicts come from a scan of PR comments at 09:57Z. "@head" means the verdict na
   - the design brief for Suyash and the iMessage status: 10:13Z;
   - the handoff page: https://claude.ai/artifact/Drw2yR7zPXwRHPacJPnrSY.
 - **Lanes:** L4, N4 and Connectors are paused until 12:30Z, with their queues in the entries above. L5 starts `get_health` after the reset.
+
+## 10:23Z (from `date -u`): heartbeat; heartbeats paused until the reset
+
+- Usage 91% (resets 12:30Z). No merges and no reviewers. Backend tip `ea41bb0e` = staging; app main `7e09317c`.
+- **Heartbeats paused:** the recurring heartbeat `b5c0736d` is deleted. A one-shot at 12:35Z (18:05 IST local) re-creates it with the same prompt and runs a cycle, so each idle cycle stops costing usage meanwhile.
+- **New since 10:00Z,** all from Ansh's cloud lanes:
+  - the backend builder fixed the three BLOCKs from cloud review 6142381426 and pushed #1135, #1132, #1129 (main merged after #1130) and #1139;
+  - the Google Workspace lane opened #1146 (Google MCP servers read-only by construction), #1147 (**needs owner:** serve Google's Workspace MCP reads on staging, a new third-party service) and #1148 (the plan), and handed its Google gap list to Connectors (#1103 6143415992).
+  - The owner ruled Google later, so #1147 waits for an explicit owner yes. These heads need fresh review after the reset.
