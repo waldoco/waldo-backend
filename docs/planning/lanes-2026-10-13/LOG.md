@@ -1901,3 +1901,17 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
   - After the 12:30Z reset, the old account's L4, N4 and Connectors resume only their small queued items (listed there).
   - The new backend lead takes everything else and is the **single gatekeeper** for both repos. The lanes post review-ready PRs on #1103.
 - **The old orchestrator** cancelled its 12:35Z heartbeat auto-resume (one-shot `5aa60008`), so there is no second gate. It stays passive until the owner brings the new session's results back.
+
+## 10:53Z (from `date -u`): the new backend lead runs as a cloud session
+
+- The owner runs the new-account backend lead as a **cloud (web) session**, like Ansh's lanes, not on this Mac.
+- **`HANDOFF_BACKEND_FINALIZER.md`** gains a "Cloud session" block that takes precedence:
+  - it can't reach Mac memory, the gate script, the Simulator, local untracked files, or session messages;
+  - coordination happens only through #1103;
+  - **its own log** is `docs/planning/backend-lead/LOG.md` on branch `claude/backend-lead-log`, with a draft PR "Backend lead log (do not merge)";
+  - deploys are the owner's, on the Mac, using the SHA it hands over;
+  - checks the cloud can't run are UNAVAILABLE, never PASS;
+  - app-repo work goes to a Mac lane or a second cloud session;
+  - it has autonomy within the phases.
+- **New `OWNER_RULINGS_DIGEST.md`** is a committed digest of the owner's rulings, because the cloud can't read Mac memory. It covers standing rulings, 13 Oct items 1–22, and the open questions.
+- **To track the cloud lead later:** `git fetch origin claude/backend-lead-log`, then `git show origin/claude/backend-lead-log:docs/planning/backend-lead/LOG.md`, plus #1103.

@@ -7,6 +7,33 @@
 >
 > **You are the only gatekeeper:** review and merge for both repos, including those lanes' PRs, which they post on #1103. The old orchestrator stays passive until the owner brings your results back to it. Claim everything else on #1103 before you start.
 
+## Cloud session: read this before the rest (it wins over anything below)
+
+You run as a **Claude Code cloud (web) session on the new account**, like Ansh's lanes. You see only what is committed to GitHub.
+
+- **Not available to you:**
+  - the owner's Mac memory folder. Use `OWNER_RULINGS_DIGEST.md` in this folder instead.
+  - the local staging-gate script;
+  - the iOS Simulator and the Air;
+  - local worktrees and untracked files, such as L4's website-requirements table, until a Mac lane commits it;
+  - messaging to Mac sessions.
+- **Coordinate only through GitHub:**
+  - claims, questions and milestones go on `waldoco/waldo-backend#1103`;
+  - the Mac lanes post their review-ready PRs there.
+- **Keep a log the owner and the Mac orchestrator can track:**
+  - It's one file, `docs/planning/backend-lead/LOG.md`, on its own branch. Name it `claude/backend-lead-log`, or the closest your environment allows.
+  - Open a draft docs PR from it into `beta-mvp`, titled "Backend lead log (do not merge)", so it's easy to find.
+  - Each entry is stamped from a separate `date -u` call and records: what you did, the PR and full SHAs, the evidence (PASS, FAIL, NOT RUN, UNAVAILABLE), decisions with their reasons, and what's next.
+  - Push after every meaningful step, and fetch and rebase before you push.
+  - Don't write to `docs/overnight-2026-10-12`; that log belongs to the Mac orchestrator.
+- **Deploys stay with the owner, on the Mac.**
+  - When a `beta-mvp` tip should go to staging, post on #1103 and in your log: the full SHA, CI 6 of 6 green, and the diff from the live release. That diff must have no `wrangler`, migration or deploy-script paths; anything app-contract also needs an emitter check.
+  - The owner runs their local staging-gate command with that SHA.
+  - Changes the gate refuses (`wrangler.jsonc`, migrations) need the owner's direct steps, written out in the PR.
+- **Local checks** that the cloud can't run (Docker, local Supabase or pgTAP, a Simulator) are recorded as UNAVAILABLE, and you rely on CI. Never report them as passing.
+- **The app repo:** if this session can't push to `waldoco/waldo-app`, put app pin and wiring changes in a #1103 note for a Mac lane, or ask the owner to start a second cloud session on `waldo-app`. The Mac app lane does Simulator proofs.
+- **Your autonomy:** you decide the order within each phase, the design details, and which bounded fixes to implement, reasoning from source and the rules. Ask the owner only for the steps listed in §6 and for rulings that the digest lists as open, or that add a store, writer, authority seam or health destination.
+
 This is for a session on a **new Claude account** (model: Fable 5.1), working on the owner's Mac. The old account's sessions (orchestrator, L4 app, N4 health, Connectors, L5) are gone after the switch. Their work survives in GitHub, in the local checkouts and in `docs/planning/lanes-2026-10-13/LOG.md` on branch `docs/overnight-2026-10-12`.
 
 **Your role:** backend lead. Finish Waldo's backend building blocks, expose them to the app through app.v1, integrate them with the app, then review the harness against mature agent systems and fix what is wrong. Ansh's cloud lanes (another account) and Suyash's design pass run in parallel: complement them, don't duplicate them.
