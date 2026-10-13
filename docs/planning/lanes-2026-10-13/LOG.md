@@ -1333,3 +1333,24 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
     - the search defect is resolved (ranking);
     - evals need keys, so the owner runs them.
 - **L4's Overview plan:** confirmed, except the skip label, which L4 asks the owner directly.
+
+## About 08:08Z: #1123 PASS (merge held until the owner deploys `917032a1`); the flake rerun; #1126 in review
+
+- **The flake on tip `917032a1`:** `approval-receipt-next-turn.test.ts` › "Telegram: a turn after the owner taps Send it sees that the desk carried it out" (expected 1, got 0). The tree is identical to the green PR head. I reran only the failed job, once, and recorded it on #1103 (6141073811).
+- **The deploy:** when the rerun is green, hand the owner:
+  `ALLOW_APP_CONTRACTS=reviewed bash <L1 scratchpad>/staging-gate.sh /Users/shivanshfulper/Developer/Pin4sf/waldo-backend <L1 scratchpad> 917032a1bf4c8332c2214d7f971b0fab6034607e --deploy`
+  If the rerun fails, it's reproducible: no deploy, and the backend lane investigates.
+- **#1123 (send-turn-one, `09c509dc`): review PASS.**
+  - CI is 6/6 on the old base `6ddbd85e`, and #1122 touches none of its files.
+  - Don't merge it until the owner has deployed `917032a1`, or the tip moves and the command stops. After the deploy: advisor, merge, then post the non-blocking notes on the PR:
+    - plain "draft" asks may now get a Send card (run both eval cases);
+    - only the surface prompt line is pinned by a test;
+    - the outcome texts still say "check before retrying";
+    - the card time uses `decided_at`, which can show the last check;
+    - the note is fixed when the card is proposed;
+    - exact matches only;
+    - the console doesn't show the note.
+- **Running:** #109 (N4) and #1126 (the calendar-move card).
+- **Waiting for CI:** app #106 (`3595c8c1`; merge on green once the merge shows only main's files), app #111 (Patrol and Spots as Settings rows, `949b63ae`), and app #110 (the Watch).
+- **#1114:** back with Connectors (fifth FAIL), with the structural fix direction.
+- **Connectors rulings sent:** the backend owns the approval vocabulary (A); RSVP after the calendar-move exit; the meeting-prep live check is parked (an attendee would receive an invite email), for the owner.
