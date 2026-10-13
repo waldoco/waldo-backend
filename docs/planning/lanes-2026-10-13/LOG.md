@@ -495,3 +495,18 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **Still open:** the live `stagingTransport` drops Retry-After on JSON error routes (approvals, actions, health). In the real app an approvals 429 leaves no wait, so it was reproduced as 3 reads where 2 were expected. The gap predates the PR, but the PR's claim depends on it.
 - **Fix:** keep Retry-After in that branch, add a transport test, and add one runtime test through the real transport. It's posted on #93 (6134907734) and sent to the App lane.
 - **#94 and #95** wait for #93.
+
+## 00:07Z: app #93 merged; #94 retargeted
+
+- **Merged app #93 as `ddd3d902`** (approvals re-read on view; it honours the server's wait).
+  - **Gate:**
+    - The independent review passed the not-before fix.
+    - The required transport delta (`06a983ba`) was checked by hand: Retry-After is read before the JSON-route branch and returned from every branch.
+    - Its transport test and its runtime test through `createStagingTransport` both fail on the old code.
+    - CI passed against current `main` (run 38325071502). The advisor agreed.
+- **#94** (the words pass) is retargeted to `main` by the orchestrator. Its diff is its own files only.
+  - The P8 fix, checked by hand: per-action approve labels, typed by action (Add, Move or Cancel the event; Add, Change, Complete or Reopen the task), with a fallback only when exact data is missing. "(#91)" is gone.
+  - It merges once App checks run on `main`, after the App lane's empty commit.
+- **#95** follows #94.
+- **#99** (R9 state words, stacked on #95) and **#98** (chrome; held for the P1 re-run) are reviewed after the 02:30Z usage reset.
+- **Usage:** about 67%. The next full review is saved for Connectors' send-verify PR.
