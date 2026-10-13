@@ -2182,3 +2182,10 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 - Read-only history: hosted staging has 57 applied, i.e. `a9161905`'s 56 plus `20261013000000` (#1178 device bridge). The iMessage `20261012000000` was already applied. No recorded applier; asked on #1103 (6153929182). #1133 must renumber, and hand-off 3 needs no migration step.
 - Worker in two steps per the v6 ruling: `fa8a8758` (#1119 rename only, CI 6/6), then `a9161905`. The auto-mode permission check refused the Mac's Worker deploy prep ("Production Deploy"), so the owner runs both; the Mac smokes and checks on the Simulator that chat history survives v6 between them.
 - Production: no Worker exists on the account (checked 19:49Z).
+
+## 20:03Z — staging at head (Ashish), storage survived v6, lane T launched, heartbeat renewed
+
+- Staging is at `7ba2e7f9`: Ashish deployed head at 19:27Z (version `9b0cd7db`). That supersedes hand-off 2's Worker step, so the two-step plan was withdrawn and never run. Smoke checks pass (healthz, 401, 403). Storage survived v6: a 19:59Z recall turn on the Air answered from stored context. Posted 6154088574.
+- Owner: Ashish handles his own Kennel deploys and migrations; the Mac tracks only. Every heartbeat now checks the staging release and the migration count and posts changes.
+- Lane T (M1, `use_mac` eligibility) launched as a background agent in its own worktree; brief `MAC_LANE_T_M1_BRIEF.md` at `20e52f35`; claim on #1103. Core lane waits for the lead's A1 spec and a slot; the recall lane waits for the B3/B4 spec.
+- The app's keep-awake-while-working setting is on (owner-approved). The heartbeat cron was re-created (13,43) with current rulings, replacing the 14:38Z text. The deploy scratch worktree was removed. The unused yes to apply `20261012000000` is void.
