@@ -168,7 +168,8 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
         }
       }
       if (!page && (page_token || calendar_id !== 'primary')) throw new Error('Calendar pagination or selected calendar adapter unavailable');
-      const events = page?.events ?? await client.events(from,to,limit,include_declined);
+      // The operation marker is for the desk's reconciliation of its own writes, not for the model.
+      const events = (page?.events ?? await client.events(from,to,limit,include_declined)).map(({ operation_marker: _marker, ...event }) => event);
       // One content-free line per calendar read: which window and which kind of calendar were asked for, and how many
       // events came back. Never the calendar id or the account, either of which can be an address. The primary calendar's
       // id is the account address, so a read by that id counts as primary. The code stays within [a-z0-9_:]{1,64}, so a
