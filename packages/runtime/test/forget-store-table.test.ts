@@ -37,8 +37,8 @@ const TABLES: Record<string, Row> = {
   commands: gap('per-device owner-requested notification wire text until result/expiry/cancellation; isolated device custody, literal owner forget does not reach it; revoke clears storage after replay horizon'),
   notify_issues: exempt('per-device notification identifiers and issuance times only'),
   // Per iMessage bridge/account custody (IMessageBridgeDO). nonces/meta rows above also cover its replay nonces and bridge meta (ids, generation, cursor, heartbeat, capability report, quarantine reason).
-  events: gap('per-bridge inbound event identity and raw digest; the message body is dropped once handed/acknowledged, but held events (media, revoked scope) keep their text as evidence; a literal owner forget does not reach this isolated custody'),
-  deliveries: gap('per-bridge frozen reply command bytes (reply text) and result until revoke/retention policy; isolated custody, literal owner forget does not reach it'),
+  events: gap('per-bridge inbound event identity and raw digest; the message body is dropped once handed/acknowledged and those rows are pruned after 7 days; held events (media, revoked scope) keep their text as evidence until pruned after 30 days; a literal owner forget does not reach this isolated custody'),
+  deliveries: gap('per-bridge frozen reply command bytes (reply text) and result; settled, owner-reported, non-unknown rows are pruned after 7 days, unknown outcomes are kept as evidence; isolated custody, literal owner forget does not reach it (the owner-side outbox/inbox copies are redacted)'),
   result_conflicts: exempt('later conflicting host result envelopes: ids, message GUID, state and reason codes; no owner-authored text'),
   sent_messages: exempt('message GUID, command id and result state for receipt correlation'),
   frames: exempt('per-device logical fingerprints, protocol type, identifiers and time; no full frame or answer text'),
