@@ -54,7 +54,8 @@ export const replyVoicePartV1Schema = z.strictObject({
 
 export const RECEIPT_MAX_ITEMS = 20;
 // What a turn's effect tools did, from their typed receipts, never from the model's words. accepted means the tool
-// accepted the effect, not that the source system holds it. digest is sha256 over the tool's validated arguments.
+// accepted the effect, not that the source system holds it. digest is sha256 over the arguments the model gave the tool,
+// as parsed JSON in canonical key order: not the payload the tool validated, so it never matches an approval's payload_digest.
 export const replyReceiptPartV1Schema = z.strictObject({
   type: z.literal('receipt'),
   items: z.array(z.strictObject({

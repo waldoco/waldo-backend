@@ -6,7 +6,7 @@ import {
 import { waldoCardSchema } from '../ui/card';
 
 export {
-  approvalActionV1Schema, approvalIdV1Schema, approvalKindV1Schema, payloadDigestV1Schema, QUICK_REPLY_LABEL_MAX_CHARS,
+  approvalActionV1Schema, approvalIdV1Schema, approvalKindV1Schema, payloadDigestV1Schema, QUICK_REPLY_LABEL_MAX_CHARS, RECEIPT_MAX_ITEMS,
   QUICK_REPLY_MAX_CHOICES, REPLY_FALLBACK_MAX_CHARS, REPLY_TEXT_MAX_CHARS, replyApprovalPartV1Schema, replyChartSeriesPartV1Schema,
   replyFilePartV1Schema, replyQuickRepliesPartV1Schema, replyReceiptPartV1Schema, replyVisibilityV1Schema, replyVoicePartV1Schema,
 } from '../app/parts';

@@ -1,5 +1,4 @@
-import { RECEIPT_MAX_ITEMS } from '../../../contracts/src/app/parts';
-import type { ConversationReceipt } from '@waldo/contracts';
+import { RECEIPT_MAX_ITEMS, type ConversationReceipt } from '@waldo/contracts';
 import { sha256Hex, stableJson } from '../context-composer/canonical';
 import { receiptsFromLoopEvents, type LoopEventLike } from './claim-hook';
 
