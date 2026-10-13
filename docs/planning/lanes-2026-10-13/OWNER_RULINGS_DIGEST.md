@@ -88,7 +88,7 @@ This digest lets cloud sessions follow the owner's rulings. The full notes live 
 35. **The engineering bar (20:39Z, before sleep).** Every piece of engineering must be properly reasoned. No rash decisions.
     - When a design point is ambiguous, check how mature agent systems handle it. Look first at Anthropic's docs and its engineers' posts.
     - Cite what you find in the PR. Where you depart from that practice, say why.
-    - The Mac is writing a sourced reference note on this branch for the decisions open now: the time budget, compaction, tool errors, evals and forgetting.
+    - The sourced reference note is `HARNESS_PRACTICE_REFERENCES.md` on this branch. It covers the time budget and retries, compaction, tool errors, memory retrieval, latency, evals, forgetting and running long lanes.
 
 ## Still open (ask the owner)
 
