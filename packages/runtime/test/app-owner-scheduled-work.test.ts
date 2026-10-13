@@ -27,7 +27,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
-const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '3f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f';
 const ownerHex = OWNER_ID.replaceAll('-', '');
@@ -67,7 +67,7 @@ afterEach(() => { vi.unstubAllGlobals(); });
 
 type Identity = Readonly<{ telegram?: boolean; telegramUnlinked?: boolean; app?: 'own' | 'foreign' | 'none'; telegramReply?: string; alarms?: number; heartbeatDue?: boolean; sweepDue?: boolean }>;
 const driveAlarm = async (name: string, identity: Identity) => {
-  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   return runInDurableObject(stub, async (_instance, state) => {
     claimStore(state.storage.sql);
     ensureSchema(state.storage);
@@ -87,7 +87,7 @@ const driveAlarm = async (name: string, identity: Identity) => {
     // A reply to an earlier Telegram turn, still waiting in the transport outbox.
     if (identity.telegramReply) await new TelegramFinalOutbox(state.storage.kv, () => Date.now() - 60_000, (rows, due) => persistTransportWake(state.storage, rows, due))
       .enqueue({ id: 'turn:telegram-1', trace: 'tg-1', payload: { chat_id: 7, text: identity.telegramReply }, ownerSubject: '7', doName: name, bot: '7' });
-    const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     try {
       for (let pass = 0; pass < (identity.alarms ?? 1); pass++) await owner.alarm();
       const askedByAlarm = [...wire.asked];
@@ -210,10 +210,10 @@ describe('the owner\'s next app turn after a scheduled message', () => {
   it('sees the reminder in its history and continues the same transcript', async () => {
     const name = 'app-turn-alarm-turn';
     const headers = { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' };
-    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
       claimStore(state.storage.sql);
       ensureSchema(state.storage);
-      const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+      const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
       const turn = async (clientId: string, text: string) => {
         const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers, body: JSON.stringify({ client_message_id: clientId, text }) }));
         expect(sent.status).toBe(202);

@@ -12,7 +12,7 @@ const move = async (name: string, before: Event, to: Readonly<{ start: string; e
   const cards: string[] = [];
   let summary = '';
   let receipt = { toast: '', message: '' };
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const client = {
       event: async (id: string) => ({ id, title: 'QA', all_day: false, etag: 'v1', ...before }),
       moveEvent: async (id: string, start: string, end: string) => ({ id, title: 'QA', start, end, all_day: false, etag: 'v2' }),
@@ -47,7 +47,7 @@ describe('a calendar move', () => {
   });
 
   it('is Done when its response was lost and Google writes the same instant in another offset', async () => {
-    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('calendar-move-readback')), async (_instance, state) => {
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('calendar-move-readback')), async (_instance, state) => {
       const effects = ownerEffectLedger(state.storage, () => 1000);
       let marker = '', moves = 0;
       const client = {

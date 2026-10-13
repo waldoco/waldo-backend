@@ -20,7 +20,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
-const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '3d4e5f60-7182-4a93-8b4c-5d6e7f8091a2';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
@@ -39,11 +39,11 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 // Text capture on (staging), so the trace gate passes an error field through untouched: only the producer keeps it out.
-const turn = (name: string) => runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+const turn = (name: string) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
   state.storage.kv.put('do_name', name);
   const sinks = (['log', 'warn', 'error'] as const).map(level => vi.spyOn(console, level).mockImplementation(() => undefined));
   try {
-    const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, WALDO_ENVIRONMENT: 'staging', LANGFUSE_CAPTURE_TEXT: 'true' });
+    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, WALDO_ENVIRONMENT: 'staging', LANGFUSE_CAPTURE_TEXT: 'true' });
     const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers: headers(name), body: JSON.stringify({ client_message_id: 'client-receipt-0001', text: 'Update the saved draft.' }) }));
     expect(sent.status).toBe(202);
     const { message_id: id } = await sent.json() as { message_id: string };
