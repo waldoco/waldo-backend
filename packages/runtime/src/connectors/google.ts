@@ -131,12 +131,16 @@ export async function exchangeGoogleCode(app: GoogleApp, code: string, fetcher: 
 }
 
 export type CalendarItem = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number; etag?: string; operation_marker?: string;
-  status?: 'confirmed' | 'tentative' | 'cancelled'; updated?: string; recurring_event_id?: string; original_start?: string; source_url?: string; attendee_names?: readonly string[] }>;
+  status?: 'confirmed' | 'tentative' | 'cancelled'; updated?: string; recurring_event_id?: string; original_start?: string; source_url?: string; attendee_names?: readonly string[];
+  attendee_emails?: readonly string[]; conference_url?: string; attachments?: readonly CalendarAttachment[] }>;
+export type CalendarAttachment = Readonly<{ title: string; file_id?: string }>;
 
 // Provider-internal etags are unnecessary in model-facing context. Keep them in the
-// connector API for concurrency (moveEvent/cancelEvent), not in a card prompt.
-export const calendarPromptProjection = (event: CalendarItem): Omit<CalendarItem, 'etag' | 'operation_marker'> => {
-  const { etag: _etag, operation_marker: _marker, ...projection } = event;
+// connector API for concurrency (moveEvent/cancelEvent), not in a card prompt. Attendee emails,
+// the join link and attachments stay out of the shared card projection; meeting prep adds the
+// link and attachment titles itself.
+export const calendarPromptProjection = (event: CalendarItem): Omit<CalendarItem, 'etag' | 'operation_marker' | 'attendee_emails' | 'conference_url' | 'attachments'> => {
+  const { etag: _etag, operation_marker: _marker, attendee_emails: _emails, conference_url: _link, attachments: _attachments, ...projection } = event;
   return projection;
 };
 
@@ -184,6 +188,19 @@ export type SentEvidence = Readonly<{ message_id: string; thread_id: string; rfc
 export const verifiedSent = (value: unknown, messageId: string, threadId?: string): value is SentEvidence =>
   isObject(value) && typeof value.message_id === 'string' && !!value.message_id && typeof value.thread_id === 'string' && !!value.thread_id
   && value.rfc822_message_id === messageId && Array.isArray(value.label_ids) && value.label_ids.includes('SENT') && (!threadId || value.thread_id === threadId);
+// The first check a Sent readback fails, for fixed-code hops. 'verified' only when verifiedSent holds and, given
+// the id the send returned, the readback is that message.
+export type SentCheck = 'verified' | 'not_found' | 'id_mismatch' | 'not_sent_label' | 'rfc822_mismatch' | 'thread_mismatch';
+export const sentCheck = (value: unknown, messageId: string, threadId?: string, sentId?: string): SentCheck =>
+  !isObject(value) || typeof value.message_id !== 'string' || !value.message_id || typeof value.thread_id !== 'string' || !value.thread_id ? 'not_found'
+    : sentId !== undefined && value.message_id !== sentId ? 'id_mismatch'
+      : !Array.isArray(value.label_ids) || !value.label_ids.includes('SENT') ? 'not_sent_label'
+        : value.rfc822_message_id !== messageId ? 'rfc822_mismatch'
+          : threadId && value.thread_id !== threadId ? 'thread_mismatch' : 'verified';
+// Gmail checks a send before it goes out, so a token failure or a 400, 401, 403 or 429 answer means nothing
+// was sent. A server error or a lost response can follow a send, so those stay unknown.
+export const sendRefused = (error: unknown): boolean =>
+  error instanceof GoogleTokenError || (error instanceof GoogleError && [400, 401, 403, 429].includes(error.status) && error.message !== 'intent_pending');
 
 // Canonical MIME for the send rail: fixed header order, CRLF, no display names. The digest the
 // owner approves binds these exact bytes; Message-ID (set by us) is the reconciliation handle
@@ -284,7 +301,9 @@ export type GoogleClient = Readonly<{
   findDraftByMessageId?(messageId: string): Promise<Readonly<{ draft_id: string; message_id?: string }> | null>;
   draft(input: DraftInput): Promise<Readonly<{ draft_id: string; message_id?: string; thread_id?: string }>>;
   sendRaw(raw: string, threadId?: string): Promise<Readonly<{ message_id: string; thread_id?: string }>>;
-  findSentByMessageId(messageId: string, threadId?: string): Promise<boolean | SentEvidence | Readonly<{ message_id: string }>>;
+  // sentId, the id messages.send returned, reads that message's metadata directly: a search can miss a message
+  // sent moments ago. The answer is returned unchecked for sentCheck. A proxy that predates it searches.
+  findSentByMessageId(messageId: string, threadId?: string, sentId?: string): Promise<boolean | SentEvidence | Readonly<{ message_id: string }>>;
   event(id: string): Promise<CalendarItem>;
   createEvent(input: Readonly<{ title: string; start: string; end: string; id?: string; operationMarker?: string }>): Promise<CalendarItem>;
   moveEvent(id: string, start: string, end: string, etag?: string, operationMarker?: string): Promise<CalendarItem>;
@@ -349,8 +368,14 @@ export async function googleAccessToken(app: GoogleApp, tokens: GoogleTokens, fe
 }
 
 // Only an invalid grant marks connection health; provider outages and client configuration do not require owner reconnect.
-export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetch = fetch, health?: (error: string) => void, account: CalendarPage['account'] = {connection_id: null, email: tokens.email ?? null}): GoogleClient & Required<Pick<GoogleClient, 'calendarPage' | 'taskListsPage' | 'tasksPage' | 'allTasksPage' | 'changedEventsPage'>> {
+// calendarDetails adds an event's join link, attachments and attendee emails. A Worker that predates them
+// parses calendar pages strictly and hashes every field into its prep digest, so the connector-proxy maps
+// them only when the calling Worker asks (proxyClientOptions). The Worker's own clients default to on.
+export type GoogleClientOptions = Readonly<{ calendarDetails?: boolean }>;
+export const proxyClientOptions = (body: Readonly<{ calendar_details?: unknown }>): GoogleClientOptions => ({ calendarDetails: body.calendar_details === true });
+export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetch = fetch, health?: (error: string) => void, account: CalendarPage['account'] = {connection_id: null, email: tokens.email ?? null}, options: GoogleClientOptions = {}): GoogleClient & Required<Pick<GoogleClient, 'calendarPage' | 'taskListsPage' | 'tasksPage' | 'allTasksPage' | 'changedEventsPage'>> {
   let access: { token: string; until: number } | null = null;
+  const item = (event: GoogleEvent): CalendarItem => toItem(event, options.calendarDetails ?? true);
   const bearer = async () => {
     if (access && access.until > Date.now()) return access.token;
     const result = await token(app, { refresh_token: tokens.refresh_token, grant_type: 'refresh_token' }, fetcher).catch((error: unknown) => {
@@ -484,7 +509,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
     const data = await call(url.toString(), { signal: AbortSignal.timeout(30_000) });
     const items = collectionItems(data, 'calendar#events', limit, 'Calendar changes');
     if (!items.every(item => validCalendarEvent(item) && optionalInstant(item.updated) && optionalInstant(item.created))) throw new Error('invalid Calendar changes page response');
-    return { events: (items as GoogleEvent[]).filter(event => event.status === 'cancelled' || event.attendees?.find(a => a.self)?.responseStatus !== 'declined').map(event => ({ ...toItem({ ...event, start: event.start ?? {}, end: event.end ?? {} }), status: event.status ?? 'confirmed', created: event.created ?? '' })), next_page_token: await cursor.next(data.nextPageToken as string | undefined), fetched_count: items.length, calendar_id: calendarId, account, observed_at: new Date().toISOString() };
+    return { events: (items as GoogleEvent[]).filter(event => event.status === 'cancelled' || event.attendees?.find(a => a.self)?.responseStatus !== 'declined').map(event => ({ ...item({ ...event, start: event.start ?? {}, end: event.end ?? {} }), status: event.status ?? 'confirmed', created: event.created ?? '' })), next_page_token: await cursor.next(data.nextPageToken as string | undefined), fetched_count: items.length, calendar_id: calendarId, account, observed_at: new Date().toISOString() };
   };
   const tasksUrl = (list: string, id?: string) => {
     if (!validGoogleId(list) || id !== undefined && !validGoogleId(id)) throw new Error('invalid Google task target');
@@ -504,7 +529,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
   const EVENTS = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
   const match = (etag?: string): Record<string, string> => (etag ? { 'if-match': etag } : {});
   const send = async (url: string, method: string, body: unknown, etag?: string) =>
-    toItem(await call(url, { method, headers: { 'content-type': 'application/json', ...match(etag) }, body: JSON.stringify(body) }) as unknown as GoogleEvent);
+    item(await call(url, { method, headers: { 'content-type': 'application/json', ...match(etag) }, body: JSON.stringify(body) }) as unknown as GoogleEvent);
   const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me/messages';
   const listIds = async (q: string, limit: number): Promise<readonly string[]> => {
     const list = new URL(GMAIL);
@@ -570,7 +595,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
     event: async (id) => {
       const value = await call(`${EVENTS}/${encodeURIComponent(id)}`);
       if (!validCalendarEvent(value) || value.id !== id) throw new Error('invalid Calendar event response');
-      return toItem(value);
+      return item(value);
     },
     // Preserve the provider's notification defaults; recovery markers do not authorize silent guest updates.
     createEvent: ({ title, start, end, id, operationMarker }) => send(EVENTS, 'POST', { ...(id ? { id } : {}), summary: title, ...calendarTimes(start, end), ...calendarMarker(operationMarker) }),
@@ -612,7 +637,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
         const payload = b64url(new TextEncoder().encode(JSON.stringify({v:1,token:data.nextPageToken})));
         continuation = `${payload}.${await signature(payload)}`;
       }
-      return {events: items.filter(e => e.status !== 'cancelled').filter(e => includeDeclined || e.attendees?.find(a => a.self)?.responseStatus !== 'declined').map(toItem).map(e=>({...e,title:e.title.slice(0,2000),...(e.location?{location:e.location.slice(0,2000)}:{})})), next_page_token: continuation, fetched_count: items.length, account, observed_at: new Date().toISOString()};
+      return {events: items.filter(e => e.status !== 'cancelled').filter(e => includeDeclined || e.attendees?.find(a => a.self)?.responseStatus !== 'declined').map(item).map(e=>({...e,title:e.title.slice(0,2000),...(e.location?{location:e.location.slice(0,2000)}:{})})), next_page_token: continuation, fetched_count: items.length, account, observed_at: new Date().toISOString()};
     },
     async events(from, to, limit, includeDeclined) {
       const url = new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');
@@ -621,7 +646,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       return (json.items ?? [])
         .filter((event) => event.status !== 'cancelled')
         .filter((event) => includeDeclined || event.attendees?.find((a) => a.self)?.responseStatus !== 'declined')
-        .map(toItem);
+        .map(item);
     },
     async changedEvents(since, from, to) {
       const changes: CalendarChange[] = [];
@@ -695,17 +720,21 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       }) as { id: string; threadId?: string };
       return { message_id: json.id, ...(json.threadId ? { thread_id: json.threadId } : {}) };
     },
-    async findSentByMessageId(messageId, threadId) {
+    async findSentByMessageId(messageId, threadId, sentId) {
       if (!validMessageId(messageId)) throw new Error('invalid Sent Message-ID');
+      const metadata = async (id: string) => {
+        const value = await call(`${GMAIL}/${encodeURIComponent(id)}?format=metadata&metadataHeaders=Message-ID`) as { id?: string; threadId?: string; labelIds?: string[]; payload?: GmailPayload };
+        const ids = value.payload?.headers?.filter(h => h.name.toLowerCase() === 'message-id');
+        return { value, evidence: { message_id: value.id, thread_id: value.threadId, label_ids: value.labelIds, rfc822_message_id: ids?.length === 1 ? ids[0]!.value.trim() : undefined } };
+      };
+      if (validGoogleId(sentId)) return (await metadata(sentId)).evidence as SentEvidence;
       const list = new URL(GMAIL);
       list.search = new URLSearchParams({ q: `in:sent rfc822msgid:${messageId.slice(1,-1)}`, maxResults: '10' }).toString();
       const { messages = [] } = await call(list.toString()) as { messages?: { id: string }[] };
       if (!Array.isArray(messages) || messages.length > 10) throw new Error('invalid Sent search response');
       for (const candidate of messages) {
         if (typeof candidate?.id !== 'string' || !candidate.id) continue;
-        const value = await call(`${GMAIL}/${encodeURIComponent(candidate.id)}?format=metadata&metadataHeaders=Message-ID`) as { id?: string; threadId?: string; labelIds?: string[]; payload?: GmailPayload };
-        const ids = value.payload?.headers?.filter(h => h.name.toLowerCase() === 'message-id');
-        const evidence = { message_id: value.id, thread_id: value.threadId, label_ids: value.labelIds, rfc822_message_id: ids?.length === 1 ? ids[0]!.value.trim() : undefined };
+        const { value, evidence } = await metadata(candidate.id);
         if (value.id === candidate.id && verifiedSent(evidence, messageId, threadId)) return evidence;
       }
       return false;
@@ -753,7 +782,7 @@ const calendarTimes = (start: string, end: string) => {
   // PATCH merges nested fields, so explicitly clear the previous representation.
   return allDay ? {start:{date:start,dateTime:null},end:{date:end,dateTime:null}} : {start:{dateTime:start,date:null},end:{dateTime:end,date:null}};
 };
-const toItem = (event: GoogleEvent): CalendarItem => ({
+const toItem = (event: GoogleEvent, details: boolean): CalendarItem => ({
   id: event.id, title: event.summary ?? '(no title)',
   start: event.start?.dateTime ?? event.start?.date ?? '', end: event.end?.dateTime ?? event.end?.date ?? '',
   all_day: event.start?.dateTime === undefined,
@@ -768,11 +797,30 @@ const toItem = (event: GoogleEvent): CalendarItem => ({
   ...(typeof event.originalStartTime?.dateTime === 'string' && validCalendarInstant(event.originalStartTime.dateTime) ? { original_start: event.originalStartTime.dateTime } : {}),
   ...(calendarSourceUrl(event.htmlLink) ? { source_url: calendarSourceUrl(event.htmlLink) } : {}),
   ...(event.attendees?.some(a => typeof a.displayName === 'string' && a.displayName.trim() && a.responseStatus !== 'declined') ? { attendee_names: event.attendees.filter(a => a.responseStatus !== 'declined' && typeof a.displayName === 'string' && a.displayName.trim()).slice(0, 20).map(a => a.displayName!.trim().slice(0, 200)) } : {}),
+  ...(details ? detailsOf(event) : {}),
+});
+const detailsOf = (event: GoogleEvent): Pick<CalendarItem, 'attendee_emails' | 'conference_url' | 'attachments'> => ({
+  // The owner's own entry (self) is never listed: a meeting's attendees are the other people in it.
+  ...(event.attendees?.some(a => typeof a.email === 'string' && a.email.trim() && a.responseStatus !== 'declined' && !a.self) ? { attendee_emails: event.attendees.filter(a => a.responseStatus !== 'declined' && !a.self && typeof a.email === 'string' && a.email.trim()).slice(0, 20).map(a => a.email!.trim().slice(0, 320)) } : {}),
+  ...(conferenceUrl(event) ? { conference_url: conferenceUrl(event) } : {}),
+  ...(attachmentsOf(event).length ? { attachments: attachmentsOf(event) } : {}),
 });
 
 type GoogleEvent = {
   id: string; etag?: string; status?: string; summary?: string; location?: string; description?: string; created?: string; updated?: string; recurringEventId?: string; originalStartTime?: { dateTime?: string; date?: string }; htmlLink?: string;
   start: { dateTime?: string; date?: string }; end: { dateTime?: string; date?: string };
   extendedProperties?: { private?: Record<string,string> };
-  attendees?: { self?: boolean; responseStatus?: string; displayName?: string }[];
+  attendees?: { self?: boolean; responseStatus?: string; displayName?: string; email?: string }[];
+  hangoutLink?: string; conferenceData?: { entryPoints?: { entryPointType?: string; uri?: string }[] };
+  attachments?: { fileId?: string; title?: string }[];
 };
+const httpsUrl = (value: unknown): string | undefined => {
+  if (typeof value !== 'string' || value.length > 2048) return undefined;
+  try { return new URL(value).protocol === 'https:' ? value : undefined; } catch { return undefined; }
+};
+const conferenceUrl = (event: GoogleEvent): string | undefined =>
+  httpsUrl(event.hangoutLink) ?? httpsUrl(event.conferenceData?.entryPoints?.find(point => point.entryPointType === 'video')?.uri);
+const attachmentsOf = (event: GoogleEvent): CalendarAttachment[] => (event.attachments ?? [])
+  .filter(attachment => typeof attachment.title === 'string' && attachment.title.trim())
+  .slice(0, 20)
+  .map(attachment => ({ title: attachment.title!.trim().slice(0, 255), ...(validGoogleId(attachment.fileId) ? { file_id: attachment.fileId } : {}) }));
