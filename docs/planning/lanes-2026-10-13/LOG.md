@@ -1616,3 +1616,11 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **Reviews running:** #109's delta (full strength), and #116 with #120 (Sonnet).
 - **Next merges on PASS:** #109, then #115 retargeted; #116 and #120; then #117 and #119 (Sonnet), #118 with #1140, #1143, #1114's delta, and the cloud PRs (#1110 first, then #1119 deployed alone).
 - **Owner rulings today** are in memory `owner-rulings-2026-10-13-morning.md`, batches 7–10 (Google later; Ansh owns the Google plan, posted as #1103 6142379186).
+
+## About 09:36Z: the handoff page is published, ahead of an account switch
+
+- The owner is moving to a new Claude account, so these sessions may end.
+- **The handoff page:** https://claude.ai/artifact/Drw2yR7zPXwRHPacJPnrSY. It's private, so the owner shares it with the new account. It covers live state, lanes and worktrees, the open-PR gate table, blockers in priority order, owner-only items, the merge and deploy procedure (durable gate path `memory/tools/staging-gate.sh`), standing rules, the 13 Oct rulings and a takeover prompt.
+- **All four lanes are told:** push every local commit to a remote branch (Connectors' A emit half `ad6bc3ae` included) and post a 5-line state note on #1103.
+- **New sessions resume from:** this LOG (the newest "STATE TO RESUME FROM", 09:27Z, plus later entries), #1103, and the handoff page.
+- **Owner ruling needed** (L4 finding 4a): decided approval cards vanish from chat by design (`approvals.ts` `appApprovalParts`). The options are (i) decided parts or (ii) an `approval_ref` part; the orchestrator recommends (ii).
