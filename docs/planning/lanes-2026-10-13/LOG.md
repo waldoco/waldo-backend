@@ -1565,3 +1565,26 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - #1114 after its delta review.
 - **The calendar QA go was sent to L4:** at most 3 events labelled "QA". Add one at 4pm, then ask "Move my 4pm to 5pm", then the card, approval and receipt.
 - **The #1122 excerpt check** still waits for a build with #114 or #120 (a confirmed zone). Builds wait for the owner's build-cache cleanup.
+
+## About 09:25Z: the owner's health-to-agent question, answered at source; Google for all users; calendar QA running
+
+- **"Is all the health data reaching the agent?"** (owner, via L4). Verified at `a94d7fa5`:
+  - **The path:** Watch → HealthKit → app (14 contract signals, consent-gated) → health plane → the H3 producer (`health/producer.ts`) computes Recovery, Form and Weight for today and yesterday → writes `public.health_context_daily` through `waldo.health_context_write` (its only writer) → the agent reads it every turn through `waldo.health_context_read` (`health_plane.sql:514`) and `channels/health-context.ts`.
+  - **What the agent sees:** zone words, drivers and freshness. There are no numbers, and no agent tool reads specific readings.
+  - **Gaps:**
+    1. Uploads happen only while the app is open. Background sync is N4's #109, now in review.
+    2. The agent's standing context is words only. The beta ruling allows the owner's own readings in model context.
+
+    Proposed: a bounded, consent-checked (`model_processing`), never-logged health read tool, for the health lane.
+  - **Unverified, owed by the health lane after 12:30Z:** one live turn traced end to end, and whether the producer runs after every upload.
+- **Google for all users** (the owner asked):
+  - **Keep the direct Google tools.** Google's Workspace MCP servers are all Developer Preview (Google's list, 9 Oct) and need the Developer Preview Program. They use the same restricted Gmail scope (`gmail.readonly`, confirmed restricted on Google's scope page) and would bypass the approval desk for writes. **No MCP trial for now.**
+  - **The all-users path:**
+    1. publish (Branding);
+    2. the privacy policy (`www.heywaldo.in/privacy` mentions no Google, Gmail or Limited Use — verified);
+    3. Search Console ownership of heywaldo.in and a company support contact;
+    4. trimming scopes (the code asks for calendar events, readonly and freebusy; drive readonly and metadata; gmail send and compose; plus mail reading);
+    5. Google verification: sensitive scopes need a justification and video; restricted scopes also need the yearly security assessment.
+
+  The owner decides on publishing and on the prep split.
+- **Calendar QA:** the owner approved all three steps (add "QA" 16:00–16:30, move it to 17:00, cancel). It's one event, on the shared test account. L4 is running it on the installed Pro Max build.
