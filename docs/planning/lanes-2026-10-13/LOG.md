@@ -1020,3 +1020,19 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - **Overlap:** its files overlap #105's `src/health/**` deletions. So it starts after #105 merges, or stays off the deleted paths.
 - **Open for the owner:** the Watch target (build order §7.5). Is it isolated and kept, or dev-only? The owner's words read as kept [inference].
 - **The App lane is on #104's blockers.** The Pro Max is waiting for the owner's sign-in.
+
+## 04:53:51Z: Patrol and Spots are wiring-only; threads are contract-only; parallel chip created
+
+- **The owner confirmed** that Patrol and Spots keep their Home cards. They also reported that the app shows no Patrol or Spots data, while the console shows it for the test account.
+  - **Cause** [verified at `6ddbd85e`]: the app's `patrol.tsx` renders `UnavailableFeature`. The backend already serves `GET /app/v1/controls` with `view=activity` and `view=constellation` (`app-controls.ts:44,51`).
+  - **App lane order:** #104's blockers, then wire Patrol and Spots, then R1, then Body.
+- **The owner asked whether "session chats" are still to do.** They are. app.v1's `/app/v1/threads` contract exists, but the runtime serves none of it, so the app has only Main chat [verified].
+  - It's routed to Ansh's lane via #1103, after the Brief pieces.
+  - A new DO table would be a migration, which needs the owner.
+- **Parallel chat:** the owner couldn't see the App lane's chip, so I created it in this session (`task_0120d6a8`). Its scope:
+  - N4 background health delivery;
+  - Watch data that is real or honestly unavailable;
+  - the iPhone Air plus Watch;
+  - no edits to `src/health/**` until #105 merges.
+  The App lane was told to dismiss its own chip.
+- **The owner's "done" at about 04:52Z:** staging is still `77d7329c` and there are no deploy artifacts, so #1100 isn't deployed. It was probably the Pro Max sign-in.
