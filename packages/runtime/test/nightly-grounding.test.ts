@@ -9,7 +9,7 @@ const NIGHT = 'owner, day of nightly-memory:1791860400000';
 const ops = (add: unknown[]) => JSON.stringify({ add, seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null });
 const fact = (text: string, evidence: string) => ({ kind: 'fact', text, source: 'stated', evidence, touches_forgotten: false });
 const withStore = <T>(name: string, work: (store: ReturnType<typeof claimStore>) => T) =>
-  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), (_i, state) => work(claimStore(state.storage.sql)));
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), (_i, state) => work(claimStore(state.storage.sql)));
 const profile = (prompt: string) => prompt.slice(prompt.indexOf('<owner_profile>'), prompt.indexOf('</owner_profile>'));
 const messages = [{ ref: 'tg-41', text: 'morning' }, { ref: 'app-1000007', text: 'I swim every Friday before work' }, { ref: 'tg-42', text: 'and my sister is called Mira' }];
 const night = { owner: messages.map(message => message.text).join('\n'), waldo: 'Noted.', ownerMessages: messages };

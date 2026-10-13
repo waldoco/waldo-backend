@@ -33,7 +33,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
-const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '7f6e5d4c-3b2a-4190-8f7e-6d5c4b3a2918';
 const NOW = Date.parse('2026-10-13T03:00:00Z');
@@ -53,7 +53,7 @@ afterEach(() => { vi.unstubAllGlobals(); });
 
 type Run = Readonly<{ scheduler: Scheduler; state: DurableObjectState; fire: (id: string) => Promise<void> }>;
 const withOwner = (name: string, work: (run: Run) => Promise<void>) =>
-  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const realNow = Date.now;
     let now = NOW;
     Date.now = () => now;
@@ -61,7 +61,7 @@ const withOwner = (name: string, work: (run: Run) => Promise<void>) =>
     try {
       ensureSchema(state.storage); traceBook(state.storage.sql); claimStore(state.storage.sql);
       for (const [key, value] of Object.entries({ do_name: name, app_subject: String(appSubjectFor(name)), timezone: 'UTC', timezone_confirmed: true })) state.storage.kv.put(key, value);
-      const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+      const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
       await (owner as unknown as { setup(channel: string): { ready: Promise<unknown> } }).setup('app').ready;
       state.storage.sql.exec('DELETE FROM schedule');
       const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
