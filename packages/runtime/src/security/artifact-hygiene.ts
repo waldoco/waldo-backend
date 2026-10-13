@@ -18,9 +18,12 @@ export type Quarantine = Readonly<{
 
 export const artifactMarker = (kind: ArtifactKind): string => `[quarantined: ${kind} artifact - view in the source app]`;
 
-// A code is digits only: 4-8 plain digits ("123456"), the split form ("123-456", "123 456"), or one digit
-// per space ("1 2 3 4 5 6"), as mail laid out in table cells renders. Alphanumeric order/tracking ids never match.
-const CODE = String.raw`(?:\d{3}[- \u00a0]\d{3}|\d(?:[ \u00a0]\d){3,7}|\d{4,8})`;
+// A code is 4-8 digits only. Mail laid out in table cells renders it split by whitespace (a space, a
+// non-breaking space, a newline and indentation), in groups of one, two, three or four digits. Each grouping
+// fixes the digit count, and the split forms come before the plain run, so "1234 5678" is never cut to "1234".
+// Alphanumeric order/tracking ids never match.
+const GAP = String.raw`\s{1,32}`;
+const CODE = String.raw`(?<code>\d{3}(?:-|${GAP})\d{3}|\d{4}${GAP}\d{4}|\d{2}(?:${GAP}\d{2}){1,3}|\d(?:${GAP}\d){3,7}|\d{4,8})`;
 // The keyword may run straight into the code ("Verification code482913") when its table cell had no separator.
 const KEYWORD_END = String.raw`(?![a-z])`;
 
@@ -70,11 +73,13 @@ export const extractArtifacts = (text: string): { text: string; artifacts: reado
   const seen = new Set<string>();
   const artifacts: ExtractedArtifact[] = [];
   for (const { kind, re } of PATTERNS) {
-    redacted = redacted.replace(re, (match) => {
-      // OTP patterns match the surrounding phrase ("Your login code is 123456"); the relay value
-      // is the code itself. Links relay whole. The G- prefix form must be tried first - its six
-      // digits would otherwise match the plain-digit alternative.
-      const value = kind === 'otp' ? (match.match(/G-\d{6}|\d{3}-\d{3}|\d{3}[ \u00a0]\d{3}|\d(?:[ \u00a0]\d){3,7}|\d{4,8}/)?.[0]?.replace(/[ \u00a0]/g, '') ?? match) : match;
+    redacted = redacted.replace(re, (match: string, ...rest: unknown[]) => {
+      // OTP patterns match the surrounding phrase ("Your login code is 123456"); the relay value is the
+      // code itself, from its own capture, never a digit elsewhere in the phrase. Links and the G- prefix
+      // form relay whole.
+      const groups = rest.at(-1);
+      const code = typeof groups === 'object' && groups !== null ? (groups as Record<string, string | undefined>).code : undefined;
+      const value = code === undefined ? match : code.replace(/\s/g, '');
       if (!seen.has(value)) {
         seen.add(value);
         artifacts.push({ kind, value });
