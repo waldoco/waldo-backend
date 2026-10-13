@@ -40,7 +40,7 @@ describe('the wording of an approval', () => {
       expect(wording(ids.calendar)).toEqual({ question: 'Add "Walk with Sam" on Sat 10 Oct, 15:00–15:30?', labels: { approve: 'Add the event', ...OPEN } });
       expect(wording(ids.email)).toEqual({ question: 'Send "Hi" to a@x.test and 1 more?', labels: { approve: 'Send email', ...OPEN } });
       expect(wording(ids.long)).toEqual({ question: `Send "${'A'.repeat(39)}…" to a@x.test?`, labels: { approve: 'Send email', ...OPEN } });
-      expect(wording(ids.message)).toEqual({ question: 'Send this message on whatsapp?', labels: { approve: 'Send message', ...OPEN } });
+      expect(wording(ids.message)).toEqual({ question: 'Send this message on WhatsApp?', labels: { approve: 'Send message', ...OPEN } });
       expect(wording(ids.browser)).toEqual({ question: 'Submit on reservations.example?', labels: { approve: 'Submit on the site', ...PUT_OFF } });
       expect(wording(ids.mcp)).toEqual({ question: 'Run lookup on the crm server?', labels: { approve: 'Run the tool', ...PUT_OFF } });
       expect(wording(ids.task)).toEqual({ question: 'Change "Buy milk"?', labels: { approve: 'Change the task', ...OPEN } });
@@ -109,6 +109,7 @@ describe('the wording of an approval', () => {
         calendar: await desk.propose({ action: 'create', title: long('w'), start: iso('2026-09-30T23:30:00Z'), end: iso('2026-10-01T00:30:00Z'), reason: 'late slot' }),
         browser: await desk.proposeBrowserSubmit({ url: `https://${long('h', 60)}.${long('i', 60)}.example/book`, action: { selector: '#book', description: 'Book' }, binding: {}, steps: [] }),
         mcp: await desk.proposeMcpCall({ server: long('s', 64), tool: long('q', 64), args: {} }),
+        message: await desk.proposeSendMessage({ channel: long('z', 64), content: 'Hello', idempotency_key: 'l-3' }),
         task: await desk.proposeGoogleTaskChange(args),
       };
       const listed = Object.fromEntries((await desk.approvals(NOW)).map(item => [item.approval_id, item]));
@@ -121,6 +122,7 @@ describe('the wording of an approval', () => {
       expect(listed[ids.calendar]!.question).toMatch(new RegExp(`^Add "${long('w', 39)}…" on Wed 30 Sept?, 23:30 to Thu 1 Oct, 00:30\\?$`));
       expect(listed[ids.browser]!.question).toBe(`Submit on ${long('h', 60)}.${long('i', 38)}…?`);
       expect(listed[ids.mcp]!.question).toBe(`Run ${long('q', 39)}… on the ${long('s', 39)}… server?`);
+      expect(listed[ids.message]!.question).toBe(`Send this message on ${long('z', 39)}…?`);
       expect(listed[ids.task]!.question).toBe(`Complete "${long('t', 39)}…"?`);
     });
   });

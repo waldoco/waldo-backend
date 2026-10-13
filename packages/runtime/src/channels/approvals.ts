@@ -1,7 +1,7 @@
 import { EffectNotAppliedError, EffectUnknownError, type OwnerEffectLedger, type EffectReceipt, type EffectReadback } from './owner-effect-ledger';
 import type { ProxyIntent } from '../connectors/proxy-intent';
 import { ProxyIntentError } from '../connectors/proxy-intent';
-import { googleTaskProposalSchema, proposeGoogleTaskChangeArgsSchema, type BrowserTaskContinuation, type ProposeCalendarChangeArgs, type ProposeGoogleTaskChangeArgs } from '@waldo/contracts';
+import { googleTaskProposalSchema, proposeGoogleTaskChangeArgsSchema, type BrowserTaskContinuation, type ChannelName, type ProposeCalendarChangeArgs, type ProposeGoogleTaskChangeArgs } from '@waldo/contracts';
 import { GoogleError, sendRefused, sentCheck, sha256Hex, type GoogleClient, type SentEvidence } from '../connectors/google';
 import { describeGoogleTaskChange, googleTaskExact, reviewGoogleTaskChange, type GoogleTaskApprovalAdapter, type GoogleTaskProposal } from './google-task-approvals';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
@@ -303,13 +303,14 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   };
   const named = (text: string | null | undefined, fallback: string) => { const one = text ? line(text, 40) : ''; return one ? `"${one}"` : fallback; };
   const TASK_VERB = { create: 'Add', update: 'Change', complete: 'Complete', reopen: 'Reopen' } as const;
+  const CHANNEL_WHERE: Readonly<Record<ChannelName, string>> = { telegram: 'on Telegram', whatsapp: 'on WhatsApp', imessage: 'by iMessage', discord: 'on Discord', slack: 'on Slack', in_app: 'in the app', apns: 'as a notification' };
   const questionOf = (entry: LedgerRow, exact: AppApprovalV1['exact']): string => {
     const p = JSON.parse(entry.payload_json);
     if (entry.kind === 'email_send') {
       const more = p.to.length + (p.cc?.length ?? 0) + (p.bcc?.length ?? 0) - 1;
       return `Send ${named(p.subject, 'this email')} to ${line(p.to[0], 40)}${more ? ` and ${more} more` : ''}?`;
     }
-    if (entry.kind === 'message_send') return `Send this message on ${line(p.channel, 40)}?`;
+    if (entry.kind === 'message_send') return `Send this message ${CHANNEL_WHERE[p.channel as ChannelName] ?? `on ${line(p.channel, 40)}`}?`;
     if (entry.kind === 'browser_submit') return `Submit on ${line(new URL(p.url).host, 100)}?`;
     if (entry.kind === 'mcp_call') return `Run ${line(p.tool, 40)} on the ${line(p.server, 40)} server?`;
     if (exact.task) return `${TASK_VERB[exact.task.action]} ${named(exact.task.task ?? exact.task.changes.title?.after, 'the task')}?`;
