@@ -6,7 +6,7 @@ import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/ap
 import { calendarDemand, demandCode, type DemandAnswer, type DemandRequest } from '../health/calendar-demand';
 import { CALENDAR_DEMAND_PATH, verifiedDemandRequest } from '../health/calendar-demand-route';
 import { surfaceOwnerAdmission } from '../identity/surface-owner-admission';
-import { createOwnerTurnContext, ownerChainRef, type OwnerContextSources } from '../context-composer/owner-turn';
+import { createOwnerTurnContext, ownerChainRef, surfaceChatRef, type OwnerContextSources } from '../context-composer/owner-turn';
 import { canonicalHistoryFault, canonicalOwnerConversationStore, skippedRowLines, type CanonicalSkipped } from '../conversation/canonical-owner-store';
 import { ownerEffectLedger } from './owner-effect-ledger';
 import {commonRuntimeReadiness} from './common-runtime-readiness';
@@ -610,7 +610,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private appDeliveryFor(authority: OwnerRuntimeAuthority): (text: string) => Promise<string> {
     return text => this.appAssistantRow({ subject: authority.doName, occurrence: `scheduled:${crypto.randomUUID()}`, text: 'Deliver a scheduled message.' }, ({ leafId }, ownerRef) => {
       const id = `scheduled-${crypto.randomUUID()}`;
-      return { entry: { id, ownerId: ownerRef, chatId: `owner:${ownerRef}`, parentId: leafId, threadAnchorId: null, surface: 'app',
+      return { entry: { id, ownerId: ownerRef, chatId: ownerChainRef('app', ownerRef), parentId: leafId, threadAnchorId: null, surface: 'app',
         modelPayload: text, appPayload: text, modelProjection: { mode: 'include' }, role: 'assistant', createdAt: Date.now() }, leafId: id };
     });
   }
@@ -631,7 +631,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       try {
         await this.appAssistantRow({ subject: found.authority.doName, occurrence: `notice:${record.id}`, text: 'Tell the owner a message did not finish.' }, ({ entries, leafId }, ownerRef) => {
           const id = `${record.id}-did-not-finish`, parentId = entries.some(entry => entry.id === record.id) ? record.id : leafId;
-          return { entry: { id, ownerId: ownerRef, chatId: `owner:${ownerRef}`, parentId, threadAnchorId: null, surface: 'app',
+          return { entry: { id, ownerId: ownerRef, chatId: ownerChainRef('app', ownerRef), parentId, threadAnchorId: null, surface: 'app',
             modelPayload: text, appPayload: text, modelProjection: { mode: 'include' }, role: 'assistant', createdAt: Date.now(),
             operation: { id: record.id, state: 'interrupted' } },
           leafId: leafId === null || parentId === leafId ? id : leafId };
@@ -734,6 +734,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if(!/^[A-Za-z0-9_-]{8,64}$/.test(client))return fail(404);
       this.recoverApp();
       const receipt=this.appInbox.receipt(name,client);return receipt?Response.json(receipt,{headers:{'cache-control':'no-store'}}):fail(404);
+    }
+    if(path.startsWith(APP_CHAT_SEND_PATH+'/')&&path.endsWith('/cancel')&&request.method==='POST'){
+      const client=path.slice(APP_CHAT_SEND_PATH.length+1,-'/cancel'.length);
+      if(!/^[A-Za-z0-9_-]{8,64}$/.test(client))return fail(404);
+      this.recoverApp();
+      const row=this.appInbox.cancel(name,client);if(!row)return fail(404);
+      if(this.activeApp?.id===row.id)this.activeAbort?.abort();
+      return Response.json(this.appInbox.receipt(name,client),{headers:{'cache-control':'no-store'}});
     }
     if(path==='/app/v1/controls'||path==='/app/v1/actions'||path.startsWith('/app/v1/actions/')||path==='/app/v1/approvals'||path==='/app/v1/approvals/decisions'){
       return this.serial(async()=>{
@@ -841,7 +849,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const name=request.headers.get('x-waldo-do-name')!,hash=request.headers.get('x-waldo-app-session-hash')!,send=parseAppSend(await request.text());
     if(!send)return Response.json({error:'unavailable'},{status:403});
     const subject=appSubjectFor(name);if(this.ctx.storage.kv.get<string>('app_subject')!==String(subject)){this.ctx.storage.kv.put('app_subject',String(subject));this.runtimes={};}
-    const conversationRef=`owner:${ownerPrincipalRef(ownerId)}`;
+    const conversationRef=ownerChainRef('app',ownerPrincipalRef(ownerId));
     const result=await this.appInbox.admit(name,hash,send.clientMessageId,send.text,conversationRef);
     if(result.kind==='conflict'||result.kind==='capacity')return Response.json({error:result.kind},{status:result.kind==='conflict'?409:503});
     this.ctx.waitUntil(this.serial(()=>this.drainApp()).catch(()=>{console.error('app inbox drain deferred');}));
@@ -2201,6 +2209,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const doName = identity.get<string>('do_name');
       // One identity check at turn admission and one at effect dispatch; every other call only checks the run scope.
       const assertSkillOwnerCurrent = async () => { scope.admit(); };
+      // The receipt read runs on every tool round; one failure line per turn keeps the bounded trace table readable.
+      let receiptsUnavailableLogged = false;
       const capability = createScopedCuratedSkillCapability(storage.sql, { owner: skillOwner, custodyKey: seededSkillCustody(storage.sql) ?? custodyFallback, turnId: turn.traceId,
         trigger: 'user_message', ownerText: turn.text, assertCurrent: assertSkillOwnerCurrent, assertDispatch }, scope);
       return Object.freeze({ ...capability, ...(admission ? { admission } : {}), taskContext: async (assertSourceCurrent?: () => Promise<void>) => {
@@ -2211,6 +2221,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           receipts = await workspace.recentWrites();
         } catch {
           await assertSkillOwnerCurrent();
+          if (!receiptsUnavailableLogged) { receiptsUnavailableLogged = true; log({ trace: turn.traceId, hop: 'workspace_receipts', ms: 0, ok: false, code: 'unavailable' }); }
           return 'Recent workspace receipt metadata is unavailable. Do not infer a saved file or substitute a Drive target. Resolve a saved-file request through the workspace tools or ask the owner.';
         }
         await assertSkillOwnerCurrent();
@@ -2230,7 +2241,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           || occurrence.runId !== scope.runId || occurrence.attempt !== scope.attempt
           || occurrence.subject !== String(owner) || currentOwner !== owner || owner <= 0
           || identity.get<string>('do_name') !== doName || identity.get<string>('telegram_subject') !== subject
-          || turn.surface !== 'telegram' || turn.conversationRef !== `telegram-${owner}`
+          || turn.surface !== 'telegram' || turn.conversationRef !== surfaceChatRef('telegram', owner)
           || turn.traceId !== `tg-${occurrence.updateId}`)
           throw new ClosedRunError();
         scope.admit();
@@ -2264,7 +2275,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         scope.admit();
         if (!record || record !== this.activeApp || scope !== this.activeScope || record.id !== scope.runId || record.attempt !== scope.attempt
           || identity.get<string>('do_name') !== doName || turn.surface !== 'app' || turn.text !== record.text
-          || turn.conversationRef !== `app-${appSubjectFor(record.owner)}` || turn.traceId !== ownerTurnTrace('app', record.updateId)) throw new ClosedRunError();
+          || turn.conversationRef !== surfaceChatRef('app', appSubjectFor(record.owner)) || turn.traceId !== ownerTurnTrace('app', record.updateId)) throw new ClosedRunError();
         scope.admit();
       };
       await assertOwnerIdentity();
@@ -2278,12 +2289,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const occurrence = this.activeInbox;
       const doName = identity.get<string>('do_name'), subject = identity.get<string>('telegram_subject');
       if (!occurrence || scope !== this.activeScope || occurrence.runId !== scope.runId || occurrence.attempt !== scope.attempt || !doName || !subject
-        || turn.surface !== 'telegram' || turn.traceId !== ownerTurnTrace('telegram', occurrence.updateId) || turn.conversationRef !== ownerChainRef('telegram', subject)) throw new ClosedRunError();
+        || turn.surface !== 'telegram' || turn.traceId !== ownerTurnTrace('telegram', occurrence.updateId) || turn.conversationRef !== surfaceChatRef('telegram', subject)) throw new ClosedRunError();
       const lookup = async () => {
         scope.admit();
         const authority = await commonOwnerAuthority(this.env).resolve('telegram', subject, doName);
         scope.admit();
-        if (!authority) throw new ClosedRunError();
+        // Compared, never written: the pin also marks an app identity for approvals and keys effect custody.
+        const pinned = identity.get<string>('owner_principal_ref');
+        if (!authority || (pinned !== undefined && pinned !== ownerPrincipalRef(authority.directoryOwnerId))) throw new ClosedRunError();
         return { ownerId: authority.directoryOwnerId, bindingRef: authority.presenceId, revision: authority.admissionRevision, physicalDoId: this.ctx.id.toString() };
       };
       // The composer runs on every tool round; one health read serves the whole turn.
@@ -2302,7 +2315,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
       }, effects), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), searchEpisodesHandler(episodes), ...memoryHandlers({
-        sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: `${channel}-${owner}`,
+        sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: surfaceChatRef(channel, owner),
         hideHistory: async (texts, context) => {
           const scope = context.runScope;
           scope?.admit();
