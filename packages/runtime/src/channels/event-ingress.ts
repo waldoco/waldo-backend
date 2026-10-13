@@ -29,7 +29,7 @@ export type EventEnvelope = Readonly<{
 }>;
 
 export type EventIngressEnv = Readonly<{
-  TELEGRAM_OWNER_DO?: DurableObjectNamespace;
+  OWNER_DO?: DurableObjectNamespace;
   WALDO_EVENT_SOURCES?: string;
 }>;
 
@@ -108,7 +108,7 @@ export const handleEventIngress = async (
   const url = new URL(request.url);
   const source = url.pathname.slice(EVENT_INGRESS_PREFIX.length).replace(/\/+$/, '');
   const config = parseEventSources(env.WALDO_EVENT_SOURCES)[source];
-  if (request.method !== 'POST' || !config || !env.TELEGRAM_OWNER_DO || !source || source.length>60 || source.includes('/')) {
+  if (request.method !== 'POST' || !config || !env.OWNER_DO || !source || source.length>60 || source.includes('/')) {
     return new Response('not found', { status: 404 });
   }
   const reader=request.body?.getReader();if(!reader)return new Response('invalid body',{status:400});
@@ -129,7 +129,7 @@ export const handleEventIngress = async (
   // Unknown shapes are acknowledged and dropped: a verified source sending noise must not
   // become a retry storm at the provider.
   if (!envelope) return new Response('ok');
-  const owners = env.TELEGRAM_OWNER_DO;
+  const owners = env.OWNER_DO;
   const origin = url.origin;
   const notify = config.notify !== false;
   const digest = await hmacSha256Hex(config.secret, body);

@@ -10,7 +10,7 @@ export async function commonRuntimeReadiness(env:TelegramWebhookEnv,storage:Dura
  if(!limiter)return Response.json({error:'unavailable'},{status:503,headers});
  try{if(!(await limiter.limit({key:`common-runtime-readiness:${actualDoId}`})).success)return Response.json({error:'rate_limited'},{status:429,headers:{...headers,'retry-after':'60'}});}catch{return Response.json({error:'unavailable'},{status:503,headers});}
  const doName=storage.kv.get<string>('do_name'),subject=storage.kv.get<string>('telegram_subject');
- if(!doName||!subject||storage.kv.get<boolean>('telegram_unlinked')||env.TELEGRAM_OWNER_DO?.idFromName(doName).toString()!==actualDoId)return Response.json({error:'owner_unavailable'},{status:503,headers});
+ if(!doName||!subject||storage.kv.get<boolean>('telegram_unlinked')||env.OWNER_DO?.idFromName(doName).toString()!==actualDoId)return Response.json({error:'owner_unavailable'},{status:503,headers});
  let browser:ReturnType<typeof commonBrowserAllowanceDiagnostic>|undefined;
  let owner:'verified'|'unlinked'|'unverifiable'='unverifiable',workspace:'verified'|'unlinked'|'unverifiable'='unverifiable';
  try{
@@ -30,6 +30,6 @@ export async function commonRuntimeReadiness(env:TelegramWebhookEnv,storage:Dura
    await directory.assertCurrent(authority);
   }
  }catch{owner='unverifiable';workspace='unverifiable';browser=undefined;}
- if(storage.kv.get('do_name')!==doName||storage.kv.get('telegram_subject')!==subject||storage.kv.get<boolean>('telegram_unlinked')||env.TELEGRAM_OWNER_DO?.idFromName(doName).toString()!==actualDoId){owner='unverifiable';workspace='unverifiable';browser=undefined;}
+ if(storage.kv.get('do_name')!==doName||storage.kv.get('telegram_subject')!==subject||storage.kv.get<boolean>('telegram_unlinked')||env.OWNER_DO?.idFromName(doName).toString()!==actualDoId){owner='unverifiable';workspace='unverifiable';browser=undefined;}
  return Response.json({version:1,owner_authority:owner,workspace_binding:workspace,...(browser?{browser}:{}),scope:'signed_read_checks_only_not_schema_health_issuer_or_execution_acceptance'}, {headers});
 }

@@ -1,6 +1,6 @@
 import {env,runInDurableObject} from 'cloudflare:test';
 import {expect,it,vi} from 'vitest';
-import {TelegramOwnerDO} from '../src/channels/telegram-owner-do';
+import {OwnerDO} from '../src/channels/owner-do';
 import {registerCommonBrowserSdk} from '../src/channels/common-staging-registration';
 const proof=vi.hoisted(()=>({inputs:[] as any[],sent:[] as string[],calls:[] as string[]}));
 vi.mock('../src/identity/common-owner-authority',()=>({commonOwnerAuthority:()=>({resolve:async()=>({directoryOwnerId:'10000000-0000-0000-0000-000000000002',custodyDigest:'b'.repeat(64)})})}));
@@ -15,11 +15,11 @@ registerCommonBrowserSdk(async()=>({acquire:async()=>{proof.calls.push('acquire'
 it.each(['absent','expired'])('ordinary two-argument ownerDO returns useful public text with %s registration and retained accounting',async kind=>{
  proof.inputs=[];proof.sent=[];proof.calls=[];alive=false;
  const doName=`normal-public-${kind}-${crypto.randomUUID()}`,subject=81102;
- const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(doName));
+ const stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName));
  const network=vi.spyOn(globalThis,'fetch').mockRejectedValue(Error('Live network forbidden'));
  try{await runInDurableObject(stub,async(_instance,state)=>{
   const runtimeEnv={...env,COMMON_OWNER_TASKS:'0',WALDO_ENVIRONMENT:'staging',WALDO_EGRESS_ALLOWLIST:'*',WALDO_TOOL_OFFLOAD:'0',BROWSER:{} as never,OPENAI_API_KEY:'fictional',TELEGRAM_BOT_TOKEN:'12345:fictional',TELEGRAM_WEBHOOK_SECRET:'normal-public-fake-secret',COMMON_BROWSER_REGISTRATION:kind==='absent'?undefined:JSON.stringify({policy:{ref:'expired',doName,subject:String(subject),directoryOwnerId:'10000000-0000-0000-0000-000000000002',createdAt:1,expiresAt:2,allowedOrigins:['*'],maxAllocations:1,maxReservedBrowserMs:20000,lifetimeMs:10000,maxScreenshotBytes:1024},billing:{cloudflareAccountId:'a'.repeat(32),conservativeWorstCase:true},spend:{limitMicrousd:10000000,maxCalls:100,validUntil:2}})};
-  const instance=new TelegramOwnerDO(state,runtimeEnv);
+  const instance=new OwnerDO(state,runtimeEnv);
   const response=await instance.fetch(new Request('https://fixture.invalid/enqueue',{method:'POST',headers:{'content-type':'application/json','x-waldo-inbox-secret':'normal-public-fake-secret','x-waldo-telegram-subject':String(subject),'x-waldo-do-name':doName},body:JSON.stringify({update_id:81102001,message:{message_id:1,date:Math.floor(Date.now()/1000),chat:{id:subject,type:'private'},from:{id:subject,is_bot:false,first_name:'Fixture'},text:'Use Cloudflare to read the public menu.'}})}));expect(response.status).toBe(200);
   await vi.waitFor(async()=>{await instance.alarm();expect(proof.sent.some(text=>text.includes('Vegetarian pasta'))).toBe(true);},{timeout:10000,interval:50});
   const output=proof.inputs.flatMap(input=>Array.isArray(input.input)?input.input:[]).find((row:any)=>row.type==='function_call_output');

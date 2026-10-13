@@ -15,7 +15,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
-const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '3d2c1b0a-9e8f-4a7b-8c6d-5e4f3a2b1c0d';
 // The directory answers the first session checks, then can go dark: the route admits the message, the drain cannot.
@@ -35,11 +35,11 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 // An app owner with a reminder an hour out: the alarm that will fire it is armed before the message.
-const withReminder = (name: string, work: (owner: InstanceType<typeof TelegramOwnerDO>, state: DurableObjectState, armed: number) => Promise<void>) =>
-  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+const withReminder = (name: string, work: (owner: InstanceType<typeof OwnerDO>, state: DurableObjectState, armed: number) => Promise<void>) =>
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql); ensureSchema(state.storage);
     state.storage.kv.put('do_name', name); state.storage.kv.put('app_subject', String(appSubjectFor(name)));
-    const owner = new TelegramOwnerDO(state, { ...env, SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret',
+    const owner = new OwnerDO(state, { ...env, SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret',
       TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     const inAnHour = new Date(Date.now() + 3_600_000).toISOString().slice(0, 16);
     await reminderBook(state.storage.sql, new Scheduler(state.storage.sql, state.storage, productionDeps()), { timezone: 'UTC', now: () => new Date() }, () => 'rem-wake')
@@ -48,7 +48,7 @@ const withReminder = (name: string, work: (owner: InstanceType<typeof TelegramOw
     expect(armed).toBe(Date.parse(`${inAnHour}:00Z`));
     try { await work(owner, state, armed!); } finally { await state.storage.deleteAlarm(); }
   });
-const send = (owner: InstanceType<typeof TelegramOwnerDO>, name: string, clientId: string) => owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', {
+const send = (owner: InstanceType<typeof OwnerDO>, name: string, clientId: string) => owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', {
   method: 'POST', headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ client_message_id: clientId, text: 'What is on today?' }) }));
 
 it('an app message leaves the alarm for the owner\'s next scheduled job in place', async () => {

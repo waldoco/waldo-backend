@@ -7,7 +7,7 @@ const topic = 'jasmine pearl';
 
 // The hold record is what /heldrows prints per topic. A count of 1 for a store that holds many rows hides how big the backlog is.
 it('a projection hold reports how many rows hold the forget, not just that one does', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('held-count')), (_i, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('held-count')), (_i, state) => {
     const sql = state.storage.sql;
     const store = claimStore(sql);
     sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0)`);
