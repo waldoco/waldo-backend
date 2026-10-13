@@ -820,3 +820,13 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   3. #1109 waits behind them.
 - **App #102** (the beta-logging origin check, consent disclosure): its review is next. With a trailing slash or `:443` in the origin, the app talked to staging but hid the beta-logging line.
 - **Run 3b's build:** the App lane installs current `main` (with #98–#101), so the owner tests what ships, and updates its note to "Confirmed".
+
+## 03:25Z: app #102 merged; #103 and #1116 in review
+
+- **Merged app #102 as `ad6be1a4`.** The consent screen's beta-logging line now shows exactly when the app talks to staging.
+  - **Gate:** review PASS. The reviewer tried 40 origin spellings in Node, and the line and the transport disagreed 0 times. The accepted set is unchanged, and production is unaffected. CI passed.
+- **`iPhone 17`** runs a Release build of app `main` `1ef1ec96` (installed 03:20Z) for the owner's run 3b, and a pass reads "Confirmed".
+- **In review:**
+  - #1116, proxy logs keep only fixed codes. It must merge before the proxy redeploy.
+  - App #103, the follow-up: "Unconfirmed", "New draft", strict state words, one time rule.
+- **The App lane's next items** come from Ansh's list 6.3: the Home Brief row pointing at the latest scheduled row, then Body's candidate recovery and sleep debt, then the unreachable-file inventory.
