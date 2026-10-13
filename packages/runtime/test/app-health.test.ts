@@ -287,7 +287,7 @@ describe('app health score history', () => {
     for (const answer of [
       new Error('directory 500'), { history: 'nope' }, { history: [stored('2026-10-08', { form: available({ zone: 'excellent' }) })] },
       { history: [stored('2026-10-06')] }, { history: [stored('2026-10-10'), stored('2026-10-08')] }, { history: [stored('2026-10-08'), stored('2026-10-08')] },
-      { history: [stored('2026-10-08', { timezone: 'Mars/Olympus_Mons' })] }, { unavailable: 'because' }, { error: 'unavailable' },
+      { history: [stored('2026-10-08', { timezone: 'Mars/Olympus_Mons' })] }, { history: [stored('2026-10-08'), null] }, { unavailable: 'because' }, { error: 'unavailable' },
     ]) {
       rpcResult = answer;
       expect((await get(WEEK)).status, JSON.stringify(answer instanceof Error ? 'thrown' : answer).slice(0, 80)).toBe(503);
