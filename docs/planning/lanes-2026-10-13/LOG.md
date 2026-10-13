@@ -1803,3 +1803,17 @@ Verdicts come from a scan of PR comments at 09:57Z. "@head" means the verdict na
   - output gaps as #1103 tasks with scenario tests.
 - **Prerequisite:** L4's source table `Docs/audits/WEBSITE_EXAMPLES_APP_REQUIREMENTS_2026-10-13.md` is UNTRACKED in the main waldo-app checkout. Commit it in a docs PR before the audit cites it.
 - **L4's open check before the Spots PR:** whether the console's Spots list and the app's `memory_view=claims` projection show the same items.
+
+## 10:13Z (from `date -u`): tip `ea41bb0e` green, ready for the owner's deploy; design brief for Suyash
+
+- **`beta-mvp` tip `ea41bb0e`** (with #1134, #1130 and #1145): CI 6 of 6 green at 10:12Z. The diff from the live `a94d7fa5` has no wrangler, deploy, migration or app-contract paths.
+  - The owner deploys it with the staging gate (`--deploy`) for that exact SHA, avoiding :00 and :30. The gate prints the rollback target.
+  - After the deploy, the default-window calendar reads on the test account should work again, even with the "QA" event present.
+- **Design brief for Suyash:** https://claude.ai/artifact/2S1J7P1rtNCCndFszwjryp (private; the owner shares it). It covers:
+  - the app at main `7e09317c`, screen by screen, marked Real, Contract only or Not served;
+  - the owner's decisions so far;
+  - the sample-data rules: one `src/prototype/` folder, a visible "Sample" label, the contract's shape where one exists, proposed shapes in `src/prototype/proposed/`, nothing sent to the backend, and synthetic health only;
+  - the takeover path.
+
+  The owner's new direction (sample data for unbuilt features, labelled) narrows the earlier "no faked data" ruling to "nothing unlabelled".
+- **Owner direction:** iMessage becomes the messaging surface and Telegram is retired. The orchestrator's status read: backend #1095 is a DRAFT (default-off connector plus a migration), and the Mac host with its Apple ID (Ashish) is the critical path; not seen running. Keep Telegram as the dev surface until iMessage has carried real use. The launch-contract surfaces (CLAUDE.md: app, email, official WhatsApp) would need iMessage added.
