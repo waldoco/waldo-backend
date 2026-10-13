@@ -338,3 +338,20 @@ it('maps calendar detail fields only for a Worker that asks for them, so either 
  const newer=await(await serve(await request({...input,calendar_details:true}))).json() as {data:{events:Record<string,unknown>[]}};
  expect(newer.data.events[0]).toMatchObject({conference_url:'https://meet.example.test/abc-defg-hij',attachments:[{title:'Q4 plan',file_id:'drive-file-1'}],attendee_emails:['asha@example.test']});
 });
+
+it('answers a Sent readback that carries the id the send returned, on a proxy that predates it and one that reads it',async()=>{
+ const searches:string[]=[];
+ vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
+  const url=String(input);const args=url.startsWith('https://db.invalid/')?JSON.parse(String(init?.body??'{}')):{};const fn=url.split('/').at(-1)!;
+  if(fn==='proxy_access')return Response.json(args.p_connection==='conn'&&args.p_do_name==='owner'?[{secret:'fictional-refresh',scopes:['https://www.googleapis.com/auth/gmail.send']}]:[]);
+  if(fn==='proxy_secret')return Response.json('fictional-refresh');
+  if(fn==='proxy_health')return Response.json(true);
+  if(url==='https://oauth2.googleapis.com/token')return Response.json({access_token:'fictional-access'});
+  if(url.includes('gmail.googleapis.com/gmail/v1/users/me/messages?')){searches.push(url);return Response.json({messages:[{id:'g1'}]});}
+  if(url.includes('gmail.googleapis.com/gmail/v1/users/me/messages/g1?'))return Response.json({id:'g1',threadId:'t1',labelIds:['SENT'],payload:{headers:[{name:'Message-ID',value:'<fixture@waldo-send>'}]}});
+  throw new Error('unexpected fictional transport');
+ }));
+ // The Worker drops only trailing undefined arguments, so an absent thread id crosses the wire as null.
+ const answer=await(await serve(await request({do_name:'owner',op:'call',connection:'conn',method:'findSentByMessageId',args:['<fixture@waldo-send>',null,'g1']}))).json();
+ expect(answer).toEqual({data:{message_id:'g1',thread_id:'t1',rfc822_message_id:'<fixture@waldo-send>',label_ids:['SENT']}});
+});
