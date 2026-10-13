@@ -341,14 +341,15 @@ const htmlText = (html: string): string => {
   const cells = new Set(['td', 'th']);
   let suppressed = 0;
   const chunks: string[] = [];
-  const boundary = () => { if (!suppressed && chunks.length && chunks.at(-1) !== '\n') chunks.push('\n'); };
-  const cellEnd = () => { if (!suppressed && chunks.length && !/\s$/.test(chunks.at(-1)!)) chunks.push(' '); };
+  const mark = (separator: string) => { if (!suppressed) chunks.push(separator); };
   new Parser({
-    onopentag(name) { if (name === 'script' || name === 'style') suppressed++; else if (blocks.has(name)) boundary(); },
-    ontext(text) { if (!suppressed) chunks.push(text); },
-    onclosetag(name) { if (name === 'script' || name === 'style') suppressed = Math.max(0, suppressed - 1); else if (blocks.has(name)) boundary(); else if (cells.has(name)) cellEnd(); },
+    onopentag(name) { if (name === 'script' || name === 'style') suppressed++; else if (blocks.has(name)) mark('\n'); },
+    // Source whitespace is layout, not text: a browser shows a run of it, line breaks included, as one space.
+    ontext(text) { if (!suppressed) chunks.push(text.replace(/\s+/g, ' ')); },
+    onclosetag(name) { if (name === 'script' || name === 'style') suppressed = Math.max(0, suppressed - 1); else if (blocks.has(name)) mark('\n'); else if (cells.has(name)) mark(' '); },
   }, { decodeEntities: true }).end(html);
-  return chunks.join('').replace(/ \n/g, '\n').trim();
+  // Rendered the way a browser lays it out: a block or row ends a line, a cell ends with a space.
+  return chunks.join('').replace(/\s+/g, (run) => (run.includes('\n') ? '\n' : ' ')).trim();
 };
 const threadBody = (payload: GmailPayload | undefined): string => {
   const partText = (part: GmailPayload, mime: string): string => {
