@@ -1716,3 +1716,13 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **Owner decisions still open:**
   - opening Waldo on the Air, or allowing that action in N4's session;
   - whether Waldo's own consent should gate on-phone display reads.
+
+## 09:48Z (from `date -u`): heartbeat
+
+- Cron `b5c0736d` is present. Usage is 86%, so non-critical work stays paused and no reviewers run, except the one the calendar-fix merge needs.
+- **Backend #1145 (Connectors, the calendar-read fix):** head `5eda4680`, +64/-3 in 3 files (`reads.ts`, `tools/live/google.ts`, a new test). CI was at 3 of 6 green, with 3 still running; a background wait is on. Once it's green: a small budgeted reviewer, the advisor, a pinned merge, then the owner's staging deploy of that exact tip.
+- **Staging** is still `a94d7fa5`, the `beta-mvp` tip, so nothing new to deploy until #1145 merges.
+- **#1103:** Ansh's cloud Google Workspace lane started; it registered files on `claude/google-*` branches and is posting design-first notes. The lanes' state notes for the account switch are posted. Nothing new on #116.
+- **Open, waiting for the reset or the owner:**
+  - app #117, #119, #121, #122 and #123 (all green), and #115 and #118 (drafts);
+  - backend: the green queue (#1110, #1114 delta, #1124, #1128–#1135, #1139–#1144), plus #1127, #1133, #1113 and #1120, which need the owner.
