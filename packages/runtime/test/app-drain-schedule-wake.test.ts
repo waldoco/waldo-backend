@@ -56,3 +56,19 @@ it('an app message leaves the alarm for the owner\'s next scheduled job in place
   });
 });
 
+
+it('a repeated send of a message already answered, which drains nothing, leaves that alarm in place too', async () => {
+  const name = 'app-drain-duplicate-keeps-wake';
+  await withReminder(name, async (owner, state, armed) => {
+    const { message_id: id } = await (await send(owner, name, 'wake-client-0002')).json() as { message_id: string };
+    await vi.waitFor(() => expect(state.storage.kv.get<{ state: string }>(`app:inbox-record:${id}`)?.state).toBe('completed'), { timeout: 10_000, interval: 20 });
+    const serial = owner as unknown as { serial(work: () => Promise<void>): Promise<void> };
+    await serial.serial(async () => undefined);
+    await state.storage.setAlarm(armed);
+    const again = await send(owner, name, 'wake-client-0002');
+    expect(again.status).toBe(202);
+    expect(await again.json()).toMatchObject({ message_id: id, state: 'completed' });
+    await serial.serial(async () => undefined);
+    expect(await state.storage.getAlarm()).toBe(armed);
+  });
+});
