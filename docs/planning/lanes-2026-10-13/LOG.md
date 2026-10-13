@@ -1851,3 +1851,31 @@ Verdicts come from a scan of PR comments at 09:57Z. "@head" means the verdict na
 - **#1147: YES for staging** (chosen through AskUserQuestion, "Time-zone fixes and #1147"). Gmail, Calendar and Drive-metadata reads go through Google's Developer Preview MCP servers without a per-read button, staging only; production is unchanged.
   - The ruling and the order are posted on #1147: #1146 first; #1147's red CI fixed; review, advisor, pinned merge; then the owner deletes the staging secret `WALDO_MCP_SERVERS`, deploys the edge from #1146, then deploys the Worker.
   - The staging gate refuses `wrangler.jsonc`, so this deploy is the owner's direct run, with the rollback target recorded first.
+
+## 10:39Z (from `date -u`): progress assessment and the priority order after the reset
+
+This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` and backend `6ddbd85e`) with what has merged and deployed since.
+
+- **Done since:** background health wakes (#109); Home Overview (#112); named-effect approvals (#113); zone confirm and alias (#114, #120); tabs (#116), now on the Air. The Weight-on-calendar-days fix (#1130), the day-card body line (#1134) and the calendar-read fix (#1145) are live on staging `ea41bb0e`.
+- **The status doc's blockers, now:**
+  1. **Invented readiness** (Form 100 on missing data): #1129 [fix, inferred from title]. Its head moved to `8af92141` after the main merge, so re-check it, then merge and deploy.
+  2. **The wake bug** (a duplicate send can stop every scheduled card): #1128, PASS at head, but its file is frozen until #1119.
+  3. **Background sync:** done (#109). Score ageing is #1131 (no verdict). Sleep debt waits on migration #1127, which is the owner's.
+  4. **App wiring:** Patrol and Spots (L4); chat Stop and rating; Body history.
+  5. **Missing backend routes:**
+     - the Brief text;
+     - carrying and outcomes, the trail and refs;
+     - the threads runtime;
+     - the push sender;
+     - the health detail series;
+     - the Spots actions.
+  6. **Owner steps:** migrations #1127 and #1133; binding #1120; the Google reconnect scopes; the #1147 steps.
+- **Priority order after the reset:**
+  1. observe a calendar read on staging;
+  2. land #1119 and then #1128 (proactivity reliability);
+  3. #1129 (honest Form);
+  4. L4: Patrol and Spots;
+  5. the owner's migrations;
+  6. `get_health` (L5);
+  7. the backend routes behind the website's Home;
+  8. the memory and proactive audit.
