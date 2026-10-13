@@ -397,6 +397,11 @@ describe('Calendar page receipts',()=>{
   const full={...page,events:[event],fetched_count:1};
   expect(calendarPageSchema.parse(full)).toEqual(full);
  });
+ it('admits the owner status only as organizer or accepted',()=>{
+  const event={id:'e1',title:'Standup',start:'2026-10-06T09:00:00Z',end:'2026-10-06T09:30:00Z',all_day:false};
+  for(const owner_status of ['organizer','accepted'])expect(calendarPageSchema.safeParse({...page,events:[{...event,owner_status}],fetched_count:1}).success).toBe(true);
+  for(const owner_status of ['tentative','needsAction','',true])expect(calendarPageSchema.safeParse({...page,events:[{...event,owner_status}],fetched_count:1}).success).toBe(false);
+ });
  it('admits empty exhausted pages with explicitly unavailable account metadata',()=>{
   expect(calendarPageSchema.parse(page)).toEqual(page);
  });

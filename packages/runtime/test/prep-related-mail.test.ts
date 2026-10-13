@@ -1,12 +1,16 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { GoogleError, googleClient, type CalendarItem, type GoogleClient, type MailItem, type ThreadMessage } from '../src/connectors/google';
-import { calendarPrepPrompt, eventBriefs, relatedMail, relatedMailQuery } from '../src/channels/event-briefs';
+import { calendarPageSchema } from '@waldo/contracts';
+import { GoogleError, b64url, googleClient, proxyClientOptions, type CalendarItem, type GoogleClient, type GoogleClientOptions, type MailItem, type ThreadMessage } from '../src/connectors/google';
+import { calendarPrepDigest, calendarPrepPrompt, eventBriefs, relatedMail, relatedMailQuery } from '../src/channels/event-briefs';
 
 // Synthetic mail only.
 const OWNER = 'owner@example.test';
-const event: CalendarItem = { id: 'e1', title: 'Weekly sync', start: '2026-10-13T05:00:00.000Z', end: '2026-10-13T05:30:00.000Z', all_day: false, attendee_emails: ['asha@example.test', OWNER] };
+const APP = { clientId: 'fixture', clientSecret: 'fixture', redirectUri: 'https://fixture.invalid' };
+const NOW = Date.parse('2026-10-13T04:30:00Z');
+const event: CalendarItem = { id: 'e1', title: 'Weekly sync', start: '2026-10-13T05:00:00.000Z', end: '2026-10-13T05:30:00.000Z', all_day: false, attendee_emails: ['asha@example.test', OWNER], owner_status: 'accepted' };
+const { owner_status: _ownerStatus, ...unmarked } = event;
 const item = (id: string, thread: string): MailItem => ({ id, thread_id: thread, from: 'asha@example.test', subject: 'Weekly sync', snippet: 's', at: '2026-10-12T09:00:00.000Z' });
 const message = (id: string, body: string): ThreadMessage => ({ id, from: 'Asha <asha@example.test>', subject: 'Re: Weekly sync', at: '2026-10-12T09:00:00.000Z', body });
 const mailClient = (threads: Record<string, readonly ThreadMessage[]>, found: readonly MailItem[], calls: string[] = []) => ({
@@ -143,5 +147,131 @@ describe('the grounded sweep', () => {
       const stored = JSON.stringify(state.storage.sql.exec('SELECT * FROM event_briefs').toArray());
       expect(stored).not.toContain('budget');
     });
+  });
+});
+
+describe('which meetings may choose the mail that is read', () => {
+  const mapped = async (extra: Record<string, unknown>, options?: GoogleClientOptions) => (await googleClient(APP, { refresh_token: 'fixture' },
+    (async (input: RequestInfo | URL) => Response.json(String(input).startsWith('https://oauth2') ? { access_token: 'fixture' } : { kind: 'calendar#events', items: [{ id: 'e1', status: 'confirmed', summary: 'Weekly sync',
+      start: { dateTime: '2026-10-13T10:30:00+05:30' }, end: { dateTime: '2026-10-13T11:00:00+05:30' }, ...extra }] })) as typeof fetch, undefined, { connection_id: 'c', email: OWNER }, options)
+    .calendarPage('primary', '2026-10-13T04:00:00Z', '2026-10-13T06:00:00Z', 10, false));
+  const invitedBy = (status: string) => ({ organizer: { email: 'asha@example.test' }, attendees: [{ email: OWNER, self: true, responseStatus: status }, { email: 'asha@example.test', responseStatus: 'accepted' }] });
+
+  it('marks an event the owner organized or accepted, for a caller that asks', async () => {
+    const asks = proxyClientOptions({ calendar_owner_status: true });
+    const organized = await mapped({ organizer: { email: OWNER, self: true } }, asks);
+    expect(organized.events[0]!.owner_status).toBe('organizer');
+    expect(calendarPageSchema.parse(organized).events[0]!.owner_status).toBe('organizer');
+    expect((await mapped(invitedBy('accepted'), asks)).events[0]!.owner_status).toBe('accepted');
+    for (const status of ['needsAction', 'tentative']) expect((await mapped(invitedBy(status), asks)).events[0]).not.toHaveProperty('owner_status');
+    expect((await mapped({ organizer: { email: 'asha@example.test' } }, asks)).events[0]).not.toHaveProperty('owner_status');
+  });
+
+  it('marks it in the Worker\'s own client, which needs no opt-in', async () => {
+    expect((await mapped({ organizer: { email: OWNER, self: true } })).events[0]!.owner_status).toBe('organizer');
+  });
+
+  it('never marks it for a caller that predates the mark, and the strict page schema refuses any other value', async () => {
+    expect((await mapped({ organizer: { email: OWNER, self: true } }, proxyClientOptions({ calendar_details: true }))).events[0]).not.toHaveProperty('owner_status');
+    const page = await mapped({ organizer: { email: OWNER, self: true } }, proxyClientOptions({ calendar_owner_status: true }));
+    expect(calendarPageSchema.safeParse({ ...page, events: [{ ...page.events[0], owner_status: 'tentative' }] }).success).toBe(false);
+  });
+
+  it('reads no mail for an invite the owner has not accepted, or when the connector did not say', async () => {
+    const calls: string[] = [];
+    const client = mailClient({ t1: [message('m1', 'Agenda: budget.')] }, [item('a', 't1')], calls);
+    expect(await relatedMail(client, unmarked)).toEqual({ status: 'none' });
+    expect(calls).toEqual([]);
+    expect((await relatedMail(client, { ...event, owner_status: 'organizer' })).status).toBe('read');
+  });
+
+  it('keeps the mark out of the prep digest and the prompt, so neither moves when it arrives', async () => {
+    expect(await calendarPrepDigest(event)).toBe(await calendarPrepDigest(unmarked));
+    expect(calendarPrepPrompt(event, NOW, 'UTC')).toBe(calendarPrepPrompt(unmarked, NOW, 'UTC'));
+  });
+});
+
+describe('a mail read that cannot finish', () => {
+  it('gives up at its deadline, so prep runs on the calendar', async () => {
+    const hanging = { ...mailClient({}, []), searchMail: () => new Promise(() => {}) } as unknown as GoogleClient;
+    expect(await relatedMail(hanging, event, 20)).toEqual({ status: 'unavailable' });
+  });
+
+  it('adds no mail line at all for a connection without mail access', async () => {
+    const noMail = { ...mailClient({}, []), searchMail: async () => { throw new GoogleError(403, 'google 403: synthetic', 'ACCESS_TOKEN_SCOPE_INSUFFICIENT'); } } as unknown as GoogleClient;
+    const related = await relatedMail(noMail, event);
+    expect(related).toEqual({ status: 'none' });
+    expect(calendarPrepPrompt(event, NOW, 'UTC', related)).toBe(calendarPrepPrompt(event, NOW, 'UTC'));
+  });
+});
+
+describe('codes an HTML-only mail lays out in table cells', () => {
+  it('never reach the prep, read through the real connector', async () => {
+    const encode = (text: string) => b64url(new TextEncoder().encode(text));
+    const client = googleClient(APP, { refresh_token: 'fixture' }, (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('https://oauth2')) return Response.json({ access_token: 'fixture' });
+      if (url.includes('/messages?')) return Response.json({ messages: [{ id: 'm1' }] });
+      if (url.includes('/messages/m1?')) return Response.json({ threadId: 't1', internalDate: '1791417600000', payload: { headers: [{ name: 'Subject', value: 'Weekly sync' }] } });
+      return Response.json({ id: 't1', messages: [{ id: 'm1', threadId: 't1', internalDate: '1791417600000', payload: { mimeType: 'text/html', headers: [{ name: 'From', value: 'noreply@example.test' }, { name: 'Subject', value: 'Weekly sync' }],
+        body: { data: encode('<table><tr><td>Verification code</td><td>482913</td></tr><tr><td>Agenda</td><td>budget</td></tr></table>') } } }] });
+    }) as typeof fetch, undefined, { connection_id: 'c', email: OWNER });
+    const read = await relatedMail(client, event);
+    expect(read.status).toBe('read');
+    const text = JSON.stringify(read);
+    expect(text).toContain('Agenda budget');
+    expect(text).not.toContain('482913');
+  });
+});
+
+describe('the grounded sweep around the mail read', () => {
+  type Sweep = Parameters<ReturnType<typeof eventBriefs>['groundedSweep']>[0];
+  const sweep = async (name: string, shape: (upcoming: CalendarItem) => CalendarItem, client: Partial<GoogleClient>, overrides: Partial<Sweep> = {}) => {
+    let result!: { queued: number | Error; prompts: string[]; enqueued: number; stored: number };
+    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+      const now = Date.now();
+      const upcoming = shape({ ...event, start: new Date(now + 20 * 60_000).toISOString(), end: new Date(now + 50 * 60_000).toISOString() });
+      const prompts: string[] = [];
+      let enqueued = 0;
+      const full = { ...mailClient({ t1: [message('m1', 'Agenda: budget review.')] }, [item('a', 't1')]), ...client,
+        calendarPage: async () => ({ events: [upcoming], next_page_token: null, fetched_count: 1, account: { connection_id: 'c', email: OWNER }, observed_at: new Date(now).toISOString() }),
+        event: async () => upcoming } as unknown as GoogleClient;
+      const queued = await eventBriefs(state.storage.sql, 'UTC').groundedSweep({ client: full, now, timezone: 'UTC', current: async () => undefined, known: () => false,
+        decide: async (_id, prompt) => { prompts.push(prompt); return JSON.stringify({ kind: 'notify', text: 'Prep: budget review at the sync.' }); },
+        enqueue: async (_id, _text, _receipt, commit) => { enqueued++; commit(); return true; }, ...overrides }).catch((error: Error) => error);
+      result = { queued, prompts, enqueued, stored: state.storage.sql.exec('SELECT * FROM event_briefs').toArray().length };
+    });
+    return result;
+  };
+
+  it('stops before the decision when the owner\'s authority changed while the mail was read', async () => {
+    let mailCalls = 0;
+    const result = await sweep('prep-fence-after-mail', upcoming => upcoming, { searchMail: (async () => { mailCalls++; return [item('a', 't1')]; }) as GoogleClient['searchMail'] },
+      { current: async () => { if (mailCalls) throw new Error('synthetic fence'); } });
+    expect(mailCalls).toBe(1);
+    expect(result.queued).toBeInstanceOf(Error);
+    expect(result).toMatchObject({ prompts: [], enqueued: 0, stored: 0 });
+  });
+
+  it('still decides on the calendar when the mail read outlasts its deadline', async () => {
+    const result = await sweep('prep-mail-deadline', upcoming => upcoming, { searchMail: (() => new Promise(() => {})) as GoogleClient['searchMail'] }, { mailDeadlineMs: 20 });
+    expect(result.queued).toBe(1);
+    expect(result.prompts[0]).toContain('Related mail could not be read');
+  });
+
+  it('never waits on the mail past the meeting\'s start', async () => {
+    const started = Date.now();
+    await sweep('prep-mail-deadline-start', upcoming => ({ ...upcoming, start: new Date(Date.now() + 300).toISOString() }), { searchMail: (() => new Promise(() => {})) as GoogleClient['searchMail'] });
+    expect(Date.now() - started).toBeLessThan(3_000);
+  });
+
+  it('measures the prompt it would send, not the whole event, against the 16 KiB bound', async () => {
+    const heavy = (upcoming: CalendarItem): CalendarItem => ({ ...upcoming,
+      attendee_emails: Array.from({ length: 20 }, (_, i) => `${'p'.repeat(300)}${i}@example.test`),
+      attachments: Array.from({ length: 20 }, (_, i) => ({ title: `Deck ${i}`, file_id: 'f'.repeat(1_000) })) });
+    expect(new TextEncoder().encode(JSON.stringify(heavy(event))).byteLength).toBeGreaterThan(16_384);
+    expect((await sweep('prep-heavy-event', heavy, {})).queued).toBe(1);
+    const oversized = await sweep('prep-oversized-prompt', upcoming => ({ ...upcoming, title: 'T'.repeat(17_000) }), {});
+    expect(oversized).toMatchObject({ queued: 0, prompts: [] });
   });
 });
