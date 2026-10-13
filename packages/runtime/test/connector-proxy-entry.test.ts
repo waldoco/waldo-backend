@@ -366,3 +366,14 @@ it('logs a fixed code, never the provider\'s error text, and keeps its own codes
  expect(lines.map(line=>line.error)).toEqual(['provider_error','intent_required']);
  for(const leaked of ['friend@example.test','Invalid To header'])expect(JSON.stringify(logs.mock.calls)).not.toContain(leaked);
 });
+it('logs provider_error for text that only starts with one of its codes, and only known operations and methods', async () => {
+ fixture();const inner=globalThis.fetch;
+ vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{if(String(input).includes('gmail.googleapis.com'))throw new Error('unknown owner friend@example.test');return inner(input,init);}));
+ const logs=vi.spyOn(console,'log').mockImplementation(()=>{});
+ await serve(await request({do_name:'owner',op:'call',connection:'conn',method:'searchMail',args:['in:sent',5]}));
+ await serve(await request({do_name:'owner',op:'call',connection:'conn',method:'friend@example.test',args:[]}));
+ await serve(await request({do_name:'owner',op:'friend@example.test',connection:'conn'}));
+ const lines=logs.mock.calls.map(call=>JSON.parse(String(call[0])) as {hop:string;op?:string;method?:string;error?:string}).filter(line=>line.hop==='connector_proxy');
+ expect(lines.map(({op,method,error})=>[op,method,error])).toEqual([['call','searchMail','provider_error'],['call','unknown','unknown operation'],['unknown',undefined,expect.any(String)]]);
+ expect(JSON.stringify(logs.mock.calls)).not.toContain('friend@example.test');
+});

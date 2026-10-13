@@ -55,12 +55,13 @@ const LOGGED_CODES = new Set([...READ_FAILURE_CODES, 'unknown owner', 'connector
   'drive_not_found', 'drive_rate_limited', 'drive_read_failed', 'drive_source_changed', 'drive_content_unsupported']);
 
 // One structured line per call: operation, method, outcome and duration. Never the code, verifier,
-// token, account or arguments.
-const logged = async (started: number, op: string, method: string | undefined, response: Response, read = false) => {
+// token, account or arguments. The operation and method come from the request body, so only known ones are logged.
+const LOGGED_OPS = new Set(['exchange', 'adopt', 'call', 'mcp_call', 'unconfigured', 'unsigned']);
+const logged = async (started: number, op: unknown, method: unknown, response: Response, read = false) => {
   const outcome = await response.clone().json().then(value => (value as {error?:{status:number;message:string;provider_diagnostic?:unknown}}).error ?? null).catch(() => ({ status: response.status, message: 'unreadable response' }));
   const message = !outcome ? undefined : read && !READ_FAILURE_CODES.has(outcome.message) ? 'mcp_read_failed' : LOGGED_CODES.has(outcome.message) ? outcome.message : 'provider_error';
   const diagnostic = read && outcome && 'provider_diagnostic' in outcome ? safeMcpErrorDiagnostic(outcome.provider_diagnostic) : undefined;
-  console.log(JSON.stringify({ hop: 'connector_proxy', op, ...(method ? { method } : {}), ok: !outcome, ms: Date.now() - started, ...(outcome ? { status: outcome.status, error: message } : {}), ...(diagnostic ? { provider_diagnostic: diagnostic } : {}) }));
+  console.log(JSON.stringify({ hop: 'connector_proxy', op: LOGGED_OPS.has(op as string) ? op : 'unknown', ...(method !== undefined ? { method: METHODS.includes(method as Method) ? method : 'unknown' } : {}), ok: !outcome, ms: Date.now() - started, ...(outcome ? { status: outcome.status, error: message } : {}), ...(diagnostic ? { provider_diagnostic: diagnostic } : {}) }));
   return response;
 };
 
