@@ -1839,3 +1839,15 @@ Verdicts come from a scan of PR comments at 09:57Z. "@head" means the verdict na
   - the backend builder fixed the three BLOCKs from cloud review 6142381426 and pushed #1135, #1132, #1129 (main merged after #1130) and #1139;
   - the Google Workspace lane opened #1146 (Google MCP servers read-only by construction), #1147 (**needs owner:** serve Google's Workspace MCP reads on staging, a new third-party service) and #1148 (the plan), and handed its Google gap list to Connectors (#1103 6143415992).
   - The owner ruled Google later, so #1147 waits for an explicit owner yes. These heads need fresh review after the reset.
+
+## 10:31Z (from `date -u`): owner rulings: time-zone fixes, and #1147 yes for staging
+
+- **Time zone: "agreed".** Three follow-ups after the reset:
+  1. **N4:** app health upload (`healthIngestDeps.ts:44`) uses the owner's saved zone, not the phone's raw zone. Red-first test.
+  2. **L4:** a travel test. Change only the Simulator's or the app's zone, never the host Mac's (that would move every lane). Waldo offers a one-tap switch and never changes the zone silently.
+  3. **The memory and proactive audit:** check every backend "today" path (day cards, Weight per day, quiet hours, the Close, reminders) uses the saved IANA zone.
+
+  The rule stays: store instants in UTC, store the owner's zone by IANA name, convert at the edge, and the owner-set zone wins.
+- **#1147: YES for staging** (chosen through AskUserQuestion, "Time-zone fixes and #1147"). Gmail, Calendar and Drive-metadata reads go through Google's Developer Preview MCP servers without a per-read button, staging only; production is unchanged.
+  - The ruling and the order are posted on #1147: #1146 first; #1147's red CI fixed; review, advisor, pinned merge; then the owner deletes the staging secret `WALDO_MCP_SERVERS`, deploys the edge from #1146, then deploys the Worker.
+  - The staging gate refuses `wrangler.jsonc`, so this deploy is the owner's direct run, with the rollback target recorded first.
