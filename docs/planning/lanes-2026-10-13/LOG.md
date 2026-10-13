@@ -2202,3 +2202,17 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 - P0 measured S2 only: PARTIAL, 51.0 s against 40.2 s. The self-correction is gone, but the offered hour overlaps a listed event. At 20:16Z the Air's app session hit the fixed 12-hour expiry (signed in at 08:16Z; no refresh). That is #1133's problem, not a deploy regression; a human must sign in again. Scorecard: scratchpad `rerun-scorecard.md`; posted 6154509927.
 - The late-night "tomorrow" is the model's reading: `get_context` returns the owner-zone date.
 - Lane P1 runs the scenarios on Telegram Web (bot chat only), diagnostic per Bible law 10. Brief `MAC_LANE_P1_TELEGRAM_BRIEF.md` at `f06c3ce9`. Lane T (M4) is still running.
+
+## 20:42Z — re-run resumed; owner rulings posted; the engineering bar
+
+- About 20:33Z the owner signed in again on the Air, and P0 resumed in order (S3, S4, S5, S6, S8, S9, S7, then the forget check). P1, the Telegram stand-in, was stopped before it sent anything.
+  - S5 took 89.7 s against 72.9 s, with 8 model calls against 6. `browse_page` still fails: two `auth_failed` and one `transient`, each in its own model round.
+  - The full scorecard follows when P0 reports.
+- The owner's rulings are posted (6154643038) and added as digest items 30–34 (`f8c058b7`):
+  - #1182 compaction is approved and built after A3;
+  - the text surfaces are plain-text extensions of the main agent, with links to the app on mobile and the console on desktop;
+  - the main agent is the focus.
+- 20:39Z, before sleep, the owner set the engineering bar: properly engineered work, no rash decisions, and mature-harness practice checked whenever a decision is ambiguous (digest item 35).
+  - A research lane is compiling sourced references for the open decisions. It is read-only and writes to the scratchpad; the Mac reviews the note before it lands here.
+- The comment-6154509927 stamp was corrected from a guessed time to 20:25Z.
+- Usage at 20:40Z: 23% of the 5-hour window, 19% weekly.

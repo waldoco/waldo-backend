@@ -1,4 +1,4 @@
-# Owner rulings digest, as of 13 Oct 2026, 20:33Z
+# Owner rulings digest, as of 13 Oct 2026, 20:42Z
 
 This digest lets cloud sessions follow the owner's rulings. The full notes live in the orchestrator's memory on the owner's Mac, which cloud sessions can't read. Rulings decide what is wanted; source and tests decide what is shipped. Where a later ruling conflicts with an earlier one, the later one wins.
 
@@ -85,6 +85,10 @@ This digest lets cloud sessions follow the owner's rulings. The full notes live 
     - Optimize later.
     - This settles A3's `visibility` question: rich health rows stay in the app and console.
 34. **The main agent is the focus.**
+35. **The engineering bar (20:39Z, before sleep).** Every piece of engineering must be properly reasoned. No rash decisions.
+    - When a design point is ambiguous, check how mature agent systems handle it. Look first at Anthropic's docs and its engineers' posts.
+    - Cite what you find in the PR. Where you depart from that practice, say why.
+    - The Mac is writing a sourced reference note on this branch for the decisions open now: the time budget, compaction, tool errors, evals and forgetting.
 
 ## Still open (ask the owner)
 
