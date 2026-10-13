@@ -34,6 +34,16 @@ const SCHEMA = [
   'CREATE TABLE IF NOT EXISTS sent_messages(message_guid TEXT PRIMARY KEY, command_id TEXT NOT NULL, state TEXT NOT NULL)',
 ];
 
+// Retention (proposed local values, owner-approved review item 2026-10-13). Terminal rows keep their identity
+// long enough for duplicate receipts, late identical results and receipt correlation, then are pruned. Pending
+// events, queued/delivered commands, unreported results and unknown (uncertain) outcomes are never pruned.
+/** Handed/acknowledged events and reported, settled deliveries (with their sent-message and conflict rows). */
+export const BRIDGE_TERMINAL_RETENTION_MS = 7 * 24 * 60 * 60_000;
+/** Held events keep their body as evidence (media, revoked scope) for longer. */
+export const BRIDGE_HELD_RETENTION_MS = 30 * 24 * 60 * 60_000;
+/** Under backpressure terminal rows may go early, but never younger than this (host ACK-loss and result-retry windows). */
+export const BRIDGE_PRESSURE_FLOOR_MS = 24 * 60 * 60_000;
+
 type Sql = SqlStorage;
 type Row = Record<string, SqlStorageValue>;
 
@@ -49,15 +59,31 @@ export class BridgeStore {
     else this.sql.exec('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', key, value);
   }
 
-  /** Runs one step atomically and enforces retained record/byte bounds before commit. */
-  tx<T>(work: () => T): T {
+  /**
+   * Runs one step atomically, prunes expired terminal rows and enforces retained record/byte bounds before
+   * commit. `unbounded` is for steps that add no rows and must never be refused for space: settling an event,
+   * withdrawing, the deadline sweep (its quarantine must always land), marking a result reported, and revoke.
+   */
+  tx<T>(work: () => T, o: { unbounded?: boolean } = {}): T {
     return this.storage.transactionSync(() => {
       const result = work();
-      this.enforceBounds();
+      if (!o.unbounded) this.enforceBounds();
       return result;
     });
   }
+  /**
+   * Defined backpressure recovery: prune terminal rows past retention; if still over the bounds, prune the
+   * oldest terminal rows down to the pressure floor; only then refuse. What remains is live or uncertain work
+   * (pending events, outstanding or unknown commands, held evidence) that only the owner flow can clear.
+   */
   private enforceBounds() {
+    const now = this.now();
+    this.prune(now - BRIDGE_TERMINAL_RETENTION_MS, now - BRIDGE_HELD_RETENTION_MS);
+    if (!this.overBounds()) return;
+    this.prune(now - BRIDGE_PRESSURE_FLOOR_MS, now - BRIDGE_HELD_RETENTION_MS);
+    if (this.overBounds()) throw new BridgeStoreError('backpressure');
+  }
+  private overBounds(): boolean {
     const count = (table: string) => Number(this.rows(`SELECT count(*) AS n FROM ${table}`)[0]!.n);
     const records = ['nonces', 'events', 'deliveries', 'result_conflicts', 'sent_messages', 'meta'].reduce((n, t) => n + count(t), 0);
     const bytes = Number(this.rows(`SELECT
@@ -65,7 +91,15 @@ export class BridgeStore {
       coalesce((SELECT sum(length(CAST(body AS BLOB)) + length(CAST(headers AS BLOB)) + length(CAST(coalesce(result,'') AS BLOB))) FROM deliveries),0) +
       coalesce((SELECT sum(length(CAST(result AS BLOB))) FROM result_conflicts),0) +
       coalesce((SELECT sum(length(CAST(value AS BLOB))) FROM meta),0) AS n`)[0]!.n);
-    if (records > this.policy.maxRecords || bytes > this.policy.maxRetainedBytes) throw new BridgeStoreError('backpressure');
+    return records > this.policy.maxRecords || bytes > this.policy.maxRetainedBytes;
+  }
+  /** Deletes terminal rows created before the cutoffs. A delivery goes only once settled, reported to the owner and not unknown. */
+  private prune(terminalBefore: number, heldBefore: number) {
+    this.sql.exec("DELETE FROM events WHERE (state IN ('handed','acknowledged') AND created_at < ?) OR (state='held' AND created_at < ?)", terminalBefore, heldBefore);
+    this.sql.exec(`DELETE FROM deliveries WHERE state IN ('resulted','withdrawn') AND result IS NOT NULL AND reported=1
+      AND json_extract(result,'$.state') <> 'unknown' AND created_at < ?`, terminalBefore);
+    this.sql.exec('DELETE FROM sent_messages WHERE command_id NOT IN (SELECT command_id FROM deliveries)');
+    this.sql.exec('DELETE FROM result_conflicts WHERE delivery_id NOT IN (SELECT delivery_id FROM deliveries)');
   }
 
   /** Consumes a fresh nonce inside the caller's transaction. Only expired nonces are pruned. */
@@ -103,7 +137,7 @@ export class BridgeStore {
   settleEvent(seq: number, state: Exclude<EventState, 'pending'>, reason: string | null) {
     // Handed/acknowledged rows keep only identity + digest (enough for duplicate receipts); the private
     // body is dropped. Held rows keep the body as retained evidence (media, revoked scope).
-    this.tx(() => this.sql.exec("UPDATE events SET state=?, reason=?, body=CASE WHEN ? = 'held' THEN body ELSE '' END WHERE seq=?", state, reason, state, seq));
+    this.tx(() => this.sql.exec("UPDATE events SET state=?, reason=?, body=CASE WHEN ? = 'held' THEN body ELSE '' END WHERE seq=?", state, reason, state, seq), { unbounded: true });
   }
   eventCounts(): Record<EventState, number> {
     const out: Record<EventState, number> = { pending: 0, handed: 0, acknowledged: 0, held: 0 };
@@ -198,7 +232,7 @@ export class BridgeStore {
       this.sql.exec("UPDATE deliveries SET state='withdrawn' WHERE delivery_id=?", deliveryId);
       this.setResult(row, notStarted(row, reason));
       return true;
-    });
+    }, { unbounded: true });
   }
   private markWithdrawnResults(reason: string) {
     for (const row of this.rows("SELECT * FROM deliveries WHERE state='withdrawn' AND result IS NULL").map(toDelivery)) this.setResult(row, notStarted(row, reason));
@@ -258,11 +292,11 @@ export class BridgeStore {
       const due = this.rows("SELECT min(CASE state WHEN 'queued' THEN created_at + ? ELSE coalesce(delivered_at, created_at) + ? END) AS due FROM deliveries WHERE state IN ('queued','delivered')",
         this.policy.deliveryDeadlineMs, this.policy.mutationDeadlineMs)[0]?.due;
       return due === null || due === undefined ? null : Number(due);
-    });
+    }, { unbounded: true }); // a deadline outcome (and its quarantine) is always recorded, even on a full store
   }
   /** Terminal outcomes the owner outbox has not yet recorded (at-least-once report). */
   unreportedResults(): DeliveryRow[] { return this.rows("SELECT * FROM deliveries WHERE result IS NOT NULL AND reported=0").map(toDelivery); }
-  markReported(deliveryId: string) { this.tx(() => this.sql.exec('UPDATE deliveries SET reported=1 WHERE delivery_id=?', deliveryId)); }
+  markReported(deliveryId: string) { this.tx(() => this.sql.exec('UPDATE deliveries SET reported=1 WHERE delivery_id=?', deliveryId), { unbounded: true }); }
   sentCommandFor(messageGuid: string): string | null { return (this.rows('SELECT command_id FROM sent_messages WHERE message_guid=?', messageGuid)[0]?.command_id as string | undefined) ?? null; }
 
   /**
@@ -277,7 +311,7 @@ export class BridgeStore {
         this.setResult(row, notStarted(row, 'binding_revoked'));
       }
       this.sql.exec("UPDATE events SET state='held', reason='binding_revoked' WHERE state='pending'");
-    });
+    }, { unbounded: true }); // a full store must still record the revoke (it adds one meta row and only shrinks live work)
   }
   revokedRevision(): string | null { return this.meta('revoked_revision'); }
   quarantineReason(): string | null { const raw = this.meta('quarantine'); return raw ? (JSON.parse(raw) as { reason: string }).reason : null; }

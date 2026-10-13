@@ -136,3 +136,76 @@ it('handed and acknowledged events keep only identity and digest; held evidence 
     expect(store.admitEvent(h(), again, await sha256Hex(again), event('k1', 'private k1'))).toEqual({ duplicate: true }); // dedup still works
   });
 });
+
+const DAY = 24 * 60 * 60_000;
+const handedEvent = async (store: BridgeStore, id: string) => {
+  const body = JSON.stringify(event(id)); store.admitEvent(h(), body, await sha256Hex(body), event(id));
+  store.settleEvent(store.nextPendingEvent()!.seq, 'handed', null);
+};
+const settledDelivery = async (store: BridgeStore, id: string, state: 'local_recorded' | 'unknown', reported = true) => {
+  const row = store.enqueue(await enqueueInput(id)); store.pull(h());
+  const target = JSON.parse(row.body).target;
+  const result = state === 'unknown' ? { version: 1, commandId: id, target, state, disposition: 'may_have_completed', reason: 'host_crash' }
+    : { version: 1, commandId: id, target, state, messageGuid: `guid-${id}`, evidence: { kind: 'local_database', reference: `row-${id}` } };
+  store.postResult(h(), { deliveryId: row.deliveryId, commandId: id, commandDigest: row.commandDigest, result: result as never }, '0'.repeat(64));
+  if (reported) store.markReported(row.deliveryId);
+  return row;
+};
+const count = (state: DurableObjectState, table: string) => Number(state.storage.sql.exec(`SELECT count(*) AS c FROM ${table}`).one().c);
+
+it('retention prunes only terminal rows past retention; pending, unreported and unknown work is kept', async () => {
+  await runInDurableObject(stub(), async (_i, state) => {
+    let now = Date.now();
+    const store = new BridgeStore(state.storage, PROPOSED_LOCAL_TEST_POLICY, () => now);
+    await handedEvent(store, 'old-handed');
+    await settledDelivery(store, 'old-sent', 'local_recorded');
+    await settledDelivery(store, 'old-unreported', 'local_recorded', false);
+    const pendingBody = JSON.stringify(event('old-pending')); store.admitEvent(h(), pendingBody, await sha256Hex(pendingBody), event('old-pending'));
+    expect(count(state, 'sent_messages')).toBe(2);
+    now += 8 * DAY; // past BRIDGE_TERMINAL_RETENTION_MS; any bounded step prunes
+    store.heartbeat(h(now), 'fixture-generation', 'online');
+    expect(store.eventCounts()).toMatchObject({ handed: 0, pending: 1 });
+    expect(store.delivery({ commandId: 'old-sent' })).toBeNull();
+    expect(store.delivery({ commandId: 'old-unreported' })).not.toBeNull(); // the owner has not recorded it yet
+    expect(store.sentCommandFor('guid-old-sent')).toBeNull();
+    expect(store.sentCommandFor('guid-old-unreported')).toBe('old-unreported');
+  });
+  await runInDurableObject(stub(), async (_i, state) => {
+    let now = Date.now();
+    const store = new BridgeStore(state.storage, PROPOSED_LOCAL_TEST_POLICY, () => now);
+    await settledDelivery(store, 'uncertain', 'unknown');
+    now += 60 * DAY;
+    store.heartbeat(h(now), 'fixture-generation', 'online');
+    expect(store.delivery({ commandId: 'uncertain' })?.result).toMatchObject({ state: 'unknown' }); // uncertain evidence is never pruned
+    expect(store.quarantineReason()).toBe('host_reported_unknown');
+  });
+});
+
+it('backpressure recovers by pruning terminal rows past the pressure floor; live work alone still refuses', async () => {
+  const tight: IMessageConnectorPolicy = { ...PROPOSED_LOCAL_TEST_POLICY, maxRecords: 12, source: 'test-tight-bounds' };
+  await runInDurableObject(stub(), async (_i, state) => {
+    let now = Date.now();
+    const store = new BridgeStore(state.storage, tight, () => now);
+    let filled = 0;
+    for (let i = 0; i < 20; i++) { try { await handedEvent(store, `t${i}`); filled++; } catch (e) { expect((e as BridgeStoreError).code).toBe('backpressure'); break; } }
+    expect(filled).toBeGreaterThan(0);
+    const body = JSON.stringify(event('next'));
+    expect(() => store.admitEvent(h(now), body, '1'.repeat(64), event('next'))).toThrow('backpressure'); // all handed rows are inside the floor
+    now += 2 * DAY; // past BRIDGE_PRESSURE_FLOOR_MS, inside the 7-day retention: only pressure pruning frees them
+    expect(store.admitEvent(h(now), body, await sha256Hex(body), event('next'))).toEqual({ duplicate: false });
+    expect(store.eventCounts().pending).toBe(1);
+  });
+});
+
+it('revoke is recorded even when the store is full of live work', async () => {
+  const tight: IMessageConnectorPolicy = { ...PROPOSED_LOCAL_TEST_POLICY, maxRecords: 6, source: 'test-tight-bounds' };
+  await runInDurableObject(stub(), async (_i, state) => {
+    const store = new BridgeStore(state.storage, tight);
+    for (let i = 0; i < 10; i++) { const body = JSON.stringify(event(`f${i}`)); try { store.admitEvent(h(), body, await sha256Hex(body), event(`f${i}`)); } catch { break; } }
+    const body = JSON.stringify(event('over'));
+    expect(() => store.admitEvent(h(), body, '1'.repeat(64), event('over'))).toThrow('backpressure');
+    store.revoke('console');
+    expect(store.revokedRevision()).toBe('console');
+    expect(store.eventCounts().pending).toBe(0); // pending turned into held evidence
+  });
+});

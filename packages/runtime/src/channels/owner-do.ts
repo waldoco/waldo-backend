@@ -3,6 +3,7 @@ import { consoleLog, consoleTrace } from '../observability/console-correlation';
 import { AppInbox, type AppInboxRecord } from './app-inbox';
 import { iMessageComposition, type IMessageEnv, type IMessageResultReport, type IMessageTurnHandoff } from './imessage/bridge-do';
 import { IMessageFinalOutbox } from './imessage/final-outbox';
+import { redactIMessageEntries } from './imessage/forget';
 import { CONSOLE_IMESSAGE_PATH, iMessageConsoleAction, iMessageConsolePage, isIMessageConsoleAction } from './imessage/console';
 import { IMessageOwnerInbox, type IMessageInboxRecord } from './imessage/owner-inbox';
 import { admitIMessageHandoff, currentIMessageAuthority, drainIMessageOutbox, iMessageOwnerContext, type OwnerHost } from './imessage/owner-runtime';
@@ -2388,7 +2389,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope);
           const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
           const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
-          if (result.remaining + mail.remaining + prep.remaining) throw new Error('Memory history cleanup is incomplete');
+          const imessage = redactIMessageEntries(this.ctx.storage, texts, FORGOTTEN, scope);
+          if (result.remaining + mail.remaining + prep.remaining + imessage.remaining) throw new Error('Memory history cleanup is incomplete');
           const scrubEpisodes = () => {
             const redact = literalTextRedactor(texts, FORGOTTEN);
             for (const row of storage.sql.exec<{ ref: number; text: string }>('SELECT rowid AS ref, text FROM episodes').toArray()) {
