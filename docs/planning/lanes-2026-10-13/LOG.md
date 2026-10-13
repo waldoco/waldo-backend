@@ -1394,3 +1394,21 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   5. The value passes through the owner DO's `scores_read` and must stay transit-only; `health_context_read` stays untouched.
   - Ansh's scope question (6138720798): the owner's 13 Oct yes to the second backend lane included item 12 (`sleep_debt`), so it is in scope.
 - **Running:** one reviewer covers the app #109 delta (consent fix `120f6511`) and the app #110 gate (Watch, `481411c5`).
+
+## 08:21:42Z: app #106 merged; the Mac's disk is full; the Skip ruling (relayed); the Brief-card cause found
+
+- **App #106 is merged (`a1b616b8`).** The pinned head was `3595c8c1` and main was `92423c81`. The diff after merging main equals the reviewed diff, with hunk offsets ignored. It's a Home change that landed while L4's Brief-card finding was open, so L4 was told to include it in the bisect window.
+- **The Brief-card cause** (verified by L4 on the Pro Max): the zone is set but not confirmed, so #108's gate hides the Brief line as designed.
+  - The gap: the automatic zone write fires only from the server's UTC default, so an account whose zone already matches the device stays unconfirmed and Home never says so.
+  - L4 asked the owner: (a) a one-tap confirm on Home's Brief card, or (b) auto-confirm when the server's zone equals the phone's.
+  - Until then, the post-deploy excerpt check for #1122 runs on a confirmed-zone account (L4 told).
+- **The Mac's disk is full:** 271 MB free at 08:21Z. N4 measured it, and Xcode builds fail with ENOSPC.
+  - N4 and L4 hold builds.
+  - The owner has commands to free about 12 GB: DerivedData 5.4 GB, N4's build folders 4.7 GB, the Homebrew cache 2.3 GB. Deletions are the owner's.
+  - The deploy of `917032a1` waits for space, because the gate runs `pnpm install` and a wrangler bundle.
+  - **Don't delete the agitated-swanson scratchpad: it holds the deploy gate and its worktree.**
+  - Structural cause: every app session builds about 5 GB into its own scratchpad, and finished sessions' scratchpads are never cleaned (58 GB in total).
+- **The Skip ruling,** relayed by L4 at about 08:15Z: "Skip" now means `defer`, and "Don't do this" is the final `skip`. It's in app #113. The owner's confirmation in this chat is asked.
+- **Usage:** 37% at 08:17Z (18% at 07:52Z), with the reset at 12:30Z. At this pace the window fills at about 09:40Z.
+- **L4's map of the website's chat example:** new backend asks I (a prepared bundle, where one "Do it" decides several effects) and J (live turn events, streamed) join E, F and A. J is a new stream contract, so the released-contract rule applies (additive, no silent widening).
+- **Reviewers running:** the #109 delta with the #110 gate; #111 with #113.
