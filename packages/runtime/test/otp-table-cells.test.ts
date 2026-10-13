@@ -16,6 +16,8 @@ const readThread = async (payload: unknown) => {
   return { shown: JSON.stringify(await handler.handle({ thread_id: 't', limit: 10 } as never)), relays };
 };
 
+const digits = ['4', '8', '2', '9', '1', '3'];
+
 describe('the extractor', () => {
   it.each([
     ['Verification code482913', '482913'],
@@ -33,6 +35,10 @@ describe('the extractor', () => {
     ['verification code 48 29', '4829'],
     // The relayed value is the code's own capture, never another digit run in the phrase.
     ['Acme2024 verification code 482913', '482913'],
+    // As a connector-proxy that predates the cell separator renders cells: indentation between them, any width.
+    ['Your code\n' + digits.join('\n' + ' '.repeat(40)), '482913'],
+    ['Your code \r\n' + digits.join(' \r\n' + ' '.repeat(30)), '482913'],
+    ['Your code\n\n' + digits.join('\n\n      \n    '), '482913'],
   ])('catches a code glued to its label or spaced out: %s', (text, code) => {
     const found = extractArtifacts(text);
     expect(found.artifacts).toEqual([{ kind: 'otp', value: code }]);
@@ -73,6 +79,9 @@ describe('codes in HTML table cells', () => {
     ['non-breaking padding', '<table><tr><td>Your code</td>' + [4, 8, 2, 9, 1, 3].map(d => `<td>&nbsp;${d}&nbsp;</td>`).join('') + '</tr></table>', '482913'],
     ['double spaces', '<table><tr><td>Your code</td><td>4  8  2  9  1  3</td></tr></table>', '482913'],
     ['an 8-digit code split 4+4', '<table><tr><td>Your code</td><td>1234 5678</td></tr></table>', '12345678'],
+    ['one digit per cell, indented 40', '<table><tr><td>Your code</td>' + digits.map(d => `\n${' '.repeat(40)}<td>${d}</td>`).join('') + '</tr></table>', '482913'],
+    ['one digit per cell, CRLF and 30 spaces', '<table>\r\n<tr>\r\n<td>Your code</td>' + digits.map(d => `\r\n${' '.repeat(30)}<td>${d}</td>`).join('') + '\r\n</tr>\r\n</table>', '482913'],
+    ['a template loop with blank lines between cells', '<table><tr><td>Your code</td>' + digits.map(d => `\n\n    \n      <td>\n        ${d}\n      </td>\n`).join('') + '</tr></table>', '482913'],
   ])('never reach read_thread when %s, and the whole code is relayed', async (_shape, markup, code) => {
     const { shown, relays } = await readThread(html(markup));
     const body = (JSON.parse(shown) as { data?: { messages: { body: string }[] }; messages?: { body: string }[] });
@@ -80,8 +89,23 @@ describe('codes in HTML table cells', () => {
     expect(relays).toEqual([[{ kind: 'otp', value: code }]]);
   });
 
+  // Staged: until the gap narrows to a space after the connector-proxy redeploy, a code joins digits on the next
+  // row. The code is still hidden; the relay carries the extra digits. The follow-up must flip these on purpose.
+  it.each([
+    ['a "2026 Acme" row', '<tr><td>Your code</td><td>4829</td></tr><tr><td>2026 Acme</td></tr>', '48292026', ''],
+    ['a "10:00" row', '<tr><td>Your code</td><td>48 29 13</td></tr><tr><td>10:00</td></tr>', '48291310', '00'],
+    ['a "5 minutes" row', '<tr><td>Your code</td>' + digits.map(d => `<td>${d}</td>`).join('') + '</tr><tr><td>5 minutes</td></tr>', '4829135', ''],
+  ])('hide a code followed by %s, and relay the joined digits', async (_row, rows, relayed, left) => {
+    const { shown, relays } = await readThread(html(`<table>${rows}</table>`));
+    const result = JSON.parse(shown) as { data?: { messages: { body: string }[] }; messages?: { body: string }[] };
+    expect((result.data ?? result).messages![0]!.body.replace(/\D/g, '')).toBe(left);
+    expect(relays).toEqual([[{ kind: 'otp', value: relayed }]]);
+  });
+
   it('render with a space between cells and a line between rows', async () => {
     const [message] = (await mail(html('<table><tr><td>Verification code</td><td>482913</td></tr><tr><th>Expires</th><td>10 minutes</td></tr></table>')).threadPage!('t', 10)).messages;
     expect(message!.body).toBe('Verification code 482913\nExpires 10 minutes');
+    const [indented] = (await mail(html('<div>\n  Your\n      sign-in   code\n</div><p>Thanks,&nbsp; the team</p>')).threadPage!('t', 10)).messages;
+    expect(indented!.body).toBe('Your sign-in code\nThanks, the team');
   });
 });
