@@ -2317,3 +2317,14 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
   - M3: the switch is inconsistent. M4: the forget wording is inconsistent.
   - The orchestrator re-checked H1 and H2 on the tip. No owner asks if H2 is fixed as proposed.
 - **Running:** T (the #1193 fixes) and the #1149 lane.
+
+## 23:36Z — #1149 carried and R8 fixed (`7242f371`); `beta-mvp` moved
+
+- **The Mac lane finished #1149** (CAS held at `c7f80fbc`, fast-forward push).
+  - The carry is `7149f951`. R8 is `7242f371`: trust is marked on each row (`speaker 'owner_said'`, written only by `ownerRows`) instead of a split time. The KV key is gone, and so is the schema change, since FTS5 can't take an `ALTER`.
+  - Red first, 7 of 7 mutations caught, and the full local suite passed.
+  - Board post 6157466880 asks the review session for an independent review, including the security lens, at the exact head.
+  - The PR body is being updated to replace the stale split-time text. A drafting agent writes it, and the Mac reviews the diff before applying it.
+- **Found while reading source, for A3:** iMessage turns never reach the episode index (`owner-do.ts:2495`).
+- **`beta-mvp` moved from `9440ec6a` to `944ae97d`.** Merged: #1190 (A0), #1154, #1171, #1163, #1155 and #1166, so the lead or the review session is merging again. Ashish's next deploy of head carries these.
+- **Side effect noted:** `guard-pgtap` rewrote `~/pgdg/sources.list` on the Mac. That directory already existed from 25 Sep, and nothing was deleted.
