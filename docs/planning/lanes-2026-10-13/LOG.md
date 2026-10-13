@@ -1624,3 +1624,11 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **All four lanes are told:** push every local commit to a remote branch (Connectors' A emit half `ad6bc3ae` included) and post a 5-line state note on #1103.
 - **New sessions resume from:** this LOG (the newest "STATE TO RESUME FROM", 09:27Z, plus later entries), #1103, and the handoff page.
 - **Owner ruling needed** (L4 finding 4a): decided approval cards vanish from chat by design (`approvals.ts` `appApprovalParts`). The options are (i) decided parts or (ii) an `approval_ref` part; the orchestrator recommends (ii).
+
+## About 09:45Z: app #109 PASS and merged (`db7e06b9`); Air install narrowed to main
+
+- **#109's delta** (`a03d6ac4`, the consent race fix) passed full-strength review and merged pinned. There was no file or import overlap with main's newer merges (#112, #114, #113).
+- **Follow-ups for N4:** disarm whenever a withdrawal ends without an answer; a lost forced run.
+- **Before the Air install:** a read-only check that `useHealthData.ts` and `useHealthSnapshot.ts` (main) are consent-gated and on-device only.
+- **The Air install is main with #109 only.** #115 waits: retarget it to main, push so CI runs, then review it.
+- **Still running:** #116 with #120 (Sonnet).
