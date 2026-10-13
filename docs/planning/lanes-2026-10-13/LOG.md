@@ -1817,3 +1817,16 @@ Verdicts come from a scan of PR comments at 09:57Z. "@head" means the verdict na
 
   The owner's new direction (sample data for unbuilt features, labelled) narrows the earlier "no faked data" ruling to "nothing unlabelled".
 - **Owner direction:** iMessage becomes the messaging surface and Telegram is retired. The orchestrator's status read: backend #1095 is a DRAFT (default-off connector plus a migration), and the Mac host with its Apple ID (Ashish) is the critical path; not seen running. Keep Telegram as the dev surface until iMessage has carried real use. The launch-contract surfaces (CLAUDE.md: app, email, official WhatsApp) would need iMessage added.
+
+## 10:18Z (from `date -u`): `ea41bb0e` DEPLOYED to staging by the owner. STATE TO RESUME FROM (supersedes 09:27Z)
+
+- **Staging:** `ea41bb0e`, version `e040a306`. The gate passed: CI 6 of 6, 0 pending of 55 applied migrations, healthz OK, and unauthenticated session and chat calls return 401. Rollback target: `6574d610` (the `a94d7fa5` release).
+  - It ships the calendar-read fix (#1145), day cards' body line (#1134) and Weight on every calendar day (#1130).
+  - **Not yet observed:** a calendar read on the test account succeeding with the "QA" event present. First check for the new account: ask Waldo "what's on my calendar today" in the app.
+- **App:** main `7e09317c` is installed on the Air. Opening Waldo there waits for the owner.
+- **Where everything is:**
+  - the open-work inventory and merge order: the 09:59Z entry;
+  - the audit request: 10:07Z;
+  - the design brief for Suyash and the iMessage status: 10:13Z;
+  - the handoff page: https://claude.ai/artifact/Drw2yR7zPXwRHPacJPnrSY.
+- **Lanes:** L4, N4 and Connectors are paused until 12:30Z, with their queues in the entries above. L5 starts `get_health` after the reset.
