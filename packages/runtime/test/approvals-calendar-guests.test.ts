@@ -3,6 +3,9 @@ import { runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import { approvalDesk, UNDO_WINDOW_MS } from '../src/channels/approvals';
 import { ownerEffectLedger } from '../src/channels/owner-effect-ledger';
+import { consoleMayApprove, renderConsole } from '../src/channels/console';
+import { appCaller } from '../src/channels/surfaces/app';
+import { SAMPLE_CONSOLE_VIEW } from './fixtures/console-sample';
 import { GoogleError, type CalendarItem, type GoogleClient } from '../src/connectors/google';
 
 const TEAM = 'team@group.calendar.google.com';
@@ -100,5 +103,37 @@ it('recovers a lost create and a lost undo by reading the event back on its own 
     loseNext = true;
     now += 1_000;
     expect((await desk.decide(kept, 'u', 't')).toast).toBe('Undone');
+  });
+});
+
+// The web console and dashboards approve a calendar change from their own render of the stored review. They show the
+// notes and guests, but only chat and the app show the invite in full, so an invite is approved there.
+it('shows an invite\'s notes in the app review and the console, and leaves the approval to chat or the app', async () => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-calendar-web-review')), async (_instance, state) => {
+    let n = 0;
+    const client = { account: { connection_id: 'local:owner@example.com', email: 'owner@example.com' } } as unknown as GoogleClient;
+    const desk = approvalDesk(state.storage.sql, { surface: 'app', owner: 42, call: appCaller(), google: async () => client, newId: () => String(++n), now: () => Date.now(), timezone: 'UTC', log: () => undefined });
+    const start = new Date(Date.now() + 86_400_000).toISOString(), end = new Date(Date.now() + 88_200_000).toISOString();
+    const notes = 'Bring <b>the</b> Q3 numbers & the plan';
+    const invite = await desk.propose({ action: 'create', title: 'Design review', start: iso(start), end: iso(end), reason: 'Sam asked',
+      calendar_id: TEAM, attendees: ['sam@example.com'], send_updates: 'all', location: 'Room 4', add_meet_link: true, description: notes });
+    const plain = await desk.propose({ action: 'create', title: 'Walk', start: iso(start), end: iso(end), reason: 'morning' });
+
+    const [shown] = await desk.approvals(Date.now(), { id: invite });
+    expect(shown!.review).toContain(`Notes on the event, which every guest can read:\n${notes}`);
+
+    const items = desk.pending(Date.now());
+    const item = items.find((entry) => entry.id === invite)!;
+    expect(item.review).toMatchObject({ kind: 'calendar_change', calendar_id: TEAM, attendees: ['sam@example.com'], send_updates: 'all', location: 'Room 4', add_meet_link: true, description: notes });
+    expect(consoleMayApprove(item)).toBe(false);
+    expect(consoleMayApprove(items.find((entry) => entry.id === plain))).toBe(true);
+
+    const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: [item] }, 'waiting');
+    for (const part of [TEAM, 'sam@example.com', 'Google emails the guests', 'Room 4', 'Meet link', 'Bring &#60;b&#62;the&#60;/b&#62; Q3 numbers &#38; the plan', 'Approve it in chat or the Waldo app'])
+      expect(html).toContain(part);
+    expect(html).not.toContain('<b>the</b>');
+    expect(html).not.toContain(`name="id" value="${invite}"`);
+    expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: items }, 'waiting')).toContain(`name="id" value="${plain}"`);
+    await state.storage.deleteAlarm();
   });
 });
