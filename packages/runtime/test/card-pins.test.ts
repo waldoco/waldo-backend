@@ -16,7 +16,7 @@ describe('card pins', () => {
       const book = dayPlanBook(state.storage.sql);
       book.pin('card:close', '22:15');
       await applyDayPlan(scheduler, book, 'Asia/Kolkata', now, [{ card: 'card:close', time: '21:30', reason: 'model plan' }]);
-      expect(book.read('2036-09-23')).toEqual([{ card: 'card:close', time: '22:15', reason: 'pinned by you', sent: false }]);
+      expect(book.read('2036-09-23')).toEqual([{ card: 'card:close', time: '22:15', reason: 'pinned by you', sent: false, state: 'pending' }]);
       expect(scheduler.read('card:close')?.due_at).toBe(Date.parse('2036-09-23T16:45:00Z'));
       await applyDayPlan(scheduler, book, 'Asia/Kolkata', now, [{ card: 'card:close', time: '20:00', reason: 'set by you for today' }], false);
       expect(book.read('2036-09-23')[0]?.time).toBe('20:00');
