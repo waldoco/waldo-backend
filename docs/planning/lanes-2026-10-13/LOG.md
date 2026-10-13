@@ -2025,3 +2025,16 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 - **N4** finishes its #123 follow-up PR (including honouring a refused or lost withdrawal), then pauses.
 - **Reviewer running:** #126, #129 and #130. Then, one at a time: the pins (#124, #125, #132) with #121 and #131; then #127, #128 and #133; then #115.
 - **Owner steps queued:** the hand deploy, waiting on the two blockers (the #1139 receipt line and the approvals emit timing); freeing Mac disk (under 6 GB); migrations #1127, #1133 and #1161; #1120; #1147; the GCP project ID; and the rulings in the gap doc (people and contacts, outbound reach, photo and voice storage, booking and spending).
+
+## 13:38Z (from `date -u`): verdicts for #126, #129 and #130; next review batch running
+
+- **#126 PASS** (`dba4707e`; zone spelling only, with no change of zone). It merges in the next batch, after the advisor check.
+- **#129 Patrol FAIL:** it shows raw harness and error strings (`run.summary` and `step.note` on failed runs). The fix went to L4: title runs by kind, use the summary only for completed `delegate_task`, and show failed checks as "Failed <time>".
+- **#130 Spots PASS, held for two fixes before merging:**
+  - past 150 claims it shows the oldest 150 as if newest; read to the end, then sort;
+  - a forget starting between page reads leaves stale spots under the banner; clear them when `unavailable_claim_count > 0`.
+
+  L4 has a go for these fixes, then pauses.
+- **A cross-cutting claim** (unverified, and conflicting with the backend lead's tolerant-reader check): a backend at `c9c841f9` or later, with day-card `state`, might fail the app's day-view parse until pin #132 lands. Either way, #132 merges before any deploy.
+- **The next review batch is running** (one reviewer): #124, #125, #132, #121, #131 and #133. Still queued: #127, #128, #134, #135 (N4, Body day history), and #115 (`a8291308`, `main` merged in).
+- **N4's last item before it pauses** is the #123 follow-up PR, which also clears held scores on a confirmed withdrawal (`onPurge` → `healthScores.reset()`).
