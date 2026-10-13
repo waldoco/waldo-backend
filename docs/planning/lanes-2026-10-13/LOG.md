@@ -2189,3 +2189,10 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 - Owner: Ashish handles his own Kennel deploys and migrations; the Mac tracks only. Every heartbeat now checks the staging release and the migration count and posts changes.
 - Lane T (M1, `use_mac` eligibility) launched as a background agent in its own worktree; brief `MAC_LANE_T_M1_BRIEF.md` at `20e52f35`; claim on #1103. Core lane waits for the lead's A1 spec and a slot; the recall lane waits for the B3/B4 spec.
 - The app's keep-awake-while-working setting is on (owner-approved). The heartbeat cron was re-created (13,43) with current rulings, replacing the 14:38Z text. The deploy scratch worktree was removed. The unused yes to apply `20261012000000` is void.
+
+## 20:22Z — owner asleep; use_mac left to Ashish; lane T on M4; lane P0 re-running
+
+- Owner (before sleep): keep running, focus on the harness and the agent, test on the app (Telegram is diagnostic only; Telegram Web and Langfuse are now signed in, in the built-in browser), watch the other sessions, use child or successor sessions if context rots. Leave Ansh's sessions running.
+- Lane T's first task proved `use_mac` is offered with no paired Mac (red test on `mac/m1-use-mac-eligibility` `4f2588a6`, test only, no PR). The owner then said `use_mac` is Ashish's Kennel work, so don't disturb it: claim withdrawn (6154442736) with an FYI for Ashish.
+- Lane T relaunched on M4, the turn time budget (brief `MAC_LANE_T_M4_BRIEF.md` at `5f962722`): measure first, then one retry owner and a per-turn deadline in `llm/`. No owner-do, responder, inbound turn, contracts or use_mac edits.
+- Lane P0 (the post-deploy baseline re-run on the Air) is still running.
