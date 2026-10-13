@@ -560,7 +560,7 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 **In one line:** approvals now raise a card in app chat, and an approved email really goes out. The app said "Outcome not confirmed" because Gmail rewrites the Message-ID we set, so the backend's proof could never pass. #1115, deployed at 01:36Z, proves a send by Gmail's own id instead. The last live check, P1 run 3b, needs you: the App session's permission check refused its keystrokes. Mail reading, meeting prep and calendar details are built but wait for your connector-proxy redeploy, and several security fixes must land before it.
 
 ### What works on staging, with Simulator evidence
-- **Staging is `19d05d02`** (Worker `5cade547`, rollback `8b48dad2`), deployed at 01:36Z. The deploys before it were `652b5fcf` at 00:54Z and `3bc1bb54` at 22:05Z.
+- **Staging is `77d7329c`** (Worker `579a47e0`, rollback `5cade547`), deployed at 04:05Z. It adds #1118, the ReDoS fix; #1116's file ships only with the proxy. The deploys before it were `19d05d02` at 01:36Z, `652b5fcf` at 00:54Z and `3bc1bb54` at 22:05Z.
 - **P1 (approve an email in the app)** on `iPhone 17`, main's build:
   - **The card:** "Send it now." raises it in chat (#1104). On the first ask ("…send it once I approve"), Waldo only drafts, in every run so far. That's queued as prompt context.
   - **The send:** both approved "probe" sends went out (23:24Z and 00:59Z, confirmed in Sent). Both still read "Outcome not confirmed", and always will: the ledger kept no Gmail id for them, and app.v1 gives that state no actions.
@@ -905,3 +905,15 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **#1114's third review** reruns #1118's timing shapes and the narrowing repro on its own head, because its whitespace normalization feeds every pattern.
 - **Summary updated:** merges; decision 3's must-merge list; decisions renumbered (the deletion PR is 7); and the review queue.
 - **Next:** push CI on `77d7329c`, then a deploy between 04:05Z and 04:25Z, smoke checks and a log entry.
+
+## 04:06Z: `77d7329c` deployed to staging (#1118); #1114 at `2c329a19`
+
+- **Deployed `77d7329c` at 04:05:45Z** [verified]. Push CI was 7/7 green.
+  - **Gate script:** GATE PASS. 4 files changed since `19d05d02`, with no wrangler, deploy or migration change. Preflight: 55 applied, 0 pending.
+  - **Worker `579a47e0`.** Rollback target `5cade547` (`19d05d02`).
+  - **Smoke:** `/healthz` shows `77d7329c`. Signed-out `/app/v1/session` and `/app/v1/chat/main` return 401, and `POST /probe/turn` returns 403. The tail shows version `579a47e0`.
+- **#1114 at `2c329a19`** (Connectors) merges `77d7329c` cleanly.
+  - **#1118's narrowing is closed:** the adjective form now starts at the adjective, with no vendor word and no `\b` before it. Both repros are pinned. A vendor word now stays visible beside the marker, so two exact-text expectations changed.
+  - The stale cost-test comment is gone.
+  - Its third review starts when CI is green. The brief covers #1118's 25 timing shapes, the earlier whitespace and row shapes, the narrowing repros, over-matching, and everything that reads the marker.
+- **Reviews running:** #1100 at `5353f095` and app #104 at `d2461250`.
