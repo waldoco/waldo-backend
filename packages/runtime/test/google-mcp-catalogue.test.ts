@@ -11,18 +11,27 @@ const registry = JSON.stringify([
   { name: 'calendar', url: CALENDAR, auth: 'google', requires: 'calendar' },
   { name: 'drive', url: DRIVE, auth: 'google', requires: 'drive', allow_tools: ['search_files', 'read_file_content'], read_tools: ['search_files', 'read_file_content'] },
   { name: 'chat', url: 'https://chatmcp.googleapis.com/mcp/v1', auth: 'google' },
+  { name: 'docs', url: 'https://docsmcp.googleapis.com/mcp/v1', auth: 'google' },
+  { name: 'sheets', url: 'https://sheetsmcp.googleapis.com/mcp/v1', auth: 'google' },
+  { name: 'slides', url: 'https://slidesmcp.googleapis.com/mcp/v1', auth: 'google' },
+  { name: 'workspace', url: 'https://workspacemcp.googleapis.com/mcp/v1', auth: 'google' },
+  { name: 'people', url: 'https://people.googleapis.com/mcp/v1', auth: 'google' },
 ]);
 const server = (name: string) => mcpServers(registry).find((s) => s.name === name)!;
 
 const WRITES: ReadonlyArray<readonly [string, string]> = [
   ['gmail', 'create_draft'], ['gmail', 'label_thread'], ['gmail', 'label_message'], ['gmail', 'unlabel_thread'], ['gmail', 'unlabel_message'], ['gmail', 'send_message'],
   ['calendar', 'create_event'], ['calendar', 'update_event'], ['calendar', 'delete_event'], ['calendar', 'respond_to_event'],
-  ['drive', 'read_file_content'], ['drive', 'create_file'], ['chat', 'list_messages'], ['gmail', 'some_future_tool'],
+  ['drive', 'read_file_content'], ['drive', 'create_file'], ['drive', 'copy_file'], ['drive', 'download_file_content'], ['chat', 'list_messages'], ['gmail', 'some_future_tool'],
+  ['gmail', 'trash_thread'], ['gmail', 'mark_thread_spam'], ['gmail', 'create_label'], ['gmail', 'update_message_labels'],
+  ['docs', 'update_doc'], ['sheets', 'update_values'], ['sheets', 'update_formulas'], ['sheets', 'insert_dimension'], ['sheets', 'update_spreadsheet'], ['slides', 'update_presentation'], ['slides', 'read_slide_page_thumbnail'],
+  ['workspace', 'search_corpus'], ['people', 'search_contacts'],
 ];
 const READS: ReadonlyArray<readonly [string, string]> = [
   ['gmail', 'search_threads'], ['gmail', 'get_thread'], ['gmail', 'get_message'], ['gmail', 'list_drafts'], ['gmail', 'list_labels'],
   ['calendar', 'list_events'], ['calendar', 'get_event'], ['calendar', 'list_calendars'], ['calendar', 'search_events'], ['calendar', 'suggest_time'],
-  ['drive', 'search_files'],
+  ['drive', 'search_files'], ['gmail', 'get_draft'],
+  ['docs', 'read_doc'], ['sheets', 'get_spreadsheet'], ['sheets', 'get_values'], ['slides', 'read_presentation'], ['slides', 'read_slide_page'],
 ];
 
 const untouchable = () => {
@@ -94,11 +103,13 @@ describe('Google MCP servers are read-only by construction', () => {
     const auth: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async (url, tool, args, _c, intent) => { sent.push({ url, tool, args, ...(intent ? { intent } : {}) }); return [{ type: 'text', text: 'ok' }]; } };
     const handler = readMcpToolHandler(registry, auth, true);
     expect(handler.eligible?.()).toEqual({ ok: true });
-    expect(handler.description).toContain('server "gmail": search_threads, get_thread, get_message, list_drafts, list_labels');
+    expect(handler.description).toContain('server "gmail": search_threads, get_thread, get_message, list_drafts, get_draft, list_labels');
+    expect(handler.description).toContain('server "sheets": get_spreadsheet, get_values');
     expect(handler.description).toContain('server "calendar": list_events, get_event, list_calendars, search_events, suggest_time');
     expect(handler.description).toContain('server "drive": search_files');
     expect(handler.description).not.toContain('read_file_content');
     expect(handler.description).not.toContain('chat');
+    expect(handler.description).not.toContain('search_corpus');
     const ctx = { authenticatedUserId: 'owner', turnId: 't1', toolCallId: 'c1' } as never;
     expect(await handler.handle({ server: 'gmail', tool: 'get_thread', args: { id: 'th' } }, ctx)).toMatchObject({ ok: true, source_taint: 'external' });
     expect(await handler.handle({ server: 'drive', tool: 'search_files', args: { query: 'q', excludeContentSnippets: false } }, ctx)).toMatchObject({ ok: true });
