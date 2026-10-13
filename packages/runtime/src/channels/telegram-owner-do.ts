@@ -6,7 +6,7 @@ import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/ap
 import { calendarDemand, demandCode, type DemandAnswer, type DemandRequest } from '../health/calendar-demand';
 import { CALENDAR_DEMAND_PATH, verifiedDemandRequest } from '../health/calendar-demand-route';
 import { surfaceOwnerAdmission } from '../identity/surface-owner-admission';
-import { createOwnerTurnContext, type OwnerContextSources } from '../context-composer/owner-turn';
+import { createOwnerTurnContext, ownerChainRef, type OwnerContextSources } from '../context-composer/owner-turn';
 import { canonicalHistoryFault, canonicalOwnerConversationStore, skippedRowLines, type CanonicalSkipped } from '../conversation/canonical-owner-store';
 import { ownerEffectLedger } from './owner-effect-ledger';
 import {commonRuntimeReadiness} from './common-runtime-readiness';
@@ -2189,7 +2189,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const occurrence = this.activeInbox;
       const doName = identity.get<string>('do_name'), subject = identity.get<string>('telegram_subject');
       if (!occurrence || scope !== this.activeScope || occurrence.runId !== scope.runId || occurrence.attempt !== scope.attempt || !doName || !subject
-        || turn.surface !== 'telegram' || turn.traceId !== ownerTurnTrace('telegram', occurrence.updateId)) throw new ClosedRunError();
+        || turn.surface !== 'telegram' || turn.traceId !== ownerTurnTrace('telegram', occurrence.updateId) || turn.conversationRef !== ownerChainRef('telegram', subject)) throw new ClosedRunError();
       const lookup = async () => {
         scope.admit();
         const authority = await commonOwnerAuthority(this.env).resolve('telegram', subject, doName);
@@ -2200,7 +2200,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       // The composer runs on every tool round; one health read serves the whole turn.
       let health: ReturnType<typeof healthContext.latest> | undefined;
       return createOwnerTurnContext(await surfaceOwnerAdmission({ scope, lookup, expectedPhysicalDoId: this.ctx.id.toString(), surface: 'telegram', subject, occurrenceKey: occurrence.id, occurredAt: occurrence.admittedAt, text: turn.text }),
-        { health: () => health ??= healthContext.latest(turn.traceId) });
+        { conversationRef: ownerChainRef('telegram', subject), health: () => health ??= healthContext.latest(turn.traceId) });
     } } } : undefined;
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,

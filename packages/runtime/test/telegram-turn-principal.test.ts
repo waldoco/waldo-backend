@@ -74,3 +74,47 @@ it('without a directory the fixture admission still answers, and names no owner'
   expect(model.requests.length).toBeGreaterThan(0);
   expect(model.requests[0]).not.toContain('Authenticated owner prn_');
 });
+
+// The Telegram chain as staging holds it: rows written before turns ran under the directory owner carry the fixture
+// principal, and a reminder lands on the same chain as the owner's own messages.
+const legacyRow = (index: number, id: string, role: 'user' | 'assistant', text: string, parentId: string | null, inputOrigin?: 'owner' | 'machine') => [`conv:${String(index).padStart(10, '0')}`, {
+  id, ownerId: FIXTURE_PRINCIPAL, chatId: 'telegram-42', parentId, threadAnchorId: null, surface: 'telegram', modelPayload: text, appPayload: text,
+  modelProjection: { mode: 'include' }, role, ...(inputOrigin ? { inputOrigin } : {}) }] as const;
+it('a directory-backed Telegram turn continues the Telegram chain: it sees the earlier turns and a reminder, and the next turn sees it', async () => {
+  const name = 'telegram-principal-chain';
+  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    claimStore(state.storage.sql);
+    ensureSchema(state.storage);
+    await state.storage.put({ telegram_subject: '42', do_name: name });
+    await state.storage.put(Object.fromEntries([
+      legacyRow(0, 'tg-41', 'user', 'Is the dentist booked for Friday?', null, 'owner'),
+      legacyRow(1, 'tg-41-reply', 'assistant', 'Booked for Friday at 3.', 'tg-41'),
+      legacyRow(2, 'reminder-1', 'user', 'Reminder due now: call Sam.', 'tg-41-reply', 'machine'),
+      legacyRow(3, 'reminder-1-reply', 'assistant', 'Time to call Sam.', 'reminder-1'),
+    ]));
+    await state.storage.put({ 'conv-count': 4, 'conv-leaf': 'reminder-1-reply' });
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7.fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC' });
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    const turn = async (update: number, text: string, host = owner) => {
+      await inbox.admit({ bot: '7.fixture', subject: '42', doName: name }, update, JSON.stringify({ update_id: update, message: { message_id: update, from: { id: 42, is_bot: false }, chat: { id: 42, type: 'private' }, text } }));
+      await (host as unknown as { drainInbox(): Promise<void> }).drainInbox();
+      return (await inbox.records()).find(row => row.updateId === update)?.state;
+    };
+    try {
+      expect(await turn(930001, 'Did I call Sam yet?')).toBe('awaiting_delivery');
+      const first = model.requests.at(-1)!;
+      expect(first).toContain(`Authenticated owner ${PRINCIPAL}`);
+      for (const earlier of ['Booked for Friday at 3.', 'Time to call Sam.']) expect(first).toContain(earlier);
+      const rows = [...(await state.storage.list<{ id: string; chatId: string; ownerId: string; parentId: string | null }>({ prefix: 'conv:' })).values()];
+      const asked = rows.find(row => row.id === 'tg-930001')!;
+      expect(asked).toMatchObject({ chatId: 'telegram-42', ownerId: PRINCIPAL, parentId: 'reminder-1-reply' });
+      expect(await turn(930002, 'And the dentist?')).toBe('awaiting_delivery');
+      expect(model.requests.at(-1)).toContain('Did I call Sam yet?');
+      // A turn that still runs under the fixture principal, as a media-only turn does, continues the same chain.
+      const local = new TelegramOwnerDO(state, { ...env, TELEGRAM_BOT_TOKEN: '7.fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC' });
+      expect(await turn(930003, 'Anything else today?', local)).toBe('awaiting_delivery');
+      expect(model.requests.at(-1)).toContain('And the dentist?');
+    } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
+  });
+});
