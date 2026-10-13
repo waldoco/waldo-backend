@@ -116,7 +116,9 @@ it('Telegram: a turn after the owner taps Send it sees that the desk carried it 
   const name = `receipt-telegram-owner-${crypto.randomUUID()}`, stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
   await runInDurableObject(stub, async (_unused, state) => {
     const originalNow = Date.now;
-    let now = originalNow();
+    // A fixed instant clear of every default card and the nightly pass: the alarm passes below move the clock about nine
+    // minutes, and a card that came due inside that window would add its own model request and message.
+    let now = Date.parse('2026-10-13T05:00:00Z');
     Date.now = () => now;
     const owner = new TelegramOwnerDO(state, { ...env, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_EGRESS_ALLOWLIST: '*', WALDO_TOOL_OFFLOAD: '0', COMMON_OWNER_TASKS: '0', BROWSER: undefined, GOOGLE_CLIENT_ID: 'fictional-client', GOOGLE_CLIENT_SECRET: 'fictional-secret' } as never);
     state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7'); state.storage.kv.put('origin', 'https://owner.fixture.invalid');
