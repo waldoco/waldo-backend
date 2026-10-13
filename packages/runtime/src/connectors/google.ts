@@ -791,7 +791,8 @@ const toItem = (event: GoogleEvent, details: boolean): CalendarItem => ({
   ...(event.description?.trim() ? { description: event.description.trim().slice(0, 2000) } : {}),
   ...(event.attendees?.length ? { attendees: event.attendees.length } : {}),
   ...(event.etag ? { etag: event.etag } : {}),
-  ...(typeof event.extendedProperties?.private?.waldoOperation === 'string' ? { operation_marker: event.extendedProperties.private.waldoOperation } : {}),
+  // Waldo's markers are 64 lowercase hex characters; any other value there isn't Waldo's, so it is never reported as one.
+  ...(typeof event.extendedProperties?.private?.waldoOperation === 'string' && /^[0-9a-f]{64}$/.test(event.extendedProperties.private.waldoOperation) ? { operation_marker: event.extendedProperties.private.waldoOperation } : {}),
   ...(['confirmed', 'tentative', 'cancelled'].includes(event.status ?? '') ? { status: event.status as CalendarItem['status'] } : {}),
   ...(typeof event.updated === 'string' && validCalendarInstant(event.updated) ? { updated: event.updated } : {}),
   ...(typeof event.recurringEventId === 'string' ? { recurring_event_id: event.recurringEventId.slice(0, 1024) } : {}),
