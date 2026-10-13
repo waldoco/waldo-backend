@@ -1,4 +1,5 @@
 import type { ApprovalItem, ApprovalReview } from './approvals';
+import type { CardLatest } from './day-cards';
 import { SCHEDULE_KINDS } from '@waldo/contracts';
 import { SCHEDULE_LABELS, type SchedulePreferences } from './schedule-preferences';
 import type { Claim, ConstellationEdge, ConstellationNode, profile } from '../memory/claims';
@@ -154,7 +155,9 @@ export const NOTICES: Readonly<Record<string, string>> = {
   invalid: 'That change could not be applied.',
 };
 
-export type ConsoleCard = Readonly<{ id: string; name: string; defaultTime: string; time: string | null; reason: string; sent: boolean; pin: string | null }>;
+// latest is the Main chat row today's card was delivered to; only the app's day view reads it.
+export type ConsoleCard = Readonly<{ id: string; name: string; defaultTime: string; time: string | null; reason: string; sent: boolean; pin: string | null;
+  latest?: CardLatest | null }>;
 
 export type ConsoleView = Readonly<{
   release: string;
