@@ -22,7 +22,9 @@ describe('the extractor', () => {
     ['Your code is 4 8 2 9 1 3', '482913'],
     ['login code: 482 913', '482913'],
     ['482 913 is your verification code', '482913'],
-    ['Verification code 4 8 2 9 1 3', '482913'],
+    // A rendered &nbsp; arrives as U+00A0.
+    ['Verification code\u00a04\u00a08\u00a02\u00a09\u00a01\u00a03', '482913'],
+    ['login code: 482\u00a0913', '482913'],
   ])('catches a code glued to its label or spaced out: %s', (text, code) => {
     const found = extractArtifacts(text);
     expect(found.artifacts).toEqual([{ kind: 'otp', value: code }]);
