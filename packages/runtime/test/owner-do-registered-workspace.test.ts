@@ -14,6 +14,7 @@ import { consoleAccess, CONSOLE_COOKIE } from '../src/channels/console';
 import { workspaceOwnerHost } from '../src/channels/workspace-host';
 import { browserDownloadToWorkspace } from '../src/channels/browser-download-workspace';
 import { generalDigest } from '../src/channels/general-browser-observation';
+import { toolOutput } from './fixtures/tool-output';
 
 type InputItem = { type?: string; call_id?: string; name?: string; output?: string };
 type RequestBody = { tools?: { name: string }[]; input: string | InputItem[]; text?: { format?: { name?: string } }; instructions?: string };
@@ -41,7 +42,7 @@ const PRESENCE = '10000000-0000-0000-0000-00000000000a';
 const BYTES = 'Exact owner workspace bytes\nहैलो 🌿\n';
 const writeArgs = { path: 'notes/fixture.txt', text: BYTES, mime: 'text/plain', expected_revision: 0 };
 const call = (name: string, args: unknown, id = name): Call => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) });
-const outputs = (request: RequestBody): Record<string, Result> => Object.fromEntries((Array.isArray(request.input) ? request.input : []).filter(item => item.type === 'function_call_output').map(item => [item.call_id!, JSON.parse(item.output!)]));
+const outputs = (request: RequestBody): Record<string, Result> => Object.fromEntries((Array.isArray(request.input) ? request.input : []).filter(item => item.type === 'function_call_output').map(item => [item.call_id!, toolOutput<Result>(item.output!)]));
 const allOutputs = (): Record<string, Result> => Object.assign({}, ...model.requests.filter(request => !request.text?.format).map(outputs));
 const replies = () => model.requests.filter(request => !request.text?.format);
 const deferred = () => {
