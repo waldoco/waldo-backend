@@ -6,7 +6,9 @@ import type { Scheduler } from '../scheduler/multiplexer';
 
 // Full-text history of the owner's chat (SQLite FTS5 in the owner's Durable Object). Every
 // saved turn is indexed; search_episodes ranks by BM25 and the nightly pass reads a day back.
-export type Speaker = 'owner' | 'waldo' | 'system';
+// 'quoted' is text the owner pasted inside a quote (a Telegram blockquote, pre or code range): searchable, but never the
+// owner's own words.
+export type Speaker = 'owner' | 'waldo' | 'system' | 'quoted';
 export type Episode = Readonly<{ entry_id: string; speaker: Speaker; at: number; text: string }>;
 // ref is the index row's own id: unique per stored row, so a snippet traces to exactly its row
 // even if the same entry_id was indexed twice (entry_id is informational, not unique).
@@ -82,24 +84,53 @@ export const episodeIndex = (sql: SqlStorage): EpisodeIndex => {
   };
 };
 
+type QuoteRanges = readonly Readonly<{ start: number; end: number }>[];
+// An owner message as index rows: its own words as 'owner', each quoted range as 'quoted', in order. The ranges index the
+// message as received; when the stored text no longer starts with it (a forgotten topic was redacted), or a range is
+// malformed, the whole message is 'quoted', so it can never ground a claim as the owner's own words.
+export const ownerRows = (stored: string, received: string, ranges: QuoteRanges): readonly Readonly<{ speaker: Speaker; text: string }>[] => {
+  const sorted = [...ranges].sort((a, b) => a.start - b.start);
+  if (!stored.startsWith(received) || sorted.some(range => !Number.isInteger(range.start) || !Number.isInteger(range.end) || range.start < 0 || range.end < range.start || range.end > received.length)) {
+    return [{ speaker: 'quoted', text: stored }];
+  }
+  const rows: { speaker: Speaker; text: string }[] = [];
+  const push = (speaker: Speaker, text: string) => { if (text.trim()) rows.push({ speaker, text }); };
+  let end = 0;
+  for (const range of sorted) {
+    if (range.start > end) push('owner', stored.slice(end, range.start));
+    if (range.end > end) push('quoted', stored.slice(Math.max(end, range.start), range.end));
+    end = Math.max(end, range.end);
+  }
+  push('owner', stored.slice(end));
+  return rows;
+};
+
 // The owner's input is indexed when it is stored, before the turn runs, so it is searchable even if the turn never
 // finishes; the turn's save then skips it.
 export const indexedConversationStore = (store: ConversationStore, index: EpisodeIndex, now: () => number): ConversationStore => {
   const indexedInputs = new Set<string>();
+  const quoted = new Map<string, Readonly<{ text: string; ranges: QuoteRanges }>>();
+  const add = (entry: ConversationEntry, at: number) => {
+    const speaker = speakerOfEntry(entry), noted = quoted.get(entry.id);
+    quoted.delete(entry.id);
+    if (speaker !== 'owner' || !noted) { index.add(entry.id, speaker, entry.appPayload, at); return; }
+    for (const row of ownerRows(entry.appPayload, noted.text, noted.ranges)) index.add(entry.id, row.speaker, row.text, at);
+  };
   const persistOwnerInput = store.persistOwnerInput;
   return {
     ...store,
     load: () => store.load(),
+    noteQuoteRanges(entryId, text, ranges) { if (ranges.length) quoted.set(entryId, { text, ranges }); },
     ...(persistOwnerInput ? { async persistOwnerInput(entry: ConversationEntry, scope: RunEffectScope) {
       await persistOwnerInput(entry, scope);
-      scope.commit(() => index.add(entry.id, speakerOfEntry(entry), entry.appPayload, now()));
+      scope.commit(() => add(entry, now()));
       indexedInputs.add(entry.id);
     } } : {}),
     async save(entries, leafId, scope) {
       await store.save(entries, leafId, scope);
       const at = now();
       const unindexed = entries.filter(entry => !indexedInputs.delete(entry.id));
-      const commit = () => { for (const entry of unindexed) index.add(entry.id, speakerOfEntry(entry), entry.appPayload, at); };
+      const commit = () => { for (const entry of unindexed) add(entry, at); };
       if (scope) scope.commit(commit); else commit();
     },
   };

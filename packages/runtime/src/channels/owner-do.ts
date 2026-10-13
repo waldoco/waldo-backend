@@ -2519,7 +2519,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // a night that failed or never ran is caught up later. Only a consolidated chunk moves the mark.
     const consolidateBacklog = async (trace: string, now: number): Promise<'done' | 'more' | 'failed'> => {
       const dayMs = 24 * 60 * 60_000;
-      let through = Math.max(storage.kv.get<number>(NIGHTLY_THROUGH_KEY) ?? now - dayMs, now - NIGHTLY_BACKLOG_DAYS * dayMs);
+      const marked = storage.kv.get<number>(NIGHTLY_THROUGH_KEY) ?? now - dayMs, floor = now - NIGHTLY_BACKLOG_DAYS * dayMs;
+      // Conversation older than the backlog window is left unconsolidated; the line says it happened.
+      if (marked < floor) log({ trace, hop: 'nightly_memory', ms: 0, ok: true, code: 'backlog_clamped' });
+      let through = Math.max(marked, floor);
       for (let chunk = 0; chunk < NIGHTLY_CHUNKS; chunk += 1) {
         const rows = episodes.after(through, 40_000);
         if (rows.length === 0) { if (chunk === 0) log({ trace, hop: 'nightly_memory', ms: 0, ok: true, detail: 'quiet day' }); return 'done'; }
@@ -2530,6 +2533,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             const owner = day.filter((episode) => episode.speaker === 'owner');
             const sides = {
               owner: owner.map((episode) => episode.text).join('\n'),
+              shared: day.filter((episode) => episode.speaker === 'quoted').map((episode) => episode.text).join('\n'),
               waldo: day.filter((episode) => episode.speaker === 'waldo').map((episode) => episode.text).join('\n'),
               ownerMessages: owner.map((episode) => ({ ref: episode.entry_id, text: episode.text })),
             };
