@@ -22,30 +22,41 @@ export const artifactMarker = (kind: ArtifactKind): string => `[quarantined: ${k
 // order/tracking ids never match.
 const CODE = String.raw`(?:\d{3}-\d{3}|\d{4,8})`;
 
+// Between a keyword and its code: whitespace, then an optional "is", ":" or "-", then an optional "#", each
+// owning the whitespace after it. Three adjacent optional whitespace runs backtracked cubically on a long run of
+// spaces after a keyword; this form matches the same text in one pass.
+const LEAD = String.raw`\s*(?:(?:is|:|-)\s*)?(?:#\s*)?`;
+const BARE_LEAD = String.raw`\s*(?:(?:is|:)\s*)?(?:#\s*)?`;
+
 // URL boundary: stop at whitespace or the punctuation that commonly wraps a pasted link.
 const URL_TAIL = String.raw`[^\s"'<>)\]]*`;
 
-const PATTERNS: ReadonlyArray<{ kind: ArtifactKind; re: RegExp }> = [
+// A link artifact is a whole URL run: from its first "http(s)://" to the URL boundary. Each link pattern is
+// tested once per run, anchored at its start. Tried from every "https://" inside one long run, the patterns
+// backtracked quadratically; a run matches from its first start whenever it matches from a later one.
+const URL_RUN = new RegExp(String.raw`https?://${URL_TAIL}`, 'gi');
+const LINKS: ReadonlyArray<{ kind: Exclude<ArtifactKind, 'otp'>; re: RegExp }> = [
   // Supabase (and lookalike) token endpoints carry the live bearer in the query string.
-  { kind: 'magic_link', re: new RegExp(String.raw`https?://[^\s"'<>)\]]*/auth/v\d+/verify${URL_TAIL}`, 'gi') },
+  { kind: 'magic_link', re: /^https?:\/\/[^\s"'<>)\]]*\/auth\/v\d+\/verify/i },
   // recovery is the password-reset artifact; it runs before the generic token patterns so a
   // recovery URL is labeled (and logged) as what it is.
-  { kind: 'password_reset', re: new RegExp(String.raw`https?://[^\s"'<>)\]]*[?&]type=recovery${URL_TAIL}`, 'gi') },
-  { kind: 'magic_link', re: new RegExp(String.raw`https?://[^\s"'<>)\]]*[?&]type=(?:magiclink|signup|email_change|invite)${URL_TAIL}`, 'gi') },
-  { kind: 'magic_link', re: new RegExp(String.raw`https?://[^\s"'<>)\]]*[?&]token_hash=${URL_TAIL}`, 'gi') },
-  { kind: 'password_reset', re: new RegExp(String.raw`https?://[^\s"'<>)\]]*(?:/reset[-_]?password|/password[-_]?reset|reset[-_]?token=|confirmation[-_]?token=)${URL_TAIL}`, 'gi') },
+  { kind: 'password_reset', re: /^https?:\/\/[^\s"'<>)\]]*[?&]type=recovery/i },
+  { kind: 'magic_link', re: /^https?:\/\/[^\s"'<>)\]]*[?&]type=(?:magiclink|signup|email_change|invite)/i },
+  { kind: 'magic_link', re: /^https?:\/\/[^\s"'<>)\]]*[?&]token_hash=/i },
+  { kind: 'password_reset', re: /^https?:\/\/[^\s"'<>)\]]*(?:\/reset[-_]?password|\/password[-_]?reset|reset[-_]?token=|confirmation[-_]?token=)/i },
+];
+
+const OTPS: readonly RegExp[] = [
   // "Your Google verification code is 123456", "login code: 123-456", "security code 123456".
-  {
-    kind: 'otp',
-    re: new RegExp(String.raw`\b[\w-]*\s?(?:verification|one[- ]?time|login|log[- ]?in|sign[- ]?in|security|authentication|confirmation|access)\s+(?:code|passcode|pin|otp)\b\s*(?:is|:|-)?\s*#?\s*` + CODE + String.raw`\b`, 'gi'),
-  },
+  // The vendor word before the adjective is bounded: an unbounded run scanned to the end from every word start.
+  new RegExp(String.raw`\b[\w-]{0,40}\s?(?:verification|one[- ]?time|login|log[- ]?in|sign[- ]?in|security|authentication|confirmation|access)\s+(?:code|passcode|pin|otp)\b` + LEAD + CODE + String.raw`\b`, 'gi'),
   // "code: 123456", "OTP: 123456", "passcode is 123456" - the bare form, no vendor adjective needed.
-  { kind: 'otp', re: new RegExp(String.raw`\b(?:code|otp|passcode)\b\s*(?:is|:)?\s*#?\s*` + CODE + String.raw`\b`, 'gi') },
+  new RegExp(String.raw`\b(?:code|otp|passcode)\b` + BARE_LEAD + CODE + String.raw`\b`, 'gi'),
   // Google's SMS/mail prefix form runs first: "G-123456 is your Google verification code" would
   // otherwise lose its prefix to the generic "is your" pattern below before extraction sees it.
-  { kind: 'otp', re: new RegExp(String.raw`\bG-\d{6}\b`, 'g') },
+  new RegExp(String.raw`\bG-\d{6}\b`, 'g'),
   // "123456 is your Google verification code", "123-456 is your WhatsApp code".
-  { kind: 'otp', re: new RegExp(String.raw`\b` + CODE + String.raw`\s+is\s+your\s+(?:[\w-]+\s){0,3}(?:code|passcode|otp)\b`, 'gi') },
+  new RegExp(String.raw`\b` + CODE + String.raw`\s+is\s+your\s+(?:[\w-]+\s){0,3}(?:code|passcode|otp)\b`, 'gi'),
 ];
 
 // Replace every artifact match with a typed marker. Returns the redacted text plus the distinct
@@ -64,21 +75,25 @@ export type ExtractedArtifact = Readonly<{ kind: ArtifactKind; value: string }>;
 // the code out of mail for me") without the artifact ever entering model context or persistence.
 // Duplicates (a code restated in subject + body) collapse by value.
 export const extractArtifacts = (text: string): { text: string; artifacts: readonly ExtractedArtifact[] } => {
-  let redacted = text;
   const seen = new Set<string>();
   const artifacts: ExtractedArtifact[] = [];
-  for (const { kind, re } of PATTERNS) {
-    redacted = redacted.replace(re, (match) => {
-      // OTP patterns match the surrounding phrase ("Your login code is 123456"); the relay value
-      // is the code itself. Links relay whole. The G- prefix form must be tried first - its six
-      // digits would otherwise match the plain-digit alternative.
-      const value = kind === 'otp' ? (match.match(/G-\d{6}|\d{3}-\d{3}|\d{4,8}/)?.[0] ?? match) : match;
-      if (!seen.has(value)) {
-        seen.add(value);
-        artifacts.push({ kind, value });
-      }
-      return artifactMarker(kind);
-    });
+  const take = (kind: ArtifactKind, value: string): string => {
+    if (!seen.has(value)) {
+      seen.add(value);
+      artifacts.push({ kind, value });
+    }
+    return artifactMarker(kind);
+  };
+  // Links relay whole; the first matching kind names the run.
+  let redacted = text.replace(URL_RUN, (url) => {
+    const link = LINKS.find(({ re }) => re.test(url));
+    return link ? take(link.kind, url) : url;
+  });
+  for (const re of OTPS) {
+    // OTP patterns match the surrounding phrase ("Your login code is 123456"); the relay value
+    // is the code itself. The G- prefix form must be tried first - its six digits would
+    // otherwise match the plain-digit alternative.
+    redacted = redacted.replace(re, (match) => take('otp', match.match(/G-\d{6}|\d{3}-\d{3}|\d{4,8}/)?.[0] ?? match));
   }
   return artifacts.length === 0 ? { text, artifacts: [] } : { text: redacted, artifacts };
 };
