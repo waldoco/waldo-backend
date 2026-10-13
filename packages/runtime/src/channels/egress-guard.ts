@@ -23,16 +23,15 @@ export const redactSecretUrls = (text: string): { text: string; count: number } 
 
 type Caller = (method: string, body: object) => Promise<unknown>;
 
-// Wraps the Telegram caller: text-bearing sends are scrubbed before they leave.
+// Wraps the Telegram caller: text-bearing sends are scrubbed before they leave, and never ask for a link preview.
+// Telegram fetches a previewed link with no tap from the owner, and the text can carry a link from a mail or invite.
 export const egressGuardedCaller = (call: Caller, onRedact: (count: number, method: string) => void): Caller =>
   async (method, body) => {
     const b = body as Record<string, unknown>;
     if ((method === 'sendMessage' || method === 'editMessageText') && typeof b.text === 'string') {
       const { text, count } = redactSecretUrls(b.text);
-      if (count > 0) {
-        onRedact(count, method);
-        return call(method, { ...b, text });
-      }
+      if (count > 0) onRedact(count, method);
+      return call(method, { ...b, text, link_preview_options: { is_disabled: true } });
     }
     return call(method, body);
   };
