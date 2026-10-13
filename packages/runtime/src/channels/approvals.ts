@@ -117,11 +117,22 @@ export type ApprovalDesk = Readonly<{
 }>;
 
 const DECISION = { a: 'approve', e: 'edit', s: 'skip' } as const;
-const CARDS: Readonly<Record<string, Readonly<{ title: string; approve: string; modify: boolean }>>> = {
-  calendar_change: { title: 'Calendar change?', approve: 'Do it', modify: true }, google_task_change: { title: 'Google task change?', approve: 'Do it', modify: true },
-  email_send: { title: 'Send this email?', approve: 'Send it', modify: true }, message_send: { title: 'Send this message?', approve: 'Send it', modify: true },
-  browser_submit: { title: 'Approve this browser action?', approve: 'Do it', modify: false }, mcp_call: { title: 'Run this MCP tool?', approve: 'Do it', modify: false },
+// Each kind's card: its Telegram title and approve button, and what approving does, which names the app's approve
+// button. A calendar or task change names its own action.
+const CALENDAR_EFFECT = { create: 'Add the event', move: 'Move the event', cancel: 'Cancel the event' } as const;
+const TASK_EFFECT = { create: 'Add the task', update: 'Change the task', complete: 'Complete the task', reopen: 'Reopen the task' } as const;
+const CARDS: Readonly<Record<string, Readonly<{ title: string; approve: string; modify: boolean; effect: (payload: never) => string }>>> = {
+  calendar_change: { title: 'Calendar change?', approve: 'Do it', modify: true, effect: (p: Stored) => CALENDAR_EFFECT[p.action] },
+  google_task_change: { title: 'Google task change?', approve: 'Do it', modify: true, effect: (p: GoogleTaskProposal) => TASK_EFFECT[p.args.action] },
+  email_send: { title: 'Send this email?', approve: 'Send it', modify: true, effect: () => 'Send email' },
+  message_send: { title: 'Send this message?', approve: 'Send it', modify: true, effect: () => 'Send message' },
+  browser_submit: { title: 'Approve this browser action?', approve: 'Do it', modify: false, effect: () => 'Submit on the site' },
+  mcp_call: { title: 'Run this MCP tool?', approve: 'Do it', modify: false, effect: () => 'Run the tool' },
 };
+// The app's buttons: approve names the effect. Skip puts the approval off, so Waldo may raise it again; Don't do this declines it.
+const DECISION_LABEL = { edit: 'Change it', skip: "Don't do this", defer: 'Skip', undo: 'Undo' } as const;
+const labelsFor = (entry: LedgerRow, actions: readonly AppApprovalV1['actions'][number][]) => Object.fromEntries(actions.map(action =>
+  [action, action === 'approve' ? CARDS[entry.kind]!.effect(JSON.parse(entry.payload_json) as never) : DECISION_LABEL[action]]));
 const PROPOSAL_KINDS = Object.keys(CARDS);
 // Telegram's buttons. Not now puts the approval off and is offered once; Don't do this skips it.
 const laterButtons = (id: string, deferrable: boolean): [string, string][] => [...(deferrable ? [['Not now', `d:${id}`] as [string, string]] : []), ["Don't do this", `s:${id}`]];
@@ -199,7 +210,7 @@ const exactFor = (entry: LedgerRow): AppApprovalV1['exact'] => {
 const appPartOf = (entry: LedgerRow, shown: Readonly<{ actions: AppApprovalPart['actions']; payload_digest: string }>): AppApprovalPart => {
   const review = appReview(entry);
   return { type: 'approval', approval_id: entry.id, kind: entry.kind as AppApprovalPart['kind'], review: review.text, payload_digest: shown.payload_digest,
-    actions: shown.actions, expires_at: expiresAt(entry), fallback_text: review.full ? summaryOf(entry).slice(0, 4000) : review.text };
+    actions: shown.actions, expires_at: expiresAt(entry), fallback_text: review.full ? summaryOf(entry).slice(0, 4000) : review.text, labels: labelsFor(entry, shown.actions) };
 };
 // An app card approves only while today's app review still shows the full content; a stored flag alone never does.
 const appShowsInFull = (entry: LedgerRow) => { try { return appReview(entry).full; } catch { return false; } };
@@ -282,6 +293,31 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (p.action === 'move') return `Move ${name}${p.seen_start && p.seen_end ? ` from ${span(p.seen_start, p.seen_end)}` : ''} to ${span(p.start!, p.end!)}${p.account ? ` (${p.account})` : ''}`;
     return `Cancel ${name}${p.account ? ` (${p.account})` : ''}`;
   };
+  // The approvals list's one line: the effect and its target, in the owner's zone. The review stays the full content.
+  // Each name is clipped to 40 characters, which keeps every question within the contract's 120.
+  const line = (text: string, max: number) => {
+    const one = text.replace(/\s+/g, ' ').trim();
+    if (one.length <= max) return one;
+    const cut = /[\uD800-\uDBFF]/.test(one[max - 2]!) ? max - 2 : max - 1;
+    return `${one.slice(0, cut)}…`;
+  };
+  const named = (text: string | null | undefined, fallback: string) => { const one = text ? line(text, 40) : ''; return one ? `"${one}"` : fallback; };
+  const TASK_VERB = { create: 'Add', update: 'Change', complete: 'Complete', reopen: 'Reopen' } as const;
+  const questionOf = (entry: LedgerRow, exact: AppApprovalV1['exact']): string => {
+    const p = JSON.parse(entry.payload_json);
+    if (entry.kind === 'email_send') {
+      const more = p.to.length + (p.cc?.length ?? 0) + (p.bcc?.length ?? 0) - 1;
+      return `Send ${named(p.subject, 'this email')} to ${line(p.to[0], 40)}${more ? ` and ${more} more` : ''}?`;
+    }
+    if (entry.kind === 'message_send') return `Send this message on ${line(p.channel, 40)}?`;
+    if (entry.kind === 'browser_submit') return `Submit on ${line(new URL(p.url).host, 100)}?`;
+    if (entry.kind === 'mcp_call') return `Run ${line(p.tool, 40)} on the ${line(p.server, 40)} server?`;
+    if (exact.task) return `${TASK_VERB[exact.task.action]} ${named(exact.task.task ?? exact.task.changes.title?.after, 'the task')}?`;
+    const name = named(p.title, 'the event');
+    if (p.action === 'create') return `Add ${name} on ${span(p.start, p.end)}?`;
+    if (p.action === 'move') return `Move ${name} to ${span(p.start, p.end)}?`;
+    return `Cancel ${name}${p.seen_start ? ` on ${when(p.seen_start)}` : ''}?`;
+  };
   const row = (id: string) => sql.exec<LedgerRow>('SELECT * FROM ledger WHERE id = ?', id).toArray()[0];
   const setStatus = (id: string, status: DeskStatus, undo: Undo | null = null) =>
     sql.exec('UPDATE ledger SET status = ?, undo_json = ?, decided_at = ? WHERE id = ?', status, undo ? JSON.stringify(undo) : null, deps.now(), id);
@@ -361,12 +397,15 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const shown = sql.exec<{ surface: string; approvable: number; retired_at: number | null }>('SELECT surface, approvable, retired_at FROM approval_presentations WHERE approval_id = ? ORDER BY presented_at, surface', entry.id).toArray();
     const inApp = shown.find(p => p.surface === 'app');
     const state = APP_APPROVAL_STATE[entry.status as DeskStatus];
+    const undoUntil = state === 'done' && entry.undo_json && entry.decided_at !== null && now - entry.decided_at <= UNDO_WINDOW_MS ? entry.decided_at + UNDO_WINDOW_MS : null;
     const actions = state === 'open' ? withDefer(entry, inApp?.approvable === 1 && inApp.retired_at === null && appShowsInFull(entry) ? approveActions(entry) : ['skip'])
       : state === 'review_only' ? withDefer(entry, ['skip'])
-        : state === 'done' && entry.undo_json && entry.decided_at !== null && now - entry.decided_at <= UNDO_WINDOW_MS ? ['undo'] as const : [];
+        : undoUntil !== null ? ['undo'] as const : [];
     const surfaces = [...new Set(shown.map(p => p.surface).filter(surface => surface !== 'legacy'))];
+    const exact = exactFor(entry);
     return { approval_id: entry.id, kind: entry.kind as AppApprovalV1['kind'], state, review: appReview(entry).text,
-      exact: exactFor(entry), payload_digest: `sha256:${await sha256Hex(entry.payload_json)}`, expires_at: expiresAt(entry), actions: [...actions],
+      exact, payload_digest: `sha256:${await sha256Hex(entry.payload_json)}`, expires_at: expiresAt(entry), actions: [...actions],
+      question: questionOf(entry, exact), labels: labelsFor(entry, actions), ...(undoUntil !== null ? { undo_until: undoUntil } : {}),
       ...(surfaces.length ? { presented_surfaces: surfaces as AppApprovalV1['presented_surfaces'] } : {}) };
   };
   const describeAny = (entry: LedgerRow) => {
