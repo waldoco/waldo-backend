@@ -607,6 +607,7 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
      - #1109's attendee search.
      - #1105's body choice.
      - #1111 and #1115's direct by-id send check.
+4. **App deletion PR (draft, "needs owner"):** the App lane's inventory found 81 unreachable JS/TS files and 25 uncompiled Swift files: the old Supabase client, local scoring, old sync and dead components. It's one draft PR, with separate JS and Swift commits. It's held because the parked list includes the dormant-stack deletion. `targets/widgets` (Live Activities) is kept for your call.
 4. **The scribe's health false positives:** options A, B and C are on #1103.
 5. **Where Patrol and Spots go once the side menu goes** (R1). R1 and the backend's "where Connections is" line wait for this.
 6. **#1109's ADR versus your ruling:**
@@ -868,3 +869,9 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 
   A new proxy in front of an old Worker leaks spaced codes.
 - **Next:** #1118's review, which is running. Then #1114's third review, then #1109's.
+
+## 03:46Z: app #104 open; app deletion inventory held for the owner
+
+- **App #104** (the Home Brief row and R3) is open at `d2461250`. Its review follows #1118's.
+- **The App lane's inventory:** 81 unreachable JS/TS files and 25 uncompiled Swift files. **Decision:** one draft PR labelled "needs owner", with separate JS and Swift commits, the scan test and a Simulator walk of every route. It's not merged tonight (the parked dormant-stack deletion is the owner's). `targets/widgets` is kept. It's added to the summary's decisions.
+- **`sleep_debt`** in app.v1 was asked of the backend builder on #1103. The app marks it "awaiting backend".
