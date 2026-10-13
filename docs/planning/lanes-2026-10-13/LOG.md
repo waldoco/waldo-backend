@@ -986,3 +986,26 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   3. Body, then builds.
 - **Reviews running:** #1110 (browse from the app) and app #105 (the deletion). Usage was 44% at 04:37Z.
 - **Asked the owner:** does "finalized" today mean an installable build on the phone, or feature-complete on the Simulator?
+
+## 04:48:11Z: owner: "feature-complete on the Simulator first"; tally with Ansh's lane
+
+- **The owner's words:**
+  - "feature-complete on the simulator first". Builds come after.
+  - On Ansh's remaining list, as relayed by the App lane at about 04:25Z: "we gotta do it". So R1, the three tabs, is no longer held.
+  - On the not-there-yet list: do it, maybe in a parallel chat if the owner starts one.
+- **Patrol and Spots:** the Home cards stay under R1. That supersedes my 23:41Z "Settings rows" interim. The owner is asked to confirm.
+- **Coordination with Ansh's sessions** runs through #1103 and PR comments. Its cloud session isn't reachable by direct message from here. It re-ordered app-first at 04:46Z: `cards[].latest`, then `sleep_debt`, the sent/skipped/pending signal, #1100's follow-ups, B1, C, guidance, B2 and E, with Telegram last.
+  - **I asked** that the committed wake fix, which stops an app message cancelling the next scheduled alarm, comes second.
+  - #1110 lands before the rename. #1119 is retargeted afterwards.
+- **Tally of the backend lane's overnight list:**
+  - **#1100:** merged.
+  - **#1119 (the rename; v6; stacked):** open, with CI green on its stack. Not reviewed yet.
+  - **#1108:** waits for #1119.
+  - **#1110:** in review.
+  - **#1113:** held for the owner.
+  - **Eight items** are committed but not opened as PRs: link previews, B1, the wake fix, A3, C, guidance, B2 and E. B2 and E carry migrations, so they need the owner.
+- **The App lane's toolchain report:**
+  - EAS isn't logged in.
+  - There's no Android SDK, so neither the APK nor the Samsung Kotlin can build.
+  - iOS builds need the owner's Apple signing.
+  - It held expo-dev-client, because builds are deferred.
