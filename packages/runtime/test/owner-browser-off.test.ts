@@ -17,7 +17,7 @@ function fixture(keys: Record<string, string> = {}) {
   const scope: RunEffectScope = { runId: 'ordinary-first-turn', attempt: 'first', deadline: Date.now() + 60000,
     signal: new AbortController().signal, admit: vi.fn(), commit: work => work() };
   const env = { WALDO_ENVIRONMENT: 'staging', OPENAI_API_KEY: 'synthetic', ...keys,
-    TELEGRAM_OWNER_DO: { idFromName: () => ({ toString: () => 'browser-off-physical' }) } } as never;
+    OWNER_DO: { idFromName: () => ({ toString: () => 'browser-off-physical' }) } } as never;
   const runtime = ownerBrowserRuntime({ env, storage, actualDoId: 'browser-off-physical', activeScope: () => scope });
   const ctx = { authenticatedUserId: 'browser-off-owner', runScope: scope } as never;
   return { runtime, scope, ctx, rows, put, alarm, transaction };

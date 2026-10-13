@@ -47,10 +47,10 @@ export function commonPublicBrowserConfiguration(options:Readonly<{env:TelegramW
  if(env.WALDO_ENVIRONMENT!=='staging'||!env.BROWSER||!selected?.loadSdk||!selected.spend)return undefined;
  const policy=freezePolicy(selected.policy),now=options.now??Date.now;
  // The policy names the owner binding it was registered for, Telegram presence or app; only that binding holds it.
- const held=()=>{const binding=localOwnerBinding(storage.kv,env.TELEGRAM_OWNER_DO,actualDoId);return binding&&binding.doName===policy.doName&&binding.subject===policy.subject?binding:undefined;};
+ const held=()=>{const binding=localOwnerBinding(storage.kv,env.OWNER_DO,actualDoId);return binding&&binding.doName===policy.doName&&binding.subject===policy.subject?binding:undefined;};
  // This registration belongs to one physical owner. Selecting it on another
  // owner would also install its model spend gate and break unrelated chat.
- if(env.TELEGRAM_OWNER_DO?.idFromName(policy.doName).toString()!==actualDoId)return undefined;
+ if(env.OWNER_DO?.idFromName(policy.doName).toString()!==actualDoId)return undefined;
  if(!options.cleanupOnly&&!held())return undefined;
  const spend=freezeSpend(selected.spend);
  if(spend.policy.ownerId!==`prn_${policy.directoryOwnerId.toLowerCase().replaceAll('-','')}`||spend.policy.validUntil>policy.expiresAt)throw Error('common browser spend policy rejected');
@@ -64,7 +64,7 @@ export function commonPublicBrowserConfiguration(options:Readonly<{env:TelegramW
   assertCommonPublicBrowserUsage(retained,policy,spend.allocationMicrousd);
   return retained;
  };
- const owner=async()=>{physical();const row=await verifyOwnerBinding(env,held()!,actualDoId,env.TELEGRAM_OWNER_DO);physical();if(!row||row.directoryOwnerId!==policy.directoryOwnerId.toLowerCase())throw Error('common public browser owner unavailable');return {ownerId:`prn_${row.directoryOwnerId.replaceAll('-','')}`,custodyDigest:row.custodyDigest};};
+ const owner=async()=>{physical();const row=await verifyOwnerBinding(env,held()!,actualDoId,env.OWNER_DO);physical();if(!row||row.directoryOwnerId!==policy.directoryOwnerId.toLowerCase())throw Error('common public browser owner unavailable');return {ownerId:`prn_${row.directoryOwnerId.replaceAll('-','')}`,custodyDigest:row.custodyDigest};};
  const verify=async(grant:CommonBrowserGrant)=>{const current=await owner();if(current.ownerId!==grant.ownerId)throw Error('common public browser owner changed');const row=read();if(row.custodyDigest!==current.custodyDigest)throw Error('common public browser authority changed');if(!row.taskGrants.some(retained=>JSON.stringify(retained)===JSON.stringify(grant)))throw Error('common public browser grant changed');};
  return {
   ownsGrant:grant=>grant.ref===policy.ref,

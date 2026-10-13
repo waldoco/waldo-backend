@@ -10,10 +10,10 @@ export async function commonRuntimeReadiness(env:TelegramWebhookEnv,storage:Dura
  if(!limiter)return Response.json({error:'unavailable'},{status:503,headers});
  try{if(!(await limiter.limit({key:`common-runtime-readiness:${actualDoId}`})).success)return Response.json({error:'rate_limited'},{status:429,headers:{...headers,'retry-after':'60'}});}catch{return Response.json({error:'unavailable'},{status:503,headers});}
  // The owner's binding on this physical object: a Telegram presence or the app account.
- const binding=localOwnerBinding(storage.kv,env.TELEGRAM_OWNER_DO,actualDoId);
+ const binding=localOwnerBinding(storage.kv,env.OWNER_DO,actualDoId);
  if(!binding)return Response.json({error:'owner_unavailable'},{status:503,headers});
  const {doName,subject}=binding;
- const verify=()=>verifyOwnerBinding(env,binding,actualDoId,env.TELEGRAM_OWNER_DO);
+ const verify=()=>verifyOwnerBinding(env,binding,actualDoId,env.OWNER_DO);
  let browser:ReturnType<typeof commonBrowserAllowanceDiagnostic>|undefined;
  let owner:'verified'|'unlinked'|'unverifiable'='unverifiable',workspace:'verified'|'unlinked'|'unverifiable'='unverifiable';
  try{
@@ -34,6 +34,6 @@ export async function commonRuntimeReadiness(env:TelegramWebhookEnv,storage:Dura
    await assertCurrent();
   }
  }catch{owner='unverifiable';workspace='unverifiable';browser=undefined;}
- if(!ownerBindingCurrent(storage.kv,env.TELEGRAM_OWNER_DO,actualDoId,binding)){owner='unverifiable';workspace='unverifiable';browser=undefined;}
+ if(!ownerBindingCurrent(storage.kv,env.OWNER_DO,actualDoId,binding)){owner='unverifiable';workspace='unverifiable';browser=undefined;}
  return Response.json({version:1,owner_authority:owner,workspace_binding:workspace,...(browser?{browser}:{}),scope:'signed_read_checks_only_not_schema_health_issuer_or_execution_acceptance'}, {headers});
 }

@@ -1,5 +1,5 @@
 import type { ApprovalItem, ApprovalReview } from './approvals';
-import type { CardLatest } from './day-cards';
+import type { CardLatest, CardState } from './day-cards';
 import { SCHEDULE_KINDS } from '@waldo/contracts';
 import { SCHEDULE_LABELS, type SchedulePreferences } from './schedule-preferences';
 import type { Claim, ConstellationEdge, ConstellationNode, profile } from '../memory/claims';
@@ -104,7 +104,7 @@ export const signInPage = (token: string): Response => new Response(
 export const sessionCookie = (request: Request): string | null =>
   (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim().split('=')).find(([name]) => name === CONSOLE_COOKIE)?.[1] ?? null;
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke'] as const;
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
 
 // The trace detail for a console action. The form id is free-form text (parseConsoleAction
@@ -157,7 +157,7 @@ export const NOTICES: Readonly<Record<string, string>> = {
 
 // latest is the Main chat row today's card was delivered to; only the app's day view reads it.
 export type ConsoleCard = Readonly<{ id: string; name: string; defaultTime: string; time: string | null; reason: string; sent: boolean; pin: string | null;
-  latest?: CardLatest | null }>;
+  latest?: CardLatest | null; state?: CardState }>;
 
 export type ConsoleView = Readonly<{
   release: string;
@@ -365,9 +365,10 @@ const retired = (view: ConsoleView) => view.retiredSpots.length === 0 ? '' : `<d
 const forgetting = (view: ConsoleView) => view.forgettingSpots.length === 0 ? '' : `<div class="forgetting"><h3>Forget in progress (${view.forgettingSpots.length})</h3><div class="sub">These removals could not finish: part of memory storage still holds the text. Retry completes the removal.</div>${view.forgettingSpots.map((spot) => `<div class="row spot"><div class="main"><div class="line">${esc(spot.text)}</div></div>${chip('Removal incomplete', 'danger')}<div class="act">${form(view.csrf, 'spot.forget', 'Retry forget', { id: String(spot.id) }, { tone: 'danger', confirm: 'Retry forgetting this spot?' })}</div></div>`).join('')}</div>`;
 
 const cards = (view: ConsoleView) => [...view.cards].sort((a, b) => (a.time ?? a.defaultTime).localeCompare(b.time ?? b.defaultTime)).map((card) => {
-  const when = card.time ?? 'Skipped today';
+  const when = card.time ?? 'Not scheduled today';
+  const status = card.state === 'skipped' ? chip('Skipped') : card.state === 'held' ? chip('Held for quiet hours') : card.state === 'sent' ? chip('Sent', 'good') : card.sent ? chip('Done') : chip('Upcoming');
   const controls = card.sent ? '' : `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="id" value="${esc(card.id)}"><input type="time" name="value" value="${esc(card.time ?? card.defaultTime)}" required><button class="btn quiet" name="action" value="card.today">Set for today</button><button class="btn quiet" name="action" value="card.pin">Always at this time</button></form>`;
-  return `<div class="row card"><div class="time">${esc(when)}</div><div class="main"><div class="line"><b>${esc(card.name)}</b> ${card.sent ? chip('Sent', 'good') : chip('Upcoming')} ${card.pin ? chip(`Pinned ${card.pin}`, 'good') : ''}</div><div class="sub">${esc(card.reason)}</div>${controls}${card.pin ? form(view.csrf, 'card.unpin', 'Clear pin', { id: card.id }) : ''}</div></div>`;
+  return `<div class="row card"><div class="time">${esc(when)}</div><div class="main"><div class="line"><b>${esc(card.name)}</b> ${status} ${card.pin ? chip(`Pinned ${card.pin}`, 'good') : ''}</div><div class="sub">${esc(card.reason)}</div>${controls}${card.pin ? form(view.csrf, 'card.unpin', 'Clear pin', { id: card.id }) : ''}</div></div>`;
 }).join('');
 
 const VOLUMES: readonly (readonly [string, string])[] = [['low', 'Low: only the three day cards'], ['normal', 'Normal: plus updates that change your day'], ['high', 'High: plus smaller useful updates']];
@@ -426,10 +427,11 @@ const overview = (view: ConsoleView) => {
   const currentTime = view.now.split(' ')[1] ?? '';
   const nextCard = [...view.cards].filter((card) => !card.sent && card.time !== null && card.time >= currentTime).sort((a, b) => (a.time ?? '').localeCompare(b.time ?? ''))[0];
   const brief = view.cards.find((card) => card.id === 'card:brief');
-  const briefState = brief?.sent ? 'Sent today' : brief?.time === null ? 'Not scheduled today' : 'Not sent yet';
+  const briefSkipped = brief?.state === 'skipped';
+  const briefState = briefSkipped ? 'Skipped today' : brief?.sent ? 'Sent today' : brief?.time === null ? 'Not scheduled today' : 'Not sent yet';
   const google = view.google.accounts.some((account) => !account.error);
   return `<div class="overview-top"><div><div class="eyebrow">Your Waldo · ${esc(view.now)} ${esc(view.timezone)}</div><h1>${greeting}<br><em>Here is where things stand.</em></h1><p>What needs you, what ran, and what comes next. No guesswork.</p></div><div class="overview-status">${chip(waiting.length ? `${waiting.length} waiting on you` : 'Nothing waiting on you', waiting.length ? 'provisional' : 'good')}<span>${google ? 'Google access saved. Live reads still need a real check.' : 'Google is not connected.'}</span></div></div>
-<div class="overview-grid"><div class="overview-feature"><div class="eyebrow">The Brief · ${esc(briefState)}</div><h3>${brief?.sent ? 'The Brief is marked sent.' : 'No Brief to read here yet.'}</h3><p>${brief?.sent ? 'Waldo recorded a send. This does not confirm delivery or show the message text; open your chat to check it.' : 'Waldo has not recorded a sent Brief for today. This page will not make one up.'}</p><a href="${CONSOLE_PATH}/day" class="text-link">See the day cards →</a></div>
+<div class="overview-grid"><div class="overview-feature"><div class="eyebrow">The Brief · ${esc(briefState)}</div><h3>${briefSkipped ? 'Waldo skipped the Brief today.' : brief?.sent ? 'The Brief is marked sent.' : 'No Brief to read here yet.'}</h3><p>${briefSkipped ? 'The Brief came due and Waldo had nothing worth sending, so no message went out.' : brief?.sent ? 'Waldo recorded a send. This does not confirm delivery or show the message text; open your chat to check it.' : 'Waldo has not recorded a sent Brief for today. This page will not make one up.'}</p><a href="${CONSOLE_PATH}/day" class="text-link">See the day cards →</a></div>
 <div class="overview-side"><div class="eyebrow">The Handoff</div><h3>${waiting.length ? `${waiting.length} ${waiting.length === 1 ? 'decision' : 'decisions'} waiting.` : 'Nothing needs your approval.'}</h3><p>${waiting.length ? esc(waiting[0]!.summary) : 'If Waldo proposes a change, review its exact details before anything happens.'}</p><a href="${CONSOLE_PATH}/waiting" class="text-link">${waiting.length ? 'Review the proposal' : 'See approvals'} →</a></div>
 <div class="overview-side"><div class="eyebrow">Next on the day</div><h3>${nextCard ? `${esc(nextCard.time!)} · ${esc(nextCard.name)}` : 'No more cards scheduled ahead.'}</h3><p>${nextCard ? esc(nextCard.reason) : 'There is no future card recorded in today’s plan.'}</p><a href="${CONSOLE_PATH}/day" class="text-link">See the plan →</a></div></div>
 <div class="overview-foot"><div><div class="eyebrow">The Patrol · latest recorded movement</div>${lastMovement}</div><a href="${CONSOLE_PATH}/activity" class="text-link">All activity →</a></div>`;

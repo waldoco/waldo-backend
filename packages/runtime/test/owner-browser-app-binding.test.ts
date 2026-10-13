@@ -24,7 +24,7 @@ beforeEach(() => vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: 
 afterEach(() => { vi.unstubAllGlobals(); asked.length = 0; provider.length = 0; duringAcquire = undefined; });
 const scope: RunEffectScope = { runId: 'app-run', attempt: 'app-attempt', deadline: Date.now() + 60_000, signal: new AbortController().signal, admit: () => undefined, commit: work => work() };
 const runtimeFor = (rows: Map<string, unknown>, actualDoId: string, env: Record<string, unknown> = {}) => ownerBrowserRuntime({
-  env: { ...directory, WALDO_ENVIRONMENT: 'staging', BROWSER: {}, BROWSERBASE_API_KEY: 'synthetic', BROWSERBASE_PROJECT_ID: 'synthetic', TELEGRAM_OWNER_DO: { idFromName: (name: string) => ({ toString: () => `id-of-${name}` }) }, ...env } as never,
+  env: { ...directory, WALDO_ENVIRONMENT: 'staging', BROWSER: {}, BROWSERBASE_API_KEY: 'synthetic', BROWSERBASE_PROJECT_ID: 'synthetic', OWNER_DO: { idFromName: (name: string) => ({ toString: () => `id-of-${name}` }) }, ...env } as never,
   storage: { kv: { get: (key: string) => rows.get(key), put: (key: string, value: unknown) => rows.set(key, value), list: () => [] }, transactionSync: <T>(work: () => T) => work(), getAlarm: async () => null, setAlarm: async () => undefined } as unknown as DurableObjectStorage,
   actualDoId, activeScope: () => scope,
 });

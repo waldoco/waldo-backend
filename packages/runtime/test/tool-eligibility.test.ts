@@ -31,7 +31,7 @@ const turn = async (name: string, accounts: () => readonly Account[] | Promise<r
     systems.push(request.system ?? '');
     return { ok: true, data: { model: request.model, text: calls ? '' : 'Done.', ...(calls ? { tool_calls: [...calls] } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 } };
   } };
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async () => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async () => {
     const args: Parameters<typeof createOwnerResponder> = ['fixture'];
     args[3] = entry => { logs.push(entry); }; args[4] = clock;
     args[5] = [...googleHandlers(google, desk, clock), connectServiceHandler(google)] as never;
@@ -84,7 +84,7 @@ it('a failing grant keeps its tools so the call can ask for a reconnect, and an 
 
 it('deploy configuration decides MCP, browse and Drive eligibility', async () => {
   const verdict = async (handler: { eligible?: () => unknown }) => handler.eligible ? await handler.eligible() : { ok: true };
-  const readable = JSON.stringify([{ name: 'drive', url: 'https://mcp.example.test', auth: 'google', requires: 'drive', allow_tools: ['search_files'], read_tools: ['search_files'] }]);
+  const readable = JSON.stringify([{ name: 'drive', url: 'https://drivemcp.googleapis.com/mcp/v1', auth: 'google', requires: 'drive', allow_tools: ['search_files'], read_tools: ['search_files'] }]);
   const plain = JSON.stringify([{ name: 'tools', url: 'https://mcp.example.test' }]);
   const missing = { ok: false, reason: 'not_configured' };
   expect(await verdict(callMcpToolHandler(undefined))).toEqual(missing);

@@ -24,7 +24,7 @@ export function commonOwnerBrowserRegistration(options: Readonly<{
   const selected = invalid || raw?.scope === 'verified_owners';
   const operator = selected ? JSON.stringify(raw) : undefined;
   const physical = () => {
-    const binding = localOwnerBinding(storage.kv, env.TELEGRAM_OWNER_DO, actualDoId);
+    const binding = localOwnerBinding(storage.kv, env.OWNER_DO, actualDoId);
     if (!binding) throw Error('automatic browser owner unavailable');
     return binding;
   };
@@ -44,7 +44,7 @@ export function commonOwnerBrowserRegistration(options: Readonly<{
       if (invalid) throw Error('automatic browser operator policy invalid');
       if (!selected) return undefined;
       const before = physical();
-      const owner = await verifyOwnerBinding(env, before, actualDoId, env.TELEGRAM_OWNER_DO);
+      const owner = await verifyOwnerBinding(env, before, actualDoId, env.OWNER_DO);
       const after = physical();
       if (!owner || owner.doName !== after.doName || owner.subject !== after.subject
         || JSON.stringify(before) !== JSON.stringify(after)) throw Error('automatic browser authority unavailable');

@@ -350,7 +350,7 @@ describe('produceHealthScores', () => {
       expect(overlapped.form).toEqual(without.form);
       expect(counted.form).not.toEqual(without.form);
       // Admitting fewer inputs is a new Form version under ADR-0081.
-      expect((counted.form as Record<string, unknown>).algorithm_version).toBe('form.candidate.v2');
+      expect((counted.form as Record<string, unknown>).algorithm_version).toBe('form.candidate.v3');
     });
   });
 

@@ -32,7 +32,7 @@ export function commonBrowserAllowanceDiagnostic(options: Readonly<{
   externalPriorUse: 'unknown' as const,
  };
  try {
-  const binding = localOwnerBinding(storage.kv, env.TELEGRAM_OWNER_DO, options.actualDoId);
+  const binding = localOwnerBinding(storage.kv, env.OWNER_DO, options.actualDoId);
   if(env.WALDO_ENVIRONMENT !== 'staging' || binding?.doName !== owner.doName || binding.subject !== owner.subject) return result;
   result.providerReady = cloudflareBrowserProviderReadiness(env);
   const ownerId = `prn_${owner.directoryOwnerId.toLowerCase().replaceAll('-', '')}`;

@@ -49,12 +49,12 @@ export function ownerBrowserRuntime(options: Readonly<{
   const cloudflareReady = () => options.env.WALDO_ENVIRONMENT === 'staging' && Boolean(options.env.BROWSER && (commonBrowserSdk() || commonPublicBrowserConfigured()));
   const eligibleWith = (typed = false) => (): ToolEligibility => active || typed && options.typedHost?.() || cloudflareReady() ? { ok: true } : { ok: false, reason: 'not_configured' };
   // The browser serves the owner bound to this physical object, through Telegram or the app; the directory confirms it.
-  const binding = () => localOwnerBinding(options.storage.kv, options.env.TELEGRAM_OWNER_DO, options.actualDoId);
-  const bound = (held: NonNullable<ReturnType<typeof binding>>) => ownerBindingCurrent(options.storage.kv, options.env.TELEGRAM_OWNER_DO, options.actualDoId, held);
+  const binding = () => localOwnerBinding(options.storage.kv, options.env.OWNER_DO, options.actualDoId);
+  const bound = (held: NonNullable<ReturnType<typeof binding>>) => ownerBindingCurrent(options.storage.kv, options.env.OWNER_DO, options.actualDoId, held);
   const assertOwner = async () => {
       const held = binding();
       if (!held) throw new ClosedRunError();
-      const owner = await verifyOwnerBinding(options.env, held, options.actualDoId, options.env.TELEGRAM_OWNER_DO);
+      const owner = await verifyOwnerBinding(options.env, held, options.actualDoId, options.env.OWNER_DO);
       if (!bound(held) || !owner) throw new ClosedRunError(); return { directoryOwnerId: owner.directoryOwnerId, custodyDigest: owner.custodyDigest };
     };
   const current = (ctx: ToolDispatcherContext) => {
