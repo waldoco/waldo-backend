@@ -700,3 +700,12 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
   - **Worker `5cade547`.** Rollback target `8b48dad2` (`652b5fcf`).
   - **Smoke:** `/healthz` shows `19d05d02`; the signed-out routes return 401 and 401, and the probe returns 403. The tail is on `5cade547`.
 - **P1 run 3 go sent** (test send 3 of 5). Success is "Done". If it's "Outcome not confirmed" again, sending stops for the night.
+
+## 01:41Z: P1 run 3 sent nothing (a duplicate was refused); run 3b uses "QA"
+
+- **Run 3 on `19d05d02`:**
+  - Turn 1 (01:37:32Z) drafted only.
+  - Turn 2 (01:38:56Z), "Send it now.": Waldo declined. "I can't confirm whether the earlier send went through… I haven't sent it again." There was no card.
+  - Nothing was approved, and nothing was sent. Test sends used are still **2 of 5**.
+- **Reading:** the two earlier "probe" sends are permanently `outcome_unknown`. The ledger kept no Gmail id for them, so #1115 can't re-prove them, and app.v1 gives that state no actions. Refusing an identical send is the correct duplicate guard.
+- **Run 3b go:** the same P1 steps with the word "QA" (allowed by ruling 6), so it isn't a duplicate. The same stop rule applies.
