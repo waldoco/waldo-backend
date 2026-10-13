@@ -53,12 +53,29 @@ export const appControlActionV1Schema = z.strictObject({
 // that is gone or has no text gives latest null.
 export const APP_CARD_EXCERPT_MAX_V1 = 280;
 const latestDelivery = z.strictObject({ message_id: text.min(1), delivered_at: z.int().positive(), excerpt: text.min(1).max(APP_CARD_EXCERPT_MAX_V1) });
+// The first page of open work the Home shows; total counts every open item, so the app can say how many more there are.
+export const APP_OVERVIEW_PAGE_MAX_V1 = 20;
+const firstPage = <Item extends z.ZodType>(item: Item) => z.strictObject({ items: z.array(item).max(APP_OVERVIEW_PAGE_MAX_V1), total: count })
+  .refine(page => page.total >= page.items.length, { error: 'total counts every open item', path: ['total'] });
+// The owner's local day, or day and minute, as the loop and responsibility tools take it.
+const localWhen = z.string().regex(/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/);
+const workTitle = text.min(1).max(200);
+// What Waldo took on and has not closed, soonest check first. next is the first unfinished step whose prerequisites are
+// done, with who holds it; null when no step is open. check_at is when Waldo looks at it again.
+const carried = z.strictObject({
+  id: text.min(1).max(100), title: workTitle, state: z.enum(['open', 'waiting', 'uncertain']),
+  next: z.strictObject({ title: workTitle, holder: z.enum(['waldo', 'owner']) }).nullable(), check_at: localWhen.nullable(),
+});
+// Open follow-ups, soonest due first and undated last. source says where one came from, never which thread.
+const openLoop = z.strictObject({ id: text.min(1).max(100), title: workTitle, due: localWhen.nullable(), source: z.enum(['gmail', 'chat']) });
 // timezone_confirmed is true once the owner set the zone themselves (timezone.set); absent from a Worker that does not say.
 export const appControlDayDataV1Schema = z.strictObject({
   timezone: text, timezone_confirmed: z.boolean().optional(), date: text,
   cards: z.array(z.strictObject({ id: text, name: text, defaultTime: text, time: text.nullable(), reason: text, sent: z.boolean(), pin: text.nullable(), latest: latestDelivery.nullable().optional() })),
   proactivity: z.strictObject({ quiet_start: text.nullable(), quiet_end: text.nullable(), volume: z.enum(['low', 'normal', 'high']) }),
   schedules: z.strictObject({ daily_brief: z.boolean(), followups: z.boolean(), event_briefs: z.boolean(), nightly: z.boolean(), heartbeat: z.boolean() }),
+  carrying: firstPage(carried).optional(),
+  open_loops: firstPage(openLoop).optional(),
 });
 // Lists only the channels this Waldo can link. Addressing is masked and exists exactly while the
 // binding keeps it: an unlinked or pending channel holds no peer identifier.
