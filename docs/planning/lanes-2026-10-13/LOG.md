@@ -1879,3 +1879,17 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
   6. `get_health` (L5);
   7. the backend routes behind the website's Home;
   8. the memory and proactive audit.
+
+## 10:46Z (from `date -u`): HANDOFF_BACKEND_FINALIZER.md for the new account
+
+- **New file:** `docs/planning/lanes-2026-10-13/HANDOFF_BACKEND_FINALIZER.md`. It's the mission brief for a new-account session (Fable 5.1) acting as backend lead:
+  - read-first list;
+  - non-negotiables;
+  - state at handoff;
+  - who else is working, so nobody overlaps;
+  - four phases:
+    1. reliability and honesty: calendar read, #1119→#1128, #1129, the reviewed queue;
+    2. app.v1 exposure of the missing blocks, in contract order;
+    3. a harness comparison against mature agent systems, with primary sources;
+    4. an owner test script;
+  - the per-item working method, owner asks, and don'ts.
