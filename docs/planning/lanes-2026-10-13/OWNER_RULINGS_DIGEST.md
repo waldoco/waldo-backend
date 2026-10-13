@@ -1,4 +1,4 @@
-# Owner rulings digest, as of 13 Oct 2026, 15:13Z
+# Owner rulings digest, as of 13 Oct 2026, 20:33Z
 
 This digest lets cloud sessions follow the owner's rulings. The full notes live in the orchestrator's memory on the owner's Mac, which cloud sessions can't read. Rulings decide what is wanted; source and tests decide what is shipped. Where a later ruling conflicts with an earlier one, the later one wins.
 
@@ -63,6 +63,28 @@ This digest lets cloud sessions follow the owner's rulings. The full notes live 
 27. **iMessage becomes Waldo's surface while Suyash reworks the app (15:13Z).** Proactive work goes to an owner who uses iMessage: the Brief, reminders, check-backs and standing orders, under the same quiet hours and delivery gate. The app keeps its copy.
 28. **Approvals asked for on iMessage.** For now, a one-tap app link in the reply. Later, numbered replies bound to the exact pending approval, after a security review. Until then the surface contract says `approval: 'none'`.
 29. **Health text in iMessage replies is allowed, the same as Telegram.** It is the owner's own health context, in replies to them, and never in logs. The host Mac's message history falls under the same retention and forget rules, and it needs a destination note.
+
+## 13 Oct evening (about 19:17Z to 20:31Z)
+
+30. **The Mac owns most of the building.**
+    - The Fable lead designs (A, compaction, recall, durable tasks), writes A0, reviews A slices and keeps the gate.
+    - Ansh's review session reviews and coordinates.
+    - The builder and the Google lane only finish their lists.
+    - Reuse existing PRs and drafts before writing anything new.
+
+    Ansh said go at 19:56Z (#1103 6153969229).
+31. **Deploys and migrations:**
+    - The Mac owns them, because Ansh and the cloud sessions can't run migrations. Production still needs an explicit check per action.
+    - The auto-mode permission check refused the Mac's Worker deploy prep, so Worker deploys fall back to the owner.
+    - Ashish runs his own Kennel deploys and migrations (`use_mac`, the iMessage host). The Mac tracks them and doesn't touch `use_mac`.
+32. **#1182, the compaction ADR: approved.** It is built after A3: the lead specs it, and the Mac implements it.
+33. **Text surfaces (iMessage, Telegram, WhatsApp) are simple text extensions of the main agent.** Health text is allowed there.
+    - The app is the rich surface, with full context and control.
+    - For anything a text surface can't show, it sends a link: to the app on mobile, to the web console on desktop.
+    - The app and the console are peers on one backend, with equal tools and features. Anything beyond that becomes an artifact.
+    - Optimize later.
+    - This settles A3's `visibility` question: rich health rows stay in the app and console.
+34. **The main agent is the focus.**
 
 ## Still open (ask the owner)
 
