@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   appHealthRoutesV1, HEALTH_CONSENT_VERSION_V1, healthApiErrorV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema,
   healthConsentListV1Schema, healthConsentWithdrawV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthSampleV1Schema,
-  healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema,
+  healthScoresHistoryQueryV1Schema, healthScoresHistoryResponseV1Schema, healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema,
 } from './health-ingest';
 
 const grant = { request_id: 'health-consent-001', source: 'apple', purpose: 'storage_compute', version: HEALTH_CONSENT_VERSION_V1, expected_epoch: 0, age_attested_18_plus: true };
@@ -171,6 +171,41 @@ describe('health scores read', () => {
     expect(healthScoresQueryV1Schema.safeParse({}).success).toBe(true);
     expect(healthScoresQueryV1Schema.safeParse({ day: '2026-10-10' }).success).toBe(true);
     rejected(healthScoresQueryV1Schema, [{ day: '10/10/2026' }, { day: '2026-10-10', owner: 'x' }]);
+  });
+});
+
+describe('health scores history', () => {
+  const pillar = { state: 'unavailable', reason: 'no_readings' };
+  const row = (day: string) => ({ day, timezone: 'Asia/Kolkata', compiled_at: `${day}T07:00:00Z`, freshness: 'expired', recovery: pillar, form: pillar, weight: pillar });
+  const history = (from: string, to: string, days: string[]) => ({ state: 'available', from, to, days: days.map(row) });
+  const month = Array.from({ length: 31 }, (_, i) => `2026-09-${String(i + 1).padStart(2, '0')}`).filter(day => !day.endsWith('-31'));
+
+  it('takes a window of one to thirty-one local days, from and to inclusive', () => {
+    for (const valid of [{ from: '2026-10-13', to: '2026-10-13' }, { from: '2026-10-07', to: '2026-10-13' }, { from: '2026-09-13', to: '2026-10-13' }, { from: '2026-02-27', to: '2026-03-01' }])
+      expect(healthScoresHistoryQueryV1Schema.safeParse(valid).success, JSON.stringify(valid)).toBe(true);
+    rejected(healthScoresHistoryQueryV1Schema, [
+      {}, { from: '2026-10-13' }, { to: '2026-10-13' }, { from: '2026-10-14', to: '2026-10-13' }, { from: '2026-09-12', to: '2026-10-13' },
+      { from: '2026-10-13', to: '2026-10-13', day: '2026-10-13' }, { from: '13/10/2026', to: '2026-10-13' }, { from: '2026-02-30', to: '2026-03-01' },
+    ]);
+  });
+
+  it('lists the days that have a row, oldest first, with gaps and never zeros', () => {
+    for (const valid of [
+      history('2026-10-07', '2026-10-13', []), history('2026-10-07', '2026-10-13', ['2026-10-07', '2026-10-09', '2026-10-13']),
+      history('2026-09-01', '2026-10-01', [...month, '2026-10-01']), { ...history('2026-10-13', '2026-10-13', ['2026-10-13']), days: [{ ...row('2026-10-13'), sleep_debt: { state: 'unavailable', reason: 'missing_sleep' } }] },
+    ]) expect(healthScoresHistoryResponseV1Schema.safeParse(valid).success, JSON.stringify(valid).slice(0, 120)).toBe(true);
+    expect(healthScoresHistoryResponseV1Schema.safeParse({ state: 'unavailable', day: null, reason: 'consent_withdrawn' }).success).toBe(true);
+  });
+
+  it('refuses days outside the window, out of order or repeated, a window it could not have asked for, and extra detail', () => {
+    rejected(healthScoresHistoryResponseV1Schema, [
+      history('2026-10-07', '2026-10-13', ['2026-10-06']), history('2026-10-07', '2026-10-13', ['2026-10-14']),
+      history('2026-10-07', '2026-10-13', ['2026-10-09', '2026-10-08']), history('2026-10-07', '2026-10-13', ['2026-10-08', '2026-10-08']),
+      history('2026-10-14', '2026-10-13', []), history('2026-09-01', '2026-10-02', []),
+      { ...history('2026-10-07', '2026-10-13', []), state: 'partial' }, { from: '2026-10-07', to: '2026-10-13', days: [] },
+      { ...history('2026-10-07', '2026-10-13', []), total: 0 }, { ...history('2026-10-07', '2026-10-13', ['2026-10-08']), days: [{ ...row('2026-10-08'), recovery: { state: 'available', score: 0 } }] },
+      { state: 'unavailable', day: null, reason: 'consent_withdrawn', days: [] },
+    ]);
   });
 });
 
