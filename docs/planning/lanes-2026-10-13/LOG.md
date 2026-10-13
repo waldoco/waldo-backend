@@ -931,3 +931,11 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **Correction:** I had held the app deletion PR for the owner, citing the parked "dormant-stack deletion". APP.md 6.3, Ansh's list, includes the deletion, and the owner ruled the App lane follows that list. So the PR now goes through the normal gate: separate JS and Swift commits, the scan test, and a Simulator walk of every route. `targets/widgets` stays, and it's now summary decision 7. Logged as a process slip.
 - **Connectors, rehearsed locally and not yet pushed:** #1109 merges #1114 cleanly. #1105's `htmlText` conflict is resolved, and a stale cost comment is fixed at the real merge. The merge then carries up to #1112 and #1117, with the full wall at #1117.
 - **Reviews running:** #1100 and #1114.
+
+## 04:18:27Z: #1100 merged; the owner is awake, so the orchestrator pauses
+
+- **Merged #1100 as `6ddbd85e`** at 04:17:47Z.
+  - **Gate:** review PASS at `5353f095`, with no blockers. Each owner object holds exactly one directory owner [verified by the reviewer from source]. The README condition is met by the owner-deletion test. CI 6/6 and CLEAN. The advisor agreed.
+  - **Interim reading (a):** chat text follows the account lifecycle. The owner is to ratify it.
+  - **Not deployed.** Two checks come first: whether a rollback stays clean for Telegram chats, and whether the staging owners' directory rows resolve.
+- **The owner sent a message at about 04:18Z.** The orchestrator stopped and is reporting. No deploy until the owner answers.
