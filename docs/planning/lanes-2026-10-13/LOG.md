@@ -2300,3 +2300,20 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 - **The core lane brief** `MAC_LANE_C_A1_BRIEF.md` is written. It launches once #1149 merges.
 - **Running:** T (M4), the #1149 lane, and the #1182 review. Lane R is done.
 - **Lesson saved:** `pgrep -f 'vitest.mjs'` matches its own waiting shell, so use `[v]itest[.]mjs`.
+
+## 23:17Z — M4 opened as #1193 (two regressions being fixed); #1182 FAIL (docs amendment)
+
+- **Lane T opened #1193** (`d9c95943`).
+  - It measured one request falling from about 89 s to at most 30 s or the time left, and a worst-case model step from 12 requests to 2. A turn's model time now ends 90 s after the loop starts, through the typed `time_exhausted` exit.
+  - The advisor found two regressions, and lane T is fixing both in the PR:
+    - a single 429 failed the turn. The provider now resends once after a cancellable `retry-after` that fits the time left, unless `x-should-retry: false`;
+    - background decisions lost every retry. One line in `owner-turn.ts` at about line 201, with tests.
+  - One responder-level test decides the WeakMap against an explicit deadline parameter (runtime types only).
+  - The 90 s budget with a 60 s tool cut is a product call for the morning.
+  - Board post: 6157224864. The review session should wait for the revised head.
+- **#1182** (the compaction ADR): FAIL as a docs amendment (PR 6157230785; board 6157231140).
+  - H1: the window drops a first-row summary first.
+  - H2: the Scribe's free-text health scan is off at `internal_context`, so numbers pass. The fix is a numeric-only check plus a test.
+  - M3: the switch is inconsistent. M4: the forget wording is inconsistent.
+  - The orchestrator re-checked H1 and H2 on the tip. No owner asks if H2 is fixed as proposed.
+- **Running:** T (the #1193 fixes) and the #1149 lane.
