@@ -1632,3 +1632,16 @@ Times come from `date -u`. Each entry is marked verified, inferred or unverified
 - **Before the Air install:** a read-only check that `useHealthData.ts` and `useHealthSnapshot.ts` (main) are consent-gated and on-device only.
 - **The Air install is main with #109 only.** #115 waits: retarget it to main, push so CI runs, then review it.
 - **Still running:** #116 with #120 (Sonnet).
+
+## About 09:50Z: app #120 PASS; #116 FAIL on one false comment
+
+- **#120** (`83bb8030`, zone alias map): PASS. It merges after the advisor. Notes:
+  - map only when the current name validates (old time-zone data);
+  - `healthIngestDeps.ts:44` still reads the raw device zone;
+  - `chatSeen.ts:8` has a dated comment.
+- **#116** (`5e77138e`, tabs and menu motion): FAIL on `settings.tsx:16`. The new comment says Home's cards still open Patrol and Spots, which is false at head. It's a one-line fix, with main merged into the same push (both PRs edit TodaySummary).
+  - Non-blocking:
+    - `router.navigate` on the stack likely still pushes (the back stack grows) [inferred]. Real tabs (NativeTabs) are the true fix, and L4 is to raise it with the owner;
+    - the "Ask Waldo about these" navigate is untested;
+    - the scrim clamp is unasserted.
+  - The delta after the fix is comment-only plus a main merge, so the orchestrator verifies it without a new review.
