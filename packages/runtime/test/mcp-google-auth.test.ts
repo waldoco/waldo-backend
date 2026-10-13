@@ -55,7 +55,7 @@ describe('google-auth MCP servers', () => {
       },
     };
     const out = await executeMcp({ name: 'drivemcp', url: 'https://drivemcp.googleapis.com/mcp/v1', auth: 'google' }, 'search_files', { max: 3 }, proxyAuth);
-    expect(seen).toEqual([{ serverUrl: 'https://drivemcp.googleapis.com/mcp/v1', tool: 'search_files', args: { max: 3 }, connection: 'conn_123' }]);
+    expect(seen).toEqual([{ serverUrl: 'https://drivemcp.googleapis.com/mcp/v1', tool: 'search_files', args: { max: 3, excludeContentSnippets: true }, connection: 'conn_123' }]);
     expect(out.content).toEqual([{ text: 'edge result' }]);
     expect(JSON.stringify(seen)).not.toContain('Bearer');
   });
