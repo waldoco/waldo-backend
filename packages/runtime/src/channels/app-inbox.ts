@@ -13,7 +13,8 @@ export const APP_INBOX_RETENTION_MS = 30 * 24 * 60 * 60_000;
 export const APP_INBOX_FLOOR_MS = 12 * 60 * 60_000;
 const MAX_ROWS = 4096;
 const PRUNE_PER_ADMIT = 512;
-const finished = (row: AppInboxRecord) => row.state === 'completed' || row.state === 'interrupted' || row.state === 'revoked';
+// A row whose "did not finish" reply is still to be written is kept until it is.
+const finished = (row: AppInboxRecord) => (row.state === 'completed' || row.state === 'interrupted' || row.state === 'revoked') && row.notice !== 'due';
 const closedAt = (row: AppInboxRecord) => row.closedAt ?? row.admittedAt;
 export type AppInboxRecord = {
   id: string; updateId: number; clientId: string; digest: string; text: string;
@@ -21,8 +22,13 @@ export type AppInboxRecord = {
   state: 'admitted' | 'running' | 'completed' | 'interrupted' | 'revoked';
   attempt?: string; deadline?: number; closedAt?: number;
   closedReason?: 'interrupted' | 'session_revoked'; effectsUnconfirmed?: boolean;
+  // An interrupted turn owes the owner a "did not finish" reply in their transcript: due until written, or dropped
+  // when the directory no longer admits the account.
+  notice?: 'due' | 'written' | 'dropped';
+  // What the interrupted turn's tools already did, as its receipt line, for that reply; cleared when the reply closes.
+  landed?: string;
 };
-const due = (rows: readonly AppInboxRecord[], now: number) => rows.some(row => row.state === 'admitted') ? now + 250 : null;
+const due = (rows: readonly AppInboxRecord[], now: number) => rows.some(row => row.state === 'admitted' || row.notice === 'due') ? now + 250 : null;
 const clear = (row: AppInboxRecord) => { row.text = ''; };
 // One durable writer: admitted payload, digest, sequence and alarm commit before ACK.
 // A recovered running attempt is uncertain and never becomes runnable again.
@@ -60,7 +66,7 @@ export class AppInbox {
   recover(live:ReadonlySet<string>):void {
     this.storage.transactionSync(()=>{
       const rows=this.records();
-      for(const row of rows)if(row.state==='running'&&!live.has(row.attempt??'')) {row.state='interrupted';row.closedReason='interrupted';row.effectsUnconfirmed=true;row.closedAt=this.now();clear(row);this.storage.kv.put(PREFIX+row.id,row);}
+      for(const row of rows)if(row.state==='running'&&!live.has(row.attempt??'')) {row.state='interrupted';row.closedReason='interrupted';row.effectsUnconfirmed=true;row.notice='due';row.closedAt=this.now();clear(row);this.storage.kv.put(PREFIX+row.id,row);}
       this.storage.kv.put(APP_INBOX_DUE_KEY,due(rows,this.now()));
     });
   }
@@ -68,7 +74,7 @@ export class AppInbox {
   // alarm, which takes the earliest due time, does not refire every 250 ms for the length of the outage.
   deferWake(delayMs:number):void {
     this.storage.transactionSync(()=>{
-      if(this.records().some(row=>row.state==='admitted'))this.storage.kv.put(APP_INBOX_DUE_KEY,this.now()+delayMs);
+      if(this.records().some(row=>row.state==='admitted'||row.notice==='due'))this.storage.kv.put(APP_INBOX_DUE_KEY,this.now()+delayMs);
     });
   }
   // Signing out closes the session's admitted and running messages through the one durable writer. A running turn's
@@ -107,8 +113,25 @@ export class AppInbox {
     this.storage.transactionSync(()=>{
       const row=this.storage.kv.get<AppInboxRecord>(PREFIX+record.id);if(!row||row.state!=='running'||row.attempt!==record.attempt)return;
       row.state=completed?'completed':'interrupted';row.closedAt=this.now();clear(row);
-      if(!completed){row.closedReason='interrupted';row.effectsUnconfirmed=true;}
+      if(completed)delete row.landed;else{row.closedReason='interrupted';row.effectsUnconfirmed=true;row.notice='due';}
       this.storage.kv.put(PREFIX+row.id,row);this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.records(),this.now()));
+    });
+  }
+  noticesDue():AppInboxRecord[] { return this.records().filter(row=>row.notice==='due'); }
+  // Kept only while the same attempt still runs: a run that was revoked or replaced owes no reply.
+  noteLanded(id:string,attempt:string,line:string):void {
+    this.storage.transactionSync(()=>{
+      const row=this.storage.kv.get<AppInboxRecord>(PREFIX+id);if(!row||row.state!=='running'||row.attempt!==attempt)return;
+      row.landed=line;this.storage.kv.put(PREFIX+id,row);
+    });
+  }
+  // Closes a due notice. `work` writes the reply in the same transaction, so a notice is written at most once;
+  // when the notice is no longer due, nothing commits.
+  closeNotice(id:string,outcome:'written'|'dropped',work:()=>void=()=>undefined):void {
+    this.storage.transactionSync(()=>{
+      const row=this.storage.kv.get<AppInboxRecord>(PREFIX+id);if(row?.notice!=='due')throw new ClosedRunError();
+      row.notice=outcome;delete row.landed;this.storage.kv.put(PREFIX+id,row);work();
+      this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.records(),this.now()));
     });
   }
 }

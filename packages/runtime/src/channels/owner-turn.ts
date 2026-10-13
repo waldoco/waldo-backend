@@ -606,7 +606,7 @@ export const createOwnerResponder = (
     turnToolEvents = [];
     control.begin(fromOwner);
     try {
-      const userEntry = tree.get(id) ?? { id, ownerId, chatId: conversationRef, parentId: conversationLeaves.get(conversationRef) ?? null, threadAnchorId: null, surface, modelPayload: said, appPayload: said, modelProjection: { mode: 'include' as const }, role:'user' as const, inputOrigin: fromOwner ? 'owner' as const : 'machine' as const };
+      const userEntry = tree.get(id) ?? { id, ownerId, chatId: conversationRef, parentId: conversationLeaves.get(conversationRef) ?? null, threadAnchorId: null, surface, modelPayload: said, appPayload: said, modelProjection: { mode: 'include' as const }, role:'user' as const, inputOrigin: fromOwner ? 'owner' as const : 'machine' as const, createdAt: Date.now() };
       if(fromOwner && context && privateRunScope) await conversationStore?.persistOwnerInput?.(userEntry,privateRunScope);
       const publication = await time('joined_path', () => path.submit({
         ...(privateRunScope ? { runScope: privateRunScope } : {}),
@@ -630,6 +630,15 @@ export const createOwnerResponder = (
       conversationLeaves.set(conversationRef,publication.leafId);
       lastReply = out;
       return out;
+    } catch (error) {
+      // What the turn's tools already did stays on the record for the next turn while the run is still admitted; a
+      // closed run writes nothing.
+      const redact = literalTextRedactor([...removedTopics], FORGOTTEN);
+      const landed = fromOwner && privateRunScope ? (await turnReceipt(turnToolEvents))?.line ?? null : null;
+      if (landed) conversationStore?.noteUnfinished?.(redact(landed), privateRunScope!);
+      try { for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); } }
+      catch (flush) { if (!(flush instanceof ClosedRunError)) throw flush; }
+      throw error;
     } finally { activeOwnerTurn = undefined; }
   };
   return {
