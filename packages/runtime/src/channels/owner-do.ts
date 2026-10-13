@@ -20,7 +20,7 @@ import {CONTROLS_PATH,readControlsQuery,projectControls} from './dashboard-contr
 import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,googleConnectReceipt} from './dashboard-control-actions';
 import { createScopedCuratedSkillCapability, type OwnerSkillCapability } from '../skills/curated-host';
 import { seededSkillCustody } from '../skills/curated-owner';
-import { ownerMessageAdmission, type OwnerMessageAdmission } from '../identity/owner-message-admission';
+import { OwnerAdmissionError, ownerMessageAdmission, type OwnerMessageAdmission } from '../identity/owner-message-admission';
 import { MEMORY_GRAPH_PATH, readMemoryGraph } from './memory-graph';
 import { pageMemoryGraph } from './memory-graph-page';
 import {TelegramLinkInbox,LINK_MODE,type LinkBinding} from './telegram-link-inbox';
@@ -76,7 +76,7 @@ import { nightlyDiagnostic } from './nightly-diagnostic';
 import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
 import { schedulePreferences, schedulePreferencesLine, schedulePreferenceHandlers, applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePreferences, replanDayCards, type ScheduleHold, type ScheduleKind } from './schedule-preferences';
 import { armBriefSweep, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT } from './event-briefs';
-import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, parseDayPlan, readCalendar } from './day-cards';
+import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardDeliveries, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, recordCardDelivery } from './day-cards';
 import { DAY_CARDS, dayPlanInput } from '../prompt/day-cards';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview } from './dashboard-overview';
 import { SKIP_UPDATE, updateCardPrompt } from '../prompt/update-cards';
@@ -552,7 +552,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return appSessionAuthority(this.env)(name, hash);
   }
   // Set only inside the alarm's unit of work while an app-only owner's scheduled jobs run (see serial()).
-  private scheduledAppDelivery: ((text: string) => Promise<void>) | null = null;
+  private scheduledAppDelivery: ((text: string) => Promise<string>) | null = null;
 
   // The app binding written at the owner's first app message: the local sign that the app is one of their surfaces.
   private appBound(): boolean {
@@ -575,8 +575,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
 
   private readonly logSkippedLoad = (skipped: CanonicalSkipped): void => { for (const line of skippedRowLines('app_history_load', skipped)) console.error(JSON.stringify(line)); };
-  // Writes a scheduled message as an assistant row in the owner's app transcript, after re-asking the directory.
-  private appDeliveryFor(authority: OwnerRuntimeAuthority): (text: string) => Promise<void> {
+  // Writes a scheduled message as an assistant row in the owner's app transcript, after re-asking the directory, and
+  // answers with the row's id.
+  private appDeliveryFor(authority: OwnerRuntimeAuthority): (text: string) => Promise<string> {
     return async text => {
       const now = Date.now(), abort = new AbortController();
       const scope: RunEffectScope = { runId: 'app-scheduled', attempt: crypto.randomUUID(), deadline: now + 60_000, signal: abort.signal,
@@ -596,23 +597,52 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const ownerRef = context.invocation.verified_authority.principal_ref, id = `scheduled-${crypto.randomUUID()}`;
         await store.save([{ id, ownerId: ownerRef, chatId: `owner:${ownerRef}`, parentId: leafId, threadAnchorId: null, surface: 'app',
           modelPayload: text, appPayload: text, modelProjection: { mode: 'include' }, role: 'assistant' }], id, scope);
+        return id;
       } finally { abort.abort(); }
     };
   }
 
+  // The app's day view names the Main chat row each of today's cards was delivered to, with an excerpt cut from that row
+  // as the chat shows it, read under the app session's own admission. The excerpt is not worth failing the day read for:
+  // when the chat cannot be read, a card with a delivery leaves latest out, which says this Worker cannot tell, while a
+  // card with none still says null.
+  private async appCardsLatest(view: ConsoleView, name: string, hash: string): Promise<ConsoleView['cards']> {
+    const delivered = cardDeliveries(this.ctx.storage.kv, view.now.slice(0, 10));
+    if (!delivered.size) return view.cards.map(card => ({ ...card, latest: null }));
+    const now = Date.now(), abort = new AbortController();
+    const scope: RunEffectScope = { runId: 'app-cards-read', attempt: crypto.randomUUID(), deadline: now + 60_000, signal: abort.signal,
+      admit: () => { if (abort.signal.aborted || Date.now() >= now + 60_000) throw new ClosedRunError(); }, commit: work => this.ctx.storage.transactionSync(work) };
+    try {
+      const admission = await this.appAdmission(name, hash, 'Read my main conversation.', `cards:${scope.attempt}`, now, scope);
+      const { entries } = await canonicalOwnerConversationStore(this.ctx.storage, admission).readForDisplay();
+      const shown = new Map(entries.map(entry => [entry.id, entry.appPayload]));
+      return view.cards.map(card => {
+        const delivery = delivered.get(card.id);
+        return { ...card, latest: latestDelivery(delivery, delivery && shown.get(delivery.message_id)) };
+      });
+    } catch (error) {
+      const code = error instanceof ClosedRunError ? 'closed' : error instanceof OwnerAdmissionError ? `admission_${error.code}` : canonicalHistoryFault(error) ?? 'read_failed';
+      console.error(JSON.stringify({ hop: 'app_cards_latest', ok: false, code }));
+      return view.cards.map(card => delivered.has(card.id) ? card : { ...card, latest: null });
+    } finally { abort.abort(); }
+  }
+
   // For an owner on both surfaces, a scheduled message is written to the app, then Telegram gets a plain copy.
-  private copiedToTelegram(deliver: (text: string) => Promise<void>): (text: string) => Promise<void> {
+  private copiedToTelegram(deliver: (text: string) => Promise<string>): (text: string) => Promise<string> {
     const telegram = this.setup('telegram');
     return withPlainCopy(deliver, text => telegram.call('sendMessage', { chat_id: telegram.owner, text }),
       code => telegram.log({ trace: `copy:${Date.now()}`, hop: 'telegram_copy', ms: 0, ok: false, code, detail: code }));
   }
 
-  private async appContext(name: string, hash: string, text: string, occurrence: string, occurredAt: number, scope: RunEffectScope, sources?: OwnerContextSources) {
+  private async appAdmission(name: string, hash: string, text: string, occurrence: string, occurredAt: number, scope: RunEffectScope) {
     const lookup=async()=>{
       scope.admit(); const session=await this.appAuthority(name,hash); scope.admit();
       return {ownerId:session.ownerId,bindingRef:session.sessionHash,revision:session.revision,physicalDoId:this.ctx.id.toString()};
     };
-    return createOwnerTurnContext(await surfaceOwnerAdmission({scope,lookup,expectedPhysicalDoId:this.ctx.id.toString(),surface:'app',subject:hash,occurrenceKey:occurrence,occurredAt,text}),sources);
+    return surfaceOwnerAdmission({scope,lookup,expectedPhysicalDoId:this.ctx.id.toString(),surface:'app',subject:hash,occurrenceKey:occurrence,occurredAt,text});
+  }
+  private async appContext(name: string, hash: string, text: string, occurrence: string, occurredAt: number, scope: RunEffectScope, sources?: OwnerContextSources) {
+    return createOwnerTurnContext(await this.appAdmission(name, hash, text, occurrence, occurredAt, scope), sources);
   }
   // Worker-to-DO only: signed by the router secret, never reachable through a forwarded client path. Signout calls it before
   // the session is revoked, so a retry after a failed revoke is safe, and again after, for work admitted in between. It
@@ -677,6 +707,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.ctx.storage.deleteAll()},
             sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.created_at)+12*60*60_000})),
             view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=await auth.listSessions(name);return {...view,sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.created_at,until:new Date(Date.parse(row.created_at)+12*60*60_000).toISOString(),current:row.session===hash}))};},
+            cardsLatest:(view:ConsoleView)=>this.appCardsLatest(view,name,hash),
             act:async(action:ConsoleAction)=>action.action==='google.connect'
               ?googleConnectReceipt(isGoogleFeature(action.value)?await runtime.googleConnectUrl(action.value,'app'):null,this.ctx.storage.kv.get<string>('origin'))
               :runtime.act(action,current),
@@ -1717,7 +1748,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       probeCapture.current === null ? call(method, request) : probeCapture.current.record(method, request);
     const api = createTelegramOwnerApi(routedCall);
     // A blocked send (unlinked or rebound owner) returns no message. A producer must not record that as sent, completed or folded.
-    const sentOrThrow = async (sending: Promise<unknown>) => { if ((await sending) === undefined) throw new Error('telegram send blocked'); };
+    const sentOrThrow = async (sending: Promise<unknown>) => { const sent = await sending; if (sent === undefined) throw new Error('telegram send blocked'); return sent; };
     // The trace names the attempt by its nonce prefix; the signed URL itself is never logged.
     const deliverConnectLink = async (url: string, purpose: 'connect' | 'reconnect' = 'connect', email?: string): Promise<boolean> => {
       const trace = url.includes('/c/') ? 'connect:deliver' : `oauth:${(new URL(url).searchParams.get('state') ?? '').split('.').at(-2)?.slice(0, 8) ?? 'unknown'}`;
@@ -2687,8 +2718,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       try {
         const text = (await ledgerJob(trace, said)).trim();
         const skipped = !text || isSkip(text);
-        if (!skipped) await sentOrThrow(api.sendMessage({ chat_id: owner, text }));
-        plans.sent(localIso(entry.occurrence_at, clock.timezone).slice(0, 10), card.id);
+        const day = localIso(entry.occurrence_at, clock.timezone).slice(0, 10);
+        if (!skipped) {
+          const receipt = await sentOrThrow(api.sendMessage({ chat_id: owner, text })) as { app_row_id?: unknown };
+          if (typeof receipt.app_row_id === 'string') recordCardDelivery(this.ctx.storage.kv, day, card.id, receipt.app_row_id, Date.now());
+        }
+        plans.sent(day, card.id);
         updates.fold(now);
         log({ trace, hop: 'day_card', ms: Date.now() - started, ok: true, detail: skipped ? `${card.id} skipped` : card.id, text: { input: said, output: text } });
         log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'day_card' });
