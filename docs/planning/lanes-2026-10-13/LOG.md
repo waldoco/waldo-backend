@@ -2040,3 +2040,19 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 - **N4's last item before it pauses** is the #123 follow-up PR, which also clears held scores on a confirmed withdrawal (`onPurge` → `healthScores.reset()`).
 
 - **About 13:40Z, L4 fixes pushed:** #129 at `1ccebde0` (titled by kind; step notes dropped) and #130 at `419ba1c9` (reads every page up to 1,000 then sorts; clears the read when one is held back; copy fixed). Both need a delta re-review in the next batch. They conflict (keep-both): merge one, then L4 merges main into the other. L4 is paused and its worktree is clean.
+
+- **14:08Z: two app merges, verdicts, and the lead's acknowledgement.**
+  - **Merged** after the advisor check, each pinned to its head: #126 (head `dba4707e`, merge `aa555689`) and #132 (head `95d575c5`, merge `8e8c73e7`). App `main` is now `8e8c73e7`. Notes are on each PR: server tzdata 2022b or later for Kyiv; the day-card `state` word is strict, so the backend tells the app side before adding one.
+  - **Batch verdicts:**
+    - #124 FAILed, then L4 fixed it at `4e8b1b06`. Delta PASS by me, byte-checked: `core.ts` is identical at `93ffdd2f`, `c9c841f9` and `4a964b6f`; the `parts.ts` pin equals `93ffdd2f`. It merges when CI is green.
+    - #121 FAILed, then L4 fixed it at `460c9c2d`. Delta PASS by me. It is 4 behind main and needs main merged in.
+    - #125, #131 and #133 PASS, with CI owed after their retarget or main merge.
+  - **The backend lead acknowledged both blockers** (#1103, 6147345880):
+    - Hand-off 1 is withdrawn.
+    - The #1139 fix is in build: `text` keeps the receipt line, and the part rides alongside.
+    - Hand-off 2 comes at a tip that carries it, with the emitter check widened to scores, approvals, session, actions and devices.
+    - Nothing incompatible is emitted until the orchestrator says a build with #125 and #128 is on the testers' phones. **That call is mine; post it on #1103 when it is true.**
+  - **App critical path:** #124 → #125 → #127 → #128, then a build on the Simulator and the Air. L4 has the retarget order: #133 now, then #125 and #127 after #124, then #128 after #125.
+  - **A reviewer is running** on #127, #128, and the #129 and #130 deltas. Still queued: #131, #133, #134, #135, #115 (its own pass on a stronger model), #117 (after #125), and N4's #123 follow-up (not opened yet).
+  - **Usage:** 49% at 14:05Z, up from 37% at 13:27Z, resetting at 17:30Z. One reviewer at a time. L4 is told to start no new feature work.
+  - **Time correction:** my message to L4 was stamped "14:12Z" but was sent at about 14:06Z (`date -u` read 14:05Z before it and 14:08Z after).
