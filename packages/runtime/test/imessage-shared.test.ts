@@ -305,3 +305,19 @@ it('a sender authority naming a different subject is held by the bridge before a
   expect(proof.turns).toHaveLength(0);
   expect(await w.inbox(w.alice)).toEqual([]);
 });
+
+it('a forged unlink form naming another owner only ever unlinks the signed-in owner', async () => {
+  const w = await world();
+  await w.sharedLive();
+  expect(await w.linkVia(w.alice, ALICE)).toMatchObject({ text: LINK_REPLIES.redeemed });
+  expect(await w.linkVia(w.bob, BOB)).toMatchObject({ text: LINK_REPLIES.redeemed });
+  // Bob, signed in to his own console, posts an unlink that names Alice every way a form could.
+  const forged = await w.bob.action('imessage.unlink', { owner: w.alice.name, do_name: w.alice.name, id: w.alice.name, subject: ALICE, handle: ALICE });
+  expect(forged.status).toBe(303);
+  const live = [...w.fx.presences.values()].filter((p) => p.active).map((p) => [p.subject, p.owner]);
+  expect(live).toEqual([[ALICE, w.alice.name]]); // the owner is the console's own DO, never form input
+  expect(await (await w.alice.page()).text()).toContain(`Linked: •••${ALICE.slice(-4)}`);
+  expect((await w.host.send(w.host.message('Alice is still linked', { senderHandle: ALICE }))).status).toBe(200);
+  await w.pump();
+  expect(await w.deliverNext()).toMatchObject({ chatGuid: `iMessage;-;${ALICE}`, ownerId: w.owners[1]!.owner_id });
+});

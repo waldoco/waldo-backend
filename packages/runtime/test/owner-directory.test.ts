@@ -71,6 +71,8 @@ describe('ownerDirectory', () => {
     const hash = await linkCodeHash('ABCDEFGHJK');
     const claimed = vi.fn().mockResolvedValue(json({ code: '23505', message: 'presence already linked to another owner' }, 409));
     expect(await ownerDirectory(env, claimed as unknown as typeof fetch, now).redeemHashed!('imessage', 'a@icloud.invalid', hash)).toEqual({ kind: 'claimed' });
+    const race = vi.fn().mockResolvedValue(json({ code: '23505', message: 'duplicate key value violates unique constraint "presences_live_subject"' }, 409));
+    expect(await ownerDirectory(env, race as unknown as typeof fetch, now).redeemHashed!('imessage', 'a@icloud.invalid', hash)).toEqual({ kind: 'uncertain' });
     const raised = vi.fn().mockResolvedValue(json({ code: 'P0001', message: 'other' }, 400));
     expect(await ownerDirectory(env, raised as unknown as typeof fetch, now).redeemHashed!('imessage', 'a@icloud.invalid', hash)).toEqual({ kind: 'uncertain' });
     const opaque = vi.fn().mockResolvedValue(new Response('bad gateway', { status: 409 }));

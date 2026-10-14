@@ -47,10 +47,12 @@ const deployOwner = (env: OwnerDirectoryEnv): OwnerDirectory => ({
 // WhatsApp has no single-owner env fallback: routing a phone number requires a real presence row,
 // so the directory-backed path is the only one (deployOwner answers telegram only).
 
-/** A refused directory call; sqlState is the PostgreSQL error code PostgREST reported, when it reported one. */
+/** A refused directory call, with the PostgreSQL code and message PostgREST reported, when it reported them. */
 export class OwnerDirectoryError extends Error {
-  constructor(readonly status: number, readonly sqlState: string | null) { super(`owner directory ${status}`); }
+  constructor(readonly status: number, readonly sqlState: string | null, readonly dbMessage: string | null) { super(`owner directory ${status}`); }
 }
+/** redeem_link_code's own refusal; any other unique_violation (an index race) stays uncertain. */
+const CLAIMED_ELSEWHERE = 'presence already linked to another owner';
 
 // The runtime holds no service-role key (ADR-0052): it calls signed database functions with the publishable key.
 export const signedRpc = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch, now = () => Date.now()) => {
@@ -68,8 +70,8 @@ export const signedRpc = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch,
       });
       if (!response.ok) {
         const body: unknown = await response.json().catch(() => null);
-        const code = body && typeof body === 'object' ? (body as { code?: unknown }).code : undefined;
-        throw new OwnerDirectoryError(response.status, typeof code === 'string' ? code : null);
+        const { code, message } = body && typeof body === 'object' ? body as { code?: unknown; message?: unknown } : {};
+        throw new OwnerDirectoryError(response.status, typeof code === 'string' ? code : null, typeof message === 'string' ? message : null);
       }
       return response.json();
     });
@@ -95,8 +97,8 @@ export const ownerDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch = f
         const result = await call('redeem_link', `redeem.${hash}.${provider}.${subject}`, { p_code_hash: hash, p_provider: provider, p_subject: subject });
         return { kind: result === null ? 'rejected' : typeof result === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(result) ? 'redeemed' : 'uncertain' };
       } catch (error) {
-        // unique_violation: redeem_link_code found the subject live under another owner and rolled back.
-        return { kind: error instanceof OwnerDirectoryError && error.sqlState === '23505' ? 'claimed' : 'uncertain' };
+        const claimed = error instanceof OwnerDirectoryError && error.sqlState === '23505' && error.dbMessage === CLAIMED_ELSEWHERE;
+        return { kind: claimed ? 'claimed' : 'uncertain' };
       }
     },
     redeem: async (provider, subject, code) => {

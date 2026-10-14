@@ -381,8 +381,8 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
   /** Shared bridge: the sender's own authority decides; no linked Waldo means the stranger path. */
   private async routeSharedSender(event: IMessageEvent, digest: string, environment: string, bridgeId: string, accountId: string, store: BridgeStore)
     : Promise<'handed' | 'not_admitted' | 'held' | 'retry' | SharedStrangerOutcome> {
-    // "waldo CODE" is always a link action, never a turn: it links a new sender and moves an already
-    // linked one (for example off their own per-owner Mac bridge) to the code's owner.
+    // "waldo CODE" is always a link action, never a turn. It links a new sender and moves the code owner's
+    // own handle (for example off their per-owner Mac bridge); a handle another owner holds is refused.
     if (event.kind === 'message' && LINK_TEXT.test(event.text.trim())) return this.answerStranger(event, environment, bridgeId, accountId, store);
     const read = () => this.directory().senderAuthority(environment, bridgeId, accountId, event.senderHandle);
     let sender: SenderAuthority | null;
