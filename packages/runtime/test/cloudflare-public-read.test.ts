@@ -218,6 +218,12 @@ it('every settle wait is bounded: a load that never fires, endless requests and 
     }
   } finally { vi.useRealTimers(); }
 });
+it('a settle wait that throws synchronously still ends in a read', async () => {
+  const f = fake();
+  f.page.waitForLoadState = () => { throw Error('load state unavailable'); };
+  f.page.evaluate = () => { throw Error('page script unavailable'); };
+  expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context)).toMatchObject({ ok: true, data: { data: { text: 'Vegetarian pasta — £12' } } });
+});
 it('a body that is still empty after the waits is read once more about 3 s later before it counts as empty', async () => {
   vi.useFakeTimers();
   try {

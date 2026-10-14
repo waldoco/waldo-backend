@@ -143,12 +143,12 @@ export function cloudflarePublicRead(options: Readonly<{ binding: BrowserWorker;
       page.on('requestfinished', settled); page.on('requestfailed', settled);
       const settleBy = (capMs: number) => Math.min(Date.now() + capMs, workDeadline - SETTLE_RESERVE_MS);
       const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, Math.max(0, ms)));
-      // A wait that runs out is not a failure: the read goes ahead with whatever the page has rendered.
+      // A wait that runs out or fails, even synchronously, is not a failure: the read goes ahead with what the page has rendered.
       const waitUpTo = async (capMs: number, work: () => Promise<unknown>) => {
         const stop = settleBy(capMs);
         if (stop <= Date.now()) return;
         let timer: ReturnType<typeof setTimeout> | undefined;
-        try { await Promise.race([work().catch(() => {}), new Promise<void>(resolve => { timer = setTimeout(resolve, stop - Date.now()); })]); }
+        try { await Promise.race([new Promise(resolve => resolve(work())).catch(() => {}), new Promise<void>(resolve => { timer = setTimeout(resolve, stop - Date.now()); })]); }
         finally { clearTimeout(timer); }
       };
       const networkQuiet = async (capMs: number) => {
