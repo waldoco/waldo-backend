@@ -459,10 +459,9 @@ export class Scheduler {
     this.settleRun(runId, delivered ? 'ok' : 'quarantined', delivered ? null : 'delivery', this.deps.now());
   }
 
-  // The owner cancelled the work before it was sent: the run did not fail, and nothing was delivered.
+  // The owner cancelled the work before it was sent: the run did not fail, and no delivery was attempted.
   settleCancelled(runId: string): void {
-    this.markHeartbeatDecision(runId, 'acted');
-    this.markDelivery(runId, 'failed');
+    this.sql.exec(`UPDATE schedule_runs SET delivery = NULL WHERE id = ? AND outcome = 'running'`, runId);
     this.settleRun(runId, 'ok', null, this.deps.now());
   }
 

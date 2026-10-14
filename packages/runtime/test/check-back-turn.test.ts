@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LLMGatewayRequest } from '../src/llm/provider';
-import { HEARTBEAT_ID } from '../src/channels/heartbeat';
+import { HEARTBEAT_EVERY_MS, HEARTBEAT_ID } from '../src/channels/heartbeat';
 import { traceBook } from '../src/channels/harness';
 import { loopBook } from '../src/channels/loops';
 import { reminderBook } from '../src/channels/reminders';
@@ -97,8 +97,9 @@ const dueLoop = (state: DurableObjectState) => {
   return loop;
 };
 // Each call is a new occurrence, due now.
-const dueHeartbeat = (state: DurableObjectState) => new Scheduler(state.storage.sql, state.storage, productionDeps())
-  .schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', payloadRefs: { id: HEARTBEAT_ID }, occurrenceAt: clock.now - 1, dueAt: clock.now - 1, recurrence: null });
+const dueHeartbeat = (state: DurableObjectState, recurring = false) => new Scheduler(state.storage.sql, state.storage, productionDeps())
+  .schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', payloadRefs: { id: HEARTBEAT_ID }, occurrenceAt: clock.now - 1, dueAt: clock.now - 1,
+    recurrence: recurring ? { type: 'interval', every_ms: HEARTBEAT_EVERY_MS, phase_ms: 0 } : null });
 const offered = (request: LLMGatewayRequest['request']) => (request.tools ?? []).map(tool => tool.name);
 const checkBackRequests = () => fixture.requests.filter(request => !request.response_format);
 // A first round that reads, then a reply that reports what the read found.
@@ -158,7 +159,7 @@ describe('a due reminder runs a fresh check-back turn', () => {
       await transportPass(owner, state);
       expect(wire.sent).toEqual([]);
       expect(state.storage.sql.exec("SELECT status FROM background_runs WHERE kind = 'reminder'").toArray()).toEqual([{ status: 'stopped' }]);
-      expect(state.storage.sql.exec("SELECT outcome, error_class, delivery FROM schedule_runs WHERE kind = 'reminder'").toArray()).toEqual([{ outcome: 'ok', error_class: null, delivery: 'failed' }]);
+      expect(state.storage.sql.exec("SELECT outcome, error_class, delivery FROM schedule_runs WHERE kind = 'reminder'").toArray()).toEqual([{ outcome: 'ok', error_class: null, delivery: null }]);
     });
   });
 
@@ -270,16 +271,16 @@ describe('a past-due loop Waldo took on runs a fresh check-back turn from the he
     await withOwner('check-back-loop-outage', async (owner, state) => {
       const loop = dueLoop(state);
       fixture.outage = true;
-      for (let tick = 0; tick < 4; tick++) { clock.now += 60_000; await dueHeartbeat(state); await schedulePass(owner, state); }
+      for (let tick = 0; tick < 4; tick++) { clock.now += 60_000; await dueHeartbeat(state, true); await schedulePass(owner, state); }
       expect(state.storage.sql.exec("SELECT outcome, heartbeat_result, delivery FROM schedule_runs WHERE kind = 'heartbeat'").toArray())
-        .toEqual(Array(4).fill({ outcome: 'ok', heartbeat_result: 'acted', delivery: 'failed' }));
-      expect(state.storage.sql.exec("SELECT status FROM schedule WHERE id = ?", HEARTBEAT_ID).toArray()).not.toEqual([{ status: 'quarantined' }]);
+        .toEqual(Array(4).fill({ outcome: 'ok', heartbeat_result: null, delivery: null }));
+      expect(state.storage.sql.exec('SELECT status, attempts FROM schedule WHERE id = ?', HEARTBEAT_ID).toArray()).toEqual([{ status: 'armed', attempts: 0 }]);
       expect(state.storage.sql.exec("SELECT ok FROM trace_log WHERE hop = 'check_back'").toArray()).toEqual(Array(4).fill({ ok: 0 }));
       expect(state.storage.sql.exec('SELECT * FROM heartbeat_notified').toArray()).toEqual([]);
       expect(outbox(state)).toEqual([]);
       fixture.outage = false;
       fixture.script = looksThen(FOUND);
-      clock.now += 60_000; await dueHeartbeat(state); await schedulePass(owner, state);
+      clock.now += 60_000; await dueHeartbeat(state, true); await schedulePass(owner, state);
       await transportPass(owner, state);
       expect(wire.sent).toEqual([FOUND]);
       expect(state.storage.sql.exec('SELECT status FROM loops WHERE id = ?', loop.id).toArray()).toEqual([{ status: 'open' }]);

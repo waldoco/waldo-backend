@@ -156,7 +156,7 @@ export const loopHandlers = (book: LoopBook, closable: (turnId: string | undefin
     autonomy_gated: false,
     mutates_state: true,
     async handle({ id, outcome }, ctx) {
-      if (closable(ctx.turnId)?.has(id) === false) return { ok: false, code: 'rejected', error: 'This check-back can close only the loops it was given.' };
+      if (closable(ctx?.turnId)?.has(id) === false) return { ok: false, code: 'rejected', error: 'This check-back can close only the loops it was given.' };
       return { ok: true, data: { id, closed: book.close(id, outcome) }, source_taint: null };
     },
   } satisfies ToolHandler<CloseLoopArgs, { id: string; closed: boolean }, ToolDispatcherContext>,

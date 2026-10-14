@@ -122,9 +122,8 @@ export const heartbeatTick = (deps: HeartbeatDeps): ScheduleExecutor => {
     try { text = await deps.checkBack(notify); }
     catch {
       // checkBack logs its own failure. A model outage must not fail the tick: three failed ticks quarantine the heartbeat
-      // for a day, the held-card release above with it. Nothing is marked notified, so the next tick asks again.
-      deps.scheduler.markHeartbeatDecision(runId, 'acted');
-      deps.scheduler.markDelivery(runId, 'failed');
+      // for a day, the held-card release above with it. The run records no decision and nothing is marked notified, so
+      // the next tick asks again.
       return;
     }
     // The turn may have closed some loops. The receipt freezes each loop as the turn left it, so a loop the owner closes
