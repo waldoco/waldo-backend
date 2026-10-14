@@ -549,7 +549,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       try {
       for (const child of await this.inbox.records()) if (child.control?.targetRun === runId && child.attempt) {
         if (child.state === 'claimed' && child.control.kind === 'steer') await this.inbox.returnUnconsumedSteer(child.id, child.attempt);
-        else if (child.state !== 'consumed' || child.control.kind !== 'steer') await this.inbox.transition(child.id, child.attempt, 'quarantined', child.state === 'consumed' ? 'consumed_target_outcome_uncertain' : 'not_consumed');
+        // A steer the run heard keeps the run's outcome: completed with its final, or consumed for the uncertainty notice.
+        else if (child.control.kind !== 'steer' || (child.state !== 'consumed' && child.state !== 'completed')) await this.inbox.transition(child.id, child.attempt, 'quarantined', child.state === 'consumed' ? 'consumed_target_outcome_uncertain' : 'not_consumed');
         this.liveAttempts.delete(child.attempt);
       }
       await this.notifyUncertainRecovery();
