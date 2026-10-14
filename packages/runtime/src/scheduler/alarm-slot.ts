@@ -20,31 +20,63 @@ export const COMMON_EXECUTION_DUE_KEY = 'common_execution_due_v1';
 
 export const WHATSAPP_PENDING_DUE_KEY = 'whatsapp_pending_due_v1';
 
+// The owner alarm handler's own retry after a failed pass; each pass consumes it.
+export const ALARM_RETRY_DUE_KEY = 'owner_alarm_retry_due_v1';
+
+// Every wake the owner object keeps, one persisted due key per lane. The arbiter arms the earliest of them, so a lane that
+// arms a wake writes its key first and no re-arm can drop it. guard-wake-due-keys fails on a due key written in the
+// runtime but missing here, and on a lane that arms the alarm without naming one.
+export const WAKE_DUE_KEYS = [
+  'imessage_owner_inbox_due_v1', 'imessage_final_outbox_due_v1', APP_INBOX_DUE_KEY, COMMON_EXECUTION_DUE_KEY,
+  'telegram_final_outbox_due_v1', 'telegram_owner_inbox_due_v1', 'telegram_link_due_v1',
+  'browser_owner_task_due_v1', 'common_browser_due_v1', 'common_browser_lease_due_v1', WHATSAPP_PENDING_DUE_KEY,
+  'mac_results_due_v1', ALARM_RETRY_DUE_KEY,
+] as const;
+
 // Wake for a WhatsApp payload admitted but not finished. Keeps an earlier alarm; never touches the Telegram due keys.
 export async function armWhatsappPendingWake(storage: DurableObjectStorage, due: number): Promise<void> {
   const existing = await storage.getAlarm();
   await armAlarm(storage, existing === null ? due : Math.min(existing, due));
 }
 
-// One arbiter for schedule and Telegram transport. Every scheduler rearm includes
-// persisted transport due time, including an empty schedule (formerly deleteAlarm).
+// How long a failed alarm pass waits before the next attempt: the platform's own retry curve (2 s, doubling) plus a fixed
+// share of up to a quarter more, taken from the object's id so owners that fail together retry apart, capped at capMs.
+export function alarmRetryDelay(streak: number, objectId: string, capMs: number): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < objectId.length; i++) hash = Math.imul(hash ^ objectId.charCodeAt(i), 0x01000193) >>> 0;
+  return Math.min(Math.floor(2_000 * 2 ** Math.min(streak - 1, 20) * (1 + hash / 2 ** 32 / 4)), capMs);
+}
+
+type PassRearm = Readonly<{ scheduleDue: number | null; retryDelayMs: number }>;
+// The re-arms of an alarm pass in flight, keyed by its object's storage. Inside the handler the arbiter only records them,
+// and the pass applies the last one once its work completes. A delete there could cancel the platform's retry of a pass
+// that then dies, and an arm made mid-pass would outlive a later re-arm that holds the schedule.
+const passRearms = new WeakMap<DurableObjectStorage, PassRearm | null>();
+export async function alarmPass(storage: DurableObjectStorage, work: () => Promise<void>): Promise<void> {
+  passRearms.set(storage, null);
+  let last: PassRearm | null | undefined;
+  try { await work(); last = passRearms.get(storage); } finally { passRearms.delete(storage); }
+  if (last) await arbitrate(storage, last.scheduleDue, Date.now(), last.retryDelayMs, false);
+}
+
+// The one arbiter: arms the earliest of the schedule's next entry and every listed lane's wake, never sooner than the
+// retry delay. While the alarm handler has a retry pending, it owns when past-due work runs again, so a past-due wake is
+// armed no sooner than that retry. With nothing due, a re-arm outside the handler clears the alarm; a pass leaves it.
 export async function rearmSharedAlarm(storage: DurableObjectStorage, scheduleDue: number | null, now: number, retryDelayMs = 250): Promise<void> {
-  const outboxDue = (await storage.get<number | null>('telegram_final_outbox_due_v1')) ?? null;
-  const inboxDue = (await storage.get<number | null>('telegram_owner_inbox_due_v1')) ?? null;
-  const linkDue = (await storage.get<number | null>('telegram_link_due_v1')) ?? null;
-  const browserDue = (await storage.get<number | null>('browser_owner_task_due_v1')) ?? null;
-  const commonBrowserDue=(await storage.get<number|null>('common_browser_due_v1'))??null;
-  const whatsappDue = (await storage.get<number | null>(WHATSAPP_PENDING_DUE_KEY)) ?? null;
-  const commonExecutionDue = (await storage.get<number | null>(COMMON_EXECUTION_DUE_KEY)) ?? null;
-  const appDue = (await storage.get<number | null>(APP_INBOX_DUE_KEY)) ?? null;
-  // iMessage owner inbox and frozen-reply outbox (keys owned by channels/imessage/owner-inbox.ts and final-outbox.ts).
-  const imessageInboxDue = (await storage.get<number | null>('imessage_owner_inbox_due_v1')) ?? null;
-  const imessageOutboxDue = (await storage.get<number | null>('imessage_final_outbox_due_v1')) ?? null;
-  // use_mac result follow-ups (key owned by devices/mac-delivery.ts).
-  const macDue = (await storage.get<number | null>('mac_results_due_v1')) ?? null;
-  const bounds = [macDue, imessageInboxDue, imessageOutboxDue, appDue, commonExecutionDue, scheduleDue, outboxDue, inboxDue, linkDue, browserDue, commonBrowserDue, whatsappDue].filter((v): v is number => v !== null);
-  if (!bounds.length) { await storage.deleteAlarm(); return; }
-  await armAlarm(storage, Math.max(Math.min(...bounds), now + retryDelayMs));
+  if (passRearms.has(storage)) { passRearms.set(storage, { scheduleDue, retryDelayMs }); return; }
+  await arbitrate(storage, scheduleDue, now, retryDelayMs, true);
+}
+
+async function arbitrate(storage: DurableObjectStorage, scheduleDue: number | null, now: number, retryDelayMs: number, mayDelete: boolean): Promise<void> {
+  const bounds = scheduleDue === null ? [] : [scheduleDue];
+  for (const key of WAKE_DUE_KEYS) {
+    const due = (await storage.get<number | null>(key)) ?? null;
+    if (due !== null) bounds.push(due);
+  }
+  if (!bounds.length) { if (mayDelete) await storage.deleteAlarm(); return; }
+  const earliest = Math.min(...bounds), retryDue = (await storage.get<number | null>(ALARM_RETRY_DUE_KEY)) ?? null;
+  const floor = earliest <= now && retryDue !== null ? Math.max(retryDue, now + retryDelayMs) : now + retryDelayMs;
+  await armAlarm(storage, Math.max(earliest, floor));
 }
 
 // Commit transport data and its wake together. Preserve an earlier scheduled alarm.
