@@ -64,6 +64,7 @@ import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, claimStore, profile } from '../memory/claims';
 import { isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine } from './loops';
 import { armHeartbeat, HEARTBEAT_EVERY_MS, heartbeatTick, heartbeatEligible, settleHeartbeat } from './heartbeat';
+import { checkBackReply, loopCheckBackText, LOOP_CHECK_BACK_TOOLS } from './check-back';
 import { dueFailureNotices, failurePauseHolds, markFailureNoticed } from '../scheduler/failure-notice';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
@@ -1773,6 +1774,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
               && (!r.mailFollowup || (loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume !== 'low' && loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).reviewEligible(r.mailFollowup, this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')))
               && (!r.calendarPrep || await runtime.calendarPrepCurrent(r.calendarPrep))
               && (!r.scheduleNotice || failurePauseHolds(this.ctx.storage.sql, r.scheduleNotice))
+              // Cancelling a reminder deletes its note, so a check-back queued before the cancel never goes out.
+              && (!r.reminder || this.ctx.storage.sql.exec('SELECT 1 FROM reminder_notes WHERE id = ?', r.reminder.id).toArray().length > 0)
               && heartbeatEligible(r, this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC', Date.now()),
             defer: async r => {
               if(r.commonExecution&&!r.commonExecution.settled)return Date.now()+30_000;
@@ -2553,6 +2556,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (copied) log({ trace: 'memory:migration', hop: 'memory_backup', ms: 0, ok: true, detail: copied });
     const files = fileBook(storage.sql);
     const loops = loopBook(storage.sql, { newId: () => deps.newRunId().slice(0, 8), now: () => Date.now() });
+    // The loops each running check-back turn was given, by its turn id: that turn may close only these.
+    const checkBackLoops = new Map<string, ReadonlySet<string>>();
     const schedPrefs = schedulePreferences(storage.sql, loops);
     const orders = standingOrderBook(storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
     // A5: working-artifact store. Bodies ride R2 when the binding exists; a deploy missing it
@@ -2798,7 +2803,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         context.runScope?.admit();
         if (!auth || auth.do_name !== doName || !auth.capabilities.includes(input.class) || identity.get<string>('do_name') !== doName) return { accepted: false, reason: 'unavailable' };
         return this.env.DEVICE_BRIDGE_DO.get(this.env.DEVICE_BRIDGE_DO.idFromName(device.device_id)).enqueueCommand({ ...input, owner_id: auth.owner_id, device_id: device.device_id });
-      } }), ...loopHandlers(loops), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable }))], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + titles.remaining }; }), undefined,
+      } }), ...loopHandlers(loops, turnId => checkBackLoops.get(turnId ?? '') ?? null), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable }))], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + titles.remaining }; }), undefined,
       (opt) => opt ? openLoopsPrompt(loops, clock.timezone, opt.loopsRoom) : standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
@@ -2899,7 +2904,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
       };
       try {
-        const text = (await responder.remind(trace, owner, note, time)).trim() || note;
+        const text = checkBackReply(await responder.remind(trace, owner, note, time));
+        // The owner may have cancelled it while the turn ran; a silent decision ends the occurrence like a sent one.
+        if (text === null || book.note(entry.id) === null) {
+          book.fired(entry);
+          runs.finish(run.id, text === null ? 'completed' : 'stopped', text === null ? 'reminder checked; nothing to send' : 'reminder cancelled before delivery');
+          log({ trace, hop: 'reminder', ms: Date.now() - started, ok: true, detail: text === null ? 'silent' : 'cancelled' });
+          log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'reminder' });
+          return;
+        }
         if (channel === 'telegram') {
           await finalOutbox.enqueue({ id: `reminder:${entry.id}:${entry.occurrence_at}`, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text },
           receiptUrls: [...(turnReceiptUrls.get(trace) ?? [])],
@@ -2972,9 +2985,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace, hop: 'day_plan', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' });
       }
     };
-    // H1 heartbeat (HEARTBEAT_AND_CRON plan): quiet-by-default due-work scan. The send goes
-    // through the same traced Telegram API as every other owner message; the tick itself is
-    // deterministic, so a scan failure lands in the schedule retry/quarantine policy unchanged.
+    // H1 heartbeat (HEARTBEAT_AND_CRON plan): quiet-by-default due-work scan. The scan is deterministic, so a scan failure
+    // lands in the schedule retry/quarantine policy unchanged; past-due loops get a check-back turn, whose failure the tick
+    // records and the next tick retries. The send goes through the same final outbox as every other owner message.
     const beat = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`;
       const started = Date.now();
@@ -2982,6 +2995,26 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       try {
         const delivery = await heartbeatTick({
           scheduler, sql: storage.sql, loops, plans, timezone: clock.timezone, now: () => Date.now(), releaseHeldCards: schedPrefs.enabled('daily_brief'),
+          checkBack: async due => {
+            const turn = `${trace}:check-back`, at = Date.now();
+            checkBackLoops.set(turn, new Set(due.map(loop => loop.id)));
+            try {
+              return checkBackReply(await responder.prompt(turn, owner, loopCheckBackText(due), async (hop, work) => {
+                const hopAt = Date.now();
+                try {
+                  const result = await work();
+                  log({ trace, hop, ms: Date.now() - hopAt, ok: true });
+                  return result;
+                } catch (error) {
+                  log({ trace, hop, ms: Date.now() - hopAt, ok: false, error: String(error), code: turnFailureCode(error) });
+                  throw error;
+                }
+              }, LOOP_CHECK_BACK_TOOLS));
+            } catch (error) {
+              log({ trace, hop: 'check_back', ms: Date.now() - at, ok: false, error: String(error), code: turnFailureCode(error) });
+              throw error;
+            } finally { checkBackLoops.delete(turn); }
+          },
           enqueue: async (text, heartbeat) => finalOutbox.enqueue({
             id: `heartbeat:${entry.id}:${entry.occurrence_at}`, trace,
             payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),
@@ -3345,11 +3378,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (record.heartbeat.runId && runs.byId(record.heartbeat.runId)?.status === 'running') runs.finish(record.heartbeat.runId, delivered ? 'completed' : 'failed', delivered ? 'heartbeat sent' : 'heartbeat delivery unconfirmed');
       }
       if (record.reminder) {
-        if (record.reminder.schedulerRunId) scheduler.settleDelivery(record.reminder.schedulerRunId, delivered);
+        const cancelled = record.status === 'blocked' && book.note(record.reminder.id) === null;
+        if (record.reminder.schedulerRunId) {
+          if (cancelled) scheduler.settleCancelled(record.reminder.schedulerRunId);
+          else scheduler.settleDelivery(record.reminder.schedulerRunId, delivered);
+        }
         if (delivered) {
           if (record.reminder.once) this.ctx.storage.sql.exec('DELETE FROM reminder_notes WHERE id = ?', record.reminder.id);
           runs.finish(record.reminder.runId, 'completed', 'reminder sent');
-        } else runs.finish(record.reminder.runId, 'failed', 'reminder delivery unconfirmed');
+        } else if (cancelled) runs.finish(record.reminder.runId, 'stopped', 'reminder cancelled before delivery');
+        else runs.finish(record.reminder.runId, 'failed', 'reminder delivery unconfirmed');
       }
       // Never mark a queued or ambiguous turn resolved. Reaction itself is best effort.
       if (delivered && record.reaction) await api.setMessageReaction({ chat_id: record.payload.chat_id,

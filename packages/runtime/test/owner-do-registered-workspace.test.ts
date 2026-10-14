@@ -373,10 +373,10 @@ it('scheduled reminder cannot write through the registered workspace closure wit
     await schedule.schedule({ id, kind: 'reminder', occurrenceAt: now, dueAt: now, payloadRefs: { reminder_id: id } });
     model.reply = request => outputs(request).scheduled ? 'Scheduled write was refused.' : [call('workspace_write', writeArgs, 'scheduled')];
     for (let i = 0; i < 3 && !allOutputs().scheduled; i++) await h.alarm();
-    expect(allOutputs().scheduled).toMatchObject({ ok: false, code: 'transient', reason: 'handler_failed' });
-    // Legacy scheduled responder advertises the handler; the host requires live owner authority.
+    expect(allOutputs().scheduled).toMatchObject({ ok: false, code: 'not_found', reason: 'handler_unavailable' });
+    // A reminder runs a read-only check-back turn: the write handler is not even offered.
     const scheduledRequest = replies().find(request => (Array.isArray(request.input) ? JSON.stringify(request.input) : request.input).includes('Scheduled fixture attempts workspace write.'))!;
-    expect(scheduledRequest.tools?.map(tool => tool.name)).toContain('workspace_write');
+    expect(scheduledRequest.tools?.map(tool => tool.name)).not.toContain('workspace_write');
     expect(h.puts).toEqual([]); expect(h.gets).toEqual([]); expect(h.rpc.filter(name => name === 'workspace_owner_binding')).toHaveLength(mappings); expect(h.manifest()).toEqual(retained);
     const scheduledContext = h.dispatches.mock.calls.find(([c]) => c.id === 'scheduled')![1];
     expect(scheduledContext.turnId).toBeTypeOf('string'); expect(scheduledContext.turnId!.length).toBeGreaterThan(0);
