@@ -15,7 +15,9 @@ vi.mock('openai', () => ({ default: class {
   } };
 } }));
 const { createOwnerResponder, ownerToolApproval } = await import('../src/channels/owner-turn');
-const { createTelegramResponder, telegramTurnEnvelope } = await import('../src/channels/telegram-turn');
+const { surfaceResponder, surfaceTurnEnvelope } = await import('../src/channels/owner-runtime');
+const { SURFACES } = await import('../src/channels/surfaces/registry');
+const telegramTurnEnvelope = (turn: Parameters<typeof surfaceTurnEnvelope>[0], surface: 'telegram' | 'whatsapp' = 'telegram') => surfaceTurnEnvelope(turn, SURFACES[surface].descriptor.presentation);
 const time = <T>(_hop: string, work: () => Promise<T>) => work();
 
 describe('channel-neutral owner conversation seam', () => {
@@ -34,9 +36,7 @@ describe('channel-neutral owner conversation seam', () => {
   });
   it('WhatsApp compatibility adapter no longer labels persisted entries Telegram', async () => {
     const entries: ConversationEntry[] = [];
-    const args: Parameters<typeof createTelegramResponder> = ['fixture-key', { load: async () => ({ entries: [], leafId: null }), save: async rows => { entries.push(...rows); } }];
-    args[20] = 'whatsapp';
-    const responder = createTelegramResponder(...args);
+    const responder = surfaceResponder(createOwnerResponder('fixture-key', { load: async () => ({ entries: [], leafId: null }), save: async rows => { entries.push(...rows); } }), SURFACES.whatsapp.descriptor.presentation);
     expect(await responder.respond(ownerTyped({ updateId: 9000000000001, messageId: null, senderId: 777, chatId: 777, sentAt: null, text: 'hello' }), time)).toBe('pong');
     expect(entries[0]).toMatchObject({ id: 'whatsapp-9000000000001', chatId: 'whatsapp-777', surface: 'whatsapp' });
   });

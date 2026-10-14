@@ -10,8 +10,8 @@ import { ensureSchema } from '../src/tracer/schema';
 // An app reply carries the turn's effect receipts as a typed part, and its text still ends with the receipt line: a build
 // without the part shows the line in the text, a build with the part hides that exact line.
 const QUIET = { quiet_start: '21:00', quiet_end: '07:00', volume: 'normal' };
-vi.mock('../src/channels/telegram-turn', async load => {
-  const original = await load<typeof import('../src/channels/telegram-turn')>();
+vi.mock('../src/channels/owner-turn', async load => {
+  const original = await load<typeof import('../src/channels/owner-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
     const done = (text: string, tool_calls?: Array<{ call_id: string; name: string; arguments: string }>) => ({ ok: true as const, data: { model: request.model, text, ...(tool_calls ? { tool_calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
     if (request.response_format) return done(request.response_format.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}');
@@ -19,7 +19,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     if (asked.includes('quiet hours') && !request.tool_turns?.length) return done('', [{ call_id: 'quiet', name: 'set_proactivity', arguments: JSON.stringify(QUIET) }]);
     return done('Done.');
   } };
-  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
+  return { ...original, createOwnerResponder: (...args: Parameters<typeof original.createOwnerResponder>) => { args[10] = gateway; return original.createOwnerResponder(...args); } };
 });
 const { OwnerDO } = await import('../src/channels/owner-do');
 

@@ -1313,7 +1313,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   if (purge && purge.texts.length > 0) {
     if (onPurged === undefined) {
       // No KV consumer: SQL verification is the whole settlement, so settle now. A caller
-      // WITH a KV store settles itself once its redaction verifies (see telegram-turn).
+      // WITH a KV store settles itself once its redaction verifies (see owner-turn).
       if (purge.ready) store.settle(forgetIds, purgeTopics);
     } else {
       onPurged(purge.texts, purge.ready ? forgetIds : [], purge.ready ? purgeTopics : []);

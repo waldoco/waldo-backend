@@ -15,14 +15,16 @@ vi.mock('openai', () => ({
   },
 }));
 
-const { createTelegramResponder } = await import('../src/channels/telegram-turn');
+const { createOwnerResponder } = await import('../src/channels/owner-turn');
+const { surfaceResponder } = await import('../src/channels/owner-runtime');
+const { telegramSurface } = await import('../src/channels/surfaces/telegram');
 const { HOOK_REGISTRY } = await import('../src/hooks/registry');
 
 // Layer: SOURCE (mocked provider). Dose wording in a model output is no longer halted by a regex gate;
 // the model-judged messaging rule ("never give medication, supplement or dose instructions") stays in the prompt.
 describe('regex medical gate removed', () => {
   it('a model output with dose wording passes through in one call, with no redirect retry', async () => {
-    const responder = createTelegramResponder('test-key');
+    const responder = surfaceResponder(createOwnerResponder('test-key'), telegramSurface.presentation);
     const text = await responder.respond(ownerTyped({ updateId: 1, messageId: null, senderId: 7, chatId: 7, sentAt: null, text: 'what is in my notes?' }), (_name, run) => run());
     expect(text).toBe(DOSE_TEXT);
     expect(requests).toHaveLength(1);

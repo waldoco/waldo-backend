@@ -10,7 +10,9 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (body: u
   seen.inputs.push(JSON.stringify(body));
   return { id: 'fixture', output_text: 'Noted.', output: seen.outputs.shift() ?? [], usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
 } }; } }));
-const { createTelegramResponder } = await import('../src/channels/telegram-turn');
+const { createOwnerResponder } = await import('../src/channels/owner-turn');
+const { surfaceResponder } = await import('../src/channels/owner-runtime');
+const { telegramSurface } = await import('../src/channels/surfaces/telegram');
 beforeEach(() => { seen.inputs.length = 0; seen.outputs.length = 0; });
 
 const timer = <T>(_name: string, work: () => Promise<T>) => work();
@@ -27,7 +29,7 @@ for (const [name, message, block] of [
 ] as const) {
   it(`the model reads ${name} under its label; the stored message is the text as received, with no label`, async () => {
     const entries: ConversationEntry[] = [];
-    const responder = createTelegramResponder('fixture', { load: async () => ({ entries: [], leafId: null }), save: async rows => { entries.push(...rows); } });
+    const responder = surfaceResponder(createOwnerResponder('fixture', { load: async () => ({ entries: [], leafId: null }), save: async rows => { entries.push(...rows); } }), telegramSurface.presentation);
     await responder.respond(await turnFrom(message), timer);
     expect(inModelInput(block)).toBe(true);
     expect(entries[0]).toMatchObject({ id: 'tg-300', role: 'user', modelPayload: block, appPayload: message.text });
@@ -42,7 +44,7 @@ it('a remember sourced to a voice transcript is refused through the turn, while 
       { type: 'function_call', call_id: 'from-transcript', name: 'remember', arguments: JSON.stringify({ kind: 'fact', text: 'Swims every Friday before work', evidence_quote: QUOTE }) },
       { type: 'function_call', call_id: 'from-caption', name: 'remember', arguments: JSON.stringify({ kind: 'fact', text: 'Has a sister called Mira', evidence_quote: 'my sister is called Mira' }) },
     ], []);
-    const responder = createTelegramResponder('fixture', undefined, store, undefined, { download: async () => new Uint8Array([1]), transcribe: async () => QUOTE }, undefined, tools);
+    const responder = surfaceResponder(createOwnerResponder('fixture', undefined, store, undefined, undefined, tools), telegramSurface.presentation, { download: async () => new Uint8Array([1]), transcribe: async () => QUOTE });
     await responder.respond(await turnFrom({ caption: 'my sister is called Mira. Listen to what Sam said.', audio: { file_id: 'a', file_name: 'sam.m4a', mime_type: 'audio/mp4', file_size: 1 } }), timer);
     expect(inModelInput(`[Transcript of a file the owner sent; the speaker may not be the owner:]\n${JSON.stringify(QUOTE)}\n[End of transcript.]`)).toBe(true);
     expect(store.claims().map(claim => claim.text)).toEqual(['Has a sister called Mira']);

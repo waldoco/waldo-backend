@@ -3,7 +3,9 @@
 import { DatabaseSync } from 'node:sqlite';
 import { writeFileSync } from 'node:fs';
 import { TOOL_PERMISSIONS, modelNameSchema, triggerTypeSchema, webSearchArgsSchema, WALDO_CHAT_MODEL, type ModelName, type SetReminderArgs, type WebSearchArgs } from '@waldo/contracts';
-import { createTelegramResponder } from '../src/channels/telegram-turn';
+import { createOwnerResponder } from '../src/channels/owner-turn';
+import { surfaceResponder } from '../src/channels/owner-runtime';
+import { telegramSurface } from '../src/channels/surfaces/telegram';
 import { inboundTurn, ownerWords } from '../src/channels/owner-inbound-turn';
 import { reminderHandlers, type ReminderBook } from '../src/channels/reminders';
 import { loopBook, loopHandlers } from '../src/channels/loops';
@@ -88,7 +90,7 @@ const runCase = async (item: EvalCase): Promise<Record_> => {
     handle: async (_args: WebSearchArgs) => ({ ok: true as const, data: { results: WEB }, source_taint: 'external' as const }),
   };
   const handlers = [...reminderHandlers(reminders), ...googleHandlers(google, { propose: async () => 'proposal:1', proposeSendEmail: async () => 'proposal:2', record: () => undefined }, clock), ...loopHandlers(loops), web, callMcpToolHandler(FIXTURE_MCP_SERVERS)];
-  const responder = createTelegramResponder(key, undefined, memory, log, {}, clock, handlers as never, model);
+  const responder = surfaceResponder(createOwnerResponder(key, undefined, memory, log, clock, handlers as never, model), telegramSurface.presentation);
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
   const replies: string[] = [];
   const started = Date.now();

@@ -2,7 +2,10 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { createTelegramCaller, createTelegramOwnerApi } from '../src/channels/telegram-api';
 import { TelegramOwnerListener } from '../src/channels/telegram-listener';
 import { TelegramPollingAdapter } from '../src/channels/telegram-polling';
-import { createTelegramResponder } from '../src/channels/telegram-turn';
+import { createOwnerResponder } from '../src/channels/owner-turn';
+import { surfaceResponder } from '../src/channels/owner-runtime';
+import { TELEGRAM_REACTIONS } from '../src/channels/reactions';
+import { telegramSurface } from '../src/channels/surfaces/telegram';
 
 const ownerTelegramId = Number(process.env.WALDO_OWNER_TELEGRAM_ID ?? '0');
 const offsetFile = process.env.WALDO_TELEGRAM_OFFSET_FILE ?? '/tmp/waldo-telegram-offset';
@@ -12,7 +15,7 @@ const log = (event: object) => console.log(JSON.stringify({ ts: new Date().toISO
 const listener = new TelegramOwnerListener({
   ownerTelegramId,
   api: createTelegramOwnerApi(telegram),
-  ...createTelegramResponder(process.env.OPENAI_API_KEY ?? ''),
+  ...surfaceResponder(createOwnerResponder(process.env.OPENAI_API_KEY ?? '', undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, TELEGRAM_REACTIONS), telegramSurface.presentation),
   log,
   saveOffset: (offset) => writeFile(offsetFile, String(offset)),
 });

@@ -36,8 +36,8 @@ vi.mock('../src/connectors/google', async load => {
     calendarPage: async () => ({ events: fixture.event ? [fixture.event] : [], next_page_token: null, fetched_count: 1, account, observed_at: new Date().toISOString() }),
   }) };
 });
-vi.mock('../src/channels/telegram-turn', async load => {
-  const original = await load<typeof import('../src/channels/telegram-turn')>();
+vi.mock('../src/channels/owner-turn', async load => {
+  const original = await load<typeof import('../src/channels/owner-turn')>();
   const gateway: LLMGatewayAdapter = { async complete(request) {
     const content = request.request.messages.at(-1)?.content ?? '';
     fixture.requests.push(String(content));
@@ -51,7 +51,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
       : content.includes('[Standing order due now') ? ORDER_TEXT : 'SKIP';
     return { ok: true, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
-  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
+  return { ...original, createOwnerResponder: (...args: Parameters<typeof original.createOwnerResponder>) => { args[10] = gateway; return original.createOwnerResponder(...args); } };
 });
 const { OwnerDO } = await import('../src/channels/owner-do');
 

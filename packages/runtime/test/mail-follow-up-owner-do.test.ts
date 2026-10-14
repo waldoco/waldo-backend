@@ -15,8 +15,8 @@ vi.mock('../src/channels/telegram-api', async load => {
   const original = await load<typeof import('../src/channels/telegram-api')>();
   return { ...original, createTelegramCaller: () => async (method: string, payload: { chat_id?: number; text?: string }) => { if (method === 'sendMessage') { fixture.sent.push(payload.text ?? ''); return { message_id: fixture.sent.length, chat: { id: payload.chat_id } }; } return true; } };
 });
-vi.mock('../src/channels/telegram-turn', async load => {
-  const original = await load<typeof import('../src/channels/telegram-turn')>();
+vi.mock('../src/channels/owner-turn', async load => {
+  const original = await load<typeof import('../src/channels/owner-turn')>();
   const gateway: LLMGatewayAdapter = { async complete(request) {
     const content = request.request.messages.at(-1)?.content ?? '';
     // The owner's own words: earlier tool results ride after them in the owner turn as external data.
@@ -29,7 +29,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     const text = request.request.response_format?.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : calls.length ? '' : writer ? '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : content.includes('[Mail follow-up check') ? 'Have you handled the deck review? Pat requested it by 10 UTC.' : 'SKIP';
     return { ok: true, data: { model: request.request.model, text, ...(calls.length ? { tool_calls: calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
-  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
+  return { ...original, createOwnerResponder: (...args: Parameters<typeof original.createOwnerResponder>) => { args[10] = gateway; return original.createOwnerResponder(...args); } };
 });
 const { OwnerDO } = await import('../src/channels/owner-do');
 it.each(['normal', 'forget-coverage'])('actual default owner mail followup: %s', async mode => {

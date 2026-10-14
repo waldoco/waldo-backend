@@ -8,8 +8,8 @@ import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 
 const gate = vi.hoisted(() => ({ release: null as null | (() => void), held: 0, asked: [] as string[], signal: null as AbortSignal | null }));
-vi.mock('../src/channels/telegram-turn', async load => {
-  const original = await load<typeof import('../src/channels/telegram-turn')>();
+vi.mock('../src/channels/owner-turn', async load => {
+  const original = await load<typeof import('../src/channels/owner-turn')>();
   const gateway = { async complete({ request, runScope }: LLMGatewayRequest) {
     const done = (text: string) => ({ ok: true as const, data: { model: request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
     if (request.response_format) return done(request.response_format.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[]}');
@@ -18,7 +18,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     if (asked.includes('slowly')) { gate.held += 1; gate.signal = runScope?.signal ?? null; await new Promise<void>(resolve => { gate.release = resolve; }); }
     return done('Done.');
   } };
-  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
+  return { ...original, createOwnerResponder: (...args: Parameters<typeof original.createOwnerResponder>) => { args[10] = gateway; return original.createOwnerResponder(...args); } };
 });
 const { OwnerDO } = await import('../src/channels/owner-do');
 

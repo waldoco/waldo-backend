@@ -4,7 +4,8 @@ import { ownerTurnAttachments, type OwnerTurnEnvelope, type ReplyContext } from 
 import { ownerWords } from '../owner-inbound-turn';
 import type { RunEffectScope } from '../run-effect-scope';
 import { splitTelegramText } from '../telegram-api';
-import type { WhatsAppCall, WaIngressMessage } from '../whatsapp-api';
+import { createWhatsAppMediaDownloader, whatsappTelegramShim, type WhatsAppCall, type WaIngressMessage } from '../whatsapp-api';
+import type { SurfaceAdapter, SurfaceDescriptor, SurfaceHost } from '../owner-runtime';
 
 // Pure transport adapter, not an owner-authentication or approval boundary. Core must
 // admit the sender/occurrence first and supply its own RunEffectScope and resolved media.
@@ -134,5 +135,35 @@ export const createWhatsAppSurfaceAdapter = (options: Readonly<{ call: WhatsAppC
       }
       return receipts;
     },
+  };
+};
+
+// The owner's WhatsApp chat as an owner-runtime surface: identity is the E.164-digit subject bound at ingress, sends go
+// through the Telegram-shaped shim, and approval cards arrive as text callbacks.
+export const whatsappSurface: SurfaceDescriptor = {
+  name: 'whatsapp',
+  presentation: { surface: 'whatsapp', delivery: { text: true, approval: 'text_callback', reactions: false, attachments: false }, commands: [] },
+  native: false,
+  offsetKey: 'wa_offset',
+  healthSource: 'whatsapp',
+  transport: ['sendMessage'],
+  presence: 'whatsapp',
+  sendsOwn: true,
+  sendTarget: true,
+  deskSurface: 'whatsapp',
+  // A directory-backed DO with no whatsapp_subject resolves owner 0, and every send drops at the gate.
+  owner: (identity) => Number(identity.get<string>('whatsapp_subject') ?? '0') || 0,
+};
+
+export const surfaceAdapter = (host: SurfaceHost): SurfaceAdapter => {
+  const { env, storage } = host;
+  return {
+    ...whatsappSurface,
+    assertConfigured: () => { if (!env.WHATSAPP_ACCESS_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) throw new Error('whatsapp owner runtime is unconfigured'); },
+    caller: () => whatsappTelegramShim(env.WHATSAPP_ACCESS_TOKEN!, env.WHATSAPP_PHONE_NUMBER_ID!, storage.kv.get<string>('whatsapp_subject') ?? ''),
+    traceOccurrences: () => [],
+    download: createWhatsAppMediaDownloader(env.WHATSAPP_ACCESS_TOKEN!),
+    consoleLink: () => ({ unsupported: 'surface_unsupported' }),
+    context: ({ ownerProfile }) => ({ jobHost: host.jobHostFor((_admission, surfaceChain) => surfaceChain), ownerProfile }),
   };
 };

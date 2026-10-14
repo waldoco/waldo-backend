@@ -14,8 +14,8 @@ const DAY_BRIEF = CURATED_SKILLS.find(skill => skill.name === 'day-brief')!;
 const CATALOG_LINE = 'Reviewed skill catalog (metadata only)';
 const REPLY = 'Prepared with the day brief.';
 const model = vi.hoisted(() => ({ systems: [] as string[], step: 0 }));
-vi.mock('../src/channels/telegram-turn', async load => {
-  const original = await load<typeof import('../src/channels/telegram-turn')>();
+vi.mock('../src/channels/owner-turn', async load => {
+  const original = await load<typeof import('../src/channels/owner-turn')>();
   // Scripted model: the first reply loads day-brief; the second answers. Memory and other structured calls get empty JSON.
   const gateway = { async complete({ request }: LLMGatewayRequest) {
     const done = (text: string, tool_calls?: Array<{ call_id: string; name: string; arguments: string }>) => ({ ok: true as const, data: { model: request.model, text, ...(tool_calls ? { tool_calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
@@ -23,7 +23,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     model.systems.push(request.system ?? '');
     return model.step++ === 0 ? done('', [{ call_id: 'load', name: 'skills_load', arguments: JSON.stringify({ name: DAY_BRIEF.name, version: DAY_BRIEF.version }) }]) : done(REPLY);
   } };
-  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
+  return { ...original, createOwnerResponder: (...args: Parameters<typeof original.createOwnerResponder>) => { args[10] = gateway; return original.createOwnerResponder(...args); } };
 });
 // The Telegram test below sends through the bot API; nothing leaves the fixture.
 vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(), createTelegramCaller: () => async (method: string) => method === 'getMe' ? { username: 'fixture_bot' } : method === 'sendMessage' ? { message_id: 1 } : true }));

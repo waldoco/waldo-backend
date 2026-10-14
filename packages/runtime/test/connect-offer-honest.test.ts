@@ -17,8 +17,8 @@ vi.mock('../src/channels/telegram-api', async load => {
     return payload.reply_markup !== undefined && !telegram.deliver ? undefined : { message_id: telegram.sent.length, chat: { id: payload.chat_id } };
   } };
 });
-vi.mock('../src/channels/telegram-turn', async load => {
-  const original = await load<typeof import('../src/channels/telegram-turn')>();
+vi.mock('../src/channels/owner-turn', async load => {
+  const original = await load<typeof import('../src/channels/owner-turn')>();
   const gateway = { async complete(request: import('../src/llm/provider').LLMGatewayRequest) {
     model.requests.push(request.request as never);
     const writer = request.request.response_format !== undefined;
@@ -30,7 +30,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     const call = asks ? { call_id: 'connect-1', name: 'connect_service', arguments: JSON.stringify({ service: 'google', feature: 'calendar' }) } : reads ? { call_id: 'read-1', name: 'query_calendar', arguments: '{}' } : null;
     return { ok: true as const, data: { model: request.request.model, text, ...(call ? { tool_calls: [call] } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
-  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
+  return { ...original, createOwnerResponder: (...args: Parameters<typeof original.createOwnerResponder>) => { args[10] = gateway; return original.createOwnerResponder(...args); } };
 });
 // A calendar read on a dead grant: the client reports invalid_grant to the host, as the token refresh does, then fails 401.
 vi.mock('../src/connectors/google', async load => {

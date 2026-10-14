@@ -6,7 +6,7 @@ import { IMessageFinalOutbox } from './imessage/final-outbox';
 import { redactIMessageEntries } from './imessage/forget';
 import { CONSOLE_IMESSAGE_PATH, iMessageConsoleAction, iMessageConsolePage, isIMessageConsoleAction } from './imessage/console';
 import { IMessageOwnerInbox, type IMessageInboxRecord } from './imessage/owner-inbox';
-import { admitIMessageHandoff, currentIMessageAuthority, drainIMessageOutbox, iMessageOwnerContext, type OwnerHost } from './imessage/owner-runtime';
+import { admitIMessageHandoff, currentIMessageAuthority, drainIMessageOutbox, type OwnerHost } from './imessage/owner-runtime';
 import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-session-authority';
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
 import { calendarDemand, demandCode, type DemandAnswer, type DemandRequest } from '../health/calendar-demand';
@@ -18,7 +18,6 @@ import { createOwnerTurnContext, ownerChainRef, surfaceChatRef, type OwnerContex
 import { canonicalHistoryFault, canonicalOwnerConversationStore, shapeFault, skippedRowLines, type CanonicalSkipped } from '../conversation/canonical-owner-store';
 import {useMacHandler} from '../tools/live/use-mac';
 import {MAC_FOLLOWUP_RETRY_MS,MAC_FOLLOWUP_UNDELIVERABLE_RETRY_MS,macDelivery,macInbox,macResultNotice,type MacDelivery} from '../devices/mac-delivery';
-import { ownerEffectLedger } from './owner-effect-ledger';
 import {commonRuntimeReadiness} from './common-runtime-readiness';
 import { CONSOLE_DEVICES_PATH } from '../devices/contract';
 import { deviceDirectory } from '../devices/device-directory';
@@ -30,7 +29,7 @@ import {CONTROLS_PATH,readControlsQuery,projectControls} from './dashboard-contr
 import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,googleConnectReceipt} from './dashboard-control-actions';
 import { createScopedCuratedSkillCapability, type OwnerSkillCapability } from '../skills/curated-host';
 import { seededSkillCustody } from '../skills/curated-owner';
-import { OwnerAdmissionError, ownerMessageAdmission, type OwnerMessageAdmission } from '../identity/owner-message-admission';
+import { OwnerAdmissionError, type OwnerMessageAdmission } from '../identity/owner-message-admission';
 import { MEMORY_GRAPH_PATH, readMemoryGraph } from './memory-graph';
 import { pageMemoryGraph } from './memory-graph-page';
 import {TelegramLinkInbox,LINK_MODE,type LinkBinding} from './telegram-link-inbox';
@@ -39,8 +38,7 @@ import {ownerDirectory} from '../identity/owner-directory';
 import { ownerRuntimeAuthority, type OwnerRuntimeAuthority } from '../identity/owner-runtime-authority';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { THREAD_TITLE_BUDGET_MS } from '../llm/time-budget';
-import { receiptUrl } from '../conversation/artifact-link-guard';
-import { TelegramOwnerInbox, OWNER_INBOX_KEY, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
+import { TelegramOwnerInbox, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
 import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armWhatsappPendingWake, heldLane, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
 import { admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
@@ -49,8 +47,7 @@ import { computeAdmission } from '../delivery-gate/gate';
 import { DeliveryGateStore } from '../delivery-gate/store';
 import { ownerTurnTrace, type OwnerTurnEnvelope } from './owner-turn-envelope';
 import { inboundTurn, ownerWords, renderForModel } from './owner-inbound-turn';
-import type { OwnerContextIntegration, OwnerSkillHost } from './owner-turn';
-import { enrichOwnerTrace, identityForStorage, readOwnerTraceHeader } from '../observability/owner-trace-identity';
+import { identityForStorage, readOwnerTraceHeader } from '../observability/owner-trace-identity';
 import { adminRead, adminAction } from './dashboard-admin';
 import { pinProxyIntentRoute } from '../connectors/proxy-intent-route';
 import { ProxyIntentError, type ProxyIntent } from '../connectors/proxy-intent';
@@ -66,24 +63,23 @@ import { isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proacti
 import { armHeartbeat, HEARTBEAT_EVERY_MS, heartbeatTick, heartbeatEligible, settleHeartbeat } from './heartbeat';
 import { dueFailureNotices, failurePauseHolds, markFailureNoticed } from '../scheduler/failure-notice';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
-import { fileBook, fileResponse } from './files';
+import { fileResponse } from './files';
 import { consoleAuth, presenceRecheck, type OwnerSettings } from '../identity/console-auth';
 import { proactiveEnabled } from './proactive-gate';
 import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
 import { CONSOLE_INVITES_PATH, renderMemberInvites } from './console-invites';
 import { newInviteCode, inviteLink } from '../identity/invite-code';
 import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, consoleActionTraceDetail, consoleMayApprove, consoleSessionRows, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, CONSOLE_RUNS_PATH, CONSOLE_PAGES, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
-import { consoleLinkSender, consoleLinkText, maskCredentialReply, mintConsoleLink, recordCredentialMessage, telegramConsoleRoute, type ConsoleLinkRoute } from './console-link';
-import { iMessageConsoleRoute } from './imessage/console-link';
+import { consoleLinkSender, consoleLinkText, maskCredentialReply, mintConsoleLink, recordCredentialMessage } from './console-link';
 import { consoleLinkHandler } from '../tools/live/console-link';
 import { HARNESS_MESSAGE_LIMIT, heldRowShapes } from '../memory/held-rows';
-import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
+import { FIRE_TARGETS, parseHarnessCommand, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
-import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
+import { resolveCaptureText } from '../observability/trace-privacy';
 import { Scheduler } from '../scheduler/multiplexer';
 import { productionDeps } from '../seams/deps';
-import { redactConversationEntries, durableConversationStore, scrubConversationHistory } from './conversation-store';
-import { egressGuardedCaller, redactSecretUrls } from './egress-guard';
+import { redactConversationEntries, scrubConversationHistory } from './conversation-store';
+import { redactSecretUrls } from './egress-guard';
 import { parseEgressAllowlistEnv } from '../hooks/egress-policy';
 import { toolOutputLedger , redactToolOutputLedger } from '../conversation/tool-output-ledger';
 import { armNightly, backfillEpisodes, consolidationDay, consolidationSides, episodeIndex, indexedConversationStore, NIGHTLY_BACKLOG_DAYS, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, NIGHTLY_CHUNKS, NIGHTLY_THROUGH_KEY, transcript } from './episodes';
@@ -91,7 +87,7 @@ import { nightlyDiagnostic } from './nightly-diagnostic';
 import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
 import { schedulePreferences, schedulePreferencesLine, schedulePreferenceHandlers, applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePreferences, replanDayCards, type ScheduleHold, type ScheduleKind } from './schedule-preferences';
 import { armBriefSweep, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT } from './event-briefs';
-import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardDeliveries, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, recordCardDelivery } from './day-cards';
+import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardDeliveries, cardFor, isClock, composeDayCard, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, recordCardDelivery } from './day-cards';
 import { DAY_CARDS, dayPlanInput } from '../prompt/day-cards';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview } from './dashboard-overview';
 import { SKIP_UPDATE, updateCardPrompt } from '../prompt/update-cards';
@@ -110,15 +106,14 @@ import { COMMON_BROWSER_DUE } from './common-browser-host';
 import { browserPublicReadConfiguration } from './browser-public-read-configuration';
 import { browseActHandler, browsePageHandler, executeBrowserSubmit } from '../tools/live/browser';
 import { webSearchHandler } from '../tools/live/web-search';
-import { healthLogBook, healthLogHandlers, healthSection } from './health-log';
-import { healthContextBook } from './health-context';
+import { healthLogHandlers, healthSection } from './health-log';
 import { localIso, localToEpoch, reminderBook, reminderHandlers, unreadableRemindersLine } from './reminders';
-import { standingOrderBook, standingOrderFireText, standingOrderHandlers, standingOrdersPrompt } from './standing-orders';
+import { standingOrderFireText, standingOrderHandlers, standingOrdersPrompt } from './standing-orders';
 import { artifactDelivery, artifactPage, artifactReadAdmission, ARTIFACT_PATH } from './artifact-delivery';
-import { artifactExports, exportArtifactHandler, r2ArtifactBinaries } from './artifact-exports';
+import { artifactExports, r2ArtifactBinaries } from './artifact-exports';
 import { ownerFilePrefixes, purgeOwnerFiles } from './owner-files-purge';
-import { ARTIFACT_EXPORT_PATH, artifactExportDownload, exportDownloadUrl } from './artifact-export-download';
-import { artifactBook, artifactHandlers, inMemoryArtifactBodies, r2ArtifactBodies } from './artifacts';
+import { ARTIFACT_EXPORT_PATH, artifactExportDownload } from './artifact-export-download';
+import { artifactBook, artifactHandlers, r2ArtifactBodies } from './artifacts';
 import { runBook } from './background-runs';
 import { exchangeGoogleCode, googleAccessToken, googleClient, googleHas, sha256Hex, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleFeature, type GoogleProfile, type GoogleTokens } from '../connectors/google';
 import { finishConsent, startConsent, type ConsentCallback, type ConsentFlow } from '../connectors/google-consent';
@@ -131,28 +126,30 @@ import { googleNameLine } from '../prompt/messaging-behavior';
 import { googleCircuit } from '../connectors/google-circuit';
 import { confirmGoogleReadback, GoogleReadbackError, readbackFeature, reauthNoticeTransition } from '../connectors/google-reconnect';
 import { connectServiceHandler, googleHandlers } from '../tools/live/google';
-import { getHealthHandler, healthReadBook } from '../tools/live/health';
+import { getHealthHandler } from '../tools/live/health';
 import { appApprovalParts, approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { googleTaskApprovals } from './google-task-approvals';
 import { googleTaskHandlers } from '../tools/live/tasks';
 import { approvalHandlers } from '../tools/live/raise-approval';
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
-import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi } from './telegram-api';
+import { createTelegramCaller, createTelegramOwnerApi } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
 import { APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_THREADS_PATH, APP_UPDATE_BASE, appSubjectFor, appTranscriptPage, ownerPrincipalRef, parseAppSend } from './app-api';
 import { appThreadsRequest, askThreadTitle, nameThread, recallReach, redactThreadTitles, threadChainRef, threadOfChain, threadRecord, threadRowsOfChain, threadRowsPrefix, touchThread, type AppThreadsHost } from './app-threads';
 import { stableJson } from '../context-composer/canonical';
-import { APP_CONNECT_GUIDANCE, appApprovalLink, appCaller } from './surfaces/app';
+import { appApprovalLink } from './surfaces/app';
 import { appApprovalsRequest } from './app-approvals';
-import { WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
+import { WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, whatsappIngressUpdates } from './whatsapp-api';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
 import { sendMessageHandler } from '../tools/live/messaging';
-import { createTelegramFileDownloader } from './telegram-media';
-import { selectTranscriber } from '../llm/transcriber';
 import { TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './telegram-listener';
 import { isForward, TelegramPollingAdapter } from './telegram-polling';
-import { createTelegramResponder } from './telegram-turn';
+import { createOwnerResponder } from './owner-turn';
+import { createSurfaceRuntime, ownerCore, surfaceResponder, type ChannelKind, type OwnerCore, type SurfaceHost } from './owner-runtime';
+import { isChannelKind, SURFACES } from './surfaces/registry';
+import { resolveOwnerTelegramId } from './surfaces/telegram';
+import { TELEGRAM_REACTIONS } from './reactions';
 import type { OwnerJobHost } from './owner-turn';
 import type { TurnControl } from './turn-control';
 import { turnFailureCode } from './turn-failure-code';
@@ -189,7 +186,7 @@ type OwnerRuntime = Readonly<{
   runs: ReturnType<typeof runBook>;
   fireOrder(entry: ScheduleEntry): Promise<void>;
   scheduler: Scheduler;
-  macFollowup: ReturnType<typeof createTelegramResponder>['prompt'];
+  macFollowup: ReturnType<typeof surfaceResponder>['prompt'];
   finalOutbox: TelegramFinalOutbox;
   settleFinal(record: FinalRecord): Promise<void>;
   fire(entry: ScheduleEntry): Promise<void | 'delivery_pending'>;
@@ -238,29 +235,16 @@ const validZone = (zone: string): boolean => {
   }
 };
 
-// A directory-backed DO whose owner has not linked Telegram yet resolves to 0 (not the deploy
-// owner's id): every send gate drops on 0, so one owner's messages can never land in another's chat.
-// The env fallback exists only for legacy single-owner deploys with no Supabase directory.
-export const resolveOwnerTelegramId = (
-  linkedSubject: string | undefined,
-  env: Readonly<{ WALDO_OWNER_TELEGRAM_ID?: string }>,
-  directoryBacked: boolean,
-): number => {
-  if (linkedSubject) return Number(linkedSubject);
-  if (directoryBacked) return 0;
-  return env.WALDO_OWNER_TELEGRAM_ID ? Number(env.WALDO_OWNER_TELEGRAM_ID) : 0;
-};
+export { resolveOwnerTelegramId };
 
-type ChannelKind = 'telegram' | 'whatsapp' | 'app' | 'imessage';
 // A failed app read answers a generic 503. The log names only which step failed, or the canonical-history fault code, never
 // the error text: a canonical-history fault message can name nothing, but other errors may carry content.
 const logAppReadFailure = (hop: 'app_history_read' | 'app_controls_read', step: string, error: unknown): void => {
   const code = error instanceof ClosedRunError ? `${step}_closed` : canonicalHistoryFault(error) ?? step;
   console.error(JSON.stringify({ hop, ok: false, code }));
 };
-const offsetKeyOf = (channel: ChannelKind) => channel === 'whatsapp' ? 'wa_offset' : channel === 'app' ? 'app_offset' : channel === 'imessage' ? 'imessage_offset' : 'offset';
-// Channels whose replies never use Telegram transport, commands or reactions.
-const nativeSurface = (channel: ChannelKind) => channel === 'app' || channel === 'imessage';
+const offsetKeyOf = (channel: ChannelKind) => SURFACES[channel].descriptor.offsetKey;
+const nativeSurface = (channel: ChannelKind) => SURFACES[channel].descriptor.native;
 const WHATSAPP_PENDING_PREFIX = 'wa_pending:';
 // How often an unfinished WhatsApp payload is looked at again. A cadence, not a limit on how long a turn may run.
 const WHATSAPP_PENDING_CHECK_MS = 60_000;
@@ -298,6 +282,23 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private runtimes: Partial<Record<ChannelKind, OwnerRuntime>> = {};
   // The owner id each cached runtime was built for. The binding can change under a live cache (console-first signup builds owner 0, the Telegram link binds later).
   private runtimeOwners: Partial<Record<ChannelKind, number>> = {};
+  // The surface-independent half every cached runtime was built on: one per object, cleared with them.
+  private core: OwnerCore | null = null;
+  // An identity or time-zone change rebuilds the core and every surface's runtime on next use; a turn already running keeps its own objects.
+  private resetRuntimes(): void { this.runtimes = {}; this.core = null; }
+  private surfaces?: SurfaceHost;
+  private get surfaceHost(): SurfaceHost {
+    return this.surfaces ??= {
+      env: this.env, storage: this.ctx.storage, doId: this.ctx.id.toString(),
+      currentRunRef: () => this.activeApp?.id ?? this.activeScope?.runId,
+      waitUntil: work => this.ctx.waitUntil(work), serial: work => this.serial(work),
+      activeInbox: () => this.activeInbox, activeScope: () => this.activeScope, activeApp: () => this.activeApp, activeIMessage: () => this.activeIMessage,
+      scheduledAppDelivery: () => this.scheduledAppDelivery, imessageHost: () => this.imessageHost, appInbox: () => this.appInbox,
+      appContext: (...context) => this.appContext(...context), logSkippedLoad: this.logSkippedLoad, jobHostFor: chain => this.jobHostFor(chain),
+      closeRunAtomic: (run, reason, awaitingDelivery) => this.closeRunAtomic(run, reason, awaitingDelivery),
+      browserTrial: this.browserTrial, browserAttachments: scope => this.ownerBrowser.attachments(scope),
+    };
+  }
   private queue: Promise<unknown> = Promise.resolve();
   private readonly inbox = new TelegramOwnerInbox(this.ctx.storage, persistInboxWake);
   private readonly liveAttempts = new Set<string>();
@@ -613,7 +614,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const outcome = await admitIMessageHandoff(this.imessageHost, input);
     if (outcome === 'admitted') {
       const subject = String(appSubjectFor(input.ownerDoName));
-      if (this.ctx.storage.kv.get<string>('imessage_subject') !== subject) { this.ctx.storage.kv.put('imessage_subject', subject); this.runtimes = {}; }
+      if (this.ctx.storage.kv.get<string>('imessage_subject') !== subject) { this.ctx.storage.kv.put('imessage_subject', subject); this.resetRuntimes(); }
       this.ctx.waitUntil(this.serial(() => this.drainIMessage()).catch(() => { console.error('imessage inbox drain deferred'); }));
     }
     return outcome;
@@ -1073,7 +1074,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return Response.json({accepted:true,message_id:result.record.id,state:result.record.state},{status:202,headers:{'cache-control':'no-store'}});
   }
   private bindAppSubject(name: string): void {
-    const subject=appSubjectFor(name);if(this.ctx.storage.kv.get<string>('app_subject')!==String(subject)){this.ctx.storage.kv.put('app_subject',String(subject));this.runtimes={};}
+    const subject=appSubjectFor(name);if(this.ctx.storage.kv.get<string>('app_subject')!==String(subject)){this.ctx.storage.kv.put('app_subject',String(subject));this.resetRuntimes();}
   }
   // A read can be the first request after a restart. A turn it finds interrupted gets its "did not finish" reply from a drain.
   private recoverApp(): void {
@@ -1157,7 +1158,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const { kv } = this.ctx.storage;
     if (kv.get<string>('whatsapp_subject') !== subject) {
       kv.put('whatsapp_subject', subject);
-      this.runtimes = {};
+      this.resetRuntimes();
     }
     const value = JSON.parse(body) as { messages?: { id?: string; from?: string; type?: string; text?: { body?: string }; audio?: { id?: string; mime_type?: string; voice?: boolean } }[] };
     const claimed = claimNewWhatsAppMessages(kv, value.messages ?? [], Date.now());
@@ -1214,7 +1215,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (bound !== undefined && bound !== subject) return new Response('forbidden', { status: 403 });
     let value: { messages?: { id?: string; from?: string; type?: string; text?: { body?: string }; audio?: { id?: string; mime_type?: string; voice?: boolean } }[] };
     try { value = JSON.parse(body); } catch { return new Response('bad request', { status: 400 }); }
-    if (bound === undefined) { kv.put('whatsapp_subject', subject); this.runtimes = {}; }
+    if (bound === undefined) { kv.put('whatsapp_subject', subject); this.resetRuntimes(); }
     // The same origin and timezone persistence the other owner paths do after the identity checks: a WhatsApp-only owner's
     // links and clock come from here. No network work (the Telegram webhook re-registration stays on the Telegram path).
     const origin = request.headers.get('x-waldo-origin'); if (origin) kv.put('origin', origin);
@@ -1361,7 +1362,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (subject && kv.get<boolean>('telegram_unlinked')) { kv.delete('telegram_unlinked'); kv.put('telegram_link_epoch', (kv.get<number>('telegram_link_epoch') ?? 0) + 1); }
     if (subject && kv.get<string>('telegram_subject') !== subject) {
       kv.put('telegram_subject', subject);
-      delete this.runtimes.telegram;
+      this.resetRuntimes();
     }
     const timezone = headers.get('x-waldo-timezone');
     if (timezone && kv.get<string>('timezone') !== timezone) kv.put('timezone', timezone);
@@ -2109,109 +2110,23 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
 
   private setup(channel: ChannelKind = 'telegram'): OwnerRuntime {
-    const { TELEGRAM_BOT_TOKEN: token, OPENAI_API_KEY: key } = this.env;
-    const identity = this.ctx.storage.kv;
-    const currentOwner = channel === 'whatsapp' || nativeSurface(channel)
-      ? Number(identity.get<string>(`${channel}_subject`) ?? '0') || 0
-      : resolveOwnerTelegramId(identity.get<string>('telegram_subject'), this.env, consoleAuth(this.env) !== null);
+    const registered = SURFACES[channel];
     const cached = this.runtimes[channel];
     // A cached runtime is current only for the owner it was built for. A turn already running keeps its own runtime object; only later turns see the rebuilt one.
-    if (cached && this.runtimeOwners[channel] === currentOwner) return cached;
-    // consoleAuth is non-null exactly when the Supabase directory backs this deploy.
-    // WhatsApp identity is the E.164-digit subject bound at ingress; a directory-backed DO with
-    // no whatsapp_subject resolves owner 0 and every send drops at the gate (same rule as d3a050c).
-    const owner = channel === 'whatsapp' || nativeSurface(channel)
-      ? Number(identity.get<string>(`${channel}_subject`) ?? '0') || 0
-      : resolveOwnerTelegramId(identity.get<string>('telegram_subject'), this.env, consoleAuth(this.env) !== null);
-    if (channel === 'whatsapp' && (!this.env.WHATSAPP_ACCESS_TOKEN || !this.env.WHATSAPP_PHONE_NUMBER_ID)) throw new Error('whatsapp owner runtime is unconfigured');
-    if (channel === 'telegram' && !token) throw new Error('telegram owner runtime is unconfigured');
-    if (!key) throw new Error('owner runtime is unconfigured');
-    const otlp = langfuseOtlpConfig(this.env);
-    // Traces are filed under the verified owner principal once an owner turn has resolved it, else under the chat.
-    let tracePrincipal: string | undefined;
-    const exportTurn = otlp ? otlpTurnExporter(otlp, {
-      environment: this.env.WALDO_ENVIRONMENT ?? 'development', release: this.env.WALDO_RELEASE ?? 'unknown',
-      channel, userId: () => tracePrincipal ?? (owner > 0 ? `${channel}:${owner}` : `${channel}:unlinked`), sessionId: owner > 0 ? `${channel}-dm:${owner}` : `${channel}-dm:unlinked`,
-      captureText: resolveCaptureText(this.env),
-    }) : undefined;
-    const deps = productionDeps();
-    const traces = traceBook(this.ctx.storage.sql);
-    const captureText = resolveCaptureText(this.env);
-    const turnReceiptUrls = new Map<string, Set<string>>();
-    const log = (entry: TurnLogEntry) => {
-      if (entry.principal !== undefined) { const { principal, ...rest } = entry; tracePrincipal = principal; entry = rest; }
-      if ((!entry.trace.startsWith('tg-') || this.activeInbox?.updateId === Number(entry.trace.slice(3))) && (entry.hop === 'tool_create_artifact' || entry.hop === 'tool_revise_artifact')) {
-        try {
-          const url = receiptUrl(entry.hop.slice(5), JSON.parse(entry.text?.output ?? 'null'));
-          if (url) { const urls = turnReceiptUrls.get(entry.trace) ?? new Set<string>(); urls.add(url); turnReceiptUrls.set(entry.trace, urls); }
-        } catch { /* malformed output grants no receipt */ }
-      }
-      // The historical owner label reaches the DO trace table; canonical ID/email also reach Worker logs and OTLP.
-      // The gate runs once here so free-form detail/error text reaches none of the sinks while
-      // the capture switch is off; whitelisted hops keep their count/enum detail either way.
-      const enriched: TurnLogEntry = gateTraceEntry(enrichOwnerTrace(entry,
-        channel === 'telegram' ? identity.get<InboxRecord[]>(OWNER_INBOX_KEY) ?? [] : [],
-        identity.get<string>('do_name') ?? '', String(owner)), captureText);
-      traces.record(enriched, deps.now());
-      console.log(JSON.stringify({ ...enriched, text: undefined }));
-      if (exportTurn) this.ctx.waitUntil(exportTurn(enriched).catch((error: unknown) => {
-        const note = String(error);
-        const failed: TurnLogEntry = gateTraceEntry({ trace: enriched.trace, hop: 'otlp_export', ms: 0, ok: false, error: note, code: 'export_failed', owner: enriched.owner,
-          owner_id: enriched.owner_id, owner_email: enriched.owner_email, owner_identity: enriched.owner_identity }, captureText);
-        console.log(JSON.stringify({ ...failed, text: undefined }));
-        traces.record(failed, deps.now());
-      }));
-    };
-    ensureSchema(this.ctx.storage);
-    const scheduler = new Scheduler(this.ctx.storage.sql, this.ctx.storage, deps);
-    const finalOutbox = new TelegramFinalOutbox(this.ctx.storage.kv, deps.now, (rows, due) => persistTransportWake(this.ctx.storage, rows, due));
-    const fallbackZone = this.env.WALDO_OWNER_TIMEZONE ?? 'UTC';
+    if (cached && this.runtimeOwners[channel] === registered.descriptor.owner(this.ctx.storage.kv, this.env)) return cached;
+    const adapter = registered.surfaceAdapter(this.surfaceHost);
+    // Every surface of this object shares one core; a reset clears the core and every cached runtime together.
+    const core = this.core ??= ownerCore(this.surfaceHost);
+    const { openaiApiKey: key, owner, log, call, routedCall, api, probeCapture, probeGuard, sentOrThrow, turnReceiptUrls, healthLogs, healthRead, healthContext, media } = createSurfaceRuntime({ core, adapter, host: this.surfaceHost });
+    const token = this.env.TELEGRAM_BOT_TOKEN;
+    const identity = this.ctx.storage.kv;
+    const { deps, traces, scheduler, finalOutbox, clock, reminders: book, effects, episodes, conversations: kv, plans, memory, files, loops, schedPrefs, orders, artifacts, exportTool, runs, quiet } = core;
     // Supabase holds the editable settings when configured; the DO applies its copy only after that write lands.
     const saveSettings = async (settings: OwnerSettings): Promise<boolean> => {
       const auth = consoleAuth(this.env);
       const doName = identity.get<string>('do_name');
       return !auth || !doName || auth.saveSettings(doName, settings);
     };
-    const clock = { get timezone() { return identity.get<string>('timezone') ?? fallbackZone; }, now: () => new Date(deps.now()) };
-    const book = reminderBook(this.ctx.storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
-    const healthLogs = healthLogBook(signedRpc(this.env), identity.get<string>('do_name') ?? null, nativeSurface(channel) ? 'console' : channel as 'telegram' | 'whatsapp', clock, (error) =>
-      log({ trace: `health:${channel}`, hop: 'health_log', ms: 0, ok: false, error: String(error) }),
-    );
-    const healthRead = healthReadBook(signedRpc(this.env), identity.get<string>('do_name') ?? null);
-    // D5: derived health context for the system prompt's health material (zones only). Read
-    // failures degrade to absence and log; they never block the turn.
-    const healthContext = healthContextBook(signedRpc(this.env), identity.get<string>('do_name') ?? null, clock,
-      (error, trace) => log({ trace: trace ?? `health:${channel}`, hop: 'health_context', ms: 0, ok: false, error: String(error), code: 'read_failed' }),
-      (present, trace) => log({ trace: trace ?? `health:${channel}`, hop: 'health_context', ms: 0, ok: true, code: present ? 'present' : 'absent' }),
-    );
-    const baseCall = channel === 'app'
-      ? appCaller(() => this.scheduledAppDelivery)
-      : channel === 'imessage'
-        ? appCaller()
-      : channel === 'whatsapp'
-        ? whatsappTelegramShim(this.env.WHATSAPP_ACCESS_TOKEN!, this.env.WHATSAPP_PHONE_NUMBER_ID!, identity.get<string>('whatsapp_subject') ?? '')
-        : createTelegramCaller(token!);
-    const egressDoName = identity.get<string>('do_name');
-    const egressSubject = identity.get<string>(channel === 'telegram' ? 'telegram_subject' : `${channel}_subject`);
-    const egressAuth = consoleAuth(this.env);
-    const call = egressGuardedCaller(
-      gatedCaller(baseCall, egressGate(
-        () => owner === 0 ? 'owner_unbound' : identity.get<boolean>(`${channel}_unlinked`) === true ? 'unlinked' : false,
-        nativeSurface(channel) ? undefined : presenceRecheck(egressAuth, egressDoName, channel, egressSubject),
-      )),
-      (count, method) => log({ trace: 'egress', hop: 'egress_redacted', ms: 0, ok: true, detail: `${method}: ${count} link(s)` }),
-    );
-    // Staging probe capture: while a capture-mode /probe-turn runs inside the serial queue,
-    // outbound Telegram calls land in the probe response instead of the Bot API. Inert otherwise.
-    const probeCapture: ProbeCaptureSlot = { current: null };
-    // Codex #230/#231 holds: confinement slot for capture-mode probe turns (memory persistence
-    // and live provider tools stay unreachable from synthetic owner-authority text).
-    const probeGuard = { suppressMemory: false, stripLiveTools: false };
-    const routedCall: typeof call = (method, request) =>
-      probeCapture.current === null ? call(method, request) : probeCapture.current.record(method, request);
-    const api = createTelegramOwnerApi(routedCall);
-    // A blocked send (unlinked or rebound owner) returns no message. A producer must not record that as sent, completed or folded.
-    const sentOrThrow = async (sending: Promise<unknown>) => { const sent = await sending; if (sent === undefined) throw new Error('telegram send blocked'); return sent; };
     // The trace names the attempt by its nonce prefix; the signed URL itself is never logged.
     const deliverConnectLink = async (url: string, purpose: 'connect' | 'reconnect' = 'connect', email?: string): Promise<boolean> => {
       const trace = url.includes('/c/') ? 'connect:deliver' : `oauth:${(new URL(url).searchParams.get('state') ?? '').split('.').at(-2)?.slice(0, 8) ?? 'unknown'}`;
@@ -2227,20 +2142,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const storage = this.ctx.storage;
     // The console link goes only to the surface this runtime serves; the app and WhatsApp say why they cannot carry it.
-    const consoleLinkRoutes: Record<ChannelKind, ConsoleLinkRoute> = {
-      telegram: telegramConsoleRoute((body) => routedCall('sendMessage', { chat_id: owner, ...body }), identity),
-      imessage: iMessageConsoleRoute(storage, () => this.activeIMessage),
-      app: { unsupported: 'app_unsupported' },
-      whatsapp: { unsupported: 'surface_unsupported' },
-    };
     const consoleLinkTool = consoleLinkHandler(consoleLinkSender({
-      surface: channel, route: consoleLinkRoutes[channel], available: () => probeCapture.current === null, mint: () => mintConsoleLink(storage, this.env), log,
+      surface: channel, route: adapter.consoleLink({ owner, routedCall }), available: () => probeCapture.current === null, mint: () => mintConsoleLink(storage, this.env), log,
     }));
     // S4 (CONNECT_FLOW_DESIGN 4.4): the responder calls this when a tool reports auth_required.
     // At most one button per owner/service/reason per 60 s; a repeat just points at the last one.
     // The app chat has no connect button, so on the app nothing is minted or sent: the owner connects from the app's own screen.
     const offerConnect = async (intent: ConnectIntent): Promise<boolean | string> => {
-      if (channel === 'app') return APP_CONNECT_GUIDANCE;
+      if (adapter.connectGuidance) return adapter.connectGuidance;
       const key = `${intent.service}:${intent.reason}`;
       const sent = (await storage.get<Record<string, number>>('connect:offers')) ?? {};
       if (Date.now() - (sent[key] ?? 0) < 60_000) {
@@ -2295,7 +2204,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (!transition.send) return;
         // The app chat has no connect button and a new ticket revokes the owner's open ones, so on the app nothing is minted:
         // the app's Connections screen shows the grant as needing a reconnect.
-        if (channel === 'app') { log({ trace: `google:${Date.now()}`, hop: 'google_reauth_notice_skipped', ms: 0, ok: true, code: 'app_surface' }); return; }
+        if (adapter.connectGuidance) { log({ trace: `google:${Date.now()}`, hop: 'google_reauth_notice_skipped', ms: 0, ok: true, code: 'app_surface' }); return; }
         const account = (await accounts()).find((known) => known.id === id);
         const url = await google.connectUrl('calendar');
         const sent = url !== null && (await deliverConnectLink(url, 'reconnect', account?.email));
@@ -2504,17 +2413,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return this.browserTasks.resolve(this.browserTasks.principal, source);
     } });
     const currentRunRef = () => this.activeApp?.id ?? this.activeScope?.runId;
-    const effects = ownerEffectLedger(storage, () => deps.now(), currentRunRef);
     const ownerRef = () => identity.get<string>('owner_principal_ref') ?? String(owner);
     const ownerRefAliases = () => [...new Set([identity.get<string>('telegram_subject'), identity.get<string>('whatsapp_subject'), identity.get<string>('app_subject'), String(owner)])].filter((ref): ref is string => !!ref && ref !== '0');
     const googleTasks = googleTaskApprovals({ sql: storage.sql, google, effects, ownerRef, ownerRefAliases });
     // A decision's effect follows the proposal's destination, not the surface that decided. Other
     // surfaces resolve lazily at decision time; the app is never a send destination.
-    const destination = (name: string) => name === channel && channel !== 'app' ? { call: routedCall, owner } : name === 'telegram' || name === 'whatsapp' ? this.setup(name) : null;
+    const destination = (name: string) => name === adapter.name ? (adapter.sendsOwn ? { call: routedCall, owner } : null) : isChannelKind(name) && SURFACES[name].descriptor.sendTarget ? this.setup(name) : null;
     const desk = approvalDesk(storage.sql, {
       effects, googleTasks: () => googleTasks, currentRunRef, appReplyRef: () => this.activeApp?.id, ownerRef, ownerRefAliases,
-      // iMessage is plain text and can never approve: its turns use the app's desk rules, so cards show only in the app.
-      surface: channel === 'imessage' ? 'app' : channel, appLink: appApprovalLink, commit: work => storage.transactionSync(work),
+      surface: adapter.deskSurface, appLink: appApprovalLink, commit: work => storage.transactionSync(work),
       retire: async ({ surface, message_ref }) => {
         const [chat = '', message = ''] = message_ref.split(':');
         if (surface !== 'telegram' || !/^-?\d+$/.test(chat) || !/^\d+$/.test(message)) return;
@@ -2550,25 +2457,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return { provider_id: intent.id, result: `Result (external content, bounded): ${JSON.stringify(content).slice(0, 300)} (protocol ${protocolVersion})` };
       },
     });
-    const episodes = episodeIndex(storage.sql);
-    const kv = durableConversationStore(storage);
-    const plans = dayPlanBook(storage.sql);
-    const memory = claimStore(storage.sql, (work) => storage.transactionSync(work));
     const copied = backupAndCopySpots(storage.sql, memory, new Date().toISOString());
     if (copied) log({ trace: 'memory:migration', hop: 'memory_backup', ms: 0, ok: true, detail: copied });
-    const files = fileBook(storage.sql);
-    const loops = loopBook(storage.sql, { newId: () => deps.newRunId().slice(0, 8), now: () => Date.now() });
-    const schedPrefs = schedulePreferences(storage.sql, loops);
-    const orders = standingOrderBook(storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
-    // A5: working-artifact store. Bodies ride R2 when the binding exists; a deploy missing it
-    // degrades to per-DO-memory bodies (artifacts become session-scoped, turns never crash).
-    const artifactBodies = this.env.ARTIFACTS ? r2ArtifactBodies(this.env.ARTIFACTS, this.ctx.id.toString()) : inMemoryArtifactBodies();
-    const artifacts = artifactBook(storage.sql, artifactBodies, clock, () => deps.newRunId().slice(0, 8));
-    // PDF export is registered only where files are durable (R2 bound) and the owner-session download route can serve them.
-    const exportTool = this.env.ARTIFACTS ? [exportArtifactHandler(
-      artifactExports(storage.sql, artifacts, artifactBodies, r2ArtifactBinaries(this.env.ARTIFACTS, this.ctx.id.toString()), clock, () => crypto.randomUUID()),  // full uuid: the export id is part of the link
-      async id => exportDownloadUrl(await storage.get<string>('origin') ?? null, id))] : [];
-    const runs = runBook(storage.sql, clock, () => deps.newRunId().slice(0, 8));
     // A9: recent meal/workout logs join the proactive context; the read degrades to empty
     // when the store is unlinked so beats and the /ledger command never break on it.
     // A job prompt is stored with the conversation and indexed for search, so it carries the ledger without the health logs;
@@ -2579,14 +2469,6 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         .filter((section) => section !== '')
         .join('\n\n');
     const ledger = async () => [await promptLedger(), await healthLogLines()].filter((section) => section !== '').join('\n\n');
-    const quiet = () => isQuiet(loops.proactivity(), Date.now(), clock.timezone);
-    // Media reads are per-channel: Telegram file ids go through getFile; WhatsApp media ids go
-    // through the Graph two-step (W4). Both feed the same transcriber/attachment pipeline.
-    const download = nativeSurface(channel)
-      ? async (): Promise<Uint8Array> => { throw new Error(`${channel} chat has no attachments`); }
-      : channel === 'whatsapp'
-        ? createWhatsAppMediaDownloader(this.env.WHATSAPP_ACCESS_TOKEN!)
-        : createTelegramFileDownloader(token ?? '');
     // Google-auth MCP servers: pick the serving account per call. A locally held refresh token
     // mints a bearer here; a Vault-backed account keeps the token edge-side and the proxy runs
     // the call with the connection id (the runtime never sees a bearer).
@@ -2671,84 +2553,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           + '\nUse these as continuity clues, never as permission or an automatic target. The current owner request wins when it changes task or names another file. Resolve ambiguity before writing. For a matching saved-file follow-up, load an enabled matching reviewed skill, read the exact workspace file and use its current revision for CAS. These receipts belong to workspace; do not search Drive as a fallback for them. If unavailable, report that and ask for the target.' : '';
       } });
     };
-    const telegramSkillHost: OwnerSkillHost = { browserAttachments: scope => this.ownerBrowser.attachments(scope), prepare: async (turn, contextOwnerId, scope) => {
-      if (probeCapture.current !== null) return undefined;
-      const occurrence = this.activeInbox;
-      const doName = identity.get<string>('do_name');
-      const subject = identity.get<string>('telegram_subject');
-      const assertOwnerIdentity = async () => {
-        scope.admit();
-        const currentOwner = resolveOwnerTelegramId(identity.get<string>('telegram_subject'), this.env, consoleAuth(this.env) !== null);
-        if (!occurrence || occurrence !== this.activeInbox || scope !== this.activeScope
-          || occurrence.runId !== scope.runId || occurrence.attempt !== scope.attempt
-          || occurrence.subject !== String(owner) || currentOwner !== owner || owner <= 0
-          || identity.get<string>('do_name') !== doName || identity.get<string>('telegram_subject') !== subject
-          || turn.surface !== 'telegram' || turn.conversationRef !== surfaceChatRef('telegram', owner)
-          || turn.traceId !== `tg-${occurrence.updateId}`)
-          throw new ClosedRunError();
-        scope.admit();
-      };
-      await assertOwnerIdentity();
-      const trial = this.browserTrial;
-      const admission = trial ? await (async () => {
-        try { return await ownerMessageAdmission({
-        lookup: browserOwnerBindingReader({ env: this.env, storage, actualDoId: this.ctx.id.toString() }, doName!, subject!), scope,
-        locator: { environment: this.env.WALDO_ENVIRONMENT ?? '', namespace: this.env.WALDO_OWNER_DO_NAMESPACE ?? '', doName: doName!, doId: this.ctx.id.toString() },
-        actualDoId: this.ctx.id.toString(), expectedDoId: name => this.env.OWNER_DO!.idFromName(name).toString(), allowedDoNames: [trial.policy.doName],
-        provider: 'telegram', subject: subject!, text: turn.text!, occurrenceKey: occurrence!.id, occurredAt: occurrence!.admittedAt, now: Date.now,
-      }); } catch {
-          await assertOwnerIdentity();
-          // Browser identity failure preserves the existing messaging path.
-          // Its fixture principal cannot resolve the canonical browser host.
-          console.warn(JSON.stringify({ event: 'browser_owner_admission_unavailable' }));
-          return undefined;
-        }
-      })() : undefined;
-      return curatedSkills(turn, admission?.invocation.verified_authority.principal_ref ?? contextOwnerId, `telegram:${owner}`, scope, assertOwnerIdentity, admission);
-    } };
-    // An app turn's skill owner is the canonical principal its admission verified (the context host hands it over). The
-    // identity check binds the capability to the admitted inbox record and this run scope, as the Telegram host binds to
-    // its inbox occurrence; the custody falls back to that principal, so an app-first owner's book is keyed by identity.
-    const appSkillHost: OwnerSkillHost = { prepare: async (turn, contextOwnerId, scope) => {
-      if (probeCapture.current !== null) return undefined;
-      const record = this.activeApp;
-      const doName = identity.get<string>('do_name');
-      const assertOwnerIdentity = async () => {
-        scope.admit();
-        if (!record || record !== this.activeApp || scope !== this.activeScope || record.id !== scope.runId || record.attempt !== scope.attempt
-          || identity.get<string>('do_name') !== doName || turn.surface !== 'app' || turn.text !== record.text
-          || turn.conversationRef !== surfaceChatRef('app', appSubjectFor(record.owner)) || turn.traceId !== ownerTurnTrace('app', record.updateId)) throw new ClosedRunError();
-        scope.admit();
-      };
-      await assertOwnerIdentity();
-      return curatedSkills(turn, contextOwnerId, contextOwnerId, scope, assertOwnerIdentity);
-    } };
-    // The owner principal inside every turn. A Telegram turn is admitted through the same surface admission as an app
-    // turn, so its tools, cache key and composed context belong to the directory owner, never to the chat id. Without a
-    // directory (local development) the fixture admission stands; a turn without text (media only) keeps the legacy path.
-    const telegramContext: OwnerContextIntegration | undefined = channel === 'telegram' && consoleAuth(this.env) !== null ? { contextHost: { prepare: async (turn, scope) => {
-      if (!turn.text) return undefined;
-      const occurrence = this.activeInbox;
-      const doName = identity.get<string>('do_name'), subject = identity.get<string>('telegram_subject');
-      if (!occurrence || scope !== this.activeScope || occurrence.runId !== scope.runId || occurrence.attempt !== scope.attempt || !doName || !subject
-        || turn.surface !== 'telegram' || turn.traceId !== ownerTurnTrace('telegram', occurrence.updateId) || turn.conversationRef !== surfaceChatRef('telegram', subject)) throw new ClosedRunError();
-      const lookup = async () => {
-        scope.admit();
-        const authority = await commonOwnerAuthority(this.env).resolve('telegram', subject, doName);
-        scope.admit();
-        // Compared, never written: the pin also marks an app identity for approvals and keys effect custody.
-        const pinned = identity.get<string>('owner_principal_ref');
-        if (!authority || (pinned !== undefined && pinned !== ownerPrincipalRef(authority.directoryOwnerId))) throw new ClosedRunError();
-        return { ownerId: authority.directoryOwnerId, bindingRef: authority.presenceId, revision: authority.admissionRevision, physicalDoId: this.ctx.id.toString() };
-      };
-      // The composer runs on every tool round; one health read serves the whole turn.
-      let health: ReturnType<typeof healthContext.latest> | undefined;
-      return createOwnerTurnContext(await surfaceOwnerAdmission({ scope, lookup, expectedPhysicalDoId: this.ctx.id.toString(), surface: 'telegram', subject, occurrenceKey: occurrence.id, occurredAt: occurrence.admittedAt, text: turn.text }),
-        { conversationRef: ownerChainRef('telegram', subject), health: () => health ??= healthContext.latest(turn.traceId), ownerProfile: google.nameLine });
-    } } } : undefined;
-    const responder = createTelegramResponder(
+    const surfaceParts = { owner, log, api, routedCall, probeCapture, turnReceiptUrls, core, healthContext, ownerProfile: google.nameLine };
+    const skillHost = adapter.skillHost?.(surfaceParts, curatedSkills);
+    const responder = surfaceResponder(createOwnerResponder(
       key, { ...indexedConversationStore(kv, episodes, () => Date.now()), recalls: (entryId: string) => recallReach(identity, identity.get<string>('owner_principal_ref'), null)(entryId) }, memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...workspaceTools, ...reminderHandlers(book), ...healthLogHandlers(healthLogs), getHealthHandler(healthRead, clock), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
+      clock, [...workspaceTools, ...reminderHandlers(book), ...healthLogHandlers(healthLogs), getHealthHandler(healthRead, clock), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
         // Owner-ruled OTP parity (September 27, 2026): the extracted artifact goes to the owner
         // as a direct message - fixed copy, no model involvement, and the send is never logged
         // with the artifact text (kinds + sender only; the code itself touches no store).
@@ -2802,23 +2611,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       (opt) => opt ? openLoopsPrompt(loops, clock.timezone, opt.loopsRoom) : standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
-      undefined, channel, channel === 'telegram' ? telegramSkillHost : channel === 'app' ? appSkillHost : undefined,
-      channel === 'app' ? {contextHost:{prepare:async (turn,scope)=>{
-        const record=this.activeApp;
-        if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==record.text)throw new ClosedRunError();
-        // The composer runs on every tool round; one health read serves the whole turn.
-        let health:ReturnType<typeof healthContext.latest>|undefined;
-        const context=await this.appContext(record.owner,record.sessionHash,record.text,record.id,record.admittedAt,scope,{health:()=>health??=healthContext.latest(turn.traceId),ownerProfile:google.nameLine,...(threadOfChain(record.conversationRef)?{conversationRef:record.conversationRef}:{})});
-        if(context.conversationRef!==record.conversationRef)throw new ClosedRunError();
-        return context;
-      }},history:context=>({...indexedConversationStore(canonicalOwnerConversationStore(this.ctx.storage,context,this.logSkippedLoad,threadOfChain(context.conversationRef)??undefined),episodes,()=>Date.now()),
-        noteUnfinished:(line,scope)=>this.appInbox.noteLanded(scope.runId,scope.attempt,line),
-        recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,threadOfChain(context.conversationRef))}),jobHost:this.jobHostFor(admission=>ownerChainRef('app',admission.invocation.verified_authority.principal_ref)),ownerProfile:google.nameLine} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
-        const record=this.activeIMessage;
-        if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==record.text)throw new ClosedRunError();
-        return iMessageOwnerContext(this.imessageHost,record,scope,{ownerProfile:google.nameLine});
-      }},history:context=>({...canonicalOwnerConversationStore(this.ctx.storage,context),recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,null)}),ownerProfile:google.nameLine} : {...telegramContext,jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine},
-    );
+      TELEGRAM_REACTIONS, undefined, undefined, { ...(skillHost ? { skillHost } : {}), ...adapter.context(surfaceParts) },
+    ), adapter.presentation, media);
     // A job prompt built on the ledger: the owner's health logs reach the model as this turn's context.
     const ledgerJob = async (trace: string, said: string, toolNames?: Parameters<typeof responder.prompt>[4]) =>
       responder.prompt(trace, owner, said, async (_hop, work) => work(), toolNames, undefined, undefined, await healthLogLines());
@@ -2837,7 +2631,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const listener = owner > 0 ? new TelegramOwnerListener({
       ownerTelegramId: owner, surface: channel, api, ...responder, log,
       // Native chat has no reaction surface; do not start a parallel unbound model call.
-      chooseReaction: nativeSurface(channel) ? undefined : turn => {
+      chooseReaction: adapter.native ? undefined : turn => {
         turn.runScope?.admit();
         return responder.chooseReaction(turn);
       },
@@ -2845,34 +2639,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (turn.media) files.record(turn.media, turn.text ?? '', Date.now());
         return responder.respond(turn, time);
       },
-      // Freeze the reply text, stable commandId and exact target together with the turn's closure.
-      ...(channel === 'imessage' ? { queueFinal: async (turn: import('./telegram-polling').TelegramInboundTurn, payload: import('./telegram-final-outbox').FinalPayload) => {
-        const record = this.activeIMessage;
-        if (!turn.runScope || !record || record.id !== turn.runScope.runId || record.attempt !== turn.runScope.attempt || record.updateId !== turn.updateId) throw new ClosedRunError();
-        const text = redactSecretUrls(payload.text).text;
-        turn.runScope.commit(() => { new IMessageFinalOutbox(this.ctx.storage).freeze(record, text); new IMessageOwnerInbox(this.ctx.storage).closeFinal(record); });
-        this.ctx.waitUntil(this.serial(() => drainIMessageOutbox(this.imessageHost, iMessageComposition(this.imessageHost.env)?.policy.replyHandoffMaxAgeMs ?? 0).then(() => rearmSharedAlarm(this.ctx.storage, null, Date.now()))).catch(() => { console.error('imessage outbox drain deferred'); }));
-      } } : {}),
-      ...(channel === 'telegram' ? { queueFinal: async (turn: import('./telegram-polling').TelegramInboundTurn, payload: import('./telegram-final-outbox').FinalPayload, emoji: string) => {
-        // Capture probes remain inert and exercise the original immediate mock path.
-        if (probeCapture.current !== null) { await api.sendMessage(payload); return; }
-        const captured = this.activeInbox;
-        if (turn.runScope && (!captured || captured.runId !== turn.runScope.runId || captured.attempt !== turn.runScope.attempt || captured.updateId !== turn.updateId)) throw new ClosedRunError();
-        const input = { id: captured ? `turn:${captured.id}` : `turn:${turn.updateId}`, trace: ownerTurnTrace(channel, turn.updateId), payload: { ...payload, text: redactSecretUrls(payload.text).text },
-          ...(captured?.runId && captured.attempt ? { inbox: { id: captured.id, runId: captured.runId, attempt: captured.attempt } } : {}),
-          receiptUrls: [...(turnReceiptUrls.get(ownerTurnTrace(channel, turn.updateId)) ?? [])],
-          ownerSubject: String(owner), doName: identity.get<string>('do_name') ?? '',
-          ...(turn.messageId === null ? {} : { reaction: { message_id: turn.messageId, emoji } }),
-        };
-        if (turn.runScope && captured) await finalOutbox.enqueueFenced(input, work => turn.runScope!.commit(() => {
-          work(); this.closeRunAtomic(captured, 'final_committed', true);
-        }));
-        else await finalOutbox.enqueue(input);
-        turnReceiptUrls.delete(ownerTurnTrace(channel, turn.updateId));
-        await scheduler.rearm();
-      } } : {}),
+      ...(adapter.queueFinal ? { queueFinal: adapter.queueFinal(surfaceParts) } : {}),
       clearTurnReceipts: trace => { turnReceiptUrls.delete(trace); },
-      saveOffset: (offset) => this.ctx.storage.put(offsetKeyOf(channel), offset),
+      saveOffset: (offset) => this.ctx.storage.put(adapter.offsetKey, offset),
     }) : null;
     const fire = async (entry: ScheduleEntry) => {
       const note = book.note(entry.id);
@@ -3415,7 +3184,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           identity.put('timezone_confirmed', true);
           await armOwnJobs(value, now, true);
           // Rebuild runtimes so values captured at build time follow the new zone.
-          this.runtimes = {};
+          this.resetRuntimes();
         } else if (action === 'spot.dismiss' || action === 'spot.forget' || action === 'spot.confirm') {
           // A claim mid-scrub (status 'purging') is the retry path: the stated 'try again'
           // must be able to select it. Dismiss/confirm stay active-only.
@@ -3495,7 +3264,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const file = Number.isInteger(id) ? files.get(id) : null;
         if (!file) return null;
         try {
-          return fileResponse(file, await download(file.file_id));
+          return fileResponse(file, await media.download(file.file_id));
         } catch {
           return null;
         }

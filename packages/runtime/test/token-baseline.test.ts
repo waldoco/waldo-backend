@@ -14,7 +14,9 @@ vi.mock('openai', () => ({
   },
 }));
 
-const { createTelegramResponder } = await import('../src/channels/telegram-turn');
+const { createOwnerResponder } = await import('../src/channels/owner-turn');
+const { surfaceResponder } = await import('../src/channels/owner-runtime');
+const { telegramSurface } = await import('../src/channels/surfaces/telegram');
 
 const tokens = (value: unknown) => Math.ceil(new TextEncoder().encode(typeof value === 'string' ? value : JSON.stringify(value) ?? '').byteLength / 4);
 
@@ -25,7 +27,7 @@ describe('token baseline (phase 1 measurement)', () => {
       load: async () => saved,
       save: async (entries: readonly ConversationEntry[], leafId: string) => { saved = { entries, leafId }; },
     };
-    const responder = createTelegramResponder('test-key', store, undefined, () => undefined, {}, { timezone: 'UTC', now: () => new Date('2026-09-24T05:00:00Z') });
+    const responder = surfaceResponder(createOwnerResponder('test-key', store, undefined, () => undefined, { timezone: 'UTC', now: () => new Date('2026-09-24T05:00:00Z') }), telegramSurface.presentation);
     for (let turn = 0; turn < 6; turn++) {
       await responder.respond(ownerTyped({ updateId: turn + 1, messageId: null, senderId: 7, chatId: 7, sentAt: null, text: `message ${turn + 1}: how is my sleep trend and what should I focus on today?` }), (_name, run) => run());
     }

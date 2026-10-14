@@ -10,15 +10,15 @@ import type { LLMGatewayRequest } from '../src/llm/provider';
 // The app has no in-app route for the console link yet (app.v1 is additive-only and the app lane is paused), so an app
 // turn that asks for it learns why it was not sent and nothing is minted.
 const model = vi.hoisted(() => ({ requests: [] as string[] }));
-vi.mock('../src/channels/telegram-turn', async load => {
-  const original = await load<typeof import('../src/channels/telegram-turn')>();
+vi.mock('../src/channels/owner-turn', async load => {
+  const original = await load<typeof import('../src/channels/owner-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
     if (request.response_format) return { ok: true as const, data: { model: request.model, text: '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
     model.requests.push(JSON.stringify(request));
     const call = !request.tool_turns?.length && JSON.stringify(request.messages.at(-1)).includes('console link');
     return { ok: true as const, data: { model: request.model, text: call ? '' : 'The app cannot show it yet.', ...(call ? { tool_calls: [{ call_id: 'console', name: 'send_console_link', arguments: '{}' }] } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
-  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
+  return { ...original, createOwnerResponder: (...args: Parameters<typeof original.createOwnerResponder>) => { args[10] = gateway; return original.createOwnerResponder(...args); } };
 });
 const { OwnerDO } = await import('../src/channels/owner-do');
 

@@ -17,15 +17,15 @@ vi.mock('../src/channels/telegram-api', async load => {
   const original = await load<typeof import('../src/channels/telegram-api')>();
   return { ...original, createTelegramCaller: () => async (method: string, payload: { chat_id?: number; text?: string }) => { if (method === 'sendMessage') { model.sent.push(payload.text ?? ''); return { message_id: model.sent.length, chat: { id: payload.chat_id } }; } return true; } };
 });
-vi.mock('../src/channels/telegram-turn', async load => {
-  const original = await load<typeof import('../src/channels/telegram-turn')>();
+vi.mock('../src/channels/owner-turn', async load => {
+  const original = await load<typeof import('../src/channels/owner-turn')>();
   const gateway: LLMGatewayAdapter = { async complete(request) {
     model.requests.push(request.request);
     const writer = request.request.response_format !== undefined;
     const text = request.request.response_format?.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : writer ? '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : 'Noted.';
     return { ok: true, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
-  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
+  return { ...original, createOwnerResponder: (...args: Parameters<typeof original.createOwnerResponder>) => { args[10] = gateway; return original.createOwnerResponder(...args); } };
 });
 const { OwnerDO } = await import('../src/channels/owner-do');
 
@@ -132,7 +132,7 @@ describe('an earlier tool result in the ledger, then one owner turn', () => {
         requests.push(request.request);
         return { ok: true, data: { model: request.request.model, text: request.request.response_format ? '{}' : 'Noted.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
       } };
-      const { createOwnerResponder } = await import('../src/channels/owner-turn');
+      const { createOwnerResponder } = await vi.importActual<typeof import('../src/channels/owner-turn')>('../src/channels/owner-turn');
       const responder = createOwnerResponder('fixture', undefined, undefined, undefined, undefined, [], undefined, false, toolOutputLedger(state.storage), undefined, gateway);
       await responder.prompt('job-brief', 'owner', 'Write the morning brief.', async (_hop, work) => work());
       const job = requests.filter(request => request.response_format === undefined);
@@ -156,7 +156,7 @@ describe('an earlier tool result in the ledger, then one owner turn', () => {
         requests.push(request.request);
         return { ok: true, data: { model: request.request.model, text: request.request.response_format ? '{}' : 'Noted.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
       } };
-      const { createOwnerResponder } = await import('../src/channels/owner-turn');
+      const { createOwnerResponder } = await vi.importActual<typeof import('../src/channels/owner-turn')>('../src/channels/owner-turn');
       const responder = createOwnerResponder('fixture', undefined, undefined, undefined, undefined, [], undefined, false, toolOutputLedger(state.storage), undefined, gateway, undefined, { suppressMemory: true, stripLiveTools: true });
       await responder.respond(ownerTyped({ traceId: 'probe-ask', conversationRef: 'owner', surface: 'telegram', text: 'what did you find in my mail?' }), async (_hop, work) => work());
       const replies = requests.filter(request => request.response_format === undefined);

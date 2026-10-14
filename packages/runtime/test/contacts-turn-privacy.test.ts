@@ -12,8 +12,8 @@ const NAME = 'Meera Rao';
 const ADDRESS = 'meera.rao@family.example';
 const AUTH = 'https://www.googleapis.com/auth/';
 const model = vi.hoisted(() => ({ requests: [] as LLMGatewayRequest['request'][] }));
-vi.mock('../src/channels/telegram-turn', async load => {
-  const original = await load<typeof import('../src/channels/telegram-turn')>();
+vi.mock('../src/channels/owner-turn', async load => {
+  const original = await load<typeof import('../src/channels/owner-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
     model.requests.push(request);
     const done = (text: string, tool_calls?: Array<{ call_id: string; name: string; arguments: string }>) => ({ ok: true as const, data: { model: request.model, text, ...(tool_calls ? { tool_calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 } });
@@ -22,7 +22,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     if (asked.includes('email Meera') && !request.tool_turns?.length) return done('', [{ call_id: 'who', name: 'search_contacts', arguments: JSON.stringify({ query: 'Meera' }) }]);
     return done('Noted.');
   } };
-  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
+  return { ...original, createOwnerResponder: (...args: Parameters<typeof original.createOwnerResponder>) => { args[10] = gateway; return original.createOwnerResponder(...args); } };
 });
 const { OwnerDO } = await import('../src/channels/owner-do');
 
