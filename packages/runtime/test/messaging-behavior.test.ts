@@ -171,7 +171,7 @@ describe('the rules that pulled against each other are gone', () => {
     expect(prompt).not.toContain('ask one narrow confirmation');
     expect(prompt).not.toContain('One suggestion per message, not a menu');
     expect(prompt).not.toContain('no live flight prices');
-    expect(prompt).toContain('When you advise, give one suggestion, not a menu. When they ask for options or a lookup of fares, stays or times, give the options you found, your pick first.');
+    expect(prompt).toContain('When you advise, give one suggestion, not a menu. When they ask for options, or to look up fares, stays or times, give the options you found, your pick first.');
   });
 
   it.each(prompts())('%s: names no chat command', (_surface, prompt) => {
