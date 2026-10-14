@@ -65,6 +65,16 @@ jobs:
       - name: Hermetic device bridge
         working-directory: packages/runtime
         run: pnpm exec vitest run --config vitest.devices.config.ts
+      # The main config excludes these files, and test:owner-ingress was their only runner.
+      - name: Telegram link routing
+        working-directory: packages/runtime
+        run: npx vitest run --config vitest.link-routing.config.ts
+      - name: iMessage bridge
+        working-directory: packages/runtime
+        run: npx vitest run --config vitest.imessage.config.ts
+      - name: Mac result recovery
+        working-directory: packages/runtime
+        run: npx vitest run --config vitest.mac-closeout.config.ts
       # live-memory.test.ts needs node:sqlite, so the workers-pool config excludes it; this step is its only CI run.
       - name: Live owner memory handlers
         working-directory: packages/runtime

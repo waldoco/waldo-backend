@@ -19,13 +19,13 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
-const withOwner = (name: string, work: (call: (method: string, path: string, body?: unknown) => Promise<Readonly<{ status: number; body: any }>>, state: DurableObjectState) => Promise<void>) =>
+const withOwner = (name: string, work: (call: (method: string, path: string, body?: unknown, asName?: string) => Promise<Readonly<{ status: number; body: any }>>, state: DurableObjectState) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     state.storage.kv.put('do_name', name);
     state.storage.kv.put('app_subject', String(appSubjectFor(name)));
     const owner: Owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
-    const call = async (method: string, path: string, body?: unknown) => {
-      const response = await owner.fetch(new Request(`https://telegram-owner/app/v1/threads${path}`, { method, headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
+    const call = async (method: string, path: string, body?: unknown, asName = name) => {
+      const response = await owner.fetch(new Request(`https://telegram-owner/app/v1/threads${path}`, { method, headers: { 'x-waldo-do-name': asName, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
       return { status: response.status, body: await response.json() };
     };
     await work(call, state);
@@ -114,6 +114,31 @@ describe('the app threads registry', () => {
       expect(await call('GET', `/${unknown}`)).toEqual({ status: 404, body: { error: 'thread_not_found' } });
       expect(await call('POST', `/${unknown}/delete`, { operation_id: op(2), expected_revision: 1 })).toEqual({ status: 404, body: { error: 'thread_not_found' } });
       expect(await call('GET', `/${unknown}?limit=51`)).toEqual({ status: 400, body: { error: 'invalid_request' } });
+      expect([...state.storage.kv.list({ prefix: 'app:thread' })]).toEqual([]);
+    });
+  });
+
+  it('refuses a title over 200 characters on create and rename, and stores nothing', async () => {
+    await withOwner('threads-title-bound', async (call, state) => {
+      const over = 'x'.repeat(201);
+      expect(await call('POST', '', { operation_id: op(1), title: over })).toEqual({ status: 400, body: { error: 'invalid_request' } });
+      expect([...state.storage.kv.list({ prefix: 'app:thread' })]).toEqual([]);
+
+      const id = recorded((await call('POST', '', { operation_id: op(2), title: ` ${'y'.repeat(200)} ` })).body).thread_id;
+      expect(await call('POST', `/${id}/rename`, { operation_id: op(3), expected_title_revision: 1, title: over })).toEqual({ status: 400, body: { error: 'invalid_request' } });
+      expect(appThreadListV1Schema.parse((await call('GET', '')).body).threads).toEqual([expect.objectContaining({ thread_id: id, title: 'y'.repeat(200), title_revision: 1 })]);
+      expect(await call('GET', `/operations/${op(3)}`)).toEqual({ status: 404, body: { error: 'thread_not_found' } });
+    });
+  });
+
+  it('answers 403 before any thread work when the session authority fails or the do_name is not this object', async () => {
+    await withOwner('threads-gate', async (call, state) => {
+      expect(await call('POST', '', { operation_id: op(1), title: 'Wrong object' }, 'threads-gate-other')).toEqual({ status: 403, body: { error: 'unavailable' } });
+      expect(await call('GET', '', undefined, 'threads-gate-other')).toEqual({ status: 403, body: { error: 'unavailable' } });
+
+      vi.stubGlobal('fetch', async () => Response.json(null));
+      expect(await call('POST', '', { operation_id: op(2), title: 'Revoked' })).toEqual({ status: 403, body: { error: 'unavailable' } });
+      expect(await call('GET', '')).toEqual({ status: 403, body: { error: 'unavailable' } });
       expect([...state.storage.kv.list({ prefix: 'app:thread' })]).toEqual([]);
     });
   });

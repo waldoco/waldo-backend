@@ -456,3 +456,21 @@ it('a Gmail watch without a mail scope, on a foreign connection or into another 
   expect(out.error).toBeDefined();expect(seen).toHaveLength(0);expect(f.hops).not.toContain('token');
  }
 });
+it('the exchange replies with the Google profile, and neither the store call nor the log carries it',async()=>{
+ const token=(claims:Record<string,unknown>)=>{const bytes=new TextEncoder().encode(JSON.stringify(claims));return `e30.${btoa(String.fromCharCode(...bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}.sig`;};
+ const scope='openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/user.phonenumbers.read';
+ const stored:string[]=[];
+ vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
+  const url=String(input);if(url.startsWith('https://db.invalid/'))stored.push(`${url} ${String(init?.body??'')}`);
+  if(url==='https://oauth2.googleapis.com/token')return Response.json({access_token:'fictional-access',refresh_token:'fictional-refresh',id_token:token({email:'owner@example.test',name:'Zoë Okonkwo-Ström',given_name:'Zoë',family_name:'Okonkwo-Ström'}),scope});
+  if(url.startsWith('https://people.googleapis.com/v1/people/me'))return Response.json({phoneNumbers:[{canonicalForm:'+15550100777',metadata:{primary:true}}]});
+  if(url==='https://db.invalid/rest/v1/rpc/proxy_store')return Response.json('conn-new');
+  throw new Error('unexpected fictional transport');
+ }));
+ const logs=vi.spyOn(console,'log');
+ const reply=await(await serve(await request({do_name:'owner',op:'exchange',code:'fictional-code',code_verifier:'fictional-verifier',redirect_uri:'https://w.invalid/oauth/google/callback'}))).json();
+ expect(reply).toEqual({id:'conn-new',email:'owner@example.test',scopes:scope.split(' '),profile:{name:'Zoë Okonkwo-Ström',given_name:'Zoë',family_name:'Okonkwo-Ström',phone:'+15550100777'}});
+ expect(stored).toHaveLength(1);
+ expect(stored.join('\n')).not.toMatch(/Zo|Okonkwo|15550100777|"phone"|"profile"/);
+ expect(JSON.stringify(logs.mock.calls)).not.toMatch(/Okonkwo|15550100777/);
+});
