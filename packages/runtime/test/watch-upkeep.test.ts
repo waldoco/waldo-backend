@@ -58,6 +58,23 @@ describe('the watch status host fact', () => {
   });
 });
 
+describe('a stored book the host fact cannot read', () => {
+  it('is no miss, whatever its shape, and an unknown reason reads as a failed start', () => {
+    for (const stored of ['not a watch', 7, null, [], { failedAt: 'yesterday' }]) {
+      const kv = memoryKv();
+      kv.put('gmail_push', stored);
+      kv.put('calendar_push', stored);
+      expect(gmailPushBook(kv).miss()).toBeNull();
+      expect(calendarPushBook(kv).miss()).toBeNull();
+    }
+    const kv = memoryKv();
+    kv.put('gmail_push', { failedAt: AT, reason: 'retired_reason' });
+    kv.put('calendar_push', { failedAt: AT, reason: 'retired_reason' });
+    expect(gmailPushBook(kv).miss()).toEqual({ at: AT, reason: 'failed' });
+    expect(calendarPushBook(kv).miss()).toEqual({ at: AT, reason: 'failed' });
+  });
+});
+
 it('a paused upkeep job tells the owner nothing: it is not one of their jobs', async () => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('watch-upkeep-pause-silent')), async (_instance, state) => {
     ensureSchema(state.storage);

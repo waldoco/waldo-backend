@@ -22,7 +22,7 @@ import { ownerEffectLedger } from './owner-effect-ledger';
 import {commonRuntimeReadiness} from './common-runtime-readiness';
 import { CONSOLE_DEVICES_PATH } from '../devices/contract';
 import { deviceDirectory } from '../devices/device-directory';
-import { deviceConsoleAction, renderDevices, DEVICE_PAGE_HEADERS } from '../devices/console-devices';
+import { deviceConsoleAction, renderDevices, devicePageHeaders, DEVICE_PAGE_HEADERS } from '../devices/console-devices';
 import { taskSourceFetch } from '../tools/task-source-io';
 import {OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,ownerControlsView,ownerControlsRead,ownerControlsAction} from './dashboard-owner-controls';
 import {MEMORY_CONTROL_PATH,projectMemoryControl,resolveMemoryAction} from './dashboard-memory-actions';
@@ -1383,7 +1383,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       try {
         const devices = await deviceDirectory(this.env).listDevices(owner);
         const rows = await Promise.all(devices.map(async (device) => ({ ...device, commands: this.env.DEVICE_BRIDGE_DO ? await this.env.DEVICE_BRIDGE_DO.get(this.env.DEVICE_BRIDGE_DO.idFromName(device.device_id)).listCommands() : [], online: this.env.DEVICE_BRIDGE_DO ? (await this.env.DEVICE_BRIDGE_DO.get(this.env.DEVICE_BRIDGE_DO.idFromName(device.device_id)).status()).online : false })));
-        return new Response(renderDevices(rows, session.csrf), { headers: DEVICE_PAGE_HEADERS });
+        const nonce = crypto.randomUUID();
+        return new Response(renderDevices(rows, session.csrf, nonce), { headers: devicePageHeaders(nonce) });
       } catch { return new Response('Devices unavailable.', { status: 503, headers: DEVICE_PAGE_HEADERS }); }
     }
     if (url.pathname === CONSOLE_IMESSAGE_PATH && request.method === 'GET') return iMessageConsolePage(this.imessageHost.env, this.ctx.storage.kv.get<string>('do_name') ?? '', session.csrf);
@@ -1393,7 +1394,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         new IMessageOwnerInbox(this.ctx.storage).revokeBridge(bridgeDoName);
         if (this.activeIMessage?.bridgeDoName === bridgeDoName) this.activeAbort?.abort();
       });
-      if (form.get('action') === 'device.pair' || form.get('action') === 'device.revoke' || form.get('action') === 'device.query' || form.get('action') === 'device.notify') return deviceConsoleAction(form, session.csrf, this.ctx.storage.kv.get<string>('do_name') ?? '', deviceDirectory(this.env), this.env.DEVICE_BRIDGE_DO);
+      if (form.get('action') === 'device.pair' || form.get('action') === 'device.revoke' || form.get('action') === 'device.query' || form.get('action') === 'device.notify') return deviceConsoleAction(form, session.csrf, this.ctx.storage.kv.get<string>('do_name') ?? '', deviceDirectory(this.env), this.env.DEVICE_BRIDGE_DO, request.headers.get('accept') ?? '');
     }
     if (url.pathname === BROWSER_TRIAL_PATH) {
       const doName = this.ctx.storage.kv.get<string>('do_name') ?? '', subject = this.ctx.storage.kv.get<string>('telegram_subject') ?? '';

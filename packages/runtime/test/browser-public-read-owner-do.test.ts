@@ -6,8 +6,12 @@ import {workspaceOwnerHost} from '../src/channels/workspace-host';
 import { configureCommonPublicBrowser } from '../src/channels/common-public-browser-configuration';
 import { commonBrowserFixture, commonBrowserMeteredFixtureLoader } from './fixtures/common-browser-sdk';
 import { toolOutput } from './fixtures/tool-output';
+import { OPENAI_GPT_6_LUNA_MODEL, WALDO_CHAT_MODEL } from '@waldo/contracts';
 
 const proof = vi.hoisted(() => ({ inputs: [] as any[], delivered: [] as string[], directoryOwner: '10000000-0000-0000-0000-000000000001', doName: '', subject: '81101',normalCalls:0,phase:'main',phaseCalls:0,sessionHandle:'',tabRef:'',outputs:[] as any[],bodies:new Map<string,Uint8Array>() }));
+// The browser trial prices Luna only and refuses any other model, so these owner turns run on Luna to reach it.
+// Remove this pin, and the test that asserts it, once the trial meter prices Sol.
+vi.mock('@waldo/contracts', async load => { const contracts = await load<typeof import('@waldo/contracts')>(); return { ...contracts, WALDO_CHAT_MODEL: contracts.OPENAI_GPT_6_LUNA_MODEL }; });
 vi.mock('../src/identity/common-owner-authority', () => ({ commonOwnerAuthority: () => ({ resolve: async () => ({ directoryOwnerId: proof.directoryOwner, custodyDigest: 'a'.repeat(64) }) }) }));
 vi.mock('../src/channels/workspace-host',async load=>{
  const actual=await load<typeof import('../src/channels/workspace-host')>();
@@ -38,6 +42,10 @@ vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof im
   if (method === 'sendMessage') { proof.delivered.push(payload.text); return { message_id: proof.delivered.length,chat:{id:payload.chat_id} }; }
   return method === 'getMe' ? { username: 'public_browser_fixture_bot' } : true;
 } }));
+
+it('runs its owner turns on Luna, the one model the browser trial prices', () => {
+  expect(WALDO_CHAT_MODEL).toBe(OPENAI_GPT_6_LUNA_MODEL);
+});
 
 it('ordinary owner loop reads, types, reobserves and continues two public tabs with PNG delivery before cancellation and a new task', async () => {
   commonBrowserFixture.reset();commonBrowserFixture.filters=true;
