@@ -389,3 +389,73 @@ describe('OpenAIResponsesAdapter reasoning passback', () => {
     ]);
   });
 });
+
+describe('OpenAIResponsesAdapter hosted web search', () => {
+  const searching = (replies: unknown[]) => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async (body: Record<string, unknown>) => { bodies.push(body); return replies[bodies.length - 1]; }) });
+    const request = (web_search?: LLMRequest['web_search']): LLMGatewayRequest => {
+      const base = gatewayRequest();
+      return { ...base, request: { ...base.request, tools: [{ name: 'get_context', description: 'Read context.', parameters: { type: 'object', properties: {} } }], ...(web_search ? { web_search } : {}) } };
+    };
+    return { bodies, adapter, request };
+  };
+  const usage = { input_tokens: 1, output_tokens: 1 };
+  const message = (text: string, citations: Array<{ url: string; title: string }>) => ({
+    type: 'message', id: 'msg_1', role: 'assistant', status: 'completed',
+    content: [{ type: 'output_text', text, annotations: citations.map((c) => ({ type: 'url_citation', start_index: 0, end_index: 1, ...c })) }],
+  });
+
+  it('offers the hosted search after the function tools, located where the owner is', async () => {
+    const { bodies, adapter, request } = searching([{ id: 'r', status: 'completed', output_text: 'ok', output: [], usage }]);
+    await adapter.complete(request({ country: 'IN', timezone: 'Asia/Kolkata' }));
+    expect(bodies[0]!.tools).toEqual([
+      { type: 'function', name: 'get_context', description: 'Read context.', parameters: { type: 'object', properties: {} }, strict: false },
+      { type: 'web_search', user_location: { type: 'approximate', country: 'IN', timezone: 'Asia/Kolkata' } },
+    ]);
+  });
+
+  it('leaves a request without hosted search unchanged', async () => {
+    const { bodies, adapter, request } = searching([{ id: 'r', status: 'completed', output_text: 'ok', output: [], usage }]);
+    await adapter.complete(request());
+    expect((bodies[0]!.tools as Array<{ type: string }>).map((tool) => tool.type)).toEqual(['function']);
+  });
+
+  it('adds every cited link the reply text does not already show', async () => {
+    const text = 'The Lalit is 1.2 km from the venue ([thelalit.com](https://www.thelalit.com/bangalore?utm_source=openai)).';
+    const output = [
+      { type: 'web_search_call', id: 'ws_1', status: 'completed', action: { type: 'search', query: 'hotels near the venue' } },
+      message(text, [{ url: 'https://www.thelalit.com/bangalore?utm_source=openai', title: 'The Lalit' }, { url: 'https://maps.example/route?utm_source=openai', title: 'Route\nmap' }]),
+    ];
+    const { adapter, request } = searching([{ id: 'r', status: 'completed', output_text: text, output, usage }]);
+    const result = await adapter.complete(request({ country: 'IN' }));
+    if (!result.ok) throw Error(result.error);
+    expect(result.data.text).toBe(`${text}\n\nSources:\n- Route map: https://maps.example/route?utm_source=openai`);
+  });
+
+  it('leaves a reply whose citations are all shown unchanged', async () => {
+    const text = 'Rooms from ₹6,000 ([agoda.com](https://www.agoda.com/x?utm_source=openai)).';
+    const { adapter, request } = searching([{ id: 'r', status: 'completed', output_text: text, output: [message(text, [{ url: 'https://www.agoda.com/x?utm_source=openai', title: 'Agoda' }])], usage }]);
+    const result = await adapter.complete(request({ country: 'IN' }));
+    if (!result.ok) throw Error(result.error);
+    expect(result.data.text).toBe(text);
+  });
+
+  it('replays a round with a hosted search untouched ahead of its function call output', async () => {
+    const roundOne = [
+      { type: 'reasoning', id: 'rs_1', encrypted_content: 'opaque-1', summary: [] },
+      { type: 'web_search_call', id: 'ws_1', status: 'completed', action: { type: 'search', query: 'hotels near the venue' } },
+      { type: 'function_call', id: 'fc_1', call_id: 'c1', name: 'get_context', arguments: '{}' },
+    ];
+    const { bodies, adapter, request } = searching([
+      { id: 'r1', status: 'completed', output_text: '', output: roundOne, usage },
+      { id: 'r2', status: 'completed', output_text: 'Booked nothing yet; here are three options.', output: [], usage },
+    ]);
+    const first = await adapter.complete(request({ country: 'IN' }));
+    if (!first.ok) throw Error(first.error);
+    const second = request({ country: 'IN' });
+    second.request.tool_turns = [{ call: first.data.tool_calls![0]!, output: '{"ok":true}', prior_items: first.data.output_items! }];
+    await expect(adapter.complete(second)).resolves.toMatchObject({ ok: true });
+    expect((bodies[1]!.input as unknown[]).slice(1)).toEqual([...roundOne, { type: 'function_call_output', call_id: 'c1', output: '{"ok":true}' }]);
+  });
+});

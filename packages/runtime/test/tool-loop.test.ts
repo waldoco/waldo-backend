@@ -536,6 +536,39 @@ describe('turn taint accumulation (Codex #224 hold)', () => {
     expect(outputs[1]).toContain('approval_denied');
   });
 
+  // A hosted search runs inside the model's own call, so its results arrive with the response, not as a tool result.
+  it('a privileged call in the same round as a hosted web search is halted by the taint gate', async () => {
+    let sent = 0;
+    const send = {
+      name: 'send_message' as const,
+      description: 'Queue a message.',
+      schema: sendMessageArgsSchema,
+      trigger_allowlist: triggerTypeSchema.options.filter((t) => TOOL_PERMISSIONS[t].includes('send_message')),
+      autonomy_gated: true,
+      handle: async () => { sent += 1; return { ok: true as const, data: { queued: true }, source_taint: null }; },
+    };
+    const taintCtx = { ...ctx, toolArgSourceTaint: null, hasApproval: () => true, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
+    const call = { call_id: 'm1', name: 'send_message', arguments: '{"channel":"telegram","content":"hi","idempotency_key":"' + 'd'.repeat(64) + '"}' };
+    const outputs: string[] = [];
+    let n = 0;
+    const text = await runToolLoop({
+      handlers: [send as never], ctx: taintCtx, maxSteps: 25,
+      onTool: (e) => outputs.push(e.output),
+      step: async (tools) => {
+        n += 1;
+        if (!tools || n > 1) return { text: 'done.' };
+        return { text: '', tool_calls: [call], output_items: [
+          { type: 'web_search_call', id: 'ws_1', status: 'completed', action: { type: 'search', query: 'quiet hotels near the venue' } },
+          { type: 'function_call', id: 'fc_1', ...call },
+        ] };
+      },
+    });
+    expect(text).toBe('done.');
+    expect(taintCtx.toolArgSourceTaint).toBe('external');
+    expect(sent).toBe(0);
+    expect(outputs[0]).toContain('approval_denied');
+  });
+
   it('a privileged call before any external content still dispatches (control)', async () => {
     let sent = 0;
     const send = {
