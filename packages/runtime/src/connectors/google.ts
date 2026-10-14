@@ -280,9 +280,11 @@ export type ContactMatch = Readonly<{ name: string | null; emails: readonly stri
 // One row per person as Google lists them, saved contacts first, with every address the person has. The Worker applies
 // the contract's address check, keeps an address once across people, and cuts to three addresses and the limit, so an
 // address the contract refuses never takes a place. A results field that is not a list is refused, never read as no match.
+// The connector's fixed refusal of a malformed People answer; the edge passes it through, so the Worker can refuse it.
+export const PEOPLE_UNREADABLE = 'invalid People search response';
 const contactMatches = (sources: readonly Readonly<{ source: ContactMatch['source']; results: unknown }>[]): readonly ContactMatch[] =>
   sources.flatMap(({ source, results }) => {
-    if (results !== undefined && !Array.isArray(results)) throw new Error('invalid People search response');
+    if (results !== undefined && !Array.isArray(results)) throw new Error(PEOPLE_UNREADABLE);
     return (results ?? []).flatMap((result: unknown) => {
       const person = isObject(result) && isObject(result.person) ? result.person : {};
       const named = Array.isArray(person.names) ? person.names.find((entry) => isObject(entry) && typeof entry.displayName === 'string' && entry.displayName.trim()) : undefined;

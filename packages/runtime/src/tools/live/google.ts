@@ -9,7 +9,7 @@ import {
   connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, searchContactsArgsSchema, contactMatchSchema, type ContactMatch, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type SearchContactsArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolEligibility, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
-import { b64url, buildMime, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type GoogleClient, type GoogleFeature } from '../../connectors/google';
+import { PEOPLE_UNREADABLE, b64url, buildMime, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type GoogleClient, type GoogleFeature } from '../../connectors/google';
 import { EmailProposalError, proposalStatus, type CardPlacement, type EmailSendProposal } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
@@ -284,7 +284,11 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       // places, and never hides an address another person shares.
       const seen = new Set<string>();
       const contacts: ContactMatch[] = [];
-      for (const { name, emails, source } of await client.searchContacts(query, limit)) {
+      const rows = await client.searchContacts(query, limit).catch((error: unknown) => {
+        // A malformed People answer fails the same way on every retry, so it is refused like any unreadable answer.
+        throw error instanceof Error && error.message === PEOPLE_UNREADABLE ? new UnreadableAnswer('unreadable connector answer') : error;
+      });
+      for (const { name, emails, source } of rows) {
         const kept = emails.filter((email) => !seen.has(email) && contactMatchSchema.shape.emails.element.safeParse(email).success).slice(0, 3);
         const match = contactMatchSchema.safeParse({ name, emails: kept, source });
         if (!match.success) continue;

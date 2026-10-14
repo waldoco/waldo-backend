@@ -63,6 +63,14 @@ describe('Google contacts lookup', () => {
       .toMatchObject({ ok: true, data: { contacts: [{ name: 'Ana Ruiz', emails: ['ana@studio.example'], source: 'contacts' }] } });
   });
 
+  it('counts an address as taken only when it is kept, so one cut from a person still reaches the next', async () => {
+    const { client } = people([person('Ana Ruiz', 'a1@studio.example', 'a2@studio.example', 'a3@studio.example', 'desk@studio.example'), person('Studio Desk', 'desk@studio.example')], []);
+    expect(await tool(client).handle({ query: 'Studio', limit: 5 } as never)).toMatchObject({ ok: true, data: { contacts: [
+      { name: 'Ana Ruiz', emails: ['a1@studio.example', 'a2@studio.example', 'a3@studio.example'] },
+      { name: 'Studio Desk', emails: ['desk@studio.example'] },
+    ] } });
+  });
+
   it('refuses a People answer whose results are not a list, never reading it as no match', async () => {
     const fetcher = async (input: RequestInfo | URL) => {
       const url = new URL(String(input));
@@ -72,7 +80,9 @@ describe('Google contacts lookup', () => {
     const client = googleClient(app, { refresh_token: 'fictional-refresh' }, fetcher as typeof fetch);
     await expect(client.searchContacts!('Priya', 5)).rejects.toThrow('invalid People search response');
     const result = await tool(client).handle({ query: 'Priya', limit: 5 } as never);
-    expect(result).toMatchObject({ ok: false });
+    expect(result).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining('Nothing was read') });
+    expect(await tool({ searchContacts: async () => { throw new GoogleError(502, 'invalid People search response'); } }).handle({ query: 'Priya', limit: 5 } as never))
+      .toMatchObject({ ok: false, code: 'rejected' });
     expect(JSON.stringify(result)).not.toContain('"contacts"');
   });
 
