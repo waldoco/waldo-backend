@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
-import { alarmRetryDelay, armAlarm, rearmSharedAlarm } from '../src/scheduler/alarm-slot';
+import { alarmPass, alarmRetryDelay, armAlarm, rearmSharedAlarm } from '../src/scheduler/alarm-slot';
 import { HEARTBEAT_EVERY_MS } from '../src/channels/heartbeat';
 
 // Every pass here is fired by workerd's own alarm scheduler at a real owner object. A wake armed or deleted during a pass
@@ -16,16 +16,18 @@ const RETRY_DUE = 'owner_alarm_retry_due_v1';
 const LINK_DUE = 'telegram_link_due_v1';
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Records when each pass starts and the platform's retry count for it. With firstPassDies, the first pass throws after its
-// work, as a pass that is evicted or runs out of CPU does, which the platform retries unless the pass deleted the alarm.
-const watchPasses = async (name: string, seed: (state: DurableObjectState) => void, observe: (stub: DurableObjectStub, at: number[], retries: number[]) => Promise<void>, firstPassDies = false) => {
+// Records when each pass starts and the platform's retry count for it. A firstPass replaces the first pass, for one that
+// dies: evicted, or out of CPU. Its error reaches the platform, which retries the alarm unless the pass deleted it.
+type Owner = Passes & { ctx: DurableObjectState };
+const realAlarm = proto.alarm;
+const passDeath = () => new Error('synthetic pass death');
+const watchPasses = async (name: string, seed: (state: DurableObjectState) => void, observe: (stub: DurableObjectStub, at: number[], retries: number[]) => Promise<void>, firstPass?: (owner: Owner) => Promise<void>) => {
   const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   const inObject = <T>(work: (state: DurableObjectState) => Promise<T> | T) => runInDurableObject(stub, async (_instance, state) => work(state));
-  const real = proto.alarm, at: number[] = [], retries: number[] = [], start = Date.now();
-  const passes = vi.spyOn(proto, 'alarm').mockImplementation(async function (this: unknown, info?: AlarmInvocationInfo) {
+  const at: number[] = [], retries: number[] = [], start = Date.now();
+  const passes = vi.spyOn(proto, 'alarm').mockImplementation(async function (this: Owner, info?: AlarmInvocationInfo) {
     at.push(Date.now() - start); retries.push(info?.retryCount ?? 0);
-    await real.call(this);
-    if (firstPassDies && at.length === 1) throw new Error('synthetic pass death');
+    return firstPass && at.length === 1 ? firstPass(this) : realAlarm.call(this);
   });
   try {
     await inObject(async state => { seed(state); await armAlarm(state.storage, Date.now() + 100); });
@@ -139,7 +141,24 @@ it('a pass that dies after the arbiter found nothing due still gets the platform
       await untilPasses(at, 2, 4_000);
       expect(at.length, `passes at ${at.join(', ')} ms`).toBeGreaterThanOrEqual(2);
       expect(retries[1], `retry counts ${retries.join(', ')}`).toBe(1);
-    }, true);
+    }, async owner => { await realAlarm.call(owner); throw passDeath(); });
+  } finally { work.mockRestore(); }
+}, 20_000);
+
+// A pass killed mid-work keeps no wake its re-arms computed, because a pass applies them only once its work completes.
+// The work still due is not lost: the platform's retry runs the pass again, and that pass re-arms from the due keys.
+it('a pass killed after drainApp re-armed leaves the wake to the platform\'s retry, which arms it again from the due keys', async () => {
+  const later = Date.now() + 20 * 60_000;
+  const work = vi.spyOn(proto, 'alarmWork').mockImplementation(async function (this: Passes) { await this.drainApp(); });
+  try {
+    await watchPasses('alarm-pass-killed-mid-work', state => state.storage.kv.put(LINK_DUE, later), async (stub, at, retries) => {
+      await untilPasses(at, 2, 4_000);
+      await sleep(200);
+      const armed = await runInDurableObject(stub, (_instance, state) => state.storage.getAlarm());
+      expect(at.length, `passes at ${at.join(', ')} ms`).toBe(2);
+      expect(retries[1], `retry counts ${retries.join(', ')}`).toBe(1);
+      expect(armed, `armed ${armed}, still due ${later}`).toBe(later);
+    }, owner => alarmPass(owner.ctx.storage, async () => { await owner.drainApp(); throw passDeath(); }));
   } finally { work.mockRestore(); }
 }, 20_000);
 
