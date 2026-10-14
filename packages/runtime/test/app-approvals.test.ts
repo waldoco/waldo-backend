@@ -275,3 +275,36 @@ it('a calendar approval carries the details its frozen review states, only to a 
     for (const header of ['approvals=1', 'approvals=x', 'threads=2', '']) expect([header, (await list(header)).text]).toEqual([header, first.text]);
   });
 });
+
+it('a calendar detail that fails its schema drops the details, not the card, so every build still lists it; the primary calendar is never named', async () => {
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`app-approvals-calendar-fallback-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, async (_instance, state) => {
+    let n = 0;
+    // Google answered without an offset, which the review can still write but `previous` does not accept.
+    let seen = { start: '2026-09-23T18:00:00', end: '2026-09-23T18:15:00' };
+    const client = {
+      account: { connection_id: 'local:owner@example.com', email: 'owner@example.com' },
+      event: async (id: string) => ({ id, title: 'Standup', ...seen, all_day: false, etag: 'v1' }),
+    } as unknown as GoogleClient;
+    const desk = approvalDesk(state.storage.sql, { surface: 'app', owner: 7_000_000_000_001, call: appCaller(), appLink: appApprovalLink,
+      google: async () => client, newId: () => `fb${++n}`, now: () => Date.now(), timezone: 'Asia/Kolkata', log: () => {}, currentRunRef: () => 'app-message-0001' });
+    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
+    const list = async (contract?: string) => appApprovalListV1Schema.parse(await (await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals', contract === undefined ? {} : { headers: { 'x-waldo-app-contract': contract } }), host)).json()).approvals;
+    const day = new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10);
+    const move = await desk.propose({ action: 'move', event_id: 'e1', title: 'Standup', start: `${day}T18:30:00+05:30` as never, end: `${day}T18:45:00+05:30` as never, calendar_id: 'primary', reason: 'clash' });
+    const fallback = { action: 'move', title: 'Standup', start: `${day}T18:30:00+05:30`, end: `${day}T18:45:00+05:30` };
+    for (const contract of [undefined, 'approvals=2']) {
+      const [approval] = await list(contract);
+      expect([contract, approval?.approval_id, approval?.state, approval?.exact]).toEqual([contract, move, 'open', { changes: fallback }]);
+    }
+    expect((await list('approvals=2'))[0]!.review).toContain('Move "Standup" from');
+
+    // With a well-formed event the details return, and an explicit primary calendar is still not named.
+    seen = { start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T18:15:00+05:30' };
+    const primary = await desk.propose({ action: 'move', event_id: 'e2', title: 'Standup', start: `${day}T19:30:00+05:30` as never, end: `${day}T19:45:00+05:30` as never, calendar_id: 'primary', reason: 'clash' });
+    const detailed = (await list('approvals=2')).find(a => a.approval_id === primary)!;
+    expect(detailed.exact.changes).toEqual({ action: 'move', title: 'Standup', start: `${day}T19:30:00+05:30`, end: `${day}T19:45:00+05:30`,
+      account: 'owner@example.com', previous: { start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T18:15:00+05:30' }, time_zone: 'Asia/Kolkata' });
+    expect(detailed.review).not.toContain('primary');
+  });
+});
