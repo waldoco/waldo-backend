@@ -159,6 +159,28 @@ describe('scheduled jobs run as the owner the directory admits', () => {
     });
   });
 
+  it('a reminder for an app-bound owner writes the owner\'s app chain, never the app subject\'s', async () => {
+    await withOwner('jobs-app-reminder-chain', { telegram: false, app: true, directory: true }, async (owner, state) => {
+      await dueReminder(state);
+      await schedulePass(owner, state);
+      expectOwnerRequest('[Reminder due now');
+      const rows = [...state.storage.kv.list<{ chatId: string; ownerId: string; appPayload: string }>({ prefix: 'conv:' })].map(([, row]) => row);
+      expect(rows.find(row => row.appPayload === REMINDER_TEXT)).toMatchObject({ chatId: `owner:${OWNER_PRINCIPAL}`, ownerId: OWNER_PRINCIPAL });
+    });
+  });
+
+  it('work that reaches the responder outside a named job runs nothing and asks the directory nothing', async () => {
+    await withOwner('jobs-unnamed-work', { telegram: true, app: false, directory: true }, async (owner, state) => {
+      await dueReminder(state);
+      const [entry] = state.storage.sql.exec<{ id: string; kind: string; occurrence_at: number; due_at: number; attempts: number }>("SELECT id, kind, occurrence_at, due_at, attempts FROM schedule WHERE kind = 'reminder'").toArray();
+      const runtime = owner.setup('telegram') as unknown as { fire(entry: unknown): Promise<unknown> };
+      await expect(runtime.fire(entry)).rejects.toThrow('run is closed or expired');
+      expect(fixture.requests).toEqual([]);
+      expect(wire.asked).toEqual([]);
+      expect(wire.telegramSent).toEqual([]);
+    });
+  });
+
   it('an app-bound owner\'s Brief composes as that owner, resolved once through the runtime authority', async () => {
     await withOwner('jobs-app-owner', { telegram: false, app: true, directory: true }, async (owner, state) => {
       await dueBrief(state);

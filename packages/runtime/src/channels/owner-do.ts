@@ -673,14 +673,21 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     try { return await work(); } finally { this.ownerJob = previous; }
   }
   // Without a directory there is no owner to resolve and the fixture owner stands. With one, a job runs only as the owner it
-  // admitted; work reaching the responder outside a named job, or for an owner no longer admitted, runs nothing.
-  private readonly jobHost: OwnerJobHost = { admit: async () => {
+  // admitted; work reaching the responder outside a named job runs nothing and asks the directory nothing, and work for an
+  // owner no longer admitted runs nothing.
+  private async admitOwnerJob(): Promise<OwnerMessageAdmission | undefined> {
     if (!consoleAuth(this.env)) return undefined;
-    const job = this.ownerJob, owner = await this.scheduledOwner();
-    if (!job || owner.kind !== 'admitted') throw new ClosedRunError();
+    const job = this.ownerJob;
+    if (!job) throw new ClosedRunError();
+    const owner = await this.scheduledOwner();
+    if (owner.kind !== 'admitted') throw new ClosedRunError();
     return ownerJobAdmission({ ...job, expectedPhysicalDoId: this.ctx.id.toString(),
       lookup: async () => { if (!owner.current()) throw new ClosedRunError(); return owner.binding; } });
-  } };
+  }
+  // Each surface's runtime names the chain its jobs write, the one its owner turns read, whichever binding admitted the owner.
+  private jobHostFor(chain: OwnerJobHost['chain']): OwnerJobHost {
+    return { admit: () => this.admitOwnerJob(), chain };
+  }
 
   // The app binding written at the owner's first app message: the local sign that the app is one of their surfaces.
   private appBound(): boolean {
@@ -1731,13 +1738,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const auth=await deviceDirectory(this.env).deviceForAuth(delivery.device_id);
         if(!auth || auth.owner_id!==delivery.owner_id || this.ctx.storage.kv.get<string>('do_name')!==auth.do_name || this.ctx.storage.kv.get<boolean>('telegram_unlinked')===true || !this.env.OWNER_DO || this.env.OWNER_DO.idFromName(auth.do_name).toString()!==this.ctx.id.toString())throw new Error('owner_binding_closed');
       };
-      try { await this.deliverMacRow(row.id, delivery, current, runtime, inbox); }
+      try { await this.asOwnerJob('device_followup', `mac:${row.id}`, () => this.deliverMacRow(row.id, delivery, current, runtime, inbox)); }
       catch (error) {
         // Custody that no longer resolves to this owner's live device (revoked, unknown, or
         // rebound) is permanent: set the row aside so the rest of the owner alarm runs. Any
         // other failure backs this follow-up off without stalling the alarm.
         if (error instanceof Error && error.message === 'owner_binding_closed') { inbox.quarantine(row.id); console.warn(JSON.stringify({module:'device_bridge',code:'followup_quarantined'})); continue; }
-        inbox.retryLater(MAC_FOLLOWUP_RETRY_MS); console.warn(JSON.stringify({module:'device_bridge',code:'followup_pending'}));
+        // A result reported to an owner the directory no longer admits waits at the undeliverable backoff, read from the owner
+        // this drain already asked for; any other failure, a directory outage included, retries sooner.
+        const dormant = (await this.jobOwner)?.kind === 'dormant';
+        inbox.retryLater(dormant ? MAC_FOLLOWUP_UNDELIVERABLE_RETRY_MS : MAC_FOLLOWUP_RETRY_MS); console.warn(JSON.stringify({module:'device_bridge',code:dormant ? 'followup_owner_dormant' : 'followup_pending'}));
         break;
       }
     }
@@ -2653,11 +2663,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if(context.conversationRef!==record.conversationRef)throw new ClosedRunError();
         return context;
       }},history:context=>({...indexedConversationStore(canonicalOwnerConversationStore(this.ctx.storage,context,this.logSkippedLoad),episodes,()=>Date.now()),
-        noteUnfinished:(line,scope)=>this.appInbox.noteLanded(scope.runId,scope.attempt,line)}),jobHost:this.jobHost} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
+        noteUnfinished:(line,scope)=>this.appInbox.noteLanded(scope.runId,scope.attempt,line)}),jobHost:this.jobHostFor(admission=>ownerChainRef('app',admission.invocation.verified_authority.principal_ref))} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
         const record=this.activeIMessage;
         if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==record.text)throw new ClosedRunError();
         return iMessageOwnerContext(this.imessageHost,record,scope);
-      }},history:context=>canonicalOwnerConversationStore(this.ctx.storage,context)} : {...telegramContext,jobHost:this.jobHost},
+      }},history:context=>canonicalOwnerConversationStore(this.ctx.storage,context)} : {...telegramContext,jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain)},
     );
     // A job prompt built on the ledger: the owner's health logs reach the model as this turn's context.
     const ledgerJob = async (trace: string, said: string, toolNames?: Parameters<typeof responder.prompt>[4]) =>

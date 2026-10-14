@@ -1,4 +1,4 @@
-import { createOwnerTurnContext, ownerChainRef, type OwnerContextCapability } from '../context-composer/owner-turn';
+import { createOwnerTurnContext, type OwnerContextCapability } from '../context-composer/owner-turn';
 import type { OwnerMessageAdmission } from '../identity/owner-message-admission';
 import { OWNER_REQUEST_HOP } from './harness';
 import { narrowHeldJson, withholdHeldTurns } from '../conversation/held-turns';
@@ -74,8 +74,9 @@ export type OwnerSkillHost = Readonly<{ browserAttachments?(scope?: RunEffectSco
 export type OwnerContextHost = Readonly<{ prepare(turn: OwnerTurnEnvelope, scope: RunEffectScope): Promise<OwnerContextCapability | undefined> }>;
 export type OwnerHistoryFactory = (context: OwnerContextCapability, scope: RunEffectScope) => ConversationStore;
 // Admits the owner a scheduled job runs as. Undefined means no directory backs this deploy, so the fixture owner stands;
-// a host that cannot admit the owner throws, and the job runs nothing.
-export type OwnerJobHost = Readonly<{ admit(): Promise<OwnerMessageAdmission | undefined> }>;
+// a host that cannot admit the owner throws, and the job runs nothing. A job that converses writes the chain the host names
+// for the admitted owner, given the chain its surface adapter passed: the one that surface's owner turns read.
+export type OwnerJobHost = Readonly<{ admit(): Promise<OwnerMessageAdmission | undefined>; chain(admission: OwnerMessageAdmission, surfaceChain: string): string }>;
 export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost }>;
 type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost }>;
 
@@ -640,15 +641,16 @@ export const createOwnerResponder = (
     }
   };
   // Machine work outside an owner turn runs in a responder bound to the owner the job host admitted, so its cache key,
-  // composed context and tools' authenticated owner are that owner's. A job that converses writes its surface's chain, the
-  // one that surface's owner turns read: the chat's on Telegram and WhatsApp, the owner's principal chain on the app.
-  const asOwnerJob = async <T>(trace: string, work: (responder: OwnerResponder) => Promise<T>, chat?: Readonly<{ surface: string | undefined; chain: string }>): Promise<T | undefined> => {
-    if (context || !privateOwner?.jobHost) return undefined;
-    const admission = await privateOwner.jobHost.admit();
+  // composed context and tools' authenticated owner are that owner's. A job that converses passes its surface's chain, and
+  // writes the chain the host names for it; a job that doesn't keeps the owner's default and writes no chain.
+  const asOwnerJob = async <T>(trace: string, work: (responder: OwnerResponder) => Promise<T>, surfaceChain?: string): Promise<T | undefined> => {
+    const jobHost = context ? undefined : privateOwner?.jobHost;
+    if (!jobHost) return undefined;
+    const admission = await jobHost.admit();
     if (!admission) return undefined;
     let healthRead: Promise<ContextHealthMaterial | null> | undefined;
     const jobContext = createOwnerTurnContext(admission, {
-      ...(chat ? { conversationRef: chat.surface === 'app' ? ownerChainRef('app', admission.invocation.verified_authority.principal_ref) : chat.chain } : {}),
+      ...(surfaceChain === undefined ? {} : { conversationRef: jobHost.chain(admission, surfaceChain) }),
       toolOutputs: recentToolResults,
       ...(health ? { health: () => healthRead ??= health(trace) } : {}),
       onPhase: (phase, previousMs) => log({ trace, hop: 'composer_phase', ms: previousMs, ok: true, detail: phase }),
@@ -779,14 +781,14 @@ export const createOwnerResponder = (
       }
     },
     async remind(id, conversationRef, note, time, surface) {
-      const asOwner = await asOwnerJob(id, job => job.remind(id, conversationRef, note, time, surface), { surface, chain: conversationRef });
+      const asOwner = await asOwnerJob(id, job => job.remind(id, conversationRef, note, time, surface), conversationRef);
       if (asOwner !== undefined) return asOwner;
       await restored();
       pending = undefined;
       return converse(id, conversationRef, `[Reminder due now, set earlier by the owner: "${note}"] Send the reminder briefly in your own words. Do not add a sentence explaining that they asked for it.`, time, false, surface);
     },
     async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint) {
-      const asOwner = await asOwnerJob(id, job => job.prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint), { surface, chain: conversationRef });
+      const asOwner = await asOwnerJob(id, job => job.prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint), conversationRef);
       if (asOwner !== undefined) return asOwner;
       backgroundSourceTaint = sourceTaint ?? null;
       // Cards read in seconds, so a job's prompt gets half the provider budget; the guard keeps the opening and closing and cuts the data between.

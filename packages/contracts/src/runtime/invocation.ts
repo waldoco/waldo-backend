@@ -63,15 +63,17 @@ export const invocationInputReferenceSchema = z.strictObject({
 });
 export type InvocationInputReference = z.infer<typeof invocationInputReferenceSchema>;
 
-// The schedule kinds the owner's own Durable Object runs through the owner responder.
-export const ownerJobSchema = scheduleKindSchema.extract(['brief', 'pre_activity_spot', 'dreaming', 'reminder', 'heartbeat', 'standing_order']);
+// The jobs the owner's own Durable Object runs through the owner responder: the schedule kinds it runs, and the report
+// of a result the owner's paired device sent back, which no schedule entry carries.
+const SCHEDULED_OWNER_JOBS = scheduleKindSchema.extract(['brief', 'pre_activity_spot', 'dreaming', 'reminder', 'heartbeat', 'standing_order']).options;
+export const ownerJobSchema = z.enum([...SCHEDULED_OWNER_JOBS, 'device_followup']);
 export type OwnerJob = z.infer<typeof ownerJobSchema>;
 
-// A reminder, heartbeat or standing-order fire reaches out to the owner without an owner message, which is what the
-// intervention trigger names; the other jobs keep the trigger their schedule kind already carries.
+// A reminder, heartbeat, standing-order fire or device follow-up reaches out to the owner without an owner message, which
+// is what the intervention trigger names; the other jobs keep the trigger their schedule kind already carries.
 const OWNER_JOB_TRIGGER: Readonly<Record<OwnerJob, TriggerType>> = {
   brief: 'brief', pre_activity_spot: 'pre_activity_spot', dreaming: 'dreaming_mode',
-  reminder: 'intervention', heartbeat: 'intervention', standing_order: 'intervention',
+  reminder: 'intervention', heartbeat: 'intervention', standing_order: 'intervention', device_followup: 'intervention',
 };
 
 export const invocationIntentSchema = z.discriminatedUnion('kind', [

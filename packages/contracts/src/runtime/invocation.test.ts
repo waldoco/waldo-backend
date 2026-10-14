@@ -349,6 +349,7 @@ describe('trusted invocation acceptance', () => {
     ['reminder', 'intervention'],
     ['heartbeat', 'intervention'],
     ['standing_order', 'intervention'],
+    ['device_followup', 'intervention'],
   ])('binds the owner job %s to the %s trigger, admitted only by the owner scheduler', (job, trigger) => {
     const invocation = accept({ ...trustedAdmission, admission_source: 'trusted_scheduler', intent: { kind: 'run_owner_job', job } });
 
@@ -361,7 +362,7 @@ describe('trusted invocation acceptance', () => {
     }
   });
 
-  it.each(['journal', 'handoff', 'patrol', 'pre_brief_sweep', 'nightly', ''])('rejects %o as an owner job', (job) => {
+  it.each(['journal', 'handoff', 'patrol', 'pre_brief_sweep', 'nightly', 'device', 'mac_followup', ''])('rejects %o as an owner job', (job) => {
     expect(acceptTrustedInvocation({ ...trustedAdmission, admission_source: 'trusted_scheduler', intent: { kind: 'run_owner_job', job } }))
       .toEqual({ ok: false, error: { code: 'invalid_trusted_admission' } });
     expect(acceptTrustedInvocation({ ...trustedAdmission, admission_source: 'trusted_scheduler', intent: { kind: 'run_owner_job' } }))
