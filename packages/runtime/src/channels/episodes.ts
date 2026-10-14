@@ -121,7 +121,7 @@ export const ownerRows = (stored: string, received: string, ranges: QuoteRanges)
 };
 
 // The owner's input is indexed when it is stored, before the turn runs, so it is searchable even if the turn never
-// finishes; the turn's save then skips it.
+// finishes; a later save of the same entry does not index it again.
 export const indexedConversationStore = (store: ConversationStore, index: EpisodeIndex, now: () => number): ConversationStore => {
   const indexedInputs = new Set<string>();
   const quoted = new Map<string, Readonly<{ text: string; ranges: QuoteRanges }>>();
