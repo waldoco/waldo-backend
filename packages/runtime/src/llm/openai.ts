@@ -78,6 +78,9 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
           reasoning: { effort, summary: 'auto' },
           ...(input.request.cache_key ? { prompt_cache_key: input.request.cache_key } : {}),
           ...(input.request.tools ? { tools: input.request.tools.map((tool) => ({ type: 'function' as const, name: tool.name, description: tool.description, parameters: tool.parameters, strict: false })) } : {}),
+          // Nothing is stored (store: false), so a tool round keeps its reasoning only by replaying the reasoning items with
+          // their encrypted content. Stateless responses include it by default; asking for it names what the replay needs.
+          ...(input.request.tools ? { include: ['reasoning.encrypted_content' as const] } : {}),
           ...(input.request.response_format ? { text: { format: { type: 'json_schema' as const, name: input.request.response_format.name, schema: input.request.response_format.schema, strict: true } } } : {}),
         },
         { signal: controller.signal },

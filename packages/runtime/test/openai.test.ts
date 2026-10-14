@@ -371,6 +371,45 @@ describe('OpenAIResponsesAdapter reasoning passback', () => {
     expect(plainItems[0]).toMatchObject({ type: 'function_call', call_id: 'c2' });
   });
 
+  const reasoningRound = () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const replies = [
+      { id: 'r1', status: 'completed', output_text: '', usage: { input_tokens: 1, output_tokens: 1 }, output: [
+        { type: 'reasoning', id: 'rs_1', encrypted_content: 'opaque-reasoning-1', summary: [{ type: 'summary_text', text: 'Check the calendar first.' }] },
+        { type: 'function_call', id: 'fc_1', call_id: 'c1', name: 'get_context', arguments: '{}' },
+      ] },
+      { id: 'r2', status: 'completed', output_text: 'You are free at 3.', output: [], usage: { input_tokens: 1, output_tokens: 1 } },
+    ];
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async (body: Record<string, unknown>) => { bodies.push(body); return replies[bodies.length - 1]; }) });
+    const withTools = (): LLMGatewayRequest => {
+      const base = gatewayRequest();
+      return { ...base, request: { ...base.request, tools: [{ name: 'get_context', description: 'Read context.', parameters: { type: 'object', properties: {} } }] } };
+    };
+    return { bodies, adapter, withTools };
+  };
+
+  it('asks for encrypted reasoning on a tool call and replays it ahead of the call in the next round', async () => {
+    const { bodies, adapter, withTools } = reasoningRound();
+    const first = await adapter.complete(withTools());
+    if (!first.ok) throw Error(first.error);
+    const second = withTools();
+    second.request.tool_turns = [{ call: first.data.tool_calls![0]!, output: '{"ok":true}', prior_items: first.data.output_items! }];
+    await expect(adapter.complete(second)).resolves.toMatchObject({ ok: true });
+    expect(bodies.map((body) => body.include)).toEqual([['reasoning.encrypted_content'], ['reasoning.encrypted_content']]);
+    expect((bodies[1]!.input as Array<Record<string, unknown>>).slice(1)).toEqual([
+      { type: 'reasoning', id: 'rs_1', encrypted_content: 'opaque-reasoning-1', summary: [{ type: 'summary_text', text: 'Check the calendar first.' }] },
+      { type: 'function_call', id: 'fc_1', call_id: 'c1', name: 'get_context', arguments: '{}' },
+      { type: 'function_call_output', call_id: 'c1', output: '{"ok":true}' },
+    ]);
+  });
+
+  it('leaves a call without tools unchanged', async () => {
+    const { bodies, adapter } = reasoningRound();
+    await adapter.complete(gatewayRequest());
+    expect('include' in bodies[0]!).toBe(false);
+    expect(bodies[0]!.input).toBe('Say hello.');
+  });
+
   // PR 1 item 3: history keeps real roles; a flattened "user: ..." blob made "that one" unresolvable.
   it('sends real multi-turn roles instead of one flattened text', async () => {
     let captured: any;
