@@ -152,3 +152,41 @@ describe('web_search dispatcher receipts', () => {
     });
   });
 });
+
+describe('web_search turn bound', () => {
+  const hung = (seen: { signal?: AbortSignal }) => (async (_url: string, init?: RequestInit) => {
+    seen.signal = init?.signal ?? undefined;
+    return new Promise<Response>((_, reject) => init?.signal?.addEventListener('abort', () => reject(init.signal!.reason), { once: true }));
+  }) as typeof fetch;
+  const scoped = (deadline: number, signal = new AbortController().signal) =>
+    ({ runScope: { runId: 'r', attempt: 'a', deadline, signal, admit() {}, commit: <T>(work: () => T) => work() } }) as unknown as ToolDispatcherContext;
+
+  it('a hung provider aborts at the run deadline and reports transient', async () => {
+    const seen: { signal?: AbortSignal } = {};
+    const started = Date.now();
+    const result = await webSearchHandler('key', hung(seen)).handle({ query: 'waldo', limit: 5 }, scoped(Date.now() + 150));
+    expect(seen.signal).toBeDefined();
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('transient');
+  });
+
+  it('the run being cancelled aborts the in-flight search', async () => {
+    const seen: { signal?: AbortSignal } = {};
+    const run = new AbortController();
+    const pending = webSearchHandler('key', hung(seen)).handle({ query: 'waldo', limit: 5 }, scoped(Date.now() + 60_000, run.signal));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    run.abort();
+    const result = await pending;
+    expect(result.ok).toBe(false);
+  });
+
+  it('without a run scope the search still has a finite ceiling', async () => {
+    const seen: { signal?: AbortSignal } = {};
+    void webSearchHandler('key', hung(seen)).handle({ query: 'waldo', limit: 5 }, ctx).catch(() => undefined);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(seen.signal).toBeDefined();
+    expect(seen.signal!.aborted).toBe(false);
+  });
+});
