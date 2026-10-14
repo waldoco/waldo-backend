@@ -6,10 +6,10 @@ import { artifactMarker, extractArtifacts, quarantineArtifacts, type ArtifactKin
 import {
   calendarPageSchema, queryAvailabilityArgsSchema, type QueryAvailabilityArgs,
   googleCalendarListPageSchema, googleTaskListPageSchema, googleTasksPageSchema, type GoogleTasksPage,
-  connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
-  type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolEligibility, type ToolHandler, type ToolName, type ToolResult,
+  connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, searchContactsArgsSchema, contactMatchSchema, type ContactMatch, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
+  type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type SearchContactsArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolEligibility, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
-import { b64url, buildMime, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type GoogleClient, type GoogleFeature } from '../../connectors/google';
+import { PEOPLE_UNREADABLE, b64url, buildMime, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type GoogleClient, type GoogleFeature } from '../../connectors/google';
 import { EmailProposalError, proposalStatus, type CardPlacement, type EmailSendProposal } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
@@ -43,6 +43,15 @@ const authFailed = (reason: ConnectIntent['reason'], feature: GoogleFeature): To
   connect: { status: 'auth_required', service: 'google', reason, feature },
 });
 
+const UNREADABLE_ANSWER = "Nothing was read: the connector's answer was not in a form Waldo can read. What this read covers was not seen, so it is not known to be empty or free. The same read fails the same way until that is fixed.";
+// Raised only where a connector answer is parsed, so a failing schema elsewhere (an approval card) is never told as a read.
+class UnreadableAnswer extends Error {}
+const connectorAnswer = <T>(schema: Readonly<{ safeParse(value: unknown): { success: true; data: T } | { success: false } }>, value: unknown): T => {
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) throw new UnreadableAnswer('unreadable connector answer');
+  return parsed.data;
+};
+
 async function withGoogle<T extends object>(google: GoogleAccess, feature: GoogleFeature, ctx: ToolDispatcherContext | undefined, work: (client: GoogleClient) => Promise<T>, account?: string): Promise<ToolResult<T>> {
   try {
   const client = await google.client(feature, undefined, ctx?.assertTaskSourceCurrent, account);
@@ -63,6 +72,9 @@ async function withGoogle<T extends object>(google: GoogleAccess, feature: Googl
     if (error instanceof GoogleError && error.status === 403 && error.reason === 'ACCESS_TOKEN_SCOPE_INSUFFICIENT') return authFailed('scope_missing', feature);
     if (error instanceof GoogleError && error.status === 403) return { ok: false, code: 'rejected', error: `Google refused the request (403${error.reason === 'SERVICE_DISABLED' ? ', the API is disabled for this project' : ''}): ${error.message}`, source_taint: 'external' };
     if (error instanceof GoogleError && error.status === 401) return authFailed('reauth_needed', feature);
+    // An answer that fails its schema fails the same way on every retry until one side is redeployed, so it is refused.
+    // The model hears fixed words: the parse error names fields, never what the owner needs to hear.
+    if (error instanceof UnreadableAnswer) return { ok: false, code: 'rejected', error: UNREADABLE_ANSWER, source_taint: 'external' };
     return { ok: false, code: 'transient', error: error instanceof Error ? error.message : String(error), source_taint: 'external' };
   }
 }
@@ -139,6 +151,12 @@ const relayThreadMessage = async <T extends { subject: string; body: string; fro
   return { ...item, subject: relayed ? relayedMarker(subject.text) : subject.text, body: relayed ? relayedMarker(body.text) : body.text, quarantined: kinds };
 };
 
+// One content-free line per failed calendar read: which operation and how it failed, never the provider's words.
+const loggedCalendarRead = <T>(operation: QueryCalendarArgs['operation'], result: ToolResult<T>): ToolResult<T> => {
+  if (!result.ok) console.log(JSON.stringify({ hop: 'calendar_read', ok: false, code: `op_${operation === 'list_calendars' ? 'calendars' : 'events'}:${result.error === UNREADABLE_ANSWER ? 'unreadable_answer' : result.code}${result.connect ? `:${result.connect.reason}` : ''}` }));
+  return result;
+};
+
 export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, relayArtifact?: ArtifactRelay, effects?: OwnerEffectLedger) => [
   {
     name: 'query_calendar',
@@ -148,10 +166,10 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     autonomy_gated: false,
     requires_connector: true,
     eligible: granted(google, 'calendar'),
-    handle: ({ date_range, include_declined, limit, calendar_id = 'primary', page_token, account, operation, include_hidden = false }: QueryCalendarArgs, ctx?: ToolDispatcherContext) => withGoogle(google, operation === 'list_calendars' ? 'calendar_list' : 'calendar', ctx, async (client) => {
+    handle: async ({ date_range, include_declined, limit, calendar_id = 'primary', page_token, account, operation, include_hidden = false }: QueryCalendarArgs, ctx?: ToolDispatcherContext) => loggedCalendarRead(operation, await withGoogle(google, operation === 'list_calendars' ? 'calendar_list' : 'calendar', ctx, async (client) => {
       if (operation === 'list_calendars') {
         if (!client.calendarListsPage) throw new Error('Calendar discovery adapter unavailable');
-        const page = googleCalendarListPageSchema.parse(await client.calendarListsPage(limit, include_hidden, page_token));
+        const page = connectorAnswer(googleCalendarListPageSchema, await client.calendarListsPage(limit, include_hidden, page_token));
         if (page.fetched_count > limit) throw new Error('Calendar-list page exceeds requested limit');
         assertCollectionAccount(page.account, client);
         return { calendars: page.items, observed_at: page.observed_at, next_page_token: page.next_page_token, coverage: { scope: 'account_calendars', result_scope: 'current_page', include_hidden, page_limit: limit, fetched_count: page.fetched_count, returned_count: page.items.length, page_exhausted: page.next_page_token === null, complete: !page_token && page.next_page_token === null } };
@@ -161,7 +179,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       const to = date_range?.to ?? new Date(now + DAY_MS).toISOString();
       let page: CalendarPage | null = null;
       if (typeof client.calendarPage === 'function') {
-        try { page = calendarPageSchema.parse(await client.calendarPage(calendar_id, from, to, limit, include_declined, page_token));
+        try { page = connectorAnswer(calendarPageSchema, await client.calendarPage(calendar_id, from, to, limit, include_declined, page_token));
           if (page.fetched_count > limit) throw new Error('Calendar page exceeds requested limit'); }
         catch (error) {
           if (!(error instanceof GoogleError && error.status === 404 && error.message === 'unknown operation') || page_token || calendar_id !== 'primary') throw error;
@@ -187,7 +205,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
           limitation:page?'One account and calendar. Each result contains only its current page. A local null connection_id means host canonical mapping is unavailable; email is grant metadata, not permission.':'Legacy sampled primary-calendar read; account and pagination are unknown. Empty does not prove absence.',
         },
       };
-    }, account),
+    }, account)),
   } satisfies ToolHandler<QueryCalendarArgs, unknown, ToolDispatcherContext>,
   {
     name: 'get_communication',
@@ -253,8 +271,40 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     }, account),
   } satisfies ToolHandler<SearchCommunicationArgs, unknown, ToolDispatcherContext>,
   {
+    name: 'search_contacts',
+    description: "Find people in the owner's Google contacts and among the people they have emailed, by the start of a name or an address. Use it to work out who the owner means before drafting, sending or inviting. If more than one person could be meant, or the match is uncertain, ask the owner which person rather than guessing a recipient. An empty result does not mean the person is unknown: the owner may never have saved or emailed them.",
+    schema: searchContactsArgsSchema,
+    trigger_allowlist: allowlist('search_contacts'),
+    autonomy_gated: false,
+    requires_connector: true,
+    handle: ({ query, limit, account }: SearchContactsArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'contacts', ctx, async (client) => {
+      if (!client.searchContacts) throw new Error('Google contacts adapter unavailable');
+      // Only the contract's fields are picked, so a phone, organisation or photo can never ride along. The contract's
+      // address check runs before an address is kept or counted: a refused address never takes one of a person's three
+      // places, and never hides an address another person shares.
+      const seen = new Set<string>();
+      const contacts: ContactMatch[] = [];
+      const rows = await client.searchContacts(query, limit).catch((error: unknown) => {
+        // A malformed People answer fails the same way on every retry, so it is refused like any unreadable answer.
+        throw error instanceof Error && error.message === PEOPLE_UNREADABLE ? new UnreadableAnswer('unreadable connector answer') : error;
+      });
+      for (const { name, emails, source } of rows) {
+        const kept = emails.filter((email) => !seen.has(email) && contactMatchSchema.shape.emails.element.safeParse(email).success).slice(0, 3);
+        const match = contactMatchSchema.safeParse({ name, emails: kept, source });
+        if (!match.success) continue;
+        kept.forEach((email) => seen.add(email));
+        contacts.push(match.data);
+        if (contacts.length === limit) break;
+      }
+      return { query, contacts, coverage: {
+        matching: 'name_or_address_prefix', sources: ['contacts', 'other_contacts'],
+        limitation: 'Names and addresses only, from one account. Empty means no saved or emailed person starts with this text, not that the person does not exist.',
+      } };
+    }, account),
+  } satisfies ToolHandler<SearchContactsArgs, unknown, ToolDispatcherContext>,
+  {
     name: 'read_thread',
-    description: "Read one Gmail thread by thread_id - the messages with sender, subject, time and body. Use after get_communication or search_communication surfaces a thread the owner asks about, before drafting a reply. Continue with cursor and the same thread/account; changed threads require restarting.",
+    description: "Read one Gmail thread by thread_id - the messages with sender, recipients (to, cc, reply_to as plain addresses), subject, time and body. account.email is the owner's own address; a send-as alias of the owner is not marked and stays in the lists. recipients_capped means a list was cut at 50 addresses, so a reply to all from it would leave people out: tell the owner. To reply to all, take the recipients from the message being replied to. Use after get_communication or search_communication surfaces a thread the owner asks about, before drafting a reply. Continue with cursor and the same thread/account; changed threads require restarting.",
     schema: readThreadArgsSchema,
     trigger_allowlist: allowlist('read_thread'),
     autonomy_gated: false,
@@ -277,7 +327,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     handle: ({ status, limit, account, operation, task_list_id, page_token }: GetTasksArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'tasks', ctx, async (client) => {
       if (operation === 'list_task_lists') {
         if (!client.taskListsPage) throw new Error('Task-list discovery adapter unavailable');
-        const page = googleTaskListPageSchema.parse(await client.taskListsPage(limit, page_token));
+        const page = connectorAnswer(googleTaskListPageSchema, await client.taskListsPage(limit, page_token));
         if (page.fetched_count > limit) throw new Error('Task-list page exceeds requested limit');
         assertCollectionAccount(page.account, client);
         return { task_lists: page.items, observed_at: page.observed_at, next_page_token: page.next_page_token, coverage: { scope: 'account_task_lists', result_scope: 'current_page', page_limit: limit, fetched_count: page.fetched_count, returned_count: page.items.length, page_exhausted: page.next_page_token === null, complete: !page_token && page.next_page_token === null } };
@@ -285,7 +335,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       const method = task_list_id ? client.tasksPage : client.allTasksPage;
       let page: GoogleTasksPage | null = null;
       if (method) {
-        try { page = googleTasksPageSchema.parse(await (task_list_id ? client.tasksPage!(task_list_id, status, limit, page_token) : client.allTasksPage!(status, limit, page_token))); }
+        try { page = connectorAnswer(googleTasksPageSchema, await (task_list_id ? client.tasksPage!(task_list_id, status, limit, page_token) : client.allTasksPage!(status, limit, page_token))); }
         catch (error) {
           if (!(error instanceof GoogleError && error.status === 404 && error.message === 'unknown operation') || page_token || task_list_id && task_list_id !== '@default') throw error;
         }
@@ -304,7 +354,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<GetTasksArgs, unknown, ToolDispatcherContext>,
   {
     name: 'propose_calendar_change',
-    description: "Propose adding, moving or cancelling an event on the owner's calendar. The owner gets a review card to approve, change or skip; nothing changes until they approve. Include the event title.",
+    description: "Propose adding, moving or cancelling an event on the owner's calendar. The owner gets a review card to approve, change or skip; nothing changes until they approve. Include the event title. calendar_id (from query_calendar list_calendars) picks a calendar other than the primary one. A new event can invite attendees, with a location, notes and a Meet link; with attendees, send_updates says whether Google emails them, and for a move or cancel of an event that has guests it says the same. The card shows the owner exactly who is invited and whether they are emailed.",
     schema: proposeCalendarChangeArgsSchema,
     trigger_allowlist: allowlist('propose_calendar_change'),
     autonomy_gated: false,
@@ -321,7 +371,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<ProposeCalendarChangeArgs, unknown, ToolDispatcherContext>,
   {
     name: 'draft_email',
-    description: "Save an email draft in the owner's Gmail. It is not sent; the owner reviews and sends it themselves. When the owner says to email themselves, read their connected account address with connect_service instead of asking for it.",
+    description: "Save an email draft in the owner's Gmail. It is not sent; the owner reviews and sends it themselves. When the owner says to email themselves, read their connected account address with connect_service instead of asking for it. To reply to all, address the replied-to message's reply_to (or its sender when there is none) and copy its to and cc, leaving out the owner's own address (account.email in read_thread); a plain reply goes to reply_to or the sender only.",
     schema: draftEmailArgsSchema,
     trigger_allowlist: allowlist('draft_email'),
     autonomy_gated: false,
@@ -351,7 +401,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<DraftEmailArgs, unknown, ToolDispatcherContext>,
   {
     name: 'send_email',
-    description: "Send an email from the owner's Gmail. The owner gets a review card showing the exact recipients, subject and body; nothing sends until they approve. A request to draft an email and send it once they approve is this tool: the card is the draft they approve. Use draft_email only when they want a saved Gmail draft to edit themselves. An earlier send whose outcome is unknown does not stop a new proposal the owner asks for: if an identical email may already have gone out, the card says so and the owner decides. When the owner says to email themselves, read their connected account address with connect_service instead of asking for it.",
+    description: "Send an email from the owner's Gmail. The owner gets a review card showing the exact recipients, subject and body; nothing sends until they approve. A request to draft an email and send it once they approve is this tool: the card is the draft they approve. Use draft_email only when they want a saved Gmail draft to edit themselves. An earlier send whose outcome is unknown does not stop a new proposal the owner asks for: if an identical email may already have gone out, the card says so and the owner decides. When the owner says to email themselves, read their connected account address with connect_service instead of asking for it. To reply to all, address the replied-to message's reply_to (or its sender when there is none) and copy its to and cc, leaving out the owner's own address (account.email in read_thread); a plain reply goes to reply_to or the sender only.",
     schema: sendEmailArgsSchema,
     trigger_allowlist: allowlist('send_email'),
     autonomy_gated: false,

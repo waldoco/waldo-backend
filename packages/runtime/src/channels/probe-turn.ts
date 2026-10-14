@@ -44,6 +44,7 @@ export const PROBE_STRIPPED_TOOLS: readonly string[] = [
   'read_owner_context',
   'get_communication',
   'search_communication',
+  'search_contacts',
   'read_thread',
   'get_tasks',
   'propose_calendar_change',

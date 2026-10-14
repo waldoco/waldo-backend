@@ -27,6 +27,7 @@ export const WAKE_DUE_KEYS = [
   'imessage_owner_inbox_due_v1', 'imessage_final_outbox_due_v1', APP_INBOX_DUE_KEY, COMMON_EXECUTION_DUE_KEY,
   'telegram_final_outbox_due_v1', 'telegram_owner_inbox_due_v1', 'telegram_link_due_v1',
   'browser_owner_task_due_v1', 'common_browser_due_v1', 'common_browser_lease_due_v1', WHATSAPP_PENDING_DUE_KEY,
+  'mac_results_due_v1',
 ] as const;
 
 // Wake for a WhatsApp payload admitted but not finished. Keeps an earlier alarm; never touches the Telegram due keys.

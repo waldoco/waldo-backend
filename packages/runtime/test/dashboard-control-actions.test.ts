@@ -31,3 +31,18 @@ describe('approval receipts', () => {
   expect(approvalControlReceipt({ toast: 'Done', message: 'x' }, 'unconfirmed').message).toBe('The proposal outcome could not be confirmed. Check the records and chat before retrying.');
  });
 });
+
+describe('calendar approval from the dashboard', () => {
+ const item=(id:string,extra:Record<string,unknown>)=>({id,kind:'calendar_change',summary:'x',state:'open' as const,undoable:false,review:{kind:'calendar_change' as const,action:'create' as const,title:'Design review',event_id:null,start:'2026-10-20T10:00:00Z',end:'2026-10-20T10:30:00Z',reason:'asked',...extra}});
+ const approve=async(revision:string,id:string)=>{const f=new FormData();for(const [k,v] of Object.entries({csrf:'csrf',revision,view:'waiting',request_id:`approve-${id}`,action:'approval.approve',id}))f.set(k,v);return f;};
+ it('refuses a crafted approve of an invite with guests or notes, and approves a plain change', async () => {
+  const {act,deps}=setup();
+  const approvals=[item('p-invite',{attendees:['sam@example.com'],send_updates:'all'}),item('p-notes',{description:'Agenda'}),item('p-plain',{})];
+  deps.view=async()=>({cards:[],proactivity:day.data.proactivity,approvals} as unknown as ConsoleView);
+  const revision=await controlRevision(day);
+  for(const id of ['p-invite','p-notes']){const refused=await controlAction(await approve(revision,id),deps);expect(refused.status).toBe(409);expect(await refused.json()).toMatchObject({error:'no_longer_eligible'});}
+  expect(act).not.toHaveBeenCalled();
+  expect((await controlAction(await approve(revision,'p-plain'),deps)).status).toBe(200);
+  expect(act).toHaveBeenCalledTimes(1);
+ });
+});

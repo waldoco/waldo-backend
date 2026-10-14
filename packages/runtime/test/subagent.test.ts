@@ -120,6 +120,24 @@ describe('delegate_task (subagent orchestration v1)', () => {
     expect(result.error).toContain('ran out of its round budget');
     expect(result.error).toContain('partial findings');
   });
+
+  it("a child stopped by the turn's time hands back a failed round that says so", async () => {
+    const delegate = delegateTaskHandler(async () => ({ exit: 'time_exhausted' as const, text: 'partial findings' }));
+    const outputs: string[] = [];
+    let n = 0;
+    await runToolLoop({
+      handlers: [delegate], ctx, maxSteps: 5,
+      onTool: (event) => outputs.push(event.output),
+      step: async (tools) => {
+        n += 1;
+        return tools && n === 1 ? { text: '', tool_calls: [{ call_id: 'd1', name: 'delegate_task', arguments: '{"task":"long task"}' }] } : { text: 'closed.' };
+      },
+    });
+    const result = JSON.parse(outputs[0]!);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("ran out of the turn's time");
+    expect(result.error).toContain('partial findings');
+  });
 });
 
 describe('runToolLoop exit classification', () => {

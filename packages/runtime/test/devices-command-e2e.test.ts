@@ -19,16 +19,16 @@ it('round-trips owner commands, reconciles old results before new work, and re-r
       console_session_touch: `consolesess.touch.${args.p_do_name}.${args.p_session_hash}`,
       issue_device_pairing_code: `devpair.${args.p_do_name}.${args.p_code_hash}`,
       device_bridge_throttle: `devthrottle.${args.p_key}.${args.p_limit}.${args.p_window_seconds}`,
-      redeem_device_pairing: `devredeem.${args.p_code_hash}.${args.p_pubkey}.${[...new TextEncoder().encode(String(args.p_label))].map((byte) => byte.toString(16).padStart(2, '0')).join('')}.${args.p_capabilities}`,
-      device_for_auth: `devauth.${args.p_device_id}`, device_touch: `devtouch.${args.p_device_id}`,
+      redeem_device_pairing_v030: `devredeem030.${args.p_code_hash}.${args.p_pubkey}.${[...new TextEncoder().encode(String(args.p_label))].map((byte) => byte.toString(16).padStart(2, '0')).join('')}.${args.p_capabilities}.${args.p_session_consent}`,
+      device_for_auth_v030: `devauth030.${args.p_device_id}`, device_touch: `devtouch.${args.p_device_id}`,
       list_devices: `devlist.${args.p_do_name}`, revoke_device: `devrevoke.${args.p_do_name}.${args.p_device_id}`,
     };
     expect(args.p_sig).toBe(await routerSignature(secret, Number(args.p_at), tags[path]!));
     let response: unknown;
     if (path === 'console_session_touch' || path === 'device_bridge_throttle') response = true;
     else if (path === 'issue_device_pairing_code') { digest = String(args.p_code_hash); response = true; }
-    else if (path === 'redeem_device_pairing') { exists = args.p_code_hash === digest && !exists; response = exists ? [{ device_id: device, owner_id: owner }] : []; }
-    else if (path === 'device_for_auth') response = exists && args.p_device_id === device ? [{ owner_id: owner, pubkey: 'A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg', capabilities: 'machine_state_query,notify_local' }] : [];
+    else if (path === 'redeem_device_pairing_v030') { exists = args.p_code_hash === digest && !exists; response = exists ? [{ device_id: device, owner_id: owner }] : []; }
+    else if (path === 'device_for_auth_v030') response = exists && args.p_device_id === device ? [{ owner_id: owner, do_name:owner,contract_version:'0.3.0',pubkey: 'A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg', capabilities: 'machine_state_query,notify_local' }] : [];
     else if (path === 'device_touch') response = exists;
     else if (path === 'list_devices') response = exists && args.p_do_name === owner ? [{ device_id: device, label: 'Fictional Mac', capabilities: 'machine_state_query,notify_local', created_at: 'fixture', last_seen_at: null }] : [];
     else if (path === 'revoke_device') { response = args.p_do_name === owner && args.p_device_id === device && exists; if (response) exists = false; }
@@ -48,16 +48,16 @@ it('round-trips owner commands, reconciles old results before new work, and re-r
   const key = await crypto.subtle.importKey('pkcs8', pkcs8, { name: 'Ed25519' }, false, ['sign']);
   const sign = async (base: string) => base64url(new Uint8Array(await crypto.subtle.sign('Ed25519', key, new TextEncoder().encode(base))));
   const headers = async (method: string, path: string, body = '') => { const timestamp = String(Math.floor(Date.now()/1000)), nonce = base64url(crypto.getRandomValues(new Uint8Array(16))); return { 'x-waldo-timestamp': timestamp, 'x-waldo-nonce': nonce, 'x-waldo-signature': await sign(httpSignatureBase(timestamp, nonce, method, path, await sha256Hex(new TextEncoder().encode(body)))) }; };
-  const redeem = canonicalJson({ code, device_pubkey: 'A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg', label: 'Fictional Mac', declared_capabilities: ['machine_state_query', 'notify_local'], contract_version: '0.2.3' });
+  const redeem = canonicalJson({ code, device_pubkey: 'A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg', label: 'Fictional Mac', declared_capabilities: ['machine_state_query', 'notify_local'], contract_version: '0.3.0',session_consent:false });
   expect((await call(new Request('https://bridge.test/devices/redeem', { method: 'POST', body: redeem, headers: await headers('POST', '/devices/redeem', redeem) }))).status).toBe(200);
-  const path = '/devices/connect?contract_version=0.2.3&declared_capabilities=machine_state_query,notify_local';
+  const path = '/devices/connect?contract_version=0.3.0&declared_capabilities=machine_state_query,notify_local';
   let socket!: WebSocket;
   type Frame = Record<string, unknown> & { payload: Record<string, unknown> };
   const received: Frame[] = [];
   const connect = async () => { const response = await call(new Request(`https://bridge.test${path}`, { headers: { ...await headers('GET', path), 'x-waldo-device-id': device, upgrade: 'websocket' } })); expect(response.status).toBe(101); socket = response.webSocket!; socket.accept(); socket.addEventListener('message', (event) => { received.push(JSON.parse(String(event.data)) as Frame); }); };
   const send = async (logical: Record<string, unknown>) => { const timestamp = Math.floor(Date.now()/1000), nonce = base64url(crypto.getRandomValues(new Uint8Array(16))); const frame = { ...logical, timestamp, nonce }; socket.send(canonicalJson({ ...frame, signature: await sign(frameSignatureBase(timestamp, String(logical.type), String(logical.message_id), nonce, await sha256Hex(new TextEncoder().encode(canonicalJson(frame))))) })); };
-  const heartbeat = (depth: number) => send({ contract_version: '0.2.3', type: 'heartbeat', message_id: newMessageId(Math.floor(Date.now()/1000)), device_id: device, owner_id: owner, payload: { declared_capabilities: ['machine_state_query', 'notify_local'], outbox_depth: depth } });
-  const reference = (command: Frame, type: string, payload: Record<string, unknown>) => ({ contract_version: '0.2.3', type, message_id: newMessageId(Math.floor(Date.now()/1000)), device_id: device, owner_id: owner, command_id: command.command_id, revision: 1, idempotency_key: command.idempotency_key, payload });
+  const heartbeat = (depth: number) => send({ contract_version: '0.3.0', type: 'heartbeat', message_id: newMessageId(Math.floor(Date.now()/1000)), device_id: device, owner_id: owner, payload: { declared_capabilities: ['machine_state_query', 'notify_local'], outbox_depth: depth } });
+  const reference = (command: Frame, type: string, payload: Record<string, unknown>) => ({ contract_version: '0.3.0', type, message_id: newMessageId(Math.floor(Date.now()/1000)), device_id: device, owner_id: owner, command_id: command.command_id, revision: 1, idempotency_key: command.idempotency_key, payload });
   const query = (id: string) => action('device.query', { request_id: id, query_kind: 'session_status' });
   expect((await query('query_roundtrip')).status).toBe(303);
   const notifyFields = { request_id: 'notify_roundtrip', notification_id: 'notification_roundtrip', title: 'Waldo status', body: 'Your Mac is connected.', severity: 'info' };

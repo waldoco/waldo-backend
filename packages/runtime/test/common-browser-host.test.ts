@@ -48,9 +48,9 @@ it('records exact allocation when authority expires in flight and denies image/r
  expect(commonBrowserFixture.ends).toBe(1);expect(host.attachments()).toHaveLength(0);
  expect(await f.host().handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read.'},f.ctx)).toMatchObject({ok:false});expect(commonBrowserFixture.allocations).toBe(1);
 });
-it('wrong owner/provider/origin are rejected before allocation',async()=>{
+it('wrong owner and origin are rejected before allocation',async()=>{
  const f=fixture();const host=f.host();
- for(const args of [{url:'https://public-pages.fixture.invalid/a',provider:'browserbase'},{url:'https://outside.fixture.invalid/a'}])expect(await host.handler.handle({...args,instruction:'Read.'} as never,f.ctx)).toMatchObject({ok:false});
+ expect(await host.handler.handle({url:'https://outside.fixture.invalid/a',instruction:'Read.'},f.ctx)).toMatchObject({ok:false});
  expect(await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read.'},{authenticatedUserId:'another-owner'} as never)).toMatchObject({ok:false});
  expect(commonBrowserFixture.allocations).toBe(0);
 });
@@ -89,7 +89,7 @@ it('registered dispatcher and post hooks preserve provider402 to model-bound res
 
 it('finite grants cannot bypass the established private-network boundary',async()=>{
  const f=fixture();(f.grant as {allowedOrigins:readonly string[]}).allowedOrigins=['https://127.0.0.1'];
- expect(await f.host().handler.handle({url:'https://127.0.0.1/private',instruction:'Read.',provider:'cloudflare_playwright'},f.ctx)).toMatchObject({ok:false});
+ expect(await f.host().handler.handle({url:'https://127.0.0.1/private',instruction:'Read.'},f.ctx)).toMatchObject({ok:false});
  expect(commonBrowserFixture.allocations).toBe(0);
 });
 
@@ -102,7 +102,7 @@ it('read result exposes the real retained session handle across fresh host reads
 });
 it('normal browser host reads, types into an observed public input, reobserves and terminates one allocation',async()=>{
  const f=fixture(),host=f.host();
- const first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.',provider:'cloudflare_playwright'},f.ctx) as any;
+ const first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.'},f.ctx) as any;
  const filled=await host.actionHandler.handle({url:first.data.url,task:'Set the note',max_actions:1,command:{operation:'type',element_ref:first.data.elements[0].ref,value:'Owner note',intent:'read'}},f.ctx);
  expect(filled).toMatchObject({ok:true,data:{field_values:[{name:'Note',value:'Owner note'}],session_handle:first.data.session_handle}});
  const read=await host.actionHandler.handle({url:first.data.url,task:'Check the note',max_actions:1,command:{operation:'read',intent:'read'}},f.ctx);
@@ -132,7 +132,7 @@ it('registered dispatcher uses the existing host for native field observation an
  const f=fixture(),host=f.host();const {dispatchTool}=await import('../src/tools/dispatcher');const {buildSessionState}=await import('@waldo/contracts');
  const ctx={...f.ctx as any,trigger:'user_message',egressAllowlist:['public-pages.fixture.invalid'],session:buildSessionState({trigger:'user_message',canary_tokens:['1111111111111111','2222222222222222','3333333333333333'],started_at:Date.now()}),hasApproval:()=>true,sourceTaint:null,toolArgSourceTaint:null,sanitise:(await import('../src/scribe/sanitiser')).sanitise} as never;
  const handlers=[host.handler,host.actionHandler];
- const first=await dispatchTool({id:'native-read',name:'browse_page',args:{url:'https://public-pages.fixture.invalid/a',instruction:'Read the note input.',provider:'cloudflare_playwright'}},ctx,{handlers}) as any;
+ const first=await dispatchTool({id:'native-read',name:'browse_page',args:{url:'https://public-pages.fixture.invalid/a',instruction:'Read the note input.'}},ctx,{handlers}) as any;
  expect(first).toMatchObject({ok:true});
  const acted=await dispatchTool({id:'native-type',name:'browse_act',args:{url:first.data.url,task:'Set the note',max_actions:1,command:{operation:'type',element_ref:first.data.elements[0].ref,value:'Exact owner note',intent:'read'}}},ctx,{handlers});
  expect(acted).toMatchObject({ok:true,data:{field_values:[{value:'Exact owner note'}]},source_taint:'external'});
