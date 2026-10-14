@@ -517,3 +517,21 @@ it('an iMessage turn with no public origin on record mints nothing, says so, and
   await runInDurableObject(w.ownerStub, async (_i, state) => { expect(state.storage.kv.get('console:link')).toBeUndefined(); });
   expect((await outbox(w.ownerStub)).map(row => row.replyRef.split(':')[0])).toEqual(['reply']);
 });
+
+it('an iMessage forget whose topic matches nothing completes the turn, replies, and the next turn loads the message as the forget left it', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  proof.outputs.push([{ type: 'function_call', call_id: 'forget', name: 'forget_memory', arguments: JSON.stringify({ topic: 'zebra stripes', scope_note: 'zebras' }) }], []);
+  await replyFor(w, 'Forget zebra stripes');
+  expect((await inbox(w.ownerStub))[0]).toMatchObject({ state: 'completed', closedReason: 'final_committed' });
+  expect(proof.turns.join('\n')).toContain('No stored memory carries that topic or span');
+  const first = (await w.host.pull()).delivery!;
+  expect(JSON.parse(first.body).text.startsWith(proof.reply)).toBe(true);
+  expect((await w.host.postResult(first, await w.host.execute(first))).status).toBe(200);
+  await w.pump(2);
+  await replyFor(w, 'What is on today?');
+  expect((await inbox(w.ownerStub)).map(record => record.state)).toEqual(['completed', 'completed']);
+  const next = proof.turns.at(-1)!;
+  expect(next).toContain('Forget [forgotten]');
+  expect(next).not.toContain('zebra stripes');
+});
