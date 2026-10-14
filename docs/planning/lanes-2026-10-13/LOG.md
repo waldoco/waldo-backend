@@ -2369,3 +2369,10 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
   - Deviations to check: the block sits before the receipts, not last; the `get-health-turn` stub was narrowed with its assertion unchanged.
 - **The core lane started A1** on `mac/a1-inbound-authorship` from `445c867b`, with brief `MAC_LANE_C_A1_BRIEF.md`. Claim: 6158471503.
 - **Open Mac PRs:** #1192 (B3) and #1193 (M4) are both waiting for the review session.
+
+## 01:07Z — A1 paused on two spec questions for the lead
+
+- **The A1 lane stopped before building, as its brief says.** Two spec points conflict with primary sources:
+  1. **Forwards.** Real Telegram forwards carry the legacy `forward_*` keys next to `forward_origin`, per the Bot API server source. A strict gate would still refuse them. Proposed: accept the legacy keys as optional and never read them.
+  2. **#1149's `nightly-quoted` test** expects a stored `Transcript: ` prefix. Option (a) stores the prefix and is recommended; option (b) changes the test.
+- Questions posted (6158580951). The lane resumes when the lead answers; about 30 of its 250 tool calls are used. Nothing has been pushed.
