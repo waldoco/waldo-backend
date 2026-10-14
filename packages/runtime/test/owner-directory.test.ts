@@ -67,6 +67,17 @@ describe('ownerDirectory', () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
+  it('a code for a subject live under another owner is reported claimed; any other refusal stays uncertain', async () => {
+    const hash = await linkCodeHash('ABCDEFGHJK');
+    const claimed = vi.fn().mockResolvedValue(json({ code: '23505', message: 'presence already linked to another owner' }, 409));
+    expect(await ownerDirectory(env, claimed as unknown as typeof fetch, now).redeemHashed!('imessage', 'a@icloud.invalid', hash)).toEqual({ kind: 'claimed' });
+    const race = vi.fn().mockResolvedValue(json({ code: '23505', message: 'duplicate key value violates unique constraint "presences_live_subject"' }, 409));
+    expect(await ownerDirectory(env, race as unknown as typeof fetch, now).redeemHashed!('imessage', 'a@icloud.invalid', hash)).toEqual({ kind: 'uncertain' });
+    const raised = vi.fn().mockResolvedValue(json({ code: 'P0001', message: 'other' }, 400));
+    expect(await ownerDirectory(env, raised as unknown as typeof fetch, now).redeemHashed!('imessage', 'a@icloud.invalid', hash)).toEqual({ kind: 'uncertain' });
+    const opaque = vi.fn().mockResolvedValue(new Response('bad gateway', { status: 409 }));
+    expect(await ownerDirectory(env, opaque as unknown as typeof fetch, now).redeemHashed!('imessage', 'a@icloud.invalid', hash)).toEqual({ kind: 'uncertain' });
+  });
   it('surfaces a database failure instead of treating it as an unknown sender', async () => {
     const fetcher = vi.fn(async () => json({ message: 'unsigned router call' }, 403));
     await expect(ownerDirectory(env, fetcher as unknown as typeof fetch, now).byPresence('telegram', '42')).rejects.toThrow('owner directory 403');
