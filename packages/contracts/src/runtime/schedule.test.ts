@@ -24,7 +24,7 @@ const baseEntry = {
 };
 
 describe('scheduleKind', () => {
-  it('is the seven ADR-0065 scheduler kinds plus owner reminders, the heartbeat tick and standing orders, in priority order', () => {
+  it('is the seven ADR-0065 scheduler kinds plus owner reminders, the heartbeat tick, standing orders and task steps, in priority order', () => {
     expect(scheduleKindSchema.options).toEqual([
       'journal',
       'handoff',
@@ -36,6 +36,7 @@ describe('scheduleKind', () => {
       'reminder',
       'heartbeat',
       'standing_order',
+      'task_step',
     ]);
     expect(scheduleKindPriority).toEqual({
       journal: 0,
@@ -48,6 +49,7 @@ describe('scheduleKind', () => {
       reminder: 7,
       heartbeat: 8,
       standing_order: 9,
+      task_step: 10,
     });
   });
 
@@ -63,6 +65,7 @@ describe('scheduleKind', () => {
       reminder: null,
       heartbeat: null,
       standing_order: null,
+      task_step: null,
     });
   });
 
@@ -74,6 +77,24 @@ describe('scheduleKind', () => {
 });
 
 describe('scheduleEntry', () => {
+  const taskStep = {
+    ...baseEntry,
+    id: 'task:i1:2:1',
+    kind: 'task_step' as const,
+    recurrence: null,
+    payload_refs: { responsibility_id: 'r1', item_id: 'i1' },
+  };
+
+  it('accepts a one-shot task step naming its responsibility and item', () => {
+    expect(scheduleEntrySchema.safeParse(taskStep).success).toBe(true);
+  });
+
+  it('rejects a task step carrying its revision or task text as a payload ref, and an unknown step kind', () => {
+    expect(scheduleEntrySchema.safeParse({ ...taskStep, payload_refs: { item_id: 'i1', revision: '2' } }).success).toBe(false);
+    expect(scheduleEntrySchema.safeParse({ ...taskStep, payload_refs: { item_id: 'x'.repeat(201) } }).success).toBe(false);
+    expect(scheduleEntrySchema.safeParse({ ...taskStep, kind: 'task_steps' }).success).toBe(false);
+  });
+
   it('accepts an armed recurring product schedule entry', () => {
     expect(scheduleEntrySchema.safeParse(baseEntry).success).toBe(true);
   });

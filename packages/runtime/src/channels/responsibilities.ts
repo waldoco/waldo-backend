@@ -90,10 +90,27 @@ export const responsibilityBook = (sql: Sql, deps: Readonly<{ newId(): string; n
       return this.update({ item_id: itemId, status: 'cancelled' });
     },
     running: (): readonly TodoItem[] => sql.exec<ItemRow>("SELECT * FROM responsibility_items WHERE status = 'running' ORDER BY updated_at").toArray().map(toItem),
+    // Waldo's own pending steps whose dependencies are all done, in an open or waiting responsibility.
+    runnable(responsibilityId: string): readonly TodoItem[] {
+      const parent = this.get(responsibilityId);
+      if (!parent || (parent.status !== 'open' && parent.status !== 'waiting')) return [];
+      const all = items(responsibilityId);
+      const done = new Set(all.filter((entry) => entry.status === 'done').map((entry) => entry.id));
+      return all.filter((entry) => entry.status === 'pending' && entry.owner === 'waldo' && entry.depends_on.every((dep) => done.has(dep)));
+    },
+    // A step's effects were interrupted or failed: what happened is not known, so the responsibility says so.
+    markUncertain(id: string): boolean {
+      return sql.exec("UPDATE responsibilities SET status = 'uncertain', revision = revision + 1 WHERE id = ? AND status IN ('open', 'waiting') RETURNING id", id).toArray().length > 0;
+    },
+    // Dropping a responsibility cancels its unfinished steps and bumps their revisions, so a worker still running one is fenced out.
     close(args: CloseResponsibilityArgs): boolean {
       const evidence = args.evidence_ref.trim();
       if (!evidence) return false;
-      return sql.exec("UPDATE responsibilities SET status = ?, closed_by_evidence = ?, closed_at = ?, revision = revision + 1 WHERE id = ? AND status IN ('open', 'waiting', 'uncertain') RETURNING id", args.outcome, evidence, deps.now(), args.id).toArray().length > 0;
+      const closed = sql.exec("UPDATE responsibilities SET status = ?, closed_by_evidence = ?, closed_at = ?, revision = revision + 1 WHERE id = ? AND status IN ('open', 'waiting', 'uncertain') RETURNING id", args.outcome, evidence, deps.now(), args.id).toArray().length > 0;
+      if (closed && args.outcome === 'dropped') {
+        sql.exec(`UPDATE responsibility_items SET status = 'cancelled', updated_at = ?, revision = revision + 1 WHERE responsibility_id = ? AND status NOT IN (${TERMINAL.map(() => '?').join(', ')})`, deps.now(), args.id, ...TERMINAL);
+      }
+      return closed;
     },
     // Carries open loops across under their own ids; a loop already carried is left as it is.
     adoptLoops(): number {
@@ -160,4 +177,4 @@ export const responsibilityHandlers = (book: ResponsibilityBook) => [
         : { ok: false, error: 'Not closed: unknown or already closed, or no evidence given.', code: 'rejected', source_taint: null };
     },
   } satisfies ToolHandler<CloseResponsibilityArgs, unknown, ToolDispatcherContext>,
-];
+] as const;

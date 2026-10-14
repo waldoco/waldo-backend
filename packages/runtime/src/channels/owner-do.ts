@@ -120,6 +120,7 @@ import { ownerFilePrefixes, purgeOwnerFiles } from './owner-files-purge';
 import { ARTIFACT_EXPORT_PATH, artifactExportDownload, exportDownloadUrl } from './artifact-export-download';
 import { artifactBook, artifactHandlers, inMemoryArtifactBodies, r2ArtifactBodies } from './artifacts';
 import { runBook } from './background-runs';
+import { ownerTasks } from './tasks/step-runner';
 import { exchangeGoogleCode, googleAccessToken, googleClient, googleHas, sha256Hex, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleFeature, type GoogleProfile, type GoogleTokens } from '../connectors/google';
 import { finishConsent, startConsent, type ConsentCallback, type ConsentFlow } from '../connectors/google-consent';
 import { GOOGLE_FINISH_PATH, type ConsentReply } from './google-oauth';
@@ -713,6 +714,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return { admit: () => this.admitOwnerJob(), chain };
   }
 
+  // A task step runs as a job of the runtime its surface's jobs run in, through that runtime's job responder.
+  private taskSteps(runtime: OwnerRuntime) {
+    if (this.env.WALDO_DURABLE_TASKS !== '1') return {};
+    const steps = ownerTasks(this.ctx.storage.sql, runtime.scheduler, { newId: () => crypto.randomUUID(), now: Date.now });
+    return { task_step: steps.executor({ runs: runtime.runs, log: runtime.log,
+      prompt: (trace, said, tools, current) => runtime.macFollowup(trace, runtime.owner, said, async (_hop, work) => work(), tools, current, undefined, undefined, 'external') }) };
+  }
   // The app binding written at the owner's first app message: the local sign that the app is one of their surfaces.
   private appBound(): boolean {
     const kv = this.ctx.storage.kv, doName = kv.get<string>('do_name');
@@ -1810,7 +1818,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // Telegram keeps it only for an owner with no app binding. On a directory-backed deploy every scheduled pass runs as the
         // owner the directory admits; a refusal holds the whole pass, never falling back to Telegram or the fixture owner: a
         // revoked account runs nothing, and an outage asks again without spending attempts.
-        let executors = { reminder: fire, heartbeat: beat, dreaming: nightly, pre_activity_spot: briefs, brief: cards, standing_order: fireOrder };
+        let executors = { reminder: fire, heartbeat: beat, dreaming: nightly, pre_activity_spot: briefs, brief: cards, standing_order: fireOrder, ...this.taskSteps(this.setup(channel)) };
         // A paused job's notice goes out from the runtime that ran the jobs, so it lands where their messages do.
         let notices = noticeFailures;
         if (consoleAuth(this.env)) {
@@ -1824,7 +1832,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             this.scheduledAppDelivery = this.copiedToTelegram(this.appDeliveryFor(owner.authority));
             const app = this.setup('app');
             await app.ready;
-            executors = { ...executors, reminder: app.fire, heartbeat: app.beat, pre_activity_spot: app.briefs, brief: app.cards, standing_order: app.fireOrder };
+            executors = { ...executors, reminder: app.fire, heartbeat: app.beat, pre_activity_spot: app.briefs, brief: app.cards, standing_order: app.fireOrder, ...this.taskSteps(app) };
             notices = app.noticeFailures;
           }
         }
@@ -2569,6 +2577,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       artifactExports(storage.sql, artifacts, artifactBodies, r2ArtifactBinaries(this.env.ARTIFACTS, this.ctx.id.toString()), clock, () => crypto.randomUUID()),  // full uuid: the export id is part of the link
       async id => exportDownloadUrl(await storage.get<string>('origin') ?? null, id))] : [];
     const runs = runBook(storage.sql, clock, () => deps.newRunId().slice(0, 8));
+    const tasks = this.env.WALDO_DURABLE_TASKS === '1' ? ownerTasks(storage.sql, scheduler, { newId: () => crypto.randomUUID(), now: Date.now }) : null;
     // A9: recent meal/workout logs join the proactive context; the read degrades to empty
     // when the store is unlinked so beats and the /ledger command never break on it.
     // A job prompt is stored with the conversation and indexed for search, so it carries the ledger without the health logs;
@@ -2798,12 +2807,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         context.runScope?.admit();
         if (!auth || auth.do_name !== doName || !auth.capabilities.includes(input.class) || identity.get<string>('do_name') !== doName) return { accepted: false, reason: 'unavailable' };
         return this.env.DEVICE_BRIDGE_DO.get(this.env.DEVICE_BRIDGE_DO.idFromName(device.device_id)).enqueueCommand({ ...input, owner_id: auth.owner_id, device_id: device.device_id });
-      } }), ...loopHandlers(loops), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable }))], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + titles.remaining }; }), undefined,
+      } }), ...loopHandlers(loops), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable })), ...(tasks?.handlers ?? [])], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + titles.remaining }; }), undefined,
       (opt) => opt ? openLoopsPrompt(loops, clock.timezone, opt.loopsRoom) : standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
       undefined, channel, channel === 'telegram' ? telegramSkillHost : channel === 'app' ? appSkillHost : undefined,
-      channel === 'app' ? {contextHost:{prepare:async (turn,scope)=>{
+      {...(tasks ? {delegation:tasks.delegation} : {}), ...(channel === 'app' ? {contextHost:{prepare:async (turn,scope)=>{
         const record=this.activeApp;
         if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==record.text)throw new ClosedRunError();
         // The composer runs on every tool round; one health read serves the whole turn.
@@ -2817,7 +2826,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const record=this.activeIMessage;
         if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==record.text)throw new ClosedRunError();
         return iMessageOwnerContext(this.imessageHost,record,scope,{ownerProfile:google.nameLine});
-      }},history:context=>({...canonicalOwnerConversationStore(this.ctx.storage,context),recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,null)}),ownerProfile:google.nameLine} : {...telegramContext,jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine},
+      }},history:context=>({...canonicalOwnerConversationStore(this.ctx.storage,context),recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,null)}),ownerProfile:google.nameLine} : {...telegramContext,jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine})},
     );
     // A job prompt built on the ledger: the owner's health logs reach the model as this turn's context.
     const ledgerJob = async (trace: string, said: string, toolNames?: Parameters<typeof responder.prompt>[4]) =>

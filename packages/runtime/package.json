@@ -15,7 +15,7 @@
     "test:mutation:delivery-gate": "stryker run stryker.delivery-gate.config.mjs",
     "test:mutation:context-composer": "stryker run stryker.context-composer.config.mjs",
     "test:scenarios": "vitest run --config vitest.scenarios.config.ts",
-    "test:owner-ingress": "vitest run --config vitest.owner-ingress.config.ts && vitest run --config vitest.link-routing.config.ts && vitest run --config vitest.devices.config.ts && vitest run --config vitest.imessage.config.ts && vitest run --config vitest.mac-closeout.config.ts",
+    "test:owner-ingress": "vitest run --config vitest.owner-ingress.config.ts && vitest run --config vitest.link-routing.config.ts && vitest run --config vitest.devices.config.ts && vitest run --config vitest.imessage.config.ts && vitest run --config vitest.mac-closeout.config.ts && vitest run --config vitest.durable-tasks.config.ts",
     "test:imessage": "vitest run --config vitest.imessage.config.ts"
   },
   "dependencies": {

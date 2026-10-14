@@ -25,6 +25,8 @@ const SAFE_DETAIL_HOPS = new Set([
 // code or detail. Never promote raw claim text or provider payload into a safe hop.
 const MEMORY_EVIDENCE = /^(?:admitted:supported|held:(?:same_day|too_few_claims|untrusted_or_missing)):owner_observation_pattern:1$/;
 const HEALTH_READ = /^(?:present|absent|read_failed)$/;
+// A task step's hop names the item it ran, the attempt number and whether an effect was dispatched: ids and integers only.
+const TASK_STEP = /^item=i[0-9a-f-]{1,64} attempt=[1-9][0-9]{0,2} effects_dispatched=[01]$/;
 
 // Gates one turn-log entry for every sink that consumes it (the DO trace table, the wrangler
 // console JSON line and the OTLP exporter): with capture off, detail survives only for hops
@@ -48,6 +50,9 @@ const gateWithoutCapture = (entry: TurnLogEntry): TurnLogEntry => {
       ? (typeof entry.detail === 'string' && MEMORY_EVIDENCE.test(entry.detail) ? entry.detail : undefined)
       : (typeof entry.code === 'string' && HEALTH_READ.test(entry.code) ? entry.code : undefined);
     return { ...entry, detail, code: detail, error: undefined, text: undefined, guard: undefined };
+  }
+  if (entry.hop === 'task_step') {
+    return { ...entry, detail: typeof entry.detail === 'string' && TASK_STEP.test(entry.detail) ? entry.detail : undefined, error: undefined, text: undefined, guard: undefined };
   }
   return {
     ...entry,

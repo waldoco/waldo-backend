@@ -36,6 +36,7 @@ import {
 } from '../hooks/registry';
 import { guardForOffload } from '../scribe/sanitiser';
 import type { ToolOutputStore } from '../conversation/tool-output-store';
+import { noteDispatch } from './dispatch-watch';
 
 export type RuntimeToolCall = {
   id: string;
@@ -255,6 +256,8 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     );
   }
 
+  // Before any handler I/O: a watcher's record that this call may act is written before the effect can happen.
+  noteDispatch(ctx.turnId, tool.data);
   let trustedEffect: TrustedToolEffect | undefined;
   if (options.trustedEffect !== undefined) {
     const executeOrReconcile = handler.executeOrReconcile;

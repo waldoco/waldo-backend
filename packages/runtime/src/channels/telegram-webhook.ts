@@ -42,6 +42,8 @@ export type TelegramWebhookEnv = Readonly<{
   WHATSAPP_PHONE_NUMBER_ID?: string;
   WALDO_MCP_SERVERS?: string;
   MCP_READ_INTENTS?: string;
+  // Durable task steps (responsibility tools, background delegation, the step runner): on only when exactly '1'.
+  WALDO_DURABLE_TASKS?: string;
   DRIVE_READS?: string;
   // Opt-in only after mixed-inbox privacy and live usefulness acceptance.
   MAIL_SOURCE_FOLLOWUPS?: string;
