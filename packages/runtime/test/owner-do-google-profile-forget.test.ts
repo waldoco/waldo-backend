@@ -8,10 +8,11 @@ import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 
-// The owner forgets what their Google account says about them without disconnecting it. A forget whose text matches the
-// account's name exactly hides the name from every line, after a reconnect too, and still settles; one that matches the
-// phone deletes it, and a reconnect does not store it again. A forget of anything else leaves the name in place, and a
-// disconnect still removes the whole record.
+// The owner forgets what their Google account says about them without disconnecting it. A forget names the fact either by
+// its exact text or, when the owner's words don't spell it out ("forget my name"), by the field the model names. A
+// forgotten name is hidden from every line, after a reconnect too, and the forget settles; a forgotten phone is deleted,
+// and a reconnect does not store it again. A forget of anything else leaves the name, and a disconnect still removes the
+// whole record.
 const MAIL = ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.compose'];
 const CALENDAR = 'https://www.googleapis.com/auth/calendar.events';
 const OWNER_ID = '3b8e5c1d-9f2a-4d7e-b6c0-1a4f8e2d5c97';
@@ -103,7 +104,7 @@ const settled = (state: DurableObjectState) => {
 };
 const listed = async (state: DurableObjectState) => JSON.stringify([...(await state.storage.list())]);
 
-it('forgetting the Google name hides it from the next turn, both lines, and after a reconnect; the forget settles; a disconnect still removes the record', async () => {
+it('"forget my name" hides the Google name from the next turn, both lines, and after a reconnect; the forget settles; a disconnect still removes the record', async () => {
   const edge: Edge = { id: 'conn-1', email: 'owner@example.test', profile: { ...NAMES, phone: PHONE } };
   directory(edge);
   const name = 'google-profile-forget-name';
@@ -119,14 +120,16 @@ it('forgetting the Google name hides it from the next turn, both lines, and afte
         expect(request.system).toContain(ON_RECORD);
       }
 
-      await send(owner, state, name, 'Please forget Zoë Okonkwo-Ström', { name: 'forget_memory', args: { topic: 'Zoë Okonkwo-Ström', scope_note: 'the name from their Google account' } });
+      // The owner's words name no value, so the model names the field.
+      await send(owner, state, name, 'Please forget my name', { name: 'forget_memory', args: { provider_fields: ['name'], scope_note: 'their name' } });
       const receipt = forgetReceipt();
       expect(receipt, 'the forget settles with a success receipt').toContain('"ok":true');
       expect(receipt, 'the receipt names the provider fact, never its value').toContain('provider_facts');
       expect(receipt).not.toContain('Okonkwo');
+      expect(receipt, 'nothing in memory carried it, and the receipt does not claim otherwise').not.toContain('removed from memory');
       settled(state);
 
-      const after = async (text: string) => {
+      const after = async (text: string, absent: readonly string[]) => {
         await send(owner, state, name, text);
         const replies = repliesTo(text);
         expect(replies.length, 'the owner turn reached the model').toBeGreaterThan(0);
@@ -134,14 +137,16 @@ it('forgetting the Google name hides it from the next turn, both lines, and afte
           expect(request.system, 'no Google name line').not.toContain(LABEL);
           expect(request.system, 'the first-conversation line knows no name').toContain(NO_NAME);
           expect(request.system).not.toContain(ON_RECORD);
-          expect(JSON.stringify(request), 'no part of the request carries the name').not.toContain('Okonkwo');
+          for (const part of absent) expect(JSON.stringify(request), 'no part of the request carries the name').not.toContain(part);
         }
       };
-      await after('what should you call me now?');
+      await after('what should you call me now?', ['Okonkwo']);
 
-      // A reconnect replaces the stored profile wholesale; the owner's barrier still stands.
+      // A reconnect replaces the stored profile wholesale, here with a full name that changed but keeps the given name.
+      // Every part of the forgotten name was barred, so the line stays out.
+      edge.profile = { name: 'Zoë O. Ström', given_name: 'Zoë', family_name: 'O. Ström' };
       await connect(owner, state);
-      await after('and after the reconnect?');
+      await after('and after the reconnect?', ['Okonkwo', 'O. Ström']);
 
       const access = consoleAccess(state.storage);
       const token = await access.grant();
@@ -150,12 +155,53 @@ it('forgetting the Google name hides it from the next turn, both lines, and afte
       expect(await state.storage.get('google:accounts')).toEqual([]);
       expect(await state.storage.get('google:profiles'), 'the disconnect removes the record, the hidden name included').toEqual({});
       const left = await listed(state);
-      for (const kept of [PHONE, ...Object.values(NAMES)]) expect(left, 'no object KV entry carries the phone or a name').not.toContain(kept);
+      for (const kept of [PHONE, ...Object.values(NAMES), 'O. Ström']) expect(left, 'no object KV entry carries the phone or a name').not.toContain(kept);
     } finally { await state.storage.deleteAlarm(); }
   });
 }, 30_000);
 
-it('forgetting the Google phone deletes it, no prompt or log carries it, a reconnect does not store it again, and the name stays', async () => {
+it('"forget my phone number" deletes the Google phone by field, a reconnect does not store it again, and the name stays', async () => {
+  const edge: Edge = { id: 'conn-1', email: 'owner@example.test', profile: { ...NAMES, phone: PHONE } };
+  directory(edge);
+  const name = 'google-profile-forget-phone-field';
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    const owner = await ownerFor(name, state);
+    try {
+      await connect(owner, state);
+      await send(owner, state, name, 'Forget my phone number', { name: 'forget_memory', args: { provider_fields: ['phone'], scope_note: 'their phone number' } });
+      const receipt = forgetReceipt();
+      expect(receipt).toContain('"ok":true');
+      expect(receipt).not.toContain(PHONE);
+      settled(state);
+      expect(await state.storage.get('google:profiles'), 'the phone is deleted and the name kept').toEqual({ 'conn-1': { ...NAMES, at: expect.any(Number) } });
+
+      await connect(owner, state);
+      expect(await state.storage.get('google:profiles'), 'a reconnect does not store the forgotten phone').toEqual({ 'conn-1': { ...NAMES, at: expect.any(Number) } });
+      expect(await listed(state)).not.toContain(PHONE);
+      await send(owner, state, name, 'what should you call me?');
+      const replies = repliesTo('what should you call me?');
+      expect(replies.length).toBeGreaterThan(0);
+      for (const request of replies) expect(count(request.system ?? '', LABEL), 'a phone forget leaves the name line').toBe(1);
+    } finally { await state.storage.deleteAlarm(); }
+  });
+}, 30_000);
+
+it('a forget by field with no connected account fails honestly, and the turn completes', async () => {
+  directory({ id: 'conn-1', email: 'owner@example.test', profile: NAMES });
+  const name = 'google-profile-forget-no-account';
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    const owner = await ownerFor(name, state);
+    try {
+      await send(owner, state, name, 'Please forget my name', { name: 'forget_memory', args: { provider_fields: ['name'], scope_note: 'their name' } });
+      const receipt = forgetReceipt();
+      expect(receipt).toContain('"ok":false');
+      expect(receipt).toContain('No connected account');
+      expect(claimStore(state.storage.sql).barriers(), 'nothing was barred').toEqual([]);
+    } finally { await state.storage.deleteAlarm(); }
+  });
+}, 30_000);
+
+it('forgetting the Google phone by its exact text deletes it, no prompt or log carries it, a reconnect does not store it again, and the name stays', async () => {
   const edge: Edge = { id: 'conn-1', email: 'owner@example.test', profile: { ...NAMES, phone: PHONE } };
   directory(edge);
   const name = 'google-profile-forget-phone';

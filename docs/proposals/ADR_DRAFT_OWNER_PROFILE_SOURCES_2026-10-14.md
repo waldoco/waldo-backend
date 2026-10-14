@@ -63,8 +63,8 @@ A coded `dominates()` waits for the ADR-0046 build.
 - **Owner claims:** corrected with `remember` plus `replaces_id`, and removed with `forget_memory`, whose barrier blocks relearning. Unchanged.
 - **Provider facts: correction.** The owner's own words win (§3.1). A correction is saved with `remember` as an owner-grounded claim, which outranks the provider line. Waldo never edits the provider record; it is Google's assertion, refreshed at each connect.
 - **Provider facts: forget without a disconnect** (condition C2 of the bounded persistence review on #1218). A forget suppresses a provider field when one of the owner's forget barriers matches it exactly. The match uses the fingerprints `remember` already uses to refuse relearning: `textFingerprint` of the trimmed text, and of its lowercased, space-collapsed form.
-  - **Name parts** (`name`, `given_name`, `family_name`): the name line checks the barriers each time it renders and leaves out any account where a part matches. All parts go, since a partial name would carry the rest. A reconnect replaces the stored profile wholesale (#1218), but the barrier lives in the claims plane until the owner lifts it, so a render-time check survives the reconnect.
-  - **Phone:** it never reaches a prompt, so there is nothing to render. A forget that matches it removes the field from `google:profiles` when the forget settles, and a later connect does not store it again while the barrier stands.
+  - **Name parts** (`name`, `given_name`, `family_name`, and the full name the given and family names make): the name line checks the barriers each time it renders and leaves out any account where one of them matches. All parts go, since a partial name would carry the rest. A reconnect replaces the stored profile wholesale (#1218), but the barrier lives in the claims plane until the owner lifts it, so a render-time check survives the reconnect.
+  - **Phone:** it never reaches a prompt, so there is nothing to render. A forget that matches it removes the field from `google:profiles` in the forget's own commit, together with the barrier, and a later connect does not store it again while the barrier stands.
   - **The phone is identity, not memory.** Its bound is plan row (i), condition C3 on #1218:
     - it is an unverified provider claim, kept only in `google:profiles`;
     - nothing reads it without its own bounded review;
@@ -72,9 +72,11 @@ A coded `dominates()` waits for the ADR-0046 build.
     - at most it prefills a number the owner then verifies;
     - it is removed with its connection or account.
   - **Deterministic by right.** A forget must be guaranteed, so this check is a privacy boundary under CLAUDE.md, not a judgment rule.
-  - **Paraphrase gap.** A barrier's topic is literal text from the owner's message, so "forget my name" without the name itself matches nothing. The model then saves the owner's wish with `remember`, which outranks the provider line. A deterministic per-account "hide the Google name" owner control is a later follow-up.
+  - **Forgetting by field.** A barrier's topic is literal text from the owner's message, so "forget my name" alone names no value. Whether the owner means the name or phone their connected account gives is the model's judgment: it says so by naming the field, `forget_memory` with `provider_fields: ["name"]` or `["phone"]`. The host resolves the field to every value stored for it and bars each exactly, so the name check and the phone deletion above follow from the barrier, after a reconnect too. No code reads the owner's words to decide this.
+    - The resolved values are barred but not swept from chat history. The sweep is a case-insensitive literal replace, and a given name such as "Will" would blank that word everywhere. The receipt says chat history is not changed.
+    - A later name that shares no part with the forgotten one (the owner renamed the account) shows again until the owner forgets it.
   - **Disconnect** still removes every provider field (#1218).
-- **Where it lands:** a follow-up PR straight after #1227. It carries the review's scenario test: forget the name, then the next turn has no name line and the forget settles.
+- **Where it lands:** #1238, straight after #1227. It carries the review's scenario test, phrased as the owner would say it: "forget my name", then the next turn has no name line, after a reconnect too, and the forget settles.
   - **Falsifier:** an owner forgets their name and Waldo still uses it.
 
 ### 3.4 Pinning, and when answers become visible

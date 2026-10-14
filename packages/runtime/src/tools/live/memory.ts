@@ -1,4 +1,4 @@
-import { rememberArgsSchema, forgetMemoryArgsSchema, readMemoryArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type ToolHandler, type ToolName, type ReadMemoryArgs, type RememberArgs, type ForgetMemoryArgs } from '@waldo/contracts';
+import { rememberArgsSchema, forgetMemoryArgsSchema, readMemoryArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type ToolHandler, type ToolName, type ReadMemoryArgs, type RememberArgs, type ForgetMemoryArgs, type ProviderField } from '@waldo/contracts';
 import { barredBy, ground, normalizeForGrounding, type Claim, type ClaimStore } from '../../memory/claims';
 import { carriesTopic, hidesTopic } from '../../memory/forget-guard';
 import { ftsQuery } from '../../channels/episodes';
@@ -19,9 +19,10 @@ type Dependencies = Readonly<{
   hideHistory(texts: readonly string[], ctx: MemoryToolContext): Promise<void>;
   resolveSource?(ref: string, ctx: MemoryToolContext): Promise<MemoryOwnerTurn | null>;
   // Facts a connected provider asserts about the owner, kept outside the claims plane. Called inside the forget's commit
-  // once its barriers are written: suppresses what the forgotten texts match exactly, and returns one line per kind of
+  // once its barriers are written, with the forgotten texts and the provider fields the model named: suppresses what they
+  // match exactly, and returns the stored values the fields resolve to, which the forget bars, and one line per kind of
   // fact matched, never a value.
-  providerFacts?(texts: readonly string[]): readonly string[];
+  providerFacts?(texts: readonly string[], fields: readonly ProviderField[]): Readonly<{ barred: readonly string[]; lines: readonly string[] }>;
 }>;
 const fail = (error: string) => ({ ok: false as const, code: 'invalid_args' as const, error, source_taint: null });
 const success = (data: unknown) => ({ ok: true as const, data, source_taint: null });
@@ -89,7 +90,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         const claims = rows.filter(claim => claim.origin !== 'untrusted' && !claim.valid_to && !hidden(claim) && (!hall || (hallKinds[hall] as readonly string[]).includes(claim.kind))).slice(0, limit);
         return success({ claims, authority: 'context_only_not_action_approval' });
       } },
-    { ...base('forget_memory', 'Remove selected owner memory by ids, literal topic in the current owner message, or an exact stored owner-message span using UTF-16 offsets. scope_note describes the requested scope.'), schema: forgetMemoryArgsSchema, mutates_state: true,
+    { ...base('forget_memory', 'Remove selected owner memory by ids, literal topic in the current owner message, or an exact stored owner-message span using UTF-16 offsets. provider_fields forgets the name or phone number the owner\'s connected account gives them, when the owner asks for that without spelling it out. scope_note describes the requested scope.'), schema: forgetMemoryArgsSchema, mutates_state: true,
       async handle(args: ForgetMemoryArgs, ctx) {
         await ready(ctx); const turn = admitted(ctx);
         if (!turn) return fail('Authenticated owner memory context is unavailable.');
@@ -112,10 +113,15 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         // Hide retained history before deleting the only claim-to-source link. A failed
         // cleanup is a failed tool, not an invented completion receipt.
         await deps.hideHistory([...texts], ctx); await ready(ctx);
+        // A named field is resolved to its stored values and barred, but those values are not swept from chat history: the
+        // sweep is a case-insensitive literal replace, and a given name such as "Will" would blank that word everywhere.
+        const fields = [...new Set(args.provider_fields ?? [])];
         let incomplete = false, touched = false, provider: readonly string[] = [];
         const commit = () => {
           for (const text of texts) store.barrier(text, now());
-          provider = deps.providerFacts?.([...texts]) ?? [];
+          const provided = deps.providerFacts?.([...texts], fields);
+          for (const text of provided?.barred ?? []) store.barrier(text, now());
+          provider = provided?.lines ?? [];
           for (const id of selected.keys()) store.forget(id);
           // Derived stores (cards, notes, goals, loops, runs, blocks, inbox, topic index) are purged in the same commit as the claim.
           // A purge that cannot verify clean leaves the pending row in place and this call reports incomplete; a topic row is closed only by a verified purge.
@@ -131,13 +137,17 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         if (ctx.runScope) ctx.runScope.commit(atomic); else atomic();
         if (incomplete) return fail('Memory cleanup could not be verified. The topic stays recorded and hidden from recall until a forget completes with verified cleanup.');
         // Nothing selected, no derived store changed and no provider fact matched means nothing was forgotten: a success receipt would tell the owner it is gone while recall still holds it.
-        if (selected.size === 0 && !touched && provider.length === 0) return fail('No stored memory carries that topic or span. Read memory, then pass claim_ids or a literal topic that appears in the stored text.');
+        if (selected.size === 0 && !touched && provider.length === 0) return fail(fields.length ? 'No connected account holds that about the owner, and no stored memory carries the topic or span. Nothing was forgotten.' : 'No stored memory carries that topic or span. Read memory, then pass claim_ids or a literal topic that appears in the stored text.');
         // Chat history is redacted by exact text. A topic or span names the literal the owner said, so restatements carrying it are swept too; an id alone only knows the saved wording, and a reworded copy elsewhere (an earlier reply, a summary) is not reached. The receipt says which one happened.
+        // A forget by provider field alone hid no chat text, and one that matched only a provider fact removed nothing from memory: the receipt says so.
         const swept = args.topic !== undefined || args.source !== undefined;
-        const history = swept
+        const history = texts.size === 0
+          ? 'chat history is not changed'
+          : swept
           ? 'copies in older chat history carrying that text are hidden'
           : 'older chat history is hidden only where it quotes the saved wording exactly; a restated or reworded copy may remain, and forgetting by the literal topic from the owner message sweeps those';
-        return success({ removed_ids: [...selected.keys()], scope_note: args.scope_note, history_swept: swept ? 'topic_literal' : 'saved_wording_only', scope: `removed from memory and recall; ${history}; messages already in the Telegram chat cannot be deleted by Waldo; backups expire per retention`, ...(provider.length ? { provider_facts: provider } : {}) });
+        const stored = selected.size > 0 || touched ? 'removed from memory and recall' : 'nothing stored in memory carried it';
+        return success({ removed_ids: [...selected.keys()], scope_note: args.scope_note, history_swept: texts.size === 0 ? 'none' : swept ? 'topic_literal' : 'saved_wording_only', scope: `${stored}; ${history}; messages already in the Telegram chat cannot be deleted by Waldo; backups expire per retention`, ...(provider.length ? { provider_facts: provider } : {}) });
       } },
   ];
 };

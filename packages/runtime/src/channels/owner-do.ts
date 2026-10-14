@@ -57,7 +57,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { workspaceOwnerHost, workspaceRequest, workspaceUploadLease } from './workspace-host';
 import { workspaceToolHandlers } from '../tools/live/workspace';
 import { workspaceDownload, workspacePage, workspaceRead } from './console-workspace';
-import { SCHEDULE_KINDS, setProactivityArgsSchema, type ConnectIntent, type ConversationEntry, type ScheduleEntry } from '@waldo/contracts';
+import { SCHEDULE_KINDS, setProactivityArgsSchema, type ConnectIntent, type ConversationEntry, type ProviderField, type ScheduleEntry } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, barredBy, claimStore, forgetFingerprints, ownerProfileClaimCount, profile } from '../memory/claims';
 import { isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine } from './loops';
@@ -2198,11 +2198,17 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
         return null;
       },
-      // A forget's texts against the kept profiles, inside the forget's own transaction. A name they match exactly stays
-      // stored and nameLine leaves it out; a phone they match is deleted. One line per kind of fact matched, never a value.
-      forget(texts: readonly string[]): string[] {
-        const matched = barredBy(texts.flatMap(forgetFingerprints));
+      // A forget's texts, and the fields the model named, against the kept profiles, inside the forget's own transaction. A
+      // field resolves to every value stored for it, which the forget then bars. A name matched exactly stays stored and
+      // nameLine leaves it out; a phone matched is deleted. Returns the resolved values and one line per kind of fact
+      // matched, never a value.
+      forget(texts: readonly string[], fields: readonly ProviderField[]): { barred: string[]; lines: string[] } {
         const profiles = storage.kv.get<Record<string, GoogleProfileFact>>('google:profiles') ?? {};
+        const barred = [...new Set(Object.values(profiles).flatMap((profile) => [
+          ...(fields.includes('name') ? googleNameTexts(profile) : []),
+          ...(fields.includes('phone') && profile.phone !== undefined ? [profile.phone] : []),
+        ]))];
+        const matched = barredBy([...texts, ...barred].flatMap(forgetFingerprints));
         const hidesName = Object.values(profiles).some((profile) => googleNameTexts(profile).some(matched));
         const dropsPhone = Object.values(profiles).some((profile) => profile.phone !== undefined && matched(profile.phone));
         if (dropsPhone) storage.kv.put('google:profiles', Object.fromEntries(Object.entries(profiles).flatMap(([id, profile]) => {
@@ -2210,10 +2216,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const { phone: _phone, at, ...facts } = profile;
           return Object.keys(facts).length ? [[id, { ...facts, at }]] : [];
         })));
-        return [
+        return { barred, lines: [
           ...(hidesName ? ["The name from the owner's Google account matched: it is hidden from you, after a reconnect too. The account stays connected."] : []),
           ...(dropsPhone ? ["The phone number from the owner's Google account matched and was deleted; a reconnect does not store it again. The account stays connected."] : []),
-        ];
+        ] };
       },
       configured: () => Boolean(clientId && clientSecret && stateSecret),
       // Every call starts a fresh single-use attempt (state nonce + PKCE verifier) valid for 15 minutes.
@@ -2583,7 +2589,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return true;
       }, effects), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), searchEpisodesHandler(episodes), ...memoryHandlers({
         sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: surfaceChatRef(channel, owner),
-        providerFacts: (texts) => google.forget(texts),
+        providerFacts: (texts, fields) => google.forget(texts, fields),
         hideHistory: async (texts, context) => {
           const scope = context.runScope;
           scope?.admit();
