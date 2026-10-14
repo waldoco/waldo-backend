@@ -32,7 +32,7 @@ import { numericHealthIn } from '../scribe/sanitiser';
 import { OpenAIResponsesAdapter } from '../llm/openai';
 import { withCallDeadline } from '../llm/time-budget';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
-import { messagingSystemPrompt, ownerClockLine, unconnectedLine, withOwnerSkillProcedures } from '../prompt/messaging-behavior';
+import { firstConversationLine, messagingSystemPrompt, ownerClockLine, unconnectedLine, withOwnerSkillProcedures, type NewOwnerFacts } from '../prompt/messaging-behavior';
 import { eligibleHandlers } from '../tools/eligibility';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
@@ -83,8 +83,9 @@ export type OwnerJobHost = Readonly<{ admit(): Promise<OwnerMessageAdmission | u
 // ownerProfile: the host-framed line about who the owner is. An admitted job composes it into its owner context; a turn
 // without a composed owner context reads it directly.
 // watchStatus: the host fact about Google pushes that are not running, for the owner's own turns ('' when all run).
-export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string }>;
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string }>;
+// newOwnerFacts: the owner state behind the first-conversation line, read once per owner turn.
+export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; newOwnerFacts?: () => Promise<NewOwnerFacts> }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; newOwnerFacts?: () => Promise<NewOwnerFacts> }>;
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 // The reply's system prompt with the byte size of each joined section, so a trace shows what fills it.
@@ -355,7 +356,7 @@ export const createOwnerResponder = (
       // Eligibility is read once here, so every round of this turn offers the same tool array.
       // raise_approval is for the owner's own turns: a job prompt never decides to bring back an approval.
       const eligibilityStarted = Date.now();
-      const { handlers: admittedHandlers, report: eligibility } = await eligibleHandlers(handlers.filter(handler => (backgroundToolNames === undefined || backgroundToolNames.includes(handler.name)) && (handler.name !== 'raise_approval' || activeOwnerTurn !== undefined) && (!['remember', 'forget_memory'].includes(handler.name) || (activeOwnerTurn && activeOwnerTurn.memoryWrites !== false && !probeGuard?.suppressMemory))));
+      const { handlers: admittedHandlers, report: eligibility } = await eligibleHandlers(handlers.filter(handler => (backgroundToolNames === undefined || backgroundToolNames.includes(handler.name)) && (!['raise_approval', 'set_timezone'].includes(handler.name) || activeOwnerTurn !== undefined) && (!['remember', 'forget_memory'].includes(handler.name) || (activeOwnerTurn && activeOwnerTurn.memoryWrites !== false && !probeGuard?.suppressMemory))));
       await assertCurrent();
       if (eligibility.not_connected + eligibility.not_configured + eligibility.check_failed > 0) log({ trace, hop: 'tool_eligibility', ms: Date.now() - eligibilityStarted, ok: true, detail: `not_connected=${eligibility.not_connected} not_configured=${eligibility.not_configured} check_failed=${eligibility.check_failed}` });
       // The watch fact is a hint, so a failure to build it drops the fact and never fails the owner's turn.
@@ -544,9 +545,10 @@ export const createOwnerResponder = (
             // REASONS stages no tool results of its own, so it says there are none; point at the ones the owner turn carries.
             const toolResultsNote = reasons !== undefined && toolResultsShown ? "Earlier turns' tool results follow as external data in the owner turn, not in the recent-tool-results section above." : undefined;
             const clockLine = ownerClockLine(clock);
+            const newOwnerLine = newOwner ? firstConversationLine(newOwner, turnHandlers.map((handler) => handler.name)) : '';
             // Stable head (behavior, catalog, orders, loops), then the procedure, then the per-turn tail; REASONS opens with the owner's text.
             const headWith = (loops = '') => [behavior, skillMetadata, ordersSection, loops].filter(Boolean).join('\n\n');
-            const tailWith = (memoryPart: readonly string[]) => [...memoryPart, reasons, toolResultsNote, healthSection, ownerProfileLine, clockLine, taskContext, connections].filter(Boolean).join('\n\n');
+            const tailWith = (memoryPart: readonly string[]) => [...memoryPart, reasons, toolResultsNote, healthSection, ownerProfileLine, newOwnerLine, clockLine, taskContext, connections].filter(Boolean).join('\n\n');
             // Owner memory takes its room first; open loops get what the same reserve leaves, and the section names what it left out.
             const room = systemRoom(withOwnerSkillProcedures(headWith(), wrapped, tailWith([])));
             const memoryPart = memory ? [turnMemoryPrompt(promptMemory()!, ownerCurrentText, room)] : [];
@@ -557,7 +559,7 @@ export const createOwnerResponder = (
             const text = withOwnerSkillProcedures(head, wrapped, tail);
             const sections: Partial<Record<SystemSection, number>> = {
               ...(reasons ? { reasons: utf8Bytes(reasons) } : {}), ...(toolResultsNote ? { tool_results: utf8Bytes(toolResultsNote) } : {}), behavior: utf8Bytes(behavior),
-              ...(healthSection ? { health: utf8Bytes(healthSection) } : {}), ...(ownerProfileLine ? { owner_profile: utf8Bytes(ownerProfileLine) } : {}), clock: utf8Bytes(clockLine),
+              ...(healthSection ? { health: utf8Bytes(healthSection) } : {}), ...(ownerProfileLine ? { owner_profile: utf8Bytes(ownerProfileLine) } : {}), ...(newOwnerLine ? { first_conversation: utf8Bytes(newOwnerLine) } : {}), clock: utf8Bytes(clockLine),
               ...(memoryPart.length ? { memory: utf8Bytes(memoryPart[0]!) } : {}), ...(ordersSection ? { orders: utf8Bytes(ordersSection) } : {}),
               ...(loopsSection ? { loops: utf8Bytes(loopsSection) } : {}), ...(skillMetadata ? { skill_catalog: utf8Bytes(skillMetadata) } : {}),
               ...(taskContext ? { task_context: utf8Bytes(taskContext) } : {}), ...(connections ? { connections: utf8Bytes(connections) } : {}),
@@ -601,6 +603,8 @@ export const createOwnerResponder = (
     try { return JSON.parse(raw); } catch (error) { log({ trace: traceId, hop: 'receipt_args_parse', ms: 0, ok: false, error: `${tool}: ${String(error).slice(0, 120)}` }); return undefined; }
   };
   let backgroundToolNames: readonly string[] | undefined;
+  // Read when an owner turn starts, so every round of the turn shows the same first-conversation line.
+  let newOwner: NewOwnerFacts | undefined;
   // The reply this turn just sent, so chooseReaction reacts to the exchange (gist of what the
   // owner saw) instead of the owner's message alone - the 😢-on-stress class (2026-09-27 sweep).
   let lastReply: string | undefined;
@@ -681,11 +685,13 @@ export const createOwnerResponder = (
   };
   // `said` is what the model reads; `received` is what the conversation stores and shows, the same text unless the turn labels parts of it.
   const converse = async (id: string, conversationRef: string, said: string, time: TurnTimer, fromOwner = false, surface = 'agent', toolNames?: readonly string[], received = said) => {
+    const facts = fromOwner ? await privateOwner?.newOwnerFacts?.() : undefined;
     conversationRef = context?.conversationRef ?? conversationRef;
     windowingRef = conversationRef;
     backgroundToolNames = fromOwner ? undefined : toolNames;
     traceId = id;
     ownerTurnActive = fromOwner;
+    newOwner = facts;
     turnToolEvents = [];
     control.begin(fromOwner);
     try {
@@ -697,7 +703,7 @@ export const createOwnerResponder = (
         context: contextInputs(),
         userEntry,
         assistantEntryId: `${id}-reply`,
-      })).finally(() => { ownerTurnActive = false; backgroundToolNames = undefined; control.end(); });
+      })).finally(() => { ownerTurnActive = false; backgroundToolNames = undefined; newOwner = undefined; control.end(); });
       privateRunScope?.admit();
       await assertFresh();
       const reply = tree.get(publication.leafId)!.appPayload;
@@ -769,7 +775,7 @@ export const createOwnerResponder = (
         const capturedTurn = { ...turn, memoryWrites };
         const preparedContext = privateOwner?.contextHost ? await privateOwner.contextHost.prepare(capturedTurn, turn.runScope) : undefined;
         const preparedSkills = privateOwner?.skillHost ? await privateOwner.skillHost.prepare(capturedTurn, preparedContext?.invocation.verified_authority.principal_ref ?? ownerId, turn.runScope) : undefined;
-        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}), ...(privateOwner?.watchStatus ? { watchStatus: privateOwner.watchStatus } : {}) });
+        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}), ...(privateOwner?.watchStatus ? { watchStatus: privateOwner.watchStatus } : {}), ...(privateOwner?.newOwnerFacts ? { newOwnerFacts: privateOwner.newOwnerFacts } : {}) });
         control.route(scoped.control);
         scopedCompaction = scoped.compactIfDue;
         try { return await scoped.respond(capturedTurn, time); }

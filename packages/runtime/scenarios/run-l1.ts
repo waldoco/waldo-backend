@@ -3,9 +3,11 @@
 import { DatabaseSync } from 'node:sqlite';
 import { TOOL_PERMISSIONS, triggerTypeSchema, webSearchArgsSchema, WALDO_CHAT_MODEL, type ConnectIntent, type SetReminderArgs, type WebSearchArgs } from '@waldo/contracts';
 import { createTelegramResponder } from '../src/channels/telegram-turn';
+import { ownerProfileClaimCount } from '../src/memory/claims';
 import { inboundTurn, ownerWords } from '../src/channels/owner-inbound-turn';
 import { reminderHandlers, type ReminderBook } from '../src/channels/reminders';
 import { loopBook, loopHandlers } from '../src/channels/loops';
+import { timezoneHandlers } from '../src/channels/owner-timezone';
 import { googleHandlers } from '../src/tools/live/google';
 import { claimStore } from '../src/memory/claims';
 import { memoryHandlers } from '../src/tools/live/memory';
@@ -120,9 +122,11 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
   };
   // Every saved turn is indexed, as the owner DO does, so recall and search_episodes see earlier turns.
   const episodes = episodeIndex(sql);
-  const handlers = [...memoryHandlers({ sql: sql as SqlStorage, store: memory, conversationRef: 'telegram-1', hideHistory: async () => undefined }), ...reminderHandlers(reminders), ...googleHandlers(google as never, { propose: async () => 'proposal:1', proposeSendEmail: async () => 'proposal:1', record: () => undefined }, CLOCK), ...loopHandlers(loops), searchEpisodesHandler(episodes), web];
+  const handlers = [...memoryHandlers({ sql: sql as SqlStorage, store: memory, conversationRef: 'telegram-1', hideHistory: async () => undefined }), ...reminderHandlers(reminders), ...googleHandlers(google as never, { propose: async () => 'proposal:1', proposeSendEmail: async () => 'proposal:1', record: () => undefined }, CLOCK), ...loopHandlers(loops), searchEpisodesHandler(episodes), web, ...timezoneHandlers(async () => true)];
   const gateway = scriptedGateway({ rules: scenario.llm, ...(scenario.claimOps === undefined ? {} : { claimOps: scenario.claimOps }) });
-  const responder = createTelegramResponder('scenario-key', indexedConversationStore(durableConversationStore(keyValueStorage()), episodes, () => CLOCK.now().getTime()), memory, log, {}, CLOCK, handlers as never, WALDO_CHAT_MODEL, false, undefined, async (intent: ConnectIntent) => { connectOffers.push(intent); return true; }, gateway);
+  const newOwner = scenario.fixtures?.newOwner ? { newOwnerFacts: async () => ({ profileClaims: ownerProfileClaimCount(memory), zone: CLOCK.timezone, zoneConfirmed: false, googleName: false, surfaces: ['the app'] }) } : undefined;
+  const responder = createTelegramResponder('scenario-key', indexedConversationStore(durableConversationStore(keyValueStorage()), episodes, () => CLOCK.now().getTime()), memory, log, {}, CLOCK, handlers as never, WALDO_CHAT_MODEL, false, undefined, async (intent: ConnectIntent) => { connectOffers.push(intent); return true; }, gateway,
+    undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, newOwner);
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
 
   const replies: string[] = [];

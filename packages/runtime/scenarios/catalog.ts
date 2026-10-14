@@ -139,6 +139,41 @@ export const SCENARIOS: readonly Scenario[] = [
     },
   },
   {
+    // A new owner's first message: the host facts reach the model, which answers first and then asks. What it asks is its call.
+    id: 'first-conversation-intro',
+    category: 'memory',
+    turns: ['hi Waldo, what can you do?'],
+    fixtures: { newOwner: true },
+    llm: [
+      { match: /what can you do/, rounds: [{ text: 'I keep track of your day and act on it when you let me. To start, what should I call you, and where are you these days?' }] },
+    ],
+    rubric: 'A new owner opened with a question. The reply answers it first, then invites the owner to share something about themselves (their name, where they are, how their days go) in one or two light questions, not a questionnaire, and claims no facts about them it does not have.',
+    assert: {
+      modelInput: [{ turn: 1, mustContain: ['Host facts about this owner', 'nothing they have told you about themselves is saved in memory yet'] }],
+      mustNotCall: ['remember'],
+      replies: [/what should I call you/],
+    },
+  },
+  {
+    // The owner's answers are kept in their own words through remember, and the host facts stop once a grounded claim exists.
+    id: 'first-conversation-answer-remembered',
+    category: 'memory',
+    turns: ['hi Waldo', 'Call me Sam. I mostly work late, after 9pm.', 'thanks'],
+    fixtures: { newOwner: true },
+    llm: [
+      { match: /^hi Waldo/, rounds: [{ text: 'Hi! What should I call you?' }] },
+      { match: /Call me Sam/, rounds: [{ toolCalls: [{ name: 'remember', arguments: { kind: 'fact', text: 'Wants to be called Sam', evidence_quote: 'Call me Sam' } }, { name: 'remember', arguments: { kind: 'routine', text: 'Mostly works late, after 9pm', evidence_quote: 'I mostly work late, after 9pm' } }] }, { text: 'Got it, Sam.' }] },
+      { match: /^thanks/, rounds: [{ text: 'Anytime.' }] },
+    ],
+    rubric: "The owner answered with their name and a routine. The reply uses the name they gave, and each fact is saved with remember, quoting the owner's own words.",
+    assert: {
+      mustCall: ['remember'],
+      hops: [{ hop: 'tool_remember', ok: true }],
+      modelInput: [{ turn: 2, mustContain: ['Host facts about this owner'] }, { turn: 3, mustNotContain: ['Host facts about this owner'] }],
+      replies: [/Hi/, /Sam/, /Anytime/],
+    },
+  },
+  {
     id: 'memory-tool-hop',
     category: 'memory',
     turns: ['I am vegetarian, just so you know'],
