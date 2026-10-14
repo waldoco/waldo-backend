@@ -5,8 +5,8 @@ export type GeneralPageState = Readonly<{ url: string; title: string; text: stri
 // Typed page facts the model decides on. Their meaning is structural (a password field, a known challenge widget
 // or Cloudflare's mitigation header), never a reading of the page's words.
 export type GeneralPageSignal = 'sign_in_requested' | 'verification_challenge';
-export type GeneralObservation = Readonly<{ revision: string; tab_ref: string; url: string; title: string; text: string; viewport: Readonly<{ width: number; height: number }>; accessibility_snapshot?: string; page_signals?: readonly GeneralPageSignal[]; elements: readonly Readonly<{ ref: string; role: string; name: string; tag: string; disabled: boolean; checked?: boolean; options?: readonly GeneralSelectOption[] }>[]; tabs: readonly Readonly<{ ref: string; url: string; title: string }>[] }>;
-export type GeneralSnapshot = Readonly<{ ownerId: string; sessionId: string; generation: number; targetId: string; digest: string; state: GeneralPageState; observation: GeneralObservation; image: Readonly<{ mime_type: 'image/png'; bytes: Uint8Array }> }>;
+export type GeneralObservation = Readonly<{ revision: string; tab_ref: string; url: string; title: string; text: string; viewport: Readonly<{ width: number; height: number }>; accessibility_snapshot?: string; page_signals?: readonly GeneralPageSignal[]; image_omitted?: 'oversize'; elements: readonly Readonly<{ ref: string; role: string; name: string; tag: string; disabled: boolean; checked?: boolean; options?: readonly GeneralSelectOption[] }>[]; tabs: readonly Readonly<{ ref: string; url: string; title: string }>[] }>;
+export type GeneralSnapshot = Readonly<{ ownerId: string; sessionId: string; generation: number; targetId: string; digest: string; state: GeneralPageState; observation: GeneralObservation; image?: Readonly<{ mime_type: 'image/png'; bytes: Uint8Array }> }>;
 export type GeneralActionSnapshot = Omit<GeneralSnapshot, 'image'>;
 
 // Host-authored page evaluation. No script/code is accepted from a model argument.

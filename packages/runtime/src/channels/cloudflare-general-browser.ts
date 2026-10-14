@@ -311,7 +311,8 @@ export function cloudflareGeneralBrowser(options: Options) {
     const semantic = await semanticSnapshot(session,context,page,state); await admit(session);
     if (!state.text.trim()) throw new GeneralBrowserError('empty_content');
     const bytes = new Uint8Array(await page.screenshot({ type: 'png', animations: 'disabled', caret: 'hide', scale: 'css',mask:[page.locator('input[type="password"],input[autocomplete~="one-time-code" i],textarea[autocomplete~="one-time-code" i]')] })); await admit(session);
-    if (bytes.byteLength > options.maxScreenshotBytes) throw new GeneralBrowserError('image_oversize');
+    // An over-limit image is left out rather than failing the read: the text and elements still carry the page.
+    const oversize = bytes.byteLength > options.maxScreenshotBytes;
     const current = await page.evaluate(generalPageState); await admit(session);
     const currentSemantic = await semanticSnapshot(session,context,page,current); await admit(session);
     if (currentSemantic !== semantic || JSON.stringify(current) !== JSON.stringify(state)) throw new GeneralBrowserError('stale_observation');
@@ -325,9 +326,9 @@ export function cloudflareGeneralBrowser(options: Options) {
     if (state.elements.some(element => element.type === 'password')) signals.push('sign_in_requested');
     if (state.challenge || challengedDocuments.has(page)) signals.push('verification_challenge');
     return { ownerId: session.ownerId, sessionId: session.id, generation: session.generation, targetId: target, digest, state,
-      observation: { revision, tab_ref: await tabRef(session, target), url: state.url, title: state.title, text: state.text, accessibility_snapshot:semantic, ...(signals.length ? { page_signals: signals } : {}), viewport: { width: state.width, height: state.height },
+      observation: { revision, tab_ref: await tabRef(session, target), url: state.url, title: state.title, text: state.text, accessibility_snapshot:semantic, ...(signals.length ? { page_signals: signals } : {}), ...(oversize ? { image_omitted: 'oversize' as const } : {}), viewport: { width: state.width, height: state.height },
         elements: state.elements.map((element, index) => ({ ref: `e:${revision.slice(0, 24)}:${index}`, role: element.role, name: element.name, tag: element.tag, disabled: element.disabled, ...(['checkbox','radio'].includes(element.type)?{checked:element.checked}:{}), ...(element.options ? { options: element.options } : {}) })), tabs },
-      image: { mime_type: 'image/png', bytes } };
+      ...(oversize ? {} : { image: { mime_type: 'image/png' as const, bytes } }) };
   };
   const terminateId = async (id: string): Promise<void> => cleanup(async step => {
     let browser: Browser | undefined;

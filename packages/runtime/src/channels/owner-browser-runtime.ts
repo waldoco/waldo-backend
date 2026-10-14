@@ -26,7 +26,7 @@ const spendRefusal=(cause:unknown)=>{
     :'No browser was started: the owner\'s browser spend record needs reconciliation. Retrying will not help; tell the owner browsing is paused until it is reconciled.');
 };
 
-const PAGE_SIGNALS=' An observation\'s page_signals are typed page facts: sign_in_requested means a password field is showing; verification_challenge means a bot-verification challenge is showing. You cannot enter credentials or pass a challenge yourself. Decide whether to offer the owner owner_login so they do it in the console, or to take another route.';
+const PAGE_SIGNALS=' page_signals (sign_in_requested, verification_challenge): offer the owner owner_login, or take another route.';
 
 // The run lease's wake: maintenance runs when the lease's run deadline, its configuration or its session lifetime ends,
 // whichever comes first. It is a listed wake key, so an arbiter re-arm keeps it.

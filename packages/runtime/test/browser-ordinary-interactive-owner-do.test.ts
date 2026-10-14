@@ -119,6 +119,10 @@ it('unregistered ordinary owner loop performs six observations, select/check, PN
       expect([...state.storage.kv.list({prefix:'common-spend:'})]).toHaveLength(0);expect(state.storage.kv.get('common_owner_browser_registration_v1')).toBeUndefined();
       const readTool=proof.inputs.flatMap(input=>input.tools??[]).find((tool:any)=>tool.name==='browse_page');
       expect(readTool.parameters.properties.retain_session).toBeDefined();
+      // Every tool the owner turn registers must fit the model request's description bound, or the whole turn fails.
+      const registered=proof.inputs.flatMap(input=>input.tools??[]);
+      expect(registered.map((tool:any)=>tool.name)).toEqual(expect.arrayContaining(['browse_page','browse_act','web_search']));
+      expect(registered.filter((tool:any)=>!(typeof tool.description==='string'&&tool.description.length>=1&&tool.description.length<=1024)).map((tool:any)=>tool.name)).toEqual([]);
     } finally { await state.storage.deleteAlarm(); denied.mockRestore(); }
   });
 });

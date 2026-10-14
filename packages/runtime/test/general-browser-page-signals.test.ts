@@ -7,7 +7,7 @@ const session: BrowserSession = { id: 'host-session', ownerId: 'owner-a', provid
 
 // One page whose document is served through the driver's own route guard, so the
 // HTTP status and headers the model's facts depend on come from the real guard path.
-function harness(document: { status: number; headers?: Record<string, string>; inputType?: string; challenge?: boolean }) {
+function harness(document: { status: number; headers?: Record<string, string>; inputType?: string; challenge?: boolean }, maxScreenshotBytes = 1024) {
   let routeHandler: ((route: unknown) => Promise<void>) | undefined, url = 'about:blank';
   const pages: any[] = [];
   const page: any = {
@@ -21,7 +21,7 @@ function harness(document: { status: number; headers?: Record<string, string>; i
     },
     evaluate: async () => ({ url, title: 'Fixture', text: 'Fixture page text', width: 1280, height: 720, scrollX: 0, scrollY: 0, ...(document.challenge ? { challenge: true } : {}),
       elements: document.inputType ? [{ selector: 'input', tag: 'input', role: 'textbox', name: 'Field', href: '', value: '', type: document.inputType, ...(['password'].includes(document.inputType) ? { secret: true } : {}), disabled: false, selected: false, checked: false, inForm: true }] : [] }),
-    locator: () => ({}), screenshot: async () => new Uint8Array([137, 80, 78, 71]), close: async () => { pages.splice(pages.indexOf(page), 1); },
+    locator: () => ({ click: async () => {} }), screenshot: async () => new Uint8Array([137, 80, 78, 71]), close: async () => { pages.splice(pages.indexOf(page), 1); },
   };
   pages.push(page);
   const context = { pages: () => [...pages], serviceWorkers: () => [], newPage: async () => page, route: async (_: string, handler: (route: unknown) => Promise<void>) => { routeHandler = handler; },
@@ -29,7 +29,7 @@ function harness(document: { status: number; headers?: Record<string, string>; i
       : method === 'DOM.getDocument' ? { root: { nodeName: 'INPUT', backendNodeId: 1, attributes: ['type', 'password'] } } : { targetInfo: { targetId: 'target' } }, detach: async () => {} }) };
   const browser = { contexts: () => [context], close: async () => {} };
   const sdk = { connect: async () => browser, sessions: async () => [] };
-  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes });
   return { driver, pages };
 }
 
@@ -66,4 +66,19 @@ it('the challenge signal clears once the same tab loads an ordinary document', a
   expect((await f.driver.navigate(session, 'https://shop.example/')).observation.page_signals).toEqual(['verification_challenge']);
   document.status = 200; document.headers = {};
   expect((await f.driver.navigate(session, 'https://shop.example/')).observation.page_signals).toBeUndefined();
+});
+
+it('an over-limit page image degrades to a text observation instead of ending the errand', async () => {
+  const observed = await harness({ status: 200, inputType: 'text' }, 2).driver.navigate(session, 'https://hotels.example/listing');
+  expect(observed.observation).toMatchObject({ text: 'Fixture page text', image_omitted: 'oversize' });
+  expect(observed.image).toBeUndefined();
+  const within = await harness({ status: 200, inputType: 'text' }).driver.navigate(session, 'https://hotels.example/listing');
+  expect(within.observation.image_omitted).toBeUndefined(); expect(within.image?.bytes.byteLength).toBe(4);
+});
+
+it('a click followed by an over-limit page image is a completed action, not an uncertain outcome', async () => {
+  const { driver } = harness({ status: 200, inputType: 'text' }, 2);
+  const before = await driver.navigate(session, 'https://flights.example/search');
+  const after = await driver.act(session, before, { operation: 'click', element_ref: before.observation.elements[0]!.ref }, async () => {});
+  expect(after.observation.image_omitted).toBe('oversize');
 });
