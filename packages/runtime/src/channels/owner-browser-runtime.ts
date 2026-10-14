@@ -12,11 +12,19 @@ import { commonOwnerBrowserRegistration,CommonBrowserRegistrationUnavailable } f
 import type { LLMGatewayAdapter } from '../llm/provider';
 import { localOwnerBinding, ownerBindingCurrent, verifyOwnerBinding } from '../identity/owner-binding';
 import { workspaceOwnerHost, workspaceMetadata } from './workspace-host';
-import {cloudflarePublicRead,PUBLIC_READ_RESERVED_BROWSER_MS} from './cloudflare-public-read';
+import {cloudflarePublicRead,PublicReadRefusal,PUBLIC_READ_RESERVED_BROWSER_MS} from './cloudflare-public-read';
 import {ordinaryPublicBrowserConfiguration} from './ordinary-public-browser-configuration';
-import {reserveOwnerPublicBrowser} from './owner-public-browser-spend';
+import {OwnerPublicBrowserCeilingExceeded,reserveOwnerPublicBrowser} from './owner-public-browser-spend';
 const browserFailureClass=(cause:unknown)=>cause instanceof CommonBrowserRegistrationUnavailable?'CommonBrowserRegistrationUnavailable':cause instanceof ClosedRunError?'ClosedRunError':cause instanceof TypeError?'TypeError':cause instanceof RangeError?'RangeError':cause instanceof SyntaxError?'SyntaxError':cause instanceof Error?'Error':'UnknownError';
 const traceBrowserFailure=(operation:string,cause:unknown)=>console.warn(JSON.stringify({event:'owner_browser_failure',operation,error_class:browserFailureClass(cause)}));
+// The spend ledger refuses a read that no retry can fund. The model is told so, and what to tell the owner.
+const spendRefusal=(cause:unknown)=>{
+  const ceiling=cause instanceof OwnerPublicBrowserCeilingExceeded;
+  traceBrowserFailure(ceiling?'public_read_spend_ceiling':'public_read_spend_reconciliation',cause);
+  return new PublicReadRefusal(ceiling
+    ?'No browser was started: the owner\'s browser spend limit is used up. Retrying will not help; tell the owner browsing is paused until the limit allows more.'
+    :'No browser was started: the owner\'s browser spend record needs reconciliation. Retrying will not help; tell the owner browsing is paused until it is reconciled.');
+};
 
 // The browser task follows the authenticated owner run. It needs no topic classifier
 // or canonical execution activation; provider identity and budget stay in the DO.
@@ -161,7 +169,9 @@ export function ownerBrowserRuntime(options: Readonly<{
                 const scope=options.activeScope()!;
                 const declaredLimitMicrousd=options.env.COMMON_BROWSER_REGISTRATION?JSON.parse(options.env.COMMON_BROWSER_REGISTRATION).spend?.limitMicrousd:undefined;
                 const effectiveLimitMicrousd=Number.isSafeInteger(declaredLimitMicrousd)?Math.min(declaredLimitMicrousd,COMMON_TEST_CEILING_MICROUSD):declaredLimitMicrousd;
-                return reserveOwnerPublicBrowser({storage:options.storage,ownerId,custodyDigest:owner.custodyDigest,intent:`${scope.runId}:${scope.attempt}:${ctx.toolCallId}`,reservedBrowserMs:PUBLIC_READ_RESERVED_BROWSER_MS,now:Date.now(),declaredLimitMicrousd:effectiveLimitMicrousd,assertCurrent:()=>{scope.admit();if(options.activeScope()!==scope||!binding())throw new ClosedRunError();}});
+                try{
+                  return reserveOwnerPublicBrowser({storage:options.storage,ownerId,custodyDigest:owner.custodyDigest,intent:`${scope.runId}:${scope.attempt}:${ctx.toolCallId}`,reservedBrowserMs:PUBLIC_READ_RESERVED_BROWSER_MS,now:Date.now(),declaredLimitMicrousd:effectiveLimitMicrousd,assertCurrent:()=>{scope.admit();if(options.activeScope()!==scope||!binding())throw new ClosedRunError();}});
+                }catch(cause){if(cause instanceof ClosedRunError)throw cause;throw spendRefusal(cause);}
               }});
               return read(args,{...ctx,authenticatedUserId:ownerId,assertTaskSourceCurrent:assertReadCurrent});
             }

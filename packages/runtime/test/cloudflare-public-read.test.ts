@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { browsePageArgsSchema } from '@waldo/contracts';
 import { browsePageHandler } from '../src/tools/live/browser';
-import { cloudflarePublicRead } from '../src/channels/cloudflare-public-read';
+import { PublicReadRefusal, cloudflarePublicRead } from '../src/channels/cloudflare-public-read';
 
 const args = { url: 'https://example.com/menu', instruction: 'Find vegetarian options' };
 const context = { authenticatedUserId: 'owner-a', egressAllowlist: ['*'], assertTaskSourceCurrent: async () => {} } as never;
@@ -355,4 +355,13 @@ it.each(['cleanup', 'settlement'] as const)('reports successful extraction safel
     expect(JSON.stringify(result)).not.toMatch(/Menu|Vegetarian|https:|private-id|private storage/);
     expect(settle).toHaveBeenCalledTimes(mode === 'cleanup' ? 0 : 1);
   } finally { vi.useRealTimers(); }
+});
+
+it('only a typed reservation refusal is reported as rejected; any other reservation failure stays transient, and neither allocates', async () => {
+  const refused = fake(), failed = fake();
+  expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => refused.sdk as never, reserveAllocation: async () => { throw new PublicReadRefusal('No browser was started. Retrying will not help.'); } })(args as never, context))
+    .toEqual({ ok: false, code: 'rejected', error: 'No browser was started. Retrying will not help.', source_taint: 'external' });
+  expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => failed.sdk as never, reserveAllocation: async () => { throw Error('private ledger detail'); } })(args as never, context))
+    .toEqual({ ok: false, code: 'transient', error: 'The Cloudflare browser read failed or its source permission changed.', source_taint: 'external' });
+  expect(refused.calls).toEqual([]); expect(failed.calls).toEqual([]);
 });

@@ -101,3 +101,37 @@ it('the one-shot capability rejects a changed but otherwise valid reservation bi
  expect(ownerPublicBrowserAccounting(f.storage,ownerId,custodyDigest)?.reservedMicrousd).toBe(1251);
  const snapshot=structuredClone([...f.rows]);expect(()=>held.settle(4000)).toThrow('settlement conflict');expect([...f.rows]).toEqual(snapshot);
 });
+
+// The owner's binding can move between surfaces (Telegram to the app, or back), or the directory can re-admit the owner;
+// either changes the custody digest while the directory owner stays the same.
+it('a newly verified custody for the same owner carries the whole ledger forward, with no refund',()=>{
+ const legacy={ownerId,custodyDigest,limitMicrousd:20_000_000,reservedMicrousd:2_090_000,intents:['old']};
+ const f=fixture([['owner-public-browser-spend:v1',legacy]]),moved='c'.repeat(64);
+ f.reserve('settled',PUBLIC_READ_RESERVED_BROWSER_MS).settle(4000);f.reserve('open',PUBLIC_READ_RESERVED_BROWSER_MS);
+ const before=structuredClone(f.rows.get(KEY)),spent=f.rows.get(monthKey);
+ reserveOwnerPublicBrowser({storage:f.storage,ownerId,custodyDigest:moved,intent:'after-move',reservedBrowserMs:PUBLIC_READ_RESERVED_BROWSER_MS,now,assertCurrent(){}});
+ expect(f.rows.get(KEY)).toEqual({...before,custodyDigest:moved,reservedMicrousd:before.reservedMicrousd+1250,
+  reservations:[...before.reservations,{intent:'after-move',month:'2026-10',reservedBrowserMs:PUBLIC_READ_RESERVED_BROWSER_MS,chargedMicrousd:1250,settled:false}]});
+ expect(f.rows.get('owner-public-browser-spend:v1')).toEqual({...legacy,custodyDigest:moved});
+ expect(f.rows.get(monthKey)).toBe(spent+1250);
+ expect(ownerPublicBrowserAccounting(f.storage,ownerId,moved)).toMatchObject({reservedMicrousd:2_090_000+100+1250+1250,intents:['old','settled','open','after-move']});
+ // A settlement bound to the earlier custody is refused, so that hold stays charged in full.
+ const held=structuredClone([...f.rows]);
+ expect(()=>settleOwnerPublicBrowser({storage:f.storage,ownerId,custodyDigest,intent:'open',durationMs:4000})).toThrow('retained cost conflict');
+ expect([...f.rows]).toEqual(held);
+});
+
+it('another owner\'s ledger, or one that does not validate under its own custody, is never carried forward',()=>{
+ const f=fixture(),moved='c'.repeat(64);f.reserve('open',PUBLIC_READ_RESERVED_BROWSER_MS);
+ const reserveMoved=(owner=ownerId)=>reserveOwnerPublicBrowser({storage:f.storage,ownerId:owner,custodyDigest:moved,intent:'after-move',reservedBrowserMs:PUBLIC_READ_RESERVED_BROWSER_MS,now,assertCurrent(){}});
+ const untouched=structuredClone([...f.rows]);
+ expect(()=>reserveMoved('prn_10000000000000000000000000000003')).toThrow('retained cost conflict');expect([...f.rows]).toEqual(untouched);
+ f.rows.get(KEY).reservedMicrousd+=1;const corrupt=structuredClone([...f.rows]);
+ expect(()=>reserveMoved()).toThrow('retained cost conflict');expect([...f.rows]).toEqual(corrupt);
+ f.rows.get(KEY).reservedMicrousd-=1;f.rows.get(KEY).custodyDigest='not-a-digest';const malformed=structuredClone([...f.rows]);
+ expect(()=>reserveMoved()).toThrow('retained cost conflict');expect([...f.rows]).toEqual(malformed);
+ // v1 and v2 written under different custodies never came from one admission; carrying would merge them silently.
+ f.rows.get(KEY).custodyDigest=custodyDigest;f.rows.set('owner-public-browser-spend:v1',{ownerId,custodyDigest:'d'.repeat(64),limitMicrousd:20_000_000,reservedMicrousd:2_090_000,intents:['old']});
+ const split=structuredClone([...f.rows]);
+ expect(()=>reserveMoved()).toThrow('retained cost conflict');expect([...f.rows]).toEqual(split);
+});
