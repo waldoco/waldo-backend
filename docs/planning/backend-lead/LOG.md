@@ -527,3 +527,12 @@ How to track this session: `git fetch origin claude/backend-lead-log && git show
   - the leak-check value should be one-decimal, so the health tool's rounding can't hide a copy, and `Date` should be frozen;
   - three more `delivery-gate` tests (`:1042`, `:1385`, `:1526`) straddle a UTC day with a sub-second window;
   - the browser diagnostic comment overclaims, the message should carry `reason`, and the body's line numbers are off.
+
+## 08:38Z (from `date -u`): the owner asks the lead to open #1217's follow-up; a third lead builder starts
+
+- **The owner's word, in this session (about 08:35Z):** "open the #1217 follow-up yourself in a parallel session". This moves the follow-up from row 19's builder, as my 6164223897 suggested, to the lead.
+- **Claimed (6164350133, 08:37Z), session `session_01PNcex4YGtqPqLPr5KYbWoc`, branch `claude/1217-followup-tests` off `3c4d3fae`, test-only, with no `src` or `owner-do.ts` change.** The builder has three tasks:
+  1. **`get-health-turn`:** a one-decimal synthetic value with integer part 60 to 99 that holds up under rounding, plus a `Date` frozen by fake timers. Red first: a stored rounded copy escapes today and is caught after.
+  2. **`delivery-gate` `:1042`, `:1385` and `:1526`:** each built from one `utcOccurrence()` base plus offsets. Red first: a forced straddle across midnight.
+  3. **The browser diagnostic:** the comment says the stored state narrows down which check refused, the message carries `reason`, and the body gives the corrected throw sites, verified against source.
+- **Lead builders running:** voice note (`session_01QXnd3q5gQB4XSfmjGEHQor`), threads stack (`session_01BkU4n3GtzKKoUoxw5jbbjF`), #1217 follow-up (`session_01PNcex4YGtqPqLPr5KYbWoc`). Each posts its head on #1103 and goes through the gate.
