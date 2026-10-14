@@ -23,10 +23,10 @@ const memoryStorage = () => {
   const data = new Map<string, unknown>();
   return {
     data,
-    get: async (key: string) => data.get(key),
+    get: async (key: string | string[]) => Array.isArray(key) ? new Map(key.filter((one) => data.has(one)).map((one) => [one, data.get(one)])) : data.get(key),
     put: async (entries: Record<string, unknown> | string, value?: unknown) => { if (typeof entries === 'string') data.set(entries, value); else for (const [key, item] of Object.entries(entries)) data.set(key, item); },
-    list: async ({ prefix, reverse, limit }: { prefix: string; reverse?: boolean; limit?: number }) => {
-      const rows = [...data].filter(([key]) => key.startsWith(prefix)).sort(([a], [b]) => a.localeCompare(b));
+    list: async ({ prefix, reverse, limit, end }: { prefix: string; reverse?: boolean; limit?: number; end?: string }) => {
+      const rows = [...data].filter(([key]) => key.startsWith(prefix) && (end === undefined || key < end)).sort(([a], [b]) => a.localeCompare(b));
       if (reverse) rows.reverse();
       return new Map(limit ? rows.slice(0, limit) : rows);
     },

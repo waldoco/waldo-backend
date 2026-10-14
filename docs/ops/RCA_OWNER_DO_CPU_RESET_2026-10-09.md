@@ -64,7 +64,7 @@ Status tags used below: LOCAL (reproduced or tested on a developer machine), PUS
 
 ## Not fixed yet
 
-- Every turn still loads all stored conversation rows (rows-read cost). [NOT STARTED]
+- Every turn loaded all stored conversation rows (rows-read cost). Canonical owner history now reads newest first in pages of 128 and stops once the rows read hold the turn's window (on a 5,000-row chain: 256 rows, 2 lists and 3 gets instead of 5,000 rows, 1 list and 5,001 gets); the per-object legacy store still loads every row. [IN REVIEW, branch claude/bounded-history-load]
 - The sanitised history is re-scanned each tool round within a turn; a within-turn cache was suggested, a cross-turn cache was advised against. [NOT STARTED]
 - About 35K tokens of raw history per turn (about 7 s gateway time, 10 s delivery); a token-sized window plus retrieval is the design direction, to be done behind regression scenarios for older content. [NOT STARTED]
 - Sanitiser check order inside the sanitiser itself (size before content) outside this destination. [NOT STARTED]
@@ -73,7 +73,7 @@ Status tags used below: LOCAL (reproduced or tested on a developer machine), PUS
 
 1. Staging-sized fixture: keep a seeded fixture that matches staging (history above every cap, claims, held topics, skills) and run one real-path turn against it in CI. [TO DO]
 2. Pass-count tests: assert the number of sanitiser passes for long histories (done for two cases: at most 3 and at most 12). [MERGED, LOCAL/CI]
-3. Per-turn budget: assert upper bounds on sanitiser passes, rows read and model-bound message count per turn, and fail CI when exceeded. [TO DO]
+3. Per-turn budget: assert upper bounds on sanitiser passes, rows read and model-bound message count per turn, and fail CI when exceeded. [rows read: IN REVIEW, `canonical-owner-store-bounded-load.test.ts`; the rest TO DO]
 4. Content-free phase hops by default: names and counts only, at every stage boundary and around each model call; read order, not milliseconds. [MERGED for composer and model call]
 5. Cheap before expensive: any validator must check structure and size before scanning content; any loop that re-runs a validator must be bounded or bisected. [TO DO, review rule]
 6. One source for limits: the window and the sanitiser should read the same caps. [TO DO]
