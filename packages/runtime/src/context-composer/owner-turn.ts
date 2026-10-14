@@ -11,6 +11,7 @@ export type OwnerContextCapability = Readonly<{
   composer: ContextComposer;
   snapshot(): Readonly<{ snapshot_ref: string; snapshot_at: number }>;
   assertCurrent(): Promise<void>;
+  assertFresh(): Promise<void>;
   assertInput(text: string): Promise<void>;
   conversationRef: string;
   retentionEpoch?(): Promise<string>;
@@ -49,6 +50,7 @@ export function createOwnerTurnContext(admission: OwnerMessageAdmission, sources
   const tenant = invocation.verified_authority.tenant_ref;
   const now = sources.now ?? Date.now;
   const assertCurrent = async () => { await admission.assertCurrent(); await sources.assertSourceCurrent?.(); await admission.assertCurrent(); };
+  const assertFresh = async () => { await admission.assertFresh(); await sources.assertSourceCurrent?.(); await admission.assertCurrent(); };
   const check = async (request: { principal_ref?: string; tenant_ref?: string; snapshot_ref: string; snapshot_at: number }) => {
     await assertCurrent();
     if ((request.principal_ref !== undefined && request.principal_ref !== principal)
@@ -117,7 +119,7 @@ export function createOwnerTurnContext(admission: OwnerMessageAdmission, sources
     } },
     ...(sources.onPhase ? { phase_observer: sources.onPhase } : {}),
   });
-  return Object.freeze({ invocation, composer, assertCurrent,
+  return Object.freeze({ invocation, composer, assertCurrent, assertFresh,
     conversationRef: sources.conversationRef ?? ownerChainRef('app', principal),
     ...(sources.retentionEpoch ? { retentionEpoch: sources.retentionEpoch } : {}),
     assertInput: async (text: string) => { if ((await admission.readInput()).text !== text) throw new ContextSourceRejectedError('input_integrity'); },

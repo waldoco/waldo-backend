@@ -79,6 +79,20 @@ describe('a schedule row this Worker cannot read', () => {
       expect(rowsLike(state.storage.sql, 'unreadable-').map(row => row.status)).toEqual(['armed', 'armed']);
     });
   });
+
+  it('counts a pause that has ended as due work only on a row this Worker can read', async () => {
+    const now = Date.now();
+    await runInDurableObject(freshStub(), async (_instance, state) => {
+      const scheduler = new Scheduler(state.storage.sql, state.storage, at(now));
+      const pauseEnded = (id: string) => state.storage.sql.exec("UPDATE schedule SET status = 'quarantined', quarantined_until = ? WHERE id = ?", now - MINUTE, id);
+      plantUnknownKind(state.storage.sql, 'unreadable-paused', now + 60 * MINUTE);
+      pauseEnded('unreadable-paused');
+      await scheduler.schedule({ id: 'valid', kind: 'brief', occurrenceAt: now + 60 * MINUTE, dueAt: now + 60 * MINUTE, payloadRefs: { id: 'valid' }, recurrence: null });
+      expect(scheduler.hasDue()).toBe(false);
+      pauseEnded('valid');
+      expect(scheduler.hasDue()).toBe(true);
+    });
+  });
 });
 
 describe('reading one id whose row this Worker cannot read', () => {

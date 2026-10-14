@@ -177,7 +177,13 @@ export class Scheduler {
     if (this.lookup(id).state === 'entry') await this.cancel(id);
   }
 
-  hasDue(): boolean { return this.dueEntries(this.deps.now()).entries.length > 0; }
+  // Due work includes a pause that has ended: rearm() wakes for it, and dispatchDue re-arms it before reading what is due.
+  hasDue(): boolean {
+    const now = this.deps.now();
+    return this.dueEntries(now).entries.length > 0 || readable(this.sql
+      .exec<ScheduleSqlRow>("SELECT * FROM schedule WHERE status = 'quarantined' AND quarantined_until <= ?", now)
+      .toArray()).entries.length > 0;
+  }
 
   async dispatchDue(executors: ScheduleExecutors): Promise<readonly ScheduleEntry[]> {
     const now = this.deps.now();
