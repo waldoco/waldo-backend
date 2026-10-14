@@ -138,7 +138,8 @@ let googleKeys: { keys: Map<string, CryptoKey>; until: number; fetchedAt: number
 export const googlePushKeys = (fetcher: typeof fetch = fetch, now: () => number = Date.now) => async (kid: string): Promise<CryptoKey | null> => {
   const known = googleKeys.keys.get(kid);
   if (known && now() < googleKeys.until) return known;
-  // At most one fetch a minute, failed ones included, so a failing cert endpoint is not asked on every push.
+  // At most one fetch a minute, failed ones included, so a failing cert endpoint is not asked on every push. A push
+  // that arrives while that fetch runs gets no key and is refused; Pub/Sub redelivers a refused push, so it is late, not lost.
   if (now() - googleKeys.fetchedAt < 60_000) return null;
   googleKeys = { ...googleKeys, fetchedAt: now() };
   try {
