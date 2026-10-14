@@ -6,8 +6,10 @@ import type { RunEffectScope } from '../channels/run-effect-scope';
 // treated as lost.
 export const MODEL_CALL_TIMEOUT_MS = 30_000;
 // A turn's tool rounds and answer, counted from the tool loop's start. With the answer reserve, tool rounds stop 90 s in,
-// past the slowest live turns measured (73 to 90 s end to end). A Telegram run is closed 150 s after it is claimed; the
-// rest of that time covers the work before the loop and the last round's tools, which run to their end.
+// past the slowest live turns measured (73 to 90 s end to end). A Telegram run is closed 150 s after it is claimed, so
+// one model call's time (30 s) is left after the budget. That margin covers the work before the loop and any tool still
+// running at the deadline, since started tools are never cut: a tool round that starts at the last moment has 60 s,
+// less the work before the loop, before the run is closed without its reply.
 export const TURN_TIME_BUDGET_MS = 120_000;
 // No tool round starts unless one full model call is left for the final answer.
 export const FINAL_ANSWER_RESERVE_MS = MODEL_CALL_TIMEOUT_MS;

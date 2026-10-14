@@ -280,8 +280,9 @@ describe('one model step: the provider is the only retry owner', () => {
 describe('one turn: the tool loop spends one time budget', () => {
   const runtime = () => new RuntimeLLMProvider({ gateway: new OpenAIResponsesAdapter({ apiKey: SYNTHETIC_KEY }) });
 
-  it('ends a turn before a Telegram run is closed', () => {
-    expect(TURN_TIME_BUDGET_MS).toBeLessThan(TURN_TIMEOUT_MS);
+  // The work before the loop, and a last tool round that runs past the deadline, both spend this margin.
+  it('leaves a Telegram run at least one model call of time after the turn budget', () => {
+    expect(TURN_TIMEOUT_MS - TURN_TIME_BUDGET_MS).toBeGreaterThanOrEqual(MODEL_CALL_TIMEOUT_MS);
   });
 
   it('a slow model no longer stretches a turn over every tool round', async () => {
