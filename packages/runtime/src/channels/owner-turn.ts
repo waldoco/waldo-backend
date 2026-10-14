@@ -5,6 +5,7 @@ import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import type { OwnerSkillCapability } from '../skills/curated-host';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import type { OwnerTurnEnvelope } from './owner-turn-envelope';
+import { receivedView, renderForModel, type InboundPart } from './owner-inbound-turn';
 import { ownerContextHandler } from '../tools/live/owner-context';
 import {
   deriveContextBudgetChars, EXTERNAL_ORIGIN_TOOLS, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, SANITISE_DESTINATION_POLICIES, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
@@ -175,9 +176,11 @@ export const createOwnerResponder = (
   const turnOnlyOutput = new Set<string>(handlers.filter((handler) => 'turn_only_output' in handler && handler.turn_only_output === true).map((handler) => handler.name));
   const recentOwnerTurns = new Map<string, import('../tools/live/memory').MemoryOwnerTurn>();
   let activeOwnerTurn: OwnerTurnEnvelope | undefined;
+  // Memory checks a span against the text the model read, so it gets that text and the spans the owner did not write.
+  const memoryView = (parts: readonly InboundPart[]) => { const shown = renderForModel(parts); return { text: shown.text, sourceQuoteRanges: shown.foreignRanges }; };
   const memoryContext = () => activeOwnerTurn ? { ownerInitiated:true, memoryTurn: {
     ownerId: safety.authenticatedUserId, conversationRef: activeOwnerTurn.conversationRef,
-    current: { message_ref: activeOwnerTurn.messageRef?.id ?? activeOwnerTurn.traceId, text: activeOwnerTurn.text, sourceQuoteRanges: activeOwnerTurn.sourceQuoteRanges },
+    current: { message_ref: activeOwnerTurn.messageRef?.id ?? activeOwnerTurn.traceId, ...memoryView(activeOwnerTurn.parts) },
     recent: [...recentOwnerTurns.values()].filter(turn => !holdsHeldTopic(turn.text)).concat(control.heard().map((text, index) => ({ message_ref: `${traceId}-steer-${index}`, text }))),
   } } : {};
   let expectedProcedure: string | undefined;
@@ -635,7 +638,8 @@ export const createOwnerResponder = (
       }
     }
   };
-  const converse = async (id: string, conversationRef: string, said: string, time: TurnTimer, fromOwner = false, surface = 'agent', toolNames?: readonly string[]) => {
+  // `said` is what the model reads; `received` is what the conversation stores and shows, the same text unless the turn labels parts of it.
+  const converse = async (id: string, conversationRef: string, said: string, time: TurnTimer, fromOwner = false, surface = 'agent', toolNames?: readonly string[], received = said) => {
     conversationRef = context?.conversationRef ?? conversationRef;
     windowingRef = conversationRef;
     backgroundToolNames = fromOwner ? undefined : toolNames;
@@ -644,7 +648,7 @@ export const createOwnerResponder = (
     turnToolEvents = [];
     control.begin(fromOwner);
     try {
-      const userEntry = tree.get(id) ?? { id, ownerId, chatId: conversationRef, parentId: conversationLeaves.get(conversationRef) ?? null, threadAnchorId: null, surface, modelPayload: said, appPayload: said, modelProjection: { mode: 'include' as const }, role:'user' as const, inputOrigin: fromOwner ? 'owner' as const : 'machine' as const, createdAt: Date.now() };
+      const userEntry = tree.get(id) ?? { id, ownerId, chatId: conversationRef, parentId: conversationLeaves.get(conversationRef) ?? null, threadAnchorId: null, surface, modelPayload: said, appPayload: received, modelProjection: { mode: 'include' as const }, role:'user' as const, inputOrigin: fromOwner ? 'owner' as const : 'machine' as const, createdAt: Date.now() };
       if(fromOwner && context && privateRunScope) await conversationStore?.persistOwnerInput?.(userEntry,privateRunScope);
       const publication = await time('joined_path', () => path.submit({
         ...(privateRunScope ? { runScope: privateRunScope } : {}),
@@ -740,16 +744,15 @@ export const createOwnerResponder = (
       traceId = id;
       log({ trace: id, hop: OWNER_REQUEST_HOP, ms: 0, ok: true });
       try {
-        const media = turn.attachment || turn.mediaNote ? { attachment: turn.attachment, note: turn.mediaNote } : undefined;
         pending = ownerTurnAttachments(turn);
         activeOwnerTurn = { ...turn, memoryWrites };
         turnReplyContext = await quoteContext(turn.replyTo);
         turnReplyOwnAuthored = turn.replyTo?.provenance !== undefined && turn.replyTo.provenance.author !== 'other' && !turn.replyTo.provenance.forwarded;
-        const said = [turn.text, media?.note].filter(Boolean).join('\n');
-        conversationStore?.noteQuoteRanges?.(id, turn.text ?? '', turn.sourceQuoteRanges ?? []);
-        return await converse(id, turn.conversationRef, said, time, true, turn.surface);
+        const received = receivedView(turn.parts);
+        conversationStore?.noteQuoteRanges?.(id, received.text, received.foreignRanges);
+        return await converse(id, turn.conversationRef, renderForModel(turn.parts).text, time, true, turn.surface, undefined, received.text);
       } finally {
-        recentOwnerTurns.set(turn.traceId, { message_ref: turn.messageRef?.id ?? turn.traceId, text: turn.text, sourceQuoteRanges: turn.sourceQuoteRanges });
+        recentOwnerTurns.set(turn.traceId, { message_ref: turn.messageRef?.id ?? turn.traceId, ...memoryView(turn.parts) });
         activeOwnerTurn = undefined;
         turnReplyContext = '';
         turnReplyOwnAuthored = false;

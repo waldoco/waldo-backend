@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { toolOutput } from './fixtures/tool-output';
@@ -35,7 +36,7 @@ const run = (name: string, args: Record<string, unknown>, body = FULL) => runInD
   a[5] = [searchEpisodesHandler(index)] as never;
   if (calls.readSlice) a[7] = true;
   const responder = createOwnerResponder(...a);
-  await responder.respond({ traceId: 'tg-1', conversationRef: 'owner', surface: 'telegram', text: 'what was the latest?' } as never, async (_l: string, work: () => Promise<unknown>) => work() as never);
+  await responder.respond(ownerTyped({ traceId: 'tg-1', conversationRef: 'owner', surface: 'telegram', text: 'what was the latest?' }) as never, async (_l: string, work: () => Promise<unknown>) => work() as never);
   return calls.inputs[calls.readSlice ? 2 : 1] ?? '';
 });
 

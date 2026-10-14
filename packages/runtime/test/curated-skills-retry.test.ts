@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { env,runInDurableObject } from 'cloudflare:test';
 import { expect,it } from 'vitest';
 import { createOwnerResponder } from '../src/channels/owner-turn';
@@ -28,7 +29,7 @@ for(const kind of ['physical_retry'] as const){
     
    args[10]=gateway;
    args[21]={skillHost:{prepare:async(turn,contextOwnerId,capturedScope)=>createScopedCuratedSkillCapability(state.storage.sql,{owner:contextOwnerId,turnId:turn.traceId,trigger:'user_message',ownerText:turn.text,assertCurrent:async()=>scope.admit()},capturedScope)}};
-   await expect(createOwnerResponder(...args).respond({traceId:trace,conversationRef:'telegram-42',surface:'telegram',text:'Prepare a draft',runScope:scope,memoryWrites:false},async(_hop,work)=>work())).rejects.toThrow();
+   await expect(createOwnerResponder(...args).respond(ownerTyped({traceId:trace,conversationRef:'telegram-42',surface:'telegram',text:'Prepare a draft',runScope:scope,memoryWrites:false}),async(_hop,work)=>work())).rejects.toThrow();
    expect(physical).toHaveLength(2);
    expect(physical.map(call=>call.containsBody)).toEqual([false,true]);
    expect(physical.every(call=>call.status==='active')).toBe(true);

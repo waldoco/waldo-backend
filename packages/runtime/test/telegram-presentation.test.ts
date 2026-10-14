@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { expect, it, vi } from 'vitest';
 import { telegramRichReply } from '../src/channels/rich-format';
 import { TelegramOwnerListener } from '../src/channels/telegram-listener';
@@ -26,7 +27,7 @@ it('falls back to the exact guarded final after a definite entity rejection', as
   const text = '**Read** `notes.md` <tag> & [open](https://example.test)';
   const send = vi.fn().mockRejectedValueOnce(new TelegramRejection(400, "Bad Request: can't parse entities: unsupported tag")).mockResolvedValue({ message_id: 3 });
   const listener = new TelegramOwnerListener({ ownerTelegramId: 7, api: { sendMessage: send, sendChatAction: async () => undefined, setMessageReaction: async () => undefined }, respond: async () => text, saveOffset: async () => undefined });
-  expect(await listener.handle({ updateId: 1, senderId: 7, chatId: 7, messageId: 2, sentAt: null, text: 'read' })).toBe('answered');
+  expect(await listener.handle(ownerTyped({ updateId: 1, senderId: 7, chatId: 7, messageId: 2, sentAt: null, text: 'read' }))).toBe('answered');
   expect(send).toHaveBeenCalledTimes(2);
   expect(send.mock.calls[1]![0]).toEqual({ chat_id: 7, text });
 });

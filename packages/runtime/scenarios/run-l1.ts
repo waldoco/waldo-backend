@@ -3,6 +3,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { TOOL_PERMISSIONS, triggerTypeSchema, webSearchArgsSchema, WALDO_CHAT_MODEL, type ConnectIntent, type SetReminderArgs, type WebSearchArgs } from '@waldo/contracts';
 import { createTelegramResponder } from '../src/channels/telegram-turn';
+import { inboundTurn, ownerWords } from '../src/channels/owner-inbound-turn';
 import { reminderHandlers, type ReminderBook } from '../src/channels/reminders';
 import { loopBook, loopHandlers } from '../src/channels/loops';
 import { googleHandlers } from '../src/tools/live/google';
@@ -135,7 +136,7 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
       if (turn.startsWith('@plan ')) return responder.planDay(`${scenario.id}-${n}`, turn.slice(6));
       if (turn.startsWith('@prompt ')) return responder.prompt(`${scenario.id}-${n}`, 1, turn.slice(8), time);
       if (turn.startsWith('@remind ')) return responder.remind(`${scenario.id}-${n}`, 1, turn.slice(8), time);
-      return responder.respond({ updateId: n, chatId: 1, text: turn } as never, time);
+      return responder.respond(inboundTurn({ updateId: n, messageId: null, senderId: 1, chatId: 1, sentAt: null, parts: ownerWords(turn) }), time);
     };
     const before = gateway.requests().length;
     try {
