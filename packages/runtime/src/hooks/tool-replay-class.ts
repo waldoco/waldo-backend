@@ -20,6 +20,7 @@ const NOT_INSPECTED = 'local owner-DO write; key and duplicate behavior not insp
 const NO_HANDLER = 'no live handler in this tree (see TOOL_CLAIM_EFFECT)';
 
 export const TOOL_REPLAY_CLASS: Readonly<Record<ToolName, ToolReplayRow>> = {
+  send_console_link: unknown('mints the one console grant and sends it; a re-run voids the link already sent, so it never auto-retries'),
   use_mac: {replay:'provider_idempotent',basis:'The stable request_id reaches DeviceCommandStore and never reissues a started Mac effect.',evidence:{file:'tools/live/use-mac.ts',needle:'request_id'}},
   get_crs: read(), get_health: read(), query_calendar: read(), get_communication: read(), search_communication: read(), search_contacts: read(),
   read_thread: read(), get_tasks: read(), get_master_metrics: read(), get_context: read('pure clock read (tools/live/get-context.ts)'), query_availability: read(),

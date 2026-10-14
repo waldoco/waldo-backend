@@ -29,9 +29,13 @@ it('names one occurrence per owner, job and schedule occurrence', async () => {
   expect(otherOwner.invocation.occurrence.occurrence_ref).not.toBe(first.invocation.occurrence.occurrence_ref);
 });
 
-it('a binding that changes after admission stops the job before any input is read', async () => {
+it('a binding that changes after admission stops the job\'s next effect at once, and its context reads once the last match is a second old', async () => {
+  let clock = Date.now();
   const lookup = vi.fn().mockResolvedValueOnce(binding()).mockResolvedValueOnce(binding()).mockResolvedValue(binding({ revision: '6' }));
-  const admitted = await ownerJobAdmission(options(lookup));
+  const admitted = await ownerJobAdmission({ ...options(lookup), occurredAt: clock - 1, now: () => clock });
+  await expect(admitted.assertCurrent()).resolves.toBeUndefined();
+  await expect(admitted.assertFresh()).rejects.toMatchObject({ code: 'rejected' });
+  clock += 1_000;
   await expect(admitted.assertCurrent()).rejects.toMatchObject({ code: 'rejected' });
   await expect(admitted.readInput()).rejects.toMatchObject({ code: 'rejected' });
 });
