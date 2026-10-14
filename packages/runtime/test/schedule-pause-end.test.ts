@@ -7,9 +7,13 @@ import { ensureSchema } from '../src/tracer/schema';
 
 // The scheduler pauses a job for a day after three failed runs in a row, then wakes at the pause's end. Every pass runs on
 // workerd's alarm scheduler with a far-future clock, so nothing fires on its own: the test moves the clock to the wake the
-// runtime armed and runs that alarm. Model calls are refused, which fails every reminder run.
+// runtime armed and runs that alarm. Model calls are refused, which fails every reminder run; Telegram sends are recorded.
+const sent = vi.hoisted(() => [] as string[]);
 vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(),
-  createTelegramCaller: () => async (_method: string, payload: { chat_id: number }) => ({ message_id: 1, chat: { id: payload.chat_id } }) }));
+  createTelegramCaller: () => async (method: string, payload: { chat_id: number; text: string }) => {
+    if (method === 'sendMessage') sent.push(payload.text);
+    return { message_id: 1, chat: { id: payload.chat_id } };
+  } }));
 vi.mock('openai', () => ({ default: class { responses = { create: async () => { throw new Error('model unavailable'); } }; } }));
 
 afterEach(() => { vi.useRealTimers(); });
@@ -42,7 +46,10 @@ it('a paused job runs again when its pause ends, and the alarm then waits for it
   for (let attempt = 1; attempt <= 3; attempt++) await pass();
   const paused = await row();
   expect(paused.status).toBe('quarantined');
-  // The wake the scheduler left is the pause's end.
+  // The next pass sends the owner the pause's notice, and the wake after it is the pause's end.
+  expect(sent).toEqual([]);
+  await pass();
+  expect(sent).toHaveLength(1);
   expect(await inObject(state => state.storage.getAlarm())).toBe(paused.until);
   await pass();
   expect(Date.now()).toBe(paused.until);
