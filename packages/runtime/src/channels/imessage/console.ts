@@ -3,6 +3,7 @@ import { iMessageBridgeName, iMessageComposition, type IMessageEnv } from './bri
 import { mintSetupSecret, sha256Hex } from './crypto';
 import { iMessageDirectory, type BridgeListing } from './directory';
 import { consoleAuth } from '../../identity/console-auth';
+import { iMessageSendUrl } from './send-url';
 
 // Private owner lifecycle UI. The authenticated owner console session + CSRF is the sole authority
 // for pair/verify/activate/revoke; host S2 credentials can never reach these actions.
@@ -45,8 +46,6 @@ export function renderIMessage(rows: readonly (BridgeListing & { online?: boolea
     + `<table><tr><th>Status</th><th>Sender</th><th>Host</th><th>Actions</th></tr>${rows.map(row).join('')}</table></body></html>`;
 }
 
-/** The one-tap link: on an iPhone it opens Messages to the Waldo address with "waldo CODE" filled in. */
-export const iMessageSendUrl = (address: string, code: string) => `sms:${encodeURIComponent(address).replace(/%40/g, '@').replace(/%2B/g, '+')}&body=${encodeURIComponent(`waldo ${code}`)}`;
 
 /** Result of "Get an iMessage link code": the code, and on a phone a button that opens Messages ready to send. */
 export function iMessageLinkPage(code: string, address: string | undefined): string {
