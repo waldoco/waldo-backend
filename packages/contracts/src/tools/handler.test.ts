@@ -262,6 +262,7 @@ describe('external-origin tool classification — ADR-0049', () => {
       'query_availability',
       'get_communication',
       'search_communication',
+      'search_contacts',
       'read_thread',
       'get_tasks',
       'web_search',

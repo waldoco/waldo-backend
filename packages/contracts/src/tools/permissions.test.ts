@@ -115,6 +115,7 @@ describe('toolName', () => {
       'skills_disable',
       'skills_load',
       'use_mac',
+      'search_contacts',
     ]);
   });
 
@@ -239,6 +240,7 @@ describe('TOOL_PERMISSIONS', () => {
         'connect_service',
         'get_communication',
         'search_communication',
+        'search_contacts',
         'read_thread',
         'get_tasks',
         'get_master_metrics',

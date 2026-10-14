@@ -6,10 +6,10 @@ import { artifactMarker, extractArtifacts, quarantineArtifacts, type ArtifactKin
 import {
   calendarPageSchema, queryAvailabilityArgsSchema, type QueryAvailabilityArgs,
   googleCalendarListPageSchema, googleTaskListPageSchema, googleTasksPageSchema, type GoogleTasksPage,
-  connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
-  type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolEligibility, type ToolHandler, type ToolName, type ToolResult,
+  connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, searchContactsArgsSchema, contactMatchSchema, type ContactMatch, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
+  type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type SearchContactsArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolEligibility, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
-import { b64url, buildMime, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type GoogleClient, type GoogleFeature } from '../../connectors/google';
+import { PEOPLE_UNREADABLE, b64url, buildMime, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type GoogleClient, type GoogleFeature } from '../../connectors/google';
 import { EmailProposalError, proposalStatus, type CardPlacement, type EmailSendProposal } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
@@ -271,6 +271,38 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     }, account),
   } satisfies ToolHandler<SearchCommunicationArgs, unknown, ToolDispatcherContext>,
   {
+    name: 'search_contacts',
+    description: "Find people in the owner's Google contacts and among the people they have emailed, by the start of a name or an address. Use it to work out who the owner means before drafting, sending or inviting. If more than one person could be meant, or the match is uncertain, ask the owner which person rather than guessing a recipient. An empty result does not mean the person is unknown: the owner may never have saved or emailed them.",
+    schema: searchContactsArgsSchema,
+    trigger_allowlist: allowlist('search_contacts'),
+    autonomy_gated: false,
+    requires_connector: true,
+    handle: ({ query, limit, account }: SearchContactsArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'contacts', ctx, async (client) => {
+      if (!client.searchContacts) throw new Error('Google contacts adapter unavailable');
+      // Only the contract's fields are picked, so a phone, organisation or photo can never ride along. The contract's
+      // address check runs before an address is kept or counted: a refused address never takes one of a person's three
+      // places, and never hides an address another person shares.
+      const seen = new Set<string>();
+      const contacts: ContactMatch[] = [];
+      const rows = await client.searchContacts(query, limit).catch((error: unknown) => {
+        // A malformed People answer fails the same way on every retry, so it is refused like any unreadable answer.
+        throw error instanceof Error && error.message === PEOPLE_UNREADABLE ? new UnreadableAnswer('unreadable connector answer') : error;
+      });
+      for (const { name, emails, source } of rows) {
+        const kept = emails.filter((email) => !seen.has(email) && contactMatchSchema.shape.emails.element.safeParse(email).success).slice(0, 3);
+        const match = contactMatchSchema.safeParse({ name, emails: kept, source });
+        if (!match.success) continue;
+        kept.forEach((email) => seen.add(email));
+        contacts.push(match.data);
+        if (contacts.length === limit) break;
+      }
+      return { query, contacts, coverage: {
+        matching: 'name_or_address_prefix', sources: ['contacts', 'other_contacts'],
+        limitation: 'Names and addresses only, from one account. Empty means no saved or emailed person starts with this text, not that the person does not exist.',
+      } };
+    }, account),
+  } satisfies ToolHandler<SearchContactsArgs, unknown, ToolDispatcherContext>,
+  {
     name: 'read_thread',
     description: "Read one Gmail thread by thread_id - the messages with sender, recipients (to, cc, reply_to as plain addresses), subject, time and body. account.email is the owner's own address; a send-as alias of the owner is not marked and stays in the lists. recipients_capped means a list was cut at 50 addresses, so a reply to all from it would leave people out: tell the owner. To reply to all, take the recipients from the message being replied to. Use after get_communication or search_communication surfaces a thread the owner asks about, before drafting a reply. Continue with cursor and the same thread/account; changed threads require restarting.",
     schema: readThreadArgsSchema,
@@ -322,7 +354,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<GetTasksArgs, unknown, ToolDispatcherContext>,
   {
     name: 'propose_calendar_change',
-    description: "Propose adding, moving or cancelling an event on the owner's calendar. The owner gets a review card to approve, change or skip; nothing changes until they approve. Include the event title.",
+    description: "Propose adding, moving or cancelling an event on the owner's calendar. The owner gets a review card to approve, change or skip; nothing changes until they approve. Include the event title. calendar_id (from query_calendar list_calendars) picks a calendar other than the primary one. A new event can invite attendees, with a location, notes and a Meet link; with attendees, send_updates says whether Google emails them, and for a move or cancel of an event that has guests it says the same. The card shows the owner exactly who is invited and whether they are emailed.",
     schema: proposeCalendarChangeArgsSchema,
     trigger_allowlist: allowlist('propose_calendar_change'),
     autonomy_gated: false,

@@ -1,4 +1,4 @@
-import type { ApprovalItem, ApprovalReview } from './approvals';
+import { calendarInviteDetails, type ApprovalItem, type ApprovalReview } from './approvals';
 import type { CardLatest, CardState } from './day-cards';
 import { SCHEDULE_KINDS } from '@waldo/contracts';
 import { SCHEDULE_LABELS, type SchedulePreferences } from './schedule-preferences';
@@ -268,7 +268,7 @@ const serviceStatus = (view: ConsoleView) => {
 // Open email/message send proposals the console may only dismiss (approve stays in chat).
 export const consoleMayDismiss = (item: ApprovalItem): boolean =>
   (item.state === 'open' || item.state === 'review_only') && !(consoleMayApprove(item) && item.review?.kind === item.kind) && (item.kind === 'email_send' || item.kind === 'message_send');
-export const consoleMayApprove = (item: ApprovalItem | undefined): boolean => Boolean(item && item.state === 'open' && item.kind === 'calendar_change' && item.review?.kind === 'calendar_change');
+export const consoleMayApprove = (item: ApprovalItem | undefined): boolean => Boolean(item && item.state === 'open' && item.kind === 'calendar_change' && item.review?.kind === 'calendar_change' && !calendarInviteDetails(item.review));
 
 const APPROVAL_LABELS: Readonly<Record<string, string>> = {
   calendar_change: 'Calendar adjustment', email_send: 'Email send', message_send: 'Message send',
@@ -282,7 +282,11 @@ const reviewDetails = (review: ApprovalReview): string => {
     const task = args.changes?.title ?? before?.title;
     return `<div class="approval-review"><div>Account: ${esc(review.account)}</div><div>List: ${esc(list.title)}</div><div>Action: ${esc(args.action)}</div>${task ? `<div>Task: ${esc(task)}</div>` : ''}${args.changes?.notes ? `<pre>${esc(args.changes.notes)}</pre>` : ''}${args.changes?.due_date ? `<div>Due: ${esc(args.changes.due_date)}</div>` : ''}<div>Reason: ${esc(args.reason)}</div></div>`;
   }
-  return `<div class="approval-review"><div>Action: ${esc(review.action)}</div>${review.title ? `<div>Event: ${esc(review.title)}</div>` : ''}${review.event_id ? `<div>Event ID: ${esc(review.event_id)}</div>` : ''}${review.start ? `<div>Start: ${esc(review.start)}</div>` : ''}${review.end ? `<div>End: ${esc(review.end)}</div>` : ''}<div>Reason: ${esc(review.reason)}</div></div>`;
+  return `<div class="approval-review"><div>Action: ${esc(review.action)}</div>${review.title ? `<div>Event: ${esc(review.title)}</div>` : ''}${review.event_id ? `<div>Event ID: ${esc(review.event_id)}</div>` : ''}${review.start ? `<div>Start: ${esc(review.start)}</div>` : ''}${review.end ? `<div>End: ${esc(review.end)}</div>` : ''}`
+    + `${review.calendar_id && review.calendar_id !== 'primary' ? `<div>Calendar: ${esc(review.calendar_id)}</div>` : ''}${review.attendees?.length ? `<div>Guests: ${esc(review.attendees.join(', '))}</div>` : ''}`
+    + `${review.send_updates ? `<div>${review.send_updates === 'all' ? 'Google emails the guests' : 'Google does not email the guests'}</div>` : ''}${review.location ? `<div>Place: ${esc(review.location)}</div>` : ''}`
+    + `${review.add_meet_link ? '<div>With a Meet link</div>' : ''}${review.description ? `<div>Notes on the event:</div><pre>${esc(review.description)}</pre>` : ''}`
+    + `<div>Reason: ${esc(review.reason)}</div>${calendarInviteDetails(review) ? '<div>Approve it in chat or the Waldo app, where the full invite is shown.</div>' : ''}</div>`;
 };
 const approvals = (view: ConsoleView) => {
   if (view.approvals.length === 0) return empty('Nothing waiting on you. When Waldo proposes a change, it appears here and in your chat.');
