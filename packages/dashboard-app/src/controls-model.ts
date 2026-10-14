@@ -28,7 +28,7 @@ export type ActivityRecord = Base<'activity', {
   ledger: string;
 }>;
 export type ProfileRecord = Base<'profile', { sections: { title: string; lines: string[] }[]; barriers: number; removal: { state: 'incomplete' | 'none_recorded'; pending_count: number; items?:{id:string;status:'purging'}[] }; holds: { kind: string; reason: string; created_at: string }[] }>;
-export type SetupRecord = Base<'setup', { telegram_linked: boolean; google_access_granted: boolean; quiet_hours_set: boolean }>;
+export type SetupRecord = Base<'setup', { telegram_linked: boolean; google_access_granted: boolean; quiet_hours_set: boolean; imessage_linked?: boolean }>;
 export type UsageRecord = Base<'usage', { rows: { model: string; calls: number; input: number; cached: number; output: number; usd: number }[] }>;
 export type FilesRecord = Base<'files', { storage: 'telegram_reference'; items: { id: number; kind: string; name: string; mime: string | null; size: number | null; caption: string; at: number }[] }>;
 type Records = { day: DayRecord; connections: ConnectionsRecord; waiting: WaitingRecord; activity: ActivityRecord; profile: ProfileRecord; setup: SetupRecord; usage: UsageRecord; files: FilesRecord };
@@ -112,7 +112,9 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
   }
   if (expected === 'setup') {
     if (![data.telegram_linked, data.google_access_granted, data.quiet_hours_set].every(value => typeof value === 'boolean')) throw shapeError();
-    return { ...base, view: 'setup', data: { telegram_linked: data.telegram_linked, google_access_granted: data.google_access_granted, quiet_hours_set: data.quiet_hours_set } } as Records[V];
+    if (data.imessage_linked !== undefined && typeof data.imessage_linked !== 'boolean') throw shapeError();
+    return { ...base, view: 'setup', data: { telegram_linked: data.telegram_linked, google_access_granted: data.google_access_granted, quiet_hours_set: data.quiet_hours_set,
+      ...(data.imessage_linked !== undefined ? { imessage_linked: data.imessage_linked } : {}) } } as Records[V];
   }
   if (expected === 'usage') {
     if (!Array.isArray(data.rows) || !data.rows.every(row => obj(row) && string(row.model) && [row.calls, row.input, row.cached, row.output].every(count) && finite(row.usd))) throw shapeError();

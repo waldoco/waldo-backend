@@ -66,11 +66,19 @@ export const appHistoryResultV1Schema = z.strictObject({ messages: z.array(appMe
 export const appErrorCodeV1Schema = z.enum(['client_message_id_reused', 'inbox_full', 'request_reused', 'stale_read', 'no_longer_eligible', 'receipt_capacity']);
 export const appProblemV1Schema = z.strictObject({ error: z.string(), code: appErrorCodeV1Schema.optional(), message: z.string().max(1000).optional() })
   .refine(problem => problem.error !== 'unavailable' || problem.code === undefined, { error: 'the generic error carries no code', path: ['code'] });
+// "Connect iMessage": a one-time code the owner sends from their own iPhone to the Waldo iMessage address, which
+// links that number to their own Waldo. send_url opens Messages with the text filled in. 503 where the shared
+// Waldo number is not configured.
+export const appIMessageLinkCodeV1Schema = z.strictObject({
+  code: z.string().regex(/^[A-HJ-NP-Z2-9]{10}$/), text: z.string().regex(/^waldo [A-HJ-NP-Z2-9]{10}$/),
+  address: z.string().min(3).max(320), send_url: z.string().startsWith('sms:').max(512), expires_in_seconds: z.literal(600),
+});
 export const appCoreRoutesV1 = [
   { method: 'POST', path: '/app/v1/auth/code', request: appCodeRequestSchema, response: appCodeResultSchema, authenticated: false, success_status: 200 },
   { method: 'POST', path: '/app/v1/auth/verify', request: appVerifyRequestV1Schema, response: appVerifyResultV1Schema, authenticated: false, success_status: 200 },
   { method: 'GET', path: '/app/v1/session', response: appSessionV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/auth/signout', response: appSignoutResultV1Schema, authenticated: true, success_status: 200 },
+  { method: 'POST', path: '/app/v1/channels/imessage/link-code', response: appIMessageLinkCodeV1Schema, authenticated: true, success_status: 200 },
   { method:'GET', path:'/app/v1/chat/main/messages/{client_message_id}',response:appMessageReceiptV1Schema,authenticated:true,success_status:200 },
   { method: 'GET', path: '/app/v1/chat/main', response: appHistoryResultV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/chat/main/messages', request: appSendRequestV1Schema, response: appSendResultV1Schema, authenticated: true, success_status: 202, max_request_bytes: APP_SEND_MAX_WIRE_BYTES },

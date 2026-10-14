@@ -230,3 +230,27 @@ it('fences the session\'s in-flight work before revoking it, and revokes nothing
     expect(fences[0]!.headers.get('x-waldo-fence-sig')).toMatch(/^[a-f0-9]{16,}$/);
   }finally{fetcher.mockRestore();}
 });
+
+describe('Connect iMessage from the app', () => {
+  const route = '/app/v1/channels/imessage/link-code';
+  const authed = (method = 'POST') => new Request(`https://w.test${route}`, { method, headers: { authorization: `Bearer ${CREDENTIAL}` } });
+  const withAddress = () => ({ ...(env() as object), IMESSAGE_WALDO_ADDRESS: 'woof@heywaldo.in' }) as never;
+
+  it('issues a one-time imessage code for the signed-in owner, with a one-tap Messages link', async () => {
+    const issued: string[] = [];
+    const { auth } = fakeAuth({ issueProviderLinkCode: async (doName: string, provider: string) => { issued.push(`${doName}:${provider}`); return 'ABCDEFGHJK'; } } as never);
+    const response = await handleApp(authed(), withAddress(), auth);
+    expect(response!.status).toBe(200);
+    expect(await response!.json()).toEqual({ code: 'ABCDEFGHJK', text: 'waldo ABCDEFGHJK', address: 'woof@heywaldo.in',
+      send_url: 'sms:woof@heywaldo.in&body=waldo%20ABCDEFGHJK', expires_in_seconds: 600 });
+    expect(issued).toEqual(['owner-1:imessage']); // always the authenticated owner's own code
+  });
+
+  it('refuses without a session, other methods, and where the Waldo number is not configured', async () => {
+    const { auth } = fakeAuth({ issueProviderLinkCode: async () => 'ABCDEFGHJK' } as never);
+    expect((await handleApp(new Request(`https://w.test${route}`, { method: 'POST' }), withAddress(), auth))!.status).toBe(401);
+    expect((await handleApp(authed('GET'), withAddress(), auth))!.status).toBe(405);
+    expect((await handleApp(authed(), env(), auth))!.status).toBe(503);
+    expect((await handleApp(authed(), withAddress(), fakeAuth({ issueProviderLinkCode: async () => null } as never).auth))!.status).toBe(503);
+  });
+});
