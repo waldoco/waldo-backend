@@ -7,7 +7,9 @@ import type { McpGoogleResolution } from '../tools/live/mcp';
 // sweep forward, so the same quiet hours, preferences, delivery routing and update check apply.
 // The 10-minute poll stays as the fallback whenever there is no live channel.
 type Kv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void; delete(key: string): unknown }>;
-type Stored = (CalendarWatch & Readonly<{ connection: string | null; highest: number }>) | Readonly<{ failedAt: number }>;
+// Why the last start did not leave a channel: no usable route on this server, or a start that failed.
+export type CalendarWatchMiss = 'failed' | 'skipped';
+type Stored = (CalendarWatch & Readonly<{ connection: string | null; highest: number }>) | Readonly<{ failedAt: number; reason?: CalendarWatchMiss }>;
 const KEY = 'calendar_push';
 const WAKE_GAP_MS = 60_000;
 
@@ -20,7 +22,8 @@ export const calendarPushBook = (kv: Kv) => {
     },
     connection: (): string | null | undefined => { const stored = read(); return stored && !('failedAt' in stored) ? stored.connection : undefined; },
     record: (watch: CalendarWatch, connection: string | null) => kv.put(KEY, { ...watch, connection, highest: 0 }),
-    fail: (now: number) => kv.put(KEY, { failedAt: now }),
+    fail: (now: number, reason: CalendarWatchMiss = 'failed') => kv.put(KEY, { failedAt: now, reason }),
+    miss: (): Readonly<{ at: number; reason: CalendarWatchMiss }> | null => { const stored = read(); return stored && 'failedAt' in stored ? { at: stored.failedAt, reason: stored.reason ?? 'failed' } : null; },
     // A new grant may fix what failed, so the next sweep retries at once. A live channel is left alone: starting
     // another while it lives would deliver every change twice.
     clearFailure: () => { const stored = read(); if (stored && 'failedAt' in stored) kv.delete(KEY); },
@@ -62,7 +65,7 @@ export const ensureCalendarWatch = async (deps: Readonly<{
   try {
     const route = await deps.resolve();
     // Nothing to watch with: wait as after a failure, instead of looking up the grant on every sweep.
-    if (route === null || (route.mode === 'proxy' && !deps.proxy)) { book.fail(now); return 'skipped'; }
+    if (route === null || (route.mode === 'proxy' && !deps.proxy)) { book.fail(now, 'skipped'); return 'skipped'; }
     const channelId = deps.newId();
     const input = { channelId, token: await calendarChannelToken(deps.secret, deps.doName, channelId), address: new URL(CALENDAR_PUSH_PATH, deps.origin).toString() };
     const watch = route.mode === 'bearer' ? await startCalendarWatch(deps.fetcher, route.token, input) : await deps.proxy!.calendarWatch(deps.doName, route.connection, input);
