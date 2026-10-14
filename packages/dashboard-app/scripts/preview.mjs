@@ -23,7 +23,7 @@ const controls = (view) => {
       { id: 'checkin', name: 'Check-in', defaultTime: '14:30', time: '14:30', reason: 'A midday look at what moved.', sent: false, pin: '14:30' },
       { id: 'close', name: 'The Close', defaultTime: '20:30', time: null, reason: 'An evening wrap of what got done.', sent: false, pin: null }],
       proactivity: { quiet_start: '22:00', quiet_end: '07:00', volume: 'normal' } },
-    connections: { google: { connectAvailable: true, accounts: [{ id: 'g1', email: 'sample@example.test', calendar: true, mail: true, tasks: false, health: 'needs_reconnect' }, { id: 'g2', email: 'work@example.test', calendar: true, mail: true, tasks: true, health: 'access_granted' }] }, telegram: { linked: true, unlinkAvailable: true }, sessions: { until: 'Oct 6, 9:00 PM', count: 2 } },
+    connections: { google: { connectAvailable: true, accounts: [{ id: 'g1', email: 'sample@example.test', calendar: true, mail: true, tasks: false, health: 'needs_reconnect' }, { id: 'g2', email: 'work@example.test', calendar: true, mail: true, tasks: true, health: 'access_granted' }] }, telegram: { linked: true, unlinkAvailable: true }, sessions: { until: 'Oct 6, 9:00 PM', count: 2, items: [{ signed_in: 'Oct 6, 9:00 AM', until: 'Oct 6, 9:00 PM', current: true }, { signed_in: 'Oct 5, 8:00 PM', until: 'Oct 6, 8:00 AM', current: false }] }, channels: [{ channel: 'imessage', state: 'linked', masked_label: 'Your iPhone' }] },
     waiting: { proposals: [
       { id: 'p1', kind: 'calendar_change', summary: 'Move Design review from 3:00 pm to 4:30 pm.', state: 'open', review: { kind: 'calendar_change', action: 'move', title: 'Design review', event_id: 'evt_synthetic', start: '2026-09-29 16:30', end: '2026-09-29 17:15', reason: 'Overlaps with your protected focus block.' }, actions: ['approval.approve', 'approval.skip'] },
       { id: 'p2', kind: 'email_send', summary: 'Reply to Sam about the Thursday agenda.', state: 'open', review: { kind: 'email_send', to: ['sam@example.test'], cc: [], bcc: [], subject: 'Re: Thursday agenda', body: 'Thursday works. I will send the agenda tonight.' }, actions: ['approval.skip'] }] },
@@ -39,10 +39,35 @@ const controls = (view) => {
   return { ...base, data };
 };
 let adminReadFailed=false;
+// Synthetic chat: a short history, and a reply that lands about four seconds after each message.
+const chatRows = selected === 'empty' ? [] : [
+  { id: 'syn-u1', role: 'user', text: 'What does tomorrow look like?', parts: [], channel: 'telegram', parent_id: null, created_at: Date.now() - 26 * 3600000 },
+  { id: 'syn-a1', role: 'assistant', text: 'Three things tomorrow:\n\n- **9:30** Standup\n- **13:00** Lunch with Sam\n- **16:30** Design review\n\nYour morning is clear until standup.', parts: [], channel: 'telegram', parent_id: 'syn-u1', created_at: Date.now() - 26 * 3600000 + 4000 },
+  { id: 'syn-u2', role: 'user', text: 'Move the design review to 5 and tell Sam lunch is still on', parts: [], channel: 'app', parent_id: null, created_at: Date.now() - 3600000 },
+  { id: 'syn-a2', role: 'assistant', text: 'I moved **Design review** to 5:00 pm. The email to Sam needs your OK first.\n\nDone: 1 calendar change.', channel: 'app', parent_id: 'syn-u2', created_at: Date.now() - 3600000 + 9000,
+    parts: [{ type: 'text', text: '' }, { type: 'approval', approval_id: 'syn-ap', kind: 'email_send', review: 'To: sam@example.test\nSubject: Lunch tomorrow\n\nStill on for 1 pm tomorrow.', payload_digest: 'sha256:' + 'a'.repeat(64), actions: ['approve', 'skip'], expires_at: Date.now() + 86400000, fallback_text: 'Send Sam a note that lunch is still on?', question: 'Send Sam a note that lunch is still on?' },
+      { type: 'receipt', items: [{ kind: 'calendar_change', target: 'Design review', outcome: 'accepted', via_task: false, at: Date.now() - 3600000 + 8000, digest: null }], more: 0, fallback_text: 'Done: 1 calendar change.' },
+      { type: 'quick_replies', choices: [{ id: 'thanks', label: 'Thanks' }, { id: 'later', label: 'Remind me at 4' }], fallback_text: 'Thanks / Remind me at 4' }] },
+];
+const chatRuns = new Map();
+const chatJson = (res, status, body) => { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)); };
+const chatReceipt = (client) => { const run = chatRuns.get(client); if (!run) return null; const done = Date.now() - run.at > 4000;
+  if (done && !run.replied) { run.replied = true; chatRows.push({ id: `syn-r${chatRows.length}`, role: 'assistant', text: `Synthetic reply to “${run.text.slice(0, 80)}”.\n\nThis preview has no model; on staging Waldo answers here.`, parts: [], channel: 'app', parent_id: run.id, created_at: Date.now() }); }
+  return { accepted: true, message_id: run.id, state: run.cancelled ? 'revoked' : done ? 'completed' : 'running', ...(run.cancelled ? { closed_reason: 'cancelled' } : {}) }; };
 const server = createServer((req, res) => {
   if(req.url?.startsWith('/console/dashboard/api/v1/memory?')) {
     const data=memoryPreview(new URL(req.url,'http://localhost').searchParams,selected==='memory-partial');
     res.writeHead(selected==='memory-error'?503:data.error?404:200,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(selected==='memory-error'?{error:'memory_unavailable'}:data));return;
+  }
+  if (req.url?.startsWith('/console/dashboard/api/v1/chat')) {
+    const url = new URL(req.url, 'http://localhost'), rest = url.pathname.slice('/console/dashboard/api/v1/chat'.length);
+    if (selected === 'signed-out') return chatJson(res, 401, { error: 'sign_in_required' });
+    if (rest === '' && req.method === 'GET') { const limit = Number(url.searchParams.get('limit') ?? 30); return chatJson(res, 200, { messages: [...chatRows].reverse().slice(0, limit), next_cursor: null }); }
+    if (rest === '/messages' && req.method === 'POST') { let body = ''; req.on('data', c => body += c); req.on('end', () => { const { client_message_id: client, text } = JSON.parse(body); const id = `syn-${chatRows.length}`;
+      chatRows.push({ id, role: 'user', text, parts: [], channel: 'app', parent_id: null, created_at: Date.now() }); chatRuns.set(client, { id, text, at: Date.now() }); chatJson(res, 202, { accepted: true, message_id: id, state: 'admitted' }); }); return; }
+    const [, , client, action] = rest.split('/');
+    if (action === 'cancel') { const run = chatRuns.get(client); if (run) run.cancelled = true; }
+    const receipt = chatReceipt(client); return chatJson(res, receipt ? 200 : 404, receipt ?? { error: 'unavailable' });
   }
   if(req.url?.startsWith('/console/dashboard/api/v1/controls?')) {
     const view=new URL(req.url,'http://localhost').searchParams.get('view');

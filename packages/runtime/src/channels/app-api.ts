@@ -33,7 +33,7 @@ const readJson = async (request: Request): Promise<Record<string, unknown> | nul
   let text: string; try { text = new TextDecoder('utf-8', {fatal:true,ignoreBOM:true}).decode(bytes); } catch { return null; }
   try { const value: unknown = JSON.parse(text); return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null; } catch { return null; }
 };
-const readBoundedBody = async (request:Request, max:number):Promise<Uint8Array|null> => {
+export const readBoundedBody = async (request:Request, max:number):Promise<Uint8Array|null> => {
   if (!request.body) return new Uint8Array();
   const reader=request.body.getReader(), chunks:Uint8Array[]=[]; let size=0, expired=false;
   const timer=setTimeout(()=>{expired=true;void reader.cancel();},5000);
