@@ -61,12 +61,21 @@ A coded `dominates()` waits for the ADR-0046 build.
 ### 3.3 Correction and forget
 
 - **Owner claims:** corrected with `remember` plus `replaces_id`, and removed with `forget_memory`, whose barrier blocks relearning. Unchanged.
-- **The Google name and phone:** `forget_memory` cannot reach them, because they are not claims. Disconnecting the account removes both (#1218). This is acceptable for the beta:
-  1. it is provider data the owner controls at Google;
-  2. every rendering marks it unconfirmed and says the owner's words win;
-  3. "don't call me that" saved as a claim outranks it.
-- **Follow-up, not in this slice:** check the owner's forget barriers by exact fingerprint (`textFingerprint`) before `googleNameLine` renders, so that forgetting the literal name also silences the Google line. That check is a privacy boundary, which CLAUDE.md allows to be deterministic.
-  - **Falsifier that makes it urgent:** an owner forgets their name and Waldo still uses it.
+- **Provider facts: correction.** The owner's own words win (§3.1). A correction is saved with `remember` as an owner-grounded claim, which outranks the provider line. Waldo never edits the provider record; it is Google's assertion, refreshed at each connect.
+- **Provider facts: forget without a disconnect** (condition C2 of the bounded persistence review on #1218). A forget suppresses a provider field when one of the owner's forget barriers matches it exactly. The match uses the fingerprints `remember` already uses to refuse relearning: `textFingerprint` of the trimmed text, and of its lowercased, space-collapsed form.
+  - **Name parts** (`name`, `given_name`, `family_name`): the name line checks the barriers each time it renders and leaves out any account where a part matches. All parts go, since a partial name would carry the rest. A reconnect replaces the stored profile wholesale (#1218), but the barrier lives in the claims plane until the owner lifts it, so a render-time check survives the reconnect.
+  - **Phone:** it never reaches a prompt, so there is nothing to render. A forget that matches it removes the field from `google:profiles` when the forget settles, and a later connect does not store it again while the barrier stands.
+  - **The phone is identity, not memory.** Its bound is plan row (i), condition C3 on #1218:
+    - it is an unverified provider claim, kept only in `google:profiles`;
+    - nothing reads it without its own bounded review;
+    - it is never an admission key, a binding, a sender match or a write to the owner's phone;
+    - at most it prefills a number the owner then verifies;
+    - it is removed with its connection or account.
+  - **Deterministic by right.** A forget must be guaranteed, so this check is a privacy boundary under CLAUDE.md, not a judgment rule.
+  - **Paraphrase gap.** A barrier's topic is literal text from the owner's message, so "forget my name" without the name itself matches nothing. The model then saves the owner's wish with `remember`, which outranks the provider line. A deterministic per-account "hide the Google name" owner control is a later follow-up.
+  - **Disconnect** still removes every provider field (#1218).
+- **Where it lands:** a follow-up PR straight after #1227. It carries the review's scenario test: forget the name, then the next turn has no name line and the forget settles.
+  - **Falsifier:** an owner forgets their name and Waldo still uses it.
 
 ### 3.4 Pinning, and when answers become visible
 
