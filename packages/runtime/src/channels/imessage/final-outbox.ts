@@ -24,9 +24,12 @@ export class IMessageFinalOutbox {
   records(): IMessageOutboxRecord[] { return [...this.storage.kv.list<IMessageOutboxRecord>({ prefix: PREFIX })].map(([, r]) => r).sort((a, b) => a.frozenAt - b.frozenAt); }
   get(replyRef: string): IMessageOutboxRecord | null { return this.storage.kv.get<IMessageOutboxRecord>(PREFIX + replyRef) ?? null; }
 
-  /** Synchronous: must run inside the run scope's commit transaction. Identical refreeze is a no-op. */
-  freeze(record: IMessageInboxRecord, text: string): IMessageOutboxRecord {
-    const replyRef = `reply:${record.id}`, prior = this.get(replyRef);
+  /**
+   * Synchronous: must run inside the run scope's commit transaction. Identical refreeze is a no-op. A console link sent
+   * for the same inbound message is its own record, under its own commandId, so the reply still sends after it.
+   */
+  freeze(record: IMessageInboxRecord, text: string, kind: 'reply' | 'console' = 'reply'): IMessageOutboxRecord {
+    const replyRef = `${kind}:${record.id}`, prior = this.get(replyRef);
     if (prior) {
       // A settled record no longer holds its text; its stable commandId is the identity check.
       if (prior.commandId !== record.commandId || (prior.state !== 'settled' && prior.text !== text)) throw new Error('imessage_reply_conflict');

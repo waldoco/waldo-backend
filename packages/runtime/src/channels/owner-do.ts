@@ -71,6 +71,9 @@ import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
 import { CONSOLE_INVITES_PATH, renderMemberInvites } from './console-invites';
 import { newInviteCode, inviteLink } from '../identity/invite-code';
 import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, consoleActionTraceDetail, consoleMayApprove, consoleSessionRows, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, CONSOLE_RUNS_PATH, CONSOLE_PAGES, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
+import { consoleLinkSender, consoleLinkText, maskCredentialReply, mintConsoleLink, recordCredentialMessage, telegramConsoleRoute, type ConsoleLinkRoute } from './console-link';
+import { iMessageConsoleRoute } from './imessage/console-link';
+import { consoleLinkHandler } from '../tools/live/console-link';
 import { HARNESS_MESSAGE_LIMIT, heldRowShapes } from '../memory/held-rows';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
@@ -394,6 +397,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     let raw: RawUpdate & { message?: RawUpdate['message'] & { chat?: { id: number; type?: string } }; callback_query?: CallbackQuery & { message?: CallbackQuery['message'] & { chat: { id: number; type?: string } } } };
     try { raw = JSON.parse(body); } catch { return new Response('bad request', { status: 400 }); }
     if (!raw || typeof raw !== 'object' || !Number.isSafeInteger(raw.update_id) || Number(raw.update_id) < 0) return new Response('ok');
+    // A reply to a message that carried a console link is steered, stored and run with the link masked. Only a masked
+    // update is re-serialized, so every other update keeps its exact bytes and a redelivery still reads as a duplicate.
+    const masked = maskCredentialReply(raw, this.ctx.storage.kv) as typeof raw;
+    const admittedBody = masked === raw ? body : JSON.stringify(masked);
+    raw = masked;
     const sender = raw.message?.from?.id ?? raw.callback_query?.from?.id;
     const chat = raw.message?.chat ?? raw.callback_query?.message?.chat;
     if (sender !== Number(subject) || (chat && chat.id !== Number(subject))) return new Response('forbidden', { status: 403 });
@@ -418,7 +426,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const control = target?.runId && text && steer && (text === '/stop' || !text.startsWith('/')) ? { kind: text === '/stop' ? 'stop' as const : 'steer' as const, targetRun: target.runId } : undefined;
     try {
       const traceIdentity = identityForStorage(readOwnerTraceHeader(request.headers), resolveCaptureText(this.env));
-      const admitted = await this.inbox.admit({ bot, subject, doName, ...(traceIdentity ? { traceIdentity } : {}) }, raw.update_id!, body, control);
+      const admitted = await this.inbox.admit({ bot, subject, doName, ...(traceIdentity ? { traceIdentity } : {}) }, raw.update_id!, admittedBody, control);
       if (admitted === 'conflict' || admitted === 'capacity') return new Response(admitted, { status: admitted === 'conflict' ? 409 : 503 });
       // Binding follows authenticated admission, and never replaces a different binding.
       this.ctx.storage.kv.put('do_name', doName); this.ctx.storage.kv.put('telegram_subject', subject);
@@ -1762,6 +1770,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
 
   private async turn(update: unknown, channel: ChannelKind = 'telegram', durable = false, scope?: RunEffectScope): Promise<void> {
+    update = maskCredentialReply(update, this.ctx.storage.kv);
     const { listener, owner, call, desk, ledger, updates, control, log, ready } = this.setup(channel);
     await ready;
     if (channel === 'imessage') {
@@ -1812,12 +1821,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const run = async () => {
         if (harness?.kind === 'console') {
         if (!durable) await this.ctx.storage.put(offsetKey, updateId + 1);
-        const origin = await this.ctx.storage.get<string>('origin');
-        const issuer = this.ctx.storage.kv.get<string>('do_name');
-        const secret = this.env.WALDO_ROUTER_HMAC_SECRET;
-        const configured = consoleAuth(this.env) !== null;
-        const link = origin && (!configured || issuer && secret) ? await consoleAccess(this.ctx.storage).mintLink(origin, configured ? { owner: issuer!, secret: secret! } : undefined) : null;
-        await call('sendMessage', { chat_id: owner, text: link ? `Console (link works once, for 10 minutes): ${link}` : 'Console sign-in is unavailable; try again shortly.', link_preview_options: { is_disabled: true } });
+        const link = await mintConsoleLink(this.ctx.storage, this.env);
+        const sent = await call('sendMessage', { chat_id: owner, text: link ? consoleLinkText(link) : 'Console sign-in is unavailable; try again shortly.', link_preview_options: { is_disabled: true } });
+        if (link) recordCredentialMessage(this.ctx.storage.kv, sent);
         return;
       }
       if (harness) {
@@ -1923,9 +1929,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (channel === 'telegram' && !token) throw new Error('telegram owner runtime is unconfigured');
     if (!key) throw new Error('owner runtime is unconfigured');
     const otlp = langfuseOtlpConfig(this.env);
+    // Traces are filed under the verified owner principal once an owner turn has resolved it, else under the chat.
+    let tracePrincipal: string | undefined;
     const exportTurn = otlp ? otlpTurnExporter(otlp, {
       environment: this.env.WALDO_ENVIRONMENT ?? 'development', release: this.env.WALDO_RELEASE ?? 'unknown',
-      channel, userId: owner > 0 ? `${channel}:${owner}` : `${channel}:unlinked`, sessionId: owner > 0 ? `${channel}-dm:${owner}` : `${channel}-dm:unlinked`,
+      channel, userId: () => tracePrincipal ?? (owner > 0 ? `${channel}:${owner}` : `${channel}:unlinked`), sessionId: owner > 0 ? `${channel}-dm:${owner}` : `${channel}-dm:unlinked`,
       captureText: resolveCaptureText(this.env),
     }) : undefined;
     const deps = productionDeps();
@@ -1933,6 +1941,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const captureText = resolveCaptureText(this.env);
     const turnReceiptUrls = new Map<string, Set<string>>();
     const log = (entry: TurnLogEntry) => {
+      if (entry.principal !== undefined) { const { principal, ...rest } = entry; tracePrincipal = principal; entry = rest; }
       if ((!entry.trace.startsWith('tg-') || this.activeInbox?.updateId === Number(entry.trace.slice(3))) && (entry.hop === 'tool_create_artifact' || entry.hop === 'tool_revise_artifact')) {
         try {
           const url = receiptUrl(entry.hop.slice(5), JSON.parse(entry.text?.output ?? 'null'));
@@ -2019,6 +2028,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         .catch((error: unknown) => (log({ trace, hop: 'oauth_link_sent', ms: 0, ok: false, error: String(error), code: 'send_failed' }), false));
     };
     const storage = this.ctx.storage;
+    // The console link goes only to the surface this runtime serves; the app and WhatsApp say why they cannot carry it.
+    const consoleLinkRoutes: Record<ChannelKind, ConsoleLinkRoute> = {
+      telegram: telegramConsoleRoute((body) => routedCall('sendMessage', { chat_id: owner, ...body }), identity),
+      imessage: iMessageConsoleRoute(storage, () => this.activeIMessage),
+      app: { unsupported: 'app_unsupported' },
+      whatsapp: { unsupported: 'surface_unsupported' },
+    };
+    const consoleLinkTool = consoleLinkHandler(consoleLinkSender({
+      surface: channel, route: consoleLinkRoutes[channel], available: () => probeCapture.current === null, mint: () => mintConsoleLink(storage, this.env), log,
+    }));
     // S4 (CONNECT_FLOW_DESIGN 4.4): the responder calls this when a tool reports auth_required.
     // At most one button per owner/service/reason per 60 s; a repeat just points at the last one.
     // The app chat has no connect button, so on the app nothing is minted or sent: the owner connects from the app's own screen.
@@ -2521,7 +2540,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await sentOrThrow(api.sendMessage({ chat_id: owner, text: `From ${from}:\n${lines.join('\n')}` }));
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
-      }, effects), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), searchEpisodesHandler(episodes), ...memoryHandlers({
+      }, effects), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, searchEpisodesHandler(episodes), ...memoryHandlers({
         sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: surfaceChatRef(channel, owner),
         hideHistory: async (texts, context) => {
           const scope = context.runScope;
