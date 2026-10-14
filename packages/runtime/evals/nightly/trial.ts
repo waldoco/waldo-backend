@@ -4,7 +4,7 @@
 import { WALDO_CHAT_MODEL, type ModelName } from '@waldo/contracts';
 import { createOwnerResponder } from '../../src/channels/owner-turn';
 import { surfaceResponder } from '../../src/channels/owner-runtime';
-import { appSurface } from '../../src/channels/surfaces/app';
+import { appSurface } from '../../src/channels/surfaces/app-runtime';
 import { inboundTurn, ownerWords } from '../../src/channels/owner-inbound-turn';
 import type { TurnLogEntry } from '../../src/channels/telegram-listener';
 import type { LLMGatewayAdapter } from '../../src/llm/provider';

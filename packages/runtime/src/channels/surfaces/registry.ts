@@ -1,5 +1,5 @@
 import type { ChannelKind, SurfaceModule } from '../owner-runtime';
-import * as app from './app';
+import * as app from './app-runtime';
 import * as imessage from './imessage';
 import * as telegram from './telegram';
 import * as whatsapp from './whatsapp';
