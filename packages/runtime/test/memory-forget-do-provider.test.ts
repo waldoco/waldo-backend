@@ -4,6 +4,7 @@ import { TelegramOwnerInbox } from '../src/channels/telegram-owner-inbox';
 import { persistInboxWake } from '../src/scheduler/alarm-slot';
 import { claimStore } from '../src/memory/claims';
 import { episodeIndex } from '../src/channels/episodes';
+import { responsibilityBook } from '../src/channels/responsibilities';
 const seen = vi.hoisted(() => ({ inputs: [] as string[], outputs: [] as unknown[][], sent: [] as string[], status: undefined as string | undefined }));
 vi.mock('../src/channels/telegram-api', async load => ({
   ...await load<typeof import('../src/channels/telegram-api')>(),
@@ -837,6 +838,13 @@ positiveStore('goals', 'POSGOAL769', (sql, text) => {
 
 positiveStore('loops', 'POSLOOP769', (sql, text) => { loopBook(sql, { now: () => Date.now(), newId: () => 'pos-769-loop' }).open({ title: text, due: null }); }, sql => JSON.stringify(sql.exec('SELECT title FROM loops').toArray()));
 positiveStore('background_runs', 'POSBG769', (sql, text) => { sql.exec('INSERT INTO background_runs (id,kind,status,summary,parent_id,started_at,ended_at) VALUES (?,?,?,?,?,?,?)', 'pos-769-bg', 'event', 'completed', text, null, 1, 2); }, sql => JSON.stringify(sql.exec('SELECT summary FROM background_runs').toArray()));
+positiveStore('responsibilities', 'POSTASK769', (sql, text) => { responsibilityBook(sql, { now: () => 1, newId: () => 'pos-769-task' }).track({ title: text, intent: text, items: [], next_check_at: null }, 'user_message'); }, sql => JSON.stringify(sql.exec('SELECT title, intent FROM responsibilities').toArray()));
+positiveStore('responsibility_items', 'POSSTEP769', (sql, text) => {
+  let n = 0;
+  const book = responsibilityBook(sql, { now: () => 1, newId: () => `pos-769-step-${++n}` });
+  const { items } = book.track({ title: 'errand', intent: 'errand', items: [{ title: text, owner: 'waldo', depends_on: [] }], next_check_at: null }, 'user_message');
+  book.finishWorker(items[0]!.id, book.start(items[0]!.id, 'waldo')!.revision, { status: 'done', result: text });
+}, sql => JSON.stringify(sql.exec('SELECT title, result_ref FROM responsibility_items').toArray()));
 positiveStore('reminder_notes', 'POSNOTE769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS reminder_notes (id TEXT PRIMARY KEY, note TEXT NOT NULL, created_at INTEGER NOT NULL)'); sql.exec('INSERT INTO reminder_notes (id, note, created_at) VALUES (?, ?, ?)', 'pos-769-note', text, 1); }, sql => JSON.stringify(sql.exec('SELECT note FROM reminder_notes').toArray()));
 positiveStore('thread_topic_index', 'POSTOPIC769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS thread_topic_index (user_id TEXT NOT NULL, topic TEXT NOT NULL, thread_id TEXT NOT NULL, last_user_message_at TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, PRIMARY KEY (user_id, topic, thread_id))'); sql.exec('INSERT INTO thread_topic_index (user_id, topic, thread_id, last_user_message_at, is_active, updated_at) VALUES (?,?,?,?,?,?)', 'u', text, 't1', 't', 1, 't'); }, sql => JSON.stringify(sql.exec('SELECT topic FROM thread_topic_index').toArray()));
 positiveStore('memory_blocks', 'POSBLOCK769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS memory_blocks (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, hall_type TEXT NOT NULL, content TEXT NOT NULL, decision_log TEXT NOT NULL DEFAULT \'[]\', confidence REAL NOT NULL, created_at TEXT NOT NULL, valid_from TEXT NOT NULL, source_trust TEXT NOT NULL)'); sql.exec('INSERT INTO memory_blocks (id, user_id, hall_type, content, decision_log, confidence, created_at, valid_from, source_trust) VALUES (?,?,?,?,?,?,?,?,?)', 'pos-769-block', 'u', 'facts', text, '[]', 0.9, 't', 't', 'user_stated'); }, sql => JSON.stringify(sql.exec('SELECT content, decision_log FROM memory_blocks').toArray()));

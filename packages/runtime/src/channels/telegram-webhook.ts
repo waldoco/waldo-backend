@@ -43,6 +43,8 @@ export type TelegramWebhookEnv = Readonly<{
   WALDO_MCP_SERVERS?: string;
   MCP_READ_INTENTS?: string;
   DRIVE_READS?: string;
+  // Background tasks run on the owner's scheduler only when '1', until staging acceptance.
+  DURABLE_TASKS?: string;
   // Opt-in only after mixed-inbox privacy and live usefulness acceptance.
   MAIL_SOURCE_FOLLOWUPS?: string;
   // Calendar-only prep remains off until controlled owner-path acceptance.

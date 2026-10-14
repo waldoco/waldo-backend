@@ -42,6 +42,21 @@ describe('responsibilities', () => {
     });
   });
 
+  it('dropping the work cancels its unfinished steps and fences a running one; closing it done leaves them', async () => {
+    await withSql(async (sql) => {
+      const book = mk(sql);
+      const { responsibility, items } = book.track(trackResponsibilityArgsSchema.parse({ title: 't', intent: 'i', items: [{ title: 'a' }, { title: 'b' }, { title: 'c' }] }), 'user_message');
+      book.finishWorker(items[0]!.id, book.start(items[0]!.id, 'waldo')!.revision, { status: 'done', result: 'found' });
+      const running = book.start(items[1]!.id, 'waldo')!;
+      expect(book.close({ id: responsibility.id, outcome: 'dropped', evidence_ref: 'owner: drop it' })).toBe(true);
+      expect(book.items(responsibility.id).map((entry) => entry.status)).toEqual(['done', 'cancelled', 'cancelled']);
+      expect(book.finishWorker(items[1]!.id, running.revision, { status: 'done', result: 'late' })).toBe('superseded');
+      const kept = book.track(trackResponsibilityArgsSchema.parse({ title: 't2', intent: 'i', items: [{ title: 'owner step', owner: 'owner' }] }), 'user_message');
+      expect(book.close({ id: kept.responsibility.id, outcome: 'done', evidence_ref: 'owner: done' })).toBe(true);
+      expect(book.items(kept.responsibility.id).map((entry) => entry.status)).toEqual(['pending']);
+    });
+  });
+
   it('three parallel children write three items and the parent reads them all', async () => {
     await withSql(async (sql) => {
       const book = mk(sql);

@@ -93,7 +93,12 @@ export const responsibilityBook = (sql: Sql, deps: Readonly<{ newId(): string; n
     close(args: CloseResponsibilityArgs): boolean {
       const evidence = args.evidence_ref.trim();
       if (!evidence) return false;
-      return sql.exec("UPDATE responsibilities SET status = ?, closed_by_evidence = ?, closed_at = ?, revision = revision + 1 WHERE id = ? AND status IN ('open', 'waiting', 'uncertain') RETURNING id", args.outcome, evidence, deps.now(), args.id).toArray().length > 0;
+      const closed = sql.exec("UPDATE responsibilities SET status = ?, closed_by_evidence = ?, closed_at = ?, revision = revision + 1 WHERE id = ? AND status IN ('open', 'waiting', 'uncertain') RETURNING id", args.outcome, evidence, deps.now(), args.id).toArray().length > 0;
+      // Dropping the work cancels its unfinished steps; the revision bump fences any worker still running one.
+      if (closed && args.outcome === 'dropped') {
+        sql.exec("UPDATE responsibility_items SET status = 'cancelled', updated_at = ?, revision = revision + 1 WHERE responsibility_id = ? AND status NOT IN ('done', 'failed', 'cancelled')", deps.now(), args.id);
+      }
+      return closed;
     },
     // Carries open loops across under their own ids; a loop already carried is left as it is.
     adoptLoops(): number {
@@ -111,7 +116,8 @@ export type ResponsibilityBook = ReturnType<typeof responsibilityBook>;
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
 
-export const responsibilityHandlers = (book: ResponsibilityBook) => [
+// changed: told after an owner or Waldo update to a step, so work waiting on that step can start.
+export const responsibilityHandlers = (book: ResponsibilityBook, changed: (responsibilityId: string) => Promise<void> = async () => undefined) => [
   {
     name: 'track_responsibility',
     description: 'Record work you took on that is consequential or has several steps, with the owner\'s intent and the steps, so it stays on the owner\'s list until it is finished on evidence. Not for questions or one-step answers.',
@@ -132,6 +138,7 @@ export const responsibilityHandlers = (book: ResponsibilityBook) => [
     mutates_state: true,
     async handle(args) {
       const updated = book.update(args);
+      if (updated) await changed(updated.responsibility_id);
       return updated
         ? { ok: true, data: updated, source_taint: null }
         : { ok: false, error: 'No such item.', code: 'rejected', source_taint: null };

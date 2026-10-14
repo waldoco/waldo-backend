@@ -13,6 +13,7 @@ export const scheduleKindSchema = z.enum([
   'heartbeat',
   'standing_order',
   'watch_upkeep',
+  'task_step',
 ]);
 export type ScheduleKind = z.infer<typeof scheduleKindSchema>;
 
@@ -28,6 +29,7 @@ export const scheduleKindPriority: Readonly<Record<ScheduleKind, number>> = {
   heartbeat: 8,
   standing_order: 9,
   watch_upkeep: 10,
+  task_step: 11,
 };
 
 export const scheduleKindTrigger: Readonly<Record<ScheduleKind, TriggerType | null>> = {
@@ -45,6 +47,8 @@ export const scheduleKindTrigger: Readonly<Record<ScheduleKind, TriggerType | nu
   standing_order: null,
   // Keeping the owner's Google push watches started is infrastructure work with no model turn and no message.
   watch_upkeep: null,
+  // One step of a background task runs the same machine-turn path, with read tools only.
+  task_step: null,
 };
 
 export const scheduleStatusSchema = z.enum(['armed', 'quarantined']);
