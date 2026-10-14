@@ -120,6 +120,15 @@ vi.mock('openai', () => ({
         else if(!read)call={name:'workspace_read',arguments:JSON.stringify({file_id:create.data.file_id,revision:create.data.revision}),call_id:'common-read'};
         return {id:`fixture-${modelInputs.length}`,output_text:call?'':'Private checklist saved and read back.',output:call?[{type:'function_call',...call}]:[],usage:{input_tokens:1,output_tokens:1,input_tokens_details:{cached_tokens:0}}};
       }
+      // Forward-during-a-turn fixture: the first turn takes a second round, and any round that reads the forwarded text
+      // tries to remember it as the owner's words.
+      const forwardFixture = JSON.stringify(body);
+      if (!name && forwardFixture.includes('FORWARD-SYNTHETIC') && !forwardFixture.includes('fixture-forward-remember')) {
+        return { id: `fixture-${modelInputs.length}`, output_text: '', output: [{ type: 'function_call', call_id: 'fixture-forward-remember', name: 'remember', arguments: JSON.stringify({ kind: 'fact', text: 'Has a sister called Mira', evidence_quote: 'my sister is called Mira' }) }], usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
+      }
+      if (!name && forwardFixture.includes('PARENT-SYNTHETIC') && !forwardFixture.includes('FORWARD-SYNTHETIC') && !forwardFixture.includes('fixture-parent-context')) {
+        return { id: `fixture-${modelInputs.length}`, output_text: '', output: [{ type: 'function_call', call_id: 'fixture-parent-context', name: 'get_context', arguments: '{}' }], usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
+      }
       const text = name === 'task_source_scope' ? typeof taskDecision === 'string' ? taskDecision : JSON.stringify(taskDecision) : name === 'claim_ops'
         ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}'
         : 'Synthetic answer from the model adapter.';
@@ -823,6 +832,44 @@ it('target execution throw after consumed steer never completes the child',async
     await internal.drainInbox();expect((await inbox.records()).find(r=>r.id===childId)?.state).toBe('quarantined');expect((await inbox.records()).find(r=>r.id===childId)?.reason).toBe('consumed_target_outcome_uncertain');internal.turn=original;await state.storage.deleteAlarm();
   });
 });
+
+it('a forward that arrives while a turn runs is its own labelled turn: no steer, and its text never grounds an owner claim', async () => {
+  const subject = 81101;
+  const parentId = 994441;
+  const childId = parentId + 1;
+  const forwarded = 'FORWARD-SYNTHETIC: my sister is called Mira';
+  let steers = 0;
+  const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
+  const { persistInboxWake } = await import('../src/scheduler/alarm-slot');
+  const { claimStore } = await import('../src/memory/claims');
+  await runInDurableObject(doStub(subject), async (instance, state) => {
+    const binding = { bot: 'hermetic-test-bot-token', subject: String(subject), doName: route(subject).doName };
+    await state.storage.put({ telegram_subject: String(subject), do_name: route(subject).doName });
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    await inbox.admit(binding, parentId, JSON.stringify({ update_id: parentId, message: { message_id: parentId, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: 'PARENT-SYNTHETIC: plan my evening.' } }));
+    onFixtureReply = async () => {
+      const control = (instance as unknown as { runtimes: { telegram: { control: import('../src/channels/turn-control').TurnControl } } }).runtimes.telegram.control;
+      const original = control.steerTarget.bind(control);
+      control.steerTarget = (...args) => { steers += 1; return original(...args); };
+      // The shape the Bot API server sends: forward_origin beside the legacy forward fields.
+      const sam = { id: 4242, is_bot: false, first_name: 'Sam' };
+      const response = await instance.fetch(new Request('https://telegram-owner/enqueue', { method: 'POST', headers: { 'x-waldo-inbox-secret': 'hermetic-test-webhook-secret', 'x-waldo-telegram-subject': String(subject), 'x-waldo-do-name': route(subject).doName }, body: JSON.stringify({ update_id: childId, message: { message_id: childId, date: 1_700_000_100, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: forwarded, forward_origin: { type: 'user', date: 1_700_000_000, sender_user: sam }, forward_from: sam, forward_date: 1_700_000_000 } }) }));
+      expect(response.status).toBe(200);
+      control.steerTarget = original;
+    };
+    await (instance as unknown as { drainInbox(): Promise<void> }).drainInbox();
+    await vi.waitFor(async () => {
+      await instance.alarm();
+      const row = (await inbox.records()).find(row => row.updateId === childId);
+      // Done once the forward was steered into the running turn, or ran as its own turn.
+      expect(steers > 0 || row?.state === 'consumed' || row?.state === 'completed').toBe(true);
+    }, { timeout: 8000, interval: 50 });
+    expect.soft(steers).toBe(0);
+    expect.soft(JSON.stringify(modelInputs)).toContain(JSON.stringify(`[Forwarded by the owner from someone else:]\n${JSON.stringify(forwarded)}\n[End of forwarded text.]`).slice(1, -1));
+    expect.soft(claimStore(state.storage.sql).allClaims().map(claim => claim.text)).not.toContain('Has a sister called Mira');
+    await state.storage.deleteAlarm();
+  });
+}, 30_000);
 
 it.each([false, true])('accepted concurrent forget after the final model round has a consumed or visible child outcome (target stopped=%s)', async (stopped) => {
   const subject = 81101;

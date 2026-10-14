@@ -401,7 +401,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (!supportedCallback && parsed.accepted.length === 0) return new Response('ok');
     const bot = this.env.TELEGRAM_BOT_TOKEN?.split(':')[0];
     if (!bot) return new Response('unavailable', { status: 503 });
-    const text = raw.message?.text?.trim();
+    // A forward is someone else's text, so it never steers or stops the running turn: it runs as its own labelled turn.
+    const forwarded = parsed.accepted.some(turn => turn.parts.some(part => part.authorship === 'forwarded'));
+    const text = forwarded ? undefined : raw.message?.text?.trim();
     const target = this.activeInbox;
     const control = target?.runId && text && (text === '/stop' || !text.startsWith('/')) ? { kind: text === '/stop' ? 'stop' as const : 'steer' as const, targetRun: target.runId } : undefined;
     try {
