@@ -19,7 +19,7 @@ it('a funded run under a live manual trial meters Luna and refuses Sol before th
   const scope: RunEffectScope = { runId: 'funded-run', attempt: 'a1', deadline: now + 60000, signal: new AbortController().signal, admit: vi.fn(), commit: work => work() };
   const gateway = ownerBrowserRuntime({ env, storage, actualDoId: 'physical-owner', activeScope: () => scope }).gateway()!;
   const before = structuredClone([...rows]);
-  await expect(gateway.complete({ runScope: scope, request: { model: OPENAI_GPT_6_1_SOL_MODEL, max_tokens: 16 } } as never)).rejects.toThrow('browser trial model price unavailable');
+  expect(await gateway.complete({ runScope: scope, request: { model: OPENAI_GPT_6_1_SOL_MODEL, max_tokens: 16 } } as never)).toEqual({ ok: false, code: 'invalid_args', error: 'browser trial model price unavailable' });
   expect(complete).not.toHaveBeenCalled();
   expect([...rows]).toEqual(before);
   await expect(gateway.complete({ runScope: scope, request: { model: OPENAI_GPT_6_LUNA_MODEL, max_tokens: 16 } } as never)).resolves.toEqual({ ok: true });

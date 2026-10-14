@@ -9,7 +9,7 @@ import { COMMON_TEST_CEILING_MICROUSD, commonBrowserSdk, commonStagingRegistrati
 import { OpenAIResponsesAdapter } from '../llm/openai';
 import { armAlarm } from '../scheduler/alarm-slot';
 import { commonOwnerBrowserRegistration,CommonBrowserRegistrationUnavailable } from './common-owner-browser-registration';
-import type { LLMGatewayAdapter } from '../llm/provider';
+import type { GatewayFailure, LLMGatewayAdapter } from '../llm/provider';
 import { localOwnerBinding, ownerBindingCurrent, verifyOwnerBinding } from '../identity/owner-binding';
 import { workspaceOwnerHost, workspaceMetadata } from './workspace-host';
 import {cloudflarePublicRead,PublicReadRefusal,PUBLIC_READ_RESERVED_BROWSER_MS} from './cloudflare-public-read';
@@ -27,10 +27,10 @@ const spendRefusal=(cause:unknown)=>{
 };
 
 // The browser trial meters a funded run's model calls with a Luna price envelope, so it refuses any other model before
-// the meter takes an ordinal or a reservation.
-const assertTrialPriced = (model: string | undefined): void => {
-  if (model !== OPENAI_GPT_6_LUNA_MODEL) throw Error('browser trial model price unavailable');
-};
+// the meter takes an ordinal or a reservation. The refusal is coded, not thrown, so the turn's trace names it and the
+// provider does not resend it.
+const trialPriced = (model: string | undefined): boolean => model === OPENAI_GPT_6_LUNA_MODEL;
+const trialUnpriced = (): GatewayFailure => ({ ok: false, code: 'invalid_args', error: 'browser trial model price unavailable' });
 
 // The run lease's wake: maintenance runs when the lease's run deadline, its configuration or its session lifetime ends,
 // whichever comes first. It is a listed wake key, so an arbiter re-arm keeps it.
@@ -235,7 +235,7 @@ export function ownerBrowserRuntime(options: Readonly<{
             return gateway.complete(request);
           }
           // Normal model policy remains with the ordinary adapter when trial registration is unavailable.
-          assertTrialPriced(request.request.model);
+          if (!trialPriced(request.request.model)) return trialUnpriced();
           // Share one wrapper even across concurrent first calls: physical model
           // ordinals must never restart within this constructed owner host.
           metered ??= Promise.resolve(config.meterGateway(gateway));
@@ -254,7 +254,7 @@ export function ownerBrowserRuntime(options: Readonly<{
         return async (request: { runScope?: RunEffectScope; request?: { model?: string } }) => {
           const scope = request.runScope;
           if (!(scope && funded(scope)&&config.expiresAt>Date.now()&&(!manual||manual.spend.policy.validUntil>Date.now()))) return target.complete(request as never);
-          assertTrialPriced(request.request?.model);
+          if (!trialPriced(request.request?.model)) return trialUnpriced();
           return metered.complete(request as never);
         };
       } });

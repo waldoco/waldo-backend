@@ -5,9 +5,11 @@ import { registerCommonBrowserSdk } from '../src/channels/common-staging-registr
 import { routerSignature } from '../src/identity/owner-directory';
 import type { CloudflareBrowserSdkLoader } from '../src/channels/public-fixture-browser';
 import { toolOutput } from './fixtures/tool-output';
+import { OPENAI_GPT_6_LUNA_MODEL, WALDO_CHAT_MODEL } from '@waldo/contracts';
 
 const proof = vi.hoisted(() => ({ subject: 81101, inputs: [] as { subject: number; input: any }[], delivered: [] as { subject: number; text: string }[] }));
 // The browser trial prices Luna only and refuses any other model, so these owner turns run on Luna to reach it.
+// Remove this pin, and the test that asserts it, once the trial meter prices Sol.
 vi.mock('@waldo/contracts', async load => { const contracts = await load<typeof import('@waldo/contracts')>(); return { ...contracts, WALDO_CHAT_MODEL: contracts.OPENAI_GPT_6_LUNA_MODEL }; });
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: any) => {
   proof.inputs.push({ subject: proof.subject, input: structuredClone(input) });
@@ -22,6 +24,10 @@ vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof im
   if (method === 'sendMessage') { proof.delivered.push({ subject: payload.chat_id, text: payload.text }); return { message_id: proof.delivered.length, chat: { id: payload.chat_id } }; }
   return method === 'getMe' ? { username: 'auto_owner_fixture_bot' } : true;
 } }));
+
+it('runs its owner turns on Luna, the one model the browser trial prices', () => {
+  expect(WALDO_CHAT_MODEL).toBe(OPENAI_GPT_6_LUNA_MODEL);
+});
 
 it('one explicit bounded operator policy serves two existing owners and a newly admitted owner through their ordinary hosts', async () => {
   const sessions = new Map<string, { subject: number; pages: any[]; context: any }>();

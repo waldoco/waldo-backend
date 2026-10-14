@@ -83,7 +83,7 @@ it('concurrent funded model calls share ordinals and reconstruction cannot refil
 it('unpriced models and missing, changed or unlinked authority cannot issue funded model calls', async () => {
   const fixture = setup(), runtime = fixture.runtime(); await allocate(fixture, runtime);
   const gateway = runtime.gateway()!, input = request(fixture.scope), original = structuredClone([...fixture.rows]);
-  await expect(gateway.complete({ ...input, request: { ...input.request, model: 'unpriced-model' as never } })).rejects.toThrow('price unavailable');
+  expect(await gateway.complete({ ...input, request: { ...input.request, model: 'unpriced-model' as never } })).toEqual({ ok: false, code: 'invalid_args', error: 'browser trial model price unavailable' });
   expect([...fixture.rows]).toEqual(original); directory.present = false;
   await expect(gateway.complete(input)).rejects.toThrow('authority unavailable'); expect(provider.calls).toHaveLength(0);
   directory.present = true; expect(await gateway.complete(input)).toMatchObject({ ok: true });
@@ -96,7 +96,7 @@ it('unpriced models and missing, changed or unlinked authority cannot issue fund
 it('a funded run refuses a Sol call before the trial meter takes an ordinal or a reservation', async () => {
   const fixture = setup(), runtime = fixture.runtime(); await allocate(fixture, runtime);
   const gateway = runtime.gateway()!, input = request(fixture.scope), original = structuredClone([...fixture.rows]);
-  await expect(gateway.complete({ ...input, request: { ...input.request, model: OPENAI_GPT_6_1_SOL_MODEL } })).rejects.toThrow('browser trial model price unavailable');
+  expect(await gateway.complete({ ...input, request: { ...input.request, model: OPENAI_GPT_6_1_SOL_MODEL } })).toEqual({ ok: false, code: 'invalid_args', error: 'browser trial model price unavailable' });
   expect([...fixture.rows]).toEqual(original); expect(provider.calls).toHaveLength(0);
   expect(await gateway.complete(input)).toMatchObject({ ok: true });
   const charged = [...fixture.rows].find(([key]) => key.startsWith('common-spend:'))![1].calls.filter((call: any) => call.id.startsWith('model:'));
