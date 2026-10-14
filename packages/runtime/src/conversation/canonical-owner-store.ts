@@ -4,6 +4,7 @@ import type { RunEffectScope } from '../channels/run-effect-scope';
 import type { OwnerContextCapability } from '../context-composer/owner-turn';
 import { stableJson } from '../context-composer/canonical';
 import { redactSecretUrls } from '../channels/egress-guard';
+import { supersededCompaction } from './compaction';
 
 export type CanonicalHistoryStorage = Pick<DurableObjectStorage, 'get' | 'list' | 'put'> & {
   kv?: Pick<DurableObjectStorage['kv'], 'get' | 'put' | 'list'>;
@@ -23,7 +24,7 @@ const scrub = (entry: ConversationEntry): ConversationEntry => ({ ...entry,
 // Canonical history has independent custody. Legacy conv:* rows are neither deleted
 // nor reclassified as authenticated owner input; only matching row+witness pairs load.
 // The entry-shape checks, named so a skipped row can say which one it failed and nothing else.
-export type CanonicalShapeCheck = 'id' | 'chat' | 'surface' | 'payload' | 'parent' | 'anchor' | 'projection' | 'role' | 'input_origin';
+export type CanonicalShapeCheck = 'id' | 'chat' | 'surface' | 'payload' | 'parent' | 'anchor' | 'projection' | 'role' | 'input_origin' | 'covers';
 const shapeFault = (entry: ConversationEntry): CanonicalShapeCheck | null => {
   if (!entry.id) return 'id';
   if (!entry.chatId) return 'chat';
@@ -33,8 +34,9 @@ const shapeFault = (entry: ConversationEntry): CanonicalShapeCheck | null => {
   if (!(entry.threadAnchorId === null || typeof entry.threadAnchorId === 'string')) return 'anchor';
   if (!entry.modelProjection || !['include', 'omit', 'replace'].includes(entry.modelProjection.mode)
     || (entry.modelProjection.mode === 'replace' && typeof entry.modelProjection.payload !== 'string')) return 'projection';
-  if (!['user', 'assistant'].includes(entry.role ?? '')) return 'role';
+  if (!['user', 'assistant', 'compaction'].includes(entry.role ?? '')) return 'role';
   if (entry.role === 'user' && !['owner', 'machine'].includes(entry.inputOrigin ?? '')) return 'input_origin';
+  if (entry.role === 'compaction' && !(entry.appPayload === '' && typeof entry.covers?.from_id === 'string' && typeof entry.covers.to_id === 'string' && Number.isInteger(entry.covers.rows) && entry.covers.rows >= 1)) return 'covers';
   return null;
 };
 export type CanonicalSkip = Readonly<{ count: number; unwitnessed: number }>;
@@ -126,6 +128,15 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
     const moved = relinked.get(entry.id);
     return moved && stableJson(entry) === stableJson(moved.loaded) ? moved.stored : entry;
   };
+  // New rows go after both the stored count and the last stored row. An older build could leave rows the count
+  // does not cover, and a write at the count would then replace any stored row at or past it.
+  const nextSlot = (count: number, last: string | undefined) => {
+    if (last === undefined) return count;
+    const slot = last.slice(`${prefix}conv:`.length);
+    if (!/^\d{10}$/.test(slot)) throw new Error('canonical history entry invalid');
+    return Math.max(count, Number(slot) + 1);
+  };
+  const lastSlot = { prefix: `${prefix}conv:`, reverse: true, limit: 1 } as const;
   const store: ConversationStore & Readonly<{ readForDisplay(): Promise<CanonicalHistoryRead> }> = {
     async load() {
       const { entries, leafId, skipped } = await read(true);
@@ -147,15 +158,6 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
       const previousLeaf = await storage.get<Witness>(witnessKey(leafId));
       if (!checked.some(entry => entry.id === leafId) && (!previousLeaf || !matches(previousLeaf, validate(previousLeaf.entry)))) throw new Error('canonical history leaf mismatch');
       await context.assertCurrent();
-      // New rows go after both the stored count and the last stored row. An older build could leave rows the count
-      // does not cover, and a write at the count would then replace any stored row at or past it.
-      const nextSlot = (count: number, last: string | undefined) => {
-        if (last === undefined) return count;
-        const slot = last.slice(`${prefix}conv:`.length);
-        if (!/^\d{10}$/.test(slot)) throw new Error('canonical history entry invalid');
-        return Math.max(count, Number(slot) + 1);
-      };
-      const lastSlot = { prefix: `${prefix}conv:`, reverse: true, limit: 1 } as const;
       const commit = (count: number, fresh: readonly ConversationEntry[]) => {
         const writes: Record<string, unknown> = { [`${prefix}count`]: count + fresh.length, [`${prefix}leaf`]: leafId };
         fresh.forEach((entry, index) => {
@@ -188,6 +190,41 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
       }
     }); },
     persistOwnerInput: async (entry, scope) => { await store.save([entry], entry.id, scope); },
+    // The compaction row goes in at the next slot and the row it supersedes is rewritten in place, with both witnesses, in
+    // one write that never touches `${prefix}leaf`: a turn that landed while the summary was in flight keeps its leaf, and a
+    // crash cannot leave two live summaries. A row already witnessed under this id is the same span again, and a no-op.
+    appendCompaction(row, supersededId, scope) { return serialize(storage, async () => {
+      await context.assertCurrent();
+      const entry = scrub(validate(row));
+      if (entry.role !== 'compaction') throw new Error('canonical history entry invalid');
+      const previous = supersededId;
+      const writes = (count: number, prior: Readonly<{ key: string; entry: ConversationEntry }> | null) => {
+        const out: Record<string, unknown> = { [`${prefix}count`]: count + 1, [`${prefix}conv:${String(count).padStart(10, '0')}`]: entry, [witnessKey(entry.id)]: witness(entry) };
+        if (prior) { const next = validate(supersededCompaction(prior.entry)); out[prior.key] = next; out[witnessKey(next.id)] = witness(next); }
+        return out;
+      };
+      if (scope) {
+        if (!storage.kv) throw new Error('fenced canonical history unavailable');
+        scope.commit(() => {
+          if (storage.kv!.get<Witness>(witnessKey(entry.id))) return;
+          const prior = previous === null ? null : [...storage.kv!.list<ConversationEntry>({ prefix: `${prefix}conv:` })].map(([key, value]) => ({ key, entry: value })).find((row) => row.entry.id === previous) ?? null;
+          const [last] = storage.kv!.list(lastSlot);
+          const count = nextSlot(storage.kv!.get<number>(`${prefix}count`) ?? 0, last?.[0]);
+          for (const [key, value] of Object.entries(writes(count, prior))) storage.kv!.put(key, value);
+        });
+      } else {
+        if (await storage.get<Witness>(witnessKey(entry.id))) return;
+        const prior = previous === null ? null : [...(await storage.list<ConversationEntry>({ prefix: `${prefix}conv:` }))].map(([key, value]) => ({ key, entry: value })).find((row) => row.entry.id === previous) ?? null;
+        const [last] = (await storage.list(lastSlot)).keys();
+        await storage.put(writes(nextSlot((await storage.get<number>(`${prefix}count`)) ?? 0, last), prior));
+      }
+    }); },
+    compactionAttempt: async (chainRef) => (await storage.get<number>(`${prefix}compaction-attempt:${chainRef}`)) ?? null,
+    async noteCompactionAttempt(chainRef, at, scope) {
+      const key = `${prefix}compaction-attempt:${chainRef}`;
+      if (scope) { if (!storage.kv) throw new Error('fenced canonical history unavailable'); scope.commit(() => storage.kv!.put(key, at)); }
+      else await storage.put(key, at);
+    },
   };
   return store;
 }

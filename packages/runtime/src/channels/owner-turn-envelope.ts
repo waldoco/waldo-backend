@@ -53,6 +53,9 @@ export type OwnerResponder = Readonly<{
   migrate(trace: string, input: string): Promise<string>;
   promote(trace: string): Promise<string>;
   planDay(trace: string, input: string): Promise<string>;
+  // After a reply is delivered: compact the chain's older rows into one summary row when the last window dropped rows or
+  // ran near its budget. Never throws; a failure is one content-free `compaction` hop. Inert while the switch is off.
+  compactIfDue?(conversationRef: string): Promise<void>;
   control: ReturnType<typeof turnControl>;
 }>;
 

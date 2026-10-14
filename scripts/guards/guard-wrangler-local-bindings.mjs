@@ -8,6 +8,7 @@
 //    (durable_objects, ratelimits, migrations, ...) plus its own ai/vectorize.
 //    The 2026-09-25 deploy shipped staging with ONLY ai+vectorize and healthz 404'd.
 import { readFileSync } from 'node:fs';
+import { parseJsonc } from '../jsonc.mjs';
 
 const path = process.env.WRANGLER_CONFIG_PATH ?? 'packages/runtime/wrangler.jsonc';
 const raw = readFileSync(path, 'utf8');
@@ -17,8 +18,7 @@ for (const key of ['"ai"', '"vectorize"']) {
 }
 
 // comment/trailing-comma-tolerant parse for the structural checks
-const text = raw.replace(/\/\/[^\n]*/g, '').replace(/,(\s*[}\]])/g, '$1');
-const cfg = JSON.parse(text);
+const cfg = parseJsonc(raw);
 const staging = cfg?.env?.staging;
 // Fetch invocation logs persist the full URL, including /c/<ticket> and OAuth callback
 // code/state. Automatic traces also include url.full/url.path. Until #205 removes those

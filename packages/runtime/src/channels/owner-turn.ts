@@ -12,7 +12,7 @@ import {
   type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
 } from '@waldo/contracts';
 import type { ConversationModelMessage } from '@waldo/contracts';
-import { MODEL_CONTEXT_MAX_CHARS } from '@waldo/contracts';
+import { BUDGET_CHARS_PER_TOKEN, MODEL_CONTEXT_MAX_CHARS } from '@waldo/contracts';
 import { PROBE_STRIPPED_TOOLS } from './probe-turn';
 import { runToolLoop } from '../conversation/tool-loop';
 import { turnReceipt } from '../hooks/receipt-line';
@@ -24,6 +24,8 @@ import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
 import { localTrustedBriefScheduleInput, localTrustedBriefTurnSnapshot, resolveRunLoopAdapters, type LocalSystemSkillBinding } from '../run-loop/adapters';
 import type { ContextHealthMaterial } from '../context-composer/types';
 import { JoinedConversationPath } from '../conversation/joined-path';
+import { COMPACTION, COMPACTION_INSTRUCTION, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, supersededCompaction, type CompactedStats } from '../conversation/compaction';
+import { numericHealthIn } from '../scribe/sanitiser';
 import { OpenAIResponsesAdapter } from '../llm/openai';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
 import { messagingSystemPrompt, ownerClockLine, unconnectedLine, withOwnerSkillProcedures } from '../prompt/messaging-behavior';
@@ -237,7 +239,7 @@ export const createOwnerResponder = (
       },
     };
     const response = result.ok ? result.response : undefined;
-    const metadataOnly = transientDecision || purpose.startsWith('memory') || purpose.startsWith('task_source');
+    const metadataOnly = transientDecision || purpose.startsWith('memory') || purpose.startsWith('task_source') || purpose === 'compaction';
     if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by, result.scribe?.reason, result.detail].filter(Boolean).join(':'), shape, ...(metadataOnly ? {} : { text: { input } }) });
     else log({
       trace, hop: `llm_${purpose}`, ms: result.usage.latency_ms, ok: true,
@@ -255,7 +257,9 @@ export const createOwnerResponder = (
   const tree = new ConversationTree();
   let pending: readonly LLMAttachment[] | undefined;
   // F1 receipt: the window observer fires only when history was actually dropped (content-free).
-  const pathObservers = { onWindow: (stats: { kept: number; dropped: number; estimated_tokens: number; budget_tokens: number }) => { if (stats.dropped > 0) log({ trace: traceId, hop: 'context_window', ms: 0, ok: true, detail: `kept ${stats.kept} dropped ${stats.dropped} ~${stats.estimated_tokens}/${stats.budget_tokens} tokens` }); } };
+  const lastWindow = new Map<string, CompactedStats>();
+  let windowingRef = '';
+  const pathObservers = { onWindow: (stats: CompactedStats) => { lastWindow.set(windowingRef, stats); if (stats.dropped > 0) log({ trace: traceId, hop: 'context_window', ms: 0, ok: true, detail: `kept ${stats.kept} dropped ${stats.dropped} ~${stats.estimated_tokens}/${stats.budget_tokens} tokens` }); } };
   // A held topic withholds only the rows that carry it (same guard the forget proof uses); other recall stays available.
   // Every string in a structured result (keys and values), unserialised: JSON.stringify would double a stored backslash and hide an escaped topic from hidesTopic.
   const structuredStrings = (value: unknown, depth = 0): string[] => {
@@ -615,6 +619,7 @@ export const createOwnerResponder = (
   // `said` is what the model reads; `received` is what the conversation stores and shows, the same text unless the turn labels parts of it.
   const converse = async (id: string, conversationRef: string, said: string, time: TurnTimer, fromOwner = false, surface = 'agent', toolNames?: readonly string[], received = said) => {
     conversationRef = context?.conversationRef ?? conversationRef;
+    windowingRef = conversationRef;
     backgroundToolNames = fromOwner ? undefined : toolNames;
     traceId = id;
     ownerTurnActive = fromOwner;
@@ -656,7 +661,45 @@ export const createOwnerResponder = (
       throw error;
     } finally { activeOwnerTurn = undefined; }
   };
+  // A scoped turn runs in its own responder (below); its compaction runs there too, after the reply is delivered.
+  let scopedCompaction: ((conversationRef: string) => Promise<void>) | undefined;
+  const compactIfDue = async (conversationRef: string): Promise<void> => {
+    const hop = (ok: boolean, code: string, extra: Readonly<{ ms?: number; detail?: string }> = {}) => log({ trace: traceId, hop: 'compaction', ms: extra.ms ?? 0, ok, code, ...(extra.detail ? { detail: extra.detail } : {}) });
+    try {
+      if (!COMPACTION.enabled) return;
+      if (scopedCompaction) return scopedCompaction(conversationRef);
+      if (!conversationStore?.appendCompaction) return;
+      const ref = context?.conversationRef ?? conversationRef;
+      const leafId = conversationLeaves.get(ref), stats = lastWindow.get(ref);
+      if (!leafId || !stats) return;
+      const now = Date.now();
+      const live = liveCompaction(tree, leafId);
+      const lastAttemptAt = (await conversationStore.compactionAttempt?.(ref)) ?? null;
+      if (!compactionDue({ stats, ownerRows: ownerRowsSince(tree, leafId, live?.createdAt ?? null), lastAttemptAt, now })) return;
+      privateRunScope?.admit();
+      await conversationStore.noteCompactionAttempt?.(ref, now, privateRunScope);
+      const plan = compactionPlan(tree, leafId, live);
+      if (!plan || tree.get(compactionId(plan.covers.to_id))) return;
+      const started = Date.now();
+      const response = await complete(traceId, 'compaction', COMPACTION_INSTRUCTION, plan.input);
+      const summary = response.text.trim();
+      if (response.truncated || summary.length > COMPACTION.maxOutputTokens * BUDGET_CHARS_PER_TOKEN) { hop(false, 'truncated'); return; }
+      if (!summary) { hop(false, 'empty'); return; }
+      // The free-text health scan is off for null-taint text at internal_context, so the numeric floor is applied here.
+      if (numericHealthIn(summary)) { hop(false, 'numeric_health'); return; }
+      const row = compactionRow(plan, summary, ownerId, Date.now());
+      privateRunScope?.admit();
+      await conversationStore.appendCompaction(row, live?.id ?? null, privateRunScope);
+      tree.append(row);
+      if (live) tree.replace(supersededCompaction(live));
+      hop(true, 'compacted', { ms: Date.now() - started, detail: `rows=${plan.covers.rows}:chars=${summary.length}:gap=${plan.gap}` });
+    } catch (error) {
+      if (error instanceof ClosedRunError) throw error;
+      hop(false, 'failed');
+    }
+  };
   return {
+    compactIfDue,
     async respond(turn, time) {
       const memoryWrites = turn.memoryWrites !== false;
       if (turn.runScope && privateRunScope !== turn.runScope) {
@@ -665,6 +708,7 @@ export const createOwnerResponder = (
         const preparedSkills = privateOwner?.skillHost ? await privateOwner.skillHost.prepare(capturedTurn, preparedContext?.invocation.verified_authority.principal_ref ?? ownerId, turn.runScope) : undefined;
         const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}) });
         control.route(scoped.control);
+        scopedCompaction = scoped.compactIfDue;
         try { return await scoped.respond(capturedTurn, time); }
         finally { control.unroute(scoped.control); }
       }

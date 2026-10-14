@@ -148,6 +148,8 @@ import { createTelegramResponder } from './telegram-turn';
 import type { TurnControl } from './turn-control';
 import { turnFailureCode } from './turn-failure-code';
 import { calendarPushBook, ensureCalendarWatch, wakeBriefSweep } from './calendar-push';
+import { ensureGmailWatch, gmailPushBook } from './gmail-push';
+import { gmailPush } from '../connectors/google-push';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 
 const WEBHOOK_UPDATES = ['message', 'callback_query'];
@@ -849,6 +851,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if(path==='/enqueue-link')return this.enqueueLink(request);
     if(this.ctx.storage.kv.get(LINK_MODE))return new Response('not found',{status:404});
     if (path === '/google-push' && request.method === 'POST') return this.calendarPush(request);
+    if (path === '/gmail-push' && request.method === 'POST') return this.gmailPush(request);
 
     if (new URL(request.url).pathname === '/enqueue') return this.enqueue(request);
     const doName = request.headers.get('x-waldo-do-name');
@@ -1079,6 +1082,17 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     ensureSchema(this.ctx.storage);
     const woke = await wakeBriefSweep(new Scheduler(this.ctx.storage.sql, this.ctx.storage, productionDeps()), Date.now());
     console.log(JSON.stringify({ hop: 'calendar_push', ok: true, code: woke ? 'sweep_pulled_forward' : 'sweep_unchanged' }));
+    return new Response('ok');
+  }
+
+  // A verified Gmail push for this owner's watched mailbox: the same sweep pull-forward as a Calendar push.
+  private async gmailPush(request: Request): Promise<Response> {
+    const connection = request.headers.get('x-waldo-gmail-connection') ?? '';
+    const history = request.headers.get('x-waldo-gmail-history') ?? '';
+    if (!connection || gmailPushBook(this.ctx.storage.kv).admit(connection, history) !== 'wake') return new Response('ok');
+    ensureSchema(this.ctx.storage);
+    const woke = await wakeBriefSweep(new Scheduler(this.ctx.storage.sql, this.ctx.storage, productionDeps()), Date.now());
+    console.log(JSON.stringify({ hop: 'gmail_push', ok: true, code: woke ? 'sweep_pulled_forward' : 'sweep_unchanged' }));
     return new Response('ok');
   }
 
@@ -2848,6 +2862,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           resolve: () => mcpGoogleAuth.resolve(undefined, 'calendar'), proxy: vault, fetcher: fetch, newId: () => crypto.randomUUID(),
         });
         if (watch === 'started' || watch === 'failed') log({ trace: `${entry.id}:${entry.occurrence_at}`, hop: 'calendar_watch', ms: Date.now() - started, ok: watch === 'started', code: `calendar_watch_${watch}` });
+        const mailWatch = await ensureGmailWatch({ book: gmailPushBook(identity), now: started, config: gmailPush(), doName: identity.get<string>('do_name'), resolve: () => mcpGoogleAuth.resolve(undefined, 'mail'), proxy: vault });
+        if (mailWatch === 'started' || mailWatch === 'failed') log({ trace: `${entry.id}:${entry.occurrence_at}`, hop: 'gmail_watch', ms: Date.now() - started, ok: mailWatch === 'started', code: `gmail_watch_${mailWatch}` });
       }
     };
     const briefSweep = async (entry: ScheduleEntry) => {
