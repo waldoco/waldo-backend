@@ -1,4 +1,5 @@
-import type { OwnerContextCapability } from '../context-composer/owner-turn';
+import { createOwnerTurnContext, type OwnerContextCapability } from '../context-composer/owner-turn';
+import type { OwnerMessageAdmission } from '../identity/owner-message-admission';
 import { OWNER_REQUEST_HOP } from './harness';
 import { narrowHeldJson, withholdHeldTurns } from '../conversation/held-turns';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
@@ -74,9 +75,14 @@ const EXTERNAL_DATA_MAX_BYTES = 4096;
 export type OwnerSkillHost = Readonly<{ browserAttachments?(scope?: RunEffectScope): readonly LLMAttachment[]; prepare(turn: OwnerTurnEnvelope, contextOwnerId: string, scope: RunEffectScope): Promise<OwnerSkillCapability | undefined> }>;
 export type OwnerContextHost = Readonly<{ prepare(turn: OwnerTurnEnvelope, scope: RunEffectScope): Promise<OwnerContextCapability | undefined> }>;
 export type OwnerHistoryFactory = (context: OwnerContextCapability, scope: RunEffectScope) => ConversationStore;
-// ownerProfile: the host-framed line about who the owner is, for turns that run without a composed owner context.
-export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; ownerProfile?: () => Promise<string | null> }>;
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; ownerProfile?: () => Promise<string | null> }>;
+// Admits the owner a scheduled job runs as. Undefined means no directory backs this deploy, so the fixture owner stands;
+// a host that cannot admit the owner throws, and the job runs nothing. A job that converses writes the chain the host names
+// for the admitted owner, given the chain its surface adapter passed: the one that surface's owner turns read.
+export type OwnerJobHost = Readonly<{ admit(): Promise<OwnerMessageAdmission | undefined>; chain(admission: OwnerMessageAdmission, surfaceChain: string): string }>;
+// ownerProfile: the host-framed line about who the owner is. An admitted job composes it into its owner context; a turn
+// without a composed owner context reads it directly.
+export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null> }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null> }>;
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 // The reply's system prompt with the byte size of each joined section, so a trace shows what fills it.
@@ -519,7 +525,7 @@ export const createOwnerResponder = (
           // Owner memory gets the room left in the FINAL system prompt (after the skill wrapper), because the sanitiser drops an oversize one whole.
           const composed = context ? await composer.compose(invocation, contextInputs()) : undefined;
           if (composed && !composed.ok) throw new Error(`owner context failed: ${composed.failure.code}`);
-          // A composed owner context carries this line in its identity; a turn without one (a job, or Telegram with no directory) reads it here.
+          // A composed owner context carries this line in its identity; a turn or job without one (no directory) reads it here.
           const ownerProfileLine = context ? undefined : (await privateOwner?.ownerProfile?.()) ?? undefined;
           await assertCurrent();
           const unboundSystem = (): SystemPrompt => {
@@ -646,6 +652,27 @@ export const createOwnerResponder = (
       }
     }
   };
+  // Machine work outside an owner turn runs in a responder bound to the owner the job host admitted, so its cache key,
+  // composed context and tools' authenticated owner are that owner's. A job that converses passes its surface's chain, and
+  // writes the chain the host names for it; a job that doesn't keeps the owner's default and writes no chain.
+  const asOwnerJob = async <T>(trace: string, work: (responder: OwnerResponder) => Promise<T>, surfaceChain?: string): Promise<T | undefined> => {
+    const jobHost = context ? undefined : privateOwner?.jobHost;
+    if (!jobHost) return undefined;
+    const admission = await jobHost.admit();
+    if (!admission) return undefined;
+    let healthRead: Promise<ContextHealthMaterial | null> | undefined;
+    const jobContext = createOwnerTurnContext(admission, {
+      ...(surfaceChain === undefined ? {} : { conversationRef: jobHost.chain(admission, surfaceChain) }),
+      ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}),
+      toolOutputs: recentToolResults,
+      ...(health ? { health: () => healthRead ??= health(trace) } : {}),
+      onPhase: (phase, previousMs) => log({ trace, hop: 'composer_phase', ms: previousMs, ok: true, detail: phase }),
+    });
+    const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, privateRunScope, privateSystemSkills, { context: jobContext });
+    control.route(scoped.control);
+    try { return await work(scoped); }
+    finally { control.unroute(scoped.control); }
+  };
   // `said` is what the model reads; `received` is what the conversation stores and shows, the same text unless the turn labels parts of it.
   const converse = async (id: string, conversationRef: string, said: string, time: TurnTimer, fromOwner = false, surface = 'agent', toolNames?: readonly string[], received = said) => {
     conversationRef = context?.conversationRef ?? conversationRef;
@@ -770,11 +797,15 @@ export const createOwnerResponder = (
       }
     },
     async remind(id, conversationRef, note, time, surface) {
+      const asOwner = await asOwnerJob(id, job => job.remind(id, conversationRef, note, time, surface), conversationRef);
+      if (asOwner !== undefined) return asOwner;
       await restored();
       pending = undefined;
       return converse(id, conversationRef, `[Reminder due now, set earlier by the owner: "${note}"] Send the reminder briefly in your own words. Do not add a sentence explaining that they asked for it.`, time, false, surface);
     },
     async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint) {
+      const asOwner = await asOwnerJob(id, job => job.prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint), conversationRef);
+      if (asOwner !== undefined) return asOwner;
       backgroundSourceTaint = sourceTaint ?? null;
       // Cards read in seconds, so a job's prompt gets half the provider budget; the guard keeps the opening and closing and cuts the data between.
       const said = fitPromptToBudget(jobText, Math.floor(deriveContextBudgetChars(model, SANITISE_DESTINATION_POLICIES.internal_context.max_chars) / 2));
@@ -808,24 +839,33 @@ export const createOwnerResponder = (
       } finally { backgroundCurrent = undefined; transientDecision = false; promptContext = ''; backgroundSourceTaint = null; }
     },
     async consolidate(trace, day, sides) {
+      const asOwner = await asOwnerJob(trace, job => job.consolidate(trace, day, sides));
+      if (asOwner !== undefined) return asOwner;
       if (!memory) return { done: true, detail: 'no memory' };
       if (memory.incompleteTopics().length) return { done: false, detail: 'historical memory consolidation deferred: forgetting coverage incomplete' };
 
       const raw = await ask(trace, 'nightly_memory', NIGHTLY_MEMORY_INSTRUCTION, nightlyInput(promptMemory()!, day), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, memoryModel);
+      await assertFresh();
       // The nightly pass is where the pinned blocks are curated.
       return { done: true, detail: applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`, undefined, sides ?? { owner: day }, false, undefined, true) };
     },
     threadTitle: (trace, exchange, scope) => withCallDeadline(scope, scope.deadline, () => ask(trace, 'thread_title', THREAD_TITLE_INSTRUCTION, exchange, THREAD_TITLE_FORMAT, undefined, undefined, undefined, memoryModel, scope)),
     async migrate(trace, input) {
+      const asOwner = await asOwnerJob(trace, job => job.migrate(trace, input));
+      if (asOwner !== undefined) return asOwner;
       if (!memory) return 'no memory';
       if (holdsAnyHeldTopic()) throw new Error('historical memory migration deferred: forgetting coverage incomplete');
       const raw = await ask(trace, 'memory_migration', MIGRATION_INSTRUCTION, input, { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, memoryModel);
+      await assertFresh();
       return applyClaimOps(memory, raw, new Date().toISOString(), 'owner agreed', undefined, { owner: input }, false);
     },
     async promote(trace) {
+      const asOwner = await asOwnerJob(trace, job => job.promote(trace));
+      if (asOwner !== undefined) return asOwner;
       if (!memory || memory.claims().length === 0) return 'no claims';
       if (memory.incompleteTopics().length) return 'historical memory promotion deferred: forgetting coverage incomplete';
       const raw = await ask(trace, 'constellation', PROMOTION_INSTRUCTION, promotionInput(memory), { name: 'promotion', schema: PROMOTION_SCHEMA });
+      await assertFresh();
       return applyPromotion(memory, raw, new Date().toISOString(), (receipt) => log({
         trace, hop: 'constellation_evidence', ms: 0, ok: true,
         code: receipt.reason ?? receipt.outcome,
@@ -833,7 +873,8 @@ export const createOwnerResponder = (
       }));
     },
     control,
-    planDay: async (trace, input) => ask(trace, 'day_plan', DAY_PLAN_INSTRUCTION, composeDayPlanInput(input, memory), { name: 'day_plan', schema: DAY_PLAN_SCHEMA }),
+    planDay: async (trace, input) => await asOwnerJob(trace, job => job.planDay(trace, input))
+      ?? ask(trace, 'day_plan', DAY_PLAN_INSTRUCTION, composeDayPlanInput(input, memory), { name: 'day_plan', schema: DAY_PLAN_SCHEMA }),
     chooseReaction: async (turn) => {
       if (turn.runScope && privateRunScope !== turn.runScope) {
         return createOwnerResponder(openaiApiKey, undefined, undefined, log, clock, [], model, false, undefined, undefined, gateway, undefined, probeGuard, undefined, undefined, memoryModel, egressAllowlist, undefined, reactionChoices, turn.runScope).chooseReaction(turn);
