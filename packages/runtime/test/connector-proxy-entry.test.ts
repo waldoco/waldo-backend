@@ -138,7 +138,7 @@ it('actual signed contacts search requires both contact scopes, never an effect 
  const input={do_name:'owner',op:'call',connection:'conn',method:'searchContacts',args:['Fictional',5]};
  for(const scopes of [null,[],['https://www.googleapis.com/auth/contacts.readonly'],['https://www.googleapis.com/auth/contacts.other.readonly']]){const f=fixture();f.scope(scopes);expect(await(await serve(await request(input))).json()).toMatchObject({error:{status:403,message:'insufficient scopes'}});expect(f.hops).not.toContain('token');}
  const f=fixture();f.scope(['https://www.googleapis.com/auth/contacts.readonly','https://www.googleapis.com/auth/contacts.other.readonly']);
- expect(await(await serve(await request(input))).json()).toEqual({data:[{name:'Fictional Person',emails:['person@example.test'],source:'contacts'}]});expect(f.hops).not.toContain('proxy_idem_claim');expect(f.effects()).toBe(0);
+ expect(await(await serve(await request(input))).json()).toEqual({data:[{name:'Fictional Person',emails:['person@example.test'],source:'contacts'},{name:'Fictional Person',emails:['person@example.test'],source:'other_contacts'}]});expect(f.hops).not.toContain('proxy_idem_claim');expect(f.effects()).toBe(0);
  spies.forEach(spy=>spy.mockRestore());
  expect(printed.join('\n')).toMatch(/insufficient scopes/);
  for(const text of ['Fictional Person','person@example.test'])expect(printed.join('\n')).not.toContain(text);

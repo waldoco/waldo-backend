@@ -49,12 +49,31 @@ describe('Google contacts lookup', () => {
       [person('Priya Nair', 'priya@northwind.example', 'PRIYA@home.example', 'p3@x.example', 'p4@x.example'), person('Priya Shah', 'shah@acme.example')],
       [person(null, 'priya@northwind.example'), person('Priyanka R', 'priyanka@studio.example'), person('No Address')],
     );
-    expect(await client.searchContacts!('Priya', 5)).toEqual<readonly ContactMatch[]>([
+    expect(await tool(client).handle({ query: 'Priya', limit: 5 } as never)).toMatchObject({ ok: true, data: { contacts: [
       { name: 'Priya Nair', emails: ['priya@northwind.example', 'priya@home.example', 'p3@x.example'], source: 'contacts' },
       { name: 'Priya Shah', emails: ['shah@acme.example'], source: 'contacts' },
       { name: 'Priyanka R', emails: ['priyanka@studio.example'], source: 'other_contacts' },
-    ]);
-    expect(await client.searchContacts!('Priya', 1)).toHaveLength(1);
+    ] } });
+    expect((await tool(client).handle({ query: 'Priya', limit: 1 } as never) as { data: { contacts: unknown[] } }).data.contacts).toHaveLength(1);
+  });
+
+  it('checks each address against the contract before it takes one of a person\'s three places', async () => {
+    const { client } = people([person('Ana Ruiz', 'ana@studio', 'ana@desk', 'ana@home', 'ana@studio.example')], []);
+    expect(await tool(client).handle({ query: 'Ana', limit: 5 } as never))
+      .toMatchObject({ ok: true, data: { contacts: [{ name: 'Ana Ruiz', emails: ['ana@studio.example'], source: 'contacts' }] } });
+  });
+
+  it('refuses a People answer whose results are not a list, never reading it as no match', async () => {
+    const fetcher = async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.origin === 'https://oauth2.googleapis.com') return Response.json({ access_token: 'fictional-access', expires_in: 3600 });
+      return Response.json({ results: url.searchParams.get('query') === '' ? [] : { person: {} } });
+    };
+    const client = googleClient(app, { refresh_token: 'fictional-refresh' }, fetcher as typeof fetch);
+    await expect(client.searchContacts!('Priya', 5)).rejects.toThrow('invalid People search response');
+    const result = await tool(client).handle({ query: 'Priya', limit: 5 } as never);
+    expect(result).toMatchObject({ ok: false });
+    expect(JSON.stringify(result)).not.toContain('"contacts"');
   });
 
   it('refuses a bad query or limit before any request', async () => {

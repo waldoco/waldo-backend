@@ -277,21 +277,21 @@ const validPageLimit = (value: number, max: number) => Number.isSafeInteger(valu
 // The edge imports this file, so the shape is checked here by hand; the tool checks it again against the contract.
 export type ContactMatch = Readonly<{ name: string | null; emails: readonly string[]; source: 'contacts' | 'other_contacts' }>;
 // One row per person, saved contacts first; a person already listed by an address is not repeated.
-const contactMatches = (sources: readonly Readonly<{ source: ContactMatch['source']; results: unknown }>[], limit: number): readonly ContactMatch[] => {
-  const seen = new Set<string>();
-  const matches: ContactMatch[] = [];
-  for (const { source, results } of sources) for (const result of Array.isArray(results) ? results : []) {
-    const person = isObject(result) && isObject(result.person) ? result.person : {};
-    const named = Array.isArray(person.names) ? person.names.find((entry) => isObject(entry) && typeof entry.displayName === 'string' && entry.displayName.trim()) : undefined;
-    const emails = [...new Set((Array.isArray(person.emailAddresses) ? person.emailAddresses : [])
-      .map((entry) => (isObject(entry) && typeof entry.value === 'string' ? entry.value.trim().toLowerCase() : ''))
-      .filter((email) => email.includes('@') && email.length <= 320 && !seen.has(email)))].slice(0, 3);
-    if (emails.length === 0) continue;
-    emails.forEach((email) => seen.add(email));
-    matches.push({ name: isObject(named) ? String(named.displayName).trim().slice(0, 200) : null, emails, source });
-  }
-  return matches.slice(0, limit);
-};
+// One row per person as Google lists them, saved contacts first, with every address the person has. The Worker applies
+// the contract's address check, keeps an address once across people, and cuts to three addresses and the limit, so an
+// address the contract refuses never takes a place. A results field that is not a list is refused, never read as no match.
+const contactMatches = (sources: readonly Readonly<{ source: ContactMatch['source']; results: unknown }>[]): readonly ContactMatch[] =>
+  sources.flatMap(({ source, results }) => {
+    if (results !== undefined && !Array.isArray(results)) throw new Error('invalid People search response');
+    return (results ?? []).flatMap((result: unknown) => {
+      const person = isObject(result) && isObject(result.person) ? result.person : {};
+      const named = Array.isArray(person.names) ? person.names.find((entry) => isObject(entry) && typeof entry.displayName === 'string' && entry.displayName.trim()) : undefined;
+      const emails = [...new Set((Array.isArray(person.emailAddresses) ? person.emailAddresses : [])
+        .map((entry) => (isObject(entry) && typeof entry.value === 'string' ? entry.value.trim().toLowerCase() : ''))
+        .filter((email) => email.includes('@') && email.length <= 320))];
+      return emails.length ? [{ name: isObject(named) ? String(named.displayName).trim().slice(0, 200) : null, emails, source }] : [];
+    });
+  });
 const validGoogleId = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 1024 && !/[\r\n\0]/.test(value);
 const validProviderToken = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 2048;
 const optionalText = (value: unknown, max: number) => value === undefined || (typeof value === 'string' && value.length <= max);
@@ -666,7 +666,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
         return (await call(url(query), { signal: AbortSignal.timeout(15_000) })).results;
       };
       const [saved, other] = await Promise.all([search('people:searchContacts'), search('otherContacts:search')]);
-      return contactMatches([{ source: 'contacts', results: saved }, { source: 'other_contacts', results: other }], limit);
+      return contactMatches([{ source: 'contacts', results: saved }, { source: 'other_contacts', results: other }]);
     },
     async calendarPage(calendarId, from, to, limit, includeDeclined, pageToken) {
       if (typeof calendarId !== 'string' || !calendarId.trim() || calendarId.length > 254 || ![from,to].every(v => validCalendarInstant(v)) || Date.parse(from) >= Date.parse(to) || !Number.isSafeInteger(limit) || limit < 1 || limit > 50 || typeof includeDeclined !== 'boolean' || (pageToken !== undefined && (typeof pageToken !== 'string' || !pageToken || pageToken.length > 4096))) throw new Error('invalid Calendar page request');

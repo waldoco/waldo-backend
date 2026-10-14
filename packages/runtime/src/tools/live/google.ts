@@ -6,7 +6,7 @@ import { artifactMarker, extractArtifacts, quarantineArtifacts, type ArtifactKin
 import {
   calendarPageSchema, queryAvailabilityArgsSchema, type QueryAvailabilityArgs,
   googleCalendarListPageSchema, googleTaskListPageSchema, googleTasksPageSchema, type GoogleTasksPage,
-  connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, searchContactsArgsSchema, contactMatchSchema, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
+  connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, searchContactsArgsSchema, contactMatchSchema, type ContactMatch, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type SearchContactsArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolEligibility, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
 import { b64url, buildMime, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type GoogleClient, type GoogleFeature } from '../../connectors/google';
@@ -279,12 +279,19 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     requires_connector: true,
     handle: ({ query, limit, account }: SearchContactsArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'contacts', ctx, async (client) => {
       if (!client.searchContacts) throw new Error('Google contacts adapter unavailable');
-      // Only the contract's fields are picked, so a phone, organisation or photo can never ride along.
-      const contacts = (await client.searchContacts(query, limit)).flatMap(({ name, emails, source }) => {
-        // An address the contract refuses is dropped on its own, so one odd address never hides the person.
-        const match = contactMatchSchema.safeParse({ name, emails: emails.filter((email) => contactMatchSchema.shape.emails.element.safeParse(email).success), source });
-        return match.success ? [match.data] : [];
-      });
+      // Only the contract's fields are picked, so a phone, organisation or photo can never ride along. The contract's
+      // address check runs before an address is kept or counted: a refused address never takes one of a person's three
+      // places, and never hides an address another person shares.
+      const seen = new Set<string>();
+      const contacts: ContactMatch[] = [];
+      for (const { name, emails, source } of await client.searchContacts(query, limit)) {
+        const kept = emails.filter((email) => !seen.has(email) && contactMatchSchema.shape.emails.element.safeParse(email).success).slice(0, 3);
+        const match = contactMatchSchema.safeParse({ name, emails: kept, source });
+        if (!match.success) continue;
+        kept.forEach((email) => seen.add(email));
+        contacts.push(match.data);
+        if (contacts.length === limit) break;
+      }
       return { query, contacts, coverage: {
         matching: 'name_or_address_prefix', sources: ['contacts', 'other_contacts'],
         limitation: 'Names and addresses only, from one account. Empty means no saved or emailed person starts with this text, not that the person does not exist.',
