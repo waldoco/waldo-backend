@@ -1470,6 +1470,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (url.pathname === CONSOLE_ACTION_PATH && request.method === 'POST') {
       const action = parseConsoleAction(await request.formData(), session.csrf);
       if (action?.action === 'telegram.link') return this.telegramLinkPage();
+      if (action?.action === 'whatsapp.link') return this.whatsappLinkPage();
       if (action?.action === 'google.connect') {
         const ticketUrl = isGoogleFeature(action.value) ? await googleConnectUrl(action.value, 'console') : null;
         return ticketUrl
@@ -1540,6 +1541,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return Response.json(built, { headers: { 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });
     }
     return new Response(renderConsole(built, pageSlug), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });
+  }
+
+  // A WhatsApp link code (provider-scoped since the shared-number migration; it used to be a Telegram code).
+  private async whatsappLinkPage(): Promise<Response> {
+    const doName = this.ctx.storage.kv.get<string>('do_name');
+    const code = doName ? await consoleAuth(this.env)?.issueProviderLinkCode?.(doName, 'whatsapp') : null;
+    const text = code
+      ? `Send this to the Waldo WhatsApp number within 10 minutes: waldo ${code}`
+      : 'Linking WhatsApp from the console needs account sign-in, which is not set up on this server yet.';
+    return new Response(`<!doctype html><meta name="viewport" content="width=device-width"><p style="font:18px system-ui;margin:40px">${text}</p><p style="font:16px system-ui;margin:40px"><a href="${CONSOLE_PATH}">Back</a></p>`, {
+      headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' },
+    });
   }
 
   private async telegramLinkPage(): Promise<Response> {

@@ -14,8 +14,11 @@ import { IMessageOwnerInbox, type IMessageInboxRecord } from './owner-inbox';
 export type OwnerHost = Readonly<{ storage: DurableObjectStorage; id: DurableObjectId; env: IMessageEnv; ownerNamespace?: DurableObjectNamespace }>;
 
 /** Fresh canonical authority for an inbox record: same owner DO, same revision, same exact binding. */
+// The sender's own authority: on an owner bridge it is the bridge authority for its bound sender; on a
+// shared bridge it comes from that sender's own presence. Another owner's Waldo is never reachable.
 export const currentIMessageAuthority = async (env: IMessageEnv, record: Pick<IMessageInboxRecord, 'environment' | 'binding' | 'revision' | 'ownerDoName' | 'bindingDigest'>): Promise<BridgeAuthority> => {
-  const a = await iMessageDirectory(env).authority(record.environment, record.binding.bridgeId, record.binding.accountId);
+  const found = await iMessageDirectory(env).senderAuthority(record.environment, record.binding.bridgeId, record.binding.accountId, record.binding.subject);
+  const a = found && found.state !== 'unknown_sender' ? found : null;
   const binding = a ? bindingFromAuthority(a) : null;
   if (!a || !binding || a.revision !== record.revision || a.doName !== record.ownerDoName || await bindingDigest(binding) !== record.bindingDigest) throw new ClosedRunError();
   return a;
@@ -67,7 +70,7 @@ export const drainIMessageOutbox = async (host: OwnerHost, maxAgeMs: number): Pr
     let outcome;
     try {
       outcome = await ns.get(ns.idFromName(row.bridgeDoName)).enqueueReply({ replyRef: row.replyRef, commandId: row.commandId, text: row.text,
-        ownerDoName: row.ownerDoName, revision: row.revision, bindingDigest: row.bindingDigest });
+        ownerDoName: row.ownerDoName, revision: row.revision, bindingDigest: row.bindingDigest, ...(row.subject !== undefined ? { subject: row.subject } : {}) });
     } catch { outbox.retryLater(row.replyRef, maxAgeMs); continue; }
     if (outcome.kind === 'queued') outbox.markQueued(row.replyRef);
     else if (outcome.kind === 'terminal') outbox.settle(row.replyRef, row.commandId, outcome.result);

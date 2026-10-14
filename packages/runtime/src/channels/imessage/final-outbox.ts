@@ -15,6 +15,8 @@ export const IMESSAGE_OUTBOX_MAX_RECORDS = 256;
 
 export type IMessageOutboxRecord = {
   replyRef: string; commandId: string; text: string; bridgeDoName: string; ownerDoName: string; revision: string; bindingDigest: string;
+  /** The sender this reply answers; selects that sender's own authority on a shared bridge. Absent on older records. */
+  subject?: string;
   frozenAt: number; state: 'frozen' | 'queued' | 'settled'; nextAttemptAt: number; attempts: number;
   result?: IMessageResult; conflicts?: number;
 };
@@ -38,7 +40,7 @@ export class IMessageFinalOutbox {
       if (!evict) throw new Error('imessage_outbox_capacity');
       this.storage.kv.delete(PREFIX + evict.replyRef);
     }
-    const row: IMessageOutboxRecord = { replyRef, commandId: record.commandId, text, bridgeDoName: record.bridgeDoName, ownerDoName: record.ownerDoName,
+    const row: IMessageOutboxRecord = { replyRef, commandId: record.commandId, text, bridgeDoName: record.bridgeDoName, ownerDoName: record.ownerDoName, subject: record.binding.subject,
       revision: record.revision, bindingDigest: record.bindingDigest, frozenAt: this.now(), state: 'frozen', nextAttemptAt: this.now(), attempts: 0 };
     this.storage.kv.put(PREFIX + replyRef, row);
     this.storage.kv.put(IMESSAGE_OUTBOX_DUE_KEY, this.dueAt());
