@@ -32,6 +32,18 @@ export const textFingerprint = (text: string): string => {
   }
   return `fnv1a:${hash.toString(16)}`;
 };
+// What a forget barrier holds for a text: the fingerprint of the trimmed text as given, and of its lower-cased,
+// space-collapsed form.
+export const forgetFingerprints = (text: string): string[] => {
+  const given = text.trim();
+  return [...new Set([textFingerprint(given), textFingerprint(given.toLowerCase().replace(/\s+/g, ' '))])];
+};
+// Whether a text matches one of these barrier fingerprints exactly: the test that refuses relearning, and the one a
+// provider fact is suppressed by. Never a substring or a paraphrase.
+export const barredBy = (hashes: Iterable<string | null>): ((text: string) => boolean) => {
+  const held = new Set(hashes);
+  return (text) => forgetFingerprints(text).some((hash) => held.has(hash));
+};
 export type ConstellationNode = Readonly<{ id: number; domain: string; label: string; summary: string; strength: number; status: string; first_seen: string; last_confirmed: string; supporting_spots: string }>;
 export type ConstellationEdge = Readonly<{ from_id: number; to_id: number; relation: string; strength: number; evidence_count: number }>;
 type NewClaim = Readonly<{ kind: string; text: string; source: string; evidence: string; origin?: string; source_ref?: string; supersedes_id?: number; aliases?: readonly string[] }>;
@@ -470,8 +482,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       // fingerprint only (the fingerprint is what blocks re-admission), and dedupe on it.
       // Also store the lower-cased, space-collapsed form: alias forms are normalised, so a capitalised
       // topic must still match them. The as-given hash stays for exact claim-text blocking.
-      const given = topic.trim();
-      for (const hash of new Set([textFingerprint(given), textFingerprint(given.toLowerCase().replace(/\s+/g, ' '))])) {
+      for (const hash of forgetFingerprints(topic)) {
         const existing = sql.exec<{ n: number }>('SELECT count(*) AS n FROM forget_barriers WHERE topic_hash = ?', hash).one().n;
         if (existing === 0) sql.exec('INSERT INTO forget_barriers (topic, topic_hash, created_at) VALUES (?, ?, ?)', FORGOTTEN, hash, at);
       }

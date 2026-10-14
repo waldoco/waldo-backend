@@ -130,8 +130,15 @@ export function ownerClockLine(clock: MessagingClock): string {
   return `The owner's current local time: ${local} (${zone}). The local day began ${sinceMidnight} ago. Anchor greetings and time-of-day references to this; call get_context if you need fresh precision mid-turn. When the local day is only just under way, "today" in a request usually means the day that just ended; search or read the last 24 hours instead of the new calendar day, and say which window you used. This applies only to a bare "today": a named date or a relative day such as "tomorrow" means exactly that day.`;
 }
 
+type GoogleNameParts = Readonly<{ name?: string; given_name?: string; family_name?: string }>;
+// Every name a Google profile gives: the full name, each part, and the full name the parts make.
+export const googleNameTexts = (profile: GoogleNameParts): string[] =>
+  [profile.name, profile.given_name, profile.family_name, [profile.given_name, profile.family_name].filter(Boolean).join(' ')].filter((text): text is string => Boolean(text));
+
 // A provider fact, not the owner's word: the name on the owner's Google account, its values quoted as data. The owner's own words win.
-export function googleNameLine(profile: Readonly<{ name?: string; given_name?: string; family_name?: string }>): string | null {
+// A profile with any name the owner asked to forget gives no line at all, since a partial name would carry the rest.
+export function googleNameLine(profile: GoogleNameParts, forgotten: (text: string) => boolean): string | null {
+  if (googleNameTexts(profile).some(forgotten)) return null;
   const full = profile.name ?? ([profile.given_name, profile.family_name].filter(Boolean).join(' ') || undefined);
   if (!full) return null;
   const quoted = (text: string) => JSON.stringify(text).replace(/[<>]/g, (c) => (c === '<' ? '\\u003c' : '\\u003e'));
