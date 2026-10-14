@@ -46,7 +46,7 @@ import { TelegramFinalOutbox, redactMailFollowupEntries, redactCalendarPrepEntri
 import { computeAdmission } from '../delivery-gate/gate';
 import { DeliveryGateStore } from '../delivery-gate/store';
 import { ownerTurnTrace, type OwnerTurnEnvelope } from './owner-turn-envelope';
-import { inboundTurn, ownerWords } from './owner-inbound-turn';
+import { inboundTurn, ownerWords, renderForModel } from './owner-inbound-turn';
 import type { OwnerContextIntegration, OwnerSkillHost } from './owner-turn';
 import { enrichOwnerTrace, identityForStorage, readOwnerTraceHeader } from '../observability/owner-trace-identity';
 import { adminRead, adminAction } from './dashboard-admin';
@@ -414,7 +414,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // A forward is someone else's text, so it never steers or stops the running turn: it runs as its own labelled turn.
     const text = isForward(raw.message) ? undefined : raw.message?.text?.trim();
     const target = this.activeInbox;
-    const control = target?.runId && text && (text === '/stop' || !text.startsWith('/')) ? { kind: text === '/stop' ? 'stop' as const : 'steer' as const, targetRun: target.runId } : undefined;
+    const steer = parsed.accepted[0];
+    const control = target?.runId && text && steer && (text === '/stop' || !text.startsWith('/')) ? { kind: text === '/stop' ? 'stop' as const : 'steer' as const, targetRun: target.runId } : undefined;
     try {
       const traceIdentity = identityForStorage(readOwnerTraceHeader(request.headers), resolveCaptureText(this.env));
       const admitted = await this.inbox.admit({ bot, subject, doName, ...(traceIdentity ? { traceIdentity } : {}) }, raw.update_id!, body, control);
@@ -442,7 +443,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
               if (target && target.runId === control.targetRun) { this.closeRunAtomic(target, 'owner_stopped'); this.activeAbort?.abort(); }
               await this.inbox.transition(row.id, attempt, 'consumed'); this.runtimes.telegram?.control.stopTarget(control.targetRun);
             }
-            else if (!this.runtimes.telegram?.control.steerTarget(control.targetRun, raw.update_id!, text!)) {
+            // The steer carries the parsed parts, so a quote in it stays labelled and is never the owner's evidence.
+            else if (!this.runtimes.telegram?.control.steerTarget(control.targetRun, raw.update_id!, renderForModel(steer!.parts))) {
               await this.inbox.returnUnconsumedSteer(row.id, attempt); this.liveAttempts.delete(attempt);
             }
           } else if (claimed && control.kind === 'steer') await this.inbox.returnUnconsumedSteer(row.id, attempt);
@@ -914,7 +916,6 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return this.probeTurn(body);
     }
     const update = JSON.parse(body) as RawUpdate;
-    if (this.intercept(update)) return new Response('ok');
     await this.serial(() => this.turn(update));
     return new Response('ok');
   }
@@ -1707,25 +1708,6 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const run = this.queue.then(work).finally(() => { this.scheduledAppDelivery = null; });
     this.queue = run.catch(() => undefined);
     return run;
-  }
-
-  // Runs outside the serial queue so it reaches a turn that is still running.
-  private intercept(update: RawUpdate): boolean {
-    const runtime = this.runtimes.telegram;
-    if (!runtime || update.update_id === undefined) return false;
-    const { owner, control, call, log } = runtime;
-    const text = update.message?.text?.trim();
-    if (update.message?.from?.id !== owner || update.message.chat?.id !== owner || !text) return false;
-    const trace = `tg-${update.update_id}`;
-    if (text === '/stop') {
-      this.ownerBrowser.stop(); this.ctx.waitUntil(Promise.all([this.browserTasks.stop(), this.ownerBrowser.maintain()]));
-      const stopping = control.stop();
-      log({ trace, hop: 'stop', ms: 0, ok: true, detail: stopping ? 'stopping the running turn' : 'nothing running' });
-      void call('sendMessage', { chat_id: owner, text: stopping ? 'Stopping.' : 'Nothing is running right now.' }).catch(() => undefined);
-      return true;
-    }
-    if (!text.startsWith('/') && control.steer(update.update_id, text)) log({ trace, hop: 'steer', ms: 0, ok: true, detail: 'queued for the running turn' });
-    return false;
   }
 
   // Staging probe path: runs one real owner turn from a synthetic update WITHOUT the
