@@ -158,7 +158,7 @@ export function firstConversationLine(facts: NewOwnerFacts, tools: readonly stri
     facts.zoneConfirmed ? `their time zone, ${facts.zone}, is confirmed` : `their time zone is not confirmed (${facts.zone} is only a default)`,
     ...(facts.surfaces.length ? [`they have written to you from ${facts.surfaces.join(', ')}`] : []),
   ];
-  const zone = !facts.zoneConfirmed && tools.includes('set_timezone') ? ' If they tell you their time zone or where they are, set it with set_timezone.' : '';
+  const zone = !facts.zoneConfirmed && tools.includes('set_timezone') ? " When they clearly tell you their own time zone or the city they live in, or ask you to use a zone, set it with set_timezone; a passing mention of a trip or of a place they are visiting doesn't change it." : '';
   return `Host facts about this owner: ${known.join('; ')}. This may be your first conversation with them. Answer what they asked first. Then, when it fits, get to know them: you decide whether to ask, what and how much, and you let it go when they would rather not. Save what they tell you about themselves with remember, quoting their own words.${zone}`;
 }
 

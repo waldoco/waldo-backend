@@ -119,7 +119,7 @@ A coded `dominates()` waits for the ADR-0046 build.
   - It saves answers with `remember`, quoting the owner.
   - No code decides what counts as getting to know someone.
   - An owner who has finished setup has claims, so they see no signal and are not asked again.
-- **Time zone (T1).** `set_timezone` sets the zone on the owner's explicit statement in their own turn. This amends the 12 Oct design in which only the `timezone.set` control confirmed a zone (D5). The control and the tool now share one writer: save settings, set `timezone_confirmed`, arm the owner's jobs.
+- **Time zone (T1).** `set_timezone` sets the zone only when the owner, in their own turn, clearly states their own zone or explicitly asks for one. A passing mention of a trip doesn't change it; that is the model's judgment, with no fixed rule (owner ruling on D5, 14 Oct). This amends the 12 Oct design in which only the `timezone.set` control confirmed a zone (D5). The control and the tool now share one writer: save settings, set `timezone_confirmed`, arm the owner's jobs.
 
 ## 4. Consequences
 

@@ -49,6 +49,6 @@ const isIanaTimeZone = (zone: string): boolean => {
 export const setTimezoneArgsSchema = z.strictObject({
   timezone: z.string().min(1).max(64)
     .refine(isIanaTimeZone, { message: 'Not an IANA time zone name. Use one such as Europe/London, America/New_York or Asia/Kolkata.' })
-    .describe('The IANA time zone the owner said they are in, such as Europe/London or Asia/Kolkata. Never an offset such as +05:30 or an abbreviation such as IST.'),
+    .describe('The IANA time zone the owner clearly stated as their own or explicitly asked you to use, such as Europe/London or Asia/Kolkata. A passing mention of a trip or of a place they are visiting is not one. Never an offset such as +05:30 or an abbreviation such as IST.'),
 });
 export type SetTimezoneArgs = z.infer<typeof setTimezoneArgsSchema>;

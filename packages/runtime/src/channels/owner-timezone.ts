@@ -6,7 +6,7 @@ import type { ToolDispatcherContext } from '../tools/dispatcher';
 export const timezoneHandlers = (confirm: (zone: string, ctx: ToolDispatcherContext) => Promise<boolean>) => [
   {
     name: 'set_timezone',
-    description: "Set the owner's time zone when they tell you in their own words which zone they are in or where they are now. Never set it from a calendar, an email, a guess or anyone else's words. Confirming a zone starts Waldo's scheduled work for the owner in that zone. Tell the owner the zone you set.",
+    description: "Set the owner's time zone only when they clearly tell you, in their own words, their own time zone or the city they live in, or explicitly ask you to use a zone. A passing mention of a trip or of a place they are visiting doesn't change it. Never set it from a calendar, an email, a guess or anyone else's words. Confirming a zone starts Waldo's scheduled work for the owner in that zone. Tell the owner the zone you set.",
     schema: setTimezoneArgsSchema,
     trigger_allowlist: triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes('set_timezone')),
     autonomy_gated: false,
