@@ -14,13 +14,15 @@ import { ensureSchema } from '../src/tracer/schema';
 // Scheduled jobs compose as the owner the directory admits for this Durable Object, whichever surface binds it.
 const CARD_TEXT = 'Your morning is clear until noon.';
 const REMINDER_TEXT = 'Time to call Sam.';
-const fixture = vi.hoisted(() => ({ requests: [] as string[] }));
+// duringModel runs inside each model call, after the job's admission and before its reply is published.
+const fixture = vi.hoisted(() => ({ requests: [] as string[], duringModel: undefined as ((content: string) => void) | undefined }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway: LLMGatewayAdapter = { async complete(request) {
     fixture.requests.push(JSON.stringify(request.request));
     const content = request.request.messages.at(-1)?.content ?? '';
     const format = request.request.response_format?.name;
+    fixture.duringModel?.(content);
     const text = format === 'task_source_scope' ? '{"decision":"retain","sources":[]}'
       : content.includes('[Scheduled card') ? CARD_TEXT
       : content.includes('[Reminder due now') ? REMINDER_TEXT : 'SKIP';
@@ -41,11 +43,12 @@ const AT = Date.parse('2026-10-03T09:00:00Z');
 const DAY = '2026-10-03';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 type Answer = 'current' | 'revoked' | 'outage';
-const wire = { telegramAuthority: 'current' as Answer, runtimeAuthority: 'current' as Answer, asked: [] as string[], telegramSent: [] as string[] };
+const wire = { telegramAuthority: 'current' as Answer, runtimeAuthority: 'current' as Answer, presenceRevision: '3', presenceOwner: undefined as string | undefined,
+  asked: [] as string[], telegramSent: [] as string[] };
 
 beforeEach(() => {
-  fixture.requests = [];
-  wire.telegramAuthority = 'current'; wire.runtimeAuthority = 'current'; wire.asked = []; wire.telegramSent = [];
+  fixture.requests = []; fixture.duringModel = undefined;
+  wire.telegramAuthority = 'current'; wire.runtimeAuthority = 'current'; wire.presenceRevision = '3'; wire.presenceOwner = undefined; wire.asked = []; wire.telegramSent = [];
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
@@ -53,9 +56,9 @@ beforeEach(() => {
     if (fn) wire.asked.push(fn);
     if (fn === 'common_owner_authority') {
       if (wire.telegramAuthority === 'outage') throw new Error('directory unavailable');
-      const owner = OWNERS[asked.p_do_name!] ?? OWNER_ID;
+      const owner = wire.presenceOwner ?? OWNERS[asked.p_do_name!] ?? OWNER_ID;
       return Response.json(wire.telegramAuthority === 'revoked' ? null : { owner_id: owner, auth_user_id: owner, do_name: asked.p_do_name, presence_id: PRESENCE_ID,
-        provider: asked.p_provider, subject: asked.p_subject, state_version: 1, admission_revision: '3' });
+        provider: asked.p_provider, subject: asked.p_subject, state_version: 1, admission_revision: wire.presenceRevision });
     }
     if (fn === 'owner_runtime_authority') {
       if (wire.runtimeAuthority === 'outage') throw new Error('directory unavailable');
@@ -127,14 +130,14 @@ const expectOwnerRequest = (marker: string, principal = OWNER_PRINCIPAL) => {
 };
 
 describe('scheduled jobs run as the owner the directory admits', () => {
-  it('a Telegram-bound owner\'s Brief and reminder compose as that owner, resolved once through the Telegram presence', async () => {
+  it('a Telegram-bound owner\'s Brief and reminder compose as that owner, admitted through the Telegram presence', async () => {
     await withOwner('jobs-telegram-owner', { telegram: true, app: false, directory: true }, async (owner, state) => {
       await dueBrief(state);
       await dueReminder(state);
       await schedulePass(owner, state);
       expectOwnerRequest('[Scheduled card');
       expectOwnerRequest('[Reminder due now');
-      expect(wire.asked.filter(fn => fn === 'common_owner_authority')).toHaveLength(1);
+      expect(new Set(wire.asked.filter(fn => fn.endsWith('_authority')))).toEqual(new Set(['common_owner_authority']));
       expect(wire.telegramSent).toEqual([CARD_TEXT]);
     });
   });
@@ -241,6 +244,37 @@ describe('scheduled jobs run as the owner the directory admits', () => {
       expect(wire.telegramSent).toEqual([]);
       expect(armed(state)).toContain('card:brief');
       if (binding.telegram) expect(admissionLog(state)).toEqual([{ ok: 0, note: 'dormant' }]);
+    });
+  });
+
+  // The pass's admission picks the owner; it is not the job's authority. A change while the job runs stops its next effect.
+  const changesMidRun: readonly (readonly [string, Binding, (state: DurableObjectState) => void])[] = [
+    ['the directory revokes a Telegram-bound owner', { telegram: true, app: false, directory: true }, () => { wire.telegramAuthority = 'revoked'; }],
+    ['the directory rebinds the Telegram presence', { telegram: true, app: false, directory: true }, () => { wire.presenceRevision = '4'; }],
+    ['the owner unlinks Telegram', { telegram: true, app: false, directory: true }, state => { state.storage.kv.put('telegram_unlinked', true); }],
+    ['the directory revokes an app-bound owner', { telegram: false, app: true, directory: true }, () => { wire.runtimeAuthority = 'revoked'; }],
+  ];
+  it.each(changesMidRun)('%s while a reminder runs: its reply is never published', async (label, binding, change) => {
+    await withOwner(`jobs-midrun-${label.replaceAll(' ', '-')}`, binding, async (owner, state) => {
+      await dueReminder(state);
+      fixture.duringModel = content => { if (content.includes('[Reminder due now')) change(state); };
+      await schedulePass(owner, state);
+      expect(requestFor('[Reminder due now')).toBeDefined();
+      expect(wire.telegramSent).toEqual([]);
+      expect([...state.storage.kv.list()].filter(([, value]) => JSON.stringify(value ?? null).includes(REMINDER_TEXT)).map(([key]) => key)).toEqual([]);
+    });
+  });
+
+  it('a pass never runs a job as an owner other than the one it admitted', async () => {
+    await withOwner('jobs-owner-changes-mid-pass', { telegram: true, app: false, directory: true }, async (owner, state) => {
+      await dueBrief(state);
+      await dueReminder(state);
+      fixture.duringModel = content => { if (content.includes('[Scheduled card')) wire.presenceOwner = OTHER_ID; };
+      await schedulePass(owner, state);
+      expectOwnerRequest('[Scheduled card');
+      expect(requestFor('[Reminder due now')).toBeUndefined();
+      expect(fixture.requests.join()).not.toContain(`prn_${OTHER_ID.replaceAll('-', '')}`);
+      expect(wire.telegramSent).toEqual([]);
     });
   });
 

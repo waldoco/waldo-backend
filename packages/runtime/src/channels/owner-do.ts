@@ -653,9 +653,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private ownerJob: Readonly<{ job: OwnerJob; occurrenceKey: string; occurredAt: number }> | null = null;
   private jobOwner: Promise<ScheduledOwner> | null = null;
 
-  // Scheduled work runs as the owner the directory admits for this Durable Object, asked once per unit of work: the app
-  // binding through owner_runtime_authority, otherwise the Telegram presence through common_owner_authority. Between the
-  // ask and each model call only the local binding is rechecked.
+  // Scheduled work runs as the owner the directory admits for this Durable Object, asked once per unit of work to pick that
+  // owner: the app binding through owner_runtime_authority, otherwise the Telegram presence through common_owner_authority.
+  // A job's own authority is asked again on every read (admitOwnerJob).
   private scheduledOwner(): Promise<ScheduledOwner> {
     return this.jobOwner ??= this.lookupScheduledOwner();
   }
@@ -689,15 +689,20 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
   // Without a directory there is no owner to resolve and the fixture owner stands. With one, a job runs only as the owner it
   // admitted; work reaching the responder outside a named job runs nothing and asks the directory nothing, and work for an
-  // owner no longer admitted runs nothing.
+  // owner no longer admitted runs nothing. Like an owner turn's, every read of the job's authority asks the directory again,
+  // and it must still name the owner this unit admitted, so a revocation or rebinding while the job runs stops its next effect.
   private async admitOwnerJob(): Promise<OwnerMessageAdmission | undefined> {
     if (!consoleAuth(this.env)) return undefined;
     const job = this.ownerJob;
     if (!job) throw new ClosedRunError();
     const owner = await this.scheduledOwner();
     if (owner.kind !== 'admitted') throw new ClosedRunError();
-    return ownerJobAdmission({ ...job, expectedPhysicalDoId: this.ctx.id.toString(),
-      lookup: async () => { if (!owner.current()) throw new ClosedRunError(); return owner.binding; } });
+    return ownerJobAdmission({ ...job, expectedPhysicalDoId: this.ctx.id.toString(), lookup: async () => {
+      if (!owner.current()) throw new ClosedRunError();
+      const answer = await this.lookupScheduledOwner();
+      if (answer.kind !== 'admitted' || answer.binding.ownerId !== owner.binding.ownerId) throw new ClosedRunError();
+      return answer.binding;
+    } });
   }
   // Each surface's runtime names the chain its jobs write, the one its owner turns read, whichever binding admitted the owner.
   private jobHostFor(chain: OwnerJobHost['chain']): OwnerJobHost {
