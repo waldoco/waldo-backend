@@ -2475,3 +2475,17 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
   - Its Worker code matches tip `3c4d3fae`: there is no runtime, edge, contract, migration or lockfile change since.
 - **Order** (lead, 6164174075): #1213 → #1218 → #1216 (#1223) → #1219 → (ii) → #1173 → #1176 → #1179. A PR that doesn't overlap the one ahead, with a clean merge-tree, doesn't wait.
 - **Usage:** 10% at 09:05Z; the window resets at 13:30Z.
+
+## 09:07Z-09:30Z: #1223 merged; a correction on CI pools
+
+- **#1223 merged as `6f7b9915`** (#1216 items 1, 2 and 4: forwards never trigger commands), pinned to `4a8620e9`.
+  - **Gate:** the Mac reviewer's PASS WITH NITS (6165191425; 12 of 12 mutations caught), CI 6 of 6, merge-tree clean, and the advisor.
+  - **Nits:** listed on #1216 (6165242311). Item 3 is #1219, now PR #1229.
+  - **WhatsApp flag names** were checked against Meta's Cloud API webhook reference: `context.forwarded` and `context.frequently_forwarded`.
+- **Correction posted** (6165242754): CI already runs `vitest.owner-ingress.config.ts`. Until #1222 lands, it does not run the link-routing, iMessage or mac-closeout configs. #1213's PASS must therefore show a local link-routing run, or CI must be rerun after #1222.
+- **New PRs, owned by other lanes:**
+  - #1228: the owner's voice note as their instruction (the lead's builder).
+  - #1229: `intercept()` deleted, and quoted steers keep their foreign ranges (the review session's builder).
+- **Staging is unchanged:** `6be19816` (`a8c92893`). The deploys run after the demo:
+  1. `72030b34`, unchanged, to verify Gmail;
+  2. a fresh tip with #1223 and #1221 (after `mig.sh`), plus #1218 if the persistence review is confirmed. That one deploys the edge first.
