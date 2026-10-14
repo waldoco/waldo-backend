@@ -1,8 +1,7 @@
-import type { Browser, BrowserContext, BrowserWorker, Page, Request } from '@cloudflare/playwright';
+import type { Browser, BrowserContext, BrowserWorker, Page, Request, WorkersLaunchOptions } from '@cloudflare/playwright';
 import type { BrowsePageArgs, ToolResult } from '@waldo/contracts';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import { EGRESS_TARGET_PATHS, OPEN_PUBLIC, evaluateDeclaredEgress } from '../hooks/egress-policy';
-import { cloudflareBrowserGuardOptions } from './cloudflare-browser-adapter';
 import { browserBoundedJson } from './browser-bounded-body';
 import { prepareGeneralPublicRead } from './general-browser-public-read';
 import type { CloudflareBrowserSdkLoader } from './public-fixture-browser';
@@ -90,7 +89,9 @@ export function cloudflarePublicRead(options: Readonly<{ binding: BrowserWorker;
     };
     try {
       const target = new URL(args.url);
-      const guard = cloudflareBrowserGuardOptions([target.hostname]);
+      // No provider host guardrail: it would refuse every other host before the per-request egress check below could
+      // admit a page's public resources. The retained public session acquires the same way.
+      const guard: WorkersLaunchOptions = { recording: false, keep_alive: 10000 };
       await admit();
       sdk = await bounded(options.loadSdk);
       await admit();

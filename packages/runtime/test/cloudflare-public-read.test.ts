@@ -136,6 +136,12 @@ it('sub-resources load from any host and with any method that passes egress; pri
   };
   expect((await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context)).ok).toBe(true);
 });
+it('acquires the provider session without a host guardrail, so cross-host sub-resources reach the per-request egress check, with recording off', async () => {
+  const f = fake(), acquired: unknown[] = []; const acquire = f.sdk.acquire;
+  f.sdk.acquire = async (...input: unknown[]) => { acquired.push(input[1]); return acquire(); };
+  expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context)).toMatchObject({ ok: true });
+  expect(acquired).toEqual([{ recording: false, keep_alive: 10000 }]);
+});
 it('top-level navigation, a popup\'s included, stays on the requested host while a cross-host frame is a sub-resource', async () => {
   const f = fake(); const initial = f.page.goto;
   f.page.goto = async () => {
