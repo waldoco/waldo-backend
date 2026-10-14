@@ -91,4 +91,23 @@ describe('surface owner admission: authority re-reads', () => {
     await admission.assertCurrent();
     expect(h.reads()).toBe(before + 1);
   });
+
+  it('a fresh check reads inside the window and sees a revocation the cached check would miss', async () => {
+    const h = harness();
+    const admission = await h.admit();
+    h.answer(async () => ({ ...BINDING, revision: '2' }));
+    await admission.assertCurrent();
+    await expect(admission.assertFresh!()).rejects.toEqual(new OwnerAdmissionError('rejected'));
+  });
+
+  it('concurrent fresh checks share one read, and a closed run fails one without reading', async () => {
+    const h = harness();
+    const admission = await h.admit();
+    const before = h.reads();
+    await Promise.all([admission.assertFresh!(), admission.assertFresh!(), admission.assertCurrent()]);
+    expect(h.reads()).toBe(before + 1);
+    h.close();
+    await expect(admission.assertFresh!()).rejects.toBeInstanceOf(ClosedRunError);
+    expect(h.reads()).toBe(before + 1);
+  });
 });

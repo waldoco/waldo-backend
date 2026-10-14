@@ -22,6 +22,8 @@ export type OwnerMessageAdmission = Readonly<{
   invocation: TrustedInvocationEnvelope;
   snapshot: Readonly<{ snapshot_ref: string; snapshot_at: number }>;
   assertCurrent(): Promise<void>;
+  // Reads authority now, never from a recent match. Absent where assertCurrent already always reads.
+  assertFresh?(): Promise<void>;
   readInput(): Promise<ResolvedInvocationInput>;
 }>;
 

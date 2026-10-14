@@ -8,7 +8,7 @@ import { ensureSchema } from '../src/tracer/schema';
 // One app turn of three tool rounds and a closing answer, against a directory that counts its session reads.
 const OWNER_ID = '5d1f8a20-6c3b-4e9a-b7d2-0e4f6a8c1b3d';
 const TOOLS = ['list_reminders', 'list_standing_orders', 'list_artifacts'];
-const world = vi.hoisted(() => ({ replies: 0, sessionReads: 0, live: true, skew: 0, onReply: undefined as undefined | ((round: number) => void) }));
+const world = vi.hoisted(() => ({ replies: 0, sessionReads: 0, live: true, skew: 0, quietSet: false, tools: undefined as undefined | readonly { name: string; args: object }[], onReply: undefined as undefined | ((round: number) => void) }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway: LLMGatewayAdapter = { async complete(request) {
@@ -16,8 +16,8 @@ vi.mock('../src/channels/telegram-turn', async load => {
     if (request.request.response_format) return { ok: true, data: { ...data, text: '{"decision":"retain","sources":[],"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' } };
     world.replies += 1;
     world.onReply?.(world.replies);
-    const tool = TOOLS[world.replies - 1];
-    return { ok: true, data: tool ? { ...data, text: '', tool_calls: [{ call_id: `c${world.replies}`, name: tool, arguments: '{}' }] } : { ...data, text: 'Done.' } };
+    const tool = (world.tools ?? TOOLS.map(name => ({ name, args: {} })))[world.replies - 1];
+    return { ok: true, data: tool ? { ...data, text: '', tool_calls: [{ call_id: `c${world.replies}`, name: tool.name, arguments: JSON.stringify(tool.args) }] } : { ...data, text: 'Done.' } };
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
@@ -49,12 +49,14 @@ const appTurn = (name: string) => {
       expect(sent.status).toBe(202);
       const { message_id: id } = await sent.json() as { message_id: string };
       await vi.waitFor(() => expect(['completed', 'interrupted', 'revoked']).toContain(state.storage.kv.get<{ state: string }>(`app:inbox-record:${id}`)?.state), { timeout: 10_000, interval: 10 });
+      world.quietSet = state.storage.sql.exec("SELECT name FROM sqlite_master WHERE name = 'proactivity'").toArray().length > 0
+        && state.storage.sql.exec("SELECT settings FROM proactivity WHERE id = 1").toArray().some(row => String(row.settings).includes('21:00'));
       return state.storage.kv.get<{ state: string }>(`app:inbox-record:${id}`)!.state;
     } finally { Date.now = realNow; await state.storage.deleteAlarm(); }
   });
 };
 
-afterEach(() => { vi.unstubAllGlobals(); Object.assign(world, { replies: 0, sessionReads: 0, live: true, skew: 0, onReply: undefined }); });
+afterEach(() => { vi.unstubAllGlobals(); Object.assign(world, { replies: 0, sessionReads: 0, live: true, skew: 0, quietSet: false, tools: undefined, onReply: undefined }); });
 
 describe('owner authority across a tool turn', () => {
   it('a three-round app turn completes on a bounded number of directory session reads', async () => {
@@ -70,5 +72,20 @@ describe('owner authority across a tool turn', () => {
     world.onReply = round => { if (round === 1) { world.live = false; world.skew += 2_000; } };
     expect(await appTurn('authority-reads-revoked')).not.toBe('completed');
     expect(world.replies).toBe(1);
+  });
+
+  it('a session revoked inside the reuse window cannot dispatch a mutating tool', async () => {
+    const quiet = { name: 'set_proactivity', args: { quiet_start: '21:00', quiet_end: '07:00', volume: 'normal' } };
+    world.tools = [quiet];
+    // The revocation lands during the model call and no time passes: a cached read would still look current.
+    world.onReply = round => { if (round === 1) world.live = false; };
+    expect(await appTurn('authority-reads-revoked-mutation')).not.toBe('completed');
+    expect(world.quietSet).toBe(false);
+  });
+
+  it('the same mutating tool dispatches while the session stays live', async () => {
+    world.tools = [{ name: 'set_proactivity', args: { quiet_start: '21:00', quiet_end: '07:00', volume: 'normal' } }];
+    expect(await appTurn('authority-reads-live-mutation')).toBe('completed');
+    expect(world.quietSet).toBe(true);
   });
 });

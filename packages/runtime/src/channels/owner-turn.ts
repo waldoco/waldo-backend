@@ -140,6 +140,8 @@ export const createOwnerResponder = (
   let transientDecision = false;
   let backgroundSourceTaint: 'external' | null = null;
   const assertCurrent = async () => { privateRunScope?.admit(); await context?.assertCurrent(); await skills?.admission?.assertCurrent(); await backgroundCurrent?.(); privateRunScope?.admit(); };
+  // Before an effect or a published reply: authority read now, never a recent match.
+  const assertFresh = async () => { privateRunScope?.admit(); await context?.assertFresh(); await (skills?.admission?.assertFresh ?? skills?.admission?.assertCurrent)?.(); await backgroundCurrent?.(); privateRunScope?.admit(); };
   const ownerId = invocation.verified_authority.principal_ref;
   const CANARIES = newSessionCanaryTokens();
   const cacheKey = `waldo:${ownerId}`;
@@ -344,7 +346,7 @@ export const createOwnerResponder = (
       const connections = unconnectedLine(eligibility.unconnected);
       const guardedHandlers: DispatchToolOptions<ToolDispatcherContext>['handlers'] = admittedHandlers.map(handler => {
         return { ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
-          await assertCurrent();
+          await assertFresh();
           const retainedRead = ['read_owner_context', 'read_memory', 'search_episodes', 'read_tool_output'].includes(handler.name);
                   if (backgroundToolNames !== undefined && handler.name === 'open_loop' && (args === null || typeof args !== 'object' || !('source_ref' in args) || typeof args.source_ref !== 'string')) {
             return { ok: false, code: 'invalid_args', error: 'Background mail follow-up requires an observed source_ref.', source_taint: null };
@@ -409,7 +411,7 @@ export const createOwnerResponder = (
       const turnBudget = { remaining: MAX_TOOL_ROUNDS };
       const delegate = delegateTaskHandler(async (task) => {
         const childHandlers = activeHandlers.map(handler => ({ ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
-          await assertCurrent();
+          await assertFresh();
           return handler.handle(args, ctx);
         } }));
         // A5b: one run row per spawned child; the exit classification lands on the row, and
@@ -655,7 +657,7 @@ export const createOwnerResponder = (
         assistantEntryId: `${id}-reply`,
       })).finally(() => { ownerTurnActive = false; backgroundToolNames = undefined; control.end(); });
       privateRunScope?.admit();
-      await assertCurrent();
+      await assertFresh();
       const reply = tree.get(publication.leafId)!.appPayload;
       // Native delivery reads durable history, so the visible effect receipt belongs in that row, as text and typed.
       const receipt = fromOwner ? await turnReceipt(turnToolEvents) : null;
@@ -665,7 +667,7 @@ export const createOwnerResponder = (
       await conversationStore?.save(savedEntries, publication.leafId, privateRunScope);
       for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); }
       privateRunScope?.admit();
-      await assertCurrent();
+      await assertFresh();
       conversationLeaves.set(conversationRef,publication.leafId);
       lastReply = out;
       return out;
