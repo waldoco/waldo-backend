@@ -35,8 +35,9 @@ const MAX_PROBE_TEXT = 4_000;
 export type ProbeGuard = { suppressMemory: boolean; stripLiveTools: boolean };
 
 // Live provider surfaces a synthetic probe must never reach in capture mode: Google reads and
-// writes (private data), the browser tools (arbitrary external effects), the MCP bridge, and
-// the connect flow. Kept: get_context, web_search (synthetic queries, our own API), memory and
+// writes (private data), the browser tools (arbitrary external effects), the MCP bridge, the
+// connect flow, and the console link (a capture probe hands its sends to the probe caller).
+// Kept: get_context, web_search (synthetic queries, our own API), memory and
 // episode reads of the staging DO, reminders/loops.
 export const PROBE_STRIPPED_TOOLS: readonly string[] = [
   'query_calendar',
@@ -55,6 +56,7 @@ export const PROBE_STRIPPED_TOOLS: readonly string[] = [
   'call_mcp_tool',
   'read_mcp_tool',
   'connect_service',
+  'send_console_link',
 ];
 
 // DO-side rate limit for the probe endpoint (Codex hold: the route had none). Per-minute

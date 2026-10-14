@@ -748,7 +748,7 @@ export const createOwnerResponder = (
       const id = turn.traceId;
       surfacePresentation = turn.presentation;
       traceId = id;
-      log({ trace: id, hop: OWNER_REQUEST_HOP, ms: 0, ok: true });
+      log({ trace: id, hop: OWNER_REQUEST_HOP, ms: 0, ok: true, ...(context ? { principal: ownerId } : {}) });
       try {
         pending = ownerTurnAttachments(turn);
         activeOwnerTurn = { ...turn, memoryWrites };

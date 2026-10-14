@@ -33,7 +33,7 @@ afterEach(() => { vi.restoreAllMocks(); proof.turns = []; proof.hold = null; pro
 async function world(ownerName = `imsg-owner-${crypto.randomUUID()}`, ownerId = '10000000-0000-4000-8000-000000000001') {
   const owners: FixtureOwner[] = [{ do_name: ownerName, owner_id: ownerId, state: 'active', state_version: 1, admission_revision: 1 }];
   const fx = fixtureDirectory({ origin: ORIGIN, secret: SECRET, owners, extra: (fn) => {
-    if (fn === 'console_session_touch') return Response.json(true);
+    if (fn === 'console_session_touch' || fn === 'console_session_open') return Response.json(true);
     if (fn === 'health_context_read' || fn === 'health_plane') return Response.json(null);
     return null;
   } });
@@ -463,4 +463,57 @@ it('quarantine recovery is revoke + re-pair: the new bridge has a clean lane and
   expect((await old.stub.status()).quarantine).toBe('mutation_deadline'); // the old lane keeps its evidence
   expect(forbiddenEgress).toEqual([]);
   } finally { vi.useRealTimers(); }
+});
+
+it('an iMessage owner\'s own request queues the console link on the same bridge, ahead of the reply; the model never sees it', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await runInDurableObject(w.ownerStub, async (_i, state) => { await state.storage.put('origin', HOST_ORIGIN); });
+  proof.outputs.push([{ type: 'function_call', call_id: 'console', name: 'send_console_link', arguments: '{}' }], []);
+  const t0 = Date.now();
+  vi.useFakeTimers({ toFake: ['Date'], now: t0 });
+  try {
+  await replyFor(w, 'Send me my console link');
+  // The link goes first and the reply waits behind it: the bridge holds one outstanding command at a time, and the
+  // reply's handoff is retried once the link's delivery has settled.
+  const first = (await w.host.pull()).delivery!;
+  const link = JSON.parse(first.body);
+  expect(link).toMatchObject({ operation: 'send', allowSMSFallback: false, attachments: [], target: { bridgeId: w.host.bridgeId, accountId: w.host.accountId, chatGuid: CHAT }, binding: { subject: SUBJECT, chatGuid: CHAT } });
+  expect(link.text.startsWith(`Console (link works once, for 10 minutes): ${HOST_ORIGIN}/console?t=c1.`)).toBe(true);
+  expect((await w.host.postResult(first, await w.host.execute(first))).status).toBe(200);
+  vi.setSystemTime(t0 + 6_000);
+  await w.pump(3);
+  const second = (await w.host.pull()).delivery!;
+  const reply = JSON.parse(second.body);
+  expect(reply).toMatchObject({ operation: 'send', text: proof.reply, target: link.target, binding: link.binding });
+  expect(reply.commandId).not.toBe(link.commandId);
+  // One server-originated record beside the reply: same bridge, owner, revision and binding, its own command id.
+  const [inbound] = await inbox(w.ownerStub);
+  const rows = await outbox(w.ownerStub);
+  const consoleRow = rows.find(row => row.replyRef === `console:${inbound!.id}`)!, replyRow = rows.find(row => row.replyRef === `reply:${inbound!.id}`)!;
+  expect(consoleRow).toMatchObject({ bridgeDoName: replyRow.bridgeDoName, ownerDoName: replyRow.ownerDoName, revision: replyRow.revision, bindingDigest: replyRow.bindingDigest, commandId: link.commandId, state: 'settled', text: '' });
+  expect(replyRow.commandId).toBe(reply.commandId);
+  const ticket = new URL(link.text.slice(link.text.indexOf('https://'))).searchParams.get('t')!;
+  const seen = proof.turns.join('\n').replaceAll('\\"', '"');
+  expect(seen).toContain('"sent":true,"surface":"imessage"');
+  expect(seen).not.toContain(ticket);
+  // The ticket is the issuing owner's, and it opens the console once.
+  const redeem = async () => (await w.call(new Request(`${HOST_ORIGIN}/console`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ t: ticket }) }))).status;
+  expect(await redeem()).toBe(303);
+  expect(await redeem()).toBe(403);
+  expect(w.host.nativeSends).toHaveLength(1);
+  expect(forbiddenEgress).toEqual([]);
+  } finally { vi.useRealTimers(); }
+});
+
+it('an iMessage turn with no public origin on record mints nothing, says so, and still replies', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  proof.outputs.push([{ type: 'function_call', call_id: 'console', name: 'send_console_link', arguments: '{}' }], []);
+  await replyFor(w, 'Send me my console link');
+  const only = (await w.host.pull()).delivery!;
+  expect(JSON.parse(only.body).text).toBe(proof.reply);
+  expect(proof.turns.join('\n').replaceAll('\\"', '"')).toContain('"sent":false,"reason":"unavailable"');
+  await runInDurableObject(w.ownerStub, async (_i, state) => { expect(state.storage.kv.get('console:link')).toBeUndefined(); });
+  expect((await outbox(w.ownerStub)).map(row => row.replyRef.split(':')[0])).toEqual(['reply']);
 });
