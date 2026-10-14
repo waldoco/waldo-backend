@@ -148,7 +148,7 @@ it("paused repository resumed after close cannot reach model or persist", async 
   const scope = {
     runId: "fixture",
     attempt: "1",
-    deadline: Date.now() + 10000,
+    deadline: Date.now() + 15 * 60_000,
     signal: new AbortController().signal,
     admit,
     commit: <T>(w: () => T) => {
@@ -287,7 +287,7 @@ it("closing after model starts cannot persist its resumed reply", async () => {
       runScope: {
         runId: "late",
         attempt: "1",
-        deadline: Date.now() + 10000,
+        deadline: Date.now() + 15 * 60_000,
         signal: new AbortController().signal,
         admit,
         commit: (w) => {

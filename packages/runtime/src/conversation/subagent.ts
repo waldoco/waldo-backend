@@ -11,10 +11,11 @@ import { runToolLoop, type LoopExit, type ToolLoopEvent, type ToolLoopStep } fro
 // structural, not a counter. Turn-scoped only until the P2 heartbeat lands: a child runs inside
 // the parent's turn and hands back before the turn ends.
 
-// Budget: a 15-round slice per child and at most 5 spawns per turn. Every foreground child round
-// draws down the PARENT turn's shared budget object, so the turn cap is absolute across parent and
-// children. A background child is given its own budget by whoever starts it.
-export const SUBAGENT_MAX_ROUNDS = 15;
+// Budget: a child may use this share of the rounds its parent has left when it starts, at least one, and at most 5
+// spawns per turn. Every foreground child round draws down the PARENT turn's shared budget object, so the turn cap is
+// absolute across parent and children, and the parent keeps rounds to use the report. A background child is given its
+// own budget by whoever starts it.
+export const SUBAGENT_ROUND_SHARE = 0.6;
 export const SUBAGENT_MAX_SPAWNS_PER_TURN = 5;
 
 // The child tool set: reads and research only. No sends, no writes, no delegation, no
@@ -106,7 +107,7 @@ export const runChildLoop = async (task: string, input: ChildLoopInput): Promise
   let stopped = false;
   const text = await runToolLoop({
     handlers: input.handlers.filter((handler) => allowed.includes(handler.name)) as never,
-    maxSteps: SUBAGENT_MAX_ROUNDS,
+    maxSteps: Math.max(1, Math.floor(input.budget.remaining * SUBAGENT_ROUND_SHARE)),
     budget: input.budget,
     ctx: input.ctx,
     onSettle: (settled) => { exit = settled; },
@@ -182,8 +183,8 @@ export const delegateTaskHandler = (
       if (written === 'superseded') return refusal('The owner changed this step while the subagent ran; its result was kept aside and not applied.');
       if (done) return { ok: true as const, data: { status: 'completed' as const, summary: text }, source_taint: 'external' as const };
       // Every non-completed exit is a failed round with its truthful classification; an owner
-      // stop is never a success receipt.
-      return refusal(`Subagent ${exit === 'stopped' ? 'was stopped by the owner mid-task' : exit === 'budget_exhausted' ? 'ran out of its round budget' : exit === 'time_exhausted' ? "ran out of the turn's time" : 'had its tools withdrawn after repeated failures'}. Partial answer: ${text.slice(0, 500)}`);
+      // stop is never a success receipt. The partial rides whole: the dispatcher bounds a long one.
+      return refusal(`Subagent ${exit === 'stopped' ? 'was stopped by the owner mid-task' : exit === 'budget_exhausted' ? 'ran out of its round budget' : exit === 'time_exhausted' ? "ran out of the turn's time" : 'had its tools withdrawn after repeated failures'}. Partial answer: ${text}`);
     },
   };
 };

@@ -30,7 +30,7 @@ import { JoinedConversationPath } from '../conversation/joined-path';
 import { COMPACTION, COMPACTION_INSTRUCTION, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, supersededCompaction, type CompactedStats } from '../conversation/compaction';
 import { numericHealthIn } from '../scribe/sanitiser';
 import { OpenAIResponsesAdapter } from '../llm/openai';
-import { withCallDeadline } from '../llm/time-budget';
+import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
 import { messagingSystemPrompt, ownerClockLine, unconnectedLine, withOwnerSkillProcedures } from '../prompt/messaging-behavior';
 import { eligibleHandlers } from '../tools/eligibility';
@@ -68,7 +68,6 @@ export const ownerToolApproval = ({ tool }: { tool: string }): boolean => !EXTER
 // public (useless as tripwires) and a false-positive source for any tool output quoting it.
 const newSessionCanaryTokens = (): string[] =>
   Array.from({ length: 3 }, () => crypto.randomUUID().replaceAll('-', '').slice(0, 16));
-const MAX_TOOL_ROUNDS = 25;
 // Reasoning tokens count against a call's output cap, and OpenAI's reasoning guide asks for at least 25,000 tokens of
 // room for reasoning and output. Sol gets that room whatever effort it runs at; other models keep the 4,096 cap Luna
 // has run with.
@@ -220,7 +219,8 @@ export const createOwnerResponder = (
       ...(attachments && index === texts.length - 1 ? { attachments: attachments.map((file) => `${file.kind}:${file.filename}`) } : {}),
     }));
     mark(`messages=${userMessages.length}`);
-    const adapter = gateway ?? new OpenAIResponsesAdapter({ apiKey: openaiApiKey, onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; } });
+    const ownerCall = ownerTurnActive && (purpose === 'reply' || purpose === 'subagent');
+    const adapter = gateway ?? new OpenAIResponsesAdapter({ apiKey: openaiApiKey, ...(ownerCall ? { timeoutMs: OWNER_TURN_CALL_TIMEOUT_MS } : {}), onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; } });
     const admittedGateway: LLMGatewayAdapter = context || skills || backgroundCurrent ? { complete: async request => {
       await assertCurrent();
       if (transientDecision && new TextEncoder().encode(JSON.stringify(request.request)).byteLength > MODEL_CONTEXT_MAX_CHARS) throw new Error('background decision context bound');
@@ -436,8 +436,10 @@ export const createOwnerResponder = (
       // runs a nested tool loop on the read-only subset (CHILD_TOOL_NAMES) with its own round
       // slice; flat by construction - children never get delegate_task.
       // One shared round budget per submitted turn: the parent loop and every child it spawns
-      // draw from it, so the turn's stated cap is absolute (Codex #224 hold).
-      const turnBudget = { remaining: MAX_TOOL_ROUNDS };
+      // draw from it, so the turn's stated cap is absolute (Codex #224 hold). Its time and rounds follow the run.
+      const turnEnd = turnDeadlineFor(privateRunScope);
+      const turnRounds = toolRoundsFor(turnEnd - Date.now());
+      const turnBudget = { remaining: turnRounds, deadline: turnEnd };
       const delegate = delegateTaskHandler(async (task) => {
         const childHandlers = activeHandlers.map(handler => ({ ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
           await assertFresh();
@@ -476,7 +478,7 @@ export const createOwnerResponder = (
         handlers: turnHandlers,
         budget: turnBudget,
         ...(offloadStore === undefined ? {} : { offload: offloadStore }),
-        maxSteps: MAX_TOOL_ROUNDS,
+        maxSteps: turnRounds,
         ctx: { ...safety, ...memoryContext(), ...((backgroundSourceTaint || turnReplyContext && !turnReplyOwnAuthored) ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
         step: async (tools, turns) => {
           const added = await consumeRound();
