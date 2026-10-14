@@ -248,7 +248,7 @@ export const telegramMessageUpdateSchema = z.strictObject({
     // Bot API MessageOrigin. The runtime reads only that the message is a forward.
     forward_origin: z.looseObject({ type: z.enum(['user', 'hidden_user', 'chat', 'channel']), date: z.int().positive() }).optional(),
     forward_from: z.looseObject({ id: z.int().positive(), is_bot: z.boolean() }).optional(),
-    forward_from_chat: z.looseObject({ id: z.int(), type: z.string() }).optional(),
+    forward_from_chat: z.looseObject({ id: z.int(), type: z.enum(['private', 'group', 'supergroup', 'channel']) }).optional(),
     forward_from_message_id: z.int().positive().optional(),
     forward_signature: z.string().min(1).max(256).optional(),
     forward_sender_name: z.string().min(1).max(256).optional(),

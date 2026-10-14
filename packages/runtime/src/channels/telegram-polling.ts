@@ -12,6 +12,7 @@ export type TelegramMedia = Readonly<{
   fileName: string | null;
   mimeType: string | null;
   fileSize: number | null;
+  forwarded?: true;
 }>;
 
 export type TelegramInboundTurn = OwnerInboundTurn;
@@ -164,7 +165,7 @@ export class TelegramPollingAdapter {
         sourceTaint: 'external' as const,
         provenance: replyProvenance(message.reply_to_message, message.from.id, message.chat.type),
       }) } : {}),
-      ...(media ? { media: Object.freeze(media) } : {}),
+      ...(media ? { media: Object.freeze(message.forward_origin === undefined ? media : { ...media, forwarded: true as const }) } : {}),
     });
   }
 }

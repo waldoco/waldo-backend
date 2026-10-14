@@ -14,6 +14,11 @@ describe('telegram media', () => {
     expect(loaded).toEqual({ parts: [{ authorship: 'media_note', text: '[Owner sent a photo, attached.]' }], attachment: { kind: 'image', mime_type: 'image/jpeg', filename: 'photo.jpg', data_base64: 'AQID' } });
   });
 
+  it('says when the media it notes was forwarded', async () => {
+    const forwarded = await loadTelegramMedia({ ...photo, forwarded: true }, { download: async () => new Uint8Array([1, 2, 3]) });
+    expect(forwarded.parts).toEqual([{ authorship: 'media_note', text: '[Owner sent a forwarded photo, attached.]' }]);
+  });
+
   it('reads supported documents by extension and explains the ones it cannot read', async () => {
     const bytes = async () => new Uint8Array([104, 105]);
     const pdf = await loadTelegramMedia({ kind: 'document', fileId: 'd', fileName: 'Plan.PDF', mimeType: null, fileSize: 2 }, { download: bytes });

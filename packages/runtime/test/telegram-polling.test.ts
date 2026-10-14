@@ -71,6 +71,13 @@ describe('TelegramPollingAdapter', () => {
     expect((await adapter.poll(0)).accepted).toEqual([{ updateId: 20, messageId: null, senderId: 7, chatId: 9, sentAt: null, text: 'browse https://x.test', parts: [{ authorship: 'owner', text: 'browse https://x.test' }] }]);
   });
 
+  it('marks the media of a forward with no caption as forwarded', async () => {
+    const owner = { from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' } };
+    const origin = { forward_origin: { type: 'hidden_user', date: 1, sender_user_name: 'Sam' }, forward_sender_name: 'Sam', forward_date: 1 };
+    const polled = await new TelegramPollingAdapter({ async getUpdates() { return [{ update_id: 30, message: { ...owner, ...origin, photo: [{ file_id: 'f', file_unique_id: 'fu', width: 9, height: 9 }] } }]; } }, 30).poll(0);
+    expect(polled.accepted[0]).toMatchObject({ text: '', parts: [], media: { kind: 'photo', fileId: 'f', forwarded: true } });
+  });
+
   it('reads a forward in the shape Telegram sends as forwarded text, a quote inside it included; a forward origin without its date stays unsupported', async () => {
     // Bot API servers send forward_origin together with the legacy forward_* fields (tdlib/telegram-bot-api Client.cpp).
     const origin = { forward_origin: { type: 'user', date: 1_700_000_000, sender_user: { id: 88, is_bot: false, first_name: 'Sam' } }, forward_from: { id: 88, is_bot: false, first_name: 'Sam' }, forward_date: 1_700_000_000 };

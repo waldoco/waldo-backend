@@ -30,14 +30,14 @@ describe('channel-neutral owner conversation seam', () => {
     });
   }
   it('Telegram adapter preserves existing trace and conversation IDs', () => {
-    expect(telegramTurnEnvelope(ownerTyped({ updateId: 12, chatId: 7, text: 'hello' }) as never)).toEqual({ traceId: 'tg-12', conversationRef: 'telegram-7', surface: 'telegram', text: 'hello', parts: [{ authorship: 'owner', text: 'hello' }], presentation: { surface: 'telegram', commands: ['/stop', '/ledger'], delivery: { text: true, approval: 'native_buttons', attachments: false, reactions: true } } });
+    expect(telegramTurnEnvelope(ownerTyped({ updateId: 12, messageId: null, senderId: 7, chatId: 7, sentAt: null, text: 'hello' }))).toEqual({ traceId: 'tg-12', conversationRef: 'telegram-7', surface: 'telegram', text: 'hello', parts: [{ authorship: 'owner', text: 'hello' }], presentation: { surface: 'telegram', commands: ['/stop', '/ledger'], delivery: { text: true, approval: 'native_buttons', attachments: false, reactions: true } } });
   });
   it('WhatsApp compatibility adapter no longer labels persisted entries Telegram', async () => {
     const entries: ConversationEntry[] = [];
     const args: Parameters<typeof createTelegramResponder> = ['fixture-key', { load: async () => ({ entries: [], leafId: null }), save: async rows => { entries.push(...rows); } }];
     args[20] = 'whatsapp';
     const responder = createTelegramResponder(...args);
-    expect(await responder.respond(ownerTyped({ updateId: 9000000000001, chatId: 777, text: 'hello' }) as never, time)).toBe('pong');
+    expect(await responder.respond(ownerTyped({ updateId: 9000000000001, messageId: null, senderId: 777, chatId: 777, sentAt: null, text: 'hello' }), time)).toBe('pong');
     expect(entries[0]).toMatchObject({ id: 'whatsapp-9000000000001', chatId: 'whatsapp-777', surface: 'whatsapp' });
   });
   it('approval policy remains identical across transports', () => {
@@ -50,12 +50,12 @@ it('same numeric transport sequence does not collide across host surfaces', asyn
   const { ownerTurnTrace } = await import('../src/channels/owner-turn-envelope');
   expect(ownerTurnTrace('telegram', 12)).toBe('tg-12');
   expect(ownerTurnTrace('whatsapp', 12)).toBe('whatsapp-12');
-  expect(telegramTurnEnvelope(ownerTyped({ updateId: 12, chatId: 7, text: 'same id' }) as never, 'whatsapp').traceId).toBe(ownerTurnTrace('whatsapp', 12));
+  expect(telegramTurnEnvelope(ownerTyped({ updateId: 12, messageId: null, senderId: 7, chatId: 7, sentAt: null, text: 'same id' }), 'whatsapp').traceId).toBe(ownerTurnTrace('whatsapp', 12));
 });
 
 const replyTo = { surface: 'telegram', messageId: '9', conversationRef: 'telegram-7', authorId: '7', authorIsBot: false, text: 'QUOTE_TARGET waiting for export review', truncated: false, sourceTaint: 'external' as const };
 it('forwards opaque reply ids on the channel-neutral envelope', () => {
-  expect(telegramTurnEnvelope(ownerTyped({ updateId: 15, chatId: 7, text: '?', replyTo }) as never).replyTo).toEqual(replyTo);
+  expect(telegramTurnEnvelope(ownerTyped({ updateId: 15, messageId: null, senderId: 7, chatId: 7, sentAt: null, text: '?', replyTo })).replyTo).toEqual(replyTo);
 });
 it('quote stays ephemeral, out of owner history, and is not carried into a later turn', async () => {
   captured.inputs = [];

@@ -52,7 +52,7 @@ export const toBase64 = (bytes: Uint8Array): string => {
 // The note joins the conversation so later turns know what was shared; the bytes ride only on the turn
 // that received them. A transcript is its own part: the speaker may be someone other than the owner.
 export const loadTelegramMedia = async (media: TelegramMedia, { download, transcribe }: MediaReaders): Promise<LoadedMedia> => {
-  const what = label(media);
+  const what = `${media.forwarded ? 'forwarded ' : ''}${label(media)}`;
   if (media.kind === 'voice' || media.kind === 'audio') return transcribeMedia(media, what, download, transcribe);
   const readable = readableAs(media);
   if (!readable) return { parts: noted(`[Owner sent a ${what}. This file type cannot be read yet.]`) };

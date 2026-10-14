@@ -416,6 +416,13 @@ describe('telegram gate-2 shapes', () => {
     }
   });
 
+  it('keeps the message gate strict: a field it does not name is refused', () => {
+    for (const extra of [{ sticker: { file_id: 's' } }, { video_note: { file_id: 'v' } }, { not_a_telegram_field: true }]) {
+      expect(telegramMessageUpdateSchema.safeParse({ ...baseTgMessage, message: { ...baseTgMessage.message, ...extra } }).success).toBe(false);
+    }
+    expect(telegramMessageUpdateSchema.safeParse({ ...baseTgMessage, message: { ...baseTgMessage.message, forward_origin: { type: 'chat', date: 1 }, forward_from_chat: { id: -1, type: 'secret' } } }).success).toBe(false);
+  });
+
   it('rejects a forward origin without its date, and legacy forward fields without a forward origin', () => {
     const parse = (fields: Record<string, unknown>) => telegramMessageUpdateSchema.safeParse({ ...baseTgMessage, message: { ...baseTgMessage.message, ...fields } }).success;
     expect(parse({ forward_origin: { type: 'user' } })).toBe(false);

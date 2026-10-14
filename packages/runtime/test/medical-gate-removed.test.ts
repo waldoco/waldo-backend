@@ -23,7 +23,7 @@ const { HOOK_REGISTRY } = await import('../src/hooks/registry');
 describe('regex medical gate removed', () => {
   it('a model output with dose wording passes through in one call, with no redirect retry', async () => {
     const responder = createTelegramResponder('test-key');
-    const text = await responder.respond(ownerTyped({ updateId: 1, chatId: 7, text: 'what is in my notes?' }) as never, (_name, run) => run());
+    const text = await responder.respond(ownerTyped({ updateId: 1, messageId: null, senderId: 7, chatId: 7, sentAt: null, text: 'what is in my notes?' }), (_name, run) => run());
     expect(text).toBe(DOSE_TEXT);
     expect(requests).toHaveLength(1);
   });
