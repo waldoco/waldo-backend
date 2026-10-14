@@ -2398,3 +2398,27 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
   - seven owner decisions (budget, #1120 S0, #1114, #1185 keys, a batched deploy with #1189's GCP steps first, #1133, B4 consent);
   - housekeeping: plant S1 again, the Air session ends at about 08:33Z.
 - **The review session (01:41Z):** #1193 needs the owner's word on the 60 s cut and the side-table design.
+
+## 04:22Z — catch-up, 02:14Z to 04:22Z (owner awake at 02:14Z, then out; demo today)
+
+- **Owner rulings:** the morning rulings are digest item 37. At 03:15Z the owner said the Mac merges everything itself; the gate still applies, and deploys are excluded.
+- **Gmail push (row 30):**
+  - The Google Cloud setup is done in the OAuth app's project.
+  - #1175 was merged by the owner at 03:12Z. #1206 was merged by the Mac at 03:45Z, under the gate: the review's PASS WITH NITS 6160271721, CI 6/6, and the advisor.
+  - The edge was deployed at `d3617e1d`.
+  - Migration `20261013150000`, first attempt (03:42Z): stopped at `local_forbidden_input`, before any write. Cause: pnpm resolved from PATH to the corepack shim, which fetched pnpm 12.
+  - Second attempt (04:06Z): applied from a fresh tree at `189c7698` with the pinned pnpm 10. 58 applied, 0 pending (6160668855).
+  - Renumbers now due: #1133, #1127 and #1161.
+  - The owner decides on rotating a credential exposed in the 03:42Z attempt; details are in the owner chat.
+- **Staging:** the Worker is at `ea923b1f`, version `18a40222`, deployed by the owner at 03:12Z. **The next owner deploy:** delete the staging secret `WALDO_MCP_SERVERS` (per #1147), then deploy from a clean tree at the tip; the rollback is `18a40222`.
+- **Landed under the gate:**
+  - by the lead: #1147, #1204, #1203, #1205, #1192 (B3) and #1201 (120 s);
+  - by the Mac: #1206.
+
+  The tip is `189c7698`.
+- **Mac lanes:**
+  - **R:** done; #1192 landed.
+  - **A:** #1186 is at `47ad5417` (M2/M3) and carries #1180. It waits on the review session; the lead's gate is 6160634063. The lead filed #1210 (per-lane backoff); the Mac builds it after #1186 lands.
+  - **C:** A1 is #1209 at `1d1e386d`, CI 6/6. It waits on the lead's voice-note call (6160714254).
+  - **T:** the browse `auth_failed` guard PR, then the #1201 fence follow-up. M1 for `use_mac` is withdrawn again, because `use_mac` is Ashish's.
+- **Usage:** 26% at 04:22Z, with the reset at 08:30Z. No new lanes until the burn allows.
