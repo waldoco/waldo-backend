@@ -222,6 +222,9 @@ type OwnerRuntime = Readonly<{
 }>;
 
 const LATE_FIRE_MS = 5 * 60_000;
+// The last message row of one chain. Every chain of an owner shares one history store, so the store's own leaf can sit in another chain.
+const chainLeaf = (entries: readonly ConversationEntry[], chatId: string): string | null =>
+  [...entries].reverse().find(entry => entry.chatId === chatId && entry.role !== 'compaction')?.id ?? null;
 const ALARM_FAILURES = 'owner_alarm_failures_v1';
 // The round-robin lanes of an owner alarm pass, by their index in owner_alarm_last_v1.
 const ROUND_ROBIN = ['inbox', 'transport', 'schedule', 'browser'] as const;
@@ -768,9 +771,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
 
   // Writes a scheduled message as an assistant row at the end of the owner's app transcript, and answers with the row's id.
   private appDeliveryFor(authority: OwnerRuntimeAuthority): (text: string) => Promise<string> {
-    return text => this.appAssistantRow({ subject: authority.doName, occurrence: `scheduled:${crypto.randomUUID()}`, text: 'Deliver a scheduled message.' }, ({ leafId }, ownerRef) => {
-      const id = `scheduled-${crypto.randomUUID()}`;
-      return { entry: { id, ownerId: ownerRef, chatId: ownerChainRef('app', ownerRef), parentId: leafId, threadAnchorId: null, surface: 'app',
+    return text => this.appAssistantRow({ subject: authority.doName, occurrence: `scheduled:${crypto.randomUUID()}`, text: 'Deliver a scheduled message.' }, ({ entries }, ownerRef) => {
+      const id = `scheduled-${crypto.randomUUID()}`, chatId = ownerChainRef('app', ownerRef);
+      return { entry: { id, ownerId: ownerRef, chatId, parentId: chainLeaf(entries, chatId), threadAnchorId: null, surface: 'app',
         modelPayload: text, appPayload: text, modelProjection: { mode: 'include' }, role: 'assistant', createdAt: Date.now() }, leafId: id };
     });
   }
@@ -792,11 +795,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const thread = threadOfChain(record.conversationRef) ?? undefined;
       try {
         await this.appAssistantRow({ subject: found.authority.doName, occurrence: `notice:${record.id}`, text: 'Tell the owner a message did not finish.' }, ({ entries, leafId }, ownerRef) => {
-          const id = `${record.id}-did-not-finish`, parentId = entries.some(entry => entry.id === record.id) ? record.id : leafId;
-          return { entry: { id, ownerId: ownerRef, chatId: thread ? threadChainRef(ownerRef, thread) : ownerChainRef('app', ownerRef), parentId, threadAnchorId: null, surface: 'app',
+          const id = `${record.id}-did-not-finish`, chatId = thread ? threadChainRef(ownerRef, thread) : ownerChainRef('app', ownerRef);
+          const last = chainLeaf(entries, chatId), parentId = entries.some(entry => entry.id === record.id) ? record.id : last;
+          return { entry: { id, ownerId: ownerRef, chatId, parentId, threadAnchorId: null, surface: 'app',
             modelPayload: text, appPayload: text, modelProjection: { mode: 'include' }, role: 'assistant', createdAt: Date.now(),
             operation: { id: record.id, state: 'interrupted' } },
-          leafId: leafId === null || parentId === leafId ? id : leafId };
+          leafId: leafId === null || parentId === leafId || parentId === last ? id : leafId };
         }, work => { let written!: ReturnType<typeof work>; this.appInbox.closeNotice(record.id, 'written', () => { written = work(); }); return written; }, thread);
       } catch (error) {
         if (error instanceof ClosedRunError) continue;

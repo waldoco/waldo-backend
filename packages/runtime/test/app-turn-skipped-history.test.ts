@@ -101,6 +101,23 @@ describe('an app turn over a history that holds a row failing the entry shape', 
     });
   });
 
+  // Every chain of an owner shares one store. An older build hung a scheduled app row under the last iMessage row.
+  it('a row stored under another chain\'s row loads on its own chain, and the next turn answers', async () => {
+    const name = 'turn-cross-chain';
+    const IM = JSON.stringify(['imessage', 'imb_fixture', 'ima_fixture', 'iMessage;-;friend@example.com']);
+    const im = (entry: Row): Row => ({ ...entry, chatId: IM, surface: 'imessage' });
+    const rows = [user('u1', 'First question.', null), reply('u1-reply', 'First answer.', 'u1'),
+      im(user('i1', 'Texted question.', null)), im(reply('i1-reply', 'Texted answer.', 'i1')), reply('s1', 'Scheduled note.', 'i1-reply')];
+    await withOwner(name, history(rows, 's1'), async (owner, state) => {
+      const store = canonicalOwnerConversationStore(state.storage, { invocation: { verified_authority: { principal_ref: PRINCIPAL, tenant_ref: TENANT } }, assertCurrent: async () => undefined } as never);
+      expect((await store.load()).entries.map(entry => [entry.id, entry.parentId])).toEqual([['u1', null], ['u1-reply', 'u1'], ['i1', null], ['i1-reply', 'i1'], ['s1', 'u1-reply']]);
+      const turn = await send(owner, state, name, 'client-cross-0001', 'Next question.');
+      expect(turn.outcome).toBe('completed');
+      expect(state.storage.kv.get<Row>(`${PREFIX}conv:0000000004`)).toEqual(rows[4]);
+      expect(model.requests.at(-1)).toContain('Scheduled note.');
+    });
+  });
+
   it('loading for a turn writes nothing to storage', async () => {
     const rows = [user('u1', 'First question.', null), broken('broken-1', 'u1'), user('u2', 'Second question.', 'broken-1')];
     await withOwner('turn-load-readonly', history(rows, 'u2'), async (_owner, state) => {
