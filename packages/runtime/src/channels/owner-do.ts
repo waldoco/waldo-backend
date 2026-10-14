@@ -315,6 +315,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (row.closedAt !== undefined) return;
       row.closedAt = Date.now(); row.body = ''; row.reason = reason;
       if (row.state === 'claimed') row.state = awaitingDelivery ? 'awaiting_delivery' : 'quarantined';
+      // A steer this run heard is answered by the final committed here; left consumed, recovery would report it uncertain.
+      if (row.state === 'awaiting_delivery') for (const child of rows) if (child.control?.kind === 'steer' && child.control.targetRun === row.runId && child.state === 'consumed') {
+        child.state = 'completed'; child.reason = 'target_final_committed'; child.body = '';
+      }
       this.ctx.storage.kv.put('telegram_owner_inbox_v1', rows);
       this.ctx.storage.kv.put('telegram_owner_inbox_due_v1', ownerInboxDue(rows, Date.now()));
     });
