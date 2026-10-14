@@ -11,7 +11,7 @@ import type { LLMGatewayRequest } from '../src/llm/provider';
 // A directory-backed Telegram owner asks for their console in their own words. The model calls send_console_link, the
 // host mints the one-time link and sends it straight to the chat. Text capture is on, as on staging, so every sink that
 // could carry the link actually receives the turn's text.
-const world = vi.hoisted(() => ({ requests: [] as string[], outputs: [] as string[], sends: [] as { text: string; message_id: number }[], next: 500, otlp: [] as string[],
+const world = vi.hoisted(() => ({ requests: [] as string[], outputs: [] as string[], sends: [] as { text: string; message_id: number; chat?: number }[], next: 500, otlp: [] as string[],
   firstTool: undefined as string | undefined, during: undefined as (() => Promise<void>) | undefined }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
@@ -34,7 +34,7 @@ vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof im
   if (method === 'getMe') return { username: 'fixture_bot' };
   if (method !== 'sendMessage') return true;
   const message_id = world.next++;
-  world.sends.push({ text: body.text ?? '', message_id });
+  world.sends.push({ text: body.text ?? '', message_id, chat: body.chat_id });
   return { message_id, chat: { id: body.chat_id, type: 'private' }, text: body.text };
 } }));
 const { OwnerDO } = await import('../src/channels/owner-do');
@@ -124,6 +124,7 @@ it('the owner\'s own request sends one link to their Telegram chat; it reaches n
     expect(await owner.send(940001, { text: 'Can you send me my console link?' })).toBe('awaiting_delivery');
     expect(linkSends()).toHaveLength(1);
     const [sent] = linkSends();
+    expect(sent!.chat).toBe(42);
     const link = /https:\/\/\S+/.exec(sent!.text)![0];
     const ticket = ticketOf(sent!.text);
     expect(link.startsWith(`${ORIGIN}/console?t=c1.`)).toBe(true);

@@ -1,8 +1,13 @@
+import { env } from 'cloudflare:workers';
+import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
 import { handlerAllowlistMatchesAcl, sendConsoleLinkResultSchema, type SendConsoleLinkResult } from '@waldo/contracts';
 import { consoleLinkHandler, type ConsoleLinkTurn } from '../src/tools/live/console-link';
 import { consoleLinkSender, consoleLinkText, CREDENTIAL_REPLY_TEXT, maskCredentialReply, recordCredentialMessage, type ConsoleLinkRoute } from '../src/channels/console-link';
-import { ClosedRunError } from '../src/channels/run-effect-scope';
+import { ClosedRunError, type RunEffectScope } from '../src/channels/run-effect-scope';
+import { iMessageConsoleRoute } from '../src/channels/imessage/console-link';
+import { IMessageFinalOutbox } from '../src/channels/imessage/final-outbox';
+import type { IMessageInboxRecord } from '../src/channels/imessage/owner-inbox';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 import { TOOL_CLAIM_EFFECT } from '../src/hooks/claim-verify-effects';
 import { TOOL_ARG_SCHEMAS } from '../src/hooks/registry';
@@ -173,6 +178,55 @@ describe('credential messages: a reply never carries a sent link back into a tur
     expect(newest.message.reply_to_message.text).toBe(CREDENTIAL_REPLY_TEXT);
     const oldest = update({ ...linkMessage, message_id: 1 });
     expect(maskCredentialReply(oldest, store)).toBe(oldest);
+  });
+});
+
+describe('iMessage console route: the link answers only the inbound message this run is executing', () => {
+  const running = (attempt: string) => ({ id: 'imsg-1', updateId: 1, dedupKey: 'dedup-1', digest: 'digest-1', text: REQUEST, conversationRef: 'imessage-chain',
+    binding: {} as IMessageInboxRecord['binding'], bindingDigest: 'binding-1', revision: '3', environment: 'test', bridgeDoName: 'bridge-1', ownerDoName: 'owner-1',
+    commandId: 'wim_reply-1', occurredAt: 1, admittedAt: 1, state: 'running', attempt }) satisfies IMessageInboxRecord;
+  const scope = (state: DurableObjectState, runId: string, attempt: string): RunEffectScope => ({
+    runId, attempt, deadline: Date.now() + 60_000, signal: new AbortController().signal, admit: () => undefined, commit: work => state.storage.transactionSync(work),
+  });
+  const withRoute = (name: string, record: IMessageInboxRecord | null, run: (route: Extract<ConsoleLinkRoute, { surface: string }>, state: DurableObjectState) => Promise<void>) =>
+    runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+      const route = iMessageConsoleRoute(state.storage, () => record);
+      if ('unsupported' in route) throw new Error('the iMessage route always delivers');
+      await run(route, state);
+    });
+
+  it('freezes one console record for the running message, on its bridge, under its own command id', async () => {
+    await withRoute('console-route-current', running('attempt-1'), async (route, state) => {
+      const turn = { turnId: 'imessage-1', runScope: scope(state, 'imsg-1', 'attempt-1') };
+      expect(route.sent(turn)).toBe(false);
+      expect(await route.deliver(consoleLinkText(LINK), turn)).toBe(true);
+      expect(route.sent(turn)).toBe(true);
+      const [row] = new IMessageFinalOutbox(state.storage).records();
+      expect(row).toMatchObject({ replyRef: 'console:imsg-1', text: consoleLinkText(LINK), bridgeDoName: 'bridge-1', ownerDoName: 'owner-1', revision: '3', bindingDigest: 'binding-1', state: 'frozen' });
+      expect(row!.commandId).toMatch(/^wcl_[a-f0-9]{40}$/);
+    });
+  });
+
+  it.each([
+    ['another inbound message', 'imsg-2', 'attempt-1'],
+    ['an earlier attempt at this message', 'imsg-1', 'attempt-0'],
+  ])('refuses a run scope for %s and freezes nothing', async (_label, runId, attempt) => {
+    await withRoute(`console-route-${runId}-${attempt}`, running('attempt-1'), async (route, state) => {
+      const turn = { turnId: 'imessage-1', runScope: scope(state, runId, attempt) };
+      expect(() => route.sent(turn)).toThrow(ClosedRunError);
+      await expect(route.deliver(consoleLinkText(LINK), turn)).rejects.toThrow(ClosedRunError);
+      expect(new IMessageFinalOutbox(state.storage).records()).toEqual([]);
+    });
+  });
+
+  it('refuses a turn with no run scope, or when no iMessage is running', async () => {
+    await withRoute('console-route-unscoped', running('attempt-1'), async route => {
+      await expect(route.deliver(consoleLinkText(LINK), { turnId: 'imessage-1' })).rejects.toThrow(ClosedRunError);
+    });
+    await withRoute('console-route-idle', null, async (route, state) => {
+      await expect(route.deliver(consoleLinkText(LINK), { turnId: 'imessage-1', runScope: scope(state, 'imsg-1', 'attempt-1') })).rejects.toThrow(ClosedRunError);
+      expect(new IMessageFinalOutbox(state.storage).records()).toEqual([]);
+    });
   });
 });
 
