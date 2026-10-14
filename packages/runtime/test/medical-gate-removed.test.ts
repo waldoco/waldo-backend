@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { describe, expect, it, vi } from 'vitest';
 
 const requests: Array<{ instructions?: string }> = [];
@@ -22,7 +23,7 @@ const { HOOK_REGISTRY } = await import('../src/hooks/registry');
 describe('regex medical gate removed', () => {
   it('a model output with dose wording passes through in one call, with no redirect retry', async () => {
     const responder = createTelegramResponder('test-key');
-    const text = await responder.respond({ updateId: 1, chatId: 7, text: 'what is in my notes?' } as never, (_name, run) => run());
+    const text = await responder.respond(ownerTyped({ updateId: 1, chatId: 7, text: 'what is in my notes?' }) as never, (_name, run) => run());
     expect(text).toBe(DOSE_TEXT);
     expect(requests).toHaveLength(1);
   });

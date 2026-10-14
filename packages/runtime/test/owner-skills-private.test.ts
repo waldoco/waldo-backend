@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { env, runInDurableObject } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
 import { claimStore } from "../src/memory/claims";
@@ -80,7 +81,7 @@ const responder = (skills?: LocalSystemSkillBinding) => {
   args[20] = skills;
   return createOwnerResponder(...args);
 };
-const turn = (id = "private-skill") => ({
+const turn = (id = "private-skill") => ownerTyped({
   traceId: id,
   conversationRef: "app-fixture",
   surface: "app",
@@ -153,7 +154,7 @@ it("paused repository resumed after close cannot reach model or persist", async 
     },
   };
   const pending = responder(skills).respond(
-    { ...turn(), runScope: scope },
+    ownerTyped({ ...turn(), runScope: scope }),
     time,
   );
   await ready;

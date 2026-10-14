@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryCalendarArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type ConversationEntry } from '@waldo/contracts';
 import type { TelegramMedia } from '../src/channels/telegram-polling';
@@ -52,7 +53,7 @@ describe('media-scope: media and voice retain tools and conversation history', (
         admit: () => undefined, commit: <T>(work: () => T) => work(),
       } };
 
-      expect(await responder.respond(turn, time)).toBe('Calendar checked.');
+      expect(await responder.respond(ownerTyped(turn), time)).toBe('Calendar checked.');
       expect(calendar).toHaveBeenCalledTimes(1);
       expect(prepare).toHaveBeenCalledTimes(1);
       expect(model.requests).toHaveLength(2);
@@ -76,7 +77,7 @@ describe('media-scope: media and voice retain tools and conversation history', (
       model.requests = [];
       model.queryCalendar = false;
       const restored = createTelegramResponder(...args);
-      await restored.respond({ ...turn, updateId: 13, messageId: 13, text: 'Thanks for checking.', media: undefined }, time);
+      await restored.respond(ownerTyped({ ...turn, updateId: 13, messageId: 13, text: 'Thanks for checking.', media: undefined }), time);
       expect(model.requests).toHaveLength(1);
       const next = JSON.stringify(model.requests[0]);
       expect(next).toContain(priorOwner);

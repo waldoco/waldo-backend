@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildSessionState, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, routingPolicySchema } from '@waldo/contracts';
 import { OpenAIResponsesAdapter } from '../src/llm/openai';
@@ -379,7 +380,7 @@ describe('one owner turn through the responder', () => {
     // The calendar read is offered without its connection check, and takes 65 s.
     const { eligible: _connected, ...slowCalendar } = calendar(slowRead);
     const responder = createOwnerResponder(SYNTHETIC_KEY, undefined, undefined, undefined, clock, [slowCalendar]);
-    const run = await settle(responder.respond({ traceId: 'slow-turn', conversationRef: 'owner', surface: 'telegram', text: 'What is on my calendar?', memoryWrites: false, runScope: scope }, sameTime));
+    const run = await settle(responder.respond(ownerTyped({ traceId: 'slow-turn', conversationRef: 'owner', surface: 'telegram', text: 'What is on my calendar?', memoryWrites: false, runScope: scope }), sameTime));
     expect(api.requests).toHaveLength(2);
     // The answer call starts with 25 s of the turn left and is cut there, not at its own 30 s limit.
     expect(api.ended[1]! - api.requests[1]!.at).toBe(TURN_TIME_BUDGET_MS - slowRead);

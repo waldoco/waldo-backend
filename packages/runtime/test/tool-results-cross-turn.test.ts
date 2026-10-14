@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -136,7 +137,7 @@ describe('an earlier tool result in the ledger, then one owner turn', () => {
       await responder.prompt('job-brief', 'owner', 'Write the morning brief.', async (_hop, work) => work());
       const job = requests.filter(request => request.response_format === undefined);
       requests.length = 0;
-      await responder.respond({ traceId: 'owner-ask', conversationRef: 'owner', surface: 'telegram', text: 'what did you find in my mail?' }, async (_hop, work) => work());
+      await responder.respond(ownerTyped({ traceId: 'owner-ask', conversationRef: 'owner', surface: 'telegram', text: 'what did you find in my mail?' }), async (_hop, work) => work());
       const owner = requests.filter(request => request.response_format === undefined);
       expect(job.length).toBeGreaterThan(0);
       expect(JSON.stringify(job)).not.toContain(MARKER);
@@ -157,7 +158,7 @@ describe('an earlier tool result in the ledger, then one owner turn', () => {
       } };
       const { createOwnerResponder } = await import('../src/channels/owner-turn');
       const responder = createOwnerResponder('fixture', undefined, undefined, undefined, undefined, [], undefined, false, toolOutputLedger(state.storage), undefined, gateway, undefined, { suppressMemory: true, stripLiveTools: true });
-      await responder.respond({ traceId: 'probe-ask', conversationRef: 'owner', surface: 'telegram', text: 'what did you find in my mail?' }, async (_hop, work) => work());
+      await responder.respond(ownerTyped({ traceId: 'probe-ask', conversationRef: 'owner', surface: 'telegram', text: 'what did you find in my mail?' }), async (_hop, work) => work());
       const replies = requests.filter(request => request.response_format === undefined);
       expect(replies.length).toBeGreaterThan(0);
       expect(JSON.stringify(replies)).not.toContain(MARKER);
