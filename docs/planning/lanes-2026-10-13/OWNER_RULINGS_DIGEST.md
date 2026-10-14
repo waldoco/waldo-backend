@@ -1,4 +1,4 @@
-# Owner rulings digest, as of 13 Oct 2026, 21:35Z
+# Owner rulings digest, as of 14 Oct 2026, 02:13Z
 
 This digest lets cloud sessions follow the owner's rulings. The full notes live in the orchestrator's memory on the owner's Mac, which cloud sessions can't read. Rulings decide what is wanted; source and tests decide what is shipped. Where a later ruling conflicts with an earlier one, the later one wins.
 
@@ -96,6 +96,13 @@ This digest lets cloud sessions follow the owner's rulings. The full notes live 
     - the advisor.
 
     Builders' in-flight branches stay theirs unless the Mac posts a claim first.
+
+37. **The morning rulings (14 Oct, about 02:10Z):**
+    - **#1193:** accept the time budget at mature-harness convention. The Mac recommends 120 s per interactive turn, with long errands going to C7 background tasks.
+    - **#1120:** a working browser comes first. The S0 network-block test is waived for now, and M-1 lands with it.
+    - **Staging deploy:** go.
+    - **#1133**, the 30-day sign-in: yes.
+    - **B4**, semantic recall: yes. That covers the Workers AI embeddings and Vectorize consent.
 
 ## Still open (ask the owner)
 
