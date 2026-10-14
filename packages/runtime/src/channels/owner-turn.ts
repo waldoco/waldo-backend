@@ -9,7 +9,7 @@ import type { OwnerTurnEnvelope } from './owner-turn-envelope';
 import { receivedView, renderForModel, type InboundPart } from './owner-inbound-turn';
 import { ownerContextHandler } from '../tools/live/owner-context';
 import {
-  deriveContextBudgetChars, EXTERNAL_ORIGIN_TOOLS, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, SANITISE_DESTINATION_POLICIES, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
+  deriveContextBudgetChars, EXTERNAL_ORIGIN_TOOLS, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, SANITISE_DESTINATION_POLICIES, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_PROVIDER, OPENAI_REASONING, routingPolicySchema, WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL,
   type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
 } from '@waldo/contracts';
 import type { ConversationModelMessage } from '@waldo/contracts';
@@ -69,6 +69,10 @@ export const ownerToolApproval = ({ tool }: { tool: string }): boolean => !EXTER
 const newSessionCanaryTokens = (): string[] =>
   Array.from({ length: 3 }, () => crypto.randomUUID().replaceAll('-', '').slice(0, 16));
 const MAX_TOOL_ROUNDS = 25;
+// Reasoning tokens count against a call's output cap, and OpenAI's reasoning guide asks for at least 25,000 tokens of
+// room for reasoning and output. Sol gets that room whatever effort it runs at; other models keep the 4,096 cap Luna
+// has run with.
+const OUTPUT_TOKENS: Readonly<Partial<Record<ModelName, number>>> = { [OPENAI_GPT_6_1_SOL_MODEL]: 25_000 };
 const EXTERNAL_DATA_MAX_BYTES = 4096;
 
 // Staging responder: the fixture invocation stands in for real per-user admission,
@@ -121,8 +125,9 @@ export const createOwnerResponder = (
   // A5b: delegate children record background-run rows (parent = this turn's trace). Optional:
   // the console and probes construct turns without the owner DO's run book.
   runs?: RunBook,
-  // Background memory consolidation uses its own model.
-  memoryModel: ModelName = OPENAI_GPT_6_LUNA_MODEL,
+  // Every call that is not an owner's own turn runs on this model: machine turns, reactions, titles, memory and the rest
+  // WALDO_AUXILIARY_MODEL lists.
+  auxiliaryModel: ModelName = WALDO_AUXILIARY_MODEL,
   // Browse-tool egress: the owner DO passes the parsed WALDO_EGRESS_ALLOWLIST deploy config.
   // Undefined keeps the hook fail-closed - browse tools deny every destination until the owner
   // names hosts. The non-global-address blocks apply regardless.
@@ -233,12 +238,17 @@ export const createOwnerResponder = (
       ...(callScope ?? privateRunScope ? { runScope: callScope ?? privateRunScope } : {}),
       trigger: 'user_message',
       policy: effectivePolicy,
-      renderRequest: () => ({
-        cache_key: cacheKey,
-        system, messages: userMessages.map(({ attachments: _names, ...message }) => message), max_tokens: 4096, temperature: 0.2,
-        ...(format ? { response_format: format } : {}), ...(attachments ? { attachments: [...attachments] } : {}),
-        ...(tools ? { tools: [...tools] } : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),
-      }),
+      renderRequest: ({ step }) => {
+        // The effort follows the model this attempt runs on, not the responder's chat model.
+        const effort = OPENAI_REASONING[step.model]?.effort;
+        return {
+          cache_key: cacheKey,
+          system, messages: userMessages.map(({ attachments: _names, ...message }) => message), max_tokens: OUTPUT_TOKENS[step.model] ?? 4_096, temperature: 0.2,
+          ...(effort ? { reasoning_effort: effort } : {}),
+          ...(format ? { response_format: format } : {}), ...(attachments ? { attachments: [...attachments] } : {}),
+          ...(tools ? { tools: [...tools] } : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),
+        };
+      },
     }, safety);
     await assertCurrent();
     privateRunScope?.admit();
@@ -567,6 +577,7 @@ export const createOwnerResponder = (
           };
           const browserImages = privateOwner?.skillHost?.browserAttachments?.(privateRunScope) ?? [];
           const attachments = [...(pending ?? []), ...browserImages];
+          // The reply step serves machine turns too (reminders, jobs, cards, briefs); only the owner's own turn gets the chat model.
           return complete(trace, 'reply',
           unboundSystem(),
           entries,
@@ -574,6 +585,7 @@ export const createOwnerResponder = (
           attachments.length ? attachments : undefined,
           tools,
           withholdHeldTurns(turns, output => holdsHeldTopic(output), output => narrowHeldJson(output, (value, tally) => withholdHeldItems(value, tally))),
+          ownerTurnActive ? undefined : auxiliaryModel,
           );
         },
         onTool: (event) => {
@@ -674,7 +686,7 @@ export const createOwnerResponder = (
       ...(health ? { health: () => healthRead ??= health(trace) } : {}),
       onPhase: (phase, previousMs) => log({ trace, hop: 'composer_phase', ms: previousMs, ok: true, detail: phase }),
     });
-    const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, privateRunScope, privateSystemSkills, { context: jobContext });
+    const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, privateRunScope, privateSystemSkills, { context: jobContext });
     control.route(scoped.control);
     try { return await work(scoped); }
     finally { control.unroute(scoped.control); }
@@ -744,7 +756,7 @@ export const createOwnerResponder = (
       const plan = compactionPlan(tree, leafId, live);
       if (!plan || tree.get(compactionId(plan.covers.to_id))) return;
       const started = Date.now();
-      const response = await complete(traceId, 'compaction', COMPACTION_INSTRUCTION, plan.input);
+      const response = await complete(traceId, 'compaction', COMPACTION_INSTRUCTION, plan.input, undefined, undefined, undefined, undefined, auxiliaryModel);
       const summary = response.text.trim();
       if (response.truncated || summary.length > COMPACTION.maxOutputTokens * BUDGET_CHARS_PER_TOKEN) { hop(false, 'truncated'); return; }
       if (!summary) { hop(false, 'empty'); return; }
@@ -769,7 +781,7 @@ export const createOwnerResponder = (
         const capturedTurn = { ...turn, memoryWrites };
         const preparedContext = privateOwner?.contextHost ? await privateOwner.contextHost.prepare(capturedTurn, turn.runScope) : undefined;
         const preparedSkills = privateOwner?.skillHost ? await privateOwner.skillHost.prepare(capturedTurn, preparedContext?.invocation.verified_authority.principal_ref ?? ownerId, turn.runScope) : undefined;
-        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}), ...(privateOwner?.watchStatus ? { watchStatus: privateOwner.watchStatus } : {}) });
+        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}), ...(privateOwner?.watchStatus ? { watchStatus: privateOwner.watchStatus } : {}) });
         control.route(scoped.control);
         scopedCompaction = scoped.compactIfDue;
         try { return await scoped.respond(capturedTurn, time); }
@@ -811,7 +823,7 @@ export const createOwnerResponder = (
       if (asOwner !== undefined) return asOwner;
       backgroundSourceTaint = sourceTaint ?? null;
       // Cards read in seconds, so a job's prompt gets half the provider budget; the guard keeps the opening and closing and cuts the data between.
-      const said = fitPromptToBudget(jobText, Math.floor(deriveContextBudgetChars(model, SANITISE_DESTINATION_POLICIES.internal_context.max_chars) / 2));
+      const said = fitPromptToBudget(jobText, Math.floor(deriveContextBudgetChars(auxiliaryModel, SANITISE_DESTINATION_POLICIES.internal_context.max_chars) / 2));
       backgroundCurrent = current;
       transientDecision = decision !== undefined;
       try {
@@ -835,7 +847,7 @@ export const createOwnerResponder = (
           // No byte cliff: dropping ALL owner context past a size made a decision with more known about the owner worse than
           // one with less. The profile is short owner sentences; the owner-direction is full context.
           const bounded = context;
-          return await time('background_decision', () => ask(id, 'background_decision', [messagingSystemPrompt([]), ownerClockLine(clock), bounded].filter(Boolean).join('\n\n'), said, decision));
+          return await time('background_decision', () => ask(id, 'background_decision', [messagingSystemPrompt([]), ownerClockLine(clock), bounded].filter(Boolean).join('\n\n'), said, decision, undefined, undefined, undefined, auxiliaryModel));
         }
         promptContext = turnContext ?? '';
         return await converse(id, conversationRef, said, time, false, surface, toolNames);
@@ -847,18 +859,18 @@ export const createOwnerResponder = (
       if (!memory) return { done: true, detail: 'no memory' };
       if (memory.incompleteTopics().length) return { done: false, detail: 'historical memory consolidation deferred: forgetting coverage incomplete' };
 
-      const raw = await ask(trace, 'nightly_memory', NIGHTLY_MEMORY_INSTRUCTION, nightlyInput(promptMemory()!, day), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, memoryModel);
+      const raw = await ask(trace, 'nightly_memory', NIGHTLY_MEMORY_INSTRUCTION, nightlyInput(promptMemory()!, day), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
       // The nightly pass is where the pinned blocks are curated.
       return { done: true, detail: applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`, undefined, sides ?? { owner: day }, false, undefined, true) };
     },
-    threadTitle: (trace, exchange, scope) => withCallDeadline(scope, scope.deadline, () => ask(trace, 'thread_title', THREAD_TITLE_INSTRUCTION, exchange, THREAD_TITLE_FORMAT, undefined, undefined, undefined, memoryModel, scope)),
+    threadTitle: (trace, exchange, scope) => withCallDeadline(scope, scope.deadline, () => ask(trace, 'thread_title', THREAD_TITLE_INSTRUCTION, exchange, THREAD_TITLE_FORMAT, undefined, undefined, undefined, auxiliaryModel, scope)),
     async migrate(trace, input) {
       const asOwner = await asOwnerJob(trace, job => job.migrate(trace, input));
       if (asOwner !== undefined) return asOwner;
       if (!memory) return 'no memory';
       if (holdsAnyHeldTopic()) throw new Error('historical memory migration deferred: forgetting coverage incomplete');
-      const raw = await ask(trace, 'memory_migration', MIGRATION_INSTRUCTION, input, { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, memoryModel);
+      const raw = await ask(trace, 'memory_migration', MIGRATION_INSTRUCTION, input, { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
       return applyClaimOps(memory, raw, new Date().toISOString(), 'owner agreed', undefined, { owner: input }, false);
     },
@@ -867,7 +879,7 @@ export const createOwnerResponder = (
       if (asOwner !== undefined) return asOwner;
       if (!memory || memory.claims().length === 0) return 'no claims';
       if (memory.incompleteTopics().length) return 'historical memory promotion deferred: forgetting coverage incomplete';
-      const raw = await ask(trace, 'constellation', PROMOTION_INSTRUCTION, promotionInput(memory), { name: 'promotion', schema: PROMOTION_SCHEMA });
+      const raw = await ask(trace, 'constellation', PROMOTION_INSTRUCTION, promotionInput(memory), { name: 'promotion', schema: PROMOTION_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
       return applyPromotion(memory, raw, new Date().toISOString(), (receipt) => log({
         trace, hop: 'constellation_evidence', ms: 0, ok: true,
@@ -877,15 +889,15 @@ export const createOwnerResponder = (
     },
     control,
     planDay: async (trace, input) => await asOwnerJob(trace, job => job.planDay(trace, input))
-      ?? ask(trace, 'day_plan', DAY_PLAN_INSTRUCTION, composeDayPlanInput(input, memory), { name: 'day_plan', schema: DAY_PLAN_SCHEMA }),
+      ?? ask(trace, 'day_plan', DAY_PLAN_INSTRUCTION, composeDayPlanInput(input, memory, auxiliaryModel), { name: 'day_plan', schema: DAY_PLAN_SCHEMA }, undefined, undefined, undefined, auxiliaryModel),
     chooseReaction: async (turn) => {
       if (turn.runScope && privateRunScope !== turn.runScope) {
-        return createOwnerResponder(openaiApiKey, undefined, undefined, log, clock, [], model, false, undefined, undefined, gateway, undefined, probeGuard, undefined, undefined, memoryModel, egressAllowlist, undefined, reactionChoices, turn.runScope).chooseReaction(turn);
+        return createOwnerResponder(openaiApiKey, undefined, undefined, log, clock, [], model, false, undefined, undefined, gateway, undefined, probeGuard, undefined, undefined, auxiliaryModel, egressAllowlist, undefined, reactionChoices, turn.runScope).chooseReaction(turn);
       }
       privateRunScope?.admit();
       const quote = await quoteContext(turn.replyTo);
       const gist = lastReply === undefined ? turn.text : `${turn.text}\n\n[Your reply just sent: ${lastReply.slice(0, 500)}]`;
-      return (JSON.parse(await ask(turn.traceId, 'reaction', reactionInstruction(reactionChoices), [gist, quote].filter(Boolean).join('\n\n'), { name: 'reaction', schema: reactionSchema(reactionChoices) })) as { reaction?: string }).reaction ?? null;
+      return (JSON.parse(await ask(turn.traceId, 'reaction', reactionInstruction(reactionChoices), [gist, quote].filter(Boolean).join('\n\n'), { name: 'reaction', schema: reactionSchema(reactionChoices) }, undefined, undefined, undefined, auxiliaryModel)) as { reaction?: string }).reaction ?? null;
     },
   };
 };
