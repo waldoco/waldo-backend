@@ -19,6 +19,7 @@ import { runToolLoop } from '../conversation/tool-loop';
 import { turnReceipt } from '../hooks/receipt-line';
 import { THREAD_TITLE_FORMAT, THREAD_TITLE_INSTRUCTION, threadOfChain } from './app-threads';
 import type { LoopEventLike } from '../hooks/claim-hook';
+import { doneClaimDesk, NOTE_DONE, NOTE_DONE_INSTRUCTION, type DoneClaimDesk } from '../hooks/done-claims';
 import { delegateTaskHandler, runChildLoop, SUBAGENT_SYSTEM_PROMPT, withDelegation } from '../conversation/subagent';
 import { inMemoryToolOutputStore } from '../conversation/tool-output-store';
 import { readToolOutputHandler } from '../tools/read-tool-output';
@@ -531,7 +532,8 @@ export const createOwnerResponder = (
           const unboundSystem = (): SystemPrompt => {
             const wrapped = skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined);
             const reasons = composed?.ok ? composed.prompt : undefined;
-            const behavior = messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation);
+            const claimsOffered = turnClaims !== undefined && turnHandlers.length > 0;
+            const behavior = [messagingSystemPrompt([...turnHandlers.map((handler) => handler.name), ...(claimsOffered ? [NOTE_DONE] : [])], surfacePresentation), ...(claimsOffered ? [NOTE_DONE_INSTRUCTION] : [])].join('\n\n');
             // The composer admitted the owner's shared health for this turn. REASONS already carries it when present.
             const healthPrompt = reasons === undefined ? request.composition.healthPrompt : undefined;
             const healthSection = healthPrompt ? `Shared health today (derived by the app from the owner's own wearable data):\n${healthPrompt}` : undefined;
@@ -580,6 +582,7 @@ export const createOwnerResponder = (
           pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: event.taint, origin: ownerTurnActive && !probeGuard?.stripLiveTools ? 'owner' : 'machine', summary: turnOnlyOutput.has(event.call.name) ? TURN_ONLY_OUTPUT : event.output, ...(thread ? { thread } : {}) });
         },
         ...(offerConnect ? { onConnect: offerConnect } : {}),
+        ...(turnClaims ? { claims: turnClaims } : {}),
       });
     },
   }, tree, undefined, pathObservers);
@@ -590,6 +593,8 @@ export const createOwnerResponder = (
   // Room left in the system prompt for owner memory: the sanitiser drops a system prompt over its limit whole.
   const systemRoom = (others: string) => SANITISE_DESTINATION_POLICIES.system_prompt.max_chars - others.length - 2_048;
   let turnToolEvents: LoopEventLike[] = [];
+  // The owner turn's done-claims, checked against turnToolEvents before the reply is delivered.
+  let turnClaims: DoneClaimDesk | undefined;
   const parseToolArgs = (raw: unknown, tool: string): unknown => {
     if (typeof raw !== 'string') return raw;
     try { return JSON.parse(raw); } catch (error) { log({ trace: traceId, hop: 'receipt_args_parse', ms: 0, ok: false, error: `${tool}: ${String(error).slice(0, 120)}` }); return undefined; }
@@ -681,6 +686,7 @@ export const createOwnerResponder = (
     traceId = id;
     ownerTurnActive = fromOwner;
     turnToolEvents = [];
+    turnClaims = fromOwner ? doneClaimDesk(() => turnToolEvents) : undefined;
     control.begin(fromOwner);
     try {
       const userEntry = tree.get(id) ?? { id, ownerId, chatId: conversationRef, parentId: conversationLeaves.get(conversationRef) ?? null, threadAnchorId: null, surface, modelPayload: said, appPayload: received, modelProjection: { mode: 'include' as const }, role:'user' as const, inputOrigin: fromOwner ? 'owner' as const : 'machine' as const, createdAt: Date.now() };
@@ -697,7 +703,10 @@ export const createOwnerResponder = (
       const reply = tree.get(publication.leafId)!.appPayload;
       // Native delivery reads durable history, so the visible effect receipt belongs in that row, as text and typed.
       const receipt = fromOwner ? await turnReceipt(turnToolEvents) : null;
-      const out = receipt ? `${reply}\n\n${receipt.line}` : reply;
+      // An unbacked claim is never delivered as done. The notice sits above the receipt line, which stays last for the app's receipt part.
+      const notice = turnClaims?.notice() ?? null;
+      const told = notice ? `${reply}\n\n${notice}` : reply;
+      const out = receipt ? `${told}\n\n${receipt.line}` : told;
       const redact = literalTextRedactor([...removedTopics], FORGOTTEN);
       const savedEntries = [tree.get(id)!, { ...tree.get(publication.leafId)!, ...(context ? { appPayload: out, ...(receipt ? { receipt } : {}) } : {}) }].map(entry => redactConversationEntry(entry, redact));
       await conversationStore?.save(savedEntries, publication.leafId, privateRunScope);

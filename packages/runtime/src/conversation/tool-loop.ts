@@ -5,6 +5,7 @@ import { CONNECT_BUTTON_SENT, CONNECT_BUTTON_UNSENT } from '../tools/live/connec
 import { ClosedRunError } from '../channels/run-effect-scope';
 import { FINAL_ANSWER_RESERVE_MS, TURN_TIME_BUDGET_MS, withCallDeadline } from '../llm/time-budget';
 import type { ToolOutputStore } from './tool-output-store';
+import { NOTE_DONE, type DoneClaimDesk } from '../hooks/done-claims';
 
 
 export const TOOL_OUTPUT_LIMIT = 16_000;
@@ -80,6 +81,9 @@ export async function runToolLoop(input: Readonly<{
   // the channel's offerConnect seam. Fired at most once per (service, reason) per turn. It answers
   // true when a connect button reached the owner, or the words the model gets instead.
   onConnect?: (intent: ConnectIntent) => Promise<boolean | string>;
+  // The owner turn's done-claim check: note_done is offered beside the turn's tools, its calls are recorded here and
+  // never dispatched, and a reply whose claims are unbacked gets one bounded revision. Child loops never get it.
+  claims?: DoneClaimDesk;
 }>): Promise<string> {
   const tools = toolDefinitions(input.handlers);
   const turns: LLMToolTurn[] = [];
@@ -103,13 +107,39 @@ export async function runToolLoop(input: Readonly<{
   const runScope = input.ctx.runScope;
   let browsingWithheld = false;
   let exit: LoopExit = 'completed';
+  const claims = input.claims;
+  const isClaim = (call: LLMToolCall) => claims !== undefined && call.name === NOTE_DONE;
+  // A reply about to close: when its claims are unbacked and the turn still has a round and a full model call's time,
+  // the model rewrites it once with only note_done offered. The rewrite and its claims replace the old ones. Never loops.
+  const close = async (text: string, turns: LLMToolTurn[]): Promise<string> => {
+    const facts = claims?.revision() ?? null;
+    const roundLeft = input.budget === undefined || input.budget.remaining > 0;
+    if (facts === null || turns.length === 0 || !roundLeft || deadline - Date.now() < FINAL_ANSWER_RESERVE_MS) return text;
+    if (input.budget !== undefined) input.budget.remaining -= 1;
+    const last = turns[turns.length - 1]!;
+    turns[turns.length - 1] = { ...last, output: `${last.output}\n${facts}` };
+    input.ctx.runScope?.admit();
+    let revised: Awaited<ReturnType<ToolLoopStep>>;
+    try {
+      revised = await withCallDeadline(runScope, deadline, () => input.step([claims!.tool], turns));
+    } catch (error) {
+      if (error instanceof ClosedRunError || runScope?.signal?.aborted) throw error;
+      return text;
+    }
+    input.ctx.runScope?.admit();
+    if (!revised.text) return text;
+    claims!.supersede();
+    for (const call of revised.tool_calls ?? []) if (isClaim(call)) claims!.note(call.arguments);
+    return guardArtifactLinks(revised.text, receiptUrls);
+  };
   for (let round = 0; ; round += 1) {
     const timeLeft = deadline - Date.now();
     const roundsAvailable = round < input.maxSteps && (input.budget === undefined || input.budget.remaining > 0);
     // A tool round starts only while one full model call is left for the final answer.
     const timeAvailable = timeLeft >= FINAL_ANSWER_RESERVE_MS;
-    const roundTools = browsingWithheld ? tools.filter((tool) => !BROWSE_TOOLS.has(tool.name)) : tools;
-    const offer = roundTools.length > 0 && roundsAvailable && timeAvailable;
+    const handlerTools = browsingWithheld ? tools.filter((tool) => !BROWSE_TOOLS.has(tool.name)) : tools;
+    const offer = handlerTools.length > 0 && roundsAvailable && timeAvailable;
+    const roundTools = claims && handlerTools.length > 0 ? [...handlerTools, claims.tool] : handlerTools;
     // An initially empty authority ceiling can reject an illegal request once and
     // give the model a final closing step. This consumes a round and performs no I/O.
     const repairEmptyCeiling = tools.length === 0 && round === 0 && roundsAvailable && timeAvailable;
@@ -133,15 +163,29 @@ export async function runToolLoop(input: Readonly<{
     }
     input.ctx.runScope?.admit();
     if (response.tool_calls === undefined || (!offer && !repairEmptyCeiling)) {
-      input.onSettle?.(exit);
-      return guardArtifactLinks(response.text || (exit === 'budget_exhausted'
+      const text = guardArtifactLinks(response.text || (exit === 'budget_exhausted'
         ? 'Tool budget exhausted; no further tools were run.'
         : exit === 'time_exhausted' ? OUT_OF_TIME_REPLY
           : tools.length === 0 ? 'No tools are available this turn; no tool calls were executed.' : ''), receiptUrls);
+      const closed = response.text ? await close(text, turns) : text;
+      input.onSettle?.(exit);
+      return closed;
+    }
+    // A reply that rides with its note_done declarations is the final answer: no further model round when they are backed.
+    if (response.text && response.tool_calls.length > 0 && response.tool_calls.every(isClaim)) {
+      response.tool_calls.forEach((call, index) => turns.push({ call, output: claims!.note(call.arguments), ...(index === 0 && response.output_items?.length ? { prior_items: [...response.output_items] } : {}) }));
+      const closed = await close(guardArtifactLinks(response.text, receiptUrls), turns);
+      input.onSettle?.(exit);
+      return closed;
     }
     let firstCall = true;
     for (const call of response.tool_calls) {
       input.ctx.runScope?.admit();
+      if (isClaim(call)) {
+        turns.push({ call, output: claims!.note(call.arguments), ...(firstCall && response.output_items?.length ? { prior_items: [...response.output_items] } : {}) });
+        firstCall = false;
+        continue;
+      }
       const started = Date.now();
       const key = `${call.name}\u0000${call.arguments}`;
       const cached = seen.get(key);
