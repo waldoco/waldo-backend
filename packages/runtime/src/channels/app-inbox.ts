@@ -27,6 +27,8 @@ export type AppInboxRecord = {
   notice?: 'due' | 'written' | 'dropped';
   // What the interrupted turn's tools already did, as its receipt line, for that reply; cleared when the reply closes.
   landed?: string;
+  // A thread message's thread revision when it was admitted: its turn stops once the thread is archived or deleted.
+  threadRevision?: number;
 };
 const due = (rows: readonly AppInboxRecord[], now: number) => rows.some(row => row.state === 'admitted' || row.notice === 'due') ? now + 250 : null;
 const clear = (row: AppInboxRecord) => { row.text = ''; };
@@ -35,11 +37,12 @@ const clear = (row: AppInboxRecord) => { row.text = ''; };
 export class AppInbox {
   constructor(private readonly storage: DurableObjectStorage, private readonly now = Date.now) {}
   records(): AppInboxRecord[] { return [...this.storage.kv.list<AppInboxRecord>({prefix:PREFIX})].map(([,row])=>row).sort((a,b)=>a.updateId-b.updateId); }
-  receipt(owner: string, clientId: string) {
-    const row=this.records().find(row=>row.owner===owner&&row.clientId===clientId);
+  // With a chat, only that chat's message answers.
+  receipt(owner: string, clientId: string, conversationRef?: string) {
+    const row=this.records().find(row=>row.owner===owner&&row.clientId===clientId&&(conversationRef===undefined||row.conversationRef===conversationRef));
     return row?{accepted:true as const,message_id:row.id,state:row.state,...(row.closedReason?{closed_reason:row.closedReason}:{}),...(row.effectsUnconfirmed!==undefined?{effects_unconfirmed:row.effectsUnconfirmed}:{})}:null;
   }
-  async admit(owner:string,sessionHash:string,clientId:string,text:string,conversationRef:string,assertCurrent?:()=>void) {
+  async admit(owner:string,sessionHash:string,clientId:string,text:string,conversationRef:string,assertCurrent?:()=>void,threadRevision?:number) {
     const digest=await sha256Hex(stableJson({text,conversationRef}));
     return this.storage.transaction(async txn=>{
       assertCurrent?.();
@@ -56,7 +59,7 @@ export class AppInbox {
       if(rows.length>=MAX_ROWS)rows=await evict(rows,now-APP_INBOX_FLOOR_MS);
       if(rows.length>=MAX_ROWS||rows.filter(row=>row.state==='admitted'||row.state==='running').length>=256)return {kind:'capacity' as const};
       const sequence=(await txn.get<number>('app_seq')??0)+1;
-      const record:AppInboxRecord={id:`app-${APP_UPDATE_BASE+sequence}`,updateId:APP_UPDATE_BASE+sequence,clientId,digest,text:redactSecretUrls(text).text,owner,sessionHash,conversationRef,admittedAt:this.now(),state:'admitted'};
+      const record:AppInboxRecord={id:`app-${APP_UPDATE_BASE+sequence}`,updateId:APP_UPDATE_BASE+sequence,clientId,digest,text:redactSecretUrls(text).text,owner,sessionHash,conversationRef,admittedAt:this.now(),state:'admitted',...(threadRevision===undefined?{}:{threadRevision})};
       assertCurrent?.();
       await txn.put({[PREFIX+record.id]:record,app_seq:sequence});
       await persistAppInboxWake(txn,this.now()+250);
@@ -95,9 +98,9 @@ export class AppInbox {
   // The owner stops a message. A running attempt is closed here first, so its scope throws at its next admit and the
   // drain's settle finds nothing left to flip; an admitted message never runs. Neither owes a "did not finish" reply:
   // the owner asked for the stop. An effect dispatched before the stop stays unconfirmed. A closed row returns as it is.
-  cancel(owner:string,clientId:string):AppInboxRecord|null {
+  cancel(owner:string,clientId:string,conversationRef?:string):AppInboxRecord|null {
     return this.storage.transactionSync(()=>{
-      const row=this.records().find(row=>row.owner===owner&&row.clientId===clientId);
+      const row=this.records().find(row=>row.owner===owner&&row.clientId===clientId&&(conversationRef===undefined||row.conversationRef===conversationRef));
       if(!row)return null;
       if(row.state!=='admitted'&&row.state!=='running')return row;
       row.effectsUnconfirmed=row.state==='running';
@@ -132,6 +135,12 @@ export class AppInbox {
     });
   }
   noticesDue():AppInboxRecord[] { return this.records().filter(row=>row.notice==='due'); }
+  // Erases a deleted chat's messages, whatever their state, with any reply still owed. It runs inside the caller's
+  // transaction, the one that deletes the chat, so it opens none of its own.
+  eraseChat(conversationRef:string):void {
+    for(const row of this.records())if(row.conversationRef===conversationRef)this.storage.kv.delete(PREFIX+row.id);
+    this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.records(),this.now()));
+  }
   // Kept only while the same attempt still runs: a run that was revoked or replaced owes no reply.
   noteLanded(id:string,attempt:string,line:string):void {
     this.storage.transactionSync(()=>{
