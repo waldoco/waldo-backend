@@ -11,7 +11,7 @@ import { TURN_TIMEOUT_MS } from '../src/channels/telegram-listener';
 import { TELEGRAM_TURN_DEADLINE_MS } from '../src/channels/telegram-owner-inbox';
 import { googleHandlers } from '../src/tools/live/google';
 import { sanitise } from '../src/scribe/sanitiser';
-import { FINAL_ANSWER_RESERVE_MS, MODEL_CALL_TIMEOUT_MS, RATE_LIMIT_BACKOFF_MS, RUN_CLOSE_MARGIN_MS, TOOL_ROUNDS_CEILING, toolRoundsFor, TURN_TIME_BUDGET_MS, turnDeadlineFor, withCallDeadline } from '../src/llm/time-budget';
+import { FINAL_ANSWER_RESERVE_MS, MODEL_CALL_TIMEOUT_MS, OWNER_TURN_CALL_TIMEOUT_MS, RATE_LIMIT_BACKOFF_MS, RUN_CLOSE_MARGIN_MS, TOOL_ROUNDS_CEILING, toolRoundsFor, TURN_TIME_BUDGET_MS, turnDeadlineFor, withCallDeadline } from '../src/llm/time-budget';
 import type { HookRuntimeContext } from '../src/hooks/registry';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 
@@ -441,6 +441,25 @@ describe('the turn budget follows the run it serves', () => {
 
   it('a short run still gets 25 tool rounds', async () => {
     expect(await roundsThroughResponder(TURN_TIMEOUT_MS)).toBe(25);
+  });
+
+  it('lets an owner reply call think past 30 s inside a long run', async () => {
+    const api = fakeOpenAI(() => ({ after: 45_000, body: said('Your week is planned.') }));
+    const { scope } = runScope(APP_RUN_MS);
+    const responder = createOwnerResponder(SYNTHETIC_KEY, undefined, undefined, undefined, clock, []);
+    const run = await settle(responder.respond(ownerTyped({ traceId: 'slow-reply', conversationRef: 'owner', surface: 'app', text: 'Plan my week.', memoryWrites: false, runScope: scope }), sameTime));
+    expect(run.value).toContain('Your week is planned.');
+    expect(api.requests).toHaveLength(1);
+    expect(api.ended[0]).toBe(45_000);
+  });
+
+  it('still cuts an owner reply call at the turn deadline', async () => {
+    fakeOpenAI(() => ({ after: OWNER_TURN_CALL_TIMEOUT_MS, body: said('Too late.') }));
+    const { scope } = runScope(RUN_CLOSE_MARGIN_MS + 60_000);
+    const responder = createOwnerResponder(SYNTHETIC_KEY, undefined, undefined, undefined, clock, []);
+    const run = await settle(responder.respond(ownerTyped({ traceId: 'cut-reply', conversationRef: 'owner', surface: 'app', text: 'Plan my week.', memoryWrites: false, runScope: scope }), sameTime));
+    expect(run.ms).toBeLessThanOrEqual(60_000);
+    expect(run.value ?? '').not.toContain('Too late.');
   });
 
   it('a longer run gives the owner turn rounds for its time', async () => {

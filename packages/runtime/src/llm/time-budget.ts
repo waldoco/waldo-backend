@@ -5,6 +5,9 @@ import type { RunEffectScope } from '../channels/run-effect-scope';
 // One model request's own limit. A live model call typically takes about 6 s, so a request still open at 30 s is
 // treated as lost.
 export const MODEL_CALL_TIMEOUT_MS = 30_000;
+// An owner turn's reply and subagent calls may reason far longer than an auxiliary call; the turn's deadline still
+// bounds each one.
+export const OWNER_TURN_CALL_TIMEOUT_MS = 120_000;
 // A turn's tool rounds and answer end this long before its run is closed without its reply. The margin covers the work
 // before the loop and any tool still running at the deadline, since started tools are never cut. A Telegram run is
 // closed 14 minutes after it is claimed, so its turn has 13.5; an app or iMessage run has 15 minutes, so its turn has 14.5.
