@@ -20,6 +20,9 @@ export const COMMON_EXECUTION_DUE_KEY = 'common_execution_due_v1';
 
 export const WHATSAPP_PENDING_DUE_KEY = 'whatsapp_pending_due_v1';
 
+// The owner alarm handler's own retry after a failed pass; each pass consumes it.
+export const ALARM_RETRY_DUE_KEY = 'owner_alarm_retry_due_v1';
+
 // Every wake the owner object keeps, one persisted due key per lane. The arbiter arms the earliest of them, so a lane that
 // arms a wake writes its key first and no re-arm can drop it. guard-wake-due-keys fails on a due key written in the
 // runtime but missing here, and on a lane that arms the alarm without naming one.
@@ -27,7 +30,7 @@ export const WAKE_DUE_KEYS = [
   'imessage_owner_inbox_due_v1', 'imessage_final_outbox_due_v1', APP_INBOX_DUE_KEY, COMMON_EXECUTION_DUE_KEY,
   'telegram_final_outbox_due_v1', 'telegram_owner_inbox_due_v1', 'telegram_link_due_v1',
   'browser_owner_task_due_v1', 'common_browser_due_v1', 'common_browser_lease_due_v1', WHATSAPP_PENDING_DUE_KEY,
-  'mac_results_due_v1',
+  'mac_results_due_v1', ALARM_RETRY_DUE_KEY,
 ] as const;
 
 // Wake for a WhatsApp payload admitted but not finished. Keeps an earlier alarm; never touches the Telegram due keys.
@@ -41,7 +44,7 @@ export async function armWhatsappPendingWake(storage: DurableObjectStorage, due:
 export function alarmRetryDelay(streak: number, objectId: string, capMs: number): number {
   let hash = 0x811c9dc5;
   for (let i = 0; i < objectId.length; i++) hash = Math.imul(hash ^ objectId.charCodeAt(i), 0x01000193) >>> 0;
-  return Math.min(2_000 * 2 ** Math.min(streak - 1, 20) * (1 + hash / 2 ** 32 / 4), capMs);
+  return Math.min(Math.floor(2_000 * 2 ** Math.min(streak - 1, 20) * (1 + hash / 2 ** 32 / 4)), capMs);
 }
 
 // The one arbiter: arms the earliest of the schedule's next entry and every listed lane's wake, never sooner than the

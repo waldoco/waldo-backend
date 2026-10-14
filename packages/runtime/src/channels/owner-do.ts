@@ -40,7 +40,7 @@ import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { receiptUrl } from '../conversation/artifact-link-guard';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
-import { APP_INBOX_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, alarmRetryDelay, armAlarm, armWhatsappPendingWake, persistInboxWake, persistTransportWake, rearmSharedAlarm } from '../scheduler/alarm-slot';
+import { ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, alarmRetryDelay, armAlarm, armWhatsappPendingWake, persistInboxWake, persistTransportWake, rearmSharedAlarm } from '../scheduler/alarm-slot';
 import { admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
 import { TelegramFinalOutbox, redactMailFollowupEntries, redactCalendarPrepEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
@@ -1464,14 +1464,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // The handler owns its retries. A wake the pass armed or deleted replaces or cancels the platform's retry, so a throw is
   // counted and answered with the next attempt on a capped backoff, no later than one heartbeat away; a pass that
   // completes clears the count. Any wake the failed pass replaced is recomputed from persisted keys by the next pass.
+  // The retry's wake is a listed due key, so a re-arm outside the handler keeps it; every pass is that retry, so it goes.
   override async alarm(): Promise<void> {
+    if (this.ctx.storage.kv.get(ALARM_RETRY_DUE_KEY) !== undefined) this.ctx.storage.kv.delete(ALARM_RETRY_DUE_KEY);
     try {
       await this.alarmWork();
       if (this.ctx.storage.kv.get(ALARM_FAILURES) !== undefined) this.ctx.storage.kv.delete(ALARM_FAILURES);
     } catch {
       const streak = (this.ctx.storage.kv.get<number>(ALARM_FAILURES) ?? 0) + 1;
+      const due = Date.now() + alarmRetryDelay(streak, this.ctx.id.toString(), HEARTBEAT_EVERY_MS);
       this.ctx.storage.kv.put(ALARM_FAILURES, streak);
-      await armAlarm(this.ctx.storage, Date.now() + alarmRetryDelay(streak, this.ctx.id.toString(), HEARTBEAT_EVERY_MS));
+      this.ctx.storage.kv.put(ALARM_RETRY_DUE_KEY, due);
+      await armAlarm(this.ctx.storage, due);
       console.error(JSON.stringify({ hop: 'alarm', ok: false, code: 'retry_scheduled', streak }));
     }
   }

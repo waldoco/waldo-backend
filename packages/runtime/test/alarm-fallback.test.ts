@@ -12,6 +12,7 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 type Passes = { alarm(): Promise<void>; alarmWork(): Promise<void>; drainApp(): Promise<void>; drainIMessage(): Promise<void> };
 const proto = OwnerDO.prototype as unknown as Passes;
 const FAILURES = 'owner_alarm_failures_v1';
+const RETRY_DUE = 'owner_alarm_retry_due_v1';
 const LINK_DUE = 'telegram_link_due_v1';
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -79,12 +80,30 @@ it('a pass that succeeds after a failure clears the streak, and the next wake is
     await watchPasses('alarm-retry-reset', state => state.storage.kv.put(LINK_DUE, later), async (stub, at) => {
       await untilPasses(at, 2, 4_000);
       await sleep(200);
-      const after = await runInDurableObject(stub, async (_instance, state) => ({ streak: state.storage.kv.get(FAILURES), armed: await state.storage.getAlarm() }));
+      const after = await runInDurableObject(stub, async (_instance, state) => ({ streak: state.storage.kv.get(FAILURES), retryDue: state.storage.kv.get(RETRY_DUE), armed: await state.storage.getAlarm() }));
       expect(at.length, `passes at ${at.join(', ')} ms`).toBe(2);
       expect(after.streak).toBeUndefined();
+      expect(after.retryDue).toBeUndefined();
       expect(after.armed).toBe(later);
     });
   } finally { work.mockRestore(); lines.mockRestore(); }
+}, 20_000);
+
+// A turn that ends while a retry is pending re-arms through the arbiter, which arms only listed wakes.
+it('the retry wake is a listed due key, so an arbiter re-arm outside the handler keeps it', async () => {
+  const lines = vi.spyOn(console, 'error').mockImplementation(() => undefined), fail = failing('drainIMessage');
+  try {
+    await watchPasses('alarm-retry-keyed', () => undefined, async stub => {
+      const deadline = Date.now() + 2_000;
+      while (await runInDurableObject(stub, (_instance, state) => state.storage.kv.get(FAILURES)) !== 1 && Date.now() < deadline) await sleep(25);
+      const kept = await runInDurableObject(stub, async (_instance, state) => {
+        await rearmSharedAlarm(state.storage, null, Date.now());
+        return { retryDue: state.storage.kv.get<number>(RETRY_DUE), armed: await state.storage.getAlarm() };
+      });
+      expect(kept.armed, `armed ${kept.armed}, retry key ${kept.retryDue}`).not.toBeNull();
+      expect(kept.armed).toBe(kept.retryDue);
+    });
+  } finally { fail.mockRestore(); lines.mockRestore(); }
 }, 20_000);
 
 it('the retry delay starts at 2 s, doubles, adds a fixed share of up to a quarter per owner, and never passes the cap', () => {
@@ -92,6 +111,7 @@ it('the retry delay starts at 2 s, doubles, adds a fixed share of up to a quarte
   for (const owner of owners) for (let streak = 1; streak <= 12; streak++) {
     const floor = 2_000 * 2 ** (streak - 1), delay = alarmRetryDelay(streak, owner, HEARTBEAT_EVERY_MS);
     expect(delay, `streak ${streak}`).toBe(alarmRetryDelay(streak, owner, HEARTBEAT_EVERY_MS));
+    expect(Number.isInteger(delay), `streak ${streak}: ${delay}`).toBe(true);
     expect(delay, `streak ${streak}`).toBeLessThanOrEqual(HEARTBEAT_EVERY_MS);
     if (floor < HEARTBEAT_EVERY_MS) {
       expect(delay, `streak ${streak}`).toBeGreaterThanOrEqual(floor);
