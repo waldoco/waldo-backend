@@ -6,11 +6,13 @@ import { appSubjectFor } from '../src/channels/app-api';
 import type { AppInboxRecord } from '../src/channels/app-inbox';
 import { redactThreadTitles } from '../src/channels/app-threads';
 import { claimStore, FORGOTTEN } from '../src/memory/claims';
+import { THREAD_TITLE_BUDGET_MS } from '../src/llm/time-budget';
 import { ensureSchema } from '../src/tracer/schema';
 
 // The model may name an untitled thread once, from its first exchange; forgetting a topic reaches every title.
 const model = vi.hoisted(() => ({
   titleAsks: [] as string[],
+  titleScopes: [] as { deadline: number; askedAt: number }[],
   turnRequests: [] as string[],
   title: '{"title":"Lisbon trip planning"}' as string | Error,
   whileTitling: null as (() => Promise<void>) | null,
@@ -21,15 +23,19 @@ vi.mock('../src/channels/telegram-turn', async load => {
     const reply = (text: string, tool_calls?: { call_id: string; name: string; arguments: string }[]) => ({ ok: true as const, data: { model: request.request.model, text, ...(tool_calls ? { tool_calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
     if (request.request.response_format?.name === 'thread_title') {
       model.titleAsks.push(JSON.stringify(request.request));
+      if (request.runScope) model.titleScopes.push({ deadline: request.runScope.deadline, askedAt: Date.now() });
       await model.whileTitling?.();
+      // A model that never answers, as a live one can: the request ends only when its scope aborts it.
+      if (model.title === 'never') await new Promise((_, reject) => request.runScope?.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
       if (model.title instanceof Error) throw model.title;
       return reply(model.title);
     }
     model.turnRequests.push(JSON.stringify(request.request));
     if (request.request.response_format) return reply('{}');
     const said = JSON.stringify(request.request.messages.at(-1)?.content ?? '');
-    if (said.includes('forget marigold') && !request.request.tool_turns?.length) {
-      return reply('', [{ call_id: 'forget', name: 'forget_memory', arguments: JSON.stringify({ topic: 'marigold', scope_note: 'the marigold topic' }) }]);
+    const forget = /forget (\w+)/.exec(said)?.[1];
+    if (forget && !request.request.tool_turns?.length) {
+      return reply('', [{ call_id: 'forget', name: 'forget_memory', arguments: JSON.stringify({ topic: forget, scope_note: `the ${forget} topic` }) }]);
     }
     return reply(said.includes('Lisbon') ? 'Happy to help plan Lisbon.' : 'Noted.');
   } };
@@ -38,9 +44,13 @@ vi.mock('../src/channels/telegram-turn', async load => {
 const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '5b1f0c2a-7d3e-4c91-8f62-0a1b2c3d4e5f';
+const PRINCIPAL = `prn_${OWNER_ID.replaceAll('-', '')}`, TENANT = `ten_${OWNER_ID.replaceAll('-', '')}`;
+const threadRows = (thread: string) => `canonical-owner-v1:${PRINCIPAL}:${TENANT}:thread:${thread}:`;
+const plantedRow = (thread: string, id: string, text: string) => ({ id, ownerId: PRINCIPAL, chatId: `owner:${PRINCIPAL}:${thread}`, parentId: null, threadAnchorId: null, surface: 'app',
+  modelPayload: text, appPayload: text, modelProjection: { mode: 'include' }, role: 'user' });
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 beforeEach(() => {
-  model.titleAsks = []; model.turnRequests = []; model.title = '{"title":"Lisbon trip planning"}'; model.whileTitling = null;
+  model.titleAsks = []; model.titleScopes = []; model.turnRequests = []; model.title = '{"title":"Lisbon trip planning"}'; model.whileTitling = null;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
@@ -145,6 +155,46 @@ describe('the model naming an untitled thread', () => {
     }
   });
 
+  // A row an older build left without an input origin fails the entry shape: the turn and the page leave it out, so the
+  // title does too, even with its witness in place.
+  it('names it from the rows the turn loads; a row the turn left out never reaches the model', async () => {
+    await withOwner('titles-shape', async ({ state, thread, say }) => {
+      const id = await thread();
+      const rows = threadRows(id), older = plantedRow(id, 'older-build-row', 'Older words about Atlantis.');
+      state.storage.kv.put(`${rows}conv:0000000000`, older);
+      state.storage.kv.put(`${rows}witness:${older.id}`, { lineage: 'canonical_v1', principal_ref: PRINCIPAL, tenant_ref: TENANT, entry: older });
+      state.storage.kv.put(`${rows}count`, 1);
+
+      await say(`/threads/${id}`, 'title-client-11', 'Help me plan four days in Lisbon in May.', 1);
+      expect(model.titleAsks).toHaveLength(1);
+      expect(model.titleAsks[0]).toContain('Help me plan four days in Lisbon in May.');
+      expect(model.titleAsks[0]).toContain('Happy to help plan Lisbon.');
+      expect(model.titleAsks[0]).not.toContain('Atlantis');
+    });
+  });
+
+  it('a thread row without its witness never shows as the preview, and the list still answers', async () => {
+    await withOwner('titles-unwitnessed', async ({ call, state, thread }) => {
+      const id = await thread('Planning');
+      state.storage.kv.put(`${threadRows(id)}conv:0000000000`, { ...plantedRow(id, 'unwitnessed-row', 'Unwitnessed words about Atlantis.'), inputOrigin: 'owner' });
+      expect(await listed(call, id)).toMatchObject({ title: 'Planning', preview: null });
+    });
+  });
+
+  it('gives the title call a budget of its own, so a model that never answers lets the queue move on', async () => {
+    await withOwner('titles-budget', async ({ call, state, thread, say }) => {
+      model.title = 'never';
+      const id = await thread();
+      const started = Date.now();
+      await say(`/threads/${id}`, 'title-client-12', 'Help me plan four days in Lisbon in May.', 1);
+      const [scope] = model.titleScopes;
+      expect(scope!.deadline - scope!.askedAt).toBeLessThanOrEqual(THREAD_TITLE_BUDGET_MS);
+      expect(Date.now() - started).toBeLessThan(THREAD_TITLE_BUDGET_MS + 10_000);
+      expect(await listed(call, id)).toMatchObject({ title: null, title_revision: 1 });
+      expect(titleLog(state)).toEqual([{ ok: 0, note: expect.stringMatching(/model_failed/) }]);
+    });
+  }, THREAD_TITLE_BUDGET_MS + 20_000);
+
   it('a thread archived while the model answers is not named', async () => {
     await withOwner('titles-archived', async ({ call, thread, say, op }) => {
       const id = await thread();
@@ -168,6 +218,21 @@ describe('titles and erasure', () => {
       const [afterTyped, afterNamed] = [await listed(call, typed), await listed(call, named)];
       expect([afterTyped!.title, afterNamed!.title]).toEqual([`${FORGOTTEN} shelf locker`, `The ${FORGOTTEN} plan`]);
       expect([afterTyped!.title_revision, afterNamed!.title_revision]).toEqual([2, 3]);
+    });
+  });
+
+  // The redactor folds case as a non-Unicode regex does and the remaining check as toLowerCase does, so a title with
+  // the Kelvin sign (U+212A, which lowercases to "k") still holds the topic after redaction. The tool must say so.
+  it('a forget that leaves the topic in a title fails the tool, and nothing is forgotten', async () => {
+    await withOwner('titles-forget-incomplete', async ({ call, state, thread, say }) => {
+      const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+      memory.add({ kind: 'fact', text: 'Wants to learn to kite in Tarifa', source: 'stated', evidence: '"learn to kite"', origin: 'owner' }, '2026-10-13T00:00:00.000Z');
+      const kite = await thread('\u212Aite repair');
+      await say('/chat/main', 'title-client-13', 'Please forget kite.');
+      const answered = model.turnRequests.find(request => request.includes('"tool_turns"'))!;
+      expect(answered).toContain(String.raw`"output":"{\"ok\":false,\"error\":\"tool handler failed\"`);
+      expect((await listed(call, kite))!.title).toBe('\u212Aite repair');
+      expect(memory.claims().map(claim => claim.text)).toEqual(['Wants to learn to kite in Tarifa']);
     });
   });
 

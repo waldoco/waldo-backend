@@ -56,8 +56,9 @@ export type OwnerResponder = Readonly<{
   // After a reply is delivered: compact the chain's older rows into one summary row when the last window dropped rows or
   // ran near its budget. Never throws; a failure is one content-free `compaction` hop. Inert while the switch is off.
   compactIfDue?(conversationRef: string): Promise<void>;
-  // The model's raw answer naming a thread from its first exchange; the caller checks it against the contract.
-  threadTitle(trace: string, exchange: string): Promise<string>;
+  // The model's raw answer naming a thread from its first exchange; the caller checks it against the contract. The scope
+  // is the call's own: its deadline bounds every attempt and its signal aborts the request in flight.
+  threadTitle(trace: string, exchange: string, scope: RunEffectScope): Promise<string>;
   control: ReturnType<typeof turnControl>;
 }>;
 

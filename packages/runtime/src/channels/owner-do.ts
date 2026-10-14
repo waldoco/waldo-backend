@@ -14,7 +14,7 @@ import { CALENDAR_DEMAND_PATH, verifiedDemandRequest } from '../health/calendar-
 import { surfaceOwnerAdmission } from '../identity/surface-owner-admission';
 import { localOwnerBinding, ownerBindingCurrent, verifyOwnerBinding } from '../identity/owner-binding';
 import { createOwnerTurnContext, ownerChainRef, surfaceChatRef, type OwnerContextSources } from '../context-composer/owner-turn';
-import { canonicalHistoryFault, canonicalOwnerConversationStore, skippedRowLines, type CanonicalSkipped } from '../conversation/canonical-owner-store';
+import { canonicalHistoryFault, canonicalOwnerConversationStore, shapeFault, skippedRowLines, type CanonicalSkipped } from '../conversation/canonical-owner-store';
 import {useMacHandler} from '../tools/live/use-mac';
 import {MAC_FOLLOWUP_RETRY_MS,MAC_FOLLOWUP_UNDELIVERABLE_RETRY_MS,macDelivery,macInbox,macResultNotice,type MacDelivery} from '../devices/mac-delivery';
 import { ownerEffectLedger } from './owner-effect-ledger';
@@ -37,6 +37,7 @@ import {drainLinkReceipt} from './telegram-link-controller';
 import {ownerDirectory} from '../identity/owner-directory';
 import { ownerRuntimeAuthority, type OwnerRuntimeAuthority } from '../identity/owner-runtime-authority';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
+import { THREAD_TITLE_BUDGET_MS } from '../llm/time-budget';
 import { receiptUrl } from '../conversation/artifact-link-guard';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
@@ -208,7 +209,7 @@ type OwnerRuntime = Readonly<{
   timezone: string;
   ready: Promise<void>;
   log(entry: TurnLogEntry): void;
-  titleThread(trace: string, exchange: string): Promise<string>;
+  titleThread(trace: string, exchange: string, scope: RunEffectScope): Promise<string>;
 }>;
 
 const LATE_FIRE_MS = 5 * 60_000;
@@ -882,8 +883,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private *shownThreadRows(rows: string, newestFirst: boolean, limit: number): Generator<Readonly<{ role: 'user' | 'assistant'; text: string }>> {
     const kv=this.ctx.storage.kv;
     for(const [,entry] of kv.list<ConversationEntry>({prefix:`${rows}conv:`,reverse:newestFirst,limit})){
-      if(entry.role!=='user'&&entry.role!=='assistant')continue;
-      if(stableJson(kv.get<{entry:ConversationEntry}>(`${rows}witness:${entry.id}`)?.entry)!==stableJson(entry))continue;
+      // The rows a turn loads and the page shows: a row of the wrong shape or without its witness is left out, never fatal here.
+      if((entry.role!=='user'&&entry.role!=='assistant')||shapeFault(entry)!==null)continue;
+      const witnessed=kv.get<{entry:ConversationEntry}>(`${rows}witness:${entry.id}`)?.entry;
+      if(witnessed===undefined||stableJson(witnessed)!==stableJson(entry))continue;
       const text=appTranscriptPage([entry],null,1).messages[0]?.text??'';
       if(text)yield {role:entry.role,text};
     }
@@ -1043,12 +1046,17 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const kv=this.ctx.storage.kv;
     if(!this.ctx.storage.transactionSync(()=>askThreadTitle(kv,thread)))return;
     const runtime=this.setup('app'),trace=`thread-title:${Date.now()}`,started=Date.now();
+    // The call's own scope: past its budget the request is aborted and no attempt starts, so the serial queue moves on.
+    const abort=new AbortController(),deadline=started+THREAD_TITLE_BUDGET_MS,timer=setTimeout(()=>abort.abort(),THREAD_TITLE_BUDGET_MS);
+    const admit=()=>{if(abort.signal.aborted||Date.now()>=deadline)throw new ClosedRunError();};
+    const scope:RunEffectScope={runId:trace,attempt:trace,deadline,signal:abort.signal,admit,commit:work=>{admit();return work();}};
     let outcome:string;
     try{
       await runtime.ready;
-      const answer=await runtime.titleThread(trace,[`Owner: ${said.text.slice(0,2000)}`,...(reply?[`Waldo: ${reply.text.slice(0,2000)}`]:[])].join('\n\n'));
+      const answer=await runtime.titleThread(trace,[`Owner: ${said.text.slice(0,2000)}`,...(reply?[`Waldo: ${reply.text.slice(0,2000)}`]:[])].join('\n\n'),scope);
       outcome=this.ctx.storage.transactionSync(()=>nameThread(kv,thread,answer));
     }catch{outcome='model_failed';}
+    finally{clearTimeout(timer);}
     runtime.log({trace,hop:'thread_title',ms:Date.now()-started,ok:outcome==='named',code:outcome});
   }
   // The schedule's next wake goes into every re-arm after app work, or an app message would drop or delay the alarm for the
@@ -3357,7 +3365,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           return null;
         }
       },
-      titleThread: (trace, exchange) => responder.threadTitle(trace, exchange),
+      titleThread: (trace, exchange, scope) => responder.threadTitle(trace, exchange, scope),
       timezone: clock.timezone, ready };
     this.runtimes[channel] = runtime; this.runtimeOwners[channel] = owner;
     return runtime;

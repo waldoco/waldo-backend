@@ -28,6 +28,7 @@ import { JoinedConversationPath } from '../conversation/joined-path';
 import { COMPACTION, COMPACTION_INSTRUCTION, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, supersededCompaction, type CompactedStats } from '../conversation/compaction';
 import { numericHealthIn } from '../scribe/sanitiser';
 import { OpenAIResponsesAdapter } from '../llm/openai';
+import { withCallDeadline } from '../llm/time-budget';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
 import { messagingSystemPrompt, ownerClockLine, unconnectedLine, withOwnerSkillProcedures } from '../prompt/messaging-behavior';
 import { eligibleHandlers } from '../tools/eligibility';
@@ -186,7 +187,7 @@ export const createOwnerResponder = (
     recent: [...recentOwnerTurns.values()].filter(turn => !holdsHeldTopic(turn.text)).concat(control.heard().map((steer, index) => ({ message_ref: `${traceId}-steer-${index}`, text: steer.text, sourceQuoteRanges: steer.foreignRanges }))),
   } } : {};
   let expectedProcedure: string | undefined;
-  const complete = async (trace: string, purpose: string, systemPrompt: string | SystemPrompt, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName) => {
+  const complete = async (trace: string, purpose: string, systemPrompt: string | SystemPrompt, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName, callScope?: RunEffectScope) => {
     await assertCurrent();
     const system = typeof systemPrompt === 'string' ? systemPrompt : systemPrompt.text;
     const started = Date.now();
@@ -219,7 +220,7 @@ export const createOwnerResponder = (
     } } : adapter;
     const sanitise = safety.sanitise;
     const result = await new RuntimeLLMProvider({ gateway: admittedGateway, circuitBreaker }).complete({
-      ...(privateRunScope ? { runScope: privateRunScope } : {}),
+      ...(callScope ?? privateRunScope ? { runScope: callScope ?? privateRunScope } : {}),
       trigger: 'user_message',
       policy: effectivePolicy,
       renderRequest: () => ({
@@ -809,7 +810,7 @@ export const createOwnerResponder = (
       // The nightly pass is where the pinned blocks are curated.
       return { done: true, detail: applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`, undefined, sides ?? { owner: day }, false, undefined, true) };
     },
-    threadTitle: (trace, exchange) => ask(trace, 'thread_title', THREAD_TITLE_INSTRUCTION, exchange, THREAD_TITLE_FORMAT, undefined, undefined, undefined, memoryModel),
+    threadTitle: (trace, exchange, scope) => withCallDeadline(scope, scope.deadline, () => ask(trace, 'thread_title', THREAD_TITLE_INSTRUCTION, exchange, THREAD_TITLE_FORMAT, undefined, undefined, undefined, memoryModel, scope)),
     async migrate(trace, input) {
       if (!memory) return 'no memory';
       if (holdsAnyHeldTopic()) throw new Error('historical memory migration deferred: forgetting coverage incomplete');

@@ -11,6 +11,9 @@ export const MODEL_CALL_TIMEOUT_MS = 30_000;
 // running at the deadline, since started tools are never cut: a tool round that starts at the last moment has 60 s,
 // less the work before the loop, before the run is closed without its reply.
 export const TURN_TIME_BUDGET_MS = 120_000;
+// Naming a thread runs in the owner object's serial queue after the app drain, so one slow title call would hold back
+// every surface's next turn. It gets one live call's typical time with room to spare, then the thread stays untitled.
+export const THREAD_TITLE_BUDGET_MS = 15_000;
 // No tool round starts unless one full model call is left for the final answer.
 export const FINAL_ANSWER_RESERVE_MS = MODEL_CALL_TIMEOUT_MS;
 // The longest wait a provider may ask for before a failed call is sent again; the OpenAI SDK honours a retry-after
