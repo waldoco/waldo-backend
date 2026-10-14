@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { WALDO_CHAT_MODEL } from '@waldo/contracts';
+import { OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
 import { COST_LEDGER_DDL, costLedger } from '../src/llm/cost-ledger';
 import { OWNER_REQUEST_HOP, parseHarnessCommand, traceBook } from '../src/channels/harness';
 
@@ -122,10 +122,10 @@ describe('owner harness', () => {
       sql.exec("INSERT INTO trace_log (at, trace, hop, ok, ms, note) VALUES (1, 'tg-0', 'llm_reply', 1, 100, NULL)");
       const book = traceBook(sql);
       const at = Date.parse('2026-09-24T04:30:00Z');
-      book.record({ trace: 'tg-1', hop: 'llm_reply', ms: 900, ok: true, usage: { model: WALDO_CHAT_MODEL, input: 2000, output: 100, cached: 1500 }, shape: { system_bytes: 1024, request_bytes: 4096 } }, at);
+      book.record({ trace: 'tg-1', hop: 'llm_reply', ms: 900, ok: true, usage: { model: OPENAI_GPT_6_LUNA_MODEL, input: 2000, output: 100, cached: 1500 }, shape: { system_bytes: 1024, request_bytes: 4096 } }, at);
       book.record({ trace: 'tg-1', hop: 'memory', ms: 400, ok: true }, at);
       const report = book.usage();
-      expect(report).toContain(`${WALDO_CHAT_MODEL}: 1 calls, 2.0k in (75% cached), 100 out, $0.0001`);
+      expect(report).toContain(`${OPENAI_GPT_6_LUNA_MODEL}: 1 calls, 2.0k in (75% cached), 100 out, $0.0001`);
       expect(report).toContain('avg request 4.0kB (system 1.0kB)');
       expect(book.recent('Asia/Kolkata', null).split('\n')).toHaveLength(3);
     });
@@ -145,7 +145,7 @@ it('parses the /heldrows continue rowid as given and rejects a garbage one', () 
 });
 
 describe('cost ledger', () => {
-  const usage = { model: WALDO_CHAT_MODEL, input: 12_000, output: 800, cached: 4_000 };
+  const usage = { model: OPENAI_GPT_6_LUNA_MODEL, input: 12_000, output: 800, cached: 4_000 };
   const at = Date.parse('2026-10-08T04:30:00Z');
 
   it('ledger sum equals the trace_log usd for a turn and separates background by kind', async () => {

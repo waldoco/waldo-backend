@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 export const OPENAI_GPT_6_LUNA_MODEL = 'gpt-6-luna' as const;
+export const OPENAI_GPT_6_1_SOL_MODEL = 'gpt-6.1-sol' as const;
 export const WORKERS_AI_GEMMA_4_26B_MODEL = '@cf/google/gemma-4-26b-a4b-it' as const;
 export const ANTHROPIC_CLAUDE_SONNET_4_6_MODEL = 'claude-sonnet-4-6' as const;
 export const ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL = 'claude-haiku-4-5' as const;
@@ -15,15 +16,30 @@ export const modelNameSchema = z.enum([
   ANTHROPIC_CLAUDE_SONNET_4_6_MODEL,
   ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL,
   OPENAI_GPT_6_LUNA_MODEL,
+  OPENAI_GPT_6_1_SOL_MODEL,
 ]);
 export type ModelName = z.infer<typeof modelNameSchema>;
 
-// The model Waldo chats, remembers and reacts with. Swapping models is this one line when the
-// target is already in the roster with an OpenAI provider; a new model also needs its roster
-// entry above, PROVIDER_OF below and a price in packages/runtime/src/llm/pricing.ts.
-// GPT-6 Luna pin (owner grant 2026-09-27, WhatsApp 11:56pm): newer OpenAI model at any
-// reasoning effort, ceiling GPT-6 Luna, nothing beyond.
-export const WALDO_CHAT_MODEL: ModelName = OPENAI_GPT_6_LUNA_MODEL;
+// The owner's own conversation turns, on the app, iMessage and Telegram, and the delegate tasks they spawn.
+export const WALDO_CHAT_MODEL: ModelName = OPENAI_GPT_6_1_SOL_MODEL;
+// Every call that is not an owner's conversation turn: reaction choice, thread titles, memory extraction and
+// consolidation, conversation compaction, reminder, day-card, brief and heartbeat wording, and background decisions.
+// Not ROSTER.auxiliary below, which is the run loop's classifier role.
+// A model swap is a pin change here; a new model also needs its roster entry, PROVIDER_OF, OPENAI_REASONING, a
+// context spec and a price in packages/runtime/src/llm/pricing.ts.
+export const WALDO_AUXILIARY_MODEL: ModelName = OPENAI_GPT_6_LUNA_MODEL;
+
+// The reasoning efforts Waldo asks for. Every OpenAI roster model accepts both; Sol accepts no none or minimal.
+export const reasoningEffortSchema = z.enum(['low', 'medium']);
+export type ReasoningEffort = z.infer<typeof reasoningEffortSchema>;
+
+// Per OpenAI model: the efforts its OpenAI model page lists, and the effort Waldo asks for. The effort follows the
+// model rather than the call, so a Luna call stays at low wherever it runs.
+export type OpenAIReasoning = Readonly<{ accepts: readonly string[]; effort: ReasoningEffort }>;
+export const OPENAI_REASONING: Readonly<Partial<Record<ModelName, OpenAIReasoning>>> = {
+  [OPENAI_GPT_6_LUNA_MODEL]: { accepts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'], effort: 'low' },
+  [OPENAI_GPT_6_1_SOL_MODEL]: { accepts: ['low', 'medium', 'high', 'xhigh', 'max'], effort: 'medium' },
+};
 
 // Speech-to-text for owner voice notes. Not chat routes, so they stay outside modelNameSchema.
 // Recommended default is ElevenLabs Scribe v2 (docs/planning/STT_SELECTION.md); smallest.ai Pulse and
@@ -40,6 +56,7 @@ export const PROVIDER_OF: Readonly<Record<ModelName, Provider>> = {
   [ANTHROPIC_CLAUDE_SONNET_4_6_MODEL]: 'anthropic',
   [ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL]: 'anthropic',
   [OPENAI_GPT_6_LUNA_MODEL]: OPENAI_PROVIDER,
+  [OPENAI_GPT_6_1_SOL_MODEL]: OPENAI_PROVIDER,
 };
 
 // The documented request ID and exact response identities accepted at the Cloudflare

@@ -1,11 +1,11 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { deriveContextBudgetChars, SANITISE_DESTINATION_POLICIES, WALDO_CHAT_MODEL } from '@waldo/contracts';
+import { deriveContextBudgetChars, SANITISE_DESTINATION_POLICIES, WALDO_AUXILIARY_MODEL } from '@waldo/contracts';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import { fitPromptToBudget } from '../src/prompt/fit-prompt';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 
-const limit = deriveContextBudgetChars(WALDO_CHAT_MODEL, SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
+const limit = deriveContextBudgetChars(WALDO_AUXILIARY_MODEL, SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
 const wire = (content: string) => JSON.stringify([{ role: 'user', content }]).length;
 const lines = (prefix: string, count: number) => Array.from({ length: count }, (_, index) => `${prefix}-${index} ${'x'.repeat(200)}`).join('\n');
 
