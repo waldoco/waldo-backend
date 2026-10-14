@@ -4,7 +4,7 @@
 // (deny read-class tools while set, add promptLine() to the prompt, register set_source_scope) is a
 // separate reviewed step in files owned by the owner-turn lane.
 // Only an untainted owner message can change the value. Retrieved content, scheduled or event
-// triggers cannot set or clear it. It never expires and /stop does not clear it; the prompt line
+// triggers cannot set or clear it. It never expires and stopping a turn does not clear it; the prompt line
 // shows it every turn so the model clears it when the owner starts a different task.
 import type { ToolName } from '@waldo/contracts';
 export type SourceScope = 'none' | 'pasted_only';

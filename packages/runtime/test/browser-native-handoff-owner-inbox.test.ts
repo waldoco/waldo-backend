@@ -25,10 +25,10 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (input: 
   const call=format?undefined:proof.phase==='main'?[
     {name:'browse_page',args:{retain_session:true,url:'https://example.com/a',instruction:'Open the owner login page'}},
     {name:'browse_act',args:{url:'https://example.com/a',task:'Owner login',max_actions:1,command:{operation:'owner_login',reason:'Sign in to the intended account and complete MFA.'}}},
-  ][at]:proof.phase==='resume'&&at===0?{name:'browse_act',args:{session_handle:proof.sessionHandle,url:'https://example.com/a',task:'Resume and verify intended account',max_actions:1,command:{operation:'resume_owner_login'}}}:undefined;
+  ][at]:proof.phase==='resume'&&at===0?{name:'browse_act',args:{session_handle:proof.sessionHandle,url:'https://example.com/a',task:'Resume and verify intended account',max_actions:1,command:{operation:'resume_owner_login'}}}:proof.phase==='stop'&&at===0?{name:'browse_act',args:{session_handle:proof.sessionHandle,url:'https://example.com/a',task:'Stop the browser',max_actions:1,command:{operation:'cancel'}}}:undefined;
   const read=Boolean(call);
   return { id: 'synthetic-public-browser-reply', output: read ? [{ type: 'function_call', call_id: `public-call-${at}`, name:call!.name, arguments:JSON.stringify(call!.args) }] : [],
-    output_text: format === 'claim_ops' ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : format ? '{}' : read ? '' : proof.phase==='main'?'Sign in through https://local.invalid/console/browser-handoff then reply after Done.':'Fresh evidence identifies the fictional intended owner.', usage: { input_tokens: 1, output_tokens: 1 } };
+    output_text: format === 'claim_ops' ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : format ? '{}' : read ? '' : proof.phase==='main'?'Sign in through https://local.invalid/console/browser-handoff then reply after Done.':proof.phase==='stop'?'Stopped the browser.':'Fresh evidence identifies the fictional intended owner.', usage: { input_tokens: 1, output_tokens: 1 } };
 } }; } }));
 vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(), createTelegramCaller: () => async (method: string, payload: any) => {
   if (method === 'sendMessage') { proof.delivered.push(payload.text); return { message_id: proof.delivered.length,chat:{id:payload.chat_id} }; }
@@ -73,7 +73,8 @@ it.each(['resume','restart'])('protocol double: real owner inbox and console han
    expect(proof.outputs.at(-1)).toMatchObject({ok:true,data:{owner_login:'completed',intended_account_verification_required:true,text:'Signed in as fictional intended owner'}});
    expect(commonBrowserFixture.allocations).toBe(1);expect(commonBrowserFixture.ends).toBe(0);
    expect(JSON.stringify(proof.inputs)+JSON.stringify([...state.storage.kv.list({prefix:'common-browser:'})])).not.toContain('FICTIONAL_BEARER');expect(JSON.stringify(proof.inputs)).not.toContain('fixture-retained-provider');expect(denied).not.toHaveBeenCalled();
-   await send('/stop');await vi.waitFor(()=>expect(commonBrowserFixture.ends).toBe(1));expect(commonBrowserFixture.pages).toHaveLength(0);
+   proof.phase='stop';proof.phaseCalls=0;
+   await send('Stop the browser.');expect(proof.outputs.at(-1)).toMatchObject({ok:true,data:{ended:true}});await vi.waitFor(()=>expect(commonBrowserFixture.ends).toBe(1));expect(commonBrowserFixture.pages).toHaveLength(0);
   }finally{await state.storage.deleteAlarm();denied.mockRestore();}
  });
 });

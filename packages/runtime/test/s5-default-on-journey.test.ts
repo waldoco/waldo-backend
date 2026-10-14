@@ -6,6 +6,7 @@ import { loopBook } from '../src/channels/loops';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { claimStore } from '../src/memory/claims';
 import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
+import { runOwnerJob } from './fixtures/owner-job';
 const fixture = vi.hoisted(() => ({ mail: false, loopId: '', event: false, sent: [] as string[], prompts: [] as string[] }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
@@ -41,26 +42,21 @@ it.each(['flag-unset', 'owner-opt-out'])('S5 default-on mail followup through th
     state.storage.kv.put('do_name', 'synthetic-mail-owner'); state.storage.kv.put('telegram_subject', '7');
     await state.storage.put('origin', 'https://fixture.invalid');
     await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.compose'] }]);
-    let update = 100;
-    const incoming = async (text: string) => {
-      const response = await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify({ update_id: update++, message: { message_id: update, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text } }) }));
-      expect(response.status).toBe(200);
-    };
     try {
-      await incoming('/fire fetch');
+      await runOwnerJob(owner, 'update_check');
       const loops = loopBook(state.storage.sql, { now: () => now, newId: () => 'test-only' });
       loops.setProactivity({ quiet_start: '20:00', quiet_end: '08:00', volume: 'normal', ...(mode === 'owner-opt-out' ? { followups: false } : {}) });
       fixture.mail = true; now += 61_000;
-      await incoming('/fire fetch');
+      await runOwnerJob(owner, 'update_check');
       expect(loops.list()).toEqual([]);
       fixture.mail = false; now = Date.parse('2026-10-03T09:00:00Z');
       dayPlanBook(state.storage.sql).sent('2026-10-03', 'card:brief');
-      await incoming('/fire fetch');
+      await runOwnerJob(owner, 'update_check');
       if (mode === 'owner-opt-out') {
         expect(loops.list()).toEqual([]);
         // Opted out, Google connected, unseen event due, outside quiet hours: the legacy event brief must not run either.
         fixture.event = true; fixture.sent = [];
-        await incoming('/fire briefs');
+        await runOwnerJob(owner, 'briefs');
         expect(state.storage.sql.exec('SELECT 1 FROM event_briefs').toArray(), 'opted-out owner must not be briefed').toEqual([]);
         expect(fixture.sent.filter(text => text.includes('Design review'))).toEqual([]);
         return;
@@ -70,7 +66,7 @@ it.each(['flag-unset', 'owner-opt-out'])('S5 default-on mail followup through th
       expect(open.source_ref).toBe('mail:mail-thread-1');
       expect(fixture.prompts.some(text => text.includes('[source_ref mail:mail-thread-1]'))).toBe(true);
       now += 300_000;
-      await incoming('/fire fetch');
+      await runOwnerJob(owner, 'update_check');
       const queued = state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)!.filter(r => r.mailFollowup);
       expect(queued).toHaveLength(1); expect(queued[0]?.status).toBe('pending');
       now += 600_000; state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm();

@@ -3,25 +3,13 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { WALDO_CHAT_MODEL } from '@waldo/contracts';
 import { COST_LEDGER_DDL, costLedger } from '../src/llm/cost-ledger';
-import { OWNER_REQUEST_HOP, parseHarnessCommand, traceBook } from '../src/channels/harness';
+import { OWNER_REQUEST_HOP, traceBook } from '../src/channels/harness';
 
 let sequence = 0;
 const withSql = <T>(fn: (sql: SqlStorage) => T) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`harness-${sequence++}`)), (_instance, state) => fn(state.storage.sql));
 
 describe('owner harness', () => {
-  it('parses fire, trace and e2e commands and ignores ordinary text', () => {
-    expect(parseHarnessCommand('/fire brief')).toEqual({ kind: 'fire', target: 'card:brief' });
-    expect(parseHarnessCommand('/fire fetch')).toEqual({ kind: 'fire', target: 'fetch' });
-    expect(parseHarnessCommand('/fire nonsense')).toEqual({ kind: 'fire', target: null });
-    expect(parseHarnessCommand('/trace tg-12')).toEqual({ kind: 'trace', filter: 'tg-12' });
-    expect(parseHarnessCommand('/e2e')).toEqual({ kind: 'e2e' });
-    expect(parseHarnessCommand('/usage')).toEqual({ kind: 'usage' });
-    expect(parseHarnessCommand('/langfuse')).toEqual({ kind: 'langfuse' });
-    expect(parseHarnessCommand('fire the brief please')).toBeNull();
-    expect(parseHarnessCommand(undefined)).toBeNull();
-  });
-
   it('shows the newest owner request, not a background job that also calls the model', async () => {
     await withSql((sql) => {
       const book = traceBook(sql, 50);
@@ -80,12 +68,11 @@ describe('owner harness', () => {
       book.record({ trace: 'tg-1', hop: 'memory', ms: 400, ok: false, error: 'bad json' }, at);
       book.record({ trace: 'tg-2', hop: 'llm_reply', ms: 800, ok: true }, at);
       book.record({ trace: 'card:brief:1', hop: 'day_card', ms: 1200, ok: true, detail: 'card:brief' }, at);
-      expect(book.recent('Asia/Kolkata', null).split('\n')).toHaveLength(3);
-      expect(book.recent('Asia/Kolkata', 'tg-2')).toBe('10:00 ok llm_reply 800ms tg-2');
-      const checklist = book.checklist('Asia/Kolkata');
-      expect(checklist).toContain('[x] Chat reply: ok at 2026-09-23 10:00');
-      expect(checklist).toContain('[!] Memory update: failed at 2026-09-23 10:00 - bad json');
-      expect(checklist).toContain('[ ] Constellation promotion: not seen');
+      expect(book.rowsPage('Asia/Kolkata', 25).rows.map((row) => row.trace)).toEqual(['tg-1', 'tg-2', 'card:brief:1']);
+      const steps = book.steps('Asia/Kolkata');
+      expect(steps).toContainEqual({ step: 'Chat reply', state: 'ok', at: '2026-09-23 10:00', note: null });
+      expect(steps).toContainEqual({ step: 'Memory update', state: 'failed', at: '2026-09-23 10:00', note: 'bad json' });
+      expect(steps).toContainEqual({ step: 'Constellation promotion', state: 'unseen', at: null, note: null });
     });
   });
 
@@ -124,24 +111,10 @@ describe('owner harness', () => {
       const at = Date.parse('2026-09-24T04:30:00Z');
       book.record({ trace: 'tg-1', hop: 'llm_reply', ms: 900, ok: true, usage: { model: WALDO_CHAT_MODEL, input: 2000, output: 100, cached: 1500 }, shape: { system_bytes: 1024, request_bytes: 4096 } }, at);
       book.record({ trace: 'tg-1', hop: 'memory', ms: 400, ok: true }, at);
-      const report = book.usage();
-      expect(report).toContain(`${WALDO_CHAT_MODEL}: 1 calls, 2.0k in (75% cached), 100 out, $0.0001`);
-      expect(report).toContain('avg request 4.0kB (system 1.0kB)');
-      expect(book.recent('Asia/Kolkata', null).split('\n')).toHaveLength(3);
+      expect(book.usageRows()).toEqual([{ model: WALDO_CHAT_MODEL, calls: 1, input: 2000, cached: 1500, output: 100, usd: expect.any(Number) }]);
+      expect(book.rowsPage('Asia/Kolkata', 25).rows).toHaveLength(3);
     });
   });
-});
-
-it('parses /heldrows with an optional table', () => {
-  expect(parseHarnessCommand('/heldrows update_cards')).toEqual({ kind: 'heldrows', table: 'update_cards', from: null });
-  expect(parseHarnessCommand('/heldrows')).toEqual({ kind: 'heldrows', table: null, from: null });
-});
-
-it('parses the /heldrows continue rowid as given and rejects a garbage one', () => {
-  expect(parseHarnessCommand('/heldrows day_plan 250')).toEqual({ kind: 'heldrows', table: 'day_plan', from: 250 });
-  expect(parseHarnessCommand('/heldrows day_plan -5')).toEqual({ kind: 'heldrows', table: 'day_plan', from: -5 });
-  expect(parseHarnessCommand('/heldrows day_plan abc')).toEqual({ kind: 'heldrows', table: 'day_plan', from: 'invalid' });
-  expect(parseHarnessCommand('/heldrows day_plan 99999999999999999999')).toEqual({ kind: 'heldrows', table: 'day_plan', from: 'invalid' });
 });
 
 describe('cost ledger', () => {

@@ -4,6 +4,7 @@ import { expect, it, vi, type MockInstance } from 'vitest';
 import { calendarPushBook } from '../src/channels/calendar-push';
 import { GOOGLE_FINISH_PATH } from '../src/channels/google-oauth';
 import { startConsent, type ConsentFlow } from '../src/connectors/google-consent';
+import { runOwnerJob } from './fixtures/owner-job';
 
 const MAIL = ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.compose'];
 const CALENDAR = 'https://www.googleapis.com/auth/calendar.events';
@@ -62,9 +63,8 @@ const world = async (name: string, accounts: unknown[], run: (world: World) => P
     state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
     await state.storage.put('origin', 'https://fixture.invalid');
     await state.storage.put('google:accounts', accounts);
-    let seq = 900;
-    // The update sweep's own closure, driven the way the harness command fires it.
-    const sweep = async () => expect((await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify({ update_id: seq++, message: { message_id: seq, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: '/fire briefs' } }) }))).status).toBe(200);
+    // The event-brief sweep, which runs the watch upkeep in its finally.
+    const sweep = () => runOwnerJob(owner, 'briefs');
     // The owner connects Google again: one consent attempt, settled through the owner object's own finish route.
     const reconnect = async (id: string, scopes: string[]) => {
       edge.exchange = { id, scopes };

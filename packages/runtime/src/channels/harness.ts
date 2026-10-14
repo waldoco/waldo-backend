@@ -5,36 +5,6 @@ import { modelCost } from '../llm/pricing';
 
 type Sql = Pick<SqlStorage, 'exec'>;
 
-export const FIRE_TARGETS = ['card:brief', 'card:midday', 'card:close', 'fetch', 'briefs', 'nightly'] as const;
-export type FireTarget = (typeof FIRE_TARGETS)[number];
-
-export type HarnessCommand =
-  | Readonly<{ kind: 'fire'; target: FireTarget | null }>
-  | Readonly<{ kind: 'trace'; filter: string | null }>
-  | Readonly<{ kind: 'e2e' }>
-  | Readonly<{ kind: 'console' }>
-  | Readonly<{ kind: 'usage' }>
-  | Readonly<{ kind: 'langfuse' }>
-  | Readonly<{ kind: 'heldrows'; table: string | null; from: number | 'invalid' | null }>;
-
-export const parseHarnessCommand = (text: string | undefined): HarnessCommand | null => {
-  const [command, arg] = (text ?? '').trim().split(/\s+/, 2);
-  if (command === '/fire') {
-    const target = FIRE_TARGETS.find((name) => name === arg || name === `card:${arg}`) ?? null;
-    return { kind: 'fire', target };
-  }
-  if (command === '/trace') return { kind: 'trace', filter: arg ?? null };
-  if (command === '/e2e') return { kind: 'e2e' };
-  if (command === '/console') return { kind: 'console' };
-  if (command === '/usage') return { kind: 'usage' };
-  if (command === '/langfuse') return { kind: 'langfuse' };
-  if (command === '/heldrows') {
-    const from = (text ?? '').trim().split(/\s+/)[2];
-    return { kind: 'heldrows', table: arg ?? null, from: from === undefined ? null : /^-?\d{1,15}$/.test(from) ? Number(from) : 'invalid' };
-  }
-  return null;
-};
-
 // Each E2E step names the log hops that prove it ran. A 'request' step happens inside one chat turn's
 // trace; a 'job' step comes from a scheduled or background run and never shares a trace with a chat turn.
 export const E2E_STEPS: readonly Readonly<{ step: string; hops: readonly string[]; scope: 'request' | 'job' }>[] = [
@@ -90,14 +60,6 @@ export const traceBook = (sql: Sql, keep = 500, ledger?: CostLedger) => {
       }
       sql.exec('DELETE FROM trace_log WHERE id <= (SELECT MAX(id) FROM trace_log) - ?', keep);
     },
-    recent(timezone: string, filter: string | null, limit = 25): string {
-      const rows = sql.exec<{ at: number; trace: string; hop: string; ok: number; ms: number; note: string | null }>(
-        'SELECT at, trace, hop, ok, ms, note FROM trace_log WHERE ? IS NULL OR trace LIKE ? OR hop LIKE ? ORDER BY id DESC LIMIT ?',
-        filter, `%${filter}%`, `%${filter}%`, limit,
-      ).toArray().reverse();
-      if (rows.length === 0) return 'No trace entries yet.';
-      return rows.map((row) => `${localIso(row.at, timezone).slice(11, 16)} ${row.ok ? 'ok' : 'FAIL'} ${row.hop} ${row.ms}ms ${row.trace}${row.note ? ` - ${row.note}` : ''}`).join('\n');
-    },
     rows(timezone: string, limit: number): readonly TraceRow[] {
       return sql.exec<{ at: number; trace: string; hop: string; ok: number; ms: number; note: string | null }>(
         'SELECT at, trace, hop, ok, ms, note FROM trace_log ORDER BY id DESC LIMIT ?', limit,
@@ -123,16 +85,6 @@ export const traceBook = (sql: Sql, keep = 500, ledger?: CostLedger) => {
          FROM trace_log WHERE model IS NOT NULL GROUP BY model ORDER BY usd DESC`,
       ).toArray();
     },
-    usage(): string {
-      const rows = sql.exec<{ model: string; calls: number; input: number; cached: number; output: number; usd: number; sys: number | null; req: number | null }>(
-        `SELECT model, COUNT(*) AS calls, SUM(input_tokens) AS input, SUM(cached_tokens) AS cached, SUM(output_tokens) AS output, SUM(usd) AS usd,
-                AVG(system_bytes) AS sys, AVG(request_bytes) AS req
-         FROM trace_log WHERE model IS NOT NULL GROUP BY model ORDER BY usd DESC`,
-      ).toArray();
-      if (rows.length === 0) return 'No model usage recorded yet.';
-      const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(Math.round(n)));
-      return rows.map((row) => `${row.model}: ${row.calls} calls, ${k(row.input)} in (${row.input > 0 ? Math.round((100 * row.cached) / row.input) : 0}% cached), ${k(row.output)} out, $${row.usd.toFixed(4)}${row.req ? `, avg request ${(row.req / 1024).toFixed(1)}kB (system ${((row.sys ?? 0) / 1024).toFixed(1)}kB)` : ''}`).join('\n');
-    },
     steps(timezone: string): readonly E2EStep[] {
       return E2E_STEPS.map(({ step, hops }) => {
         const row = sql.exec<{ at: number; ok: number; note: string | null }>(
@@ -148,10 +100,6 @@ export const traceBook = (sql: Sql, keep = 500, ledger?: CostLedger) => {
       const hops = sql.exec<{ hop: string; ok: number; ms: number; note: string | null }>('SELECT hop, ok, ms, note FROM trace_log WHERE trace = ? ORDER BY id ASC', head.trace).toArray()
         .map((row) => ({ hop: row.hop, ok: row.ok === 1, ms: row.ms, note: row.note ?? '' }));
       return { trace: head.trace, at: localIso(head.at, timezone).slice(0, 16).replace('T', ' '), ok: head.ok === 1, partial: hops.length < head.steps, recorded_steps: head.steps, hops };
-    },
-    checklist(timezone: string): string {
-      return this.steps(timezone).map(({ step, state, at, note }) => state === 'unseen' ? `[ ] ${step}: not seen`
-        : `[${state === 'ok' ? 'x' : '!'}] ${step}: ${state} at ${at}${note ? ` - ${note}` : ''}`).join('\n');
     },
   };
 };

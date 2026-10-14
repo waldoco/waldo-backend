@@ -1,22 +1,23 @@
 import { expect,it } from 'vitest';
 import { messagingSystemPrompt,withOwnerSkillProcedures } from '../src/prompt/messaging-behavior';
 it('shared prompt describes rendered WhatsApp text callbacks, not undelivered native buttons/reactions',()=>{
- const prompt=messagingSystemPrompt(['workspace_write'],{surface:'whatsapp',delivery:{text:true,approval:'text_callback',reactions:false,attachments:false},commands:[]});
+ const prompt=messagingSystemPrompt(['workspace_write'],{surface:'whatsapp',delivery:{text:true,approval:'text_callback',reactions:false,attachments:false}});
  expect(prompt).toContain('Approval delivery: text_callback');
  expect(prompt).toContain('Reactions: unavailable');
  expect(prompt).not.toContain('Connection links arrive as buttons');
  expect(prompt).not.toContain('Do it / Modify / Not now buttons');
  expect(prompt).not.toContain('owner can type /ledger');
 });
-it('native Telegram presentation stays distinct from common authority and task context',()=>{
- const prompt=messagingSystemPrompt([],{surface:'telegram',delivery:{text:true,approval:'native_buttons',reactions:true,attachments:false},commands:['/stop','/ledger']});
+it('native Telegram presentation stays distinct from common authority and task context, and offers no commands',()=>{
+ const prompt=messagingSystemPrompt([],{surface:'telegram',delivery:{text:true,approval:'native_buttons',reactions:true,attachments:false}});
  expect(prompt).toContain('Approval delivery: native_buttons');
- expect(prompt).toContain('/ledger');
+ expect(prompt).toContain('Commands: none.');
+ expect(prompt).not.toMatch(/\/(stop|ledger|console)\b/);
  expect(prompt).toContain('does not grant approval');
 });
 
 it('reviewed-skill safety wrapper does not restore false surface delivery promises',()=>{
- const presentation={surface:'whatsapp',delivery:{text:true,approval:'text_callback' as const,reactions:false,attachments:false},commands:[]};
+ const presentation={surface:'whatsapp',delivery:{text:true,approval:'text_callback' as const,reactions:false,attachments:false}};
  const prompt=withOwnerSkillProcedures(messagingSystemPrompt([],presentation),'Reviewed file procedure');
  expect(prompt).not.toContain('Connection links arrive as buttons');
  expect(prompt).not.toContain('Do it / Modify / Not now buttons');
@@ -24,7 +25,7 @@ it('reviewed-skill safety wrapper does not restore false surface delivery promis
 });
 
 it('grounds continuation and file handoff in supplied shared receipts without claiming missing native delivery',()=>{
- const prompt=messagingSystemPrompt([],{surface:'whatsapp',delivery:{text:true,approval:'text_callback',reactions:false,attachments:false},commands:[]});
+ const prompt=messagingSystemPrompt([],{surface:'whatsapp',delivery:{text:true,approval:'text_callback',reactions:false,attachments:false}});
  expect(prompt).toContain('Continue from the supplied shared task');
  expect(prompt).toContain('do not ask the owner to retell');
  expect(prompt).toContain('If shared context is unavailable');

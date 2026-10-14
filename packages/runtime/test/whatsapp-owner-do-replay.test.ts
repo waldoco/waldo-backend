@@ -1,5 +1,5 @@
-// Real signed webhook routing, owner DO storage and turn handling. Graph effects stay local;
-// /stop makes the ingress receipt independent of model/provider behavior.
+// Real signed webhook routing, owner DO storage and turn handling. Graph effects stay local, and the fixed model reply
+// makes the ingress receipt independent of model/provider behavior.
 import { env, runInDurableObject } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
@@ -9,14 +9,14 @@ import type { OwnerDirectory } from '../src/identity/owner-directory';
 
 // Runtime initialization can start a background day-plan call. It is outside this ingress proof.
 vi.mock('openai', () => ({ default: class {
-  responses = { create: async () => ({ id: 'fixture', output_text: '{}', output: [], usage: { input_tokens: 1, output_tokens: 1 } }) };
+  responses = { create: async (input: { text?: { format?: unknown } }) => ({ id: 'fixture', output_text: input.text?.format ? '{}' : 'Synthetic WhatsApp reply.', output: [], usage: { input_tokens: 1, output_tokens: 1 } }) };
 } }));
 
 const SUBJECT = '15550001111';
 const SECRET = 'fictional-whatsapp-app-secret';
 const body = (id: string) => JSON.stringify({ entry: [{ changes: [{ value: {
   metadata: { phone_number_id: 'fictional-phone-id' },
-  messages: [{ from: SUBJECT, id, type: 'text', text: { body: '/stop' } }],
+  messages: [{ from: SUBJECT, id, type: 'text', text: { body: 'Synthetic WhatsApp message.' } }],
 } }] }] });
 
 async function signedRequest(payload: string): Promise<Request> {
@@ -86,7 +86,7 @@ describe('WhatsApp owner DO replay', () => {
         expect(routed).toHaveBeenCalledTimes(2);
         expect(turns).toHaveBeenCalledTimes(1);
         expect(turns).toHaveBeenNthCalledWith(1, expect.objectContaining({ update_id: WA_UPDATE_BASE + 1 }), 'whatsapp');
-        expect(sent).toEqual([{ messaging_product: 'whatsapp', to: SUBJECT, type: 'text', text: { body: 'Nothing is running right now.' } }]);
+        expect(sent).toEqual([{ messaging_product: 'whatsapp', to: SUBJECT, type: 'text', text: { body: 'Synthetic WhatsApp reply.' } }]);
         expect(state.storage.kv.get('wamid:wamid.A')).toBe(now);
         expect(state.storage.kv.get('wamid:expired')).toBeUndefined();
         expect(state.storage.kv.get('wamid:within-retention')).toBe(now - WAMID_RETENTION_MS + 1);

@@ -6,6 +6,7 @@ import { loopBook } from '../src/channels/loops';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
 import { presenceAuthority } from './helpers/directory-presence';
+import { runOwnerJob } from './fixtures/owner-job';
 const fixture = vi.hoisted(() => ({ mail: false, loopId: '', sent: [] as string[], prompts: [] as string[] }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
@@ -62,23 +63,18 @@ it('a mail follow-up is written with the owner\'s health logs, but no stored cop
     state.storage.kv.put('do_name', 'synthetic-mail-owner'); state.storage.kv.put('telegram_subject', '7');
     await state.storage.put('origin', 'https://fixture.invalid');
     await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.compose'] }]);
-    let update = 100;
-    const incoming = async (text: string) => {
-      const response = await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify({ update_id: update++, message: { message_id: update, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text } }) }));
-      expect(response.status).toBe(200);
-    };
     try {
-      await incoming('/fire fetch');
+      await runOwnerJob(owner, 'update_check');
       const loops = loopBook(state.storage.sql, { now: () => now, newId: () => 'test-only' });
       loops.setProactivity({ quiet_start: '20:00', quiet_end: '08:00', volume: 'normal' });
       fixture.mail = true; now += 61_000;
-      await incoming('/fire fetch');
+      await runOwnerJob(owner, 'update_check');
       fixture.mail = false; now = Date.parse('2026-10-03T09:00:00Z');
       dayPlanBook(state.storage.sql).sent('2026-10-03', 'card:brief');
-      await incoming('/fire fetch');
+      await runOwnerJob(owner, 'update_check');
       expect(loops.list()[0]?.source_ref).toBe('mail:mail-thread-1');
       now += 300_000;
-      await incoming('/fire fetch');
+      await runOwnerJob(owner, 'update_check');
       expect(state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)!.filter(r => r.mailFollowup)).toHaveLength(1);
       const followup = fixture.prompts.find(text => text.includes('Mail follow-up check'));
       expect(followup).toContain('~640 kcal, estimate');

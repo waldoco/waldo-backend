@@ -11,7 +11,6 @@ export default defineConfig({
       COMMON_TEST_FINAL_EXPIRED:process.env.COMMON_TEST_FINAL_EXPIRED??'0',
       COMMON_TEST_WORKSPACE_RESULT_FAULT:process.env.COMMON_TEST_WORKSPACE_RESULT_FAULT??'0',
       COMMON_TEST_FIRST_FINAL_FAULT:process.env.COMMON_TEST_FIRST_FINAL_FAULT??'0',
-      COMMON_TEST_STOP_DURING_ACQUIRE:process.env.COMMON_TEST_STOP_DURING_ACQUIRE??'0',
       WALDO_ENV: 'test', RUN_LOOP_PROVIDER_MODE: 'fake', COMMON_OWNER_TASKS:'1', WALDO_EGRESS_ALLOWLIST:'public-pages.fixture.invalid',
       SUPABASE_PROJECT_URL:'https://common-source.fixture.invalid', SUPABASE_PUBLISHABLE_KEY:'common-source-fixture', WALDO_ROUTER_HMAC_SECRET:'common-source-fictional-hmac',
       // The verified owner email follows the text-capture switch (trace-privacy-owner-email.test.ts); this config models the staging vars in wrangler.jsonc (WALDO_ENVIRONMENT staging, capture true); the wrangler default is production, capture off.

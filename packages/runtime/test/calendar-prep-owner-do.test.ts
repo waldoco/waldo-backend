@@ -10,6 +10,7 @@ import { updateBook } from '../src/channels/update-cards';
 import { DeliveryGateStore } from '../src/delivery-gate/store';
 import { ensureSchema } from '../src/tracer/schema';
 import { claimStore } from '../src/memory/claims';
+import { runOwnerJob } from './fixtures/owner-job';
 
 const fixture = vi.hoisted(() => ({ event: null as CalendarItem | null, sent: [] as string[], requests: [] as LLMGatewayRequest[], decision: 'notify', changes: [] as CalendarChange[], mutate: null as (() => void) | null, ack: true }));
 vi.mock('../src/connectors/google', async load => {
@@ -57,11 +58,7 @@ it.each(['cancel', 'revision', 'timezone', 'disconnect', 'new-account', 'scope-r
     state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
     await state.storage.put('origin', 'https://fixture.invalid');
     await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
-    let seq = 100;
-    const incoming = async (text = '/fire briefs') => {
-      const response = await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify({ update_id: seq++, message: { message_id: seq, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text } }) }));
-      expect(response.status).toBe(200);
-    };
+    const incoming = () => runOwnerJob(owner, 'briefs');
     const rows = () => state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)?.filter(r => r.calendarPrep) ?? [];
     const drain = async () => { now += 1000; state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm(); };
     try {
@@ -147,11 +144,7 @@ it('actual default owner DO freezes grounded local-time prep and rechecks quiet/
     state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
     await state.storage.put('origin', 'https://fixture.invalid');
     await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
-    let seq = 100;
-    const incoming = async () => {
-      const response = await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify({ update_id: seq++, message: { message_id: seq, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: '/fire briefs' } }) }));
-      expect(response.status).toBe(200);
-    };
+    const incoming = () => runOwnerJob(owner, 'briefs');
     const drain = async () => { now += 1000; state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm(); };
     try {
       await incoming();
@@ -253,8 +246,8 @@ it.each(counterCases)('counter timezone adoption: $name', async scenario => {
     const retained = [...tables, 'event_cooldowns', 'exempt_telemetry'];
     const before = retained.map(table => state.storage.sql.exec(`SELECT * FROM ${table}`).toArray());
     try {
-      const fire = (update: number) => owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify({ update_id: update, message: { message_id: update + 1, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: '/fire briefs' } }) }));
-      expect((await fire(100)).status).toBe(200);
+      const fire = () => runOwnerJob(owner, 'briefs');
+      await fire();
       expect(state.storage.kv.get('calendar_prep_counter_timezone_v1')).toEqual(scenario.ready ? zone : scenario.marker);
       const decisions = () => fixture.requests.filter(r => r.request.messages.at(-1)?.content.includes('[Meeting prep decision'));
       expect(decisions()).toHaveLength(scenario.ready ? 1 : 0);
@@ -276,13 +269,13 @@ it.each(counterCases)('counter timezone adoption: $name', async scenario => {
       if (scenario.advanceTo) {
         now = Date.parse(scenario.advanceTo);
         fixture.event = { ...fixture.event!, start: new Date(now + 30 * 60_000).toISOString(), end: new Date(now + 60 * 60_000).toISOString() };
-        await fire(104);
+        await fire();
         expect(state.storage.kv.get('calendar_prep_counter_timezone_v1')).toBe(zone);
         expect(decisions()).toHaveLength(1);
         expect(retained.map(table => state.storage.sql.exec(`SELECT * FROM ${table}`).toArray())).toEqual(before);
       }
       if (scenario.ready) {
-        await fire(102);
+        await fire();
         expect(decisions()).toHaveLength(1);
         expect(retained.map(table => state.storage.sql.exec(`SELECT * FROM ${table}`).toArray())).toEqual(before);
       }

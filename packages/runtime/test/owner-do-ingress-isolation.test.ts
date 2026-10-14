@@ -804,21 +804,6 @@ it('actual inbox record and alarm transaction rollback leave no admitted update'
   });
 });
 
-it('delayed consumed stop cannot stop a replacement run in the real DO', async()=>{
-  const { turnControl }=await import('../src/channels/turn-control');const subject=81102;const stub=doStub(subject);
-  await runInDurableObject(stub,async(instance,state)=>{
-    const internal=instance as unknown as {activeInbox:import('../src/channels/telegram-owner-inbox').InboxRecord|null;runtimes:{telegram:{control:ReturnType<typeof turnControl>}};inbox:{transition:(...args:unknown[])=>Promise<boolean>}};
-    const { TelegramOwnerInbox }=await import('../src/channels/telegram-owner-inbox');const { persistInboxWake }=await import('../src/scheduler/alarm-slot');
-    const inbox=new TelegramOwnerInbox(state.storage,persistInboxWake);await inbox.admit({bot:'hermetic-test-bot-token',subject:String(subject),doName:route(subject).doName},991121,'target');
-    const oldTarget=(await inbox.claim('hermetic-test-bot-token:telegram:991121','old-attempt','old-run',Date.now()+150000))!;
-    const control=turnControl();control.bindTarget('old-run');control.begin(true);internal.activeInbox=oldTarget;internal.runtimes.telegram={control};
-    const original=internal.inbox.transition.bind(internal.inbox);let entered!:()=>void;const reached=new Promise<void>(r=>entered=r);let release!:()=>void;const gate=new Promise<void>(r=>release=r);
-    internal.inbox.transition=async(...args)=>{if(args[2]==='consumed'){entered();await gate;}return original(...args);};
-    const request=new Request('https://telegram-owner/enqueue',{method:'POST',headers:{'x-waldo-inbox-secret':'hermetic-test-webhook-secret','x-waldo-telegram-subject':String(subject),'x-waldo-do-name':route(subject).doName},body:JSON.stringify({update_id:991122,message:{message_id:991122,from:{id:subject,is_bot:false},chat:{id:subject,type:'private'},text:'/stop'}})});
-    const pending=instance.fetch(request);await reached;control.end();control.bindTarget('new-run');control.begin(true);internal.activeInbox={...oldTarget,runId:'new-run',attempt:'new-attempt'};release();expect((await pending).status).toBe(200);expect(await control.roundAsync()).toBe('');
-    internal.inbox.transition=original;internal.activeInbox=null;delete (internal.runtimes as {telegram?:unknown}).telegram;await state.storage.deleteAlarm();
-  });
-});
 it('a recovered consumed control is uncertain, never an answered child',async()=>{
   const { TelegramOwnerInbox }=await import('../src/channels/telegram-owner-inbox');const { persistInboxWake }=await import('../src/scheduler/alarm-slot');
   await runInDurableObject(doStub(81101),async(_instance,state)=>{
@@ -875,22 +860,17 @@ it('a forward that arrives while a turn runs is its own labelled turn: no steer,
   });
 }, 30_000);
 
-it.each([{ command: '/fire nightly', updateId: 994461 }, { command: '/stop', updateId: 994462 }, { command: '/ledger', updateId: 994485 }])('a forwarded $command is someone else\'s text: it runs as one labelled turn, never as the owner\'s command', async ({ command, updateId }) => {
+it.each([{ command: '/fire nightly', updateId: 994461 }, { command: '/stop', updateId: 994462 }, { command: '/ledger', updateId: 994485 }])('a forwarded $command is someone else\'s text: it runs as one labelled turn', async ({ command, updateId }) => {
   const subject = 81101;
-  let commands = 0;
   const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
   const { persistInboxWake } = await import('../src/scheduler/alarm-slot');
   await runInDurableObject(doStub(subject), async (instance, state) => {
     await state.storage.put({ telegram_subject: String(subject), do_name: route(subject).doName });
     const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
-    const internal = instance as unknown as { runHarness: () => Promise<string>; drainInbox(): Promise<void>; turn: (update: { update_id?: number }, ...rest: unknown[]) => Promise<void> };
-    const runHarness = internal.runHarness;
+    const internal = instance as unknown as { drainInbox(): Promise<void>; turn: (update: { update_id?: number }, ...rest: unknown[]) => Promise<void> };
     const turn = internal.turn;
     let scoped: boolean | undefined;
-    internal.runHarness = async () => { commands += 1; return 'HARNESS-RAN'; };
-    // Every turn runs under its run's scope; only a command takes the direct path, without one.
     internal.turn = async (update, ...rest) => { if (update.update_id === updateId) scoped = rest[2] !== undefined; return turn.call(instance, update, ...rest); };
-    const before = outbox.length;
     // The shape the Bot API server sends: forward_origin beside the legacy forward fields.
     const sam = { id: 4242, is_bot: false, first_name: 'Sam' };
     const response = await instance.fetch(new Request('https://telegram-owner/enqueue', { method: 'POST', headers: { 'x-waldo-inbox-secret': 'hermetic-test-webhook-secret', 'x-waldo-telegram-subject': String(subject), 'x-waldo-do-name': route(subject).doName }, body: JSON.stringify({ update_id: updateId, message: { message_id: updateId, date: 1_700_000_100, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: command, forward_origin: { type: 'user', date: 1_700_000_000, sender_user: sam }, forward_from: sam, forward_date: 1_700_000_000 } }) }));
@@ -901,14 +881,59 @@ it.each([{ command: '/fire nightly', updateId: 994461 }, { command: '/stop', upd
       expect(['completed', 'quarantined']).toContain((await inbox.records()).find(row => row.updateId === updateId)?.state);
     }, { timeout: 20_000, interval: 50 });
     const row = (await inbox.records()).find(row => row.updateId === updateId)!;
-    const replies = outbox.slice(before).filter(item => item.method === 'sendMessage').map(item => String(item.body.text));
-    expect.soft(commands).toBe(0);
-    expect.soft(replies).not.toContain('Nothing is running right now.');
     expect.soft(row.state).toBe('completed');
     expect.soft(scoped).toBe(true);
     expect.soft(JSON.stringify(modelInputs)).toContain(JSON.stringify(`[Forwarded by the owner from someone else:]\n${JSON.stringify(command)}\n[End of forwarded text.]`).slice(1, -1));
-    internal.runHarness = runHarness;
     internal.turn = turn;
+    await state.storage.deleteAlarm();
+  });
+}, 30_000);
+
+// No chat command is left: each of these is the owner's own words, read and answered by the model like any message.
+it.each(['/stop', '/console', '/ledger', '/fire briefs', '/trace tg-12', '/e2e', '/usage', '/langfuse', '/heldrows day_plan'].map((text, index) => ({ text, updateId: 994731 + index })))('the owner typing $text gets an ordinary turn: the model reads it and its answer is the reply', async ({ text, updateId }) => {
+  // An owner whose history holds no forwarded or quoted fixture text, so the model's answer is the whole reply.
+  const subject = 81104;
+  const before = outbox.length, calls = modelInputs.length;
+  expect((await send(subject, text, updateId)).status).toBe(200);
+  const replies = outbox.slice(before).filter(item => item.method === 'sendMessage' && item.body.chat_id === subject).map(item => String(item.body.text));
+  expect.soft(replies).toEqual(['Synthetic answer from the model adapter.']);
+  expect.soft(JSON.stringify(modelInputs.slice(calls))).toContain(JSON.stringify(text).slice(1, -1));
+  await runInDurableObject(doStub(subject), async (_instance, state) => { await state.storage.deleteAlarm(); });
+}, 30_000);
+
+// No exact word stops a run: "stop" mid-turn is a steer the model reads at its next round, as any added message is.
+it.each([{ text: 'stop', updateId: 994621 }, { text: '/stop', updateId: 994623 }])('the owner\'s "$text" while a turn runs reaches the model as their words, and nothing kills the run', async ({ text, updateId }) => {
+  const subject = 81101;
+  const parentId = updateId;
+  const childId = parentId + 1;
+  let steers = 0;
+  const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
+  const { persistInboxWake } = await import('../src/scheduler/alarm-slot');
+  await runInDurableObject(doStub(subject), async (instance, state) => {
+    const binding = { bot: 'hermetic-test-bot-token', subject: String(subject), doName: route(subject).doName };
+    await state.storage.put({ telegram_subject: String(subject), do_name: route(subject).doName });
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    await inbox.admit(binding, parentId, JSON.stringify({ update_id: parentId, message: { message_id: parentId, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: 'PARENT-SYNTHETIC: plan my evening.' } }));
+    const calls = modelInputs.length;
+    onFixtureReply = async () => {
+      const control = (instance as unknown as { runtimes: { telegram: { control: import('../src/channels/turn-control').TurnControl } } }).runtimes.telegram.control;
+      const original = control.steerTarget.bind(control);
+      control.steerTarget = (...args) => { const accepted = original(...args); if (accepted) steers += 1; return accepted; };
+      const response = await instance.fetch(new Request('https://telegram-owner/enqueue', { method: 'POST', headers: { 'x-waldo-inbox-secret': 'hermetic-test-webhook-secret', 'x-waldo-telegram-subject': String(subject), 'x-waldo-do-name': route(subject).doName }, body: JSON.stringify({ update_id: childId, message: { message_id: childId, date: 1_700_000_100, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text } }) }));
+      expect(response.status).toBe(200);
+      control.steerTarget = original;
+    };
+    await (instance as unknown as { drainInbox(): Promise<void> }).drainInbox();
+    await vi.waitFor(async () => {
+      await instance.alarm();
+      const finished = (await inbox.records()).filter(row => [parentId, childId].includes(row.updateId) && ['consumed', 'completed', 'quarantined'].includes(row.state));
+      expect(finished).toHaveLength(2);
+    }, { timeout: 20_000, interval: 50 });
+    const rows = await inbox.records();
+    expect.soft(steers).toBe(1);
+    expect.soft(rows.find(row => row.updateId === parentId)?.state).toBe('completed');
+    expect.soft(rows.find(row => row.updateId === parentId)?.reason).not.toBe('owner_stopped');
+    expect.soft(JSON.stringify(modelInputs.slice(calls))).toContain(JSON.stringify(`the owner added: ${JSON.stringify(text)}`).slice(1, -1));
     await state.storage.deleteAlarm();
   });
 }, 30_000);
@@ -937,21 +962,18 @@ it('a forwarded /start or /link gets one fixed reply and is never redeemed or st
   });
 }, 30_000);
 
-it('an owner command typed as a reply to a forward still runs: the text is the owner\'s', async () => {
+it('slash text the owner types as a reply to a forward reaches the model as their own words', async () => {
   const subject = 81101;
   const updateId = 994484;
-  let commands = 0;
   const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
   const { persistInboxWake } = await import('../src/scheduler/alarm-slot');
   await runInDurableObject(doStub(subject), async (instance, state) => {
     await state.storage.put({ telegram_subject: String(subject), do_name: route(subject).doName });
     const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
-    const internal = instance as unknown as { runHarness: () => Promise<string>; drainInbox(): Promise<void> };
-    const runHarness = internal.runHarness;
-    internal.runHarness = async () => { commands += 1; return 'HARNESS-RAN'; };
+    const internal = instance as unknown as { drainInbox(): Promise<void> };
     const sam = { id: 4242, is_bot: false, first_name: 'Sam' };
     const forwardedNote = { message_id: updateId - 1, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: 'Synthetic forwarded note.', forward_origin: { type: 'user', date: 1_700_000_000, sender_user: sam }, forward_from: sam, forward_date: 1_700_000_000 };
-    const before = outbox.length;
+    const calls = modelInputs.length;
     const response = await instance.fetch(new Request('https://telegram-owner/enqueue', { method: 'POST', headers: { 'x-waldo-inbox-secret': 'hermetic-test-webhook-secret', 'x-waldo-telegram-subject': String(subject), 'x-waldo-do-name': route(subject).doName }, body: JSON.stringify({ update_id: updateId, message: { message_id: updateId, date: 1_700_000_100, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: '/fire nightly', reply_to_message: forwardedNote } }) }));
     expect(response.status).toBe(200);
     await internal.drainInbox();
@@ -959,9 +981,11 @@ it('an owner command typed as a reply to a forward still runs: the text is the o
       await instance.alarm();
       expect((await inbox.records()).find(row => row.updateId === updateId)?.state).toBe('completed');
     }, { timeout: 20_000, interval: 50 });
-    expect.soft(commands).toBe(1);
-    expect.soft(outbox.slice(before).map(item => item.body.text)).toContain('HARNESS-RAN');
-    internal.runHarness = runHarness;
+    // The newest owner message in the reply request: earlier turns in the history may hold a forwarded copy of the same words.
+    const reply = modelInputs.slice(calls).find(body => !(body as { text?: { format?: unknown } }).text?.format) as { input?: { role?: string }[] } | undefined;
+    const said = JSON.stringify((reply?.input ?? []).filter(item => item.role === 'user').at(-1));
+    expect.soft(said).toContain('/fire nightly');
+    expect.soft(said).not.toContain(JSON.stringify(`[Forwarded by the owner from someone else:]\n${JSON.stringify('/fire nightly')}`).slice(1, -1));
     await state.storage.deleteAlarm();
   });
 }, 30_000);
@@ -1022,9 +1046,9 @@ it('a quote inside the owner\'s mid-turn message reaches the model labelled, and
   });
 }, 30_000);
 
-it.each([false, true])('accepted concurrent forget after the final model round has a consumed or visible child outcome (target stopped=%s)', async (stopped) => {
+it('accepted concurrent forget after the final model round has a consumed or visible child outcome', async () => {
   const subject = 81101;
-  const parentId = stopped ? 994421 : 994411;
+  const parentId = 994411;
   const childId = parentId + 1;
   let acceptedSteer: boolean | undefined;
   const marker = 'FORGET-CONCURRENT-SYNTHETIC';
@@ -1038,7 +1062,6 @@ it.each([false, true])('accepted concurrent forget after the final model round h
     onFixtureReply = async () => {
       const internal = instance as unknown as { activeInbox: { runId: string }; runtimes: { telegram: { control: import('../src/channels/turn-control').TurnControl } } };
       const control = internal.runtimes.telegram.control;
-      if (stopped) expect(control.stopTarget(internal.activeInbox.runId)).toBe(true);
       const original = control.steerTarget.bind(control);
       control.steerTarget = (...args) => { acceptedSteer = original(...args); return acceptedSteer; };
       const response = await instance.fetch(new Request('https://telegram-owner/enqueue', { method: 'POST', headers: { 'x-waldo-inbox-secret': 'hermetic-test-webhook-secret', 'x-waldo-telegram-subject': String(subject), 'x-waldo-do-name': route(subject).doName }, body: JSON.stringify({ update_id: childId, message: { message_id: childId, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: `Forget ${marker}.` } }) }));
@@ -1057,7 +1080,7 @@ it.each([false, true])('accepted concurrent forget after the final model round h
     }, { timeout: 8000, interval: 50 });
     const child = (await inbox.records()).find(row => row.updateId === childId)!;
     const finals = state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1') ?? [];
-    expect(acceptedSteer).toBe(!stopped);
+    expect(acceptedSteer).toBe(true);
     const consumed = child.state === 'consumed' || child.state === 'completed';
     const visibleOutcome = finals.some(row => row.trace === `tg-${childId}`);
     expect(consumed || visibleOutcome, JSON.stringify({ state: child.state, reason: child.reason, seenByModel: JSON.stringify(modelInputs).includes(marker), acceptedSteer, visibleOutcome, parentNotice: finals.some(row => row.trace === `tg-${parentId}`) })).toBe(true);
@@ -1372,7 +1395,7 @@ it.skipIf(env.SUPABASE_PROJECT_URL !== 'https://common-source.fixture.invalid')(
   }
 });
 
-it.skipIf(env.SUPABASE_PROJECT_URL!=='https://common-source.fixture.invalid').each([(env as typeof env & {COMMON_TEST_STOP_DURING_ACQUIRE?:string}).COMMON_TEST_STOP_DURING_ACQUIRE==='1'])('two-argument registered owner host reaches canonical workspace across physical reconstruction (stop-during-acquire %s)',async(stopDuringAcquire)=>{
+it.skipIf(env.SUPABASE_PROJECT_URL!=='https://common-source.fixture.invalid')('two-argument registered owner host reaches canonical workspace across physical reconstruction',async()=>{
  const subject=81106,authUser='30000000-0000-0000-0000-000000000006';
  const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(authUser)))].map(b=>b.toString(16).padStart(2,'0')).join('');
  const {responsibilityOwnerRootName}=await import('../src/index');
@@ -1389,31 +1412,12 @@ it.skipIf(env.SUPABASE_PROJECT_URL!=='https://common-source.fixture.invalid').ea
  commonBrowserFixture.reset();commonRealHostJourney=true;taskDecision={decision:'retain',sources:[]};
  const recoverWorkspace=(env as typeof env & {COMMON_TEST_WORKSPACE_RESULT_FAULT?:string}).COMMON_TEST_WORKSPACE_RESULT_FAULT==='1';if(recoverWorkspace){loseWorkspaceResult=true;lostWorkspaceResults=0;issuedWorkspaceWrites=0;}
  const interruptFinal=(env as typeof env & {COMMON_TEST_FIRST_FINAL_FAULT?:string}).COMMON_TEST_FIRST_FINAL_FAULT==='1';if(interruptFinal){blockFirstRootFinal=true;blockedRootFinals=0;}
- let reachedAcquire!:()=>void,releaseAcquire!:()=>void;
- const acquireReached=new Promise<void>(resolve=>{reachedAcquire=resolve;});
- const acquireGate=new Promise<void>(resolve=>{releaseAcquire=resolve;});
- if(stopDuringAcquire)commonBrowserFixture.onAcquire=async()=>{reachedAcquire();await acquireGate;};
 
  try{
   let checkedOriginal=false;
   onCommonOriginalBeforeClassify=()=>runInDurableObject(doStub(subject),async(_instance,state)=>{const prefix='canonical-owner-v1:prn_10000000000000000000000000081106:ten_10000000000000000000000000081106:';const entries=[...state.storage.kv.list<any>({prefix:prefix+'conv:'})].map(([,row])=>row);expect(entries).toHaveLength(1);expect(entries[0]).toMatchObject({id:'tg-998001',role:'user',modelPayload:'Prepare a real private note from supplied material.'});expect(state.storage.kv.get<any>(prefix+'witness:tg-998001')?.entry).toEqual(entries[0]);expect(state.storage.kv.get(prefix+'conv-leaf')).toBeUndefined();checkedOriginal=true;});
   const pendingSend=send(subject,'Prepare a real private note from supplied material.',998001);
-  if(stopDuringAcquire){
-   await acquireReached;
-   const response=await doStub(subject).fetch('https://telegram-owner/enqueue',{method:'POST',headers:{'x-waldo-inbox-secret':'hermetic-test-webhook-secret','x-waldo-telegram-subject':String(subject),'x-waldo-do-name':route(subject).doName},body:JSON.stringify({update_id:998004,message:{message_id:998004,from:{id:subject,is_bot:false},chat:{id:subject,type:'private'},text:'/stop'}})});
-   expect(response.status).toBe(200);releaseAcquire();
-  }
   await pendingSend;expect(checkedOriginal).toBe(true);
-  if(stopDuringAcquire){
-   await vi.waitFor(()=>expect(commonBrowserFixture.ends).toBe(1));expect(commonBrowserFixture.allocations).toBe(1);
-   await runInDurableObject(doStub(subject),async(_instance,state)=>{
-    const rows=[...state.storage.kv.list<any>({prefix:'common-browser:'})];expect(rows).toHaveLength(1);expect(rows[0]![1]).toMatchObject({cleanup:'closed',allocation:'observed',session:{providerSessionId:'fixture-retained-provider'}});
-    const tables=state.storage.sql.exec("SELECT name FROM sqlite_master WHERE name='workspace_manifest'").toArray();expect(tables).toHaveLength(0);
-    const finals=state.storage.kv.get<any[]>('telegram_final_outbox_v1')??[];expect(finals.some(final=>String(final.payload.text).includes('Private note saved'))).toBe(false);
-   });
-   return;
-  }
-
   if(recoverWorkspace){expect(lostWorkspaceResults).toBe(1);expect(issuedWorkspaceWrites).toBe(1);}
   if(interruptFinal){
    expect(blockedRootFinals).toBeGreaterThan(0);const calls=modelInputs.length;
@@ -1459,12 +1463,6 @@ it.skipIf(env.SUPABASE_PROJECT_URL!=='https://common-source.fixture.invalid').ea
   });
   expect(commonBrowserFixture.allocations).toBe(1);expect(commonBrowserFixture.pages).toHaveLength(2);
   expect(JSON.stringify(modelInputs)).toContain('input_image');
-  await evictDurableObject(doStub(subject));await evictDurableObject(root);
-  await send(subject,'/stop',998003);
-  await vi.waitFor(()=>expect(commonBrowserFixture.ends).toBe(1));
-  await runInDurableObject(doStub(subject),async(_instance,state)=>{
-   const rows=[...state.storage.kv.list<any>({prefix:'common-browser:'})];expect(rows[0]![1].cleanup).toBe('closed');
-  });
 
  }finally{loseWorkspaceResult=false;blockFirstRootFinal=false;commonRealHostJourney=false;vi.unstubAllGlobals();}
 });

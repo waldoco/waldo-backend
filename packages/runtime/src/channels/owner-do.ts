@@ -73,11 +73,10 @@ import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
 import { CONSOLE_INVITES_PATH, renderMemberInvites } from './console-invites';
 import { newInviteCode, inviteLink } from '../identity/invite-code';
 import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, consoleActionTraceDetail, consoleMayApprove, consoleSessionRows, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, CONSOLE_RUNS_PATH, CONSOLE_PAGES, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
-import { consoleLinkSender, consoleLinkText, maskCredentialReply, mintConsoleLink, recordCredentialMessage, telegramConsoleRoute, type ConsoleLinkRoute } from './console-link';
+import { consoleLinkSender, maskCredentialReply, mintConsoleLink, telegramConsoleRoute, type ConsoleLinkRoute } from './console-link';
 import { iMessageConsoleRoute } from './imessage/console-link';
 import { consoleLinkHandler } from '../tools/live/console-link';
-import { HARNESS_MESSAGE_LIMIT, heldRowShapes } from '../memory/held-rows';
-import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
+import { traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
 import { Scheduler } from '../scheduler/multiplexer';
@@ -101,8 +100,7 @@ import { memoryHandlers } from '../tools/live/memory';
 import { literalTextRedactor } from '@waldo/contracts';
 import { browserOwnerHost, BROWSER_TASK_KEY, type BrowserOwnerConfiguration } from './browser-owner-host';
 import { browserProductionConfiguration, browserOwnerBindingReader } from './browser-production-factory';
-import { browserTrialConsent, BROWSER_TRIAL_PATH, BROWSER_TRIAL_PENDING_KEY, BROWSER_TRIAL_REVOCATION_KEY, type BrowserTrialPreparation } from './browser-trial-consent';
-import { browserOwnerAuthority } from './browser-owner-authority';
+import { browserTrialConsent, BROWSER_TRIAL_PATH, type BrowserTrialPreparation } from './browser-trial-consent';
 import { browserTaskSourceCustody } from './browser-task-source';
 import { browserTaskHandler, browserTaskApprovalBridge } from '../tools/live/browser-task';
 import { COMMON_BROWSER_LEASE_DUE, ownerBrowserRuntime } from './owner-browser-runtime';
@@ -183,7 +181,6 @@ type OwnerRuntime = Readonly<{
   probeCapture: ProbeCaptureSlot;
   probeGuard: { suppressMemory: boolean; stripLiveTools: boolean };
   desk: ApprovalDesk;
-  ledger(): Promise<string>;
   updates: UpdateBook;
   reminders: ReturnType<typeof reminderBook>;
   runs: ReturnType<typeof runBook>;
@@ -430,26 +427,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (!supportedCallback && parsed.accepted.length === 0) return new Response('ok');
     const bot = this.env.TELEGRAM_BOT_TOKEN?.split(':')[0];
     if (!bot) return new Response('unavailable', { status: 503 });
-    // A forward is someone else's text, so it never steers or stops the running turn: it runs as its own labelled turn.
+    // A forward is someone else's text, so it never steers the running turn: it runs as its own labelled turn. Every other
+    // message that arrives while a turn runs, "stop" among them, is a steer the model reads at its next round.
     const text = isForward(raw.message) ? undefined : raw.message?.text?.trim();
     const target = this.activeInbox;
     const steer = parsed.accepted[0];
-    const control = target?.runId && text && steer && (text === '/stop' || !text.startsWith('/')) ? { kind: text === '/stop' ? 'stop' as const : 'steer' as const, targetRun: target.runId } : undefined;
+    const control = target?.runId && text && steer ? { kind: 'steer' as const, targetRun: target.runId } : undefined;
     try {
       const traceIdentity = identityForStorage(readOwnerTraceHeader(request.headers), resolveCaptureText(this.env));
       const admitted = await this.inbox.admit({ bot, subject, doName, ...(traceIdentity ? { traceIdentity } : {}) }, raw.update_id!, admittedBody, control);
       if (admitted === 'conflict' || admitted === 'capacity') return new Response(admitted, { status: admitted === 'conflict' ? 409 : 503 });
       // Binding follows authenticated admission, and never replaces a different binding.
       this.ctx.storage.kv.put('do_name', doName); this.ctx.storage.kv.put('telegram_subject', subject);
-      if (text === '/stop') {
-        if (this.browserTrial) {
-          this.ctx.storage.kv.delete(BROWSER_TRIAL_PENDING_KEY);
-          this.ctx.storage.kv.put(BROWSER_TRIAL_REVOCATION_KEY, crypto.randomUUID());
-          const authorization = browserOwnerAuthority(this.ctx.storage).read();
-          if (authorization) this.ctx.storage.kv.put('browser_owner_task_revoked_v1', authorization.manifest.runId);
-        }
-        this.ownerBrowser.stop(); await this.browserTasks.revoke(); this.ctx.waitUntil(this.browserReady.then(() => Promise.all([this.browserTasks.stop(), this.ownerBrowser.maintain()])));
-      }
       const origin = request.headers.get('x-waldo-origin'); if (origin) this.ctx.storage.kv.put('origin', origin);
       const timezone = request.headers.get('x-waldo-timezone'); if (timezone) this.ctx.storage.kv.put('timezone', timezone);
       if (admitted === 'admitted' && control && this.activeInbox?.runId === control.targetRun) {
@@ -458,15 +447,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const attempt = crypto.randomUUID(); const claimed = await this.inbox.claim(row.id, attempt, crypto.randomUUID(), Date.now() + 180_000);
           if (claimed && this.activeInbox?.runId === control.targetRun) {
             this.liveAttempts.add(attempt);
-            if (control.kind === 'stop') {
-              if (target && target.runId === control.targetRun) { this.closeRunAtomic(target, 'owner_stopped'); this.activeAbort?.abort(); }
-              await this.inbox.transition(row.id, attempt, 'consumed'); this.runtimes.telegram?.control.stopTarget(control.targetRun);
-            }
             // The steer carries the parsed parts, so a quote in it stays labelled and is never the owner's evidence.
-            else if (!this.runtimes.telegram?.control.steerTarget(control.targetRun, raw.update_id!, renderForModel(steer!.parts))) {
+            if (!this.runtimes.telegram?.control.steerTarget(control.targetRun, raw.update_id!, renderForModel(steer!.parts))) {
               await this.inbox.returnUnconsumedSteer(row.id, attempt); this.liveAttempts.delete(attempt);
             }
-          } else if (claimed && control.kind === 'steer') await this.inbox.returnUnconsumedSteer(row.id, attempt);
+          } else if (claimed) await this.inbox.returnUnconsumedSteer(row.id, attempt);
         }
       }
       return new Response('ok');
@@ -518,8 +503,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await this.inbox.transition(row.id, attempt, 'quarantined', 'owner_binding'); return;
       }
       const raw = JSON.parse(row.body) as RawUpdate;
-      // A forward is never the owner's command, so it runs as a turn under this run's scope.
-      const direct = Boolean(raw.callback_query || (!isForward(raw.message) && (parseHarnessCommand(raw.message?.text) || ['/stop', '/ledger'].includes(raw.message?.text?.trim() ?? ''))));
+      // A button press is answered directly; every message, whatever its text, runs as a turn under this run's scope.
+      const direct = Boolean(raw.callback_query);
       if (direct) await this.turn(raw, 'telegram', true);
       else {
         const expired = new Promise<never>((_, reject) => { abort.signal.addEventListener('abort', () => reject(new ClosedRunError()), { once: true }); timeout = setTimeout(() => reject(new ClosedRunError()), Math.max(0, scope.deadline - Date.now())); });
@@ -1382,11 +1367,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const routed = posted.startsWith('c1.') && this.env.WALDO_ROUTER_HMAC_SECRET ? await readConsoleTicket(posted, this.env.WALDO_ROUTER_HMAC_SECRET) : null;
       if (posted.startsWith('c1.') && (!routed || this.env.OWNER_DO?.idFromName(routed.owner).toString() !== this.ctx.id.toString())) return new Response('Invalid console link.', { status: 403 });
       const session = await this.serial(() => access.redeem(routed?.token ?? posted, sessionCookie(request)));
-      if (!session) return new Response('This console link is used or expired. Send /console to Waldo for a new one.', { status: 403 });
+      if (!session) return new Response('This console link is used or expired. Ask Waldo in chat for a new one, or sign in with your email at /console/signin.', { status: 403 });
       return new Response(null, { status: 303, headers: { location: CONSOLE_PATH, 'set-cookie': `${CONSOLE_COOKIE}=${session}; Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=43200` } });
     }
     const session = await access.session(sessionCookie(request));
-    if (!session) return new Response('Send /console to Waldo on Telegram for a sign-in link.', { status: 401, headers: overviewRoute ? DASHBOARD_OVERVIEW_HEADERS : undefined });
+    if (!session) return new Response('Not signed in. Sign in with your email at /console/signin, or ask Waldo in chat for a console link.', { status: 401, headers: overviewRoute ? DASHBOARD_OVERVIEW_HEADERS : undefined });
     if (url.pathname === '/console/browser-handoff') return this.ownerBrowser.consoleHandoff(request,session.csrf,async()=>{const fresh=await access.session(sessionCookie(request));if(!fresh||fresh.csrf!==session.csrf)throw new Error('console session expired');});
     if (url.pathname === CONSOLE_DEVICES_PATH && request.method === 'GET') {
       const owner = this.ctx.storage.kv.get<string>('do_name') ?? '';
@@ -1615,7 +1600,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (action.action === 'session.signout.all') {
           if (!await this.signOutEverywhere()) return new Response('Signing out everywhere did not finish. This browser is still signed in; go back and try again.', { status: 503, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
         } else await access.signOut(session.token);
-        return new Response('Signed out. Send /console to Waldo on Telegram to sign in again.', { headers: { 'set-cookie': `${CONSOLE_COOKIE}=; Path=${CONSOLE_PATH}; Max-Age=0` } });
+        return new Response('Signed out. To sign in again, use your email at /console/signin or ask Waldo in chat for a console link.', { headers: { 'set-cookie': `${CONSOLE_COOKIE}=; Path=${CONSOLE_PATH}; Max-Age=0` } });
       }
       const done = action ? await this.serial(() => act(action)) : false;
       // A string result is a NOTICES key (e.g. an honest partial-failure receipt); boolean keeps the old path.
@@ -1968,7 +1953,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
 
   private async turn(update: unknown, channel: ChannelKind = 'telegram', durable = false, scope?: RunEffectScope): Promise<void> {
     update = maskCredentialReply(update, this.ctx.storage.kv);
-    const { listener, owner, call, desk, ledger, updates, control, log, ready } = this.setup(channel);
+    const { listener, owner, call, desk, updates, control, log, ready } = this.setup(channel);
     await ready;
     if (channel === 'imessage') {
       const record = this.activeIMessage;
@@ -1997,54 +1982,27 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (!durable) await this.ctx.storage.put(offsetKey, raw.update_id + 1);
       return log({ trace: ownerTurnTrace(channel, raw.update_id), hop: 'steer', ms: 0, ok: true, detail: 'answered inside the running turn' });
     }
-    // A forward is someone else's text: it runs as a labelled turn, never as the owner's command.
-    const ownerCommand = !nativeSurface(channel) && fromOwner && !isForward(raw.message);
-    if (ownerCommand && raw.message?.text?.trim() === '/stop') {
+    // A button press is answered here, outside the listener's turn pipeline, and closes with a machine_turn root like every
+    // other machine execution so it leaves a trace. Every message runs as a turn; a forward is labelled as someone else's text.
+    if (!nativeSurface(channel) && raw.callback_query !== undefined) {
       if (raw.update_id === undefined || raw.update_id < offset) return;
-      if (!durable) await this.ctx.storage.put(offsetKey, raw.update_id + 1);
-      return void (await call('sendMessage', { chat_id: owner, text: 'Nothing is running right now.' }));
-    }
-    const harness = ownerCommand ? parseHarnessCommand(raw.message?.text) : null;
-    const handledDirectly = !nativeSurface(channel) && (raw.callback_query !== undefined || harness !== null || (ownerCommand && raw.message?.text?.trim() === '/ledger'));
-    if (handledDirectly) {
-      if (raw.update_id === undefined || raw.update_id < offset) return;
-      // Commands run outside the listener turn pipeline, so without this receipt they left no
-      // Langfuse trace at all (2026-09-27 sweep #12). A command turn now closes with a
-      // machine_turn root like every other machine execution.
       const updateId = raw.update_id;
-      const commandTrace = ownerTurnTrace(channel, updateId);
-      const commandStarted = Date.now();
-      const commandWhat = harness ? `/${harness.kind}` : raw.callback_query !== undefined ? 'callback' : '/ledger';
-      const run = async () => {
-        if (harness?.kind === 'console') {
-        if (!durable) await this.ctx.storage.put(offsetKey, updateId + 1);
-        const link = await mintConsoleLink(this.ctx.storage, this.env);
-        const sent = await call('sendMessage', { chat_id: owner, text: link ? consoleLinkText(link) : 'Console sign-in is unavailable; try again shortly.', link_preview_options: { is_disabled: true } });
-        if (link) recordCredentialMessage(this.ctx.storage.kv, sent);
-        return;
-      }
-      if (harness) {
-        if (!durable) await this.ctx.storage.put(offsetKey, updateId + 1);
-        await call('sendMessage', { chat_id: owner, text: (await this.runHarness(harness, updateId)).slice(0, HARNESS_MESSAGE_LIMIT) });
-        return;
-      }
-      const feedback = raw.callback_query?.data?.match(/^fb:(\d+):([un])$/);
-      if (feedback && raw.callback_query) {
-        const query = raw.callback_query;
-        const rated = query.from.id === owner && updates.rate(Number(feedback[1]), feedback[2] === 'u' ? 'useful' : 'not useful');
-        await call('answerCallbackQuery', { callback_query_id: query.id, text: rated ? 'Thanks, noted.' : 'Already handled.' });
-        if (rated && query.message) await call('editMessageReplyMarkup', { chat_id: query.message.chat.id, message_id: query.message.message_id, reply_markup: { inline_keyboard: [] } }).catch(() => undefined);
-      } else if (raw.callback_query) await desk.callback(raw.callback_query, commandTrace);
-        else await call('sendMessage', { chat_id: owner, text: await ledger() });
-        if (!durable) await this.ctx.storage.put(offsetKey, updateId + 1);
-      };
+      const callbackTrace = ownerTurnTrace(channel, updateId);
+      const started = Date.now();
+      const query = raw.callback_query;
       try {
-        await run();
-        log({ trace: commandTrace, hop: 'command', ms: Date.now() - commandStarted, ok: true, detail: commandWhat });
-        log({ trace: commandTrace, hop: 'machine_turn', ms: Date.now() - commandStarted, ok: true, detail: 'command' });
+        const feedback = query.data?.match(/^fb:(\d+):([un])$/);
+        if (feedback) {
+          const rated = query.from.id === owner && updates.rate(Number(feedback[1]), feedback[2] === 'u' ? 'useful' : 'not useful');
+          await call('answerCallbackQuery', { callback_query_id: query.id, text: rated ? 'Thanks, noted.' : 'Already handled.' });
+          if (rated && query.message) await call('editMessageReplyMarkup', { chat_id: query.message.chat.id, message_id: query.message.message_id, reply_markup: { inline_keyboard: [] } }).catch(() => undefined);
+        } else await desk.callback(query, callbackTrace);
+        if (!durable) await this.ctx.storage.put(offsetKey, updateId + 1);
+        log({ trace: callbackTrace, hop: 'command', ms: Date.now() - started, ok: true, detail: 'callback' });
+        log({ trace: callbackTrace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'command' });
       } catch (error) {
-        log({ trace: commandTrace, hop: 'command', ms: Date.now() - commandStarted, ok: false, error: String(error), detail: commandWhat });
-        log({ trace: commandTrace, hop: 'machine_turn', ms: Date.now() - commandStarted, ok: false, detail: 'command' });
+        log({ trace: callbackTrace, hop: 'command', ms: Date.now() - started, ok: false, error: String(error), detail: 'callback' });
+        log({ trace: callbackTrace, hop: 'machine_turn', ms: Date.now() - started, ok: false, detail: 'command' });
         throw error;
       }
       return;
@@ -2062,49 +2020,6 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const failure: TurnLogEntry = { trace: `${channel}-browser-cleanup`, hop: 'browser_cleanup', ms: 0, ok: false, code: 'browser_cleanup_unresolved', error: 'Browser cleanup failed; session absence remains unconfirmed.' };
         try { log(failure); } catch { console.error(JSON.stringify(failure)); }
       }
-    }
-  }
-
-  private async runHarness(command: NonNullable<ReturnType<typeof parseHarnessCommand>>, updateId: number): Promise<string> {
-    const { traces, timezone, cards, briefs, nightly, updateCheck } = this.setup();
-    if (command.kind === 'trace') return traces.recent(timezone, command.filter);
-    if (command.kind === 'e2e') return traces.checklist(timezone);
-    if (command.kind === 'usage') return traces.usage();
-    if (command.kind === 'langfuse') return this.checkLangfuse();
-    if (command.kind === 'heldrows') {
-      // Shape only. 25 rows matches the /trace default.
-      const memory = claimStore(this.ctx.storage.sql);
-      const topics = [...memory.incompleteTopics().map(topic => ({ topic, state: 'incomplete' as const })), ...memory.pendingTopics().map(topic => ({ topic, state: 'pending' as const }))];
-      return heldRowShapes(this.ctx.storage.sql, command.table ?? '', topics, 25, topic => memory.forgetSources(topic, true), command.from ?? undefined);
-    }
-    if (command.kind !== 'fire') return '';
-    if (command.target === null) return `Usage: /fire <${FIRE_TARGETS.join(' | ')}>`;
-    const trace = `harness-${updateId}`;
-    const entry = { id: command.target, occurrence_at: Date.now(), attempts: 0 } as unknown as ScheduleEntry;
-    try {
-      // A harness fire runs the same job the schedule would, as the same owner.
-      if (command.target === 'fetch') await this.asOwnerJob('heartbeat', trace, () => updateCheck(trace));
-      else if (command.target === 'briefs') await this.asOwnerJob('pre_activity_spot', trace, () => briefs(entry));
-      else if (command.target === 'nightly') await this.asOwnerJob('dreaming', trace, () => nightly(entry));
-      else await this.asOwnerJob('brief', trace, () => cards(entry));
-    } catch (error) {
-      return `Fired ${command.target}; it failed: ${String(error)}\n\n${traces.recent(timezone, null, 10)}`;
-    }
-    return `Fired ${command.target}.\n\n${traces.recent(timezone, null, 10)}`;
-  }
-
-  private async checkLangfuse(): Promise<string> {
-    const otlp = langfuseOtlpConfig(this.env);
-    if (!otlp) return 'Langfuse is not configured: one of LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY or LANGFUSE_BASE_URL is missing.';
-    const exportTurn = otlpTurnExporter(otlp, {
-      environment: this.env.WALDO_ENVIRONMENT ?? 'development', release: this.env.WALDO_RELEASE ?? 'unknown',
-      channel: 'telegram', userId: 'langfuse-check', sessionId: 'langfuse-check', captureText: false,
-    });
-    try {
-      await exportTurn({ trace: `langfuse-check-${Date.now()}`, hop: 'turn', ms: 1, ok: true, detail: 'owner self-test' });
-      return 'Langfuse self-test export accepted. A telegram.turn trace from user langfuse-check should appear within a minute.';
-    } catch (error) {
-      return `Langfuse self-test failed: ${String(error)}`;
     }
   }
 
@@ -3360,7 +3275,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (delivered && record.reaction) await api.setMessageReaction({ chat_id: record.payload.chat_id,
         message_id: record.reaction.message_id, reaction: [{ type: 'emoji', emoji: record.reaction.emoji }] }).catch(() => undefined);
     };
-    const runtime: OwnerRuntime = { macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, cards, updateCheck, calendarPrepCurrent, retainedRecallAvailable: () => memory.incompleteTopics().length === 0, traces, log, google,
+    const runtime: OwnerRuntime = { macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, cards, updateCheck, calendarPrepCurrent, retainedRecallAvailable: () => memory.incompleteTopics().length === 0, traces, log, google,
       view: async (session, notice, page) => {
         const linked = await google.state();
         const tracePage = traces.rowsPage(clock.timezone, 60, page?.traceBefore);

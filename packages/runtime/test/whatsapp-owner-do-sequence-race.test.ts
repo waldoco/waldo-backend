@@ -5,7 +5,7 @@ import { OwnerDO } from '../src/channels/owner-do';
 import { WA_UPDATE_BASE } from '../src/channels/whatsapp-api';
 
 vi.mock('openai', () => ({ default: class {
-  responses = { create: async () => ({ id: 'fixture', output_text: '{}', output: [], usage: { input_tokens: 1, output_tokens: 1 } }) };
+  responses = { create: async (input: { text?: { format?: unknown } }) => ({ id: 'fixture', output_text: input.text?.format ? '{}' : 'Synthetic WhatsApp reply.', output: [], usage: { input_tokens: 1, output_tokens: 1 } }) };
 } }));
 
 const deferred = () => {
@@ -45,7 +45,7 @@ it('allocates distinct update_ids for overlapping different wamids (known wa_seq
     });
     const post = (id: string) => instance.fetch(new Request('https://telegram-owner/whatsapp-turn', {
       method: 'POST', headers: { 'x-waldo-whatsapp-subject': '15550001111' },
-      body: JSON.stringify({ messages: [{ from: '15550001111', id, type: 'text', text: { body: '/stop' } }] }),
+      body: JSON.stringify({ messages: [{ from: '15550001111', id, type: 'text', text: { body: 'Synthetic WhatsApp message.' } }] }),
     }));
     const pending: Promise<Response>[] = [];
     try {

@@ -6,6 +6,7 @@ import { loopBook } from '../src/channels/loops';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { claimStore } from '../src/memory/claims';
 import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
+import { runOwnerJob } from './fixtures/owner-job';
 const fixture = vi.hoisted(() => ({ mail: false, loopId: '', sent: [] as string[], prompts: [] as string[] }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
@@ -49,20 +50,20 @@ it.each(['normal', 'forget-coverage'])('actual default owner mail followup: %s',
       expect(response.status).toBe(200);
     };
     try {
-      await incoming('/fire fetch');
+      await runOwnerJob(owner, 'update_check');
       const loops = loopBook(state.storage.sql, { now: () => now, newId: () => 'test-only' });
       loops.setProactivity({ quiet_start: '20:00', quiet_end: '08:00', volume: 'normal' });
       fixture.mail = true; now += 61_000;
-      await incoming('/fire fetch');
+      await runOwnerJob(owner, 'update_check');
       expect(loops.list()).toEqual([]);
       fixture.mail = false; now = Date.parse('2026-10-03T09:00:00Z');
       dayPlanBook(state.storage.sql).sent('2026-10-03', 'card:brief');
-      await incoming('/fire fetch');
+      await runOwnerJob(owner, 'update_check');
       const open = loops.list()[0]!; fixture.loopId = open.id;
       expect(open.source_ref).toBe('mail:mail-thread-1');
       expect(fixture.prompts.some(text => text.includes('[source_ref mail:mail-thread-1]'))).toBe(true);
       now += 300_000;
-      await incoming('/fire fetch');
+      await runOwnerJob(owner, 'update_check');
       const queued = state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)!.filter(r => r.mailFollowup);
       expect(queued).toHaveLength(1); expect(queued[0]?.status).toBe('pending');
       loops.setProactivity({ quiet_start: '20:00', quiet_end: '08:00', volume: 'low' });
@@ -99,7 +100,7 @@ it.each(['normal', 'forget-coverage'])('actual default owner mail followup: %s',
       await incoming('done');
       expect(loops.list()).toEqual([]);
       expect(loops.closed()[0]?.status).toBe('done');
-      now += 600_000; await incoming('/fire fetch');
+      now += 600_000; await runOwnerJob(owner, 'update_check');
       expect(fixture.sent.filter(text => text.startsWith('Have you handled'))).toHaveLength(1);
     } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
   });

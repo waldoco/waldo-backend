@@ -236,7 +236,7 @@ const connectors = (view: ConsoleView) => {
     row('Telegram', 'Your owner DM. Chat, cards and reminders arrive here, and it is how you sign in to this console.', status(telegram.linked, telegram.linked ? 'Connected' : 'Unlinked'), telegramAction),
     row('iMessage', 'Text Waldo from your own iPhone. Only you reach your Waldo: link your number with a one-time code.', '', `<a href="/console/imessage">Set up</a>`),
     row('WhatsApp', 'Chat with your Waldo on WhatsApp after linking your number with a one-time code.', '', form(csrf, 'whatsapp.link', 'Get a WhatsApp link code', {}, {})),
-    row('Console session', `Signed in until ${esc(view.sessionUntil)} on ${view.sessionCount} ${view.sessionCount === 1 ? 'browser' : 'browsers'}. Send /console on Telegram for a fresh link.`, status(true, 'Active'),
+    row('Console session', `Signed in until ${esc(view.sessionUntil)} on ${view.sessionCount} ${view.sessionCount === 1 ? 'browser' : 'browsers'}. For a fresh link, ask Waldo in chat or sign in with your email.`, status(true, 'Active'),
       form(csrf, 'session.signout', 'Sign out') + form(csrf, 'session.signout.all', 'Sign out everywhere', {}, { tone: 'danger', confirm: 'Sign out of every browser and the app?' })),
     row('WhatsApp', 'The channel route exists, but this page cannot verify a linked WhatsApp number or live delivery. Ask Waldo in chat before relying on it.', chip('Status unknown here', 'provisional'), ''),
     row('Phone number and OTP sign-in', 'This console currently offers invite-gated email OTP and Telegram one-time links, not phone OTP sign-in.', chip('Not available', 'muted'), ''),
@@ -327,7 +327,7 @@ const checklist = (view: ConsoleView) => {
     `<div class="row conn"><div><div class="name">${esc(label)}</div><div class="sub">${hint}</div></div><div class="state">${status(done, done ? 'Done' : 'To do')}</div><div class="act"></div></div>`;
   const connected = view.google.accounts.some((account) => !account.error);
   return [
-    item(view.telegram.linked, 'Link Telegram', 'Send /console to Waldo on Telegram so cards, reminders and sign-in links reach you.'),
+    item(view.telegram.linked, 'Link Telegram', 'Optional. Link it under Connections and cards and reminders can reach you there too.'),
     item(connected, 'Connect Google', 'Calendar, Gmail and Tasks permissions are requested together. A successful connection does not prove a live read; try a real Calendar and Gmail request in chat.'),
     item(view.proactivity.quiet_start !== null, 'Set quiet hours', 'Tell Waldo when not to message you, in Your day below.'),
   ].join('');

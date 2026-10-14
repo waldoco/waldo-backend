@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { consoleAccess, CONSOLE_COOKIE } from '../src/channels/console';
 import { CREDENTIAL_REPLY_TEXT } from '../src/channels/console-link';
 import { TelegramOwnerInbox } from '../src/channels/telegram-owner-inbox';
 import { claimStore } from '../src/memory/claims';
@@ -11,7 +12,7 @@ import type { LLMGatewayRequest } from '../src/llm/provider';
 // A directory-backed Telegram owner asks for their console in their own words. The model calls send_console_link, the
 // host mints the one-time link and sends it straight to the chat. Text capture is on, as on staging, so every sink that
 // could carry the link actually receives the turn's text.
-const world = vi.hoisted(() => ({ requests: [] as string[], outputs: [] as string[], sends: [] as { text: string; message_id: number; chat?: number }[], next: 500, otlp: [] as string[],
+const world = vi.hoisted(() => ({ requests: [] as string[], outputs: [] as string[], sends: [] as { text: string; message_id: number; chat?: number }[], next: 500, otlp: [] as string[], deleted: [] as string[],
   firstTool: undefined as string | undefined, during: undefined as (() => Promise<void>) | undefined }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
@@ -46,7 +47,7 @@ const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', S
 const langfuse = { LANGFUSE_PUBLIC_KEY: 'pk-fixture', LANGFUSE_SECRET_KEY: 'sk-fixture', LANGFUSE_BASE_URL: 'https://langfuse.fixture.invalid', LANGFUSE_CAPTURE_TEXT: 'true', WALDO_ENVIRONMENT: 'staging' };
 
 beforeEach(() => {
-  world.requests = []; world.outputs = []; world.sends = []; world.otlp = []; world.firstTool = undefined; world.during = undefined;
+  world.requests = []; world.outputs = []; world.sends = []; world.otlp = []; world.deleted = []; world.firstTool = undefined; world.during = undefined;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     if (url.startsWith(langfuse.LANGFUSE_BASE_URL)) { world.otlp.push(String(init?.body ?? '')); return new Response('{}', { status: 200 }); }
@@ -55,6 +56,7 @@ beforeEach(() => {
     if (fn === 'common_owner_authority') return Response.json({ admission_revision: '5', auth_user_id: OWNER_ID, do_name: asked.p_do_name, owner_id: OWNER_ID, presence_id: '0d6b1f22-9c4e-4a7b-8e21-5f3a9c7d1b44', provider: asked.p_provider, state_version: 1, subject: asked.p_subject });
     if (fn === 'assert_channel_presence') return Response.json(true);
     if (fn === 'health_context_read') return Response.json(null);
+    if (fn === 'delete_owner') { world.deleted.push(asked.p_do_name!); return Response.json(true); }
     return new Response('unexpected', { status: 500 });
   });
 });
@@ -68,6 +70,7 @@ type Owner = Readonly<{
   // The final reply leaves on the alarm; only its settlement logs the root hop that exports the turn's trace.
   deliver(update: number): Promise<string | undefined>;
   redeem(ticket: string): Promise<number>;
+  fetch(request: Request): Promise<Response>;
   state: DurableObjectState;
   logged(): string;
 }>;
@@ -101,6 +104,7 @@ const telegramOwner = (name: string, run: (owner: Owner) => Promise<void>, withD
         return state();
       },
       redeem: async ticket => (await owner.fetch(new Request(`${ORIGIN}/console`, { method: 'POST', body: new URLSearchParams({ t: ticket }) }))).status,
+      fetch: request => owner.fetch(request),
       logged: () => JSON.stringify(lines),
     });
   } finally { for (const spy of spies) spy.mockRestore(); await state.storage.deleteAlarm(); }
@@ -149,7 +153,7 @@ it('the owner\'s own request sends one link to their Telegram chat; it reaches n
   });
 });
 
-it('a reply to the link message reaches the model masked, and so does a reply to a /console link', async () => {
+it('a reply to the link message reaches the model masked; any other reply keeps its text', async () => {
   await telegramOwner('console-link-telegram-reply', async owner => {
     expect(await owner.send(940011, { text: 'Can you send me my console link?' })).toBe('awaiting_delivery');
     const [toolSent] = linkSends();
@@ -157,14 +161,6 @@ it('a reply to the link message reaches the model masked, and so does a reply to
     expect(await owner.send(940012, { text: 'Is this still good?', reply_to_message: { message_id: toolSent!.message_id, from: { id: 7, is_bot: true }, chat: { id: 42, type: 'private' }, date: 1, text: toolSent!.text } })).toBe('awaiting_delivery');
     expect(world.requests.join('\n')).toContain(CREDENTIAL_REPLY_TEXT);
     expect(world.requests.join('\n')).not.toContain(ticketOf(toolSent!.text));
-    // The text command still works until the tool is verified on staging, and its link is masked the same way.
-    expect(await owner.send(940013, { text: '/console' })).toBe('completed');
-    const commandSent = linkSends().at(-1)!;
-    expect(commandSent.message_id).not.toBe(toolSent!.message_id);
-    world.requests = [];
-    expect(await owner.send(940014, { text: 'And this one?', reply_to_message: { message_id: commandSent.message_id, from: { id: 7, is_bot: true }, chat: { id: 42, type: 'private' }, date: 1, text: commandSent.text } })).toBe('awaiting_delivery');
-    expect(world.requests.join('\n')).toContain(CREDENTIAL_REPLY_TEXT);
-    expect(world.requests.join('\n')).not.toContain(ticketOf(commandSent.text));
     // Any other reply keeps its text.
     world.requests = [];
     expect(await owner.send(940015, { text: 'What about this?', reply_to_message: { message_id: 123, from: { id: 7, is_bot: true }, chat: { id: 42, type: 'private' }, date: 1, text: 'Your 3pm moved to 4pm.' } })).toBe('awaiting_delivery');
@@ -223,6 +219,24 @@ it('the link works once, at exactly ten minutes, and not a millisecond later', a
     vi.setSystemTime(grant.expires);
     expect(await owner.redeem(ticket)).toBe(303);
     expect(await owner.redeem(ticket)).toBe(403);
+  });
+});
+
+// No command is needed to leave: a Telegram-only owner asks in plain words, opens the link, and deletes from the console.
+it('a Telegram-only owner deletes their account from the console link Waldo sent when they asked in plain words', async () => {
+  await telegramOwner('console-link-telegram-delete', async owner => {
+    expect(await owner.send(940051, { text: 'I want to delete my account. Can you send me my console link?' })).toBe('awaiting_delivery');
+    const [sent] = linkSends();
+    expect(sent!.chat).toBe(42);
+    const redeemed = await owner.fetch(new Request(`${ORIGIN}/console`, { method: 'POST', body: new URLSearchParams({ t: ticketOf(sent!.text) }) }));
+    expect(redeemed.status).toBe(303);
+    const cookie = new RegExp(`${CONSOLE_COOKIE}=([0-9a-f]+)`).exec(redeemed.headers.get('set-cookie') ?? '')![1]!;
+    const { csrf } = (await consoleAccess(owner.state.storage).session(cookie))!;
+    const deleted = await owner.fetch(new Request(`${ORIGIN}/console/action`, { method: 'POST', headers: { cookie: `${CONSOLE_COOKIE}=${cookie}` }, body: new URLSearchParams({ csrf, action: 'account.delete' }) }));
+    expect(deleted.status).toBe(200);
+    expect(await deleted.text()).toContain('Account deleted.');
+    expect(world.deleted).toEqual(['console-link-telegram-delete']);
+    expect(await owner.state.storage.list()).toEqual(new Map());
   });
 });
 

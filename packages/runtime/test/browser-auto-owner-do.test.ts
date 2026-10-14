@@ -6,11 +6,20 @@ import { routerSignature } from '../src/identity/owner-directory';
 import type { CloudflareBrowserSdkLoader } from '../src/channels/public-fixture-browser';
 import { toolOutput } from './fixtures/tool-output';
 
-const proof = vi.hoisted(() => ({ subject: 81101, inputs: [] as { subject: number; input: any }[], delivered: [] as { subject: number; text: string }[] }));
+const proof = vi.hoisted(() => ({ subject: 81101, inputs: [] as { subject: number; input: any }[], delivered: [] as { subject: number; text: string }[], handle: undefined as string | undefined }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: any) => {
   proof.inputs.push({ subject: proof.subject, input: structuredClone(input) });
   const format = input.text?.format?.name;
-  const previous = (Array.isArray(input.input) ? input.input : []).filter((item: any) => item.type === 'function_call_output');
+  const items = Array.isArray(input.input) ? input.input : [];
+  const previous = items.filter((item: any) => item.type === 'function_call_output');
+  for (const item of previous) { const handle = (toolOutput(item.output) as any)?.data?.session_handle; if (handle) proof.handle = handle; }
+  // Asked to stop, the model ends the retained session with the handle its reads returned, naming the last page it observed
+  // (A was refused as a repeat, so that is B).
+  if (!format && JSON.stringify(items.filter((item: any) => item.role === 'user').at(-1) ?? null).includes('Stop the browser.')) {
+    const cancelled = previous.some((item: any) => item.call_id === 'stop-browser');
+    return { id: 'synthetic-auto-owner', output: cancelled ? [] : [{ type: 'function_call', call_id: 'stop-browser', name: 'browse_act', arguments: JSON.stringify({ url: 'https://example.com/b', session_handle: proof.handle, task: 'Stop the browser', command: { operation: 'cancel' } }) }],
+      output_text: cancelled ? 'Stopped the browser.' : '', usage: { input_tokens: 1, output_tokens: 1 } };
+  }
   const urls = ['https://example.com/a', 'https://example.com/b', 'https://example.com/a'];
   const read = !format && previous.length < urls.length;
   return { id: 'synthetic-auto-owner', output: read ? [{ type: 'function_call', call_id: `read-${previous.length}`, name: 'browse_page', arguments: JSON.stringify({ url: urls[previous.length], instruction: 'Read the public page' }) }] : [],
@@ -79,16 +88,9 @@ it('one explicit bounded operator policy serves two existing owners and a newly 
         let instance = new OwnerDO(state, privateEnv), updateId = owner.subject * 100;
         const send = async (text: string, expectedStatus = 'delivered') => {
           const id = ++updateId;
-          const deliveredBefore = proof.delivered.length;
           expect((await instance.fetch(new Request('https://local.invalid/enqueue', { method: 'POST', headers: { 'x-waldo-inbox-secret': privateEnv.TELEGRAM_WEBHOOK_SECRET, 'x-waldo-telegram-subject': String(owner.subject), 'x-waldo-do-name': owner.doName }, body: JSON.stringify({ update_id: id, message: { message_id: id, from: { id: owner.subject, is_bot: false }, chat: { id: owner.subject, type: 'private' }, text } }) }))).status).toBe(200);
           await vi.waitFor(async () => {
             await instance.alarm();
-            if (text === '/stop') {
-              const row = state.storage.kv.get<any[]>('telegram_owner_inbox_v1')?.find(row => row.updateId === id);
-              expect(['consumed', 'completed']).toContain(row?.state);
-              expect(proof.delivered.slice(deliveredBefore).some(row => Number(row.subject) === owner.subject && row.text.includes('Nothing is running'))).toBe(true);
-              return;
-            }
             const final = state.storage.kv.get<any[]>('telegram_final_outbox_v1')?.find(row => row.trace === `tg-${id}`);
             expect(final).toMatchObject({ status: expectedStatus, settled: true });
           }, { timeout: 8000, interval: 50 });
@@ -113,7 +115,7 @@ it('one explicit bounded operator policy serves two existing owners and a newly 
         expect(proof.delivered.some(row => Number(row.subject) === owner.subject && row.text === `Owner ${owner.subject} read A/B/A.`)).toBe(true);
         const records = [...state.storage.kv.list<any>({ prefix: 'common-browser:' })].map(([, row]) => row);
         expect(records).toHaveLength(1); expect(records[0]).toMatchObject({session:{state:'active'}});
-        await send('/stop');
+        await send('Stop the browser.');
         await vi.waitFor(()=>expect(state.storage.kv.get<any>(`common-browser:${records[0].grant.taskId}`)).toMatchObject({cleanup:'closed',session:{state:'ended'}}));
         const ledgers = [...state.storage.kv.list<any>({ prefix: 'common-spend:' })].map(([, row]) => row);
         expect(ledgers).toHaveLength(1); expect(ledgers[0].calls[0]?.id).toMatch(/^browser:/);
@@ -122,7 +124,7 @@ it('one explicit bounded operator policy serves two existing owners and a newly 
         expect(ledgers[0].reservedMicrousd).toBeLessThanOrEqual(10000000);
         receipts.push({ ownerId: records[0].session.ownerId, handle: outputs[0].data.session_handle, ref: ledgers[0].policy.ref, reserved: ledgers[0].reservedMicrousd });
         const snapshot = structuredClone(ledgers[0]);
-        instance = new OwnerDO(state, privateEnv); await send('/stop');
+        instance = new OwnerDO(state, privateEnv); await instance.alarm();
         expect([...state.storage.kv.list<any>({ prefix: 'common-spend:' })][0]?.[1]).toEqual(snapshot);
         await state.storage.deleteAlarm();
       });

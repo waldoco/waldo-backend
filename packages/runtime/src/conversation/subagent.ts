@@ -96,7 +96,7 @@ export type ChildLoopInput = Readonly<{
 }>;
 
 // The child spawner (spec section 4): a nested tool loop on the read-only subset with its own
-// round slice. Turn control applies INSIDE the child: /stop or steering is observed between
+// round slice. Turn control applies INSIDE the child: a stop or steering is observed between
 // child rounds, not only at handback. Steering text is appended to the child task; a stop ends
 // the child immediately with a truthful stopped note.
 export const runChildLoop = async (task: string, input: ChildLoopInput): Promise<Readonly<{ exit: ChildExit; text: string }>> => {

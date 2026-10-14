@@ -88,7 +88,7 @@ export const createWhatsAppSurfaceAdapter = (options: Readonly<{ call: WhatsAppC
       const typed = cleanOwnerText(text);
       const envelope: OwnerTurnEnvelope = {
         traceId: update.traceId, conversationRef, surface: 'whatsapp', service: 'WhatsApp',
-        presentation: { surface: 'whatsapp', delivery: { text: true, approval: 'native_buttons', reactions: false, attachments: true }, commands: [] },
+        presentation: { surface: 'whatsapp', delivery: { text: true, approval: 'native_buttons', reactions: false, attachments: true } },
         text: typed, runScope: update.runScope, messageRef: { id, conversationRef },
         parts: [
           ...ownerWords(typed),
