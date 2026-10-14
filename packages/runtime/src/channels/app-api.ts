@@ -1,5 +1,6 @@
 import type { ConversationEntry } from '@waldo/contracts';
-import { APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appCodeRequestSchema, appContractHeaderV1Schema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
+import { iMessageSendUrl } from './imessage/send-url';
+import { APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appCodeRequestSchema, appContractHeaderV1Schema, appIMessageLinkCodeV1Schema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
 import type { AppApprovalCards } from './approvals';
 import { consoleAuth, type ConsoleAuth } from '../identity/console-auth';
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
@@ -11,6 +12,7 @@ import { APP_HEALTH_PATH, handleAppHealth } from './app-health';
 import { CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS, CONSOLE_OTP_SEND_LIMIT, CONSOLE_OTP_VERIFY_LIMIT } from './console-signin';
 
 export const APP_PATH = '/app/v1';
+const APP_IMESSAGE_LINK_CODE_PATH = `${APP_PATH}/channels/imessage/link-code`;
 export const APP_CHAT_PATH = `${APP_PATH}/chat/main`;
 export const APP_THREADS_PATH = `${APP_PATH}/threads`;
 export const APP_CHAT_SEND_PATH = `${APP_CHAT_PATH}/messages`;
@@ -18,7 +20,7 @@ export const APP_APPROVALS_PATH = `${APP_PATH}/approvals`;
 export const APP_APPROVAL_DECISIONS_PATH = `${APP_APPROVALS_PATH}/decisions`;
 const MAX_BODY_BYTES = 8192;
 
-type AppEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
+type AppEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string }>;
 
 // Errors before authentication share one shape so the app cannot learn who is invited.
 const fail = (status: 401 | 403 | 404 | 405 | 413 | 429 | 503) => Response.json({ error: 'unavailable' }, { status, headers: { 'cache-control': 'no-store', ...(status === 429 ? { 'retry-after': '60' } : {}) } });
@@ -151,12 +153,24 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   }
   // A stop is a control on a message already paid for, so it counts as a read, not a send.
   const stop = url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) && url.pathname.endsWith('/cancel');
-  const bucket = request.method !== 'POST' || stop ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : 'app-chat-send';
+  const linkCode = url.pathname === APP_IMESSAGE_LINK_CODE_PATH;
+  const bucket = request.method !== 'POST' || stop || linkCode ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : 'app-chat-send';
   try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `${bucket}:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
 
   if (url.pathname === `${APP_PATH}/session`) {
     if (request.method !== 'GET') return fail(405);
     try { return ok(await sessionView(auth, who.doName, who.credential)); } catch { return fail(503); }
+  }
+
+  if (linkCode) {
+    if (request.method !== 'POST') return fail(405);
+    const address = env.IMESSAGE_WALDO_ADDRESS;
+    if (!address || !auth.issueProviderLinkCode) return fail(503);
+    try {
+      const code = await auth.issueProviderLinkCode(who.doName, 'imessage');
+      if (!code) return fail(503);
+      return ok(appIMessageLinkCodeV1Schema.parse({ code, text: `waldo ${code}`, address, send_url: iMessageSendUrl(address, code), expires_in_seconds: 600 }));
+    } catch { return fail(503); }
   }
 
   if (url.pathname === `${APP_PATH}/auth/signout`) {
