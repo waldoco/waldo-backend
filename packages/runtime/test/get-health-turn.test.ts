@@ -7,8 +7,9 @@ import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 
 // A get_health result reaches the model in the turn that asked and nowhere else: not the ledger the next turn reads,
-// not the transcript, not the object's storage. Synthetic readings only; the value is a decimal no id or time holds.
-const HRV = '47.5';
+// not the transcript, not the object's storage. Synthetic readings only. The value can't occur in an id or an ISO
+// time: a time's only dot follows its seconds, which never reach 73.
+const HRV = '73.25';
 const model = vi.hoisted(() => ({ requests: [] as LLMGatewayRequest['request'][] }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();

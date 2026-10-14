@@ -967,7 +967,7 @@ describe('DeliveryGate runtime policy state', () => {
   it('freezes held fetch_alert candidates without outbox or counter mutation', async () => {
     const sink = new FakeSink();
     const runtime = freshRuntimeStub();
-    const firstAt = futureOccurrence();
+    const firstAt = utcOccurrence('2026-01-01');
     const firstRun = await runtime.startRun({
       userId: USER,
       trigger: FETCH_ALERT,
