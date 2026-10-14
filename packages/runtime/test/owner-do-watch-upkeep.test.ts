@@ -228,6 +228,24 @@ describe('Gmail and Calendar watch upkeep', () => {
     });
   });
 
+  it('a boot leaves an existing upkeep row as it is, so a paused upkeep stays paused', async () => {
+    await world('upkeep-boot-keeps-row', { accounts: [{ id: 'conn-1', email: EMAIL, scopes: MAIL }], off: ALL_OFF }, async w => {
+      await armAlarm(w.state.storage, Date.now());
+      for (let n = 0; n < 2 && w.watches('gmail_watch').length === 0; n++) await w.pass();
+      expect(w.watches('gmail_watch')).toEqual(['conn-1']);
+      const sql = w.state.storage.sql;
+      const paused = () => sql.exec<{ status: string; attempts: number; due_at: number; quarantined_until: number | null }>('SELECT status, attempts, due_at, quarantined_until FROM schedule WHERE id = ?', WATCH_UPKEEP_ID).toArray()[0];
+      sql.exec("UPDATE schedule SET status = 'quarantined', attempts = 3, quarantined_until = ? WHERE id = ?", Date.now() + DAY, WATCH_UPKEEP_ID);
+      const before = paused();
+      // A new instance on the same storage is what an owner object's restart looks like.
+      const booted = new OwnerDO(w.state, { ...env, ...CONFIG, WALDO_OWNER_TELEGRAM_ID: '7' }) as unknown as Owner;
+      await w.state.storage.deleteAlarm();
+      await booted.alarm();
+      expect(paused()).toEqual(before);
+      expect(w.watches('gmail_watch')).toEqual(['conn-1']);
+    });
+  });
+
   it('a failed start is retried by the scheduler after the backoff, not before, and a watch without its grant is not tried', async () => {
     await world('upkeep-retry', { accounts: [{ id: 'conn-1', email: EMAIL, scopes: MAIL }], off: ALL_OFF }, async w => {
       edge.failing.add('gmail_watch');
@@ -290,8 +308,9 @@ describe('Gmail and Calendar watch upkeep', () => {
       expect(gmailPushBook(kv).miss()).toEqual({ at: expect.any(Number), reason: 'local_rail' });
       calendarPushBook(kv).fail(Date.now());
       await w.connect('conn-2', [...MAIL, CALENDAR]);
+      const connected = Date.now();
       expect(calendarPushBook(kv).state(), 'the keep clears a Calendar failure').toBeNull();
-      await w.pass();
+      expect(await w.pass(), 'a reconnect runs the existing upkeep at once, not at its next hourly check').toBeLessThanOrEqual(connected + 1_000);
       expect(w.watches('gmail_watch'), 'upkeep watches with the new connection').toEqual(['conn-2']);
       expect(w.watches('calendar_watch'), 'and retries the Calendar watch with the new grant').toEqual(['conn-2']);
       await w.pass();
