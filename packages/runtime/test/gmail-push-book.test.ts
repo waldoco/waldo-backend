@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ensureGmailWatch, gmailPushBook } from '../src/channels/gmail-push';
 import { gmailPush } from '../src/connectors/google-push';
+import { McpConnectError } from '../src/tools/live/mcp';
 
-const kv = () => { const map = new Map<string, unknown>(); return { get: <T>(key: string) => map.get(key) as T | undefined, put: (key: string, value: unknown) => { map.set(key, value); } }; };
+const kv = () => { const map = new Map<string, unknown>(); return { get: <T>(key: string) => map.get(key) as T | undefined, put: (key: string, value: unknown) => { map.set(key, value); }, delete: (key: string) => map.delete(key) }; };
 const DAY = 86_400_000;
 const config = gmailPush('waldo-dev')!;
 
@@ -51,7 +52,7 @@ describe('Gmail watch upkeep', () => {
   it('without a Google account it waits before asking again, rather than on every sweep', async () => {
     const resolve = vi.fn(async () => null);
     const d = deps({ resolve });
-    expect(await ensureGmailWatch(d)).toBe('skipped');
+    expect(await ensureGmailWatch(d)).toEqual({ skipped: 'no_mail_grant' });
     expect(await ensureGmailWatch({ ...d, now: 3_600_000 })).toBe('fresh');
     expect(resolve).toHaveBeenCalledTimes(1);
   });
@@ -62,11 +63,45 @@ describe('Gmail watch upkeep', () => {
     expect(await ensureGmailWatch({ ...d, now: 5 * 3_600_000 })).toBe('fresh');
   });
 
-  it('skips with no project named, no Google account, or a locally held grant pushes cannot reach', async () => {
-    for (const over of [{ config: null }, { resolve: async () => null }, { resolve: async () => ({ mode: 'bearer' as const, token: 'ya29.t' }) }, { doName: undefined }]) {
+  it('skips, saying why, with no project named, no mail grant, or a locally held grant pushes cannot reach', async () => {
+    const cases: ReadonlyArray<readonly [Record<string, unknown>, string]> = [
+      [{ config: null }, 'unconfigured'], [{ doName: undefined }, 'unconfigured'], [{ resolve: async () => null }, 'no_mail_grant'],
+      [{ resolve: async () => { throw new McpConnectError('scope_missing', 'no connected Google grant covers mail', 'mail'); } }, 'no_mail_grant'],
+      [{ resolve: async () => ({ mode: 'bearer' as const, token: 'ya29.t' }) }, 'local_rail'],
+    ];
+    for (const [over, reason] of cases) {
       const d = deps(over);
-      expect(await ensureGmailWatch(d)).toBe('skipped');
+      expect(await ensureGmailWatch(d)).toEqual({ skipped: reason });
       expect(d.proxy.gmailWatch).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe('Gmail watch after a new grant', () => {
+  const proxyTo = (connection: string) => async () => ({ mode: 'proxy' as const, connection });
+
+  it('a reset forgets a live watch, so the next sweep watches the connection it now resolves and pushes follow it', async () => {
+    const gmailWatch = vi.fn(async () => ({ historyId: '700', expiration: 7 * DAY }));
+    const book = gmailPushBook(kv());
+    const d = { book, now: 0, config, doName: 'owner-a', resolve: proxyTo('conn-1'), proxy: { gmailWatch } };
+    expect(await ensureGmailWatch(d)).toBe('started');
+    book.reset();
+    expect(book.state()).toBeNull();
+    expect(book.admit('conn-1', '701')).toBe('ignore');
+    expect(await ensureGmailWatch({ ...d, now: 600_000, resolve: proxyTo('conn-2') })).toBe('started');
+    expect(gmailWatch).toHaveBeenLastCalledWith('owner-a', 'conn-2', config.topic);
+    expect(book.admit('conn-1', '702')).toBe('ignore');
+    expect(book.admit('conn-2', '702')).toBe('wake');
+  });
+
+  it('a reset forgets a stored skip, so the next sweep tries at once instead of six hours later', async () => {
+    const gmailWatch = vi.fn(async () => ({ historyId: '700', expiration: 7 * DAY }));
+    const book = gmailPushBook(kv());
+    const d = { book, now: 0, config, doName: 'owner-a', resolve: async () => ({ mode: 'bearer' as const, token: 'ya29.t' }), proxy: { gmailWatch } };
+    expect(await ensureGmailWatch(d)).toEqual({ skipped: 'local_rail' });
+    expect(await ensureGmailWatch({ ...d, now: 600_000, resolve: proxyTo('conn-2') })).toBe('fresh');
+    book.reset();
+    expect(await ensureGmailWatch({ ...d, now: 600_000, resolve: proxyTo('conn-2') })).toBe('started');
+    expect(gmailWatch).toHaveBeenCalledWith('owner-a', 'conn-2', config.topic);
   });
 });
