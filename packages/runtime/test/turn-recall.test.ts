@@ -19,6 +19,9 @@ const owned = (store: ClaimStore, text: string, ref: string, kind = 'fact') =>
   store.add({ kind, text, source: 'stated', evidence: `"${text}"`, origin: 'owner', source_ref: `owner, ${ref}` }, AT);
 const fromIndex = (index: EpisodeIndex): RecallEpisodes => ({ search: async (query, limit) => index.search(query, limit), get: async (ref) => index.get(ref) });
 const nothingHeld = () => false;
+// Answers like the real search_episodes handler and records who called it. A handler that throws would hide a call behind
+// recall's fail-open catch, so a path that must not search past messages is held to zero calls instead.
+const recordingSearch = (calls: string[], caller: string) => ({ name: 'search_episodes', description: 'search', schema: { parse: (value: unknown) => value }, trigger_allowlist: [], autonomy_gated: false, handle: async () => { calls.push(caller); return { ok: true, data: { hits: [] } }; } }) as never;
 const lines = (text: string) => text.split('\n').filter((line) => line.startsWith('- ['));
 
 describe('recall terms', () => {
@@ -174,7 +177,8 @@ describe('the background decision', () => {
       } };
       const args: Parameters<typeof createOwnerResponder> = ['fixture'];
       args[2] = memory;
-      args[5] = [{ name: 'search_episodes', description: 'search', schema: { parse: (value: unknown) => value }, trigger_allowlist: [], autonomy_gated: false, handle: async () => { throw new Error('a decision must not search episodes'); } } as never];
+      const searches: string[] = [];
+      args[5] = [recordingSearch(searches, 'decision-1')];
       args[10] = gateway;
       const responder = createOwnerResponder(...args);
       const time = <R>(_hop: string, work: () => Promise<R>) => work();
@@ -184,14 +188,16 @@ describe('the background decision', () => {
       expect(system).toContain('Works from the Pune office on Tuesdays');
       expect(system).not.toContain('Knee physio');
       expect(system).not.toMatch(/ref \d+\]/);
+      expect(searches).toEqual([]);
     });
   });
 });
 
 describe('a machine turn', () => {
-  it('never recalls a health claim by the words of an externally tainted job; an untainted job with the same words does', async () => {
+  it('never recalls a health claim by the words of an externally tainted job; an untainted job with the same words does; neither searches past messages', async () => {
     await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('turn-recall-external-job')), async (_instance, state) => {
       const memory = claimStore(state.storage.sql);
+      const searches: string[] = [];
       owned(memory, 'Knee physio exercises every morning before the standup', 'tg-41', 'health');
       owned(memory, 'Works from the Pune office on Tuesdays before the standup', 'tg-42');
       // Curated with the office fact only, so the health claim can reach the prompt by recall alone.
@@ -202,7 +208,7 @@ describe('a machine turn', () => {
           requests.push(request);
           return { ok: true, data: { model: request.request.model, text: 'Done.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
         } };
-        const responder = createOwnerResponder('fixture', undefined, memory, undefined, undefined, [], undefined, false, undefined, undefined, gateway);
+        const responder = createOwnerResponder('fixture', undefined, memory, undefined, undefined, [recordingSearch(searches, id)], undefined, false, undefined, undefined, gateway);
         await responder.prompt(id, 'owner', 'Report this device result briefly: knee physio, the Pune office and the standup.', async (_hop, work) => work(), 'telegram', [], undefined, undefined, undefined, taint);
         return requests[0]!.request;
       };
@@ -219,6 +225,8 @@ describe('a machine turn', () => {
       const untainted = await requestFor('job-owner');
       expect(recalled(untainted)).toContain('Knee physio exercises every morning');
       expect(untainted.system).not.toContain('Knee physio');
+      // A job's words select stored claims only: no machine turn, tainted or not, searches past messages.
+      expect(searches).toEqual([]);
     });
   });
 });
