@@ -22,7 +22,11 @@ vi.mock('../src/scheduler/alarm-slot', async load => {
     }
   } };
 });
-vi.mock('openai', () => ({ default: class { responses = { create: async () => { throw new Error('heartbeat fixture forbids model calls'); } }; } }));
+// Only the check-back turn may call the model; its reply carries a link the outbox must redact.
+vi.mock('openai', () => ({ default: class { responses = { create: async (body: { input: unknown }) => {
+  if (!JSON.stringify(body.input).includes('[Check-back due now')) throw new Error('heartbeat fixture allows only the check-back turn');
+  return { status: 'completed', output_text: 'Still open: Synthetic errand https://fixture.invalid/page?code=fixture-code', output: [], usage: { input_tokens: 1, output_tokens: 1 } };
+} }; } }));
 const { OwnerDO } = await import('../src/channels/owner-do');
 let sequence = 0;
 it.each(['ack', 'blocked', 'unlink', 'enqueueCrash', 'enqueueFailure'])('actual owner alarm keeps heartbeat background delivery truthful: %s', async mode => {

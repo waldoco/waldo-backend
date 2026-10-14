@@ -12,6 +12,8 @@ import { standingOrderBook, standingOrderHandlers, standingOrdersPrompt } from '
 import { DAY_CARDS } from '../src/prompt/day-cards';
 import { Scheduler, UnreadableScheduleRowError } from '../src/scheduler/multiplexer';
 import type { Deps } from '../src/seams/deps';
+// Stands in for the check-back turn: reports which loops it was given.
+const checkedBack = async (loops: readonly { title: string }[]) => `Checked ${loops.map(loop => loop.title).join(', ')}`;
 
 let seq = 0;
 const freshStub = (): Parameters<typeof runInDurableObject>[0] => {
@@ -91,6 +93,19 @@ describe('a schedule row this Worker cannot read', () => {
       expect(scheduler.hasDue()).toBe(false);
       pauseEnded('valid');
       expect(scheduler.hasDue()).toBe(true);
+    });
+  });
+
+  it('counts a pause still running as no due work, and a dispatch leaves it paused until its end', async () => {
+    const now = Date.now();
+    await runInDurableObject(freshStub(), async (_instance, state) => {
+      const scheduler = (clock: number) => new Scheduler(state.storage.sql, state.storage, at(clock));
+      await scheduler(now).schedule({ id: 'valid', kind: 'brief', occurrenceAt: now + 60 * MINUTE, dueAt: now + 60 * MINUTE, payloadRefs: { id: 'valid' }, recurrence: null });
+      state.storage.sql.exec("UPDATE schedule SET status = 'quarantined', quarantined_until = ? WHERE id = ?", now + MINUTE, 'valid');
+      expect(scheduler(now).hasDue()).toBe(false);
+      expect(await scheduler(now).dispatchDue({})).toEqual([]);
+      expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM schedule WHERE id = ?', 'valid').one().status).toBe('quarantined');
+      expect(scheduler(now + MINUTE).hasDue()).toBe(true);
     });
   });
 });
@@ -182,7 +197,7 @@ describe('reading one id whose row this Worker cannot read', () => {
       const before = rowsLike(sql, unreadableCard);
       const loops = loopBook(sql, { newId: () => 'loop-1', now: () => now });
       await scheduler.schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', occurrenceAt: now - MINUTE, dueAt: now - MINUTE, payloadRefs: { id: HEARTBEAT_ID } });
-      await scheduler.dispatchDue({ heartbeat: heartbeatTick({ scheduler, sql, loops, plans: { heldToday: () => [unreadableCard, readableCard] }, timezone: 'UTC', now: () => now, enqueue: async () => undefined }) });
+      await scheduler.dispatchDue({ heartbeat: heartbeatTick({ scheduler, sql, loops, plans: { heldToday: () => [unreadableCard, readableCard] }, timezone: 'UTC', now: () => now, checkBack: checkedBack, enqueue: async () => undefined }) });
       expect(rowsLike(sql, unreadableCard)).toEqual(before);
       expect(scheduler.lookup(readableCard)).toMatchObject({ state: 'entry', entry: { due_at: now } });
     });

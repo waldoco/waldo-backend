@@ -6,7 +6,10 @@ import {
   appApprovalListV1Schema,
   appApprovalRoutesV1,
   appApprovalStateV1Schema,
+  appApprovalAtRevision,
   appApprovalV1Schema,
+  APP_APPROVALS_CONTRACT_REVISION,
+  type AppApprovalV1,
 } from './approvals';
 import { appControlReceiptV1Schema, appControlRequestIdV1Schema } from './controls';
 import { payloadDigestV1Schema, replyApprovalPartV1Schema } from './parts';
@@ -207,5 +210,36 @@ describe('the wording a server may send with an approval', () => {
   it('rejects when undo closes on an approval that offers no undo', () => {
     expect(appApprovalV1Schema.safeParse({ ...worded, undo_until: expiresAtMs }).success).toBe(false);
     expect(appApprovalV1Schema.safeParse({ ...done, actions: [], labels: undefined }).success).toBe(false);
+  });
+});
+
+describe('calendar details, approvals revision 2', () => {
+  const details = {
+    guests: ['sam@example.com', 'pat@example.org'], emails_guests: true, location: 'Room 4', calendar: 'team@group.calendar.google.com', account: 'me@example.com',
+    previous: { start: '2026-10-11T15:00:00+01:00', end: '2026-10-11T16:00:00+01:00' }, time_zone: 'Europe/London',
+  } as const;
+  const detailed = { ...calendar, exact: { changes: { ...calendar.exact.changes, ...details } } };
+  const withChange = (key: string, value: unknown) => ({ ...calendar, exact: { changes: { ...calendar.exact.changes, [key]: value } } });
+
+  it('accepts each detail alone and all together', () => {
+    for (const [key, value] of Object.entries(details)) expect([key, appApprovalV1Schema.safeParse(withChange(key, value)).success]).toEqual([key, true]);
+    expect(appApprovalV1Schema.safeParse(detailed).success).toBe(true);
+  });
+
+  it('rejects each detail in a wrong shape', () => {
+    const invalid: readonly (readonly [string, unknown])[] = [
+      ['guests', []], ['guests', ['not an address']], ['emails_guests', 'all'], ['location', ''], ['location', 'x'.repeat(301)],
+      ['calendar', ''], ['account', 'me'], ['previous', { start: '2026-10-11T15:00:00+01:00' }], ['previous', { start: 'Fri 15:00', end: 'Fri 16:00' }],
+      ['previous', { ...details.previous, event_id: 'e1' }], ['time_zone', ''], ['time_zone', 'x'.repeat(65)],
+    ];
+    for (const [key, value] of invalid) expect([key, value, appApprovalV1Schema.safeParse(withChange(key, value)).success]).toEqual([key, value, false]);
+  });
+
+  it('a build reading revision 1 gets exactly the shape before the details, and a later build gets them all', () => {
+    const parsed = appApprovalV1Schema.parse(detailed) as AppApprovalV1;
+    expect(JSON.stringify(appApprovalAtRevision(parsed, 1))).toBe(JSON.stringify(calendar));
+    expect(appApprovalAtRevision(parsed, APP_APPROVALS_CONTRACT_REVISION)).toBe(parsed);
+    const mail = appApprovalV1Schema.parse(email) as AppApprovalV1;
+    expect(appApprovalAtRevision(mail, 1)).toBe(mail);
   });
 });

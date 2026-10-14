@@ -4,7 +4,10 @@ import { McpConnectError, type McpGoogleResolution } from '../tools/live/mcp';
 // The owner's Gmail watch. A push only pulls the existing update sweep forward (wakeBriefSweep), like a
 // Calendar push. Pushes are routed through the connections table, so only a Vault-backed grant is watched.
 type Kv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void; delete(key: string): unknown }>;
-type Stored = Readonly<{ connection: string; historyId: string; startedAt: number; expiration: number }> | Readonly<{ failedAt: number }>;
+// Why the last start did not leave a watch. A miss stored before reasons were kept reads as a failure.
+export type GmailWatchMiss = 'failed' | 'no_mail_grant' | 'local_rail';
+const GMAIL_MISSES: readonly GmailWatchMiss[] = ['failed', 'no_mail_grant', 'local_rail'];
+type Stored = Readonly<{ connection: string; historyId: string; startedAt: number; expiration: number }> | Readonly<{ failedAt: number; reason?: GmailWatchMiss }>;
 const KEY = 'gmail_push';
 
 export const gmailPushBook = (kv: Kv) => {
@@ -12,7 +15,13 @@ export const gmailPushBook = (kv: Kv) => {
   return {
     state: (): GmailWatchState | null => { const stored = read(); return stored === null ? null : 'failedAt' in stored ? { failedAt: stored.failedAt } : { startedAt: stored.startedAt, expiration: stored.expiration }; },
     record: (watch: GmailWatch, connection: string, now: number) => kv.put(KEY, { connection, historyId: watch.historyId, startedAt: now, expiration: watch.expiration }),
-    fail: (now: number) => kv.put(KEY, { failedAt: now }),
+    fail: (now: number, reason: GmailWatchMiss = 'failed') => kv.put(KEY, { failedAt: now, reason }),
+    // Read for the owner's turn, so a stored value of any shape is no miss rather than a throw.
+    miss: (): Readonly<{ at: number; reason: GmailWatchMiss }> | null => {
+      const stored: unknown = kv.get(KEY);
+      if (typeof stored !== 'object' || stored === null || !('failedAt' in stored) || typeof stored.failedAt !== 'number') return null;
+      return { at: stored.failedAt, reason: 'reason' in stored && GMAIL_MISSES.includes(stored.reason as GmailWatchMiss) ? stored.reason as GmailWatchMiss : 'failed' };
+    },
     // A new grant makes the stored watch stale: a stored skip or failure would hold the next try for hours, and a live
     // watch admits pushes only for the connection it was started on. The next sweep watches with the route it resolves.
     reset: () => { kv.delete(KEY); },
@@ -44,7 +53,11 @@ export const ensureGmailWatch = async (deps: Readonly<{
     // Connected accounts that hold no mail scope are no mail grant, not a failed watch.
     const route = await deps.resolve().catch((error: unknown) => { if (error instanceof McpConnectError && error.reason === 'scope_missing') return null; throw error; });
     // Nothing to watch with: wait as after a failure, instead of looking up the grant on every sweep.
-    if (route === null || route.mode !== 'proxy') { book.fail(now); return { skipped: route === null ? 'no_mail_grant' : 'local_rail' }; }
+    if (route === null || route.mode !== 'proxy') {
+      const skipped = route === null ? 'no_mail_grant' : 'local_rail';
+      book.fail(now, skipped);
+      return { skipped };
+    }
     // A previous mailbox's watch is left to lapse within seven days: Gmail keeps one watch per mailbox, which
     // another owner of the same mailbox may still rely on.
     book.record(await deps.proxy.gmailWatch(deps.doName, route.connection, deps.config.topic), route.connection, now);

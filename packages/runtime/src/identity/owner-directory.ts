@@ -47,12 +47,17 @@ const deployOwner = (env: OwnerDirectoryEnv): OwnerDirectory => ({
 // WhatsApp has no single-owner env fallback: routing a phone number requires a real presence row,
 // so the directory-backed path is the only one (deployOwner answers telegram only).
 
-/** A refused directory call, with the PostgreSQL code and message PostgREST reported, when it reported them. */
-export class OwnerDirectoryError extends Error {
-  constructor(readonly status: number, readonly sqlState: string | null, readonly dbMessage: string | null) { super(`owner directory ${status}`); }
-}
 /** redeem_link_code's own refusal; any other unique_violation (an index race) stays uncertain. */
 const CLAIMED_ELSEWHERE = 'presence already linked to another owner';
+/** A refused directory call, with the PostgreSQL code PostgREST reported. The message is reduced to whether it was
+ * redeem_link_code's own refusal: a database message can quote a subject, so it is never kept where it could be serialized. */
+export class OwnerDirectoryError extends Error {
+  readonly claimedElsewhere: boolean;
+  constructor(readonly status: number, readonly sqlState: string | null, dbMessage: string | null) {
+    super(`owner directory ${status}`);
+    this.claimedElsewhere = sqlState === '23505' && dbMessage === CLAIMED_ELSEWHERE;
+  }
+}
 
 // The runtime holds no service-role key (ADR-0052): it calls signed database functions with the publishable key.
 export const signedRpc = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch, now = () => Date.now()) => {
@@ -97,8 +102,7 @@ export const ownerDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch = f
         const result = await call('redeem_link', `redeem.${hash}.${provider}.${subject}`, { p_code_hash: hash, p_provider: provider, p_subject: subject });
         return { kind: result === null ? 'rejected' : typeof result === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(result) ? 'redeemed' : 'uncertain' };
       } catch (error) {
-        const claimed = error instanceof OwnerDirectoryError && error.sqlState === '23505' && error.dbMessage === CLAIMED_ELSEWHERE;
-        return { kind: claimed ? 'claimed' : 'uncertain' };
+        return { kind: error instanceof OwnerDirectoryError && error.claimedElsewhere ? 'claimed' : 'uncertain' };
       }
     },
     redeem: async (provider, subject, code) => {
