@@ -18,10 +18,12 @@ export const GOOGLE_FEATURE_SCOPES = {
   docs: [`${AUTH}drive.readonly`, `${AUTH}documents.readonly`],
   sheets: [`${AUTH}drive.readonly`, `${AUTH}spreadsheets.readonly`],
   slides: [`${AUTH}drive.readonly`, `${AUTH}presentations.readonly`],
+  // Saved contacts and the people the owner has mailed (Google's "other contacts"), read only.
+  contacts: [`${AUTH}contacts.readonly`, `${AUTH}contacts.other.readonly`],
 } as const;
 export type GoogleFeature = keyof typeof GOOGLE_FEATURE_SCOPES;
 // Never granted implicitly: legacy null-scope grants do not hold these.
-const WORKSPACE_READ_FEATURES: readonly GoogleFeature[] = ['drive', 'docs', 'sheets', 'slides'];
+const EXPLICIT_FEATURES: readonly GoogleFeature[] = ['drive', 'docs', 'sheets', 'slides', 'contacts'];
 export const isGoogleFeature = (value: string): value is GoogleFeature => Object.hasOwn(GOOGLE_FEATURE_SCOPES, value);
 // Legacy null grants retain old features, never a newly introduced availability or calendar-list scope.
 export const googleHas = (scopes: readonly string[] | null | undefined, feature: GoogleFeature): boolean =>
@@ -29,7 +31,7 @@ export const googleHas = (scopes: readonly string[] | null | undefined, feature:
     ? ['calendar.events.freebusy','calendar.freebusy','calendar.readonly','calendar'].some(scope => scopes?.includes(`${AUTH}${scope}`) ?? false)
     : feature === 'calendar_list'
     ? ['calendar.calendarlist.readonly','calendar.calendarlist','calendar.readonly','calendar'].some(scope => scopes?.includes(`${AUTH}${scope}`) ?? false)
-    : WORKSPACE_READ_FEATURES.includes(feature)
+    : EXPLICIT_FEATURES.includes(feature)
       ? GOOGLE_FEATURE_SCOPES[feature].every((scope) => scopes?.includes(scope) ?? false)
       : scopes === null || GOOGLE_FEATURE_SCOPES[feature].every((scope) => scopes?.includes(scope) ?? false);
 
@@ -82,7 +84,7 @@ export async function readConsentState(secret: string, state: string): Promise<R
   return (await sign(secret, `${owner}.${nonce}`)) === mac ? { owner, nonce } : null;
 }
 
-export const GOOGLE_CONSENT_SCOPES: readonly string[] = ['openid', 'email', ...GOOGLE_FEATURE_SCOPES.calendar, ...GOOGLE_FEATURE_SCOPES.availability, ...GOOGLE_FEATURE_SCOPES.calendar_list, ...GOOGLE_FEATURE_SCOPES.mail, ...GOOGLE_FEATURE_SCOPES.tasks, ...new Set([...GOOGLE_FEATURE_SCOPES.drive, ...GOOGLE_FEATURE_SCOPES.docs, ...GOOGLE_FEATURE_SCOPES.sheets, ...GOOGLE_FEATURE_SCOPES.slides])];
+export const GOOGLE_CONSENT_SCOPES: readonly string[] = ['openid', 'email', ...GOOGLE_FEATURE_SCOPES.calendar, ...GOOGLE_FEATURE_SCOPES.availability, ...GOOGLE_FEATURE_SCOPES.calendar_list, ...GOOGLE_FEATURE_SCOPES.mail, ...GOOGLE_FEATURE_SCOPES.tasks, ...new Set([...GOOGLE_FEATURE_SCOPES.drive, ...GOOGLE_FEATURE_SCOPES.docs, ...GOOGLE_FEATURE_SCOPES.sheets, ...GOOGLE_FEATURE_SCOPES.slides]), ...GOOGLE_FEATURE_SCOPES.contacts];
 
 export function googleConsentUrl(app: GoogleApp, state: string, codeChallenge: string): string {
   const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
@@ -132,6 +134,9 @@ export type CalendarItem = Readonly<{ id: string; title: string; start: string; 
   status?: 'confirmed' | 'tentative' | 'cancelled'; updated?: string; recurring_event_id?: string; original_start?: string; source_url?: string; attendee_names?: readonly string[];
   attendee_emails?: readonly string[]; conference_url?: string; attachments?: readonly CalendarAttachment[] }>;
 export type CalendarAttachment = Readonly<{ title: string; file_id?: string }>;
+// Whether Google emails the guests about a write. Left out, Google emails no one.
+export type CalendarSendUpdates = 'all' | 'none';
+export type CalendarWriteOptions = Readonly<{ calendarId?: string; sendUpdates?: CalendarSendUpdates }>;
 
 // Provider-internal etags are unnecessary in model-facing context. Keep them in the
 // connector API for concurrency (moveEvent/cancelEvent), not in a card prompt. Attendee emails,
@@ -200,7 +205,8 @@ export const addressList = (header: string): string[] => {
   const seen = new Set<string>();
   return tokens.map((item) => (/<([^<>]*)>\s*$/.exec(item)?.[1] ?? item).trim()).filter((address) => {
     const key = address.toLowerCase();
-    if (!/^[^\s@<>"(),;:]+@[^\s@<>"(),;:]+\.[^\s@<>"(),;:]+$/.test(address) || seen.has(key)) return false;
+    // The length check comes first: the pattern backtracks quadratically on a long dotted domain that fails at its end.
+    if (address.length > 320 || !/^[^\s@<>"(),;:]+@[^\s@<>"(),;:]+\.[^\s@<>"(),;:]+$/.test(address) || seen.has(key)) return false;
     seen.add(key);
     return true;
   });
@@ -271,6 +277,27 @@ export type GoogleTaskResource = Readonly<{ id: string; task_list_id: string; ti
 export type GoogleTaskPatch = GoogleTaskChanges & Readonly<{ status?: 'todo' | 'done' }>;
 
 const validPageLimit = (value: number, max: number) => Number.isSafeInteger(value) && value >= 1 && value <= max;
+
+// The edge imports this file, so the shape is checked here by hand; the tool checks it again against the contract.
+export type ContactMatch = Readonly<{ name: string | null; emails: readonly string[]; source: 'contacts' | 'other_contacts' }>;
+// One row per person, saved contacts first; a person already listed by an address is not repeated.
+// One row per person as Google lists them, saved contacts first, with every address the person has. The Worker applies
+// the contract's address check, keeps an address once across people, and cuts to three addresses and the limit, so an
+// address the contract refuses never takes a place. A results field that is not a list is refused, never read as no match.
+// The connector's fixed refusal of a malformed People answer; the edge passes it through, so the Worker can refuse it.
+export const PEOPLE_UNREADABLE = 'invalid People search response';
+const contactMatches = (sources: readonly Readonly<{ source: ContactMatch['source']; results: unknown }>[]): readonly ContactMatch[] =>
+  sources.flatMap(({ source, results }) => {
+    if (results !== undefined && !Array.isArray(results)) throw new Error(PEOPLE_UNREADABLE);
+    return (results ?? []).flatMap((result: unknown) => {
+      const person = isObject(result) && isObject(result.person) ? result.person : {};
+      const named = Array.isArray(person.names) ? person.names.find((entry) => isObject(entry) && typeof entry.displayName === 'string' && entry.displayName.trim()) : undefined;
+      const emails = [...new Set((Array.isArray(person.emailAddresses) ? person.emailAddresses : [])
+        .map((entry) => (isObject(entry) && typeof entry.value === 'string' ? entry.value.trim().toLowerCase() : ''))
+        .filter((email) => email.includes('@') && email.length <= 320))];
+      return emails.length ? [{ name: isObject(named) ? String(named.displayName).trim().slice(0, 200) : null, emails, source }] : [];
+    });
+  });
 const validGoogleId = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 1024 && !/[\r\n\0]/.test(value);
 const validProviderToken = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 2048;
 const optionalText = (value: unknown, max: number) => value === undefined || (typeof value === 'string' && value.length <= max);
@@ -331,10 +358,10 @@ export type GoogleClient = Readonly<{
   // sentId, the id messages.send returned, reads that message's metadata directly: a search can miss a message
   // sent moments ago. The answer is returned unchecked for sentCheck. A proxy that predates it searches.
   findSentByMessageId(messageId: string, threadId?: string, sentId?: string): Promise<boolean | SentEvidence | Readonly<{ message_id: string }>>;
-  event(id: string): Promise<CalendarItem>;
-  createEvent(input: Readonly<{ title: string; start: string; end: string; id?: string; operationMarker?: string }>): Promise<CalendarItem>;
-  moveEvent(id: string, start: string, end: string, etag?: string, operationMarker?: string): Promise<CalendarItem>;
-  cancelEvent(id: string, etag?: string, operationMarker?: string): Promise<void>;
+  event(id: string, calendarId?: string): Promise<CalendarItem>;
+  createEvent(input: Readonly<{ title: string; start: string; end: string; id?: string; operationMarker?: string; calendarId?: string; attendees?: readonly string[]; description?: string; location?: string; meet?: boolean; sendUpdates?: CalendarSendUpdates }>): Promise<CalendarItem>;
+  moveEvent(id: string, start: string, end: string, etag?: string, operationMarker?: string, options?: CalendarWriteOptions): Promise<CalendarItem>;
+  cancelEvent(id: string, etag?: string, operationMarker?: string, options?: CalendarWriteOptions): Promise<void>;
   changedEvents(since: number, from: number, to: number): Promise<readonly CalendarChange[]>;
   changedEventsPage?(calendarId: string, since: number, from: number, to: number, limit: number, pageToken?: string): Promise<CalendarChangesPage>;
   mailPage(query:string,limit:number,pageToken?:string):Promise<Readonly<{messages:readonly MailItem[];next_page_token:string|null;result_size_estimate:number|null}>>;
@@ -342,13 +369,14 @@ export type GoogleClient = Readonly<{
   searchMail(query: string, limit: number): Promise<readonly MailItem[]>;
   readThread(threadId: string, limit: number): Promise<readonly ThreadMessage[]>;
   threadPage?(threadId: string, limit: number, cursor?: string): Promise<Readonly<{messages: readonly ThreadMessage[]; cursor: string | null}>>;
+  searchContacts?(query: string, limit: number): Promise<readonly ContactMatch[]>;
   tasks(status: TaskStatusFilter, limit: number): Promise<readonly TaskItem[]>;
 }>;
 
 // Single source for the connector-proxy allowlist: the runtime's vault client and the Supabase
 // connector-proxy Edge Function both build from this list, so a method added to GoogleClient but
 // missed here fails `satisfies` / the parity test instead of breaking live calls on Vault installs.
-export const GOOGLE_METHODS = ['calendarPage','calendarListsPage','taskListsPage','tasksPage','allTasksPage','taskList','task','createTask','patchTask','mailPage','freeBusy', 'events', 'draft', 'findDraftByMessageId', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents','changedEventsPage', 'newMail', 'searchMail', 'readThread', 'threadPage', 'tasks', 'driveListFiles', 'driveSearchFiles', 'driveGetFileMetadata','driveReadFileContent'] as const satisfies readonly (keyof GoogleClient)[];
+export const GOOGLE_METHODS = ['calendarPage','calendarListsPage','taskListsPage','tasksPage','allTasksPage','taskList','task','createTask','patchTask','mailPage','freeBusy', 'events', 'draft', 'findDraftByMessageId', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents','changedEventsPage', 'newMail', 'searchMail', 'readThread', 'threadPage', 'tasks', 'driveListFiles', 'driveSearchFiles', 'driveGetFileMetadata','driveReadFileContent','searchContacts'] as const satisfies readonly (keyof GoogleClient)[];
 export type GoogleMethod = (typeof GOOGLE_METHODS)[number];
 
 const b64urlDecode = (data: string): string => {
@@ -553,7 +581,12 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
     if (status !== undefined && status !== 'todo' && status !== 'done' || !Object.keys(parsed).length && status === undefined) throw new Error('invalid Google task changes');
     return { ...(parsed.title !== undefined ? { title: parsed.title } : {}), ...(parsed.notes !== undefined ? { notes: parsed.notes } : {}), ...(parsed.due_date !== undefined ? { due: parsed.due_date === null ? null : `${parsed.due_date}T00:00:00.000Z` } : {}), ...(status !== undefined ? { status: status === 'done' ? 'completed' : 'needsAction', ...(status === 'todo' && clearCompletion ? { completed: null } : {}) } : {}) };
   };
-  const EVENTS = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
+  const events = (calendarId = 'primary', id?: string, query: Readonly<Record<string, string | undefined>> = {}) => {
+    if (!calendarId || calendarId.length > 254) throw new Error('invalid Calendar id');
+    const url = new URL(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events${id === undefined ? '' : `/${encodeURIComponent(id)}`}`);
+    for (const [key, value] of Object.entries(query)) if (value !== undefined) url.searchParams.set(key, value);
+    return url.toString();
+  };
   const match = (etag?: string): Record<string, string> => (etag ? { 'if-match': etag } : {});
   const send = async (url: string, method: string, body: unknown, etag?: string) =>
     item(await call(url, { method, headers: { 'content-type': 'application/json', ...match(etag) }, body: JSON.stringify(body) }) as unknown as GoogleEvent);
@@ -621,19 +654,37 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       if(!result||typeof result!=='object'||!result.calendars||typeof result.calendars!=='object'||Array.isArray(result.calendars)||!Object.values(result.calendars).every(validFreeBusyCalendar)||Date.parse(result.timeMin??'')!==Date.parse(from)||Date.parse(result.timeMax??'')!==Date.parse(to))throw new Error('freebusy coverage differs');
       return {from:result.timeMin!,to:result.timeMax!,calendars:result.calendars};
     },
-    event: async (id) => {
-      const value = await call(`${EVENTS}/${encodeURIComponent(id)}`);
+    event: async (id, calendarId) => {
+      const value = await call(events(calendarId, id));
       if (!validCalendarEvent(value) || value.id !== id) throw new Error('invalid Calendar event response');
       return item(value);
     },
     // Preserve the provider's notification defaults; recovery markers do not authorize silent guest updates.
-    createEvent: ({ title, start, end, id, operationMarker }) => send(EVENTS, 'POST', { ...(id ? { id } : {}), summary: title, ...calendarTimes(start, end), ...calendarMarker(operationMarker) }),
-    moveEvent: (id, start, end, etag, operationMarker) => send(`${EVENTS}/${encodeURIComponent(id)}`, 'PATCH', { ...calendarTimes(start, end), ...calendarMarker(operationMarker) }, etag),
-    async cancelEvent(id, etag, operationMarker) {
+    // A Meet request is keyed to the event id, so a retried create cannot ask for a second link.
+    createEvent: async ({ title, start, end, id, operationMarker, calendarId, attendees, description, location, meet, sendUpdates }) => send(
+      events(calendarId, undefined, { sendUpdates, conferenceDataVersion: meet ? '1' : undefined }), 'POST', {
+        ...(id ? { id } : {}), summary: title, ...calendarTimes(start, end), ...calendarMarker(operationMarker),
+        ...(description ? { description } : {}), ...(location ? { location } : {}), ...(attendees?.length ? { attendees: attendees.map((email) => ({ email })) } : {}),
+        ...(meet ? { conferenceData: { createRequest: { requestId: id ?? operationMarker ?? crypto.randomUUID(), conferenceSolutionKey: { type: 'hangoutsMeet' } } } } : {}),
+      }),
+    moveEvent: async (id, start, end, etag, operationMarker, options) => send(events(options?.calendarId, id, { sendUpdates: options?.sendUpdates }), 'PATCH', { ...calendarTimes(start, end), ...calendarMarker(operationMarker) }, etag),
+    async cancelEvent(id, etag, operationMarker, options) {
+      const url = events(options?.calendarId, id, { sendUpdates: options?.sendUpdates });
       // Put cancellation and its marker in one version-fenced mutation. A missing tombstone
       // marker later is ambiguous, even if a provider returns 404 or a bare cancelled event.
-      if (operationMarker) await send(`${EVENTS}/${encodeURIComponent(id)}`, 'PATCH', { status: 'cancelled', ...calendarMarker(operationMarker) }, etag);
-      else await call(`${EVENTS}/${encodeURIComponent(id)}`, { method: 'DELETE', headers: match(etag) });
+      if (operationMarker) await send(url, 'PATCH', { status: 'cancelled', ...calendarMarker(operationMarker) }, etag);
+      else await call(url, { method: 'DELETE', headers: match(etag) });
+    },
+    async searchContacts(query, limit) {
+      if (typeof query !== 'string' || !query || query.length > 100 || !validPageLimit(limit, 10)) throw new Error('invalid contacts search');
+      // Google asks for an empty-query request before each search so the contact cache is current.
+      const search = async (path: string) => {
+        const url = (text: string) => `https://people.googleapis.com/v1/${path}?${new URLSearchParams({ query: text, readMask: 'names,emailAddresses', pageSize: String(limit) })}`;
+        await call(url(''), { signal: AbortSignal.timeout(15_000) });
+        return (await call(url(query), { signal: AbortSignal.timeout(15_000) })).results;
+      };
+      const [saved, other] = await Promise.all([search('people:searchContacts'), search('otherContacts:search')]);
+      return contactMatches([{ source: 'contacts', results: saved }, { source: 'other_contacts', results: other }]);
     },
     async calendarPage(calendarId, from, to, limit, includeDeclined, pageToken) {
       if (typeof calendarId !== 'string' || !calendarId.trim() || calendarId.length > 254 || ![from,to].every(v => validCalendarInstant(v)) || Date.parse(from) >= Date.parse(to) || !Number.isSafeInteger(limit) || limit < 1 || limit > 50 || typeof includeDeclined !== 'boolean' || (pageToken !== undefined && (typeof pageToken !== 'string' || !pageToken || pageToken.length > 4096))) throw new Error('invalid Calendar page request');

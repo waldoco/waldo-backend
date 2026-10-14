@@ -98,6 +98,8 @@ export const toolNameSchema = z.enum([
   'skills_disable',
   'skills_load',
   'use_mac',
+  // search_contacts: the owner's Google contacts and other contacts, by name or address prefix.
+  'search_contacts',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -201,6 +203,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'connect_service',
     'get_communication',
     'search_communication',
+    'search_contacts',
     'read_thread',
     'get_tasks',
     'get_master_metrics',

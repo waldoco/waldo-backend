@@ -18,7 +18,7 @@ const SCOPES: readonly SourceScope[] = ['none', 'pasted_only'];
 // delegate_task is allow here because the guard must be applied to the child's handlers too (see wiring).
 export const SOURCE_SCOPE_CLASS: Readonly<Record<ToolName, 'deny' | 'allow'>> = {
   use_mac: 'deny',
-  get_crs: 'deny', get_health: 'deny', query_calendar: 'deny', get_communication: 'deny', search_communication: 'deny',
+  get_crs: 'deny', get_health: 'deny', query_calendar: 'deny', get_communication: 'deny', search_communication: 'deny', search_contacts: 'deny',
   read_thread: 'deny', get_tasks: 'deny', get_master_metrics: 'deny', get_context: 'allow', query_availability: 'deny',
   remember: 'allow', forget_memory: 'allow',
   read_owner_context: 'deny', read_memory: 'deny', update_memory: 'allow', search_episodes: 'deny', propose_action: 'allow',
