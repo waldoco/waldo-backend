@@ -2376,3 +2376,11 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
   1. **Forwards.** Real Telegram forwards carry the legacy `forward_*` keys next to `forward_origin`, per the Bot API server source. A strict gate would still refuse them. Proposed: accept the legacy keys as optional and never read them.
   2. **#1149's `nightly-quoted` test** expects a stored `Transcript: ` prefix. Option (a) stores the prefix and is recommended; option (b) changes the test.
 - Questions posted (6158580951). The lane resumes when the lead answers; about 30 of its 250 tool calls are used. Nothing has been pushed.
+
+## 01:08Z — heartbeat
+
+- The lead landed #1174 and #1189; the tip is `38beffd2`.
+- The lead accepted #1192's two deviations (6158546331). #1192 and #1193 are at CI 6/6 and wait for the review session.
+- Staging is unchanged since 20:26Z.
+- The heartbeat cron was renewed as `54720d7e` with the current state.
+- The A1 questions are still open with the lead.
