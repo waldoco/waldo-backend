@@ -459,6 +459,15 @@ describe('an owner reply has room to write', () => {
     expect(await replyRequest((responder, scope) => responder.respond(ownerTyped({ traceId: 'reply', conversationRef: 'owner', surface: 'app', text: 'Plan my day.', memoryWrites: false, runScope: scope }), sameTime))).toMatchObject({ max_output_tokens: 16_384 });
   });
 
+  it('gives a subagent of an owner turn the same room', async () => {
+    const delegates = { ...asksForCalendar(0, 'delegate_task'), output: [{ type: 'function_call', id: 'fc_d', call_id: 'call_d', name: 'delegate_task', arguments: '{"task":"Find the venue."}', status: 'completed' }] };
+    const api = fakeOpenAI((n) => ({ after: 0, body: n === 0 ? delegates : said('Done.') }));
+    const { scope } = runScope();
+    await settle(createOwnerResponder(SYNTHETIC_KEY, undefined, undefined, undefined, clock, []).respond(ownerTyped({ traceId: 'child', conversationRef: 'owner', surface: 'app', text: 'Research this.', memoryWrites: false, runScope: scope }), sameTime));
+    const child = api.requests.find((request) => String(request.body.instructions).startsWith('You are a subagent of Waldo'));
+    expect(child?.body).toMatchObject({ max_output_tokens: 16_384 });
+  });
+
   it('keeps machine turns at the smaller output', async () => {
     expect(await replyRequest((responder) => responder.remind('remind', 'owner', 'Stretch.', sameTime))).toMatchObject({ max_output_tokens: 4096 });
   });
