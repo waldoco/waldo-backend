@@ -93,7 +93,7 @@ export const watchDue = (state: CalendarWatchState | null, now: number): boolean
 
 // Gmail pushes arrive through Google Cloud Pub/Sub. The owner sets up the topic and push subscription in
 // the OAuth app's Cloud project; this is the one value that names it, and Gmail push is off while it is empty.
-export const GMAIL_PUSH_PROJECT = '';
+export const GMAIL_PUSH_PROJECT = 'waldo-dev-492217';
 export const GMAIL_PUSH_PATH = '/events/gmail';
 export const GMAIL_WATCH_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/watch';
 const GMAIL_RENEW_EVERY_MS = 24 * 3_600_000;
