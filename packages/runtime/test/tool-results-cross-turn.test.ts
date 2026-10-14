@@ -25,7 +25,8 @@ vi.mock('../src/channels/owner-turn', async load => {
     const text = request.request.response_format?.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : writer ? '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : 'Noted.';
     return { ok: true, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
-  return { ...original, createOwnerResponder: (...args: Parameters<typeof original.createOwnerResponder>) => { args[10] = gateway; return original.createOwnerResponder(...args); } };
+  // The owner object passes no gateway in this fixture; the direct responders below bring their own.
+  return { ...original, createOwnerResponder: (...args: Parameters<typeof original.createOwnerResponder>) => { args[10] ??= gateway; return original.createOwnerResponder(...args); } };
 });
 const { OwnerDO } = await import('../src/channels/owner-do');
 
@@ -132,7 +133,7 @@ describe('an earlier tool result in the ledger, then one owner turn', () => {
         requests.push(request.request);
         return { ok: true, data: { model: request.request.model, text: request.request.response_format ? '{}' : 'Noted.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
       } };
-      const { createOwnerResponder } = await vi.importActual<typeof import('../src/channels/owner-turn')>('../src/channels/owner-turn');
+      const { createOwnerResponder } = await import('../src/channels/owner-turn');
       const responder = createOwnerResponder('fixture', undefined, undefined, undefined, undefined, [], undefined, false, toolOutputLedger(state.storage), undefined, gateway);
       await responder.prompt('job-brief', 'owner', 'Write the morning brief.', async (_hop, work) => work());
       const job = requests.filter(request => request.response_format === undefined);
@@ -156,7 +157,7 @@ describe('an earlier tool result in the ledger, then one owner turn', () => {
         requests.push(request.request);
         return { ok: true, data: { model: request.request.model, text: request.request.response_format ? '{}' : 'Noted.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
       } };
-      const { createOwnerResponder } = await vi.importActual<typeof import('../src/channels/owner-turn')>('../src/channels/owner-turn');
+      const { createOwnerResponder } = await import('../src/channels/owner-turn');
       const responder = createOwnerResponder('fixture', undefined, undefined, undefined, undefined, [], undefined, false, toolOutputLedger(state.storage), undefined, gateway, undefined, { suppressMemory: true, stripLiveTools: true });
       await responder.respond(ownerTyped({ traceId: 'probe-ask', conversationRef: 'owner', surface: 'telegram', text: 'what did you find in my mail?' }), async (_hop, work) => work());
       const replies = requests.filter(request => request.response_format === undefined);
