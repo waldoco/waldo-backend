@@ -103,9 +103,11 @@ it('deploy configuration decides MCP, browse and Drive eligibility', async () =>
 });
 
 it('the owner browser offers browse tools only where its Cloudflare host can serve them, whatever the Browserbase keys say', async () => {
-  const storage = { kv: { get: () => undefined, put: () => undefined, list: () => [] } } as unknown as DurableObjectStorage;
+  // The owner holds a Telegram binding on this physical object; browse tools are never offered without one.
+  const bound: Record<string, unknown> = { do_name: 'owner', telegram_subject: '81' };
+  const storage = { kv: { get: (key: string) => bound[key], put: () => undefined, list: () => [] } } as unknown as DurableObjectStorage;
   const missing = { ok: false, reason: 'not_configured' };
-  const runtime = (environment: string, binding = true) => ownerBrowserRuntime({ env: { WALDO_ENVIRONMENT: environment, BROWSERBASE_API_KEY: 'key', BROWSERBASE_PROJECT_ID: 'project', ...(binding ? { BROWSER: {} } : {}) } as never, storage, actualDoId: 'physical', activeScope: () => undefined });
+  const runtime = (environment: string, binding = true) => ownerBrowserRuntime({ env: { WALDO_ENVIRONMENT: environment, BROWSERBASE_API_KEY: 'key', BROWSERBASE_PROJECT_ID: 'project', OWNER_DO: { idFromName: (name: string) => ({ toString: () => name === 'owner' ? 'physical' : 'elsewhere' }) }, ...(binding ? { BROWSER: {} } : {}) } as never, storage, actualDoId: 'physical', activeScope: () => undefined });
   expect(await runtime('staging', false).read(browsePageHandler('key', 'project', undefined)).eligible!()).toEqual(missing);
   expect(await runtime('staging', false).act(browseActHandler('key', 'project', undefined)).eligible!()).toEqual(missing);
   registerCommonBrowserSdk(async () => ({}) as never);

@@ -6,6 +6,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseJsonc } from '../jsonc.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const source = readFileSync(join(root, 'packages/runtime/wrangler.jsonc'), 'utf8');
@@ -24,7 +25,7 @@ const check = (config) => {
 
 try {
   if (check(source).status !== 0) throw new Error('current observability config rejected');
-  const config = JSON.parse(source.replace(/\/\/[^\n]*/g, '').replace(/,(\s*[}\]])/g, '$1'));
+  const config = parseJsonc(source);
   // Inspect actual environments, not textual occurrence counts: adding an isolated
   // preview must not make the production/staging privacy regression stop running.
   for (const target of ['production', 'staging']) {
