@@ -9,21 +9,27 @@ import { HEARTBEAT_EVERY_MS } from '../src/channels/heartbeat';
 // and returns. The four throw shapes: before any re-arm (a); after the arbiter deleted the alarm (b); after it armed its
 // 250 ms floor for a past-due key (c); after it armed a later wake (d).
 const { OwnerDO } = await import('../src/channels/owner-do');
-type Passes = { alarm(): Promise<void>; alarmWork(): Promise<void>; drainApp(): Promise<void>; drainIMessage(): Promise<void> };
+type Passes = { alarm(info?: AlarmInvocationInfo): Promise<void>; alarmWork(): Promise<void>; drainApp(): Promise<void>; drainIMessage(): Promise<void> };
 const proto = OwnerDO.prototype as unknown as Passes;
 const FAILURES = 'owner_alarm_failures_v1';
 const RETRY_DUE = 'owner_alarm_retry_due_v1';
 const LINK_DUE = 'telegram_link_due_v1';
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-const watchPasses = async (name: string, seed: (state: DurableObjectState) => void, observe: (stub: DurableObjectStub, at: number[]) => Promise<void>) => {
+// Records when each pass starts and the platform's retry count for it. With firstPassDies, the first pass throws after its
+// work, as a pass that is evicted or runs out of CPU does, which the platform retries unless the pass deleted the alarm.
+const watchPasses = async (name: string, seed: (state: DurableObjectState) => void, observe: (stub: DurableObjectStub, at: number[], retries: number[]) => Promise<void>, firstPassDies = false) => {
   const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   const inObject = <T>(work: (state: DurableObjectState) => Promise<T> | T) => runInDurableObject(stub, async (_instance, state) => work(state));
-  const real = proto.alarm, at: number[] = [], start = Date.now();
-  const passes = vi.spyOn(proto, 'alarm').mockImplementation(async function (this: unknown) { at.push(Date.now() - start); return real.call(this); });
+  const real = proto.alarm, at: number[] = [], retries: number[] = [], start = Date.now();
+  const passes = vi.spyOn(proto, 'alarm').mockImplementation(async function (this: unknown, info?: AlarmInvocationInfo) {
+    at.push(Date.now() - start); retries.push(info?.retryCount ?? 0);
+    await real.call(this);
+    if (firstPassDies && at.length === 1) throw new Error('synthetic pass death');
+  });
   try {
     await inObject(async state => { seed(state); await armAlarm(state.storage, Date.now() + 100); });
-    await observe(stub, at);
+    await observe(stub, at, retries);
   } finally {
     // The failing lane stays mocked until no wake is left, so no pass runs the real alarm work on this owner afterwards.
     await inObject(state => state.storage.deleteAlarm());
@@ -89,21 +95,52 @@ it('a pass that succeeds after a failure clears the streak, and the next wake is
   } finally { work.mockRestore(); lines.mockRestore(); }
 }, 20_000);
 
-// A turn that ends while a retry is pending re-arms through the arbiter, which arms only listed wakes.
+// A turn that ends while a retry is pending re-arms through the arbiter, outside the handler.
+const rearmAfterFirstFailure = async (stub: DurableObjectStub) => {
+  const deadline = Date.now() + 2_000;
+  while (await runInDurableObject(stub, (_instance, state) => state.storage.kv.get(FAILURES)) !== 1 && Date.now() < deadline) await sleep(25);
+  return runInDurableObject(stub, async (_instance, state) => {
+    await rearmSharedAlarm(state.storage, null, Date.now());
+    return { retryDue: state.storage.kv.get<number>(RETRY_DUE), armed: await state.storage.getAlarm() };
+  });
+};
+
 it('the retry wake is a listed due key, so an arbiter re-arm outside the handler keeps it', async () => {
   const lines = vi.spyOn(console, 'error').mockImplementation(() => undefined), fail = failing('drainIMessage');
   try {
     await watchPasses('alarm-retry-keyed', () => undefined, async stub => {
-      const deadline = Date.now() + 2_000;
-      while (await runInDurableObject(stub, (_instance, state) => state.storage.kv.get(FAILURES)) !== 1 && Date.now() < deadline) await sleep(25);
-      const kept = await runInDurableObject(stub, async (_instance, state) => {
-        await rearmSharedAlarm(state.storage, null, Date.now());
-        return { retryDue: state.storage.kv.get<number>(RETRY_DUE), armed: await state.storage.getAlarm() };
-      });
+      const kept = await rearmAfterFirstFailure(stub);
       expect(kept.armed, `armed ${kept.armed}, retry key ${kept.retryDue}`).not.toBeNull();
       expect(kept.armed).toBe(kept.retryDue);
     });
   } finally { fail.mockRestore(); lines.mockRestore(); }
+}, 20_000);
+
+// The handler owns the retry, so the arbiter's 250 ms floor is no second backoff while one is pending.
+it('while a retry is pending, a re-arm outside the handler arms a past-due key no sooner than that retry', async () => {
+  const lines = vi.spyOn(console, 'error').mockImplementation(() => undefined), fail = failing('drainIMessage');
+  try {
+    await watchPasses('alarm-retry-past-due', state => state.storage.kv.put(LINK_DUE, Date.now() - 1_000), async (stub, at) => {
+      const kept = await rearmAfterFirstFailure(stub);
+      expect(kept.armed, `armed ${kept.armed}, retry key ${kept.retryDue}`).toBe(kept.retryDue);
+      await untilPasses(at, 2, 4_000);
+      const step = alarmRetryDelay(1, stub.id.toString(), HEARTBEAT_EVERY_MS);
+      expect(at[1]! - at[0]!, `passes at ${at.join(', ')} ms; first step ${step} ms`).toBeGreaterThanOrEqual(step - 50);
+    });
+  } finally { fail.mockRestore(); lines.mockRestore(); }
+}, 20_000);
+
+// Inside the handler the arbiter never deletes the alarm: with nothing due it leaves the platform's alarm state, so a
+// pass that dies after it still gets the platform's own retry.
+it('a pass that dies after the arbiter found nothing due still gets the platform\'s retry', async () => {
+  const work = vi.spyOn(proto, 'alarmWork').mockImplementation(async function (this: Passes) { await this.drainApp(); });
+  try {
+    await watchPasses('alarm-pass-dies', () => undefined, async (_stub, at, retries) => {
+      await untilPasses(at, 2, 4_000);
+      expect(at.length, `passes at ${at.join(', ')} ms`).toBeGreaterThanOrEqual(2);
+      expect(retries[1], `retry counts ${retries.join(', ')}`).toBe(1);
+    }, true);
+  } finally { work.mockRestore(); }
 }, 20_000);
 
 it('the retry delay starts at 2 s, doubles, adds a fixed share of up to a quarter per owner, and never passes the cap', () => {

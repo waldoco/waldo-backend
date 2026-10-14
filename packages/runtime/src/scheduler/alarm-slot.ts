@@ -47,16 +47,27 @@ export function alarmRetryDelay(streak: number, objectId: string, capMs: number)
   return Math.min(Math.floor(2_000 * 2 ** Math.min(streak - 1, 20) * (1 + hash / 2 ** 32 / 4)), capMs);
 }
 
+// Objects whose alarm handler is running. A delete made there may cancel the platform's retry of a pass that then dies,
+// so inside the handler the arbiter never deletes the alarm.
+const inAlarmHandler = new WeakSet<DurableObjectStorage>();
+export async function insideAlarmHandler(storage: DurableObjectStorage, pass: () => Promise<void>): Promise<void> {
+  inAlarmHandler.add(storage);
+  try { await pass(); } finally { inAlarmHandler.delete(storage); }
+}
+
 // The one arbiter: arms the earliest of the schedule's next entry and every listed lane's wake, never sooner than the
-// retry delay, and clears the alarm when nothing is due.
+// retry delay. While the alarm handler has a retry pending, it owns when past-due work runs again, so a past-due wake is
+// armed no sooner than that retry. With nothing due, a re-arm outside the handler clears the alarm; inside, it leaves it.
 export async function rearmSharedAlarm(storage: DurableObjectStorage, scheduleDue: number | null, now: number, retryDelayMs = 250): Promise<void> {
   const bounds = scheduleDue === null ? [] : [scheduleDue];
   for (const key of WAKE_DUE_KEYS) {
     const due = (await storage.get<number | null>(key)) ?? null;
     if (due !== null) bounds.push(due);
   }
-  if (!bounds.length) { await storage.deleteAlarm(); return; }
-  await armAlarm(storage, Math.max(Math.min(...bounds), now + retryDelayMs));
+  if (!bounds.length) { if (!inAlarmHandler.has(storage)) await storage.deleteAlarm(); return; }
+  const earliest = Math.min(...bounds), retryDue = (await storage.get<number | null>(ALARM_RETRY_DUE_KEY)) ?? null;
+  const floor = earliest <= now && retryDue !== null ? Math.max(retryDue, now + retryDelayMs) : now + retryDelayMs;
+  await armAlarm(storage, Math.max(earliest, floor));
 }
 
 // Commit transport data and its wake together. Preserve an earlier scheduled alarm.
