@@ -18,11 +18,10 @@ type Dependencies = Readonly<{
   transaction?<T>(work: () => T): T;
   hideHistory(texts: readonly string[], ctx: MemoryToolContext): Promise<void>;
   resolveSource?(ref: string, ctx: MemoryToolContext): Promise<MemoryOwnerTurn | null>;
-  // Facts a connected provider asserts about the owner, kept outside the claims plane. Called inside the forget's commit
-  // once its barriers are written, with the forgotten texts and the provider fields the model named: suppresses what they
-  // match exactly, and returns the stored values the fields resolve to, which the forget bars, and one line per kind of
-  // fact matched, never a value.
-  providerFacts?(texts: readonly string[], fields: readonly ProviderField[]): Readonly<{ barred: readonly string[]; lines: readonly string[] }>;
+  // Facts a connected provider asserts about the owner, kept outside the claims plane by their own writer. Called inside the
+  // forget's commit once its barriers are written, with the forgotten texts and the provider fields the model named:
+  // suppresses the facts they name, and returns one line per kind of fact forgotten, never a value.
+  providerFacts?(texts: readonly string[], fields: readonly ProviderField[]): readonly string[];
 }>;
 const fail = (error: string) => ({ ok: false as const, code: 'invalid_args' as const, error, source_taint: null });
 const success = (data: unknown) => ({ ok: true as const, data, source_taint: null });
@@ -113,15 +112,14 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         // Hide retained history before deleting the only claim-to-source link. A failed
         // cleanup is a failed tool, not an invented completion receipt.
         await deps.hideHistory([...texts], ctx); await ready(ctx);
-        // A named field is resolved to its stored values and barred, but those values are not swept from chat history: the
-        // sweep is a case-insensitive literal replace, and a given name such as "Will" would blank that word everywhere.
+        // A named field is forgotten by the provider's own writer, not barred here: a barrier would refuse the owner later
+        // saying their name in their own words. Its values are not swept from chat history either: the sweep is a
+        // case-insensitive literal replace, and a given name such as "Will" would blank that word everywhere.
         const fields = [...new Set(args.provider_fields ?? [])];
         let incomplete = false, touched = false, provider: readonly string[] = [];
         const commit = () => {
           for (const text of texts) store.barrier(text, now());
-          const provided = deps.providerFacts?.([...texts], fields);
-          for (const text of provided?.barred ?? []) store.barrier(text, now());
-          provider = provided?.lines ?? [];
+          provider = deps.providerFacts?.([...texts], fields) ?? [];
           for (const id of selected.keys()) store.forget(id);
           // Derived stores (cards, notes, goals, loops, runs, blocks, inbox, topic index) are purged in the same commit as the claim.
           // A purge that cannot verify clean leaves the pending row in place and this call reports incomplete; a topic row is closed only by a verified purge.

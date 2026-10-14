@@ -11,8 +11,8 @@ import { ensureSchema } from '../src/tracer/schema';
 // The owner forgets what their Google account says about them without disconnecting it. A forget names the fact either by
 // its exact text or, when the owner's words don't spell it out ("forget my name"), by the field the model names. A
 // forgotten name is hidden from every line, after a reconnect too, and the forget settles; a forgotten phone is deleted,
-// and a reconnect does not store it again. A forget of anything else leaves the name, and a disconnect still removes the
-// whole record.
+// and a reconnect does not store it again. The owner can still give their name in their own words. A forget of anything
+// else leaves the name, and a disconnect still removes the whole record.
 const MAIL = ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.compose'];
 const CALENDAR = 'https://www.googleapis.com/auth/calendar.events';
 const OWNER_ID = '3b8e5c1d-9f2a-4d7e-b6c0-1a4f8e2d5c97';
@@ -90,12 +90,13 @@ const send = async (owner: InstanceType<typeof OwnerDO>, state: DurableObjectSta
   await vi.waitFor(() => expect(state.storage.kv.get<{ state: string }>(`app:inbox-record:${id}`)?.state).toBe('completed'), { timeout: 10_000, interval: 20 });
 };
 const repliesTo = (text: string) => model.requests.filter(request => request.response_format === undefined && JSON.stringify(request.messages.at(-1)?.content ?? '').includes(text));
-// What the forget tool told the model, from the round that follows the call.
-const forgetReceipt = () => {
-  const outputs = model.requests.flatMap(request => (request.tool_turns ?? []).filter(turn => turn.call.name === 'forget_memory').map(turn => turn.output));
-  expect(outputs.length, 'the forget call reached the tool').toBeGreaterThan(0);
+// What a tool told the model, from the round that follows the call.
+const receiptOf = (tool: string) => {
+  const outputs = model.requests.flatMap(request => (request.tool_turns ?? []).filter(turn => turn.call.name === tool).map(turn => turn.output));
+  expect(outputs.length, `the ${tool} call reached the tool`).toBeGreaterThan(0);
   return outputs.at(-1)!;
 };
+const forgetReceipt = () => receiptOf('forget_memory');
 const count = (text: string, part: string) => text.split(part).length - 1;
 const settled = (state: DurableObjectState) => {
   const memory = claimStore(state.storage.sql);
@@ -128,6 +129,9 @@ it('"forget my name" hides the Google name from the next turn, both lines, and a
       expect(receipt).not.toContain('Okonkwo');
       expect(receipt, 'nothing in memory carried it, and the receipt does not claim otherwise').not.toContain('removed from memory');
       settled(state);
+      // A second field forget adds to the first rather than replacing it.
+      await send(owner, state, name, 'And my phone number', { name: 'forget_memory', args: { provider_fields: ['phone'], scope_note: 'their phone number' } });
+      expect(forgetReceipt()).toContain('"ok":true');
 
       const after = async (text: string, absent: readonly string[]) => {
         await send(owner, state, name, text);
@@ -142,11 +146,11 @@ it('"forget my name" hides the Google name from the next turn, both lines, and a
       };
       await after('what should you call me now?', ['Okonkwo']);
 
-      // A reconnect replaces the stored profile wholesale, here with a full name that changed but keeps the given name.
-      // Every part of the forgotten name was barred, so the line stays out.
-      edge.profile = { name: 'Zoë O. Ström', given_name: 'Zoë', family_name: 'O. Ström' };
+      // A reconnect replaces the stored profile wholesale, here under a name that shares no part with the forgotten one.
+      // The owner forgot the field, not only its old value, so the line stays out.
+      edge.profile = { name: 'Zed Strand', given_name: 'Zed', family_name: 'Strand' };
       await connect(owner, state);
-      await after('and after the reconnect?', ['Okonkwo', 'O. Ström']);
+      await after('and after the reconnect?', ['Okonkwo', 'Strand']);
 
       const access = consoleAccess(state.storage);
       const token = await access.grant();
@@ -155,7 +159,11 @@ it('"forget my name" hides the Google name from the next turn, both lines, and a
       expect(await state.storage.get('google:accounts')).toEqual([]);
       expect(await state.storage.get('google:profiles'), 'the disconnect removes the record, the hidden name included').toEqual({});
       const left = await listed(state);
-      for (const kept of [PHONE, ...Object.values(NAMES), 'O. Ström']) expect(left, 'no object KV entry carries the phone or a name').not.toContain(kept);
+      for (const kept of [PHONE, ...Object.values(NAMES), 'Strand']) expect(left, 'no object KV entry carries the phone or a name').not.toContain(kept);
+
+      // The forget is the owner's, not the account's: connecting again after the disconnect does not bring the name back.
+      await connect(owner, state);
+      await after('and after connecting again?', ['Okonkwo', 'Strand']);
     } finally { await state.storage.deleteAlarm(); }
   });
 }, 30_000);
@@ -197,6 +205,29 @@ it('a forget by field with no connected account fails honestly, and the turn com
       expect(receipt).toContain('"ok":false');
       expect(receipt).toContain('No connected account');
       expect(claimStore(state.storage.sql).barriers(), 'nothing was barred').toEqual([]);
+      expect(await state.storage.get('google:forgotten'), 'nothing was hidden ahead of a future connect').toBeUndefined();
+    } finally { await state.storage.deleteAlarm(); }
+  });
+}, 30_000);
+
+it('after "forget my name", the owner\'s own words win: their name, said as a bare word, is remembered and the model can read it', async () => {
+  directory({ id: 'conn-1', email: 'owner@example.test', profile: NAMES });
+  const name = 'google-profile-forget-correction';
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    const owner = await ownerFor(name, state);
+    try {
+      await connect(owner, state);
+      await send(owner, state, name, 'Please forget my name', { name: 'forget_memory', args: { provider_fields: ['name'], scope_note: 'their name' } });
+      expect(forgetReceipt()).toContain('"ok":true');
+
+      // The owner answers with the given name alone, so the quote and the alias are exactly the name Google gave.
+      await send(owner, state, name, 'Zoë', { name: 'remember', args: { kind: 'preference', text: 'The owner wants to be called Zoë', evidence_quote: 'Zoë', aliases: ['Zoë'] } });
+      expect(receiptOf('remember'), 'a forgotten Google name never blocks the owner saying it').toContain('"status":"stored"');
+      await send(owner, state, name, 'what do you know about me?', { name: 'read_memory', args: { limit: 10 } });
+      expect(receiptOf('read_memory')).toContain('The owner wants to be called Zoë');
+      const replies = repliesTo('what do you know about me?');
+      expect(replies.length).toBeGreaterThan(0);
+      for (const request of replies) expect(request.system, 'the Google line stays hidden').not.toContain(LABEL);
     } finally { await state.storage.deleteAlarm(); }
   });
 }, 30_000);

@@ -2070,6 +2070,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const googleProfiles = async () => (await storage.get<Record<string, GoogleProfileFact>>('google:profiles')) ?? {};
     // The owner's forget barriers as they stand now: a provider fact one of them matches exactly is suppressed.
     const forgotten = () => barredBy(memory.barriers().map((barrier) => barrier.topic_hash));
+    // The provider fields the owner forgot as a whole ("forget my name"): object KV 'google:forgotten', written only by
+    // google.forget. It outlives a disconnect, since the forget is the owner's and not the account's.
+    const forgottenFields = () => storage.kv.get<ProviderField[]>('google:forgotten') ?? [];
     const health = async () => (await storage.get<Record<string, string>>('google:health')) ?? {};
     const noteHealth = (id: string, error: string) => {
       this.ctx.waitUntil((async () => {
@@ -2127,10 +2130,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // it); a grant that carries none, from an edge that predates it or a migrated token, leaves it as it is.
         const ids = new Set(kept.map((known) => known.id));
         const profiles = Object.fromEntries(Object.entries(await googleProfiles()).filter(([id]) => ids.has(id) && !(grant.profile && id === account.id)));
-        // A phone the owner asked to forget is not stored again while their barrier stands. A forgotten name is stored as
-        // Google sent it, and nameLine leaves it out.
+        // A phone the owner asked to forget is not stored again: any phone once they forgot the field, or the same number
+        // while their barrier stands. A forgotten name is stored as Google sent it, and nameLine leaves it out.
         const { phone, ...names } = grant.profile ?? {};
-        const profile = phone === undefined || forgotten()(phone) ? names : { ...names, phone };
+        const profile = phone === undefined || forgottenFields().includes('phone') || forgotten()(phone) ? names : { ...names, phone };
         if (grant.profile && Object.keys(profile).length) profiles[account.id] = { ...profile, at: Date.now() };
         await storage.put({ 'google:accounts': kept, 'google:profiles': profiles });
         noteHealth(account.id, '');
@@ -2189,8 +2192,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return true;
       },
       // The name Google gave for the first connected account that has one, in connect order (a reconnect moves an account last).
-      // The barriers are read at every render, so an account whose name the owner forgot stays out after a reconnect.
+      // The owner's forgets are read at every render: a forgotten name field leaves out every account, and a barrier leaves
+      // out an account whose name it matches, so either stays out after a reconnect.
       async nameLine(): Promise<string | null> {
+        if (forgottenFields().includes('name')) return null;
         const [all, profiles, barred] = [await accounts(), await googleProfiles(), forgotten()];
         for (const account of all) {
           const line = googleNameLine(profiles[account.id] ?? {}, barred);
@@ -2199,27 +2204,28 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return null;
       },
       // A forget's texts, and the fields the model named, against the kept profiles, inside the forget's own transaction. A
-      // field resolves to every value stored for it, which the forget then bars. A name matched exactly stays stored and
-      // nameLine leaves it out; a phone matched is deleted. Returns the resolved values and one line per kind of fact
-      // matched, never a value.
-      forget(texts: readonly string[], fields: readonly ProviderField[]): { barred: string[]; lines: string[] } {
+      // named field that an account holds is forgotten as a whole, from every account and every later connect; a text
+      // matches only the values it equals exactly. Nothing here becomes a memory barrier, so the owner can still say their
+      // name in their own words. A forgotten name stays stored and nameLine leaves it out; a forgotten phone is deleted.
+      // Returns one line per kind of fact forgotten, never a value.
+      forget(texts: readonly string[], fields: readonly ProviderField[]): string[] {
         const profiles = storage.kv.get<Record<string, GoogleProfileFact>>('google:profiles') ?? {};
-        const barred = [...new Set(Object.values(profiles).flatMap((profile) => [
-          ...(fields.includes('name') ? googleNameTexts(profile) : []),
-          ...(fields.includes('phone') && profile.phone !== undefined ? [profile.phone] : []),
-        ]))];
-        const matched = barredBy([...texts, ...barred].flatMap(forgetFingerprints));
-        const hidesName = Object.values(profiles).some((profile) => googleNameTexts(profile).some(matched));
-        const dropsPhone = Object.values(profiles).some((profile) => profile.phone !== undefined && matched(profile.phone));
+        const held = Object.values(profiles);
+        const named = fields.filter((field) => held.some((profile) => field === 'name' ? googleNameTexts(profile).length > 0 : profile.phone !== undefined));
+        if (named.length) storage.kv.put('google:forgotten', [...new Set([...forgottenFields(), ...named])]);
+        const matched = barredBy(texts.flatMap(forgetFingerprints));
+        const drops = (profile: GoogleProfileFact) => profile.phone !== undefined && (named.includes('phone') || matched(profile.phone));
+        const hidesName = named.includes('name') || held.some((profile) => googleNameTexts(profile).some(matched));
+        const dropsPhone = held.some(drops);
         if (dropsPhone) storage.kv.put('google:profiles', Object.fromEntries(Object.entries(profiles).flatMap(([id, profile]) => {
-          if (profile.phone === undefined || !matched(profile.phone)) return [[id, profile]];
+          if (!drops(profile)) return [[id, profile]];
           const { phone: _phone, at, ...facts } = profile;
           return Object.keys(facts).length ? [[id, { ...facts, at }]] : [];
         })));
-        return { barred, lines: [
+        return [
           ...(hidesName ? ["The name from the owner's Google account matched: it is hidden from you, after a reconnect too. The account stays connected."] : []),
           ...(dropsPhone ? ["The phone number from the owner's Google account matched and was deleted; a reconnect does not store it again. The account stays connected."] : []),
-        ] };
+        ];
       },
       configured: () => Boolean(clientId && clientSecret && stateSecret),
       // Every call starts a fresh single-use attempt (state nonce + PKCE verifier) valid for 15 minutes.
