@@ -2386,3 +2386,15 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 - The A1 questions are still open with the lead.
 
 - 01:18Z heartbeat: the review session passed #1193 (M4) with nits at `2824f791`, with no blocking findings; the lead merges it. The nits become follow-ups for the morning summary: errors after the deadline all read as timeouts; the explicit deadline parameter; the `onSettle` trace; nested `withCallDeadline`; `ERR_INVALID_THIS`. The tip is unchanged at `38beffd2`. The A1 questions are still open.
+
+## 01:50Z — lane A on #1180 and #1186; morning summary posted
+
+- **Lane A** (brief `MAC_LANE_A_ALARM_BRIEF.md`) finishes #1180 with F2′ and real-scheduler tests, keys the retry wake, and carries #1186. It runs a compare-and-swap on both heads before pushing. Claim 6159076525.
+- **The morning summary** is posted (6159086509):
+  - 14 landings, but staging isn't updated;
+  - Mac PRs: #1193 needs owner decision 1; #1192 is in review;
+  - the takeover reviews;
+  - A1 is paused;
+  - seven owner decisions (budget, #1120 S0, #1114, #1185 keys, a batched deploy with #1189's GCP steps first, #1133, B4 consent);
+  - housekeeping: plant S1 again, the Air session ends at about 08:33Z.
+- **The review session (01:41Z):** #1193 needs the owner's word on the 60 s cut and the side-table design.
