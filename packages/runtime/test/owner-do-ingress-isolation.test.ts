@@ -836,6 +836,23 @@ it('target execution throw after consumed steer never completes the child',async
     await internal.drainInbox();expect((await inbox.records()).find(r=>r.id===childId)?.state).toBe('quarantined');expect((await inbox.records()).find(r=>r.id===childId)?.reason).toBe('consumed_target_outcome_uncertain');internal.turn=original;await state.storage.deleteAlarm();
   });
 });
+it('a committed final completes only the steers its own run heard',async()=>{
+  const { TelegramOwnerInbox }=await import('../src/channels/telegram-owner-inbox');const { persistInboxWake }=await import('../src/scheduler/alarm-slot');const subject=81102;
+  await runInDurableObject(doStub(subject),async(instance,state)=>{
+    const inbox=new TelegramOwnerInbox(state.storage,persistInboxWake);const binding={bot:'hermetic-test-bot-token',subject:String(subject),doName:route(subject).doName};
+    await state.storage.put({telegram_subject:String(subject),do_name:binding.doName});
+    await inbox.admit(binding,993361,'target');const target=(await inbox.claim('hermetic-test-bot-token:telegram:993361','target-attempt','target-run',Date.now()+150000))!;
+    // Heard by this run; sent but not yet heard; heard by another run.
+    for(const [id,run,heard] of [[993362,'target-run',true],[993363,'target-run',false],[993364,'other-run',true]] as const){
+      const child=`hermetic-test-bot-token:telegram:${id}`;await inbox.admit(binding,id,'steer',{kind:'steer',targetRun:run});await inbox.claim(child,`attempt-${id}`,'control',Date.now()+180000);
+      if(heard)await inbox.transition(child,`attempt-${id}`,'consumed');
+    }
+    (instance as unknown as {closeRunAtomic(run:import('../src/channels/telegram-owner-inbox').InboxRecord,reason:string,awaitingDelivery:boolean):void}).closeRunAtomic(target,'final_committed',true);
+    const rows=await inbox.records();const outcome=(id:number)=>{const row=rows.find(r=>r.updateId===id)!;return [row.state,row.reason??null,row.body];};
+    await state.storage.put('telegram_owner_inbox_v1',rows.filter(row=>row.updateId<993361||row.updateId>993364));await state.storage.deleteAlarm();
+    expect([993361,993362,993363,993364].map(outcome)).toEqual([['awaiting_delivery','final_committed',''],['completed','target_final_committed',''],['claimed',null,'steer'],['consumed',null,'steer']]);
+  });
+});
 
 it('a forward that arrives while a turn runs is its own labelled turn: no steer, and its text never grounds an owner claim', async () => {
   const subject = 81101;
