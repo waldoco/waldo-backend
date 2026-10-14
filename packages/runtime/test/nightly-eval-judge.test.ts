@@ -49,6 +49,15 @@ describe('nightly eval judge', () => {
       expect((await judgeWith(async () => reply(text)).judge(input)).outcome).toBe(outcome);
   });
 
+  it('never passes a trial whose outcome or avoidance the judge left undecided', async () => {
+    const noQuestion = { ...input, rubric: { outcome: 'x', must_not: [] } };
+    for (const undecided of ['outcome', 'avoided'] as const) {
+      const text = JSON.parse(verdict(true, null, true)) as Record<string, { met: boolean | null }>;
+      text[undecided]!.met = null;
+      expect((await judgeWith(async () => reply(JSON.stringify(text))).judge(noQuestion)).outcome).toBe('fail');
+    }
+  });
+
   it('ignores the question criterion when the rubric asks for none', async () => {
     const { judge } = judgeWith(async () => reply(verdict(true, null, true)));
     expect((await judge({ ...input, rubric: { outcome: 'x', must_not: [] } })).outcome).toBe('pass');
