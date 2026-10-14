@@ -11,7 +11,7 @@ import {
 } from '@waldo/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { RunJournalOutbox } from '../src/run-journal/outbox-runtime';
-import type { Deps } from '../src/seams/deps';
+import { productionDeps, type Deps } from '../src/seams/deps';
 import { FakeSink } from '../src/tracer/sink';
 import type { TracerDO } from '../src/tracer/tracer-do';
 
@@ -666,6 +666,48 @@ describe('DeliveryGate runtime policy state', () => {
     expect(await heldCount(runtime, eventId)).toBe(0);
   });
 
+  it.each([
+    ['names no journal run', USER],
+    ["names another owner's run", 'user-delivery-gate-other-owner'],
+  ])('scrubs a held card-shaped event id that %s', async (_case, runOwner) => {
+    const runtime = freshRuntimeStub();
+    const eventId = '17192945-1670-4670-a977-70b3acba8cdd';
+    await runInDurableObject(runtime, (_instance, state) => {
+      const journalOutbox = new RunJournalOutbox(
+        state.storage,
+        { ...productionDeps(), newRunId: () => eventId },
+        new FakeSink(),
+      );
+      if (runOwner !== USER) {
+        journalOutbox.startRun({
+          userId: runOwner,
+          trigger: FETCH_ALERT,
+          occurrenceAt: futureOccurrence(),
+        });
+      }
+      state.storage.sql.exec(
+        `INSERT INTO held_candidates
+           (user_id, event_id, push_class, candidate_json, hold_until, expires_at)
+         VALUES (?, ?, ?, ?, ?, NULL)`,
+        USER,
+        eventId,
+        FETCH_ALERT,
+        JSON.stringify({
+          push_class: FETCH_ALERT,
+          trigger: FETCH_ALERT,
+          event_id: eventId,
+          expires_at: null,
+        }),
+        futureOccurrence(),
+      );
+    });
+
+    await expect(
+      releaseHeld(runtime, { userId: USER, eventId, occurrenceAt: futureOccurrence() }),
+    ).rejects.toThrow('scribe:invalid_payload');
+    expect(await heldCount(runtime, eventId)).toBe(0);
+  });
+
   it('scrubs an unsafe legacy candidate before direct governor admission', async () => {
     const runtime = freshRuntimeStub();
     const runId = await runtime.startRun({
@@ -1042,17 +1084,18 @@ describe('DeliveryGate runtime policy state', () => {
   it('releases a held candidate through a fresh GATED step', async () => {
     const sink = new FakeSink();
     const runtime = freshRuntimeStub();
+    const firstAt = utcOccurrence('2026-01-01');
     const firstRun = await runtime.startRun({
       userId: USER,
       trigger: FETCH_ALERT,
-      occurrenceAt: futureOccurrence(),
+      occurrenceAt: firstAt,
     });
     await tick(runtime, firstRun);
 
     const heldRun = await runtime.startRun({
       userId: USER,
       trigger: FETCH_ALERT,
-      occurrenceAt: futureOccurrence(),
+      occurrenceAt: firstAt + 60_000,
     });
     await tick(runtime, heldRun);
     expect(await heldCount(runtime, heldRun)).toBe(1);
@@ -1068,7 +1111,7 @@ describe('DeliveryGate runtime policy state', () => {
     const releasedRun = await releaseHeld(runtime, {
       userId: USER,
       eventId: heldRun,
-      occurrenceAt: futureOccurrence(),
+      occurrenceAt: firstAt + 120_000,
     });
     expect(releasedRun).not.toBeNull();
     expect(await heldCount(runtime, heldRun)).toBe(0);
@@ -1088,6 +1131,68 @@ describe('DeliveryGate runtime policy state', () => {
       countedSends: 0,
     });
     expect(sink.observedSendAttempts()).toBe(2);
+    expect(sink.observedDeliveries()).toBe(2);
+  });
+
+  it('releases a held default candidate whose generated run id contains a card-shaped digit run', async () => {
+    const sink = new FakeSink();
+    const runtime = freshRuntimeStub();
+    const firstAt = utcOccurrence('2026-01-01');
+    // The first 16 digits pass the Luhn check, so Scribe's PII pass rewrites them.
+    const cardShapedRunId = '17192945-1670-4670-a977-70b3acba8cdd';
+    const runIds = ['generated-first-run', cardShapedRunId, 'generated-release-run'];
+    let outboxSequence = 0;
+
+    const result = await runInDurableObject(runtime, async (_instance, state) => {
+      const journalOutbox = new RunJournalOutbox(
+        state.storage,
+        {
+          now: () => firstAt,
+          newRunId: () => {
+            const next = runIds.shift();
+            if (next === undefined) throw new Error('unexpected additional run id');
+            return next;
+          },
+          newOutboxId: () => `card-shaped-outbox-${++outboxSequence}`,
+          sha256Hex: productionDeps().sha256Hex,
+        },
+        sink,
+      );
+      const firstRun = journalOutbox.startRun({
+        userId: USER,
+        trigger: FETCH_ALERT,
+        occurrenceAt: firstAt,
+      });
+      await journalOutbox.tickRun(firstRun);
+      const heldRun = journalOutbox.startRun({
+        userId: USER,
+        trigger: FETCH_ALERT,
+        occurrenceAt: firstAt + 60_000,
+      });
+      await journalOutbox.tickRun(heldRun);
+      state.storage.sql.exec(
+        'UPDATE class_state SET last_sent_at = 0 WHERE user_id = ? AND push_class = ?',
+        USER,
+        FETCH_ALERT,
+      );
+
+      const releasedRun = journalOutbox.releaseHeld({
+        userId: USER,
+        eventId: heldRun,
+        occurrenceAt: firstAt + 120_000,
+      });
+      if (releasedRun === null) throw new Error('held candidate was not released');
+      await journalOutbox.tickRun(releasedRun);
+      return { heldRun, releasedRun };
+    });
+
+    expect(result).toEqual({ heldRun: cardShapedRunId, releasedRun: 'generated-release-run' });
+    expect(await heldCount(runtime, cardShapedRunId)).toBe(0);
+    expect(await readGateState(runtime, result.releasedRun, FETCH_ALERT)).toMatchObject({
+      journalState: 'DONE',
+      verdict: 'send',
+      outboxStatus: 'acked',
+    });
     expect(sink.observedDeliveries()).toBe(2);
   });
 
@@ -1385,11 +1490,12 @@ describe('DeliveryGate runtime policy state', () => {
   it('keeps intervention_knock exempt and capped at two sends', async () => {
     const sink = new FakeSink();
     const runtime = freshRuntimeStub();
-    for (const eventId of ['intervention-01', 'intervention-02']) {
+    const firstAt = utcOccurrence('2026-01-01');
+    for (const [index, eventId] of ['intervention-01', 'intervention-02'].entries()) {
       const runId = await runtime.startRun({
         userId: USER,
         trigger: 'intervention',
-        occurrenceAt: futureOccurrence(),
+        occurrenceAt: firstAt + index * 60_000,
         candidate: {
           push_class: INTERVENTION_KNOCK,
           trigger: 'intervention',
@@ -1403,7 +1509,7 @@ describe('DeliveryGate runtime policy state', () => {
     const thirdRun = await runtime.startRun({
       userId: USER,
       trigger: 'intervention',
-      occurrenceAt: futureOccurrence(),
+      occurrenceAt: firstAt + 120_000,
       candidate: {
         push_class: INTERVENTION_KNOCK,
         trigger: 'intervention',
@@ -1526,10 +1632,11 @@ describe('DeliveryGate runtime policy state', () => {
   it('applies adjustment proposed sub-cap without capping executed adjustments', async () => {
     const sink = new FakeSink();
     const runtime = freshRuntimeStub();
+    const firstAt = utcOccurrence('2026-01-01');
     const proposedRun = await runtime.startRun({
       userId: USER,
       trigger: 'handoff_act',
-      occurrenceAt: futureOccurrence(),
+      occurrenceAt: firstAt,
       candidate: {
         push_class: ADJUSTMENT,
         trigger: 'handoff_act',
@@ -1543,7 +1650,7 @@ describe('DeliveryGate runtime policy state', () => {
     const heldProposedRun = await runtime.startRun({
       userId: USER,
       trigger: 'handoff_act',
-      occurrenceAt: futureOccurrence(),
+      occurrenceAt: firstAt + 60_000,
       candidate: {
         push_class: ADJUSTMENT,
         trigger: 'handoff_act',
@@ -1557,7 +1664,7 @@ describe('DeliveryGate runtime policy state', () => {
     const executedRun = await runtime.startRun({
       userId: USER,
       trigger: 'handoff_act',
-      occurrenceAt: futureOccurrence(),
+      occurrenceAt: firstAt + 120_000,
       candidate: {
         push_class: ADJUSTMENT,
         trigger: 'handoff_act',

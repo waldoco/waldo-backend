@@ -1,5 +1,5 @@
 import { iMessageBindingSchema } from '@waldo/contracts';
-import { createOwnerTurnContext } from '../../context-composer/owner-turn';
+import { createOwnerTurnContext, type OwnerContextSources } from '../../context-composer/owner-turn';
 import { surfaceOwnerAdmission } from '../../identity/surface-owner-admission';
 import { ClosedRunError, type RunEffectScope } from '../run-effect-scope';
 import { bindingDigest, bindingFromAuthority, iMessageComposition, type IMessageBridgeDO, type IMessageEnv, type IMessageTurnHandoff } from './bridge-do';
@@ -45,7 +45,7 @@ export const admitIMessageHandoff = async (host: OwnerHost, input: IMessageTurnH
 };
 
 /** Owner context for one running iMessage record: surfaceOwnerAdmission re-reads authority whenever its last matching read has aged out. */
-export const iMessageOwnerContext = async (host: OwnerHost, record: IMessageInboxRecord, scope: RunEffectScope) => {
+export const iMessageOwnerContext = async (host: OwnerHost, record: IMessageInboxRecord, scope: RunEffectScope, sources: Pick<OwnerContextSources, 'ownerProfile'> = {}) => {
   const lookup = async () => {
     scope.admit();
     const a = await currentIMessageAuthority(host.env, record);
@@ -53,7 +53,7 @@ export const iMessageOwnerContext = async (host: OwnerHost, record: IMessageInbo
     return { ownerId: a.ownerId, bindingRef: a.presenceId ?? a.bridgeId, revision: a.revision, physicalDoId: host.id.toString() };
   };
   const context = createOwnerTurnContext(await surfaceOwnerAdmission({ scope, lookup, expectedPhysicalDoId: host.id.toString(), surface: 'imessage',
-    subject: record.binding.subject, occurrenceKey: record.dedupKey, occurredAt: Math.min(record.occurredAt, record.admittedAt), text: record.text }), { conversationRef: record.conversationRef });
+    subject: record.binding.subject, occurrenceKey: record.dedupKey, occurredAt: Math.min(record.occurredAt, record.admittedAt), text: record.text }), { conversationRef: record.conversationRef, ...sources });
   if (context.conversationRef !== record.conversationRef) throw new ClosedRunError();
   return context;
 };

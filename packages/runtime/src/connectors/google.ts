@@ -38,7 +38,9 @@ export const googleHas = (scopes: readonly string[] | null | undefined, feature:
 export const GOOGLE_CALLBACK_PATH = '/oauth/google/callback';
 
 export type GoogleApp = Readonly<{ clientId: string; clientSecret: string; redirectUri: string }>;
-export type GoogleTokens = Readonly<{ refresh_token: string; email?: string; scopes?: readonly string[] | null }>;
+// What Google says about the account at connect, validated by shape only (parseGoogleProfile). A provider fact, not the owner's word.
+export type GoogleProfile = Readonly<{ name?: string; given_name?: string; family_name?: string; phone?: string }>;
+export type GoogleTokens = Readonly<{ refresh_token: string; email?: string; scopes?: readonly string[] | null; profile?: GoogleProfile }>;
 type Fetch = typeof fetch;
 
 export const b64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -84,7 +86,10 @@ export async function readConsentState(secret: string, state: string): Promise<R
   return (await sign(secret, `${owner}.${nonce}`)) === mac ? { owner, nonce } : null;
 }
 
-export const GOOGLE_CONSENT_SCOPES: readonly string[] = ['openid', 'email', ...GOOGLE_FEATURE_SCOPES.calendar, ...GOOGLE_FEATURE_SCOPES.availability, ...GOOGLE_FEATURE_SCOPES.calendar_list, ...GOOGLE_FEATURE_SCOPES.mail, ...GOOGLE_FEATURE_SCOPES.tasks, ...new Set([...GOOGLE_FEATURE_SCOPES.drive, ...GOOGLE_FEATURE_SCOPES.docs, ...GOOGLE_FEATURE_SCOPES.sheets, ...GOOGLE_FEATURE_SCOPES.slides]), ...GOOGLE_FEATURE_SCOPES.contacts];
+// The account's name (the profile scope's ID token claims) and phone number are read once, at connect. Neither is a
+// feature: no tool is gated on them, and a grant without them connects as before.
+export const GOOGLE_PHONE_SCOPE = `${AUTH}user.phonenumbers.read`;
+export const GOOGLE_CONSENT_SCOPES: readonly string[] = ['openid', 'email', 'profile', ...GOOGLE_FEATURE_SCOPES.calendar, ...GOOGLE_FEATURE_SCOPES.availability, ...GOOGLE_FEATURE_SCOPES.calendar_list, ...GOOGLE_FEATURE_SCOPES.mail, ...GOOGLE_FEATURE_SCOPES.tasks, ...new Set([...GOOGLE_FEATURE_SCOPES.drive, ...GOOGLE_FEATURE_SCOPES.docs, ...GOOGLE_FEATURE_SCOPES.sheets, ...GOOGLE_FEATURE_SCOPES.slides]), ...GOOGLE_FEATURE_SCOPES.contacts, GOOGLE_PHONE_SCOPE];
 
 export function googleConsentUrl(app: GoogleApp, state: string, codeChallenge: string): string {
   const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
@@ -123,11 +128,54 @@ async function token(app: GoogleApp, body: Record<string, string>, fetcher: Fetc
   return json as { access_token: string; refresh_token?: string; id_token?: string; scope?: string };
 }
 
-export async function exchangeGoogleCode(app: GoogleApp, code: string, fetcher: Fetch = fetch, codeVerifier?: string): Promise<GoogleTokens> {
+// Shape checks only: a name is a non-blank string of at most 100 characters with no control characters, and the phone is
+// E.164. A value that fails is dropped whole, never trimmed or reformatted, and no other key is kept.
+const PROFILE_TEXT_MAX = 100;
+const E164 = /^\+[1-9]\d{6,14}$/;
+const profileText = (value: unknown): string | undefined =>
+  typeof value === 'string' && value.trim() !== '' && value.length <= PROFILE_TEXT_MAX && !/\p{Cc}/u.test(value) ? value : undefined;
+export const parseGoogleProfile = (value: unknown): GoogleProfile => {
+  const record = isObject(value) ? value : {};
+  const phone = typeof record.phone === 'string' && E164.test(record.phone) ? record.phone : undefined;
+  const fields = { name: profileText(record.name), given_name: profileText(record.given_name), family_name: profileText(record.family_name), phone };
+  return Object.fromEntries(Object.entries(fields).filter(([, field]) => field !== undefined));
+};
+
+// The primary number's canonical form, else the first number that has one; accepted only as E.164.
+export const peoplePhone = (body: unknown): string | undefined => {
+  const numbers = isObject(body) && Array.isArray(body.phoneNumbers) ? body.phoneNumbers.filter(isObject) : [];
+  const canonical = (entry: Record<string, unknown>) => (typeof entry.canonicalForm === 'string' ? entry.canonicalForm : undefined);
+  const primary = numbers.find((entry) => isObject(entry.metadata) && entry.metadata.primary === true);
+  const chosen = (primary && canonical(primary)) ?? numbers.map(canonical).find((form) => form !== undefined);
+  return chosen !== undefined && E164.test(chosen) ? chosen : undefined;
+};
+
+const PEOPLE_PHONE_TIMEOUT_MS = 2_000;
+// Best effort by design: the connect never waits past the bound or fails for the phone. Any refusal, timeout or odd body
+// means no phone, and nothing about it is logged (the failure would carry nothing the owner can act on).
+async function peopleMePhone(accessToken: string, fetcher: Fetch, timeoutMs: number): Promise<string | undefined> {
+  try {
+    const response = await fetcher('https://people.googleapis.com/v1/people/me?personFields=phoneNumbers', { headers: { authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(timeoutMs) });
+    return response.ok ? peoplePhone(await response.json()) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// The ID token's payload is base64url UTF-8 JSON. Decoding through bytes keeps a name outside ASCII intact.
+const idTokenClaims = (idToken: string): Record<string, unknown> => {
+  const binary = atob(idToken.split('.')[1]!.replace(/-/g, '+').replace(/_/g, '/'));
+  return JSON.parse(new TextDecoder().decode(Uint8Array.from(binary, (char) => char.charCodeAt(0)))) as Record<string, unknown>;
+};
+
+export async function exchangeGoogleCode(app: GoogleApp, code: string, fetcher: Fetch = fetch, codeVerifier?: string, phoneTimeoutMs = PEOPLE_PHONE_TIMEOUT_MS): Promise<GoogleTokens> {
   const result = await token(app, { code, grant_type: 'authorization_code', redirect_uri: app.redirectUri, ...(codeVerifier ? { code_verifier: codeVerifier } : {}) }, fetcher);
   if (!result.refresh_token) throw new Error('google returned no refresh token');
-  const claims = result.id_token ? JSON.parse(atob(result.id_token.split('.')[1]!.replace(/-/g, '+').replace(/_/g, '/'))) as { email?: string } : {};
-  return { refresh_token: result.refresh_token, scopes: (result.scope ?? '').split(' ').filter(Boolean), ...(claims.email ? { email: claims.email } : {}) };
+  const claims = result.id_token ? idTokenClaims(result.id_token) : {};
+  const scopes = (result.scope ?? '').split(' ').filter(Boolean);
+  const phone = scopes.includes(GOOGLE_PHONE_SCOPE) ? await peopleMePhone(result.access_token, fetcher, phoneTimeoutMs) : undefined;
+  const profile = parseGoogleProfile({ name: claims.name, given_name: claims.given_name, family_name: claims.family_name, phone });
+  return { refresh_token: result.refresh_token, scopes, ...(typeof claims.email === 'string' && claims.email ? { email: claims.email } : {}), profile };
 }
 
 export type CalendarItem = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number; etag?: string; operation_marker?: string;
