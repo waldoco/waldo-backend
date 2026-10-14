@@ -12,6 +12,12 @@ export const deviceDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch = 
   };
   return {
     issuePairingCode: async (owner: string, digest: string): Promise<boolean> => await call('issue_device_pairing_code', `devpair.${owner}.${digest}`, { p_do_name: owner, p_code_hash: digest }) === true,
+    // Same mint as issuePairingCode, but returns the owner UUID so the console can show one
+    // code that also names the owner (a fresh Kennel install binds to it without configuration).
+    issueOwnedPairingCode: async (owner: string, digest: string): Promise<string | null> => {
+      const result = await call('issue_device_pairing_code_owned', `devpairowner.${owner}.${digest}`, { p_do_name: owner, p_code_hash: digest });
+      return typeof result === 'string' && identifier(result) ? result : null;
+    },
     async throttle(ip: string, digest: string): Promise<boolean> {
       const hash = await sha256Hex(new TextEncoder().encode(ip));
       // Independent durable windows prevent worker restarts or mixed bucket cleanup bypassing caps.
