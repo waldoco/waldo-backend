@@ -255,3 +255,22 @@ describe('writes after a window read', () => {
     }
   });
 });
+
+describe('against Durable Object storage', () => {
+  it('pages back through a long chain with the real list and get, and loads what a whole-chain read loads', async () => {
+    const { env } = await import('cloudflare:workers');
+    const { runInDurableObject } = await import('cloudflare:test');
+    const data = stored(chain(300), `${MAIN}-u299-reply`);
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('bounded-history-load')), async (_instance, state) => {
+      for (const [key, value] of data) state.storage.kv.put(key, value);
+      const { entries, leafId } = await canonicalOwnerConversationStore(state.storage, contextFor(MAIN)).load();
+      const whole = await canonicalOwnerConversationStore(unboundedView(new Map(data)), contextFor(MAIN)).load();
+      expect(leafId).toBe(whole.leafId);
+      // About 500 tokens a row: the window holds about 200 rows, so the read takes a second page through the list's end key.
+      expect(entries).toHaveLength(256);
+      expect(entries.map((entry) => entry.id)).toEqual(whole.entries.slice(-256).map((entry) => entry.id));
+      expect(entries[0]!.parentId).toBeNull();
+      await state.storage.deleteAll();
+    });
+  }, 60_000);
+});
