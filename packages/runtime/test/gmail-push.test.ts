@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { gmailPush, gmailWatchDue, GMAIL_WATCH_URL, parseGmailPush, startGmailWatch, verifyPushToken } from '../src/connectors/google-push';
+import { gmailPush, gmailWatchDue, GMAIL_PUSH_PROJECT, GMAIL_WATCH_URL, parseGmailPush, startGmailWatch, verifyPushToken } from '../src/connectors/google-push';
 
 const AUD = 'https://w.test/events/gmail';
 const SA = 'waldo-gmail-push@waldo-dev.iam.gserviceaccount.com';
@@ -81,5 +81,9 @@ describe('Gmail watch', () => {
   it('is off until the owner names the Google Cloud project', () => {
     expect(gmailPush('')).toBeNull();
     expect(gmailPush('waldo-dev')).toEqual({ topic: 'projects/waldo-dev/topics/waldo-gmail-push', serviceAccount: 'waldo-gmail-push@waldo-dev.iam.gserviceaccount.com' });
+  });
+  it('ships naming the Cloud project that holds the push topic and the push service account', () => {
+    expect(GMAIL_PUSH_PROJECT).toBe('waldo-dev-492217');
+    expect(gmailPush()).toEqual({ topic: 'projects/waldo-dev-492217/topics/waldo-gmail-push', serviceAccount: 'waldo-gmail-push@waldo-dev-492217.iam.gserviceaccount.com' });
   });
 });

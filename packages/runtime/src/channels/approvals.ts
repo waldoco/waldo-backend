@@ -368,11 +368,13 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     return shown;
   };
   // Approving or modifying needs a card that showed the full review on the deciding surface. The
-  // console renders the stored review itself, so any full-review presentation serves it.
+  // console renders the stored review itself, so any full-review presentation serves it, and it approves one
+  // kind only: a calendar change without invite details, the rule consoleMayApprove applies at the route. Every
+  // other kind is approved in chat or the app, whatever the route that asked.
   const presentedTo = (entry: LedgerRow, via: ApprovalVia) => {
     const live = sql.exec<{ surface: string; message_ref: string; approvable: number }>('SELECT surface, message_ref, approvable FROM approval_presentations WHERE approval_id = ? AND retired_at IS NULL', entry.id).toArray();
     const approves = (p: { surface: string; approvable: number }) => p.approvable === 1 && (p.surface !== 'app' || appShowsInFull(entry));
-    if (via.surface === 'console') return !(entry.kind === 'calendar_change' && calendarInviteDetails(JSON.parse(entry.payload_json))) && live.some(approves);
+    if (via.surface === 'console') return entry.kind === 'calendar_change' && !calendarInviteDetails(JSON.parse(entry.payload_json)) && live.some(approves);
     const mine = live.filter(p => p.surface === via.surface || (p.surface === 'legacy' && via.surface !== 'app'));
     const tapped = mine.filter(p => p.message_ref === via.messageRef);
     return (tapped.length ? tapped : mine).some(approves);
