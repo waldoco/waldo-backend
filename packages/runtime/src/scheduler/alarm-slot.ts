@@ -35,11 +35,12 @@ export async function armWhatsappPendingWake(storage: DurableObjectStorage, due:
   await armAlarm(storage, existing === null ? due : Math.min(existing, due));
 }
 
-// The alarm handler's last resort after a throw: an earlier future wake already armed stands, otherwise the owner wakes
-// again after delayMs. Whatever threw, the object is never left without a next alarm.
-export async function armFallbackWake(storage: Pick<DurableObjectStorage, 'getAlarm' | 'setAlarm'>, now: number, delayMs: number): Promise<void> {
-  const existing = await storage.getAlarm();
-  await armAlarm(storage, existing !== null && existing > now ? Math.min(existing, now + delayMs) : now + delayMs);
+// How long a failed alarm pass waits before the next attempt: the platform's own retry curve (2 s, doubling) plus a fixed
+// share of up to a quarter more, taken from the object's id so owners that fail together retry apart, capped at capMs.
+export function alarmRetryDelay(streak: number, objectId: string, capMs: number): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < objectId.length; i++) hash = Math.imul(hash ^ objectId.charCodeAt(i), 0x01000193) >>> 0;
+  return Math.min(2_000 * 2 ** Math.min(streak - 1, 20) * (1 + hash / 2 ** 32 / 4), capMs);
 }
 
 // The one arbiter: arms the earliest of the schedule's next entry and every listed lane's wake, never sooner than the
