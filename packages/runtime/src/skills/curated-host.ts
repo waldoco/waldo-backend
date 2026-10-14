@@ -15,14 +15,6 @@ export type OwnerSkillCapability = Readonly<{
  prompt(canaries:readonly string[]):Promise<string>;
  assertProcedureCurrent(expected:string,canaries:readonly string[]):Promise<void>;
 }>;
-// Host constructs this only after canonical owner admission. No model or source bytes can
-// construct lifecycle authority; the original admitted owner text and run identity are fixed.
-export function createCuratedSkillCapability(sql:SqlStorage, admission:OwnerMessageAdmission, ownerText:string, turnId:string, scope:RunEffectScope):OwnerSkillCapability {
- const owner=admission.invocation.verified_authority.principal_ref;
- const turn:CuratedSkillTurn={owner,ownerText,turnId,trigger:admission.invocation.runtime_binding.trigger,
-  assertCurrent:async()=>{scope.admit();await admission.assertCurrent();scope.admit();}};
- return createScopedCuratedSkillCapability(sql,turn,scope);
-}
 // Existing owner-channel ingress supplies this private capability; model arguments never do.
 export function createScopedCuratedSkillCapability(sql:SqlStorage, turn:CuratedSkillTurn, scope:RunEffectScope):OwnerSkillCapability {
  const owner=turn.owner;
