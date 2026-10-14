@@ -860,13 +860,51 @@ it('a forward that arrives while a turn runs is its own labelled turn: no steer,
     await (instance as unknown as { drainInbox(): Promise<void> }).drainInbox();
     await vi.waitFor(async () => {
       await instance.alarm();
-      const row = (await inbox.records()).find(row => row.updateId === childId);
-      // Done once the forward was steered into the running turn, or ran as its own turn.
-      expect(steers > 0 || row?.state === 'consumed' || row?.state === 'completed').toBe(true);
-    }, { timeout: 8000, interval: 50 });
+      // Done once both have finished, whether the forward was steered into the first turn or ran as its own.
+      const finished = (await inbox.records()).filter(row => [parentId, childId].includes(row.updateId) && ['consumed', 'completed', 'quarantined'].includes(row.state));
+      expect(finished).toHaveLength(2);
+    }, { timeout: 20_000, interval: 50 });
     expect.soft(steers).toBe(0);
     expect.soft(JSON.stringify(modelInputs)).toContain(JSON.stringify(`[Forwarded by the owner from someone else:]\n${JSON.stringify(forwarded)}\n[End of forwarded text.]`).slice(1, -1));
     expect.soft(claimStore(state.storage.sql).allClaims().map(claim => claim.text)).not.toContain('Has a sister called Mira');
+    await state.storage.deleteAlarm();
+  });
+}, 30_000);
+
+it.each([{ command: '/fire nightly', updateId: 994461 }, { command: '/stop', updateId: 994462 }])('a forwarded $command is someone else\'s text: it runs as one labelled turn, never as the owner\'s command', async ({ command, updateId }) => {
+  const subject = 81101;
+  let commands = 0;
+  const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
+  const { persistInboxWake } = await import('../src/scheduler/alarm-slot');
+  await runInDurableObject(doStub(subject), async (instance, state) => {
+    await state.storage.put({ telegram_subject: String(subject), do_name: route(subject).doName });
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    const internal = instance as unknown as { runHarness: () => Promise<string>; drainInbox(): Promise<void>; turn: (update: { update_id?: number }, ...rest: unknown[]) => Promise<void> };
+    const runHarness = internal.runHarness;
+    const turn = internal.turn;
+    let scoped: boolean | undefined;
+    internal.runHarness = async () => { commands += 1; return 'HARNESS-RAN'; };
+    // Every turn runs under its run's scope; only a command takes the direct path, without one.
+    internal.turn = async (update, ...rest) => { if (update.update_id === updateId) scoped = rest[2] !== undefined; return turn.call(instance, update, ...rest); };
+    const before = outbox.length;
+    // The shape the Bot API server sends: forward_origin beside the legacy forward fields.
+    const sam = { id: 4242, is_bot: false, first_name: 'Sam' };
+    const response = await instance.fetch(new Request('https://telegram-owner/enqueue', { method: 'POST', headers: { 'x-waldo-inbox-secret': 'hermetic-test-webhook-secret', 'x-waldo-telegram-subject': String(subject), 'x-waldo-do-name': route(subject).doName }, body: JSON.stringify({ update_id: updateId, message: { message_id: updateId, date: 1_700_000_100, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: command, forward_origin: { type: 'user', date: 1_700_000_000, sender_user: sam }, forward_from: sam, forward_date: 1_700_000_000 } }) }));
+    expect(response.status).toBe(200);
+    await internal.drainInbox();
+    await vi.waitFor(async () => {
+      await instance.alarm();
+      expect(['completed', 'quarantined']).toContain((await inbox.records()).find(row => row.updateId === updateId)?.state);
+    }, { timeout: 20_000, interval: 50 });
+    const row = (await inbox.records()).find(row => row.updateId === updateId)!;
+    const replies = outbox.slice(before).filter(item => item.method === 'sendMessage').map(item => String(item.body.text));
+    expect.soft(commands).toBe(0);
+    expect.soft(replies).not.toContain('Nothing is running right now.');
+    expect.soft(row.state).toBe('completed');
+    expect.soft(scoped).toBe(true);
+    expect.soft(JSON.stringify(modelInputs)).toContain(JSON.stringify(`[Forwarded by the owner from someone else:]\n${JSON.stringify(command)}\n[End of forwarded text.]`).slice(1, -1));
+    internal.runHarness = runHarness;
+    internal.turn = turn;
     await state.storage.deleteAlarm();
   });
 }, 30_000);

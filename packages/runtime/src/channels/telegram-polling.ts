@@ -36,12 +36,17 @@ export type TelegramPollResult = Readonly<{
   dropped: number;
 }>;
 
+// Telegram marks a forward with forward_origin, and with the older forward_* fields beside it. A forward is someone
+// else's text: callers label it, and never take it as the owner's command, steer or stop.
+export const isForward = (message: object | undefined): boolean =>
+  message !== undefined && ['forward_origin', 'forward_date', 'forward_from', 'forward_sender_name', 'is_automatic_forward'].some(key => (message as Record<string, unknown>)[key] !== undefined);
+
 const replyProvenance = (
   reply: { from?: { id: number; is_bot: boolean } | undefined } & Record<string, unknown>,
   senderId: number,
   chatType: string,
 ): NonNullable<ReplyContext['provenance']> => {
-  const forwarded = ['forward_origin', 'forward_date', 'forward_from', 'forward_sender_name', 'is_automatic_forward'].some(key => key in reply);
+  const forwarded = isForward(reply);
   if (forwarded || reply.from === undefined) return { author: 'other', forwarded };
   if (reply.from.is_bot && chatType === 'private') return { author: 'waldo', forwarded };
   if (!reply.from.is_bot && reply.from.id === senderId) return { author: 'owner', forwarded };
@@ -145,6 +150,7 @@ export class TelegramPollingAdapter {
           : message.audio
             ? { kind: 'audio', fileId: message.audio.file_id, fileName: message.audio.file_name ?? 'audio', mimeType: message.audio.mime_type ?? null, fileSize: message.audio.file_size ?? null }
             : undefined;
+    const forwarded = isForward(message);
     return inboundTurn({
       updateId: update.update_id,
       messageId: message.message_id ?? null,
@@ -152,8 +158,8 @@ export class TelegramPollingAdapter {
       chatId: message.chat.id,
       sentAt: message.date === undefined ? null : message.date * 1000,
       parts: message.text === undefined
-        ? textParts(message.caption ?? '', message.caption_entities ?? [], message.forward_origin !== undefined)
-        : textParts(message.text, message.entities ?? [], message.forward_origin !== undefined),
+        ? textParts(message.caption ?? '', message.caption_entities ?? [], forwarded)
+        : textParts(message.text, message.entities ?? [], forwarded),
       ...(message.reply_to_message ? { replyTo: Object.freeze({
         surface: 'telegram',
         messageId: String(message.reply_to_message.message_id),
@@ -165,7 +171,7 @@ export class TelegramPollingAdapter {
         sourceTaint: 'external' as const,
         provenance: replyProvenance(message.reply_to_message, message.from.id, message.chat.type),
       }) } : {}),
-      ...(media ? { media: Object.freeze(message.forward_origin === undefined ? media : { ...media, forwarded: true as const }) } : {}),
+      ...(media ? { media: Object.freeze(forwarded ? { ...media, forwarded: true as const } : media) } : {}),
     });
   }
 }
