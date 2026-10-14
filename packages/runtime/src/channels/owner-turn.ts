@@ -614,7 +614,8 @@ export const createOwnerResponder = (
       const { entries } = await history.load();
       const legacy = history === store;
       if (legacy && new Set([ownerId, ...entries.map(entry => entry.ownerId)].filter(id => id !== fixturePrincipal)).size > 1) throw new Error('conversation history owner mismatch');
-      for (const entry of entries) { tree.append(legacy ? { ...entry, ownerId } : entry); conversationLeaves.set(entry.chatId, entry.id); }
+      // A compaction row hangs off its span's last row; the chain a new turn continues from ends at a message, never at a summary.
+      for (const entry of entries) { tree.append(legacy ? { ...entry, ownerId } : entry); if (entry.role !== 'compaction') conversationLeaves.set(entry.chatId, entry.id); }
     };
     await (restorePromise ??= conversationStore ? load(conversationStore) : Promise.resolve());
     const ids = forgettingState?.claims('purging').map(claim => claim.id) ?? [];

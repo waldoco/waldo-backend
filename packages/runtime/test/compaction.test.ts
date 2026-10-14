@@ -3,6 +3,7 @@ import { COMPACTION_SUMMARY_CLOSE, ConversationTree, compactionSummaryOpen, type
 import { COMPACTION, COMPACTION_SUPERSEDED_MARKER, compactedHistory, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, supersededCompaction } from '../src/conversation/compaction';
 import { estimateMessageTokens, windowModelMessages } from '../src/conversation/window';
 import { numericHealthIn } from '../src/scribe/sanitiser';
+import { DERIVED_SCORE_PATTERNS, RAW_SENSOR_PATTERNS } from '@waldo/contracts';
 
 const defaults = { ...COMPACTION };
 afterEach(() => { Object.assign(COMPACTION, defaults); });
@@ -123,5 +124,17 @@ describe('compaction', () => {
     expect(numericHealthIn('circadian rhythm is off')).toBe(false);
     // the floor also rejects an ordinary numbered list, which is why the instruction asks for plain bullets
     expect(numericHealthIn('Next steps: 1. Book the flights')).toBe(true);
+  });
+
+  it('the floor never reads or moves the shared global patterns\' lastIndex', () => {
+    const shared = [...RAW_SENSOR_PATTERNS, ...DERIVED_SCORE_PATTERNS];
+    for (const pattern of shared) pattern.lastIndex = 10_000;
+    try {
+      expect(numericHealthIn('HRV 48 ms this morning')).toBe(true);
+      expect(numericHealthIn('sleeping badly this week')).toBe(false);
+      expect(shared.map(pattern => pattern.lastIndex)).toEqual(shared.map(() => 10_000));
+    } finally {
+      for (const pattern of shared) pattern.lastIndex = 0;
+    }
   });
 });
