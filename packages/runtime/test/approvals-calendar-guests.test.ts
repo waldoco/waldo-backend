@@ -111,7 +111,9 @@ it('recovers a lost create and a lost undo by reading the event back on its own 
 it('shows an invite\'s notes in the app review and the console, and leaves the approval to chat or the app', async () => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-calendar-web-review')), async (_instance, state) => {
     let n = 0;
-    const client = { account: { connection_id: 'local:owner@example.com', email: 'owner@example.com' } } as unknown as GoogleClient;
+    const created: string[] = [];
+    const client = { account: { connection_id: 'local:owner@example.com', email: 'owner@example.com' },
+      createEvent: async (input: { title: string }) => { created.push(input.title); return { id: 'new1', title: input.title, start: '', end: '', all_day: false, etag: 'v1' }; } } as unknown as GoogleClient;
     const desk = approvalDesk(state.storage.sql, { surface: 'app', owner: 42, call: appCaller(), google: async () => client, newId: () => String(++n), now: () => Date.now(), timezone: 'UTC', log: () => undefined });
     const start = new Date(Date.now() + 86_400_000).toISOString(), end = new Date(Date.now() + 88_200_000).toISOString();
     const notes = 'Bring <b>the</b> Q3 numbers & the plan';
@@ -134,6 +136,13 @@ it('shows an invite\'s notes in the app review and the console, and leaves the a
     expect(html).not.toContain('<b>the</b>');
     expect(html).not.toContain(`name="id" value="${invite}"`);
     expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: items }, 'waiting')).toContain(`name="id" value="${plain}"`);
+
+    // The desk refuses a web approval of the invite itself, whatever route sends it.
+    expect((await desk.decide(invite, 'a', 'console:approval', { surface: 'console' })).toast).not.toBe('Done');
+    expect(created).toEqual([]);
+    expect(desk.pending(Date.now()).find((entry) => entry.id === invite)?.state).toBe('open');
+    expect((await desk.decide(plain, 'a', 'console:approval', { surface: 'console' })).toast).toBe('Done');
+    expect(created).toEqual(['Walk']);
     await state.storage.deleteAlarm();
   });
 });

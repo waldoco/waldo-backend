@@ -87,6 +87,10 @@ export type ApprovalReview =
   | Readonly<{ kind: 'google_task_change'; account: string; proposal: GoogleTaskProposal; proposal_digest: string }>
   | Readonly<{ kind: 'calendar_change'; account?: string; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string;
       calendar_id?: string; attendees?: readonly string[]; send_updates?: 'all' | 'none'; location?: string; description?: string; add_meet_link?: boolean }>;
+// What a calendar invite carries beyond the event and its times. The web surfaces (console and dashboards) render
+// the stored review themselves and do not show these in full, so a change carrying any of them is approved in chat or the app.
+export const calendarInviteDetails = (p: Readonly<{ calendar_id?: string; attendees?: readonly string[]; send_updates?: string; location?: string; description?: string; add_meet_link?: boolean }>): boolean =>
+  Boolean((p.calendar_id && p.calendar_id !== 'primary') || p.attendees?.length || p.send_updates || p.location || p.description || p.add_meet_link);
 // Where a proposal's card landed, and where a card that can approve it landed: on the proposing desk's own surface and in the app.
 export type CardPlacement = Readonly<{ here: boolean; hereApprovable: boolean; app: boolean; appApprovable: boolean }>;
 // What a proposing tool tells the model about the card, so a reply never points at buttons that are not there.
@@ -368,7 +372,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const presentedTo = (entry: LedgerRow, via: ApprovalVia) => {
     const live = sql.exec<{ surface: string; message_ref: string; approvable: number }>('SELECT surface, message_ref, approvable FROM approval_presentations WHERE approval_id = ? AND retired_at IS NULL', entry.id).toArray();
     const approves = (p: { surface: string; approvable: number }) => p.approvable === 1 && (p.surface !== 'app' || appShowsInFull(entry));
-    if (via.surface === 'console') return live.some(approves);
+    if (via.surface === 'console') return !(entry.kind === 'calendar_change' && calendarInviteDetails(JSON.parse(entry.payload_json))) && live.some(approves);
     const mine = live.filter(p => p.surface === via.surface || (p.surface === 'legacy' && via.surface !== 'app'));
     const tapped = mine.filter(p => p.message_ref === via.messageRef);
     return (tapped.length ? tapped : mine).some(approves);
