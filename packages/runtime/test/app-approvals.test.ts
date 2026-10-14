@@ -234,3 +234,44 @@ it('adds the deferral column to a ledger created before it, once, and keeps the 
     expect(sql.exec<{ id: string; deferred_at: number | null }>('SELECT id, deferred_at FROM ledger').toArray()).toEqual([{ id: 'p-old', deferred_at: null }]);
   });
 });
+
+it('a calendar approval carries the details its frozen review states, only to a build that declares approvals revision 2', async () => {
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`app-approvals-calendar-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, async (_instance, state) => {
+    let n = 0;
+    const TEAM = 'team@group.calendar.google.com';
+    const client = {
+      account: { connection_id: 'local:owner@example.com', email: 'owner@example.com' },
+      event: async (id: string) => ({ id, title: 'Standup', start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T18:15:00+05:30', all_day: false, etag: 'v1', attendees: 3 }),
+    } as unknown as GoogleClient;
+    const desk = approvalDesk(state.storage.sql, { surface: 'app', owner: 7_000_000_000_001, call: appCaller(), appLink: appApprovalLink,
+      google: async () => client, newId: () => `cal${++n}`, now: () => Date.now(), timezone: 'Asia/Kolkata', log: () => {}, currentRunRef: () => 'app-message-0001' });
+    const host = { csrf: CSRF, expires: Date.now() + 3_600_000, storage: state.storage, assertCurrent: async () => {}, sessions: async () => [{ csrf: CSRF, expires: Date.now() + 3_600_000 }], desk };
+    const list = async (contract?: string) => {
+      const response = await appApprovalsRequest(new Request('https://telegram-owner/app/v1/approvals', contract === undefined ? {} : { headers: { 'x-waldo-app-contract': contract } }), host);
+      return { text: await response.clone().text(), approvals: appApprovalListV1Schema.parse(await response.json()).approvals };
+    };
+    const day = (offset: number) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
+    const move = await desk.propose({ action: 'move', event_id: 'e1', title: 'Standup', start: `${day(2)}T18:30:00+05:30` as never, end: `${day(2)}T18:45:00+05:30` as never,
+      calendar_id: TEAM, send_updates: 'none', reason: 'clash' });
+    const invite = await desk.propose({ action: 'create', title: 'Design review', start: `${day(3)}T10:00:00+05:30` as never, end: `${day(3)}T10:30:00+05:30` as never, reason: 'Sam asked',
+      account: 'owner@example.com', attendees: ['sam@example.com', 'pat@example.org'], send_updates: 'all', location: 'Room 4' });
+
+    const declared = (await list('approvals=2')).approvals;
+    const moved = declared.find(a => a.approval_id === move)!, invited = declared.find(a => a.approval_id === invite)!;
+    expect(moved.exact.changes).toEqual({ action: 'move', title: 'Standup', start: `${day(2)}T18:30:00+05:30`, end: `${day(2)}T18:45:00+05:30`,
+      emails_guests: false, calendar: TEAM, account: 'owner@example.com', previous: { start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T18:15:00+05:30' }, time_zone: 'Asia/Kolkata' });
+    for (const stated of ['from Wed 23 Sept, 18:00–18:15', `to `, '18:30–18:45', ` on ${TEAM}`, '(owner@example.com)', 'Google does not email the 3 guests']) expect(moved.review).toContain(stated);
+    expect(invited.exact.changes).toEqual({ action: 'create', title: 'Design review', start: `${day(3)}T10:00:00+05:30`, end: `${day(3)}T10:30:00+05:30`,
+      guests: ['sam@example.com', 'pat@example.org'], emails_guests: true, location: 'Room 4', account: 'owner@example.com', time_zone: 'Asia/Kolkata' });
+    for (const stated of ['Guests: sam@example.com, pat@example.org.', 'Place: Room 4.', 'Google emails the 2 guests', '(owner@example.com)', '10:00']) expect(invited.review).toContain(stated);
+    expect(invited.review).not.toContain(' on ');
+
+    // Installed builds parse strictly: with no declaration they get the first revision, unchanged.
+    const first = await list();
+    for (const approval of first.approvals) expect(Object.keys(approval.exact.changes!)).toEqual(['action', 'title', 'start', 'end']);
+    const stripped = declared.map(approval => { const { action, title, start, end } = approval.exact.changes!; return { ...approval, exact: { changes: { action, title, start, end } } }; });
+    expect(first.text).toBe(JSON.stringify({ approvals: stripped }));
+    for (const header of ['approvals=1', 'approvals=x', 'threads=2', '']) expect([header, (await list(header)).text]).toEqual([header, first.text]);
+  });
+});

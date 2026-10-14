@@ -1,5 +1,5 @@
 import type { ConversationEntry } from '@waldo/contracts';
-import { APP_SEND_MAX_WIRE_BYTES, appCodeRequestSchema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
+import { APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appCodeRequestSchema, appContractHeaderV1Schema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
 import type { AppApprovalCards } from './approvals';
 import { consoleAuth, type ConsoleAuth } from '../identity/console-auth';
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
@@ -176,9 +176,11 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     const length = request.headers.get('content-length');
     if (length && (!/^\d+$/.test(length) || Number(length) > (sending ? APP_SEND_MAX_WIRE_BYTES : maxBytes))) return fail(413);
     const body=mutating?await readBoundedBody(request,sending?APP_SEND_MAX_WIRE_BYTES:maxBytes):new Uint8Array();if(!body)return fail(413);
+    const contract = request.headers.get(APP_CONTRACT_HEADER);
     const forwarded = new Request(`https://telegram-owner${url.pathname}${url.search}`, {
       method: request.method,
-      headers: { 'x-waldo-do-name': who.doName, 'x-waldo-app-session-hash': await linkCodeHash(sessionIdOf(who.credential)!), 'x-waldo-app-origin': url.origin, 'content-type': request.headers.get('content-type') ?? 'application/json' },
+      headers: { 'x-waldo-do-name': who.doName, 'x-waldo-app-session-hash': await linkCodeHash(sessionIdOf(who.credential)!), 'x-waldo-app-origin': url.origin, 'content-type': request.headers.get('content-type') ?? 'application/json',
+        ...(appContractHeaderV1Schema.safeParse(contract).success ? { [APP_CONTRACT_HEADER]: contract! } : {}) },
       ...(mutating ? { body: body } : {}),
     });
     try { return await owners.get(owners.idFromName(who.doName)).fetch(forwarded); } catch { return fail(503); }

@@ -5,6 +5,25 @@ import {
 } from './parts';
 
 export const APP_AGENT_VERSION = 'app.v1' as const;
+// The contract revisions an app build reads, as `name=revision` pairs, e.g. `approvals=2`. Installed builds parse
+// strictly and drop what they cannot read, so a response grows past a contract's first revision only for a request
+// that names a later one. No header, a value that does not parse or a contract it leaves out reads revision 1.
+// Names this backend does not know are kept, so a newer build can declare them.
+export const APP_CONTRACT_HEADER = 'x-waldo-app-contract' as const;
+const contractPair = /^([a-z][a-z0-9_]{0,31})=([1-9][0-9]{0,3})$/;
+export const appContractHeaderV1Schema = z.string().max(512).transform((value, ctx) => {
+  const revisions: Record<string, number> = {};
+  for (const pair of value.split(',')) {
+    const match = contractPair.exec(pair);
+    if (!match || Object.hasOwn(revisions, match[1]!)) { ctx.addIssue({ code: 'custom', message: 'expected distinct name=revision pairs' }); return z.NEVER; }
+    revisions[match[1]!] = Number(match[2]);
+  }
+  return revisions;
+});
+export const appContractRevision = (header: string | null | undefined, contract: string): number => {
+  const parsed = appContractHeaderV1Schema.safeParse(header);
+  return parsed.success && Object.hasOwn(parsed.data, contract) ? parsed.data[contract]! : 1;
+};
 export const APP_SEND_MAX_WIRE_BYTES = 32768;
 export const appJsonWireBytes = (value: unknown): number => {
   const serialized = JSON.stringify(value);
