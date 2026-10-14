@@ -11,6 +11,7 @@ import { ensureSchema } from '../src/tracer/schema';
 // The model may name an untitled thread once, from its first exchange; forgetting a topic reaches every title.
 const model = vi.hoisted(() => ({
   titleAsks: [] as string[],
+  turnRequests: [] as string[],
   title: '{"title":"Lisbon trip planning"}' as string | Error,
   whileTitling: null as (() => Promise<void>) | null,
 }));
@@ -24,6 +25,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
       if (model.title instanceof Error) throw model.title;
       return reply(model.title);
     }
+    model.turnRequests.push(JSON.stringify(request.request));
     if (request.request.response_format) return reply('{}');
     const said = JSON.stringify(request.request.messages.at(-1)?.content ?? '');
     if (said.includes('forget marigold') && !request.request.tool_turns?.length) {
@@ -38,7 +40,7 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 const OWNER_ID = '5b1f0c2a-7d3e-4c91-8f62-0a1b2c3d4e5f';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 beforeEach(() => {
-  model.titleAsks = []; model.title = '{"title":"Lisbon trip planning"}'; model.whileTitling = null;
+  model.titleAsks = []; model.turnRequests = []; model.title = '{"title":"Lisbon trip planning"}'; model.whileTitling = null;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
@@ -100,6 +102,9 @@ describe('the model naming an untitled thread', () => {
       await say(`/threads/${id}`, 'title-client-02', 'And a day trip to Sintra?', 1);
       expect(model.titleAsks).toHaveLength(1);
       expect((await listed(call, id))!.title).toBe('Lisbon trip planning');
+      // The model's title is shown to the owner only; no later request carries it, as the owner's words or otherwise.
+      expect(model.turnRequests.some(request => request.includes('Sintra'))).toBe(true);
+      expect(model.turnRequests.filter(request => request.includes('Lisbon trip planning'))).toEqual([]);
       // The model's title moved title_revision, so a rename made against the untitled thread rereads.
       expect(await call('POST', `/threads/${id}/rename`, { operation_id: '0b6f3c1e-8a2d-4f5b-9c7e-000000000099', expected_title_revision: 1, title: 'Mine' }))
         .toEqual({ status: 409, body: { error: 'title_revision_conflict' } });
