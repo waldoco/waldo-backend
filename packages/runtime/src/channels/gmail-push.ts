@@ -6,6 +6,7 @@ import { McpConnectError, type McpGoogleResolution } from '../tools/live/mcp';
 type Kv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void; delete(key: string): unknown }>;
 // Why the last start did not leave a watch. A miss stored before reasons were kept reads as a failure.
 export type GmailWatchMiss = 'failed' | 'no_mail_grant' | 'local_rail';
+const GMAIL_MISSES: readonly GmailWatchMiss[] = ['failed', 'no_mail_grant', 'local_rail'];
 type Stored = Readonly<{ connection: string; historyId: string; startedAt: number; expiration: number }> | Readonly<{ failedAt: number; reason?: GmailWatchMiss }>;
 const KEY = 'gmail_push';
 
@@ -15,7 +16,12 @@ export const gmailPushBook = (kv: Kv) => {
     state: (): GmailWatchState | null => { const stored = read(); return stored === null ? null : 'failedAt' in stored ? { failedAt: stored.failedAt } : { startedAt: stored.startedAt, expiration: stored.expiration }; },
     record: (watch: GmailWatch, connection: string, now: number) => kv.put(KEY, { connection, historyId: watch.historyId, startedAt: now, expiration: watch.expiration }),
     fail: (now: number, reason: GmailWatchMiss = 'failed') => kv.put(KEY, { failedAt: now, reason }),
-    miss: (): Readonly<{ at: number; reason: GmailWatchMiss }> | null => { const stored = read(); return stored && 'failedAt' in stored ? { at: stored.failedAt, reason: stored.reason ?? 'failed' } : null; },
+    // Read for the owner's turn, so a stored value of any shape is no miss rather than a throw.
+    miss: (): Readonly<{ at: number; reason: GmailWatchMiss }> | null => {
+      const stored: unknown = kv.get(KEY);
+      if (typeof stored !== 'object' || stored === null || !('failedAt' in stored) || typeof stored.failedAt !== 'number') return null;
+      return { at: stored.failedAt, reason: 'reason' in stored && GMAIL_MISSES.includes(stored.reason as GmailWatchMiss) ? stored.reason as GmailWatchMiss : 'failed' };
+    },
     // A new grant makes the stored watch stale: a stored skip or failure would hold the next try for hours, and a live
     // watch admits pushes only for the connection it was started on. The next sweep watches with the route it resolves.
     reset: () => { kv.delete(KEY); },

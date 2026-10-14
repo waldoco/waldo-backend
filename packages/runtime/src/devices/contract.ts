@@ -7,6 +7,10 @@ export const CLOCK_SKEW_SECONDS = 300;
 export const ONLINE_SECONDS = 90;
 export const PAIRING_SECONDS = 600;
 export const CONSOLE_DEVICES_PATH = '/console/devices';
+// The console shows one copyable code for Kennel: `wp1.<owner UUID>.<43-char pairing code>`.
+// Kennel binds to the owner before redeeming; redeem still receives only the 43-char code and
+// returns the same owner_id, which Kennel verifies.
+export const KENNEL_PAIRING_CODE_PREFIX = 'wp1';
 export const LABEL_BYTES = 120;
 export const IDENTIFIER_BYTES = 128;
 export const OUTBOX_DEPTH_MAX = 1_000_000;

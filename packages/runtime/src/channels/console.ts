@@ -174,6 +174,8 @@ export type ConsoleView = Readonly<{
   notice: string | null;
   google: Readonly<{ accounts: readonly Readonly<{ id: string; email: string; error: string | null; calendar: boolean; mail: boolean; tasks: boolean }>[]; connectAvailable: boolean }>;
   telegram: Readonly<{ linked: boolean; unlinkAvailable: boolean }>;
+  /** Whether this owner has an active iMessage link (their own handle, via "waldo CODE"). Absent = unknown. */
+  imessage?: Readonly<{ linked: boolean }>;
   profile: ReturnType<typeof profile>;
   barriers: number;
   spots: readonly Claim[];

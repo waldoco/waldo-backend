@@ -24,14 +24,16 @@ const harness = async (name: string, work: (instance: OwnerDO, state: DurableObj
     try { await work(instance, state, turn as never, sent); } finally { await state.storage.deleteAlarm(); turn.mockRestore(); graph.mockRestore(); }
   });
 };
-const postMany = (instance: OwnerDO, ids: string[]) => instance.fetch(new Request('https://telegram-owner/whatsapp-turn', {
-  method: 'POST', headers: { 'x-waldo-whatsapp-subject': '15550001111' },
-  body: JSON.stringify({ messages: ids.map(id => ({ from: '15550001111', id, type: 'text', text: { body: 'PRIVATE_WA_TEXT' } })) }),
-}));
-const post = (instance: OwnerDO, id: string) => instance.fetch(new Request('https://telegram-owner/whatsapp-turn', {
-  method: 'POST', headers: { 'x-waldo-whatsapp-subject': '15550001111' },
-  body: JSON.stringify({ messages: [{ from: '15550001111', id, type: 'text', text: { body: 'PRIVATE_WA_TEXT' } }] }),
-}));
+// Admission acks before the turns run; settle waits for them, as the webhook's waitUntil would.
+const postMany = async (instance: OwnerDO, ids: string[]) => {
+  const response = await instance.fetch(new Request('https://telegram-owner/whatsapp-admit', {
+    method: 'POST', headers: { 'x-waldo-whatsapp-subject': '15550001111' },
+    body: JSON.stringify({ messages: ids.map(id => ({ from: '15550001111', id, type: 'text', text: { body: 'PRIVATE_WA_TEXT' } })) }),
+  }));
+  await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+  return response;
+};
+const post = (instance: OwnerDO, id: string) => postMany(instance, [id]);
 
 it('a wa_seq write fault before the turn releases the claim, tells the owner, and a redelivery runs', async () => {
   await harness('whatsapp-seq-write-fault', async (instance, state, turn, sent) => {
