@@ -1,3 +1,4 @@
+import { TELEGRAM_TURN_DEADLINE_MS } from '../src/channels/telegram-owner-inbox';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
@@ -47,7 +48,7 @@ it('deadline uses the claim clock and late completion cannot publish',async()=>{
  seen.pause=true;await setup('fence-do-deadline',async(i,s)=>{
   const inbox=await admit(i,s,4);let enter!:()=>void;const ready=new Promise<void>(r=>{enter=r;});seen.entered=enter;
   const running=(i as unknown as {drainInbox():Promise<void>}).drainInbox();await ready;
-  const row=(await inbox.records())[0]!;expect(row.deadline! - row.admittedAt).toBeLessThan(151000);
+  const row=(await inbox.records())[0]!;expect(row.deadline! - row.admittedAt).toBeLessThan(TELEGRAM_TURN_DEADLINE_MS + 1000);
   const real=Date.now;Date.now=()=>row.deadline!+1;
   try {seen.finish!({id:'expired',output_text:'LATE_DEADLINE',output:[],usage:{input_tokens:1,output_tokens:1}});await running;}
   finally {Date.now=real;}
