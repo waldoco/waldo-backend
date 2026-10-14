@@ -72,6 +72,8 @@ export const toolNameSchema = z.enum([
   'set_schedule_preference',
   'read_tool_output',
   'connect_service',
+  // send_console_link: the host sends the owner a one-time console sign-in link on the turn's own surface.
+  'send_console_link',
   'browse_page',
   'browse_act',
   // delegate_task 42 (subagent orchestration v1): turn-scoped, owner chat turns only; children
@@ -203,6 +205,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'get_health',
     'query_calendar',
     'connect_service',
+    'send_console_link',
     'get_communication',
     'search_communication',
     'search_contacts',
@@ -301,6 +304,7 @@ export const LAZY_DISCOVERY_TRIGGERS: readonly TriggerType[] = ['user_message', 
 // there is this list ∩ the ACL — loading never widens permission.
 // connect_service joined the always-on set (owner direction 2026-09-24): connect intent must be
 // prompt-visible without discovery - the model cannot search_tools for a tool it does not know exists.
+// send_console_link joined for the same reason: the owner asks for their console in words, never a slash command.
 export const ALWAYS_ON_TOOLS: readonly ToolName[] = [
   'read_memory',
   'remember',
@@ -309,6 +313,7 @@ export const ALWAYS_ON_TOOLS: readonly ToolName[] = [
   'propose_action',
   'search_tools',
   'connect_service',
+  'send_console_link',
   'skills_list',
   'use_mac',
 ];

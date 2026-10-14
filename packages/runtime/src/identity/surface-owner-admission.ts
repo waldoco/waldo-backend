@@ -24,6 +24,10 @@ export type SurfaceOwnerAdmissionOptions = Readonly<{
   now?(): number;
 }>;
 
+// How long a matching directory read keeps a turn's admission current for context reads. Effects and published replies
+// read afresh, so a revoked session that no fence reached can still shape context for this long, never act.
+const VERIFIED_FOR_MS = 1_000;
+
 // The surface host verifies its JWT/session/private-DM and physical owner DO before
 // supplying lookup. This common adapter never discovers identities or grants access.
 export async function surfaceOwnerAdmission(options: SurfaceOwnerAdmissionOptions): Promise<OwnerMessageAdmission> {
@@ -44,10 +48,27 @@ export async function surfaceOwnerAdmission(options: SurfaceOwnerAdmissionOption
     return Object.freeze({ ownerId: binding.ownerId.toLowerCase(), bindingRef: binding.bindingRef, revision: binding.revision, physicalDoId: binding.physicalDoId });
   };
   const binding = await resolve();
-  const assertCurrent = async () => {
+  // A turn checks currency around nearly every await, and one directory read per check left each tool round waiting on
+  // dozens of serial round trips. assertCurrent reuses a read that matched for VERIFIED_FOR_MS from when it started;
+  // assertFresh, the check before an effect or a published reply, always reads. Concurrent checks share one read, and
+  // the run scope is checked every time, so a session fence stops the turn at once.
+  let verifiedAt = Number.NEGATIVE_INFINITY;
+  let reading: Promise<void> | undefined;
+  const reread = async () => {
+    const startedAt = now();
     const current = await resolve();
     if (current.ownerId !== binding.ownerId || current.bindingRef !== binding.bindingRef || current.revision !== binding.revision
       || current.physicalDoId !== binding.physicalDoId) throw new OwnerAdmissionError('rejected');
+    verifiedAt = startedAt;
+  };
+  const assertFresh = async () => {
+    scope.admit();
+    reading ??= reread().finally(() => { reading = undefined; });
+    await reading;
+  };
+  const assertCurrent = async () => {
+    scope.admit();
+    if (now() - verifiedAt >= VERIFIED_FOR_MS) await assertFresh();
   };
   const ownerHex = binding.ownerId.replaceAll('-', '');
   const occurrence = await sha256Hex(JSON.stringify([binding.ownerId, expectedPhysicalDoId, surface, subject, occurrenceKey]));
@@ -69,6 +90,6 @@ export async function surfaceOwnerAdmission(options: SurfaceOwnerAdmissionOption
     principal_ref: `prn_${ownerHex}`, tenant_ref: `ten_${ownerHex}`, text,
     source: Object.freeze({ source_key: `owner-message:${occurrence.slice(0, 32)}`, source_kind: 'invocation_input' as const, scope: 'invocation' as const, source_taint: null, produced_at: occurredAt }) });
   return Object.freeze({ invocation: accepted.value,
-    snapshot: Object.freeze({ snapshot_ref: `snp_${crypto.randomUUID().replaceAll('-', '')}`, snapshot_at: Math.max(now(), acceptedAt) }), assertCurrent,
+    snapshot: Object.freeze({ snapshot_ref: `snp_${crypto.randomUUID().replaceAll('-', '')}`, snapshot_at: Math.max(now(), acceptedAt) }), assertCurrent, assertFresh,
     readInput: async () => { await assertCurrent(); return input; } });
 }

@@ -16,7 +16,7 @@ import { BUDGET_CHARS_PER_TOKEN, MODEL_CONTEXT_MAX_CHARS } from '@waldo/contract
 import { PROBE_STRIPPED_TOOLS } from './probe-turn';
 import { runToolLoop } from '../conversation/tool-loop';
 import { turnReceipt } from '../hooks/receipt-line';
-import { threadOfChain } from './app-threads';
+import { THREAD_TITLE_FORMAT, THREAD_TITLE_INSTRUCTION, threadOfChain } from './app-threads';
 import type { LoopEventLike } from '../hooks/claim-hook';
 import { delegateTaskHandler, runChildLoop, SUBAGENT_SYSTEM_PROMPT, withDelegation } from '../conversation/subagent';
 import { inMemoryToolOutputStore } from '../conversation/tool-output-store';
@@ -28,6 +28,7 @@ import { JoinedConversationPath } from '../conversation/joined-path';
 import { COMPACTION, COMPACTION_INSTRUCTION, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, supersededCompaction, type CompactedStats } from '../conversation/compaction';
 import { numericHealthIn } from '../scribe/sanitiser';
 import { OpenAIResponsesAdapter } from '../llm/openai';
+import { withCallDeadline } from '../llm/time-budget';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
 import { firstConversationLine, messagingSystemPrompt, ownerClockLine, unconnectedLine, withOwnerSkillProcedures, type NewOwnerFacts } from '../prompt/messaging-behavior';
 import { eligibleHandlers } from '../tools/eligibility';
@@ -144,6 +145,8 @@ export const createOwnerResponder = (
   let transientDecision = false;
   let backgroundSourceTaint: 'external' | null = null;
   const assertCurrent = async () => { privateRunScope?.admit(); await context?.assertCurrent(); await skills?.admission?.assertCurrent(); await backgroundCurrent?.(); privateRunScope?.admit(); };
+  // Before an effect or a published reply: authority read now, never a recent match.
+  const assertFresh = async () => { privateRunScope?.admit(); await context?.assertFresh(); await skills?.admission?.assertFresh(); await backgroundCurrent?.(); privateRunScope?.admit(); };
   const ownerId = invocation.verified_authority.principal_ref;
   const CANARIES = newSessionCanaryTokens();
   const cacheKey = `waldo:${ownerId}`;
@@ -187,7 +190,7 @@ export const createOwnerResponder = (
     recent: [...recentOwnerTurns.values()].filter(turn => !holdsHeldTopic(turn.text)).concat(control.heard().map((steer, index) => ({ message_ref: `${traceId}-steer-${index}`, text: steer.text, sourceQuoteRanges: steer.foreignRanges }))),
   } } : {};
   let expectedProcedure: string | undefined;
-  const complete = async (trace: string, purpose: string, systemPrompt: string | SystemPrompt, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName) => {
+  const complete = async (trace: string, purpose: string, systemPrompt: string | SystemPrompt, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName, callScope?: RunEffectScope) => {
     await assertCurrent();
     const system = typeof systemPrompt === 'string' ? systemPrompt : systemPrompt.text;
     const started = Date.now();
@@ -220,7 +223,7 @@ export const createOwnerResponder = (
     } } : adapter;
     const sanitise = safety.sanitise;
     const result = await new RuntimeLLMProvider({ gateway: admittedGateway, circuitBreaker }).complete({
-      ...(privateRunScope ? { runScope: privateRunScope } : {}),
+      ...(callScope ?? privateRunScope ? { runScope: callScope ?? privateRunScope } : {}),
       trigger: 'user_message',
       policy: effectivePolicy,
       renderRequest: () => ({
@@ -351,7 +354,7 @@ export const createOwnerResponder = (
       const connections = unconnectedLine(eligibility.unconnected);
       const guardedHandlers: DispatchToolOptions<ToolDispatcherContext>['handlers'] = admittedHandlers.map(handler => {
         return { ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
-          await assertCurrent();
+          await assertFresh();
           const retainedRead = ['read_owner_context', 'read_memory', 'search_episodes', 'read_tool_output'].includes(handler.name);
                   if (backgroundToolNames !== undefined && handler.name === 'open_loop' && (args === null || typeof args !== 'object' || !('source_ref' in args) || typeof args.source_ref !== 'string')) {
             return { ok: false, code: 'invalid_args', error: 'Background mail follow-up requires an observed source_ref.', source_taint: null };
@@ -416,7 +419,7 @@ export const createOwnerResponder = (
       const turnBudget = { remaining: MAX_TOOL_ROUNDS };
       const delegate = delegateTaskHandler(async (task) => {
         const childHandlers = activeHandlers.map(handler => ({ ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
-          await assertCurrent();
+          await assertFresh();
           return handler.handle(args, ctx);
         } }));
         // A5b: one run row per spawned child; the exit classification lands on the row, and
@@ -669,7 +672,7 @@ export const createOwnerResponder = (
         assistantEntryId: `${id}-reply`,
       })).finally(() => { ownerTurnActive = false; backgroundToolNames = undefined; newOwner = undefined; control.end(); });
       privateRunScope?.admit();
-      await assertCurrent();
+      await assertFresh();
       const reply = tree.get(publication.leafId)!.appPayload;
       // Native delivery reads durable history, so the visible effect receipt belongs in that row, as text and typed.
       const receipt = fromOwner ? await turnReceipt(turnToolEvents) : null;
@@ -679,7 +682,7 @@ export const createOwnerResponder = (
       await conversationStore?.save(savedEntries, publication.leafId, privateRunScope);
       for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); }
       privateRunScope?.admit();
-      await assertCurrent();
+      await assertFresh();
       conversationLeaves.set(conversationRef,publication.leafId);
       lastReply = out;
       return out;
@@ -753,7 +756,7 @@ export const createOwnerResponder = (
       const id = turn.traceId;
       surfacePresentation = turn.presentation;
       traceId = id;
-      log({ trace: id, hop: OWNER_REQUEST_HOP, ms: 0, ok: true });
+      log({ trace: id, hop: OWNER_REQUEST_HOP, ms: 0, ok: true, ...(context ? { principal: ownerId } : {}) });
       try {
         pending = ownerTurnAttachments(turn);
         activeOwnerTurn = { ...turn, memoryWrites };
@@ -815,6 +818,7 @@ export const createOwnerResponder = (
       // The nightly pass is where the pinned blocks are curated.
       return { done: true, detail: applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`, undefined, sides ?? { owner: day }, false, undefined, true) };
     },
+    threadTitle: (trace, exchange, scope) => withCallDeadline(scope, scope.deadline, () => ask(trace, 'thread_title', THREAD_TITLE_INSTRUCTION, exchange, THREAD_TITLE_FORMAT, undefined, undefined, undefined, memoryModel, scope)),
     async migrate(trace, input) {
       if (!memory) return 'no memory';
       if (holdsAnyHeldTopic()) throw new Error('historical memory migration deferred: forgetting coverage incomplete');

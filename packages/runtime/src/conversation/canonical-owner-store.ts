@@ -25,7 +25,7 @@ const scrub = (entry: ConversationEntry): ConversationEntry => ({ ...entry,
 // nor reclassified as authenticated owner input; only matching row+witness pairs load.
 // The entry-shape checks, named so a skipped row can say which one it failed and nothing else.
 export type CanonicalShapeCheck = 'id' | 'chat' | 'surface' | 'payload' | 'parent' | 'anchor' | 'projection' | 'role' | 'input_origin' | 'covers';
-const shapeFault = (entry: ConversationEntry): CanonicalShapeCheck | null => {
+export const shapeFault = (entry: ConversationEntry): CanonicalShapeCheck | null => {
   if (!entry.id) return 'id';
   if (!entry.chatId) return 'chat';
   if (!entry.surface) return 'surface';

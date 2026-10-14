@@ -24,7 +24,7 @@ select is((select count(*) from pg_class c join pg_namespace n on n.oid = c.reln
 select is(waldo.redeem_link_code('h-old', 'telegram', '111'), null, 'an expired code binds nothing');
 select is(waldo.redeem_link_code('h-a', 'telegram', '111'), '10000000-0000-0000-0000-00000000000a'::uuid, 'a fresh code binds the presence');
 select is(waldo.redeem_link_code('h-a', 'telegram', '111'), null, 'a code works once');
-select throws_ok($$ select waldo.redeem_link_code('h-steal', 'telegram', '222') $$, 'P0001', 'presence already linked to another owner', 'a code cannot take a subject another owner holds');
+select throws_ok($$ select waldo.redeem_link_code('h-steal', 'telegram', '222') $$, '23505', 'presence already linked to another owner', 'a code cannot take a subject another owner holds');
 
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}', true);

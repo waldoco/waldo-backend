@@ -83,7 +83,7 @@ it('stops an admitted message before it runs, with nothing unconfirmed, and the 
   const name = 'app-stop-admitted';
   await withOwner(name, async (owner, state) => {
     const inbox = new AppInbox(state.storage);
-    const admitted = await inbox.admit(name, HASH, 'stop-client-0002', 'QA: never run this one', 'main');
+    const admitted = await inbox.admit(name, HASH, 'stop-client-0002', 'QA: never run this one', `owner:prn_${OWNER_ID.replaceAll('-', '')}`);
     expect(admitted.kind).toBe('admitted');
     const id = admitted.kind === 'admitted' ? admitted.record.id : '';
     expect(appMessageReceiptV1Schema.parse(await (await cancel(owner, name, 'stop-client-0002')).json())).toEqual({ accepted: true, message_id: id, state: 'interrupted', closed_reason: 'cancelled', effects_unconfirmed: false });

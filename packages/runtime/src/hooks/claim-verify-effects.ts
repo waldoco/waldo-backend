@@ -5,6 +5,8 @@ import type { ToolName } from '@waldo/contracts';
 // adding a tool without deciding its effect fails the build, and the test checks the same list.
 export const TOOL_CLAIM_EFFECT: Readonly<Record<ToolName, string | null>> = {
   use_mac: 'mac_action_requested',
+  // Its not-sent outcomes are ok results too, so a done label would claim a send that never happened.
+  send_console_link: null,
   get_crs: null, get_health: null, query_calendar: null, get_communication: null, search_communication: null, search_contacts: null,
   read_thread: null, get_tasks: null, get_master_metrics: null, get_context: null, query_availability: null,
   read_owner_context: null, read_memory: null, search_episodes: null, propose_action: null, web_search: null,
