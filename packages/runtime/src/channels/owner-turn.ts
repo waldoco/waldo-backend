@@ -10,7 +10,7 @@ import { receivedView, renderForModel, type InboundPart } from './owner-inbound-
 import { ownerContextHandler } from '../tools/live/owner-context';
 import {
   deriveContextBudgetChars, EXTERNAL_ORIGIN_TOOLS, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, SANITISE_DESTINATION_POLICIES, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_PROVIDER, OPENAI_REASONING, routingPolicySchema, WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL,
-  type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
+  type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName, type ReasoningEffort,
 } from '@waldo/contracts';
 import type { ConversationModelMessage } from '@waldo/contracts';
 import { BUDGET_CHARS_PER_TOKEN, MODEL_CONTEXT_MAX_CHARS } from '@waldo/contracts';
@@ -68,6 +68,9 @@ export const ownerToolApproval = ({ tool }: { tool: string }): boolean => !EXTER
 const newSessionCanaryTokens = (): string[] =>
   Array.from({ length: 3 }, () => crypto.randomUUID().replaceAll('-', '').slice(0, 16));
 const MAX_TOOL_ROUNDS = 25;
+// Reasoning tokens count against a call's output cap, and OpenAI's reasoning guide asks for at least 25,000 tokens of
+// room for reasoning and output. Low effort keeps the 4,096 cap it has run with.
+const OUTPUT_TOKENS: Readonly<Record<ReasoningEffort, number>> = { low: 4_096, medium: 25_000 };
 const EXTERNAL_DATA_MAX_BYTES = 4096;
 
 // Staging responder: the fixture invocation stands in for real per-user admission,
@@ -238,7 +241,7 @@ export const createOwnerResponder = (
         const effort = OPENAI_REASONING[step.model]?.effort;
         return {
           cache_key: cacheKey,
-          system, messages: userMessages.map(({ attachments: _names, ...message }) => message), max_tokens: 4096, temperature: 0.2,
+          system, messages: userMessages.map(({ attachments: _names, ...message }) => message), max_tokens: effort ? OUTPUT_TOKENS[effort] : 4_096, temperature: 0.2,
           ...(effort ? { reasoning_effort: effort } : {}),
           ...(format ? { response_format: format } : {}), ...(attachments ? { attachments: [...attachments] } : {}),
           ...(tools ? { tools: [...tools] } : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),
