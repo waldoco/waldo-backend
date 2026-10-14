@@ -85,3 +85,15 @@ it('a turn that is still finishing is named as the reason, not reported as an un
  expect(refused).toMatchObject({ok:false});expect(refused.error).toContain('earlier turn that is finishing');
  expect(await f.oneShot()).toMatchObject({ok:true});
 });
+it('a journey whose last action is uncertain can still be ended by its handle from a later turn, and the browser is free again',async()=>{
+ const f=fixture(),first=await f.read(),handle=first.data.session_handle;
+ commonBrowserFixture.onFill=()=>{throw Error('provider dropped the action');};
+ expect(await f.act(handle,{operation:'type',element_ref:first.data.elements[0].ref,value:'Unsent owner note'})).toMatchObject({ok:false});
+ commonBrowserFixture.onFill=undefined;
+ expect(f.rows.get('common-browser:first')).toMatchObject({action:{state:'uncertain'}});
+ await f.next();
+ expect(await f.oneShot()).toMatchObject({ok:true,data:{open_browser_session:{session_handle:handle}}});
+ expect(await f.act(handle,{operation:'cancel'},'https://example.com/elsewhere')).toMatchObject({ok:true,data:{ended:true}});
+ expect(commonBrowserFixture.ends).toBe(1);
+ expect(await f.read()).toMatchObject({ok:true});
+});
