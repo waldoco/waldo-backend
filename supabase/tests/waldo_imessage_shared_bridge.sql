@@ -101,6 +101,41 @@ select is(pg_temp.sender(pg_temp.bid('5'), pg_temp.aid('5'), 'a@icloud.test', 'o
 update waldo.presences set state = 'unlinked', unlinked_at = now() where provider = 'imessage' and subject = '+15550000002';
 select is(pg_temp.sender(pg_temp.bid('5'), pg_temp.aid('5'), '+15550000002')->>'state', 'unknown_sender', 'an unlinked handle is unknown again');
 
+-- A handle live under one owner cannot be claimed with another owner's code: it rolls back as a
+-- unique_violation, both owners keep their bindings and the claiming code stays unspent.
+select is(pg_temp.plink('sh-b', 'imessage', pg_temp.h('c')), true, 'owner b issues another imessage link code');
+select isnt(pg_temp.redeem_link(pg_temp.h('c'), 'imessage', 'b2@icloud.test'), null, 'owner b links a handle of their own');
+select is(pg_temp.plink('sh-b', 'imessage', pg_temp.h('d')), true, 'owner b issues a code to claim a@icloud.test');
+select throws_ok($$ select pg_temp.redeem_link(pg_temp.h('d'), 'imessage', 'a@icloud.test') $$, '23505', 'presence already linked to another owner',
+  'a code cannot take a handle another owner holds');
+select is(pg_temp.sender(pg_temp.bid('5'), pg_temp.aid('5'), 'a@icloud.test')->>'do_name', 'sh-a', 'the claimed handle still routes to its own owner');
+select is(pg_temp.sender(pg_temp.bid('5'), pg_temp.aid('5'), 'b2@icloud.test')->>'do_name', 'sh-b', 'the claiming owner keeps their own handle');
+select ok(exists (select 1 from waldo.link_codes where code_hash = pg_temp.h('d') and used_at is null), 'the claiming code is not spent');
+select is((select count(*)::int from waldo.presences where provider = 'imessage' and subject = 'a@icloud.test' and state = 'active'), 1, 'one live binding for the handle');
+
+-- The console hint shows only the last characters of the owner's linked handle.
+create function pg_temp.hint(o text, prov text) returns text language sql as $$
+  select waldo.presence_hint(o, prov, pg_temp.at(), pg_temp.rsig('presencehint.' || o || '.' || prov)) $$;
+select throws_ok($$ select waldo.presence_hint('sh-a', 'imessage', pg_temp.at(), 'forged') $$, '42501', 'unsigned router call', 'a forged hint read is refused');
+select is(pg_temp.hint('sh-a', 'imessage'), 'test', 'the hint is the last 4 characters of the linked handle');
+select is(pg_temp.hint('sh-a', 'telegram'), null, 'no hint for a provider the owner has not linked');
+select is(pg_temp.hint('sh-op', 'imessage'), null, 'no hint for an owner with no linked handle');
+insert into waldo.owners(do_name, email) values ('sh-short', 'short@test.invalid');
+insert into waldo.presences(owner_id, provider, subject) select id, 'imessage', 'ab@c.io' from waldo.owners where do_name = 'sh-short';
+select is(pg_temp.hint('sh-short', 'imessage'), 'io', 'a handle shorter than 8 shows 2 characters');
+
+-- Owner unlink: the handle is unknown at once on the shared bridge; other owners are untouched.
+create function pg_temp.unlink(o text, prov text) returns boolean language sql as $$
+  select waldo.unlink_presence(o, prov, pg_temp.at(), pg_temp.rsig('unlink.' || o || '.' || prov)) $$;
+select is(pg_temp.unlink('sh-a', 'telegram'), false, 'unlinking another provider leaves the imessage handle');
+select is(pg_temp.sender(pg_temp.bid('5'), pg_temp.aid('5'), 'a@icloud.test')->>'do_name', 'sh-a', 'still linked after the telegram unlink');
+select is(pg_temp.unlink('sh-a', 'imessage'), true, 'the owner unlinks their imessage handle');
+select is(pg_temp.sender(pg_temp.bid('5'), pg_temp.aid('5'), 'a@icloud.test')->>'state', 'unknown_sender', 'an unlinked handle is an unknown sender');
+select is(pg_temp.hint('sh-a', 'imessage'), null, 'no hint after unlinking');
+select is(pg_temp.sender(pg_temp.bid('5'), pg_temp.aid('5'), 'b2@icloud.test')->>'do_name', 'sh-b', 'another owner keeps their handle');
+select is(pg_temp.auth(pg_temp.bid('5'), pg_temp.aid('5'))->>'state', 'active', 'the shared bridge stays active');
+select is(pg_temp.unlink('sh-a', 'imessage'), false, 'nothing left to unlink');
+
 -- Owner-kind bridges: sender authority equals the bridge authority for the bound subject only.
 select is(pg_temp.invite('sh-b', pg_temp.h('a')), true, 'owner b pairs a per-owner bridge');
 select is(pg_temp.redeem(pg_temp.h('a'), pg_temp.bid('a'), pg_temp.aid('a'))->>'bridge_id', pg_temp.bid('a'), 'per-owner bridge pending');
@@ -134,6 +169,8 @@ select is(pg_temp.throttle('imother.sender.' || pg_temp.h('3')), false, 'other k
 select ok(not has_table_privilege('anon', 'waldo.imessage_onboarding_replies', 'select'), 'onboarding replies unreachable for anon');
 select ok(not has_function_privilege('anon', 'waldo.imessage_authority_json(text,text,text)', 'execute'), 'the unsigned authority body is not callable');
 select ok(has_function_privilege('anon', 'waldo.imessage_sender_authority(text,text,text,text,text,bigint,text)', 'execute'), 'sender authority callable only with a router signature');
+select ok(has_function_privilege('anon', 'waldo.presence_hint(text,text,bigint,text)', 'execute'), 'presence hint callable only with a router signature');
+select ok(not has_function_privilege('authenticated', 'waldo.presence_hint(text,text,bigint,text)', 'execute'), 'presence hint not callable by signed-in users');
 
 select * from finish();
 rollback;

@@ -104,7 +104,13 @@ async function world() {
   };
   const inbox = async (o: typeof alice) => runInDurableObject(o.stub, async (_i, state) => new IMessageOwnerInbox(state.storage).records());
   const outbox = async (o: typeof alice) => runInDurableObject(o.stub, async (_i, state) => new IMessageFinalOutbox(state.storage).records());
-  return { fx, op, alice, bob, host, call, pump, deliverNext, sharedLive, linkCode, inbox, outbox, bridgeStub, owners };
+  const linkVia = async (o: typeof alice, handle: string) => {
+    const code = await linkCode(o);
+    await host.send(host.message(`waldo ${code}`, { senderHandle: handle })); await pump();
+    return deliverNext();
+  };
+  const events = () => runInDurableObject(bridgeStub(), async (_i, state) => state.storage.sql.exec<{ state: string; reason: string; body: string }>('SELECT state, reason, body FROM events').toArray());
+  return { fx, op, alice, bob, host, call, pump, deliverNext, sharedLive, linkCode, linkVia, inbox, outbox, bridgeStub, events, owners };
 }
 
 it('the shared Waldo number routes every sender to their own Waldo only', async () => {
@@ -176,6 +182,8 @@ it('a group or a chat that is not the sender\'s own direct chat never routes, ev
   expect(await w.deliverNext()).toBeNull();
   expect(proof.turns).toHaveLength(0);
   expect(await w.inbox(w.alice)).toEqual([]);
+  // The bridge's own direct-chat check refuses the foreign chat before any authority read or admission.
+  expect((await w.events()).filter((e) => e.reason === 'not_sender_direct_chat')).toHaveLength(1);
 });
 
 it('the console shows link codes to every owner and the shared-number controls only to the operator', async () => {
@@ -210,4 +218,90 @@ it('linking through the shared number replaces the owner\'s own per-owner Mac br
   // Her texts now arrive through the shared number, to her own Waldo.
   await w.host.send(w.host.message('through the shared number', { senderHandle: ALICE })); await w.pump();
   expect(await w.deliverNext()).toMatchObject({ chatGuid: `iMessage;-;${ALICE}`, ownerId: w.owners[1]!.owner_id });
+});
+
+it('an owner sees their linked handle masked and unlinks it: a queued reply ends authority_changed and later texts are unknown', async () => {
+  const w = await world();
+  await w.sharedLive();
+  expect(await (await w.alice.page()).text()).not.toContain('imessage.unlink'); // nothing linked yet
+  expect(await w.linkVia(w.alice, ALICE)).toMatchObject({ text: LINK_REPLIES.redeemed });
+  const page = await (await w.alice.page()).text();
+  expect(page).toContain(`Linked: •••${ALICE.slice(-4)}`);
+  expect(page).not.toContain(ALICE); // only the last characters of the handle ever reach the console
+  expect(page).toContain('imessage.unlink');
+  const t0 = Date.now();
+  vi.useFakeTimers({ toFake: ['Date'], now: t0 });
+  try {
+    vi.setSystemTime(t0 + 91_000); // the host is stale, so Alice's reply stays frozen in her outbox
+    expect((await w.host.send(w.host.message('Alice asks before unlinking', { senderHandle: ALICE }))).status).toBe(200);
+    await w.pump(3);
+    expect(proof.turns).toHaveLength(1);
+    expect((await w.outbox(w.alice))[0]).toMatchObject({ state: 'frozen', subject: ALICE });
+    // Bob cannot unlink Alice: his unlink finds nothing of his own.
+    expect(await (await w.bob.action('imessage.unlink')).text()).toContain('Unable');
+    expect(await (await w.alice.action('imessage.unlink')).status).toBe(303);
+    expect([...w.fx.presences.values()].filter((p) => p.subject === ALICE && p.active)).toEqual([]);
+    expect(await (await w.alice.page()).text()).not.toContain('Linked: ');
+    // The host is back after the outbox's retry delay; the frozen reply is rechecked against the sender's authority and never sent.
+    vi.setSystemTime(t0 + 97_000);
+    expect((await w.host.heartbeat()).status).toBe(200); expect((await w.host.capabilities()).status).toBe(200);
+    await w.pump(2);
+    expect((await w.outbox(w.alice))[0]).toMatchObject({ state: 'settled', result: { state: 'rejected', disposition: 'not_started', reason: 'authority_changed' } });
+    expect((await w.host.pull()).delivery).toBeNull();
+    // One sender's unlink never revokes the shared bridge: it stays live for everyone else.
+    expect(await w.bridgeStub().status()).toMatchObject({ revoked: false, online: true });
+    vi.setSystemTime(t0 + 98_000);
+    expect((await w.host.heartbeat()).status).toBe(200);
+    // A later text from that handle is an unknown sender: the onboarding reply, never a turn.
+    expect((await w.host.send(w.host.message('Alice after unlinking', { senderHandle: ALICE }))).status).toBe(200);
+    await w.pump();
+    expect(await w.deliverNext()).toMatchObject({ text: onboardingReply(ONBOARDING), chatGuid: `iMessage;-;${ALICE}`, ownerId: SYSTEM_OWNER_ID });
+    expect(proof.turns).toHaveLength(1);
+    expect(await w.inbox(w.alice)).toHaveLength(1); // only the turn from before the unlink
+  } finally { vi.useRealTimers(); }
+});
+
+it('a handle linked to one owner cannot be claimed with another owner\'s code; the sender is told it is already linked', async () => {
+  const w = await world();
+  await w.sharedLive();
+  expect(await w.linkVia(w.alice, ALICE)).toMatchObject({ text: LINK_REPLIES.redeemed });
+  expect(await w.linkVia(w.bob, BOB)).toMatchObject({ text: LINK_REPLIES.redeemed });
+  // Bob's code, texted from Alice's handle (a recycled number, or someone talked into it).
+  const code = await w.linkCode(w.bob);
+  expect((await w.host.send(w.host.message(`waldo ${code}`, { senderHandle: ALICE }))).status).toBe(200);
+  await w.pump();
+  expect(await w.deliverNext()).toMatchObject({ text: LINK_REPLIES.claimed, chatGuid: `iMessage;-;${ALICE}`, ownerId: SYSTEM_OWNER_ID });
+  expect((await w.events()).filter((e) => e.reason === 'link_claimed')).toHaveLength(1);
+  // Nothing moved: Alice keeps her binding, Bob keeps his, and Bob's code was not spent.
+  const live = [...w.fx.presences.values()].filter((p) => p.active).map((p) => [p.subject, p.owner]);
+  expect(live).toEqual(expect.arrayContaining([[ALICE, w.alice.name], [BOB, w.bob.name]]));
+  expect(live).toHaveLength(2);
+  expect([...w.fx.linkCodes.values()].filter((c) => c.owner === w.bob.name && !c.used)).toHaveLength(1);
+  // Alice's next text still reaches Alice's Waldo only.
+  expect((await w.host.send(w.host.message('Alice is still Alice', { senderHandle: ALICE }))).status).toBe(200);
+  await w.pump();
+  expect(await w.deliverNext()).toMatchObject({ chatGuid: `iMessage;-;${ALICE}`, ownerId: w.owners[1]!.owner_id });
+  expect((await w.inbox(w.alice)).map((r) => r.binding.subject)).toEqual([ALICE]); // linking is never a turn
+  expect(await w.inbox(w.bob)).toEqual([]);
+});
+
+it('a sender authority naming a different subject is held by the bridge before any admission', async () => {
+  const w = await world();
+  await w.sharedLive();
+  expect(await w.linkVia(w.alice, ALICE)).toMatchObject({ text: LINK_REPLIES.redeemed });
+  // A directory answer for Alice's handle that names someone else must never become Alice's turn.
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    const response = await w.fx.fetcher(input as RequestInfo, init);
+    if (!response) throw new Error('forbidden egress');
+    if (!String(input instanceof Request ? input.url : input).endsWith('/imessage_sender_authority')) return response;
+    const body = await response.json() as Record<string, unknown> | null;
+    return Response.json(body?.state === 'active' ? { ...body, subject: BOB } : body);
+  });
+  const before = w.fx.calls.length;
+  expect((await w.host.send(w.host.message('mismatched authority', { senderHandle: ALICE }))).status).toBe(200);
+  await w.pump(2);
+  expect((await w.events()).at(-1)).toMatchObject({ state: 'held', reason: 'held' });
+  expect(w.fx.calls.slice(before)).not.toContain('route_presence'); // admission never ran
+  expect(proof.turns).toHaveLength(0);
+  expect(await w.inbox(w.alice)).toEqual([]);
 });

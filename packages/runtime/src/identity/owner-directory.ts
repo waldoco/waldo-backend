@@ -15,7 +15,8 @@ export type OwnerDirectoryEnv = Readonly<{
 export type PresenceProvider = 'telegram' | 'whatsapp';
 export type PresenceLookupProvider = PresenceProvider | 'imessage';
 
-export type RedemptionOutcome = { kind: 'redeemed' | 'rejected' | 'uncertain' };
+/** claimed: the subject is live under another owner, so nothing changed and the code was not spent. */
+export type RedemptionOutcome = { kind: 'redeemed' | 'rejected' | 'claimed' | 'uncertain' };
 export type OwnerDirectory = Readonly<{
   redeemHashed?(provider: PresenceLookupProvider, subject: string, hash: string): Promise<RedemptionOutcome>;
   byPresence(provider: PresenceLookupProvider, subject: string): Promise<OwnerRoute | null>;
@@ -46,6 +47,11 @@ const deployOwner = (env: OwnerDirectoryEnv): OwnerDirectory => ({
 // WhatsApp has no single-owner env fallback: routing a phone number requires a real presence row,
 // so the directory-backed path is the only one (deployOwner answers telegram only).
 
+/** A refused directory call; sqlState is the PostgreSQL error code PostgREST reported, when it reported one. */
+export class OwnerDirectoryError extends Error {
+  constructor(readonly status: number, readonly sqlState: string | null) { super(`owner directory ${status}`); }
+}
+
 // The runtime holds no service-role key (ADR-0052): it calls signed database functions with the publishable key.
 export const signedRpc = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch, now = () => Date.now()) => {
   const { SUPABASE_PROJECT_URL: base, SUPABASE_PUBLISHABLE_KEY: key, WALDO_ROUTER_HMAC_SECRET: secret } = env;
@@ -60,7 +66,11 @@ export const signedRpc = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch,
         headers: { apikey: key, 'content-profile': 'waldo', 'content-type': 'application/json' },
         body: JSON.stringify({ ...args, p_at: at, p_sig: signature }),
       });
-      if (!response.ok) throw new Error(`owner directory ${response.status}`);
+      if (!response.ok) {
+        const body: unknown = await response.json().catch(() => null);
+        const code = body && typeof body === 'object' ? (body as { code?: unknown }).code : undefined;
+        throw new OwnerDirectoryError(response.status, typeof code === 'string' ? code : null);
+      }
       return response.json();
     });
   };
@@ -84,7 +94,10 @@ export const ownerDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch = f
       try {
         const result = await call('redeem_link', `redeem.${hash}.${provider}.${subject}`, { p_code_hash: hash, p_provider: provider, p_subject: subject });
         return { kind: result === null ? 'rejected' : typeof result === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(result) ? 'redeemed' : 'uncertain' };
-      } catch { return { kind: 'uncertain' }; }
+      } catch (error) {
+        // unique_violation: redeem_link_code found the subject live under another owner and rolled back.
+        return { kind: error instanceof OwnerDirectoryError && error.sqlState === '23505' ? 'claimed' : 'uncertain' };
+      }
     },
     redeem: async (provider, subject, code) => {
       const hash = await linkCodeHash(code);

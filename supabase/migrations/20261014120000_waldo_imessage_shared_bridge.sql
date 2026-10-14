@@ -259,6 +259,41 @@ begin
     from waldo.imessage_bridges b join waldo.owners o on o.id = b.owner_id where o.do_name = p_do_name), '[]'::jsonb);
 end $$;
 
+-- 3. Owner unlink and cross-owner claims ---------------------------------------------------------------
+-- A code redeemed for a subject live under another owner rolls back as a unique_violation, so the signed
+-- caller can tell the sender the handle is already linked; nothing moves and the code stays unspent.
+create or replace function waldo.redeem_link_code(p_code_hash text, p_provider text, p_subject text) returns uuid
+language plpgsql security definer set search_path = '' as $$
+declare v_owner uuid;
+begin
+  update waldo.link_codes set used_at = now()
+    where code_hash = p_code_hash and provider = p_provider and used_at is null and expires_at > now()
+    returning owner_id into v_owner;
+  if v_owner is null then return null; end if;
+  update waldo.presences set state = 'unlinked', unlinked_at = now()
+    where provider = p_provider and owner_id = v_owner and state = 'active';
+  if exists (select 1 from waldo.presences where provider = p_provider and subject = p_subject and state = 'active') then
+    raise exception 'presence already linked to another owner' using errcode = '23505';
+  end if;
+  insert into waldo.presences (owner_id, provider, subject) values (v_owner, p_provider, p_subject);
+  return v_owner;
+end $$;
+
+-- The owner console names the linked handle without it leaving the database: its last 4 characters
+-- (2 for a handle shorter than 8), or null when the owner has no active presence for the provider.
+create function waldo.presence_hint(p_do_name text, p_provider text, p_at bigint, p_sig text) returns text
+language plpgsql stable security definer set search_path = '' as $$
+declare v_subject text;
+begin
+  if not waldo.router_signed('presencehint.' || p_do_name || '.' || p_provider, p_at, p_sig) then
+    raise exception 'unsigned router call' using errcode = '42501';
+  end if;
+  select p.subject into v_subject from waldo.presences p join waldo.owners o on o.id = p.owner_id
+    where o.do_name = p_do_name and o.state = 'active' and p.provider = p_provider and p.state = 'active';
+  if v_subject is null then return null; end if;
+  return right(v_subject, case when length(v_subject) >= 8 then 4 else 2 end);
+end $$;
+
 do $grants$
 declare f text;
 begin
@@ -266,7 +301,8 @@ begin
     'waldo.imessage_issue_shared_invitation(text,text,text,integer,text,bigint,text)',
     'waldo.imessage_sender_authority(text,text,text,text,text,bigint,text)',
     'waldo.imessage_activate_shared(text,text,text,text,text,bigint,text)',
-    'waldo.imessage_onboarding_allowed(text,text,text,text,text,bigint,text)'] loop
+    'waldo.imessage_onboarding_allowed(text,text,text,text,text,bigint,text)',
+    'waldo.presence_hint(text,text,bigint,text)'] loop
     execute 'revoke all on function ' || f || ' from public, anon, authenticated';
     execute 'grant execute on function ' || f || ' to anon';
   end loop;

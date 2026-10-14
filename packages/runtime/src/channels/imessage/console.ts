@@ -7,7 +7,7 @@ import { consoleAuth } from '../../identity/console-auth';
 // Private owner lifecycle UI. The authenticated owner console session + CSRF is the sole authority
 // for pair/verify/activate/revoke; host S2 credentials can never reach these actions.
 export const CONSOLE_IMESSAGE_PATH = '/console/imessage';
-export const IMESSAGE_CONSOLE_ACTIONS = ['imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.pair_shared', 'imessage.activate_shared'] as const;
+export const IMESSAGE_CONSOLE_ACTIONS = ['imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared'] as const;
 export const isIMessageConsoleAction = (action: unknown): action is typeof IMESSAGE_CONSOLE_ACTIONS[number] => IMESSAGE_CONSOLE_ACTIONS.includes(action as never);
 
 const HEADERS = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' };
@@ -19,7 +19,7 @@ const field = (form: FormData, name: string, max = 512): string | null => {
   return typeof v === 'string' && v.length > 0 && v.length <= max && v.trim() === v && !/[\u0000-\u001f\u007f]/.test(v) ? v : null;
 };
 
-export function renderIMessage(rows: readonly (BridgeListing & { online?: boolean; textReady?: boolean; quarantine?: string | null })[], csrf: string, o: { admin?: boolean; address?: string } = {}): string {
+export function renderIMessage(rows: readonly (BridgeListing & { online?: boolean; textReady?: boolean; quarantine?: string | null })[], csrf: string, o: { admin?: boolean; address?: string; linkedHint?: string | null } = {}): string {
   const hidden = `<input type="hidden" name="csrf" value="${escape(csrf)}">`;
   const form = (action: string, body: string, label: string) => `<form method="post" action="/console/action">${hidden}<input type="hidden" name="action" value="${action}">${body}<button>${label}</button></form>`;
   const row = (r: (typeof rows)[number]) => {
@@ -34,9 +34,12 @@ export function renderIMessage(rows: readonly (BridgeListing & { online?: boolea
     return `<tr><td>${shared ? 'shared Waldo number · ' : ''}${escape(r.state)}${health}</td><td>${shared ? '' : escape(r.subject ?? '')}</td><td>${escape(r.host_version)}</td><td>${actions}${revoke}</td></tr>`;
   };
   const address = o.address ? escape(o.address) : 'the Waldo iMessage number';
+  const linked = o.linkedHint
+    ? `<p>Linked: •••${escape(o.linkedHint)}. Texts from this number reach your Waldo.</p>${form('imessage.unlink', '', 'Unlink this number')}`
+    : '';
   return `<!doctype html><html><head><meta charset="utf-8"><title>Waldo on iMessage</title></head><body><a href="/console">Back to console</a><h1>iMessage</h1>`
     + `<p>Direct iMessage text only. Groups, SMS, files and reactions are not supported.</p>`
-    + `<h2>Text your Waldo from your iPhone</h2><p>Get a one-time code, then text <b>waldo CODE</b> to ${address} from your iPhone. Only your own number reaches your Waldo.</p>${form('imessage.link', '', 'Get an iMessage link code')}`
+    + `<h2>Text your Waldo from your iPhone</h2><p>Get a one-time code, then text <b>waldo CODE</b> to ${address} from your iPhone. Only your own number reaches your Waldo.</p>${linked}${form('imessage.link', '', 'Get an iMessage link code')}`
     + `<h2>Your own Mac host</h2>${form('imessage.pair', '', 'Pair a Mac host')}`
     + (o.admin ? `<h2>Shared Waldo number (operator)</h2><p>Pairs the Mac that runs ${address} for everyone. Each sender still reaches only their own Waldo.</p>${form('imessage.pair_shared', '', 'Pair the shared Waldo number host')}` : '')
     + `<table><tr><th>Status</th><th>Sender</th><th>Host</th><th>Actions</th></tr>${rows.map(row).join('')}</table></body></html>`;
@@ -52,8 +55,10 @@ export async function iMessageConsolePage(env: IMessageEnv, owner: string, csrf:
       const s = await ns.get(ns.idFromName(iMessageBridgeName(environment, r.bridge_id, r.account_id))).status();
       return { ...r, online: s.online, textReady: s.textReady, quarantine: s.quarantine };
     }));
-    const admin = await consoleAuth(env)?.adminOverview(owner).then((v) => v !== null).catch(() => false) ?? false;
-    return new Response(renderIMessage(withStatus, csrf, { admin, ...(env.IMESSAGE_WALDO_ADDRESS ? { address: env.IMESSAGE_WALDO_ADDRESS } : {}) }), { headers: HEADERS });
+    const auth = consoleAuth(env);
+    const admin = await auth?.adminOverview(owner).then((v) => v !== null).catch(() => false) ?? false;
+    const linkedHint = await auth?.iMessageHandleHint?.(owner) ?? null;
+    return new Response(renderIMessage(withStatus, csrf, { admin, linkedHint, ...(env.IMESSAGE_WALDO_ADDRESS ? { address: env.IMESSAGE_WALDO_ADDRESS } : {}) }), { headers: HEADERS });
   } catch { return new Response('iMessage status unavailable.', { status: 503, headers: HEADERS }); }
 }
 
@@ -68,6 +73,10 @@ export async function iMessageConsoleAction(form: FormData, csrf: string, owner:
       const code = await consoleAuth(env)?.issueProviderLinkCode?.(owner, 'imessage');
       const to = env.IMESSAGE_WALDO_ADDRESS ?? 'the Waldo iMessage number';
       if (code) return new Response(`waldo ${code}\nText exactly this to ${to} from your iPhone within 10 minutes. Your number then reaches only your Waldo.`, { headers: TEXT });
+    } else if (action === 'imessage.unlink') {
+      // Canonical unlink: the sender's authority and revision change at once, so the bridge refuses any queued reply
+      // (authority_changed) and a later text from the handle is an unknown sender.
+      if (await consoleAuth(env)?.unlinkIMessage?.(owner)) return new Response(null, { status: 303, headers: { location: CONSOLE_IMESSAGE_PATH } });
     } else if (action === 'imessage.pair_shared') {
       const code = mintSetupSecret('wim');
       if (await directory.issueSharedInvitation(owner, c.environment, await sha256Hex(code), lifetime))

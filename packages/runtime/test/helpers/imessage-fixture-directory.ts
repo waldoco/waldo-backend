@@ -13,6 +13,8 @@ export type FixtureBridge = {
 };
 export type FixtureOwner = { do_name: string; owner_id: string; state: 'active' | 'suspended'; state_version: number; admission_revision: number; admin?: boolean };
 
+class ClaimedElsewhere extends Error { constructor() { super('presence already linked to another owner'); } }
+
 export function fixtureDirectory(input: { origin: string; secret: string; owners: FixtureOwner[]; extra?: (fn: string, args: Record<string, unknown>) => Response | Promise<Response> | null }) {
   const invitations = new Map<string, { owner: string; environment: string; expires: number; used: boolean; kind: 'owner' | 'shared' }>();
   const bridges = new Map<string, FixtureBridge>();
@@ -75,7 +77,7 @@ export function fixtureDirectory(input: { origin: string; secret: string; owners
     redeem_link: (a) => {
       const c = linkCodes.get(a.p_code_hash); if (!c || c.used || c.provider !== a.p_provider || c.expires <= Date.now()) return null;
       const taken = livePresence(a.p_provider, a.p_subject);
-      if (taken && taken.owner !== c.owner) throw new Error('presence already linked to another owner');
+      if (taken && taken.owner !== c.owner) throw new ClaimedElsewhere();
       c.used = true;
       for (const p of presences.values()) if (p.active && (p.provider ?? 'imessage') === a.p_provider && p.owner === c.owner) p.active = false;
       const id = crypto.randomUUID(); presences.set(id, { id, owner: c.owner, subject: a.p_subject, active: true, provider: a.p_provider });
@@ -117,6 +119,15 @@ export function fixtureDirectory(input: { origin: string; secret: string; owners
     },
     imessage_list: (a) => [...bridges.values()].filter((b) => b.owner === a.p_do_name).map((b) => ({ bridge_id: b.bridge_id, account_id: b.account_id, state: b.state, kind: b.kind,
       subject: b.expected_subject, chat_guid: b.expected_chat_guid, observed: !!b.observed, host_version: b.host_version, created_at: 'fixture', activated_at: null, revoked_at: null })),
+    unlink_presence: (a) => {
+      let found = false;
+      for (const p of presences.values()) if (p.active && p.owner === a.p_do_name && (p.provider ?? 'imessage') === a.p_provider) { p.active = false; found = true; }
+      return found;
+    },
+    presence_hint: (a) => {
+      const o = owner(a.p_do_name), p = [...presences.values()].find((x) => x.active && x.owner === a.p_do_name && (x.provider ?? 'imessage') === a.p_provider);
+      return o && o.state === 'active' && p ? p.subject.slice(p.subject.length >= 8 ? -4 : -2) : null;
+    },
     route_presence: (a) => {
       const p = livePresence(a.p_provider, a.p_subject); const o = p ? owner(p.owner) : undefined;
       return p && o && o.state === 'active' ? [{ do_name: o.do_name, subject: p.subject, timezone: 'UTC', owner_id: o.owner_id, owner_email: null }] : [];
@@ -126,6 +137,8 @@ export function fixtureDirectory(input: { origin: string; secret: string; owners
     if (fn === 'route_presence') return `route.${a.p_provider}.${a.p_subject}`;
     if (fn === 'redeem_link') return `redeem.${a.p_code_hash}.${a.p_provider}.${a.p_subject}`;
     if (fn === 'issue_provider_link_code') return `link.${a.p_provider}.${a.p_do_name}.${a.p_code_hash}`;
+    if (fn === 'unlink_presence') return `unlink.${a.p_do_name}.${a.p_provider}`;
+    if (fn === 'presence_hint') return `presencehint.${a.p_do_name}.${a.p_provider}`;
     const op = ({ imessage_throttle: 'throttle', imessage_issue_invitation: 'invite', imessage_redeem_invitation: 'redeem', imessage_bridge_authority: 'authority',
       imessage_set_expected_scope: 'scope', imessage_record_challenge: 'challenge', imessage_activate: 'activate', imessage_revoke: 'revoke', imessage_list: 'list',
       imessage_issue_shared_invitation: 'invite_shared', imessage_sender_authority: 'sender', imessage_onboarding_allowed: 'onboard', imessage_activate_shared: 'activate_shared' } as Record<string, string>)[fn];
@@ -144,7 +157,11 @@ export function fixtureDirectory(input: { origin: string; secret: string; owners
     const message = await signedMessage(fn, a);
     if (message !== null) {
       if (a.p_sig !== await routerSignature(input.secret, a.p_at, message)) return Response.json({ code: '42501', message: 'unsigned router call' }, { status: 403 });
-      try { return Response.json(handlers[fn]!(a)); } catch (error) { return Response.json({ code: 'P0001', message: (error as Error).message }, { status: 400 }); }
+      try { return Response.json(handlers[fn]!(a)); } catch (error) {
+        // PostgREST answers a unique_violation (23505) with 409, any other raise with 400.
+        if (error instanceof ClaimedElsewhere) return Response.json({ code: '23505', message: error.message }, { status: 409 });
+        return Response.json({ code: 'P0001', message: (error as Error).message }, { status: 400 });
+      }
     }
     const extra = await input.extra?.(fn, a);
     if (extra) return extra;

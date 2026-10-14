@@ -70,6 +70,7 @@ const LINK_TEXT = /^waldo\s+([A-HJ-NP-Za-hj-np-z2-9]{10})$/i;
 export const LINK_REPLIES = {
   redeemed: 'Linked. Texts from this number now go to your own Waldo.',
   rejected: 'That code did not work. Get a new one from your Waldo console.',
+  claimed: 'This number is already linked to a Waldo account, so it was not moved. To link it here, unlink it in that account\'s console first, then text a new code.',
   uncertain: 'Linking could not be confirmed. Check your Waldo console before trying a new code.',
 } as const;
 export const onboardingReply = (url: string) =>
@@ -77,7 +78,7 @@ export const onboardingReply = (url: string) =>
 const onboardingUrl = (raw: string | undefined): string | null => {
   try { const u = new URL(raw ?? ''); return u.protocol === 'https:' && !u.username && !u.password ? u.toString() : null; } catch { return null; }
 };
-type SharedStrangerOutcome = 'link_redeemed' | 'link_failed' | 'link_throttled' | 'stranger_onboarded' | 'stranger_throttled' | 'stranger_ignored';
+type SharedStrangerOutcome = 'link_redeemed' | 'link_claimed' | 'link_failed' | 'link_throttled' | 'stranger_onboarded' | 'stranger_throttled' | 'stranger_ignored';
 const isSenderAuthority = (a: SenderAuthority | null): a is BridgeAuthority => !!a && a.state !== 'unknown_sender';
 
 export const bindingFromAuthority = (a: BridgeAuthority): IMessageBinding | null => {
@@ -409,7 +410,7 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
         const redeemHashed = ownerDirectory(this.env).redeemHashed;
         const outcome = redeemHashed ? await redeemHashed('imessage', event.senderHandle, await linkCodeHash(code)) : { kind: 'uncertain' as const };
         await this.enqueueSystemReply(store, event, environment, bridgeId, accountId, LINK_REPLIES[outcome.kind]);
-        return outcome.kind === 'redeemed' ? 'link_redeemed' : 'link_failed';
+        return outcome.kind === 'redeemed' ? 'link_redeemed' : outcome.kind === 'claimed' ? 'link_claimed' : 'link_failed';
       }
       const url = onboardingUrl(this.env.IMESSAGE_ONBOARDING_URL);
       if (!url || ready === 'unavailable') return 'stranger_ignored';
