@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { validModelCredential } from './credential-shape';
 import {
   OPENAI_PROVIDER,
+  OPENAI_REASONING,
   PROVIDER_OF,
   type ModelName,
 } from '@waldo/contracts';
@@ -49,6 +50,12 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
     if (PROVIDER_OF[input.request.model] !== OPENAI_PROVIDER || input.step.provider !== OPENAI_PROVIDER) {
       return { ok: false, code: 'invalid_args', error: 'OpenAI adapter received an unsupported route' };
     }
+    // Refused, never mapped to a nearby effort: a mapped effort would silently change how much the model reasons.
+    const reasoning = OPENAI_REASONING[input.request.model];
+    const effort = input.request.reasoning_effort ?? reasoning?.effort;
+    if (reasoning === undefined || effort === undefined || !reasoning.accepts.includes(effort)) {
+      return { ok: false, code: 'invalid_args', error: 'OpenAI adapter received a reasoning effort the model does not accept' };
+    }
     if (this.missingKey || this.client === undefined) {
       return { ok: false, code: 'auth_failed', error: 'OPENAI_API_KEY is unavailable' };
     }
@@ -68,7 +75,7 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
           input: responsesInput(input.request),
           max_output_tokens: input.request.max_tokens,
           store: false,
-          reasoning: { effort: 'low', summary: 'auto' },
+          reasoning: { effort, summary: 'auto' },
           ...(input.request.cache_key ? { prompt_cache_key: input.request.cache_key } : {}),
           ...(input.request.tools ? { tools: input.request.tools.map((tool) => ({ type: 'function' as const, name: tool.name, description: tool.description, parameters: tool.parameters, strict: false })) } : {}),
           ...(input.request.response_format ? { text: { format: { type: 'json_schema' as const, name: input.request.response_format.name, schema: input.request.response_format.schema, strict: true } } } : {}),
