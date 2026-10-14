@@ -186,6 +186,7 @@ it('forgetting the Google phone deletes it, no prompt or log carries it, a recon
   });
 }, 30_000);
 
+// The forgotten fact shares a word with the family name, which an exact match must not take for the name.
 it('forgetting something else leaves the Google name, and its receipt claims no provider fact', async () => {
   const edge: Edge = { id: 'conn-1', email: 'owner@example.test', profile: NAMES };
   directory(edge);
@@ -194,9 +195,9 @@ it('forgetting something else leaves the Google name, and its receipt claims no 
     const owner = await ownerFor(name, state);
     try {
       await connect(owner, state);
-      await send(owner, state, name, 'I love espresso', { name: 'remember', args: { kind: 'preference', text: 'Loves espresso', evidence_quote: 'I love espresso' } });
-      expect(claimStore(state.storage.sql).claims().map(claim => claim.text)).toEqual(['Loves espresso']);
-      await send(owner, state, name, 'Forget espresso', { name: 'forget_memory', args: { topic: 'espresso', scope_note: 'coffee' } });
+      await send(owner, state, name, 'My manager is Mr Okonkwo', { name: 'remember', args: { kind: 'fact', text: 'Manager is Mr Okonkwo', evidence_quote: 'My manager is Mr Okonkwo' } });
+      expect(claimStore(state.storage.sql).claims().map(claim => claim.text)).toEqual(['Manager is Mr Okonkwo']);
+      await send(owner, state, name, 'Forget Okonkwo', { name: 'forget_memory', args: { topic: 'Okonkwo', scope_note: 'their manager' } });
       const receipt = forgetReceipt();
       expect(receipt).toContain('"ok":true');
       expect(receipt).not.toContain('provider_facts');
