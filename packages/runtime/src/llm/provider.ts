@@ -52,6 +52,7 @@ import {
   type ResolvedSkillBudget,
   type SkillBudgetFactory,
 } from '../skills/budget';
+import { callTimeLeftMs, MODEL_CALL_TIMEOUT_MS, PROVIDER_WAIT_MAX_MS, RATE_LIMIT_BACKOFF_MS } from './time-budget';
 
 export type LLMContextMode = 'full_context' | 'reduced_context';
 export type RuntimeFallbackStep = (typeof FALLBACK_LADDER)[number] | 'defer';
@@ -124,8 +125,21 @@ export type TrustedGatewayExecution =
       execution_witness: TrustedRunV2ProviderExecutionWitness;
     }>;
 
+export type SpentTokens = Readonly<Pick<LLMResponse, 'input_tokens' | 'output_tokens' | 'cache_read_input_tokens'>>;
+
+// What the model provider said about trying a failed request again: the wait it asked for, and whether it allows
+// another try at all.
+export type ProviderRetryAdvice = Readonly<{ afterMs?: number; allowed?: boolean }>;
+
+// A failed attempt as an adapter reports it. `spent` carries the tokens of an attempt the provider still billed, such as
+// a reply with neither text nor a tool call; they join the usage of the attempt that succeeds, so a retried model step
+// is metered whole. `retry` carries the provider's own retry headers to the one retry owner.
+export type GatewayFailure = Readonly<{ ok: false; code: ErrorCode; error: string; spent?: SpentTokens; retry?: ProviderRetryAdvice }>;
+
+export type LLMGatewayResult = Extract<AdapterResult<LLMResponse>, { ok: true }> | GatewayFailure;
+
 export interface LLMGatewayAdapter {
-  complete(request: LLMGatewayRequest): Promise<AdapterResult<LLMResponse>>;
+  complete(request: LLMGatewayRequest): Promise<LLMGatewayResult>;
   executeOrReconcile?(input: TrustedGatewayExecution): Promise<TrustedGatewayAdapterResult>;
 }
 
@@ -277,6 +291,31 @@ const DEFAULT_CIRCUIT_OPTIONS: CircuitBreakerOptions = {
   cooldownMs: 30_000,
 };
 
+// complete() is the one retry owner for a model step. It sends the same model a step again only after a failure that a
+// second try can fix: a transient miss (a timeout, a server error, a reply with no text), an oversize request, which the
+// reduced-context attempt exists for, or a rate limit, once the provider's wait is over. Auth, forbidden, not-found and
+// rejected failures are permanent, and a provider that says not to retry is obeyed; those go to a fallback model on the
+// route, if it has one.
+const RESENDABLE_CODES: ReadonlySet<ErrorCode> = new Set<ErrorCode>(['transient', 'oversize', 'rate_limited']);
+
+// The wait before the same model is sent a failed step again, or null when it must not be. The wait is the one the
+// provider asked for, or a short jittered backoff for a rate limit that named none. A wait is honoured only when it is
+// one the provider may ask for and one more full call still fits the turn's time after it; otherwise the step fails at once.
+function resendWaitMs(failure: GatewayFailure, timeLeftMs: number): number | null {
+  if (!RESENDABLE_CODES.has(failure.code) || failure.retry?.allowed === false) return null;
+  const wait = failure.retry?.afterMs ?? (failure.code === 'rate_limited' ? RATE_LIMIT_BACKOFF_MS * (1 - Math.random() * 0.25) : 0);
+  if (wait <= 0) return 0;
+  return wait <= PROVIDER_WAIT_MAX_MS && wait + MODEL_CALL_TIMEOUT_MS <= timeLeftMs ? wait : null;
+}
+
+// Sleeps out a provider's wait, waking early when the run is stopped.
+const pause = (ms: number, stop: AbortSignal | undefined): Promise<void> => new Promise((resolve) => {
+  if (stop?.aborted) return resolve();
+  const wake = () => { clearTimeout(timer); stop?.removeEventListener('abort', wake); resolve(); };
+  const timer = setTimeout(wake, ms);
+  stop?.addEventListener('abort', wake, { once: true });
+});
+
 export class InMemoryCircuitBreaker implements CircuitBreaker {
   private readonly state = new Map<Provider, CircuitState>();
   private readonly options: CircuitBreakerOptions;
@@ -366,10 +405,25 @@ export class RuntimeLLMProvider {
     }
     const effectiveRoute = spendCapped ? spendClampedRoute(route) : route;
     const attempts: LLMAttempt[] = [];
+    const settledModels = new Set<string>();
+    const resendWaits = new Map<string, number>();
+    let spent: SpentTokens = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0 };
     let lastDetail: string | undefined;
 
     for (const plan of attemptPlan(effectiveRoute, spendCapped)) {
       input.runScope?.admit();
+      if (settledModels.has(modelKey(plan.step))) continue;
+      const wait = resendWaits.get(modelKey(plan.step));
+      if (wait !== undefined) {
+        resendWaits.delete(modelKey(plan.step));
+        await pause(wait, input.runScope?.signal);
+        input.runScope?.admit();
+      }
+      // A retry or a later rung starts only while the turn still has time for it.
+      if (callTimeLeftMs(input.runScope) <= 0) {
+        lastDetail = 'turn_deadline';
+        break;
+      }
       if (this.circuitBreaker.isOpen(plan.step.provider)) {
         attempts.push({
           outcome: 'skipped',
@@ -413,7 +467,7 @@ export class RuntimeLLMProvider {
         return failFromHook(preHook, plan.fallback_step, attempts, routingLogs);
       }
 
-      let gatewayResult: AdapterResult<LLMResponse>;
+      let gatewayResult: LLMGatewayResult;
       try {
         input.runScope?.admit();
         gatewayResult = await this.gateway.complete({
@@ -451,9 +505,13 @@ export class RuntimeLLMProvider {
           fallback_step: plan.fallback_step,
           code: gatewayResult.code,
         });
+        if (gatewayResult.spent) spent = addTokens(spent, gatewayResult.spent);
         if (gatewayResult.code === 'invalid_args') {
           return invalidResponseFailure(plan.fallback_step, attempts, routingLogs, undefined, gatewayResult.error);
         }
+        const resendWait = resendWaitMs(gatewayResult, callTimeLeftMs(input.runScope));
+        if (resendWait === null) settledModels.add(modelKey(plan.step));
+        else if (resendWait > 0) resendWaits.set(modelKey(plan.step), resendWait);
         continue;
       }
 
@@ -503,7 +561,7 @@ export class RuntimeLLMProvider {
           routingLogs.length > 0 ||
           plan.fallback_step !== 'configured_model' ||
           plan.context !== 'full_context',
-        usage,
+        usage: { ...usage, ...addTokens(usage, spent) },
         attempts,
         routing_logs: routingLogs,
       };
@@ -1184,6 +1242,16 @@ function usageFromResponse(response: LLMResponse): LLMUsage {
     latency_ms: response.latency_ms,
   };
 }
+
+function addTokens(a: SpentTokens, b: SpentTokens): SpentTokens {
+  return {
+    input_tokens: a.input_tokens + b.input_tokens,
+    output_tokens: a.output_tokens + b.output_tokens,
+    cache_read_input_tokens: a.cache_read_input_tokens + b.cache_read_input_tokens,
+  };
+}
+
+const modelKey = (step: GatewayStep): string => `${step.provider}:${step.model}`;
 
 const MISSING_GATEWAY_DATA_PROPERTY = Symbol('missing-gateway-data-property');
 
