@@ -36,6 +36,7 @@ describe('scheduleKind', () => {
       'reminder',
       'heartbeat',
       'standing_order',
+      'task_step',
     ]);
     expect(scheduleKindPriority).toEqual({
       journal: 0,
@@ -48,6 +49,7 @@ describe('scheduleKind', () => {
       reminder: 7,
       heartbeat: 8,
       standing_order: 9,
+      task_step: 10,
     });
   });
 
@@ -63,6 +65,7 @@ describe('scheduleKind', () => {
       reminder: null,
       heartbeat: null,
       standing_order: null,
+      task_step: null,
     });
   });
 

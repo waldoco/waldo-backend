@@ -93,7 +93,12 @@ export const responsibilityBook = (sql: Sql, deps: Readonly<{ newId(): string; n
     close(args: CloseResponsibilityArgs): boolean {
       const evidence = args.evidence_ref.trim();
       if (!evidence) return false;
-      return sql.exec("UPDATE responsibilities SET status = ?, closed_by_evidence = ?, closed_at = ?, revision = revision + 1 WHERE id = ? AND status IN ('open', 'waiting', 'uncertain') RETURNING id", args.outcome, evidence, deps.now(), args.id).toArray().length > 0;
+      const closed = sql.exec("UPDATE responsibilities SET status = ?, closed_by_evidence = ?, closed_at = ?, revision = revision + 1 WHERE id = ? AND status IN ('open', 'waiting', 'uncertain') RETURNING id", args.outcome, evidence, deps.now(), args.id).toArray().length > 0;
+      // Dropping the work cancels its unfinished steps; the revision bump fences any worker still running one.
+      if (closed && args.outcome === 'dropped') {
+        sql.exec("UPDATE responsibility_items SET status = 'cancelled', updated_at = ?, revision = revision + 1 WHERE responsibility_id = ? AND status NOT IN ('done', 'failed', 'cancelled')", deps.now(), args.id);
+      }
+      return closed;
     },
     // Carries open loops across under their own ids; a loop already carried is left as it is.
     adoptLoops(): number {

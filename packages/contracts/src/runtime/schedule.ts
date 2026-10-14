@@ -12,6 +12,7 @@ export const scheduleKindSchema = z.enum([
   'reminder',
   'heartbeat',
   'standing_order',
+  'task_step',
 ]);
 export type ScheduleKind = z.infer<typeof scheduleKindSchema>;
 
@@ -26,6 +27,7 @@ export const scheduleKindPriority: Readonly<Record<ScheduleKind, number>> = {
   reminder: 7,
   heartbeat: 8,
   standing_order: 9,
+  task_step: 10,
 };
 
 export const scheduleKindTrigger: Readonly<Record<ScheduleKind, TriggerType | null>> = {
@@ -41,6 +43,8 @@ export const scheduleKindTrigger: Readonly<Record<ScheduleKind, TriggerType | nu
   heartbeat: null,
   // A standing-order fire runs the same machine-turn path as a reminder fire (A7).
   standing_order: null,
+  // One step of a background task runs the same machine-turn path, with read tools only.
+  task_step: null,
 };
 
 export const scheduleStatusSchema = z.enum(['armed', 'quarantined']);
