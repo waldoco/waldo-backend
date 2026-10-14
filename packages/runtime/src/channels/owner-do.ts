@@ -40,13 +40,13 @@ import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { receiptUrl } from '../conversation/artifact-link-guard';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
-import { ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, alarmPass, alarmRetryDelay, armAlarm, armWhatsappPendingWake, persistInboxWake, persistTransportWake, rearmSharedAlarm } from '../scheduler/alarm-slot';
+import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armWhatsappPendingWake, heldLane, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
 import { admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
 import { TelegramFinalOutbox, redactMailFollowupEntries, redactCalendarPrepEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
 import { DeliveryGateStore } from '../delivery-gate/store';
 import { ownerTurnTrace, type OwnerTurnEnvelope } from './owner-turn-envelope';
-import { inboundTurn, ownerWords } from './owner-inbound-turn';
+import { inboundTurn, ownerWords, renderForModel } from './owner-inbound-turn';
 import type { OwnerContextIntegration, OwnerSkillHost } from './owner-turn';
 import { enrichOwnerTrace, identityForStorage, readOwnerTraceHeader } from '../observability/owner-trace-identity';
 import { adminRead, adminAction } from './dashboard-admin';
@@ -115,13 +115,14 @@ import { ownerFilePrefixes, purgeOwnerFiles } from './owner-files-purge';
 import { ARTIFACT_EXPORT_PATH, artifactExportDownload, exportDownloadUrl } from './artifact-export-download';
 import { artifactBook, artifactHandlers, inMemoryArtifactBodies, r2ArtifactBodies } from './artifacts';
 import { runBook } from './background-runs';
-import { exchangeGoogleCode, googleAccessToken, googleClient, googleHas, sha256Hex, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleFeature, type GoogleTokens } from '../connectors/google';
+import { exchangeGoogleCode, googleAccessToken, googleClient, googleHas, sha256Hex, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleFeature, type GoogleProfile, type GoogleTokens } from '../connectors/google';
 import { finishConsent, startConsent, type ConsentCallback, type ConsentFlow } from '../connectors/google-consent';
 import { GOOGLE_FINISH_PATH, type ConsentReply } from './google-oauth';
 import { BEGIN_SESSION_PATH, newTicket, ticketHash } from './connect-link';
 import { readConsoleTicket } from '../identity/console-ticket';
 import { signedRpc } from '../identity/owner-directory';
 import { googleProxy } from '../connectors/connections';
+import { googleNameLine } from '../prompt/messaging-behavior';
 import { googleCircuit } from '../connectors/google-circuit';
 import { confirmGoogleReadback, GoogleReadbackError, readbackFeature, reauthNoticeTransition } from '../connectors/google-reconnect';
 import { connectServiceHandler, googleHandlers } from '../tools/live/google';
@@ -161,7 +162,9 @@ type RawUpdate = { update_id?: number; callback_query?: CallbackQuery; message?:
 type ConnectChannel = 'telegram' | 'console' | 'app';
 type GoogleAccount = Readonly<{ id: string; email: string; scopes: readonly string[] | null; refresh_token?: string }>;
 const LEGACY_GRANT = null;
-type LinkGrant = Readonly<{ id: string; email: string; scopes: readonly string[] | null }>;
+type LinkGrant = Readonly<{ id: string; email: string; scopes: readonly string[] | null; profile?: GoogleProfile }>;
+// What Google said about one connected account at its latest connect: object KV 'google:profiles', keyed by account id.
+type GoogleProfileFact = GoogleProfile & Readonly<{ at: number }>;
 
 type OwnerRuntime = Readonly<{
   owner: number;
@@ -207,6 +210,9 @@ type OwnerRuntime = Readonly<{
 
 const LATE_FIRE_MS = 5 * 60_000;
 const ALARM_FAILURES = 'owner_alarm_failures_v1';
+// The round-robin lanes of an owner alarm pass, by their index in owner_alarm_last_v1.
+const ROUND_ROBIN = ['inbox', 'transport', 'schedule', 'browser'] as const;
+type LaneRunner = (lane: Parameters<typeof runLane>[0], work: () => Promise<unknown>) => Promise<void>;
 // A directory outage at the alarm leaves the app owner's scheduled work waiting; this is how soon the alarm asks again.
 const APP_ADMISSION_RETRY_MS = 60_000;
 
@@ -395,8 +401,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const chat = raw.message?.chat ?? raw.callback_query?.message?.chat;
     if (sender !== Number(subject) || (chat && chat.id !== Number(subject))) return new Response('forbidden', { status: 403 });
     if (!chat || chat.type !== 'private') return new Response('ok');
-    // Link/setup commands never become model input in this supported-owner slice.
-    if (/^\/(?:start|link)(?:\s|$)/.test(raw.message?.text?.trim() ?? '')) return new Response('ok');
+    // Link/setup commands never become model input in this supported-owner slice. A forwarded one is someone else's text and
+    // is never redeemed: it gets one fixed reply, with nothing stored and nothing echoed.
+    if (/^\/(?:start|link)(?:\s|$)/.test(raw.message?.text?.trim() ?? '')) {
+      const token = this.env.TELEGRAM_BOT_TOKEN;
+      if (isForward(raw.message) && token) await createTelegramCaller(token)('sendMessage', { chat_id: Number(subject), text: 'That was a forwarded command, so I did not run it. Commands only run when you type them yourself.' })
+        .catch(() => console.error(JSON.stringify({ hop: 'forwarded_setup_reply', ok: false })));
+      return new Response('ok');
+    }
     const parsed = await new TelegramPollingAdapter({ getUpdates: async () => [raw] }, 0).poll(0);
     const supportedCallback = raw.callback_query && typeof raw.callback_query.id === 'string' && typeof raw.callback_query.data === 'string';
     if (!supportedCallback && parsed.accepted.length === 0) return new Response('ok');
@@ -405,7 +417,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // A forward is someone else's text, so it never steers or stops the running turn: it runs as its own labelled turn.
     const text = isForward(raw.message) ? undefined : raw.message?.text?.trim();
     const target = this.activeInbox;
-    const control = target?.runId && text && (text === '/stop' || !text.startsWith('/')) ? { kind: text === '/stop' ? 'stop' as const : 'steer' as const, targetRun: target.runId } : undefined;
+    const steer = parsed.accepted[0];
+    const control = target?.runId && text && steer && (text === '/stop' || !text.startsWith('/')) ? { kind: text === '/stop' ? 'stop' as const : 'steer' as const, targetRun: target.runId } : undefined;
     try {
       const traceIdentity = identityForStorage(readOwnerTraceHeader(request.headers), resolveCaptureText(this.env));
       const admitted = await this.inbox.admit({ bot, subject, doName, ...(traceIdentity ? { traceIdentity } : {}) }, raw.update_id!, body, control);
@@ -433,7 +446,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
               if (target && target.runId === control.targetRun) { this.closeRunAtomic(target, 'owner_stopped'); this.activeAbort?.abort(); }
               await this.inbox.transition(row.id, attempt, 'consumed'); this.runtimes.telegram?.control.stopTarget(control.targetRun);
             }
-            else if (!this.runtimes.telegram?.control.steerTarget(control.targetRun, raw.update_id!, text!)) {
+            // The steer carries the parsed parts, so a quote in it stays labelled and is never the owner's evidence.
+            else if (!this.runtimes.telegram?.control.steerTarget(control.targetRun, raw.update_id!, renderForModel(steer!.parts))) {
               await this.inbox.returnUnconsumedSteer(row.id, attempt); this.liveAttempts.delete(attempt);
             }
           } else if (claimed && control.kind === 'steer') await this.inbox.returnUnconsumedSteer(row.id, attempt);
@@ -540,26 +554,26 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if(!data||data.bot!==bot||!/^\d+$/.test(data.bot)||!/^\d+$/.test(data.subject)||data.name!==`telegram-link:${bot}:${data.subject}`||!Number.isSafeInteger(data.id)||data.id<0||!/^[a-f0-9]{64}$/.test(data.digest)||!/^[a-f0-9]{64}$/.test(data.hash)||!this.env.OWNER_DO||this.env.OWNER_DO.idFromName(data.name).toString()!==this.ctx.id.toString())return new Response('forbidden',{status:403});
     try{const result=await new TelegramLinkInbox(this.ctx.storage).admit({bot:data.bot,subject:data.subject,name:data.name},data.id,data.digest,data.hash);return new Response(result==='conflict'?'conflict':'ok',{status:result==='conflict'?409:result==='capacity'?503:200});}catch{return new Response('admission unavailable',{status:503})}
   }
-  private async drainLink(mode:LinkBinding):Promise<void>{
+  private async drainLink(mode:LinkBinding,lane:LaneRunner):Promise<void>{
     const live=()=>{const stored=this.ctx.storage.kv.get<LinkBinding>(LINK_MODE);return this.env.TELEGRAM_BOT_TOKEN?.split(':')[0]===mode.bot&&stored?.name===mode.name&&stored.bot===mode.bot&&stored.subject===mode.subject&&this.env.OWNER_DO?.idFromName(mode.name).toString()===this.ctx.id.toString();};
     const inbox=new TelegramLinkInbox(this.ctx.storage);
+    // Routing transport uses the same bounded outbox policy, not owner setup.
+    const transport=new TelegramFinalOutbox(this.ctx.storage.kv,Date.now,(rows,due)=>persistTransportWake(this.ctx.storage,rows,due));
+    const deliver={allowed:async (r:FinalRecord)=>live()&&r.bot===mode.bot&&r.ownerSubject===mode.subject&&r.doName===mode.name,send:(p:import('./telegram-final-outbox').FinalPayload)=>createTelegramCaller(this.env.TELEGRAM_BOT_TOKEN!)('sendMessage',p),settled:async()=>{}};
     try{
-      await inbox.maintain();
-      await drainLinkReceipt(inbox,ownerDirectory(this.env),live,mode.subject);
-      // Routing transport uses the same bounded outbox policy, not owner setup.
-      const transport=new TelegramFinalOutbox(this.ctx.storage.kv,Date.now,(rows,due)=>persistTransportWake(this.ctx.storage,rows,due));
-      const deliver={allowed:async (r:FinalRecord)=>live()&&r.bot===mode.bot&&r.ownerSubject===mode.subject&&r.doName===mode.name,send:(p:import('./telegram-final-outbox').FinalPayload)=>createTelegramCaller(this.env.TELEGRAM_BOT_TOKEN!)('sendMessage',p),settled:async()=>{}};
+      await lane('inbox',async()=>{await inbox.maintain();await drainLinkReceipt(inbox,ownerDirectory(this.env),live,mode.subject);});
       // Delivery gets a slot before transfer. A full outbox cannot starve its own
       // drain behind an enqueue failure; one frozen transfer per alarm is fair.
-      await transport.drain(deliver);
-      const row=(await inbox.records()).find(r=>r.state==='frozen'&&r.text);
-      if(row){
-        try{
-          await transport.enqueue({id:`link:${mode.bot}:${row.id}`,trace:`link:${row.id}`,payload:{chat_id:Number(mode.subject),text:row.text!},bot:mode.bot,ownerSubject:mode.subject,doName:mode.name,expiresAt:row.frozenAt!+5*60_000});
-          await inbox.complete(row.id);
-        }catch(error){if(!(error instanceof Error)||error.message!=='final outbox capacity')throw error;}
-      }
-
+      await lane('transport',()=>transport.drain(deliver));
+      await lane('inbox',async()=>{
+        const row=(await inbox.records()).find(r=>r.state==='frozen'&&r.text);
+        if(row){
+          try{
+            await transport.enqueue({id:`link:${mode.bot}:${row.id}`,trace:`link:${row.id}`,payload:{chat_id:Number(mode.subject),text:row.text!},bot:mode.bot,ownerSubject:mode.subject,doName:mode.name,expiresAt:row.frozenAt!+5*60_000});
+            await inbox.complete(row.id);
+          }catch(error){if(!(error instanceof Error)||error.message!=='final outbox capacity')throw error;}
+        }
+      });
     }finally{
       const {rearmSharedAlarm}=await import('../scheduler/alarm-slot');
       await rearmSharedAlarm(this.ctx.storage,null,Date.now());
@@ -905,7 +919,6 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return this.probeTurn(body);
     }
     const update = JSON.parse(body) as RawUpdate;
-    if (this.intercept(update)) return new Response('ok');
     await this.serial(() => this.turn(update));
     return new Response('ok');
   }
@@ -951,6 +964,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async rearmWithSchedule(): Promise<void> {
     ensureSchema(this.ctx.storage);
     await new Scheduler(this.ctx.storage.sql,this.ctx.storage,productionDeps()).rearm();
+  }
+  // Every wake the owner keeps, with the schedule's next entry. A routing object has no schedule.
+  private async rearmEveryWake(): Promise<void> {
+    if (this.ctx.storage.kv.get(LINK_MODE)) await rearmSharedAlarm(this.ctx.storage, null, Date.now());
+    else await this.rearmWithSchedule();
   }
 
   // WhatsApp ingress (WHATSAPP_CHANNEL_SPEC W3). The webhook has already verified Meta's
@@ -1492,32 +1510,43 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
 
   // The handler owns its retries. A wake the pass armed or deleted replaces or cancels the platform's retry, so a throw is
-  // counted and answered with the next attempt on a capped backoff, no later than one heartbeat away; a pass that
-  // completes clears the count. Any wake the failed pass replaced is recomputed from persisted keys by the next pass.
-  // The retry's wake is a listed due key, so a re-arm outside the handler keeps it; every pass is that retry, so it goes.
-  // The work runs as one alarm pass, whose last re-arm is applied once it completes; a failed pass's re-arms are dropped.
+  // counted and answered with the next attempt on a capped backoff, no later than one heartbeat away. The retry is the
+  // failing lane's: until it is due, a pass holds that lane and runs the others, whose wakes don't wait for it. The pass at
+  // or after it is the retry, which consumes its key, runs that lane first and clears the count once it completes.
+  // The work runs as one alarm pass, whose last re-arm is applied once it completes; a failed pass's re-arms are dropped,
+  // and the next pass recomputes them from the persisted keys.
   override async alarm(): Promise<void> {
-    if (this.ctx.storage.kv.get(ALARM_RETRY_DUE_KEY) !== undefined) this.ctx.storage.kv.delete(ALARM_RETRY_DUE_KEY);
+    const kv = this.ctx.storage.kv, failed = kv.get<AlarmLane>(ALARM_FAILED_LANE_KEY), retryDue = kv.get<number>(ALARM_RETRY_DUE_KEY);
+    const held = heldLane(retryDue, failed, Date.now());
+    if (!held && retryDue !== undefined) kv.delete(ALARM_RETRY_DUE_KEY);
     try {
-      await alarmPass(this.ctx.storage, () => this.alarmWork());
-      if (this.ctx.storage.kv.get(ALARM_FAILURES) !== undefined) this.ctx.storage.kv.delete(ALARM_FAILURES);
-    } catch {
-      const streak = (this.ctx.storage.kv.get<number>(ALARM_FAILURES) ?? 0) + 1;
+      await alarmPass(this.ctx.storage, () => this.alarmWork(held, held ? null : failed ?? null));
+      if (!held) for (const key of [ALARM_FAILURES, ALARM_FAILED_LANE_KEY]) if (kv.get(key) !== undefined) kv.delete(key);
+    } catch (error) {
+      // The lane that threw is recorded unless a lane is held: a held pass failing elsewhere holds the whole pass, because
+      // keeping either lane would let the two take turns at the floor. That hold lasts one step; its retry runs every lane.
+      const thrown = error instanceof AlarmLaneFailure ? error.lane : 'pass', lane = held === null ? thrown : 'pass';
+      const streak = (kv.get<number>(ALARM_FAILURES) ?? 0) + 1;
       const due = Date.now() + alarmRetryDelay(streak, this.ctx.id.toString(), HEARTBEAT_EVERY_MS);
-      this.ctx.storage.kv.put(ALARM_FAILURES, streak);
-      this.ctx.storage.kv.put(ALARM_RETRY_DUE_KEY, due);
+      kv.put(ALARM_FAILURES, streak); kv.put(ALARM_FAILED_LANE_KEY, lane); kv.put(ALARM_RETRY_DUE_KEY, due);
       await armAlarm(this.ctx.storage, due);
-      console.error(JSON.stringify({ hop: 'alarm', ok: false, code: 'retry_scheduled', streak }));
+      console.error(JSON.stringify({ hop: 'alarm', ok: false, code: 'retry_scheduled', lane, streak }));
+      // The other lanes' due work and the schedule's next entry go in under that retry, not behind it. The retry is armed
+      // already, so a failure here leaves it.
+      try { await alarmPass(this.ctx.storage, () => this.rearmEveryWake()); }
+      catch { console.error(JSON.stringify({ hop: 'alarm', ok: false, code: 'rearm_deferred', lane })); }
     }
   }
-  private async alarmWork(): Promise<void> {
+  private async alarmWork(held: AlarmLane | null = null, retrying: AlarmLane | null = null): Promise<void> {
+    if (held === 'pass') return;
+    const lane: LaneRunner = (id, work) => runLane(id, held, work);
     await this.browserReady;
-    await this.recoverWhatsappPending();
+    await lane('whatsapp', () => this.recoverWhatsappPending());
     const mode=this.ctx.storage.kv.get<LinkBinding>(LINK_MODE);
-    if(mode){await this.serial(()=>this.drainLink(mode));return;}
+    if(mode){await this.serial(()=>this.drainLink(mode,lane));return;}
     await this.serial(async () => {
-      await this.drainApp();
-      await this.drainIMessage();
+      await lane('app', () => this.drainApp());
+      await lane('imessage', () => this.drainIMessage());
       // Directory-backed owner alarms require the same physical binding as owner ingress.
       // Keep retained work and transport recovery wakes; do not boot provider work on an orphan.
       // An owner with no Telegram link runs on the app when the directory still admits their account.
@@ -1539,8 +1568,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       const { scheduler, fire, beat, nightly, briefs, cards, fireOrder, ready, log, finalOutbox, settleFinal } = this.setup(channel);
       await ready;
-      await this.drainMacDeliveries();
-      await finalOutbox.maintain();
+      await lane('mac', () => this.drainMacDeliveries());
+      await lane('transport', () => finalOutbox.maintain());
       // Reconcile finals before quarantining recovered claims with committed payloads.
       for(const final of finalOutbox.records())if(final.commonExecution&&!final.commonExecution.settled&&!final.commonExecution.disposition) {
       }
@@ -1558,12 +1587,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         this.ctx.storage.kv.get<number>(COMMON_BROWSER_LEASE_DUE) ?? Infinity);
       const readyKinds = [dueInbox, dueTransport, scheduler.hasDue(), browserDue !== undefined && browserDue !== null && browserDue <= Date.now()];
       const last = this.ctx.storage.kv.get<number>('owner_alarm_last_v1') ?? 2;
+      // The failing lane goes first in its retry pass, so its streak clears only when it has run.
       let selected = -1;
-      for (let n = 1; n <= 4; n++) { const candidate = (last + n) % 4; if (readyKinds[candidate]) { selected = candidate; break; } }
+      for (const candidate of [ROUND_ROBIN.findIndex(kind => kind === retrying), ...[1, 2, 3, 4].map(n => (last + n) % 4)]) {
+        if (candidate >= 0 && readyKinds[candidate] && ROUND_ROBIN[candidate] !== held) { selected = candidate; break; }
+      }
       if (selected < 0) { await scheduler.rearm(); return; }
       this.ctx.storage.kv.put('owner_alarm_last_v1', selected);
       if (selected === 3) { this.ctx.waitUntil(Promise.all([this.browserTasks.maintain(), this.ownerBrowser.maintain()])); await scheduler.rearm(); return; }
-      if (selected === 0) { try { await this.drainInbox(); } finally { await scheduler.rearm(); } return; }
+      if (selected === 0) { try { await lane('inbox', () => this.drainInbox()); } finally { await scheduler.rearm(); } return; }
       if (selected === 1) {
         // Each record goes to the surface it is addressed to, with that surface's checks.
         const routeFor = (surface: ChannelKind): OutboxRoute => {
@@ -1593,45 +1625,47 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (found.kind === 'admitted') this.scheduledAppDelivery = this.copiedToTelegram(this.appDeliveryFor(found.authority));
           return found.kind;
         }, () => Date.now() + APP_ADMISSION_RETRY_MS));
-        try { await finalOutbox.drain({ ...routedDelivery(routes), settled: settleFinal }); } finally { await scheduler.rearm(); }
+        try { await lane('transport', () => finalOutbox.drain({ ...routedDelivery(routes), settled: settleFinal })); } finally { await scheduler.rearm(); }
         return;
       }
-      // Proactive work goes to the app, the default surface, once the owner has used it, and Telegram gets a plain copy of it;
-      // Telegram keeps it only for an owner with no app binding. A refusal holds the whole scheduled pass, never falling back
-      // to Telegram: a revoked account runs nothing, and an outage asks again without spending attempts.
-      let executors = { reminder: fire, heartbeat: beat, dreaming: nightly, pre_activity_spot: briefs, brief: cards, standing_order: fireOrder };
-      if (channel === 'telegram' && consoleAuth(this.env) && this.appBound()) {
-        const appOwner = await this.appOwnerLookup();
-        if (appOwner.kind !== 'admitted') {
-          log({ trace: `alarm:${Date.now()}`, hop: 'scheduled_admission', ms: 0, ok: false, code: appOwner.kind });
-          await rearmSharedAlarm(this.ctx.storage, appOwner.kind === 'retry' ? Date.now() + APP_ADMISSION_RETRY_MS : null, Date.now(), 30_000);
-          return;
+      await lane('schedule', async () => {
+        // Proactive work goes to the app, the default surface, once the owner has used it, and Telegram gets a plain copy of it;
+        // Telegram keeps it only for an owner with no app binding. A refusal holds the whole scheduled pass, never falling back
+        // to Telegram: a revoked account runs nothing, and an outage asks again without spending attempts.
+        let executors = { reminder: fire, heartbeat: beat, dreaming: nightly, pre_activity_spot: briefs, brief: cards, standing_order: fireOrder };
+        if (channel === 'telegram' && consoleAuth(this.env) && this.appBound()) {
+          const appOwner = await this.appOwnerLookup();
+          if (appOwner.kind !== 'admitted') {
+            log({ trace: `alarm:${Date.now()}`, hop: 'scheduled_admission', ms: 0, ok: false, code: appOwner.kind });
+            await rearmSharedAlarm(this.ctx.storage, appOwner.kind === 'retry' ? Date.now() + APP_ADMISSION_RETRY_MS : null, Date.now(), 30_000);
+            return;
+          }
+          this.scheduledAppDelivery = this.copiedToTelegram(this.appDeliveryFor(appOwner.authority));
+          const app = this.setup('app');
+          await app.ready;
+          executors = { ...executors, reminder: app.fire, heartbeat: app.beat, pre_activity_spot: app.briefs, brief: app.cards, standing_order: app.fireOrder };
         }
-        this.scheduledAppDelivery = this.copiedToTelegram(this.appDeliveryFor(appOwner.authority));
-        const app = this.setup('app');
-        await app.ready;
-        executors = { ...executors, reminder: app.fire, heartbeat: app.beat, pre_activity_spot: app.briefs, brief: app.cards, standing_order: app.fireOrder };
-      }
-      const started = Date.now();
-      let fired: readonly ScheduleEntry[];
-      try {
-        // An app owner's jobs wait for a confirmed zone. The event-brief sweep, which a Telegram runtime build can arm, is
-        // cancelled instead of held, so it does not wake every ten minutes; confirming the zone arms it again.
-        const held = (kind: ScheduleKind): ScheduleHold => channel !== 'app' || this.ctx.storage.kv.get<boolean>('timezone_confirmed') === true ? false : kind === 'event_briefs' ? 'drop' : 'hold';
-        const onHeld = (kind: ScheduleKind, outcome: 'hold' | 'drop') => {
-          const code = `${kind}_timezone_unconfirmed`;
-          log({ trace: `alarm:${started}`, hop: outcome === 'drop' ? 'scheduled_drop' : 'scheduled_hold', ms: 0, ok: true, code, detail: code });
-        };
-        fired = await scheduler.dispatchDue(gateScheduleExecutors(executors, schedulePreferences(this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now })), scheduler, held, onHeld));
-      } catch (error) {
-        // A dispatch throw used to leave no trace at all - the wake was invisible in Langfuse.
-        log({ trace: `alarm:${started}`, hop: 'machine_turn', ms: Date.now() - started, ok: false, error: String(error), detail: 'dispatch' });
-        throw error;
-      }
-      for (const entry of fired) {
-        const late = started - entry.due_at;
-        if (late > LATE_FIRE_MS) log({ trace: `${entry.id}:${entry.occurrence_at}`, hop: 'late_fire', ms: late, ok: false, error: `${entry.kind} fired ${Math.round(late / 60_000)} min late` });
-      }
+        const started = Date.now();
+        let fired: readonly ScheduleEntry[];
+        try {
+          // An app owner's jobs wait for a confirmed zone. The event-brief sweep, which a Telegram runtime build can arm, is
+          // cancelled instead of held, so it does not wake every ten minutes; confirming the zone arms it again.
+          const held = (kind: ScheduleKind): ScheduleHold => channel !== 'app' || this.ctx.storage.kv.get<boolean>('timezone_confirmed') === true ? false : kind === 'event_briefs' ? 'drop' : 'hold';
+          const onHeld = (kind: ScheduleKind, outcome: 'hold' | 'drop') => {
+            const code = `${kind}_timezone_unconfirmed`;
+            log({ trace: `alarm:${started}`, hop: outcome === 'drop' ? 'scheduled_drop' : 'scheduled_hold', ms: 0, ok: true, code, detail: code });
+          };
+          fired = await scheduler.dispatchDue(gateScheduleExecutors(executors, schedulePreferences(this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now })), scheduler, held, onHeld));
+        } catch (error) {
+          // A dispatch throw used to leave no trace at all - the wake was invisible in Langfuse.
+          log({ trace: `alarm:${started}`, hop: 'machine_turn', ms: Date.now() - started, ok: false, error: String(error), detail: 'dispatch' });
+          throw error;
+        }
+        for (const entry of fired) {
+          const late = started - entry.due_at;
+          if (late > LATE_FIRE_MS) log({ trace: `${entry.id}:${entry.occurrence_at}`, hop: 'late_fire', ms: late, ok: false, error: `${entry.kind} fired ${Math.round(late / 60_000)} min late` });
+        }
+      });
     });
   }
 
@@ -1690,25 +1724,6 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const run = this.queue.then(work).finally(() => { this.scheduledAppDelivery = null; });
     this.queue = run.catch(() => undefined);
     return run;
-  }
-
-  // Runs outside the serial queue so it reaches a turn that is still running.
-  private intercept(update: RawUpdate): boolean {
-    const runtime = this.runtimes.telegram;
-    if (!runtime || update.update_id === undefined) return false;
-    const { owner, control, call, log } = runtime;
-    const text = update.message?.text?.trim();
-    if (update.message?.from?.id !== owner || update.message.chat?.id !== owner || !text) return false;
-    const trace = `tg-${update.update_id}`;
-    if (text === '/stop') {
-      this.ownerBrowser.stop(); this.ctx.waitUntil(Promise.all([this.browserTasks.stop(), this.ownerBrowser.maintain()]));
-      const stopping = control.stop();
-      log({ trace, hop: 'stop', ms: 0, ok: true, detail: stopping ? 'stopping the running turn' : 'nothing running' });
-      void call('sendMessage', { chat_id: owner, text: stopping ? 'Stopping.' : 'Nothing is running right now.' }).catch(() => undefined);
-      return true;
-    }
-    if (!text.startsWith('/') && control.steer(update.update_id, text)) log({ trace, hop: 'steer', ms: 0, ok: true, detail: 'queued for the running turn' });
-    return false;
   }
 
   // Staging probe path: runs one real owner turn from a synthetic update WITHOUT the
@@ -2064,6 +2079,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const vaultOwner = () => identity.get<string>('do_name');
     const stateOwner = () => vaultOwner() ?? (owner > 0 ? String(owner) : 'unlinked');
     const accounts = async () => (await storage.get<GoogleAccount[]>('google:accounts')) ?? [];
+    const googleProfiles = async () => (await storage.get<Record<string, GoogleProfileFact>>('google:profiles')) ?? {};
     const health = async () => (await storage.get<Record<string, string>>('google:health')) ?? {};
     const noteHealth = (id: string, error: string) => {
       this.ctx.waitUntil((async () => {
@@ -2116,7 +2132,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const account: GoogleAccount = 'id' in grant
           ? { id: grant.id, email, scopes: grant.scopes }
           : { id: `local:${email}`, email, scopes: grant.scopes ?? null, refresh_token: grant.refresh_token };
-        await storage.put('google:accounts', [...(await accounts()).filter((known) => known.email !== email), account]);
+        const kept = [...(await accounts()).filter((known) => known.email !== email), account];
+        // A profile lives only as long as its account. A connect that carries one replaces the old (an empty one clears
+        // it); a grant that carries none, from an edge that predates it or a migrated token, leaves it as it is.
+        const ids = new Set(kept.map((known) => known.id));
+        const profiles = Object.fromEntries(Object.entries(await googleProfiles()).filter(([id]) => ids.has(id) && !(grant.profile && id === account.id)));
+        if (grant.profile && Object.keys(grant.profile).length) profiles[account.id] = { ...grant.profile, at: Date.now() };
+        await storage.put({ 'google:accounts': kept, 'google:profiles': profiles });
         noteHealth(account.id, '');
         // The next sweep watches with the route this grant gives, rather than waiting out a stored skip or failure.
         gmailPushBook(identity).reset();
@@ -2167,9 +2189,19 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const account = all.find((known) => known.id === id);
         if (!account) return false;
         if (!id.startsWith('local:') && vault && doName) await vault.revoke(doName, id);
-        await storage.put('google:accounts', all.filter((known) => known.id !== id));
+        const { [id]: _profile, ...profiles } = await googleProfiles();
+        await storage.put({ 'google:accounts': all.filter((known) => known.id !== id), 'google:profiles': profiles });
         noteHealth(id, '');
         return true;
+      },
+      // The name Google gave for the first connected account that has one, in connect order (a reconnect moves an account last).
+      async nameLine(): Promise<string | null> {
+        const [all, profiles] = [await accounts(), await googleProfiles()];
+        for (const account of all) {
+          const line = googleNameLine(profiles[account.id] ?? {});
+          if (line) return line;
+        }
+        return null;
       },
       configured: () => Boolean(clientId && clientSecret && stateSecret),
       // Every call starts a fresh single-use attempt (state nonce + PKCE verifier) valid for 15 minutes.
@@ -2510,7 +2542,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       // The composer runs on every tool round; one health read serves the whole turn.
       let health: ReturnType<typeof healthContext.latest> | undefined;
       return createOwnerTurnContext(await surfaceOwnerAdmission({ scope, lookup, expectedPhysicalDoId: this.ctx.id.toString(), surface: 'telegram', subject, occurrenceKey: occurrence.id, occurredAt: occurrence.admittedAt, text: turn.text }),
-        { conversationRef: ownerChainRef('telegram', subject), health: () => health ??= healthContext.latest(turn.traceId) });
+        { conversationRef: ownerChainRef('telegram', subject), health: () => health ??= healthContext.latest(turn.traceId), ownerProfile: google.nameLine });
     } } } : undefined;
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
@@ -2573,15 +2605,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==record.text)throw new ClosedRunError();
         // The composer runs on every tool round; one health read serves the whole turn.
         let health:ReturnType<typeof healthContext.latest>|undefined;
-        const context=await this.appContext(record.owner,record.sessionHash,record.text,record.id,record.admittedAt,scope,{health:()=>health??=healthContext.latest(turn.traceId)});
+        const context=await this.appContext(record.owner,record.sessionHash,record.text,record.id,record.admittedAt,scope,{health:()=>health??=healthContext.latest(turn.traceId),ownerProfile:google.nameLine});
         if(context.conversationRef!==record.conversationRef)throw new ClosedRunError();
         return context;
       }},history:context=>({...indexedConversationStore(canonicalOwnerConversationStore(this.ctx.storage,context,this.logSkippedLoad),episodes,()=>Date.now()),
-        noteUnfinished:(line,scope)=>this.appInbox.noteLanded(scope.runId,scope.attempt,line)})} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
+        noteUnfinished:(line,scope)=>this.appInbox.noteLanded(scope.runId,scope.attempt,line)}),ownerProfile:google.nameLine} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
         const record=this.activeIMessage;
         if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==record.text)throw new ClosedRunError();
-        return iMessageOwnerContext(this.imessageHost,record,scope);
-      }},history:context=>canonicalOwnerConversationStore(this.ctx.storage,context)} : telegramContext,
+        return iMessageOwnerContext(this.imessageHost,record,scope,{ownerProfile:google.nameLine});
+      }},history:context=>canonicalOwnerConversationStore(this.ctx.storage,context),ownerProfile:google.nameLine} : {...telegramContext,ownerProfile:google.nameLine},
     );
     // A job prompt built on the ledger: the owner's health logs reach the model as this turn's context.
     const ledgerJob = async (trace: string, said: string, toolNames?: Parameters<typeof responder.prompt>[4]) =>
