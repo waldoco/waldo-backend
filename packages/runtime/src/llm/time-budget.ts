@@ -26,6 +26,9 @@ export const runClaimDeadline = (windowMs: number, alarmEnd: number | undefined,
 };
 // The turn's time when no run bounds it, counted from the tool loop's start.
 export const TURN_TIME_BUDGET_MS = 120_000;
+// A scheduled job's turn has no run, so it gets TURN_TIME_BUDGET_MS from its loop's start. An alarm starts one only with
+// that much of its budget left, plus the close margin; otherwise the job stays due for a fresh alarm.
+export const ALARM_JOB_MIN_MS = TURN_TIME_BUDGET_MS + RUN_CLOSE_MARGIN_MS;
 // Tool rounds follow the time a turn has: 25 for two minutes, never fewer, and never past a ceiling that stops a model
 // stuck in a loop from spending a long run's whole deadline one tool call at a time.
 export const TOOL_ROUNDS_PER_TURN_BUDGET = 25;

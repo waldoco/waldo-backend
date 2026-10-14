@@ -38,7 +38,7 @@ import {drainLinkReceipt} from './telegram-link-controller';
 import {ownerDirectory} from '../identity/owner-directory';
 import { ownerRuntimeAuthority, type OwnerRuntimeAuthority } from '../identity/owner-runtime-authority';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
-import { ALARM_TURN_BUDGET_MS, runClaimDeadline, THREAD_TITLE_BUDGET_MS } from '../llm/time-budget';
+import { ALARM_JOB_MIN_MS, ALARM_TURN_BUDGET_MS, ALARM_TURN_MIN_MS, runClaimDeadline, THREAD_TITLE_BUDGET_MS } from '../llm/time-budget';
 import { receiptUrl } from '../conversation/artifact-link-guard';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, TELEGRAM_TURN_DEADLINE_MS, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
@@ -1712,8 +1712,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     await this.browserReady;
     await lane('whatsapp', () => this.recoverWhatsappPending());
     const mode=this.ctx.storage.kv.get<LinkBinding>(LINK_MODE);
-    if(mode){await this.serial(()=>this.drainLink(mode,lane));return;}
-    await this.serial(async () => {
+    if(mode){if(!await this.serialWithin(alarmEnd,()=>this.drainLink(mode,lane)))await this.rearmWithSchedule();return;}
+    const entered = await this.serialWithin(alarmEnd, async () => {
       await lane('app', () => this.drainApp(alarmEnd));
       await lane('imessage', () => this.drainIMessage(alarmEnd));
       // Directory-backed owner alarms require the same physical binding as owner ingress.
@@ -1840,7 +1840,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             const code = `${kind}_timezone_unconfirmed`;
             log({ trace: `alarm:${started}`, hop: outcome === 'drop' ? 'scheduled_drop' : 'scheduled_hold', ms: 0, ok: true, code, detail: code });
           };
-          fired = await scheduler.dispatchDue(gateScheduleExecutors(jobs, schedulePreferences(this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now })), scheduler, held, onHeld));
+          // Each job starts only with time for its turn left in this alarm; the rest stay due for a fresh one.
+          fired = await scheduler.dispatchDue(gateScheduleExecutors(jobs, schedulePreferences(this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now })), scheduler, held, onHeld),
+            () => alarmEnd === undefined || alarmEnd - Date.now() >= ALARM_JOB_MIN_MS);
         } catch (error) {
           // A dispatch throw used to leave no trace at all - the wake was invisible in Langfuse.
           log({ trace: `alarm:${started}`, hop: 'machine_turn', ms: Date.now() - started, ok: false, error: String(error), detail: 'dispatch' });
@@ -1853,6 +1855,25 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await notices();
       });
     });
+    if (!entered) await this.rearmWithSchedule();
+  }
+
+  // An alarm waits in the serial queue behind work a request started, which can hold it for a whole turn. It has claimed
+  // nothing while it waits, so once too little of its budget is left it gives up its place, and its wakes, still due,
+  // start a fresh alarm. False when it gave up; the queued work then does nothing.
+  private async serialWithin(alarmEnd: number | undefined, work: () => Promise<void>): Promise<boolean> {
+    if (alarmEnd === undefined) { await this.serial(work); return true; }
+    let state: 'waiting' | 'running' | 'abandoned' = 'waiting';
+    let begin!: () => void;
+    const begun = new Promise<void>(resolve => { begin = resolve; });
+    const run = this.serial(async () => { if (state === 'abandoned') return; state = 'running'; begin(); await work(); });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<void>(resolve => { timer = setTimeout(resolve, Math.max(0, alarmEnd - ALARM_TURN_MIN_MS - Date.now())); });
+    await Promise.race([begun, late]);
+    clearTimeout(timer);
+    if (state === 'waiting') { state = 'abandoned'; return false; }
+    await run;
+    return true;
   }
 
   async admitMacDelivery(value: unknown): Promise<boolean> {
