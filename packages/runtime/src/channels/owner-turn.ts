@@ -16,6 +16,7 @@ import { BUDGET_CHARS_PER_TOKEN, MODEL_CONTEXT_MAX_CHARS } from '@waldo/contract
 import { PROBE_STRIPPED_TOOLS } from './probe-turn';
 import { runToolLoop } from '../conversation/tool-loop';
 import { turnReceipt } from '../hooks/receipt-line';
+import { threadOfChain } from './app-threads';
 import type { LoopEventLike } from '../hooks/claim-hook';
 import { delegateTaskHandler, runChildLoop, SUBAGENT_SYSTEM_PROMPT, withDelegation } from '../conversation/subagent';
 import { inMemoryToolOutputStore } from '../conversation/tool-output-store';
@@ -128,6 +129,7 @@ export const createOwnerResponder = (
 ): OwnerResponder => {
   const skills = privateOwner?.skills;
   const context = privateOwner?.context;
+  const thread = context ? threadOfChain(context.conversationRef) ?? undefined : undefined;
   const conversationStore = context && privateRunScope && privateOwner?.history ? privateOwner.history(context, privateRunScope) : store;
   const invocation = context?.invocation ?? (() => {
     const accepted = acceptTrustedInvocation(localTrustedBriefScheduleInput().admission);
@@ -148,18 +150,18 @@ export const createOwnerResponder = (
   let surfacePresentation: import('../prompt/messaging-behavior').SurfacePresentation | undefined;
   // Earlier turns' tool results, without anything the owner removed or is forgetting.
   const recentToolResults = async () => {
-    const fragments = await toolLedger?.recent(heldTopics()) ?? [];
+    const fragments = await toolLedger?.recent(heldTopics(), thread) ?? [];
     return fragments.filter(fragment => !holdsHeldTopic(fragment.text));
   };
   const earlierOwnerResults = async () => {
-    const results = await toolLedger?.ownerTurnResults(heldTopics()) ?? [];
+    const results = await toolLedger?.ownerTurnResults(heldTopics(), thread) ?? [];
     return results.filter(result => !holdsHeldTopic(result));
   };
   const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' }, { ...(privateSystemSkills ? { localSystemSkills: privateSystemSkills } : {}), toolOutputs: recentToolResults, ...(health === undefined ? {} : { health: async () => {
     return health(traceId);
   } }), onComposerPhase: (phase, previousMs) => log({ trace: traceId, hop: 'composer_phase', ms: previousMs, ok: true, detail: phase }) });
   // Tool outputs from the current turn; flushed to the ledger when the turn's entries persist.
-  const pendingToolOutputs: Array<{ tool: string; ok: boolean; at: number; taint: 'external' | null; origin: 'owner' | 'machine'; summary: string }> = [];
+  const pendingToolOutputs: Array<{ tool: string; ok: boolean; at: number; taint: 'external' | null; origin: 'owner' | 'machine'; summary: string; thread?: string }> = [];
   const circuitBreaker = new InMemoryCircuitBreaker();
   const policy = routingPolicySchema.parse({ routes: [{ trigger: 'user_message', primary: { provider: OPENAI_PROVIDER, model, cache: 'none', max_tokens: 4096 }, fallback: [], floor: 'template' }], escalation: [], template_fallback: false });
   const offloadStore = offload ? inMemoryToolOutputStore() : undefined;
@@ -315,7 +317,10 @@ export const createOwnerResponder = (
   const episodeSearch = tools.find((handler) => handler.name === 'search_episodes');
   const recallFor = async (source: ClaimStore, text: string, room: number, ownerTurn?: string): Promise<string> => {
     const previous = ownerTurn === undefined ? undefined : previousOwnerMessage((id) => tree.get(id), ownerTurn);
-    const episodes = ownerTurn === undefined || !episodeSearch ? undefined : episodesFromSearchTool(episodeSearch, { ...safety, turnId: ownerTurn, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) });
+    const searched = ownerTurn === undefined || !episodeSearch ? undefined : episodesFromSearchTool(episodeSearch, { ...safety, turnId: ownerTurn, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) });
+    // A chat's recall stays in that chat; search_episodes, which the model calls on purpose, still reaches every chat.
+    const reach = conversationStore?.recalls;
+    const episodes = searched && reach ? { ...searched, search: async (query: string, limit: number) => (await searched.search(query, limit)).filter((hit) => reach(hit.entry_id)) } : searched;
     const claims: Pick<ClaimStore, 'recall'> = backgroundSourceTaint === 'external' ? { recall: (query, limit) => source.recall(query, limit).filter((claim) => claim.kind !== 'health') } : source;
     const recalled = await recallForTurn({ claims, question: text, room, holds: holdsIn(heldTopics()), ...(previous === undefined ? {} : { previous }), ...(episodes && ownerTurn !== undefined ? { episodes, current: ownerTurn } : {}) });
     // Recall fails open: the turn goes on with what the other leg found, and the trace names the failed leg without any text.
@@ -563,7 +568,7 @@ export const createOwnerResponder = (
           privateRunScope?.admit();
           log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: event.call.arguments, output: event.output } });
           privateRunScope?.admit();
-          pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: event.taint, origin: ownerTurnActive && !probeGuard?.stripLiveTools ? 'owner' : 'machine', summary: turnOnlyOutput.has(event.call.name) ? TURN_ONLY_OUTPUT : event.output });
+          pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: event.taint, origin: ownerTurnActive && !probeGuard?.stripLiveTools ? 'owner' : 'machine', summary: turnOnlyOutput.has(event.call.name) ? TURN_ONLY_OUTPUT : event.output, ...(thread ? { thread } : {}) });
         },
         ...(offerConnect ? { onConnect: offerConnect } : {}),
       });
