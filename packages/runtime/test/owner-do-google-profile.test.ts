@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
+import { CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_PATH, consoleAccess } from '../src/channels/console';
 import { GOOGLE_FINISH_PATH } from '../src/channels/google-oauth';
 import { startConsent, type ConsentFlow } from '../src/connectors/google-consent';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
@@ -174,5 +175,62 @@ it('a local connect keeps the profile too, and a Telegram turn without the compo
       expectNoPhoneWrite(outbound);
       expect(JSON.stringify(logs.mock.calls), 'no log carries the phone').not.toContain(PHONE);
     } finally { Date.now = originalNow; logs.mockRestore(); await state.storage.deleteAlarm(); }
+  });
+});
+
+it('a console disconnect removes the kept profile, phone included, and a connect with an empty profile clears it', async () => {
+  const BASE = 'https://directory.fixture.invalid';
+  const real = globalThis.fetch;
+  const edge: { profile: unknown } = { profile: { ...NAMES, phone: PHONE } };
+  const revoked: string[] = [];
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (!url.startsWith(BASE)) return real(input, init);
+    const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, string>;
+    if (url === `${BASE}/functions/v1/connector-proxy`) {
+      if (body.op === 'exchange') return Response.json({ id: 'conn-1', email: EMAIL, scopes: [...MAIL, CALENDAR], profile: edge.profile });
+      if (body.op === 'gmail_watch') return Response.json({ data: { historyId: '555', expiration: Date.now() + 7 * DAY } });
+      if (body.op === 'calendar_watch') return Response.json({ data: { channelId: body.channel_id, resourceId: 'res-1', expiration: Date.now() + 7 * DAY } });
+      if (body.op === 'call') return Response.json({ data: [] });
+      return Response.json({ error: { status: 404, message: 'unknown operation' } });
+    }
+    if (url === `${BASE}/rest/v1/rpc/connection_revoke`) { revoked.push(body.p_connection ?? ''); return Response.json(true); }
+    return new Response('unexpected', { status: 500 });
+  });
+  const name = 'google-profile-disconnect';
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    claimStore(state.storage.sql);
+    ensureSchema(state.storage);
+    state.storage.kv.put('do_name', name);
+    await state.storage.put('origin', 'https://fixture.invalid');
+    const owner = new OwnerDO(state, { ...env, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' });
+    const stored = async () => {
+      const all = await state.storage.list();
+      expect(all.has('do_name'), 'the listing holds what the sync API wrote').toBe(true);
+      return JSON.stringify([...all]);
+    };
+    const access = consoleAccess(state.storage);
+    const token = await access.grant();
+    const { csrf } = (await access.session(token))!;
+    try {
+      await connect(owner, state);
+      expect(await stored(), 'the scan finds the kept phone').toContain(PHONE);
+      const reply = await owner.fetch(new Request(`https://owner.invalid${CONSOLE_ACTION_PATH}`, { method: 'POST', headers: { cookie: `${CONSOLE_COOKIE}=${token}`, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ csrf, action: 'google.disconnect', id: 'conn-1' }) }));
+      expect(reply.headers.get('location')).toBe(`${CONSOLE_PATH}?m=google.disconnect`);
+      expect(revoked).toEqual(['conn-1']);
+      expect(await state.storage.get('google:accounts')).toEqual([]);
+      expect.soft(await state.storage.get('google:profiles'), 'the disconnected account keeps no profile').toEqual({});
+      const left = await stored();
+      for (const kept of [PHONE, ...Object.values(NAMES)]) expect.soft(left, 'no object KV entry carries the phone or a name').not.toContain(kept);
+
+      // A connect with no name claims and no phone sends an empty profile: it clears the kept one, and the account stays.
+      await connect(owner, state);
+      expect(await state.storage.get('google:profiles')).toEqual({ 'conn-1': { ...NAMES, phone: PHONE, at: expect.any(Number) } });
+      edge.profile = {};
+      await connect(owner, state);
+      expect(await state.storage.get('google:accounts')).toEqual([expect.objectContaining({ id: 'conn-1' })]);
+      expect(await state.storage.get('google:profiles')).toEqual({});
+      expect(await stored()).not.toContain(PHONE);
+    } finally { await state.storage.deleteAlarm(); }
   });
 });
