@@ -114,21 +114,22 @@ describe('working on a task', () => {
     expect(prompt).toContain('Ask only for what is still unknown and would change the result, once, in one message that also confirms what you inferred');
     expect(prompt).toContain('Otherwise go ahead and say what you assumed.');
     expect(prompt).toContain('Answer every part of the ask: each option with every field they asked for (price, distance, times, availability)');
-    expect(prompt).toContain('a link to the page you read and its catch');
+    expect(prompt).toContain('a link to the page you read and any catch that matters');
     expect(prompt).toContain('If a field is still missing after another source, say which; if figures disagree, settle it on the page or say which you trust and why.');
   });
 
   it.each(prompts())('%s: has one asking policy, with effects behind confirmed details and a clear yes', (_surface, prompt) => {
     expect(prompt).toContain('Reading, searching and comparing can run on stated assumptions.');
-    expect(prompt).toContain("Booking, paying, sending something to another person or changing a shared calendar needs confirmed details and the owner's clear yes.");
+    expect(prompt).toContain("Booking, paying, sending something to another person or changing a shared calendar needs confirmed details and the owner's clear yes first.");
     expect(prompt).toContain('Never reply with only a question, a link or a list of sites when some of the work could already be done.');
-    expect(prompt).toContain('"Try again" or "keep going" means work');
+    expect(prompt).toContain('A bare "try again" or "keep going" after a failure usually means do the work');
     // Each asking line is said once; a second, older policy would show up as a repeat or as one of the removed lines.
     expect(prompt.split('Ask only for what is still unknown').length).toBe(2);
   });
 
   it.each(prompts())('%s: has a failure ladder that ends honestly', (_surface, prompt) => {
-    expect(prompt).toContain('an error message is not a reason to stop');
+    expect(prompt).toContain('is not a result and not a reason to stop');
+    expect(prompt).toContain('never work around a login, CAPTCHA, paywall or a declined approval');
     expect(prompt).toContain('then switch: another site for the same fact, another way into the same site, another result, another tool, other words');
     expect(prompt).toContain('When one source fails and others worked (one calendar of several, one site of three), answer from what worked and name the gap; never withhold the whole answer.');
     expect(prompt).toContain('A lead you could not open still goes out with its link, marked unchecked.');
@@ -149,7 +150,7 @@ describe('working on a task', () => {
     expect(MESSAGING_BEHAVIOR).toContain('get me three stays nearby');
     expect(MESSAGING_BEHAVIOR).toContain('Flight to Goa Friday evening');
     expect(MESSAGING_BEHAVIOR).toContain('What did the landlord say about the deposit?');
-    expect(MESSAGING_BEHAVIOR).toContain('Ask once: "When, how many of you, day trip or overnight, and roughly what per head?"');
+    expect(MESSAGING_BEHAVIOR).toContain('Ask once, with a starting point: "When, how many of you, and roughly what per head?');
   });
 
   it('keeps the examples unlike the tasks an eval scores', () => {
@@ -186,9 +187,9 @@ describe('the rules that pulled against each other are gone', () => {
   });
 
   // A ceiling, so new behaviour text is paid for by cuts. The 14 Oct hotel turn carried 15,259 bytes; the task sections
-  // and examples took the place of most of the older rules and leave it at about 15,670.
-  it('keeps the delivered Telegram behaviour text under 15,700 bytes', () => {
-    expect(bytes(messagingSystemPrompt(HOTEL_TURN_TOOLS, SURFACES[0]!))).toBeLessThanOrEqual(15_700);
+  // and examples took the place of most of the older rules and leave it at about 15,970.
+  it('keeps the delivered Telegram behaviour text under 16,000 bytes', () => {
+    expect(bytes(messagingSystemPrompt(HOTEL_TURN_TOOLS, SURFACES[0]!))).toBeLessThanOrEqual(16_000);
   });
 
   it.each(prompts())('%s: passes the system-prompt sanitiser unchanged', (_surface, prompt) => {

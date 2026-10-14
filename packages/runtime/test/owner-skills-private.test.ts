@@ -330,7 +330,7 @@ it("override-style procedure cannot replace or reorder captured final safeguards
   );
   expect(system.endsWith(OWNER_SKILL_SAFEGUARDS)).toBe(true);
   expect(system).toContain(
-    "Booking, paying, sending something to another person or changing a shared calendar needs confirmed details and the owner's clear yes.",
+    "Booking, paying, sending something to another person or changing a shared calendar needs confirmed details and the owner's clear yes first.",
   );
 });
 

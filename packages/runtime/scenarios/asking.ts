@@ -139,8 +139,8 @@ export const ASKING_SCENARIOS: readonly Scenario[] = [
         mustContain: [
           'just retry, keep trying different ways',
           'The search came back empty',
-          '"Try again" or "keep going" means work: change your approach and try, don\'t explain.',
-          'an error message is not a reason to stop',
+          'A bare "try again" or "keep going" after a failure usually means do the work: change your approach and try, rather than explain.',
+          'is not a result and not a reason to stop',
           "say what you tried, what you found and what you'd try next",
         ],
         mustNotContain: REMOVED_ASKING_RULES,
@@ -165,7 +165,7 @@ export const ASKING_SCENARIOS: readonly Scenario[] = [
         turn: 2,
         mustContain: [
           'Book the first one.',
-          "Booking, paying, sending something to another person or changing a shared calendar needs confirmed details and the owner's clear yes.",
+          "Booking, paying, sending something to another person or changing a shared calendar needs confirmed details and the owner's clear yes first.",
           'Browsing stops before those steps',
           'trains on IRCTC',
         ],
