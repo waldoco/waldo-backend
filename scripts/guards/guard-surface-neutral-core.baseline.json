@@ -1,0 +1,15 @@
+{
+  "packages/runtime/src/channels/approvals.ts": 20,
+  "packages/runtime/src/channels/google-oauth.ts": 3,
+  "packages/runtime/src/channels/imessage/owner-runtime.ts": 1,
+  "packages/runtime/src/channels/owner-do.ts": 58,
+  "packages/runtime/src/channels/owner-turn-envelope.ts": 1,
+  "packages/runtime/src/channels/telegram-listener.ts": 3,
+  "packages/runtime/src/channels/telegram-turn.ts": 5,
+  "packages/runtime/src/context-composer/owner-turn.ts": 1,
+  "packages/runtime/src/delivery-gate/gate.ts": 1,
+  "packages/runtime/src/identity/owner-directory.ts": 1,
+  "packages/runtime/src/identity/owner-message-admission.ts": 2,
+  "packages/runtime/src/tools/live/raise-approval.ts": 1,
+  "packages/runtime/src/triage/dispatcher.ts": 4
+}

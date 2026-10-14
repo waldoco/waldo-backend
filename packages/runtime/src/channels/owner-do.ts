@@ -145,6 +145,7 @@ import { TelegramPollingAdapter } from './telegram-polling';
 import { createTelegramResponder } from './telegram-turn';
 import type { TurnControl } from './turn-control';
 import { turnFailureCode } from './turn-failure-code';
+import { calendarPushBook, ensureCalendarWatch, wakeBriefSweep } from './calendar-push';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 
 const WEBHOOK_UPDATES = ['message', 'callback_query'];
@@ -843,6 +844,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if(path.startsWith('/app/v1/'))return this.appRoute(request);
     if(path==='/enqueue-link')return this.enqueueLink(request);
     if(this.ctx.storage.kv.get(LINK_MODE))return new Response('not found',{status:404});
+    if (path === '/google-push' && request.method === 'POST') return this.calendarPush(request);
 
     if (new URL(request.url).pathname === '/enqueue') return this.enqueue(request);
     const doName = request.headers.get('x-waldo-do-name');
@@ -1062,6 +1064,20 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // formatted text. The envelope is NEVER written to episodes or fed to a turn: external
   // event text (a crafted commit message, say) must not ride episode recall into model
   // context. The console shows it escaped; Telegram shows it as plain text.
+  // A verified Calendar push: run the existing update sweep sooner. A redelivery, the sync handshake or an
+  // old channel changes nothing, and an owner with no sweep (opted out, zone unconfirmed) is not woken.
+  private async calendarPush(request: Request): Promise<Response> {
+    const channel = request.headers.get('x-waldo-gcal-channel') ?? '';
+    const state = request.headers.get('x-waldo-gcal-state');
+    const number = Number(request.headers.get('x-waldo-gcal-number'));
+    if (!channel || (state !== 'sync' && state !== 'exists' && state !== 'not_exists') || !Number.isSafeInteger(number)) return new Response('ok');
+    if (calendarPushBook(this.ctx.storage.kv).admit(channel, state, number) !== 'wake') return new Response('ok');
+    ensureSchema(this.ctx.storage);
+    const woke = await wakeBriefSweep(new Scheduler(this.ctx.storage.sql, this.ctx.storage, productionDeps()), Date.now());
+    console.log(JSON.stringify({ hop: 'calendar_push', ok: true, code: woke ? 'sweep_pulled_forward' : 'sweep_unchanged' }));
+    return new Response('ok');
+  }
+
   private async recordEvent(request: Request, body: string): Promise<Response> {
     const source = (request.headers.get('x-waldo-event-source') ?? 'unknown').slice(0, 60);
     const notify = request.headers.get('x-waldo-event-notify') === '1';
@@ -2805,7 +2821,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           && !quiet() && loops.proactivity().volume !== 'low' && proactiveEnabled(this.env.CALENDAR_GROUNDED_PREP, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity());
       } catch { return false; }
     };
+    // Push-channel upkeep runs after the sweep, so a renewal never delays the update check.
     const briefs = async (entry: ScheduleEntry) => {
+      try { await briefSweep(entry); } finally {
+        const started = Date.now();
+        const watch = await ensureCalendarWatch({
+          book: calendarPushBook(identity), now: started, origin: identity.get<string>('origin') ?? null, secret: this.env.WALDO_ROUTER_HMAC_SECRET, doName: identity.get<string>('do_name'),
+          resolve: () => mcpGoogleAuth.resolve(undefined, 'calendar'), proxy: vault, fetcher: fetch, newId: () => crypto.randomUUID(),
+        });
+        if (watch === 'started' || watch === 'failed') log({ trace: `${entry.id}:${entry.occurrence_at}`, hop: 'calendar_watch', ms: Date.now() - started, ok: watch === 'started', code: `calendar_watch_${watch}` });
+      }
+    };
+    const briefSweep = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`;
       const started = Date.now();
       try {
