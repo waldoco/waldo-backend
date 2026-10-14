@@ -48,6 +48,10 @@ export const WARN_WINDOW_ROUNDS = 5;
 export type LoopExit = 'completed' | 'budget_exhausted' | 'time_exhausted' | 'withdrawn';
 
 export const OUT_OF_TIME_REPLY = "I couldn't finish that in time.";
+export const BROWSING_UNAVAILABLE = 'Browsing is unavailable on this Waldo for the rest of this turn; use what you have or say what you could not read.';
+// For the browse tools, auth_failed is a configuration fact that cannot clear within a turn (no browser binding, the
+// provider unavailable, a rejected key), so after one both are withheld until the turn ends. Keyed on the typed code.
+const BROWSE_TOOLS: ReadonlySet<string> = new Set(['browse_page', 'browse_act']);
 const TIME_UP_NOTE = '\n[budget: turn time is up - no more tool calls; answer now with what you have]';
 
 // Set once by the first loop of a turn and shared with its child loops through the budget.
@@ -97,13 +101,15 @@ export async function runToolLoop(input: Readonly<{
   // The scope the turn handed in, which its model step also carries. Read once: a tool hook writes a copy of the
   // context back over input.ctx, so its runScope is a different object after the first dispatch.
   const runScope = input.ctx.runScope;
+  let browsingWithheld = false;
   let exit: LoopExit = 'completed';
   for (let round = 0; ; round += 1) {
     const timeLeft = deadline - Date.now();
     const roundsAvailable = round < input.maxSteps && (input.budget === undefined || input.budget.remaining > 0);
     // A tool round starts only while one full model call is left for the final answer.
     const timeAvailable = timeLeft >= FINAL_ANSWER_RESERVE_MS;
-    const offer = tools.length > 0 && roundsAvailable && timeAvailable;
+    const roundTools = browsingWithheld ? tools.filter((tool) => !BROWSE_TOOLS.has(tool.name)) : tools;
+    const offer = roundTools.length > 0 && roundsAvailable && timeAvailable;
     // An initially empty authority ceiling can reject an illegal request once and
     // give the model a final closing step. This consumes a round and performs no I/O.
     const repairEmptyCeiling = tools.length === 0 && round === 0 && roundsAvailable && timeAvailable;
@@ -118,7 +124,7 @@ export async function runToolLoop(input: Readonly<{
     input.ctx.runScope?.admit();
     let response: Awaited<ReturnType<ToolLoopStep>>;
     try {
-      response = await withCallDeadline(runScope, deadline, () => input.step(offer ? tools : undefined, turns));
+      response = await withCallDeadline(runScope, deadline, () => input.step(offer ? roundTools : undefined, turns));
     } catch (error) {
       // A model step that fails once the turn's time is gone ends the turn plainly; a closed or stopped run never does.
       if (error instanceof ClosedRunError || runScope?.signal?.aborted || Date.now() < deadline) throw error;
@@ -154,8 +160,14 @@ export async function runToolLoop(input: Readonly<{
           : previous
         : !offer
           ? { ok: false, error: 'Tool handler unavailable.', code: 'not_found' as const, reason: 'handler_unavailable' }
-          : await dispatch(call, input);
+          : browsingWithheld && BROWSE_TOOLS.has(call.name)
+            ? { ok: false, error: BROWSING_UNAVAILABLE, code: 'auth_failed' as const, reason: 'withheld_this_turn' }
+            : await dispatch(call, input);
       input.ctx.runScope?.admit();
+      const browsingNote = !browsingWithheld && !result.ok && result.code === 'auth_failed' && BROWSE_TOOLS.has(call.name)
+        ? `\n[${BROWSING_UNAVAILABLE}]`
+        : '';
+      if (browsingNote) browsingWithheld = true;
       if (!previous && !result.ok && result.connect) {
         const offerKey = `${result.connect.service}:${result.connect.reason}`;
         let outcome = offered.get(offerKey);
@@ -220,7 +232,7 @@ export async function runToolLoop(input: Readonly<{
       const replayNote = previous && !previous.ok
         ? '\n[repeat: cached failure from this turn; no new tool execution]'
         : '';
-      const output = capToolOutput(JSON.stringify(result), input.offload, call.call_id) + replayNote + budgetNote;
+      const output = capToolOutput(JSON.stringify(result), input.offload, call.call_id) + replayNote + browsingNote + budgetNote;
       turns.push({ call, output, ...(firstCall && response.output_items?.length ? { prior_items: [...response.output_items] } : {}) });
       firstCall = false;
       // The typed code/reason ride the span as their own fields so a failed hop stays
