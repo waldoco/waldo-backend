@@ -3,6 +3,7 @@
 // reminder path, as the owner object's alarm drives it.
 import { WALDO_CHAT_MODEL, type ModelName } from '@waldo/contracts';
 import { createTelegramResponder } from '../../src/channels/telegram-turn';
+import { inboundTurn, ownerWords } from '../../src/channels/owner-inbound-turn';
 import type { TurnLogEntry } from '../../src/channels/telegram-listener';
 import type { LLMGatewayAdapter } from '../../src/llm/provider';
 import type { CallBudget } from './budget';
@@ -51,7 +52,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
       if ('say' in step) {
         turn += 1;
         transcript.push({ role: 'owner', text: step.say });
-        transcript.push({ role: 'waldo', text: await responder.respond({ updateId: turn, chatId: 1, text: step.say } as never, time) });
+        transcript.push({ role: 'waldo', text: await responder.respond(inboundTurn({ updateId: turn, messageId: null, senderId: 1, chatId: 1, sentAt: null, parts: ownerWords(step.say) }), time) });
       } else if ('advance_to' in step) {
         world.advance(step.advance_to);
         transcript.push({ role: 'world', text: `The time is now ${world.localNow()} (${TIMEZONE}).` });
