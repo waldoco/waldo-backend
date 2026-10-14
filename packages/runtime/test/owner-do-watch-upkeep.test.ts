@@ -215,6 +215,19 @@ describe('Gmail and Calendar watch upkeep', () => {
     });
   });
 
+  it('on the app runtime, an existing account is watched with every routine off and the zone unconfirmed, with no reconnect', async () => {
+    await world('upkeep-app-existing-unconfirmed', { surface: 'app', accounts: [{ id: 'conn-1', email: EMAIL, scopes: [...MAIL, CALENDAR] }], off: ALL_OFF }, async w => {
+      expect(w.state.storage.kv.get('timezone_confirmed')).toBeUndefined();
+      await armAlarm(w.state.storage, Date.now());
+      for (let n = 0; n < 2 && w.watches('gmail_watch').length === 0; n++) await w.pass();
+      expect(w.watches('gmail_watch')).toEqual(['conn-1']);
+      expect(w.watches('calendar_watch')).toEqual(['conn-1']);
+      expect(w.row(BRIEF_SWEEP_ID)).toBeNull();
+      expect(w.outbox()).toEqual([]);
+      expect(edge.models).toBe(0);
+    });
+  });
+
   it('a failed start is retried by the scheduler after the backoff, not before, and a watch without its grant is not tried', async () => {
     await world('upkeep-retry', { accounts: [{ id: 'conn-1', email: EMAIL, scopes: MAIL }], off: ALL_OFF }, async w => {
       edge.failing.add('gmail_watch');
