@@ -37,6 +37,19 @@ const run = async (request: Request, env: WhatsAppWebhookEnv, directory?: OwnerD
 afterEach(() => vi.unstubAllGlobals());
 
 describe('handleWhatsAppWebhook', () => {
+  it('a forwarded "waldo CODE" from an unlinked sender is never redeemed; the same text typed is', async () => {
+    const { ns } = namespace();
+    const redeem = vi.fn(async () => null);
+    const directory: OwnerDirectory = { byPresence: async () => null, redeem };
+    const env: WhatsAppWebhookEnv = { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_ACCESS_TOKEN: 'fictional-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' };
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ messages: [{ id: 'wamid.out' }] })));
+    const body = (context?: Record<string, unknown>) => JSON.stringify({ entry: [{ changes: [{ value: { metadata: { phone_number_id: 'pn1' },
+      messages: [{ ...(context ? { context } : {}), from: '15550009999', id: 'wamid.code', timestamp: '1700000000', type: 'text', text: { body: 'waldo ABCDEFGH23' } }] } }] }] });
+    for (const context of [{ forwarded: true }, { frequently_forwarded: true }]) expect((await run(await post('sig', body(context)), env, directory)).status).toBe(200);
+    expect(redeem).not.toHaveBeenCalled();
+    expect((await run(await post('sig', body()), env, directory)).status).toBe(200);
+    expect(redeem).toHaveBeenCalledTimes(1);
+  });
   it('GET verify: echoes the challenge for the right token, 403 otherwise', async () => {
     const { ns } = namespace();
     const env: WhatsAppWebhookEnv = { OWNER_DO: ns, WHATSAPP_VERIFY_TOKEN: 'vt' };

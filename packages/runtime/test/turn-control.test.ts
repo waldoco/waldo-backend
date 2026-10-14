@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { turnControl } from '../src/channels/turn-control';
+import { renderForModel } from '../src/channels/owner-inbound-turn';
+import { TelegramPollingAdapter } from '../src/channels/telegram-polling';
 
 describe('turn control', () => {
   it('stops a running turn before its next round and ignores stop when idle', () => {
@@ -74,4 +76,14 @@ it('reports steers that arrived after the last round as unconsumed, so the host 
     expect(control.unconsumed()).toEqual([{ id: 3, text: 'forget the rooms topic', foreignRanges: [] }]);
     control.begin(true);
     expect(control.unconsumed()).toEqual([]);
+});
+
+it('a plain-text owner steer reaches the model round exactly as its raw text did', async () => {
+  const text = 'make it Friday instead';
+  const parsed = await new TelegramPollingAdapter({ getUpdates: async () => [{ update_id: 1, message: { message_id: 1, date: 1, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text } }] }, 0).poll(0);
+  const steer = renderForModel(parsed.accepted[0]!.parts);
+  expect(steer).toEqual({ text, foreignRanges: [] });
+  const control = turnControl(); control.bindTarget('run'); control.begin(true);
+  expect(control.steerTarget('run', 1, steer)).toBe(true);
+  expect(await control.roundAsync()).toBe(`\n\n[While you were working, the owner added: ${JSON.stringify(text)}. Take it into account in this answer.]`);
 });
