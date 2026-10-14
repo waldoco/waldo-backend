@@ -44,6 +44,14 @@ describe('the local owner binding', () => {
     values.telegram_subject = '81';
     expect(ownerBindingCurrent(kv(values), owners, 'id-of-owner-a', binding)).toBe(false);
   });
+
+  it('stops being current when the Telegram presence is rebound to another subject in place', () => {
+    const values: Record<string, unknown> = { do_name: 'owner-a', telegram_subject: '81' };
+    const binding = localOwnerBinding(kv(values), owners, 'id-of-owner-a')!;
+    expect(ownerBindingCurrent(kv(values), owners, 'id-of-owner-a', binding)).toBe(true);
+    values.telegram_subject = '82';
+    expect(ownerBindingCurrent(kv(values), owners, 'id-of-owner-a', binding)).toBe(false);
+  });
 });
 
 describe('the directory\'s answer for a binding', () => {

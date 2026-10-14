@@ -68,10 +68,10 @@ for (const [envName, envCfg] of Object.entries(cfg?.env ?? {})) {
   if (!hasLimiter(envCfg)) bad.push(`env.${envName} missing RESPONSIBILITY_RATE_LIMITER (console signup fails closed without it)`);
 }
 
-// 4. The staging browser binding stays OFF in source until the network-side block is proven
-//    (owner decision 2026-10-06, S0 live test). An enabled binding here ships on the next
-//    Workers Builds promote. Turn it on only in the PR that records a passing S0 run.
-if (staging?.browser !== undefined) bad.push('env.staging must not bind a browser until the S0 network-block test passes');
+// 4. Staging browses through Cloudflare Browser Rendering, bound as BROWSER, by owner ruling; the S0 network-block
+//    test no longer gates it. Production binds no browser: a binding there would ship on the next promote.
+if (JSON.stringify(staging?.browser) !== JSON.stringify({ binding: 'BROWSER' })) bad.push('env.staging must bind Cloudflare Browser Rendering as BROWSER');
+if (cfg.browser !== undefined) bad.push('the top-level (production) config must not bind a browser');
 
 if (bad.length) {
   process.stderr.write(`guard-wrangler-local-bindings: ${bad.join('; ')}\n`);
