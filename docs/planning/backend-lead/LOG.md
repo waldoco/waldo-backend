@@ -568,3 +568,31 @@ How to track this session: `git fetch origin claude/backend-lead-log && git show
   2. `mac/push-upkeep`;
   3. A2 the moment #1234 lands (the lead starts a builder if the Mac's core lane is still busy);
   4. reviews owed on #1228, #1242, #1240/#1227.
+
+## 15:55Z (from `date -u`): #1234 landed; A2, C7 and G57 builders started on Shivansh's word
+
+- **Landed by the review session:** #1234 → `e5c022ef` (jobs and Mac reports run as the directory-admitted owner; every job effect re-reads; the review session's PASS at `16f34641`, 6172275523) and #1242 → `98f43461` (console iMessage nav). Row 11 / #1108 is closed in code, so A2's gate is clear.
+- **New this hour on the board:**
+  - owner ruling "no need for stop" (6171907223): no stop command or kill word; the Mac takes every slash command off chat;
+  - #1244, app P0 #2, calendar approval fields behind an additive `x-waldo-app-contract` header (6172304879, 6172321124);
+  - the G62 builder's claim with a no-durable-shape design (6171841387).
+- **Shivansh asked to start A2 in parallel, and for every other unowned block that is holding the agent back.** Three lead builders started, posted as 6172481773:
+  - **A2:** `session_01NJxh1DcTcL29C8R7JxyGiG`, `claude/a2-owner-runtime`.
+    - PR 1 is the core, the factory, the adapters and the registry, with the baseline lowered; the executors stay put while `mac/push-upkeep` holds them.
+    - PR 2 (listener and one skill host) waits for the Mac's commands-off-chat PR.
+    - The identity checks from #1230, #1234 and #1224/#1225 are kept exactly.
+  - **C7:** `session_01FE7vktsoZZtAVwMEToVJXS`, `claude/c7-durable-tasks`.
+    - It starts in parallel, overriding the spec's "after A2".
+    - It writes one `owner-do.ts` hunk, last.
+    - PR 1 is the runner, the journal and resume rule, sequencing and cancel; steps run under #1234's admission.
+  - **G57:** `session_01928GxFgBGnZ8Hd62VuSZh8`, `claude/claims-against-receipts`.
+    - Claims come typed, never parsed from text.
+    - An unbacked claim gets one bounded revision, then "not confirmed"; if the check throws, it fails closed to the same line.
+    - The check sits in the surface-neutral path and stays out of `owner-do.ts`.
+- **Why these three:** of the 61 gaps on the doc page, they are the largest that need no owner decision and nobody holds:
+  - A2 starts one agent on every surface (G20).
+  - C7 is the follow-through base under the reply watch, watches, Patrol and long errands (G2).
+  - G57 stops a reply from saying "sent" or "booked" with nothing behind it.
+- **Still blocked on the owner:** G37 (health in the transcript) blocks compaction and semantic recall; also G43 eval keys, G41 spend ceiling, G3 grants ADR, G1 email-body ADR and G38 Google verification.
+- **Held by others:** push-upkeep and commands off chat (the Mac), iMessage proactive (Ashish or the Mac, asked in 6171907223), Google connectors (lane G), #1244 (app lane).
+- **Lead builders now running:** G62, A2, C7 and G57, plus the voice-note builder on #1228, which is waiting for review.
