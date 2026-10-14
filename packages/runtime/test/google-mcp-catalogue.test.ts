@@ -2,6 +2,8 @@ import { env } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
 import { callMcpToolHandler, executeMcp, mcpServers, readMcpToolHandler, type McpGoogleAuth } from '../src/tools/live/mcp';
 import { GOOGLE_MCP_READ_ONLY, GOOGLE_MCP_SERVERS, GOOGLE_MCP_UNAVAILABLE } from '../src/connectors/google-mcp';
+import config from '../wrangler.jsonc?raw';
+import { parseJsonc } from '../../../scripts/jsonc.mjs';
 
 const GMAIL = 'https://gmailmcp.googleapis.com/mcp/v1';
 const CALENDAR = 'https://calendarmcp.googleapis.com/mcp/v1';
@@ -173,7 +175,17 @@ describe('staging only', () => {
   it('production config names no MCP server and keeps button-free reads off', () => {
     const production = env as { WALDO_ENVIRONMENT?: string; WALDO_MCP_SERVERS?: string; MCP_READ_INTENTS?: string };
     expect(production.WALDO_ENVIRONMENT).toBe('production');
-    expect(production.WALDO_MCP_SERVERS).toBeUndefined();
+    expect(production.WALDO_MCP_SERVERS).toBe('[]');
+    expect(mcpServers(production.WALDO_MCP_SERVERS)).toEqual([]);
     expect(production.MCP_READ_INTENTS).toBe('0');
+  });
+});
+
+describe('the staging registry', () => {
+  // The owner approved button-free reads of Gmail, Calendar and Drive metadata only; Docs, Sheets and Slides bodies are not.
+  it('names exactly the Gmail, Calendar and Drive servers, each narrowed to its reads', () => {
+    const staging = mcpServers((parseJsonc(config) as { env: { staging: { vars: { WALDO_MCP_SERVERS: string } } } }).env.staging.vars.WALDO_MCP_SERVERS);
+    expect(staging.map((s) => s.url)).toEqual([GMAIL, CALENDAR, DRIVE]);
+    for (const s of staging) expect(s.allow_tools).toEqual(GOOGLE_MCP_SERVERS.find((g) => g.url === s.url)!.read_tools);
   });
 });
