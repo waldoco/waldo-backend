@@ -101,6 +101,10 @@ it('the owner\'s own words set the time zone: settings saved, zone confirmed, jo
       expect(state.storage.kv.get('timezone_confirmed')).toBe(true);
       expect(armedIn('Asia/Kolkata'), 'the owner\'s jobs are armed in the new zone').toBe(true);
       expect(repliesTo('I live in Kolkata now').length, 'one tool round, then one reply').toBe(2);
+      const [toolRound, replyRound] = repliesTo('I live in Kolkata now');
+      expect(toolRound!.system).toContain('their time zone is not confirmed (UTC is only a default)');
+      expect(replyRound!.system, 'the round after the set reads the confirmed zone').toContain('their time zone, Asia/Kolkata, is confirmed');
+      expect(replyRound!.system).not.toContain('their time zone is not confirmed');
       const trace = hops(logs.mock.calls);
       expect(trace.filter(entry => entry.hop === 'tool_set_timezone').map(entry => entry.ok), 'the trace records one successful call').toEqual([true]);
 

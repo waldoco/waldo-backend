@@ -354,6 +354,8 @@ export const createOwnerResponder = (
           const removal = handler.name === 'forget_memory' && args && typeof args === 'object' ? args as { topic?: string; claim_ids?: number[] } : undefined;
           const removalTexts = removal ? [removal.topic, ...(forgettingState?.allClaims().filter(claim => removal.claim_ids?.includes(claim.id)).flatMap(claim => [claim.text, claim.evidence]) ?? [])].filter((text): text is string => typeof text === 'string' && text.length > 0) : [];
           let result = await handler.handle(args, { ...ctx, ...memoryContext() }) as Awaited<ReturnType<typeof handler.handle>>; await assertCurrent();
+          // A confirmed zone changes the host facts, which the turn read once: later rounds read them again.
+          if (handler.name === 'set_timezone' && result.ok && newOwner) newOwner = await privateOwner?.newOwnerFacts?.() ?? newOwner;
           if (removal && result.ok) {
             for (const text of removalTexts) removedTopics.add(text);
             offloadStore?.clear();
