@@ -1169,7 +1169,13 @@ export const nightlyInput = (store: ClaimStore, day: string): string =>
 // 'inferred' rather than silently blessed 'stated'. Nightly consolidation passes the day text
 // as owner grounding (fabrication check only - side separation happens at the per-exchange
 // gate); migration passes the file payload the evidence cites.
-export type ClaimGrounding = Readonly<{ owner?: string; shared?: string; waldo?: string }>;
+// ownerMessages are the owner's own messages behind `owner`, each with the id it is stored under: a claim whose evidence
+// sits whole in one of them names that message as its source, as remember does for the message in hand.
+export type ClaimGrounding = Readonly<{ owner?: string; shared?: string; waldo?: string; ownerMessages?: readonly Readonly<{ ref: string; text: string }>[] }>;
+const ownerSourceRef = (evidence: string, grounding: ClaimGrounding | undefined): string | undefined => {
+  const message = grounding?.ownerMessages?.find(candidate => ground(evidence, { owner: candidate.text }) === 'owner');
+  return message ? `owner, ${message.ref}` : undefined;
+};
 
 export const normalizeForGrounding = (text: string): string => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').replace(/^ +| +$/g, '');
 
@@ -1291,7 +1297,9 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     }
     // An alias that is itself a forgotten topic is dropped, not stored.
     const aliases = claim.aliases_touch_forgotten ? [] : (claim.aliases ?? []).filter((alias) => typeof alias === 'string' && !aliasForms(alias).some((form) => barrierHashes.has(textFingerprint(form))));
-    store.add({ kind: claim.kind, text: claim.text.trim(), source, evidence: claim.evidence.trim(), aliases, origin: origin ?? undefined, source_ref: origin === 'owner' && evidence.startsWith('owner, ') && !evidence.includes('day of') ? evidence : undefined }, at);
+    const sourceRef = origin !== 'owner' ? undefined
+      : ownerSourceRef(claim.evidence, grounding) ?? (evidence.startsWith('owner, ') && !evidence.includes('day of') ? evidence : undefined);
+    store.add({ kind: claim.kind, text: claim.text.trim(), source, evidence: claim.evidence.trim(), aliases, origin: origin ?? undefined, source_ref: sourceRef }, at);
     written += 1;
   }
   for (const id of ops.seen.filter((id) => known.has(id))) store.seen(id, at);
