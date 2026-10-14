@@ -2,7 +2,7 @@ import { describe,it,expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { DashboardNavigation, resolveRoute } from './App';
 import { SettingsNavigation } from './Settings';
-import { quota,pageRows,inviteStatus } from './admin-model';
+import { quotaLabel,pageRows,inviteStatus } from './admin-model';
 describe('restricted admin presentation',()=>{
  it('does not advertise admin to non-admin and selects restricted entry only when backed',()=>{
   expect(renderToStaticMarkup(<DashboardNavigation route="today"/>)).not.toContain('#/admin');
@@ -10,8 +10,8 @@ describe('restricted admin presentation',()=>{
   const html=renderToStaticMarkup(<SettingsNavigation selected="admin" isAdmin/>);
   expect(html).toContain('href="#/admin"');expect(html).toContain('aria-current="page"');expect(resolveRoute('admin')).toBe('admin');
  });
- it('counts every issued code and clamps only remaining quota',()=>{
-  expect(quota(5)).toEqual({used:5,remaining:0});expect(quota(7)).toEqual({used:7,remaining:0});expect(quota(2).remaining).toBe(3);
+ it('labels the viewing admin as uncapped and any other issuer against the member cap of five',()=>{
+  expect(quotaLabel(7,true)).toBe('7 issued · no limit');expect(quotaLabel(5,false)).toBe('5 of 5 used');expect(quotaLabel(2,false)).toBe('2 of 5 used');
   const base={id:'i',email:null,issued_by:null,issuer_email:null,created_at:'2026-09-01Z',expires_at:'2026-09-15Z',used_at:null,revoked_at:null};
   expect(inviteStatus(base,'2026-09-30Z')).toBe('expired');expect(inviteStatus({...base,used_at:'2026-09-02Z'},'2026-09-30Z')).toBe('used');expect(inviteStatus({...base,revoked_at:'2026-09-02Z'},'2026-09-30Z')).toBe('revoked');
  });
@@ -23,11 +23,13 @@ describe('restricted admin presentation',()=>{
 import { vi } from 'vitest';
 import { AdminPanel } from './Admin';
 import { readAdmin,submitInvite,type AdminRecord } from './admin-model';
-const admin:AdminRecord={csrf:'csrf',as_of:'2026-09-30T00:00:00Z',current_issuer:{id:'o',email:'admin@test.invalid',issued_count:5},owners:[{id:'o',email:'<script>@test.invalid',state:'active',presences:['telegram'],created_at:'2026-09-01T00:00:00Z',issued_count:5}],invites:[{id:'hash',email:'recipient@test.invalid',issued_by:'o',issuer_email:'<script>@test.invalid',created_at:'2026-09-29T00:00:00Z',expires_at:'2026-10-13T00:00:00Z',used_at:null,revoked_at:null}]};
+const admin:AdminRecord={csrf:'csrf',as_of:'2026-09-30T00:00:00Z',current_issuer:{id:'o',email:'admin@test.invalid',issued_count:7},owners:[{id:'o',email:'<script>@test.invalid',state:'active',presences:['telegram'],created_at:'2026-09-01T00:00:00Z',issued_count:7},{id:'m',email:'member@test.invalid',state:'active',presences:[],created_at:'2026-09-02T00:00:00Z',issued_count:5}],invites:[{id:'hash',email:'recipient@test.invalid',issued_by:'o',issuer_email:'<script>@test.invalid',created_at:'2026-09-29T00:00:00Z',expires_at:'2026-10-13T00:00:00Z',used_at:null,revoked_at:null},{id:'hash2',email:'friend@test.invalid',issued_by:'m',issuer_email:'member@test.invalid',created_at:'2026-09-28T00:00:00Z',expires_at:'2026-10-12T00:00:00Z',used_at:null,revoked_at:null}]};
 describe('admin data and recovery',()=>{
- it('renders canonical attribution, exhausted quota, escaping and no recovered codes',()=>{
+ it('renders canonical attribution, an uncapped admin past five, capped members, escaping and no recovered codes',()=>{
   const html=renderToStaticMarkup(<AdminPanel state={{kind:'ready',data:admin}} onRefresh={async()=>{}}/>);
-  expect(html).toContain('5 of 5 codes issued');expect(html).toContain('0 remaining');expect(html).toContain('&lt;script&gt;');expect(html).not.toContain('<script>');expect(html).not.toContain('>hash<');expect(html).toContain('Revoke invitation for');expect(html).toContain('disabled=""');
+  expect(html).toContain('admin@test.invalid: 7 issued · no limit');expect(html).not.toContain('All five codes');expect(html.match(/<form[^]*?<\/form>/)?.[0]).not.toContain('disabled');
+  expect(html).toContain('<td>7 issued · no limit</td>');expect(html).toContain('<td>5 of 5 used</td>');expect(html).toContain('<small class="issuer-quota">7 issued · no limit</small>');expect(html).toContain('5 of 5 used · revoke does not restore quota');
+  expect(html).toContain('&lt;script&gt;');expect(html).not.toContain('<script>');expect(html).not.toContain('>hash<');expect(html).toContain('Revoke invitation for');
   const denied=renderToStaticMarkup(<AdminPanel state={{kind:'absent'}} onRefresh={async()=>{}}/>);
   expect(denied).not.toContain('Invite');expect(denied).not.toContain('/console/admin');expect(denied).toContain('Page not found');
  });
