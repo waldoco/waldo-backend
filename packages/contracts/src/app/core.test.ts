@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appCodeRequestSchema, appCoreRoutesV1, appErrorCodeV1Schema, appHistoryResultV1Schema, appMessageReceiptV1Schema, appMessageV1Schema, appProblemV1Schema, appRatingRequestV1Schema, appRatingResultV1Schema, appVerifyRequestV1Schema } from './core';
+import { APP_CONTRACT_HEADER, appCodeRequestSchema, appContractHeaderV1Schema, appContractRevision, appCoreRoutesV1, appErrorCodeV1Schema, appHistoryResultV1Schema, appMessageReceiptV1Schema, appMessageV1Schema, appProblemV1Schema, appRatingRequestV1Schema, appRatingResultV1Schema, appVerifyRequestV1Schema } from './core';
 
 const fallback_text = 'Open Waldo to see this.';
 const row = { id: 'entry-1', role: 'assistant', text: 'Done.', parts: [{ type: 'text', text: 'Done.' }], channel: 'app', parent_id: null } as const;
@@ -109,5 +109,24 @@ describe('message times, cancel and ratings', () => {
     expect(routes).toContain('PUT /app/v1/chat/main/messages/{message_id}/rating');
     expect(appMessageReceiptV1Schema.safeParse({ accepted: true, message_id: 'm', state: 'completed', closed_reason: 'cancelled', effects_unconfirmed: true }).success).toBe(true);
     expect(appMessageReceiptV1Schema.safeParse({ accepted: true, message_id: 'm', state: 'completed', steps: [] }).success).toBe(false);
+  });
+});
+
+describe('the contract revisions a build declares', () => {
+  it('reads distinct name=revision pairs, keeping names this backend does not know', () => {
+    expect(APP_CONTRACT_HEADER).toBe('x-waldo-app-contract');
+    expect(appContractHeaderV1Schema.parse('approvals=2')).toEqual({ approvals: 2 });
+    expect(appContractHeaderV1Schema.parse('approvals=2,threads_v=13')).toEqual({ approvals: 2, threads_v: 13 });
+  });
+
+  it('rejects a value that is not distinct name=revision pairs', () => {
+    for (const value of ['', 'approvals', 'approvals=0', 'approvals=02', 'approvals=10000', 'Approvals=2', 'approvals=2,approvals=3', 'approvals=2, threads=1', 'approvals=2,', '__proto__=1', 'x'.repeat(513)]) {
+      expect([value, appContractHeaderV1Schema.safeParse(value).success]).toEqual([value, false]);
+    }
+  });
+
+  it('reads revision 1 when the header is absent, malformed or leaves the contract out', () => {
+    expect(appContractRevision('approvals=2', 'approvals')).toBe(2);
+    for (const header of [null, undefined, 'approvals=x', 'threads=4']) expect([header, appContractRevision(header, 'approvals')]).toEqual([header, 1]);
   });
 });
