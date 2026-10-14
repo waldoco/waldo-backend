@@ -6,14 +6,19 @@ import { sha256Hex } from './crypto';
 // and the database re-derives the array from its parameters before trusting the signature.
 
 export type BridgeAuthorityState = 'pending' | 'active' | 'revoked' | 'owner_inactive' | 'expired';
+/** owner: one owner's paired Mac and one sender. shared: the operator's Waldo number, routed per sender. */
+export type BridgeKind = 'owner' | 'shared';
 export type BridgeAuthority = Readonly<{
-  state: BridgeAuthorityState; bridgeId: string; accountId: string; ownerId: string; doName: string;
+  /** For a shared bridge's own authority, ownerId/doName are the operator's: never a turn owner. */
+  state: BridgeAuthorityState; kind: BridgeKind; bridgeId: string; accountId: string; ownerId: string; doName: string;
   wrappedCredential: string; credentialEpoch: number; revision: string;
   presenceId: string | null; subject: string | null; chatGuid: string | null;
   challengeHash: string | null; expectedSubject: string | null; expectedChatGuid: string | null;
 }>;
+/** A sender on a bridge: their own authority, or no linked Waldo (never another owner's). */
+export type SenderAuthority = BridgeAuthority | Readonly<{ state: 'unknown_sender'; kind: BridgeKind; bridgeId: string; accountId: string }>;
 export type BridgeListing = Readonly<{
-  bridge_id: string; account_id: string; state: string; subject: string | null; chat_guid: string | null;
+  bridge_id: string; account_id: string; state: string; kind?: BridgeKind; subject: string | null; chat_guid: string | null;
   observed: boolean; host_version: string; created_at: string; activated_at: string | null; revoked_at: string | null;
 }>;
 
@@ -29,11 +34,20 @@ const parseAuthority = (raw: unknown): BridgeAuthority | null => {
   if (!['pending', 'active', 'revoked', 'owner_inactive', 'expired'].includes(String(r.state)) || !str(r.bridge_id) || !str(r.account_id)
     || !str(r.owner_id) || !str(r.do_name) || !str(r.wrapped_credential) || !str(r.revision) || typeof r.credential_epoch !== 'number') throw new IMessageDirectoryUnavailable();
   return Object.freeze({
-    state: r.state as BridgeAuthorityState, bridgeId: r.bridge_id, accountId: r.account_id, ownerId: r.owner_id, doName: r.do_name,
+    state: r.state as BridgeAuthorityState, kind: r.kind === 'shared' ? 'shared' as const : 'owner' as const, bridgeId: r.bridge_id, accountId: r.account_id, ownerId: r.owner_id, doName: r.do_name,
     wrappedCredential: r.wrapped_credential, credentialEpoch: r.credential_epoch, revision: r.revision,
     presenceId: nullable(r.presence_id), subject: nullable(r.subject), chatGuid: nullable(r.chat_guid),
     challengeHash: nullable(r.challenge_hash), expectedSubject: nullable(r.expected_subject), expectedChatGuid: nullable(r.expected_chat_guid),
   });
+};
+
+const parseSenderAuthority = (raw: unknown): SenderAuthority | null => {
+  if (raw !== null && typeof raw === 'object' && !Array.isArray(raw) && (raw as Record<string, unknown>).state === 'unknown_sender') {
+    const r = raw as Record<string, unknown>;
+    if (!str(r.bridge_id) || !str(r.account_id) || (r.kind !== 'owner' && r.kind !== 'shared')) throw new IMessageDirectoryUnavailable();
+    return Object.freeze({ state: 'unknown_sender' as const, kind: r.kind, bridgeId: r.bridge_id, accountId: r.account_id });
+  }
+  return parseAuthority(raw);
 };
 
 export const iMessageDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch, now = () => Date.now()) => {
@@ -59,6 +73,18 @@ export const iMessageDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch 
     },
     authority: async (environment: string, bridgeId: string, accountId: string) =>
       parseAuthority(await call('imessage_bridge_authority', 'authority', { p_environment: environment, p_bridge_id: bridgeId, p_account_id: accountId })),
+    /** One sender's authority: on a shared bridge from their own imessage presence, else unknown_sender. */
+    senderAuthority: async (environment: string, bridgeId: string, accountId: string, subject: string) =>
+      parseSenderAuthority(await call('imessage_sender_authority', 'sender', { p_environment: environment, p_bridge_id: bridgeId, p_account_id: accountId, p_subject: subject })),
+    /** Hash-only, throttled: one onboarding reply per sender per 30 days, 20 per bridge per hour. */
+    onboardingAllowed: async (environment: string, bridgeId: string, accountId: string, subjectHash: string) =>
+      bool(await call('imessage_onboarding_allowed', 'onboard', { p_environment: environment, p_bridge_id: bridgeId, p_account_id: accountId, p_subject_hash: subjectHash })),
+    issueSharedInvitation: async (doName: string, environment: string, codeHash: string, lifetimeSeconds: number) =>
+      bool(await call('imessage_issue_shared_invitation', 'invite_shared', { p_do_name: doName, p_environment: environment, p_code_hash: codeHash, p_lifetime_seconds: lifetimeSeconds })),
+    async activateShared(doName: string, bridgeId: string, subject: string, chatGuid: string) {
+      const r = await call('imessage_activate_shared', 'activate_shared', { p_do_name: doName, p_bridge_id: bridgeId, p_subject: subject, p_chat_guid: chatGuid });
+      return r !== null && typeof r === 'object' && (r as Record<string, unknown>).bridge_id === bridgeId;
+    },
     setExpectedScope: async (doName: string, bridgeId: string, subject: string, chatGuid: string, challengeHash: string, lifetimeSeconds: number) =>
       bool(await call('imessage_set_expected_scope', 'scope', { p_do_name: doName, p_bridge_id: bridgeId, p_subject: subject, p_chat_guid: chatGuid, p_challenge_hash: challengeHash, p_lifetime_seconds: lifetimeSeconds })),
     recordChallenge: async (input: { environment: string; bridgeId: string; accountId: string; challengeHash: string; subject: string; chatGuid: string; generation: string; eventId: string; digest: string }) =>

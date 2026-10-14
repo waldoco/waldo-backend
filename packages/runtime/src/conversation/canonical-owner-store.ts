@@ -25,7 +25,7 @@ const scrub = (entry: ConversationEntry): ConversationEntry => ({ ...entry,
 // nor reclassified as authenticated owner input; only matching row+witness pairs load.
 // The entry-shape checks, named so a skipped row can say which one it failed and nothing else.
 export type CanonicalShapeCheck = 'id' | 'chat' | 'surface' | 'payload' | 'parent' | 'anchor' | 'projection' | 'role' | 'input_origin' | 'covers';
-const shapeFault = (entry: ConversationEntry): CanonicalShapeCheck | null => {
+export const shapeFault = (entry: ConversationEntry): CanonicalShapeCheck | null => {
   if (!entry.id) return 'id';
   if (!entry.chatId) return 'chat';
   if (!entry.surface) return 'surface';
@@ -55,10 +55,11 @@ export const canonicalHistoryFault = (error: unknown): string | null => error in
 export const skippedRowLines = (hop: string, skipped: CanonicalSkipped) => Object.entries(skipped.checks).map(([check, tally]) =>
   ({ hop, ok: true, code: 'history_rows_skipped', check, count: tally!.count, unwitnessed: tally!.unwitnessed, orphans: skipped.orphans, leaf: skipped.leaf }));
 
-export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage, context: Pick<OwnerContextCapability, 'invocation' | 'assertCurrent'>, onSkipped?: (skipped: CanonicalSkipped) => void): ConversationStore & Readonly<{ readForDisplay(): Promise<CanonicalHistoryRead> }> {
+// A thread's history is its own chain under the owner's prefix (thread:<thread id>:); main's is the prefix itself.
+export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage, context: Pick<OwnerContextCapability, 'invocation' | 'assertCurrent'>, onSkipped?: (skipped: CanonicalSkipped) => void, thread?: string): ConversationStore & Readonly<{ readForDisplay(): Promise<CanonicalHistoryRead> }> {
   const principal = context.invocation.verified_authority.principal_ref;
   const tenant = context.invocation.verified_authority.tenant_ref;
-  const prefix = `canonical-owner-v1:${principal}:${tenant}:`;
+  const prefix = `canonical-owner-v1:${principal}:${tenant}:${thread ? `thread:${thread}:` : ''}`;
   const witnessKey = (id: string) => `${prefix}witness:${id}`;
   const validate = (entry: ConversationEntry) => {
     if (!entry || entry.ownerId !== principal) throw new Error('canonical history owner mismatch');

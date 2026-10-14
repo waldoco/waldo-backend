@@ -3,6 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { APP_THREAD_MAX_V1, appThreadListV1Schema, appThreadOperationResultV1Schema, appThreadReadV1Schema } from '../../contracts/src/app/threads';
 import { appSubjectFor } from '../src/channels/app-api';
+import { recallReach, threadRowsPrefix } from '../src/channels/app-threads';
 
 const OWNER_ID = '5b1f0c2a-7d3e-4c91-8f62-0a1b2c3d4e5f';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
@@ -19,13 +20,13 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
-const withOwner = (name: string, work: (call: (method: string, path: string, body?: unknown) => Promise<Readonly<{ status: number; body: any }>>, state: DurableObjectState) => Promise<void>) =>
+const withOwner = (name: string, work: (call: (method: string, path: string, body?: unknown, asName?: string) => Promise<Readonly<{ status: number; body: any }>>, state: DurableObjectState) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     state.storage.kv.put('do_name', name);
     state.storage.kv.put('app_subject', String(appSubjectFor(name)));
     const owner: Owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
-    const call = async (method: string, path: string, body?: unknown) => {
-      const response = await owner.fetch(new Request(`https://telegram-owner/app/v1/threads${path}`, { method, headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
+    const call = async (method: string, path: string, body?: unknown, asName = name) => {
+      const response = await owner.fetch(new Request(`https://telegram-owner/app/v1/threads${path}`, { method, headers: { 'x-waldo-do-name': asName, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
       return { status: response.status, body: await response.json() };
     };
     await work(call, state);
@@ -116,5 +117,51 @@ describe('the app threads registry', () => {
       expect(await call('GET', `/${unknown}?limit=51`)).toEqual({ status: 400, body: { error: 'invalid_request' } });
       expect([...state.storage.kv.list({ prefix: 'app:thread' })]).toEqual([]);
     });
+  });
+
+  it('refuses a title over 200 characters on create and rename, and stores nothing', async () => {
+    await withOwner('threads-title-bound', async (call, state) => {
+      const over = 'x'.repeat(201);
+      expect(await call('POST', '', { operation_id: op(1), title: over })).toEqual({ status: 400, body: { error: 'invalid_request' } });
+      expect([...state.storage.kv.list({ prefix: 'app:thread' })]).toEqual([]);
+
+      const id = recorded((await call('POST', '', { operation_id: op(2), title: ` ${'y'.repeat(200)} ` })).body).thread_id;
+      expect(await call('POST', `/${id}/rename`, { operation_id: op(3), expected_title_revision: 1, title: over })).toEqual({ status: 400, body: { error: 'invalid_request' } });
+      expect(appThreadListV1Schema.parse((await call('GET', '')).body).threads).toEqual([expect.objectContaining({ thread_id: id, title: 'y'.repeat(200), title_revision: 1 })]);
+      expect(await call('GET', `/operations/${op(3)}`)).toEqual({ status: 404, body: { error: 'thread_not_found' } });
+    });
+  });
+
+  it('answers 403 before any thread work when the session authority fails or the do_name is not this object', async () => {
+    await withOwner('threads-gate', async (call, state) => {
+      expect(await call('POST', '', { operation_id: op(1), title: 'Wrong object' }, 'threads-gate-other')).toEqual({ status: 403, body: { error: 'unavailable' } });
+      expect(await call('GET', '', undefined, 'threads-gate-other')).toEqual({ status: 403, body: { error: 'unavailable' } });
+
+      vi.stubGlobal('fetch', async () => Response.json(null));
+      expect(await call('POST', '', { operation_id: op(2), title: 'Revoked' })).toEqual({ status: 403, body: { error: 'unavailable' } });
+      expect(await call('GET', '')).toEqual({ status: 403, body: { error: 'unavailable' } });
+      expect([...state.storage.kv.list({ prefix: 'app:thread' })]).toEqual([]);
+    });
+  });
+});
+
+// Per-turn recall reach. Telegram passes the stored owner_principal_ref, which only an app session writes.
+describe('recall reach', () => {
+  const kvOf = (rows: Record<string, unknown>) => ({
+    get: <T,>(key: string) => rows[key] as T | undefined,
+    list: <T,>({ prefix }: { prefix?: string } = {}) => new Map(Object.entries(rows).filter(([key]) => key.startsWith(prefix ?? '')) as [string, T][]),
+  }) as unknown as Pick<DurableObjectStorage['kv'], 'get' | 'list'>;
+  const principal = `prn_${OWNER_ID.replaceAll('-', '')}`, thread = 'thr_00000000-0000-4000-8000-000000000001';
+
+  it('a Telegram owner with no app session recalls every entry of its own chain', () => {
+    const reach = recallReach(kvOf({}), undefined, null);
+    expect(['tg-entry-1', 'tg-entry-2'].map(reach)).toEqual([true, true]);
+    expect(recallReach(kvOf({}), undefined, thread)('tg-entry-1')).toBe(false);
+  });
+
+  it('once the owner has threads, main and Telegram leave out thread entries and a thread keeps only its own', () => {
+    const kv = kvOf({ [`app:thread:${thread}`]: { thread_id: thread }, [`${threadRowsPrefix(principal, thread)}witness:on-thread`]: {} });
+    expect(['on-thread', 'tg-entry-1'].map(recallReach(kv, principal, null))).toEqual([false, true]);
+    expect(['on-thread', 'tg-entry-1'].map(recallReach(kv, principal, thread))).toEqual([true, false]);
   });
 });

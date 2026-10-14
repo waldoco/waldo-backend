@@ -104,7 +104,7 @@ export const signInPage = (token: string): Response => new Response(
 export const sessionCookie = (request: Request): string | null =>
   (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim().split('=')).find(([name]) => name === CONSOLE_COOKIE)?.[1] ?? null;
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link'] as const;
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
 
 // The trace detail for a console action. The form id is free-form text (parseConsoleAction
@@ -234,6 +234,8 @@ const connectors = (view: ConsoleView) => {
       google.accounts.length ? '' : status(false, 'Not connected'),
       google.connectAvailable ? form(csrf, 'google.connect', google.accounts.length ? 'Add account' : 'Connect Google', { value: 'calendar' }, { tone: google.accounts.length ? 'quiet' : 'primary' }) : '<span class="note">OAuth app keys are not set on this server yet</span>'),
     row('Telegram', 'Your owner DM. Chat, cards and reminders arrive here, and it is how you sign in to this console.', status(telegram.linked, telegram.linked ? 'Connected' : 'Unlinked'), telegramAction),
+    row('iMessage', 'Text Waldo from your own iPhone. Only you reach your Waldo: link your number with a one-time code.', '', `<a href="/console/imessage">Set up</a>`),
+    row('WhatsApp', 'Chat with your Waldo on WhatsApp after linking your number with a one-time code.', '', form(csrf, 'whatsapp.link', 'Get a WhatsApp link code', {}, {})),
     row('Console session', `Signed in until ${esc(view.sessionUntil)} on ${view.sessionCount} ${view.sessionCount === 1 ? 'browser' : 'browsers'}. Send /console on Telegram for a fresh link.`, status(true, 'Active'),
       form(csrf, 'session.signout', 'Sign out') + form(csrf, 'session.signout.all', 'Sign out everywhere', {}, { tone: 'danger', confirm: 'Sign out of every browser and the app?' })),
     row('WhatsApp', 'The channel route exists, but this page cannot verify a linked WhatsApp number or live delivery. Ask Waldo in chat before relying on it.', chip('Status unknown here', 'provisional'), ''),
@@ -541,7 +543,7 @@ export const renderConsole = (view: ConsoleView, page: string = '', banner = '')
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Waldo console</title>
 ${FONTS}<style>${STYLE}</style></head><body><div class="wrap">
 ${banner}<header><div class="brand">Waldo<small>Console</small></div><div class="env">Staging · ${esc(view.release)} · ${esc(view.now)} ${esc(view.timezone)}</div></header>
-<nav>${nav}<a href="${CONSOLE_PATH}/invites">Invites</a><a href="${CONSOLE_PATH}/devices">Devices</a></nav>
+<nav>${nav}<a href="${CONSOLE_PATH}/invites">Invites</a><a href="${CONSOLE_PATH}/devices">Devices</a><a href="${CONSOLE_PATH}/imessage">iMessage</a></nav>
 ${view.notice ? `<div class="notice">${esc(view.notice)}</div>` : ''}
 ${pages[page] ?? pages['']}
 <footer>Only you can open this page. Links come from your Telegram DM and expire after 10 minutes; a session lasts 12 hours.</footer>

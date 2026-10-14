@@ -23,7 +23,7 @@ const DUE_LOOKAHEAD_MS = 1_000;
 const MAX_DUE_PER_ALARM = 8;
 const PRODUCT_RETRY_DELAY_MS = 30_000;
 const DURABILITY_RETRY_CAP_MS = 15 * 60_000;
-const QUARANTINE_AFTER_ATTEMPTS = 3;
+export const QUARANTINE_AFTER_ATTEMPTS = 3;
 const QUARANTINE_MS = 24 * 60 * 60_000;
 
 type ScheduleSqlRow = {
@@ -177,7 +177,13 @@ export class Scheduler {
     if (this.lookup(id).state === 'entry') await this.cancel(id);
   }
 
-  hasDue(): boolean { return this.dueEntries(this.deps.now()).entries.length > 0; }
+  // Due work includes a pause that has ended: rearm() wakes for it, and dispatchDue re-arms it before reading what is due.
+  hasDue(): boolean {
+    const now = this.deps.now();
+    return this.dueEntries(now).entries.length > 0 || readable(this.sql
+      .exec<ScheduleSqlRow>("SELECT * FROM schedule WHERE status = 'quarantined' AND quarantined_until <= ?", now)
+      .toArray()).entries.length > 0;
+  }
 
   async dispatchDue(executors: ScheduleExecutors): Promise<readonly ScheduleEntry[]> {
     const now = this.deps.now();
