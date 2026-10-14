@@ -23,6 +23,10 @@ vi.mock('../src/channels/telegram-turn', async load => {
     if (!request.request.response_format && said.includes('set quiet hours') && !request.request.tool_turns?.length) {
       return { ok: true as const, data: { model: request.request.model, text: '', tool_calls: [{ call_id: 'quiet', name: 'set_proactivity', arguments: JSON.stringify({ quiet_start: '21:00', quiet_end: '07:00', volume: 'normal' }) }], input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
     }
+    // A turn that asks to search past messages calls search_episodes first, then answers.
+    if (!request.request.response_format && said.includes('search my messages') && !request.request.tool_turns?.length) {
+      return { ok: true as const, data: { model: request.request.model, text: '', tool_calls: [{ call_id: 'search', name: 'search_episodes', arguments: JSON.stringify({ query: 'blue door', limit: 8 }) }], input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
+    }
     return { ok: true as const, data: { model: request.request.model, text: request.request.response_format ? '{}' : 'Noted.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
@@ -100,6 +104,32 @@ describe('a thread message', () => {
       const listed = appThreadListV1Schema.parse((await call('GET', '/threads')).body).threads.find(row => row.thread_id === id)!;
       expect(listed.preview).toBe('Noted.');
       expect(listed.last_activity_at).toBeGreaterThan(listed.created_at);
+    });
+  });
+
+  it('recalls past messages from its own chain only, while search_episodes still reaches every chat', async () => {
+    await withOwner('thread-recall', async ({ thread, say }) => {
+      const id = await thread('Planning');
+      await say('/chat/main', 'main-client-01', 'Main note: the orchard key hangs by the blue door.');
+      await say(`/threads/${id}`, 'thread-client-01', 'Thread note: the lantern code hangs by the blue door.', 1);
+      const recalled = () => model.requests.map(request => request.split('memory recalled for this message')[1]?.split('/recalled')[0] ?? '').join('\n');
+
+      model.requests = [];
+      await say(`/threads/${id}`, 'thread-client-02', 'What hangs by the blue door?', 1);
+      expect(recalled()).toContain('lantern code');
+      expect(recalled()).not.toContain('orchard key');
+
+      model.requests = [];
+      await say('/chat/main', 'main-client-02', 'What hangs by the blue door?');
+      expect(recalled()).toContain('orchard key');
+      expect(recalled()).not.toContain('lantern code');
+
+      model.requests = [];
+      await say('/chat/main', 'main-client-03', 'Please search my messages for it.');
+      const searched = model.requests.find(request => request.includes('"tool_turns"') && request.includes('search_episodes'));
+      expect(searched).toBeDefined();
+      expect(searched).toContain('orchard key');
+      expect(searched).toContain('lantern code');
     });
   });
 

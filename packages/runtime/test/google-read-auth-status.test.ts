@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { GoogleError } from '../src/connectors/google';
 import { googleHandlers, type GoogleAccess } from '../src/tools/live/google';
 
@@ -78,5 +79,35 @@ describe('google read tools: connected-but-dead grant asks for reconnect, not a 
   it('no serving client and no state seam -> not_connected (unchanged)', async () => {
     const r = await run({ client: async () => null }, 'query_calendar', { include_declined: false, limit: 20 });
     expect(r).toMatchObject({ ok: false, code: 'auth_failed', connect: { reason: 'not_connected' } });
+  });
+});
+
+describe('google read tools: a connector answer that fails its schema is refused, not retried as temporary', () => {
+  const receipt = { next_page_token: null, fetched_count: 1, account: { connection_id: null, email: null }, observed_at: '2026-10-03T08:00:00Z' };
+  const answering = (method: string, answer: unknown): GoogleAccess => ({ client: async () => ({ [method]: async () => answer }) as never });
+  const UNDECLARED = [
+    ['query_calendar', { include_declined: false, limit: 20 }, 'calendarPage', { ...receipt, events: [{ id: 'e1', title: 'Fixture', start: '2026-10-03T09:00:00Z', end: '2026-10-03T09:30:00Z', all_day: false, undeclared_field: 'x' }] }],
+    ['query_calendar', { operation: 'list_calendars', limit: 20 }, 'calendarListsPage', { ...receipt, items: [{ id: 'c1', title: 'Fixture', access_role: 'owner', primary: true, selected: true, hidden: false, undeclared_field: 'x' }] }],
+    ['get_tasks', { status: 'open', limit: 10 }, 'allTasksPage', { ...receipt, undeclared_field: 'x' }],
+  ] as const;
+  for (const [name, args, method, answer] of UNDECLARED) {
+    it(`${name} (${method}): refused with fixed words that say nothing was seen, and never the parse error`, async () => {
+      const r = await run(answering(method, answer), name, args);
+      expect(r).toEqual({ ok: false, code: 'rejected', source_taint: 'external', error: expect.stringContaining('Nothing was read') });
+      expect((r as { error: string }).error).toContain('was not seen');
+      expect((r as { error: string }).error).not.toMatch(/undeclared_field|unrecognized|Zod|invalid_type|expected/i);
+    });
+  }
+  it('a calendar card that fails its own schema is never told to the owner as a failed read', async () => {
+    const cardFails = { ...desk, propose: async () => z.strictObject({ review: z.string() }).parse({ review: 1 }) };
+    const access: GoogleAccess = { client: async () => ({ account: { connection_id: 'c1', email: 'owner@example.com' } }) as never };
+    const r = await googleHandlers(access, cardFails as never, clock).find((h) => h.name === 'propose_calendar_change')!
+      .handle({ action: 'create', title: 'Design review', start: '2026-10-04T10:00:00+05:30', end: '2026-10-04T10:30:00+05:30', reason: 'asked' } as never);
+    expect(r).toMatchObject({ ok: false });
+    expect(r).not.toMatchObject({ code: 'rejected' });
+    expect((r as { error: string }).error).not.toContain('Nothing was read');
+  });
+  it('a provider 500 on the same read stays transient', async () => {
+    expect(await run(failing(500), 'query_calendar', { include_declined: false, limit: 20 })).toMatchObject({ ok: false, code: 'transient' });
   });
 });

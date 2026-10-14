@@ -199,3 +199,5 @@ export * from './tools/schemas/skills';
 export * from './protocol/common-workunit-execution';
 
 export * from './tools/schemas/memory';
+
+export * from './tools/use-mac';

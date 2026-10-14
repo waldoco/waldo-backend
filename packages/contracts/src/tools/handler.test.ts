@@ -170,6 +170,7 @@ describe('privileged-action set — ADR-0049', () => {
       'update_thread_topics',
       'skills_install',
       'skills_disable',
+      'use_mac',
     ]);
   });
 
@@ -261,6 +262,7 @@ describe('external-origin tool classification — ADR-0049', () => {
       'query_availability',
       'get_communication',
       'search_communication',
+      'search_contacts',
       'read_thread',
       'get_tasks',
       'web_search',

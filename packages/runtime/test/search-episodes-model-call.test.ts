@@ -1,5 +1,7 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
+import { toolOutput } from './fixtures/tool-output';
 
 const calls = vi.hoisted(() => ({ inputs: [] as string[], args: {} as Record<string, unknown>, readSlice: false }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
@@ -34,7 +36,7 @@ const run = (name: string, args: Record<string, unknown>, body = FULL) => runInD
   a[5] = [searchEpisodesHandler(index)] as never;
   if (calls.readSlice) a[7] = true;
   const responder = createOwnerResponder(...a);
-  await responder.respond({ traceId: 'tg-1', conversationRef: 'owner', surface: 'telegram', text: 'what was the latest?' } as never, async (_l: string, work: () => Promise<unknown>) => work() as never);
+  await responder.respond(ownerTyped({ traceId: 'tg-1', conversationRef: 'owner', surface: 'telegram', text: 'what was the latest?' }) as never, async (_l: string, work: () => Promise<unknown>) => work() as never);
   return calls.inputs[calls.readSlice ? 2 : 1] ?? '';
 });
 
@@ -77,7 +79,7 @@ it('a large recovered turn is offloaded and its exact deep value is readable thr
   expect(readIndex).toBeGreaterThanOrEqual(0);
   const readOutput = request.input[readIndex]!.output;
   expect(readOutput).toBeDefined();
-  const receipt = JSON.parse(readOutput!) as { ok?: boolean; source_taint?: string };
+  const receipt = toolOutput<{ ok?: boolean; source_taint?: string }>(readOutput!);
   expect(receipt.ok).toBe(true);
   expect(receipt.source_taint).toBe('external');
   expect(readOutput).toContain('18.5k');

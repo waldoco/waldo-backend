@@ -3,17 +3,28 @@ import { literalTextRedactor, redactConversationEntry, type ConversationEntry, t
 import { redactSecretUrls } from './egress-guard';
 import { hidesTopic } from '../memory/forget-guard';
 import { asciiLiteralIncludes, forgetSourceBatch, type ForgetSource, type ForgetBatch } from '../memory/selective-forget';
+import { supersededCompaction } from '../conversation/compaction';
 
 export type ConversationStore = Readonly<{
   load(): Promise<Readonly<{ entries: readonly ConversationEntry[]; leafId: string | null }>>;
   save(entries: readonly ConversationEntry[], leafId: string, scope?: RunEffectScope): Promise<void>;
   persistOwnerInput?(entry: ConversationEntry, scope: RunEffectScope): Promise<void>;
+  // An owner message as received (`text`) and its quoted ranges, for the index to keep the owner's own words apart from
+  // what they quote and from what was stored with the message.
+  noteQuoteRanges?(entryId: string, text: string, ranges: readonly Readonly<{ start: number; end: number }>[]): void;
   // The receipt line of what an owner turn that did not finish already did, for the reply that says it did not finish.
   noteUnfinished?(receiptLine: string, scope: RunEffectScope): void;
+  // Whether per-turn recall may bring this past message into this chain's turn; without it, every indexed message.
+  recalls?(entryId: string): boolean;
   forgetSources?(topic: string): Promise<{ sources: ForgetSource[]; incomplete: boolean }>;
   forgetSourceBatch?(topic: string): Promise<ForgetBatch>;
   forgetSourceBatchCurrent?(topic: string): ForgetBatch | null;
   forgetSourcesCurrent?(topic: string): { sources: ForgetSource[]; incomplete: boolean } | null;
+  // A compaction row and the row it supersedes, written as one unit that never moves the chain's leaf.
+  appendCompaction?(row: ConversationEntry, supersededId: string | null, scope?: RunEffectScope): Promise<void>;
+  // When this chain last tried to compact, success or failure; one bounded value with no content.
+  compactionAttempt?(chainRef: string): Promise<number | null>;
+  noteCompactionAttempt?(chainRef: string, at: number, scope?: RunEffectScope): Promise<void>;
 }>;
 
 type KeyValueStorage = Pick<DurableObjectStorage, 'get' | 'list' | 'put'> & { kv?: Pick<DurableObjectStorage['kv'], 'put'> & Partial<Pick<DurableObjectStorage['kv'], 'list'>> };
@@ -141,6 +152,16 @@ const conversationSourcesFromRows = (legacy: Map<string, ConversationEntry>, can
 };
 const entryText = (entry: ConversationEntry): string => `${entry.modelPayload}\n${entry.appPayload}\n${entry.modelProjection.mode === 'replace' ? entry.modelProjection.payload : ''}`.toLowerCase();
 
+// The original rows a compaction row covers: the chain from to_id back to from_id, inclusive, by stored parent links.
+const coveredIds = (rows: ReadonlyMap<string, Readonly<{ entry: ConversationEntry }>>, covers: NonNullable<ConversationEntry['covers']>): ReadonlySet<string> => {
+  const ids = new Set<string>();
+  for (let current = rows.get(covers.to_id)?.entry; current && !ids.has(current.id); current = current.parentId === null ? undefined : rows.get(current.parentId)?.entry) {
+    ids.add(current.id);
+    if (current.id === covers.from_id) break;
+  }
+  return ids;
+};
+
 export const redactConversationEntries = async (
   storage: KeyValueStorage,
   texts: readonly string[],
@@ -170,6 +191,21 @@ export const redactConversationEntries = async (
       if (JSON.stringify(next) !== JSON.stringify(witness.entry)) writes[key] = { ...witness, entry: next };
     }
   }
+  const hit = (entry: ConversationEntry): boolean => needles.some((needle) => entryText(entry).includes(needle.toLowerCase()) || [entry.modelPayload, entry.appPayload, ...(entry.modelProjection.mode === 'replace' ? [entry.modelProjection.payload] : [])].some(text => conversationHides(text, needle)));
+  // A compaction row paraphrases its span, which a literal rewrite cannot reach. When the topic sits in any original row of
+  // the span, or in the summary itself, the row is superseded to the marker and omitted, with its witness in the same unit
+  // and its covers kept; the hit test reads the rows as stored before this rewrite. A superseded summary stays as it is.
+  const rows = new Map<string, Readonly<{ key: string; entry: ConversationEntry }>>();
+  for (const [key, value] of canonical) if (canonicalKind(key) === 'conv') rows.set((value as ConversationEntry).id, { key, entry: value as ConversationEntry });
+  for (const { key, entry } of rows.values()) {
+    if (entry.role !== 'compaction' || !entry.covers || entry.modelProjection.mode === 'omit') continue;
+    if (!hit(entry) && ![...coveredIds(rows, entry.covers)].some((id) => { const row = rows.get(id); return row !== undefined && hit(row.entry); })) continue;
+    const next = supersededCompaction(entry);
+    writes[key] = next; rewritten += 1;
+    const witnessKey = `${key.split(':').slice(0, 3).join(':')}:witness:${entry.id}`;
+    const witness = canonical.get(witnessKey) as Witness | undefined;
+    if (witness?.entry) writes[witnessKey] = { ...witness, entry: next };
+  }
   if (Object.keys(writes).length > 0) {
     if (scope) { if (!storage.kv) throw new Error('fenced redaction store unavailable'); scope.commit(() => { for (const [key, value] of Object.entries(writes)) storage.kv!.put(key, value); }); }
     else {
@@ -197,7 +233,6 @@ export const redactConversationEntries = async (
       await flush();
     }
   }
-  const hit = (entry: ConversationEntry): boolean => needles.some((needle) => entryText(entry).includes(needle.toLowerCase()) || [entry.modelPayload, entry.appPayload, ...(entry.modelProjection.mode === 'replace' ? [entry.modelProjection.payload] : [])].some(text => conversationHides(text, needle)));
   const afterLegacy = rewritten > 0 ? await storage.list<ConversationEntry>({ prefix: 'conv:' }) : legacy;
   const afterCanonical = Object.keys(writes).length > 0 ? await storage.list<ConversationEntry | Witness>({ prefix: CANONICAL_PREFIX }) : canonical;
   let remaining = 0;

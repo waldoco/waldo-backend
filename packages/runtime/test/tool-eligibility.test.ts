@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import { WALDO_CHAT_MODEL, type ConnectIntent, type LLMToolCall } from '@waldo/contracts';
@@ -10,6 +11,7 @@ import { browseActHandler, browsePageHandler } from '../src/tools/live/browser';
 import { readDriveHandler } from '../src/tools/live/drive';
 import { connectServiceHandler, googleHandlers, type GoogleAccess } from '../src/tools/live/google';
 import { callMcpToolHandler, readMcpToolHandler } from '../src/tools/live/mcp';
+import { registerCommonBrowserSdk } from '../src/channels/common-staging-registration';
 
 type Account = Readonly<{ id: string; email: string; error: string | null; calendar: boolean; mail: boolean; tasks: boolean }>;
 const clock = { timezone: 'UTC', now: () => new Date('2026-10-10T09:00:00Z') };
@@ -35,7 +37,7 @@ const turn = async (name: string, accounts: () => readonly Account[] | Promise<r
     args[3] = entry => { logs.push(entry); }; args[4] = clock;
     args[5] = [...googleHandlers(google, desk, clock), connectServiceHandler(google)] as never;
     args[6] = WALDO_CHAT_MODEL; args[9] = async intent => { offers.push(intent); return true; }; args[10] = gateway;
-    await createOwnerResponder(...args).respond({ traceId: `${name}-1`, conversationRef: 'telegram-42', surface: 'telegram', text: 'what is on my calendar today?', memoryWrites: false }, (_hop, work) => work());
+    await createOwnerResponder(...args).respond(ownerTyped({ traceId: `${name}-1`, conversationRef: 'telegram-42', surface: 'telegram', text: 'what is on my calendar today?', memoryWrites: false }), (_hop, work) => work());
   });
   return { offered, systems, offers, logs };
 };
@@ -93,21 +95,25 @@ it('deploy configuration decides MCP, browse and Drive eligibility', async () =>
   expect(await verdict(readMcpToolHandler(readable, undefined, true))).toEqual({ ok: true });
   expect(await verdict(browsePageHandler(undefined, undefined, undefined))).toEqual(missing);
   expect(await verdict(browsePageHandler('key', 'project', undefined))).toEqual({ ok: true });
-  expect(await verdict(browsePageHandler(undefined, undefined, undefined, fetch, { defaultProvider: 'cloudflare_playwright', allowBrowserbase: false, cloudflare: (async () => ({})) as never }))).toEqual({ ok: true });
-  expect(await verdict(browsePageHandler('key', 'project', undefined, fetch, { defaultProvider: 'browserbase_stagehand_http_v3', allowBrowserbase: false }))).toEqual(missing);
+  expect(await verdict(browsePageHandler(undefined, undefined, undefined, fetch, { allowBrowserbase: false, cloudflare: (async () => ({})) as never }))).toEqual({ ok: true });
+  expect(await verdict(browsePageHandler('key', 'project', undefined, fetch, { allowBrowserbase: false }))).toEqual(missing);
   expect(await verdict(browseActHandler(undefined, undefined, undefined))).toEqual(missing);
   expect(await verdict(browseActHandler('key', 'project', undefined))).toEqual({ ok: true });
   expect(await verdict(readDriveHandler({ client: async () => null }, false))).toEqual(missing);
   expect(await verdict(readDriveHandler({ client: async () => null }, true))).toEqual({ ok: true });
 });
 
-it('the owner browser keeps browse tools where it serves them natively, and otherwise follows the fallback provider', async () => {
-  const storage = { kv: { get: () => undefined, put: () => undefined, list: () => [] } } as unknown as DurableObjectStorage;
-  const runtime = (environment: string) => ownerBrowserRuntime({ env: { WALDO_ENVIRONMENT: environment } as never, storage, actualDoId: 'physical', activeScope: () => undefined });
+it('the owner browser offers browse tools only where its Cloudflare host can serve them, whatever the Browserbase keys say', async () => {
+  // The owner holds a Telegram binding on this physical object; browse tools are never offered without one.
+  const bound: Record<string, unknown> = { do_name: 'owner', telegram_subject: '81' };
+  const storage = { kv: { get: (key: string) => bound[key], put: () => undefined, list: () => [] } } as unknown as DurableObjectStorage;
   const missing = { ok: false, reason: 'not_configured' };
-  expect(await runtime('production').read(browsePageHandler(undefined, undefined, undefined)).eligible!()).toEqual(missing);
-  expect(await runtime('production').act(browseActHandler(undefined, undefined, undefined)).eligible!()).toEqual(missing);
-  expect(await runtime('production').read(browsePageHandler('key', 'project', undefined)).eligible!()).toEqual({ ok: true });
+  const runtime = (environment: string, binding = true) => ownerBrowserRuntime({ env: { WALDO_ENVIRONMENT: environment, BROWSERBASE_API_KEY: 'key', BROWSERBASE_PROJECT_ID: 'project', OWNER_DO: { idFromName: (name: string) => ({ toString: () => name === 'owner' ? 'physical' : 'elsewhere' }) }, ...(binding ? { BROWSER: {} } : {}) } as never, storage, actualDoId: 'physical', activeScope: () => undefined });
+  expect(await runtime('staging', false).read(browsePageHandler('key', 'project', undefined)).eligible!()).toEqual(missing);
+  expect(await runtime('staging', false).act(browseActHandler('key', 'project', undefined)).eligible!()).toEqual(missing);
+  registerCommonBrowserSdk(async () => ({}) as never);
+  expect(await runtime('production').read(browsePageHandler('key', 'project', undefined)).eligible!()).toEqual(missing);
+  expect(await runtime('production').act(browseActHandler('key', 'project', undefined)).eligible!()).toEqual(missing);
   expect(await runtime('staging').read(browsePageHandler(undefined, undefined, undefined)).eligible!()).toEqual({ ok: true });
   expect(await runtime('staging').act(browseActHandler(undefined, undefined, undefined)).eligible!()).toEqual({ ok: true });
 });

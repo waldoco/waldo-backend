@@ -17,6 +17,8 @@
 // Capture mode (default) suppresses memory persistence and strips live provider tools for the
 // duration of the probe; live:true keeps the full surface and really sends.
 
+import { STAGING_WORKER_URL } from './staging-gate.mjs';
+
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(name);
 const opt = (name, fallback) => {
@@ -24,7 +26,7 @@ const opt = (name, fallback) => {
   return i >= 0 && args[i + 1] ? args[i + 1] : fallback;
 };
 
-const BASE = opt('--url', 'https://waldo-runtime-staging.piyushfulper3210.workers.dev');
+const BASE = opt('--url', STAGING_WORKER_URL);
 const TOKEN = process.env.WALDO_PROBE_TOKEN;
 if (!TOKEN) {
   console.error('FAIL setup: WALDO_PROBE_TOKEN env var is required (value never printed).');
