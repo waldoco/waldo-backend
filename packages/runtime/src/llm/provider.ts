@@ -496,7 +496,6 @@ export class RuntimeLLMProvider {
 
       if (!gatewayResult.ok) {
         lastDetail = gatewayResult.error;
-        this.circuitBreaker.recordFailure(plan.step.provider);
         attempts.push({
           outcome: 'failure',
           model: plan.step.model,
@@ -506,9 +505,11 @@ export class RuntimeLLMProvider {
           code: gatewayResult.code,
         });
         if (gatewayResult.spent) spent = addTokens(spent, gatewayResult.spent);
+        // A refused request is not a provider outage, so it leaves the circuit as it was.
         if (gatewayResult.code === 'invalid_args') {
           return invalidResponseFailure(plan.fallback_step, attempts, routingLogs, undefined, gatewayResult.error);
         }
+        this.circuitBreaker.recordFailure(plan.step.provider);
         const resendWait = resendWaitMs(gatewayResult, callTimeLeftMs(input.runScope));
         if (resendWait === null) settledModels.add(modelKey(plan.step));
         else if (resendWait > 0) resendWaits.set(modelKey(plan.step), resendWait);

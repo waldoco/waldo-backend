@@ -742,6 +742,21 @@ describe('RuntimeLLMProvider', () => {
     }
   });
 
+  // A refused request says nothing about whether the provider is up, so it must not open the circuit for later calls.
+  it('keeps the circuit closed after refused requests', async () => {
+    const breaker = new InMemoryCircuitBreaker({ failureThreshold: 2 });
+    const gateway = new ScriptedGateway(() => ({ ok: false, error: 'browser trial model price unavailable', code: 'invalid_args' }));
+    const provider = new RuntimeLLMProvider({ gateway, circuitBreaker: breaker });
+    const brief = {
+      trigger: 'brief' as const,
+      renderRequest: () => ({ system: 'brief', messages: [{ role: 'user' as const, content: 'brief' }], max_tokens: 512, temperature: 0.3 }),
+      renderTemplate: () => 'template fallback',
+    };
+    for (let refused = 0; refused < 3; refused += 1) await provider.complete(brief, runtimeCtx());
+    expect(breaker.isOpen('workers_ai')).toBe(false);
+    expect(gateway.requests).toHaveLength(3);
+  });
+
   it('opens and cools a circuit without taking every provider dark', async () => {
     let now = 1_000;
     const breaker = new InMemoryCircuitBreaker({
