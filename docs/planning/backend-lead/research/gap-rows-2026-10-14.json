@@ -1,0 +1,1027 @@
+[
+ {
+  "id": "G1",
+  "pillar": "P1 durable work and failures",
+  "block": "Durable workflows",
+  "gap": "After an approved email goes out, Waldo stops watching it. Nothing ties the sent thread to a wait, so a reply never closes the follow-up and a bounce or auto-reply is never told apart from a real answer.",
+  "today": "The send ends at setStatus('done') with a toast (channels/approvals.ts:694-695). A mail-source loop refuses any source the update lane has not observed (channels/loops.ts:25), and the lane observes only inbox mail (connectors/google.ts:753). A plain dated loop is listed by the heartbeat once past due (channels/heartbeat.ts:98-106), but it has no thread link. The skill says 'Do not promise unsupported watches' (packages/runtime/skills/reminders-and-watches/SKILL.md:10).",
+  "add": "On a confirmed send, open a durable watch on the sent thread with an expiry, the last-seen message id and a deadline the owner agreed. Gmail push or the sweep wakes it. The model decides whether a new message is a real reply, an auto-reply or a bounce. A real reply stops the old follow-up and proposes the next step; it never sends on its own.",
+  "needs": [
+   "ADR",
+   "app.v1 contract"
+  ],
+  "size": "M",
+  "source": "docs/planning/WALDO_PERSONAL_AGENT_PRODUCT_ARCHITECTURE_AND_BUILD_PLAN_2026-09-18.md \u00a71 (:52), \u00a79 Email (:340), A6 (:420); docs/planning/WEBSITE_PROMISE_LEDGER_2026-10-10.md ruling 7 (:13, 'reply watch')",
+  "gates": "Rides Gmail push (#1215, merged at the tip as 72030b34). Email-body processing needs bounded ADR review (CLAUDE.md). Closes A6.",
+  "instinct": "T13 watches for a reply (gap doc :94); plan \u00a74 'takes initiative and follows up'",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G2",
+  "pillar": "P1 durable work and failures",
+  "block": "Durable workflows",
+  "gap": "Multi-step errands live inside one turn. Background delegation refuses, and the step book that could carry work across wakes is not wired, so a restart mid-task loses the steps already done [inference].",
+  "today": "delegate_task with background refuses when startBackground is missing (conversation/subagent.ts:170-171), and the owner turn calls delegateTaskHandler with no deps at all, so it has neither book nor startBackground (channels/owner-turn.ts:410). The responsibilities and responsibility_items tables exist (channels/responsibilities.ts:25-33), but nothing outside that file uses them (grep). The schedule kinds have no task_step (packages/contracts/src/runtime/schedule.ts:4-15). Background run rows are audit records only (docs/planning/PARITY_GAP_PLAN_2026-10-02.md:16).",
+  "add": "Per the C7 spec: a task_step schedule kind and a step runner that makes one bounded attempt per wake over the existing responsibility book. Add a responsibility_item_attempts journal that flips effects_dispatched when a non-safe-read tool is dispatched. Only attempts that dispatched no effects resume, up to three; otherwise the item is marked uncertain with one notice. Approvals block and unblock steps through a waiting_on ref, and cancel fences them by revision.",
+  "needs": [
+   "migration"
+  ],
+  "size": "L",
+  "source": "#1103 comment 6154789747 (C7 spec); docs/planning/PARITY_GAP_PLAN_2026-10-02.md:16; docs/planning/WEBSITE_PROMISE_LEDGER_2026-10-10.md \u00a711 (:262-264)",
+  "gates": "Sits under #1108 (page 1: jobs as owner, check-back turn, failure notice) and serves page 1 #20's carrying rows. Its executor needs A2 (G20). Unblocks G3, G13 and long browsing errands (owner ruling 1 in 6159378186).",
+  "instinct": "Background errands and parallel workers (ledger \u00a711); gap doc T14, T23",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G3",
+  "pillar": "P1 durable work and failures",
+  "block": "Permissions and approvals",
+  "gap": "Waldo never acts under a standing permission. Nothing finds a conflict, fixes it and reports afterwards, so 'fixed first, mentioned after' is not real.",
+  "today": "The patrol schedule kind exists (packages/contracts/src/runtime/schedule.ts:10), but the alarm's executors stop at standing_order with no patrol entry (channels/owner-do.ts:1589). The heartbeat lists past-due loops with no model call and no effect (channels/heartbeat.ts:97-125). The only grant store is single-use and bound to one work unit (do-schema.ts:1062-1085, CHECK use_limit = 1; packages/contracts/src/protocol/responsibility-judgment-authority-v0-5.ts:311). There is no multi-use standing grant (docs/research/HARNESS_COMPARISON_2026-10-13.md \u00a76.2). #932 is a draft holding only a contract and eligibility.",
+  "add": "Check standing grants at the effect boundary, and recheck them before dispatch and before resume. Add a Patrol executor: it reads sources read-only and the model proposes. It acts only under a live matching grant, then reads back and leaves a receipt; otherwise it raises the normal card. Revoking a grant blocks a queued retry.",
+  "needs": [
+   "ADR",
+   "owner decision",
+   "migration"
+  ],
+  "size": "L",
+  "source": "docs/planning/WEBSITE_PROMISE_LEDGER_2026-10-10.md (:108), Wave 2 (:237); docs/research/HARNESS_COMPARISON_2026-10-13.md \u00a76.2 (:126-132), \u00a711 item 6, \u00a712a (:224)",
+  "gates": "Page 1 covers the grants view (#30, #64, #932) and the Patrol receipts feed (#8); this row is the runtime underneath. Comes after G23 and G2.",
+  "instinct": "A1 sending, booking and spending follow approval rules; W6 (gap doc :137, 'No Patrol executor')",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G4",
+  "pillar": "P1 durable work and failures",
+  "block": "Durable workflows",
+  "gap": "If the owner object restarts mid-answer, the owner gets 'did not finish' and has to ask again, even when no effect ran.",
+  "today": "Running app rows that are no longer live become interrupted, all with effectsUnconfirmed=true whether or not anything was dispatched (channels/app-inbox.ts:66-71). Each one leaves a 'did not finish' reply (channels/owner-do.ts:680-681). The text constant is at :214 and is used at :346.",
+  "add": "Regenerate once under a fresh inference-attempt id, but only when no final reply was staged and no non-read tool crossed its boundary. That needs a per-attempt dispatched-effects signal, not the blanket effectsUnconfirmed flag. Reuse committed tool results and stay within the aggregate spend limit. Never regenerate when effects are unknown. Add crash-probe tests at each publication boundary.",
+  "needs": [
+   "ADR"
+  ],
+  "size": "M",
+  "source": "docs/planning/WALDO_PERSONAL_AGENT_PRODUCT_ARCHITECTURE_AND_BUILD_PLAN_2026-09-18.md \u00a76 Recovery (:242, :248), A1 (:415)",
+  "gates": "Next to #1108's failure notice (page 1), which covers jobs, not regeneration. The aggregate limit needs G41. The effects journal can share G2's attempts design.",
+  "instinct": "",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G5",
+  "pillar": "P1 durable work and failures",
+  "block": "Triggers and scheduled jobs",
+  "gap": "Nothing limits how many reminders and standing orders an owner can have or how often they fire. One request can schedule a model turn every minute.",
+  "today": "reminderBook.set inserts with no count check (channels/reminders.ts:30-52). The cron schema accepts any numeric five-field expression (packages/contracts/src/runtime/schedule.ts:49; tools/schemas/reminders.ts:5). Each standing-order fire runs a full model turn (channels/standing-orders.ts:110-115).",
+  "add": "A per-owner cap on active jobs and a minimum interval for fires that run the model. Both are enforced in the books, with a plain typed refusal the model relays. Count fire spend in the cost ledger.",
+  "needs": [
+   "owner decision"
+  ],
+  "size": "S",
+  "source": "docs/planning/MATURE_AGENT_TASKS_CONNECTORS_PARITY_2026-10-02.md:18 (T6), :33 (conditional); docs/planning/WEBSITE_PROMISE_LEDGER_2026-10-10.md ruling 18 (:24, $25 per user per month ceiling)",
+  "gates": "Fire spend needs G41. Comes before G13.",
+  "instinct": "Active task limits stated plainly (ChatGPT Tasks T6)",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G6",
+  "pillar": "P3 memory",
+  "block": "Memory and skills",
+  "gap": "Per-turn recall searches the whole owner's message index. Once thread messages are indexed, a thread's turn pulls in main-chat rows and the reverse. That breaks the thread isolation the owner set and has stopped the threads stack.",
+  "today": "The episodes leg of per-turn recall searches the owner-wide index (memory/turn-recall.ts:98), and the owner turn appends it to every message (channels/owner-turn.ts:489). The FTS table has no chain column (channels/episodes.ts:49). At the tip, threads are not indexed yet. On the tree merged with #1176, the builder reports app-thread-messages failing 1 of 7. #1176 is stopped and #1179 waits (#1103 comment 6164326899).",
+  "add": "Decided by the lead on #1103 (comment 6166267816): option 1a. Per-turn recall's episodes leg keeps only hits from the turn's own chain, through an entry-to-chain lookup in the canonical store. No schema change; search_episodes stays owner-wide. Red-first tests in both directions, then app-thread-messages 7 of 7.",
+  "needs": [
+   "none"
+  ],
+  "size": "S",
+  "source": "#1103 comment 6164326899 (threads builder, 14 Oct 08:36Z); B3 spec 6154593035",
+  "gates": "Blocks #1176 and #1179, which serve threads (page 1 #12).",
+  "instinct": "",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G7",
+  "pillar": "P3 memory",
+  "block": "Memory and skills",
+  "gap": "In a long chat the oldest messages silently drop out of the model's view. Compaction is built but off, nothing calls it, and the model is not told what it cannot see.",
+  "today": "COMPACTION.enabled is false (conversation/compaction.ts:8). compactIfDue is defined (channels/owner-turn.ts:685), but no caller runs it (grep). There is no compaction eval in packages/runtime/evals.",
+  "add": "Wire the post-delivery compactIfDue call. Until the switch is on, add a count-only 'N earlier messages out of view' line. Run the eval against the brief's pre-committed bar, then turn compaction on behind a rollback switch.",
+  "needs": [
+   "none"
+  ],
+  "size": "S",
+  "source": "docs/planning/lanes-2026-10-11/LONG_CONVERSATIONS_BRIEF.md \u00a73-5; docs/research/HARNESS_COMPARISON_2026-10-13.md \u00a74.4; #1103 comment 6154753866",
+  "gates": "Telegram chains first need A3 (G19), and the health ruling (G37) comes first. Turning it on waits on G43 (#1185).",
+  "instinct": "",
+  "_verdict": "keep"
+ },
+ {
+  "id": "G8",
+  "pillar": "P3 memory",
+  "block": "Memory and skills",
+  "gap": "Waldo finds past chats and memories only by shared words, so a question asked in other words can miss what it was told.",
+  "today": "Episode search is FTS5 term matching (channels/episodes.ts:7, 39-49). Staging binds AI and Vectorize (packages/runtime/wrangler.jsonc:118-121), but nothing in src reads VECTORIZE (grep). Production has neither binding.",
+  "add": "An owner-namespaced embedding index over claims and episodes. An outbox written in the same transaction feeds it and drains after commit. Hybrid retrieval runs on a time cap and fails open. Forget settles only when the vector delete returns, and health claims and app-only rows are never embedded.",
+  "needs": [
+   "ADR",
+   "deploy or secret"
+  ],
+  "size": "L",
+  "source": "#1103 comment 6154593035 (B4 spec), owner yes at 6159378186 item 5; docs/planning/MATURE_AGENT_MEMORY_PARITY_2026-10-02.md:19, 32",
+  "gates": "Comes after G37. Production bindings come with G52. Its done-when needs G43.",
+  "instinct": "Search past conversations by meaning (mature-agent M6)",
+  "_verdict": "keep"
+ },
+ {
+  "id": "G9",
+  "pillar": "P3 memory",
+  "block": "Memory and skills",
+  "gap": "Waldo has no typed notion of a person: relation, preferences, birthday, or which Sam is meant. What it knows about people sits in untyped fact text, and contact search returns only names and addresses.",
+  "today": "The claim kinds have no person kind (memory/claims.ts:6), so people appear only inside free-text claims. search_contacts exists (tools/live/google.ts:274) under the already-requested contacts.readonly scope (connectors/google.ts:22), but its People read mask is names and emailAddresses only (connectors/google.ts:682), so no birthday is read.",
+  "add": "A person dimension on claims (relation, preferences, important dates, link to a contact), added through the memory-proposal review. Telling people apart stays the model's judgment. Read birthdays through the existing contacts scope, and turn them into reminders once the owner confirms them.",
+  "needs": [
+   "ADR",
+   "owner decision",
+   "migration"
+  ],
+  "size": "M",
+  "source": "docs/research/HARNESS_COMPARISON_2026-10-13.md \u00a712a (:227); gap doc T2 (:83) and T20 (:101) (docs/research/WALDO_VS_INSTINCT_CAPABILITY_GAP_2026-10-13.md on branch docs/overnight-2026-10-12)",
+  "gates": "Needs an owner ruling on reading and storing birthdays and person facts (a purpose change; no new OAuth scope), plus forget coverage for person rows.",
+  "instinct": "T2 remembers people; T20 birthdays",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G10",
+  "pillar": "P3 memory",
+  "block": "Memory and skills",
+  "gap": "A memory cannot be 'for today only' or dated to when it became true. Every claim stays active until corrected, so temporary context turns into a trait and 'since when' answers come out wrong.",
+  "today": "Inserts set valid_from to null and write no valid_to (memory/claims.ts:414). valid_to is written only on supersede (:438, :446). Per-turn recall does not filter by time (memory/turn-recall.ts).",
+  "add": "Let remember take a validity window (today, until a date, from now on) and a real-world start date that the model sets from the owner's words. Expired claims leave recall and the pinned blocks. Add A15 expiry tests.",
+  "needs": [
+   "ADR",
+   "migration"
+  ],
+  "size": "M",
+  "source": "plan \u00a78 behaviours 5-6 (:301-302), A15 (:429); docs/research/HARNESS_COMPARISON_2026-10-13.md \u00a74.1, \u00a711 proposal 3",
+  "gates": "Page 1's memory ADR may fold this in. The window needs no new column; an expired_at column does.",
+  "instinct": "T1 remembers preferences, plans and decisions; compact briefing with freshness (plan \u00a78 :304)",
+  "_verdict": "keep"
+ },
+ {
+  "id": "G11",
+  "pillar": "P3 memory",
+  "block": "Memory and skills",
+  "gap": "The owner cannot have a conversation that Waldo will not remember or keep in history.",
+  "today": "Every owner turn runs through the indexed conversation store and the memory handlers (channels/owner-do.ts:2503-2512). A memoryWrites flag on the turn envelope only hides remember and forget (channels/owner-turn-envelope.ts:41-42; channels/owner-turn.ts:341). By its own comment it leaves nightly consolidation and history indexing on, and nothing in src sets it to false (grep). The parity doc marks M7 'not found' (docs/planning/MATURE_AGENT_MEMORY_PARITY_2026-10-02.md:33).",
+  "add": "A private flag per thread or turn, set by the owner. It extends memoryWrites=false so that it also skips persistence beyond the live turn, the episode index and the nightly claims. Effects still get receipts, and forget-coverage tests prove nothing stayed.",
+  "needs": [
+   "owner decision",
+   "app.v1 contract"
+  ],
+  "size": "M",
+  "source": "docs/planning/MATURE_AGENT_MEMORY_PARITY_2026-10-02.md:20, 33, 40",
+  "gates": "Threads (#1173 to #1179) are the natural carrier. The owner decides whether it is wanted (parity doc :40).",
+  "instinct": "Per-chat memory opt-out (mature-agent M7)",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G12",
+  "pillar": "P4 proactivity and triggers",
+  "block": "Triggers and scheduled jobs",
+  "gap": "When a meeting moves or is cancelled, Waldo can mention it in an update card, but it keeps no day plan or focus blocks to recheck, so the day is never replanned and nothing protected is moved.",
+  "today": "A Calendar push pulls the sweep forward (channels/calendar-push.ts:43-47). That sweep also runs the update check (channels/owner-do.ts:2885-2968), which reads changed primary-calendar events (connectors/google.ts:731-736) and lets the model write a notice card (prompt/update-cards.ts:10-19). day_plan stores card send times, not a plan (channels/day-cards.ts:23-29).",
+  "add": "Store the day plan: priorities, fixed commitments, and Waldo's focus blocks with their event ids and etags. On an admitted calendar change, group related changes and propose one replan. A block moves without asking only under a grant. A failed or stale read stops automatic changes and says so.",
+  "needs": [
+   "app.v1 contract",
+   "migration"
+  ],
+  "size": "L",
+  "source": "docs/planning/WALDO_PERSONAL_AGENT_PRODUCT_ARCHITECTURE_AND_BUILD_PLAN_2026-09-18.md \u00a71 proof story 1 (:51), \u00a79 Calendar (:332), A3 (:417)",
+  "gates": "Moving blocks without asking needs G3. Health input comes from G32. Together with G32 it closes A3.",
+  "instinct": "Plan \u00a74 'takes initiative'; gap doc T5 (:86)",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G13",
+  "pillar": "P4 proactivity and triggers",
+  "block": "Triggers and scheduled jobs",
+  "gap": "Waldo cannot watch a page, a price, a delivery or a thread and speak up only when it changes. A standing order starts fresh each run, so it repeats itself or misses the change.",
+  "today": "A standing-order fire sends only the order text as a new machine turn (channels/standing-orders.ts:110-115) and keeps no last-seen state (grep). The 13 Oct re-run records 'It still says it can't watch the inbox' (#1103 comment 6155218639).",
+  "add": "A watch record: source pointer, cadence, a content-free fingerprint and the last verdict. Each run reads the source read-only, and the model judges whether the change matters. Notify once through the proactive gate, with pause, stop and a bounded count.",
+  "needs": [
+   "ADR",
+   "app.v1 contract"
+  ],
+  "size": "M",
+  "source": "docs/planning/MATURE_AGENT_TASKS_CONNECTORS_PARITY_2026-10-02.md:16; docs/planning/PARITY_GAP_PLAN_2026-10-02.md:20; docs/research/HARNESS_COMPARISON_2026-10-13.md \u00a712a",
+  "gates": "Page 1 covers Gmail and Calendar push and routines, not watches on arbitrary sources. Long reads need G2, unattended action needs G3, and caps come from G5.",
+  "instinct": "T13 watches for a change; T18 price checks; ChatGPT Tasks T4",
+  "_verdict": "keep"
+ },
+ {
+  "id": "G14",
+  "pillar": "P4 proactivity and triggers",
+  "block": "Connectors and auth",
+  "gap": "Meeting prep, the day cards and change detection read only the primary calendar. Meetings on a work or shared calendar get no prep, are missing from the day and never trigger an update.",
+  "today": "Prep reads 'primary' (channels/event-briefs.ts:76). Day cards call google.events (channels/day-cards.ts:157), which reads calendars/primary (connectors/google.ts:722-723). Changed-event detection also reads 'primary' (connectors/google.ts:736). query_calendar can list calendars and read one named calendar per call (tools/live/google.ts:163-169). Free/busy queries several calendars at once (tools/live/google.ts:461).",
+  "add": "One bounded read across all the owner's selected calendars, with a concurrency cap, a merge in start order, and a typed partial result when one calendar fails. Prep, day cards, change detection and query_calendar's default all use it.",
+  "needs": [
+   "none"
+  ],
+  "size": "M",
+  "source": "docs/planning/lanes-2026-10-11/instinct/03-connector-read-depth.md:7, 32-39",
+  "gates": "Underneath page 1 #21 (today's agenda); drop it if that answer already reads all calendars. Feeds the Brief, G12 and the Weight score.",
+  "instinct": "Instinct brief 03: calendar across all calendars",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G15",
+  "pillar": "P4 proactivity and triggers",
+  "block": "Triggers and scheduled jobs",
+  "gap": "Waldo chooses only 'update now' or 'skip', and every change then folds into the next card. It cannot escalate something urgent through quiet hours or low volume, or deliberately keep noise out of the next card, so the site's 'fewer pings' promise rests on fixed switches as Gmail push raises volume.",
+  "today": "The update lane asks the model whether a change is worth an update card now, otherwise SKIP (prompt/update-cards.ts:15-19; channels/owner-do.ts:2991-2994). All recorded changes fold into the next main card (channels/update-cards.ts:61-67; channels/owner-do.ts:3048). Quiet hours, low volume or a sent Close block sending outright, with no escalation (channels/owner-do.ts:2989). Push admission uses fixed caps and cooldowns per class (delivery-gate/gate.ts:28-91).",
+  "add": "Widen the model's decision to now, fold into the next card, keep out, or escalate, each with a short reason recorded on the update row. Escalation may cross quiet hours or low volume only under an owner-set rule, and the deterministic gate stays the hard cap. Add scenario evals for bursts, quiet hours and an urgent sender.",
+  "needs": [
+   "owner decision",
+   "migration"
+  ],
+  "size": "M",
+  "source": "docs/planning/WEBSITE_PROMISE_LEDGER_2026-10-10.md 'Fewer pings' (:107), ruling 5 (:11), \u00a77 (:196)",
+  "gates": "Gmail push (#1215) pulls this sweep forward on every mail (channels/gmail-push.ts:4). Page 1 covers notification preferences (#24) and active hours, not this judgment.",
+  "instinct": "W6 follows through without interrupting to seem active",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G16",
+  "pillar": "P4 proactivity and triggers",
+  "block": "Connectors and auth",
+  "gap": "Waldo cannot read the forecast, UV, air quality or daylight, and it has no coarse location, so plans and the Brief ignore weather and place.",
+  "today": "No weather tool or Open-Meteo code exists in packages (grep). The ledger marks it NOTHING (docs/planning/WEBSITE_PROMISE_LEDGER_2026-10-10.md:91, :159) and records provider decision D5 at :255. Draft PR #1043 is open.",
+  "add": "A read-only get_weather tool on Open-Meteo with strict schemas, a timeout, and typed results for unavailable and no-location. A coarse owner location from the app under its own consent purpose, rounded before any request and never logged. Add the host to the egress allowlist.",
+  "needs": [
+   "owner decision",
+   "app.v1 contract",
+   "deploy or secret"
+  ],
+  "size": "M",
+  "source": "docs/planning/lanes-2026-10-11/instinct/02-weather-daylight-tool.md:1-77",
+  "gates": "Needs a ruling on Open-Meteo's commercial terms (brief :70) and a location-consent ruling. Draft PR #1043.",
+  "instinct": "Instinct brief 02 weather and daylight; T16; L4",
+  "_verdict": "keep"
+ },
+ {
+  "id": "G17",
+  "pillar": "P4 proactivity and triggers",
+  "block": "Health plane",
+  "gap": "The promised learning moments do not exist: The Window, best hours, a Heads-Up driven by patterns, the weekly Adjustment, The Slope and Tomorrow today. The owner gets three fixed day cards.",
+  "today": "The only day cards are the Brief, the Check-in and the Close (prompt/day-cards.ts:14, 23, 31). 'adjustment' is a push class with no producer (delivery-gate/gate.ts:48-56). There is no pattern producer in the health plane (grep).",
+  "add": "Producers in the Supabase health plane: intraday readiness and best hours, numeric pattern evidence under RLS, and a four-week Slope. DO memory keeps only a qualitative pattern and a pointer. Add a card kind for each moment, and let task ordering take Form into account.",
+  "needs": [
+   "ADR",
+   "migration",
+   "app.v1 contract",
+   "owner decision"
+  ],
+  "size": "L",
+  "source": "docs/planning/WEBSITE_PROMISE_LEDGER_2026-10-10.md :100-110, :140, \u00a77 (:193, :198), Wave 4 (:241)",
+  "gates": "Page 1 covers the displays (#23, #50, #69). Needs G33, G3 for Window blocking, and waldo-brain#34 (the numeric-pattern rule).",
+  "instinct": "T5 health-aware timing",
+  "_verdict": "keep"
+ },
+ {
+  "id": "G18",
+  "pillar": "P4 proactivity and triggers",
+  "block": "Triggers and scheduled jobs",
+  "gap": "A meeting prep note never mentions what was left open last time with the same people or meeting series.",
+  "today": "The grounded prep runs as a one-call decision on calendarPrepPrompt (channels/event-briefs.ts:45-52, called at channels/owner-do.ts:2918). Its only owner context is recalled owner-authored, non-health memory claims (channels/owner-turn.ts:777-788). No open loops, receipts or earlier prep notes go in. event_briefs stores only a digest per occurrence (event-briefs.ts:64-65, 99). The ledger records last time's open items as absent (docs/planning/WEBSITE_PROMISE_LEDGER_2026-10-10.md:101).",
+  "add": "Pass open loops, receipts and the earlier prep for the same series or attendees as sourced context. The model judges what to mention. Add a scenario test.",
+  "needs": [
+   "none"
+  ],
+  "size": "S",
+  "source": "docs/planning/WEBSITE_PROMISE_LEDGER_2026-10-10.md Prep (:101), Wave 2 (:237)",
+  "gates": "Open PR #1109 adds the mail tied to the meeting. This row adds Waldo's own history.",
+  "instinct": "T13",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G19",
+  "pillar": "P6 one agent on every surface",
+  "block": "Memory and skills",
+  "gap": "A fact told to Waldo on Telegram or iMessage is not in the next app turn's history, because each surface keeps its own transcript. iMessage rows are also left out of the recall index.",
+  "today": "ownerChainRef returns owner:<principal> only for the app (context-composer/owner-turn.ts:38-40), next to the comment 'Until the single transcript each surface keeps its own'. iMessage history uses the canonical store without the episode index (channels/owner-do.ts:2571), while the app wraps it in indexedConversationStore (:2566).",
+  "add": "Every admitted surface reads and writes the owner's one chain. A one-time backfill inside each owner object copies the old per-surface rows into it in time order, with ids unchanged, and keeps the originals for forget. No hosted migration is needed. Threads keep their own chains.",
+  "needs": [
+   "migration"
+  ],
+  "size": "L",
+  "source": "#1103 comment 6154900101 (A3 spec); docs/planning/lanes-2026-10-11/IDENTITY_ROOT_PLAN.md \u00a72 (Conversation row), \u00a73 slice 4",
+  "gates": "A3 is specced but not started: there is no PR at the tip, and the 14 Oct focus list puts it under 'Next'. It comes after G20. Page 1 covers row visibility (#5); this is the merge underneath it. [inference] This morning's reset and re-onboarding of the team may shrink what the backfill has to carry.",
+  "instinct": "",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G20",
+  "pillar": "P6 one agent on every surface",
+  "block": "Text and voice channels",
+  "gap": "Each surface still gets its own runtime with Telegram-shaped identity, and iMessage and WhatsApp turns get no skills. The same request behaves differently depending on where it is typed.",
+  "today": "setup(channel) builds and caches one runtime per channel, resolving owners through resolveOwnerTelegramId (channels/owner-do.ts:1895-1912). Skills go only to Telegram and the app (:2557). The guard baseline counts 58 surface compares in owner-do.ts (scripts/guards/guard-surface-neutral-core.baseline.json:5).",
+  "add": "Build the owner core once per owner object, and a runtime for each surface adapter from it. One curated skill host keyed by the owner principal. Make the listener surface-neutral and retire the Telegram responder shim.",
+  "needs": [
+   "none"
+  ],
+  "size": "L",
+  "source": "#1103 comment 6154843733 (A2 spec); 6152354118 \u00a73 A2; docs/planning/lanes-2026-10-11/IDENTITY_ROOT_PLAN.md \u00a71, \u00a73 slices 1 and 7",
+  "gates": "Workstream A2 is on the 14 Oct focus list (Now, row 6), with no PR at the tip. It waits on #1108 (open). It unblocks G19, G22, G21, G2's executor and G26.",
+  "instinct": "",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G21",
+  "pillar": "P6 one agent on every surface",
+  "block": "Triggers and scheduled jobs",
+  "gap": "Proactive work goes only to the app or Telegram. There is no per-kind surface choice and no rule to use where the owner last was. So iMessage and WhatsApp never get a Brief, reminder, prep note or check-back, and an owner on both surfaces always gets a hard-coded Telegram copy.",
+  "today": "alarm() runs the app's executors when the owner is app-bound (channels/owner-do.ts:1511-1519, 1584-1597) and wraps app delivery in copiedToTelegram, a plain Telegram copy for owners on both (:736-741). Telegram keeps proactive output only for an owner with no app binding. No other surface is ever the scheduled channel, and the prep sweep returns early on any other channel (:2902).",
+  "add": "One route(kind, owner): the surface the owner chose for that kind, otherwise the last surface used, otherwise the app with push, otherwise Telegram. One hold-until rule covers quiet hours and the daily cap. The Telegram copy becomes a per-owner rule that ends once push lands. A refused app admission still holds and never falls back silently.",
+  "needs": [
+   "none"
+  ],
+  "size": "M",
+  "source": "#1103 comment 6154958924 (A5); docs/planning/lanes-2026-10-11/IDENTITY_ROOT_PLAN.md \u00a72 (Proactive delivery row), \u00a73 slice 3",
+  "gates": "Comes after G19 and G22. Shares the alarm pass with #1108 and #1213 (both open). Push (#1177, page 1) feeds the app branch.",
+  "instinct": "",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G22",
+  "pillar": "P6 one agent on every surface",
+  "block": "Text and voice channels",
+  "gap": "Replies and proactive messages are built in Telegram's shape and sent from many places. A surface without Telegram silently gets less, and a reply part a surface cannot show has no defined fallback.",
+  "today": "The reply-part and surface-capability contracts exist (packages/contracts/src/runtime/reply-parts.ts:22-41; surface-capabilities.ts:9-30), but nothing in runtime imports them (grep). FinalPayload is TelegramFinalPayload (channels/telegram-final-outbox.ts:11).",
+  "add": "A reply envelope over the contract parts, rendered per surface by declared capability. A part a surface cannot show becomes a link and is never dropped. One addressed final outbox, every producer going through deliver(envelope, to), and a surface registry with a conformance test across every part and surface.",
+  "needs": [
+   "app.v1 contract"
+  ],
+  "size": "L",
+  "source": "#1103 comments 6154958924 (A4), 6152354118 \u00a73 A7; docs/planning/OMNIPRESENCE_SEAM_DESIGN_2026-10-10.md",
+  "gates": "Comes after G20 and G19. Page 1 covers the app parts and the capabilities route (#28, #41); this is the seam underneath. Unblocks G21, G23, G24, G25 and G26.",
+  "instinct": "",
+  "_verdict": "keep"
+ },
+ {
+  "id": "G23",
+  "pillar": "P6 one agent on every surface",
+  "block": "Permissions and approvals",
+  "gap": "The approval desk has no iMessage surface and defaults to Telegram. A card raised from an iMessage turn is recorded as an app card, so its origin is wrong, and a decision clears the card's buttons only on Telegram.",
+  "today": "ApprovalSurface is telegram, whatsapp, app or console (channels/approvals.ts:81), defaulting to telegram (:275). The iMessage runtime files its desk as 'app' by design, since iMessage cannot approve (channels/owner-do.ts:2270-2271). Text surfaces already get an app link to approve (approvals.ts:352). A decision retires every presentation durably (approvals.ts:841-848), but the visual retire runs only for Telegram (owner-do.ts:2272-2276).",
+  "add": "Take the surface type from the contracts list, iMessage included, and make the surface required. Record the true origin surface on each card. Retire through each surface's renderer once G22 lands. Keep the app link as the decision path on text surfaces.",
+  "needs": [
+   "none"
+  ],
+  "size": "S",
+  "source": "#1103 comments 6152354118 \u00a73 A6, 6153185827 \u00a77",
+  "gates": "Comes after G22. Page 1 #34 shows approval origin to the app; this is the desk's surface list underneath it.",
+  "instinct": "",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G24",
+  "pillar": "P6 one agent on every surface",
+  "block": "Text and voice channels",
+  "gap": "Quick replies and charts are declared in app.v1 and promised as working, but the runtime never emits either one.",
+  "today": "The contract declares quick_replies (packages/contracts/src/app/parts.ts:40-45) and chart_series (:46-53). The app transcript emits only text, operation, approval and receipt parts (packages/runtime/src/channels/app-api.ts:210-213). No runtime producer emits quick replies or a chart (grep).",
+  "add": "A structured-output path or tool that lets the turn attach quick replies and a chart, always with a readable text fallback. On messaging channels a chart degrades, for example to an image, and quick replies to a numbered line. Health series go only to the owner's own surfaces, under ADR-0081 review.",
+  "needs": [
+   "ADR"
+  ],
+  "size": "M",
+  "source": "docs/planning/WEBSITE_PROMISE_LEDGER_2026-10-10.md (:118, :119), \u00a72 rules 1 and 2 (:47-48)",
+  "gates": "Renders through G22. Health charts wait on page 1's position on raw health values on the app wire.",
+  "instinct": "",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G25",
+  "pillar": "P6 one agent on every surface",
+  "block": "Text and voice channels",
+  "gap": "The owner cannot forward or send mail to Waldo, because there is no Waldo address per owner. Yet inbound email is a named launch presence.",
+  "today": "The Worker exports only fetch and scheduled (index.ts:172-259), and no email() handler exists (grep). docs/architecture/PRODUCTION_ARCHITECTURE.md (Lanes, item 1) marks it not built.",
+  "add": "A per-owner address and an Email Worker handler that admits mail through the same authority boundary: owner and sender checks, mail treated as external data, and authorship labels on forwarded and quoted parts. Record an activity entry for each event.",
+  "needs": [
+   "ADR",
+   "owner decision",
+   "deploy or secret"
+  ],
+  "size": "L",
+  "source": "CLAUDE.md (inbound email shares the authority boundary; email-body processing needs ADR review); docs/architecture/PRODUCTION_ARCHITECTURE.md Lanes 1",
+  "gates": "Reuses the forward rule (#1209, #1216, #1219). Comes after G22.",
+  "instinct": "A2 connected accounts or web access where needed",
+  "_verdict": "keep"
+ },
+ {
+  "id": "G26",
+  "pillar": "P6 one agent on every surface",
+  "block": "Text and voice channels",
+  "gap": "WhatsApp is still reached through a Telegram-shaped shim keyed on a stored phone number, not the owner principal, and it is never a proactive channel. Outside Meta's 24-hour window only an approved template can reach the owner, and no template send exists. So no Brief or reminder can go out there.",
+  "today": "Sends go through whatsappTelegramShim (channels/whatsapp-api.ts:39-50; channels/owner-do.ts:1972-1973), and the owner is the stored whatsapp_subject (:1898-1899). alarm() only ever schedules on Telegram or the app (:1511-1519). No template send exists (grep). Proactive messages outside 24 hours need approved templates (docs/research/WHATSAPP_ROUTES_2026-09-24.md:12, :36).",
+  "add": "Record the eligibility and route ruling. Then admit WhatsApp by principal through a directory presence, add an adapter and renderer, and add a utility-template path for proactive items with per-owner opt-in. Retire the shim.",
+  "needs": [
+   "owner decision",
+   "migration",
+   "deploy or secret"
+  ],
+  "size": "M",
+  "source": "plan \u00a713 WhatsApp (:485); #1103 comment 6152354118 (\u00a71 correction 3, \u00a73 A8)",
+  "gates": "Comes after G20, G21 and G22. The 14 Oct focus list says 'not now' (#1103 comment 6159688464). Page 1 covers linking and unlinking (#16, #48). WhatsApp's forward flag (#1216 item 4) landed in #1223 just after the tip.",
+  "instinct": "",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G27",
+  "pillar": "P6 one agent on every surface",
+  "block": "Text and voice channels",
+  "gap": "The web dashboard has no Chat view and no Work view. It says the Brief, Check-in and Close are not shown there.",
+  "today": "The Route union has no chat or work route (packages/dashboard-app/src/App.tsx:21). The Today page's caption says the Brief, Check-in and evening Close run in chat and are not shown (:119).",
+  "add": "A Chat view on the same conversation store and cursor, and a Work view of delegated tasks, executor availability and artifacts. Both use the same task ids, replay and cancellation as the app. Approval stays in the app and under the console's calendar-only rule.",
+  "needs": [
+   "app.v1 contract"
+  ],
+  "size": "L",
+  "source": "plan \u00a713 Web dashboard (:507-509), \u00a710 W (:374), A12 (:426)",
+  "gates": "Joined product, after S4. The Chat view reads the one chain from G19. The Work view needs G28 and G2.",
+  "instinct": "",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G28",
+  "pillar": "P6 one agent on every surface",
+  "block": "Browser and computer use",
+  "gap": "Waldo can start Codex or Claude Code on the paired Mac, but it gets back only an exit code and a bounded output tail, delivered only on Telegram. No diff, artifact or independent test result comes back tied to a Waldo task.",
+  "today": "start_session admits codex and claude-code (devices/mac-wire.ts:10). A completed result is exit_code plus an output_tail of at most 6,144 bytes (:16). The owner gets the status line (devices/mac-delivery.ts:36) and a model summary of that payload, only through Telegram. An owner with no Telegram link keeps the rows pending (channels/owner-do.ts:1637-1639, 1659-1668).",
+  "add": "A result contract: artifact references (diff, test log) stored in the workspace or R2, an independent verification step, and a mapping from task to session that survives reconnect. Delivery goes through G21's router. No health context goes into the handoff.",
+  "needs": [
+   "app.v1 contract",
+   "ADR"
+  ],
+  "size": "L",
+  "source": "plan \u00a710 K0 (:371), \u00a713 Kennel (:495-503), A14 (:428)",
+  "gates": "Needed for the joined showcase, not the personal pilot. Feeds A11 and G27. App delivery needs G21.",
+  "instinct": "",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G29",
+  "pillar": "Connector depth",
+  "block": "Connectors and auth",
+  "gap": "Long emails are cut silently at 32,000 characters, and inbound attachments are invisible. Waldo can misread a long message and never knows a file was attached.",
+  "today": "BODY_CAP is 32_000, applied with a plain slice and no truncated flag (connectors/google.ts:389, 410). read_thread returns messages and a cursor only (tools/live/google.ts:306).",
+  "add": "A body chunk cursor with a truncated flag, plus attachment metadata per message (name, size, type) without fetching the content. Land #1117.",
+  "needs": [
+   "none"
+  ],
+  "size": "S",
+  "source": "docs/planning/lanes-2026-10-11/instinct/03-connector-read-depth.md:9, 41-45",
+  "gates": "PR #1117 (open). Page 1 #3 covers outbound attachments only.",
+  "instinct": "Instinct brief 03: full bodies, long threads, attachments listed",
+  "_verdict": "keep"
+ },
+ {
+  "id": "G30",
+  "pillar": "Connector depth",
+  "block": "Connectors and auth",
+  "gap": "Waldo cannot archive, label or mark mail read, and it cannot create or edit a Doc, Sheet or Drive file. It reads Drive only on staging. Triage and 'make me a budget sheet' end as suggestions.",
+  "today": "GOOGLE_METHODS has no Gmail modify and no Drive, Docs or Sheets write (connectors/google.ts:379). Mail scopes stop at readonly, send and compose (:13), and Workspace scopes are read-only by design (:15-20). draft_document and write_sheet_cell are typed names with no handler (hooks/tool-replay-class.ts:50). DRIVE_READS is '0' for production (packages/runtime/wrangler.jsonc:20).",
+  "add": "Gmail modify plus Docs, Sheets and Drive create, edit and share, each as an approval kind whose card shows the exact messages, diff or range. Each gets a readback, a revision receipt and undo where Google allows. Sharing gets its own approval class. Turn on Drive reads in production after a production proof.",
+  "needs": [
+   "owner decision",
+   "ADR",
+   "app.v1 contract",
+   "deploy or secret"
+  ],
+  "size": "L",
+  "source": "docs/planning/WEBSITE_PROMISE_LEDGER_2026-10-10.md (:152, :154), Wave 5 (:243); docs/planning/waldo-agent-mvp/GOOGLE_WORKSPACE_PARITY_2026-09-26.md:27-31",
+  "gates": "The 14 Oct focus list puts Docs and Sheets writes and new Google features under 'not now' (#1103 comment 6159688464). New scopes need G38. New approval kinds ship only after the app re-pins. Open PR #1148 holds the Workspace plan.",
+  "instinct": "T25 spreadsheets; Hermes and gog Workspace surface",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G31",
+  "pillar": "Connector depth",
+  "block": "Connectors and auth",
+  "gap": "An owner cannot connect an MCP server with their own sign-in. Each of the site's 22 'planned' connectors would need bespoke work.",
+  "today": "'Server registry is deploy config for alpha (env JSON); per-owner servers ride the vault later' (tools/live/mcp.ts:32). Generic OAuth is left to 'the generic flow (RFC 9728)' (:111-112), and none exists (grep). Production ships an empty server list (packages/runtime/wrangler.jsonc:20).",
+  "add": "A per-owner MCP server registry in Vault. OAuth with RFC 9728 discovery and RFC 8707 resource indicators. Tokens stay at the edge, as today, with a tool allowlist per server. Servers that move money get their own authority review.",
+  "needs": [
+   "ADR",
+   "migration",
+   "deploy or secret"
+  ],
+  "size": "L",
+  "source": "docs/research/HARNESS_COMPARISON_2026-10-13.md \u00a76.3 (:134-140); docs/planning/WEBSITE_PROMISE_LEDGER_2026-10-10.md (:172)",
+  "gates": "Page 1 #45 covers four named connectors. Write tools need G3. The harness comparison scopes this to third-party servers, which the launch does not promise. The 14 Oct focus list puts the connector long tail under 'not now'.",
+  "instinct": "A2 connected accounts where needed",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G32",
+  "pillar": "Health plane",
+  "block": "Health plane",
+  "gap": "The day plan sets card times from the calendar and memory, and ignores the health plane. Health-aware planning, a core launch capability, is not delivered.",
+  "today": "planToday builds dayPlanInput from localNow, calendar, cards and proactivity (channels/owner-do.ts:2711-2719; prompt/day-cards.ts:65-69). composeDayPlanInput adds owner memory (channels/day-cards.ts:248-261). No health-plane zone reaches the plan.",
+  "add": "Feed consent-gated health at zone level, with no numbers, into the plan input, so the model can move cards on a stretched day. Missing or revoked health stays absent, never invented readiness. Run the ADR-0081 destination check first, because the plan is stored.",
+  "needs": [
+   "ADR"
+  ],
+  "size": "M",
+  "source": "#1103 comments 6159705967 (lead's priority 3), 6159688464; gap doc T5; plan A3 (:417), A5 (:419)",
+  "gates": "Needs health rows on staging from the producers and device ingest. Together with G12 it closes A3, and it covers the plan side of A5.",
+  "instinct": "T5 daily planning (Waldo's claimed lead)",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G33",
+  "pillar": "Health plane",
+  "block": "Health plane",
+  "gap": "Every score is still a candidate, so no Recovery, Sleep debt, Form or Weight number is an accepted measure.",
+  "today": "Zone bands are candidates until the owner ratifies them (health/scores/zones.ts:4). Every available pillar is marked candidate_unaccepted (health/scores/index.ts:49; form.ts:77; weight.ts:28).",
+  "add": "An owner review of formulas and bands, an ADR-0081 amendment recording the accepted versions, and activation per pillar with the version shown on the score.",
+  "needs": [
+   "owner decision",
+   "ADR"
+  ],
+  "size": "S",
+  "source": "docs/planning/lanes-2026-10-11/instinct/01-health-score-calculations.md:32-33, 102",
+  "gates": "Underneath page 1 #17, #18 and #53; drop it if page 1 states this step. Related open PRs: #1083 and #1152.",
+  "instinct": "Instinct brief 01 score formulas",
+  "_verdict": "keep"
+ },
+ {
+  "id": "G34",
+  "pillar": "Health plane",
+  "block": "Health plane",
+  "gap": "Weight counts only calendar time and physical load. Message volume and open tasks are always empty, so a heavy inbox day reads as light.",
+  "today": "The producer passes messageCount and openTaskMinutes as null for every day (health/producer.ts:206, 210). Weight would weigh them, at 0.15 and 0.3 of the score, if they were present (health/scores/weight.ts:6-8).",
+  "add": "Daily collectors that hold no content: a Gmail message count per local day, and open-task minutes from Google Tasks. The task input needs a duration estimate per task, because Weight reads minutes, not a count (health/scores/weight.ts:7). Store numbers only in DO storage, like calendar demand (health/calendar-demand.ts:4-5), and feed them to the producer.",
+  "needs": [
+   "none"
+  ],
+  "size": "S",
+  "source": "docs/planning/lanes-2026-10-11/instinct/01-health-score-calculations.md:64-67; docs/planning/WEBSITE_PROMISE_LEDGER_2026-10-10.md Weight row (task estimates)",
+  "gates": "Underneath page 1 #19. Drop it if page 1 names these collectors.",
+  "instinct": "Instinct brief 01 Weight demand inputs",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G35",
+  "pillar": "Health plane",
+  "block": "Health plane",
+  "gap": "There is no Training score and there are no quiet flags. Workouts count only as physical load inside Weight and as time Form leaves out of stress. SpO2 and breathing rate are ingested but never compared with the owner's usual, and wrist temperature cannot be uploaded at all.",
+  "today": "computeDailyScores returns recovery, sleep_debt, form and weight only (health/scores/index.ts:12-15). Workouts feed Weight's physical load (health/producer.ts:132-140; health/scores/weight.ts:7) and are left out of Form's stress windows (health/scores/form.ts:22). Ingest accepts spo2, respiratory_rate and workout but no wrist temperature (packages/contracts/src/app/health-ingest.ts:132-136, 141-144). Outside the sanitiser, nothing reads spo2 or respiratory_rate (grep).",
+  "add": "A training pillar: workout load against the personal baseline, read beside the day's meetings. A flag for SpO2, breathing rate and wrist temperature when they move away from the owner's usual. It is a zone or flag only, never a diagnosis, and shows unavailable rather than an invented value. Add wrist_temperature to ingest additively.",
+  "needs": [
+   "ADR",
+   "app.v1 contract",
+   "migration"
+  ],
+  "size": "M",
+  "source": "docs/planning/WEBSITE_PROMISE_LEDGER_2026-10-10.md (:89, :90, :195); docs/planning/lanes-2026-10-11/instinct/README.md:30; 01-health-score-calculations.md:62-64",
+  "gates": "Needs ADR-0081 registry entries as candidates, and an app-side read of wrist temperature from HealthKit.",
+  "instinct": "Instinct brief 01 Training pillar",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G36",
+  "pillar": "Health plane",
+  "block": "Health plane",
+  "gap": "After the owner changes time zone, the app's health route and the model's prompt can disagree on whether today's score is fresh. The screen and the reply then contradict each other.",
+  "today": "The route ages a row by the zone stored on that row (channels/app-health.ts:116). The prompt uses the owner's clock zone (channels/health-context.ts:135). The stored score has no source_as_of or stale_at field (grep).",
+  "add": "One ageing call, in the owner's current zone, used by both the route and the prompt. Add ADR-0081's source_as_of and stale_at to the stored score row.",
+  "needs": [
+   "ADR",
+   "migration"
+  ],
+  "size": "S",
+  "source": "docs/research/HARNESS_COMPARISON_2026-10-13.md \u00a78 (:152-158), \u00a711 proposal 1",
+  "gates": "Underneath page 1 #53 (provenance and freshness).",
+  "instinct": "",
+  "_verdict": "keep"
+ },
+ {
+  "id": "G37",
+  "pillar": "Health plane",
+  "block": "Health plane",
+  "gap": "Health values the owner types into chat are kept word for word in the transcript and in the search index of past messages. Nothing quarantines them, no decision allows it, and summaries or embeddings built later would read the same rows.",
+  "today": "Transcript saves scrub only secret URLs (packages/runtime/src/conversation/canonical-owner-store.ts:19-22). The episode index stores message text as is (channels/episodes.ts:52, :130-131). Memory blocks and R2 summaries reject health (packages/contracts/src/memory/sanitise.ts:349-361), but nothing covers the transcript. IMPLEMENTATION_CONTRACTS.md:39 requires a quarantine before anything is stored.",
+  "add": "An owner ruling, recorded in an ADR, that extends the beta health ruling to conversation bodies. Option one: classify sensitive turns at ingress, by the model or the owner, never by a fixed rule, and store a non-reconstructive marker in their place. Option two: amend ADR-0081 to keep owner-typed chat verbatim, with forget and deletion duties that also reach the episode index and every derived summary. Tests use synthetic values.",
+  "needs": [
+   "ADR",
+   "owner decision"
+  ],
+  "size": "M",
+  "source": "docs/planning/lanes-2026-10-11/LONG_CONVERSATIONS_BRIEF.md \u00a71 (Health bullet); docs/planning/waldo-agent-mvp/IMPLEMENTATION_CONTRACTS.md:39; CLAUDE.md health constraints ('conversation-body storage ... need explicit bounded contract/ADR review')",
+  "gates": "Needed before G8 embeds episodes and before G7 is turned on. Must stay consistent with page 1's position against fixed-rule sensitive rows.",
+  "instinct": "",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G38",
+  "pillar": "P7 identity and consent",
+  "block": "Connectors and auth",
+  "gap": "Only listed test users can connect Google: the OAuth app is unverified and asks for restricted Gmail and Drive scopes. Nobody outside the list can link mail or calendar, and test-mode refresh tokens lapse every 7 days.",
+  "today": "connectors/google.ts:5 reads 'Unverified app, so only listed test users can connect'. gmail.compose stays 'until Waldo keeps its own drafts' (:6). The restricted scopes are requested at :13 (gmail.readonly, send, compose) and :17 (drive.readonly). Open PR #1148, docs/connectors/GOOGLE_WORKSPACE_PLAN.md:178, says test-mode tokens expire after 7 days. Its line 3 records the owner ruling that publishing and verification come after the working agent and the app build.",
+  "add": "Settle the smallest scope list per feature, dropping gmail.compose if drafts stay inside Waldo. Prepare the branding, the data-use disclosures and the demo video. Then submit brand and restricted-scope verification, including the yearly security assessment, when the owner lifts the 'later' ruling.",
+  "needs": [
+   "owner decision",
+   "deploy or secret"
+  ],
+  "size": "M",
+  "source": "plan \u00a79 Email (:336), \u00a713 (:491); docs/planning/waldo-agent-mvp/GOOGLE_WORKSPACE_PARITY_2026-09-26.md:13; ADR_RECONCILIATION.md ADR-0075 row ('Google verification remains an external gate')",
+  "gates": "Long external lead time. Gates every tester outside the list and the scope changes in G30. Page 1 covers metadata mode (#15), connection health (#46) and per-feature narrowing (#47), not publishing.",
+  "instinct": "Gmail, Calendar and Contacts for any user (OpenInstinct Google Workspace)",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G39",
+  "pillar": "P7 identity and consent",
+  "block": "Connectors and auth",
+  "gap": "Disconnecting Google deletes Waldo's stored token but never revokes the grant at Google, and keeps everything Waldo learned from that account. The website line 'Disconnect removes what Waldo learned' is not true today.",
+  "today": "google.disconnect calls vault.revoke and then drops the account from the owner object's list (packages/runtime/src/channels/owner-do.ts:2152-2159). vault.revoke runs connection_revoke (connectors/connections.ts:90), which only marks the row revoked and deletes the Vault secret (supabase/migrations/20260924170000_waldo_connections.sql:78-88). No code calls Google's token-revocation endpoint (rg). No claims, episodes or tool-output rows are retired by source account.",
+  "add": "Revoke the token at Google, through the connector proxy, before deleting the secret, and show 'cleanup pending' if that fails; do the same on account deletion. Retire the claims, episodes, tool-output rows and R2 copies that came from that account through the forget barrier, with a receipt naming what was removed and what stays.",
+  "needs": [
+   "ADR",
+   "owner decision",
+   "deploy or secret"
+  ],
+  "size": "M",
+  "source": "plan A9 (:423); docs/planning/WEBSITE_PROMISE_LEDGER_2026-10-10.md \u00a76 (:181), \u00a77 (:199)",
+  "gates": "Underneath page 1 #14 (disconnect in the app) and #6 (per-store purge). Closes A9's 'provider cleanup pending is shown honestly'.",
+  "instinct": "",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G40",
+  "pillar": "P7 identity and consent",
+  "block": "Permissions and approvals",
+  "gap": "The retained compliance ADR requires four things before any non-founder user: a DPIA, an inventory of processors and DPAs, a breach plan and a launch-region decision. None of them is in the repository.",
+  "today": "ADR-0073 is retained with that list (docs/planning/waldo-agent-mvp/ADR_RECONCILIATION.md:27). Code already sends data to OpenAI, Langfuse (channels/owner-do.ts:76), Google, Telegram and Cloudflare. Expo is pending in #1177.",
+  "add": "A processor inventory covering every egress route and its retention. Then the DPIA, a breach and incident runbook, and the launch-region decision.",
+  "needs": [
+   "owner decision"
+  ],
+  "size": "M",
+  "source": "docs/planning/waldo-agent-mvp/ADR_RECONCILIATION.md ADR-0073 row (:27); plan \u00a713 (:491)",
+  "gates": "Page 1 covers age, terms, consents, export and deletion. Gates the first non-founder user.",
+  "instinct": "",
+  "_verdict": "keep"
+ },
+ {
+  "id": "G41",
+  "pillar": "P8 activity and observability",
+  "block": "Evals and observability",
+  "gap": "Model spend per owner survives only in a rolling log of the last 500 steps, so no monthly total exists. The owner's ceiling of $25 per user per month cannot be enforced or shown, and background work can spend without bound.",
+  "today": "Each priced hop's cost lands in the owner object's trace_log, which keeps 500 rows (packages/runtime/src/channels/harness.ts:62-92). Console usage sums only those rows (channels/console.ts:318-319). The ledger table 'is still to be written. costLedger never creates it' (llm/cost-ledger.ts:32), and traceBook is built without a ledger (channels/owner-do.ts:1920). spendPosture (cost-ledger.ts:67) has no caller (rg). PR #1113 adds the ledger and a monthly /usage line. It is held for the owner and has no ceiling.",
+  "add": "Land the ledger, through #1113 or an equivalent, and set the ceiling per environment. Gate background, heartbeat and worker turns with spendPosture: lower effort near the cap, skip background work at it, and send one notice. Price Browserbase calls into the ledger. Report p50 and p95 cost and latency per completed loop.",
+  "needs": [
+   "owner decision",
+   "migration",
+   "deploy or secret"
+  ],
+  "size": "M",
+  "source": "docs/planning/WEBSITE_PROMISE_LEDGER_2026-10-10.md ruling 18 (:24), D10 (:260); plan \u00a712 (:479), A10 (:424); docs/planning/lanes-2026-10-11/handoffs/GAP_ANALYSIS_HANDOFF_2026-10-11.md \u00a70a (:16)",
+  "gates": "Needed before outside users. Feeds G4, G5 and G44.",
+  "instinct": "",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G42",
+  "pillar": "P8 activity and observability",
+  "block": "Evals and observability",
+  "gap": "Each round of a turn spends about 7.5 to 11.6 seconds outside the model, and nobody has measured where that time goes.",
+  "today": "The 13 Oct re-run measured it (#1103 comment 6155218639). Tool calls in one response run one after another (packages/runtime/src/conversation/tool-loop.ts:143). Tools are sent with strict false (llm/openai.ts:73). On a non-app boot, memory migration and the day plan queue on the owner's serial lane (channels/owner-do.ts:2386-2392). APP_CHAT_PLAN.md:79 (row 17) traces the first request waiting on setup().ready behind that work.",
+  "add": "First, a time breakdown per hop. Then run read-only tool calls concurrently while keeping mutations in order. Make tool schemas strict one tool at a time, each with valid and invalid tests. Keep boot work off the first request without breaking the forget-and-pin ordering that serial protects.",
+  "needs": [
+   "none"
+  ],
+  "size": "M",
+  "source": "#1103 comments 6155218639, 6153185827 (take item 6, strict tools); docs/planning/lanes-2026-10-11/APP_CHAT_PLAN.md:79 (row 17); plan \u00a711 (:436, p95 first useful feedback under 5 s)",
+  "gates": "Measured with #1185's latency columns (G43). Affects A16.",
+  "instinct": "",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G43",
+  "pillar": "P8 activity and observability",
+  "block": "Evals and observability",
+  "gap": "No scheduled run grades the real model. A prompt or model change can make replies worse without raising any red signal.",
+  "today": "evals/run.ts runs on demand and uses the chat model as its own judge (packages/runtime/evals/run.ts:29-31). No workflow schedules it (.github/workflows). PR #1185 (22 scenarios, independent judge, pass^3) is waiting for owner keys and a schedule.",
+  "add": "Merge and host #1185: keys, a cron, a capped spend and scorecard storage tied to the release SHA. Report pass^3 from a different grader model. A regression holds promotion.",
+  "needs": [
+   "owner decision",
+   "deploy or secret"
+  ],
+  "size": "M",
+  "source": "docs/planning/PARITY_GAP_PLAN_2026-10-02.md:18; docs/research/HARNESS_COMPARISON_2026-10-13.md \u00a79.2; docs/planning/lanes-2026-10-11/handoffs/GAP_ANALYSIS_HANDOFF_2026-10-11.md \u00a75 item 7",
+  "gates": "Gates turning on G7, G8's done-when, G47 and G44.",
+  "instinct": "",
+  "_verdict": "keep"
+ },
+ {
+  "id": "G44",
+  "pillar": "P8 activity and observability",
+  "block": "Evals and observability",
+  "gap": "The plan's release checks cannot be scored. The eval set has 7 memory cases, 5 day-planning cases, one draft-email case, no email follow-up case and one open-loop research prompt. None of the 36 native cases has run.",
+  "today": "Case categories are in packages/runtime/evals/cases.ts:5, with the counts by grep. Email and research appear only as tools-draft-email and tools-open-loop (cases.ts:23-24). Every native case must be 'not_run' (packages/runtime/evals/waldo-native-suite.ts:9-10, :27, :45). Completion needs a provider-billed cost per response (packages/runtime/evals/usage-reconciliation.ts:25-35).",
+  "add": "Freeze the thresholds, then build held-out suites for A2, A3, A6, A8 and A15 with 3 repeats each, including email follow-up and multi-source research. Replace the billed-usage join with captured usage, priced as a labelled estimate. Add a staging probe that sends one signed synthetic message and checks the reply and the trace hops.",
+  "needs": [
+   "owner decision",
+   "deploy or secret"
+  ],
+  "size": "L",
+  "source": "plan \u00a711 (:409-430), \u00a75 (:176); docs/planning/waldo-agent-mvp/HARNESS_COMPONENT_AUDIT_2026-09-30.md:34-46; docs/planning/PARITY_GAP_PLAN_2026-10-02.md:18",
+  "gates": "Runs on G43. The A6 cases need G1, and the estimates need G41. Gates the S4 invited beta.",
+  "instinct": "",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G45",
+  "pillar": "P8 activity and observability",
+  "block": "Evals and observability",
+  "gap": "Nothing checks the app.v1 contract by machine. A backend PR can remove or retype a field, the app cannot use a generated client, and CI skips three test pools.",
+  "today": "The public OpenAPI is built only from the responsibility route manifests (packages/contracts/src/public/openapi.ts:216-221). /app/v1 is routed by hand (packages/runtime/src/channels/app-api.ts:13), and no app.v1 path appears in the OpenAPI (rg). scripts/guards has no app.v1 additivity guard. CI runs the owner-ingress and devices configs (.github/workflows/verify.yml:62-67) but not link-routing, iMessage or Mac-closeout, which test:owner-ingress bundles (packages/runtime/package.json:18).",
+  "add": "A route manifest, plus a generated OpenAPI and client, for /app/v1. An additivity guard that fails on a removed, renamed or retyped field or a narrowed enum. One synthetic JSON fixture per route, for the app's CI to parse. Merge #1222 and #1187.",
+  "needs": [
+   "app.v1 contract"
+  ],
+  "size": "M",
+  "source": "plan \u00a710 S1 (:365, 'generated client'); docs/foundation/NEXT-SESSION-PLAN.md:19-20; docs/research/HARNESS_COMPARISON_2026-10-13.md \u00a77 Fix, \u00a712",
+  "gates": "Protects G19, G22 and every new approval kind. #1113 deletes guard-openapi-fresh, so settle that first.",
+  "instinct": "",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G47",
+  "pillar": "Instinct parity",
+  "block": "Evals and observability",
+  "gap": "Waldo asks only when it is unsure what the owner meant, not when a wrong guess would cost money, create an obligation or reach the wrong person. It has no guidance to listen first on a hard day or to push back on a weak plan.",
+  "today": "The prompt says to state an assumed reading and ask one narrow confirmation when uncertain (prompt/messaging-behavior.ts:34), and to 'Ask at most one clarifying question, and only when you can't help without it' (:37). No line covers listening first, challenging, or the cost of a wrong guess (rg over prompt/). The scenario cases voice-venting and voice-no-sycophancy exist (packages/runtime/evals/cases.ts:14, :16) but run only on demand.",
+  "add": "Prompt changes that leave the judgment to the model. Confirm when a guess risks an obligation, the wrong person, money or something irreversible. Listen first, challenge without taking over, and state limits up front. Changes go through the soul-file review and are backed by scenario evals, never fixed rules.",
+  "needs": [
+   "owner decision"
+  ],
+  "size": "S",
+  "source": "docs/research/HARNESS_COMPARISON_2026-10-13.md \u00a712a (:223); WALDO_VS_INSTINCT_CAPABILITY_GAP_2026-10-13.md rows W4, H1, H7, H8 and L1 (branch docs/overnight-2026-10-12, not at the tip)",
+  "gates": "Needs G43 to measure the effect, and a review of the protected voice assets.",
+  "instinct": "W4 ask versus assume; H1; H7; H8; L1",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G48",
+  "pillar": "Instinct parity",
+  "block": "Text and voice channels",
+  "gap": "Waldo can message only the owner's own channels. 'Send Sam a note on WhatsApp' is impossible; only email reaches other people.",
+  "today": "send_message sends 'on one of the owner's channels' (packages/runtime/src/tools/live/messaging.ts:20). Its arguments are a channel and content, with no recipient (packages/contracts/src/tools/schemas/writes.ts:39-43). Email to others goes through send_email approval.",
+  "add": "A recipient on the message approval, with the exact recipient and body on the card as for email, routed through the WhatsApp and iMessage adapters. Sends to other people never come from a standing grant without an explicit ruling.",
+  "needs": [
+   "owner decision",
+   "ADR",
+   "app.v1 contract"
+  ],
+  "size": "L",
+  "source": "docs/planning/WEBSITE_PROMISE_LEDGER_2026-10-10.md \u00a711 (:262-264); WALDO_VS_INSTINCT_CAPABILITY_GAP_2026-10-13.md row T21 (branch docs/overnight-2026-10-12)",
+  "gates": "Needs G26 and the iMessage adapters (open #1224). Page 1 #3 covers exact message approvals to the owner's own channels only.",
+  "instinct": "T21 thoughtful messages to people",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G49",
+  "pillar": "Instinct parity",
+  "block": "Memory and skills",
+  "gap": "Waldo makes PDF and DOCX files but no real spreadsheet, and its PDF refuses non-Latin text. A Hindi itinerary as a PDF, or a budget as a spreadsheet, comes back as an error or as prose.",
+  "today": "Artifact export is 'pdf, Latin text only' (packages/runtime/src/channels/artifact-exports.ts:101). workspace_render's PDF has the same limit; DOCX keeps Unicode (tools/live/workspace-render.ts:11; channels/document-render.ts:1-12). workspace_write accepts only text/plain or text/markdown (packages/contracts/src/tools/schemas/workspace.ts:50). No XLSX renderer exists (rg). write_sheet_cell has no handler (hooks/tool-replay-class.ts:50).",
+  "add": "An embedded Unicode font for PDF, with Devanagari at least. A CSV type and an XLSX renderer built from a structured table revision, following the same receipt and revision rules.",
+  "needs": [
+   "owner decision"
+  ],
+  "size": "M",
+  "source": "docs/planning/WEBSITE_PROMISE_LEDGER_2026-10-10.md \u00a711 (:262-264); WALDO_VS_INSTINCT_CAPABILITY_GAP_2026-10-13.md rows T24, T25 (branch docs/overnight-2026-10-12)",
+  "gates": "Needs dependency approval for the font and XLSX libraries. Page 1 #42 is the display.",
+  "instinct": "T24 trip documents; T25 spreadsheets",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G50",
+  "pillar": "Instinct parity",
+  "block": "Payments and identity",
+  "gap": "Waldo cannot book, buy or pay for anything, even after a yes. There are no owner spend limits, no spend approval and no payment method.",
+  "today": "The browser stops before any pay, purchase, checkout, order or book step (packages/runtime/src/tools/live/browser.ts:168-175). The approval kinds include browser_submit but no spend kind (packages/contracts/src/app/approvals.ts:48). Ruling 14: no purchases until the owner sets spend limits (docs/planning/WEBSITE_PROMISE_LEDGER_2026-10-10.md:20). D10 leaves the browser purchase limits to the owner (:260).",
+  "add": "A spending-authority ADR: per-action and monthly limits, merchant scope, and one approval per spend showing amount, merchant and terms. It covers receipts, refunds and uncertain outcomes. The payment method is held outside prompts and logs.",
+  "needs": [
+   "ADR",
+   "owner decision",
+   "deploy or secret",
+   "app.v1 contract"
+  ],
+  "size": "L",
+  "source": "docs/planning/WEBSITE_PROMISE_LEDGER_2026-10-10.md ruling 14 (:20), D10 (:260), \u00a711 (:262-264); WALDO_VS_INSTINCT_CAPABILITY_GAP_2026-10-13.md rows A1, T15, T17, T19 (branch docs/overnight-2026-10-12)",
+  "gates": "Comes after G3 and G2, and waits on the owner setting limits (ruling 14).",
+  "instinct": "A1; T15; T17; T19",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G51",
+  "pillar": "Instinct parity",
+  "block": "Permissions and approvals",
+  "gap": "Waldo cannot coordinate with another person's Waldo, for example to arrange a meeting. The contract exists, but there is no transport, no signing and no admission on either side.",
+  "today": "The relationship, request and response schemas and an in-memory TrustedCoordinationModule exist (packages/contracts/src/runtime/trusted-coordination.ts:5, :13, :25, :51), exported from packages/contracts/src/index.ts:194. Nothing in packages/runtime/src imports them (rg).",
+  "add": "A signed envelope (invite, propose, accept, decline, cancel, receipt) and a relationship registry. Each owner admits, approves and carries out their own side. Only approved availability windows are shared, never health reasons. Tests cover replay, impersonation, expiry and revoke.",
+  "needs": [
+   "ADR",
+   "owner decision",
+   "migration",
+   "app.v1 contract"
+  ],
+  "size": "L",
+  "source": "plan \u00a713 (:511, :513), A13 (:427); CLAUDE.md Trusted Relationship rule; docs/planning/WEBSITE_PROMISE_LEDGER_2026-10-10.md (:141)",
+  "gates": "Comes after G22, G23 and G27.",
+  "instinct": "T22 coordinates with another person's agent",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G52",
+  "pillar": "Operations and governance",
+  "block": "Triggers and scheduled jobs",
+  "gap": "Only staging can run the beta. Production has no cron, so the health retention sweep never runs there. It also has no AI, Vectorize or browser binding, its flags are off, its egress allowlist is empty, and it has no deploy gate or rollback.",
+  "today": "Production sets its feature flags to '0' and its egress allowlist to empty (packages/runtime/wrangler.jsonc:20). The retention cron is declared only under env.staging (wrangler.jsonc:77-78; src/index.ts:258), as are the browser, AI and Vectorize bindings (wrangler.jsonc:80-81, :118-120). Staging opens the public web with '*', with internal addresses blocked (wrangler.jsonc:18-19). The deploy gate and rollback script cover staging only (docs/ops/STAGING_DEPLOY_GATE.md:50-53).",
+  "add": "Decide the production environment: retention cron, bindings, browser provider, flags and an egress policy that keeps internal addresses blocked. Then add a production deploy gate, a reviewed migration route, a rollback and the S4 runbook.",
+  "needs": [
+   "owner decision",
+   "deploy or secret"
+  ],
+  "size": "M",
+  "source": "plan \u00a710 S4 (:372), \u00a713 (:491); docs/app/HEALTH_PLANE_AMENDMENT.md \u00a7Retention and access (:26)",
+  "gates": "Page 1 covers only the staging deploy. Gates any beta outside staging and G8 in production. Related: #1081 (open) pins the owner-do-smoke actions to SHAs.",
+  "instinct": "",
+  "_verdict": "fix"
+ },
+ {
+  "id": "G53",
+  "pillar": "Operations and governance",
+  "block": "Governance (ADR sync)",
+  "gap": "The ADR snapshot that the guards check still pins Brain at the 17 September commit. The superseded launch cut and the amended seams are not yet published as current authority.",
+  "today": "accepted-adrs.json has _sourceCommit be08c4af (docs/foundation/accepted-adrs.json:4-6), a Brain commit from 17 September 2026. The synchronization gate is still open (docs/planning/waldo-agent-mvp/ADR_RECONCILIATION.md:34). Brain PR #34, amending the ADRs and the launch contract per the 10 October rulings, is open (WEBSITE_PROMISE_LEDGER_2026-10-10.md, \u00a77 closing paragraph).",
+  "add": "Merge Brain #34 (the launch contract and the ADR packet), regenerate accepted-adrs.json with the sync command, and repin the plan, CLAUDE.md and the entrypoints to that Brain revision.",
+  "needs": [
+   "ADR",
+   "owner decision"
+  ],
+  "size": "S",
+  "source": "docs/foundation/NEXT-SESSION-PLAN.md:16; docs/planning/waldo-agent-mvp/ADR_RECONCILIATION.md:34; CLAUDE.md 'Candidate build roadmap'",
+  "gates": "Page 1's topic ADRs land into it. Gates merging code that changes a conflicting seam (ADR-0069, ADR-0071, ADR-0075).",
+  "instinct": "",
+  "_verdict": "fix"
+ },
+ {
+  "pillar": "Instinct parity",
+  "block": "Browser and computer use",
+  "gap": "A browser errand that needs a sign-in pauses the turn and sends the owner to the web console's handoff page. The login lives only inside that one browser session, which closes 10 minutes after the run that opened it ends (about 25 minutes at most for an app run; 10 minutes under the registered staging policy). It is never saved, so every later logged-in errand needs a fresh sign-in. The browser cannot choose a file to upload. Browsing exists only on staging.",
+  "today": "owner_login returns console_path /console/browser-handoff (common-browser-host.ts:207; owner-browser-runtime.ts:199). The ordinary session ends at the run deadline plus a 10-minute idle window (IDLE_MS=600_000; ordinary-public-browser-configuration.ts:10,19,45). Encrypted login-state custody exists but has no caller (browser-state-custody.ts; browser-site-custody.ts:162 'still unwired'). The tool text says 'File selection and page sends are unsupported' (owner-browser-runtime.ts:190). There is no browser outside staging (owner-browser-runtime.ts:99; wrangler.jsonc:80).",
+  "add": "Wire the owner-scoped, site-scoped encrypted login-state custody into the owner browser, with revoke and expiry. Offer the sign-in handoff from the app as well as the console. Add file upload from the owner workspace behind a per-action approval.",
+  "needs": [
+   "ADR",
+   "app.v1 contract",
+   "owner decision"
+  ],
+  "size": "M",
+  "source": "docs/planning/WEBSITE_PROMISE_LEDGER_2026-10-10.md:20,25 (rulings 14 and 19), :264 (\u00a711 logged-in browser errands); plan \u00a76 canonical state :224 and \u00a79 Browser :354; docs/planning/waldo-agent-mvp/BUILD_PLAYBOOK_2026-10-04.md:62 (procedure 9)",
+  "gates": "G52 (production has no browser binding); G50 (purchases wait for spend limits); unblocks form and checkout preparation",
+  "instinct": "Prepares forms; checkout preparation; web access to signed-in accounts (Instinct T10, T19, A2)",
+  "id": "G54",
+  "_verdict": "critic"
+ },
+ {
+  "pillar": "Instinct parity",
+  "block": "Connectors and auth",
+  "gap": "Waldo can see where a meeting is but cannot work out travel time, find a place nearby or give directions. Its free-slot search uses Google free/busy alone, so it can offer a slot right after a meeting across town with no travel gap. Nothing can fire on arrival or departure, because the backend never learns where the owner is.",
+  "today": "Calendar reads return each event's location (connectors/google.ts:720). The tool set has no maps, places or directions tool. query_availability is 'Google's own free/busy answer' with no travel buffer (tools/live/google.ts:456). Trigger types run brief through work_unit_plan, with no location kind (contracts/src/core/trigger.ts:3-17). No device location reaches the backend.",
+  "add": "Add a read-only routes/places connector that computes travel time between consecutive located events and finds places near a stated point. Make query_availability subtract travel buffers. Location triggers need an ADR first: the app shares coarse location, and the owner consents to arrival/departure triggers.",
+  "needs": [
+   "owner decision",
+   "deploy or secret"
+  ],
+  "size": "M",
+  "source": "plan \u00a711 A3 :417 (\u226590% feasible plans); plan \u00a78 :312; BUILD_PLAYBOOK_2026-10-04.md:64-66; WEBSITE_PROMISE_LEDGER_2026-10-10.md \u00a710 D5 (coarse location)",
+  "gates": "Depends on G16 (coarse location and its consent); strengthens G12 and G32",
+  "instinct": "Food and places, directions (T16, T17); location triggers (L4)",
+  "id": "G55",
+  "_verdict": "critic"
+ },
+ {
+  "pillar": "Instinct parity",
+  "block": "Memory and skills",
+  "gap": "Waldo can write plain-text and Markdown files and render them to PDF (Latin text only) or Word. It cannot make slides or images. It cannot look at a file it rendered to check the layout, and it cannot prepare a document for e-signature.",
+  "today": "workspace_render: PDF or DOCX only (tools/live/workspace-render.ts:11). export_artifact: pdf only (channels/artifact-exports.ts:53). workspace_write: text/plain or text/markdown (contracts/src/tools/schemas/workspace.ts:50). Model images come only from owner attachments and browser screenshots (channels/owner-turn.ts:545-546). No e-signature connector.",
+  "add": "Add a slides/image render target and a render-preview step that feeds page images of Waldo's own output back to the model. Add an e-signature connector whose 'send for signature' is a per-action approved effect.",
+  "needs": [
+   "owner decision",
+   "deploy or secret"
+  ],
+  "size": "L",
+  "source": "WEBSITE_PROMISE_LEDGER_2026-10-10.md:138 (Voice, Wave 6), :264 (\u00a711 rich file outputs); BUILD_PLAYBOOK_2026-10-04.md:70,78,80-81",
+  "gates": "Separate from G49 (spreadsheets and non-Latin PDF). A TTS provider needs a processor entry (G40). First-page ask 42 opens what Waldo sends.",
+  "instinct": "Makes presentations, images and spoken audio (T25)",
+  "id": "G56",
+  "_verdict": "critic"
+ },
+ {
+  "pillar": "P8 activity and observability",
+  "block": "Evals and observability",
+  "gap": "Nothing checks Waldo's words against what actually ran. The receipt line lists real effects, but a reply with no effect call can still say 'sent' or 'booked'. The claim checker is built but wired into no turn.",
+  "today": "Typed done-claims are checked against receipts only in tests (hooks/claim-hook.ts:5,46-47). The receipt line covers effect calls only and is null when there are none (hooks/receipt-line.ts:7,18-19).",
+  "add": "Have the reply carry typed done-claims, run evaluateTurnClaims on every owner turn before delivery, and handle unbacked claims (revise, or label them as unconfirmed). Add a scenario test with a reply claiming 'sent' with no effect call.",
+  "needs": [
+   "owner decision"
+  ],
+  "size": "S",
+  "source": "WEBSITE_PROMISE_LEDGER_2026-10-10.md:264 (\u00a711 quality bar: claim verification); plan \u00a711 A8 :422 (zero fabricated receipt); LIVE_CHECKS_AND_CLAIM_VERIFY_DESIGN_2026-10-02.md \u00a73",
+  "gates": "Builds on the receipt line (first-page asks 11 and 44); feeds G43 and G44",
+  "instinct": "Reports what's done and what still needs you (W5)",
+  "id": "G57",
+  "_verdict": "critic"
+ },
+ {
+  "pillar": "P8 activity and observability",
+  "block": "Evals and observability",
+  "gap": "When Waldo breaks for an owner, nobody on the team is told. A failing alarm, a dead job, a failed delivery or a lapsed Gmail watch shows up only if someone reads the Workers logs or Langfuse traces, or the owner complains. This covers the team side only; owner-facing failure notices are first-page item #1108.",
+  "today": "Observability is Workers logs, with invocation logs and traces off (wrangler.jsonc:8-12), plus Langfuse turn traces. No alert sink exists in packages/runtime/src. Admin console actions are invite.create and invite.revoke only (channels/dashboard-admin.ts:21). A failed watch renewal records failedAt and retries later (connectors/google-push.ts:90-92).",
+  "add": "Add an operator alert sink fed by bounded, low-cardinality failure events: alarm failure, a dead or stuck job, delivery failure, watch lapse, connector auth loss. It must carry no health values, message content or account emails. Add an admin view of the failing owners and the failure class.",
+  "needs": [
+   "owner decision",
+   "deploy or secret"
+  ],
+  "size": "S",
+  "source": "plan \u00a710 S4 :372 (operational runbook); OBSERVABILITY_RESILIENCE_CHARTER_2026-09-26.md:88",
+  "gates": "Separate from G43 (model grading). Needed before the cohort in ledger ruling 18 is admitted.",
+  "id": "G58",
+  "_verdict": "critic"
+ },
+ {
+  "pillar": "Operations and governance",
+  "block": "Memory and skills",
+  "gap": "If a bad deploy or an owner-object migration damages an owner's memory, permissions or schedules, Waldo has no way to restore them. Rolling back the Worker brings back code, not data, and the platform's 30-day restore for the owner object is never used.",
+  "today": "Worker rollback restores code and bindings only, and Supabase migrations are forward-only (docs/ops/STAGING_DEPLOY_GATE.md:50-57). No code calls the Durable Object restore API: grep finds no getBookmarkForTime or onNextSessionRestoreBookmark under packages/. ADR-0058, which would adopt it, is proposed, not accepted (docs/foundation/accepted-adrs.json:328-330). The pre-migration memory_backups row is written once (memory/migration.ts:22-26) and never read back.",
+  "add": "Accept ADR-0058 and build a reviewed restore path for one owner: an admin route or runbook that uses the Durable Object bookmark API, run as a staging drill. It must handle three side effects. A restore can bring back data the owner forgot or deleted, so forget and deletion barriers must be re-applied. The outbox must not resend messages that already went out. Grants and schedules must be re-checked before anything runs.",
+  "needs": [
+   "owner decision"
+  ],
+  "size": "M",
+  "source": "plan \u00a710 S4 :372 (recovery tests, operational runbook); docs/ops/STAGING_DEPLOY_GATE.md:46-58",
+  "gates": "Complements G52 (production deploy gate and code rollback)",
+  "id": "G59",
+  "_verdict": "critic"
+ },
+ {
+  "pillar": "P3 memory",
+  "block": "Memory and skills",
+  "gap": "Forget cleans the owner object but not the copies outside it. Staging trace text, stored files in R2 (artifacts, exports, workspace) and the platform restore window keep what the owner asked Waldo to forget. The reply still says backups 'expire per retention', with no period and no mention of traces or files.",
+  "today": "Forget redacts every store inside the owner object (channels/owner-do.ts:2514-2528; memory/claims.ts:518-640). Only account deletion purges the owner's R2 files (channels/owner-files-purge.ts:13-24; owner-do.ts:572-574). Staging captures model text in traces (wrangler.jsonc:87), and nothing in the forget path deletes it. The reply text is fixed at tools/live/memory.ts:135 and always names the Telegram chat, whatever surface the owner used.",
+  "add": "Extend forget to the stores outside the owner object. Delete or redact matching R2 artifacts and exports. Delete the owner's staging trace sessions through the Langfuse API, or state that it cannot. Then rewrite the reply to name each store that still holds a copy and its real expiry: trace project retention, and the platform's 30-day restore window. Add a test that the receipt lists exactly the stores it did not clean.",
+  "needs": [
+   "owner decision"
+  ],
+  "size": "M",
+  "source": "plan \u00a78 :275 (forget barrier; summaries, embeddings and caches respect source generations); plan \u00a711 A9 :423 (no deleted content reconstructed); WEBSITE_PROMISE_LEDGER_2026-10-10.md:130",
+  "gates": "Underneath first-page ask 22 (forget from the app); related to G37 and G39",
+  "id": "G60",
+  "_verdict": "critic"
+ },
+ {
+  "pillar": "P7 identity and consent",
+  "block": "Memory and skills",
+  "gap": "Waldo keeps every chat message, quoted email and memory row for as long as the account exists. Health data has a scheduled sweep and short-lived intake queues expire, but no retention schedule by data class is decided or enforced for the durable record.",
+  "today": "Health is swept on a schedule (health/retention-sweep.ts). Intake queues and outboxes expire within 24 hours to 30 days (telegram-owner-inbox.ts:5, app-inbox.ts:12, imessage/owner-inbox.ts:17, telegram-final-outbox.ts:85). Chat history, claims, episodes and mail follow-ups have no expiry (conversation-store.ts:50-62; claims.ts:465, 984 are forget paths only). The reconciliation doc states the principle without a schedule (ADR_RECONCILIATION.md:49).",
+  "add": "Decide a retention schedule by data class: chat rows, quoted external content (mail and calendar), memory claims and episodes, R2 files, and traces. Enforce it with an alarm-driven sweep in the owner object that uses the same redaction and receipt path as forget, plus a test with a mocked clock.",
+  "needs": [
+   "ADR",
+   "owner decision"
+  ],
+  "size": "M",
+  "source": "plan \u00a78 tier 4 :289 (explicit retention and deletion rules); CLAUDE.md:17; ADR_RECONCILIATION.md:49",
+  "gates": "Feeds G40 (DPIA). First-page asks 6 and 29 (delete and export) reuse it. Shrinks the per-turn load in the next row.",
+  "id": "G61",
+  "_verdict": "critic"
+ },
+ {
+  "pillar": "P8 activity and observability",
+  "block": "Evals and observability",
+  "gap": "Each turn's storage work grows with the length of the chat, even though the prompt is windowed, and nothing proves Waldo holds up for the cohort. Every turn re-reads all stored rows, no CI budget bounds a turn, and no soak test has run, including on the one-Mac iMessage bridge.",
+  "today": "The prompt is capped (conversation/window.ts:27, 44), and compaction is off (compaction.ts:8). Each scoped owner turn re-reads the full chain: canonical-owner-store.ts:80 lists every row with no limit and :87 fetches one witness per row, and the responder is rebuilt at owner-turn.ts:728. CI has no performance gate (.github/workflows/verify.yml), and the only workflows are verify, owner-do-smoke, deploy-staging and migration preflight.",
+  "add": "Load only the tail of the history: a reverse-limited list down to the window or compaction boundary, with witnesses fetched only for the loaded rows. Add a CI test that fails if a turn's storage reads and time exceed a set limit on a long chain, such as 5,000 rows. Run a staging soak at cohort concurrency, including iMessage bridge throughput and recovery.",
+  "needs": [
+   "none"
+  ],
+  "size": "M",
+  "source": "plan \u00a711 A10 :424 (p50/p95 cost and latency, zero unbounded runs); plan \u00a712 :479-481 (measure p50/p95; per-run limits); RCA_OWNER_DO_CPU_RESET_2026-10-09.md prevention checklist",
+  "gates": "Related to G7 (compaction) and G42 (where turn time goes); needed before the ruling-18 cohort grows past 10",
+  "id": "G62",
+  "_verdict": "critic"
+ }
+]

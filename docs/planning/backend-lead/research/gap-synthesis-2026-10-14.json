@@ -1,0 +1,851 @@
+{
+ "instinct": [
+  {
+   "capability": "T1 Remembers preferences, plans and decisions",
+   "waldo": "partial",
+   "today": "remember and correction work (tools/live/memory.ts:50, 58). Memories have no validity window (memory/claims.ts:414) and recall works only by shared words.",
+   "gapId": "G10"
+  },
+  {
+   "capability": "T2 Remembers people",
+   "waldo": "missing",
+   "today": "There is no person claim kind (memory/claims.ts:6); only contact search exists (tools/live/google.ts:274).",
+   "gapId": "G9"
+  },
+  {
+   "capability": "T3 Reminders",
+   "waldo": "matched",
+   "today": "set_reminder, one-off or recurring (channels/reminders.ts:114)."
+  },
+  {
+   "capability": "T4 Checks the calendar",
+   "waldo": "matched",
+   "today": "query_calendar (tools/live/google.ts:162)."
+  },
+  {
+   "capability": "T5 Daily planning",
+   "waldo": "partial",
+   "today": "Cards are planned from the calendar only (channels/owner-do.ts:2711-2719) and never adapt to changes (channels/calendar-push.ts:43-47).",
+   "gapId": "G32"
+  },
+  {
+   "capability": "T6 Finds free time",
+   "waldo": "matched",
+   "today": "query_availability through free/busy (tools/live/google.ts:456)."
+  },
+  {
+   "capability": "T7 Prepares calendar bookings for approval",
+   "waldo": "matched",
+   "today": "propose_calendar_change (tools/live/google.ts:356)."
+  },
+  {
+   "capability": "T8 Finds receipts, tickets and documents",
+   "waldo": "partial",
+   "today": "search_communication works (tools/live/google.ts:251), but Drive reads are '0' in production (packages/runtime/wrangler.jsonc:20).",
+   "gapId": "G30"
+  },
+  {
+   "capability": "T9 Explains an email",
+   "waldo": "partial",
+   "today": "read_thread works (tools/live/google.ts:306), but bodies are cut silently at 32,000 characters (connectors/google.ts:389).",
+   "gapId": "G29"
+  },
+  {
+   "capability": "T10 Prepares forms",
+   "waldo": "partial",
+   "today": "browse_act stops before submit (tools/live/browser.ts:194), and the browser binding exists on staging only (packages/runtime/wrangler.jsonc:80-81).",
+   "gapId": "G52"
+  },
+  {
+   "capability": "T11 Drafts replies",
+   "waldo": "matched",
+   "today": "draft_email, and send_email behind approval (tools/live/google.ts:373, 403)."
+  },
+  {
+   "capability": "T12 Tracks unfinished tasks",
+   "waldo": "partial",
+   "today": "Live on the backend. The app display is on page 1 (#20, #57), so there is no row here."
+  },
+  {
+   "capability": "T13 Watches for a reply or a change, then reports back",
+   "waldo": "missing",
+   "today": "Only mail Waldo already observed is tracked (channels/loops.ts:18-19). Standing orders keep no last-seen state (channels/standing-orders.ts:110-115).",
+   "gapId": "G13"
+  },
+  {
+   "capability": "T14 Travel research and preparation",
+   "waldo": "partial",
+   "today": "The travel-prep skill and web_search exist (tools/live/web-search.ts:15). There is no booking.",
+   "gapId": "G50"
+  },
+  {
+   "capability": "T15 Booking changes",
+   "waldo": "missing",
+   "today": "The browser stops before any book or pay step (tools/live/browser.ts:169).",
+   "gapId": "G50"
+  },
+  {
+   "capability": "T16 Food and places",
+   "waldo": "partial",
+   "today": "Web search works, but there is no location source (grep).",
+   "gapId": "G16"
+  },
+  {
+   "capability": "T17 Directions and food orders",
+   "waldo": "missing",
+   "today": "There is no maps or ordering tool and no spend approval (packages/contracts/src/app/approvals.ts:48).",
+   "gapId": "G50"
+  },
+  {
+   "capability": "T18 Shopping and comparisons",
+   "waldo": "partial",
+   "today": "Search and the decision-brief skill exist. There is no price watch.",
+   "gapId": "G13"
+  },
+  {
+   "capability": "T19 Checkout and order follow-up",
+   "waldo": "partial",
+   "today": "A browser_submit approval exists, but there is no spend kind (packages/contracts/src/app/approvals.ts:48).",
+   "gapId": "G50"
+  },
+  {
+   "capability": "T20 Birthdays",
+   "waldo": "missing",
+   "today": "There is no person kind and no birthday read (memory/claims.ts:6).",
+   "gapId": "G9"
+  },
+  {
+   "capability": "T21 Thoughtful messages to people",
+   "waldo": "partial",
+   "today": "Email only. send_message reaches only the owner's own channels (tools/live/messaging.ts:21).",
+   "gapId": "G48"
+  },
+  {
+   "capability": "T22 Coordinates with another person's agent",
+   "waldo": "missing",
+   "today": "A contract exists with no runtime (packages/contracts/src/runtime/trusted-coordination.ts:5).",
+   "gapId": "G51"
+  },
+  {
+   "capability": "T23 Research with reasons",
+   "waldo": "partial",
+   "today": "web_search and browse_page exist (tools/live/browser.ts:104), but there is no research eval and production has no browser binding.",
+   "gapId": "G44"
+  },
+  {
+   "capability": "T24 Notes and trip documents",
+   "waldo": "partial",
+   "today": "PDF and DOCX can be made (channels/document-render.ts:7), but PDF is Latin text only (tools/live/workspace-render.ts:11).",
+   "gapId": "G49"
+  },
+  {
+   "capability": "T25 Budgets or spreadsheets",
+   "waldo": "missing",
+   "today": "There is no XLSX or CSV output, and write_sheet_cell has no handler (hooks/registry.ts:906).",
+   "gapId": "G49"
+  },
+  {
+   "capability": "A1 Sending, booking and spending follow approval rules",
+   "waldo": "partial",
+   "today": "Sends, calendar changes and tasks go through exact approvals (channels/approvals.ts:81). Spending has no approval kind.",
+   "gapId": "G50"
+  },
+  {
+   "capability": "A2 Connected accounts or web access where needed",
+   "waldo": "partial",
+   "today": "There is Google plus deploy-wide MCP (tools/live/mcp.ts:32). There are no MCP servers per owner and no inbound email (index.ts:172-259).",
+   "gapId": "G31"
+  },
+  {
+   "capability": "W1 Accepts half-formed thoughts",
+   "waldo": "matched",
+   "today": "The prompt says to answer first and ask at most one question (prompt/messaging-behavior.ts:37)."
+  },
+  {
+   "capability": "W2 Accepts voice notes",
+   "waldo": "partial",
+   "today": "Telegram only. App voice is on page 1 (#40), so there is no row here."
+  },
+  {
+   "capability": "W3 Accepts photos",
+   "waldo": "partial",
+   "today": "Telegram only. App attachments are on page 1 (#40), so there is no row here."
+  },
+  {
+   "capability": "W4 Fills harmless gaps, asks when a wrong guess costs",
+   "waldo": "partial",
+   "today": "Only the one-question rule exists (prompt/messaging-behavior.ts:37).",
+   "gapId": "G47"
+  },
+  {
+   "capability": "W5 Reports what's done and what still needs you",
+   "waldo": "partial",
+   "today": "Receipts exist. The app views are on page 1 (#8, #11, #44)."
+  },
+  {
+   "capability": "W6 Follows through without interrupting just to seem active",
+   "waldo": "partial",
+   "today": "Fixed caps decide (delivery-gate/gate.ts:28-91), and there is no Patrol executor (channels/owner-do.ts:1589).",
+   "gapId": "G15"
+  },
+  {
+   "capability": "H1 Talks through a rough day without jumping to advice",
+   "waldo": "partial",
+   "today": "Covered by the prompt only, with no line about listening first (prompt/messaging-behavior.ts).",
+   "gapId": "G47"
+  },
+  {
+   "capability": "H2 Untangles decisions",
+   "waldo": "matched",
+   "today": "The decision-brief skill (packages/runtime/skills/decision-brief). It has not been evaluated."
+  },
+  {
+   "capability": "H3 Taste opinions from photos",
+   "waldo": "partial",
+   "today": "Telegram only. App photos are on page 1 (#40)."
+  },
+  {
+   "capability": "H4 Learning and practice",
+   "waldo": "partial",
+   "today": "Reminders can schedule practice, but nothing tracks it. There is no row because the value is low."
+  },
+  {
+   "capability": "H5 Brainstorming, celebrating, humour",
+   "waldo": "matched",
+   "today": "The prompt allows wit once and stays plain when the owner is tired (prompt/messaging-behavior.ts:13)."
+  },
+  {
+   "capability": "H6 iMessage games",
+   "waldo": "missing",
+   "today": "There is no row. It needs the iMessage surface (open #1224), and the value is low."
+  },
+  {
+   "capability": "H7 Helps start procrastinated tasks",
+   "waldo": "partial",
+   "today": "Reminders and responsibilities exist, but the prompt gives no first-small-step guidance.",
+   "gapId": "G47"
+  },
+  {
+   "capability": "H8 Warm, direct personality that challenges without taking over",
+   "waldo": "partial",
+   "today": "Covered by the prompt only, with no challenge line and no eval.",
+   "gapId": "G47"
+  },
+  {
+   "capability": "L1 States its limits up front",
+   "waldo": "partial",
+   "today": "The prompt says it is not a clinician (prompt/messaging-behavior.ts:60), but it states this only when asked, not up front.",
+   "gapId": "G47"
+  },
+  {
+   "capability": "L2 Admits it can misread",
+   "waldo": "matched",
+   "today": "Corrections replace the earlier memory through replaces_id (tools/live/memory.ts:58)."
+  },
+  {
+   "capability": "L3 Admits accounts and sites fail",
+   "waldo": "matched",
+   "today": "Uncertain outcomes show as outcome_unknown (channels/approvals.ts:24)."
+  },
+  {
+   "capability": "L4 Location triggers",
+   "waldo": "missing",
+   "today": "There is no location source (grep).",
+   "gapId": "G16"
+  },
+  {
+   "capability": "L5 Places calls",
+   "waldo": "missing",
+   "today": "There is no telephony, which matches Instinct. No row."
+  },
+  {
+   "capability": "Health scores: Recovery, Sleep debt, Form, Weight (brief 01)",
+   "waldo": "partial",
+   "today": "All four are computed but marked candidate_unaccepted (health/scores/index.ts:49).",
+   "gapId": "G33"
+  },
+  {
+   "capability": "Training pillar (brief 01)",
+   "waldo": "missing",
+   "today": "The scores are only recovery, sleep_debt, form and weight (health/scores/index.ts:14).",
+   "gapId": "G35"
+  },
+  {
+   "capability": "Weight demand inputs (brief 01)",
+   "waldo": "partial",
+   "today": "Message count and open tasks are always null (health/producer.ts:206).",
+   "gapId": "G34"
+  },
+  {
+   "capability": "Weather and daylight (brief 02)",
+   "waldo": "missing",
+   "today": "There is no tool on the tip; draft PR #1043 is open.",
+   "gapId": "G16"
+  },
+  {
+   "capability": "Calendar across all calendars in proactive reads (brief 03)",
+   "waldo": "partial",
+   "today": "Prep and day cards read only the primary calendar (channels/event-briefs.ts:76; connectors/google.ts:722-723).",
+   "gapId": "G14"
+  },
+  {
+   "capability": "Gmail full bodies, long threads, attachments listed (brief 03)",
+   "waldo": "missing",
+   "today": "Bodies are capped at 32,000 characters, and ThreadMessage has no attachment field (connectors/google.ts:389). PR #1117 is open.",
+   "gapId": "G29"
+  },
+  {
+   "capability": "Tasks across lists, free/busy, contacts (brief 03)",
+   "waldo": "matched",
+   "today": "get_tasks, query_availability and search_contacts (tools/live/google.ts:320, 456, 274)."
+  },
+  {
+   "capability": "Read-only until decision, exact proposals, corrections replace (Instinct audit bar)",
+   "waldo": "matched",
+   "today": "Exact approval cards (channels/approvals.ts) and memory corrections with a forget barrier (tools/live/memory.ts:50-58)."
+  },
+  {
+   "capability": "Search past conversations by meaning (mature-agent M6)",
+   "waldo": "partial",
+   "today": "Search uses FTS5 only. Vectorize is bound on staging but unused (channels/episodes.ts:7; packages/runtime/wrangler.jsonc:118-120).",
+   "gapId": "G8"
+  },
+  {
+   "capability": "Private chat with no memory (mature-agent M7)",
+   "waldo": "missing",
+   "today": "No such mode exists (grep).",
+   "gapId": "G11"
+  },
+  {
+   "capability": "Don't mention this again without deleting it (mature-agent M3)",
+   "waldo": "missing",
+   "today": "Page 1 covers it under #66 ('don't suggest this'), so there is no row here."
+  },
+  {
+   "capability": "Active task limits (ChatGPT Tasks T6)",
+   "waldo": "missing",
+   "today": "Reminders and cron have no cap (channels/reminders.ts:30-52; packages/contracts/src/runtime/schedule.ts:49).",
+   "gapId": "G5"
+  },
+  {
+   "capability": "Follows up after a send (plan \u00a74 'takes initiative and follows up')",
+   "waldo": "missing",
+   "today": "The send ends at 'done' with no watch (channels/approvals.ts:694-695).",
+   "gapId": "G1"
+  },
+  {
+   "capability": "Background errands and parallel workers (ledger \u00a711)",
+   "waldo": "partial",
+   "today": "Background delegation refuses (conversation/subagent.ts:170-171).",
+   "gapId": "G2"
+  }
+ ],
+ "acceptance": [
+  {
+   "id": "A1",
+   "check": "Continuing conversation: no duplicate, stale cross-owner or wedged turn across restart and reconnect on a real iPhone",
+   "status": "partial",
+   "today": "Sends are deduplicated by clientMessageId (channels/owner-do.ts:918). An interrupted turn is closed honestly but never regenerated (channels/app-inbox.ts:69). There is no device evidence in this repo.",
+   "gapId": "G4"
+  },
+  {
+   "id": "A2",
+   "check": "Recall, correction and forget: at least 95% on 40 held-out cases, with no resurrected stale claims",
+   "status": "partial",
+   "today": "Correction and forget exist (tools/live/memory.ts:50-58), but recall works by shared words (channels/episodes.ts:7). There are only 7 memory eval cases (packages/runtime/evals/cases.ts).",
+   "gapId": "G44"
+  },
+  {
+   "id": "A3",
+   "check": "Adaptive day: feasible plans, and at most one adaptation per outside calendar change while the app and laptop are off",
+   "status": "unmet",
+   "today": "A calendar push wakes only the prep sweep (channels/calendar-push.ts:43-47). No plan or focus blocks are kept (channels/day-cards.ts:23-29), and health is not an input to the plan.",
+   "gapId": "G12"
+  },
+  {
+   "id": "A4",
+   "check": "Bounded autonomy: standing focus-block rule, etag race, expired or revoked permission",
+   "status": "partial",
+   "today": "Writes carry If-Match etags (connectors/google.ts:590) and go through exact approvals. Standing grants are not used at dispatch; #932 is a draft.",
+   "gapId": "G3"
+  },
+  {
+   "id": "A5",
+   "check": "Health-aware reality on a physical iPhone: no invented readiness, no false freshness, no leakage",
+   "status": "partial",
+   "today": "The health routes exist (channels/app-api.ts:145). The plan ignores health, and the route and the prompt age scores differently (channels/app-health.ts:116; channels/health-context.ts:135). Device proof belongs to the app side.",
+   "gapId": "G32"
+  },
+  {
+   "id": "A6",
+   "check": "Investor follow-up: exact send, no duplicates, unknown stays unknown, reply tracked",
+   "status": "partial",
+   "today": "The send is bound to a digest, and uncertain outcomes are reconciled (channels/approvals.ts:595-707). Nothing watches for the reply after the send (:694-695).",
+   "gapId": "G1"
+  },
+  {
+   "id": "A7",
+   "check": "Cloud return: reminders and quiet hours with app and laptop off; no rerun on push retry",
+   "status": "partial",
+   "today": "There is a durable scheduler with a missed-run policy (scheduler/multiplexer.ts:203-209). Proactive work never routes to iMessage (channels/owner-do.ts:1510-1519). The push sender is #1177 (page 1).",
+   "gapId": "G21"
+  },
+  {
+   "id": "A8",
+   "check": "Public research: at least 90% source-supported answers, surviving browser loss",
+   "status": "partial",
+   "today": "web_search and browse_page exist (tools/live/web-search.ts:15; tools/live/browser.ts:104). The browser binding is staging only (packages/runtime/wrangler.jsonc:80-81), and there is no research eval.",
+   "gapId": "G44"
+  },
+  {
+   "id": "A9",
+   "check": "Control: revoke, logout and deletion during runs; provider cleanup shown honestly; nothing deleted is rebuilt",
+   "status": "partial",
+   "today": "Revoked and cancelled run states exist (channels/app-inbox.ts:22-24). Google disconnect never revokes at Google or removes what was learned (supabase/migrations/20260924170000_waldo_connections.sql:78-88).",
+   "gapId": "G39"
+  },
+  {
+   "id": "A10",
+   "check": "Quality and cost over 14 days: at least 80% useful proactive items; p50 and p95 cost and latency",
+   "status": "unmet",
+   "today": "The cost ledger is not wired (llm/cost-ledger.ts:32; channels/owner-do.ts:1920). PR #1113 is held.",
+   "gapId": "G41"
+  },
+  {
+   "id": "A11",
+   "check": "Same agent across app and Telegram; later Kennel disconnect and return",
+   "status": "partial",
+   "today": "Each surface has its own runtime and chain (channels/owner-do.ts:1895-1912; context-composer/owner-turn.ts:40). Telegram links are frozen today (page 1).",
+   "gapId": "G20"
+  },
+  {
+   "id": "A12",
+   "check": "Joined dashboard: start, inspect, approve and interrupt across surfaces",
+   "status": "unmet",
+   "today": "The dashboard has no chat or work route (packages/dashboard-app/src/App.tsx:21).",
+   "gapId": "G27"
+  },
+  {
+   "id": "A13",
+   "check": "Cross-person meeting coordination",
+   "status": "unmet",
+   "today": "A contract exists, with no runtime (packages/contracts/src/runtime/trusted-coordination.ts:5-25).",
+   "gapId": "G51"
+  },
+  {
+   "id": "A14",
+   "check": "Kennel bounded change with Codex and independent verification",
+   "status": "partial",
+   "today": "Sessions start (devices/mac-wire.ts:10), but a result is only an exit code and a tail (:16).",
+   "gapId": "G28"
+  },
+  {
+   "id": "A15",
+   "check": "Natural and fresh memory: implicit use, time expiry, correction during execution, 20 histories x 3",
+   "status": "partial",
+   "today": "Per-turn recall and nightly consolidation exist. Claims have no validity window (memory/claims.ts:414), and there is no 20-history suite.",
+   "gapId": "G10"
+  },
+  {
+   "id": "A16",
+   "check": "First use: 4 of 5 testers reach a useful plan within 5 minutes",
+   "status": "partial",
+   "today": "Mostly app-side; page 1 covers onboarding and the first conversation. The backend spends 7.5 to 11.6 s per round outside the model (#1103 comment 6155218639).",
+   "gapId": "G42"
+  }
+ ],
+ "edges": [
+  {
+   "from": "#1108",
+   "to": "G20 (A2)",
+   "why": "The lead's A2 spec starts after scheduled jobs run as the admitted owner."
+  },
+  {
+   "from": "#1108",
+   "to": "G2",
+   "why": "C7's check-back turn and failure notice build on #1108."
+  },
+  {
+   "from": "#1108",
+   "to": "G21",
+   "why": "[inference] Both rewrite the owner alarm's executor pass."
+  },
+  {
+   "from": "#1213",
+   "to": "G21",
+   "why": "[inference] Per-lane backoff changes the same alarm pass that the router replaces."
+  },
+  {
+   "from": "#1177",
+   "to": "G21",
+   "why": "Push feeds the router's 'app with push' branch."
+  },
+  {
+   "from": "G20 (A2)",
+   "to": "G19 (A3)",
+   "why": "One chain needs one runtime per owner first."
+  },
+  {
+   "from": "G20 (A2)",
+   "to": "G22",
+   "why": "A4's first PR builds on the surface adapters."
+  },
+  {
+   "from": "G19 (A3)",
+   "to": "G22",
+   "why": "A4's second PR needs the one chain."
+  },
+  {
+   "from": "G19 (A3)",
+   "to": "G21",
+   "why": "'Last surface used' reads the one chain."
+  },
+  {
+   "from": "G22",
+   "to": "G21",
+   "why": "The router delivers through deliver(envelope, to)."
+  },
+  {
+   "from": "G22",
+   "to": "G23",
+   "why": "Cards retire through each surface's renderer."
+  },
+  {
+   "from": "G22",
+   "to": "G24",
+   "why": "Quick replies and charts render through the surface registry."
+  },
+  {
+   "from": "G22",
+   "to": "G25",
+   "why": "Replies to inbound mail leave through the same delivery path."
+  },
+  {
+   "from": "G20 (A2)",
+   "to": "G26",
+   "why": "WhatsApp gets its adapter in the runtime factory."
+  },
+  {
+   "from": "G22",
+   "to": "G26",
+   "why": "WhatsApp needs a renderer and a template path."
+  },
+  {
+   "from": "G20 (A2)",
+   "to": "G2",
+   "why": "The task_step executor lives in the runtime factory."
+  },
+  {
+   "from": "G19 (A3)",
+   "to": "G7",
+   "why": "Telegram chains compact only after they move to the canonical store."
+  },
+  {
+   "from": "G37",
+   "to": "G7",
+   "why": "Summaries must not carry typed health before the ruling."
+  },
+  {
+   "from": "G37",
+   "to": "G8",
+   "why": "Embeddings must not carry typed health before the ruling."
+  },
+  {
+   "from": "G43 (#1185)",
+   "to": "G7",
+   "why": "Turning compaction on waits on a scored eval run."
+  },
+  {
+   "from": "G43 (#1185)",
+   "to": "G8",
+   "why": "Semantic recall's done-when is an eval result."
+  },
+  {
+   "from": "G43 (#1185)",
+   "to": "G47",
+   "why": "Persona changes need scenario evals."
+  },
+  {
+   "from": "G43 (#1185)",
+   "to": "G44",
+   "why": "The release suites run on the nightly harness."
+  },
+  {
+   "from": "G6",
+   "to": "#1176",
+   "why": "Thread isolation fails until the recall scope is decided."
+  },
+  {
+   "from": "#1173",
+   "to": "#1176",
+   "why": "The threads registry comes before messages per thread."
+  },
+  {
+   "from": "#1176",
+   "to": "#1179",
+   "why": "Naming threads and letting forget reach titles sits on top of thread messages."
+  },
+  {
+   "from": "#1176",
+   "to": "G11",
+   "why": "[inference] A private chat is most naturally a private thread."
+  },
+  {
+   "from": "#932",
+   "to": "G3",
+   "why": "The grant contract and eligibility come first; #932 must be rebased off stale #918."
+  },
+  {
+   "from": "G2",
+   "to": "G3",
+   "why": "Patrol and grant checks on resume need durable task state."
+  },
+  {
+   "from": "G23",
+   "to": "G3",
+   "why": "Grants are used inside the one desk."
+  },
+  {
+   "from": "G3",
+   "to": "G12",
+   "why": "Moving a focus block without asking needs a live grant."
+  },
+  {
+   "from": "G3",
+   "to": "G13",
+   "why": "Unattended action from a watch needs a grant."
+  },
+  {
+   "from": "G2",
+   "to": "G13",
+   "why": "Long reads for a watch run as durable steps."
+  },
+  {
+   "from": "G5",
+   "to": "G13",
+   "why": "Caps come before more scheduled fires are added."
+  },
+  {
+   "from": "G13",
+   "to": "G1",
+   "why": "[inference] The reply watch can reuse the watch record."
+  },
+  {
+   "from": "#1215",
+   "to": "G1",
+   "why": "The reply watch rides Gmail push, which has landed."
+  },
+  {
+   "from": "#1215",
+   "to": "G15",
+   "why": "Push raises the event rate that needs interruption judgment."
+  },
+  {
+   "from": "G41",
+   "to": "G5",
+   "why": "Fire spend is counted in the ledger."
+  },
+  {
+   "from": "G41",
+   "to": "G4",
+   "why": "Regeneration must stay within the aggregate spend limit."
+  },
+  {
+   "from": "G41",
+   "to": "G44",
+   "why": "Cost estimates for the native cases come from the ledger."
+  },
+  {
+   "from": "#1113",
+   "to": "G41",
+   "why": "#1113 creates cost_ledger and /usage; it is held for the owner."
+  },
+  {
+   "from": "G38",
+   "to": "G30",
+   "why": "New Gmail and Drive scopes need the verified app and incremental consent."
+  },
+  {
+   "from": "G28",
+   "to": "G27",
+   "why": "The Work view shows Kennel results."
+  },
+  {
+   "from": "G27",
+   "to": "G51",
+   "why": "The plan puts coordination (R) after the joined dashboard (W)."
+  },
+  {
+   "from": "G23",
+   "to": "G51",
+   "why": "Each side's approvals run through the one desk."
+  },
+  {
+   "from": "G3",
+   "to": "G50",
+   "why": "Spending authority builds on the standing-grant ADR."
+  },
+  {
+   "from": "G26",
+   "to": "G48",
+   "why": "Messages to other people go out through the WhatsApp adapter."
+  },
+  {
+   "from": "G33",
+   "to": "G17",
+   "why": "Learning moments need accepted scores."
+  },
+  {
+   "from": "G1",
+   "to": "G44",
+   "why": "The A6 eval cases need the reply watch."
+  },
+  {
+   "from": "G52",
+   "to": "G8",
+   "why": "Production needs the AI and Vectorize bindings."
+  },
+  {
+   "from": "G45",
+   "to": "G22",
+   "why": "An additivity guard protects the new reply parts on the app wire."
+  },
+  {
+   "from": "#1216",
+   "to": "G25",
+   "why": "Inbound mail reuses the single forward rule (isForward)."
+  },
+  {
+   "from": "#1219",
+   "to": "G25",
+   "why": "Quoted text must never count as the owner's own words."
+  },
+  {
+   "from": "#1216",
+   "to": "G26",
+   "why": "Item 4 adds WhatsApp's forwarded flag."
+  },
+  {
+   "from": "#1218",
+   "to": "G9",
+   "why": "[inference] The Google profile read and the one-writer profile slot it adds are what person memory extends."
+  },
+  {
+   "from": "#1117",
+   "to": "G29",
+   "why": "#1117 is the fix."
+  }
+ ],
+ "decisions": [
+  {
+   "decision": "Recall scope across threads: a per-chain lookup, a chain column, or accepting cross-chat recall",
+   "unblocks": "G6, then #1176 and #1179 (threads)"
+  },
+  {
+   "decision": "Owner-typed health in the transcript, recall index and embeddings: a quarantine, or an ADR-0081 amendment that keeps it",
+   "unblocks": "G37, then G8 semantic recall and turning on G7 compaction"
+  },
+  {
+   "decision": "Keys, judge model, schedule and spend cap for the nightly eval (#1185)",
+   "unblocks": "G43, which then unblocks G7, G8, G47 and G44"
+  },
+  {
+   "decision": "Merge #1113 (it deletes and downgrades guards) and set the monthly spend ceiling per owner",
+   "unblocks": "G41, cohort growth past the alpha, A10"
+  },
+  {
+   "decision": "Standing-grant ADR: owner, resource, parameter, time and budget scope, rechecked before dispatch and resume",
+   "unblocks": "G3, autonomous moves in G12, unattended watches in G13, G50; A4"
+  },
+  {
+   "decision": "Email-body processing ADR covering the reply watch on sent threads",
+   "unblocks": "G1; A6"
+  },
+  {
+   "decision": "Inbound email presence: a per-owner Waldo address and sender admission",
+   "unblocks": "G25"
+  },
+  {
+   "decision": "Google publishing path: the smallest scope list, dropping gmail.compose, and submitting verification",
+   "unblocks": "G38, the new scopes in G30, every tester outside the test list"
+  },
+  {
+   "decision": "Production environment: cron, bindings, browser provider, flags and a named egress allowlist, including replacing staging's wildcard",
+   "unblocks": "G52, G8 in production, any beta outside staging"
+  },
+  {
+   "decision": "ADR-0073 compliance pack: processor inventory, DPIA, breach plan, launch region",
+   "unblocks": "G40, the first non-founder user"
+  },
+  {
+   "decision": "Score ratification: formulas, zone bands and an ADR-0081 amendment",
+   "unblocks": "G33, the G35 registry entries, G17"
+  },
+  {
+   "decision": "Day plan contract: store priorities and focus blocks, plus the ADR-0081 destination check for health input",
+   "unblocks": "G12, G32; A3"
+  },
+  {
+   "decision": "Regeneration policy for interrupted turns as a contract amendment",
+   "unblocks": "G4; A1"
+  },
+  {
+   "decision": "Interruption policy: the model judges now, batch, silent or escalate, and the gate stays the hard cap",
+   "unblocks": "G15"
+  },
+  {
+   "decision": "Location consent purpose and Open-Meteo commercial terms",
+   "unblocks": "G16; T16 and L4 parity"
+  },
+  {
+   "decision": "WhatsApp eligibility and route ruling, then utility templates and third-party sends",
+   "unblocks": "G26, G48"
+  },
+  {
+   "decision": "Person memory and contacts scope",
+   "unblocks": "G9"
+  },
+  {
+   "decision": "Whether a private chat is wanted",
+   "unblocks": "G11"
+  },
+  {
+   "decision": "Learning-layer numeric pattern rule (waldo-brain#34, ADR-0018 and ADR-0019 amendments)",
+   "unblocks": "G17"
+  },
+  {
+   "decision": "Spending-authority ADR: limits, merchant scope, custody of the payment method",
+   "unblocks": "G50"
+  },
+  {
+   "decision": "Trusted-coordination transport and signing ADR",
+   "unblocks": "G51; A13"
+  },
+  {
+   "decision": "Kennel K0 result contract: artifacts, independent verification, task-to-session mapping",
+   "unblocks": "G28, G27's Work view; A14"
+  },
+  {
+   "decision": "Job caps: active-job count and minimum interval for fires that run the model",
+   "unblocks": "G5, then G13"
+  },
+  {
+   "decision": "Health tool output in staging traces, within the 10 October ruling",
+   "unblocks": "G46"
+  },
+  {
+   "decision": "Persona amendments through soul-file review: ask versus assume, listen first, challenge",
+   "unblocks": "G47"
+  },
+  {
+   "decision": "Approval for the Unicode font and XLSX libraries as dependencies",
+   "unblocks": "G49"
+  },
+  {
+   "decision": "Publish the Brain launch contract and ADR packet, then regenerate accepted-adrs.json",
+   "unblocks": "G53, and merging code that touches the ADR-0069, ADR-0071 and ADR-0075 seams"
+  }
+ ],
+ "pillars": "P1 durable work and failures: scheduled jobs, wakes, retries, failures the owner can see, exact-detail approvals.\nP2: not defined in any source the readers found.\nP3 memory: claims, recall, the context window, correction, forgetting.\nP4 proactivity and triggers: day cards, event wakes, the delivery gate, active hours.\nP5: not defined in any source the readers found.\nP6 one agent on every surface: one brain and one state, rendered to each surface's ability.\nP7 identity and consent: session, owner admission, consent, provider grants, rights.\nP8 activity and observability: receipts, traces, evals, spend, latency.\nExtra groups, named for their sources: Connector depth (ledger Wave 5), Health plane (ledger Wave 3, ADR-0081), Instinct parity (ledger \u00a711), Operations and governance (plan \u00a713, S0).",
+ "note": "Synthesis of the 14 Oct gap research at tip 3c4d3fae. Rows are in gap-rows-2026-10-14.json (61 rows: G1-G53 without G46, critic rows renumbered G54-G62). Decision G6 was decided 1a (#1103 comment 6166267816)."
+}
