@@ -20,6 +20,7 @@ import { turnReceipt } from '../hooks/receipt-line';
 import { THREAD_TITLE_FORMAT, THREAD_TITLE_INSTRUCTION, threadOfChain } from './app-threads';
 import type { LoopEventLike } from '../hooks/claim-hook';
 import { delegateTaskHandler, runChildLoop, SUBAGENT_SYSTEM_PROMPT, withDelegation } from '../conversation/subagent';
+import { CHECK_BACK_TOOLS, reminderCheckBackText } from './check-back';
 import { inMemoryToolOutputStore } from '../conversation/tool-output-store';
 import { readToolOutputHandler } from '../tools/read-tool-output';
 import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
@@ -362,7 +363,11 @@ export const createOwnerResponder = (
       const { handlers: admittedHandlers, report: eligibility } = await eligibleHandlers(handlers.filter(handler => (backgroundToolNames === undefined || backgroundToolNames.includes(handler.name)) && (handler.name !== 'raise_approval' || activeOwnerTurn !== undefined) && (!['remember', 'forget_memory'].includes(handler.name) || (activeOwnerTurn && activeOwnerTurn.memoryWrites !== false && !probeGuard?.suppressMemory))));
       await assertCurrent();
       if (eligibility.not_connected + eligibility.not_configured + eligibility.check_failed > 0) log({ trace, hop: 'tool_eligibility', ms: Date.now() - eligibilityStarted, ok: true, detail: `not_connected=${eligibility.not_connected} not_configured=${eligibility.not_configured} check_failed=${eligibility.check_failed}` });
-      const connections = [unconnectedLine(eligibility.unconnected), activeOwnerTurn ? privateOwner?.watchStatus?.() : undefined].filter(Boolean).join('\n\n');
+      // The watch fact is a hint, so a failure to build it drops the fact and never fails the owner's turn.
+      const watchFact = () => {
+        try { return privateOwner?.watchStatus?.(); } catch { log({ trace, hop: 'watch_status', ms: 0, ok: false, code: 'watch_status_failed' }); return undefined; }
+      };
+      const connections = [unconnectedLine(eligibility.unconnected), activeOwnerTurn ? watchFact() : undefined].filter(Boolean).join('\n\n');
       const guardedHandlers: DispatchToolOptions<ToolDispatcherContext>['handlers'] = admittedHandlers.map(handler => {
         return { ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
           await assertFresh();
@@ -806,7 +811,7 @@ export const createOwnerResponder = (
       if (asOwner !== undefined) return asOwner;
       await restored();
       pending = undefined;
-      return converse(id, conversationRef, `[Reminder due now, set earlier by the owner: "${note}"] Send the reminder briefly in your own words. Do not add a sentence explaining that they asked for it.`, time, false, surface);
+      return converse(id, conversationRef, reminderCheckBackText(note), time, false, surface, CHECK_BACK_TOOLS);
     },
     async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint) {
       const asOwner = await asOwnerJob(id, job => job.prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint), conversationRef);

@@ -3,6 +3,7 @@ import { iMessageBridgeName, iMessageComposition, type IMessageEnv } from './bri
 import { mintSetupSecret, sha256Hex } from './crypto';
 import { iMessageDirectory, type BridgeListing } from './directory';
 import { consoleAuth } from '../../identity/console-auth';
+import { iMessageSendUrl } from './send-url';
 
 // Private owner lifecycle UI. The authenticated owner console session + CSRF is the sole authority
 // for pair/verify/activate/revoke; host S2 credentials can never reach these actions.
@@ -45,6 +46,18 @@ export function renderIMessage(rows: readonly (BridgeListing & { online?: boolea
     + `<table><tr><th>Status</th><th>Sender</th><th>Host</th><th>Actions</th></tr>${rows.map(row).join('')}</table></body></html>`;
 }
 
+
+/** Result of "Get an iMessage link code": the code, and on a phone a button that opens Messages ready to send. */
+export function iMessageLinkPage(code: string, address: string | undefined): string {
+  const to = address ? escape(address) : 'the Waldo iMessage number';
+  const open = address ? `<p><a href="${escape(iMessageSendUrl(address, code))}" style="display:inline-block;padding:14px 22px;border-radius:12px;background:#0a84ff;color:#fff;text-decoration:none;font-weight:bold">Open Messages</a></p><p>On your iPhone, tap <b>Open Messages</b>, then tap <b>Send</b>.</p>` : '';
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect iMessage</title></head>`
+    + `<body style="font:17px system-ui;margin:32px;max-width:560px"><h1>Connect iMessage</h1>${open}`
+    + `<p>Or text exactly this to ${to} from your iPhone:</p><p style="font:600 24px ui-monospace,monospace">waldo ${escape(code)}</p>`
+    + `<p>The code works once, within 10 minutes. Waldo replies "Linked." and from then on only your number reaches your Waldo.</p>`
+    + `<p><a href="${CONSOLE_IMESSAGE_PATH}">Back</a></p></body></html>`;
+}
+
 export async function iMessageConsolePage(env: IMessageEnv, owner: string, csrf: string): Promise<Response> {
   if (!iMessageComposition(env)) return new Response('iMessage is not enabled.', { status: 404, headers: HEADERS });
   try {
@@ -71,8 +84,7 @@ export async function iMessageConsoleAction(form: FormData, csrf: string, owner:
     const action = form.get('action');
     if (action === 'imessage.link') {
       const code = await consoleAuth(env)?.issueProviderLinkCode?.(owner, 'imessage');
-      const to = env.IMESSAGE_WALDO_ADDRESS ?? 'the Waldo iMessage number';
-      if (code) return new Response(`waldo ${code}\nText exactly this to ${to} from your iPhone within 10 minutes. Your number then reaches only your Waldo.`, { headers: TEXT });
+      if (code) return new Response(iMessageLinkPage(code, env.IMESSAGE_WALDO_ADDRESS), { headers: HEADERS });
     } else if (action === 'imessage.unlink') {
       // Canonical unlink: the sender's authority and revision change at once, so the bridge refuses any queued reply
       // (authority_changed) and a later text from the handle is an unknown sender.

@@ -10,6 +10,8 @@ import { ensureSchema } from '../src/tracer/schema';
 import type { Deps } from '../src/seams/deps';
 import { TelegramFinalOutbox, type HeartbeatReceipt } from '../src/channels/telegram-final-outbox';
 import type { OwnerDO } from '../src/channels/owner-do';
+// Stands in for the check-back turn: reports which loops it was given.
+const checkedBack = async (loops: readonly { title: string }[]) => `Checked ${loops.map(loop => loop.title).join(', ')}`;
 
 let sequence = 0;
 const stub = () => env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`heartbeat-${sequence++}`)) as DurableObjectStub<OwnerDO>;
@@ -37,7 +39,7 @@ const withBeat = async <T>(now: number, work: (ctx: {
     const beat = async (occurrenceAt: number) => {
       await scheduler.schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', occurrenceAt, dueAt: occurrenceAt, payloadRefs: { id: HEARTBEAT_ID } }).catch(() => undefined);
       return scheduler.dispatchDue({
-        heartbeat: heartbeatTick({ scheduler, sql, loops: book, plans, timezone: TZ, now: () => now, enqueue: enqueueSend(sql, state.storage, scheduler, now, async (text) => { sent.push(text); }) }),
+        heartbeat: heartbeatTick({ scheduler, sql, loops: book, plans, timezone: TZ, now: () => now, checkBack: checkedBack, enqueue: enqueueSend(sql, state.storage, scheduler, now, async (text) => { sent.push(text); }) }),
       } as ScheduleExecutors);
     };
     const runs = () => sql.exec<RunRow>('SELECT schedule_id, outcome, heartbeat_result, delivery, attempt FROM schedule_runs ORDER BY id').toArray();
@@ -76,18 +78,18 @@ describe('heartbeat tick (H1, scheduler-owned run history)', () => {
     });
   });
 
-  it('a tick with one past-due loop sends exactly that loop and records acted + sent', async () => {
+  it('a tick with one past-due loop sends the reply of the check-back turn and records acted + sent', async () => {
     await withBeat(at('2026-09-26T10:30:00Z'), async ({ sql, beat, sent, runs }) => {
       const book = loopBook(sql, { newId: () => 'x', now: () => at('2026-09-26T10:00:00Z') });
       book.open({ title: 'Check how the late call went', due: '2026-09-26T14:00' });
       await beat(at('2026-09-26T10:30:00Z'));
       // 16:00 IST - the 14:00 IST loop is past due.
-      expect(sent).toEqual(['From your list, past due:\n- Check how the late call went (due 2026-09-26 14:00)']);
+      expect(sent).toEqual(['Checked Check how the late call went']);
       expect(runs()).toEqual([{ schedule_id: HEARTBEAT_ID, outcome: 'ok', heartbeat_result: 'acted', delivery: 'sent', attempt: 1 }]);
     });
   });
 
-  it('flood control: many past-due loops still produce exactly one message', async () => {
+  it('flood control: many past-due loops go to one check-back turn and produce exactly one message', async () => {
     await withBeat(at('2026-09-26T10:30:00Z'), async ({ sql, beat, sent, runs }) => {
       const book = loopBook(sql, { newId: (() => { let n = 0; return () => `l${++n}`; })(), now: () => at('2026-09-26T10:00:00Z') });
       book.open({ title: 'A', due: '2026-09-26T13:00' });
@@ -96,8 +98,7 @@ describe('heartbeat tick (H1, scheduler-owned run history)', () => {
       book.open({ title: 'D', due: '2026-09-26T15:30' });
       await beat(at('2026-09-26T10:30:00Z'));
       expect(sent.length).toBe(1);
-      expect(sent[0]).toContain('- A (due 2026-09-26 13:00)');
-      expect(sent[0]).toContain('…and 1 more on your list.');
+      expect(sent).toEqual(['Checked A, B, C, D']);
       expect(runs()[0]).toMatchObject({ outcome: 'ok', heartbeat_result: 'acted', delivery: 'sent' });
     });
   });
@@ -137,7 +138,7 @@ describe('heartbeat tick (H1, scheduler-owned run history)', () => {
         const scheduler = new Scheduler(sql, manualAlarmStorage(state.storage), deps(now));
         await scheduler.schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', occurrenceAt: occurrence, dueAt: occurrence, payloadRefs: {} });
         await scheduler.dispatchDue({
-          heartbeat: heartbeatTick({ scheduler, sql, loops: book, plans: dayPlanBook(sql), timezone: TZ, now: () => now, enqueue: enqueueSend(sql, state.storage, scheduler, now, async (text) => { sent.push(text); }) }),
+          heartbeat: heartbeatTick({ scheduler, sql, loops: book, plans: dayPlanBook(sql), timezone: TZ, now: () => now, checkBack: checkedBack, enqueue: enqueueSend(sql, state.storage, scheduler, now, async (text) => { sent.push(text); }) }),
         } as ScheduleExecutors);
       };
       await beatAt(at('2026-09-26T10:30:00Z'));
@@ -173,7 +174,7 @@ describe('heartbeat tick (H1, scheduler-owned run history)', () => {
       // Retry of the same occurrence: no terminal delivery exists, so the send happens.
       const sent: string[] = [];
       await scheduler.dispatchDue({
-        heartbeat: heartbeatTick({ scheduler, sql, loops: book, plans: dayPlanBook(sql), timezone: TZ, now: () => occurrence, enqueue: enqueueSend(sql, state.storage, scheduler, occurrence, async (text) => { sent.push(text); }) }),
+        heartbeat: heartbeatTick({ scheduler, sql, loops: book, plans: dayPlanBook(sql), timezone: TZ, now: () => occurrence, checkBack: checkedBack, enqueue: enqueueSend(sql, state.storage, scheduler, occurrence, async (text) => { sent.push(text); }) }),
       } as ScheduleExecutors);
       expect(sent.length).toBe(1);
       const rows = sql.exec<RunRow>('SELECT schedule_id, outcome, heartbeat_result, delivery, attempt FROM schedule_runs ORDER BY id').toArray();
@@ -192,13 +193,13 @@ describe('heartbeat tick (H1, scheduler-owned run history)', () => {
       await scheduler.schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', occurrenceAt: occurrence, dueAt: occurrence, payloadRefs: {} });
       let calls = 0;
       await scheduler.dispatchDue({
-        heartbeat: heartbeatTick({ scheduler, sql, loops: book, plans: dayPlanBook(sql), timezone: TZ, now: () => occurrence, enqueue: enqueueSend(sql, state.storage, scheduler, occurrence, async () => { calls += 1; throw new TypeError('network down'); }) }),
+        heartbeat: heartbeatTick({ scheduler, sql, loops: book, plans: dayPlanBook(sql), timezone: TZ, now: () => occurrence, checkBack: checkedBack, enqueue: enqueueSend(sql, state.storage, scheduler, occurrence, async () => { calls += 1; throw new TypeError('network down'); }) }),
       } as ScheduleExecutors).catch(() => undefined);
       const first = sql.exec<RunRow>('SELECT schedule_id, outcome, heartbeat_result, delivery, attempt FROM schedule_runs ORDER BY id').toArray();
       expect(first[0]).toMatchObject({ outcome: 'quarantined', heartbeat_result: 'acted', delivery: 'failed' });
       // Retry: the terminal 'failed' delivery is observed, not re-sent.
       await scheduler.dispatchDue({
-        heartbeat: heartbeatTick({ scheduler, sql, loops: book, plans: dayPlanBook(sql), timezone: TZ, now: () => occurrence, enqueue: enqueueSend(sql, state.storage, scheduler, occurrence, async () => { calls += 1; }) }),
+        heartbeat: heartbeatTick({ scheduler, sql, loops: book, plans: dayPlanBook(sql), timezone: TZ, now: () => occurrence, checkBack: checkedBack, enqueue: enqueueSend(sql, state.storage, scheduler, occurrence, async () => { calls += 1; }) }),
       } as ScheduleExecutors).catch(() => undefined);
       expect(calls).toBe(1);
     });
@@ -243,7 +244,7 @@ describe('heartbeat H1b: quiet-held day card release', () => {
       plans.held('2026-09-26', 'card:brief');
       await beat(at('2026-09-26T02:30:00Z'));
       expect(scheduler.read('card:brief')?.status).toBe('armed');
-      expect(sent).toEqual(['From your list, past due:\n- Check how the late call went (due 2026-09-26 07:00)']);
+      expect(sent).toEqual(['Checked Check how the late call went']);
       expect(runs()[0]).toMatchObject({ heartbeat_result: 'acted', delivery: 'sent' });
     });
   });

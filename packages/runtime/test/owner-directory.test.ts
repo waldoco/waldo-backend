@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { linkCodeHash, ownerDirectory, routerSignature } from '../src/identity/owner-directory';
+import { linkCodeHash, ownerDirectory, routerSignature, signedRpc } from '../src/identity/owner-directory';
 
 const env = { SUPABASE_PROJECT_URL: 'https://db.test', SUPABASE_PUBLISHABLE_KEY: 'pub', WALDO_ROUTER_HMAC_SECRET: 'router' };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
@@ -77,6 +77,14 @@ describe('ownerDirectory', () => {
     expect(await ownerDirectory(env, raised as unknown as typeof fetch, now).redeemHashed!('imessage', 'a@icloud.invalid', hash)).toEqual({ kind: 'uncertain' });
     const opaque = vi.fn().mockResolvedValue(new Response('bad gateway', { status: 409 }));
     expect(await ownerDirectory(env, opaque as unknown as typeof fetch, now).redeemHashed!('imessage', 'a@icloud.invalid', hash)).toEqual({ kind: 'uncertain' });
+  });
+  it('a refused call keeps only whether the subject is claimed elsewhere, never the database message', async () => {
+    const message = 'duplicate key value violates unique constraint: (subject)=(+15550100123)';
+    const fetcher = vi.fn(async () => json({ code: '23505', message }, 409));
+    const error = await signedRpc(env, fetcher as unknown as typeof fetch, now)!('redeem_link', 'redeem', {}).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ status: 409, sqlState: '23505', claimedElsewhere: false });
+    expect(JSON.stringify(error)).not.toContain('15550100123');
+    expect(JSON.stringify(error)).not.toContain('duplicate key');
   });
   it('surfaces a database failure instead of treating it as an unknown sender', async () => {
     const fetcher = vi.fn(async () => json({ message: 'unsigned router call' }, 403));
