@@ -11,6 +11,21 @@ const trial = (item: TrialScenario, rules: readonly ScriptRule[], budget = callB
 };
 
 describe('nightly eval trial', () => {
+  it('hands the owner text to the model as the owner\'s own words, never as a quote', async () => {
+    const { gateway, result } = trial(scenario([{ say: 'Move my 3pm to 4.' }]), [{ match: /Move my 3pm/, rounds: [{ text: 'Which 3pm?' }] }]);
+    expect((await result).status).toBe('ran');
+    const asked = gateway.requests().filter((request) => request.request.response_format === undefined).map((request) => JSON.stringify(request.request.messages.at(-1)));
+    expect(asked.some((message) => message.includes('Move my 3pm to 4.'))).toBe(true);
+    for (const message of asked) expect(message).not.toMatch(/Quoted by the owner|Forwarded/);
+  });
+
+  it('names the class of the error that stopped a trial, and never its message', async () => {
+    const { result } = trial(scenario([{ say: 'hello' }, { advance_to: '2026-09-23T09:00:00+05:30' }]), [{ match: /hello/, rounds: [{ text: 'hi' }] }]);
+    const run = await result;
+    expect(run.status).toBe('harness_error');
+    expect(run.error).toBe('Error');
+  });
+
   it('records the promise, moves the clock and fires the reminder through the reminder path', async () => {
     const { result } = trial(scenario([{ say: 'Remind me at 5 to call the bank.' }, { advance_to: '2026-09-24T17:00:00+05:30' }, { fire_due: true }]), [
       { match: /Remind me at 5/, rounds: [{ toolCalls: [{ name: 'set_reminder', arguments: { note: 'call the bank', at: '2026-09-24T17:00', repeat: 'none' } }] }, { text: 'Set for 5pm.' }] },

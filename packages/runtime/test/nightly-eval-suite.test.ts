@@ -50,7 +50,7 @@ describe('nightly eval suite', () => {
     const broken = quick('broken', { steps: [{ advance_to: '2026-09-23T09:00:00+05:30' }] });
     const card = await runNightly([broken], { trials: 1, budget: callBudget(10), gateway: reply, judge: passing, candidate: 'model-a', judgeModel: 'model-b' });
     expect(judgeCalls).toEqual([]);
-    expect(card.scenarios[0]).toMatchObject({ passed: 0, failed: 0, ungraded: 1 });
+    expect(card.scenarios[0]).toMatchObject({ passed: 0, failed: 0, ungraded: 1, harness_errors: ['Error'] });
   });
 
   it('dry-runs the whole catalogue with the recorded model and judge, with no network and no scenario text in the scorecard', async () => {

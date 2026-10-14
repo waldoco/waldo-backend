@@ -24,16 +24,17 @@ export const runNightly = async (scenarios: readonly NightlyScenario[], run: Nig
   const results: ScenarioTrials[] = [];
   for (const scenario of scenarios) {
     const outcomes: TrialOutcome[] = [];
+    const errors: string[] = [];
     for (let trial = 0; trial < run.trials; trial += 1) {
       if (scenario.blocked) { outcomes.push('blocked'); continue; }
       if (run.budget.exhausted()) { outcomes.push('budget_exhausted'); continue; }
       const record = await runTrial(scenario, { gateway: run.gateway(), budget: run.budget, ...(run.model ? { model: run.model } : {}) });
-      if (record.status !== 'ran') { outcomes.push(record.status); continue; }
+      if (record.status !== 'ran') { outcomes.push(record.status); if (record.error) errors.push(record.error); continue; }
       const verdict = await run.judge({ scenario: scenario.id, rubric: scenario.rubric, transcript: record.transcript, tools: record.tools, effects: record.effects, final_state: record.final_state });
       outcomes.push(verdict.outcome);
       run.show?.(scenario, record, verdict);
     }
-    results.push({ id: scenario.id, pain: scenario.pain, outcomes });
+    results.push({ id: scenario.id, pain: scenario.pain, outcomes, ...(errors.length ? { harness_errors: errors } : {}) });
   }
   return scorecard(results, { candidate: run.candidate, judge: run.judgeModel, trials: run.trials, usage: run.budget.usage() });
 };

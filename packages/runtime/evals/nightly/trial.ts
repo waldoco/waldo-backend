@@ -18,6 +18,8 @@ export type Step =
 export type TrialScenario = Readonly<{ id: string; start: string; steps: readonly Step[]; world: WorldSeed }>;
 export type TrialRecord = Readonly<{
   status: 'ran' | 'harness_error' | 'budget_exhausted';
+  // The class of the error that stopped a harness_error trial, never its message, so a failed night is diagnosable.
+  error?: string;
   transcript: JudgeInput['transcript'];
   tools: JudgeInput['tools'];
   // Kept for a local look at one scenario; never written to the scorecard.
@@ -41,11 +43,12 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
   const entries: TurnLogEntry[] = [];
   const model = deps.model ?? WALDO_CHAT_MODEL;
   const responder = createTelegramResponder('eval-key', world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
-    world.handlers as never, model, false, undefined, async () => true, metered(deps.gateway, deps.budget), undefined, undefined, undefined, undefined,
+    world.handlers, model, false, undefined, async () => true, metered(deps.gateway, deps.budget), undefined, undefined, undefined, undefined,
     model, undefined, world.health, undefined, 'app');
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
   const transcript: { role: 'owner' | 'waldo' | 'world'; text: string }[] = [];
   let status: TrialRecord['status'] = 'ran';
+  let error: string | undefined;
   let turn = 0;
   try {
     for (const step of scenario.steps) {
@@ -68,13 +71,14 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
       }
       if (deps.budget.exhausted()) { status = 'budget_exhausted'; break; }
     }
-  } catch {
+  } catch (failure) {
     status = deps.budget.exhausted() ? 'budget_exhausted' : 'harness_error';
+    if (status === 'harness_error') error = failure instanceof Error ? failure.constructor.name : typeof failure;
   }
   const names = new Set(world.handlers.map((handler) => `tool_${handler.name}`));
   const tools = entries.filter((entry) => names.has(entry.hop));
   return {
-    status, transcript,
+    status, ...(error ? { error } : {}), transcript,
     tools: tools.map((entry) => ({ name: entry.hop.slice(5), ok: entry.ok })),
     toolOutputs: tools.map((entry) => ({ name: entry.hop.slice(5), output: entry.text?.output ?? '' })),
     effects: world.effects(),
