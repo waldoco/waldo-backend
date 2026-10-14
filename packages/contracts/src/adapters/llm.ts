@@ -78,9 +78,6 @@ export const llmRequestSchema = z.strictObject({
   // truthfully. Per-model derivation lands with the roster window table when the roster grows.
   max_tokens: z.int().min(1).max(128_000),
   temperature: z.number().min(0).max(2),
-  // How hard a reasoning model thinks before answering. Absent means the adapter's low default; providers without a
-  // reasoning setting ignore it.
-  reasoning_effort: z.enum(['low', 'medium']).optional(),
   // Prompt-cache affinity hint (OpenAI prompt_cache_key): stable per owner, never content,
   // never a credential. Providers without keyed caching ignore it.
   cache_key: z.string().min(1).max(128).optional(),

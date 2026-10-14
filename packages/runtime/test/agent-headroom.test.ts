@@ -1,14 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildSessionState, getCrsArgsSchema, LLM_TOOL_TURNS_MAX, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, sendMessageArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type LLMToolTurn, type ToolHandler } from '@waldo/contracts';
+import { buildSessionState, getCrsArgsSchema, LLM_TOOL_TURNS_MAX, sendMessageArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type LLMToolTurn, type ToolHandler } from '@waldo/contracts';
 import { runToolLoop, unfinishedReply, type LoopExit } from '../src/conversation/tool-loop';
 import { delegateTaskHandler, runChildLoop, SUBAGENT_ROUND_SHARE } from '../src/conversation/subagent';
 import { dispatchTool, MAX_TOOL_ERROR_CHARS, type ToolDispatcherContext } from '../src/tools/dispatcher';
 import { inMemoryToolOutputStore } from '../src/conversation/tool-output-store';
-import { OpenAIResponsesAdapter, type OpenAIResponsesClient } from '../src/llm/openai';
-import { ownerTurnEffort, spendPosture } from '../src/llm/cost-ledger';
 import { getContextHandler } from '../src/tools/live/get-context';
 import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
-import type { LLMGatewayRequest } from '../src/llm/provider';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
 const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' });
@@ -261,32 +258,5 @@ describe('a tool error', () => {
     const result = await dispatchTool(call, ctx(), { handlers: [failing(error)], offload: inMemoryToolOutputStore() });
     expect(result.ok).toBe(false);
     expect((result as { error: string }).error).not.toContain(CANARIES[0]);
-  });
-});
-
-describe('reasoning effort', () => {
-  const request = (effort?: 'low' | 'medium'): LLMGatewayRequest => ({
-    request: { model: OPENAI_GPT_6_LUNA_MODEL, messages: [{ role: 'user', content: 'Hi.' }], max_tokens: 32, temperature: 0, ...(effort ? { reasoning_effort: effort } : {}) },
-    route: { trigger: 'user_message', primary: { provider: OPENAI_PROVIDER, model: OPENAI_GPT_6_LUNA_MODEL, cache: 'none' }, fallback: [], floor: 'template' },
-    step: { provider: OPENAI_PROVIDER, model: OPENAI_GPT_6_LUNA_MODEL, cache: 'none' },
-    context: 'full_context', fallback_step: 'configured_model', headers: { 'cf-aig-collect-log-payload': 'false' },
-  });
-  const sentEffort = async (effort?: 'low' | 'medium') => {
-    let sent: { reasoning?: { effort?: string } } | undefined;
-    const client = { responses: { create: async (body: typeof sent) => { sent = body; return { id: 'r', status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'ok' }] }], usage: { input_tokens: 1, output_tokens: 1 } }; } } } as unknown as OpenAIResponsesClient;
-    await new OpenAIResponsesAdapter({ apiKey: 'synthetic-key-0123456789', client }).complete(request(effort));
-    return sent?.reasoning?.effort;
-  };
-
-  it('sends the effort the request asks for, and low when it names none', async () => {
-    expect(await sentEffort('medium')).toBe('medium');
-    expect(await sentEffort()).toBe('low');
-  });
-
-  it('owner turns think at medium until the cost brake engages', () => {
-    expect(ownerTurnEffort(undefined)).toBe('medium');
-    expect(ownerTurnEffort(spendPosture(7.9, 10))).toBe('medium');
-    expect(ownerTurnEffort(spendPosture(8, 10))).toBe('low');
-    expect(ownerTurnEffort(spendPosture(12, 10))).toBe('low');
   });
 });

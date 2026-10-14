@@ -13,7 +13,7 @@ for(const kind of ['physical_retry'] as const){
   await runInDurableObject(stub,async(_,state)=>{
    const owner=localTrustedBriefScheduleInput().admission.verified_authority.principal_ref;
    const trace=`curated-${kind}`;const name=CURATED_PREPARATION_SKILL.name;const body=CURATED_PREPARATION_SKILL.body_markdown;
-   const scope={runId:'run',attempt:'attempt',deadline:Date.now()+60000,signal:new AbortController().signal,admit(){},commit<T>(work:()=>T){return work();}};
+   const scope={runId:'run',attempt:'attempt',deadline:Date.now()+15*60_000,signal:new AbortController().signal,admit(){},commit<T>(work:()=>T){return work();}};
    const writer=new CuratedOwnerSkills(state.storage.sql,owner);
    expect(writer.install(name,1,{owner,turnId:trace,trigger:'user_message',ownerText:`/skills install ${name}@1`,assertCurrent:async()=>{}}).ok).toBe(true);
    const physical:Array<{containsBody:boolean;status:string;context:string}>=[];

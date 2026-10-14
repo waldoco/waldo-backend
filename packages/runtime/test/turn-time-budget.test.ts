@@ -11,7 +11,6 @@ import { TURN_TIMEOUT_MS } from '../src/channels/telegram-listener';
 import { googleHandlers } from '../src/tools/live/google';
 import { sanitise } from '../src/scribe/sanitiser';
 import { FINAL_ANSWER_RESERVE_MS, MODEL_CALL_TIMEOUT_MS, RATE_LIMIT_BACKOFF_MS, RUN_CLOSE_MARGIN_MS, TOOL_ROUNDS_CEILING, toolRoundsFor, TURN_TIME_BUDGET_MS, turnDeadlineFor, withCallDeadline } from '../src/llm/time-budget';
-import { spendPosture } from '../src/llm/cost-ledger';
 import type { HookRuntimeContext } from '../src/hooks/registry';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 
@@ -448,21 +447,20 @@ describe('the turn budget follows the run it serves', () => {
   });
 });
 
-describe('an owner reply thinks and writes with room', () => {
-  const replyRequest = async (spend?: ReturnType<typeof spendPosture>) => {
+describe('an owner reply has room to write', () => {
+  const replyRequest = async (respond: (responder: ReturnType<typeof createOwnerResponder>, scope: RunEffectScope) => Promise<unknown>) => {
     const api = fakeOpenAI(() => ({ after: 0, body: said('Done.') }));
     const { scope } = runScope();
-    const responder = createOwnerResponder(SYNTHETIC_KEY, undefined, undefined, undefined, clock, [], undefined, false, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, [], undefined, undefined, spend ? { spendPosture: () => spend } : undefined);
-    await settle(responder.respond(ownerTyped({ traceId: 'reply', conversationRef: 'owner', surface: 'app', text: 'Plan my day.', memoryWrites: false, runScope: scope }), sameTime));
-    return api.requests[0]!.body as { reasoning?: { effort?: string }; max_output_tokens?: number };
+    await settle(respond(createOwnerResponder(SYNTHETIC_KEY, undefined, undefined, undefined, clock, []), scope));
+    return api.requests[0]!.body as { max_output_tokens?: number };
   };
 
-  it('asks for medium effort and output room for reasoning plus the answer', async () => {
-    expect(await replyRequest()).toMatchObject({ reasoning: { effort: 'medium' }, max_output_tokens: 16_384 });
+  it('asks for output room for reasoning plus a long answer on an owner turn', async () => {
+    expect(await replyRequest((responder, scope) => responder.respond(ownerTyped({ traceId: 'reply', conversationRef: 'owner', surface: 'app', text: 'Plan my day.', memoryWrites: false, runScope: scope }), sameTime))).toMatchObject({ max_output_tokens: 16_384 });
   });
 
-  it('drops to low effort once the cost brake engages', async () => {
-    expect((await replyRequest(spendPosture(8, 10))).reasoning?.effort).toBe('low');
+  it('keeps machine turns at the smaller output', async () => {
+    expect(await replyRequest((responder) => responder.remind('remind', 'owner', 'Stretch.', sameTime))).toMatchObject({ max_output_tokens: 4096 });
   });
 });
 
