@@ -357,7 +357,11 @@ export const createOwnerResponder = (
       const { handlers: admittedHandlers, report: eligibility } = await eligibleHandlers(handlers.filter(handler => (backgroundToolNames === undefined || backgroundToolNames.includes(handler.name)) && (handler.name !== 'raise_approval' || activeOwnerTurn !== undefined) && (!['remember', 'forget_memory'].includes(handler.name) || (activeOwnerTurn && activeOwnerTurn.memoryWrites !== false && !probeGuard?.suppressMemory))));
       await assertCurrent();
       if (eligibility.not_connected + eligibility.not_configured + eligibility.check_failed > 0) log({ trace, hop: 'tool_eligibility', ms: Date.now() - eligibilityStarted, ok: true, detail: `not_connected=${eligibility.not_connected} not_configured=${eligibility.not_configured} check_failed=${eligibility.check_failed}` });
-      const connections = [unconnectedLine(eligibility.unconnected), activeOwnerTurn ? privateOwner?.watchStatus?.() : undefined].filter(Boolean).join('\n\n');
+      // The watch fact is a hint, so a failure to build it drops the fact and never fails the owner's turn.
+      const watchFact = () => {
+        try { return privateOwner?.watchStatus?.(); } catch { log({ trace, hop: 'watch_status', ms: 0, ok: false, code: 'watch_status_failed' }); return undefined; }
+      };
+      const connections = [unconnectedLine(eligibility.unconnected), activeOwnerTurn ? watchFact() : undefined].filter(Boolean).join('\n\n');
       const guardedHandlers: DispatchToolOptions<ToolDispatcherContext>['handlers'] = admittedHandlers.map(handler => {
         return { ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
           await assertFresh();
