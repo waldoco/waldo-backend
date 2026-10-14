@@ -41,7 +41,7 @@ it('the reply call reports what fills its context, and the system sections add u
   });
 });
 
-const scope = (): RunEffectScope => ({ runId: 'run-prefix', attempt: 'attempt-one', deadline: Date.now() + 30_000, signal: new AbortController().signal, admit: vi.fn(), commit: work => work() });
+const scope = (): RunEffectScope => ({ runId: 'run-prefix', attempt: 'attempt-one', deadline: Date.now() + 15 * 60_000, signal: new AbortController().signal, admit: vi.fn(), commit: work => work() });
 const appTurn = async (occurrenceKey: string, text: string, now: Date) => {
   const runScope = scope();
   const admission = await ownerMessageAdmission({

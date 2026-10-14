@@ -66,6 +66,8 @@ export type LLMToolTurn = z.infer<typeof llmToolTurnSchema>;
 // the parity so a growing tool surface fails CI instead of every live turn.
 // The closed registry bounds requests; its ACLs must remain representable as the surface grows.
 export const LLM_TOOLS_MAX = Math.min(toolNameSchema.options.length, 128);
+// Tool calls and results one request may replay; a longer turn sends its most recent rounds.
+export const LLM_TOOL_TURNS_MAX = 64;
 export const llmRequestSchema = z.strictObject({
   model: modelNameSchema,
   system: z.string().min(1).optional(),
@@ -89,7 +91,7 @@ export const llmRequestSchema = z.strictObject({
   // sanitisation never rewrites binary data; providers without file input reject the request.
   attachments: z.array(llmAttachmentSchema).min(1).max(LLM_ATTACHMENTS_MAX).optional(),
   tools: z.array(llmToolSchema).min(1).max(LLM_TOOLS_MAX).optional(),
-  tool_turns: z.array(llmToolTurnSchema).max(64).optional(),
+  tool_turns: z.array(llmToolTurnSchema).max(LLM_TOOL_TURNS_MAX).optional(),
 });
 export type LLMRequest = z.infer<typeof llmRequestSchema>;
 

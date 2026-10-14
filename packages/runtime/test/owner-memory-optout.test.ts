@@ -45,7 +45,7 @@ it('captures host control before any awaited reply and rejects a model write aft
 });
 
 it('captures host control before entering a scoped responder and rejects a model write after envelope mutation', async () => {
-  const runScope = { runId: 'fixture-run', attempt: 'fixture-attempt', deadline: Date.now() + 30_000, signal: new AbortController().signal, admit: () => {}, commit: <T>(work: () => T) => work() };
+  const runScope = { runId: 'fixture-run', attempt: 'fixture-attempt', deadline: Date.now() + 15 * 60_000, signal: new AbortController().signal, admit: () => {}, commit: <T>(work: () => T) => work() };
   const turn = { traceId: 'scoped-mutation', conversationRef: 'owner', surface: 'telegram', text: 'Synthetic hello', memoryWrites: false, runScope };
   const replying = responder().respond(ownerTyped(turn), timer);
   turn.memoryWrites = true;

@@ -1,11 +1,11 @@
 import { appControlsRequest } from './app-controls';
 import { consoleLog, consoleTrace } from '../observability/console-correlation';
-import { AppInbox, type AppInboxRecord } from './app-inbox';
+import { APP_TURN_DEADLINE_MS, AppInbox, type AppInboxRecord } from './app-inbox';
 import { iMessageComposition, type IMessageEnv, type IMessageResultReport, type IMessageTurnHandoff } from './imessage/bridge-do';
 import { IMessageFinalOutbox } from './imessage/final-outbox';
 import { redactIMessageEntries } from './imessage/forget';
 import { CONSOLE_IMESSAGE_PATH, iMessageConsoleAction, iMessageConsolePage, isIMessageConsoleAction } from './imessage/console';
-import { IMessageOwnerInbox, type IMessageInboxRecord } from './imessage/owner-inbox';
+import { IMESSAGE_TURN_DEADLINE_MS, IMessageOwnerInbox, type IMessageInboxRecord } from './imessage/owner-inbox';
 import { admitIMessageHandoff, currentIMessageAuthority, drainIMessageOutbox, iMessageOwnerContext, type OwnerHost } from './imessage/owner-runtime';
 import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-session-authority';
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
@@ -38,9 +38,9 @@ import {drainLinkReceipt} from './telegram-link-controller';
 import {ownerDirectory} from '../identity/owner-directory';
 import { ownerRuntimeAuthority, type OwnerRuntimeAuthority } from '../identity/owner-runtime-authority';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
-import { THREAD_TITLE_BUDGET_MS } from '../llm/time-budget';
+import { ALARM_JOB_MIN_MS, ALARM_TURN_BUDGET_MS, ALARM_TURN_MIN_MS, runClaimDeadline, THREAD_TITLE_BUDGET_MS } from '../llm/time-budget';
 import { receiptUrl } from '../conversation/artifact-link-guard';
-import { TelegramOwnerInbox, OWNER_INBOX_KEY, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
+import { TelegramOwnerInbox, OWNER_INBOX_KEY, TELEGRAM_TURN_DEADLINE_MS, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
 import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armWhatsappPendingWake, heldLane, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
 import { admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
@@ -481,7 +481,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     } catch { return new Response('admission unavailable', { status: 503 }); }
   }
 
-  private async drainInbox(): Promise<void> {
+  // alarmEnd: the budget of the alarm running this drain; a drain outside an alarm passes none.
+  private async drainInbox(alarmEnd?: number): Promise<void> {
     const rows = (await this.inbox.records()).filter(r => r.state === 'admitted').sort((a,b) => a.sequence - b.sequence);
     let row = rows[0]; if (!row) return;
     if (row.control?.kind === 'steer') {
@@ -492,8 +493,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const attempt = crypto.randomUUID(); await this.inbox.claim(row.id, attempt, crypto.randomUUID(), Date.now() + 180_000);
       await this.inbox.transition(row.id, attempt, 'quarantined', 'target_run_not_live'); return;
     }
+    // Too little of the alarm left: the row stays admitted, and its wake runs it in a fresh alarm.
+    const deadline = runClaimDeadline(TELEGRAM_TURN_DEADLINE_MS, alarmEnd); if (deadline === null) return;
     const attempt = crypto.randomUUID(); const runId = crypto.randomUUID();
-    const claimed = await this.inbox.claim(row.id, attempt, runId, Date.now() + 150_000); if (!claimed) return;
+    const claimed = await this.inbox.claim(row.id, attempt, runId, deadline); if (!claimed) return;
     this.liveAttempts.add(attempt); this.activeInbox = claimed;
     const abort = new AbortController();
     const scope: RunEffectScope = {
@@ -630,7 +633,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   async recordIMessageResult(input: IMessageResultReport): Promise<boolean> {
     try { return new IMessageFinalOutbox(this.ctx.storage).settle(input.replyRef, input.commandId, input.result); } catch { return false; }
   }
-  private async drainIMessage(): Promise<void> {
+  private async drainIMessage(alarmEnd?: number): Promise<void> {
     const composition = iMessageComposition(this.imessageHost.env);
     if (!composition) return;
     const inbox = new IMessageOwnerInbox(this.ctx.storage);
@@ -639,7 +642,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       let current = false;
       try { await currentIMessageAuthority(this.imessageHost.env, pending); current = true; }
       catch (error) { if (!(error instanceof ClosedRunError)) { inbox.deferWake(30_000); break; } }
-      const record = inbox.claim(pending.id, current); if (!record) continue;
+      const deadline = runClaimDeadline(IMESSAGE_TURN_DEADLINE_MS, alarmEnd); if (deadline === null) break;
+      const record = inbox.claim(pending.id, current, deadline); if (!record) continue;
       this.imessageAttempts.add(record.attempt!); this.activeIMessage = record;
       const abort = new AbortController(), scope = inbox.scope(record, abort.signal);
       this.activeScope = scope; this.activeAbort = abort; let completed = false;
@@ -1092,14 +1096,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const current = () => { const record = threadRecord(this.ctx.storage.kv, thread); if (record?.state !== 'active' || record.revision !== revision) throw new ClosedRunError(); };
     return { ...scope, admit: () => { scope.admit(); current(); }, commit: work => scope.commit(() => { current(); return work(); }) };
   }
-  private async drainApp(): Promise<void> {
+  private async drainApp(alarmEnd?: number): Promise<void> {
     this.appInbox.recover(this.appAttempts);
     await this.writeAppNotices();
     const untitled=new Map<string,string>();
     for(const pending of this.appInbox.records().filter(row=>row.state==='admitted')){
       let current=false;
       try{await this.appAuthority(pending.owner,pending.sessionHash);current=true;}catch(error){if(error instanceof AppSessionAuthorityError&&error.kind==='unavailable'){this.appInbox.deferWake(30_000);await this.rearmWithSchedule();return;}}
-      const record=this.appInbox.claim(pending.id,current);if(!record)continue;
+      const deadline=runClaimDeadline(APP_TURN_DEADLINE_MS,alarmEnd);if(deadline===null){await this.rearmWithSchedule();return;}
+      const record=this.appInbox.claim(pending.id,current,deadline);if(!record)continue;
       this.appAttempts.add(record.attempt!);this.activeApp=record;
       const abort=new AbortController(),thread=threadOfChain(record.conversationRef),scope=this.threadFenced(this.appInbox.scope(record,abort.signal),thread,record.threadRevision);
       this.activeScope=scope;this.activeAbort=abort;let completed=false;
@@ -1684,7 +1689,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const held = heldLane(retryDue, failed, Date.now());
     if (!held && retryDue !== undefined) kv.delete(ALARM_RETRY_DUE_KEY);
     try {
-      await alarmPass(this.ctx.storage, () => this.alarmWork(held, held ? null : failed ?? null));
+      const alarmEnd = Date.now() + ALARM_TURN_BUDGET_MS;
+      await alarmPass(this.ctx.storage, () => this.alarmWork(held, held ? null : failed ?? null, alarmEnd));
       if (!held) for (const key of [ALARM_FAILURES, ALARM_FAILED_LANE_KEY]) if (kv.get(key) !== undefined) kv.delete(key);
     } catch (error) {
       // The lane that threw is recorded unless a lane is held: a held pass failing elsewhere holds the whole pass, because
@@ -1701,16 +1707,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       catch { console.error(JSON.stringify({ hop: 'alarm', ok: false, code: 'rearm_deferred', lane })); }
     }
   }
-  private async alarmWork(held: AlarmLane | null = null, retrying: AlarmLane | null = null): Promise<void> {
+  private async alarmWork(held: AlarmLane | null = null, retrying: AlarmLane | null = null, alarmEnd?: number): Promise<void> {
     if (held === 'pass') return;
     const lane: LaneRunner = (id, work) => runLane(id, held, work);
     await this.browserReady;
     await lane('whatsapp', () => this.recoverWhatsappPending());
     const mode=this.ctx.storage.kv.get<LinkBinding>(LINK_MODE);
-    if(mode){await this.serial(()=>this.drainLink(mode,lane));return;}
-    await this.serial(async () => {
-      await lane('app', () => this.drainApp());
-      await lane('imessage', () => this.drainIMessage());
+    if(mode){if(!await this.serialWithin(alarmEnd,()=>this.drainLink(mode,lane)))await this.rearmWithSchedule();return;}
+    const entered = await this.serialWithin(alarmEnd, async () => {
+      await lane('app', () => this.drainApp(alarmEnd));
+      await lane('imessage', () => this.drainIMessage(alarmEnd));
       // Directory-backed owner alarms require the same physical binding as owner ingress.
       // Keep retained work and transport recovery wakes; do not boot provider work on an orphan.
       // An owner with no Telegram link runs on the app when the directory still admits their account.
@@ -1762,7 +1768,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (selected < 0) { await scheduler.rearm(); return; }
       this.ctx.storage.kv.put('owner_alarm_last_v1', selected);
       if (selected === 3) { this.ctx.waitUntil(Promise.all([this.browserTasks.maintain(), this.ownerBrowser.maintain()])); await scheduler.rearm(); return; }
-      if (selected === 0) { try { await lane('inbox', () => this.drainInbox()); } finally { await scheduler.rearm(); } return; }
+      if (selected === 0) { try { await lane('inbox', () => this.drainInbox(alarmEnd)); } finally { await scheduler.rearm(); } return; }
       if (selected === 1) {
         // Each record goes to the surface it is addressed to, with that surface's checks.
         const routeFor = (surface: ChannelKind): OutboxRoute => {
@@ -1835,7 +1841,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             const code = `${kind}_timezone_unconfirmed`;
             log({ trace: `alarm:${started}`, hop: outcome === 'drop' ? 'scheduled_drop' : 'scheduled_hold', ms: 0, ok: true, code, detail: code });
           };
-          fired = await scheduler.dispatchDue(gateScheduleExecutors(jobs, schedulePreferences(this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now })), scheduler, held, onHeld));
+          // Each job starts only with time for its turn left in this alarm; the rest stay due for a fresh one.
+          fired = await scheduler.dispatchDue(gateScheduleExecutors(jobs, schedulePreferences(this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now })), scheduler, held, onHeld),
+            () => alarmEnd === undefined || alarmEnd - Date.now() >= ALARM_JOB_MIN_MS);
         } catch (error) {
           // A dispatch throw used to leave no trace at all - the wake was invisible in Langfuse.
           log({ trace: `alarm:${started}`, hop: 'machine_turn', ms: Date.now() - started, ok: false, error: String(error), detail: 'dispatch' });
@@ -1848,6 +1856,25 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await notices();
       });
     });
+    if (!entered) await this.rearmWithSchedule();
+  }
+
+  // An alarm waits in the serial queue behind work a request started, which can hold it for a whole turn. It has claimed
+  // nothing while it waits, so once too little of its budget is left it gives up its place, and its wakes, still due,
+  // start a fresh alarm. False when it gave up; the queued work then does nothing.
+  private async serialWithin(alarmEnd: number | undefined, work: () => Promise<void>): Promise<boolean> {
+    if (alarmEnd === undefined) { await this.serial(work); return true; }
+    let state: 'waiting' | 'running' | 'abandoned' = 'waiting';
+    let begin!: () => void;
+    const begun = new Promise<void>(resolve => { begin = resolve; });
+    const run = this.serial(async () => { if (state === 'abandoned') return; state = 'running'; begin(); await work(); });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<void>(resolve => { timer = setTimeout(resolve, Math.max(0, alarmEnd - ALARM_TURN_MIN_MS - Date.now())); });
+    await Promise.race([begun, late]);
+    clearTimeout(timer);
+    if (state === 'waiting') { state = 'abandoned'; return false; }
+    await run;
+    return true;
   }
 
   async admitMacDelivery(value: unknown): Promise<boolean> {
