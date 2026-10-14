@@ -57,7 +57,7 @@ type OwnerInternals = {
 };
 const ownerIn = (state: DurableObjectState, name: string) => new OwnerDO(state, {
   ...env, TELEGRAM_BOT_TOKEN: '123456:fictional-telegram-token', TELEGRAM_WEBHOOK_SECRET: 'fictional-inbox-secret', OPENAI_API_KEY: 'fictional-model-key',
-}) as unknown as OwnerDO & OwnerInternals;
+}) as unknown as OwnerInternals & { fetch(request: Request): Promise<Response>; alarm(): Promise<void> };
 
 // One alarm invocation runs the app drain before the Telegram drain and the scheduler; the app turn here takes the given
 // time. With `telegram`, a Telegram row waits; otherwise a scheduled job is due.
