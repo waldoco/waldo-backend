@@ -130,14 +130,16 @@ export type DispatchToolOptions<Ctx extends ToolDispatcherContext> = {
   handlers: readonly RuntimeToolHandler<Ctx>[];
   extraHooks?: HookRegistry<Ctx>;
   maxResultJsonChars?: number;
-  offload?: import('../conversation/tool-output-store').ToolOutputStore;
+  offload?: ToolOutputStore;
   trustedEffect?: Readonly<{
     prepare(input: Readonly<{ tool: ToolName; args: unknown }>): Promise<TrustedToolEffect>;
   }>;
 };
 
 const DEFAULT_MAX_RESULT_JSON_CHARS = 16_384;
-const DEFAULT_MAX_ERROR_CHARS = 512;
+// Room for a provider's diagnostic or a subagent's partial report. A longer error is stored whole when the turn can
+// store outputs, else cut, so the model always sees a bounded head.
+export const MAX_TOOL_ERROR_CHARS = 2_000;
 
 export async function parseToolCalls(
   raw: unknown,
@@ -382,7 +384,8 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
   }
 
   if (!finalResult.ok) {
-    if (finalResult.error.length > DEFAULT_MAX_ERROR_CHARS) {
+    const error = boundedError(call.id, finalResult.error, ctx, options.offload);
+    if (error === null) {
       return withTrustedEffect(failDispatch(
         call.id,
         tool.data,
@@ -395,7 +398,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return withTrustedEffect(failDispatch(
       call.id,
       tool.data,
-      finalResult.error,
+      error,
       finalResult.code,
       'tool_result_error',
       finalResult.source_taint,
@@ -471,7 +474,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     handlers: readonly RuntimeToolHandler<Ctx>[];
     extraHooks?: HookRegistry<Ctx>;
     maxResultJsonChars?: number;
-  offload?: import('../conversation/tool-output-store').ToolOutputStore;
+  offload?: ToolOutputStore;
   }>,
 ): Promise<DispatchToolResult> {
   const tool = toolNameSchema.safeParse(input.tool);
@@ -584,7 +587,8 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     ), input.effect);
   }
   if (!finalResult.ok) {
-    if (finalResult.error.length > DEFAULT_MAX_ERROR_CHARS) {
+    const error = boundedError(input.callRef, finalResult.error, input.ctx, input.offload);
+    if (error === null) {
       return withTrustedEffect(failDispatch(
         input.callRef,
         tool.data,
@@ -596,7 +600,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     return withTrustedEffect(failDispatch(
       input.callRef,
       tool.data,
-      finalResult.error,
+      error,
       finalResult.code,
       'tool_result_error',
       finalResult.source_taint,
@@ -896,6 +900,22 @@ const offloadResult = (
     // retrievable - the receipt never claims retrievable output the store did not keep
     data: { stored_output: stored.id, total_chars: stored.original_chars, stored_chars: stored.stored_chars, truncated: stored.truncated, head: text.slice(0, 4_000), read_with: 'read_tool_output' },
   };
+};
+
+// null when the stored form is refused by the offload guard: then no part of the error is shown.
+const boundedError = (callId: string, error: string, ctx: ToolDispatcherContext, store?: ToolOutputStore): string | null => {
+  if (error.length <= MAX_TOOL_ERROR_CHARS) return error;
+  if (store === undefined) return `${error.slice(0, MAX_TOOL_ERROR_CHARS)}\n[cut: ${error.length - MAX_TOOL_ERROR_CHARS} more characters]`;
+  const guarded = guardForOffload({
+    payload: error,
+    destination: 'internal_context',
+    canary_tokens: ctx.session?.canary_tokens ?? [],
+    source_taint: 'external',
+  });
+  if (!guarded.ok) return null;
+  const text = typeof guarded.payload === 'string' ? guarded.payload : JSON.stringify(guarded.payload);
+  const stored = store.put(text, { call_id: callId });
+  return `${text.slice(0, MAX_TOOL_ERROR_CHARS)}\n[full error stored as ${stored.id}: ${stored.stored_chars} of ${stored.original_chars} characters kept; call read_tool_output with this id, offset and length to read more]`;
 };
 
 function failDispatch(

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildSessionState, getContextArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type LLMToolCall } from '@waldo/contracts';
-import { runToolLoop, type ToolLoopEvent, type LoopExit } from '../src/conversation/tool-loop';
+import { runToolLoop, unfinishedReply, type ToolLoopEvent, type LoopExit } from '../src/conversation/tool-loop';
 import { googleHandlers } from '../src/tools/live/google';
 import { getContextHandler } from '../src/tools/live/get-context';
 import { webSearchHandler } from '../src/tools/live/web-search';
@@ -277,7 +277,7 @@ describe('bounded tool-loop read recovery', () => {
     });
     expect(attempts).toBe(1);
     expect(exit).toBe('budget_exhausted');
-    expect(text).toContain('budget exhausted');
+    expect(text).toBe(unfinishedReply('budget_exhausted', [handler.name]));
   });
 
   it('uses a shared hard budget for transient recovery and rejects final-step calls', async () => {
@@ -302,7 +302,7 @@ describe('bounded tool-loop read recovery', () => {
     const ready = new Promise<void>((resolve) => { entered = resolve; });
     const controller = new AbortController();
     const scope: RunEffectScope = {
-      runId: 'synthetic-run', attempt: 'synthetic-attempt', deadline: Date.now() + 60_000, signal: controller.signal,
+      runId: 'synthetic-run', attempt: 'synthetic-attempt', deadline: Date.now() + 150_000, signal: controller.signal,
       admit() { if (controller.signal.aborted || Date.now() >= this.deadline) throw new ClosedRunError(); },
       commit(work) { this.admit(); return work(); },
     };

@@ -5,12 +5,17 @@ import type { RunEffectScope } from '../channels/run-effect-scope';
 // One model request's own limit. A live model call typically takes about 6 s, so a request still open at 30 s is
 // treated as lost.
 export const MODEL_CALL_TIMEOUT_MS = 30_000;
-// A turn's tool rounds and answer, counted from the tool loop's start. With the answer reserve, tool rounds stop 90 s in,
-// past the slowest live turns measured (73 to 90 s end to end). A Telegram run is closed 150 s after it is claimed, so
-// one model call's time (30 s) is left after the budget. That margin covers the work before the loop and any tool still
-// running at the deadline, since started tools are never cut: a tool round that starts at the last moment has 60 s,
-// less the work before the loop, before the run is closed without its reply.
+// A turn's tool rounds and answer end this long before its run is closed without its reply. The margin covers the work
+// before the loop and any tool still running at the deadline, since started tools are never cut. A Telegram run is
+// closed 150 s after it is claimed, so its turn has 120 s, past the slowest live turns measured (73 to 90 s end to end);
+// an app or iMessage run has 15 minutes, so its turn has 14.5.
+export const RUN_CLOSE_MARGIN_MS = 30_000;
+// The turn's time when no run bounds it, counted from the tool loop's start.
 export const TURN_TIME_BUDGET_MS = 120_000;
+// Tool rounds follow the time a turn has: 25 for two minutes, never fewer, and never past a ceiling that stops a model
+// stuck in a loop from spending a long run's whole deadline one tool call at a time.
+export const TOOL_ROUNDS_PER_TURN_BUDGET = 25;
+export const TOOL_ROUNDS_CEILING = 150;
 // Naming a thread runs in the owner object's serial queue after the app drain, so one slow title call would hold back
 // every surface's next turn. It gets one live call's typical time with room to spare, then the thread stays untitled.
 export const THREAD_TITLE_BUDGET_MS = 15_000;
@@ -39,6 +44,12 @@ export async function withCallDeadline<T>(scope: RunEffectScope | undefined, dea
     else callDeadlines.set(scope, outer);
   }
 }
+
+export const turnDeadlineFor = (scope: RunEffectScope | undefined, now = Date.now()): number =>
+  scope === undefined ? now + TURN_TIME_BUDGET_MS : scope.deadline - RUN_CLOSE_MARGIN_MS;
+
+export const toolRoundsFor = (timeMs: number): number =>
+  Math.min(TOOL_ROUNDS_CEILING, Math.max(TOOL_ROUNDS_PER_TURN_BUDGET, Math.floor((timeMs * TOOL_ROUNDS_PER_TURN_BUDGET) / TURN_TIME_BUDGET_MS)));
 
 // Infinity when no loop has set a deadline for this scope.
 export const callTimeLeftMs = (scope: RunEffectScope | undefined, now = Date.now()): number => {

@@ -24,6 +24,7 @@ import { describe, expect, it } from 'vitest';
 import {
   dispatchTool,
   formatToolDefinitions,
+  MAX_TOOL_ERROR_CHARS,
   parseToolCalls,
   type ToolDispatcherContext,
   type RuntimeToolCall,
@@ -1247,7 +1248,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-error',
       tool: 'get_crs',
-      error: 'tool returned oversized error',
+      error: `${'x'.repeat(MAX_TOOL_ERROR_CHARS)}\n[cut: ${20_000 - MAX_TOOL_ERROR_CHARS} more characters]`,
       code: 'transient',
       reason: 'tool_result_error',
     });

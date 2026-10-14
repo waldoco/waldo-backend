@@ -86,7 +86,7 @@ describe('external taint through the model boundary', () => {
     const seen: (readonly LLMToolTurn[])[] = [];
     const web = webSearchHandler('test-key', async () => Response.json({ web: { results: [{ title: 'T', url: 'https://x.test', description: 'D' }] } }));
     const text = await runToolLoop({
-      handlers: [...handlers, web], ctx, maxSteps: 4,
+      handlers: [...handlers, web], ctx, maxSteps: 10,
       step: async (_tools, turns) => {
         seen.push(turns);
         if (turns.length === 0) return { text: '', tool_calls: [{ call_id: 'c1', name: 'web_search', arguments: '{"query":"q"}' }] };
@@ -229,8 +229,9 @@ describe('warn-first budget notice and distinct read identities', () => {
     });
     expect(text).toBe('wrapped up.');
     expect(seenAt[1]![0]).not.toContain('[budget:');
-    expect(seenAt.some((turns) => turns.some((o) => o.includes('[budget: 4 tool rounds left this turn - start wrapping up')))).toBe(true);
-    expect(seenAt.some((turns) => turns.some((o) => o.includes('[budget: 2 tool rounds left this turn - wrap up and answer now')))).toBe(true);
+    expect(seenAt.some((turns) => turns.some((o) => o.includes('[budget: 3 tool rounds left')))).toBe(false);
+    expect(seenAt.some((turns) => turns.some((o) => o.includes('[budget: 2 tool rounds left this turn - finish the step you are on')))).toBe(true);
+    expect(seenAt.some((turns) => turns.some((o) => o.includes('[budget: 1 tool round left this turn')))).toBe(true);
     const lastDelivered = seenAt[seenAt.length - 1]!;
     expect(lastDelivered[lastDelivered.length - 1]).toContain('[budget: tool budget exhausted this turn');
   });

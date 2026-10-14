@@ -5,12 +5,13 @@ import { OpenAIResponsesAdapter } from '../src/llm/openai';
 import { RuntimeLLMProvider, type LLMGatewayRequest, type LLMGatewayResult, type RuntimeLLMRequest } from '../src/llm/provider';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import { CALENDAR_PREP_FORMAT } from '../src/channels/event-briefs';
-import { OUT_OF_TIME_REPLY, runToolLoop, type LoopExit, type ToolLoopEvent, type ToolLoopStep } from '../src/conversation/tool-loop';
+import { runToolLoop, unfinishedReply, type LoopExit, type ToolLoopEvent, type ToolLoopStep } from '../src/conversation/tool-loop';
 import { ClosedRunError, type RunEffectScope } from '../src/channels/run-effect-scope';
 import { TURN_TIMEOUT_MS } from '../src/channels/telegram-listener';
 import { googleHandlers } from '../src/tools/live/google';
 import { sanitise } from '../src/scribe/sanitiser';
-import { FINAL_ANSWER_RESERVE_MS, MODEL_CALL_TIMEOUT_MS, RATE_LIMIT_BACKOFF_MS, TURN_TIME_BUDGET_MS, withCallDeadline } from '../src/llm/time-budget';
+import { FINAL_ANSWER_RESERVE_MS, MODEL_CALL_TIMEOUT_MS, RATE_LIMIT_BACKOFF_MS, RUN_CLOSE_MARGIN_MS, TOOL_ROUNDS_CEILING, toolRoundsFor, TURN_TIME_BUDGET_MS, turnDeadlineFor, withCallDeadline } from '../src/llm/time-budget';
+import { spendPosture } from '../src/llm/cost-ledger';
 import type { HookRuntimeContext } from '../src/hooks/registry';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 
@@ -89,8 +90,12 @@ const loopCtx = (runScope?: RunEffectScope): ToolDispatcherContext => ({
   ...(runScope ? { runScope } : {}),
 });
 
-// An app turn's run: a 15-minute hard deadline that /stop can close at any time.
-function runScope(lifetimeMs = 15 * 60_000) {
+// A Telegram run is closed 150 s after it is claimed; an app run 15 minutes after. /stop can close either at any time.
+const APP_RUN_MS = 15 * 60_000;
+const TELEGRAM_TURN_MS = TURN_TIMEOUT_MS - RUN_CLOSE_MARGIN_MS;
+const OUT_OF_TIME = unfinishedReply('time_exhausted', []);
+const OUT_OF_TIME_AFTER_READ = unfinishedReply('time_exhausted', ['query_calendar']);
+function runScope(lifetimeMs = TURN_TIMEOUT_MS) {
   const controller = new AbortController();
   const deadline = Date.now() + lifetimeMs;
   const scope: RunEffectScope = {
@@ -283,7 +288,9 @@ describe('one turn: the tool loop spends one time budget', () => {
 
   // The work before the loop, and a last tool round that runs past the deadline, both spend this margin.
   it('leaves a Telegram run at least one model call of time after the turn budget', () => {
-    expect(TURN_TIMEOUT_MS - TURN_TIME_BUDGET_MS).toBeGreaterThanOrEqual(MODEL_CALL_TIMEOUT_MS);
+    const { scope } = runScope();
+    expect(scope.deadline - turnDeadlineFor(scope)).toBeGreaterThanOrEqual(MODEL_CALL_TIMEOUT_MS);
+    expect(turnDeadlineFor(scope) - Date.now()).toBe(TELEGRAM_TURN_MS);
   });
 
   it('a slow model no longer stretches a turn over every tool round', async () => {
@@ -293,22 +300,22 @@ describe('one turn: the tool loop spends one time budget', () => {
     const run = await settle(loop.done);
     // Rounds start at 0, 25, 50 and 75 s; at 100 s less than one full call is left, so the answer call gets the last 20 s.
     expect(api.requests.map((request) => request.at)).toEqual([0, 25_000, 50_000, 75_000, 100_000]);
-    expect(run).toMatchObject({ ms: TURN_TIME_BUDGET_MS, value: OUT_OF_TIME_REPLY });
+    expect(run).toMatchObject({ ms: TELEGRAM_TURN_MS, value: OUT_OF_TIME_AFTER_READ });
     expect(loop.exit()).toBe('time_exhausted');
   });
 
   it('shortens a later model call to what is left of the turn', async () => {
-    const slowRead = TURN_TIME_BUDGET_MS - FINAL_ANSWER_RESERVE_MS + 5_000;
+    const slowRead = TELEGRAM_TURN_MS - FINAL_ANSWER_RESERVE_MS + 5_000;
     const api = fakeOpenAI((n) => (n === 0 ? { after: 0, body: asksForCalendar(0) } : 'hang'));
     const { scope } = runScope();
     const loop = turn(ownerStep(runtime(), scope), scope, [calendar(slowRead)]);
     const run = await settle(loop.done);
-    expect(run).toMatchObject({ ms: TURN_TIME_BUDGET_MS, value: OUT_OF_TIME_REPLY });
+    expect(run).toMatchObject({ ms: TELEGRAM_TURN_MS, value: OUT_OF_TIME_AFTER_READ });
     // The answer call starts with 25 s left and is cut there, not at its own 30 s; no retry is sent once the time is gone.
     expect(api.requests).toHaveLength(2);
     expect(api.requests[1]).toMatchObject({ at: slowRead });
     expect(api.requests[1]!.body.tools).toBeUndefined();
-    expect(api.ended[1]).toBe(TURN_TIME_BUDGET_MS);
+    expect(api.ended[1]).toBe(TELEGRAM_TURN_MS);
   });
 
   it('ends an exhausted budget through the final no-tools step', async () => {
@@ -326,9 +333,9 @@ describe('one turn: the tool loop spends one time budget', () => {
   it('says plainly that it could not finish when no time is left for an answer', async () => {
     const api = fakeOpenAI(() => ({ after: 1_000, body: asksForCalendar(0) }));
     const { scope } = runScope();
-    const loop = turn(ownerStep(runtime(), scope), scope, [calendar(TURN_TIME_BUDGET_MS)]);
+    const loop = turn(ownerStep(runtime(), scope), scope, [calendar(TELEGRAM_TURN_MS)]);
     const run = await settle(loop.done);
-    expect(run).toMatchObject({ ms: 1_000 + TURN_TIME_BUDGET_MS, value: OUT_OF_TIME_REPLY });
+    expect(run).toMatchObject({ ms: 1_000 + TELEGRAM_TURN_MS, value: OUT_OF_TIME_AFTER_READ });
     // The read that started ran to its end; only the model call that could not finish was skipped.
     expect(loop.events.map((event) => [event.call.name, event.ok])).toEqual([['query_calendar', true]]);
     expect(api.requests).toHaveLength(1);
@@ -336,11 +343,11 @@ describe('one turn: the tool loop spends one time budget', () => {
   });
 
   it('keeps a model answer that lands just inside the budget', async () => {
-    const slowRead = TURN_TIME_BUDGET_MS - FINAL_ANSWER_RESERVE_MS + 5_000;
-    fakeOpenAI((n) => (n === 0 ? { after: 0, body: asksForCalendar(0) } : { after: TURN_TIME_BUDGET_MS - slowRead - 1, body: said('Your afternoon is clear.') }));
+    const slowRead = TELEGRAM_TURN_MS - FINAL_ANSWER_RESERVE_MS + 5_000;
+    fakeOpenAI((n) => (n === 0 ? { after: 0, body: asksForCalendar(0) } : { after: TELEGRAM_TURN_MS - slowRead - 1, body: said('Your afternoon is clear.') }));
     const { scope } = runScope();
     const run = await settle(turn(ownerStep(runtime(), scope), scope, [calendar(slowRead)]).done);
-    expect(run).toMatchObject({ ms: TURN_TIME_BUDGET_MS - 1, value: 'Your afternoon is clear.' });
+    expect(run).toMatchObject({ ms: TELEGRAM_TURN_MS - 1, value: 'Your afternoon is clear.' });
   });
 
   it('a run-scope stop still ends the turn at once, never as running out of time', async () => {
@@ -355,7 +362,7 @@ describe('one turn: the tool loop spends one time budget', () => {
 
   it('a closed run after the deadline still throws instead of the plain reply', async () => {
     const { scope } = runScope();
-    const run = await settle(turn(async () => { await delay(TURN_TIME_BUDGET_MS + 1_000); throw new ClosedRunError(); }, scope).done);
+    const run = await settle(turn(async () => { await delay(TELEGRAM_TURN_MS + 1_000); throw new ClosedRunError(); }, scope).done);
     expect(run.error).toBeInstanceOf(ClosedRunError);
   });
 
@@ -375,7 +382,7 @@ const sameTime = <T>(_hop: string, work: () => Promise<T>) => work();
 
 describe('one owner turn through the responder', () => {
   it('cuts the answer call to what is left of the turn', async () => {
-    const slowRead = TURN_TIME_BUDGET_MS - FINAL_ANSWER_RESERVE_MS + 5_000;
+    const slowRead = TELEGRAM_TURN_MS - FINAL_ANSWER_RESERVE_MS + 5_000;
     const api = fakeOpenAI((n) => (n === 0 ? { after: 0, body: asksForCalendar(0) } : 'hang'));
     const { scope } = runScope();
     // The calendar read is offered without its connection check, and takes 65 s.
@@ -384,8 +391,78 @@ describe('one owner turn through the responder', () => {
     const run = await settle(responder.respond(ownerTyped({ traceId: 'slow-turn', conversationRef: 'owner', surface: 'telegram', text: 'What is on my calendar?', memoryWrites: false, runScope: scope }), sameTime));
     expect(api.requests).toHaveLength(2);
     // The answer call starts with 25 s of the turn left and is cut there, not at its own 30 s limit.
-    expect(api.ended[1]! - api.requests[1]!.at).toBe(TURN_TIME_BUDGET_MS - slowRead);
-    expect(run.value).toBe(OUT_OF_TIME_REPLY);
+    expect(api.ended[1]! - api.requests[1]!.at).toBe(TELEGRAM_TURN_MS - slowRead);
+    expect(run.value).toBe(OUT_OF_TIME_AFTER_READ);
+  });
+});
+
+describe('the turn budget follows the run it serves', () => {
+  const runtime = () => new RuntimeLLMProvider({ gateway: new OpenAIResponsesAdapter({ apiKey: SYNTHETIC_KEY }) });
+
+  it('an app turn keeps working past two minutes, up to its own run less the close margin', async () => {
+    const api = fakeOpenAI((n) => ({ after: 25_000, body: asksForCalendar(n) }));
+    const { scope } = runScope(APP_RUN_MS);
+    const loop = turn(ownerStep(runtime(), scope), scope, [calendar()], { remaining: 200 });
+    const run = await settle(loop.done);
+    // 25 rounds of 25 s: the round cap ends it at 625 s, long before the app run's 14.5 minutes.
+    expect(api.requests.filter((request) => request.body.tools !== undefined && request.at > TURN_TIME_BUDGET_MS).length).toBeGreaterThan(0);
+    expect(run.ms).toBe(26 * 25_000);
+    expect(loop.exit()).toBe('budget_exhausted');
+  });
+
+  it('an app turn that runs to its deadline stops tools one answer call before it', async () => {
+    const api = fakeOpenAI((n) => ({ after: 25_000, body: asksForCalendar(n) }));
+    const { scope } = runScope(APP_RUN_MS);
+    let exit: LoopExit | undefined;
+    const run = await settle(runToolLoop({ handlers: [calendar()], ctx: loopCtx(scope), maxSteps: 200, budget: { remaining: 200 }, step: ownerStep(runtime(), scope), onSettle: (value) => { exit = value; } }));
+    const end = APP_RUN_MS - RUN_CLOSE_MARGIN_MS;
+    expect(Math.max(...api.requests.filter((request) => request.body.tools !== undefined).map((request) => request.at))).toBeLessThanOrEqual(end - FINAL_ANSWER_RESERVE_MS);
+    expect(run.ms).toBe(end);
+    expect(exit).toBe('time_exhausted');
+  });
+
+  it('gives tool rounds in proportion to the time, from 25 for two minutes up to a runaway ceiling', () => {
+    expect(toolRoundsFor(TELEGRAM_TURN_MS)).toBe(25);
+    expect(toolRoundsFor(30_000)).toBe(25);
+    expect(toolRoundsFor(4 * 60_000)).toBe(50);
+    expect(toolRoundsFor(APP_RUN_MS - RUN_CLOSE_MARGIN_MS)).toBe(TOOL_ROUNDS_CEILING);
+    expect(TOOL_ROUNDS_CEILING).toBeLessThan(200);
+  });
+
+  const roundsThroughResponder = async (lifetimeMs: number) => {
+    const api = fakeOpenAI((n) => ({ after: 0, body: asksForCalendar(n) }));
+    const { scope } = runScope(lifetimeMs);
+    const responder = createOwnerResponder(SYNTHETIC_KEY, undefined, undefined, undefined, clock, [calendar()]);
+    await settle(responder.respond(ownerTyped({ traceId: 'long-turn', conversationRef: 'owner', surface: 'app', text: 'Work through my week.', memoryWrites: false, runScope: scope }), sameTime));
+    return api.requests.filter((request) => request.body.tools !== undefined).length;
+  };
+
+  it('a Telegram owner turn still gets 25 tool rounds', async () => {
+    expect(await roundsThroughResponder(TURN_TIMEOUT_MS)).toBe(25);
+  });
+
+  it('a longer run gives the owner turn rounds for its time', async () => {
+    const lifetime = 3 * 60_000;
+    expect(await roundsThroughResponder(lifetime)).toBe(toolRoundsFor(lifetime - RUN_CLOSE_MARGIN_MS));
+    expect(toolRoundsFor(lifetime - RUN_CLOSE_MARGIN_MS)).toBe(31);
+  });
+});
+
+describe('an owner reply thinks and writes with room', () => {
+  const replyRequest = async (spend?: ReturnType<typeof spendPosture>) => {
+    const api = fakeOpenAI(() => ({ after: 0, body: said('Done.') }));
+    const { scope } = runScope();
+    const responder = createOwnerResponder(SYNTHETIC_KEY, undefined, undefined, undefined, clock, [], undefined, false, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, [], undefined, undefined, spend ? { spendPosture: () => spend } : undefined);
+    await settle(responder.respond(ownerTyped({ traceId: 'reply', conversationRef: 'owner', surface: 'app', text: 'Plan my day.', memoryWrites: false, runScope: scope }), sameTime));
+    return api.requests[0]!.body as { reasoning?: { effort?: string }; max_output_tokens?: number };
+  };
+
+  it('asks for medium effort and output room for reasoning plus the answer', async () => {
+    expect(await replyRequest()).toMatchObject({ reasoning: { effort: 'medium' }, max_output_tokens: 16_384 });
+  });
+
+  it('drops to low effort once the cost brake engages', async () => {
+    expect((await replyRequest(spendPosture(8, 10))).reasoning?.effort).toBe('low');
   });
 });
 

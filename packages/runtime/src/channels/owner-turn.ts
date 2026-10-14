@@ -29,7 +29,8 @@ import { JoinedConversationPath } from '../conversation/joined-path';
 import { COMPACTION, COMPACTION_INSTRUCTION, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, supersededCompaction, type CompactedStats } from '../conversation/compaction';
 import { numericHealthIn } from '../scribe/sanitiser';
 import { OpenAIResponsesAdapter } from '../llm/openai';
-import { withCallDeadline } from '../llm/time-budget';
+import { toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
+import { ownerTurnEffort, type SpendPosture } from '../llm/cost-ledger';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
 import { messagingSystemPrompt, ownerClockLine, unconnectedLine, withOwnerSkillProcedures } from '../prompt/messaging-behavior';
 import { eligibleHandlers } from '../tools/eligibility';
@@ -67,7 +68,9 @@ export const ownerToolApproval = ({ tool }: { tool: string }): boolean => !EXTER
 // public (useless as tripwires) and a false-positive source for any tool output quoting it.
 const newSessionCanaryTokens = (): string[] =>
   Array.from({ length: 3 }, () => crypto.randomUUID().replaceAll('-', '').slice(0, 16));
-const MAX_TOOL_ROUNDS = 25;
+// An owner reply's output covers its reasoning and its words; at medium effort 4,096 tokens can run out mid-answer.
+// The chat model allows 128,000 (MODEL_CONTEXT_SPECS).
+const OWNER_REPLY_MAX_TOKENS = 16_384;
 const EXTERNAL_DATA_MAX_BYTES = 4096;
 
 // Staging responder: the fixture invocation stands in for real per-user admission,
@@ -82,8 +85,8 @@ export type OwnerJobHost = Readonly<{ admit(): Promise<OwnerMessageAdmission | u
 // ownerProfile: the host-framed line about who the owner is. An admitted job composes it into its owner context; a turn
 // without a composed owner context reads it directly.
 // watchStatus: the host fact about Google pushes that are not running, for the owner's own turns ('' when all run).
-export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string }>;
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string }>;
+export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; spendPosture?: () => SpendPosture }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; spendPosture?: () => SpendPosture }>;
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 // The reply's system prompt with the byte size of each joined section, so a trace shows what fills it.
@@ -228,13 +231,15 @@ export const createOwnerResponder = (
       return result;
     } } : adapter;
     const sanitise = safety.sanitise;
+    const ownerReply = ownerTurnActive && (purpose === 'reply' || purpose === 'subagent');
     const result = await new RuntimeLLMProvider({ gateway: admittedGateway, circuitBreaker }).complete({
       ...(callScope ?? privateRunScope ? { runScope: callScope ?? privateRunScope } : {}),
       trigger: 'user_message',
       policy: effectivePolicy,
       renderRequest: () => ({
         cache_key: cacheKey,
-        system, messages: userMessages.map(({ attachments: _names, ...message }) => message), max_tokens: 4096, temperature: 0.2,
+        system, messages: userMessages.map(({ attachments: _names, ...message }) => message), temperature: 0.2,
+        ...(ownerReply ? { max_tokens: OWNER_REPLY_MAX_TOKENS, reasoning_effort: ownerTurnEffort(privateOwner?.spendPosture?.()) } : { max_tokens: 4096 }),
         ...(format ? { response_format: format } : {}), ...(attachments ? { attachments: [...attachments] } : {}),
         ...(tools ? { tools: [...tools] } : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),
       }),
@@ -421,8 +426,10 @@ export const createOwnerResponder = (
       // runs a nested tool loop on the read-only subset (CHILD_TOOL_NAMES) with its own round
       // slice; flat by construction - children never get delegate_task.
       // One shared round budget per submitted turn: the parent loop and every child it spawns
-      // draw from it, so the turn's stated cap is absolute (Codex #224 hold).
-      const turnBudget = { remaining: MAX_TOOL_ROUNDS };
+      // draw from it, so the turn's stated cap is absolute (Codex #224 hold). Its time and rounds follow the run.
+      const turnEnd = turnDeadlineFor(privateRunScope);
+      const turnRounds = toolRoundsFor(turnEnd - Date.now());
+      const turnBudget = { remaining: turnRounds, deadline: turnEnd };
       const delegate = delegateTaskHandler(async (task) => {
         const childHandlers = activeHandlers.map(handler => ({ ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
           await assertFresh();
@@ -461,7 +468,7 @@ export const createOwnerResponder = (
         handlers: turnHandlers,
         budget: turnBudget,
         ...(offloadStore === undefined ? {} : { offload: offloadStore }),
-        maxSteps: MAX_TOOL_ROUNDS,
+        maxSteps: turnRounds,
         ctx: { ...safety, ...memoryContext(), ...((backgroundSourceTaint || turnReplyContext && !turnReplyOwnAuthored) ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
         step: async (tools, turns) => {
           const added = await consumeRound();
@@ -764,7 +771,7 @@ export const createOwnerResponder = (
         const capturedTurn = { ...turn, memoryWrites };
         const preparedContext = privateOwner?.contextHost ? await privateOwner.contextHost.prepare(capturedTurn, turn.runScope) : undefined;
         const preparedSkills = privateOwner?.skillHost ? await privateOwner.skillHost.prepare(capturedTurn, preparedContext?.invocation.verified_authority.principal_ref ?? ownerId, turn.runScope) : undefined;
-        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}), ...(privateOwner?.watchStatus ? { watchStatus: privateOwner.watchStatus } : {}) });
+        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}), ...(privateOwner?.watchStatus ? { watchStatus: privateOwner.watchStatus } : {}), ...(privateOwner?.spendPosture ? { spendPosture: privateOwner.spendPosture } : {}) });
         control.route(scoped.control);
         scopedCompaction = scoped.compactIfDue;
         try { return await scoped.respond(capturedTurn, time); }
