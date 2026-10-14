@@ -6,6 +6,9 @@ import { HEARTBEAT_EVERY_MS } from '../src/channels/heartbeat';
 import { TelegramFinalOutbox } from '../src/channels/telegram-final-outbox';
 import { TelegramOwnerInbox } from '../src/channels/telegram-owner-inbox';
 import { LINK_MODE, TelegramLinkInbox } from '../src/channels/telegram-link-inbox';
+import { Scheduler } from '../src/scheduler/multiplexer';
+import { productionDeps } from '../src/seams/deps';
+import { ensureSchema } from '../src/tracer/schema';
 
 // Per-lane backoff on workerd's own alarm scheduler. This pool binds a Telegram token and a model key, so a pass that
 // holds one lane gets through the owner runtime to the others. Sends are recorded here and model calls are refused.
@@ -273,4 +276,50 @@ it('a one-off throw outside every lane holds the whole pass for one step; at its
       expect(after[2], passes).toMatchObject({ streak: 2, lane: 'app', retryDue: after[1]!.retryDue });
     });
   } finally { setup.mockRestore(); app.restore(); inbound.restore(); lines.mockRestore(); }
+}, 20_000);
+
+// A pass under a whole-pass hold runs no lane and records no re-arm, so the hold's own re-arm is what keeps the retry in
+// the slot. An inbound admission arms the slot at about 250 ms over the retry, and the held pass it wakes must put the
+// retry back, or every lane's work waits for the next outside wake. A record with no lane, as written before lanes, holds
+// the same way.
+it.each([['a whole-pass hold', 'pass'], ['a record with no lane', undefined]] as const)('an inbound message during %s wakes a held pass that puts the retry back in the slot', async (_hold, held) => {
+  const name = `lane-held-rearm-${held ?? 'none'}`, subject = held ? '709' : '710', retryDue = Date.now() + 60_000, inbound = lane('drainInbox', name, consumesInbound);
+  try {
+    await watch(name, async state => {
+      ownedBy(state, name, subject); state.storage.kv.put(FAILURES, 2); state.storage.kv.put(RETRY_DUE, retryDue);
+      if (held) state.storage.kv.put(LANE, held);
+      await armAlarm(state.storage, retryDue);
+    }, async (stub, at, _retries, after) => {
+      await runInDurableObject(stub, (_instance, state) => admitInbound(state, name, subject));
+      await until(() => after.length > 0, 1_500);
+      await sleep(200);
+      const armed = await runInDurableObject(stub, (_instance, state) => state.storage.getAlarm()), passes = `passes at ${at.join(', ')} ms; records ${JSON.stringify(after)}`;
+      expect(after, passes).toHaveLength(1);
+      expect(after[0], passes).toMatchObject({ streak: 2, lane: held, retryDue });
+      expect(armed, passes).toBe(retryDue);
+      expect(inbound.ran, passes).toHaveLength(0);
+    }, { arm: false });
+  } finally { inbound.restore(); }
+}, 20_000);
+
+// The catch's re-arm carries the schedule's next entry too. A lane that fails ahead of the round-robin (WhatsApp, app,
+// iMessage, Mac, the outbox) ends every retry pass before the schedule lane, so an entry due before the retry is armed by
+// that re-arm or waits for the retry.
+it('the schedule\'s next entry, due before the retry, is armed by the failed pass\'s own re-arm', async () => {
+  const name = 'lane-catch-schedule', subject = '711', lines = vi.spyOn(console, 'error').mockImplementation(() => undefined), app = lane('drainApp', name, fails);
+  let entryDue = 0;
+  try {
+    await watch(name, async state => {
+      ownedBy(state, name, subject); ensureSchema(state.storage);
+      entryDue = Date.now() + 1_500;
+      await new Scheduler(state.storage.sql, state.storage, productionDeps()).schedule({ id: 'lane-catch-entry', kind: 'heartbeat', payloadRefs: { id: 'lane-catch-entry' }, occurrenceAt: entryDue, dueAt: entryDue, recurrence: null });
+    }, async (stub, at, _retries, after) => {
+      await until(() => after.length > 0, 1_000);
+      await sleep(150);
+      const armed = await runInDurableObject(stub, (_instance, state) => state.storage.getAlarm()), passes = `passes at ${at.join(', ')} ms; records ${JSON.stringify(after)}; entry at ${entryDue}`;
+      expect(after[0], passes).toMatchObject({ streak: 1, lane: 'app' });
+      expect(entryDue, passes).toBeLessThan(after[0]!.retryDue!);
+      expect(armed, passes).toBe(entryDue);
+    });
+  } finally { app.restore(); lines.mockRestore(); }
 }, 20_000);

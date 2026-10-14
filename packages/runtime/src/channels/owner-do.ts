@@ -209,7 +209,7 @@ const LATE_FIRE_MS = 5 * 60_000;
 const ALARM_FAILURES = 'owner_alarm_failures_v1';
 // The round-robin lanes of an owner alarm pass, by their index in owner_alarm_last_v1.
 const ROUND_ROBIN = ['inbox', 'transport', 'schedule', 'browser'] as const;
-type LaneRunner = (lane: Exclude<AlarmLane, 'pass'>, work: () => Promise<unknown>) => Promise<void>;
+type LaneRunner = (lane: Parameters<typeof runLane>[0], work: () => Promise<unknown>) => Promise<void>;
 // A directory outage at the alarm leaves the app owner's scheduled work waiting; this is how soon the alarm asks again.
 const APP_ADMISSION_RETRY_MS = 60_000;
 
@@ -1577,7 +1577,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       if (selected < 0) { await scheduler.rearm(); return; }
       this.ctx.storage.kv.put('owner_alarm_last_v1', selected);
-      if (selected === 3) { await lane('browser', async () => { this.ctx.waitUntil(Promise.all([this.browserTasks.maintain(), this.ownerBrowser.maintain()])); }); await scheduler.rearm(); return; }
+      if (selected === 3) { this.ctx.waitUntil(Promise.all([this.browserTasks.maintain(), this.ownerBrowser.maintain()])); await scheduler.rearm(); return; }
       if (selected === 0) { try { await lane('inbox', () => this.drainInbox()); } finally { await scheduler.rearm(); } return; }
       if (selected === 1) {
         // Each record goes to the surface it is addressed to, with that surface's checks.

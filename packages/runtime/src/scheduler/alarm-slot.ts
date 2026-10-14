@@ -58,12 +58,15 @@ export function heldLane(retryDue: number | null | undefined, lane: AlarmLane | 
   return retryDue != null && retryDue > now ? lane ?? 'pass' : null;
 }
 
+// A lane a failed pass can name. The browser lane only hands its work to waitUntil, so it can't fail a pass; its wakes are
+// still its own.
+type FailingLane = Exclude<AlarmLane, 'pass' | 'browser'>;
 // What a lane of an alarm pass throws, so the handler holds that lane: keyed by the lane, never by the error's message.
 export class AlarmLaneFailure extends Error {
-  constructor(readonly lane: Exclude<AlarmLane, 'pass'>, cause: unknown) { super(`alarm lane ${lane} failed`, { cause }); }
+  constructor(readonly lane: FailingLane, cause: unknown) { super(`alarm lane ${lane} failed`, { cause }); }
 }
 // Runs one lane of a pass unless it is the held one.
-export async function runLane(lane: Exclude<AlarmLane, 'pass'>, held: AlarmLane | null, work: () => Promise<unknown>): Promise<void> {
+export async function runLane(lane: FailingLane, held: AlarmLane | null, work: () => Promise<unknown>): Promise<void> {
   if (held === lane || held === 'pass') return;
   try { await work(); } catch (error) { throw error instanceof AlarmLaneFailure ? error : new AlarmLaneFailure(lane, error); }
 }
