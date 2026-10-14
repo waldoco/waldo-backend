@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { describe, expect, it, vi } from 'vitest';
 
 const requests: Array<unknown> = [];
@@ -27,7 +28,7 @@ describe('poisoned history degrade', () => {
     };
     const store = { load: async () => ({ entries: [entry], leafId: 'h1' }), save: async () => undefined };
     const responder = createTelegramResponder('test-key', store as never);
-    const text = await responder.respond({ updateId: 2, chatId: 7, text: 'hello' } as never, (_name, run) => run());
+    const text = await responder.respond(ownerTyped({ updateId: 2, messageId: null, senderId: 7, chatId: 7, sentAt: null, text: 'hello' }), (_name, run) => run());
     expect(text).toBe('pong');
     expect(requests.length).toBeGreaterThan(0);
     for (const body of requests) expect(JSON.stringify(body)).not.toContain('%252525');
@@ -36,7 +37,7 @@ describe('poisoned history degrade', () => {
   it('the sanitizer still denies the poisoned shape when it is the CURRENT message - no bypass', async () => {
     const responder = createTelegramResponder('test-key');
     await expect(
-      responder.respond({ updateId: 3, chatId: 7, text: POISON } as never, (_name, run) => run()),
+      responder.respond(ownerTyped({ updateId: 3, messageId: null, senderId: 7, chatId: 7, sentAt: null, text: POISON }), (_name, run) => run()),
     ).rejects.toThrow('scribe_sanitise');
   });
 });

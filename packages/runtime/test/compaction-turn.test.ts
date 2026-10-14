@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
@@ -46,7 +47,7 @@ it('after a turn that dropped rows, compactIfDue writes one summary row the next
   await inOwner('compaction-turn', async () => {
     const store = canonicalOwnerConversationStore(storage, { invocation: localTrustedBriefScheduleInput().admission as never, assertCurrent: async () => undefined });
     const responder = createOwnerResponder('fixture', store, undefined, entry => logs.push(entry));
-    for (let n = 1; n <= 6; n += 1) await responder.respond({ traceId: `app-${n}`, conversationRef: 'owner', surface: 'app', text: question(n) }, (_name, work) => work());
+    for (let n = 1; n <= 6; n += 1) await responder.respond(ownerTyped({ traceId: `app-${n}`, conversationRef: 'owner', surface: 'app', text: question(n) }), (_name, work) => work());
     expect(logs.find(entry => entry.hop === 'context_window')).toBeDefined();
     await responder.compactIfDue!('owner');
     await settle();
@@ -66,7 +67,7 @@ it('after a turn that dropped rows, compactIfDue writes one summary row the next
     await responder.compactIfDue!('owner');
     expect(fake.bodies.length).toBe(calls);
     // the next turn's model input opens with the labelled summary and no longer carries the earliest question
-    await responder.respond({ traceId: 'app-7', conversationRef: 'owner', surface: 'app', text: question(7) }, (_name, work) => work());
+    await responder.respond(ownerTyped({ traceId: 'app-7', conversationRef: 'owner', surface: 'app', text: question(7) }), (_name, work) => work());
     const input = inputText();
     expect(input).toContain(compactionSummaryOpen((summaries[0] as { covers: { rows: number } }).covers.rows));
     expect(input).toContain(fake.summary);
@@ -74,7 +75,7 @@ it('after a turn that dropped rows, compactIfDue writes one summary row the next
     expect(input).toContain(question(7));
     // a later compaction carries the first forward: the first is superseded in storage, the second is live and covers more
     fake.summary = 'Tea, quiet mornings, and a dentist on Friday.';
-    await responder.respond({ traceId: 'app-8', conversationRef: 'owner', surface: 'app', text: question(8) }, (_name, work) => work());
+    await responder.respond(ownerTyped({ traceId: 'app-8', conversationRef: 'owner', surface: 'app', text: question(8) }), (_name, work) => work());
     await responder.compactIfDue!('owner');
     const after = [...storage.data.entries()].filter(([key]) => key.startsWith(`${PREFIX}conv:`)).map(([, value]) => value as { id: string; role?: string; modelPayload: string; modelProjection: { mode: string }; covers?: { from_id: string; rows: number } });
     const [first, second] = after.filter(row => row.role === 'compaction');
@@ -94,7 +95,7 @@ it('a summary that carries a health number is never written, and counts as an at
   await inOwner('compaction-health', async () => {
     const store = canonicalOwnerConversationStore(storage, { invocation: localTrustedBriefScheduleInput().admission as never, assertCurrent: async () => undefined });
     const responder = createOwnerResponder('fixture', store, undefined, entry => logs.push(entry));
-    for (let n = 1; n <= 6; n += 1) await responder.respond({ traceId: `app-${n}`, conversationRef: 'owner', surface: 'app', text: question(n) }, (_name, work) => work());
+    for (let n = 1; n <= 6; n += 1) await responder.respond(ownerTyped({ traceId: `app-${n}`, conversationRef: 'owner', surface: 'app', text: question(n) }), (_name, work) => work());
     await responder.compactIfDue!('owner');
     expect(logs.filter(entry => entry.hop === 'compaction').at(-1)).toMatchObject({ ok: false, code: 'numeric_health' });
     expect([...storage.data.values()].some(value => (value as { role?: string })?.role === 'compaction')).toBe(false);
@@ -112,7 +113,7 @@ it('with the switch off nothing is called and an existing summary row shapes no 
     const store = canonicalOwnerConversationStore(storage, { invocation: localTrustedBriefScheduleInput().admission as never, assertCurrent: async () => undefined });
     const responder = createOwnerResponder('fixture', store);
     Object.assign(COMPACTION, { enabled: true, budgetTokens: 160, minOwnerRows: 2, minIntervalMs: 0 });
-    for (let n = 1; n <= 6; n += 1) await responder.respond({ traceId: `app-${n}`, conversationRef: 'owner', surface: 'app', text: question(n) }, (_name, work) => work());
+    for (let n = 1; n <= 6; n += 1) await responder.respond(ownerTyped({ traceId: `app-${n}`, conversationRef: 'owner', surface: 'app', text: question(n) }), (_name, work) => work());
     await responder.compactIfDue!('owner');
     await settle();
     expect([...storage.data.values()].some(value => (value as { role?: string })?.role === 'compaction')).toBe(true);
@@ -120,7 +121,7 @@ it('with the switch off nothing is called and an existing summary row shapes no 
     Object.assign(COMPACTION, { ...defaults, budgetTokens: 160, minOwnerRows: 2, minIntervalMs: 0 });
     const compactions = () => fake.bodies.filter(body => body.instructions === COMPACTION_INSTRUCTION).length;
     expect(compactions()).toBe(1);
-    for (const n of [7, 8]) await responder.respond({ traceId: `app-${n}`, conversationRef: 'owner', surface: 'app', text: question(n) }, (_name, work) => work());
+    for (const n of [7, 8]) await responder.respond(ownerTyped({ traceId: `app-${n}`, conversationRef: 'owner', surface: 'app', text: question(n) }), (_name, work) => work());
     expect(inputText()).not.toContain(compactionSummaryOpen(0).slice(0, 20));
     await responder.compactIfDue!('owner');
     expect(compactions()).toBe(1);
@@ -134,20 +135,20 @@ it('after a restart the stored summary row is never the leaf: the next turn cont
   await inOwner('compaction-restart', async () => {
     const store = () => canonicalOwnerConversationStore(storage, { invocation: localTrustedBriefScheduleInput().admission as never, assertCurrent: async () => undefined });
     const first = createOwnerResponder('fixture', store());
-    for (let n = 1; n <= 6; n += 1) await first.respond({ traceId: `app-${n}`, conversationRef: 'owner', surface: 'app', text: question(n) }, (_name, work) => work());
+    for (let n = 1; n <= 6; n += 1) await first.respond(ownerTyped({ traceId: `app-${n}`, conversationRef: 'owner', surface: 'app', text: question(n) }), (_name, work) => work());
     await first.compactIfDue!('owner');
     const summary = [...storage.data.values()].find(row => (row as { role?: string })?.role === 'compaction') as { id: string; covers: { to_id: string; rows: number } };
     expect(summary.covers.to_id).toBe('app-5-reply');
     // a fresh responder on the same storage, as after an eviction, with the switch on: the verbatim tail stays in the chain
     const second = createOwnerResponder('fixture', store());
-    await second.respond({ traceId: 'app-7', conversationRef: 'owner', surface: 'app', text: question(7) }, (_name, work) => work());
+    await second.respond(ownerTyped({ traceId: 'app-7', conversationRef: 'owner', surface: 'app', text: question(7) }), (_name, work) => work());
     expect(parentOf('app-7')).toBe('app-6-reply');
     expect(inputText()).toContain(compactionSummaryOpen(summary.covers.rows));
     expect(inputText()).toContain(question(6));
     // and with the switch off: the stored row shapes nothing and the chain continues from the last reply
     Object.assign(COMPACTION, defaults);
     const third = createOwnerResponder('fixture', store());
-    await third.respond({ traceId: 'app-8', conversationRef: 'owner', surface: 'app', text: question(8) }, (_name, work) => work());
+    await third.respond(ownerTyped({ traceId: 'app-8', conversationRef: 'owner', surface: 'app', text: question(8) }), (_name, work) => work());
     expect(parentOf('app-8')).toBe('app-7-reply');
     expect(inputText()).not.toContain(compactionSummaryOpen(0).slice(0, 20));
     expect(inputText()).toContain(question(7));

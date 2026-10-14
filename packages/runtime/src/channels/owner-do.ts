@@ -46,6 +46,7 @@ import { TelegramFinalOutbox, redactMailFollowupEntries, redactCalendarPrepEntri
 import { computeAdmission } from '../delivery-gate/gate';
 import { DeliveryGateStore } from '../delivery-gate/store';
 import { ownerTurnTrace, type OwnerTurnEnvelope } from './owner-turn-envelope';
+import { inboundTurn, ownerWords } from './owner-inbound-turn';
 import type { OwnerContextIntegration, OwnerSkillHost } from './owner-turn';
 import { enrichOwnerTrace, identityForStorage, readOwnerTraceHeader } from '../observability/owner-trace-identity';
 import { adminRead, adminAction } from './dashboard-admin';
@@ -142,7 +143,7 @@ import { sendMessageHandler } from '../tools/live/messaging';
 import { createTelegramFileDownloader } from './telegram-media';
 import { selectTranscriber } from '../llm/transcriber';
 import { TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './telegram-listener';
-import { TelegramPollingAdapter } from './telegram-polling';
+import { isForward, TelegramPollingAdapter } from './telegram-polling';
 import { createTelegramResponder } from './telegram-turn';
 import type { TurnControl } from './turn-control';
 import { turnFailureCode } from './turn-failure-code';
@@ -401,7 +402,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (!supportedCallback && parsed.accepted.length === 0) return new Response('ok');
     const bot = this.env.TELEGRAM_BOT_TOKEN?.split(':')[0];
     if (!bot) return new Response('unavailable', { status: 503 });
-    const text = raw.message?.text?.trim();
+    // A forward is someone else's text, so it never steers or stops the running turn: it runs as its own labelled turn.
+    const text = isForward(raw.message) ? undefined : raw.message?.text?.trim();
     const target = this.activeInbox;
     const control = target?.runId && text && (text === '/stop' || !text.startsWith('/')) ? { kind: text === '/stop' ? 'stop' as const : 'steer' as const, targetRun: target.runId } : undefined;
     try {
@@ -486,7 +488,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await this.inbox.transition(row.id, attempt, 'quarantined', 'owner_binding'); return;
       }
       const raw = JSON.parse(row.body) as RawUpdate;
-      const direct = Boolean(raw.callback_query || parseHarnessCommand(raw.message?.text) || ['/stop', '/ledger'].includes(raw.message?.text?.trim() ?? ''));
+      // A forward is never the owner's command, so it runs as a turn under this run's scope.
+      const direct = Boolean(raw.callback_query || (!isForward(raw.message) && (parseHarnessCommand(raw.message?.text) || ['/stop', '/ledger'].includes(raw.message?.text?.trim() ?? ''))));
       if (direct) await this.turn(raw, 'telegram', true);
       else {
         const expired = new Promise<never>((_, reject) => { abort.signal.addEventListener('abort', () => reject(new ClosedRunError()), { once: true }); timeout = setTimeout(() => reject(new ClosedRunError()), Math.max(0, scope.deadline - Date.now())); });
@@ -1733,9 +1736,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       probeGuard.suppressMemory = !live;
       probeGuard.stripLiveTools = !live;
       try {
-        const outcome = await listener.handle({
-          updateId: seq, messageId: null, senderId: owner, chatId: owner, sentAt: null, text: text.trim(),
-        });
+        const outcome = await listener.handle(inboundTurn({
+          updateId: seq, messageId: null, senderId: owner, chatId: owner, sentAt: null, parts: ownerWords(text.trim()),
+        }));
         return { trace: `tg-${seq}` as string | null, outcome, captured: capture === null ? null : capture.calls };
       } finally {
         probeCapture.current = null;
@@ -1776,13 +1779,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (!durable) await this.ctx.storage.put(offsetKey, raw.update_id + 1);
       return log({ trace: ownerTurnTrace(channel, raw.update_id), hop: 'steer', ms: 0, ok: true, detail: 'answered inside the running turn' });
     }
-    if (!nativeSurface(channel) && fromOwner && raw.message?.text?.trim() === '/stop') {
+    // A forward is someone else's text: it runs as a labelled turn, never as the owner's command.
+    const ownerCommand = !nativeSurface(channel) && fromOwner && !isForward(raw.message);
+    if (ownerCommand && raw.message?.text?.trim() === '/stop') {
       if (raw.update_id === undefined || raw.update_id < offset) return;
       if (!durable) await this.ctx.storage.put(offsetKey, raw.update_id + 1);
       return void (await call('sendMessage', { chat_id: owner, text: 'Nothing is running right now.' }));
     }
-    const harness = !nativeSurface(channel) && fromOwner ? parseHarnessCommand(raw.message?.text) : null;
-    const handledDirectly = !nativeSurface(channel) && (raw.callback_query !== undefined || harness !== null || (fromOwner && raw.message?.text?.trim() === '/ledger'));
+    const harness = ownerCommand ? parseHarnessCommand(raw.message?.text) : null;
+    const handledDirectly = !nativeSurface(channel) && (raw.callback_query !== undefined || harness !== null || (ownerCommand && raw.message?.text?.trim() === '/ledger'));
     if (handledDirectly) {
       if (raw.update_id === undefined || raw.update_id < offset) return;
       // Commands run outside the listener turn pipeline, so without this receipt they left no

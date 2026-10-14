@@ -15,7 +15,7 @@ export const telegramTurnEnvelope = (turn: TelegramInboundTurn, surface = 'teleg
   surface,
   presentation: { surface, delivery: { text: true, approval: surface === 'telegram' || surface === 'app' ? 'native_buttons' : surface === 'whatsapp' ? 'text_callback' : 'none', reactions: surface === 'telegram', attachments: false }, commands: surface === 'telegram' ? ['/stop','/ledger'] : [] },
   text: turn.text,
-  ...(turn.sourceQuoteRanges ? { sourceQuoteRanges: turn.sourceQuoteRanges } : {}),
+  parts: turn.parts,
   ...(turn.runScope ? { runScope: turn.runScope } : {}),
   ...(turn.replyTo ? { replyTo: turn.replyTo } : {}),
 });
@@ -33,7 +33,7 @@ export const createTelegramResponder = (...args: [...AdapterArgs, surface?: stri
     turn.runScope?.admit();
     const media = turn.media ? await time('media', () => loadTelegramMedia(turn.media!, readers ?? {})) : undefined;
     turn.runScope?.admit();
-    return core.respond({ ...envelope(turn), ...(media?.note ? { mediaNote: media.note } : {}), ...(media?.attachment ? { attachment: media.attachment } : {}) }, time);
+    return core.respond({ ...envelope(turn), parts: [...turn.parts, ...(media?.parts ?? [])], ...(media?.attachment ? { attachment: media.attachment } : {}) }, time);
   };
   return {
     ...core, respond,
