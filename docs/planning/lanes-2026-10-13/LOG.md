@@ -2453,3 +2453,25 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 - **Slice (i):** lane G2 opened draft #1218, stacked on #1215. Owner steps: deploy the edge, then the Worker, then reconnect Google.
 - **Suyash's handoff page:** not found. The two shared pages are the design system and the Build Bible. The owner was asked for the link.
 - **Usage:** 74% at 08:01Z. No new lanes until the 08:30Z reset. Then, in order: lane A on #1213, the admin cap (iv), and (ii) with the memory ADR.
+
+## 08:01Z-09:07Z: builders in new chats; #1218 and #1221 pass and are held for the demo; the demo deploy moves to after 09:30Z
+
+- **Suyash's handoff page:** the owner shared it. All 78 asks are mapped in `BACKEND_POSITION_2026-10-14.md` (`ed46997f`). The owner's Claude Doc is filled in; the Mac's tab is named "Mac orchestrator: backend position".
+- **Four builder sessions** started from chips when the owner clicked them, at about 08:30Z:
+  - **#1213's finish:** head `22078b2e`. A re-review is asked of the review session.
+  - **(iv):** #1221 at `94c749b2`.
+  - **#1216 items 1, 2 and 4:** #1223 at `4a8620e9`.
+  - **(ii):** #1227 at `bda52f70`. It is a draft stacked on #1218, with a memory ADR draft.
+- **#1218: PASS WITH NITS at `d41cbf11`** from the review session (6164096228). CI 6/6; merge-tree clean on `3c4d3fae`.
+  - **Held as a draft until after the demo deploy,** on the advisor's advice: otherwise the tip carries an unevaluated prompt change and new consent scopes.
+  - **Open question** to the review session: does its PASS cover the bounded persistence review for the stored Google phone (6164394223)? The owner asked for the phone at 06:13Z.
+  - `/run-eval` is UNAVAILABLE until the #1185 keys arrive.
+- **#1221: PASS WITH NITS at `94c749b2`** from the Mac's security reviewer (6164585378). CI 6/6, including pgTAP.
+  - **Held** (6164620311).
+  - **After the demo, in one sitting:** merge it; run `mig.sh preflight`, which must show only `20261014060000`; apply. Only then hand over any deploy that carries it.
+- **#1223:** a Mac reviewer claimed the review (6164857704).
+- **Staging is unchanged:** `6be19816` (`a8c92893`).
+  - The `72030b34` deploy had not run by the 09:05Z cutoff. It now goes after the demo, followed by the Google reconnect, the Gmail tail and one test mail.
+  - Its Worker code matches tip `3c4d3fae`: there is no runtime, edge, contract, migration or lockfile change since.
+- **Order** (lead, 6164174075): #1213 → #1218 → #1216 (#1223) → #1219 → (ii) → #1173 → #1176 → #1179. A PR that doesn't overlap the one ahead, with a clean merge-tree, doesn't wait.
+- **Usage:** 10% at 09:05Z; the window resets at 13:30Z.
