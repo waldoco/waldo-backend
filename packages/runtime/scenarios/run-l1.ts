@@ -96,6 +96,7 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
   } satisfies ReminderBook;
 
   const events = scenario.fixtures?.events ?? DEFAULT_EVENTS;
+  const freeBusy = scenario.fixtures?.freeBusy;
   const connectOffers: ConnectIntent[] = [];
   const google = {
     client: scenario.fixtures?.googleNotConnected ? async () => null : async () => ({
@@ -107,6 +108,7 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
       createEvent: async () => events[0]!,
       moveEvent: async () => events[0]!,
       cancelEvent: async () => undefined,
+      ...(freeBusy ? { freeBusy: async (from: string, to: string, ids: readonly string[]) => ({ from, to, calendars: Object.fromEntries(Object.entries(freeBusy).filter(([id]) => ids.includes(id))) }) } : {}),
     }) as unknown as GoogleClient | null,
     connectUrl: async () => null,
   };
@@ -218,7 +220,7 @@ const checkModelInput = (want: ModelInputAssert, run: ScenarioRun): readonly str
   const last = requests[requests.length - 1]?.request;
   if (!last) return [`${label}: the model received no request`];
   const failures: string[] = [];
-  const text = [last.system ?? '', ...last.messages.map((message) => message.content)].join('\n');
+  const text = [last.system ?? '', ...last.messages.map((message) => message.content), ...(last.tool_turns ?? []).map((turn) => turn.output)].join('\n');
   for (const needle of want.mustContain ?? []) if (!text.includes(needle)) failures.push(`${label}: model input missing "${needle.slice(0, 80)}"`);
   for (const needle of want.mustNotContain ?? []) if (text.includes(needle)) failures.push(`${label}: model input contained "${needle.slice(0, 80)}"`);
   if (want.roles) {

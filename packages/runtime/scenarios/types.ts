@@ -18,7 +18,8 @@ export type HopAssert = Readonly<{
 }>;
 
 // Assertion over what the scripted model actually received on an owner turn (1-based). Text is
-// the system prompt plus every message; roles lists the message roles in order.
+// the system prompt, every message and every tool result the request carried; roles lists the
+// message roles in order.
 export type ModelInputAssert = Readonly<{
   turn: number;
   mustContain?: readonly string[];
@@ -35,6 +36,8 @@ export type StateAssert =
 export type FixtureEvent = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean }>;
 export type FixtureMail = Readonly<{ id: string; from: string; subject: string; snippet: string; at: string }>;
 export type FixtureWeb = Readonly<{ title: string; url: string; snippet: string }>;
+// One calendar's free/busy answer; a calendar that is absent, or carries errors, reads as unavailable.
+export type FixtureFreeBusy = Readonly<{ busy: readonly Readonly<{ start: string; end: string }>[]; errors?: readonly Readonly<{ reason: string }>[] }>;
 
 // A turn is owner text; the '@plan ' and '@prompt ' prefixes drive the planning and proactive
 // entry points, matching the evals runner's convention.
@@ -52,6 +55,7 @@ export type Scenario = Readonly<{
     events?: readonly FixtureEvent[];
     mail?: readonly FixtureMail[];
     web?: readonly FixtureWeb[];
+    freeBusy?: Readonly<Record<string, FixtureFreeBusy>>;
     // The google client resolves to null: every google tool returns the not_connected auth
     // failure and the connect offer seam fires.
     googleNotConnected?: boolean;

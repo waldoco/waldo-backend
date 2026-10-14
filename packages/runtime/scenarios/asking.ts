@@ -13,6 +13,61 @@ const REMOVED_ASKING_RULES = [
 
 export const ASKING_SCENARIOS: readonly Scenario[] = [
   {
+    // A fact the calendar holds reaches the model, with the rule to look before asking, before it answers.
+    id: 'asking-looks-before-asking',
+    category: 'asking',
+    turns: ['When should I leave for the airport tomorrow?'],
+    llm: [
+      { match: /airport tomorrow/, rounds: [
+        { toolCalls: [{ name: 'query_calendar', arguments: { date_range: { from: '2026-09-25T00:00:00+05:30', to: '2026-09-26T00:00:00+05:30' } } }] },
+        { text: 'Your flight leaves at 12:05, so head out by about 9:30.' },
+      ] },
+    ],
+    fixtures: { events: [{ id: 'f1', title: 'Flight 6E 2041 Bengaluru to Delhi', start: '2026-09-25T12:05:00+05:30', end: '2026-09-25T14:50:00+05:30', all_day: false }] },
+    assert: {
+      modelInput: [{
+        turn: 1,
+        mustContain: [
+          'When should I leave for the airport tomorrow?',
+          'Flight 6E 2041 Bengaluru to Delhi',
+          'Look before you ask: their calendars (all of them, not just the main one)',
+          'Never ask for a fact you could find there.',
+        ],
+        mustNotContain: REMOVED_ASKING_RULES,
+      }],
+    },
+  },
+  {
+    // One calendar of two fails: the failed read, the read that worked and the rule to answer from it all reach the model.
+    id: 'asking-partial-answer-when-a-calendar-fails',
+    category: 'asking',
+    turns: ['When am I free on Friday for 30 min?'],
+    llm: [
+      { match: /free on Friday/, rounds: [
+        { toolCalls: [{ name: 'query_availability', arguments: { date_range: { from: '2026-09-25T09:00:00+05:30', to: '2026-09-25T18:00:00+05:30' }, calendar_ids: ['primary', 'en.indian#holiday@group.v.calendar.google.com'], duration_minutes: 30 } }] },
+        { toolCalls: [{ name: 'query_availability', arguments: { date_range: { from: '2026-09-25T09:00:00+05:30', to: '2026-09-25T18:00:00+05:30' }, calendar_ids: ['primary'], duration_minutes: 30 } }] },
+        { text: 'Friday you are free 10:15 to 13:00 and 14:00 to 15:00, going by your main calendar. I could not read Holidays in India.' },
+      ] },
+    ],
+    fixtures: { freeBusy: {
+      primary: { busy: [{ start: '2026-09-25T09:00:00+05:30', end: '2026-09-25T10:15:00+05:30' }, { start: '2026-09-25T13:00:00+05:30', end: '2026-09-25T14:00:00+05:30' }, { start: '2026-09-25T15:00:00+05:30', end: '2026-09-25T18:00:00+05:30' }] },
+      'en.indian#holiday@group.v.calendar.google.com': { busy: [], errors: [{ reason: 'notFound' }] },
+    } },
+    assert: {
+      modelInput: [{
+        turn: 1,
+        mustContain: [
+          'When am I free on Friday for 30 min?',
+          'unavailable_calendar_ids',
+          'complete_provider_coverage',
+          'When one source fails and others worked (one calendar of several, one site of three), answer from what worked and name the gap; never withhold the whole answer.',
+          'For free time, query again without the calendar that failed',
+        ],
+        mustNotContain: REMOVED_ASKING_RULES,
+      }],
+    },
+  },
+  {
     // The details the owner gave earlier reach the turn that decides whether to ask, beside the rule to use them.
     id: 'asking-stay-uses-known-details',
     category: 'asking',
@@ -34,7 +89,7 @@ export const ASKING_SCENARIOS: readonly Scenario[] = [
         mustContain: [
           'Pune product summit, 22 to 24 Nov',
           'under 5,000 a night',
-          'Start from what you know or can look up',
+          'Look before you ask: their calendars (all of them, not just the main one), mail, memory',
           'Ask only for what is still unknown and would change the result, once, in one message that also confirms what you inferred',
           'Otherwise go ahead and say what you assumed.',
         ],
