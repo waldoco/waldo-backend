@@ -11,8 +11,9 @@ import { AppSessionAuthorityError, appSessionAuthority } from '../identity/app-s
 import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
 import { calendarDemand, demandCode, type DemandAnswer, type DemandRequest } from '../health/calendar-demand';
 import { CALENDAR_DEMAND_PATH, verifiedDemandRequest } from '../health/calendar-demand-route';
-import { surfaceOwnerAdmission } from '../identity/surface-owner-admission';
+import { ownerJobAdmission, surfaceOwnerAdmission, type SurfaceOwnerBinding } from '../identity/surface-owner-admission';
 import { localOwnerBinding, ownerBindingCurrent, verifyOwnerBinding } from '../identity/owner-binding';
+import { commonOwnerAuthority } from '../identity/common-owner-authority';
 import { createOwnerTurnContext, ownerChainRef, surfaceChatRef, type OwnerContextSources } from '../context-composer/owner-turn';
 import { canonicalHistoryFault, canonicalOwnerConversationStore, skippedRowLines, type CanonicalSkipped } from '../conversation/canonical-owner-store';
 import {useMacHandler} from '../tools/live/use-mac';
@@ -57,7 +58,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { workspaceOwnerHost, workspaceRequest, workspaceUploadLease } from './workspace-host';
 import { workspaceToolHandlers } from '../tools/live/workspace';
 import { workspaceDownload, workspacePage, workspaceRead } from './console-workspace';
-import { SCHEDULE_KINDS, setProactivityArgsSchema, type ConnectIntent, type ConversationEntry, type ScheduleEntry } from '@waldo/contracts';
+import { SCHEDULE_KINDS, setProactivityArgsSchema, type ConnectIntent, type ConversationEntry, type OwnerJob, type ScheduleEntry } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, claimStore, profile } from '../memory/claims';
 import { isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine } from './loops';
@@ -65,7 +66,6 @@ import { armHeartbeat, HEARTBEAT_EVERY_MS, heartbeatTick, heartbeatEligible, set
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
 import { consoleAuth, presenceRecheck, type OwnerSettings } from '../identity/console-auth';
-import { commonOwnerAuthority } from '../identity/common-owner-authority';
 import { proactiveEnabled } from './proactive-gate';
 import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
 import { CONSOLE_INVITES_PATH, renderMemberInvites } from './console-invites';
@@ -145,6 +145,7 @@ import { selectTranscriber } from '../llm/transcriber';
 import { TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './telegram-listener';
 import { isForward, TelegramPollingAdapter } from './telegram-polling';
 import { createTelegramResponder } from './telegram-turn';
+import type { OwnerJobHost } from './owner-turn';
 import type { TurnControl } from './turn-control';
 import { turnFailureCode } from './turn-failure-code';
 import { calendarPushBook, ensureCalendarWatch, wakeBriefSweep } from './calendar-push';
@@ -212,6 +213,7 @@ const ROUND_ROBIN = ['inbox', 'transport', 'schedule', 'browser'] as const;
 type LaneRunner = (lane: Parameters<typeof runLane>[0], work: () => Promise<unknown>) => Promise<void>;
 // A directory outage at the alarm leaves the app owner's scheduled work waiting; this is how soon the alarm asks again.
 const APP_ADMISSION_RETRY_MS = 60_000;
+type ScheduledOwner = Readonly<{ kind: 'admitted'; binding: SurfaceOwnerBinding; authority?: OwnerRuntimeAuthority; current(): boolean }> | Readonly<{ kind: 'dormant' | 'retry' }>;
 
 // The notice for a run that stopped before it finished, so its outcome is unknown.
 const RUN_DID_NOT_FINISH = 'This run did not finish. In-flight changes may still finish. Please check before retrying changes.';
@@ -632,6 +634,53 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
   // Set only inside the alarm's unit of work while an app-only owner's scheduled jobs run (see serial()).
   private scheduledAppDelivery: ((text: string) => Promise<string>) | null = null;
+  // The scheduled job running now, and the owner the directory admitted for this unit of work (both cleared by serial()).
+  private ownerJob: Readonly<{ job: OwnerJob; occurrenceKey: string; occurredAt: number }> | null = null;
+  private jobOwner: Promise<ScheduledOwner> | null = null;
+
+  // Scheduled work runs as the owner the directory admits for this Durable Object, asked once per unit of work: the app
+  // binding through owner_runtime_authority, otherwise the Telegram presence through common_owner_authority. Between the
+  // ask and each model call only the local binding is rechecked.
+  private scheduledOwner(): Promise<ScheduledOwner> {
+    return this.jobOwner ??= this.lookupScheduledOwner();
+  }
+  private appScheduledOwner(authority: OwnerRuntimeAuthority): ScheduledOwner {
+    const kv = this.ctx.storage.kv, doName = authority.doName;
+    return { kind: 'admitted', authority, binding: { ownerId: authority.ownerId, bindingRef: `runtime:${doName}`, revision: authority.admissionRevision, physicalDoId: this.ctx.id.toString() },
+      current: () => kv.get<string>('do_name') === doName && this.appBound() };
+  }
+  private async lookupScheduledOwner(): Promise<ScheduledOwner> {
+    const kv = this.ctx.storage.kv, doName = kv.get<string>('do_name'), owners = this.env.OWNER_DO;
+    if (!doName || !owners || owners.idFromName(doName).toString() !== this.ctx.id.toString()) return { kind: 'dormant' };
+    if (this.appBound()) {
+      const found = await this.appOwnerLookup();
+      return found.kind === 'admitted' ? this.appScheduledOwner(found.authority) : found;
+    }
+    const subject = kv.get<string>('telegram_subject');
+    if (!subject || !/^\d+$/.test(subject) || kv.get<boolean>('telegram_unlinked') === true) return { kind: 'dormant' };
+    try {
+      const found = await commonOwnerAuthority(this.env).resolve('telegram', subject, doName);
+      if (!found) return { kind: 'dormant' };
+      return { kind: 'admitted', binding: { ownerId: found.directoryOwnerId, bindingRef: found.presenceId, revision: found.admissionRevision, physicalDoId: this.ctx.id.toString() },
+        current: () => kv.get<string>('do_name') === doName && kv.get<string>('telegram_subject') === subject && kv.get<boolean>('telegram_unlinked') !== true };
+    } catch (error) {
+      return error instanceof Error && error.message === 'common owner authority rejected' ? { kind: 'dormant' } : { kind: 'retry' };
+    }
+  }
+  private async asOwnerJob<T>(job: OwnerJob, occurrenceKey: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.ownerJob;
+    this.ownerJob = { job, occurrenceKey, occurredAt: Date.now() };
+    try { return await work(); } finally { this.ownerJob = previous; }
+  }
+  // Without a directory there is no owner to resolve and the fixture owner stands. With one, a job runs only as the owner it
+  // admitted; work reaching the responder outside a named job, or for an owner no longer admitted, runs nothing.
+  private readonly jobHost: OwnerJobHost = { admit: async () => {
+    if (!consoleAuth(this.env)) return undefined;
+    const job = this.ownerJob, owner = await this.scheduledOwner();
+    if (!job || owner.kind !== 'admitted') throw new ClosedRunError();
+    return ownerJobAdmission({ ...job, expectedPhysicalDoId: this.ctx.id.toString(),
+      lookup: async () => { if (!owner.current()) throw new ClosedRunError(); return owner.binding; } });
+  } };
 
   // The app binding written at the owner's first app message: the local sign that the app is one of their surfaces.
   private appBound(): boolean {
@@ -1541,7 +1590,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           && this.ctx.storage.kv.get<boolean>('telegram_unlinked') !== true
           && this.env.OWNER_DO && this.env.OWNER_DO.idFromName(doName).toString() === this.ctx.id.toString();
         const appOwner = telegramBound ? null : await this.appOwnerLookup();
-        if (appOwner?.kind === 'admitted') { channel = 'app'; this.scheduledAppDelivery = this.appDeliveryFor(appOwner.authority); }
+        if (appOwner?.kind === 'admitted') {
+          channel = 'app'; this.scheduledAppDelivery = this.appDeliveryFor(appOwner.authority);
+          this.jobOwner = Promise.resolve(this.appScheduledOwner(appOwner.authority));
+        }
         if (!telegramBound && appOwner?.kind !== 'admitted') {
           if (Math.min(this.ctx.storage.kv.get<number>('browser_owner_task_due_v1') ?? Infinity, this.ctx.storage.kv.get<number>(COMMON_BROWSER_DUE) ?? Infinity,
             this.ctx.storage.kv.get<number>(COMMON_BROWSER_LEASE_DUE) ?? Infinity) <= Date.now()) this.ctx.waitUntil(Promise.all([this.browserTasks.maintain(), this.ownerBrowser.maintain()]));
@@ -1613,21 +1665,26 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       await lane('schedule', async () => {
         // Proactive work goes to the app, the default surface, once the owner has used it, and Telegram gets a plain copy of it;
-        // Telegram keeps it only for an owner with no app binding. A refusal holds the whole scheduled pass, never falling back
-        // to Telegram: a revoked account runs nothing, and an outage asks again without spending attempts.
+        // Telegram keeps it only for an owner with no app binding. On a directory-backed deploy every scheduled pass runs as the
+        // owner the directory admits; a refusal holds the whole pass, never falling back to Telegram or the fixture owner: a
+        // revoked account runs nothing, and an outage asks again without spending attempts.
         let executors = { reminder: fire, heartbeat: beat, dreaming: nightly, pre_activity_spot: briefs, brief: cards, standing_order: fireOrder };
-        if (channel === 'telegram' && consoleAuth(this.env) && this.appBound()) {
-          const appOwner = await this.appOwnerLookup();
-          if (appOwner.kind !== 'admitted') {
-            log({ trace: `alarm:${Date.now()}`, hop: 'scheduled_admission', ms: 0, ok: false, code: appOwner.kind });
-            await rearmSharedAlarm(this.ctx.storage, appOwner.kind === 'retry' ? Date.now() + APP_ADMISSION_RETRY_MS : null, Date.now(), 30_000);
+        if (consoleAuth(this.env)) {
+          const owner = await this.scheduledOwner();
+          if (owner.kind !== 'admitted') {
+            log({ trace: `alarm:${Date.now()}`, hop: 'scheduled_admission', ms: 0, ok: false, code: owner.kind });
+            await rearmSharedAlarm(this.ctx.storage, owner.kind === 'retry' ? Date.now() + APP_ADMISSION_RETRY_MS : null, Date.now(), 30_000);
             return;
           }
-          this.scheduledAppDelivery = this.copiedToTelegram(this.appDeliveryFor(appOwner.authority));
-          const app = this.setup('app');
-          await app.ready;
-          executors = { ...executors, reminder: app.fire, heartbeat: app.beat, pre_activity_spot: app.briefs, brief: app.cards, standing_order: app.fireOrder };
+          if (channel === 'telegram' && owner.authority) {
+            this.scheduledAppDelivery = this.copiedToTelegram(this.appDeliveryFor(owner.authority));
+            const app = this.setup('app');
+            await app.ready;
+            executors = { ...executors, reminder: app.fire, heartbeat: app.beat, pre_activity_spot: app.briefs, brief: app.cards, standing_order: app.fireOrder };
+          }
         }
+        const jobs = Object.fromEntries(Object.entries(executors).map(([kind, run]) =>
+          [kind, (entry: ScheduleEntry) => this.asOwnerJob(kind as OwnerJob, `${entry.id}:${entry.occurrence_at}`, () => run(entry))])) as typeof executors;
         const started = Date.now();
         let fired: readonly ScheduleEntry[];
         try {
@@ -1638,7 +1695,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             const code = `${kind}_timezone_unconfirmed`;
             log({ trace: `alarm:${started}`, hop: outcome === 'drop' ? 'scheduled_drop' : 'scheduled_hold', ms: 0, ok: true, code, detail: code });
           };
-          fired = await scheduler.dispatchDue(gateScheduleExecutors(executors, schedulePreferences(this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now })), scheduler, held, onHeld));
+          fired = await scheduler.dispatchDue(gateScheduleExecutors(jobs, schedulePreferences(this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now })), scheduler, held, onHeld));
         } catch (error) {
           // A dispatch throw used to leave no trace at all - the wake was invisible in Langfuse.
           log({ trace: `alarm:${started}`, hop: 'machine_turn', ms: Date.now() - started, ok: false, error: String(error), detail: 'dispatch' });
@@ -1704,7 +1761,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
 
   private serial<T>(work: () => Promise<T>): Promise<T> {
     // The alarm sets a scheduled app delivery inside its unit of work; no later unit, and no turn, inherits it.
-    const run = this.queue.then(work).finally(() => { this.scheduledAppDelivery = null; });
+    const run = this.queue.then(work).finally(() => { this.scheduledAppDelivery = null; this.jobOwner = null; });
     this.queue = run.catch(() => undefined);
     return run;
   }
@@ -1897,10 +1954,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const trace = `harness-${updateId}`;
     const entry = { id: command.target, occurrence_at: Date.now(), attempts: 0 } as unknown as ScheduleEntry;
     try {
-      if (command.target === 'fetch') await updateCheck(trace);
-      else if (command.target === 'briefs') await briefs(entry);
-      else if (command.target === 'nightly') await nightly(entry);
-      else await cards(entry);
+      // A harness fire runs the same job the schedule would, as the same owner.
+      if (command.target === 'fetch') await this.asOwnerJob('heartbeat', trace, () => updateCheck(trace));
+      else if (command.target === 'briefs') await this.asOwnerJob('pre_activity_spot', trace, () => briefs(entry));
+      else if (command.target === 'nightly') await this.asOwnerJob('dreaming', trace, () => nightly(entry));
+      else await this.asOwnerJob('brief', trace, () => cards(entry));
     } catch (error) {
       return `Fired ${command.target}; it failed: ${String(error)}\n\n${traces.recent(timezone, null, 10)}`;
     }
@@ -2418,8 +2476,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await reconcileSchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now: Date.now() });
         const scrubbed = await scrubConversationHistory(storage);
         if (scrubbed > 0) log({ trace: 'history:scrub', hop: 'egress_scrub', ms: 0, ok: true, detail: `${scrubbed} entries` });
-        void this.serial(() => migrateCoreFiles('memory:migration'));
-        if (seeded) void this.serial(() => planToday('day-plan:boot'));
+        // Boot work is the nightly memory job's migration and the day plan that arms the Brief, run as those jobs.
+        void this.serial(() => this.asOwnerJob('dreaming', 'memory:migration', () => migrateCoreFiles('memory:migration')));
+        if (seeded) void this.serial(() => this.asOwnerJob('brief', `day-plan:boot:${Date.now()}`, () => planToday('day-plan:boot')));
       });
     const workspaceTools = workspaceToolHandlers(ctx => {
       const scope = ctx?.runScope;
@@ -2594,11 +2653,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if(context.conversationRef!==record.conversationRef)throw new ClosedRunError();
         return context;
       }},history:context=>({...indexedConversationStore(canonicalOwnerConversationStore(this.ctx.storage,context,this.logSkippedLoad),episodes,()=>Date.now()),
-        noteUnfinished:(line,scope)=>this.appInbox.noteLanded(scope.runId,scope.attempt,line)})} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
+        noteUnfinished:(line,scope)=>this.appInbox.noteLanded(scope.runId,scope.attempt,line)}),jobHost:this.jobHost} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
         const record=this.activeIMessage;
         if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==record.text)throw new ClosedRunError();
         return iMessageOwnerContext(this.imessageHost,record,scope);
-      }},history:context=>canonicalOwnerConversationStore(this.ctx.storage,context)} : telegramContext,
+      }},history:context=>canonicalOwnerConversationStore(this.ctx.storage,context)} : {...telegramContext,jobHost:this.jobHost},
     );
     // A job prompt built on the ledger: the owner's health logs reach the model as this turn's context.
     const ledgerJob = async (trace: string, said: string, toolNames?: Parameters<typeof responder.prompt>[4]) =>
