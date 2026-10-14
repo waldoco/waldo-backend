@@ -38,3 +38,30 @@ describe('A-7: health free text in external content is redacted, not denied', ()
     expect(run({ metric: 'hrv', measurement: 58, unit: 'ms' }, 'internal_context', 'external')).toEqual({ ok: false, check: 'health_value', reason: 'health_value_leak' });
   });
 });
+
+describe('a tool result the model reads as a JSON string', () => {
+  const HOTEL = 'Deluxe Twin, sleeps 3. Free cancellation. Weight 23 kg per checked bag. Sleep 8 hours in blackout rooms. 120 steps to the beach. Rated 8.6 by 1,204 guests.';
+
+  it('withholds only the matched spans of an external page and keeps the rest', () => {
+    const output = JSON.stringify({ ok: true, data: { url: 'https://www.agoda.com/hotel', text: HOTEL } });
+    const result = run([{ call: { call_id: 'c1', name: 'browse_page', arguments: '{}' }, output }], 'internal_context', 'external');
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    const page = (JSON.parse((result.payload as Array<{ output: string }>)[0]!.output) as { data: { text: string } }).data.text;
+    expect(page).toContain('Deluxe Twin');
+    expect(page).toContain('Free cancellation');
+    expect(page).toContain('[health value withheld]');
+    expect(result.redactions).toContainEqual(expect.objectContaining({ kind: 'health_value' }));
+  });
+
+  it('still denies a wearable reading inside it', () => {
+    for (const data of [{ metric: 'hrv', value: 42, unit: 'ms' }, { hrv: 42, unit: 'ms' }]) {
+      expect(run([{ call: { call_id: 'c1', name: 'browse_page', arguments: '{}' }, output: JSON.stringify({ ok: true, data }) }], 'internal_context', 'external')).toEqual({ ok: false, check: 'health_value', reason: 'health_value_leak' });
+    }
+  });
+
+  it('leaves the owner\'s own conversation about health as it is', () => {
+    const text = 'I only slept 5 hours and my HRV was 42 ms this morning.';
+    expect(run([{ role: 'user', content: text }], 'internal_context', null)).toMatchObject({ ok: true, payload: [{ role: 'user', content: text }] });
+  });
+});

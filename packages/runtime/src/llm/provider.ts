@@ -1393,6 +1393,9 @@ const SCRIBE_HARD_REASONS: ReadonlySet<string> = new Set([
   'secret_leak',
   'health_value_leak',
 ]);
+// An outside tool result the health filter denies is replaced by this, so the model knows the page was read and why
+// it cannot see it.
+const HEALTH_WITHHELD_OUTPUT = JSON.stringify({ ok: false, code: 'withheld', error: "This page's text was withheld by the health-data filter. Try another source or a different page." });
 
 async function sanitiseRequest(
   request: LLMRequest,
@@ -1615,6 +1618,17 @@ async function sanitiseRequest(
       const single = await sanitiseValue([turn], 'internal_context', turnTaint(turn));
       if (single.ok && Array.isArray(single.payload) && single.payload.length === 1) {
         kept.push(single.payload[0] as LLMToolTurn);
+        continue;
+      }
+      // An outside result the health filter still denies after its spans are withheld is replaced whole, call arguments
+      // included, by a typed withheld result; none of its content reaches the model, and the turn goes on.
+      if (!single.ok && single.error.hook === 'scribe_sanitise' && single.error.reason === 'scribe:health_value_leak' && turnTaint(turn) === 'external') {
+        const withheld = await sanitiseValue([{ call: { ...turn.call, arguments: '{}' }, output: HEALTH_WITHHELD_OUTPUT }], 'internal_context', 'external');
+        if (!withheld.ok || !Array.isArray(withheld.payload) || withheld.payload.length !== 1) {
+          return { ok: false, error: withheld.ok ? new HookHaltError('llm_provider', 'withheld turn invalid', 'transient') : withheld.error, scribeDestination: 'internal_context' };
+        }
+        receipts.add(withheld.payload[0] as LLMToolTurn);
+        kept.push(withheld.payload[0] as LLMToolTurn);
         continue;
       }
       if (!single.ok && !softScribe(single.error)) {
