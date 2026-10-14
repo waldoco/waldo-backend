@@ -13,7 +13,7 @@ import { persistInboxWake } from '../src/scheduler/alarm-slot';
 const DAY_BRIEF = CURATED_SKILLS.find(skill => skill.name === 'day-brief')!;
 const CATALOG_LINE = 'Reviewed skill catalog (metadata only)';
 const REPLY = 'Prepared with the day brief.';
-const model = vi.hoisted(() => ({ systems: [] as string[], step: 0 }));
+const model = vi.hoisted(() => ({ systems: [] as string[], tools: [] as string[][], step: 0 }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   // Scripted model: the first reply loads day-brief; the second answers. Memory and other structured calls get empty JSON.
@@ -21,6 +21,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     const done = (text: string, tool_calls?: Array<{ call_id: string; name: string; arguments: string }>) => ({ ok: true as const, data: { model: request.model, text, ...(tool_calls ? { tool_calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
     if (request.response_format) return done('{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}');
     model.systems.push(request.system ?? '');
+    model.tools.push((request.tools ?? []).map(tool => tool.name));
     return model.step++ === 0 ? done('', [{ call_id: 'load', name: 'skills_load', arguments: JSON.stringify({ name: DAY_BRIEF.name, version: DAY_BRIEF.version }) }]) : done(REPLY);
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
@@ -35,7 +36,7 @@ const TELEGRAM_CUSTODY = 'telegram:42';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 
 beforeEach(() => {
-  model.systems = []; model.step = 0;
+  model.systems = []; model.tools = []; model.step = 0;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
@@ -88,6 +89,19 @@ it('an app-first owner gets the reviewed catalog in the prompt and can load a sk
     expect((await shownReplies(owner, name)).at(-1)).toContain(REPLY);
     expect(custodies(state)).toEqual([PRINCIPAL]);
     expect(seededSkillCustody(state.storage.sql)).toBe(PRINCIPAL);
+  });
+});
+
+// The catalog is one line per reviewed skill, exact enough for skills_load; skills_list keeps the full metadata.
+it('the catalog names every reviewed skill by its exact version and purpose, and skills_load is a callable tool', async () => {
+  const name = 'app-skills-catalog-lines';
+  await withOwner(name, () => undefined, async (owner, state) => {
+    expect(await send(owner, state, name, 'What does my day look like?')).toBe('completed');
+    const system = model.systems[0]!;
+    for (const skill of CURATED_SKILLS) expect(system).toContain(`\n- ${skill.name}@${skill.version}: ${skill.trigger_condition}\n`.slice(0, -1));
+    expect(system).not.toContain('conservative_utf8_byte_upper_bound');
+    expect(system).not.toContain('Tools available in this chat');
+    expect(model.tools[0]).toEqual(expect.arrayContaining(['skills_load', 'skills_list']));
   });
 });
 

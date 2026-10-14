@@ -449,7 +449,9 @@ describe('ContextComposer', () => {
     expect(result.prompt).toContain('Could you help me plan my afternoon?');
     expect(result.prompt).toContain('<available-skills>');
     expect(result.prompt).toContain('afternoon-planning');
-    expect(result.prompt).toContain('Tool ACL ceiling: ' + TOOL_PERMISSIONS.user_message.join(', ') + '.');
+    // The trigger's ACL ceiling grants nothing callable, so the structure layer points at the function list instead.
+    expect(result.prompt).toContain("Call only tools in this request's function list.");
+    expect(result.prompt).not.toContain('Tool ACL ceiling');
     expect(result.prompt).toContain('<memory-context>');
     expect(result.prompt).toContain('<recall>');
     expect(result.prompt).toContain('Form zone: steady.');
@@ -463,7 +465,7 @@ describe('ContextComposer', () => {
       '<invocation-inputs>',
       'The verified principal is asking for a practical response.',
       'Help the user choose a feasible next sequence.',
-      'Tool ACL ceiling:',
+      "Call only tools in this request's function list.",
       '<memory-context>',
       'Prefer a calm, concrete pace.',
       'Respect privacy and require approved actions.',
@@ -1551,9 +1553,10 @@ describe('ContextComposer', () => {
 // health tools joined it, 2026-09-27; the A7 standing-order tools the A1 gmail tools and the A5 artifact tools joined it, 2026-09-27);
 // query_availability and read_owner_context joined it 2026-09-30. read_mcp_tool joined it 2026-10-02. export_artifact joined it 2026-10-02. workspace_list, workspace_read and workspace_write joined it 2026-10-02. workspace_render and curated skills lifecycle tools joined it 2026-10-03.
 // set_schedule_preference joined it 2026-10-07. propose_google_task_change joined it 2026-10-10. use_mac joined it 2026-10-13. search_contacts joined it 2026-10-13. send_console_link joined it 2026-10-14.
-// The serializer revision moved to context-reasons-v3 2026-10-14 (a recall that did not run stops reading as an empty one).
+// The serializer revision moved to context-reasons-v3 2026-10-14 (a recall that did not run stops reading as an empty one),
+// and to context-reasons-v4 2026-10-15 (the ceiling list left the prompt, so ACL additions no longer move this hash).
 // determinism is proven by first===second above.
-    expect(first.checkpoint.context_ref).toBe('ctx_78bcdb0a61bea3886d879523b3f3d9a5');
+    expect(first.checkpoint.context_ref).toBe('ctx_c3e517f69784beb392109c4c38070ee6');
     expect(first.prompt.indexOf('Workspace source key a- marker.')).toBeLessThan(
       first.prompt.indexOf('Workspace source key a: marker.'),
     );

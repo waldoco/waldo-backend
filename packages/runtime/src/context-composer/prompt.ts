@@ -1,6 +1,5 @@
 import {
   REASONS_LAYER_JOIN,
-  TOOL_PERMISSIONS,
   renderRecall,
   wrapSkills,
   type CanaryTokens,
@@ -46,7 +45,7 @@ export type RenderedProviderPrompt =
 
 // This is the whole REASONS canvas serializer revision, not the narrower skill serializer.
 // Any semantic rendering change must bump it even when all source snapshots stay unchanged.
-export const CONTEXT_PROMPT_SERIALIZER_REVISION = 'context-reasons-v3';
+export const CONTEXT_PROMPT_SERIALIZER_REVISION = 'context-reasons-v4';
 
 const NO_CONFLICT_AUTHORITY = Object.freeze({
   inDomain: () => false,
@@ -147,7 +146,8 @@ export function assembleReasonsPrompt(
     requirements,
     materials.identity.text,
     approach,
-    `Tool ACL ceiling: ${TOOL_PERMISSIONS[invocation.runtime_binding.trigger].join(', ')}. Call only tools in this request's function list; ceiling entries without a live handler are not callable.`,
+    // The trigger's ACL ceiling grants nothing callable (evidence.tool_acl records it); the function list is the callable set.
+    "Call only tools in this request's function list.",
     operations,
     [materials.zone_modifier.text, materials.mode_template.text, materials.soul_base.text].join('\n'),
     materials.safety_rules.text,

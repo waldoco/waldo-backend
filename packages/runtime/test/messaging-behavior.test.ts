@@ -28,8 +28,14 @@ describe('messagingSystemPrompt', () => {
     expect(prompt.endsWith('Tools available in this chat: none.')).toBe(true);
   });
 
-  it('lists only the callable tools, sorted', () => {
-    expect(messagingSystemPrompt(['get_context', 'calendar_read']).endsWith('Tools available in this chat: calendar_read, get_context.')).toBe(true);
+  // The model's function list names the callable tools each round, and narrows when a round withholds some; a copy here
+  // would only go stale. A turn with no tools says so, because an empty function list says nothing.
+  it('leaves tool names to the function list and says so only when there are none', () => {
+    const prompt = messagingSystemPrompt(['get_context', 'calendar_read']);
+    expect(prompt).not.toContain('Tools available in this chat');
+    expect(prompt).not.toMatch(/\bcalendar_read\b/);
+    expect(prompt.endsWith(MESSAGING_BEHAVIOR)).toBe(true);
+    expect(prompt).toContain('Only claim what your tools can do and what they actually returned.');
   });
 
   it('distinguishes search snippets from read pages and keeps external text untrusted', () => {
@@ -186,10 +192,10 @@ describe('the rules that pulled against each other are gone', () => {
     }
   });
 
-  // A ceiling, so new behaviour text is paid for by cuts. The 14 Oct hotel turn carried 15,259 bytes; the task sections
-  // and examples took the place of most of the older rules and leave it at about 15,970.
-  it('keeps the delivered Telegram behaviour text under 16,000 bytes', () => {
-    expect(bytes(messagingSystemPrompt(HOTEL_TURN_TOOLS, SURFACES[0]!))).toBeLessThanOrEqual(16_000);
+  // A ceiling, so new behaviour text is paid for by cuts. The 14 Oct hotel turn carried 15,259 bytes, its tool names
+  // included; without them the block is about 15,020.
+  it('keeps the delivered Telegram behaviour text under 15,100 bytes', () => {
+    expect(bytes(messagingSystemPrompt(HOTEL_TURN_TOOLS, SURFACES[0]!))).toBeLessThanOrEqual(15_100);
   });
 
   it.each(prompts())('%s: passes the system-prompt sanitiser unchanged', (_surface, prompt) => {
