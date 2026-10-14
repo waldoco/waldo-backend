@@ -48,7 +48,8 @@ export type HeartbeatDeps = Readonly<{
   plans: Pick<DayPlanBook, 'heldToday'>;
   timezone: string;
   now: () => number;
-  // The check-back turn for these loops: its reply, or null when the model decided to stay silent.
+  // The check-back turn for these loops: its reply, or null when the model decided to stay silent. A throw is a failed
+  // check-back the next tick retries, never a failed tick.
   checkBack: (loops: readonly Loop[]) => Promise<string | null>;
   enqueue: (text: string, receipt: HeartbeatReceipt) => Promise<void>;
 }>;
@@ -117,7 +118,15 @@ export const heartbeatTick = (deps: HeartbeatDeps): ScheduleExecutor => {
       deps.scheduler.markHeartbeatDecision(runId, heldCards.length > 0 ? 'acted' : 'quiet');
       return;
     }
-    const text = await deps.checkBack(notify);
+    let text: string | null;
+    try { text = await deps.checkBack(notify); }
+    catch {
+      // checkBack logs its own failure. A model outage must not fail the tick: three failed ticks quarantine the heartbeat
+      // for a day, the held-card release above with it. Nothing is marked notified, so the next tick asks again.
+      deps.scheduler.markHeartbeatDecision(runId, 'acted');
+      deps.scheduler.markDelivery(runId, 'failed');
+      return;
+    }
     // The turn may have closed some loops. The receipt freezes each loop as the turn left it, so a loop the owner closes
     // or moves before the send stops it.
     const after = notify.map(loop => deps.sql.exec<{ status: string; due: string | null }>('SELECT status, due FROM loops WHERE id = ?', loop.id).toArray()[0])
