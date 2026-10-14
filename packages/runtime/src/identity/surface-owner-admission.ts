@@ -24,6 +24,10 @@ export type SurfaceOwnerAdmissionOptions = Readonly<{
   now?(): number;
 }>;
 
+// How long a matching directory read keeps a turn's admission current. A revoked session that no fence reached
+// stops at the first check after this.
+const VERIFIED_FOR_MS = 1_000;
+
 // The surface host verifies its JWT/session/private-DM and physical owner DO before
 // supplying lookup. This common adapter never discovers identities or grants access.
 export async function surfaceOwnerAdmission(options: SurfaceOwnerAdmissionOptions): Promise<OwnerMessageAdmission> {
@@ -44,10 +48,23 @@ export async function surfaceOwnerAdmission(options: SurfaceOwnerAdmissionOption
     return Object.freeze({ ownerId: binding.ownerId.toLowerCase(), bindingRef: binding.bindingRef, revision: binding.revision, physicalDoId: binding.physicalDoId });
   };
   const binding = await resolve();
-  const assertCurrent = async () => {
+  // A turn checks currency around nearly every await, and one directory read per check left each tool round waiting on
+  // dozens of serial round trips. A read that matched is reused for VERIFIED_FOR_MS from when it started, and concurrent
+  // checks share one read; the run scope is still checked every time, so a session fence stops the turn at once.
+  let verifiedAt = Number.NEGATIVE_INFINITY;
+  let reading: Promise<void> | undefined;
+  const reread = async () => {
+    const startedAt = now();
     const current = await resolve();
     if (current.ownerId !== binding.ownerId || current.bindingRef !== binding.bindingRef || current.revision !== binding.revision
       || current.physicalDoId !== binding.physicalDoId) throw new OwnerAdmissionError('rejected');
+    verifiedAt = startedAt;
+  };
+  const assertCurrent = async () => {
+    scope.admit();
+    if (now() - verifiedAt < VERIFIED_FOR_MS) return;
+    reading ??= reread().finally(() => { reading = undefined; });
+    await reading;
   };
   const ownerHex = binding.ownerId.replaceAll('-', '');
   const occurrence = await sha256Hex(JSON.stringify([binding.ownerId, expectedPhysicalDoId, surface, subject, occurrenceKey]));

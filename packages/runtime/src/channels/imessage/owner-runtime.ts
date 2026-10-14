@@ -44,7 +44,7 @@ export const admitIMessageHandoff = async (host: OwnerHost, input: IMessageTurnH
   return result.kind;
 };
 
-/** Owner context for one running iMessage record: surfaceOwnerAdmission re-reads authority on every check. */
+/** Owner context for one running iMessage record: surfaceOwnerAdmission re-reads authority whenever its last matching read has aged out. */
 export const iMessageOwnerContext = async (host: OwnerHost, record: IMessageInboxRecord, scope: RunEffectScope) => {
   const lookup = async () => {
     scope.admit();
