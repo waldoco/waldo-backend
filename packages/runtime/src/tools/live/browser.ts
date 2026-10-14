@@ -1,5 +1,5 @@
 import {
-  PROVIDER_OF, TOOL_PERMISSIONS, triggerTypeSchema, browseActArgsSchema, browsePageArgsSchema, WALDO_CHAT_MODEL,
+  PROVIDER_OF, TOOL_PERMISSIONS, triggerTypeSchema, browseActArgsSchema, browsePageArgsSchema, WALDO_AUXILIARY_MODEL,
   type ToolHandler, type ToolName, type BrowsePageArgs, type BrowseActArgs,
 } from '@waldo/contracts';
 import type { CloudflarePageReader } from '../../channels/cloudflare-public-read';
@@ -12,7 +12,9 @@ import { EGRESS_TARGET_PATHS, OPEN_PUBLIC, evaluateDeclaredEgress } from '../../
 const BASE = 'https://api.stagehand.browserbase.com';
 // Browserbase GET /v1/sessions/{id}/debug lists the session's open pages (docs.browserbase.com/reference/api/session-live-urls).
 const BROWSERBASE_BASE = 'https://api.browserbase.com';
-const MODEL = `${PROVIDER_OF[WALDO_CHAT_MODEL]}/${WALDO_CHAT_MODEL}`;
+// Stagehand's model only picks page elements and extracts page text for the owner turn's model, and a Stagehand
+// session names a model with no reasoning effort, so it stays on the auxiliary model.
+const MODEL = `${PROVIDER_OF[WALDO_AUXILIARY_MODEL]}/${WALDO_AUXILIARY_MODEL}`;
 
 
 // Provider failure bodies are untrusted and may echo credentials or page instructions.

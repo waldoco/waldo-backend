@@ -1,7 +1,7 @@
 // One nightly trial: a fresh synthetic owner, the production responder on the app surface, and
 // the scenario's steps. Owner text goes through the reply path, a due reminder through the
 // reminder path, as the owner object's alarm drives it.
-import { WALDO_CHAT_MODEL, type ModelName } from '@waldo/contracts';
+import { WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL, type ModelName } from '@waldo/contracts';
 import { createTelegramResponder } from '../../src/channels/telegram-turn';
 import { inboundTurn, ownerWords } from '../../src/channels/owner-inbound-turn';
 import type { TurnLogEntry } from '../../src/channels/telegram-listener';
@@ -44,7 +44,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
   const model = deps.model ?? WALDO_CHAT_MODEL;
   const responder = createTelegramResponder('eval-key', world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
     world.handlers, model, false, undefined, async () => true, metered(deps.gateway, deps.budget), undefined, undefined, undefined, undefined,
-    model, undefined, world.health, undefined, 'app');
+    WALDO_AUXILIARY_MODEL, undefined, world.health, undefined, 'app');
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
   const transcript: { role: 'owner' | 'waldo' | 'world'; text: string }[] = [];
   let status: TrialRecord['status'] = 'ran';
