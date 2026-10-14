@@ -73,7 +73,7 @@ export type SubagentSpawner = (task: string, options?: ChildOptions) => Promise<
 
 // The handler is built per turn: the spawn counter resets every turn, and the spawner closure
 // carries the turn's LLM step. The child hands the parent a truthful status: completed -> ok
-// with the summary; budget_exhausted/withdrawn -> a failed round with the reason, so repeated
+// with the summary; budget_exhausted/time_exhausted/withdrawn -> a failed round with the reason, so repeated
 // failing spawns trip the parent's existing failure streak instead of silently counting as
 // progress (spec section 5). Handler error codes are the closed contracts union; 'rejected'
 // carries both cases and the text keeps the truthful classification.
@@ -85,8 +85,8 @@ export type ChildLoopInput = Readonly<{
   controlRound: () => string | null | Promise<string | null>;
   // The turn's LLM step, pre-bound with trace/purpose/system prompt by the channel.
   complete: (content: string, tools: readonly unknown[] | undefined, turns: readonly LLMToolTurn[]) => ReturnType<ToolLoopStep>;
-  // The parent turn's shared round budget; the child's rounds decrement it too.
-  budget: { remaining: number };
+  // The parent turn's shared round budget and deadline; the child's rounds decrement it and spend the same time.
+  budget: { remaining: number; deadline?: number };
   // Trace/ledger sink shared with the parent turn; child hops are tagged subagent_tool_*.
   onTool: (event: ToolLoopEvent) => void;
   // Read tools this child may use; defaults to CHILD_TOOL_NAMES.
@@ -183,7 +183,7 @@ export const delegateTaskHandler = (
       if (done) return { ok: true as const, data: { status: 'completed' as const, summary: text }, source_taint: 'external' as const };
       // Every non-completed exit is a failed round with its truthful classification; an owner
       // stop is never a success receipt.
-      return refusal(`Subagent ${exit === 'stopped' ? 'was stopped by the owner mid-task' : exit === 'budget_exhausted' ? 'ran out of its round budget' : 'had its tools withdrawn after repeated failures'}. Partial answer: ${text.slice(0, 500)}`);
+      return refusal(`Subagent ${exit === 'stopped' ? 'was stopped by the owner mid-task' : exit === 'budget_exhausted' ? 'ran out of its round budget' : exit === 'time_exhausted' ? "ran out of the turn's time" : 'had its tools withdrawn after repeated failures'}. Partial answer: ${text.slice(0, 500)}`);
     },
   };
 };

@@ -2,6 +2,8 @@ import { env } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
 import { callMcpToolHandler, executeMcp, mcpServers, readMcpToolHandler, type McpGoogleAuth } from '../src/tools/live/mcp';
 import { GOOGLE_MCP_READ_ONLY, GOOGLE_MCP_SERVERS, GOOGLE_MCP_UNAVAILABLE } from '../src/connectors/google-mcp';
+import config from '../wrangler.jsonc?raw';
+import { parseJsonc } from '../../../scripts/jsonc.mjs';
 
 const GMAIL = 'https://gmailmcp.googleapis.com/mcp/v1';
 const CALENDAR = 'https://calendarmcp.googleapis.com/mcp/v1';
@@ -120,6 +122,23 @@ describe('Google MCP servers are read-only by construction', () => {
     expect(await handler.handle({ server: 'gmail', tool: 'create_draft', args: {} }, ctx)).toMatchObject({ ok: false, code: 'forbidden' });
     expect(sent).toHaveLength(2);
   });
+
+  it('the fixed arguments land on the effect rail too, so an approved call cannot drop them', async () => {
+    const sent: Array<{ tool: string; args: Record<string, unknown> }> = [];
+    const auth: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async (_url, tool, args) => { sent.push({ tool, args }); return [{ type: 'text', text: 'ok' }]; } };
+    await executeMcp(server('drive'), 'search_files', { query: 'q', excludeContentSnippets: false }, auth, fetch, { id: 'approval:mcp' });
+    await executeMcp(server('gmail'), 'get_thread', { id: 'th' }, auth, fetch, { id: 'approval:mcp' });
+    expect(sent).toEqual([{ tool: 'search_files', args: { query: 'q', excludeContentSnippets: true } }, { tool: 'get_thread', args: { id: 'th' } }]);
+    const wire: Array<Record<string, unknown>> = [];
+    const bearer: McpGoogleAuth = { resolve: async () => ({ mode: 'bearer', token: 'synthetic-bearer' }), proxy: async () => { throw new Error('not the proxy rail'); } };
+    const transport: typeof fetch = async (_input, init) => {
+      const rpc = JSON.parse(String(init?.body)) as { method: string; params?: { arguments?: Record<string, unknown> } };
+      if (rpc.method === 'tools/call') wire.push(rpc.params?.arguments ?? {});
+      return rpc.method === 'notifications/initialized' ? new Response(null, { status: 202 }) : Response.json({ result: rpc.method === 'initialize' ? { protocolVersion: '2025-06-18' } : { content: [{ type: 'text', text: 'ok' }] } });
+    };
+    await executeMcp(server('drive'), 'search_files', { query: 'q', excludeContentSnippets: false }, bearer, transport);
+    expect(wire).toEqual([{ query: 'q', excludeContentSnippets: true }]);
+  });
 });
 
 describe('a preview that is not available reads as not available, never an error that degrades the turn', () => {
@@ -156,7 +175,17 @@ describe('staging only', () => {
   it('production config names no MCP server and keeps button-free reads off', () => {
     const production = env as { WALDO_ENVIRONMENT?: string; WALDO_MCP_SERVERS?: string; MCP_READ_INTENTS?: string };
     expect(production.WALDO_ENVIRONMENT).toBe('production');
-    expect(production.WALDO_MCP_SERVERS).toBeUndefined();
+    expect(production.WALDO_MCP_SERVERS).toBe('[]');
+    expect(mcpServers(production.WALDO_MCP_SERVERS)).toEqual([]);
     expect(production.MCP_READ_INTENTS).toBe('0');
+  });
+});
+
+describe('the staging registry', () => {
+  // The owner approved button-free reads of Gmail, Calendar and Drive metadata only; Docs, Sheets and Slides bodies are not.
+  it('names exactly the Gmail, Calendar and Drive servers, each narrowed to its reads', () => {
+    const staging = mcpServers((parseJsonc(config) as { env: { staging: { vars: { WALDO_MCP_SERVERS: string } } } }).env.staging.vars.WALDO_MCP_SERVERS);
+    expect(staging.map((s) => s.url)).toEqual([GMAIL, CALENDAR, DRIVE]);
+    for (const s of staging) expect(s.allow_tools).toEqual(GOOGLE_MCP_SERVERS.find((g) => g.url === s.url)!.read_tools);
   });
 });

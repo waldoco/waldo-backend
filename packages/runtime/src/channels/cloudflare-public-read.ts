@@ -10,6 +10,9 @@ export type CloudflarePageReader = (args: BrowsePageArgs, context: ToolDispatche
 // Existing 30s work, 10s cleanup and 10s provider idle expiry after disconnect.
 export const PUBLIC_READ_RESERVED_BROWSER_MS=50000;
 export type PublicReadReservation = Readonly<{ settle(durationMs: number): void }>;
+// A reservation refusal no retry changes, reported as rejected. Its message reaches the model as written, so it names
+// what to do next and carries no identifiers.
+export class PublicReadRefusal extends Error {}
 // Preserve the pinned Playwright request default while vetting each hop manually.
 const PLAYWRIGHT_REDIRECT_LIMIT = 20;
 const CLEANUP_ABSENCE_ATTEMPTS = 4;
@@ -145,7 +148,10 @@ export function cloudflarePublicRead(options: Readonly<{ binding: BrowserWorker;
         else if (!text.trim()) result = failure('not_found', 'The page returned no readable content.');
         else result = { ok: true, data: { url, provider: 'cloudflare_playwright', data: { title, text } }, source_taint: 'external' };
       }
-    } catch (cause) { result = failure('transient', cause instanceof ProviderFailure ? cause.message : 'The Cloudflare browser read failed or its source permission changed.'); }
+    } catch (cause) {
+      result = cause instanceof PublicReadRefusal ? failure('rejected', cause.message)
+        : failure('transient', cause instanceof ProviderFailure ? cause.message : 'The Cloudflare browser read failed or its source permission changed.');
+    }
     finally {
       // Cleanup does not depend on source admission. connect.close only disconnects;
       // Browser.close and an absence readback are required to certify termination.

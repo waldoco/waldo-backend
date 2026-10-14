@@ -33,6 +33,7 @@ import {
   getCommunicationArgsSchema,
   readThreadArgsSchema,
   searchCommunicationArgsSchema,
+  searchContactsArgsSchema,
   listArtifactsArgsSchema,
   readArtifactArgsSchema,
   skillsListArgsSchema, skillsVersionArgsSchema,
@@ -66,6 +67,7 @@ import {
   searchEpisodesArgsSchema,
   searchToolsArgsSchema,
   sendMessageArgsSchema,
+  useMacArgsSchema,
   browseActArgsSchema, delegateTaskArgsSchema,
   browsePageArgsSchema,
   cancelReminderArgsSchema,
@@ -158,12 +160,14 @@ const halt = (reason: string, code: ErrorCode): HookResult => ({
 });
 
 export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object.freeze({
+  use_mac: useMacArgsSchema,
   get_crs: getCrsArgsSchema,
   get_health: getHealthArgsSchema,
   connect_service: connectServiceArgsSchema,
   query_calendar: queryCalendarArgsSchema,
   get_communication: getCommunicationArgsSchema,
   search_communication: searchCommunicationArgsSchema,
+  search_contacts: searchContactsArgsSchema,
   read_thread: readThreadArgsSchema,
   create_artifact: createArtifactArgsSchema,
   revise_artifact: reviseArtifactArgsSchema,
@@ -445,6 +449,9 @@ export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
         ? halt(TAINT_NEEDS_APPROVAL_REASON, 'forbidden')
         : halt('external-tainted privileged action blocked', 'forbidden');
     }
+
+    // This admits a request only; native Mac custody authorizes each effect.
+    if (tool.data === 'use_mac') return ok();
 
     if (ctx.hasApproval === undefined) {
       return halt('approval check unavailable', 'forbidden');

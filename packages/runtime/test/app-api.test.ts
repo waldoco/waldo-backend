@@ -152,11 +152,12 @@ describe('main chat transcript page', () => {
     expect(older.messages[2]!.channel).toBe('telegram');
     expect(older.next_cursor).toBeNull();
   });
-  it('shows a stored receipt as a part and drops its line from the text, only when the text ends with exactly that line', () => {
+  it('shows a stored receipt as a part and keeps its line in the text, byte for byte the part\'s fallback', () => {
     const receipt = { line: 'Done: reminder set', items: [{ kind: 'reminder_set', target: null, outcome: 'accepted' as const, via_task: false, at: Date.UTC(2026, 9, 13, 8), digest: null }], more: 0 };
     const part = { type: 'receipt', items: receipt.items, more: 0, fallback_text: 'Done: reminder set' };
     const shown = (appPayload: string) => appTranscriptPage([{ ...entry(20, 'assistant', 'app'), appPayload, receipt }], null, 5).messages[0]!;
-    expect(shown('Set for 9.\n\nDone: reminder set')).toMatchObject({ text: 'Set for 9.', parts: [{ type: 'text', text: 'Set for 9.' }, part] });
+    expect(shown('Set for 9.\n\nDone: reminder set')).toMatchObject({ text: 'Set for 9.\n\nDone: reminder set', parts: [{ type: 'text', text: 'Set for 9.\n\nDone: reminder set' }, part] });
+    expect(shown('Set for 9.\n\nDone: reminder set').text.endsWith(`\n\n${part.fallback_text}`)).toBe(true);
     expect(shown('Set for 9. Done: reminder set')).toMatchObject({ text: 'Set for 9. Done: reminder set', parts: [{ type: 'text' }, part] });
     expect(shown('\n\nDone: reminder set')).toMatchObject({ text: '\n\nDone: reminder set', parts: [{ type: 'text' }, part] });
     expect(appTranscriptPage([entry(21, 'assistant', 'app')], null, 5).messages[0]!.parts).toEqual([{ type: 'text', text: 'text 21' }]);

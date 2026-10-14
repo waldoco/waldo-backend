@@ -9,6 +9,11 @@ export type ConversationRole = 'user' | 'assistant';
 
 export type ConversationModelMessage = Readonly<{ role: ConversationRole; content: string }>;
 
+// A compaction row summarises the span of original rows it covers, for the model's view only. Its role lives on the
+// entry alone: a model message never carries it, so no provider adapter can receive it on the wire.
+export type ConversationEntryRole = ConversationRole | 'compaction';
+export type ConversationCovers = Readonly<{ from_id: string; to_id: string; rows: number }>;
+
 export type ConversationEntry = Readonly<{
   id: string;
   ownerId: string;
@@ -21,7 +26,10 @@ export type ConversationEntry = Readonly<{
   modelProjection: ConversationProjection;
   // Stamped by the conversation path that appends the entry. Optional only for rows stored
   // before the seam existed; modelContext derives those from the assistant-entry id convention.
-  role?: ConversationRole;
+  role?: ConversationEntryRole;
+  // The original rows a compaction row carries, directly or through the summary it superseded: the first and last row
+  // ids on the chain and how many rows that is. Kept when the row is superseded or omitted, so a forget can find the span.
+  covers?: ConversationCovers;
   // Canonical owner-history ingress evidence; older rows remain unstamped.
   inputOrigin?: 'owner' | 'machine';
   // Epoch ms when the path that appends the entry made it. Rows stored before the time was kept have none.
@@ -94,6 +102,21 @@ export const literalJsonTextRedactor = (
   };
 };
 
+export const COMPACTION_SUMMARY_CLOSE = '[End of summary.]';
+export const compactionSummaryOpen = (rows: number): string => `[Waldo's summary of ${rows} earlier messages in this conversation; not the owner's words:]`;
+// The model sees a compaction row as one user message that names itself as a summary, so nothing grounds on it as the
+// owner's own words. The labels are part of the record, not of any one renderer.
+export const compactionMessage = (entry: ConversationEntry, text: string = entry.modelPayload): ConversationModelMessage =>
+  ({ role: 'user', content: `${compactionSummaryOpen(entry.covers?.rows ?? 0)}\n${text}\n${COMPACTION_SUMMARY_CLOSE}` });
+
+// The model's view of rows in chain order: each row's projection, with a compaction row rendered as its labelled summary.
+export const conversationModelMessages = (entries: readonly ConversationEntry[]): readonly ConversationModelMessage[] => entries.flatMap((entry) => {
+  const role = entry.role ?? (entry.id.endsWith('-reply') ? 'assistant' : 'user');
+  const projected = entry.modelProjection.mode === 'omit' ? null : entry.modelProjection.mode === 'replace' ? entry.modelProjection.payload : entry.modelPayload;
+  if (projected === null) return [];
+  return [role === 'compaction' ? compactionMessage(entry, projected) : { role, content: projected }];
+});
+
 export const redactConversationEntry = (entry: ConversationEntry, redact: (value: string) => string): ConversationEntry => ({
   ...entry,
   modelPayload: redact(entry.modelPayload), appPayload: redact(entry.appPayload),
@@ -162,18 +185,25 @@ export class ConversationTree {
   }
 
   modelContext(leafId: string): readonly ConversationModelMessage[] {
-    return this.path(leafId).flatMap((entry) => {
-      const role = entry.role ?? (entry.id.endsWith('-reply') ? 'assistant' : 'user');
-      switch (entry.modelProjection.mode) {
-        case 'include': return [{ role, content: entry.modelPayload }];
-        case 'omit': return [];
-        case 'replace': return [{ role, content: entry.modelProjection.payload }];
-      }
-    });
+    return conversationModelMessages(this.path(leafId));
   }
 
+  // The owner's transcript never carries a compaction row.
   appContext(leafId: string): readonly string[] {
-    return this.path(leafId).map((entry) => entry.appPayload);
+    return this.path(leafId).filter((entry) => entry.role !== 'compaction').map((entry) => entry.appPayload);
+  }
+
+  // Every row the tree holds, in no order; a reader that needs the chain walks path().
+  values(): IterableIterator<ConversationEntry> {
+    return this.entries.values();
+  }
+
+  // Rewrites one row in place (a compaction row superseded by a newer one); its id and links never change.
+  replace(entry: ConversationEntry): void {
+    const current = this.entries.get(entry.id);
+    if (!current) throw new Error('conversation entry not found');
+    if (current.parentId !== entry.parentId || current.threadAnchorId !== entry.threadAnchorId) throw new Error('conversation entry links cannot change');
+    this.entries.set(entry.id, Object.freeze({ ...entry, modelProjection: Object.freeze({ ...entry.modelProjection }) }));
   }
 
   private ancestorIds(parentId: string | null): string[] {

@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { beforeEach, expect, it, vi } from 'vitest';
 const calls = vi.hoisted(() => ({ order: [] as string[], replyInputs: [] as string[], onFirstReply: undefined as undefined | (() => void), outputs: [] as unknown[][] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
@@ -25,7 +26,7 @@ const setup = (opts: { memoryWrites?: boolean; fail?: boolean; throws?: boolean;
     return { ok: true, data: { id: 1, status: 'stored' }, source_taint: null };
   } };
   const responder = createOwnerResponder('fixture', store as never, memory as never, undefined, undefined, [remember, ...(opts.loops ? loopHandlers(loopBook as never) : [])] as never);
-  const run = (text: string) => responder.respond({ traceId: 'tg-1', conversationRef: 'owner', surface: 'telegram', text, ...(opts.memoryWrites === undefined ? {} : { memoryWrites: opts.memoryWrites }) }, (_name, work) => work());
+  const run = (text: string) => responder.respond(ownerTyped({ traceId: 'tg-1', conversationRef: 'owner', surface: 'telegram', text, ...(opts.memoryWrites === undefined ? {} : { memoryWrites: opts.memoryWrites }) }), (_name, work) => work());
   return { responder, run, saved, writes };
 };
 beforeEach(() => { calls.order = []; calls.replyInputs = []; calls.outputs = []; calls.onFirstReply = undefined; });

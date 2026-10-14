@@ -8,7 +8,7 @@ const binding = { fetch: async (url, init) => {
 globalThis.__fixtureWorkerEnv = { BROWSER: binding };
 const sdk = await import('@cloudflare/playwright');
 const result = await cloudflarePublicRead({ binding, loadSdk: async () => sdk })(
-  { url: 'https://example.com/menu', instruction: 'Read menu', provider: 'cloudflare_playwright' },
+  { url: 'https://example.com/menu', instruction: 'Read menu' },
   { authenticatedUserId: 'owner-a', egressAllowlist: ['*'], assertTaskSourceCurrent: async () => {} },
 );
 process.stdout.write(JSON.stringify({ calls, result }));

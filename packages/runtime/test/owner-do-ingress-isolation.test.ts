@@ -53,6 +53,9 @@ vi.mock('../src/run-loop/do',async load=>{
 });
 
 const outbox: { method: string; body: Record<string, unknown> }[] = [];
+// An approval card is the message carrying an approve button; its text is the review itself, with no fixed prefix.
+const approvalCard = (item: { method: string; body: Record<string, unknown> }) => item.method === 'sendMessage'
+  && ((item.body.reply_markup as { inline_keyboard?: { callback_data?: string }[][] } | undefined)?.inline_keyboard?.flat().some((button) => button.callback_data?.startsWith('a:')) ?? false);
 const modelInputs: unknown[] = [];
 let onCommonOriginalBeforeClassify:(()=>Promise<void>)|undefined;
 let commonWorkspaceJourney=false;let commonRealHostJourney=false;
@@ -116,6 +119,15 @@ vi.mock('openai', () => ({
         else if(!create)call={name:'workspace_write',arguments:JSON.stringify({path:'checklist.md',text:revised?'Short comparison: A has 10, B has 20 fictional tokens.':'Private comparison: Option A has 10 fictional tokens. Option B has 20 fictional tokens.',mime:'text/markdown',expected_revision:revised?listed.data.files.find((f:any)=>f.path==='checklist.md').revision:0}),call_id:'common-write'};
         else if(!read)call={name:'workspace_read',arguments:JSON.stringify({file_id:create.data.file_id,revision:create.data.revision}),call_id:'common-read'};
         return {id:`fixture-${modelInputs.length}`,output_text:call?'':'Private checklist saved and read back.',output:call?[{type:'function_call',...call}]:[],usage:{input_tokens:1,output_tokens:1,input_tokens_details:{cached_tokens:0}}};
+      }
+      // Forward-during-a-turn fixture: the first turn takes a second round, and any round that reads the forwarded text
+      // tries to remember it as the owner's words.
+      const forwardFixture = JSON.stringify(body);
+      if (!name && forwardFixture.includes('FORWARD-SYNTHETIC') && !forwardFixture.includes('fixture-forward-remember')) {
+        return { id: `fixture-${modelInputs.length}`, output_text: '', output: [{ type: 'function_call', call_id: 'fixture-forward-remember', name: 'remember', arguments: JSON.stringify({ kind: 'fact', text: 'Has a sister called Mira', evidence_quote: 'my sister is called Mira' }) }], usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
+      }
+      if (!name && forwardFixture.includes('PARENT-SYNTHETIC') && !forwardFixture.includes('FORWARD-SYNTHETIC') && !forwardFixture.includes('fixture-parent-context')) {
+        return { id: `fixture-${modelInputs.length}`, output_text: '', output: [{ type: 'function_call', call_id: 'fixture-parent-context', name: 'get_context', arguments: '{}' }], usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
       }
       const text = name === 'task_source_scope' ? typeof taskDecision === 'string' ? taskDecision : JSON.stringify(taskDecision) : name === 'claim_ops'
         ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}'
@@ -581,7 +593,7 @@ describe('real owner-DO ingress in a sealed test world', () => {
     outbox.length = 0; modelInputs.length = 0;
     const update = 300000 + ++sequence * 10;
     expect((await send(81101, 'Propose a fixture calendar event, but do not commit it.', update)).status).toBe(200);
-    const cards = outbox.filter((item) => item.method === 'sendMessage' && String(item.body.text).startsWith('Proposed:'));
+    const cards = outbox.filter((item) => approvalCard(item));
     expect(sourceWorld.outbox('a@example.invalid')).toEqual([]);
     expect(cards).toHaveLength(1);
     expect(cards[0]!.body.chat_id).toBe(81101);
@@ -624,14 +636,14 @@ describe('real owner-DO ingress in a sealed test world', () => {
     expect(await ledgerState()).toEqual([{ kind: 'calendar_change', status: 'skipped' }]);
     expect(outbox.some((item) => item.method === 'answerCallbackQuery' && item.body.callback_query_id === `fixture-query-${update + 4}` && item.body.text === 'Already handled.')).toBe(true);
     expect((await send(81101, 'Propose a fixture calendar event, but do not commit it.', update)).status).toBe(200);
-    expect(outbox.filter((item) => item.method === 'sendMessage' && String(item.body.text).startsWith('Proposed:'))).toHaveLength(1);
+    expect(outbox.filter((item) => approvalCard(item))).toHaveLength(1);
   });
   it('intercepts a calendar provider write only after the bound owner approves the card', async () => {
     sourceWorld = new IsolatedSourceWorld({ clock: '2026-09-29T13:00:00Z', owners: [{ id: 'a@example.invalid' }, { id: 'b@example.invalid' }], sources: {} });
     interceptCalendarEffects = true; outbox.length = 0; modelInputs.length = 0;
     const update = 400000 + ++sequence * 10;
     expect((await send(81101, 'Propose a fixture calendar event for my review.', update)).status).toBe(200);
-    const card = outbox.find((item) => item.method === 'sendMessage' && String(item.body.text).startsWith('Proposed:'))!.body;
+    const card = outbox.find((item) => approvalCard(item))!.body;
     const keyboard = card.reply_markup as { inline_keyboard: { callback_data: string }[][] };
     const approve = keyboard.inline_keyboard.flat().find((button) => button.callback_data.startsWith('a:'))!.callback_data;
     expect(sourceWorld.outbox('a@example.invalid')).toEqual([]);
@@ -820,6 +832,82 @@ it('target execution throw after consumed steer never completes the child',async
     await internal.drainInbox();expect((await inbox.records()).find(r=>r.id===childId)?.state).toBe('quarantined');expect((await inbox.records()).find(r=>r.id===childId)?.reason).toBe('consumed_target_outcome_uncertain');internal.turn=original;await state.storage.deleteAlarm();
   });
 });
+
+it('a forward that arrives while a turn runs is its own labelled turn: no steer, and its text never grounds an owner claim', async () => {
+  const subject = 81101;
+  const parentId = 994441;
+  const childId = parentId + 1;
+  const forwarded = 'FORWARD-SYNTHETIC: my sister is called Mira';
+  let steers = 0;
+  const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
+  const { persistInboxWake } = await import('../src/scheduler/alarm-slot');
+  const { claimStore } = await import('../src/memory/claims');
+  await runInDurableObject(doStub(subject), async (instance, state) => {
+    const binding = { bot: 'hermetic-test-bot-token', subject: String(subject), doName: route(subject).doName };
+    await state.storage.put({ telegram_subject: String(subject), do_name: route(subject).doName });
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    await inbox.admit(binding, parentId, JSON.stringify({ update_id: parentId, message: { message_id: parentId, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: 'PARENT-SYNTHETIC: plan my evening.' } }));
+    onFixtureReply = async () => {
+      const control = (instance as unknown as { runtimes: { telegram: { control: import('../src/channels/turn-control').TurnControl } } }).runtimes.telegram.control;
+      const original = control.steerTarget.bind(control);
+      control.steerTarget = (...args) => { steers += 1; return original(...args); };
+      // The shape the Bot API server sends: forward_origin beside the legacy forward fields.
+      const sam = { id: 4242, is_bot: false, first_name: 'Sam' };
+      const response = await instance.fetch(new Request('https://telegram-owner/enqueue', { method: 'POST', headers: { 'x-waldo-inbox-secret': 'hermetic-test-webhook-secret', 'x-waldo-telegram-subject': String(subject), 'x-waldo-do-name': route(subject).doName }, body: JSON.stringify({ update_id: childId, message: { message_id: childId, date: 1_700_000_100, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: forwarded, forward_origin: { type: 'user', date: 1_700_000_000, sender_user: sam }, forward_from: sam, forward_date: 1_700_000_000 } }) }));
+      expect(response.status).toBe(200);
+      control.steerTarget = original;
+    };
+    await (instance as unknown as { drainInbox(): Promise<void> }).drainInbox();
+    await vi.waitFor(async () => {
+      await instance.alarm();
+      // Done once both have finished, whether the forward was steered into the first turn or ran as its own.
+      const finished = (await inbox.records()).filter(row => [parentId, childId].includes(row.updateId) && ['consumed', 'completed', 'quarantined'].includes(row.state));
+      expect(finished).toHaveLength(2);
+    }, { timeout: 20_000, interval: 50 });
+    expect.soft(steers).toBe(0);
+    expect.soft(JSON.stringify(modelInputs)).toContain(JSON.stringify(`[Forwarded by the owner from someone else:]\n${JSON.stringify(forwarded)}\n[End of forwarded text.]`).slice(1, -1));
+    expect.soft(claimStore(state.storage.sql).allClaims().map(claim => claim.text)).not.toContain('Has a sister called Mira');
+    await state.storage.deleteAlarm();
+  });
+}, 30_000);
+
+it.each([{ command: '/fire nightly', updateId: 994461 }, { command: '/stop', updateId: 994462 }])('a forwarded $command is someone else\'s text: it runs as one labelled turn, never as the owner\'s command', async ({ command, updateId }) => {
+  const subject = 81101;
+  let commands = 0;
+  const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
+  const { persistInboxWake } = await import('../src/scheduler/alarm-slot');
+  await runInDurableObject(doStub(subject), async (instance, state) => {
+    await state.storage.put({ telegram_subject: String(subject), do_name: route(subject).doName });
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    const internal = instance as unknown as { runHarness: () => Promise<string>; drainInbox(): Promise<void>; turn: (update: { update_id?: number }, ...rest: unknown[]) => Promise<void> };
+    const runHarness = internal.runHarness;
+    const turn = internal.turn;
+    let scoped: boolean | undefined;
+    internal.runHarness = async () => { commands += 1; return 'HARNESS-RAN'; };
+    // Every turn runs under its run's scope; only a command takes the direct path, without one.
+    internal.turn = async (update, ...rest) => { if (update.update_id === updateId) scoped = rest[2] !== undefined; return turn.call(instance, update, ...rest); };
+    const before = outbox.length;
+    // The shape the Bot API server sends: forward_origin beside the legacy forward fields.
+    const sam = { id: 4242, is_bot: false, first_name: 'Sam' };
+    const response = await instance.fetch(new Request('https://telegram-owner/enqueue', { method: 'POST', headers: { 'x-waldo-inbox-secret': 'hermetic-test-webhook-secret', 'x-waldo-telegram-subject': String(subject), 'x-waldo-do-name': route(subject).doName }, body: JSON.stringify({ update_id: updateId, message: { message_id: updateId, date: 1_700_000_100, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: command, forward_origin: { type: 'user', date: 1_700_000_000, sender_user: sam }, forward_from: sam, forward_date: 1_700_000_000 } }) }));
+    expect(response.status).toBe(200);
+    await internal.drainInbox();
+    await vi.waitFor(async () => {
+      await instance.alarm();
+      expect(['completed', 'quarantined']).toContain((await inbox.records()).find(row => row.updateId === updateId)?.state);
+    }, { timeout: 20_000, interval: 50 });
+    const row = (await inbox.records()).find(row => row.updateId === updateId)!;
+    const replies = outbox.slice(before).filter(item => item.method === 'sendMessage').map(item => String(item.body.text));
+    expect.soft(commands).toBe(0);
+    expect.soft(replies).not.toContain('Nothing is running right now.');
+    expect.soft(row.state).toBe('completed');
+    expect.soft(scoped).toBe(true);
+    expect.soft(JSON.stringify(modelInputs)).toContain(JSON.stringify(`[Forwarded by the owner from someone else:]\n${JSON.stringify(command)}\n[End of forwarded text.]`).slice(1, -1));
+    internal.runHarness = runHarness;
+    internal.turn = turn;
+    await state.storage.deleteAlarm();
+  });
+}, 30_000);
 
 it.each([false, true])('accepted concurrent forget after the final model round has a consumed or visible child outcome (target stopped=%s)', async (stopped) => {
   const subject = 81101;

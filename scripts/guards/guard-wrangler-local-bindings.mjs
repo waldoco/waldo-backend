@@ -8,6 +8,7 @@
 //    (durable_objects, ratelimits, migrations, ...) plus its own ai/vectorize.
 //    The 2026-09-25 deploy shipped staging with ONLY ai+vectorize and healthz 404'd.
 import { readFileSync } from 'node:fs';
+import { parseJsonc } from '../jsonc.mjs';
 
 const path = process.env.WRANGLER_CONFIG_PATH ?? 'packages/runtime/wrangler.jsonc';
 const raw = readFileSync(path, 'utf8');
@@ -17,8 +18,7 @@ for (const key of ['"ai"', '"vectorize"']) {
 }
 
 // comment/trailing-comma-tolerant parse for the structural checks
-const text = raw.replace(/\/\/[^\n]*/g, '').replace(/,(\s*[}\]])/g, '$1');
-const cfg = JSON.parse(text);
+const cfg = parseJsonc(raw);
 const staging = cfg?.env?.staging;
 // Fetch invocation logs persist the full URL, including /c/<ticket> and OAuth callback
 // code/state. Automatic traces also include url.full/url.path. Until #205 removes those
@@ -68,10 +68,10 @@ for (const [envName, envCfg] of Object.entries(cfg?.env ?? {})) {
   if (!hasLimiter(envCfg)) bad.push(`env.${envName} missing RESPONSIBILITY_RATE_LIMITER (console signup fails closed without it)`);
 }
 
-// 4. The staging browser binding stays OFF in source until the network-side block is proven
-//    (owner decision 2026-10-06, S0 live test). An enabled binding here ships on the next
-//    Workers Builds promote. Turn it on only in the PR that records a passing S0 run.
-if (staging?.browser !== undefined) bad.push('env.staging must not bind a browser until the S0 network-block test passes');
+// 4. Staging browses through Cloudflare Browser Rendering, bound as BROWSER, by owner ruling; the S0 network-block
+//    test no longer gates it. Production binds no browser: a binding there would ship on the next promote.
+if (JSON.stringify(staging?.browser) !== JSON.stringify({ binding: 'BROWSER' })) bad.push('env.staging must bind Cloudflare Browser Rendering as BROWSER');
+if (cfg.browser !== undefined) bad.push('the top-level (production) config must not bind a browser');
 
 if (bad.length) {
   process.stderr.write(`guard-wrangler-local-bindings: ${bad.join('; ')}\n`);

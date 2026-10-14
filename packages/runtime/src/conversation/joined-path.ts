@@ -6,7 +6,7 @@ import {
   type TrustedInvocationEnvelope,
 } from '@waldo/contracts';
 import type { ContextComposer, RuntimeOwnedContextInputs } from '../context-composer';
-import { windowModelMessages, type ConversationWindowStats } from './window';
+import { compactedHistory, type CompactedStats } from './compaction';
 
 export type JoinedConversationModel = Readonly<{
   complete(request: Readonly<{
@@ -43,7 +43,7 @@ export class JoinedConversationPath {
     private readonly model: JoinedConversationModel,
     private readonly tree = new ConversationTree(),
     private readonly publications = new Map<string, JoinedConversationPublication>(),
-    private readonly observers?: { onWindow?: (stats: ConversationWindowStats) => void },
+    private readonly observers?: { onWindow?: (stats: CompactedStats) => void },
   ) {}
 
   async submit(request: JoinedConversationRequest): Promise<JoinedConversationPublication> {
@@ -65,8 +65,8 @@ export class JoinedConversationPath {
     if (!composition.ok) throw new Error(`conversation context failed: ${composition.failure.code}`);
     // F1: bound the model input before the call - the full ancestor path grows without limit
     // otherwise, and provider-side overflow is a failed turn (paper audit, arXiv 2609.20804).
-    const history = taskHistoryMessages(this.tree, request.userEntry.id, request.historyStartRef);
-    const windowed = windowModelMessages(history);
+    // With compaction on, a live summary row is kept ahead of the window instead of being its first casualty.
+    const windowed = compactedHistory(this.tree, request.userEntry.id, request.historyStartRef);
     this.observers?.onWindow?.(windowed.stats);
     request.runScope?.admit();
     const text = await this.model.complete({

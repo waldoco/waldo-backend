@@ -15,7 +15,7 @@ export const telegramTurnEnvelope = (turn: TelegramInboundTurn, surface = 'teleg
   surface,
   presentation: { surface, delivery: { text: true, approval: surface === 'telegram' || surface === 'app' ? 'native_buttons' : surface === 'whatsapp' ? 'text_callback' : 'none', reactions: surface === 'telegram', attachments: false }, commands: surface === 'telegram' ? ['/stop','/ledger'] : [] },
   text: turn.text,
-  ...(turn.sourceQuoteRanges ? { sourceQuoteRanges: turn.sourceQuoteRanges } : {}),
+  parts: turn.parts,
   ...(turn.runScope ? { runScope: turn.runScope } : {}),
   ...(turn.replyTo ? { replyTo: turn.replyTo } : {}),
 });
@@ -33,12 +33,12 @@ export const createTelegramResponder = (...args: [...AdapterArgs, surface?: stri
     turn.runScope?.admit();
     const media = turn.media ? await time('media', () => loadTelegramMedia(turn.media!, readers ?? {})) : undefined;
     turn.runScope?.admit();
-    return core.respond({ ...envelope(turn), ...(media?.note ? { mediaNote: media.note } : {}), ...(media?.attachment ? { attachment: media.attachment } : {}) }, time);
+    return core.respond({ ...envelope(turn), parts: [...turn.parts, ...(media?.parts ?? [])], ...(media?.attachment ? { attachment: media.attachment } : {}) }, time);
   };
   return {
     ...core, respond,
     chooseReaction: (turn: TelegramInboundTurn) => core.chooseReaction(envelope(turn)),
     remind: (id: string, chatId: number, note: string, time: TurnTimer) => core.remind(id, surfaceChatRef(surface, chatId), note, time, surface),
-    prompt: (id: string, chatId: number, said: string, time: TurnTimer, toolNames?: Parameters<typeof core.prompt>[5], current?: Parameters<typeof core.prompt>[6], decision?: Parameters<typeof core.prompt>[7], turnContext?: string) => core.prompt(id, surfaceChatRef(surface, chatId), said, time, surface, toolNames, current, decision, turnContext),
+    prompt: (id: string, chatId: number, said: string, time: TurnTimer, toolNames?: Parameters<typeof core.prompt>[5], current?: Parameters<typeof core.prompt>[6], decision?: Parameters<typeof core.prompt>[7], turnContext?: string, sourceTaint?: Parameters<typeof core.prompt>[9]) => core.prompt(id, surfaceChatRef(surface, chatId), said, time, surface, toolNames, current, decision, turnContext, sourceTaint),
   };
 };
