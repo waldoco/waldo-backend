@@ -112,7 +112,9 @@ it('forgetting the Google name hides it from the next turn, both lines, and afte
     try {
       await connect(owner, state);
       await send(owner, state, name, 'what should you call me?');
-      for (const request of repliesTo('what should you call me?')) {
+      const before = repliesTo('what should you call me?');
+      expect(before.length, 'the owner turn reached the model').toBeGreaterThan(0);
+      for (const request of before) {
         expect(count(request.system ?? '', LABEL), 'before the forget the name line is there').toBe(1);
         expect(request.system).toContain(ON_RECORD);
       }
