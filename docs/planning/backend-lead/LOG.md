@@ -536,3 +536,35 @@ How to track this session: `git fetch origin claude/backend-lead-log && git show
   2. **`delivery-gate` `:1042`, `:1385` and `:1526`:** each built from one `utcOccurrence()` base plus offsets. Red first: a forced straddle across midnight.
   3. **The browser diagnostic:** the comment says the stored state narrows down which check refused, the message carries `reason`, and the body gives the corrected throw sites, verified against source.
 - **Lead builders running:** voice note (`session_01QXnd3q5gQB4XSfmjGEHQor`), threads stack (`session_01BkU4n3GtzKKoUoxw5jbbjF`), #1217 follow-up (`session_01PNcex4YGtqPqLPr5KYbWoc`). Each posts its head on #1103 and goes through the gate.
+
+## 15:18Z (from `date -u`): threads ruling; the gap page; seven hours of landings by other gates; staging at `7f202f2b`; deploy recommendation; G62 builder
+
+- **Threads ruling (6166267816, 10:27Z):** option 1a. Per-turn recall's episodes leg keeps only hits on the turn's own chain, through an entry-to-chain lookup in the canonical store. No schema change; `search_episodes` stays owner-wide. Sent to the threads builder (`session_01BkU4n3GtzKKoUoxw5jbbjF`). The stack then landed: #1173 → `ad2a6c7a`, #1176 → `01190451`, #1179 → `00e85861` (the review session's PASS at `509a2a33`). App threads are complete.
+- **The gap page (Shivansh's ask):** filled the tab "Claude, backend lead: not covered yet" (file `b8d07da0-1d02`) in the doc `6hoEoMEoTyYHq8raQk3Nir`. Method:
+  - four readers (master plan, Instinct, harness, live plans) at `3c4d3fae`;
+  - synthesis, then a verifier against the tip and page 1;
+  - a completeness critic, whose 11 rows were verified again: 9 kept, 7 of them corrected, 2 dropped (the push sender is page 1's #1177; a cleared messaging route is a platform-terms call). G46 was withdrawn under the 10 October trace ruling.
+  
+  Content:
+  - 61 gaps by pillar (13 S, 30 M, 18 L), each with tip citations;
+  - the 60-row Instinct parity (12 matched, 31 partial, 17 missing);
+  - A1–A16 (0 met, 12 partial, 4 unmet);
+  - a what-gates-what diagram;
+  - the owner decisions as a checklist (G6 ticked).
+  
+  No health values, emails or staging URL on the page.
+- **Landed while this session was down (worker restarts), each by its own gate, recorded not re-verified:**
+  - #1221 → `49669c49` (migration `20261014060000` applied on staging by the Mac);
+  - #1222 → `e87c74a0`, #1220 → `37dc205d`, #1226 → `d591b7da` (the review session's lane);
+  - #1213 → `86f2bc23`, #1229 → `a6d305f8`, #1218 → `4c41871c`;
+  - #1173, #1233 → `1d01dbd0`, #1176;
+  - #1224 → `fe2e07dc` and #1225 → `7f202f2b` (Ashish; migration `20261014120000`);
+  - #1237 → `93cc94eb`, #1236 → `2482fd21`, #1230 → `1b061312`, #1179 → `00e85861`, #1239 → `5dd49945`.
+- **Staging** is the tip `7f202f2b`, version `6ef62710`, deployed at 13:52Z with no deploy record (6170214997). The owner's 15:00Z ruling binds every lane: no user-facing slash commands and no Telegram-only path; Waldo fixes things by natural language or a console link (6171369798). Gmail push on connect is not working on staging. The Mac is building `mac/push-upkeep` (6171619694).
+- **Deploy recommendation posted (6171719250):** `5dd49945` when push CI is 6 of 6, else `00e85861` (green). It is Worker-only: no migration, `wrangler.jsonc` or edge change since `7f202f2b`. Rollback `6ef62710`. Gain: #1230's latency (harness: 29.3 s to 2.76 s outside the model on a 3-round turn), #1236, #1179 and #1239. Acceptance after deploy: S3 or S2 re-run.
+- **New lead builder `session_01Bx6zreUsnAv5MAZN13mYGf`: G62, bounded history load per turn.** Branch `claude/bounded-history-load`, draft only, stays out of `owner-do.ts`. It needs red-first read counts on a 5,000-row chain and equivalence tests. Picked because it needs no owner decision and no hot file, and it compounds #1230's latency win.
+- **Order for the rest of today:**
+  1. #1234 (delta review at `bc0f86af`; gates A2);
+  2. `mac/push-upkeep`;
+  3. A2 the moment #1234 lands (the lead starts a builder if the Mac's core lane is still busy);
+  4. reviews owed on #1228, #1242, #1240/#1227.
