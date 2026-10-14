@@ -62,6 +62,7 @@ import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, claimStore, profile } from '../memory/claims';
 import { isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine } from './loops';
 import { armHeartbeat, HEARTBEAT_EVERY_MS, heartbeatTick, heartbeatEligible, settleHeartbeat } from './heartbeat';
+import { dueFailureNotices, failurePauseHolds, markFailureNoticed } from '../scheduler/failure-notice';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
 import { consoleAuth, presenceRecheck, type OwnerSettings } from '../identity/console-auth';
@@ -187,6 +188,7 @@ type OwnerRuntime = Readonly<{
   settleFinal(record: FinalRecord): Promise<void>;
   fire(entry: ScheduleEntry): Promise<void | 'delivery_pending'>;
   beat(entry: ScheduleEntry): Promise<void | 'delivery_pending'>;
+  noticeFailures(): Promise<void>;
   nightly(entry: ScheduleEntry): Promise<void>;
   briefs(entry: ScheduleEntry): Promise<void>;
   cards(entry: ScheduleEntry): Promise<void>;
@@ -1555,7 +1557,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           return;
         }
       }
-      const { scheduler, fire, beat, nightly, briefs, cards, fireOrder, ready, log, finalOutbox, settleFinal } = this.setup(channel);
+      const { scheduler, fire, beat, nightly, briefs, cards, fireOrder, noticeFailures, ready, log, finalOutbox, settleFinal } = this.setup(channel);
       await ready;
       await lane('mac', () => this.drainMacDeliveries());
       await lane('transport', () => finalOutbox.maintain());
@@ -1597,9 +1599,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
               && this.ctx.storage.kv.get<boolean>(`${surface}_unlinked`) !== true
               && (!r.mailFollowup || (loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume !== 'low' && loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).reviewEligible(r.mailFollowup, this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')))
               && (!r.calendarPrep || await runtime.calendarPrepCurrent(r.calendarPrep))
+              && (!r.scheduleNotice || failurePauseHolds(this.ctx.storage.sql, r.scheduleNotice))
               && heartbeatEligible(r, this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC', Date.now()),
             defer: async r => {
               if(r.commonExecution&&!r.commonExecution.settled)return Date.now()+30_000;
+              if (r.scheduleNotice && isQuiet(loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity(), Date.now(), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')) return Date.now() + 10 * 60_000;
               // Frozen source-derived outputs cannot replay retained facts while coverage is unproved.
               // Keep bytes and transport state intact; current owner replies use a separate lane.
               if ((r.mailFollowup || r.calendarPrep) && !runtime.retainedRecallAvailable()) return Math.min(Date.now() + 10 * 60_000, r.expiresAt ?? r.createdAt + 86400000);
@@ -1622,6 +1626,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // Telegram keeps it only for an owner with no app binding. A refusal holds the whole scheduled pass, never falling back
         // to Telegram: a revoked account runs nothing, and an outage asks again without spending attempts.
         let executors = { reminder: fire, heartbeat: beat, dreaming: nightly, pre_activity_spot: briefs, brief: cards, standing_order: fireOrder };
+        // A paused job's notice goes out from the runtime that ran the jobs, so it lands where their messages do.
+        let notices = noticeFailures;
         if (channel === 'telegram' && consoleAuth(this.env) && this.appBound()) {
           const appOwner = await this.appOwnerLookup();
           if (appOwner.kind !== 'admitted') {
@@ -1633,6 +1639,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const app = this.setup('app');
           await app.ready;
           executors = { ...executors, reminder: app.fire, heartbeat: app.beat, pre_activity_spot: app.briefs, brief: app.cards, standing_order: app.fireOrder };
+          notices = app.noticeFailures;
         }
         const started = Date.now();
         let fired: readonly ScheduleEntry[];
@@ -1654,6 +1661,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const late = started - entry.due_at;
           if (late > LATE_FIRE_MS) log({ trace: `${entry.id}:${entry.occurrence_at}`, hop: 'late_fire', ms: late, ok: false, error: `${entry.kind} fired ${Math.round(late / 60_000)} min late` });
         }
+        await notices();
       });
     });
   }
@@ -2785,6 +2793,26 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         throw error;
       }
     };
+    // A job the scheduler paused after its runs failed three times in a row says so in its fixed line, through the final outbox
+    // addressed like the heartbeat's message. The notice lapses when the pause ends or is lifted. A record already queued
+    // under the notice's id (a pass that died before marking it) is marked, never queued again.
+    const noticeFailures = async () => {
+      try {
+        const now = Date.now();
+        for (const notice of dueFailureNotices(storage.sql, storage.kv, now, clock.timezone)) {
+          if (notice.text !== null && !finalOutbox.records().some(record => record.id === notice.id)) {
+            await finalOutbox.enqueue({ id: notice.id, trace: notice.id, payload: { chat_id: owner, text: notice.text }, ownerSubject: String(owner),
+              doName: this.ctx.storage.kv.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0], expiresAt: notice.until,
+              scheduleNotice: { scheduleId: notice.scheduleId, until: notice.until } });
+          }
+          markFailureNoticed(storage.kv, notice, now);
+          log({ trace: notice.id, hop: 'schedule_notice', ms: 0, ok: true, code: notice.kind, ...(notice.text === null ? { detail: 'capped' } : {}) });
+        }
+      } catch (error) {
+        // The jobs in this lane never wait on a notice: one that can't be queued is tried again on the next scheduled pass.
+        log({ trace: 'schedule-failed', hop: 'schedule_notice', ms: 0, ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+    };
     // Memory learns from the conversation since the last pass that finished, oldest first and a bounded chunk at a time, so
     // a night that failed or never ran is caught up later. Only a consolidated chunk moves the mark.
     const consolidateBacklog = async (trace: string, now: number): Promise<'done' | 'more' | 'failed'> => {
@@ -3125,7 +3153,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (delivered && record.reaction) await api.setMessageReaction({ chat_id: record.payload.chat_id,
         message_id: record.reaction.message_id, reaction: [{ type: 'emoji', emoji: record.reaction.emoji }] }).catch(() => undefined);
     };
-    const runtime: OwnerRuntime = { macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, nightly, briefs, cards, updateCheck, calendarPrepCurrent, retainedRecallAvailable: () => memory.incompleteTopics().length === 0, traces, log, google,
+    const runtime: OwnerRuntime = { macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, cards, updateCheck, calendarPrepCurrent, retainedRecallAvailable: () => memory.incompleteTopics().length === 0, traces, log, google,
       view: async (session, notice, page) => {
         const linked = await google.state();
         const tracePage = traces.rowsPage(clock.timezone, 60, page?.traceBefore);
