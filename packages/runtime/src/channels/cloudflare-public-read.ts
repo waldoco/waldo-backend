@@ -1,9 +1,10 @@
-import type { Browser, BrowserContext, BrowserWorker, Page } from '@cloudflare/playwright';
+import type { Browser, BrowserContext, BrowserWorker, Page, Request } from '@cloudflare/playwright';
 import type { BrowsePageArgs, ToolResult } from '@waldo/contracts';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import { EGRESS_TARGET_PATHS, OPEN_PUBLIC, evaluateDeclaredEgress } from '../hooks/egress-policy';
 import { cloudflareBrowserGuardOptions } from './cloudflare-browser-adapter';
 import { browserBoundedJson } from './browser-bounded-body';
+import { prepareGeneralPublicRead } from './general-browser-public-read';
 import type { CloudflareBrowserSdkLoader } from './public-fixture-browser';
 
 export type CloudflarePageReader = (args: BrowsePageArgs, context: ToolDispatcherContext) => Promise<ToolResult<Readonly<{ url: string; provider: 'cloudflare_playwright'; data: { title: string; text: string } }>>>;
@@ -17,6 +18,19 @@ export class PublicReadRefusal extends Error {}
 const PLAYWRIGHT_REDIRECT_LIMIT = 20;
 const CLEANUP_ABSENCE_ATTEMPTS = 4;
 const CLEANUP_ABSENCE_INTERVAL_MS = 250;
+// Pages that render with script need more than domcontentloaded. The settle waits follow Cloudflare's playwright-mcp
+// (load, up to 5 s) and Stagehand (500 ms with no request in flight, capped at 5 s, a stalled request stops counting
+// after 2 s). Each stops early enough to leave the content read its share of the 30 s work deadline.
+const NAVIGATION_TIMEOUT_MS = 20000;
+const LOAD_WAIT_MS = 5000;
+const QUIET_WINDOW_MS = 500;
+const QUIET_CAP_MS = 5000;
+const STALLED_REQUEST_MS = 2000;
+const SCROLL_QUIET_CAP_MS = 2000;
+const EMPTY_TEXT_RECHECK_MS = 3000;
+const SETTLE_RESERVE_MS = 5000;
+const UNREAD_RESOURCE_TYPES = new Set(['image', 'media', 'font']);
+const STREAMING_RESOURCE_TYPES = new Set(['websocket', 'eventsource']);
 type ReadStage = 'setup' | 'allocation' | 'connection' | 'context' | 'navigation' | 'content';
 class ProviderFailure extends Error {}
 const diagnostic = async (response: Response) => {
@@ -95,20 +109,22 @@ export function cloudflarePublicRead(options: Readonly<{ binding: BrowserWorker;
       await admit();
       readStage = 'context';
       privateContext = await bounded(() => browser!.newContext({ serviceWorkers: 'block' }));
+      if (!await bounded(() => prepareGeneralPublicRead(privateContext!))) throw Error('browser context is not private');
       await bounded(() => privateContext!.route('**/*', async route => {
         try {
           await admit();
-          const url = new URL(route.request().url());
-          // The provider guard remains pinned to the requested host. Cross-host
-          // navigation requires a new owner-authorized read, never implicit widening.
-          if (url.hostname === target.hostname && allowed(url.href) && route.request().method() === 'GET') {
+          const request = route.request(), url = new URL(request.url());
+          // Top-level navigation, a popup's included, stays on the requested host: moving elsewhere takes a new
+          // owner-authorized read. Scripts, styles, frames and XHR may come from any host that passes egress.
+          const topLevel = request.isNavigationRequest() && !request.frame().parentFrame();
+          if (allowed(url.href) && !UNREAD_RESOURCE_TYPES.has(request.resourceType()) && (!topLevel || (url.hostname === target.hostname && request.method() === 'GET'))) {
             // route.continue only checks the first URL in a redirect chain. Fetch
-            // without following redirects so a same-host private port cannot bypass egress.
+            // without following redirects so a redirect to a private host cannot bypass egress.
             const response = await route.fetch({ maxRedirects: 0, timeout: 10000 });
             await admit();
             if (response.status() >= 300 && response.status() < 400) {
               const location = response.headers()['location'];
-              if (location && route.request().isNavigationRequest() && route.request().frame() === page?.mainFrame()) navigationRedirect = new URL(location, url).href;
+              if (location && request.isNavigationRequest() && request.frame() === page?.mainFrame()) navigationRedirect = new URL(location, url).href;
               await route.abort('blockedbyclient');
             }
             else await route.fulfill({ response });
@@ -119,6 +135,31 @@ export function cloudflarePublicRead(options: Readonly<{ binding: BrowserWorker;
       await admit();
       page = await bounded(() => privateContext!.newPage());
       page.setDefaultTimeout(10000);
+      const inFlight = new Map<Request, number>();
+      let lastActivity = -Infinity;
+      page.on('request', request => { if (!STREAMING_RESOURCE_TYPES.has(request.resourceType())) { inFlight.set(request, Date.now()); lastActivity = Date.now(); } });
+      const settled = (request: Request) => { if (inFlight.delete(request)) lastActivity = Date.now(); };
+      page.on('requestfinished', settled); page.on('requestfailed', settled);
+      const settleBy = (capMs: number) => Math.min(Date.now() + capMs, workDeadline - SETTLE_RESERVE_MS);
+      const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, Math.max(0, ms)));
+      // A wait that runs out is not a failure: the read goes ahead with whatever the page has rendered.
+      const waitUpTo = async (capMs: number, work: () => Promise<unknown>) => {
+        const stop = settleBy(capMs);
+        if (stop <= Date.now()) return;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try { await Promise.race([work().catch(() => {}), new Promise<void>(resolve => { timer = setTimeout(resolve, stop - Date.now()); })]); }
+        finally { clearTimeout(timer); }
+      };
+      const networkQuiet = async (capMs: number) => {
+        const stop = settleBy(capMs);
+        for (;;) {
+          const now = Date.now();
+          for (const [request, startedAt] of inFlight) if (now - startedAt >= STALLED_REQUEST_MS) inFlight.delete(request);
+          const quietFor = now - lastActivity;
+          if ((!inFlight.size && quietFor >= QUIET_WINDOW_MS) || now >= stop) return;
+          await pause(Math.min(inFlight.size ? 100 : QUIET_WINDOW_MS - quietFor, stop - now));
+        }
+      };
       await admit();
       readStage = 'navigation';
       let nextUrl = args.url, response: Awaited<ReturnType<Page['goto']>> = null;
@@ -127,13 +168,19 @@ export function cloudflarePublicRead(options: Readonly<{ binding: BrowserWorker;
         if (!allowed(nextUrl) || new URL(nextUrl).hostname !== target.hostname || visited.has(nextUrl) || visited.size > PLAYWRIGHT_REDIRECT_LIMIT) throw Error('browser redirect rejected');
         visited.add(nextUrl); navigationRedirect = undefined;
         await admit();
-        try { response = await bounded(() => page!.goto(nextUrl, { waitUntil: 'domcontentloaded', timeout: 10000 })); }
+        try { response = await bounded(() => page!.goto(nextUrl, { waitUntil: 'domcontentloaded', timeout: Math.max(1, Math.min(NAVIGATION_TIMEOUT_MS, workDeadline - Date.now())) })); }
         catch (cause) { if (!navigationRedirect) throw cause; }
         if (!navigationRedirect) break;
         // A new top-level navigation checks each target before I/O; no fresh
         // session, grant or transport retry. The original run deadline bounds chains.
         nextUrl = navigationRedirect;
       }
+      await admit();
+      await waitUpTo(LOAD_WAIT_MS, () => page!.waitForLoadState('load'));
+      await networkQuiet(QUIET_CAP_MS);
+      // One scroll brings in content that loads as it comes into view.
+      await waitUpTo(SCROLL_QUIET_CAP_MS, () => page!.evaluate(() => { const view = globalThis as any; view.scrollTo(0, view.document.body.scrollHeight); }));
+      await networkQuiet(SCROLL_QUIET_CAP_MS);
       await admit();
       const url = page.url();
       if (!allowed(url) || new URL(url).hostname !== target.hostname) result = failure('rejected', 'The page moved outside the selected public browser target.');
@@ -142,8 +189,15 @@ export function cloudflarePublicRead(options: Readonly<{ binding: BrowserWorker;
         readStage = 'content';
         const title = await bounded(() => page!.title());
         await admit();
-        const text = await bounded(() => page!.locator('body').innerText());
+        let text = await bounded(() => page!.locator('body').innerText());
         await admit();
+        // A page that is still rendering can show an empty body after the waits; look once more before calling it empty.
+        if (!text.trim() && settleBy(EMPTY_TEXT_RECHECK_MS) - Date.now() >= EMPTY_TEXT_RECHECK_MS) {
+          await pause(EMPTY_TEXT_RECHECK_MS);
+          await admit();
+          text = await bounded(() => page!.locator('body').innerText());
+          await admit();
+        }
         if (page.url() !== url) result = failure('rejected', 'The page moved during the read.');
         else if (!text.trim()) result = failure('not_found', 'The page returned no readable content.');
         else result = { ok: true, data: { url, provider: 'cloudflare_playwright', data: { title, text } }, source_taint: 'external' };
