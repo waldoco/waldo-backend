@@ -3,8 +3,9 @@ import type { ReplyContext } from './owner-turn-envelope';
 import type { TelegramMedia } from './telegram-polling';
 
 // Who wrote each part of a message the owner sent. Adapters set it only from what the transport states for
-// certain (quote markup, a forward's origin, a transcript the host made), never from reading the words.
-export const INBOUND_AUTHORSHIPS = ['owner', 'quoted', 'forwarded', 'file_transcript', 'media_note'] as const;
+// certain (quote markup, a forward's origin, a transcript the host made), never from reading the words. A voice note the
+// owner recorded in the chat is their own words, as transcribed; a file's transcript may be anyone's.
+export const INBOUND_AUTHORSHIPS = ['owner', 'quoted', 'forwarded', 'file_transcript', 'owner_voice', 'media_note'] as const;
 export type InboundAuthorship = (typeof INBOUND_AUTHORSHIPS)[number];
 export type InboundPart = Readonly<{ authorship: InboundAuthorship; text: string }>;
 export type InboundSpan = Readonly<{ start: number; end: number }>;
@@ -34,6 +35,7 @@ const LABELS: Readonly<Record<Exclude<InboundAuthorship, 'owner' | 'media_note'>
   quoted: ['[Quoted by the owner; not their words:]', '[End of quote.]'],
   forwarded: ['[Forwarded by the owner from someone else:]', '[End of forwarded text.]'],
   file_transcript: ['[Transcript of a file the owner sent; the speaker may not be the owner:]', '[End of transcript.]'],
+  owner_voice: ['[Voice note the owner recorded; their own words, as transcribed:]', '[End of voice note.]'],
 };
 
 const joined = (blocks: readonly Readonly<{ text: string; foreign: boolean }>[], separator: string): InboundView => {
@@ -53,9 +55,10 @@ const joined = (blocks: readonly Readonly<{ text: string; foreign: boolean }>[],
 
 // The stored and indexed view: no labels. Text parts are pieces of one message and join as they arrived; a
 // file's note and transcript each start a line, and the transcript says it is one, so history reads on its own.
+// The owner's own voice note stays foreign here: a mis-heard word must not become memory without their typed words.
 export const receivedView = (parts: readonly InboundPart[]): InboundView => joined(parts.map((part, index) => {
   const line = index > 0 ? '\n' : '';
-  const text = part.authorship === 'file_transcript' ? `${line}Transcript: ${part.text}` : part.authorship === 'media_note' ? `${line}${part.text}` : part.text;
+  const text = part.authorship === 'file_transcript' || part.authorship === 'owner_voice' ? `${line}Transcript: ${part.text}` : part.authorship === 'media_note' ? `${line}${part.text}` : part.text;
   return { text, foreign: part.authorship !== 'owner' };
 }), '');
 

@@ -22,7 +22,7 @@ const time = <T>(_hop: string, work: () => Promise<T>) => work();
 const cases: readonly { name: string; media: TelegramMedia; text: string; note: string; stored?: string; image: boolean }[] = [
   { name: 'downloaded photo', media: { kind: 'photo', fileId: 'photo-fixture', fileName: null, mimeType: 'image/jpeg', fileSize: 3 }, text: "What's on my calendar?", note: '[Owner sent a photo, attached.]', image: true },
   { name: 'attachment note without readable bytes', media: { kind: 'document', fileId: 'archive-fixture', fileName: 'notes.zip', mimeType: 'application/zip', fileSize: 3 }, text: "What's on my calendar?", note: '[Owner sent a file "notes.zip". This file type cannot be read yet.]', image: false },
-  { name: 'voice-only calendar request', media: { kind: 'voice', fileId: 'voice-fixture', fileName: 'voice.ogg', mimeType: 'audio/ogg', fileSize: 3 }, text: '', note: "[Owner sent a voice note.]\n[Transcript of a file the owner sent; the speaker may not be the owner:]\n\"What's on my calendar?\"\n[End of transcript.]", stored: "[Owner sent a voice note.]\nTranscript: What's on my calendar?", image: false },
+  { name: 'voice-only calendar request', media: { kind: 'voice', fileId: 'voice-fixture', fileName: 'voice.ogg', mimeType: 'audio/ogg', fileSize: 3 }, text: '', note: "[Owner sent a voice note.]\n[Voice note the owner recorded; their own words, as transcribed:]\n\"What's on my calendar?\"\n[End of voice note.]", stored: "[Owner sent a voice note.]\nTranscript: What's on my calendar?", image: false },
 ];
 
 beforeEach(() => { model.requests = []; model.queryCalendar = true; });

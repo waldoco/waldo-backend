@@ -52,11 +52,20 @@ describe('telegram media', () => {
     const voice = { kind: 'voice' as const, fileId: 'v', fileName: 'voice.ogg', mimeType: 'audio/ogg', fileSize: 10 };
     const seen: string[] = [];
     const heard = await loadTelegramMedia(voice, { download: async () => new Uint8Array([1]), transcribe: async (_audio, name, mime) => { seen.push(name, mime); return ' move gym to 7 '; } });
-    expect(heard).toEqual({ parts: [{ authorship: 'media_note', text: '[Owner sent a voice note.]' }, { authorship: 'file_transcript', text: 'move gym to 7' }] });
+    expect(heard).toEqual({ parts: [{ authorship: 'media_note', text: '[Owner sent a voice note.]' }, { authorship: 'owner_voice', text: 'move gym to 7' }] });
     expect(seen).toEqual(['voice.ogg', 'audio/ogg']);
     expect(await loadTelegramMedia(voice, { download: async () => new Uint8Array([1]), transcribe: async () => '  ' })).toEqual({ parts: [{ authorship: 'media_note', text: '[Owner sent a voice note with no speech that could be made out.]' }] });
     expect(await loadTelegramMedia(voice, { download: async () => new Uint8Array([1]), transcribe: async () => { throw new Error('403'); } })).toEqual({ parts: [{ authorship: 'media_note', text: '[Owner sent a voice note, but it could not be transcribed.]' }] });
     expect(await loadTelegramMedia(voice, { download: async () => new Uint8Array([1]) })).toEqual({ parts: [{ authorship: 'media_note', text: '[Owner sent a voice note, but voice reading is not set up here.]' }] });
+  });
+
+  it('only the owner\'s own voice note is their voice: a forwarded voice note and an audio file stay a file\'s transcript', async () => {
+    const readers = { download: async () => new Uint8Array([1]), transcribe: async () => 'move gym to 7' };
+    const voice = { kind: 'voice' as const, fileId: 'v', fileName: 'voice.ogg', mimeType: 'audio/ogg', fileSize: 10 };
+    expect(await loadTelegramMedia({ ...voice, forwarded: true }, readers)).toEqual({ parts: [{ authorship: 'media_note', text: '[Owner sent a forwarded voice note.]' }, { authorship: 'file_transcript', text: 'move gym to 7' }] });
+    const audio = { kind: 'audio' as const, fileId: 'a', fileName: 'sam.m4a', mimeType: 'audio/mp4', fileSize: 10 };
+    expect((await loadTelegramMedia(audio, readers)).parts[1]).toEqual({ authorship: 'file_transcript', text: 'move gym to 7' });
+    expect((await loadTelegramMedia({ ...audio, forwarded: true }, readers)).parts[1]).toEqual({ authorship: 'file_transcript', text: 'move gym to 7' });
   });
 
   it('posts audio to the transcription endpoint and surfaces failures without the key', async () => {

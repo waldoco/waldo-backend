@@ -50,7 +50,8 @@ export const toBase64 = (bytes: Uint8Array): string => {
 };
 
 // The note joins the conversation so later turns know what was shared; the bytes ride only on the turn
-// that received them. A transcript is its own part: the speaker may be someone other than the owner.
+// that received them. A transcript is its own part. A voice note the owner recorded is their own voice; an audio
+// file or a forwarded voice note may be anyone's.
 export const loadTelegramMedia = async (media: TelegramMedia, { download, transcribe }: MediaReaders): Promise<LoadedMedia> => {
   const what = `${media.forwarded ? 'forwarded ' : ''}${label(media)}`;
   if (media.kind === 'voice' || media.kind === 'audio') return transcribeMedia(media, what, download, transcribe);
@@ -72,7 +73,8 @@ const transcribeMedia = async (media: TelegramMedia, what: string, download?: Te
   if (!download || !transcribe) return { parts: noted(`[Owner sent a ${what}, but voice reading is not set up here.]`) };
   try {
     const text = (await transcribe(await download(media.fileId), media.fileName ?? 'audio', media.mimeType ?? 'application/octet-stream')).trim();
-    return { parts: text.length > 0 ? [...noted(`[Owner sent a ${what}.]`), { authorship: 'file_transcript', text }] : noted(`[Owner sent a ${what} with no speech that could be made out.]`) };
+    const authorship = media.kind === 'voice' && !media.forwarded ? 'owner_voice' : 'file_transcript';
+    return { parts: text.length > 0 ? [...noted(`[Owner sent a ${what}.]`), { authorship, text }] : noted(`[Owner sent a ${what} with no speech that could be made out.]`) };
   } catch {
     return { parts: noted(`[Owner sent a ${what}, but it could not be transcribed.]`) };
   }
