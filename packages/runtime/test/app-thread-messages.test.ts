@@ -165,6 +165,24 @@ describe('a thread message', () => {
     });
   });
 
+  it('main\'s receipt and Stop never reach a thread\'s message, and the thread\'s never reach main\'s', async () => {
+    await withOwner('thread-main-stop', async ({ call, state, thread, say }) => {
+      const id = await thread();
+      await say('/chat/main', 'main-client-01', 'Main note.');
+      let release!: () => void;
+      model.hold = new Promise(resolve => { release = resolve; });
+      const sent = await call('POST', `/threads/${id}/messages`, { client_message_id: 'thread-client-01', text: 'Plan the week, take your time.', expected_revision: 1 });
+      await vi.waitFor(() => expect(model.held).toBe(1), { timeout: 10_000, interval: 20 });
+      expect(await call('GET', '/chat/main/messages/thread-client-01')).toEqual({ status: 404, body: { error: 'unavailable' } });
+      expect(await call('POST', '/chat/main/messages/thread-client-01/cancel')).toEqual({ status: 404, body: { error: 'unavailable' } });
+      expect((await call('POST', `/threads/${id}/messages/main-client-01/cancel`)).body).toEqual({ error: 'message_not_found' });
+      release();
+      await vi.waitFor(() => expect(state.storage.kv.get<AppInboxRecord>(`app:inbox-record:${sent.body.message_id}`)?.state).toBe('completed'), { timeout: 10_000, interval: 20 });
+      expect(texts(await shown(call, `/threads/${id}`))).toEqual(['Plan the week, take your time.', 'Noted.']);
+      expect(appMessageReceiptV1Schema.parse((await call('GET', '/chat/main/messages/main-client-01')).body).state).toBe('completed');
+    });
+  });
+
   it('queued behind another reply, never runs once its thread is archived', async () => {
     await withOwner('thread-fence-queued', async ({ call, state, thread }) => {
       const busy = await thread(), queued = await thread();
