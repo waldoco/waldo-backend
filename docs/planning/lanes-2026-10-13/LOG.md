@@ -2355,3 +2355,9 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 - **`merge-tree`** is clean against #1192, #1149 and the tip.
 - **The red CI at `d9c95943`** was a runner fault: port 54322 in use.
 - Board post: 6157744096. Lane T is done.
+
+## 00:28Z — delta reviews: #1110 and #1182 PASS WITH NITS
+
+- #1182 merged as `9589435b`. Its four mediums (the `gi` regex `.test()`, forget through a summary of summaries, unbounded compaction input, the eval bar of seven probes counted as ten) are now B2 requirements.
+- #1110 at `4705f2a0` is ready for the lead to merge. M-1 is still open and must land before or with #1120.
+- Board post: the comment after 6157744096.
