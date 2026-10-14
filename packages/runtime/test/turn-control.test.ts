@@ -23,7 +23,7 @@ describe('turn control', () => {
     control.steer(2, 'make it Friday instead');
     expect(control.round()).toContain('the owner added: "make it Friday instead"');
     control.steer(3, 'arrived after the last round');
-    expect(control.end()).toEqual(['make it Friday instead']);
+    expect(control.end()).toEqual([{ text: 'make it Friday instead', foreignRanges: [] }]);
     expect(control.absorbed(2)).toBe(true);
     expect(control.absorbed(2)).toBe(false);
     expect(control.absorbed(3)).toBe(false);
@@ -60,7 +60,7 @@ it('failed durable consumption never exposes steer text and a target stop never 
 });
 it('target-scoped stop and steer cannot hit the next running turn after an await', async()=>{
   const control=turnControl();control.bindTarget('first');control.begin(true);control.end();control.bindTarget('second');control.begin(true);
-  expect(control.stopTarget('first')).toBe(false);expect(control.steerTarget('first',1,'old')).toBe(false);expect(await control.roundAsync()).toBe('');expect(control.stopTarget('second')).toBe(true);expect(await control.roundAsync()).toBeNull();
+  expect(control.stopTarget('first')).toBe(false);expect(control.steerTarget('first',1,{text:'old',foreignRanges:[]})).toBe(false);expect(await control.roundAsync()).toBe('');expect(control.stopTarget('second')).toBe(true);expect(await control.roundAsync()).toBeNull();
 });
 
 it('reports steers that arrived after the last round as unconsumed, so the host can answer them', () => {
@@ -71,7 +71,7 @@ it('reports steers that arrived after the last round as unconsumed, so the host 
     control.round();
     control.steer(3, 'forget the rooms topic');
     control.end();
-    expect(control.unconsumed()).toEqual([{ id: 3, text: 'forget the rooms topic' }]);
+    expect(control.unconsumed()).toEqual([{ id: 3, text: 'forget the rooms topic', foreignRanges: [] }]);
     control.begin(true);
     expect(control.unconsumed()).toEqual([]);
 });
