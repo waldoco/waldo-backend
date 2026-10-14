@@ -4,7 +4,7 @@ import { BRIEF_SWEEP_ID } from '../src/channels/event-briefs';
 import { verifyCalendarChannel } from '../src/connectors/google-push';
 import type { ScheduleEntry } from '@waldo/contracts';
 
-const kv = () => { const map = new Map<string, unknown>(); return { get: <T>(key: string) => map.get(key) as T | undefined, put: (key: string, value: unknown) => { map.set(key, value); }, map }; };
+const kv = () => { const map = new Map<string, unknown>(); return { get: <T>(key: string) => map.get(key) as T | undefined, put: (key: string, value: unknown) => { map.set(key, value); }, delete: (key: string) => map.delete(key), map }; };
 const HOUR = 3_600_000;
 const SECRET = 'router-secret-fixture-0000000000';
 
@@ -121,5 +121,23 @@ describe('the watch is kept fresh on the sweep', () => {
     expect(await ensureCalendarWatch(base)).toBe('started');
     expect(new Headers((fetcher.mock.calls[0] as unknown as [string, RequestInit])[1].headers).get('authorization')).toBe('Bearer ya29.fixture');
     expect(base.proxy.calendarWatch).not.toHaveBeenCalled();
+  });
+});
+
+describe('Calendar watch after a new grant', () => {
+  it('clearing failures lets the next sweep retry a failed watch at once', () => {
+    const book = calendarPushBook(kv());
+    book.fail(0);
+    book.clearFailure();
+    expect(book.state()).toBeNull();
+  });
+
+  it('clearing failures leaves a live channel and its connection alone, so no second channel is started', () => {
+    const book = calendarPushBook(kv());
+    const live = { channelId: 'chan-1', resourceId: 'res-1', expiration: 100 * HOUR };
+    book.record(live, 'conn-1');
+    book.clearFailure();
+    expect(book.state()).toEqual(live);
+    expect(book.connection()).toBe('conn-1');
   });
 });

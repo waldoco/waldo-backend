@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
@@ -40,7 +41,7 @@ for (const name of scenarioNames) {
       const responder=createOwnerResponder(...args);
       for (const [index, tool] of skill.required_tools.entries()) {
         activeTool=tool; step=0; systems.length=0;
-        const reply=await responder.respond({traceId:`skill-${skill.name}-${index}`,conversationRef:'telegram-42',surface:'telegram',text:`Help me with ${skill.trigger_condition}`,runScope:scope,memoryWrites:false},async(_hop,work)=>work());
+        const reply=await responder.respond(ownerTyped({traceId:`skill-${skill.name}-${index}`,conversationRef:'telegram-42',surface:'telegram',text:`Help me with ${skill.trigger_condition}`,runScope:scope,memoryWrites:false}),async(_hop,work)=>work());
         expect(reply).toContain('Prepared with verified receipts.');
         expect(systems[0]).not.toContain(skill.body_markdown);
         expect(systems.slice(1).some(s=>s.includes(skill.body_markdown))).toBe(true);

@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { beforeEach, it, expect, vi } from 'vitest';
 const calls = vi.hoisted(() => ({ writer: 0, inputs: [] as string[], remember: 0 }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
@@ -15,7 +16,7 @@ const timer = <T>(_name: string, work: () => Promise<T>) => work();
 beforeEach(() => { calls.writer = 0; calls.inputs = []; calls.remember = 0; });
 
 it('host-selected memoryWrites:false blocks remember independent of owner prose', async () => {
-  const reply = await responder().respond({ traceId: 'optout', conversationRef: 'owner', surface: 'telegram', text: 'Synthetic hello', memoryWrites: false }, timer);
+  const reply = await responder().respond(ownerTyped({ traceId: 'optout', conversationRef: 'owner', surface: 'telegram', text: 'Synthetic hello', memoryWrites: false }), timer);
   expect(calls.inputs).toHaveLength(2);
   expect(calls.remember).toBe(0);
   expect(advertised()).toBe(false);
@@ -24,7 +25,7 @@ it('host-selected memoryWrites:false blocks remember independent of owner prose'
 });
 
 it('default behavior offers the memory tool but never runs an automatic writer or treats owner prose as host control', async () => {
-  const reply = await responder().respond({ traceId: 'default', conversationRef: 'owner', surface: 'telegram', text: 'No memory writes.' }, timer);
+  const reply = await responder().respond(ownerTyped({ traceId: 'default', conversationRef: 'owner', surface: 'telegram', text: 'No memory writes.' }), timer);
   expect(calls.inputs).toHaveLength(2);
   expect(advertised()).toBe(true);
   expect(calls.remember).toBe(1);
@@ -34,7 +35,7 @@ it('default behavior offers the memory tool but never runs an automatic writer o
 
 it('captures host control before any awaited reply and rejects a model write after envelope mutation', async () => {
   const turn = { traceId: 'mutation', conversationRef: 'owner', surface: 'telegram', text: 'Synthetic hello', memoryWrites: false };
-  const replying = responder().respond(turn, timer);
+  const replying = responder().respond(ownerTyped(turn), timer);
   turn.memoryWrites = true;
   await replying;
   expect(calls.inputs).toHaveLength(2);
@@ -46,7 +47,7 @@ it('captures host control before any awaited reply and rejects a model write aft
 it('captures host control before entering a scoped responder and rejects a model write after envelope mutation', async () => {
   const runScope = { runId: 'fixture-run', attempt: 'fixture-attempt', deadline: Date.now() + 30_000, signal: new AbortController().signal, admit: () => {}, commit: <T>(work: () => T) => work() };
   const turn = { traceId: 'scoped-mutation', conversationRef: 'owner', surface: 'telegram', text: 'Synthetic hello', memoryWrites: false, runScope };
-  const replying = responder().respond(turn, timer);
+  const replying = responder().respond(ownerTyped(turn), timer);
   turn.memoryWrites = true;
   await replying;
   expect(calls.inputs).toHaveLength(2);

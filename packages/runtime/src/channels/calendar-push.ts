@@ -6,7 +6,7 @@ import type { McpGoogleResolution } from '../tools/live/mcp';
 // The owner's Calendar push channel. A push never carries event data: it pulls the existing update
 // sweep forward, so the same quiet hours, preferences, delivery routing and update check apply.
 // The 10-minute poll stays as the fallback whenever there is no live channel.
-type Kv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void }>;
+type Kv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void; delete(key: string): unknown }>;
 type Stored = (CalendarWatch & Readonly<{ connection: string | null; highest: number }>) | Readonly<{ failedAt: number }>;
 const KEY = 'calendar_push';
 const WAKE_GAP_MS = 60_000;
@@ -21,6 +21,9 @@ export const calendarPushBook = (kv: Kv) => {
     connection: (): string | null | undefined => { const stored = read(); return stored && !('failedAt' in stored) ? stored.connection : undefined; },
     record: (watch: CalendarWatch, connection: string | null) => kv.put(KEY, { ...watch, connection, highest: 0 }),
     fail: (now: number) => kv.put(KEY, { failedAt: now }),
+    // A new grant may fix what failed, so the next sweep retries at once. A live channel is left alone: starting
+    // another while it lives would deliver every change twice.
+    clearFailure: () => { const stored = read(); if (stored && 'failedAt' in stored) kv.delete(KEY); },
     // Message numbers only grow per channel: a repeat or an older number is a redelivery.
     admit: (channelId: string, state: 'sync' | 'exists' | 'not_exists', messageNumber: number): 'wake' | 'ignore' => {
       const stored = read();

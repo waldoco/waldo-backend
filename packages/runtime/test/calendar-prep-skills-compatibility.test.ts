@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { expect, it } from 'vitest';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import { CALENDAR_PREP_FORMAT } from '../src/channels/event-briefs';
@@ -19,7 +20,7 @@ it('transient prep never loads or reuses an earlier owner skill procedure or its
   args[21] = { skills: { handlers: [], metadata: () => { metadataCalls++; return 'Reviewed owner skill metadata'; }, prompt: async () => { promptCalls++; return body; }, assertProcedureCurrent: async expected => { currentCalls++; if (revoked || expected !== body) throw new Error('owner skill revoked'); } } };
   const responder = createOwnerResponder(...args);
   const time = <T>(_hop: string, work: () => Promise<T>) => work();
-  await responder.respond({ traceId: 'owner-skill', conversationRef: 'owner', surface: 'telegram', text: 'Prepare my document', memoryWrites: false }, time);
+  await responder.respond(ownerTyped({ traceId: 'owner-skill', conversationRef: 'owner', surface: 'telegram', text: 'Prepare my document', memoryWrites: false }), time);
   expect(requests[0]!.request.system).toContain(body);
   expect(currentCalls).toBeGreaterThan(0);
   const before = { promptCalls, metadataCalls, currentCalls };

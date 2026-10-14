@@ -70,7 +70,7 @@ export class TelegramOwnerListener {
     const { api } = this.options;
     const chat_id = turn.chatId;
     this.options.log?.({ trace: ownerTurnTrace(this.options.surface ?? 'telegram', turn.updateId), hop: 'unsupported', ms: 0, ok: true, ...(turn.note === undefined ? {} : { detail: turn.note }) });
-    await api.sendMessage({ chat_id, text: this.options.unsupportedText ?? 'I can read text, photos, documents and voice notes here. Videos, stickers, forwards and some formatting do not come through yet.' }).catch(() => undefined);
+    await api.sendMessage({ chat_id, text: this.options.unsupportedText ?? 'I can read text, photos, documents and voice notes here. Videos, stickers and some formatting do not come through yet.' }).catch(() => undefined);
     if (turn.messageId !== null) {
       await api.setMessageReaction({ chat_id, message_id: turn.messageId, reaction: [{ type: 'emoji', emoji: '🤷' }] }).catch(() => undefined);
     }

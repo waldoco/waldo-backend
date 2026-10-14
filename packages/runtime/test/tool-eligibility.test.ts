@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import { WALDO_CHAT_MODEL, type ConnectIntent, type LLMToolCall } from '@waldo/contracts';
@@ -36,7 +37,7 @@ const turn = async (name: string, accounts: () => readonly Account[] | Promise<r
     args[3] = entry => { logs.push(entry); }; args[4] = clock;
     args[5] = [...googleHandlers(google, desk, clock), connectServiceHandler(google)] as never;
     args[6] = WALDO_CHAT_MODEL; args[9] = async intent => { offers.push(intent); return true; }; args[10] = gateway;
-    await createOwnerResponder(...args).respond({ traceId: `${name}-1`, conversationRef: 'telegram-42', surface: 'telegram', text: 'what is on my calendar today?', memoryWrites: false }, (_hop, work) => work());
+    await createOwnerResponder(...args).respond(ownerTyped({ traceId: `${name}-1`, conversationRef: 'telegram-42', surface: 'telegram', text: 'what is on my calendar today?', memoryWrites: false }), (_hop, work) => work());
   });
   return { offered, systems, offers, logs };
 };
