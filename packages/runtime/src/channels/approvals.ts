@@ -10,7 +10,7 @@ import type { TurnLogEntry } from './telegram-listener';
 import { MASK, isCredentialKey, maskedUrl, maskedValue } from './secret-fields';
 import { APP_REVIEW_MAX_CHARS, appApprovalPart, type AppApprovalPart } from './surfaces/app';
 import { replyApprovalPartV1Schema } from '@waldo/contracts';
-import { appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
+import { appApprovalExactV1Schema, appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
 
 export type TelegramCall = (method: string, body: object) => Promise<unknown>;
 export type CallbackQuery = Readonly<{ id: string; from: { id: number }; data?: string; message?: { message_id: number; chat: { id: number } } }>;
@@ -34,7 +34,8 @@ export const UNDO_WINDOW_MS = 10 * 60_000;
 export const PROPOSAL_TTL_MS = 12 * 60 * 60_000;
 
 // seen_start/seen_end: the event's time when the card was made, so a move shows what it moves from.
-type Stored = ProposeCalendarChangeArgs & { seen_etag?: string; seen_start?: string; seen_end?: string; seen_guests?: number; operation_ref?: string };
+// time_zone: the zone the review's times were written in.
+type Stored = ProposeCalendarChangeArgs & { seen_etag?: string; seen_start?: string; seen_end?: string; seen_guests?: number; operation_ref?: string; time_zone?: string };
 
 // B-tool-3: the exact thing the owner approved. The executor replays it in a fresh browser
 // session and re-reads the binding from the page before acting - a changed price/item/destination
@@ -207,7 +208,16 @@ const exactFor = (entry: LedgerRow): AppApprovalV1['exact'] => {
   if (entry.kind === 'browser_submit') return { scope: pageOf(p.url) };
   if (entry.kind === 'mcp_call') return { scope: `${p.tool} on the ${p.server} server` };
   if (entry.kind === 'google_task_change') return { task: googleTaskExact(googleTaskProposalSchema.parse(p)) };
-  return { changes: { action: p.action, title: p.title ?? null, start: p.start ?? null, end: p.end ?? null } };
+  const guestCount = p.action === 'create' ? p.attendees?.length ?? 0 : p.seen_guests ?? 0;
+  const first = { action: p.action, title: p.title ?? null, start: p.start ?? null, end: p.end ?? null };
+  // Each detail appears exactly when describe() wrote it into the frozen review. A detail that does not fit its
+  // schema (a provider time without an offset, say) drops the details, never the card: every build still sees it.
+  const detailed = { changes: { ...first,
+    ...(p.attendees?.length ? { guests: p.attendees } : {}), ...(guestCount ? { emails_guests: p.send_updates === 'all' } : {}),
+    ...(p.location ? { location: p.location } : {}), ...(p.calendar_id && p.calendar_id !== 'primary' ? { calendar: p.calendar_id } : {}),
+    ...(p.account ? { account: p.account } : {}), ...(p.action === 'move' && p.seen_start && p.seen_end ? { previous: { start: p.seen_start, end: p.seen_end } } : {}),
+    ...(p.time_zone ? { time_zone: p.time_zone } : {}) } };
+  return appApprovalExactV1Schema.safeParse(detailed).success ? detailed : { changes: first };
 };
 // The app's card, rendered from the ledger row and its presentation, so the payload has one stored form.
 const appPartOf = (entry: LedgerRow, shown: Readonly<{ actions: AppApprovalPart['actions']; payload_digest: string }>): AppApprovalPart => {
@@ -1005,7 +1015,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         const before = client && bound.event_id ? await client.event(bound.event_id, bound.calendar_id) : undefined;
         const seen = before?.etag;
         const seenTime = before && !before.all_day && before.start && before.end ? { seen_start: before.start, seen_end: before.end } : {};
-        const stored: Stored = { ...bound, ...(seen ? { seen_etag: seen } : {}), ...seenTime, ...(before?.attendees ? { seen_guests: before.attendees } : {}), ...(operationRef ? { operation_ref: operationRef } : {}) };
+        const stored: Stored = { ...bound, ...(seen ? { seen_etag: seen } : {}), ...seenTime, ...(before?.attendees ? { seen_guests: before.attendees } : {}), ...(operationRef ? { operation_ref: operationRef } : {}), time_zone: deps.timezone };
         const summary = `${describe(stored)}. ${bound.reason}`;
         sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'calendar_change', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(stored), deps.now());
         bindOrigin(id, originRunRef);

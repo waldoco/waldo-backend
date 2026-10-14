@@ -114,6 +114,12 @@ describe('app sign-in and main chat routes', () => {
       expect((await handleApp(new Request(`https://w.test/app/v1${path}`,{headers:{authorization:`Bearer ${CREDENTIAL}`}}),limited,auth))!.status).toBe(429);
     }
   });
+  it('forwards the contract revisions a build declares, and drops a value that does not parse', async () => {
+    forwards.length = 0;
+    const auth = fakeAuth().auth, read = (contract?: string) => handleApp(new Request('https://w.test/app/v1/approvals', { headers: { authorization: `Bearer ${CREDENTIAL}`, ...(contract === undefined ? {} : { 'x-waldo-app-contract': contract }) } }), env(), auth);
+    for (const contract of ['approvals=2', 'approvals=2,threads=3', undefined, 'approvals=two', 'approvals=2,approvals=2']) await read(contract);
+    expect(forwards.map(r => r.headers.get('x-waldo-app-contract'))).toEqual(['approvals=2', 'approvals=2,threads=3', null, null, null]);
+  });
   it('forwards approval reads and decisions to the credential owner DO, with decisions in their own rate bucket', async () => {
     forwards.length = 0; const keys: string[] = [];
     const counted = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async ({ key }: { key: string }) => { keys.push(key); return { success: true }; } } } as never;
