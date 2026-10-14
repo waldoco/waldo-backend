@@ -33,6 +33,18 @@ describe('query_availability free windows', () => {
       .toEqual([{ start: day('09:00'), end: day('10:00'), minutes: 60 }, { start: day('12:00'), end: day('18:00'), minutes: 360 }]);
   });
 
+  it('keeps a closing window exactly as long as asked', async () => {
+    expect(await freeWindows(IST, day('09:00'), day('18:00'), [block('09:00', '17:00')], 60)).toEqual([{ start: day('17:00'), end: day('18:00'), minutes: 60 }]);
+  });
+
+  it('starts and ends each window on a whole minute inside the free time, dropping one that then falls short', async () => {
+    const at = (hms: string) => `2026-10-14T${hms}+05:30`;
+    // 10:00:30 to 11:00:40 is just over an hour, but holds only 59 whole minutes.
+    expect(await freeWindows(IST, day('09:00'), day('18:00'), [{ start: at('09:00:00'), end: at('10:00:30') }, { start: at('11:00:40'), end: at('18:00:00') }], 60)).toEqual([]);
+    expect(await freeWindows(IST, day('09:00'), day('18:00'), [{ start: at('09:00:00'), end: at('10:00:30') }, { start: at('11:30:00'), end: at('18:00:00') }], 60))
+      .toEqual([{ start: day('10:01'), end: day('11:30'), minutes: 89 }]);
+  });
+
   it('treats an all-day block as busy all day', async () => {
     expect(await freeWindows(IST, day('09:00'), day('18:00'), [{ start: '2026-10-14T00:00:00+05:30', end: '2026-10-15T00:00:00+05:30' }], 30)).toEqual([]);
   });

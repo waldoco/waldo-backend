@@ -463,7 +463,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       if(Date.parse(observed.from)!==Date.parse(range.from)||Date.parse(observed.to)!==Date.parse(range.to))throw new Error('availability coverage differs');
       const unavailable=ids.filter(id=>!validFreeBusyCalendar(observed.calendars?.[id])||Boolean(observed.calendars[id]!.errors?.length));
       if(unavailable.length)return {status:'unknown' as const,from:range.from,to:range.to,timezone:clock.timezone,calendar_ids:ids,unavailable_calendar_ids:unavailable,free_windows:[],observed_at:clock.now().toISOString()};
-      return {status:'complete_provider_coverage' as const,from:range.from,to:range.to,timezone:clock.timezone,calendar_ids:ids,unavailable_calendar_ids:[],free_windows:ownerWindows(availabilityWindows(range,ids.flatMap(id=>observed.calendars[id]!.busy),windows,duration),clock.timezone),observed_at:clock.now().toISOString(),qualification:'Free according to queried calendars and supplied work windows; not a booking or guarantee of personal availability.'};
+      return {status:'complete_provider_coverage' as const,from:range.from,to:range.to,timezone:clock.timezone,calendar_ids:ids,unavailable_calendar_ids:[],free_windows:ownerWindows(availabilityWindows(range,ids.flatMap(id=>observed.calendars[id]!.busy),windows,duration),clock.timezone,duration),observed_at:clock.now().toISOString(),qualification:'Free according to queried calendars and supplied work windows; not a booking or guarantee of personal availability.'};
     },args.account),
   } satisfies ToolHandler<QueryAvailabilityArgs,unknown,ToolDispatcherContext>,
 

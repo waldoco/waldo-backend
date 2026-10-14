@@ -16,5 +16,9 @@ const zoned=(ms:number,timeZone:string)=>{
  const part=Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone,hourCycle:'h23',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',timeZoneName:'longOffset'}).formatToParts(new Date(ms)).map(p=>[p.type,p.value]));
  return `${part.year}-${part.month}-${part.day}T${part.hour}:${part.minute}:${part.second}${part.timeZoneName==='GMT'?'+00:00':part.timeZoneName!.slice(3)}`;
 };
-export const ownerWindows=(windows:readonly BusyInterval[],timeZone:string):readonly FreeWindow[]=>
- windows.map(w=>{const a=Date.parse(w.start),b=Date.parse(w.end);return {start:zoned(a,timeZone),end:zoned(b,timeZone),minutes:Math.floor((b-a)/60000)};});
+// Each window starts on the next whole minute and ends on the previous one, so an offered time is never inside a busy
+// second, and one that then holds fewer than duration minutes is dropped.
+export const ownerWindows=(windows:readonly BusyInterval[],timeZone:string,duration:number):readonly FreeWindow[]=>windows.flatMap(w=>{
+ const a=Math.ceil(Date.parse(w.start)/60000)*60000,b=Math.floor(Date.parse(w.end)/60000)*60000,minutes=(b-a)/60000;
+ return minutes>=duration?[{start:zoned(a,timeZone),end:zoned(b,timeZone),minutes}]:[];
+});
