@@ -102,6 +102,8 @@ export const toolNameSchema = z.enum([
   'use_mac',
   // search_contacts: the owner's Google contacts and other contacts, by name or address prefix.
   'search_contacts',
+  // send_progress_note: a short non-blocking note to the owner's chat while their own turn keeps working.
+  'send_progress_note',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -204,6 +206,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'query_calendar',
     'connect_service',
     'send_console_link',
+    'send_progress_note',
     'get_communication',
     'search_communication',
     'search_contacts',
