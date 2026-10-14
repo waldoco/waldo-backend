@@ -2384,3 +2384,5 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 - Staging is unchanged since 20:26Z.
 - The heartbeat cron was renewed as `54720d7e` with the current state.
 - The A1 questions are still open with the lead.
+
+- 01:18Z heartbeat: the review session passed #1193 (M4) with nits at `2824f791`, with no blocking findings; the lead merges it. The nits become follow-ups for the morning summary: errors after the deadline all read as timeouts; the explicit deadline parameter; the `onSettle` trace; nested `withCallDeadline`; `ERR_INVALID_THIS`. The tip is unchanged at `38beffd2`. The A1 questions are still open.
