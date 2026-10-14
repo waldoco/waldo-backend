@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { onlyArtifacts, quarantineArtifacts } from '../security/artifact-hygiene';
 // WhatsApp Cloud API surface (WHATSAPP_CHANNEL_SPEC W2-W4): the raw caller for the webhook's
 // link-code replies, the telegram-shaped send shim the owner DO wraps in the same
@@ -79,10 +80,20 @@ export const createWhatsAppMediaDownloader = (token: string, fetcher: typeof fet
 
 export const WA_UPDATE_BASE = 9_000_000_000_000;
 
-export type WaIngressMessage = Readonly<{ id?: string; from?: string; type?: string; text?: { body?: string }; audio?: { id?: string; mime_type?: string; voice?: boolean }; image?: { id?: string; mime_type?: string; caption?: string } }>;
+// The Cloud API marks a forward in a message's context, which can also carry reply context: only the two flags are read.
+const waForwardContextSchema = z.object({ forwarded: z.boolean().optional(), frequently_forwarded: z.boolean().optional() });
+
+export type WaIngressMessage = Readonly<{ id?: string; from?: string; type?: string; context?: Readonly<z.infer<typeof waForwardContextSchema>>; text?: { body?: string }; audio?: { id?: string; mime_type?: string; voice?: boolean }; image?: { id?: string; mime_type?: string; caption?: string } }>;
 export type WaSyntheticUpdate = Readonly<Record<string, unknown>>;
 
-// Pure normalization for /whatsapp-turn: each of the owner's text messages becomes a
+// A context that does not match the schema counts as a forward: text Waldo cannot vouch for is never the owner's command.
+export const whatsappForwarded = (message: WaIngressMessage): boolean => {
+  if (message.context === undefined) return false;
+  const context = waForwardContextSchema.safeParse(message.context);
+  return !context.success || context.data.forwarded === true || context.data.frequently_forwarded === true;
+};
+
+// Normalization for /whatsapp-turn: each of the owner's text messages becomes a
 // telegram-shaped update (subject digits double as the numeric owner/chat id; ids live in the
 // 9e12 namespace so they never collide with telegram update ids). An approval reply "a:p12"
 // synthesizes the equivalent callback_query because WhatsApp buttons carry no callback_data.
@@ -97,13 +108,18 @@ export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], su
   const updates: WaSyntheticUpdate[] = [];
   for (const message of messages) {
     if (message.from !== subject) continue;
+    // A forward carries Bot API's MessageOrigin, the mark isForward and the turn parser read, so it runs as someone else's
+    // text and never as a command or an approval reply. WhatsApp names neither the original sender nor when it was first
+    // sent: the origin is a hidden user, and the time Waldo received it stands in.
+    const forwarded = whatsappForwarded(message);
+    const origin = forwarded ? { forward_origin: { type: 'hidden_user', date: Math.floor(Date.now() / 1000) } } : {};
     if (message.type === 'audio' && message.audio?.id) {
       seq += 1;
       const audio = message.audio;
       const media = audio.voice === false
         ? { audio: { file_id: audio.id, ...(audio.mime_type ? { mime_type: audio.mime_type } : {}) } }
         : { voice: { file_id: audio.id, ...(audio.mime_type ? { mime_type: audio.mime_type } : {}) } };
-      updates.push({ update_id: WA_UPDATE_BASE + seq, message: { from: { id: ownerNum, is_bot: false }, chat: { id: ownerNum, type: 'private' }, ...media } });
+      updates.push({ update_id: WA_UPDATE_BASE + seq, message: { from: { id: ownerNum, is_bot: false }, chat: { id: ownerNum, type: 'private' }, ...origin, ...media } });
       continue;
     }
     if (message.type === 'image' && message.image?.id) {
@@ -114,7 +130,7 @@ export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], su
       updates.push({
         update_id: WA_UPDATE_BASE + seq,
         message: {
-          from: { id: ownerNum, is_bot: false }, chat: { id: ownerNum, type: 'private' },
+          from: { id: ownerNum, is_bot: false }, chat: { id: ownerNum, type: 'private' }, ...origin,
           photo: [{ file_id: image.id }],
           ...(q === null ? {} : { caption: q.kinds.length === 0 ? caption : onlyArtifacts(q) ? `[quarantined: ${q.kinds.join('/')} artifact - see your WhatsApp thread]` : q.text }),
         },
@@ -129,13 +145,13 @@ export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], su
     // update exists, so no downstream consumer (turn pipeline, episodes, traces) ever sees the raw
     // code or link. The original stays owner-inspectable in their own WhatsApp thread. Approval
     // replies are channel commands that can never carry an artifact, so they skip the filter.
-    if (/^([aseud]):(\S+)$/.exec(text)) {
+    if (!forwarded && /^([aseud]):(\S+)$/.exec(text)) {
       updates.push({ update_id: WA_UPDATE_BASE + seq, callback_query: { id: `wa-${message.id ?? seq}`, from: { id: ownerNum, is_bot: false }, data: text, message: { message_id: 0, chat: { id: ownerNum } } } });
       continue;
     }
     const q = quarantineArtifacts(text);
     const clean = q.kinds.length === 0 ? text : onlyArtifacts(q) ? `[quarantined: ${q.kinds.join('/')} artifact - see your WhatsApp thread]` : q.text;
-    updates.push({ update_id: WA_UPDATE_BASE + seq, message: { from: { id: ownerNum, is_bot: false }, chat: { id: ownerNum, type: 'private' }, text: clean } });
+    updates.push({ update_id: WA_UPDATE_BASE + seq, message: { from: { id: ownerNum, is_bot: false }, chat: { id: ownerNum, type: 'private' }, ...origin, text: clean } });
   }
   return { updates, seq };
 };

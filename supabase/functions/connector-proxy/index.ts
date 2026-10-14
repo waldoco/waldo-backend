@@ -1,12 +1,12 @@
 // Typed connector proxy. The only place a Google token is read, refreshed or used: the runtime
 // sends a connection id and a typed operation, signed with the router secret, and gets data back.
-import { exchangeGoogleCode, GOOGLE_METHODS, googleClient, googleHas, GoogleError, proxyClientOptions, type GoogleErrorReason, type GoogleClient, type GoogleMethod } from '../../../packages/runtime/src/connectors/google.ts';
+import { exchangeGoogleCode, GOOGLE_METHODS, googleClient, googleHas, GoogleError, proxyClientOptions, type GoogleErrorReason, type GoogleClient, type GoogleMethod, type GoogleProfile } from '../../../packages/runtime/src/connectors/google.ts';
 import { driveRestClient, DRIVE_REST_METHODS, DriveRestError, type DriveRestMethod } from '../../../packages/runtime/src/connectors/drive-rest.ts';
 import { googleAccessToken, GoogleTokenError } from '../../../packages/runtime/src/connectors/google.ts';
 import { executeProxyIntent, ProxyIntentError, type IntentClaim } from '../../../packages/runtime/src/connectors/proxy-intent.ts';
 import { callMcpTransport, McpAuthError, McpHttpError, McpToolError } from '../../../packages/runtime/src/connectors/mcp-transport.ts';
 import { GOOGLE_MCP_READ_ONLY, googleMcpServer, isGoogleMcpRead } from '../../../packages/runtime/src/connectors/google-mcp.ts';
-import { CALENDAR_PUSH_PATH, GooglePushError, startCalendarWatch, stopChannel } from '../../../packages/runtime/src/connectors/google-push.ts';
+import { CALENDAR_PUSH_PATH, GooglePushError, startCalendarWatch, startGmailWatch, stopChannel } from '../../../packages/runtime/src/connectors/google-push.ts';
 import { safeMcpErrorDiagnostic, type McpErrorDiagnostic } from '../../../packages/runtime/src/connectors/mcp-error-diagnostic.ts';
 
 declare const Deno: {env:{get(name:string):string|undefined};serve(handler:(request:Request)=>Promise<Response>):unknown};
@@ -37,12 +37,13 @@ const db = async (fn: string, args: Record<string, unknown>) => {
   if (!response.ok) throw new Error(`db ${fn} ${response.status}`);
   return response.json();
 };
-const store = async (doName: string, email: string, scopes: readonly string[], token: string) => {
+// The Google profile only passes through to the owner object: the edge stores none of it.
+const store = async (doName: string, email: string, scopes: readonly string[], token: string, profile?: GoogleProfile) => {
   const id = await db('proxy_store', { p_do_name: doName, p_provider: 'google', p_account: email, p_scopes: scopes.join(' '), p_secret: token }) as string | null;
-  return id ? reply({ id, email: email.toLowerCase(), scopes }) : fail(404, 'unknown owner');
+  return id ? reply({ id, email: email.toLowerCase(), scopes, ...(profile ? { profile } : {}) }) : fail(404, 'unknown owner');
 };
 
-type Body = Readonly<{ intent_id?: string; read_only?: boolean; do_name: string; op: 'exchange' | 'adopt' | 'call' | 'mcp_call' | 'calendar_watch' | 'channel_stop'; channel_id?: string; token?: string; address?: string; resource_id?: string; server_url?: string; tool?: string; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[]; calendar_details?: boolean }>;
+type Body = Readonly<{ intent_id?: string; read_only?: boolean; do_name: string; op: 'exchange' | 'adopt' | 'call' | 'mcp_call' | 'calendar_watch' | 'channel_stop' | 'gmail_watch'; topic?: string; channel_id?: string; token?: string; address?: string; resource_id?: string; server_url?: string; tool?: string; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[]; calendar_details?: boolean }>;
 // Edge-owned, exact read authority from the shared catalogue. Never accept a request-supplied registry or a generic Google host match.
 const nonStoringRead = (body: Body): boolean => body.op === 'mcp_call' && body.read_only === true && /^mcpread:[0-9a-f]{64}$/.test(body.intent_id ?? '') && isGoogleMcpRead(body.server_url, body.tool);
 const READ_FAILURE_CODES = new Set(['intent_unavailable', 'insufficient scopes', 'google_refresh_failed', 'google_reauth_needed', 'google_scope_missing', 'mcp_read_rejected', 'mcp_read_unavailable', 'mcp_read_failed']);
@@ -56,7 +57,7 @@ const LOGGED_CODES = new Set([...READ_FAILURE_CODES, GOOGLE_MCP_READ_ONLY, 'unkn
 
 // One structured line per call: operation, method, outcome and duration. Never the code, verifier,
 // token, account or arguments. The operation and method come from the request body, so only known ones are logged.
-const LOGGED_OPS = new Set(['exchange', 'adopt', 'call', 'mcp_call', 'calendar_watch', 'channel_stop', 'unconfigured', 'unsigned']);
+const LOGGED_OPS = new Set(['exchange', 'adopt', 'call', 'mcp_call', 'calendar_watch', 'channel_stop', 'gmail_watch', 'unconfigured', 'unsigned']);
 const logged = async (started: number, op: unknown, method: unknown, response: Response, read = false) => {
   const outcome = await response.clone().json().then(value => (value as {error?:{status:number;message:string;provider_diagnostic?:unknown}}).error ?? null).catch(() => ({ status: response.status, message: 'unreadable response' }));
   const message = !outcome ? undefined : read && !READ_FAILURE_CODES.has(outcome.message) ? 'mcp_read_failed' : LOGGED_CODES.has(outcome.message) ? outcome.message : 'provider_error';
@@ -88,7 +89,7 @@ const handle = async (body: Body): Promise<Response> => {
   try {
     if (body.op === 'exchange' && body.code) {
       const tokens = await exchangeGoogleCode(app, body.code, fetch, body.code_verifier);
-      return store(body.do_name, tokens.email ?? 'google', tokens.scopes ?? [], tokens.refresh_token);
+      return store(body.do_name, tokens.email ?? 'google', tokens.scopes ?? [], tokens.refresh_token, tokens.profile);
     }
     // One-time move of a token saved in the Durable Object before this proxy existed.
     if (body.op === 'adopt' && body.refresh_token) return store(body.do_name, body.email ?? 'google', body.scopes ?? [], body.refresh_token);
@@ -110,6 +111,24 @@ const handle = async (body: Body): Promise<Response> => {
         const bearer = await googleAccessToken(app, { refresh_token: grant.secret }, fetch);
         if (body.op === 'channel_stop') { await stopChannel(fetch, bearer, { channelId, resourceId: body.resource_id! }); return reply({ data: null }); }
         return reply({ data: await startCalendarWatch(fetch, bearer, { channelId, token: body.token!, address: address!.toString() }) });
+      } catch (error) {
+        if (error instanceof GooglePushError) return fail(error.status, error.message);
+        if (error instanceof GoogleTokenError) return fail(error.status, 'google_refresh_failed');
+        return fail(502, 'google_push_transient');
+      }
+    }
+    // The Gmail watch for a Vault-backed grant, into Waldo's own push topic only. Like a calendar channel,
+    // starting one is not an owner-visible effect, so there is no ledger row.
+    if (body.op === 'gmail_watch') {
+      if (!body.connection) return fail(404, 'unknown operation');
+      if (!/^projects\/[a-z][a-z0-9-]{4,28}[a-z0-9]\/topics\/waldo-gmail-push$/.test(body.topic ?? '')) return fail(400, 'google_push_invalid_request');
+      const access = await db('proxy_access', { p_do_name: body.do_name, p_connection: body.connection }) as {secret:string;scopes:unknown}[];
+      const grant = Array.isArray(access) ? access[0] : undefined;
+      if (!grant || typeof grant.secret !== 'string' || !grant.secret) return fail(401, 'connection unavailable');
+      if (!googleHas(Array.isArray(grant.scopes) ? grant.scopes : undefined, 'mail')) return fail(403, 'insufficient scopes');
+      try {
+        const bearer = await googleAccessToken(app, { refresh_token: grant.secret }, fetch);
+        return reply({ data: await startGmailWatch(fetch, bearer, body.topic!) });
       } catch (error) {
         if (error instanceof GooglePushError) return fail(error.status, error.message);
         if (error instanceof GoogleTokenError) return fail(error.status, 'google_refresh_failed');

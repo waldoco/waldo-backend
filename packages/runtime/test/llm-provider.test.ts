@@ -16,7 +16,7 @@ import {
   type TriggerType,
   MODEL_CONTEXT_MAX_CHARS,
 } from '@waldo/contracts';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   InMemoryCircuitBreaker,
   RuntimeLLMProvider,
@@ -31,6 +31,8 @@ import { inMemoryToolOutputStore } from '../src/conversation/tool-output-store';
 import type { CountResult, ResolvedSkillBudget, SkillBudgetFactory } from '../src/skills/budget';
 import type { HookRegistry, HookRuntimeContext } from '../src/hooks/registry';
 import { sanitise } from '../src/scribe/sanitiser';
+import { withCallDeadline } from '../src/llm/time-budget';
+import type { RunEffectScope } from '../src/channels/run-effect-scope';
 
 const canaryTokens = ['1111111111111111', '2222222222222222', '3333333333333333'];
 
@@ -79,6 +81,19 @@ function response(model: ModelName, text = '{"tool_calls":[]}'): LLMResponse {
     output_tokens: 5,
     cache_read_input_tokens: model === ROSTER.primary ? 0 : 3,
     latency_ms: 11,
+  };
+}
+
+function briefRequest(runScope?: RunEffectScope): RuntimeLLMRequest {
+  return {
+    ...(runScope ? { runScope } : {}),
+    trigger: 'brief',
+    renderRequest: ({ context, step }) => ({
+      system: `${context}:${step.model}`,
+      messages: [{ role: 'user', content: 'brief' }],
+      max_tokens: 512,
+      temperature: 0.3,
+    }),
   };
 }
 
@@ -681,6 +696,50 @@ describe('RuntimeLLMProvider', () => {
       `reduced_context:${ROSTER.primary}`,
       `reduced_context:${ROSTER.fallback}`,
     ]);
+  });
+
+  it.each(['auth_failed', 'forbidden', 'not_found', 'rejected'] as const)(
+    'does not send a model the same request again after %s, and still tries the fallback rung',
+    async (code) => {
+      const gateway = new ScriptedGateway((request) =>
+        request.step.model === ROSTER.fallback
+          ? { ok: true, data: response(request.request.model) }
+          : { ok: false, error: 'refused', code },
+      );
+      const result = await new RuntimeLLMProvider({ gateway }).complete(briefRequest(), runtimeCtx());
+
+      expect(gateway.requests.map((request) => [request.request.model, request.context])).toEqual([
+        [ROSTER.primary, 'full_context'],
+        [ROSTER.fallback, 'reduced_context'],
+      ]);
+      expect(result.ok).toBe(true);
+    },
+  );
+
+  it('starts no attempt, retry or fallback once the turn has no time left', async () => {
+    vi.useFakeTimers();
+    try {
+      const runScope: RunEffectScope = {
+        runId: 'run-1', attempt: 'attempt-1', deadline: Date.now() + 600_000,
+        signal: new AbortController().signal, admit() {}, commit: (work) => work(),
+      };
+      const unsent = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+      const late = await withCallDeadline(runScope, Date.now(), () =>
+        new RuntimeLLMProvider({ gateway: unsent }).complete(briefRequest(runScope), runtimeCtx()));
+      expect(unsent.requests).toHaveLength(0);
+      expect(late).toMatchObject({ ok: false, detail: 'turn_deadline' });
+
+      const slow = new ScriptedGateway(() => {
+        vi.setSystemTime(Date.now() + 20_000);
+        return { ok: false, error: 'timed out', code: 'transient' };
+      });
+      const spent = await withCallDeadline(runScope, Date.now() + 15_000, () =>
+        new RuntimeLLMProvider({ gateway: slow }).complete(briefRequest(runScope), runtimeCtx()));
+      expect(slow.requests.map((request) => [request.request.model, request.context])).toEqual([[ROSTER.primary, 'full_context']]);
+      expect(spent).toMatchObject({ ok: false, detail: 'turn_deadline' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('opens and cools a circuit without taking every provider dark', async () => {

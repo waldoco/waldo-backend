@@ -1,4 +1,5 @@
 // Prompt contract regression only. This does not simulate or grade a live model.
+import { ownerTyped } from './helpers/owner-typed';
 import {it,expect} from 'vitest';
 import {messagingSystemPrompt} from '../src/prompt/messaging-behavior';
 it('requires independent checks before constrained recommendations',()=>{
@@ -17,9 +18,9 @@ it('real owner pipeline keeps swapped latest values and verification rule in pro
  captured.inputs.length=0;
  const responder=createOwnerResponder('fixture-key');
  const time=<T>(_hop:string,work:()=>Promise<T>)=>work();
- await responder.respond({traceId:'old',conversationRef:'fixture',surface:'telegram',text:'Fictional old rows: A13000/19:00 B19000/17:00 C23000/16:00. Budget20000, arrive by18:00.'},time);
+ await responder.respond(ownerTyped({traceId:'old',conversationRef:'fixture',surface:'telegram',text:'Fictional old rows: A13000/19:00 B19000/17:00 C23000/16:00. Budget20000, arrive by18:00.'}),time);
  const latest='Fictional changed rows: A22000/16:30 B18500/17:45 C19500/18:15. Budget20000, arrive by18:00.';
- await responder.respond({traceId:'new',conversationRef:'fixture',surface:'telegram',text:latest},time);
+ await responder.respond(ownerTyped({traceId:'new',conversationRef:'fixture',surface:'telegram',text:latest}),time);
  const input=JSON.stringify(captured.inputs.at(-1));
  expect(input).toContain(latest);
  expect(input).toContain('check every option against every explicit constraint independently');

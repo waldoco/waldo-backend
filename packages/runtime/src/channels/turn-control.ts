@@ -1,17 +1,20 @@
 // Stop and steer (W6). A turn runs as rounds of model calls; between rounds the owner can stop it
 // or add direction. Anything the running turn saw is absorbed, so it is not answered twice.
+import type { InboundSpan, InboundView } from './owner-inbound-turn';
+
 export const STOPPED_REPLY = 'Stopped. Nothing more on that one.';
 
 export const turnControl = () => {
-  let child: { bindTarget(id: string): void; durableConsume(hook: (ids: readonly number[]) => Promise<void>): void; stopTarget(id: string): boolean; steerTarget(targetId: string, id: number, text: string): boolean; stop(): boolean; steer(id: number, text: string): boolean } | undefined;
+  let child: { bindTarget(id: string): void; durableConsume(hook: (ids: readonly number[]) => Promise<void>): void; stopTarget(id: string): boolean; steerTarget(targetId: string, id: number, steer: InboundView): boolean; stop(): boolean; steer(id: number, text: string): boolean } | undefined;
   let revision = 0;
   let running = false;
   let target: string | null = null;
   let steerable = false;
   let stopped = false;
-  let pending: { id: number; text: string }[] = [];
-  let heard: string[] = [];
-  let leftover: { id: number; text: string }[] = [];
+  // A steer keeps the spans the owner did not write, so memory never takes a quote in it as their words.
+  let pending: { id: number; text: string; foreignRanges: readonly InboundSpan[] }[] = [];
+  let heard: InboundView[] = [];
+  let leftover: typeof pending = [];
   const absorbed = new Set<number>();
   let consume: ((ids: readonly number[]) => Promise<void>) | undefined;
   return {
@@ -19,10 +22,10 @@ export const turnControl = () => {
     unroute(next: NonNullable<typeof child>): void { if (child === next) child = undefined; },
     bindTarget(id: string): void { target = id; child?.bindTarget(id); },
     stopTarget(id: string): boolean { if (child) return child.stopTarget(id); if (target !== id || !running) return false; stopped = true; revision++; return true; },
-    steerTarget(targetId: string, id: number, text: string): boolean {
-      if (child) return child.steerTarget(targetId, id, text);
+    steerTarget(targetId: string, id: number, steer: InboundView): boolean {
+      if (child) return child.steerTarget(targetId, id, steer);
       if (target !== targetId || !running || !steerable || stopped) return false;
-      pending.push({ id, text }); revision++; return true;
+      pending.push({ id, ...steer }); revision++; return true;
     },
     durableConsume(hook: (ids: readonly number[]) => Promise<void>): void { consume = hook; child?.durableConsume(hook); },
     async roundAsync(): Promise<string | null> {
@@ -31,9 +34,9 @@ export const turnControl = () => {
       const claimed = pending.slice();
       if (claimed.length && consume) await consume(claimed.map(note => note.id));
       if (stopped || target !== capturedTarget) return null;
-      for (const note of claimed) { heard.push(note.text); absorbed.add(note.id); }
+      for (const { id, ...steer } of claimed) { heard.push(steer); absorbed.add(id); }
       pending.splice(0, claimed.length);
-      return heard.length === 0 ? '' : `\n\n[While you were working, the owner added: ${heard.map(text => JSON.stringify(text)).join('; ')}. Take it into account in this answer.]`;
+      return heard.length === 0 ? '' : `\n\n[While you were working, the owner added: ${heard.map(steer => JSON.stringify(steer.text)).join('; ')}. Take it into account in this answer.]`;
     },
     begin(fromOwner: boolean): void {
       running = true;
@@ -43,7 +46,7 @@ export const turnControl = () => {
       leftover = [];
       heard = [];
     },
-    end(): readonly string[] {
+    end(): readonly InboundView[] {
       // Steers that arrived after the last round were never seen by the model; the host must answer them as their own turn.
       leftover = pending.filter(note => !absorbed.has(note.id));
       pending = [];
@@ -52,8 +55,8 @@ export const turnControl = () => {
       return heard;
     },
     revision: () => revision,
-    heard: (): readonly string[] => heard,
-    unconsumed: (): readonly { id: number; text: string }[] => leftover,
+    heard: (): readonly InboundView[] => heard,
+    unconsumed: (): readonly { id: number; text: string; foreignRanges: readonly InboundSpan[] }[] => leftover,
     stop(): boolean {
       if (child) return child.stop();
       if (running) { stopped = true; revision++; }
@@ -62,18 +65,18 @@ export const turnControl = () => {
     steer(id: number, text: string): boolean {
       if (child) return child.steer(id, text);
       const open = running && steerable && !stopped;
-      if (open) { pending.push({ id, text }); revision++; }
+      if (open) { pending.push({ id, text, foreignRanges: [] }); revision++; }
       return open;
     },
     // Called before each model round: null means stop, otherwise the owner's additions so far.
     round(): string | null {
       if (stopped) return null;
-      for (const note of pending) {
-        heard.push(note.text);
-        absorbed.add(note.id);
+      for (const { id, ...steer } of pending) {
+        heard.push(steer);
+        absorbed.add(id);
       }
       pending = [];
-      return heard.length === 0 ? '' : `\n\n[While you were working, the owner added: ${heard.map((text) => `"${text}"`).join('; ')}. Take it into account in this answer.]`;
+      return heard.length === 0 ? '' : `\n\n[While you were working, the owner added: ${heard.map((steer) => `"${steer.text}"`).join('; ')}. Take it into account in this answer.]`;
     },
     absorbed(id: number): boolean {
       return absorbed.delete(id);

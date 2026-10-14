@@ -2,6 +2,8 @@ import { guardArtifactLinks, receiptUrl } from './artifact-link-guard';
 import { toolNameSchema, toolParameters, type ConnectIntent, type LLMTool, type LLMToolCall, type LLMToolTurn } from '@waldo/contracts';
 import { dispatchTool, type DispatchToolOptions, type ToolDispatcherContext } from '../tools/dispatcher';
 import { CONNECT_BUTTON_SENT, CONNECT_BUTTON_UNSENT } from '../tools/live/connect-text';
+import { ClosedRunError } from '../channels/run-effect-scope';
+import { FINAL_ANSWER_RESERVE_MS, TURN_TIME_BUDGET_MS, withCallDeadline } from '../llm/time-budget';
 import type { ToolOutputStore } from './tool-output-store';
 
 
@@ -40,9 +42,24 @@ export const toolDefinitions = (handlers: DispatchToolOptions<ToolDispatcherCont
 export const WARN_WINDOW_ROUNDS = 5;
 
 // 'completed' means the model closed while resources remained. 'budget_exhausted'
-// means the loop withdrew tools at its local/shared cap. Keep 'withdrawn' in the
+// means the loop withdrew tools at its local/shared round cap, 'time_exhausted' that
+// it withdrew them, or ended the turn, at the turn's deadline. Keep 'withdrawn' in the
 // caller contract for existing child outcome consumers.
-export type LoopExit = 'completed' | 'budget_exhausted' | 'withdrawn';
+export type LoopExit = 'completed' | 'budget_exhausted' | 'time_exhausted' | 'withdrawn';
+
+export const OUT_OF_TIME_REPLY = "I couldn't finish that in time.";
+export const BROWSING_UNAVAILABLE = 'Browsing is unavailable on this Waldo for the rest of this turn; use what you have or say what you could not read.';
+// For the browse tools, auth_failed is a configuration fact that cannot clear within a turn (no browser binding, the
+// provider unavailable, a rejected key), so after one both are withheld until the turn ends. Keyed on the typed code.
+const BROWSE_TOOLS: ReadonlySet<string> = new Set(['browse_page', 'browse_act']);
+const TIME_UP_NOTE = '\n[budget: turn time is up - no more tool calls; answer now with what you have]';
+
+// Set once by the first loop of a turn and shared with its child loops through the budget.
+const turnDeadline = (budget: { deadline?: number } | undefined): number => {
+  const deadline = budget?.deadline ?? Date.now() + TURN_TIME_BUDGET_MS;
+  if (budget !== undefined) budget.deadline = deadline;
+  return deadline;
+};
 
 
 export async function runToolLoop(input: Readonly<{
@@ -56,8 +73,9 @@ export async function runToolLoop(input: Readonly<{
   onSettle?: (exit: LoopExit) => void;
   // Shared tool-round budget across a parent turn and its children (subagent orchestration
   // spec): when present, every offered round in EVERY loop holding the same object decrements
-  // it, so a turn's stated round cap is absolute - children can never dispatch past it.
-  budget?: { remaining: number };
+  // it, so a turn's stated round cap is absolute - children can never dispatch past it. The
+  // first loop also stamps the turn's deadline on it, so a child spends the same time.
+  budget?: { remaining: number; deadline?: number };
   // S4 (CONNECT_FLOW_DESIGN 4.4): a tool's typed auth intent is acted on by the responder via
   // the channel's offerConnect seam. Fired at most once per (service, reason) per turn. It answers
   // true when a connect button reached the owner, or the words the model gets instead.
@@ -79,25 +97,47 @@ export async function runToolLoop(input: Readonly<{
   // A landed mutation opens a new read epoch. Mutation replay keys survive resets,
   // so a state change cannot re-fire a write. Recovery shares the finite round budget.
   const mutationTools = new Set(input.handlers.filter((h) => h.autonomy_gated || h.mutates_state).map((h) => h.name));
+  const deadline = turnDeadline(input.budget);
+  // The scope the turn handed in, which its model step also carries. Read once: a tool hook writes a copy of the
+  // context back over input.ctx, so its runScope is a different object after the first dispatch.
+  const runScope = input.ctx.runScope;
+  let browsingWithheld = false;
   let exit: LoopExit = 'completed';
   for (let round = 0; ; round += 1) {
+    const timeLeft = deadline - Date.now();
     const roundsAvailable = round < input.maxSteps && (input.budget === undefined || input.budget.remaining > 0);
-    const offer = tools.length > 0 && roundsAvailable;
+    // A tool round starts only while one full model call is left for the final answer.
+    const timeAvailable = timeLeft >= FINAL_ANSWER_RESERVE_MS;
+    const roundTools = browsingWithheld ? tools.filter((tool) => !BROWSE_TOOLS.has(tool.name)) : tools;
+    const offer = roundTools.length > 0 && roundsAvailable && timeAvailable;
     // An initially empty authority ceiling can reject an illegal request once and
     // give the model a final closing step. This consumes a round and performs no I/O.
-    const repairEmptyCeiling = tools.length === 0 && round === 0 && roundsAvailable;
-    if (!roundsAvailable && exit === 'completed') {
-      exit = 'budget_exhausted';
+    const repairEmptyCeiling = tools.length === 0 && round === 0 && roundsAvailable && timeAvailable;
+    if (exit === 'completed' && !roundsAvailable) exit = 'budget_exhausted';
+    else if (exit === 'completed' && !timeAvailable) exit = 'time_exhausted';
+    // With no time left even for the answer, say so instead of starting a model call that cannot finish.
+    if (!offer && !repairEmptyCeiling && timeLeft <= 0) {
+      input.onSettle?.('time_exhausted');
+      return OUT_OF_TIME_REPLY;
     }
     if ((offer || repairEmptyCeiling) && input.budget !== undefined) input.budget.remaining -= 1;
     input.ctx.runScope?.admit();
-    const response = await input.step(offer ? tools : undefined, turns);
+    let response: Awaited<ReturnType<ToolLoopStep>>;
+    try {
+      response = await withCallDeadline(runScope, deadline, () => input.step(offer ? roundTools : undefined, turns));
+    } catch (error) {
+      // A model step that fails once the turn's time is gone ends the turn plainly; a closed or stopped run never does.
+      if (error instanceof ClosedRunError || runScope?.signal?.aborted || Date.now() < deadline) throw error;
+      input.onSettle?.('time_exhausted');
+      return OUT_OF_TIME_REPLY;
+    }
     input.ctx.runScope?.admit();
     if (response.tool_calls === undefined || (!offer && !repairEmptyCeiling)) {
       input.onSettle?.(exit);
       return guardArtifactLinks(response.text || (exit === 'budget_exhausted'
         ? 'Tool budget exhausted; no further tools were run.'
-        : tools.length === 0 ? 'No tools are available this turn; no tool calls were executed.' : ''), receiptUrls);
+        : exit === 'time_exhausted' ? OUT_OF_TIME_REPLY
+          : tools.length === 0 ? 'No tools are available this turn; no tool calls were executed.' : ''), receiptUrls);
     }
     let firstCall = true;
     for (const call of response.tool_calls) {
@@ -120,8 +160,14 @@ export async function runToolLoop(input: Readonly<{
           : previous
         : !offer
           ? { ok: false, error: 'Tool handler unavailable.', code: 'not_found' as const, reason: 'handler_unavailable' }
-          : await dispatch(call, input);
+          : browsingWithheld && BROWSE_TOOLS.has(call.name)
+            ? { ok: false, error: BROWSING_UNAVAILABLE, code: 'auth_failed' as const, reason: 'withheld_this_turn' }
+            : await dispatch(call, input);
       input.ctx.runScope?.admit();
+      const browsingNote = !browsingWithheld && !result.ok && result.code === 'auth_failed' && BROWSE_TOOLS.has(call.name)
+        ? `\n[${BROWSING_UNAVAILABLE}]`
+        : '';
+      if (browsingNote) browsingWithheld = true;
       if (!previous && !result.ok && result.connect) {
         const offerKey = `${result.connect.service}:${result.connect.reason}`;
         let outcome = offered.get(offerKey);
@@ -172,18 +218,21 @@ export async function runToolLoop(input: Readonly<{
       // exercise the withdrawal mechanism itself stay note-free. Pressure escalates as the
       // window closes, and the
       // roundsLeft 0 notice is the graceful close - the model is told the budget is exhausted
-      // alongside its last tool result, so the final no-tools step comes back as words.
-      const budgetNote = input.maxSteps > WARN_WINDOW_ROUNDS && roundsLeft >= 0 && roundsLeft < WARN_WINDOW_ROUNDS
-        ? roundsLeft === 0
-          ? '\n[budget: tool budget exhausted this turn - no more tool calls; answer now with what you have]'
-          : roundsLeft <= 2
-            ? `\n[budget: ${roundsLeft} tool round${roundsLeft === 1 ? '' : 's'} left this turn - wrap up and answer now]`
-            : `\n[budget: ${roundsLeft} tool rounds left this turn - start wrapping up]`
-        : '';
+      // alongside its last tool result, so the final no-tools step comes back as words. The
+      // turn's deadline closes the same way, whatever the round cap.
+      const budgetNote = deadline - Date.now() < FINAL_ANSWER_RESERVE_MS
+        ? TIME_UP_NOTE
+        : input.maxSteps > WARN_WINDOW_ROUNDS && roundsLeft >= 0 && roundsLeft < WARN_WINDOW_ROUNDS
+          ? roundsLeft === 0
+            ? '\n[budget: tool budget exhausted this turn - no more tool calls; answer now with what you have]'
+            : roundsLeft <= 2
+              ? `\n[budget: ${roundsLeft} tool round${roundsLeft === 1 ? '' : 's'} left this turn - wrap up and answer now]`
+              : `\n[budget: ${roundsLeft} tool rounds left this turn - start wrapping up]`
+          : '';
       const replayNote = previous && !previous.ok
         ? '\n[repeat: cached failure from this turn; no new tool execution]'
         : '';
-      const output = capToolOutput(JSON.stringify(result), input.offload, call.call_id) + replayNote + budgetNote;
+      const output = capToolOutput(JSON.stringify(result), input.offload, call.call_id) + replayNote + browsingNote + budgetNote;
       turns.push({ call, output, ...(firstCall && response.output_items?.length ? { prior_items: [...response.output_items] } : {}) });
       firstCall = false;
       // The typed code/reason ride the span as their own fields so a failed hop stays

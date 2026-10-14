@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -35,7 +36,7 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('the approval delivery each surface tells the model', () => {
-  const delivery = (surface?: string) => telegramTurnEnvelope({ updateId: 1, chatId: 7, text: 'hi' } as never, surface).presentation?.delivery;
+  const delivery = (surface?: string) => telegramTurnEnvelope(ownerTyped({ updateId: 1, messageId: null, senderId: 7, chatId: 7, sentAt: null, text: 'hi' }), surface).presentation?.delivery;
 
   it('gives the app native approval buttons, the same as Telegram', () => {
     expect(delivery('app')).toEqual({ text: true, approval: 'native_buttons', reactions: false, attachments: false });

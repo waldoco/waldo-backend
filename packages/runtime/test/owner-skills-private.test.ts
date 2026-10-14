@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { env, runInDurableObject } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
 import { claimStore } from "../src/memory/claims";
@@ -75,12 +76,15 @@ const binding = (): LocalSystemSkillBinding => ({
     }),
   },
 });
+// The system prompt prints the clock to the minute, so prompts compared by bytes share one instant.
+const clock = { timezone: "UTC", now: () => new Date("2026-10-13T23:41:59.900Z") };
 const responder = (skills?: LocalSystemSkillBinding) => {
   const args: Parameters<typeof createOwnerResponder> = ["fixture"];
+  args[4] = clock;
   args[20] = skills;
   return createOwnerResponder(...args);
 };
-const turn = (id = "private-skill") => ({
+const turn = (id = "private-skill") => ownerTyped({
   traceId: id,
   conversationRef: "app-fixture",
   surface: "app",
@@ -153,7 +157,7 @@ it("paused repository resumed after close cannot reach model or persist", async 
     },
   };
   const pending = responder(skills).respond(
-    { ...turn(), runScope: scope },
+    ownerTyped({ ...turn(), runScope: scope }),
     time,
   );
   await ready;

@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
@@ -25,7 +26,7 @@ it('the reply call reports what fills its context, and the system sections add u
     const tools = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', hideHistory: async () => undefined });
     const logged: TurnLogEntry[] = [];
     const responder = createOwnerResponder('fixture', undefined, store, entry => { logged.push(entry); }, undefined, tools);
-    await responder.respond({ traceId: 'tg-shape-1', conversationRef: 'owner', surface: 'telegram', text: 'what is on today?' }, (_name, work) => work());
+    await responder.respond(ownerTyped({ traceId: 'tg-shape-1', conversationRef: 'owner', surface: 'telegram', text: 'what is on today?' }), (_name, work) => work());
     const reply = logged.filter(entry => entry.hop === 'llm_reply').at(-1)!;
     const shape = reply.shape!;
     const context = shape.context!;
@@ -54,7 +55,7 @@ const appTurn = async (occurrenceKey: string, text: string, now: Date) => {
   seen.instructions = [];
   const responder = createOwnerResponder('fixture', undefined, undefined, entry => { logged.push(entry); }, { timezone: 'Asia/Kolkata', now: () => now }, [], undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, [], runScope, undefined, { context });
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`prefix-${occurrenceKey}`)), () =>
-    responder.respond({ traceId: `app-${occurrenceKey}`, conversationRef: context.conversationRef, surface: 'app', text }, (_name, work) => work()));
+    responder.respond(ownerTyped({ traceId: `app-${occurrenceKey}`, conversationRef: context.conversationRef, surface: 'app', text }), (_name, work) => work()));
   return { instructions: new TextEncoder().encode(seen.instructions.at(-1)!), shape: logged.find(entry => entry.hop === 'llm_reply')!.shape! };
 };
 

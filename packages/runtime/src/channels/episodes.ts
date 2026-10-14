@@ -36,10 +36,12 @@ export const speakerOf = (entryId: string): Speaker => (entryId.endsWith('-reply
 export const speakerOfEntry = (entry: Pick<ConversationEntry, 'id' | 'role' | 'inputOrigin'>): Speaker =>
   entry.role === 'assistant' ? 'waldo' : entry.inputOrigin === 'owner' ? 'owner' : entry.inputOrigin === 'machine' ? 'system' : speakerOf(entry.id);
 
-// Model text becomes plain quoted terms, so FTS5 operators and quotes in a question can't
-// break the query; OR keeps recall and BM25 does the ranking.
+// Model text becomes plain terms (letters and digits, first occurrence order, at most 16), so FTS5
+// operators and quotes in a question can't break the query.
+export const ftsTerms = (text: string): readonly string[] => [...new Set(text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])].slice(0, 16);
+// Each term quoted; OR keeps recall and BM25 does the ranking.
 export const ftsQuery = (text: string): string | null => {
-  const terms = [...new Set(text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])].slice(0, 16);
+  const terms = ftsTerms(text);
   return terms.length ? terms.map((term) => `"${term}"`).join(' OR ') : null;
 };
 
@@ -120,7 +122,9 @@ export const ownerRows = (stored: string, received: string, ranges: QuoteRanges)
 export const indexedConversationStore = (store: ConversationStore, index: EpisodeIndex, now: () => number): ConversationStore => {
   const indexedInputs = new Set<string>();
   const quoted = new Map<string, Readonly<{ text: string; ranges: QuoteRanges }>>();
+  // A compaction row is Waldo's paraphrase of rows the index already holds: never a row of its own.
   const add = (entry: ConversationEntry, at: number) => {
+    if (entry.role === 'compaction') return;
     const speaker = speakerOfEntry(entry), noted = quoted.get(entry.id);
     quoted.delete(entry.id);
     if (speaker !== 'owner' || !noted) { index.add(entry.id, speaker, entry.appPayload, at); return; }
@@ -150,8 +154,9 @@ export const indexedConversationStore = (store: ConversationStore, index: Episod
 export const backfillEpisodes = async (store: ConversationStore, index: EpisodeIndex): Promise<number> => {
   if (index.count() > 0) return 0;
   const { entries } = await store.load();
-  for (const entry of entries) index.add(entry.id, speakerOfEntry(entry), entry.appPayload, 0);
-  return entries.length;
+  const rows = entries.filter((entry) => entry.role !== 'compaction');
+  for (const entry of rows) index.add(entry.id, speakerOfEntry(entry), entry.appPayload, 0);
+  return rows.length;
 };
 
 // Nightly consolidation learns from what the owner and Waldo said. Machine-written entries

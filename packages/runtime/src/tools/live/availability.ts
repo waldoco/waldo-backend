@@ -10,3 +10,15 @@ export const availabilityWindows=(range:TimeRange,busy:readonly BusyInterval[],w
  for(const [a,b]of allowed){let cursor=a!;for(const [x,y]of blocked){if(y!<=cursor||x!>=b!)continue;if(x!>cursor&&(x!-cursor)>=duration*60000)result.push({start:new Date(cursor).toISOString(),end:new Date(Math.min(x!,b!)).toISOString()});cursor=Math.max(cursor,y!);if(cursor>=b!)break;}if(b!-cursor>=duration*60000)result.push({start:new Date(cursor).toISOString(),end:new Date(b!).toISOString()});}
  return result;
 };
+export type FreeWindow=Readonly<{start:string;end:string;minutes:number}>;
+// The same instants written in the owner's zone with their length, so the model never converts zones or subtracts times.
+const zoned=(ms:number,timeZone:string)=>{
+ const part=Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone,hourCycle:'h23',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',timeZoneName:'longOffset'}).formatToParts(new Date(ms)).map(p=>[p.type,p.value]));
+ return `${part.year}-${part.month}-${part.day}T${part.hour}:${part.minute}:${part.second}${part.timeZoneName==='GMT'?'+00:00':part.timeZoneName!.slice(3)}`;
+};
+// Each window starts on the next whole minute and ends on the previous one, so an offered time is never inside a busy
+// second, and one that then holds fewer than duration minutes is dropped.
+export const ownerWindows=(windows:readonly BusyInterval[],timeZone:string,duration:number):readonly FreeWindow[]=>windows.flatMap(w=>{
+ const a=Math.ceil(Date.parse(w.start)/60000)*60000,b=Math.floor(Date.parse(w.end)/60000)*60000,minutes=(b-a)/60000;
+ return minutes>=duration?[{start:zoned(a,timeZone),end:zoned(b,timeZone),minutes}]:[];
+});

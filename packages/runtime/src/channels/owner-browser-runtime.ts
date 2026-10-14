@@ -12,11 +12,23 @@ import { commonOwnerBrowserRegistration,CommonBrowserRegistrationUnavailable } f
 import type { LLMGatewayAdapter } from '../llm/provider';
 import { localOwnerBinding, ownerBindingCurrent, verifyOwnerBinding } from '../identity/owner-binding';
 import { workspaceOwnerHost, workspaceMetadata } from './workspace-host';
-import {cloudflarePublicRead,PUBLIC_READ_RESERVED_BROWSER_MS} from './cloudflare-public-read';
+import {cloudflarePublicRead,PublicReadRefusal,PUBLIC_READ_RESERVED_BROWSER_MS} from './cloudflare-public-read';
 import {ordinaryPublicBrowserConfiguration} from './ordinary-public-browser-configuration';
-import {reserveOwnerPublicBrowser} from './owner-public-browser-spend';
+import {OwnerPublicBrowserCeilingExceeded,reserveOwnerPublicBrowser} from './owner-public-browser-spend';
 const browserFailureClass=(cause:unknown)=>cause instanceof CommonBrowserRegistrationUnavailable?'CommonBrowserRegistrationUnavailable':cause instanceof ClosedRunError?'ClosedRunError':cause instanceof TypeError?'TypeError':cause instanceof RangeError?'RangeError':cause instanceof SyntaxError?'SyntaxError':cause instanceof Error?'Error':'UnknownError';
 const traceBrowserFailure=(operation:string,cause:unknown)=>console.warn(JSON.stringify({event:'owner_browser_failure',operation,error_class:browserFailureClass(cause)}));
+// The spend ledger refuses a read that no retry can fund. The model is told so, and what to tell the owner.
+const spendRefusal=(cause:unknown)=>{
+  const ceiling=cause instanceof OwnerPublicBrowserCeilingExceeded;
+  traceBrowserFailure(ceiling?'public_read_spend_ceiling':'public_read_spend_reconciliation',cause);
+  return new PublicReadRefusal(ceiling
+    ?'No browser was started: the owner\'s browser spend limit is used up. Retrying will not help; tell the owner browsing is paused until the limit allows more.'
+    :'No browser was started: the owner\'s browser spend record needs reconciliation. Retrying will not help; tell the owner browsing is paused until it is reconciled.');
+};
+
+// The run lease's wake: maintenance runs when the lease's run deadline, its configuration or its session lifetime ends,
+// whichever comes first. It is a listed wake key, so an arbiter re-arm keeps it.
+export const COMMON_BROWSER_LEASE_DUE='common_browser_lease_due_v1';
 
 // The browser task follows the authenticated owner run. It needs no topic classifier
 // or canonical execution activation; provider identity and budget stay in the DO.
@@ -44,10 +56,11 @@ export function ownerBrowserRuntime(options: Readonly<{
     } : {}) });
   };
   const selectedConfiguration = async (cleanupOnly = false, normalRead = false) => automatic.selected || automatic.hasRetained() ? automatic.configuration(cleanupOnly) : configuration(cleanupOnly, normalRead);
-  // A held session, or the enabled typed task host for browse_act, serves browsing; otherwise only the owner's Cloudflare
-  // host does, on a staging Worker that registered its provider code and holds a browser binding. Browserbase keys never do.
+  // Browsing is offered only to an owner this object holds a binding for, since every browse call needs one. Then a held
+  // session, or the enabled typed task host for browse_act, serves browsing; otherwise only the owner's Cloudflare host
+  // does, on a staging Worker that registered its provider code and holds a browser binding. Browserbase keys never do.
   const cloudflareReady = () => options.env.WALDO_ENVIRONMENT === 'staging' && Boolean(options.env.BROWSER && (commonBrowserSdk() || commonPublicBrowserConfigured()));
-  const eligibleWith = (typed = false) => (): ToolEligibility => active || typed && options.typedHost?.() || cloudflareReady() ? { ok: true } : { ok: false, reason: 'not_configured' };
+  const eligibleWith = (typed = false) => (): ToolEligibility => binding() && (active || typed && options.typedHost?.() || cloudflareReady()) ? { ok: true } : { ok: false, reason: 'not_configured' };
   // The browser serves the owner bound to this physical object, through Telegram or the app; the directory confirms it.
   const binding = () => localOwnerBinding(options.storage.kv, options.env.OWNER_DO, options.actualDoId);
   const bound = (held: NonNullable<ReturnType<typeof binding>>) => ownerBindingCurrent(options.storage.kv, options.env.OWNER_DO, options.actualDoId, held);
@@ -108,6 +121,7 @@ export function ownerBrowserRuntime(options: Readonly<{
     lease={scope,deadline:scope.deadline,assertCurrent};
     options.storage.kv.put(`common-browser-run:${scope.runId}`,active.taskId);
     const wake=Math.min(scope.deadline,config.expiresAt,Date.now()+config.lifetimeMs),prior=await options.storage.getAlarm();
+    options.storage.kv.put(COMMON_BROWSER_LEASE_DUE,wake);
     await armAlarm(options.storage,Math.max(Date.now()+250,prior===null?wake:Math.min(prior,wake)));await assertCurrent();
     return {active,context:{...ctx,authenticatedUserId:config.ownerId,assertTaskSourceCurrent:assertCurrent}};
   };
@@ -160,7 +174,9 @@ export function ownerBrowserRuntime(options: Readonly<{
                 const scope=options.activeScope()!;
                 const declaredLimitMicrousd=options.env.COMMON_BROWSER_REGISTRATION?JSON.parse(options.env.COMMON_BROWSER_REGISTRATION).spend?.limitMicrousd:undefined;
                 const effectiveLimitMicrousd=Number.isSafeInteger(declaredLimitMicrousd)?Math.min(declaredLimitMicrousd,COMMON_TEST_CEILING_MICROUSD):declaredLimitMicrousd;
-                return reserveOwnerPublicBrowser({storage:options.storage,ownerId,custodyDigest:owner.custodyDigest,intent:`${scope.runId}:${scope.attempt}:${ctx.toolCallId}`,reservedBrowserMs:PUBLIC_READ_RESERVED_BROWSER_MS,now:Date.now(),declaredLimitMicrousd:effectiveLimitMicrousd,assertCurrent:()=>{scope.admit();if(options.activeScope()!==scope||!binding())throw new ClosedRunError();}});
+                try{
+                  return reserveOwnerPublicBrowser({storage:options.storage,ownerId,custodyDigest:owner.custodyDigest,intent:`${scope.runId}:${scope.attempt}:${ctx.toolCallId}`,reservedBrowserMs:PUBLIC_READ_RESERVED_BROWSER_MS,now:Date.now(),declaredLimitMicrousd:effectiveLimitMicrousd,assertCurrent:()=>{scope.admit();if(options.activeScope()!==scope||!binding())throw new ClosedRunError();}});
+                }catch(cause){if(cause instanceof ClosedRunError)throw cause;throw spendRefusal(cause);}
               }});
               return read(args,{...ctx,authenticatedUserId:ownerId,assertTaskSourceCurrent:assertReadCurrent});
             }
@@ -241,13 +257,16 @@ export function ownerBrowserRuntime(options: Readonly<{
     },
     async finish(scope?: RunEffectScope) {
       if (!scope || active?.scope !== scope) return;
-      active.host.resetAttachments();active.scope=undefined;lease=undefined;
+      active.host.resetAttachments();active.scope=undefined;lease=undefined;options.storage.kv.put(COMMON_BROWSER_LEASE_DUE,null);
       // Keep the disposable context/CDP connection under the original paid
       // session deadline. Idle requests fail admission until explicit continuation.
     },
     stop() { revokeCommonBrowsers(options.storage, Date.now()); },
     maintain() {
       return maintenance??=(async()=>{
+        // A lease wake that has come keeps a live lease's deadline, or goes, so no past wake stays for the arbiter to re-arm.
+        const leaseDue=options.storage.kv.get<number|null>(COMMON_BROWSER_LEASE_DUE);
+        if(typeof leaseDue==='number'&&leaseDue<=Date.now())options.storage.kv.put(COMMON_BROWSER_LEASE_DUE,lease&&lease.deadline>Date.now()?lease.deadline:null);
         if(active){await active.host.maintainHandoff();const row=options.storage.kv.get<{cleanup?:string;cleanupFailed?:boolean;session:{expiresAt:number}}>(`common-browser:${active.taskId}`);if(row&&!row.cleanupFailed&&(row.cleanup||row.session.expiresAt<=Date.now())){const held=active;await held.host.cancel();if(active===held){active=undefined;lease=undefined;}}}
         const config=await automatic.configuration(true)??(automatic.selected?undefined:configuration(true));
         if(config)await maintainCommonBrowsers(options.storage,config,Date.now());
