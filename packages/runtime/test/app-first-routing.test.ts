@@ -26,6 +26,7 @@ const UPDATE_TEXT = 'Your 10:30 moved to 11:00.';
 const FOLLOWUP_TEXT = 'Have you handled the deck review? Pat asked for it by 10.';
 const PREP_TEXT = 'Design review at 09:30. Bring the onboarding mocks; Pat is listed.';
 const ORDER_TEXT = 'Inbox triage done: two threads need you.';
+const CHECK_BACK_TEXT = 'I looked for the invoice in your sent mail and found nothing yet. Want me to draft it?';
 const NUDGE_TEXT = 'A nudge queued for the app.';
 const REPLY_TEXT = 'Here is your answer.';
 const fixture = vi.hoisted(() => ({ event: null as CalendarItem | null, changes: [] as CalendarChange[], requests: [] as string[] }));
@@ -48,7 +49,8 @@ vi.mock('../src/channels/owner-turn', async load => {
       : content.includes('[Mail follow-up check') ? FOLLOWUP_TEXT
       : content.includes('[Update check') ? UPDATE_TEXT
       : content.includes('[Scheduled card') ? CARD_TEXT
-      : content.includes('[Standing order due now') ? ORDER_TEXT : 'SKIP';
+      : content.includes('[Standing order due now') ? ORDER_TEXT
+      : content.includes('[Check-back due now') ? CHECK_BACK_TEXT : 'SKIP';
     return { ok: true, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
   return { ...original, createOwnerResponder: (...args: Parameters<typeof original.createOwnerResponder>) => { args[10] = gateway; return original.createOwnerResponder(...args); } };
@@ -217,16 +219,15 @@ describe('proactive work for an owner on Telegram who also uses the app', () => 
     });
   });
 
-  it('a heartbeat nudge is queued for the app, reaches the app chat, and Telegram gets one plain copy', async () => {
+  it('the check-back of a due loop is queued for the app, reaches the app chat, and Telegram gets one plain copy', async () => {
     await withOwner('routing-heartbeat', async (owner, state, ctx) => {
       loopBook(state.storage.sql, { newId: () => 'loop-1', now: () => AT }).open({ title: 'Send the invoice', due: `${DAY}T08:00` });
       await armHeartbeat(new Scheduler(state.storage.sql, state.storage, productionDeps()), Date.now() - 60 * 60_000);
       await schedulePass(owner, state);
       expect(outbox(state).filter(record => record.heartbeat).map(record => record.payload.chat_id)).toEqual([ctx.appSubject]);
       await outboxPass(owner, state, ctx);
-      const nudge = 'From your list, past due:\n- Send the invoice (due 2026-10-03 08:00)';
-      expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: nudge, channel: 'app' }]);
-      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: nudge }]);
+      expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: CHECK_BACK_TEXT, channel: 'app' }]);
+      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: CHECK_BACK_TEXT }]);
     });
   });
 

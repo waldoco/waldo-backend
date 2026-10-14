@@ -6,8 +6,9 @@ import { localIso } from './reminders';
 import type { FinalRecord, HeartbeatReceipt } from './telegram-final-outbox';
 
 // H1 of the heartbeat/cron plan: a periodic check-in tick that scans due work, stays silent when
-// nothing needs attention, and records every tick in schedule_runs. The tick is deterministic -
-// no LLM turn - so it needs no LoopPolicy entry and cannot spend tokens.
+// nothing needs attention, and records every tick in schedule_runs. The scan is deterministic; only
+// past-due loops Waldo took on start a model turn, the check-back, which reads the current state and
+// decides what to say or to stay silent.
 //
 // Run history is the scheduler-owned schedule_runs table (the one run-history record): the
 // Scheduler writes the row before dispatch, and the tick records its DECISION
@@ -17,12 +18,11 @@ import type { FinalRecord, HeartbeatReceipt } from './telegram-final-outbox';
 //
 // H1+H1b scope: past-due open loops, plus release of quiet-hours-held day cards (H1b). A card
 // held at its planned time (day_plan sent=2) is re-armed here once quiet ends; the real send
-// happens in the normal cards pipeline (the tick stays deterministic - no LLM turn) and marks
-// the card sent there. Due reminders need no heartbeat path: the C3 missed-run policy fires
-// the latest elapsed occurrence once, so a heartbeat copy would double-fire.
+// happens in the normal cards pipeline and marks the card sent there. Due reminders need no
+// heartbeat path: the C3 missed-run policy fires the latest elapsed occurrence once, so a
+// heartbeat copy would double-fire.
 export const HEARTBEAT_ID = 'heartbeat-tick';
 export const HEARTBEAT_EVERY_MS = 30 * 60_000;
-const MAX_LISTED_LOOPS = 3;
 const DUE_SCAN_LIMIT = 20;
 // Cross-tick flood control: a loop is re-notified only after this cooldown, and only while it is
 // still past due. The notified-occurrence key is (loop_id, due), so editing the due time starts a
@@ -48,6 +48,9 @@ export type HeartbeatDeps = Readonly<{
   plans: Pick<DayPlanBook, 'heldToday'>;
   timezone: string;
   now: () => number;
+  // The check-back turn for these loops: its reply, or null when the model decided to stay silent. A throw is a failed
+  // check-back the next tick retries, never a failed tick.
+  checkBack: (loops: readonly Loop[]) => Promise<string | null>;
   enqueue: (text: string, receipt: HeartbeatReceipt) => Promise<void>;
 }>;
 
@@ -115,15 +118,27 @@ export const heartbeatTick = (deps: HeartbeatDeps): ScheduleExecutor => {
       deps.scheduler.markHeartbeatDecision(runId, heldCards.length > 0 ? 'acted' : 'quiet');
       return;
     }
+    let text: string | null;
+    try { text = await deps.checkBack(notify); }
+    catch {
+      // checkBack logs its own failure. A model outage must not fail the tick: three failed ticks quarantine the heartbeat
+      // for a day, the held-card release above with it. The run records no decision and nothing is marked notified, so
+      // the next tick asks again.
+      return;
+    }
+    // The turn may have closed some loops. The receipt freezes each loop as the turn left it, so a loop the owner closes
+    // or moves before the send stops it.
+    const after = notify.map(loop => deps.sql.exec<{ status: string; due: string | null }>('SELECT status, due FROM loops WHERE id = ?', loop.id).toArray()[0])
+      .flatMap((row, index) => row?.due ? [{ id: notify[index]!.id, due: row.due, status: row.status }] : []);
+    if (text === null) {
+      // Checked and nothing to say: the cooldown holds these loops as if told, so the next tick does not ask again.
+      for (const loop of after) if (loop.status === 'open') markNotified(deps.sql, loop, firedAt);
+      deps.scheduler.markHeartbeatDecision(runId, heldCards.length > 0 ? 'acted' : 'quiet');
+      return;
+    }
     deps.scheduler.markHeartbeatDecision(runId, 'acted');
     deps.scheduler.markDelivery(runId, 'pending');
-    const listed = notify.slice(0, MAX_LISTED_LOOPS);
-    const lines = listed.map((loop) => `- ${loop.title}${loop.due ? ` (due ${loop.due.replace('T', ' ')})` : ''}`);
-    const more = notify.length > listed.length ? `\n…and ${notify.length - listed.length} more on your list.` : '';
-    await deps.enqueue(`From your list, past due:\n${lines.join('\n')}${more}`, {
-      id: entry.id, occurrence: entry.occurrence_at, schedulerRunId: runId,
-      loops: notify.map(loop => ({ id: loop.id, due: loop.due! })),
-    });
+    await deps.enqueue(text, { id: entry.id, occurrence: entry.occurrence_at, schedulerRunId: runId, loops: after });
     return 'delivery_pending';
   };
 };
@@ -132,21 +147,28 @@ export const heartbeatEligible = (record: FinalRecord, sql: Sql, loops: LoopBook
   if (!record.heartbeat) return true;
   if (isQuiet(loops.proactivity(), now, timezone) || loops.proactivity().volume === 'low') return false;
   const localNow = localIso(now, timezone).slice(0, 16);
-  return record.heartbeat.loops.length > 0 && record.heartbeat.loops.every(loop => sql.exec(
-    `SELECT 1 FROM loops l WHERE l.id = ? AND l.status = 'open' AND l.due = ? AND l.due <= ?
-      AND NOT EXISTS (SELECT 1 FROM heartbeat_notified n WHERE n.loop_id = l.id AND n.due = l.due AND n.notified_at >= ?)`,
-    loop.id, loop.due, localNow, now - RENOTIFY_COOLDOWN_MS,
-  ).toArray().length > 0);
+  // A receipt from before check-back turns names open loops only, so a missing status reads as open.
+  return record.heartbeat.loops.length > 0 && record.heartbeat.loops.every(loop => (loop.status ?? 'open') === 'open'
+    ? sql.exec(
+      `SELECT 1 FROM loops l WHERE l.id = ? AND l.status = 'open' AND l.due = ? AND l.due <= ?
+        AND NOT EXISTS (SELECT 1 FROM heartbeat_notified n WHERE n.loop_id = l.id AND n.due = l.due AND n.notified_at >= ?)`,
+      loop.id, loop.due, localNow, now - RENOTIFY_COOLDOWN_MS,
+    ).toArray().length > 0
+    : sql.exec('SELECT 1 FROM loops WHERE id = ? AND status = ? AND due = ?', loop.id, loop.status, loop.due).toArray().length > 0);
 };
 
 export const settleHeartbeat = (record: FinalRecord, sql: Sql, scheduler: Scheduler): void => {
   if (!record.heartbeat || record.status === 'pending') return;
   if (record.status === 'delivered') {
     if (record.deliveredAt === undefined) throw new Error('heartbeat ACK timestamp missing');
-    for (const loop of record.heartbeat.loops) sql.exec(
-      'INSERT INTO heartbeat_notified (loop_id, due, notified_at) VALUES (?, ?, ?) ON CONFLICT (loop_id, due) DO UPDATE SET notified_at = max(heartbeat_notified.notified_at, excluded.notified_at)',
-      loop.id, loop.due, record.deliveredAt,
-    );
+    for (const loop of record.heartbeat.loops) markNotified(sql, loop, record.deliveredAt);
   }
   scheduler.settleDelivery(record.heartbeat.schedulerRunId, record.status === 'delivered');
+};
+
+const markNotified = (sql: Sql, loop: Readonly<{ id: string; due: string }>, at: number): void => {
+  sql.exec(
+    'INSERT INTO heartbeat_notified (loop_id, due, notified_at) VALUES (?, ?, ?) ON CONFLICT (loop_id, due) DO UPDATE SET notified_at = max(heartbeat_notified.notified_at, excluded.notified_at)',
+    loop.id, loop.due, at,
+  );
 };

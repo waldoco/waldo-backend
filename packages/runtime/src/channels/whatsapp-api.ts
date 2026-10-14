@@ -93,7 +93,7 @@ export const whatsappForwarded = (message: WaIngressMessage): boolean => {
   return !context.success || context.data.forwarded === true || context.data.frequently_forwarded === true;
 };
 
-// Normalization for /whatsapp-turn: each of the owner's text messages becomes a
+// Normalization for WhatsApp ingress: each of the owner's text messages becomes a
 // telegram-shaped update (subject digits double as the numeric owner/chat id; ids live in the
 // 9e12 namespace so they never collide with telegram update ids). An approval reply "a:p12"
 // synthesizes the equivalent callback_query because WhatsApp buttons carry no callback_data.
