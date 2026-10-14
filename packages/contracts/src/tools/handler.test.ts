@@ -168,10 +168,20 @@ describe('privileged-action set — ADR-0049', () => {
       'restore_message',
       'archive_thread',
       'update_thread_topics',
+      'set_proactivity',
+      'set_schedule_preference',
       'skills_install',
       'skills_disable',
       'use_mac',
+      'set_timezone',
     ]);
+  });
+
+  it('includes the owner setting tools: tainted text never sets the zone, proactivity or a scheduled behavior', () => {
+    for (const tool of ['set_timezone', 'set_proactivity', 'set_schedule_preference'] as const) {
+      expect(taintGateBlocksDirectExecution(tool, 'external')).toBe(true);
+      expect(taintGateBlocksDirectExecution(tool, null)).toBe(false);
+    }
   });
 
   it("excludes 'propose_action' — it IS the human-confirm route the gate falls back to", () => {

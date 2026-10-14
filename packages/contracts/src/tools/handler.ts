@@ -150,10 +150,15 @@ export const PRIVILEGED_ACTION_TOOLS: readonly ToolName[] = [
   'restore_message',
   'archive_thread',
   'update_thread_topics',
+  // The owner's own settings change only on the owner's own words: proactivity and scheduled behaviors decide what Waldo
+  // sends unasked, and a confirmed time zone arms that delivery.
+  'set_proactivity',
+  'set_schedule_preference',
   // Changing durable procedure availability is owner-controlled, never provider-authorized.
   'skills_install',
   'skills_disable',
   'use_mac',
+  'set_timezone',
 ];
 
 // The single authority of the ADR-0049 taint gate, pure so hook and dispatcher share one law:
