@@ -182,7 +182,7 @@ export const createOwnerResponder = (
   const memoryContext = () => activeOwnerTurn ? { ownerInitiated:true, memoryTurn: {
     ownerId: safety.authenticatedUserId, conversationRef: activeOwnerTurn.conversationRef,
     current: { message_ref: activeOwnerTurn.messageRef?.id ?? activeOwnerTurn.traceId, ...memoryView(activeOwnerTurn.parts) },
-    recent: [...recentOwnerTurns.values()].filter(turn => !holdsHeldTopic(turn.text)).concat(control.heard().map((text, index) => ({ message_ref: `${traceId}-steer-${index}`, text }))),
+    recent: [...recentOwnerTurns.values()].filter(turn => !holdsHeldTopic(turn.text)).concat(control.heard().map((steer, index) => ({ message_ref: `${traceId}-steer-${index}`, text: steer.text, sourceQuoteRanges: steer.foreignRanges }))),
   } } : {};
   let expectedProcedure: string | undefined;
   const complete = async (trace: string, purpose: string, systemPrompt: string | SystemPrompt, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName) => {

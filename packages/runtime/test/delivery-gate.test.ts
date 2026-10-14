@@ -967,7 +967,7 @@ describe('DeliveryGate runtime policy state', () => {
   it('freezes held fetch_alert candidates without outbox or counter mutation', async () => {
     const sink = new FakeSink();
     const runtime = freshRuntimeStub();
-    const firstAt = futureOccurrence();
+    const firstAt = utcOccurrence('2026-01-01');
     const firstRun = await runtime.startRun({
       userId: USER,
       trigger: FETCH_ALERT,
@@ -1042,17 +1042,18 @@ describe('DeliveryGate runtime policy state', () => {
   it('releases a held candidate through a fresh GATED step', async () => {
     const sink = new FakeSink();
     const runtime = freshRuntimeStub();
+    const firstAt = utcOccurrence('2026-01-01');
     const firstRun = await runtime.startRun({
       userId: USER,
       trigger: FETCH_ALERT,
-      occurrenceAt: futureOccurrence(),
+      occurrenceAt: firstAt,
     });
     await tick(runtime, firstRun);
 
     const heldRun = await runtime.startRun({
       userId: USER,
       trigger: FETCH_ALERT,
-      occurrenceAt: futureOccurrence(),
+      occurrenceAt: firstAt + 60_000,
     });
     await tick(runtime, heldRun);
     expect(await heldCount(runtime, heldRun)).toBe(1);
@@ -1068,7 +1069,7 @@ describe('DeliveryGate runtime policy state', () => {
     const releasedRun = await releaseHeld(runtime, {
       userId: USER,
       eventId: heldRun,
-      occurrenceAt: futureOccurrence(),
+      occurrenceAt: firstAt + 120_000,
     });
     expect(releasedRun).not.toBeNull();
     expect(await heldCount(runtime, heldRun)).toBe(0);
@@ -1385,11 +1386,12 @@ describe('DeliveryGate runtime policy state', () => {
   it('keeps intervention_knock exempt and capped at two sends', async () => {
     const sink = new FakeSink();
     const runtime = freshRuntimeStub();
-    for (const eventId of ['intervention-01', 'intervention-02']) {
+    const firstAt = utcOccurrence('2026-01-01');
+    for (const [index, eventId] of ['intervention-01', 'intervention-02'].entries()) {
       const runId = await runtime.startRun({
         userId: USER,
         trigger: 'intervention',
-        occurrenceAt: futureOccurrence(),
+        occurrenceAt: firstAt + index * 60_000,
         candidate: {
           push_class: INTERVENTION_KNOCK,
           trigger: 'intervention',
@@ -1403,7 +1405,7 @@ describe('DeliveryGate runtime policy state', () => {
     const thirdRun = await runtime.startRun({
       userId: USER,
       trigger: 'intervention',
-      occurrenceAt: futureOccurrence(),
+      occurrenceAt: firstAt + 120_000,
       candidate: {
         push_class: INTERVENTION_KNOCK,
         trigger: 'intervention',
@@ -1526,10 +1528,11 @@ describe('DeliveryGate runtime policy state', () => {
   it('applies adjustment proposed sub-cap without capping executed adjustments', async () => {
     const sink = new FakeSink();
     const runtime = freshRuntimeStub();
+    const firstAt = utcOccurrence('2026-01-01');
     const proposedRun = await runtime.startRun({
       userId: USER,
       trigger: 'handoff_act',
-      occurrenceAt: futureOccurrence(),
+      occurrenceAt: firstAt,
       candidate: {
         push_class: ADJUSTMENT,
         trigger: 'handoff_act',
@@ -1543,7 +1546,7 @@ describe('DeliveryGate runtime policy state', () => {
     const heldProposedRun = await runtime.startRun({
       userId: USER,
       trigger: 'handoff_act',
-      occurrenceAt: futureOccurrence(),
+      occurrenceAt: firstAt + 60_000,
       candidate: {
         push_class: ADJUSTMENT,
         trigger: 'handoff_act',
@@ -1557,7 +1560,7 @@ describe('DeliveryGate runtime policy state', () => {
     const executedRun = await runtime.startRun({
       userId: USER,
       trigger: 'handoff_act',
-      occurrenceAt: futureOccurrence(),
+      occurrenceAt: firstAt + 120_000,
       candidate: {
         push_class: ADJUSTMENT,
         trigger: 'handoff_act',
