@@ -77,8 +77,10 @@ export type OwnerHistoryFactory = (context: OwnerContextCapability, scope: RunEf
 // a host that cannot admit the owner throws, and the job runs nothing. A job that converses writes the chain the host names
 // for the admitted owner, given the chain its surface adapter passed: the one that surface's owner turns read.
 export type OwnerJobHost = Readonly<{ admit(): Promise<OwnerMessageAdmission | undefined>; chain(admission: OwnerMessageAdmission, surfaceChain: string): string }>;
-export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost }>;
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost }>;
+// ownerProfile: the host-framed line about who the owner is. An admitted job composes it into its owner context; a turn
+// without a composed owner context reads it directly.
+export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null> }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null> }>;
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 // The reply's system prompt with the byte size of each joined section, so a trace shows what fills it.
@@ -185,7 +187,7 @@ export const createOwnerResponder = (
   const memoryContext = () => activeOwnerTurn ? { ownerInitiated:true, memoryTurn: {
     ownerId: safety.authenticatedUserId, conversationRef: activeOwnerTurn.conversationRef,
     current: { message_ref: activeOwnerTurn.messageRef?.id ?? activeOwnerTurn.traceId, ...memoryView(activeOwnerTurn.parts) },
-    recent: [...recentOwnerTurns.values()].filter(turn => !holdsHeldTopic(turn.text)).concat(control.heard().map((text, index) => ({ message_ref: `${traceId}-steer-${index}`, text }))),
+    recent: [...recentOwnerTurns.values()].filter(turn => !holdsHeldTopic(turn.text)).concat(control.heard().map((steer, index) => ({ message_ref: `${traceId}-steer-${index}`, text: steer.text, sourceQuoteRanges: steer.foreignRanges }))),
   } } : {};
   let expectedProcedure: string | undefined;
   const complete = async (trace: string, purpose: string, systemPrompt: string | SystemPrompt, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName) => {
@@ -515,6 +517,8 @@ export const createOwnerResponder = (
           // Owner memory gets the room left in the FINAL system prompt (after the skill wrapper), because the sanitiser drops an oversize one whole.
           const composed = context ? await composer.compose(invocation, contextInputs()) : undefined;
           if (composed && !composed.ok) throw new Error(`owner context failed: ${composed.failure.code}`);
+          // A composed owner context carries this line in its identity; a turn or job without one (no directory) reads it here.
+          const ownerProfileLine = context ? undefined : (await privateOwner?.ownerProfile?.()) ?? undefined;
           await assertCurrent();
           const unboundSystem = (): SystemPrompt => {
             const wrapped = skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined);
@@ -528,7 +532,7 @@ export const createOwnerResponder = (
             const clockLine = ownerClockLine(clock);
             // Stable head (behavior, catalog, orders, loops), then the procedure, then the per-turn tail; REASONS opens with the owner's text.
             const headWith = (loops = '') => [behavior, skillMetadata, ordersSection, loops].filter(Boolean).join('\n\n');
-            const tailWith = (memoryPart: readonly string[]) => [...memoryPart, reasons, toolResultsNote, healthSection, clockLine, taskContext, connections].filter(Boolean).join('\n\n');
+            const tailWith = (memoryPart: readonly string[]) => [...memoryPart, reasons, toolResultsNote, healthSection, ownerProfileLine, clockLine, taskContext, connections].filter(Boolean).join('\n\n');
             // Owner memory takes its room first; open loops get what the same reserve leaves, and the section names what it left out.
             const room = systemRoom(withOwnerSkillProcedures(headWith(), wrapped, tailWith([])));
             const memoryPart = memory ? [turnMemoryPrompt(promptMemory()!, ownerCurrentText, room)] : [];
@@ -539,7 +543,7 @@ export const createOwnerResponder = (
             const text = withOwnerSkillProcedures(head, wrapped, tail);
             const sections: Partial<Record<SystemSection, number>> = {
               ...(reasons ? { reasons: utf8Bytes(reasons) } : {}), ...(toolResultsNote ? { tool_results: utf8Bytes(toolResultsNote) } : {}), behavior: utf8Bytes(behavior),
-              ...(healthSection ? { health: utf8Bytes(healthSection) } : {}), clock: utf8Bytes(clockLine),
+              ...(healthSection ? { health: utf8Bytes(healthSection) } : {}), ...(ownerProfileLine ? { owner_profile: utf8Bytes(ownerProfileLine) } : {}), clock: utf8Bytes(clockLine),
               ...(memoryPart.length ? { memory: utf8Bytes(memoryPart[0]!) } : {}), ...(ordersSection ? { orders: utf8Bytes(ordersSection) } : {}),
               ...(loopsSection ? { loops: utf8Bytes(loopsSection) } : {}), ...(skillMetadata ? { skill_catalog: utf8Bytes(skillMetadata) } : {}),
               ...(taskContext ? { task_context: utf8Bytes(taskContext) } : {}), ...(connections ? { connections: utf8Bytes(connections) } : {}),
@@ -651,6 +655,7 @@ export const createOwnerResponder = (
     let healthRead: Promise<ContextHealthMaterial | null> | undefined;
     const jobContext = createOwnerTurnContext(admission, {
       ...(surfaceChain === undefined ? {} : { conversationRef: jobHost.chain(admission, surfaceChain) }),
+      ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}),
       toolOutputs: recentToolResults,
       ...(health ? { health: () => healthRead ??= health(trace) } : {}),
       onPhase: (phase, previousMs) => log({ trace, hop: 'composer_phase', ms: previousMs, ok: true, detail: phase }),
@@ -750,7 +755,7 @@ export const createOwnerResponder = (
         const capturedTurn = { ...turn, memoryWrites };
         const preparedContext = privateOwner?.contextHost ? await privateOwner.contextHost.prepare(capturedTurn, turn.runScope) : undefined;
         const preparedSkills = privateOwner?.skillHost ? await privateOwner.skillHost.prepare(capturedTurn, preparedContext?.invocation.verified_authority.principal_ref ?? ownerId, turn.runScope) : undefined;
-        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}) });
+        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}) });
         control.route(scoped.control);
         scopedCompaction = scoped.compactIfDue;
         try { return await scoped.respond(capturedTurn, time); }
