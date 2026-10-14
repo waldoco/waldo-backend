@@ -2489,3 +2489,17 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 - **Staging is unchanged:** `6be19816` (`a8c92893`). The deploys run after the demo:
   1. `72030b34`, unchanged, to verify Gmail;
   2. a fresh tip with #1223 and #1221 (after `mig.sh`), plus #1218 if the persistence review is confirmed. That one deploys the edge first.
+
+## 09:30Z-10:46Z: #1221 merged and its migration applied; #1213 FAIL again; overlap check; two new builder chips
+
+- **#1221 merged as `49669c49`**, pinned to `94c749b2`. Migration `20261014060000` was applied on staging through `mig.sh`: preflight showed one pending migration whose bytes match the reviewed head, and afterwards 59 are applied and 0 pending (6166453180). Ashish's `20261014120000` comes after it.
+- **#1218.** The bounded persistence review is PASS WITH CONDITIONS (6165919118). C1, a disconnect test, was built by a chip session as `ee812f17`; a delta review is running. C2 (forget the Google name) goes to #1227's ADR. C3 is done: the plan row is amended at `b45b3dd9`.
+- **#1213: FAIL at `22078b2e`** (6166527226). Two more guards are untested: `alarm-slot.ts:96` and `owner-do.ts:961`. The builder was messaged and is adding two real-scheduler tests.
+- **Overlap check** (6166358821):
+  - #1213 was being reviewed twice.
+  - The owner's doc has two "not covered" tabs.
+  - A sequential merge simulation of 13 PRs: #1229, #1230, #1224 and #1225 need the tip carried in.
+- **New chips:** X (#1108, then the check-back turn, then the failure notice) and Z ((vi) `send_console_link` and trace ids).
+- **The review session merged** #1222 (CI now runs the link-routing, iMessage and Mac-closeout pools), #1220 and #1226. The tip is `d591b7da`.
+- **The owner's doc:** my tab's "Next work" section is replaced by the end-of-day order.
+- **Staging is still `6be19816` (`a8c92893`).** The owner deploys `72030b34` next.
