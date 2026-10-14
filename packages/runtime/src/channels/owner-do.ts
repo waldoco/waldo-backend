@@ -134,7 +134,7 @@ import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
 import { APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_THREADS_PATH, APP_UPDATE_BASE, appSubjectFor, appTranscriptPage, ownerPrincipalRef, parseAppSend } from './app-api';
-import { appThreadsRequest, threadChainRef, threadOfChain, threadRecord, touchThread, type AppThreadsHost } from './app-threads';
+import { appThreadsRequest, recallReach, threadChainRef, threadOfChain, threadRecord, threadRowsPrefix, touchThread, type AppThreadsHost } from './app-threads';
 import { stableJson } from '../context-composer/canonical';
 import { APP_CONNECT_GUIDANCE, appApprovalLink, appCaller } from './surfaces/app';
 import { appApprovalsRequest } from './app-approvals';
@@ -863,7 +863,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
   // The owner object's side of the app's threads: their messages ride the one app inbox and drain, on each thread's own chain.
   private threadsHost(name: string, hash: string, ownerId: string): AppThreadsHost {
-    const principal=ownerPrincipalRef(ownerId),chain=(thread:string)=>`canonical-owner-v1:${principal}:ten_${ownerId.replaceAll('-','').toLowerCase()}:thread:${thread}:`;
+    const principal=ownerPrincipalRef(ownerId),chain=(thread:string)=>threadRowsPrefix(principal,thread);
     const kv=this.ctx.storage.kv,at={step:'context'};
     return {storage:this.ctx.storage,now:()=>Date.now(),principal,messages:{
       admit:async(ref,clientId,text,assertCurrent,revision)=>{
@@ -2569,7 +2569,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         { conversationRef: ownerChainRef('telegram', subject), health: () => health ??= healthContext.latest(turn.traceId) });
     } } } : undefined;
     const responder = createTelegramResponder(
-      key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
+      key, { ...indexedConversationStore(kv, episodes, () => Date.now()), recalls: (entryId: string) => recallReach(identity, identity.get<string>('owner_principal_ref'), null)(entryId) }, memory, log,
       { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...workspaceTools, ...reminderHandlers(book), ...healthLogHandlers(healthLogs), getHealthHandler(healthRead, clock), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
         // Owner-ruled OTP parity (September 27, 2026): the extracted artifact goes to the owner
         // as a direct message - fixed copy, no model involvement, and the send is never logged
@@ -2633,11 +2633,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if(context.conversationRef!==record.conversationRef)throw new ClosedRunError();
         return context;
       }},history:context=>({...indexedConversationStore(canonicalOwnerConversationStore(this.ctx.storage,context,this.logSkippedLoad,threadOfChain(context.conversationRef)??undefined),episodes,()=>Date.now()),
-        noteUnfinished:(line,scope)=>this.appInbox.noteLanded(scope.runId,scope.attempt,line)})} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
+        noteUnfinished:(line,scope)=>this.appInbox.noteLanded(scope.runId,scope.attempt,line),
+        recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,threadOfChain(context.conversationRef))})} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
         const record=this.activeIMessage;
         if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==record.text)throw new ClosedRunError();
         return iMessageOwnerContext(this.imessageHost,record,scope);
-      }},history:context=>canonicalOwnerConversationStore(this.ctx.storage,context)} : telegramContext,
+      }},history:context=>({...canonicalOwnerConversationStore(this.ctx.storage,context),recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,null)})} : telegramContext,
     );
     // A job prompt built on the ledger: the owner's health logs reach the model as this turn's context.
     const ledgerJob = async (trace: string, said: string, toolNames?: Parameters<typeof responder.prompt>[4]) =>

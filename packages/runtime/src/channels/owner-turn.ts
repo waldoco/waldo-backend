@@ -316,7 +316,10 @@ export const createOwnerResponder = (
   const episodeSearch = tools.find((handler) => handler.name === 'search_episodes');
   const recallFor = async (source: ClaimStore, text: string, room: number, ownerTurn?: string): Promise<string> => {
     const previous = ownerTurn === undefined ? undefined : previousOwnerMessage((id) => tree.get(id), ownerTurn);
-    const episodes = ownerTurn === undefined || !episodeSearch ? undefined : episodesFromSearchTool(episodeSearch, { ...safety, turnId: ownerTurn, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) });
+    const searched = ownerTurn === undefined || !episodeSearch ? undefined : episodesFromSearchTool(episodeSearch, { ...safety, turnId: ownerTurn, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) });
+    // A chat's recall stays in that chat; search_episodes, which the model calls on purpose, still reaches every chat.
+    const reach = conversationStore?.recalls;
+    const episodes = searched && reach ? { ...searched, search: async (query: string, limit: number) => (await searched.search(query, limit)).filter((hit) => reach(hit.entry_id)) } : searched;
     const claims: Pick<ClaimStore, 'recall'> = backgroundSourceTaint === 'external' ? { recall: (query, limit) => source.recall(query, limit).filter((claim) => claim.kind !== 'health') } : source;
     const recalled = await recallForTurn({ claims, question: text, room, holds: holdsIn(heldTopics()), ...(previous === undefined ? {} : { previous }), ...(episodes && ownerTurn !== undefined ? { episodes, current: ownerTurn } : {}) });
     // Recall fails open: the turn goes on with what the other leg found, and the trace names the failed leg without any text.

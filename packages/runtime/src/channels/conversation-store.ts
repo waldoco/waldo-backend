@@ -14,6 +14,8 @@ export type ConversationStore = Readonly<{
   noteQuoteRanges?(entryId: string, text: string, ranges: readonly Readonly<{ start: number; end: number }>[]): void;
   // The receipt line of what an owner turn that did not finish already did, for the reply that says it did not finish.
   noteUnfinished?(receiptLine: string, scope: RunEffectScope): void;
+  // Whether per-turn recall may bring this past message into this chain's turn; without it, every indexed message.
+  recalls?(entryId: string): boolean;
   forgetSources?(topic: string): Promise<{ sources: ForgetSource[]; incomplete: boolean }>;
   forgetSourceBatch?(topic: string): Promise<ForgetBatch>;
   forgetSourceBatchCurrent?(topic: string): ForgetBatch | null;

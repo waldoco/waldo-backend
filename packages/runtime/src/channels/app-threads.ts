@@ -20,6 +20,17 @@ export const threadOfChain = (conversationRef: string): string | null => {
   return owner === 'owner' && principal && rest.length === 0 && appThreadIdV1Schema.safeParse(thread).success ? thread! : null;
 };
 export const threadRecord = (kv: Pick<DurableObjectStorage['kv'], 'get'>, thread: string) => kv.get<ThreadRecord>(THREAD + thread);
+// A thread's canonical rows: its conv rows and their witnesses.
+export const threadRowsPrefix = (principal: string, thread: string) => `canonical-owner-v1:${principal}:ten_${principal.slice('prn_'.length)}:thread:${thread}:`;
+// Which past messages per-turn recall may bring into a chain's turn: a thread's turn only those written on that thread, any
+// other turn none written on a thread. A row's witness names the chain it was written on. Without an app principal there are
+// no threads.
+export const recallReach = (kv: Pick<DurableObjectStorage['kv'], 'get' | 'list'>, principal: string | undefined, thread: string | null): (entryId: string) => boolean => {
+  const onThread = (id: string, rows: string) => kv.get(`${rows}witness:${id}`) !== undefined;
+  if (!principal) return () => thread === null;
+  if (thread) return id => onThread(id, threadRowsPrefix(principal, thread));
+  return id => ![...kv.list<ThreadRecord>({ prefix: THREAD })].some(([, record]) => onThread(id, threadRowsPrefix(principal, record.thread_id)));
+};
 // After a thread message's turn, the thread shows that it moved; the time only ever moves forward.
 export const touchThread = (kv: Pick<DurableObjectStorage['kv'], 'get' | 'put'>, thread: string, at: number) => {
   const record = kv.get<ThreadRecord>(THREAD + thread);
