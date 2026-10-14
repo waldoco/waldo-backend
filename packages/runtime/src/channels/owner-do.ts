@@ -1054,9 +1054,6 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         console.log(JSON.stringify({ hop: 'set_webhook', ok: false, error: String(error) }));
       }
     }
-    if (new URL(request.url).pathname === '/whatsapp-turn' && request.method === 'POST') {
-      return this.whatsappTurn(request, body);
-    }
     if (new URL(request.url).pathname === '/event' && request.method === 'POST') {
       return this.recordEvent(request, body);
     }
@@ -1150,28 +1147,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
 
   // WhatsApp ingress (WHATSAPP_CHANNEL_SPEC W3). The webhook has already verified Meta's
-  // signature and resolved this sender to this owner; here we bind the whatsapp subject, then
-  // normalize each text message into the telegram-shaped update the turn pipeline consumes
+  // signature and resolved this sender to this owner, and whatsappAdmit has bound the subject;
+  // here each claimed text message becomes the telegram-shaped update the turn pipeline consumes
   // (subject digits double as the numeric owner/chat id). Approval replies arrive as text
   // ("a:p12") because WhatsApp buttons carry no callback_data, so that shape synthesizes the
   // equivalent callback_query. Voice/audio notes ride the same transcriber path as Telegram
   // (W4): file_id carries the WhatsApp media id and the per-channel downloader in setup()
   // resolves it through the Graph two-step. Other non-text messages are skipped.
-  private async whatsappTurn(request: Request, body: string): Promise<Response> {
-    const subject = request.headers.get('x-waldo-whatsapp-subject') ?? '';
-    if (!/^\d{6,15}$/.test(subject)) return new Response('forbidden', { status: 403 });
-    const { kv } = this.ctx.storage;
-    if (kv.get<string>('whatsapp_subject') !== subject) {
-      kv.put('whatsapp_subject', subject);
-      this.runtimes = {};
-    }
-    const value = JSON.parse(body) as { messages?: { id?: string; from?: string; type?: string; text?: { body?: string }; audio?: { id?: string; mime_type?: string; voice?: boolean } }[] };
-    const claimed = claimNewWhatsAppMessages(kv, value.messages ?? [], Date.now());
-    await this.runWhatsappClaimed(null, claimed, subject);
-    return new Response('ok');
-  }
-
-  private async runWhatsappClaimed(pendingKey: string | null, claimed: readonly { id?: string; from?: string; type?: string; text?: { body?: string }; audio?: { id?: string; mime_type?: string; voice?: boolean } }[], subject: string): Promise<void> {
+  private async runWhatsappClaimed(pendingKey: string, claimed: readonly { id?: string; from?: string; type?: string; text?: { body?: string }; audio?: { id?: string; mime_type?: string; voice?: boolean } }[], subject: string): Promise<void> {
     // Sequence allocation, the turns and the persisted counter are one serial unit, so an overlapping
     // request cannot read the same wa_seq and hand a different message the same update_id.
     await this.serial(async () => {
@@ -1196,7 +1179,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // text, no error text). If no turn started it is safe to resend; if one started it may have had effects, so the notice says
         // to check first. A turn that already started is never replayed. Listener failures propagate here for this fixed notice.
         // Consume the pending record before the send so a cold instance recovering during this request cannot send a second notice.
-        if (pendingKey) { this.liveWhatsapp.delete(pendingKey); this.ctx.storage.kv.delete(pendingKey); }
+        this.liveWhatsapp.delete(pendingKey); this.ctx.storage.kv.delete(pendingKey);
         try {
           const { api, owner } = this.setup('whatsapp');
           await api.sendMessage({ chat_id: owner, text: started === 0 ? WHATSAPP_UNSTARTED_NOTICE : WHATSAPP_PARTIAL_NOTICE });
