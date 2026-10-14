@@ -51,7 +51,7 @@ export const iMessageSendUrl = (address: string, code: string) => `sms:${encodeU
 /** Result of "Get an iMessage link code": the code, and on a phone a button that opens Messages ready to send. */
 export function iMessageLinkPage(code: string, address: string | undefined): string {
   const to = address ? escape(address) : 'the Waldo iMessage number';
-  const open = address ? `<p><a href="${escape(iMessageSendUrl(address, code))}" style="display:inline-block;padding:14px 22px;border-radius:12px;background:#0a84ff;color:#fff;text-decoration:none;font-weight:600">Open Messages</a></p><p>On your iPhone, tap <b>Open Messages</b>, then tap <b>Send</b>.</p>` : '';
+  const open = address ? `<p><a href="${escape(iMessageSendUrl(address, code))}" style="display:inline-block;padding:14px 22px;border-radius:12px;background:#0a84ff;color:#fff;text-decoration:none;font-weight:bold">Open Messages</a></p><p>On your iPhone, tap <b>Open Messages</b>, then tap <b>Send</b>.</p>` : '';
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect iMessage</title></head>`
     + `<body style="font:17px system-ui;margin:32px;max-width:560px"><h1>Connect iMessage</h1>${open}`
     + `<p>Or text exactly this to ${to} from your iPhone:</p><p style="font:600 24px ui-monospace,monospace">waldo ${escape(code)}</p>`
