@@ -662,7 +662,7 @@ export const createOwnerResponder = (
         context: contextInputs(),
         userEntry,
         assistantEntryId: `${id}-reply`,
-      })).finally(() => { ownerTurnActive = false; backgroundToolNames = undefined; control.end(); });
+      })).finally(() => { ownerTurnActive = false; backgroundToolNames = undefined; newOwner = undefined; control.end(); });
       privateRunScope?.admit();
       await assertCurrent();
       const reply = tree.get(publication.leafId)!.appPayload;
