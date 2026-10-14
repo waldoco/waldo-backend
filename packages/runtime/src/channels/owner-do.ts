@@ -2105,6 +2105,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           : { id: `local:${email}`, email, scopes: grant.scopes ?? null, refresh_token: grant.refresh_token };
         await storage.put('google:accounts', [...(await accounts()).filter((known) => known.email !== email), account]);
         noteHealth(account.id, '');
+        // The next sweep watches with the route this grant gives, rather than waiting out a stored skip or failure.
+        gmailPushBook(identity).reset();
+        calendarPushBook(identity).clearFailure();
       },
       // Tokens saved before multi-account and Vault move into the account list once.
       async migrate(): Promise<void> {
@@ -2888,7 +2891,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         });
         if (watch === 'started' || watch === 'failed') log({ trace: `${entry.id}:${entry.occurrence_at}`, hop: 'calendar_watch', ms: Date.now() - started, ok: watch === 'started', code: `calendar_watch_${watch}` });
         const mailWatch = await ensureGmailWatch({ book: gmailPushBook(identity), now: started, config: gmailPush(), doName: identity.get<string>('do_name'), resolve: () => mcpGoogleAuth.resolve(undefined, 'mail'), proxy: vault });
-        if (mailWatch === 'started' || mailWatch === 'failed') log({ trace: `${entry.id}:${entry.occurrence_at}`, hop: 'gmail_watch', ms: Date.now() - started, ok: mailWatch === 'started', code: `gmail_watch_${mailWatch}` });
+        if (mailWatch !== 'fresh') log({ trace: `${entry.id}:${entry.occurrence_at}`, hop: 'gmail_watch', ms: Date.now() - started, ok: mailWatch === 'started', code: typeof mailWatch === 'string' ? `gmail_watch_${mailWatch}` : `gmail_watch_skipped:${mailWatch.skipped}` });
       }
     };
     const briefSweep = async (entry: ScheduleEntry) => {
