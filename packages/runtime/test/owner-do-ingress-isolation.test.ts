@@ -871,7 +871,7 @@ it('a forward that arrives while a turn runs is its own labelled turn: no steer,
   });
 }, 30_000);
 
-it.each([{ command: '/fire nightly', updateId: 994461 }, { command: '/stop', updateId: 994462 }])('a forwarded $command is someone else\'s text: it runs as one labelled turn, never as the owner\'s command', async ({ command, updateId }) => {
+it.each([{ command: '/fire nightly', updateId: 994461 }, { command: '/stop', updateId: 994462 }, { command: '/ledger', updateId: 994485 }])('a forwarded $command is someone else\'s text: it runs as one labelled turn, never as the owner\'s command', async ({ command, updateId }) => {
   const subject = 81101;
   let commands = 0;
   const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
@@ -905,6 +905,59 @@ it.each([{ command: '/fire nightly', updateId: 994461 }, { command: '/stop', upd
     expect.soft(JSON.stringify(modelInputs)).toContain(JSON.stringify(`[Forwarded by the owner from someone else:]\n${JSON.stringify(command)}\n[End of forwarded text.]`).slice(1, -1));
     internal.runHarness = runHarness;
     internal.turn = turn;
+    await state.storage.deleteAlarm();
+  });
+}, 30_000);
+
+it('a forwarded /start or /link gets one fixed reply and is never redeemed or stored; the owner\'s own bare /start stays silent', async () => {
+  const subject = 81141;
+  const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
+  const { persistInboxWake } = await import('../src/scheduler/alarm-slot');
+  await runInDurableObject(doStub(subject), async (instance, state) => {
+    await state.storage.put({ telegram_subject: String(subject), do_name: route(subject).doName });
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    const sam = { id: 4242, is_bot: false, first_name: 'Sam' };
+    // The shape the Bot API server sends: forward_origin beside the legacy forward fields.
+    const forward = { forward_origin: { type: 'user', date: 1_700_000_000, sender_user: sam }, forward_from: sam, forward_date: 1_700_000_000 };
+    const enqueue = (updateId: number, message: Record<string, unknown>) => instance.fetch(new Request('https://telegram-owner/enqueue', { method: 'POST', headers: { 'x-waldo-inbox-secret': 'hermetic-test-webhook-secret', 'x-waldo-telegram-subject': String(subject), 'x-waldo-do-name': route(subject).doName }, body: JSON.stringify({ update_id: updateId, message: { message_id: updateId, date: 1_700_000_100, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, ...message } }) }));
+    const before = outbox.length;
+    expect((await enqueue(994481, { text: '/start ABCDEFGH23', ...forward })).status).toBe(200);
+    expect((await enqueue(994482, { text: '/link ABCDEFGH23', ...forward })).status).toBe(200);
+    expect((await enqueue(994483, { text: '/start' })).status).toBe(200);
+    const replies = outbox.slice(before).filter(item => item.body.chat_id === subject);
+    expect.soft(replies.map(item => item.method)).toEqual(['sendMessage', 'sendMessage']);
+    expect.soft(new Set(replies.map(item => item.body.text)).size).toBe(1);
+    expect.soft(await inbox.records()).toEqual([]);
+    expect.soft(JSON.stringify(replies)).not.toContain('ABCDEFGH23');
+    await state.storage.deleteAlarm();
+  });
+}, 30_000);
+
+it('an owner command typed as a reply to a forward still runs: the text is the owner\'s', async () => {
+  const subject = 81101;
+  const updateId = 994484;
+  let commands = 0;
+  const { TelegramOwnerInbox } = await import('../src/channels/telegram-owner-inbox');
+  const { persistInboxWake } = await import('../src/scheduler/alarm-slot');
+  await runInDurableObject(doStub(subject), async (instance, state) => {
+    await state.storage.put({ telegram_subject: String(subject), do_name: route(subject).doName });
+    const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
+    const internal = instance as unknown as { runHarness: () => Promise<string>; drainInbox(): Promise<void> };
+    const runHarness = internal.runHarness;
+    internal.runHarness = async () => { commands += 1; return 'HARNESS-RAN'; };
+    const sam = { id: 4242, is_bot: false, first_name: 'Sam' };
+    const forwardedNote = { message_id: updateId - 1, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: 'Synthetic forwarded note.', forward_origin: { type: 'user', date: 1_700_000_000, sender_user: sam }, forward_from: sam, forward_date: 1_700_000_000 };
+    const before = outbox.length;
+    const response = await instance.fetch(new Request('https://telegram-owner/enqueue', { method: 'POST', headers: { 'x-waldo-inbox-secret': 'hermetic-test-webhook-secret', 'x-waldo-telegram-subject': String(subject), 'x-waldo-do-name': route(subject).doName }, body: JSON.stringify({ update_id: updateId, message: { message_id: updateId, date: 1_700_000_100, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: '/fire nightly', reply_to_message: forwardedNote } }) }));
+    expect(response.status).toBe(200);
+    await internal.drainInbox();
+    await vi.waitFor(async () => {
+      await instance.alarm();
+      expect((await inbox.records()).find(row => row.updateId === updateId)?.state).toBe('completed');
+    }, { timeout: 20_000, interval: 50 });
+    expect.soft(commands).toBe(1);
+    expect.soft(outbox.slice(before).map(item => item.body.text)).toContain('HARNESS-RAN');
+    internal.runHarness = runHarness;
     await state.storage.deleteAlarm();
   });
 }, 30_000);
