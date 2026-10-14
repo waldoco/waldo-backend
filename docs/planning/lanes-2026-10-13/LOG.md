@@ -2361,3 +2361,11 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 - #1182 merged as `9589435b`. Its four mediums (the `gi` regex `.test()`, forget through a summary of summaries, unbounded compaction input, the eval bar of seven probes counted as ten) are now B2 requirements.
 - #1110 at `4705f2a0` is ready for the lead to merge. M-1 is still open and must land before or with #1120.
 - Board post: the comment after 6157744096.
+
+## 00:58Z — #1149 and #1110 merged; A1 started; #1192 updated
+
+- **The lead merged** #1149 (`84aaa3a0`, 00:25Z), #1110 (`445c867b`), #1182 (`9589435b`) and #1198. The tip is now `445c867b`.
+- **#1192** is updated at `f2008f66`: `<recalled>` is fenced in the turn's own message, red first, and the full local wall passes. Review asked (6158471503).
+  - Deviations to check: the block sits before the receipts, not last; the `get-health-turn` stub was narrowed with its assertion unchanged.
+- **The core lane started A1** on `mac/a1-inbound-authorship` from `445c867b`, with brief `MAC_LANE_C_A1_BRIEF.md`. Claim: 6158471503.
+- **Open Mac PRs:** #1192 (B3) and #1193 (M4) are both waiting for the review session.
