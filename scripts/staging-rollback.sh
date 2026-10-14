@@ -30,4 +30,4 @@ if [ "$confirm" != "$version" ]; then
   exit 3
 fi
 cd "$(dirname "$0")/../packages/runtime"
-exec npx --no-install wrangler rollback "$version" --env staging --message "$reason" --yes
+exec npx --no-install wrangler rollback "$version" --env staging "--message=$reason" --yes
