@@ -523,7 +523,9 @@ export class RunJournalOutbox {
     }
     let candidate: DeliveryCandidate;
     try {
-      candidate = prepareCandidateForPersistence(held.candidate);
+      candidate = prepareCandidateForPersistence(held.candidate, (eventId) =>
+        this.namesRunOf(userId, eventId),
+      );
     } catch (error) {
       this.store.deleteHeld(input.userId, input.eventId);
       throw error;
@@ -867,7 +869,11 @@ export class RunJournalOutbox {
       } catch {
         throw new Error('scribe:invalid_payload');
       }
-      return prepareCandidateForPersistence(candidate, runId);
+      return prepareCandidateForPersistence(candidate, (eventId) => {
+        if (eventId === runId) return true;
+        const run = this.journal.read(runId);
+        return run !== null && this.namesRunOf(run.user_id, eventId);
+      });
     } catch (error) {
       this.storage.transactionSync(() => {
         this.store.deleteCandidate(runId);
@@ -878,6 +884,12 @@ export class RunJournalOutbox {
       });
       throw error;
     }
+  }
+
+  // A released candidate keeps the generated run id of the run that was held, so its event id is
+  // runtime-generated exactly when it names a journal run of the same owner.
+  private namesRunOf(userId: string, eventId: string): boolean {
+    return this.journal.read(eventId)?.user_id === userId;
   }
 
   private finalize(runId: string): void {
@@ -915,8 +927,14 @@ export class RunJournalOutbox {
     if (input.outputDisposition !== 'proactive_delivery') return;
     const candidate =
       input.candidate === undefined
-        ? prepareCandidateForPersistence(defaultCandidateFor(input.trigger, runId), runId)
-        : prepareCandidateForPersistence(input.candidate, input.trustedGeneratedEventId);
+        ? prepareCandidateForPersistence(
+            defaultCandidateFor(input.trigger, runId),
+            (eventId) => eventId === runId,
+          )
+        : prepareCandidateForPersistence(
+            input.candidate,
+            (eventId) => eventId === input.trustedGeneratedEventId,
+          );
     this.store.writeCandidate(runId, candidate);
   }
 }
@@ -1012,9 +1030,11 @@ function defaultCandidateForTrustedInvocation(
   });
 }
 
+// Scribe can rewrite a generated UUID event id (a Luhn-valid digit run reads as a card number).
+// Only an id the runtime itself generated may bypass that rewrite.
 function prepareCandidateForPersistence(
   candidate: unknown,
-  trustedGeneratedEventId?: string,
+  isGeneratedEventId: (eventId: string) => boolean = () => false,
 ): DeliveryCandidate {
   const original = deliveryCandidateSchema.safeParse(candidate);
   if (!original.success) throw new Error('scribe:invalid_payload');
@@ -1028,8 +1048,8 @@ function prepareCandidateForPersistence(
   if (!prepared.ok) throw new Error(`scribe:${prepared.reason}`);
   if (prepared.value.event_id !== original.data.event_id) {
     if (
-      trustedGeneratedEventId === original.data.event_id &&
-      runtimeOperationalRefSchema.safeParse(trustedGeneratedEventId).success
+      runtimeOperationalRefSchema.safeParse(original.data.event_id).success &&
+      isGeneratedEventId(original.data.event_id)
     ) {
       return original.data;
     }
