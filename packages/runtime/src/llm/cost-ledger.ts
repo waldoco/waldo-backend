@@ -71,9 +71,6 @@ export const spendPosture = (spentUsd: number, ceilingUsd: number | null): Spend
   return { effort: nearing ? 'low' : 'normal', background: reached ? 'skip' : 'run', batchProactive: nearing, ceilingReached: reached };
 };
 
-// An owner turn thinks at medium effort; once spend nears the ceiling it drops to low with the rest of the work.
-export const ownerTurnEffort = (posture: SpendPosture | undefined): 'low' | 'medium' => posture?.effort === 'low' ? 'low' : 'medium';
-
 export const parseCeilingUsd = (raw: string | undefined): number | null => {
   if (raw === undefined || raw.trim() === '') return null;
   const value = Number(raw);
