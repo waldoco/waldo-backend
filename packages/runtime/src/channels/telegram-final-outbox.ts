@@ -12,7 +12,7 @@ export type FinalPayload = TelegramFinalPayload;
 // One sendable sendMessage unit of a frozen final. Computed at enqueue and stored on the
 // record so redelivery resumes per part instead of resending the whole message.
 export type FinalPart = Readonly<{ text: string; fallback_text?: string }>;
-export type HeartbeatReceipt = { id: string; occurrence: number; schedulerRunId: string; runId?: string; loops: { id: string; due: string }[] };
+export type HeartbeatReceipt = { id: string; occurrence: number; schedulerRunId: string; runId?: string; loops: { id: string; due: string; status?: string }[] };
 export type MailFollowupReceipt = { loopId: string; due: string; sourceRef: string; timezone: string; messageId: string };
 export type CalendarPrepReceipt = { connectionId: string; calendarId: 'primary'; eventId: string; occurrence: string; start: string; revision: string | null; sourceDigest: string; timezone: string };
 export type FinalRecord = {

@@ -24,7 +24,7 @@ const baseEntry = {
 };
 
 describe('scheduleKind', () => {
-  it('is the seven ADR-0065 scheduler kinds plus owner reminders, the heartbeat tick and standing orders, in priority order', () => {
+  it('is the seven ADR-0065 scheduler kinds plus owner reminders, the heartbeat tick, standing orders and watch upkeep, in priority order', () => {
     expect(scheduleKindSchema.options).toEqual([
       'journal',
       'handoff',
@@ -36,6 +36,7 @@ describe('scheduleKind', () => {
       'reminder',
       'heartbeat',
       'standing_order',
+      'watch_upkeep',
       'task_step',
     ]);
     expect(scheduleKindPriority).toEqual({
@@ -49,7 +50,8 @@ describe('scheduleKind', () => {
       reminder: 7,
       heartbeat: 8,
       standing_order: 9,
-      task_step: 10,
+      watch_upkeep: 10,
+      task_step: 11,
     });
   });
 
@@ -65,6 +67,7 @@ describe('scheduleKind', () => {
       reminder: null,
       heartbeat: null,
       standing_order: null,
+      watch_upkeep: null,
       task_step: null,
     });
   });

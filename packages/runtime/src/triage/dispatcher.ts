@@ -163,6 +163,8 @@ function triageScheduleKind(
       return reject('unknown_alarm_name', 'the heartbeat tick fires in the Telegram owner object');
     case 'standing_order':
       return reject('unknown_alarm_name', 'owner standing orders fire in the Telegram owner object');
+    case 'watch_upkeep':
+      return reject('unknown_alarm_name', 'watch upkeep runs in the owner object');
     case 'task_step':
       return reject('unknown_alarm_name', 'background task steps run in the owner object');
     default:
@@ -291,6 +293,8 @@ function alarmNameMatchesScheduleKind(alarmName: string, scheduleKind: ScheduleK
       return alarmName === 'heartbeat-tick' || alarmName.startsWith('heartbeat:');
     case 'standing_order':
       return alarmName.startsWith('order:');
+    case 'watch_upkeep':
+      return alarmName === 'google-watch-upkeep';
     case 'task_step':
       return alarmName.startsWith('task:');
     default:
