@@ -2567,3 +2567,36 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 - **Deploy handover:** `e5c022ef` (green push CI, no migrations). The `connector-proxy` edge function goes first, then the Worker. The owner runs it.
 - **#1227 is waiting for the owner's approval** in its builder's session. #1238 and #1240 are stacked on it.
 - **The app restarted at about 15:35Z,** wiping the Mac's scratchpad helpers. The builders were resumed.
+
+## 16:32Z–18:53Z (Mac orchestrator): Waldo failed the hotel errand; the owner froze features
+
+- **The hotel test.** The owner gave Waldo (staging Telegram) and Instinct (a competing agent) the same request.
+  - Instinct asked for dates, guests and rooms. It read the event page and returned three priced options with the catch (one bed for three adults).
+  - Waldo asked nothing and opened no hotel page. It stopped after one browser `image_oversize`, and when told "just retry" it explained itself without retrying.
+  - The traces show five blockers:
+    1. Tool rounds stop at 90 s.
+    2. `gpt-6-luna` runs at reasoning effort `low`, hard-coded in `llm/openai.ts`.
+    3. The prompt rules say not to ask before reading candidates, and give no task loop.
+    4. The owner profile and open loops are mostly QA data; each call carries 648 history messages and 58 tools, about 48k tokens, none cached.
+    5. No eval.
+- **Owner rulings this evening:**
+  - Freeze features and optimisation.
+  - Evaluate Waldo on everyday errands now.
+  - "Take its time but do it", with short progress notes.
+  - India-first sources, with a link for every option.
+  - Tonight is for the basic agent, the console and onboarding.
+  - GPT-6.1 Sol for owner turns (17:30Z).
+  - Reset the owner account's QA data after the baseline.
+- **The plan** is the tab "Tonight, 14 Oct: basics first" in the backend position doc: the freeze list, everything left, a 20-task errands bar, four tracks and the baseline scores.
+- **Baseline errands eval** (Luna at low effort, staging Telegram): 2 of 9 errands fully done; completion 8/18, grounding 9/18.
+  - Instinct gave no reply to prompts sent from the Mac's Messages account.
+  - Waldo's iMessage thread couldn't be read from the Mac.
+- **Lanes:**
+  - *Running locally:* the GPT-6.1 Sol switch and prompt v2.
+  - *Paused locally:* the long-task lane and the browser-fix lane. They overlapped the cloud lanes *agent headroom* and *browser end to end*. Evidence and ownership are on #1103 (6175860864).
+- **#1247: the Mac's gate FAIL** at `1ef99170` (6173844744) asked for an app-runtime arming test and a guard against a bad watch book.
+  - The review lane merged #1247 at `82a676c5`.
+  - The follow-ups are in #1254. A fresh reviewer is running at `d012ca5a`.
+- **Merged by others:** #1251, #1244, #1185, #1255, #1252 and #1257.
+- **Staging:** release `04e02124`, Worker version `67e50f3c` (18:48Z). healthz and refusal paths PASS; rollback `6ef62710` (#1103 6175882296).
+- **Usage** reached 94% at 18:07Z, and the local builders stopped around 18:17Z. The window reset at about 18:40Z.
