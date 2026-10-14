@@ -11,7 +11,8 @@ it('shared prompt describes rendered WhatsApp text callbacks, not undelivered na
 it('native Telegram presentation stays distinct from common authority and task context',()=>{
  const prompt=messagingSystemPrompt([],{surface:'telegram',delivery:{text:true,approval:'native_buttons',reactions:true,attachments:false},commands:['/stop','/ledger']});
  expect(prompt).toContain('Approval delivery: native_buttons');
- expect(prompt).toContain('/ledger');
+ expect(prompt).toContain('Commands: none.');
+ expect(prompt).not.toMatch(/\/(stop|ledger|console)\b/);
  expect(prompt).toContain('does not grant approval');
 });
 

@@ -13,8 +13,9 @@ it.each(names)('the owner can discover a ready-to-use %s procedure with named to
 it('loading a procedure does not duplicate the doing and health instructions', () => {
   const base = messagingSystemPrompt([]);
   const prompt = withOwnerSkillProcedures(base, 'Selected procedure');
-  const boundary = 'Anything that reaches another person, spends money or changes a shared calendar needs';
-  expect(prompt.split(boundary).length).toBe(base.split(boundary).length);
+  const boundary = 'Booking, paying, sending something to another person or changing a shared calendar needs';
+  expect(base.split(boundary).length).toBe(2);
+  expect(prompt.split(boundary).length).toBe(2);
 });
 
 import { BUNDLED_SKILL_FILES } from '../src/skills/bundled-text';

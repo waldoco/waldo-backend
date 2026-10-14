@@ -4,7 +4,7 @@
 import type { ScriptRule } from '../src/testing/scripted-gateway';
 
 export type ScenarioCategory =
-  | 'tools' | 'memory' | 'scheduler' | 'degradation' | 'injection' | 'approvals' | 'voice' | 'clinical' | 'fetch';
+  | 'tools' | 'memory' | 'scheduler' | 'degradation' | 'injection' | 'approvals' | 'voice' | 'clinical' | 'fetch' | 'asking';
 
 // Trace assertion over the turn's hop stream (the same feed traceBook persists live).
 export type HopAssert = Readonly<{

@@ -1,6 +1,7 @@
 // Seed L1 catalog (H1). Rubric-graded voice/clinical cases stay in evals/cases.ts for L2; these
 // are the cases whose expectations are exact enough to check without a judge. New tools add
 // their scenarios here (or in a sibling module) in the same commit - see the spec's rules.
+import { ASKING_SCENARIOS } from './asking';
 import type { Scenario } from './types';
 
 export const SCENARIOS: readonly Scenario[] = [
@@ -416,4 +417,5 @@ export const SCENARIOS: readonly Scenario[] = [
       replies: [/card:brief/],
     },
   },
+  ...ASKING_SCENARIOS,
 ];
