@@ -204,7 +204,7 @@ Classes: **(a)** keep until iMessage is stable · **(b)** freeze now (new links)
   - Otherwise leave it dormant: with no admission the alarm stops (`owner-do.ts:1517-1521`).
   - Or explicitly authorise a non-audited operator delete that skips R2 and object purge.
 - **D4. The owner's Apple account:** a plain email invite works today. Sign in with Apple stays out for the beta (12 Oct ruling).
-- **D5. Time zone:**
+- **D5. Time zone: DECIDED 14 Oct, T1** (the owner, in the Mac orchestrator's chat; recorded on #1227, 6168355119). The model may set the zone from the owner's clear statement of their own zone. It writes through `confirmZone`, the same writer as `timezone.set`, and the app's one-tap row still overrides it. A passing mention of a trip does not change the zone; that is model judgment, with a scenario eval. The calendar-zone suggestion is still open.
   - Option T1: the model may set it from the owner's explicit statement, which amends the 12 Oct "only `timezone.set` confirms" design.
   - Option T2: the app control only. Then an owner who never opens the app arms nothing.
   - Also decide whether the primary calendar's zone (`google.ts:503-509`) may be *suggested*.

@@ -2528,3 +2528,23 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
   - `/run-eval` is UNAVAILABLE (#1185);
   - it follows the Gmail check on `72030b34`.
 - **Staging is still `6be19816` (`a8c92893`).** The owner hasn't deployed `72030b34` yet.
+
+## 11:38Z-12:32Z: push CI green at `4c41871c`; #1227 reviewed and held for wording; D5 decided
+
+- **Push CI at `4c41871c` is 6 of 6** (38557599356), so #1218 and #1229 pass together.
+- **Merged by others:** #1173 (the threads registry) as `ad2a6c7a`, and #1233 as `1d01dbd0`. #1233 root-caused the two #1196 reds and added the blocking guard `guard-single-vi-mock`.
+- **#1227 (first conversation and `set_timezone`): PASS WITH NITS at `092a60ba`** (6167988396), from a fresh read-only reviewer.
+  - **Mutations:** 3 of 4 killed. The survivor, M1, is the `confirmZone` cache drop.
+  - **Runs:** contracts 46/46, scenario-harness 35/35, first-conversation 2/2, context-composer 118/118. CI 6 of 6 (38558455016).
+- **D5 decided by the owner: T1** (6168355119). The time zone can be set from chat, but only from a clear statement of the owner's own zone, and a trip doesn't change it. Plan §6 is updated.
+- **#1227 is held for a text fix.** Its wording invited a zone change from any location mention. #1218's C1 builder is fixing it on `mac/first-conversation`; then a delta review, CI and the merge follow.
+  - **Scratch merge onto `1d01dbd0`:** clean; `guard-single-vi-mock` ok; `pnpm -r typecheck` passes.
+- **The C2 chip** ("Make forget hide the Google name and phone") is running, stacked on #1227. It also carries #1227's nits:
+  - `set_timezone` in `PRIVILEGED_ACTION_TOOLS`;
+  - "forget my name";
+  - stale facts within a turn;
+  - the replay basis;
+  - the M1 cache drop;
+  - the trip eval case.
+- **Lane X** opened #1234.
+- **Staging is still `6be19816` (`a8c92893`).**
