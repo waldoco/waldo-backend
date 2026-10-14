@@ -25,7 +25,7 @@ form{margin:0;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .table{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:640px}
 th,td{text-align:left;padding:10px 8px;border-top:1px solid var(--line);vertical-align:top;font-size:14px}th{color:var(--muted);font-weight:normal;border-top:0}
 td ul{margin:6px 0 0;padding-left:18px;color:var(--muted)}
-.code{font:600 17px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all;background:var(--canvas);border-radius:12px;padding:16px}
+.code{font:600 17px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all;background:var(--canvas);border-radius:12px;padding:16px;user-select:all;-webkit-user-select:all}
 .row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}`;
 const shell = (title: string, nonce: string, body: string, script = ''): string => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style nonce="${nonce}">${STYLE}</style></head><body><main>${body}</main>${script ? `<script nonce="${nonce}">${script}</script>` : ''}</body></html>`;
 export const devicePageHeaders = (nonce: string): Record<string, string> => ({
@@ -49,7 +49,8 @@ export function renderDevices(devices: (ListedDevice & { online: boolean; comman
 // The browser view of a fresh code: one copyable value that also names the owner (see
 // KENNEL_PAIRING_CODE_PREFIX). Never cached, never framed, no referrer.
 export function renderPairingCode(value: string, nonce: string): string {
-  const script = `document.getElementById('copy').addEventListener('click',async function(){var b=this;try{await navigator.clipboard.writeText(document.getElementById('code').textContent);b.textContent='Copied';}catch(e){b.textContent='Select the code and copy it';}});`;
+  // If the clipboard is refused, select the whole code so one keystroke copies it.
+  const script = `document.getElementById('copy').addEventListener('click',async function(){var b=this,c=document.getElementById('code');try{await navigator.clipboard.writeText(c.textContent);b.textContent='Copied';}catch(e){var r=document.createRange();r.selectNodeContents(c);var s=getSelection();s.removeAllRanges();s.addRange(r);b.textContent='Code selected. Press Command-C to copy';}});`;
   return shell('Your pairing code', nonce, `<a href="${CONSOLE_DEVICES_PATH}">Back to devices</a><h1>Your pairing code</h1><section><p class="muted">Paste this into Kennel: Settings, then Connect to Waldo.</p><p class="code" id="code">${escape(value)}</p><div class="row"><button class="primary" id="copy" type="button">Copy code</button><span class="muted">Expires in 10 minutes. Single use.</span></div></section>`, script);
 }
 export const DEVICE_PAGE_HEADERS = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' };
