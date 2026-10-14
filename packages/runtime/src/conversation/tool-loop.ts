@@ -109,8 +109,9 @@ export async function runToolLoop(input: Readonly<{
   let exit: LoopExit = 'completed';
   const claims = input.claims;
   const isClaim = (call: LLMToolCall) => claims !== undefined && call.name === NOTE_DONE;
-  // A reply about to close: when its claims are unbacked and the turn still has a round and a full model call's time,
+  // A reply that rides with its claims: when one is unbacked and the turn still has a round and a full model call's time,
   // the model rewrites it once with only note_done offered. The rewrite and its claims replace the old ones. Never loops.
+  // A claim declared in an earlier round already returned its finding to the model, which wrote the reply after it.
   const close = async (text: string, turns: LLMToolTurn[]): Promise<string> => {
     const facts = claims?.revision() ?? null;
     const roundLeft = input.budget === undefined || input.budget.remaining > 0;
@@ -163,13 +164,11 @@ export async function runToolLoop(input: Readonly<{
     }
     input.ctx.runScope?.admit();
     if (response.tool_calls === undefined || (!offer && !repairEmptyCeiling)) {
-      const text = guardArtifactLinks(response.text || (exit === 'budget_exhausted'
+      input.onSettle?.(exit);
+      return guardArtifactLinks(response.text || (exit === 'budget_exhausted'
         ? 'Tool budget exhausted; no further tools were run.'
         : exit === 'time_exhausted' ? OUT_OF_TIME_REPLY
           : tools.length === 0 ? 'No tools are available this turn; no tool calls were executed.' : ''), receiptUrls);
-      const closed = response.text ? await close(text, turns) : text;
-      input.onSettle?.(exit);
-      return closed;
     }
     // A reply that rides with its note_done declarations is the final answer: no further model round when they are backed.
     if (response.text && response.tool_calls.length > 0 && response.tool_calls.every(isClaim)) {

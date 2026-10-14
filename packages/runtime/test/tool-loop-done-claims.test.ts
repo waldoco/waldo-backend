@@ -72,6 +72,14 @@ describe('done-claims in the tool loop', () => {
     expect(result.notice).toBe('Not confirmed: reminder set (it failed)');
   });
 
+  it('a claim declared in an earlier round returns its finding then, so the plain reply after it is not revised again', async () => {
+    const seen: (readonly LLMToolTurn[])[] = [];
+    const result = await run((_tools, turns, round) => { seen.push(turns); return round === 0 ? { text: '', tool_calls: [noteDone('message_send_proposed')] } : { text: 'Sent it.' }; });
+    expect(JSON.parse(seen[1]![0]!.output)).toMatchObject({ backed: false, finding: 'no_matching_receipt' });
+    expect(result.offered).toHaveLength(2);
+    expect(result.notice).toBe('Not confirmed: message send proposed (nothing ran)');
+  });
+
   it('an empty rewrite keeps the original reply and its claims', async () => {
     const result = await run((_tools, _turns, round) => round === 0 ? { text: 'Sent it.', tool_calls: [noteDone('message_send_proposed')] } : { text: '' });
     expect(result.text).toBe('Sent it.');
