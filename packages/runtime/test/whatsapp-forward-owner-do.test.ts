@@ -1,5 +1,5 @@
 // A forward on the real WhatsApp Cloud API webhook shape is someone else's text: it reaches the model under the forward
-// label and never runs as the owner's command, stop, ledger or approval decision. The owner's own command still runs.
+// label and never runs as the owner's approval decision. The owner's own reply reaches the model as their words.
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
@@ -33,15 +33,17 @@ const deliver = async (instance: OwnerDO, messages: readonly Record<string, unkn
   await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
 };
 const message = (id: string, body: string, context: Record<string, unknown>) => ({ context, from: SUBJECT, id, timestamp: '1700000000', text: { body }, type: 'text' });
+// The newest owner message in the first reply request among these model calls.
+const newestOwnerItem = (bodies: readonly unknown[]) => {
+  const reply = bodies.find(body => !(body as { text?: { format?: unknown } }).text?.format) as { input?: { role?: string }[] } | undefined;
+  return JSON.stringify((reply?.input ?? []).filter(item => item.role === 'user').at(-1));
+};
 const labelled = (text: string) => JSON.stringify(`[Forwarded by the owner from someone else:]\n${JSON.stringify(text)}\n[End of forwarded text.]`).slice(1, -1);
 
-it('a forwarded /fire nightly, /stop, /ledger or approval reply reaches the model under the forward label and never runs; the owner\'s own reply still does', async () => {
+it('a forwarded /fire nightly, /stop, /ledger or approval reply reaches the model under the forward label; the owner\'s own reply reaches it as their words', async () => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('wa-forward')), async (_instance, state) => {
-    const sent: string[] = [];
-    const net = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => { sent.push(String(init?.body)); return Response.json({ messages: [{ id: 'wamid.out' }] }); });
+    const net = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ messages: [{ id: 'wamid.out' }] }));
     const instance = new OwnerDO(state, { ...env, TELEGRAM_BOT_TOKEN: 'fictional-telegram-token', OPENAI_API_KEY: 'fictional-model-key', WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' });
-    let commands = 0;
-    (instance as unknown as { runHarness: () => Promise<string> }).runHarness = async () => { commands += 1; return 'HARNESS-RAN'; };
     try {
       await deliver(instance, [
         message('wamid.fwd.fire', '/fire nightly', { forwarded: true }),
@@ -49,13 +51,13 @@ it('a forwarded /fire nightly, /stop, /ledger or approval reply reaches the mode
         message('wamid.fwd.ledger', '/ledger', { frequently_forwarded: true }),
         message('wamid.fwd.approve', 'a:p12', { forwarded: true }),
       ]);
-      expect.soft(commands).toBe(0);
-      expect.soft(sent.join('\n')).not.toContain('Nothing is running right now.');
       for (const text of ['/fire nightly', '/stop', '/ledger', 'a:p12']) expect.soft(JSON.stringify(modelInputs), text).toContain(labelled(text));
-      // A reply carries context too, with no forward flag: the owner typed this command, so it runs.
-      const before = commands;
+      // A reply carries context too, with no forward flag: the owner typed it, so the model reads it as their words.
+      const before = modelInputs.length;
       await deliver(instance, [message('wamid.reply.fire', '/fire nightly', { from: '15550002222', id: 'wamid.original' })]);
-      expect.soft(commands - before).toBe(1);
+      const said = newestOwnerItem(modelInputs.slice(before));
+      expect.soft(said).toContain('/fire nightly');
+      expect.soft(said).not.toContain(labelled('/fire nightly'));
     } finally { net.mockRestore(); await state.storage.deleteAlarm(); }
   });
 }, 60_000);

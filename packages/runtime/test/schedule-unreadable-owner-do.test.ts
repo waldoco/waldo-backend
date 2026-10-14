@@ -7,6 +7,7 @@ import { HEARTBEAT_ID } from '../src/channels/heartbeat';
 import { DAY_CARDS } from '../src/prompt/day-cards';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
+import { consoleAccess, type ConsoleSession } from '../src/channels/console';
 
 const model = vi.hoisted(() => ({ calls: 0 }));
 vi.mock('../src/channels/telegram-turn', async load => {
@@ -97,8 +98,14 @@ describe('a fixed-id schedule row this Worker cannot read, on an app owner with 
     });
   });
 
-  type Runtime = Readonly<{ ready: Promise<unknown>; act(action: { action: string; id?: string; value?: string }): Promise<boolean | string>; ledger(): Promise<string> }>;
+  type Runtime = Readonly<{ ready: Promise<unknown>; act(action: { action: string; id?: string; value?: string }): Promise<boolean | string>; view(session: ConsoleSession, notice: string | null): Promise<{ ledger: string }> }>;
   const runtimeOf = (owner: Owner) => (owner as unknown as { setup(channel: string): Runtime }).setup('app');
+  // The ledger as the owner's console shows it, read from this app owner's own runtime view.
+  const ledgerOf = async (owner: Owner, state: DurableObjectState) => {
+    const access = consoleAccess(state.storage);
+    const runtime = runtimeOf(owner); await runtime.ready;
+    return (await runtime.view((await access.session(await access.grant()))!, null)).ledger;
+  };
 
   it('refuses every change to a card whose row cannot be read, says why, and leaves the row and the pins as they were', async () => {
     const name = 'unreadable-card-actions', card = DAY_CARDS[0]!.id;
@@ -122,8 +129,8 @@ describe('a fixed-id schedule row this Worker cannot read, on an app owner with 
   });
 
   it('counts reminders it cannot read in the ledger, and leaves the ledger as it was when there are none', async () => {
-    await boot('unreadable-ledger-none', () => undefined, async owner => {
-      const ledger = await runtimeOf(owner).ledger();
+    await boot('unreadable-ledger-none', () => undefined, async (owner, state) => {
+      const ledger = await ledgerOf(owner, state);
       expect(ledger).not.toContain('more reminder');
       expect(ledger).not.toContain('\n\n\n');
     });
@@ -131,8 +138,8 @@ describe('a fixed-id schedule row this Worker cannot read, on an app owner with 
       sql.exec('CREATE TABLE IF NOT EXISTS reminder_notes (id TEXT PRIMARY KEY, note TEXT NOT NULL, created_at INTEGER NOT NULL)');
       sql.exec("INSERT INTO reminder_notes (id, note, created_at) VALUES ('reminder-unreadable', 'call Sam', ?)", Date.now());
       plantReshaped(sql, 'reminder-unreadable', 'reminder', Date.now() + 3_600_000);
-    }, async owner => {
-      const ledger = await runtimeOf(owner).ledger();
+    }, async (owner, state) => {
+      const ledger = await ledgerOf(owner, state);
       expect(ledger).toContain("1 more reminder was saved in a form this version can't read");
       expect(ledger).not.toContain('call Sam');
     });

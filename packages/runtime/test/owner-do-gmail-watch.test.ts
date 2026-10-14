@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { gmailPushBook } from '../src/channels/gmail-push';
+import { runOwnerJob } from './fixtures/owner-job';
 
 const proxied = vi.hoisted(() => ({ ops: [] as Record<string, unknown>[] }));
 vi.mock('../src/connectors/google-push', async load => {
@@ -30,8 +31,7 @@ it('the update sweep starts a Gmail watch into the push topic for a Vault-backed
     state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
     await state.storage.put('origin', 'https://fixture.invalid');
     await state.storage.put('google:accounts', [{ id: 'conn-1', email: 'owner@example.test', scopes: ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.compose'] }]);
-    let seq = 700;
-    const fire = async () => expect((await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify({ update_id: seq++, message: { message_id: seq, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: '/fire briefs' } }) }))).status).toBe(200);
+    const fire = () => runOwnerJob(owner, 'briefs');
     try {
       await fire();
       const watches = proxied.ops.filter((op) => op.op === 'gmail_watch');

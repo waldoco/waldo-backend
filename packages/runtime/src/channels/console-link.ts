@@ -7,8 +7,8 @@ import type { TurnLogEntry } from './owner-turn-types';
 
 export const consoleLinkText = (link: string): string => `Console (link works once, for 10 minutes): ${link}`;
 
-// One minting rule for the tool and the /console text command. A directory-backed deploy signs a ticket naming this
-// owner's object; without a directory the grant token itself is the link.
+// The one minting rule for console links. A directory-backed deploy signs a ticket naming this owner's object; without
+// a directory the grant token itself is the link.
 export const mintConsoleLink = async (storage: DurableObjectStorage, env: OwnerDirectoryEnv): Promise<string | null> => {
   const origin = await storage.get<string>('origin'), issuer = storage.kv.get<string>('do_name'), secret = env.WALDO_ROUTER_HMAC_SECRET;
   const configured = consoleAuth(env) !== null;

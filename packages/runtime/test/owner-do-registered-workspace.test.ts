@@ -57,7 +57,7 @@ beforeEach(() => { model.sourceDecision = '{"decision":"retain","sources":[]}'; 
 async function proof(work: (h: {
   state: DurableObjectState; name: string; bytes: Map<string, Uint8Array>; puts: string[]; gets: string[]; rpc: string[];
   enqueue(text: string, id?: number, subject?: string, doName?: string, entities?: readonly { type: string; offset: number; length: number }[]): Promise<{ response: Response; id: number }>;
-  send(text: string, id?: number, entities?: readonly { type: string; offset: number; length: number }[]): Promise<number>; alarm(): Promise<void>; restart(): void; manifest(): WorkspaceState | null; request(request: Request): Promise<Response>;
+  send(text: string, id?: number, entities?: readonly { type: string; offset: number; length: number }[]): Promise<number>; alarm(): Promise<void>; restart(): void; closeRun(): void; manifest(): WorkspaceState | null; request(request: Request): Promise<Response>;
   workspace(): ReturnType<typeof workspaceOwnerHost>;
   mapping: { owner_id: string; environment: string; namespace: string; do_name: string; do_id: string; state_version: number; mapping_version: number };
   absent(): void; unlinked(): void; pauseMapping(afterReservation?: boolean): ReturnType<typeof deferred>; pausePut(): ReturnType<typeof deferred>;
@@ -145,6 +145,8 @@ async function proof(work: (h: {
       return row ? JSON.parse(row.state_json) as WorkspaceState : null;
     };
     try { await work({ state, name, bytes, puts, gets, rpc, enqueue, send, alarm: () => instance.alarm(), request: request => instance.fetch(request), restart: () => { instance = new OwnerDO(state, fixtureEnv); }, manifest, mapping,
+      // Ends the running owner turn the way its deadline does: the run's abort fires and the run closes.
+      closeRun: () => { (instance as unknown as { activeAbort?: AbortController }).activeAbort!.abort(); },
       workspace: () => workspaceOwnerHost(fixtureEnv, state.storage, state.id.toString(), name),
       absent: () => { missing = true; }, unlinked: () => { state.storage.kv.put('telegram_unlinked', true); },
       pauseMapping: (afterReservation = false) => { pauseAfterReservation = afterReservation; mappingPause = deferred(); pauses.push(mappingPause); return mappingPause; }, pausePut: () => { putPause = deferred(); pauses.push(putPause); return putPause; }, onPut: fn => { afterPut = fn; }, dispatches });
@@ -285,19 +287,19 @@ it('epoch revocation after admitted R2 bytes preserves its pending reservation w
   });
 });
 
-it.each(['mapping_open', 'mapping_reserved', 'body'] as const)('actual /stop fences a registered write paused at %s after its losing handler resumes', async boundary => {
+it.each(['mapping_open', 'mapping_reserved', 'body'] as const)('a run closed while its registered write is paused at %s cannot publish after the losing handler resumes', async boundary => {
   await proof(async h => {
     const pause = boundary === 'body' ? h.pausePut() : h.pauseMapping(boundary === 'mapping_reserved');
     model.reply = request => outputs(request).write ? 'This must not publish.' : [call('workspace_write', writeArgs, 'write')];
-    expect((await h.enqueue('Create a file until I stop the run.')).response.status).toBe(200);
+    expect((await h.enqueue('Create a file before the run closes.')).response.status).toBe(200);
     const alarm = h.alarm(); await pause.reached;
     const losing = h.dispatches.mock.results.filter((_, i) => h.dispatches.mock.calls[i]![0].name === 'workspace_write').at(-1)!.value as Promise<unknown>;
     expect(losing).toBeInstanceOf(Promise);
-    expect((await h.enqueue('/stop')).response.status).toBe(200);
+    h.closeRun();
     await alarm; // The public alarm can settle before the pending I/O continuation.
     pause.release(); await Promise.allSettled([losing]);
     expect(h.manifest()?.files ?? []).toEqual([]); expect(h.manifest()?.bodies ?? []).toEqual([]);
-    expect(h.state.storage.kv.get<any[]>('telegram_owner_inbox_v1')!.some(row => row.reason === 'owner_stopped' && row.closedAt !== undefined)).toBe(true);
+    expect(h.state.storage.kv.get<any[]>('telegram_owner_inbox_v1')!.some(row => row.reason === 'execution_closed' && row.closedAt !== undefined)).toBe(true);
     expect((h.state.storage.kv.get<any[]>('telegram_final_outbox_v1') ?? []).filter(row => row.id.startsWith('turn:'))).toEqual([]);
     if (boundary === 'mapping_open') { expect(h.puts).toEqual([]); expect(h.gets).toEqual([]); expect(h.manifest()).toMatchObject({ files: [], bodies: [], operations: [] }); }
     else if (boundary === 'mapping_reserved') { expect(h.puts).toEqual([]); expect(h.manifest()).toMatchObject({ files: [], bodies: [], operations: [{ status: 'pending' }] }); }
@@ -320,17 +322,17 @@ it('unlinked owner during a pending body write cannot publish after the real han
   });
 });
 
-it('run A cannot borrow run B authority after /stop and a new default owner run starts', async () => {
+it('run A cannot borrow run B authority after A closes mid-write and a new default owner run starts', async () => {
   await proof(async h => {
     const pauseA = h.pausePut();
     model.reply = request => outputs(request).writeA ? 'A must not publish.' : [call('workspace_write', writeArgs, 'writeA')];
     const admittedA = await h.enqueue('Run A writes a pending file.'); expect(admittedA.response.status).toBe(200);
     const alarmA = h.alarm(); await pauseA.reached;
     const losingA = h.dispatches.mock.results.filter((_, i) => h.dispatches.mock.calls[i]![0].name === 'workspace_write').at(-1)!.value as Promise<unknown>;
-    expect((await h.enqueue('/stop')).response.status).toBe(200); await alarmA;
+    h.closeRun(); await alarmA;
     const pauseB = deferred();
     model.reply = async () => { pauseB.entered(); await pauseB.wait; return 'B completed independently.'; };
-    const admittedB = await h.enqueue('Run B starts after stopping A.'); expect(admittedB.response.status).toBe(200);
+    const admittedB = await h.enqueue('Run B starts after A closed.'); expect(admittedB.response.status).toBe(200);
     // Deliver a failure outbox if the fair alarm selects it before the next owner run.
     const startB = async () => { for (let i = 0; i < 3; i++) { await h.alarm(); if (model.requests.some(request => !request.text?.format && String(request.input).includes('Run B'))) return; } };
     const alarmB = startB(); await pauseB.reached;

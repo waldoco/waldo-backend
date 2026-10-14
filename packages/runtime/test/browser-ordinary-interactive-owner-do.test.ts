@@ -31,7 +31,7 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (input: 
     {name:'browse_act',args:{session_handle:proof.sessionHandle,url:'https://www.iana.org/b',task:'Read current B',max_actions:1,command:{operation:'read'}}},
     {name:'browse_act',args:{session_handle:proof.sessionHandle,url:'https://www.iana.org/b',task:'Inspect current B',max_actions:1,command:{operation:'inspect'}}},
   ];
-  const call=at===11?{name:'browse_act',args:{session_handle:proof.sessionHandle,url:'https://example.com/a',task:'Close my browser',max_actions:1,command:{operation:'cancel'}}}:at===14?{name:'browse_page',args:{retain_session:true,url:'https://example.com/a',instruction:'Start a new owner browser task'}}:at===8?{name:'browse_act',args:{session_handle:proof.sessionHandle,url:'https://example.com/a',task:'Apply my availability choice',max_actions:1,command:{operation:'set_checked',element_ref:outputs.at(-1)?.data?.elements.find((row:any)=>row.name==='Available only')?.ref,checked:true}}}:at===9?{name:'browse_act',args:{session_handle:proof.sessionHandle,url:'https://example.com/a',task:'Save my screenshot',max_actions:1,command:{operation:'screenshot'}}}:at===7?{name:'browse_act',args:{session_handle:proof.sessionHandle,url:'https://www.iana.org/b',task:'Return to my note',max_actions:1,command:{operation:'switch_tab',tab_ref:proof.tabRef}}}:calls[at];
+  const call=at===11||at===16?{name:'browse_act',args:{session_handle:proof.sessionHandle,url:'https://example.com/a',task:'Close my browser',max_actions:1,command:{operation:'cancel'}}}:at===14?{name:'browse_page',args:{retain_session:true,url:'https://example.com/a',instruction:'Start a new owner browser task'}}:at===8?{name:'browse_act',args:{session_handle:proof.sessionHandle,url:'https://example.com/a',task:'Apply my availability choice',max_actions:1,command:{operation:'set_checked',element_ref:outputs.at(-1)?.data?.elements.find((row:any)=>row.name==='Available only')?.ref,checked:true}}}:at===9?{name:'browse_act',args:{session_handle:proof.sessionHandle,url:'https://example.com/a',task:'Save my screenshot',max_actions:1,command:{operation:'screenshot'}}}:at===7?{name:'browse_act',args:{session_handle:proof.sessionHandle,url:'https://www.iana.org/b',task:'Return to my note',max_actions:1,command:{operation:'switch_tab',tab_ref:proof.tabRef}}}:calls[at];
   const read=Boolean(call);
   return { id: 'synthetic-public-browser-reply', output: read ? [{ type: 'function_call', call_id: `public-call-${at}`, name:call!.name, arguments:JSON.stringify(call!.args) }] : [],
     output_text: format === 'claim_ops' ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : format ? '{}' : read ? '' : 'Option A costs 10 fictional tokens; option B costs 20 fictional tokens. A was revisited. Shall I show available only?', usage: { input_tokens: 1, output_tokens: 1 } };
@@ -108,7 +108,8 @@ it('unregistered ordinary owner loop performs six observations, select/check, PN
       await send('Start a fresh Cloudflare browser task.');
       expect(proof.outputs.at(-1)).toMatchObject({ok:true,data:{text:expect.stringContaining('Option A costs 10')}});
       expect(commonBrowserFixture.allocations).toBe(2);
-      await send('/stop');
+      await send('Stop the browser.');
+      expect(proof.outputs.at(-1)).toMatchObject({ok:true,data:{ended:true}});
       await vi.waitFor(()=>expect(commonBrowserFixture.ends).toBe(2));
       expect(commonBrowserFixture.pages).toHaveLength(0);
       expect(await (await commonBrowserMeteredFixtureLoader()).sessions(binding as never)).toEqual([]);

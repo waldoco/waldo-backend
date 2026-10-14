@@ -3,6 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { calendarPushBook } from '../src/channels/calendar-push';
 import { verifyCalendarChannel } from '../src/connectors/google-push';
+import { runOwnerJob } from './fixtures/owner-job';
 
 const SECRET = 'router-secret-fixture-0000000000';
 const watches = vi.hoisted(() => ({ bodies: [] as Record<string, string>[], status: 200 }));
@@ -36,8 +37,7 @@ it('the update sweep starts a Calendar watch whose token routes back to this own
     state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
     await state.storage.put('origin', 'https://fixture.invalid');
     await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
-    let seq = 500;
-    const fire = async () => expect((await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify({ update_id: seq++, message: { message_id: seq, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: '/fire briefs' } }) }))).status).toBe(200);
+    const fire = () => runOwnerJob(owner, 'briefs');
     try {
       await fire();
       expect(watches.bodies).toHaveLength(1);

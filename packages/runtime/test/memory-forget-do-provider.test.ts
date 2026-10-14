@@ -62,7 +62,6 @@ it('a held coffee topic keeps unrelated profile available in the registered owne
 });
 import { HELDROWS_SCAN_BUDGET, HARNESS_MESSAGE_LIMIT, heldRowShapes } from '../src/memory/held-rows';
 import { likePrefilter, projectionPredicate, FORGOTTEN } from '../src/memory/claims';
-import { parseHarnessCommand } from '../src/channels/harness';
 import { evictDurableObject } from 'cloudflare:test';
 import { updateBook } from '../src/channels/update-cards';
 it('HELDROWS verdict is the real forgetSources verdict, and the row shapes it lists are the guard\'s own escape/NUL rows (differential)', async () => {
@@ -200,7 +199,7 @@ it('HELDROWS lists the held rows of a projection hold and a decoded-leaf hold, c
   });
 });
 
-it('HELDROWS continues projection and decoded-leaf listings from the given rowid, announces a partial leaf scan, and bounds a many-topic reply through the real harness path', async () => {
+it('HELDROWS continues projection and decoded-leaf listings from the given rowid, announces a partial leaf scan, and bounds a many-topic reply read from the claim store', async () => {
   const label = 'heldrows-review-fixes'; const topic = 'LATEHOLDTOPIC';
 
   await runInDurableObject(stub(label), async (instance, state) => {
@@ -227,10 +226,13 @@ it('HELDROWS continues projection and decoded-leaf listings from the given rowid
     const out = heldRowShapes(sql, '', many, 25, t => { calls.push(t); return real(t); });
     const shown = Number(/^t(\d+): .*$/m.exec(out.split('\n').filter(l => /^t\d+:/.test(l)).at(-1)!)![1]);
     expect(calls.length).toBe(shown);
-    // (c) real caller path: 128 pending topics, then the delivery slice.
+    // (c) 128 pending topics read from the claim store, judged by its own forget guard.
     for (const t of many) sql.exec('INSERT OR IGNORE INTO topic_purge_pending (fingerprint, topic, created_at) VALUES (?,?,?)', `fp-${t.topic}`, t.topic, '2026-10-05T00:00:00Z');
     sql.exec('UPDATE update_cards SET changes = ?', JSON.stringify([{ n: 'M0001 M0002 M0003 M0004' }]));
-    const reply = (await (instance as unknown as { runHarness(c: unknown, id: number): Promise<string> }).runHarness(parseHarnessCommand('/heldrows update_cards'), 1)).slice(0, HARNESS_MESSAGE_LIMIT);
+    const memory = claimStore(sql);
+    const pending = [...memory.incompleteTopics().map(topic => ({ topic, state: 'incomplete' as const })), ...memory.pendingTopics().map(topic => ({ topic, state: 'pending' as const }))];
+    const reply = heldRowShapes(sql, 'update_cards', pending, 25, topic => memory.forgetSources(topic, true));
+    expect(reply.length).toBeLessThanOrEqual(HARNESS_MESSAGE_LIMIT);
     expect(reply).toMatch(/more topics not shown/);
     expect(reply).toMatch(/projection/);
     expect(reply).toContain('row listing: escape/NUL rows');

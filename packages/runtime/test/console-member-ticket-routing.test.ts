@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import worker from '../src/index';
 import { consoleAccess, CONSOLE_COOKIE } from '../src/channels/console';
 import { consoleAuth, OWNER_COOKIE } from '../src/identity/console-auth';
+import { mintConsoleLink } from '../src/channels/console-link';
 
 const DEPLOY = 'owner-synthetic-console-deploy';
 const MEMBER = 'owner-synthetic-console-member';
@@ -18,14 +19,9 @@ afterEach(() => vi.unstubAllGlobals());
 
 async function fixture(owner = MEMBER, issuedAt?: number) {
   const rpcState = { open: true, failOpen: false };
-  const messages: string[] = [];
   // Every external request fails except these fictional directory/session RPCs.
   vi.stubGlobal('fetch', vi.fn(async (input: string | Request, init?: RequestInit) => {
     const url = new URL(typeof input === 'string' ? input : input.url);
-    if (url.origin === 'https://api.telegram.org' && url.pathname.endsWith('/sendMessage')) {
-      messages.push(JSON.parse(String(init?.body)).text);
-      return Response.json({ ok: true, result: { message_id: 1 } });
-    }
     if (url.origin !== 'https://directory.invalid') throw new Error('unexpected external request');
     const args = JSON.parse(String(init?.body));
     if (url.pathname.endsWith('/assert_channel_presence')) return Response.json(true);
@@ -67,7 +63,7 @@ async function fixture(owner = MEMBER, issuedAt?: number) {
     method: 'POST', redirect: 'manual', body: new URLSearchParams({ t: token }).toString(),
     headers: { 'content-type': 'application/x-www-form-urlencoded', ...(cookie ? { cookie } : {}) },
   });
-  return { member, bindings, selected, link, post, deploySession, token, rpcState, messages };
+  return { member, bindings, selected, link, post, deploySession, token, rpcState };
 }
 
 it('redeems a fresh member ticket through the Worker in a fresh browser', async () => {
@@ -177,33 +173,24 @@ it.each(['false', 'throw'])('fails closed when owner session open returns %s and
   expect((await worker.fetch(fresh.post(), fresh.bindings)).status).toBe(303);
 });
 
-it.each([true, false])('actual Telegram /console command issues a routed ticket only with an issuer (%s)', async withIssuer => {
+it.each([true, false])('the console link Waldo mints for a member is a routed ticket only with an issuer (%s)', async withIssuer => {
   const f = await fixture();
-  const subject = 999000002;
-  await runInDurableObject(f.member, async (instance, state) => {
-    const runtime = instance as unknown as { env: Cloudflare.Env; fetch(request: Request): Promise<Response> };
-    const previous = runtime.env;
-    runtime.env = { ...previous, ...directoryEnv } as Cloudflare.Env;
+  // send_console_link mints through this one rule; its delivery on each surface is tested with the tool.
+  const link = await runInDurableObject(f.member, async (_instance, state) => {
     await state.storage.put('origin', ORIGIN);
-    await state.storage.put('telegram_subject', String(subject));
     if (withIssuer) await state.storage.put('do_name', MEMBER);
     else await state.storage.delete('do_name');
     const previousGrant = await state.storage.get('console:link');
-    try {
-      expect((await runtime.fetch(new Request('https://telegram-owner/turn', {
-        method: 'POST', body: JSON.stringify({ update_id: 1, message: { message_id: 1, from: { id: subject }, chat: { id: subject, type: 'private' }, text: '/console' } }),
-      }))).status).toBe(200);
-      if (!withIssuer) expect(await state.storage.get('console:link')).toEqual(previousGrant);
-    } finally { runtime.env = previous; }
+    const minted = await mintConsoleLink(state.storage, { ...env, ...directoryEnv });
+    if (!withIssuer) expect(await state.storage.get('console:link')).toEqual(previousGrant);
+    return minted;
   });
   if (!withIssuer) {
-    expect(f.messages).toHaveLength(0);
+    expect(link).toBeNull();
     return;
   }
-  expect(f.messages).toHaveLength(1);
-  const link = f.messages[0]!.match(/https:\/\/\S+/)![0];
-  expect(new URL(link).searchParams.get('t')).toMatch(/^c1\./);
-  const token = new URL(link).searchParams.get('t')!;
+  expect(new URL(link!).searchParams.get('t')).toMatch(/^c1\./);
+  const token = new URL(link!).searchParams.get('t')!;
   const response = await worker.fetch(new Request(`${ORIGIN}/console`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ t: token }).toString() }), f.bindings);
   expect(response.status).toBe(303);
   expect(f.selected).toEqual([MEMBER]);

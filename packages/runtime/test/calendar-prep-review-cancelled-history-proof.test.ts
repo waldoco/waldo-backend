@@ -5,6 +5,7 @@ import type { CalendarItem } from '../src/connectors/google';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
 import { loopBook } from '../src/channels/loops';
+import { runOwnerJob } from './fixtures/owner-job';
 
 const fixture = vi.hoisted(() => ({ event: null as CalendarItem | null, sent: [] as string[], requests: [] as LLMGatewayRequest[], decision: 'notify', mutate: null as (() => void) | null, ack: true }));
 vi.mock('../src/connectors/google', async load => {
@@ -51,8 +52,7 @@ it('review proof: cancelled prep is still retained as Waldo conversation and nig
     await state.storage.put('origin', 'https://fixture.invalid');
     await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
     try {
-      const response = await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify({ update_id: 901, message: { message_id: 901, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: '/fire briefs' } }) }));
-      expect(response.status).toBe(200);
+      await runOwnerJob(owner, 'briefs');
       expect(state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)?.filter(r => r.calendarPrep) ?? []).toHaveLength(0);
       expect(fixture.sent.filter(t => t.startsWith('Design review'))).toHaveLength(0);
       const rows = state.storage.sql.exec<{entry_id:string;speaker:string;text:string}>("SELECT entry_id, speaker, text FROM episodes WHERE entry_id LIKE 'calendar-prep:%'").toArray();
@@ -80,11 +80,10 @@ it('review proof: changed source retry does not reuse cached stale decision', as
     await state.storage.put('origin', 'https://fixture.invalid');
     await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
     try {
-      const response = await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify({ update_id: 901, message: { message_id: 901, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: '/fire briefs' } }) }));
-      expect(response.status).toBe(200);
+      await runOwnerJob(owner, 'briefs');
       expect(state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)?.filter(r => r.calendarPrep) ?? []).toHaveLength(0);
       expect(fixture.sent.filter(t => t.startsWith('Design review'))).toHaveLength(0);
-      await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify({ update_id: 902, message: { message_id: 902, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: '/fire briefs' } }) }));
+      await runOwnerJob(owner, 'briefs');
       const rows = state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)?.filter(r => r.calendarPrep) ?? [];
       expect(rows).toHaveLength(1);
       expect(rows[0]?.calendarPrep?.revision).toBe('r2');
@@ -110,8 +109,7 @@ it('review proof: literal forget removes source identifiers from every retained 
     await state.storage.put('origin', 'https://fixture.invalid');
     await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
     try {
-      const response = await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify({ update_id: 901, message: { message_id: 901, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: '/fire briefs' } }) }));
-      expect(response.status).toBe(200);
+      await runOwnerJob(owner, 'briefs');
       const { redactCalendarPrepEntries } = await import('../src/channels/telegram-final-outbox');
       const cleanup = redactCalendarPrepEntries(state.storage.kv, ['secretmeeting123'], '[forgotten]');
       expect(cleanup.remaining).toBe(0);

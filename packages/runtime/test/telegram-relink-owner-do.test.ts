@@ -1,6 +1,4 @@
-import { HELDROWS_SCAN_BUDGET, HARNESS_MESSAGE_LIMIT, heldRowShapes } from '../src/memory/held-rows';
 import { likePrefilter, projectionPredicate } from '../src/memory/claims';
-import { parseHarnessCommand } from '../src/channels/harness';
 import { env, evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { TelegramOwnerInbox } from '../src/channels/telegram-owner-inbox';

@@ -5,7 +5,7 @@ import type { InboundSpan, InboundView } from './owner-inbound-turn';
 export const STOPPED_REPLY = 'Stopped. Nothing more on that one.';
 
 export const turnControl = () => {
-  let child: { bindTarget(id: string): void; durableConsume(hook: (ids: readonly number[]) => Promise<void>): void; stopTarget(id: string): boolean; steerTarget(targetId: string, id: number, steer: InboundView): boolean; stop(): boolean; steer(id: number, text: string): boolean } | undefined;
+  let child: { bindTarget(id: string): void; durableConsume(hook: (ids: readonly number[]) => Promise<void>): void; steerTarget(targetId: string, id: number, steer: InboundView): boolean; stop(): boolean; steer(id: number, text: string): boolean } | undefined;
   let revision = 0;
   let running = false;
   let target: string | null = null;
@@ -21,7 +21,6 @@ export const turnControl = () => {
     route(next: NonNullable<typeof child>): void { child = next; if (target) next.bindTarget(target); if (consume) next.durableConsume(consume); },
     unroute(next: NonNullable<typeof child>): void { if (child === next) child = undefined; },
     bindTarget(id: string): void { target = id; child?.bindTarget(id); },
-    stopTarget(id: string): boolean { if (child) return child.stopTarget(id); if (target !== id || !running) return false; stopped = true; revision++; return true; },
     steerTarget(targetId: string, id: number, steer: InboundView): boolean {
       if (child) return child.steerTarget(targetId, id, steer);
       if (target !== targetId || !running || !steerable || stopped) return false;

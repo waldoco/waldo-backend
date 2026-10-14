@@ -8,9 +8,10 @@ import { BRIEF_SWEEP_ID } from '../src/channels/event-briefs';
 import { updateBook } from '../src/channels/update-cards';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { presenceAuthority } from './helpers/directory-presence';
+import { consoleAccess, CONSOLE_COOKIE } from '../src/channels/console';
 
 const UPDATE_TEXT = 'Synthetic update text.';
-const fixture = vi.hoisted(() => ({ changes: [] as CalendarChange[], requests: [] as string[], sent: [] as string[] }));
+const fixture = vi.hoisted(() => ({ changes: [] as CalendarChange[], requests: [] as string[] }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
   return { ...original, googleClient: (_app: unknown, _tokens: unknown, _fetch: unknown, _health: unknown, account: unknown) => ({
@@ -22,7 +23,6 @@ vi.mock('../src/channels/telegram-api', async load => {
   const original = await load<typeof import('../src/channels/telegram-api')>();
   return { ...original, createTelegramCaller: () => async (method: string, payload: { chat_id?: number; text?: string }) => {
     if (method !== 'sendMessage') return true;
-    fixture.sent.push(payload.text ?? '');
     return { message_id: 91, chat: { id: payload.chat_id } };
   } };
 });
@@ -50,7 +50,7 @@ const storedText = (state: DurableObjectState) => {
   return [...kv, ...tables.flatMap(table => state.storage.sql.exec(`SELECT * FROM "${table}"`).toArray().map(row => JSON.stringify(row)))].join('\n');
 };
 
-it('an update card is written with the owner\'s health logs, no stored copy of its prompt carries their numbers, and /ledger still shows them', async () => {
+it('an update card is written with the owner\'s health logs, no stored copy of its prompt carries their numbers, and the console ledger still shows them', async () => {
   const name = 'update-card-health-strip';
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const originalNow = Date.now;
@@ -90,10 +90,11 @@ it('an update card is written with the owner\'s health logs, no stored copy of i
       expect(stored).toContain('Changed event');
       expect(stored).not.toContain('640 kcal');
       expect(stored).not.toContain('37 min');
-      fixture.sent = [];
-      const ledger = await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify({ update_id: 500, message: { message_id: 500, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: '/ledger' } }) }));
-      expect(ledger.status).toBe(200);
-      expect(fixture.sent.join('\n')).toContain('~640 kcal, estimate');
+      // The owner reads their own health log lines in the ledger on their console page.
+      const session = await consoleAccess(state.storage).grant();
+      const page = await owner.fetch(new Request('https://owner.invalid/console/activity', { headers: { accept: 'application/json', cookie: `${CONSOLE_COOKIE}=${session}` } }));
+      expect(page.status).toBe(200);
+      expect((await page.json() as { ledger: string }).ledger).toContain('~640 kcal, estimate');
     } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
   });
 });

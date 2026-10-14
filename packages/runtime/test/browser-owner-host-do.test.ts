@@ -63,7 +63,8 @@ async function browserProof(work: (h: {
       gateway: { complete: async ({ request }: { request: LLMRequest }) => {
         requests.push(structuredClone(request));
         const journey = mode === 'journey' && !request.response_format && request.tools?.some((t: { name: string }) => t.name === 'browse_act') ? journeyCommands.shift() : undefined;
-        const calls = journey ? [{ call_id: `synthetic-command-${requests.length}`, name: 'browse_act', arguments: JSON.stringify({ url: driver.pageUrl, task: 'Prepare the known synthetic form', command: journey }) }] : !replyOnly && mode !== 'journey' && !request.response_format && !request.tool_turns?.length && request.tools?.some((t: { name: string }) => t.name === 'browse_act')
+        const stopping = !request.response_format && !request.tool_turns?.length && JSON.stringify(request.messages.at(-1)).includes('Stop the browser.') && request.tools?.some((t: { name: string }) => t.name === 'browse_act');
+        const calls = stopping ? [{ call_id: `browser-cancel-${requests.length}`, name: 'browse_act', arguments: JSON.stringify({ url: driver.pageUrl, task: 'Stop the synthetic browser task', command: { operation: 'cancel' } }) }] : journey ? [{ call_id: `synthetic-command-${requests.length}`, name: 'browse_act', arguments: JSON.stringify({ url: driver.pageUrl, task: 'Prepare the known synthetic form', command: journey }) }] : !replyOnly && mode !== 'journey' && !request.response_format && !request.tool_turns?.length && request.tools?.some((t: { name: string }) => t.name === 'browse_act')
           ? [{ call_id: `browser-inspect-${requests.length}`, name: 'browse_act', arguments: JSON.stringify({ url: driver.pageUrl, task: 'Inspect the synthetic public form', command: { operation: 'inspect' } }) }] : undefined;
         return { ok: true, data: { text: request.response_format ? JSON.stringify({ decision: 'retain', sources: [] }) : calls ? '' : 'Synthetic browser reply.', ...(calls ? { tool_calls: calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, model: request.model, latency_ms: 1 } };
       } },
@@ -73,7 +74,7 @@ async function browserProof(work: (h: {
     const construct = () => new OwnerDO(state, privateEnv, mode === 'absent' || mode === 'factory_failed' || mode === 'legacy_factory_failed' ? undefined : config, mode === 'factory_failed' || mode === 'legacy_factory_failed' ? { policy: { enabled: false, doName, fixtureOrigin: 'https://fixture.example' }, manifest: { origin: 'https://fixture.example', pagePath: '/form', submitPath: '/submit', receiptPrefix: '/receipts/', runId: 'trial-one', fields: ['value'], formSelector: '#form', submitSelector: '#submit', resultSelector: '#result' } } : undefined);
     if (mode === 'legacy_factory_failed') { legacyModel.enabled = true; legacyModel.calls = 0; }
     let instance = construct();
-    const sendUpdate = async (update: object, text = '', expectedStatus = 200) => {
+    const sendUpdate = async (update: object, expectedStatus = 200) => {
       const id = ++sequence;
       const response = await instance.fetch(new Request('https://local.invalid/enqueue', { method: 'POST', headers: { 'x-waldo-inbox-secret': 'fictional-browser-inbox-secret', 'x-waldo-telegram-subject': String(subject), 'x-waldo-do-name': doName }, body: JSON.stringify({ update_id: id, ...update }) }));
       expect(response.status).toBe(expectedStatus);
@@ -83,11 +84,10 @@ async function browserProof(work: (h: {
         const row = state.storage.kv.get<{ updateId: number; state: string; closedAt?: number }[]>('telegram_owner_inbox_v1')?.find(row => row.updateId === id);
         if (row?.closedAt !== undefined || row?.state === 'consumed' || row?.state === 'completed') return;
       }
-      if (text === '/stop') return;
       throw Error('Synthetic browser turn did not close in five actual alarms');
     };
-    const send = (text: string) => sendUpdate({ message: { message_id: sequence + 1, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text } }, text);
-    const decide = (id: string, action: 'a' | 's', owner = subject) => sendUpdate({ callback_query: { id: `synthetic-callback-${sequence + 1}`, from: { id: owner }, data: `${action}:${id}`, message: { message_id: 1, chat: { id: subject, type: 'private' } } } }, '', owner === subject ? 200 : 403);
+    const send = (text: string) => sendUpdate({ message: { message_id: sequence + 1, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text } });
+    const decide = (id: string, action: 'a' | 's', owner = subject) => sendUpdate({ callback_query: { id: `synthetic-callback-${sequence + 1}`, from: { id: owner }, data: `${action}:${id}`, message: { message_id: 1, chat: { id: subject, type: 'private' } } } }, owner === subject ? 200 : 403);
     const failFinishRunOnce = () => {
       const task = (instance as unknown as { browserTasks: { finishRun(): Promise<void> } }).browserTasks;
       const original = task.finishRun;
@@ -128,10 +128,10 @@ for (const mutation of ['foreign', 'stale'] as const) it(`actual owner admission
     expect(h.starts()).toBe(starts); expect(h.inspections()).toBe(inspections);
   });
 });
-it('authenticated /stop fences and cleans a persisted browser task even after DO reconstruction', async () => {
+it('the owner asking Waldo to stop the browser ends a persisted browser task even after DO reconstruction', async () => {
   await browserProof(async h => {
     await h.send('Inspect the public fixture.'); expect(h.starts()).toBe(1);
-    h.reload(); await h.send('/stop');
+    h.reload(); await h.send('Stop the browser.');
     expect(h.ends()).toBe(1); expect(await h.state.storage.get(BROWSER_TASK_KEY)).toMatchObject({ phase: 'closed' });
     await h.send('Inspect again after stop.'); expect(h.starts()).toBe(1);
   });
@@ -244,17 +244,6 @@ it('factory failure does not stop ordinary owner messaging', async () => {
   }, 'factory_failed');
 });
 
-for (const seam of ['lookup', 'inspect'] as const) it(`actual DO fences browser work on authenticated stop during paused ${seam}`, async () => {
-  await browserProof(async h => {
-    const resume = seam === 'lookup' ? h.pauseLookup() : h.pauseInspect();
-    const pending = h.send('Inspect the public fixture.'); await resume.reached;
-    await h.send('/stop');
-    resume(); await pending;
-    expect(h.starts()).toBe(seam === 'lookup' ? 0 : 1);
-    expect(JSON.stringify(h.requests)).not.toContain('field_refs');
-    await h.send('/stop'); if (seam === 'inspect') expect(h.ends()).toBe(1);
-  });
-});
 it('browser approval custody survives reconstruction but denies replaced physical owner or continuation', async () => {
   await browserProof(async h => {
     const { browserTaskSourceCustody } = await import('../src/channels/browser-task-source');
@@ -287,7 +276,7 @@ it('default responder still answers ordinary owner text when the configured brow
     expect(JSON.stringify(h.state.storage.kv.get('telegram_final_outbox_v1'))).toContain('Ordinary messaging remains available.');
   }, 'legacy_factory_failed');
 });
-it('browser approval custody remains valid without a classifier and is revoked by authenticated stop', async () => {
+it('browser approval custody remains valid without a classifier and is revoked when the owner has Waldo stop the browser', async () => {
   await browserProof(async h => {
     const { browserTaskSourceCustody } = await import('../src/channels/browser-task-source');
     await h.send('Inspect the public fixture.');
@@ -299,7 +288,7 @@ it('browser approval custody remains valid without a classifier and is revoked b
     const guard = browserTaskSourceCustody(h.state.storage.sql, h.state.storage.kv, owner).guard(payload);
     await guard();
     expect(h.state.storage.sql.exec("SELECT name FROM sqlite_master WHERE name='owner_task_source_scope'").toArray()).toHaveLength(0);
-    await h.send('/stop');
+    await h.send('Stop the browser.');
     await expect(guard()).rejects.toThrow('changed');
   });
 });
