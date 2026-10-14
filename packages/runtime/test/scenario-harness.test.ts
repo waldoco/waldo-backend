@@ -69,7 +69,7 @@ describe('recall by relevance', () => {
   // history window, so asserting on the whole model input would pass without recall; the block is what proves it ran.
   const recalled = (run: ScenarioRun, turn: number): string => fencedIn(lastRequest(run, turn).messages.at(-1)?.content ?? '');
 
-  it('puts what a message recalled at the end of that message, fenced, and never in the system prompt or the stored conversation', async () => {
+  it('puts what a message recalled in that message, fenced after its words, and never in the system prompt or the stored conversation', async () => {
     const run = await runScenario(r1);
     const request = lastRequest(run, 8);
     expect(recalled(run, 8)).toMatch(/^<recalled>\nMatched to this message by shared words: /);
