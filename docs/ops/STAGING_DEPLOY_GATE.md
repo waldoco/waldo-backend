@@ -26,6 +26,9 @@ and the edge function project is `togdshayyxycitzckpqv`.
 | `gmail-push-unsigned` | `POST /events/gmail`, no bearer | 403. A 404 means push ingress is not configured |
 | `connector-proxy-unsigned` | `POST /functions/v1/connector-proxy`, no apikey or signature | 401 from the gateway, or 200 carrying the function's own `401 unsigned proxy call` |
 
+With `--expect-sha`, `healthz` is tried up to 3 times, 10 seconds apart, so a deploy still reaching
+every edge is not reported as a stale release.
+
 A `release` of `unreleased` fails `healthz`: the Worker was deployed without `scripts/deploy-runtime.sh`,
 so nothing ties it to a commit.
 
