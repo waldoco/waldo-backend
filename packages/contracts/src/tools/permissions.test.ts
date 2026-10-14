@@ -96,6 +96,7 @@ describe('toolName', () => {
       'set_schedule_preference',
       'read_tool_output',
       'connect_service',
+      'send_console_link',
       'browse_page',
       'browse_act',
       'delegate_task',
@@ -238,6 +239,7 @@ describe('TOOL_PERMISSIONS', () => {
         'get_health',
         'query_calendar',
         'connect_service',
+        'send_console_link',
         'get_communication',
         'search_communication',
         'search_contacts',
@@ -349,6 +351,10 @@ describe('TOOL_PERMISSIONS', () => {
     expect(triggersGranting('browse_act')).toEqual(['user_message']);
   });
 
+  it("grants 'send_console_link' in user_message only - a job, brief or handoff never mints a console credential", () => {
+    expect(triggersGranting('send_console_link')).toEqual(['user_message']);
+  });
+
   it("grants 'web_search', 'browse_page' and 'read_document' only in the two verbose triggers", () => {
     for (const tool of ['web_search', 'browse_page', 'read_document']) {
       expect(triggersGranting(tool)).toEqual(['handoff_explore', 'user_message']);
@@ -399,7 +405,7 @@ describe('search_tools — ADR-0034 Option A, first-class', () => {
   });
 
   it('pins the always-on discovery and skill metadata set', () => {
-    expect(ALWAYS_ON_TOOLS).toEqual(['read_memory', 'remember', 'forget_memory', 'send_message', 'propose_action', 'search_tools', 'connect_service', 'skills_list', 'use_mac']);
+    expect(ALWAYS_ON_TOOLS).toEqual(['read_memory', 'remember', 'forget_memory', 'send_message', 'propose_action', 'search_tools', 'connect_service', 'send_console_link', 'skills_list', 'use_mac']);
   });
 
   it('grants connect_service exactly where query_calendar is granted', () => {
