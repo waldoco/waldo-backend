@@ -23,7 +23,7 @@ const fakeAuth = (over: Partial<ConsoleAuth> = {}) => {
 };
 const forwards: Request[] = [];
 const env = () => ({
-  TELEGRAM_OWNER_DO: { idFromName: (n: string) => n, get: () => ({ fetch: async (r: Request) => { forwards.push(r); return Response.json({ forwarded: true }); } }) },
+  OWNER_DO: { idFromName: (n: string) => n, get: () => ({ fetch: async (r: Request) => { forwards.push(r); return Response.json({ forwarded: true }); } }) },
   RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) },
   SUPABASE_PROJECT_URL:'https://directory.fixture.invalid',SUPABASE_PUBLISHABLE_KEY:'fictional-public-key',WALDO_ROUTER_HMAC_SECRET:'fictional-router-secret-00000000000000000',
 }) as never;
@@ -78,6 +78,16 @@ describe('app sign-in and main chat routes', () => {
     expect(forwards[0]!.headers.get('x-waldo-do-name')).toBe('owner-1');
     expect(new URL(forwards[0]!.url).pathname).toBe('/app/v1/chat/main/messages');
   });
+  it('forwards a stop to the owner DO and counts it as a read, not a send', async () => {
+    forwards.length = 0;
+    const keys: string[] = [];
+    const counted = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async ({ key }: { key: string }) => { keys.push(key); return { success: true }; } } } as never;
+    const response = await handleApp(new Request('https://w.test/app/v1/chat/main/messages/client-msg-0001/cancel', { method: 'POST', headers: { authorization: `Bearer ${CREDENTIAL}` } }), counted, fakeAuth().auth);
+    expect(await response!.json()).toEqual({ forwarded: true });
+    expect(forwards[0]!.method).toBe('POST');
+    expect(new URL(forwards[0]!.url).pathname).toBe('/app/v1/chat/main/messages/client-msg-0001/cancel');
+    expect(keys).toEqual(['app-read:owner-1']);
+  });
   it('rate limits chat sends per owner and fails closed without the limiter', async () => {
     const auth = fakeAuth().auth;
     const limited = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: false }) } } as never;
@@ -130,6 +140,16 @@ describe('main chat transcript page', () => {
     expect(older.messages[2]!.channel).toBe('telegram');
     expect(older.next_cursor).toBeNull();
   });
+  it('shows a stored receipt as a part and keeps its line in the text, byte for byte the part\'s fallback', () => {
+    const receipt = { line: 'Done: reminder set', items: [{ kind: 'reminder_set', target: null, outcome: 'accepted' as const, via_task: false, at: Date.UTC(2026, 9, 13, 8), digest: null }], more: 0 };
+    const part = { type: 'receipt', items: receipt.items, more: 0, fallback_text: 'Done: reminder set' };
+    const shown = (appPayload: string) => appTranscriptPage([{ ...entry(20, 'assistant', 'app'), appPayload, receipt }], null, 5).messages[0]!;
+    expect(shown('Set for 9.\n\nDone: reminder set')).toMatchObject({ text: 'Set for 9.\n\nDone: reminder set', parts: [{ type: 'text', text: 'Set for 9.\n\nDone: reminder set' }, part] });
+    expect(shown('Set for 9.\n\nDone: reminder set').text.endsWith(`\n\n${part.fallback_text}`)).toBe(true);
+    expect(shown('Set for 9. Done: reminder set')).toMatchObject({ text: 'Set for 9. Done: reminder set', parts: [{ type: 'text' }, part] });
+    expect(shown('\n\nDone: reminder set')).toMatchObject({ text: '\n\nDone: reminder set', parts: [{ type: 'text' }, part] });
+    expect(appTranscriptPage([entry(21, 'assistant', 'app')], null, 5).messages[0]!.parts).toEqual([{ type: 'text', text: 'text 21' }]);
+  });
   it('attaches the approval parts presented for a run to the assistant reply to that run', () => {
     const part: import('../src/channels/surfaces/app').AppApprovalPart = { type: 'approval', approval_id: 'p1', kind: 'calendar_change', review: 'Proposed: Walk', payload_digest: `sha256:${'b'.repeat(64)}`, actions: ['approve', 'edit', 'skip'], expires_at: Date.UTC(2026, 9, 10, 15), fallback_text: 'Walk' };
     const user = entry(10, 'user', 'app'), first = { ...entry(11, 'assistant', 'app'), parentId: 'e10' }, reply = { ...entry(12, 'assistant', 'app'), parentId: 'e10' };
@@ -174,7 +194,7 @@ it('fences again once the session is revoked, and a failed second fence does not
   const owners={idFromName:(n:string)=>n,get:()=>({fetch:async()=>{calls.push('fence');return new Response('{}',{status:calls.filter(call=>call==='fence').length===1?200:503});}})};
   const fetcher=vi.spyOn(globalThis,'fetch').mockImplementation(async()=>{calls.push('push');return Response.json(0);});
   try{
-    const response=await handleApp(post('/app/v1/auth/signout',{},{authorization:`Bearer ${CREDENTIAL}`}),{...env() as object,TELEGRAM_OWNER_DO:owners} as never,auth);
+    const response=await handleApp(post('/app/v1/auth/signout',{},{authorization:`Bearer ${CREDENTIAL}`}),{...env() as object,OWNER_DO:owners} as never,auth);
     expect([response!.status,await response!.json()]).toEqual([200,{result:'revoked'}]);
     expect(calls).toEqual(['fence','push','revoke','fence']);
   }finally{fetcher.mockRestore();}
@@ -184,7 +204,7 @@ it('fences the session\'s in-flight work before revoking it, and revokes nothing
   const fences:Request[]=[];
   const owners=(status:number)=>({idFromName:(n:string)=>n,get:()=>({fetch:async(r:Request)=>{fences.push(r);return new Response('{}',{status});}})});
   const headers={authorization:`Bearer ${CREDENTIAL}`};
-  const withOwners=(status:number)=>({...env() as object,TELEGRAM_OWNER_DO:owners(status)}) as never;
+  const withOwners=(status:number)=>({...env() as object,OWNER_DO:owners(status)}) as never;
   const fetcher=vi.spyOn(globalThis,'fetch').mockImplementation(async()=>Response.json(0));
   try{
     const failing=fakeAuth();

@@ -52,7 +52,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
-const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '6c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f';
 const AT = Date.parse('2026-10-03T09:00:00Z');
@@ -61,11 +61,11 @@ const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', S
 type Authority = 'current' | 'revoked' | 'outage' | 'error';
 type Sent = { chat_id: number; text: string; reply_markup?: unknown };
 // authorityAfter: the directory answers 'current' this many times, then `authority`.
-const wire = { authority: 'current' as Authority, authorityAfter: 0, asked: 0, presence: true, telegram: 'ok' as 'ok' | 'fails', telegramSent: [] as Sent[] };
+const wire = { authority: 'current' as Authority, authorityAfter: 0, asked: 0, presence: true, telegram: 'ok' as 'ok' | 'fails', telegramSent: [] as Sent[], previews: [] as unknown[] };
 
 beforeEach(() => {
   fixture.event = null; fixture.changes = []; fixture.requests = [];
-  wire.authority = 'current'; wire.authorityAfter = 0; wire.asked = 0; wire.presence = true; wire.telegram = 'ok'; wire.telegramSent = [];
+  wire.authority = 'current'; wire.authorityAfter = 0; wire.asked = 0; wire.presence = true; wire.telegram = 'ok'; wire.telegramSent = []; wire.previews = [];
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
@@ -82,7 +82,8 @@ beforeEach(() => {
     if (fn === 'health_context_read') return Response.json(null);
     if (fn === 'assert_channel_presence') return Response.json(wire.presence);
     if (/^https:\/\/api\.telegram\.org\/bot[^/]+\/sendMessage$/.test(url)) {
-      const sent = JSON.parse(String(init?.body)) as Sent;
+      const sent = JSON.parse(String(init?.body)) as Sent & { link_preview_options?: unknown };
+      wire.previews.push(sent.link_preview_options);
       wire.telegramSent.push({ chat_id: sent.chat_id, text: sent.text, ...(sent.reply_markup === undefined ? {} : { reply_markup: sent.reply_markup }) });
       if (wire.telegram === 'fails') return Response.json({ ok: false, error_code: 500, description: 'Internal Server Error' }, { status: 500 });
       return Response.json({ ok: true, result: { message_id: 40 + wire.telegramSent.length, chat: { id: sent.chat_id } } });
@@ -101,7 +102,7 @@ type Binding = Readonly<{ app?: boolean }>;
 // zone confirmed in the app. The jobs each runtime arms on its first build are cleared, so each test schedules exactly the
 // work it means to run.
 const withOwner = async (name: string, run: (owner: Owner, state: DurableObjectState, ctx: Ctx) => Promise<void>, binding: Binding = { app: true }) => {
-  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   await runInDurableObject(stub, async (_instance, state) => {
     const originalNow = Date.now, ctx: Ctx = { now: AT, name, appSubject: appSubjectFor(name) };
     Date.now = () => ctx.now;
@@ -114,12 +115,12 @@ const withOwner = async (name: string, run: (owner: Owner, state: DurableObjectS
       await state.storage.put('origin', 'https://fixture.invalid');
       await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only',
         scopes: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/gmail.readonly'] }]);
-      const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC',
+      const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC',
         WALDO_OWNER_TELEGRAM_ID: undefined, GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', MAIL_SOURCE_FOLLOWUPS: '1', CALENDAR_GROUNDED_PREP: '1' }) as unknown as Owner;
       await owner.setup('telegram').ready;
       await owner.setup('app').ready;
       state.storage.sql.exec('DELETE FROM schedule');
-      wire.telegramSent = [];
+      wire.telegramSent = []; wire.previews = [];
       await run(owner, state, ctx);
     } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
   });
@@ -345,6 +346,48 @@ describe('the delivery outbox for an owner on both surfaces', () => {
       expect(outbox(state).map(record => record.status)).toEqual(['delivered']);
       expect(wire.telegramSent).toEqual(failure === 'fails' ? [{ chat_id: 7, text: NUDGE_TEXT }] : []);
       expect(copyLog(state)).toEqual([{ ok: 0, note: code }]);
+    });
+  });
+});
+
+// Telegram fetches a link in a message to draw its preview, with no tap from the owner. Text that carries mail or calendar
+// content can carry a link someone else wrote, so no send from the owner object asks for a preview.
+describe('link previews on Telegram', () => {
+  const noPreview = { is_disabled: true };
+
+  it('meeting prep goes to a Telegram-only owner with link previews off', async () => {
+    await withOwner('previews-prep', async (owner, state, ctx) => {
+      fixture.event = { id: 'event-1', title: 'Design review', status: 'confirmed', start: `${DAY}T09:30:00Z`, end: `${DAY}T10:00:00Z`, all_day: false,
+        description: 'Bring the onboarding mocks.', attendee_names: ['Pat'], attendees: 3, etag: 'r1' } as CalendarItem;
+      await dueSweep(state);
+      await schedulePass(owner, state);
+      await outboxPass(owner, state, ctx);
+      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: PREP_TEXT }]);
+      expect(wire.previews).toEqual([noPreview]);
+    }, { app: false });
+  });
+
+  it('an update card, with its buttons, goes out with link previews off', async () => {
+    await withOwner('previews-update', async (owner, state) => {
+      dayPlanBook(state.storage.sql).sent(DAY, 'card:brief');
+      updateBook(state.storage.sql).mark('calendar_since', AT - 3_600_000);
+      fixture.changes = [{ id: 'event-1', title: 'Changed event', status: 'confirmed', start: `${DAY}T11:00:00Z`, end: `${DAY}T11:30:00Z`, all_day: false, description: '', etag: 'r2',
+        created: new Date(AT - 86_400_000).toISOString() } as CalendarChange];
+      await dueSweep(state);
+      await schedulePass(owner, state);
+      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: UPDATE_TEXT, reply_markup: expect.objectContaining({ inline_keyboard: expect.any(Array) }) }]);
+      expect(wire.previews).toEqual([noPreview]);
+    }, { app: false });
+  });
+
+  it('a reply to a Telegram turn and the plain copy of an app message both go out with link previews off', async () => {
+    await withOwner('previews-reply-and-copy', async (owner, state, ctx) => {
+      await queue(state, ctx, 'telegram');
+      await queue(state, ctx, 'app');
+      await outboxPass(owner, state, ctx);
+      await outboxPass(owner, state, ctx);
+      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: REPLY_TEXT }, { chat_id: 7, text: NUDGE_TEXT }]);
+      expect(wire.previews).toEqual([noPreview, noPreview]);
     });
   });
 });

@@ -1,9 +1,10 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
-import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
+import { OwnerDO } from '../src/channels/owner-do';
 import { registerCommonBrowserSdk } from '../src/channels/common-staging-registration';
 import { routerSignature } from '../src/identity/owner-directory';
 import type { CloudflareBrowserSdkLoader } from '../src/channels/public-fixture-browser';
+import { toolOutput } from './fixtures/tool-output';
 
 const proof = vi.hoisted(() => ({ subject: 81101, inputs: [] as { subject: number; input: any }[], delivered: [] as { subject: number; text: string }[] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: any) => {
@@ -12,7 +13,7 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (input: 
   const previous = (Array.isArray(input.input) ? input.input : []).filter((item: any) => item.type === 'function_call_output');
   const urls = ['https://example.com/a', 'https://example.com/b', 'https://example.com/a'];
   const read = !format && previous.length < urls.length;
-  return { id: 'synthetic-auto-owner', output: read ? [{ type: 'function_call', call_id: `read-${previous.length}`, name: 'browse_page', arguments: JSON.stringify({ provider: 'cloudflare_playwright', url: urls[previous.length], instruction: 'Read the public page' }) }] : [],
+  return { id: 'synthetic-auto-owner', output: read ? [{ type: 'function_call', call_id: `read-${previous.length}`, name: 'browse_page', arguments: JSON.stringify({ url: urls[previous.length], instruction: 'Read the public page' }) }] : [],
     output_text: format === 'claim_ops' ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : format ? '{}' : read ? '' : `Owner ${proof.subject} read A/B/A.`, usage: { input_tokens: 1, output_tokens: 1 } };
 } }; } }));
 vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(), createTelegramCaller: () => async (method: string, payload: any) => {
@@ -70,12 +71,12 @@ it('one explicit bounded operator policy serves two existing owners and a newly 
   try {
     for (const owner of owners) {
       proof.subject = owner.subject;
-      const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(owner.doName));
+      const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(owner.doName));
       await runInDurableObject(stub, async (_instance, state) => {
         const binding = { fetch: vi.fn(async () => new Response('{}')) };
         const privateEnv = { ...env, COMMON_OWNER_TASKS: '0', WALDO_ENVIRONMENT: 'staging', COMMON_BROWSER_REGISTRATION: operator, SUPABASE_PROJECT_URL: 'https://directory.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable-key', WALDO_ROUTER_HMAC_SECRET: secret,
           LANGFUSE_CAPTURE_TEXT: 'true', WALDO_EGRESS_ALLOWLIST: '*', WALDO_TOOL_OFFLOAD: '0', BROWSER: binding as never, TELEGRAM_BOT_TOKEN: '12345:fictional', TELEGRAM_WEBHOOK_SECRET: 'synthetic-auto-secret', OPENAI_API_KEY: 'synthetic-model-key' };
-        let instance = new TelegramOwnerDO(state, privateEnv), updateId = owner.subject * 100;
+        let instance = new OwnerDO(state, privateEnv), updateId = owner.subject * 100;
         const send = async (text: string, expectedStatus = 'delivered') => {
           const id = ++updateId;
           const deliveredBefore = proof.delivered.length;
@@ -98,12 +99,12 @@ it('one explicit bounded operator policy serves two existing owners and a newly 
           expect(proof.inputs).toHaveLength(calls); expect(allocated).toHaveLength(2);
           // Admission changes in the existing directory; no operator/browser
           // registration changes are needed for this newly invited owner.
-          admitted.add(owner.subject); instance = new TelegramOwnerDO(state, privateEnv);
+          admitted.add(owner.subject); instance = new OwnerDO(state, privateEnv);
         }
         await send('Use Cloudflare to read A, B, then revisit A.');
         const final = proof.inputs.filter(row => row.subject === owner.subject).map(row => row.input).find(input => Array.isArray(input.input) && input.input.filter((item: any) => item.type === 'function_call_output').length === 3);
         expect(final).toBeDefined();
-        const outputs = final.input.filter((item: any) => item.type === 'function_call_output').map((item: any) => JSON.parse(item.output));
+        const outputs = final.input.filter((item: any) => item.type === 'function_call_output').map((item: any) => toolOutput(item.output));
         expect(outputs).toHaveLength(3); expect(outputs.slice(0, 2).every((row: any) => row.ok && row.data.text.includes(`cookie-${owner.subject}`))).toBe(true);
         expect(outputs[2]).toMatchObject({ok:false,code:'repeat_refusal'});
         expect(new Set(outputs.slice(0,2).map((row: any) => row.data.session_handle)).size).toBe(1);
@@ -121,7 +122,7 @@ it('one explicit bounded operator policy serves two existing owners and a newly 
         expect(ledgers[0].reservedMicrousd).toBeLessThanOrEqual(10000000);
         receipts.push({ ownerId: records[0].session.ownerId, handle: outputs[0].data.session_handle, ref: ledgers[0].policy.ref, reserved: ledgers[0].reservedMicrousd });
         const snapshot = structuredClone(ledgers[0]);
-        instance = new TelegramOwnerDO(state, privateEnv); await send('/stop');
+        instance = new OwnerDO(state, privateEnv); await send('/stop');
         expect([...state.storage.kv.list<any>({ prefix: 'common-spend:' })][0]?.[1]).toEqual(snapshot);
         await state.storage.deleteAlarm();
       });

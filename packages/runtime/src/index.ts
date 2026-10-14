@@ -48,10 +48,13 @@ import {
 // own modules, never re-exported here (pinned by test/worker-entry-exports.test.ts).
 export { RunLoopDO } from './run-loop/do';
 export { DeviceBridgeDO } from './devices/device-bridge-do';
-export { TelegramOwnerDO } from './channels/telegram-owner-do';
+export { IMessageBridgeDO } from './channels/imessage/bridge-do';
+export { OwnerDO } from './channels/owner-do';
 export { TracerDO } from './tracer/tracer-do';
 import type { RunLoopDO } from './run-loop/do';
 import type { TracerDO } from './tracer/tracer-do';
+import type { IMessageBridgeDO } from './channels/imessage/bridge-do';
+import { handleIMessageHost, isIMessageHostPath } from './channels/imessage/http';
 
 // Augment the ambient worker env so both the DO base (typed on Cloudflare.Env)
 // and the test's `env` import (also Cloudflare.Env) see the DO bindings.
@@ -74,8 +77,13 @@ declare global {
       WALDO_ROUTER_HMAC_SECRET?: string;
       RUN_LOOP_LOCAL_INGRESS_TOKEN?: string;
       TRACER_DO: DurableObjectNamespace<TracerDO>;
-      TELEGRAM_OWNER_DO?: DurableObjectNamespace;
+      OWNER_DO?: DurableObjectNamespace;
       DEVICE_BRIDGE_DO?: DurableObjectNamespace<DeviceBridgeDO>;
+      IMESSAGE_BRIDGE_DO?: DurableObjectNamespace<IMessageBridgeDO>;
+      IMESSAGE_CONNECTOR_ENABLED?: string;
+      IMESSAGE_CONNECTOR_POLICY?: string;
+      IMESSAGE_CREDENTIAL_WRAPPING_KEY?: string;
+      WALDO_ENVIRONMENT?: string;
       TELEGRAM_BOT_TOKEN?: string;
       TELEGRAM_WEBHOOK_SECRET?: string;
       GOOGLE_CLIENT_ID?: string;
@@ -125,13 +133,13 @@ export class RuntimeProbeDO extends DurableObject<Env> {
 }
 
 const forwardTicketConsole = async (request: Request, env: Env, issuer?: string): Promise<Response> => {
-  if (!env.TELEGRAM_OWNER_DO || (!issuer && !env.WALDO_OWNER_TELEGRAM_ID)) return new Response('unauthorized', { status: 401 });
+  if (!env.OWNER_DO || (!issuer && !env.WALDO_OWNER_TELEGRAM_ID)) return new Response('unauthorized', { status: 401 });
   const ownerRoute = issuer ? { doName: issuer } : await ownerDirectory(env).byPresence('telegram', env.WALDO_OWNER_TELEGRAM_ID!);
   if (!ownerRoute) return new Response('owner unavailable', { status: 503 });
   const doName = ownerRoute.doName;
   const forwarded = new Request(request);
   forwarded.headers.set('x-waldo-do-name', doName);
-  return env.TELEGRAM_OWNER_DO.get(env.TELEGRAM_OWNER_DO.idFromName(doName)).fetch(forwarded);
+  return env.OWNER_DO.get(env.OWNER_DO.idFromName(doName)).fetch(forwarded);
 };
 
 const routedConsoleTicket = async (request: Request, env: Env): Promise<Response | null> => {
@@ -168,6 +176,8 @@ export default {
     const appResponse = await handleApp(request, env, undefined, (work) => ctx?.waitUntil(work));
     if (appResponse) return appResponse;
     const devicePath = new URL(request.url).pathname;
+    // iMessage host profile waldo-imessage-http-v1: registered before generic routes/assets; 404 unless composed.
+    if (isIMessageHostPath(devicePath)) return handleIMessageHost(request, env as never);
     if (devicePath === '/devices/redeem') return request.method === 'POST' ? handleDeviceRedeem(request, env) : genericReject();
     if (devicePath === '/devices/connect') return request.method === 'GET' ? handleDeviceConnect(request, env) : genericReject();
     if (new URL(request.url).pathname === '/healthz') {
@@ -195,7 +205,7 @@ export default {
       const signedIn = await handleConsole(request, env, undefined, consoleRequestTrace);
       if (signedIn) return signedIn;
     }
-    if (new URL(request.url).pathname.startsWith(CONSOLE_PATH) && env.TELEGRAM_OWNER_DO && env.WALDO_OWNER_TELEGRAM_ID) {
+    if (new URL(request.url).pathname.startsWith(CONSOLE_PATH) && env.OWNER_DO && env.WALDO_OWNER_TELEGRAM_ID) {
       // The console must land on the owner's REAL DO - the one the Telegram webhook routes his
       // turns to. With Supabase configured that name comes from the owner directory (e.g.
       // 'owner-<uuid>' from console signup), not the env telegram id. Routing by the env id

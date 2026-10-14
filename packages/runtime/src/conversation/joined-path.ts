@@ -88,6 +88,7 @@ export class JoinedConversationPath {
       appPayload: text,
       modelProjection: { mode: 'include' },
       role: 'assistant',
+      createdAt: Date.now(),
     };
     request.runScope?.admit();
     this.tree.append(assistantEntry);

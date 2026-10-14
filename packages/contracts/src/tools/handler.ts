@@ -100,6 +100,7 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   'query_availability',
   'get_communication',
   'search_communication',
+  'search_contacts',
   'read_thread',
   'get_tasks',
   'web_search',
@@ -152,6 +153,7 @@ export const PRIVILEGED_ACTION_TOOLS: readonly ToolName[] = [
   // Changing durable procedure availability is owner-controlled, never provider-authorized.
   'skills_install',
   'skills_disable',
+  'use_mac',
 ];
 
 // The single authority of the ADR-0049 taint gate, pure so hook and dispatcher share one law:
@@ -207,6 +209,9 @@ export interface ToolHandler<Args, Result, Ctx> {
   // The host derives the connector_backed list for ACL intersection from this declaration, never from a host-supplied
   // list that can be omitted (see connectorBackedTools in tools/acl-intersection.ts).
   requires_connector?: true;
+  // turn_only_output marks a result that may hold the owner's health values: it reaches the model in the turn that
+  // asked and nowhere else. The cross-turn tool ledger and the unfinished-turn flush record a content-free line for it.
+  turn_only_output?: true;
   // Absent means always eligible (connect_service must stay offered so an owner can connect).
   eligible?(): ToolEligibility | Promise<ToolEligibility>;
   handle(args: Args, ctx: Ctx): Promise<ToolResult<Result>>;

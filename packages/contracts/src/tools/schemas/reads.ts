@@ -26,23 +26,52 @@ export const getCrsArgsSchema = z.strictObject({
 });
 export type GetCrsArgs = z.infer<typeof getCrsArgsSchema>;
 
-// Metric selectors are names only — results come back as zones/bands/trends, never raw
-// values (ADR-0024 destination rules); the closed set is what the health seam serves.
-export const healthMetricSelectorSchema = z.enum([
-  'hrv',
-  'hr',
-  'sleep',
-  'spo2',
-  'strain',
-  'recovery',
-]);
-export type HealthMetricSelector = z.infer<typeof healthMetricSelectorSchema>;
-
-export const getHealthArgsSchema = z.strictObject({
-  metrics: z.array(healthMetricSelectorSchema).optional(),
-  date: iso8601Schema.optional(),
-});
+// The owner's own readings from the health plane, by local day, for the owner's own model context (the beta ruling
+// lets them reach the model and owner-channel replies, never storage or egress). Days are the owner's local days,
+// inclusive, at most 31, ending no later than today; the handler checks "today" in the owner's zone.
+export const healthReadSignalSchema = z.enum(['sleep', 'sleep_midpoint', 'hrv', 'resting_hr', 'heart_rate', 'movement', 'daylight', 'workouts']);
+export type HealthReadSignal = z.infer<typeof healthReadSignalSchema>;
+const healthReadDaySchema = z.iso.date();
+export const HEALTH_READ_MAX_DAYS = 31;
+const dayOrdinal = (day: string): number => Math.round(Date.parse(`${day}T00:00:00Z`) / 86_400_000);
+export const getHealthArgsSchema = z
+  .strictObject({
+    signals: z.array(healthReadSignalSchema).min(1).max(8),
+    from: healthReadDaySchema,
+    to: healthReadDaySchema,
+    aggregation: z.enum(['daily', 'summary']).default('daily'),
+  })
+  .refine((args) => dayOrdinal(args.from) <= dayOrdinal(args.to), { error: 'from must not be after to', path: ['to'] })
+  .refine((args) => dayOrdinal(args.to) - dayOrdinal(args.from) < HEALTH_READ_MAX_DAYS, { error: `at most ${HEALTH_READ_MAX_DAYS} days`, path: ['to'] });
 export type GetHealthArgs = z.infer<typeof getHealthArgsSchema>;
+
+export const healthReadUnitSchema = z.enum(['minutes', 'ms', 'bpm', 'minute_of_day']);
+export const healthReadUnavailableReasonSchema = z.enum(['consent_required', 'consent_withdrawn', 'not_linked', 'no_readings', 'read_failed']);
+export const getHealthResultSchema = z.discriminatedUnion('state', [
+  z.strictObject({
+    state: z.literal('available'),
+    timezone: z.string().min(1),
+    from: healthReadDaySchema,
+    to: healthReadDaySchema,
+    read_at: z.iso.datetime(),
+    signals: z.array(z.strictObject({
+      signal: healthReadSignalSchema,
+      unit: healthReadUnitSchema,
+      source: z.enum(['apple', 'samsung', 'health_connect']),
+      method: z.enum(['asleep', 'rmssd', 'sdnn']).nullable(),
+      days: z.array(z.strictObject({ day: healthReadDaySchema, value: z.number().nullable() })).optional(),
+      // Null when no asked day has a value: nothing is invented.
+      summary: z.strictObject({ mean: z.number().nullable(), min: z.number().nullable(), max: z.number().nullable(), days_with_value: z.int().nonnegative() }).optional(),
+    })).max(8),
+    // From the newest reading used: fresh within 36 hours, stale within 72, expired after (the source-data bounds of
+    // ADR-0081 section 2).
+    freshness: z.enum(['fresh', 'stale', 'expired']),
+    // The share of asked signal-days that have a value, 0 to 1.
+    coverage: z.number().min(0).max(1),
+  }),
+  z.strictObject({ state: z.literal('unavailable'), reason: healthReadUnavailableReasonSchema }),
+]);
+export type GetHealthResult = z.infer<typeof getHealthResultSchema>;
 
 // 'query_calendar' is the ADR-0040 rename of the legacy schedule read.
 export const queryCalendarArgsSchema = z.strictObject({
@@ -60,11 +89,13 @@ export const queryCalendarArgsSchema = z.strictObject({
   .refine(args => args.operation === 'list_calendars' || args.include_hidden === undefined, {error:'include_hidden applies only to Calendar discovery'});
 export type QueryCalendarArgs = z.infer<typeof queryCalendarArgsSchema>;
 
-// Provider receipt validation is also used after the proxy boundary, before claiming coverage.
+// Provider receipt validation is also used after the proxy boundary, before claiming coverage. It names every field the
+// connector reports: one it leaves out rejects the whole page. An event Waldo created, moved or cancelled carries the
+// operation marker the approval desk reconciles by.
 export const calendarPageSchema = z.strictObject({
   events: z.array(z.strictObject({
     id:z.string().min(1).max(1024),title:z.string().max(2000),start:z.string().min(1).max(64),end:z.string().min(1).max(64),all_day:z.boolean(),
-    location:z.string().max(2000).optional(),description:z.string().max(2000).optional(),attendees:z.int().min(0).optional(),etag:z.string().max(1024).optional(),
+    location:z.string().max(2000).optional(),description:z.string().max(2000).optional(),attendees:z.int().min(0).optional(),etag:z.string().max(1024).optional(),operation_marker:z.string().min(1).max(1024).optional(),
     status:z.enum(['confirmed','tentative','cancelled']).optional(),updated:iso8601Schema.optional(),recurring_event_id:z.string().max(1024).optional(),original_start:iso8601Schema.optional(),source_url:z.string().max(2048).optional(),attendee_names:z.array(z.string().max(320)).max(50).optional(),
     attendee_emails:z.array(z.string().min(1).max(320)).max(20).optional(),conference_url:z.string().max(2048).optional(),attachments:z.array(z.strictObject({title:z.string().min(1).max(255),file_id:z.string().max(1024).optional()})).max(20).optional(),
   }).refine(event => {
@@ -105,6 +136,22 @@ export const searchCommunicationArgsSchema = z.strictObject({
   limit: z.int().min(1).max(20).default(10),
 });
 export type SearchCommunicationArgs = z.infer<typeof searchCommunicationArgsSchema>;
+
+// People search over the owner's own contacts and "other contacts" (people they have mailed).
+// Google matches name and address prefixes; the result carries names and addresses only.
+export const searchContactsArgsSchema = z.strictObject({
+  account: z.email().optional(),
+  query: z.string().min(1).max(100),
+  limit: z.int().min(1).max(10).default(5),
+});
+export type SearchContactsArgs = z.infer<typeof searchContactsArgsSchema>;
+// A match carries a name and addresses only; there is no field for phone, organisation or photo.
+export const contactMatchSchema = z.strictObject({
+  name: z.string().min(1).max(200).nullable(),
+  emails: z.array(z.email().max(320)).min(1).max(3),
+  source: z.enum(['contacts', 'other_contacts']),
+});
+export type ContactMatch = z.infer<typeof contactMatchSchema>;
 
 export const readThreadArgsSchema = z.strictObject({
   account: z.email().optional(),
@@ -221,7 +268,7 @@ export type WebSearchArgs = z.infer<typeof webSearchArgsSchema>;
 export const browsePageArgsSchema = z.strictObject({
   retain_session: z.boolean().optional().describe('Use true before an interactive browser journey. Returns DOM, accessibility, screenshot and session_handle for subsequent browse_act calls; omit for a one-shot page read.'),
   session_handle: z.string().min(1).max(80).optional().describe('Continue the exact owner browser session returned by a prior observation; never a provider ID.'),
-  provider: z.enum(['cloudflare_playwright', 'browserbase_stagehand_http_v3']).optional(),
+  provider: z.enum(['cloudflare_playwright', 'browserbase_stagehand_http_v3']).optional().describe('Ignored: the host always picks the browser.'),
   url: z.url().max(2000),
   instruction: z.string().min(1).max(1000),
 });
@@ -255,7 +302,7 @@ export const browserTaskCommandSchema = z.discriminatedUnion('operation', [
 ]);
 export type BrowserTaskCommand = z.infer<typeof browserTaskCommandSchema>;
 export const browseActArgsSchema = z.strictObject({
-  provider: z.enum(['cloudflare_playwright', 'browserbase_stagehand_http_v3']).optional(),
+  provider: z.enum(['cloudflare_playwright', 'browserbase_stagehand_http_v3']).optional().describe('Ignored: the host always picks the browser.'),
   session_handle: z.string().min(1).max(80).optional(),
   url: z.url().max(2000),
   task: z.string().min(1).max(1000),

@@ -6,7 +6,7 @@ import {
   callMcpToolResultSchema,
   connectServiceArgsSchema,
   executeActionArgsSchema,
-  getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema,
+  getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, searchContactsArgsSchema, contactMatchSchema,
   queryAvailabilityArgsSchema, readOwnerContextArgsSchema,
   getContextArgsSchema,
   getCrsArgsSchema,
@@ -14,7 +14,7 @@ import {
   getMasterMetricsArgsSchema,
   getTasksArgsSchema,
   readDriveArgsSchema,
-  healthMetricSelectorSchema,
+  getHealthResultSchema,
   calendarPageSchema, queryCalendarArgsSchema, googleCalendarListPageSchema,
   readDocumentArgsSchema,
   readDocumentResultSchema,
@@ -66,21 +66,30 @@ describe('getCrsArgs', () => {
   });
 });
 
-describe('healthMetricSelector', () => {
-  it('is exactly the six selectors, in order', () => {
-    expect(healthMetricSelectorSchema.options).toEqual([
-      'hrv',
-      'hr',
-      'sleep',
-      'spo2',
-      'strain',
-      'recovery',
-    ]);
+describe('getHealthArgsSchema', () => {
+  it('accepts local days, a signal list and an aggregation, and defaults the aggregation to daily', () => {
+    const parsed = getHealthArgsSchema.safeParse({ signals: ['sleep', 'hrv'], from: '2026-10-01', to: '2026-10-07' });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.aggregation).toBe('daily');
+    expect(getHealthArgsSchema.safeParse({ signals: ['heart_rate'], from: '2026-09-07', to: '2026-10-07', aggregation: 'summary' }).success).toBe(true);
   });
 
-  it('accepts a selector list and rejects an out-of-domain metric', () => {
-    expect(getHealthArgsSchema.safeParse({ metrics: ['hrv', 'sleep'] }).success).toBe(true);
-    expect(getHealthArgsSchema.safeParse({ metrics: ['glucose'] }).success).toBe(false);
+  it('rejects an unknown signal, an empty list, a reversed range, a range over 31 days and a smuggled argument', () => {
+    expect(getHealthArgsSchema.safeParse({ signals: ['spo2'], from: '2026-10-01', to: '2026-10-07' }).success).toBe(false);
+    expect(getHealthArgsSchema.safeParse({ signals: [], from: '2026-10-01', to: '2026-10-07' }).success).toBe(false);
+    expect(getHealthArgsSchema.safeParse({ signals: ['sleep'], from: '2026-10-08', to: '2026-10-07' }).success).toBe(false);
+    expect(getHealthArgsSchema.safeParse({ signals: ['sleep'], from: '2026-09-06', to: '2026-10-07' }).success).toBe(false);
+    expect(getHealthArgsSchema.safeParse({ signals: ['sleep'], from: '2026-10-01', to: '2026-10-07', metrics: ['hrv'] }).success).toBe(false);
+    expect(getHealthArgsSchema.safeParse({ signals: ['sleep'], from: '2026-10-01T00:00:00Z', to: '2026-10-07' }).success).toBe(false);
+  });
+
+  it('types the result: values by day or a summary, or a reason', () => {
+    const available = { state: 'available', timezone: 'Asia/Kolkata', from: '2026-10-01', to: '2026-10-02', read_at: '2026-10-02T03:00:00.000Z', freshness: 'fresh', coverage: 0.5,
+      signals: [{ signal: 'hrv', unit: 'ms', source: 'apple', method: 'sdnn', days: [{ day: '2026-10-01', value: 48 }, { day: '2026-10-02', value: null }] }] };
+    expect(getHealthResultSchema.safeParse(available).success).toBe(true);
+    expect(getHealthResultSchema.safeParse({ state: 'unavailable', reason: 'consent_withdrawn' }).success).toBe(true);
+    expect(getHealthResultSchema.safeParse({ ...available, signals: [{ ...available.signals[0], unit: 'kg' }] }).success).toBe(false);
+    expect(getHealthResultSchema.safeParse({ state: 'unavailable', reason: 'stale' }).success).toBe(false);
   });
 });
 
@@ -220,9 +229,17 @@ describe('executeActionArgs', () => {
 });
 
 describe('browsePageArgs', () => {
-  it('accepts only explicitly supported browser providers without authority or session arguments', () => {
-    for (const provider of ['cloudflare_playwright', 'browserbase_stagehand_http_v3']) expect(browsePageArgsSchema.parse({ url: 'https://example.com', instruction: 'read', provider })).toMatchObject({ provider });
-    for (const extra of [{ provider: 'auto' }, { provider: 'cloudflare_playwright', session_id: 'foreign' }, { provider: 'cloudflare_playwright', owner_id: 'foreign' }, { provider: 'cloudflare_playwright', allow_hosts: ['*'] }]) expect(browsePageArgsSchema.safeParse({ url: 'https://example.com', instruction: 'read', ...extra }).success).toBe(false);
+  it('still accepts a provider the earlier contract named, which the host ignores', () => {
+    for (const provider of ['cloudflare_playwright', 'browserbase_stagehand_http_v3']) {
+      expect(browsePageArgsSchema.safeParse({ url: 'https://example.com', instruction: 'read', provider }).success).toBe(true);
+      expect(browseActArgsSchema.safeParse({ url: 'https://example.com', task: 'read', provider }).success).toBe(true);
+    }
+  });
+  it('refuses an unknown provider and authority or session arguments', () => {
+    for (const extra of [{ provider: 'auto' }, { session_id: 'foreign' }, { owner_id: 'foreign' }, { allow_hosts: ['*'] }]) {
+      expect(browsePageArgsSchema.safeParse({ url: 'https://example.com', instruction: 'read', ...extra }).success).toBe(false);
+      expect(browseActArgsSchema.safeParse({ url: 'https://example.com', task: 'read', ...extra }).success).toBe(false);
+    }
   });
   it('accepts a url + instruction and rejects extras, empty instruction and non-urls', () => {
     expect(browsePageArgsSchema.parse({ url: 'https://example.com', instruction: 'what is on this page' })).toEqual({
@@ -351,6 +368,25 @@ describe('date_range guidance and strictness', () => {
   });
 });
 
+describe('searchContactsArgs', () => {
+  it('needs a name or address of 1 to 100 characters and caps the limit at 10, defaulting to 5', () => {
+    expect(searchContactsArgsSchema.parse({ query: 'Priya' })).toEqual({ query: 'Priya', limit: 5 });
+    expect(searchContactsArgsSchema.safeParse({ query: 'priya@', limit: 10, account: 'owner@example.com' }).success).toBe(true);
+    for (const bad of [{}, { query: '' }, { query: 'x'.repeat(101) }, { query: 'x', limit: 0 }, { query: 'x', limit: 11 }, { query: 'x', account: 'not-an-address' }, { query: 'x', phone: true }])
+      expect(searchContactsArgsSchema.safeParse(bad).success).toBe(false);
+  });
+  it('a match holds a name and up to three addresses, and nothing else', () => {
+    const match = { name: 'Priya Nair', emails: ['priya@northwind.example'], source: 'contacts' };
+    expect(contactMatchSchema.safeParse(match).success).toBe(true);
+    expect(contactMatchSchema.safeParse({ ...match, name: null, source: 'other_contacts' }).success).toBe(true);
+    for (const bad of [{ ...match, phone: '+1 555 0100' }, { ...match, organization: 'Northwind' }, { ...match, photo: 'https://example.test/p.jpg' }, { ...match, emails: [] }, { ...match, emails: ['a@x.example', 'b@x.example', 'c@x.example', 'd@x.example'] }, { ...match, emails: ['not an address'] }, { ...match, source: 'directory' }])
+      expect(contactMatchSchema.safeParse(bad).success).toBe(false);
+  });
+  it('lets a connect intent name the contacts feature', () => {
+    expect(connectIntentSchema.safeParse({ status: 'auth_required', service: 'google', reason: 'scope_missing', feature: 'contacts' }).success).toBe(true);
+  });
+});
+
 describe('searchCommunicationArgs / readThreadArgs (A1)', () => {
   it('search requires a non-empty query, caps the limit at 20, and defaults it to 10', () => {
     expect(searchCommunicationArgsSchema.safeParse({ query: 'from:sam' }).success).toBe(true);
@@ -397,6 +433,12 @@ describe('Calendar page receipts',()=>{
   const full={...page,events:[event],fetched_count:1};
   expect(calendarPageSchema.parse(full)).toEqual(full);
  });
+ it('admits the operation marker on an event Waldo changed, and refuses an empty or oversized one',()=>{
+  const event={id:'e1',title:'QA',start:'2026-10-13T10:30:00Z',end:'2026-10-13T11:30:00Z',all_day:false};
+  const withMarker=(operation_marker:string)=>({...page,events:[{...event,operation_marker}],fetched_count:1});
+  expect(calendarPageSchema.safeParse(withMarker('a'.repeat(64))).success).toBe(true);
+  for(const marker of ['','a'.repeat(1025)])expect(calendarPageSchema.safeParse(withMarker(marker)).success).toBe(false);
+ });
  it('admits empty exhausted pages with explicitly unavailable account metadata',()=>{
   expect(calendarPageSchema.parse(page)).toEqual(page);
  });
@@ -418,7 +460,7 @@ it('browser native commands are strict and cannot smuggle owner, session or subm
 });
 
 it('validates explicit native filter choices without executable selectors or coerced checkbox state',()=>{
- const base={provider:'cloudflare_playwright',url:'https://example.com/',task:'Choose a public filter'};
+ const base={url:'https://example.com/',task:'Choose a public filter'};
  expect(browseActArgsSchema.safeParse({...base,command:{operation:'select',element_ref:'e:observed:0',value:''}}).success).toBe(true);
  expect(browseActArgsSchema.safeParse({...base,command:{operation:'set_checked',element_ref:'e:observed:1',checked:false}}).success).toBe(true);
  for(const command of [{operation:'set_checked',element_ref:'e:observed:1',checked:'true'},{operation:'select',element_ref:'e:observed:0',value:'north',selector:'input'},{operation:'set_checked',checked:true}])expect(browseActArgsSchema.safeParse({...base,command}).success).toBe(false);

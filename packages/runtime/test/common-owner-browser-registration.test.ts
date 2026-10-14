@@ -21,7 +21,7 @@ const setup = () => {
   const now = Date.now();
   const operator = { scope: 'verified_owners', policy: { ref: 'automatic-test', createdAt: now - 1000, expiresAt: now + 60000, allowedOrigins: ['*'], maxAllocations: 1, maxReservedBrowserMs: 120000, lifetimeMs: 60000, maxScreenshotBytes: 1024 }, billing: { cloudflareAccountId: 'a'.repeat(32), conservativeWorstCase: true }, spend: { limitMicrousd: 10000000, maxCalls: 100, validUntil: now + 60000 } };
   const binding = { fetch: vi.fn(async () => new Response('{}')) };
-  const env = { WALDO_ENVIRONMENT: 'staging', COMMON_BROWSER_REGISTRATION: JSON.stringify(operator), OPENAI_API_KEY: 'synthetic-model-key', BROWSER: binding, TELEGRAM_OWNER_DO: { idFromName: (name: string) => ({ toString: () => name === 'automatic-owner' ? 'physical-owner' : 'foreign' }) } };
+  const env = { WALDO_ENVIRONMENT: 'staging', COMMON_BROWSER_REGISTRATION: JSON.stringify(operator), OPENAI_API_KEY: 'synthetic-model-key', BROWSER: binding, OWNER_DO: { idFromName: (name: string) => ({ toString: () => name === 'automatic-owner' ? 'physical-owner' : 'foreign' }) } };
   const scope: RunEffectScope = { runId: crypto.randomUUID(), attempt: crypto.randomUUID(), deadline: now + 60000, signal: new AbortController().signal, admit: vi.fn(), commit: work => work() };
   let activeScope=scope;
   const runtime = () => ownerBrowserRuntime({ env: env as never, storage, actualDoId: 'physical-owner', activeScope: () => activeScope });
@@ -31,14 +31,14 @@ const setup = () => {
 it('automatically derives the registered browser owner from current directory authority, without a selected subject in operator policy', async () => {
   commonBrowserFixture.reset();
   const fixture = setup(), runtime = fixture.runtime(), fallback = vi.fn();
-  const result = await runtime.read({ name: 'browse_page', handle: fallback } as never).handle({ provider: 'cloudflare_playwright', url: 'https://example.com/a', instruction: 'Read' }, { authenticatedUserId: 'authenticated-owner', turnId: 'turn', toolCallId: 'read', runScope: fixture.scope, egressAllowlist: ['*'] } as never);
+  const result = await runtime.read({ name: 'browse_page', handle: fallback } as never).handle({ url: 'https://example.com/a', instruction: 'Read' }, { authenticatedUserId: 'authenticated-owner', turnId: 'turn', toolCallId: 'read', runScope: fixture.scope, egressAllowlist: ['*'] } as never);
   expect(result).toMatchObject({ ok: true, data: { text: expect.stringContaining('Option A costs 10') } });
   expect(commonBrowserFixture.allocations).toBe(1);
   expect(fallback).not.toHaveBeenCalled();
   await runtime.finish(fixture.scope);
   expect(commonBrowserFixture.ends).toBe(0);expect(commonBrowserFixture.pages).toHaveLength(1);
   expect(runtime.attachments(fixture.scope)).toHaveLength(0);
-  expect(await runtime.read({name:'browse_page'} as never).handle({provider:'cloudflare_playwright',url:'https://example.com/a',instruction:'No renewed scope'}, {authenticatedUserId:'owner',runScope:fixture.scope,turnId:'idle',toolCallId:'idle'} as never)).toMatchObject({ok:false});
+  expect(await runtime.read({name:'browse_page'} as never).handle({url:'https://example.com/a',instruction:'No renewed scope'}, {authenticatedUserId:'owner',runScope:fixture.scope,turnId:'idle',toolCallId:'idle'} as never)).toMatchObject({ok:false});
   expect(commonBrowserFixture.allocations).toBe(1);
   runtime.stop();await runtime.maintain();expect(commonBrowserFixture.ends).toBe(1);expect(commonBrowserFixture.pages).toHaveLength(0);
 });
@@ -46,7 +46,7 @@ it('automatically derives the registered browser owner from current directory au
 const request = (scope: RunEffectScope) => ({ runScope: scope, request: { model: WALDO_CHAT_MODEL, max_tokens: 16, system: 'Fixture', messages: [] }, route: { provider: 'openai', model: WALDO_CHAT_MODEL, cache: 'none', max_tokens: 16 }, step: { provider: 'openai', model: WALDO_CHAT_MODEL }, context: 'full_context', fallback_step: 'configured_model', headers: {} }) as unknown as LLMGatewayRequest;
 
 const allocate = async (fixture: ReturnType<typeof setup>, runtime: ReturnType<ReturnType<typeof setup>['runtime']>) => {
-  expect(await runtime.read({ name: 'browse_page' } as never).handle({ provider: 'cloudflare_playwright', url: 'https://example.com/a', instruction: 'Read' },
+  expect(await runtime.read({ name: 'browse_page' } as never).handle({ url: 'https://example.com/a', instruction: 'Read' },
     { authenticatedUserId: 'owner', runScope: fixture.scope, turnId: 'funded-turn', toolCallId: 'funded-call', egressAllowlist: ['*'] } as never)).toMatchObject({ ok: true });
 };
 it('removing trial registration preserves ordinary model admission without resetting retained browser spend', async () => {
@@ -110,7 +110,7 @@ it.each(['expired','unavailable'])('a changed retained ref cannot hide behind %s
  if(kind==='expired'){fixture.operator.policy.expiresAt=Date.now()-1;fixture.operator.spend.validUntil=fixture.operator.policy.expiresAt;}else{delete (fixture.env as any).BROWSER;}
  fixture.env.COMMON_BROWSER_REGISTRATION=JSON.stringify(fixture.operator);const retained=structuredClone([...fixture.rows]);
  await expect(fixture.runtime().gateway()!.complete(request(fixture.scope))).rejects.toThrow('reconciliation');
- expect(await fixture.runtime().read({name:'browse_page'} as never).handle({provider:'cloudflare_playwright',url:'https://example.com/a',instruction:'Read'},{authenticatedUserId:'owner',runScope:fixture.scope,turnId:'new',toolCallId:'new',egressAllowlist:['*']} as never)).toMatchObject({ok:false});
+ expect(await fixture.runtime().read({name:'browse_page'} as never).handle({url:'https://example.com/a',instruction:'Read'},{authenticatedUserId:'owner',runScope:fixture.scope,turnId:'new',toolCallId:'new',egressAllowlist:['*']} as never)).toMatchObject({ok:false});
  expect(provider.calls).toHaveLength(0);expect(commonBrowserFixture.allocations).toBe(1);expect([...fixture.rows]).toEqual(retained);
 });
 
@@ -118,7 +118,7 @@ it('manual registration spend cannot be bypassed by switching to an automatic po
   const fixture = setup();
   commonSpendReservation(fixture.storage, { ref: 'manual-owner-policy', ownerId: `prn_${directory.owner.replaceAll('-', '')}`, validUntil: fixture.operator.spend.validUntil, limitMicrousd: 10000000, maxCalls: 100 }, Date.now, () => {}).reserve('already-reserved', 10000000);
   const retained = structuredClone([...fixture.rows]);
-  expect(await fixture.runtime().read({ name: 'browse_page' } as never).handle({ provider: 'cloudflare_playwright', url: 'https://example.com/a', instruction: 'Read' }, { authenticatedUserId: 'owner', runScope: fixture.scope, turnId: 'turn', toolCallId: 'call', egressAllowlist: ['*'] } as never)).toMatchObject({ ok: false });
+  expect(await fixture.runtime().read({ name: 'browse_page' } as never).handle({ url: 'https://example.com/a', instruction: 'Read' }, { authenticatedUserId: 'owner', runScope: fixture.scope, turnId: 'turn', toolCallId: 'call', egressAllowlist: ['*'] } as never)).toMatchObject({ ok: false });
   expect(provider.calls).toHaveLength(0); expect(commonBrowserFixture.allocations).toBe(0);
   expect([...fixture.rows]).toEqual(retained);
 });
@@ -130,7 +130,7 @@ it('an expired trial permits a normal accounted public read and ordinary model w
   fixture.env.COMMON_BROWSER_REGISTRATION = JSON.stringify(fixture.operator);
   const runtime = fixture.runtime();
   expect(await runtime.gateway()!.complete(request(fixture.scope))).toMatchObject({ ok: true });
-  expect(await runtime.read({ name: 'browse_page' } as never).handle({ provider: 'cloudflare_playwright', url: 'https://example.com/a', instruction: 'Read' }, { authenticatedUserId: 'owner', runScope: fixture.scope, turnId: 'turn', toolCallId: 'call', egressAllowlist: ['*'] } as never)).toMatchObject({ ok: true });
+  expect(await runtime.read({ name: 'browse_page' } as never).handle({ url: 'https://example.com/a', instruction: 'Read' }, { authenticatedUserId: 'owner', runScope: fixture.scope, turnId: 'turn', toolCallId: 'call', egressAllowlist: ['*'] } as never)).toMatchObject({ ok: true });
   expect(provider.calls).toHaveLength(1); expect(commonBrowserFixture.allocations).toBe(1);expect(commonBrowserFixture.ends).toBe(1);
   expect(fixture.rows.get('owner-public-browser-spend:v2').reservedMicrousd).toBeLessThanOrEqual(1250);
   expect(fixture.rows.get('owner-public-browser-spend:v2').reservations[0].settled).toBe(true);
@@ -139,7 +139,7 @@ it('an expired trial permits a normal accounted public read and ordinary model w
 
 it('a malformed operator update denies new work but cannot strand retained funded cleanup', async () => {
   const fixture = setup(), runtime = fixture.runtime();
-  expect(await runtime.read({ name: 'browse_page' } as never).handle({ provider: 'cloudflare_playwright', url: 'https://example.com/a', instruction: 'Read' }, { authenticatedUserId: 'owner', runScope: fixture.scope, turnId: 'turn', toolCallId: 'call', egressAllowlist: ['*'] } as never)).toMatchObject({ ok: true });
+  expect(await runtime.read({ name: 'browse_page' } as never).handle({ url: 'https://example.com/a', instruction: 'Read' }, { authenticatedUserId: 'owner', runScope: fixture.scope, turnId: 'turn', toolCallId: 'call', egressAllowlist: ['*'] } as never)).toMatchObject({ ok: true });
   fixture.env.COMMON_BROWSER_REGISTRATION = '{invalid';
   expect(() => fixture.runtime()).not.toThrow();
   await expect(fixture.runtime().gateway()!.complete(request(fixture.scope))).rejects.toThrow();
@@ -185,7 +185,7 @@ it.each(['automatic','manual'])('historical %s registration cleanup survives the
  if(pinned){pinned.operator=f.env.COMMON_BROWSER_REGISTRATION;pinned.registration.spend.limitMicrousd=20_000_000;}
  const ledger=[...f.rows].find(([key])=>key.startsWith('common-spend:'))![1];ledger.policy.limitMicrousd=20_000_000;
  const before=structuredClone([...f.rows]),reserved=ledger.reservedMicrousd;
- expect(await f.runtime().read({name:'browse_page'} as never).handle({provider:'cloudflare_playwright',url:'https://example.com/a',instruction:'Read'},{authenticatedUserId:'owner',runScope:f.scope,turnId:'new',toolCallId:'new',egressAllowlist:['*']} as never)).toMatchObject({ok:false});
+ expect(await f.runtime().read({name:'browse_page'} as never).handle({url:'https://example.com/a',instruction:'Read'},{authenticatedUserId:'owner',runScope:f.scope,turnId:'new',toolCallId:'new',egressAllowlist:['*']} as never)).toMatchObject({ok:false});
  expect([...f.rows]).toEqual(before);expect(commonBrowserFixture.allocations).toBe(1);
  runtime.stop();await f.runtime().maintain();
  expect(commonBrowserFixture.ends).toBe(1);expect(commonBrowserFixture.allocations).toBe(1);expect(provider.calls).toHaveLength(0);
@@ -206,14 +206,14 @@ async function expiredHistoricalRegistration(kind:string,limitMicrousd=17_910_00
  expect(commonBrowserFixture.allocations).toBe(1);expect(commonBrowserFixture.ends).toBe(1);expect([...f.rows].find(([key])=>key.startsWith('common-spend:'))![1].reservedMicrousd).toBe(retainedCharge);
  let clock=f.operator.policy.expiresAt+1;vi.spyOn(Date,'now').mockImplementation(()=>clock);
  const scope={...f.scope,runId:crypto.randomUUID(),attempt:crypto.randomUUID(),deadline:clock+60000};f.activate(scope);
- const read=(id='normal')=>f.runtime().read({name:'browse_page'} as never).handle({provider:'cloudflare_playwright',url:'https://example.com/a',instruction:'Read'},{authenticatedUserId:'owner',runScope:scope,turnId:'normal',toolCallId:id,egressAllowlist:['*']} as never);
+ const read=(id='normal')=>f.runtime().read({name:'browse_page'} as never).handle({url:'https://example.com/a',instruction:'Read'},{authenticatedUserId:'owner',runScope:scope,turnId:'normal',toolCallId:id,egressAllowlist:['*']} as never);
  return {f,read,advance:(ms:number)=>{clock+=ms;}};
 }
 it.each([['automatic',17_910_000],['manual',17_910_000],['automatic',8_000_000],['manual',8_000_000]] as const)('expired %s %i declaration admits a normal read at the effective cap without changing history',async(kind,limit)=>{
  const {f,read,advance}=await expiredHistoricalRegistration(kind,limit),before=structuredClone([...f.rows]),descriptor=f.env.COMMON_BROWSER_REGISTRATION;
  const month=`common-public-browser-month:${new Date().toISOString().slice(0,7)}`,priorMonth=f.rows.get(month),effective=Math.min(limit,10_000_000);
  commonBrowserFixture.onAcquire=()=>{expect(f.rows.get('owner-public-browser-spend:v2')).toMatchObject({limitMicrousd:effective,reservedMicrousd:1250});expect(f.rows.get(month)).toBe(priorMonth+1250);advance(4000);};
- expect(await read()).toMatchObject({ok:true,data:{provider:'cloudflare_playwright',data:{text:expect.stringContaining('Option A costs 10')}}});
+ expect(await read()).toMatchObject({ok:true,data:{data:{text:expect.stringContaining('Option A costs 10')}}});
  expect(commonBrowserFixture.allocations).toBe(2);expect(commonBrowserFixture.ends).toBe(2);expect(provider.calls).toHaveLength(0);
  expect(f.rows.get('owner-public-browser-spend:v2')).toMatchObject({limitMicrousd:effective,reservedMicrousd:100});
  for(const [key,value] of before)if(key!==month)expect(f.rows.get(key)).toEqual(value);
@@ -232,7 +232,7 @@ it.each([['automatic','live'],['manual','live'],['automatic','future'],['manual'
  if(state==='future'){f.operator.policy.createdAt+=120000;f.operator.policy.expiresAt+=180000;f.operator.spend.validUntil=f.operator.policy.expiresAt;}
  f.env.COMMON_BROWSER_REGISTRATION=JSON.stringify(kind==='automatic'?f.operator:{policy:{...f.operator.policy,doName:'automatic-owner',subject:'81101',directoryOwnerId:directory.owner},spend:f.operator.spend,billing:f.operator.billing});
  const before=structuredClone([...f.rows]);
- expect(await f.runtime().read({name:'browse_page'} as never).handle({provider:'cloudflare_playwright',url:'https://example.com/a',instruction:'Read'},{authenticatedUserId:'owner',runScope:f.scope,turnId:'new',toolCallId:'new',egressAllowlist:['*']} as never)).toMatchObject({ok:false});
+ expect(await f.runtime().read({name:'browse_page'} as never).handle({url:'https://example.com/a',instruction:'Read'},{authenticatedUserId:'owner',runScope:f.scope,turnId:'new',toolCallId:'new',egressAllowlist:['*']} as never)).toMatchObject({ok:false});
  expect([...f.rows]).toEqual(before);expect(commonBrowserFixture.allocations).toBe(0);expect(provider.calls).toHaveLength(0);
 });
 it.each([['automatic','pin'],['automatic','owner'],['automatic','custody'],['manual','owner'],['manual','custody']])('expired historical %s declaration cannot hide changed %s',async(mode,kind)=>{

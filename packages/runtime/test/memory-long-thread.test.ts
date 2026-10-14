@@ -27,7 +27,7 @@ const wordCost = (text: string) => Math.ceil(new TextEncoder().encode(text).byte
 
 describe('memory long-thread development harness', () => {
   it('reports recall, stale leakage, untrusted leakage and prompt size as the thread grows', async () => {
-    const rows = await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('memory-long-thread-a')), (_instance, state) => {
+    const rows = await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('memory-long-thread-a')), (_instance, state) => {
       const store = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
       const live = new Map<string, { id: number; value: string }>();
       const stale = new Map<string, number[]>();
@@ -73,7 +73,7 @@ describe('memory long-thread development harness', () => {
       }
       return report;
     });
-    const other = await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('memory-long-thread-b')), (_instance, state) => claimStore(state.storage.sql).recall('favourite coffee order'));
+    const other = await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('memory-long-thread-b')), (_instance, state) => claimStore(state.storage.sql).recall('favourite coffee order'));
     console.log('MEMORY_LONG_THREAD ' + JSON.stringify(rows));
     expect(rows).toHaveLength(CHECKPOINTS.length);
     expect(other).toEqual([]);
@@ -86,7 +86,7 @@ describe('memory long-thread development harness', () => {
   // aliases): the claim is stored with the real aliases field and indexed in the aliases FTS column.
   it('reports synonym recall with zero shared words, and the oracle upper bound of each retrieval option', async () => {
     const synonymOf = (category: string) => { const q = category.split(' ')[0]!; return `${QUALIFIER_SYNONYMS[q]!} ${SYNONYMS[category.slice(q.length + 1)]!}`; };
-    const run = (name: string, aliases: boolean) => runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), (_instance, state) => {
+    const run = (name: string, aliases: boolean) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), (_instance, state) => {
       const store = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
       const live = new Map<string, number>();
       const stale = new Map<string, number[]>();

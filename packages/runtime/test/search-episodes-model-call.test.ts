@@ -1,5 +1,6 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
+import { toolOutput } from './fixtures/tool-output';
 
 const calls = vi.hoisted(() => ({ inputs: [] as string[], args: {} as Record<string, unknown>, readSlice: false }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
@@ -23,7 +24,7 @@ const FULL = `latest options test arrive ${'so '.repeat(30)}A leaves 16:30 for 2
 
 // Model-call layer: the scripted model calls search_episodes through the real owner turn,
 // dispatcher and hooks, and the next model input must carry what the tool returned.
-const run = (name: string, args: Record<string, unknown>, body = FULL) => runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_i, state) => {
+const run = (name: string, args: Record<string, unknown>, body = FULL) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_i, state) => {
   calls.inputs = []; calls.args = args; calls.readSlice = name.startsWith('se-big');
   const index = episodeIndex(state.storage.sql);
   index.add('tg-9', 'owner', body, Date.parse('2026-10-01T02:31:18Z'));
@@ -77,7 +78,7 @@ it('a large recovered turn is offloaded and its exact deep value is readable thr
   expect(readIndex).toBeGreaterThanOrEqual(0);
   const readOutput = request.input[readIndex]!.output;
   expect(readOutput).toBeDefined();
-  const receipt = JSON.parse(readOutput!) as { ok?: boolean; source_taint?: string };
+  const receipt = toolOutput<{ ok?: boolean; source_taint?: string }>(readOutput!);
   expect(receipt.ok).toBe(true);
   expect(receipt.source_taint).toBe('external');
   expect(readOutput).toContain('18.5k');
