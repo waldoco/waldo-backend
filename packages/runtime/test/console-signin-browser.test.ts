@@ -148,6 +148,21 @@ it('navigates only for the existing successful verification redirect', async () 
   expect(b.navigations).toEqual(['/console']);
 });
 
+it('continues to the devices page only when that was the requested continuation', async () => {
+  const b = await browser('/console/devices');
+  const send = b.submit(); b.reply(0, 'code'); await send.settled;
+  const verify = b.submit(); b.reply(1, 'code', { redirected: true, url: 'https://fixture.test/console/devices' }); await verify.settled;
+  expect(b.navigations).toEqual(['/console/devices']);
+});
+
+it('refuses a devices redirect nobody asked for', async () => {
+  const b = await browser();
+  const send = b.submit(); b.reply(0, 'code'); await send.settled;
+  const verify = b.submit(); b.reply(1, 'code', { redirected: true, url: 'https://fixture.test/console/devices' }); await verify.settled;
+  expect(b.navigations).toEqual([]);
+  expect(b.ui().status.textContent).toContain('may have completed');
+});
+
 it('handles a fetch/CSP failure with preserved details and no automatic native retry', async () => {
   const b = await browser(); const send = b.submit();
   b.requests[0]!.reject(new TypeError('Failed to fetch')); await send.settled;

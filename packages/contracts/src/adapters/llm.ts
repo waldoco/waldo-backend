@@ -1,7 +1,7 @@
 import { toolNameSchema } from '../tools/permissions';
 import { z } from 'zod';
 import type { AdapterResult } from '../core/error';
-import { modelNameSchema, PROVIDER_OF } from '../model/roster';
+import { modelNameSchema, PROVIDER_OF, reasoningEffortSchema } from '../model/roster';
 
 export const llmMessageSchema = z.strictObject({
   role: z.enum(['user', 'assistant']),
@@ -79,6 +79,9 @@ export const llmRequestSchema = z.strictObject({
   // Prompt-cache affinity hint (OpenAI prompt_cache_key): stable per owner, never content,
   // never a credential. Providers without keyed caching ignore it.
   cache_key: z.string().min(1).max(128).optional(),
+  // OpenAI reasoning effort for this call; without it the adapter sends the roster's effort for
+  // the model (OPENAI_REASONING). Providers without a reasoning effort ignore it.
+  reasoning_effort: reasoningEffortSchema.optional(),
   // Asks the provider to constrain output to this JSON schema where it can (OpenAI strict
   // structured outputs). Callers still validate the result; other providers ignore it.
   response_format: z.strictObject({ name: z.string().min(1).max(64), schema: z.record(z.string(), z.unknown()) }).optional(),

@@ -3,9 +3,9 @@ import { expect, it } from 'vitest';
 import { claimStore } from '../src/memory/claims';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import { DAY_CARDS, dayPlanInput, DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../src/prompt/day-cards';
-import { deriveContextBudgetChars, SANITISE_DESTINATION_POLICIES, WALDO_CHAT_MODEL } from '@waldo/contracts';
+import { deriveContextBudgetChars, SANITISE_DESTINATION_POLICIES, WALDO_AUXILIARY_MODEL } from '@waldo/contracts';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
-const limit=deriveContextBudgetChars(WALDO_CHAT_MODEL,SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
+const limit=deriveContextBudgetChars(WALDO_AUXILIARY_MODEL,SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
 const input=dayPlanInput({localNow:'2026-10-04T08:00',calendar:'No events.',cards:DAY_CARDS,proactivity:'Quiet hours 23:00-07:00'});
 it.each([false,true])('real planDay provider admission with 220 facts, escaping=%s',async escaping=>{
  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`review738-${escaping}`)),async(_i,state)=>{
