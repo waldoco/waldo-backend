@@ -4,6 +4,8 @@ import type { BrowserSession } from '@waldo/contracts';
 
 const session: BrowserSession = { id: 'host-session', ownerId: 'owner-a', provider: 'cloudflare_playwright', providerSessionId: 'PRIVATE_PROVIDER_ID', contextHandle: null, mode: 'public', state: 'active', generation: 1, expiresAt: 60000, updatedAt: 0 };
 function harness(controlTag = 'a', inputType = 'text') {
+  // A capture's size by its encoding: PNG, or JPEG at a quality. Defaults to the 4-byte PNG for every capture.
+  const shots: any[] = []; let shotBytes = (_options: any): Uint8Array => new Uint8Array([137, 80, 78, 71]);
   const calls: string[] = []; let ended = false, serial = 0, changed = false;
   const pages: any[] = [];
   const page = () => {
@@ -15,7 +17,7 @@ function harness(controlTag = 'a', inputType = 'text') {
         return { url, title: 'Public documentation', text: changed ? 'Changed by the human' : 'Compare Browser Run sessions and contexts.', width: 1280, height: 720, scrollX: 0, scrollY: 0, elements: [{ selector: 'html > body > a:nth-of-type(1)', tag: controlTag, role: controlTag === 'a' ? 'link' : 'textbox', name: 'Session reuse', href: controlTag === 'a' ? 'https://docs.example/reuse' : '', value, type: controlTag === 'input' ? inputType : '', disabled: false, selected: false, checked: false, inForm: false, ...(controlTag === 'select' ? { options: [{ value: 'second', label: 'Second choice', disabled: false, selected: value === 'second' }] } : {}) }] };
       },
       locator: () => ({ ariaSnapshot:async()=>`- heading "Public documentation"\n- textbox "Session reuse": ${value}`, click: async () => { calls.push('click'); url = 'https://docs.example/reuse'; }, fill: async (input: string) => { calls.push(`fill:${input}`); value = input; }, selectOption: async (input: string) => { calls.push(`select:${input}`); value = input; }, press: async (input: string) => { calls.push(`press:${input}`); } }),
-      screenshot: async () => new Uint8Array([137, 80, 78, 71]), close: async () => { pages.splice(pages.indexOf(p), 1); },
+      screenshot: async (options: any) => { shots.push(options); if (options?.type !== 'jpeg' && options?.quality !== undefined) throw Error('quality is unsupported for png'); return shotBytes(options); }, close: async () => { pages.splice(pages.indexOf(p), 1); },
     }; pages.push(p); return p;
   };
   page();
@@ -23,7 +25,7 @@ function harness(controlTag = 'a', inputType = 'text') {
   const context = { close:async()=>{await Promise.all(pages.map(page=>page.close()));}, serviceWorkers:()=>[], addInitScript:async()=>{calls.push('block-service-workers');}, routeWebSocket:async(_:string,handler:any)=>{await handler({close:()=>{calls.push('block-websocket');}});}, pages: () => [...pages], newPage: async () => page(), route: async (_: string, handler: (route: any) => Promise<void>) => { routeHandler = handler; }, unroute: async () => {}, newCDPSession: async (p: any) => ({ send: async (method:string) => method==='Accessibility.getFullAXTree'?{nodes:[{nodeId:'1',role:{value:'heading'},name:{value:'Public documentation'},properties:[]}]}:({ targetInfo: { targetId: p.id } }), detach: async () => {} }) };
   const browser = { contexts: () => [context], newContext: async () => { calls.push('new-disposable-context'); return context; }, close: async () => { calls.push('release'); }, newBrowserCDPSession: async () => ({ send: async () => { ended = true; } }) };
   const sdk = { acquire: async () => { calls.push('acquire'); return { sessionId: session.providerSessionId }; }, connect: async (_: unknown, options: any) => { expect(options).toEqual({ sessionId: session.providerSessionId, persistent: true }); if (ended) throw Error('session ended'); calls.push('attach'); return browser; }, sessions: async () => ended ? [] : [{ sessionId: session.providerSessionId }] };
-  return { calls, pages, sdk, browser, context, route: (route: any) => routeHandler!(route), humanChange: () => { changed = true; } };
+  return { calls, pages, sdk, browser, context, shots, sized: (bytes: (options: any) => Uint8Array) => { shotBytes = bytes; }, route: (route: any) => routeHandler!(route), humanChange: () => { changed = true; } };
 }
 it('navigates a public page, returns actual image bytes, and retains two tabs across detached owner turns', async () => {
   const f = harness();
@@ -142,6 +144,21 @@ it('reads an oversized-screenshot page as text only and keeps provider cancellat
   expect(await f.sdk.sessions()).toHaveLength(1);
   await driver.terminate(session);
   expect(await f.sdk.sessions()).toHaveLength(0);
+});
+it.each([[50, 'image/jpeg'], [35, 'image/jpeg'], [25, 'image/jpeg']] as const)('steps an over-limit PNG down to JPEG quality %i before going text-only', async (fits, mime) => {
+  const f = harness();
+  f.sized(options => new Uint8Array(options.type === 'jpeg' && options.quality <= fits ? 900 : 2000));
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1000 });
+  const observed = await driver.navigate(session, 'https://docs.example/index');
+  expect(observed.image).toMatchObject({ mime_type: mime }); expect(observed.image!.bytes.byteLength).toBe(900);
+  expect(f.shots.map(shot => shot.type === 'jpeg' ? shot.quality : 'png')).toEqual(['png', ...[50, 35, 25].filter(quality => quality >= fits)]);
+  expect(f.shots.every(shot => shot.scale === 'css' && !shot.fullPage)).toBe(true);
+});
+it('goes text-only only after the PNG and every JPEG step are over the limit', async () => {
+  const f = harness(); f.sized(() => new Uint8Array(2000));
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1000 });
+  expect((await driver.navigate(session, 'https://docs.example/index')).image).toBeUndefined();
+  expect(f.shots.map(shot => shot.type === 'jpeg' ? shot.quality : 'png')).toEqual(['png', 50, 35, 25]);
 });
 it('closes the selected tab and rejects its old reference', async () => {
   const f = harness();

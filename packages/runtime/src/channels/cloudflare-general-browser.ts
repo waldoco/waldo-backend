@@ -293,9 +293,19 @@ export function cloudflareGeneralBrowser(options: Options) {
     const state = await page.evaluate(generalPageState); await admit(session);
     const semantic = await semanticSnapshot(session,context,page,state); await admit(session);
     if (!state.text.trim()) throw new GeneralBrowserError('empty_content');
-    const bytes = new Uint8Array(await page.screenshot({ type: 'png', animations: 'disabled', caret: 'hide', scale: 'css',mask:[page.locator('input[type="password"],input[autocomplete~="one-time-code" i],textarea[autocomplete~="one-time-code" i]')] })); await admit(session);
-    // The PNG only ever reaches the model, never the checkpoint, so a page over the cap is still read, as text.
-    const image = bytes.byteLength > options.maxScreenshotBytes ? undefined : { mime_type: 'image/png' as const, bytes };
+    const capture = async (encoding: Readonly<{ type: 'png' } | { type: 'jpeg'; quality: number }>) => {
+      const shot = new Uint8Array(await page.screenshot({ ...encoding, animations: 'disabled', caret: 'hide', scale: 'css',mask:[page.locator('input[type="password"],input[autocomplete~="one-time-code" i],textarea[autocomplete~="one-time-code" i]')] })); await admit(session);
+      return shot;
+    };
+    const bytes = await capture({ type: 'png' });
+    // The image only ever reaches the model, never the checkpoint. Over the cap it steps down through JPEG qualities
+    // (Cloudflare's playwright-mcp screenshots at JPEG 50); past the last step the page is still read, as text.
+    let image: GeneralSnapshot['image'] = bytes.byteLength > options.maxScreenshotBytes ? undefined : { mime_type: 'image/png', bytes };
+    for (const quality of [50, 35, 25]) {
+      if (image) break;
+      const jpeg = await capture({ type: 'jpeg', quality });
+      if (jpeg.byteLength <= options.maxScreenshotBytes) image = { mime_type: 'image/jpeg', bytes: jpeg };
+    }
     const current = await page.evaluate(generalPageState); await admit(session);
     const currentSemantic = await semanticSnapshot(session,context,page,current); await admit(session);
     if (currentSemantic !== semantic || JSON.stringify(current) !== JSON.stringify(state)) throw new GeneralBrowserError('stale_observation');

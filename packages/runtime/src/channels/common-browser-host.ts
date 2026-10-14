@@ -115,7 +115,7 @@ export function commonBrowserHost(options:Readonly<{
   if(observed.image){
    let binary='';for(const byte of observed.image.bytes)binary+=String.fromCharCode(byte);
    if(images.length>=4)images.shift();
-   images.push({kind:'image',filename:`browser-${observed.observation.revision}.png`,mime_type:observed.image.mime_type,data_base64:btoa(binary)});
+   images.push({kind:'image',filename:`browser-${observed.observation.revision}.${observed.image.mime_type==='image/png'?'png':'jpg'}`,mime_type:observed.image.mime_type,data_base64:btoa(binary)});
   }
   return {ok:true as const,data:{...observed.observation,session_handle:record.session.id,text:observed.observation.text.slice(0,8000),elements:observed.observation.elements.slice(0,64),tabs:observed.observation.tabs.slice(0,8),
    field_values:observed.state.elements.slice(0,64).flatMap((element,index)=>['input','textarea','select'].includes(element.tag)&&!['password','file','hidden'].includes(element.type)?[{ref:observed.observation.elements[index]!.ref,name:element.name,value:element.value}]:[]),
@@ -252,7 +252,8 @@ export function commonBrowserHost(options:Readonly<{
     if(digest){const completed=digest;options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey!);if(latest?.action?.digest===completed)save({...latest,action:{digest:completed,state:'observed'}},storageKey!);});}
     const published=await publishObservation(grant,record,observed,ctx);
     if(command.operation==='screenshot'){
-      if(!observed.image)throw new GeneralBrowserError('image_oversize');
+      // The owner workspace stores the PNG capture only; a JPEG means the PNG was over the size limit.
+      if(observed.image?.mime_type!=='image/png')throw new GeneralBrowserError('image_oversize');
       if(!options.files)throw Error('owner screenshot storage unavailable');
       const files=await options.files(async()=>{await checked();},options.ownerId);
       const receipt=await browserScreenshotToWorkspace({...files,image:observed.image.bytes,maxScreenshotBytes:grant.maxScreenshotBytes,operationId:crypto.randomUUID(),deadline:Math.min(record.session.expiresAt,options.deadline()),now:options.now,assertCurrent:async()=>{await checked();}});

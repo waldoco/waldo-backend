@@ -279,3 +279,13 @@ it('cancel ends a retained session that has no current observation, whatever url
  expect(await host.actionHandler.handle({url:'https://public-pages.fixture.invalid/other',task:'Close the browser',max_actions:1,session_handle:first.data.session_handle,command:{operation:'cancel'}} as never,f.ctx)).toMatchObject({ok:true,data:{ended:true}});
  expect(commonBrowserFixture.ends).toBe(1);expect(f.rows.get('common-browser:fixture-task')).toMatchObject({cleanup:'closed'});
 });
+it('an over-limit PNG reaches the model as a smaller JPEG, while the owner\'s screenshot save still needs a PNG',async()=>{
+ const f=fixture();(f.grant as {maxScreenshotBytes:number}).maxScreenshotBytes=40;commonBrowserFixture.jpeg=Uint8Array.from([0xff,0xd8,0xff,0xe0,...new Array(20).fill(0)]);
+ const {host,run}=await registered(f);
+ const read=await run('browse_page',{url:'https://public-pages.fixture.invalid/a',instruction:'Read A.'});
+ expect(read).toMatchObject({ok:true});expect(read.data.text_only).toBeUndefined();
+ expect(host.attachments()).toEqual([expect.objectContaining({kind:'image',mime_type:'image/jpeg',filename:expect.stringMatching(/\.jpg$/),data_base64:expect.stringMatching(/^\/9j\//)})]);
+ const shot=await run('browse_act',{url:read.data.url,task:'Save a screenshot',max_actions:1,command:{operation:'screenshot'}});
+ expect(shot).toMatchObject({ok:false});expect(JSON.stringify(shot)).toContain('image_oversize');
+ await host.cancel();
+});
