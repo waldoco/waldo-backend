@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { applyClaimOps, applyPromotion, claimStore, exchangeInput, memoryPrompt, turnMemoryPrompt, nightlyInput, profile , FORGOTTEN, textFingerprint } from '../src/memory/claims';
 import { backupAndCopySpots, LEGACY_BACKUP, markCoreFilesMigrated, pendingCoreFiles } from '../src/memory/migration';
 import { CLAIM_OPS_SCHEMA, FACTS_BLOCK_MAX_CHARS, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, PROFILE_BLOCK_MAX_CHARS } from '../src/memory/claims';
+import { createOwnerResponder } from '../src/channels/owner-turn';
+import type { LLMGatewayAdapter } from '../src/llm/provider';
 
 let sequence = 0;
 const withSql = <T>(fn: (sql: SqlStorage, transaction: <R>(work: () => R) => R) => T) =>
@@ -720,6 +722,8 @@ describe('pinned blocks', () => {
     return start < 0 ? null : prompt.slice(start + tag.length + 2, prompt.indexOf(`</${tag}>`, start));
   };
   const shown = (text: string | null) => (text ?? '').split('\n').filter((line) => line.startsWith('- ['));
+  // The nightly pass is the one caller that curates the blocks.
+  const nightly = (store: ReturnType<typeof claimStore>, raw: string) => applyClaimOps(store, raw, AT, undefined, undefined, undefined, undefined, undefined, true);
 
   it('pins and unpins through claim ops, only for claims the profile can show', async () => {
     await withSql((sql, transaction) => {
@@ -731,7 +735,7 @@ describe('pinned blocks', () => {
       owned(store, 'Dentist on Friday', 'event');
       owned(store, 'Gym at eleven', 'routine');
       const [pune, short, mornings, bicycle, dentist, gym] = ['Lives in Pune', 'Prefers short replies', 'Seems to like mornings', 'Owns a red bicycle', 'Dentist on Friday', 'Gym at eleven'].map((text) => idOf(store, text));
-      const result = applyClaimOps(store, ops({ pin: [{ id: pune, block: 'profile', order: 2 }, { id: short, block: 'profile', order: 1 }, { id: mornings, block: 'profile', order: 3 }, { id: bicycle, block: 'facts', order: 1 }, { id: dentist, block: 'facts', order: 2 }, { id: 9_999, block: 'facts', order: 3 }] }), AT);
+      const result = nightly(store, ops({ pin: [{ id: pune, block: 'profile', order: 2 }, { id: short, block: 'profile', order: 1 }, { id: mornings, block: 'profile', order: 3 }, { id: bicycle, block: 'facts', order: 1 }, { id: dentist, block: 'facts', order: 2 }, { id: 9_999, block: 'facts', order: 3 }] }));
       expect(result).toMatch(/ pinned2\b/);
       const curated = turnMemoryPrompt(store, 'unrelated');
       expect(shown(block(curated, 'owner_profile'))).toEqual(['- [owner-grounded] Prefers short replies', '- [owner-grounded] Lives in Pune']);
@@ -739,7 +743,7 @@ describe('pinned blocks', () => {
       // Once anything is pinned, an unpinned claim is reached by recall, not shown in a block.
       expect(curated).not.toContain('Gym at eleven');
       // An unpin and a pin of the same claim in one reply is a move: the pin wins.
-      expect(applyClaimOps(store, ops({ unpin: [short, pune, gym], pin: [{ id: pune, block: 'facts', order: 1 }] }), AT)).toMatch(/ pinned1 unpinned2\b/);
+      expect(nightly(store, ops({ unpin: [short, pune, gym], pin: [{ id: pune, block: 'facts', order: 1 }] }))).toMatch(/ pinned1 unpinned2\b/);
       const moved = turnMemoryPrompt(store, 'unrelated');
       expect(shown(block(moved, 'owner_profile'))).toEqual([]);
       expect(shown(block(moved, 'owner_facts'))).toEqual(['- [owner-grounded] Lives in Pune']);
@@ -758,10 +762,10 @@ describe('pinned blocks', () => {
       for (let i = 0; i < 20; i++) owned(store, profileText(i), 'preference');
       for (let i = 0; i < 30; i++) owned(store, factText(i));
       // Pin order, not insertion order: the profile is pinned in reverse.
-      applyClaimOps(store, ops({ pin: [
+      nightly(store, ops({ pin: [
         ...Array.from({ length: 20 }, (_, i) => ({ id: idOf(store, profileText(i)), block: 'profile', order: 19 - i })),
         ...Array.from({ length: 30 }, (_, i) => ({ id: idOf(store, factText(i)), block: 'facts', order: i })),
-      ] }), AT);
+      ] }));
       const prompt = turnMemoryPrompt(store, 'unrelated');
       const profileLines = shown(block(prompt, 'owner_profile'));
       const factLines = shown(block(prompt, 'owner_facts'));
@@ -788,7 +792,7 @@ describe('pinned blocks', () => {
       expect(lines[0]).toContain('Fallback 59');
       expect(prompt).toContain(`(${60 - lines.length} older owner facts are not shown here; search memory to recall them.)`);
       // The first pin ends the fallback: only curated claims render.
-      applyClaimOps(store, ops({ pin: [{ id: idOf(store, text(3)), block: 'profile', order: 1 }] }), AT);
+      nightly(store, ops({ pin: [{ id: idOf(store, text(3)), block: 'profile', order: 1 }] }));
       const curated = turnMemoryPrompt(store, 'unrelated');
       expect(shown(block(curated, 'owner_profile'))).toEqual([`- [owner-grounded] ${text(3)}`]);
       expect(curated).not.toContain('older owner facts are not shown');
@@ -800,7 +804,7 @@ describe('pinned blocks', () => {
       const store = claimStore(sql, transaction);
       for (const text of ['Locker is the blue door one', 'Parks on level two', 'Desk is by the window', 'Commutes by train', 'Commutes by metro', 'Gym at eleven']) owned(store, text);
       const [locker, parks, desk, train] = ['Locker is the blue door one', 'Parks on level two', 'Desk is by the window', 'Commutes by train'].map((text) => idOf(store, text)) as [number, number, number, number];
-      applyClaimOps(store, ops({ pin: [{ id: locker, block: 'profile', order: 1 }, { id: parks, block: 'profile', order: 2 }, { id: desk, block: 'profile', order: 3 }, { id: train, block: 'facts', order: 1 }] }), AT);
+      nightly(store, ops({ pin: [{ id: locker, block: 'profile', order: 1 }, { id: parks, block: 'profile', order: 2 }, { id: desk, block: 'profile', order: 3 }, { id: train, block: 'facts', order: 1 }] }));
       applyClaimOps(store, ops({ forget_claims: [locker] }), AT, 'owner agreed', undefined, undefined, true);
       applyClaimOps(store, ops({ dismiss: [parks] }), AT);
       expect(store.allClaims().some((claim) => claim.id === locker)).toBe(false);
@@ -821,7 +825,7 @@ describe('pinned blocks', () => {
       const store = claimStore(sql, transaction);
       owned(store, 'Lives in Pune');
       owned(store, 'Gym at eleven', 'routine');
-      applyClaimOps(store, ops({ pin: [{ id: idOf(store, 'Lives in Pune'), block: 'profile', order: 1 }] }), AT);
+      nightly(store, ops({ pin: [{ id: idOf(store, 'Lives in Pune'), block: 'profile', order: 1 }] }));
       const listing = memoryPrompt(store);
       expect(listing).toMatch(/<claim id="\d+" kind="fact" [^>]*pinned="profile" order="1"[^>]*>Lives in Pune/);
       expect(listing).not.toMatch(/<claim [^>]*pinned=[^>]*>Gym at eleven/);
@@ -840,8 +844,34 @@ describe('pinned blocks', () => {
       owned(store, 'Lives in Pune');
       const pune = idOf(store, 'Lives in Pune');
       expect(applyClaimOps(store, JSON.stringify({ add: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null }), AT)).toBe('+0 held0 seen0 confirmed0 dismissed0 forgot0');
-      expect(applyClaimOps(store, ops({ pin: [{ id: String(pune), block: 'profile', order: 1 }, { id: pune, block: 'sidebar', order: 1 }, { id: pune, block: 'profile', order: 1.5 }, null], unpin: ['x'] }), AT)).toBe('+0 held0 seen0 confirmed0 dismissed0 forgot0');
+      expect(nightly(store, ops({ pin: [{ id: String(pune), block: 'profile', order: 1 }, { id: pune, block: 'sidebar', order: 1 }, { id: pune, block: 'profile', order: 1.5 }, null], unpin: ['x'] }))).toBe('+0 held0 seen0 confirmed0 dismissed0 forgot0');
       expect(store.claims()[0]).toMatchObject({ pinned: null, pin_order: null });
+    });
+  });
+
+  it('curates the blocks only in the nightly pass: a migration\'s pin and unpin are counted and ignored', async () => {
+    await withSql(async (sql, transaction) => {
+      const store = claimStore(sql, transaction);
+      owned(store, 'Lives in Pune');
+      owned(store, 'Prefers short replies', 'preference');
+      const [pune, short] = [idOf(store, 'Lives in Pune'), idOf(store, 'Prefers short replies')];
+      let reply = ops({});
+      const gateway: LLMGatewayAdapter = { complete: async (request) => ({ ok: true, data: { model: request.request.model, text: reply, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } }) };
+      const responder = createOwnerResponder('fixture', undefined, store, undefined, undefined, [], undefined, false, undefined, undefined, gateway);
+      const pins = () => store.claims().filter((claim) => claim.pinned !== null).sort((a, b) => a.id - b.id).map((claim) => [claim.id, claim.pinned, claim.pin_order]);
+      reply = ops({ pin: [{ id: pune, block: 'profile', order: 1 }] });
+      const migrated = await responder.migrate('migrate-1', 'MEMORY_CORE r1: synthetic notes');
+      expect(pins()).toEqual([]);
+      expect(migrated).toContain(' pin-blocked1');
+      reply = ops({ pin: [{ id: pune, block: 'profile', order: 1 }, { id: short, block: 'facts', order: 1 }] });
+      expect((await responder.consolidate('night-1', 'a synthetic day')).detail).toMatch(/ pinned2\b/);
+      expect(pins()).toEqual([[pune, 'profile', 1], [short, 'facts', 1]]);
+      reply = ops({ unpin: [pune], pin: [{ id: short, block: 'profile', order: 2 }] });
+      expect(await responder.migrate('migrate-2', 'MEMORY_CORE r2: synthetic notes')).toContain(' pin-blocked2');
+      expect(pins()).toEqual([[pune, 'profile', 1], [short, 'facts', 1]]);
+      reply = ops({ unpin: [pune] });
+      expect((await responder.consolidate('night-2', 'a synthetic day')).detail).toMatch(/ unpinned1\b/);
+      expect(pins()).toEqual([[short, 'facts', 1]]);
     });
   });
 });
