@@ -3,6 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { APP_THREAD_MAX_V1, appThreadListV1Schema, appThreadOperationResultV1Schema, appThreadReadV1Schema } from '../../contracts/src/app/threads';
 import { appSubjectFor } from '../src/channels/app-api';
+import { recallReach, threadRowsPrefix } from '../src/channels/app-threads';
 
 const OWNER_ID = '5b1f0c2a-7d3e-4c91-8f62-0a1b2c3d4e5f';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
@@ -141,5 +142,26 @@ describe('the app threads registry', () => {
       expect(await call('GET', '')).toEqual({ status: 403, body: { error: 'unavailable' } });
       expect([...state.storage.kv.list({ prefix: 'app:thread' })]).toEqual([]);
     });
+  });
+});
+
+// Per-turn recall reach. Telegram passes the stored owner_principal_ref, which only an app session writes.
+describe('recall reach', () => {
+  const kvOf = (rows: Record<string, unknown>) => ({
+    get: <T,>(key: string) => rows[key] as T | undefined,
+    list: <T,>({ prefix }: { prefix?: string } = {}) => new Map(Object.entries(rows).filter(([key]) => key.startsWith(prefix ?? '')) as [string, T][]),
+  }) as unknown as Pick<DurableObjectStorage['kv'], 'get' | 'list'>;
+  const principal = `prn_${OWNER_ID.replaceAll('-', '')}`, thread = 'thr_00000000-0000-4000-8000-000000000001';
+
+  it('a Telegram owner with no app session recalls every entry of its own chain', () => {
+    const reach = recallReach(kvOf({}), undefined, null);
+    expect(['tg-entry-1', 'tg-entry-2'].map(reach)).toEqual([true, true]);
+    expect(recallReach(kvOf({}), undefined, thread)('tg-entry-1')).toBe(false);
+  });
+
+  it('once the owner has threads, main and Telegram leave out thread entries and a thread keeps only its own', () => {
+    const kv = kvOf({ [`app:thread:${thread}`]: { thread_id: thread }, [`${threadRowsPrefix(principal, thread)}witness:on-thread`]: {} });
+    expect(['on-thread', 'tg-entry-1'].map(recallReach(kv, principal, null))).toEqual([false, true]);
+    expect(['on-thread', 'tg-entry-1'].map(recallReach(kv, principal, thread))).toEqual([true, false]);
   });
 });
