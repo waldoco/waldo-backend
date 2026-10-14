@@ -398,8 +398,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const chat = raw.message?.chat ?? raw.callback_query?.message?.chat;
     if (sender !== Number(subject) || (chat && chat.id !== Number(subject))) return new Response('forbidden', { status: 403 });
     if (!chat || chat.type !== 'private') return new Response('ok');
-    // Link/setup commands never become model input in this supported-owner slice.
-    if (/^\/(?:start|link)(?:\s|$)/.test(raw.message?.text?.trim() ?? '')) return new Response('ok');
+    // Link/setup commands never become model input in this supported-owner slice. A forwarded one is someone else's text and
+    // is never redeemed: it gets one fixed reply, with nothing stored and nothing echoed.
+    if (/^\/(?:start|link)(?:\s|$)/.test(raw.message?.text?.trim() ?? '')) {
+      const token = this.env.TELEGRAM_BOT_TOKEN;
+      if (isForward(raw.message) && token) await createTelegramCaller(token)('sendMessage', { chat_id: Number(subject), text: 'That was a forwarded command, so I did not run it. Commands only run when you type them yourself.' })
+        .catch(() => console.error(JSON.stringify({ hop: 'forwarded_setup_reply', ok: false })));
+      return new Response('ok');
+    }
     const parsed = await new TelegramPollingAdapter({ getUpdates: async () => [raw] }, 0).poll(0);
     const supportedCallback = raw.callback_query && typeof raw.callback_query.id === 'string' && typeof raw.callback_query.data === 'string';
     if (!supportedCallback && parsed.accepted.length === 0) return new Response('ok');
