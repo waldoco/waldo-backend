@@ -2,7 +2,7 @@
 // then a model judge scores each case against its rubric. Usage: npx tsx evals/run.ts <chat|alternative>
 import { DatabaseSync } from 'node:sqlite';
 import { writeFileSync } from 'node:fs';
-import { TOOL_PERMISSIONS, modelNameSchema, triggerTypeSchema, webSearchArgsSchema, WALDO_CHAT_MODEL, type ModelName, type SetReminderArgs, type WebSearchArgs } from '@waldo/contracts';
+import { TOOL_PERMISSIONS, modelNameSchema, triggerTypeSchema, webSearchArgsSchema, WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL, type ModelName, type SetReminderArgs, type WebSearchArgs } from '@waldo/contracts';
 import { createTelegramResponder } from '../src/channels/telegram-turn';
 import { inboundTurn, ownerWords } from '../src/channels/owner-inbound-turn';
 import { reminderHandlers, type ReminderBook } from '../src/channels/reminders';
@@ -28,7 +28,8 @@ if (!key) throw new Error('OPENAI_API_KEY is required');
 const argvModel = process.argv[2] && process.argv[2] !== '-' ? modelNameSchema.parse(process.argv[2]) : undefined;
 const model: ModelName = argvModel ?? WALDO_CHAT_MODEL;
 const only = process.argv[3];
-const JUDGE: ModelName = WALDO_CHAT_MODEL;
+// The grader stays on the auxiliary model whichever model is graded, so runs on different chat models stay comparable.
+const JUDGE: ModelName = WALDO_AUXILIARY_MODEL;
 
 const sqlite = (): SqlStorage => {
   const db = new DatabaseSync(':memory:');

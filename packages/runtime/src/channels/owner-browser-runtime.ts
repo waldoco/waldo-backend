@@ -1,5 +1,5 @@
 import {browserHandoffConsole} from './browser-handoff-console';
-import { browsePageArgsSchema, browseActArgsSchema, WALDO_CHAT_MODEL, type BrowseActArgs, type BrowsePageArgs, type LLMAttachment, type ToolEligibility, type ToolHandler } from '@waldo/contracts';
+import { browsePageArgsSchema, browseActArgsSchema, OPENAI_GPT_6_LUNA_MODEL, type BrowseActArgs, type BrowsePageArgs, type LLMAttachment, type ToolEligibility, type ToolHandler } from '@waldo/contracts';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
@@ -24,6 +24,12 @@ const spendRefusal=(cause:unknown)=>{
   return new PublicReadRefusal(ceiling
     ?'No browser was started: the owner\'s browser spend limit is used up. Retrying will not help; tell the owner browsing is paused until the limit allows more.'
     :'No browser was started: the owner\'s browser spend record needs reconciliation. Retrying will not help; tell the owner browsing is paused until it is reconciled.');
+};
+
+// The browser trial meters a funded run's model calls with a Luna price envelope, so it refuses any other model before
+// the meter takes an ordinal or a reservation.
+const assertTrialPriced = (model: string | undefined): void => {
+  if (model !== OPENAI_GPT_6_LUNA_MODEL) throw Error('browser trial model price unavailable');
 };
 
 // The run lease's wake: maintenance runs when the lease's run deadline, its configuration or its session lifetime ends,
@@ -228,9 +234,8 @@ export function ownerBrowserRuntime(options: Readonly<{
             if(pinned&&(pinned.custodyDigest!==owner.custodyDigest||pinned.registration?.policy?.directoryOwnerId!==owner.directoryOwnerId))throw Error('automatic browser policy requires reconciliation');
             return gateway.complete(request);
           }
-          // The live trial quote covers Luna only; normal model policy remains
-          // with the ordinary adapter when trial registration is unavailable.
-          if (request.request.model !== WALDO_CHAT_MODEL) throw Error('automatic browser model price unavailable');
+          // Normal model policy remains with the ordinary adapter when trial registration is unavailable.
+          assertTrialPriced(request.request.model);
           // Share one wrapper even across concurrent first calls: physical model
           // ordinals must never restart within this constructed owner host.
           metered ??= Promise.resolve(config.meterGateway(gateway));
@@ -246,9 +251,11 @@ export function ownerBrowserRuntime(options: Readonly<{
       // Only a run that holds a browser allocation is metered. An expired or used-up registration denies browser allocations, never ordinary model calls.
       return new Proxy(base, { get(target, key) {
         if (key !== 'complete') { const value = Reflect.get(target, key, target); return typeof value === 'function' ? value.bind(target) : value; }
-        return (request: { runScope?: RunEffectScope }) => {
+        return async (request: { runScope?: RunEffectScope; request?: { model?: string } }) => {
           const scope = request.runScope;
-          return scope && funded(scope)&&config.expiresAt>Date.now()&&(!manual||manual.spend.policy.validUntil>Date.now()) ? metered.complete(request as never) : target.complete(request as never);
+          if (!(scope && funded(scope)&&config.expiresAt>Date.now()&&(!manual||manual.spend.policy.validUntil>Date.now()))) return target.complete(request as never);
+          assertTrialPriced(request.request?.model);
+          return metered.complete(request as never);
         };
       } });
     },

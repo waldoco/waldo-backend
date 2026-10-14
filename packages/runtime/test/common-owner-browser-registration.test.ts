@@ -3,7 +3,7 @@ import { ownerBrowserRuntime } from '../src/channels/owner-browser-runtime';
 import { registerCommonBrowserSdk } from '../src/channels/common-staging-registration';
 import { commonBrowserFixture, commonBrowserMeteredFixtureLoader } from './fixtures/common-browser-sdk';
 import type { RunEffectScope } from '../src/channels/run-effect-scope';
-import { WALDO_CHAT_MODEL } from '@waldo/contracts';
+import { OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { commonSpendReservation } from '../src/channels/common-spend-reservation';
 
@@ -43,7 +43,8 @@ it('automatically derives the registered browser owner from current directory au
   runtime.stop();await runtime.maintain();expect(commonBrowserFixture.ends).toBe(1);expect(commonBrowserFixture.pages).toHaveLength(0);
 });
 
-const request = (scope: RunEffectScope) => ({ runScope: scope, request: { model: WALDO_CHAT_MODEL, max_tokens: 16, system: 'Fixture', messages: [] }, route: { provider: 'openai', model: WALDO_CHAT_MODEL, cache: 'none', max_tokens: 16 }, step: { provider: 'openai', model: WALDO_CHAT_MODEL }, context: 'full_context', fallback_step: 'configured_model', headers: {} }) as unknown as LLMGatewayRequest;
+// The trial's price envelope covers Luna only, so a funded call here is a Luna call.
+const request = (scope: RunEffectScope) => ({ runScope: scope, request: { model: OPENAI_GPT_6_LUNA_MODEL, max_tokens: 16, system: 'Fixture', messages: [] }, route: { provider: 'openai', model: OPENAI_GPT_6_LUNA_MODEL, cache: 'none', max_tokens: 16 }, step: { provider: 'openai', model: OPENAI_GPT_6_LUNA_MODEL }, context: 'full_context', fallback_step: 'configured_model', headers: {} }) as unknown as LLMGatewayRequest;
 
 const allocate = async (fixture: ReturnType<typeof setup>, runtime: ReturnType<ReturnType<typeof setup>['runtime']>) => {
   expect(await runtime.read({ name: 'browse_page' } as never).handle({ url: 'https://example.com/a', instruction: 'Read' },
@@ -90,6 +91,17 @@ it('unpriced models and missing, changed or unlinked authority cannot issue fund
   await expect(gateway.complete(input)).rejects.toThrow('reconciliation'); expect([...fixture.rows]).toEqual(retained);
   fixture.rows.set('telegram_unlinked', true);
   await expect(gateway.complete(input)).rejects.toThrow('owner unavailable'); expect(provider.calls).toHaveLength(1);
+});
+
+it('a funded run refuses a Sol call before the trial meter takes an ordinal or a reservation', async () => {
+  const fixture = setup(), runtime = fixture.runtime(); await allocate(fixture, runtime);
+  const gateway = runtime.gateway()!, input = request(fixture.scope), original = structuredClone([...fixture.rows]);
+  await expect(gateway.complete({ ...input, request: { ...input.request, model: OPENAI_GPT_6_1_SOL_MODEL } })).rejects.toThrow('browser trial model price unavailable');
+  expect([...fixture.rows]).toEqual(original); expect(provider.calls).toHaveLength(0);
+  expect(await gateway.complete(input)).toMatchObject({ ok: true });
+  const charged = [...fixture.rows].find(([key]) => key.startsWith('common-spend:'))![1].calls.filter((call: any) => call.id.startsWith('model:'));
+  expect(charged.map((call: any) => call.id.split(':').at(-1))).toEqual(['1']);
+  expect(provider.calls).toHaveLength(1);
 });
 
 it('cleanup survives registration removal and unlink without funding another session', async () => {

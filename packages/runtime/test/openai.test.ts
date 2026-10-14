@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import OpenAI from 'openai';
 import {
+  OPENAI_GPT_6_1_SOL_MODEL,
   OPENAI_GPT_6_LUNA_MODEL,
   OPENAI_PROVIDER,
   type LLMRequest,
@@ -261,6 +262,64 @@ describe('OpenAIResponsesAdapter', () => {
     });
   });
 });
+describe('OpenAIResponsesAdapter reasoning effort', () => {
+  const sol = (effort?: string): LLMGatewayRequest => {
+    const base = gatewayRequest();
+    return {
+      ...base,
+      request: { ...base.request, model: OPENAI_GPT_6_1_SOL_MODEL, ...(effort === undefined ? {} : { reasoning_effort: effort as never }) },
+      route: { ...base.route, primary: { ...base.route.primary, model: OPENAI_GPT_6_1_SOL_MODEL } },
+      step: { ...base.step, model: OPENAI_GPT_6_1_SOL_MODEL },
+    };
+  };
+  const recording = () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const adapter = new OpenAIResponsesAdapter({
+      apiKey: 'test-key',
+      client: client(async (body: Record<string, unknown>) => {
+        bodies.push(body);
+        return { id: 'r', output_text: 'ok', output: [], usage: { input_tokens: 1, output_tokens: 1 } };
+      }),
+    });
+    return { bodies, adapter };
+  };
+
+  it('sends the effort the request names, with an auto summary', async () => {
+    const { bodies, adapter } = recording();
+    await expect(adapter.complete(sol('medium'))).resolves.toMatchObject({ ok: true });
+    await expect(adapter.complete(sol('low'))).resolves.toMatchObject({ ok: true });
+    expect(bodies.map((body) => [body.model, body.reasoning])).toEqual([
+      [OPENAI_GPT_6_1_SOL_MODEL, { effort: 'medium', summary: 'auto' }],
+      [OPENAI_GPT_6_1_SOL_MODEL, { effort: 'low', summary: 'auto' }],
+    ]);
+  });
+
+  it('a request that names no effort gets the roster effort for its model', async () => {
+    const { bodies, adapter } = recording();
+    await adapter.complete(sol());
+    await adapter.complete(gatewayRequest());
+    expect(bodies.map((body) => [body.model, body.reasoning])).toEqual([
+      [OPENAI_GPT_6_1_SOL_MODEL, { effort: 'medium', summary: 'auto' }],
+      [OPENAI_GPT_6_LUNA_MODEL, { effort: 'low', summary: 'auto' }],
+    ]);
+  });
+
+  it.each(['none', 'minimal'])('refuses %s for Sol without calling the provider', async (effort) => {
+    const { bodies, adapter } = recording();
+    await expect(adapter.complete(sol(effort))).resolves.toEqual({
+      ok: false, code: 'invalid_args', error: 'OpenAI adapter received a reasoning effort the model does not accept',
+    });
+    expect(bodies).toHaveLength(0);
+  });
+
+  it('refuses an effort Luna does not list either, without calling the provider', async () => {
+    const { bodies, adapter } = recording();
+    const base = gatewayRequest();
+    await expect(adapter.complete({ ...base, request: { ...base.request, reasoning_effort: 'minimal' as never } })).resolves.toMatchObject({ ok: false, code: 'invalid_args' });
+    expect(bodies).toHaveLength(0);
+  });
+});
+
 describe('OpenAIResponsesAdapter prompt caching', () => {
   it('passes prompt_cache_key when the request carries a cache key, omits it otherwise', async () => {
     const bodies: Array<Record<string, unknown>> = [];
