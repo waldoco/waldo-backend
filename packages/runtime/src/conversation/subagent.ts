@@ -150,7 +150,7 @@ export const delegateTaskHandler = (
   return {
     name: 'delegate_task',
     description:
-      'Spawn a subagent for a self-contained research or reading subtask. It runs with read-only tools and reports back; several can run in one turn. Pass item_id to attach the task to a todo step, tools to widen its read tools, background to let it finish after this turn. Use it to isolate long lookups; keep owner-facing replies for yourself.',
+      'Spawn a subagent for a self-contained research or reading subtask. It runs with read-only tools and reports back; several can run in one turn. Pass item_id to attach the task to a todo step, tools to widen its read tools, background to let it finish after this turn (a background step runs on its own from the tracked task and step, with the read tools for background work, so task and tools are not used for it). Use it to isolate long lookups; keep owner-facing replies for yourself.',
     schema: delegateTaskArgsSchema,
     trigger_allowlist: ['user_message'],
     autonomy_gated: false,

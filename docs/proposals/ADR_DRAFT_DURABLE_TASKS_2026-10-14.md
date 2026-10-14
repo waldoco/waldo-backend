@@ -21,7 +21,7 @@ Author: the C7 builder session (claude.ai/code `session_01V7kpVJaPZUuGytfbo12xE3
 
 - **The task** is a responsibility, and **its steps** are its items. Both stay in the owner object's SQLite. The book is their only writer, as before.
 - **The attempt journal** is one new table in the same SQLite: `task_step_attempts`.
-  - Columns: `item_id`, `attempt`, `revision`, `status`, `report`, `created_at`, `ended_at`.
+  - Columns: `item_id`, `attempt`, `round_start`, `revision`, `status`, `report`, `created_at`, `ended_at`. `round_start` is the first attempt since the step was started or reset; the attempt budget counts from it.
   - `status` is `armed`, `running`, `done`, `failed`, `interrupted` or `cancelled`. `report` is `sending` or `sent`.
   - It's created lazily, like the book's tables, with no DO migration.
   - Its only writer is `channels/tasks/step-runner.ts`.
@@ -30,7 +30,8 @@ Author: the C7 builder session (claude.ai/code `session_01V7kpVJaPZUuGytfbo12xE3
 
 ### 2.2 Step boundary and intent before I/O
 
-- One step attempt is one schedule entry, `task:<item>:a<n>`. Its payload is only `{ item_id }`.
+- One step attempt is one schedule entry with its own id, `task:<item>:<id>`. Its payload is only `{ item_id, attempt_id }`.
+- **Arming writes the schedule entry first, then the journal row.** If the schedule write throws, the journal is unchanged and the executor throws, so the Scheduler delivers the current entry again. A redelivered `running` attempt resumes as interrupted, and a redelivered `done` attempt arms the steps that follow it. A step is never left armed with nothing to run it.
 - **Before any I/O**, one `transactionSync` commits `book.start` (which bumps the item's revision) and the attempt row as `running` at that revision.
 - **The I/O runs outside the transaction:** one machine turn through `responder.prompt`, the path standing orders use.
   - The turn runs under `asOwnerJob`, so every tool call and the reply pass `ownerJobAdmission`, whose `assertFresh` re-asks the directory.
@@ -40,11 +41,11 @@ Author: the C7 builder session (claude.ai/code `session_01V7kpVJaPZUuGytfbo12xE3
 ### 2.3 One retry owner
 
 The runner owns retries, and the executor never throws a step's failure to the Scheduler.
-- A failed attempt arms the next one as its own entry, 30 s × n later, up to `TASK_STEP_MAX_ATTEMPTS = 3`.
+- A failed attempt arms the next one as its own entry, 30 s × n later (n counted from `round_start`), up to `TASK_STEP_MAX_ATTEMPTS = 3`.
 - A closed authority (`ClosedRunError` or `OwnerAdmissionError`: a revoke, a rebind, a directory outage) isn't the step failing. The same attempt is armed again 30 s later and spends nothing. While the owner isn't admitted, the scheduled pass holds before any executor runs.
 - Every entry has its own id and names its attempt (`payload_refs.attempt_id`). Arming never rewrites the entry being dispatched, and an entry for an attempt already replaced or settled runs nothing.
 - After the third failure the item fails, and the owner is told once.
-- The Scheduler's own retry and quarantine apply only to a crash of the executor itself.
+- The Scheduler's own retry and quarantine apply only when the executor itself throws: a crash, or a schedule write that failed (§2.2).
 
 ### 2.4 Resume after eviction
 
@@ -58,7 +59,9 @@ On a wake, the runner may find a `running` attempt at the item's current revisio
 - A step runs only at the revision its entry was armed with, and only while its responsibility is `open` or `waiting`.
 - `update_todo` and `close_responsibility(dropped)` bump the revision; dropping now also cancels the unfinished steps.
 - A cancel between steps makes the next wake a no-op: no model call, no message.
-- A cancel during a step makes its result land as `superseded`, kept aside.
+- A cancel during a non-final step makes its result land as `superseded`, kept aside.
+- A cancel during the last step is checked again in a transaction right before the send, so the result isn't sent.
+- An `update_todo` that sets a step back to `pending` fences any armed attempt and, in a task already running in the background, arms a fresh round at the new revision. That's also how the owner retries a step that failed.
 - A cancel never claims that a read already done was undone.
 
 ### 2.6 What the owner hears
@@ -70,8 +73,8 @@ On a wake, the runner may find a `running` attempt at the item's current revisio
   - For an app owner that's `appDeliveryFor`, which re-asks the directory per row.
   - Before each send, the runner also calls the job admission's `assertFresh`.
 - **Progress lines are at most once.** The `report` column is set to `sending` before the send and `sent` after it, and a progress line is never sent again. A crash mid-send can lose a progress line, never repeat it.
-- **The result is at least once.** The result is kept nowhere but the owner's channel, so the last step is `done` only after its send succeeds. A failed send runs the step again: an ordinary failure spends an attempt, a closed authority doesn't. A crash mid-send can deliver the result twice, but never loses it.
-- **Owner steps:** when the owner marks their own step done (`update_todo`), any Waldo step waiting on it is armed.
+- **The result is at least once.** The result is kept nowhere but the owner's channel, so the last step is `done` only after its send succeeds. A failed send runs the step again: an ordinary failure spends an attempt, a closed authority doesn't. An attempt found `running` with its report `sent` is finished without sending again. Only a crash between the send and that `sent` mark can deliver the result twice; nothing loses it.
+- **Owner steps:** in a task already running in the background, when the owner marks their own step done (`update_todo`), any Waldo step waiting on it is armed. A task the model never started in the background is never started by an update.
 
 ### 2.7 Privacy
 
@@ -81,6 +84,7 @@ On a wake, the runner may find a `running` attempt at the item's current revisio
   - the last step's text goes only to the owner channel, and its item keeps "Reported to the owner."
 - **Taint:** a step that reads an earlier step's result runs with `sourceTaint: 'external'`.
 - **Logs:** trace hops carry ids, attempt numbers and codes, never task text.
+- **Forget:** `responsibilities` (title, intent, closing evidence) and `responsibility_items` (title, result, superseded result) are in the forget path's literal-redaction stores, with redaction, readback and span selection like `goals`.
 
 ### 2.8 Contracts
 
@@ -101,9 +105,5 @@ An older Worker reads a `task_step` row as unreadable and leaves it alone; that'
 
 - **Switch off (the default):** no responsibility tools, `delegate_task` behaves as before, and no `task_step` executor is registered. A `task_step` entry armed while the switch was on fails at hand-off ("no scheduler executor"), and the Scheduler retries and then pauses it like any entry with no executor. It has no failure-notice name, so the pause is silent.
 - **Roll-back of the Worker:** an older Worker skips `task_step` rows as unreadable. The `task_step_attempts` table and the book's rows stay, inert.
-- **Known gaps, named, not built:**
-  - A throw from `scheduler.schedule` right after an attempt row is armed leaves that row with no entry, so the step stalls. The journal write and the schedule insert can't share one synchronous transaction, because `schedule` awaits the alarm.
-  - A step the owner resets to `pending` after an attempt isn't re-armed.
-  - Switching off leaves armed `task_step` entries to the Scheduler's no-executor retry and pause.
-  - A literal forget doesn't reach `responsibilities` or `responsibility_items` text. Both are already `KNOWN_GAP` in `forget-store-table.test.ts`; this change makes them live behind the switch.
+- **Known gap, named, not built:** switching off leaves armed `task_step` entries to the Scheduler's no-executor retry and pause.
 - **Still open:** wait-on-event (approvals), effect-bearing steps with the `uncertain` rule, the app's Carrying rows, and a `progress` reply part, once the A4 seam exists. These are PR 2.
