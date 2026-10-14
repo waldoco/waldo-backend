@@ -60,6 +60,7 @@ const expectedMigrations = [
   '20261012000000_waldo_imessage_connector.sql',
   '20261013000000_waldo_device_bridge_v030.sql',
   '20261013150000_gmail_push_route.sql',
+  '20261014060000_waldo_admin_invite_uncapped.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);
