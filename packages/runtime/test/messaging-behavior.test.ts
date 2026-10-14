@@ -129,7 +129,7 @@ describe('working on a task', () => {
 
   it.each(prompts())('%s: has a failure ladder that ends honestly', (_surface, prompt) => {
     expect(prompt).toContain('is not a result and not a reason to stop');
-    expect(prompt).toContain('never work around a login, CAPTCHA, paywall or a declined approval');
+    expect(prompt).toContain('Never work around a login, CAPTCHA, paywall or declined approval; switch sources.');
     expect(prompt).toContain('then switch: another site for the same fact, another way into the same site, another result, another tool, other words');
     expect(prompt).toContain('When one source fails and others worked (one calendar of several, one site of three), answer from what worked and name the gap; never withhold the whole answer.');
     expect(prompt).toContain('A lead you could not open still goes out with its link, marked unchecked.');
