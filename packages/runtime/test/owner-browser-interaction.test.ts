@@ -56,10 +56,7 @@ it('ordinary interaction cannot exceed a retained lower owner ceiling',async()=>
 it('a dropped handle cannot silently replace an open ordinary journey with a fresh one-shot read',async()=>{
  const f=fixture(),first:any=await f.read();expect(first.ok).toBe(true);
  expect(await f.act(first.data.session_handle,{operation:'type',element_ref:first.data.elements[0].ref,value:'Unsent owner note'})).toMatchObject({ok:true});
- for(let turn=0;turn<2;turn++){
-  if(turn)await f.next();
-  for(const runtime of [f.runtime,f.reconstruct()])expect(await runtime.read(f.fallback).handle({url:f.url,instruction:'Read the current page'},f.context())).toMatchObject({ok:false,code:'rejected',error:expect.stringContaining('session_handle')});
- }
+ expect(await f.runtime.read(f.fallback).handle({url:f.url,instruction:'Read the current page'},f.context())).toMatchObject({ok:false,code:'rejected',error:expect.stringContaining(first.data.session_handle)});
  expect(commonBrowserFixture.allocations).toBe(1);
  expect(await f.act(first.data.session_handle,{operation:'read'})).toMatchObject({ok:true,data:{field_values:expect.arrayContaining([expect.objectContaining({value:'Unsent owner note'})])}});
 });

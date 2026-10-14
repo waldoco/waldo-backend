@@ -30,7 +30,7 @@ it('navigates a public page, returns actual image bytes, and retains two tabs ac
   const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
   const first = await driver.navigate(session, 'https://docs.example/index');
   expect(first.observation).toMatchObject({ url: 'https://docs.example/index', text: 'Compare Browser Run sessions and contexts.', elements: [{ role: 'link', name: 'Session reuse' }] });
-  expect(first.image.bytes).toEqual(new Uint8Array([137, 80, 78, 71]));
+  expect(first.image?.bytes).toEqual(new Uint8Array([137, 80, 78, 71]));
   const second = await driver.openTab(session, 'https://docs.example/reuse');
   const resumed = await driver.observe(session, first.observation.tab_ref);
   expect(resumed.observation.tabs).toHaveLength(2);
@@ -130,10 +130,15 @@ it('never replaces a lost provider session or exposes its raw error', async () =
   expect(f.calls).not.toContain('acquire');
   await expect(driver.terminate(session)).rejects.toMatchObject({ code: 'cleanup_unconfirmed' });
 });
-it('rejects oversized screenshots and keeps provider cancellation separate from disconnect', async () => {
-  const f = harness();
+it('reads an oversized-screenshot page as text only and keeps provider cancellation separate from disconnect', async () => {
+  const f = harness('input');
   const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 3 });
-  await expect(driver.navigate(session, 'https://docs.example/index')).rejects.toMatchObject({ code: 'image_oversize' });
+  const first = await driver.navigate(session, 'https://docs.example/index');
+  expect(first.image).toBeUndefined();
+  expect(first.observation).toMatchObject({ text: 'Compare Browser Run sessions and contexts.', elements: [{ name: 'Session reuse' }] });
+  // The re-observation after a dispatched action is text-only too; it stays a known outcome, not outcome_uncertain.
+  const filled = await driver.act(session, first, { operation: 'fill', element_ref: first.observation.elements[0]!.ref, value: 'Walrus' }, async () => {});
+  expect(filled.state.elements[0]!.value).toBe('Walrus'); expect(filled.image).toBeUndefined();
   expect(await f.sdk.sessions()).toHaveLength(1);
   await driver.terminate(session);
   expect(await f.sdk.sessions()).toHaveLength(0);
