@@ -114,13 +114,14 @@ import { ownerFilePrefixes, purgeOwnerFiles } from './owner-files-purge';
 import { ARTIFACT_EXPORT_PATH, artifactExportDownload, exportDownloadUrl } from './artifact-export-download';
 import { artifactBook, artifactHandlers, inMemoryArtifactBodies, r2ArtifactBodies } from './artifacts';
 import { runBook } from './background-runs';
-import { exchangeGoogleCode, googleAccessToken, googleClient, googleHas, sha256Hex, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleFeature, type GoogleTokens } from '../connectors/google';
+import { exchangeGoogleCode, googleAccessToken, googleClient, googleHas, sha256Hex, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleFeature, type GoogleProfile, type GoogleTokens } from '../connectors/google';
 import { finishConsent, startConsent, type ConsentCallback, type ConsentFlow } from '../connectors/google-consent';
 import { GOOGLE_FINISH_PATH, type ConsentReply } from './google-oauth';
 import { BEGIN_SESSION_PATH, newTicket, ticketHash } from './connect-link';
 import { readConsoleTicket } from '../identity/console-ticket';
 import { signedRpc } from '../identity/owner-directory';
 import { googleProxy } from '../connectors/connections';
+import { googleNameLine } from '../prompt/messaging-behavior';
 import { googleCircuit } from '../connectors/google-circuit';
 import { confirmGoogleReadback, GoogleReadbackError, readbackFeature, reauthNoticeTransition } from '../connectors/google-reconnect';
 import { connectServiceHandler, googleHandlers } from '../tools/live/google';
@@ -160,7 +161,9 @@ type RawUpdate = { update_id?: number; callback_query?: CallbackQuery; message?:
 type ConnectChannel = 'telegram' | 'console' | 'app';
 type GoogleAccount = Readonly<{ id: string; email: string; scopes: readonly string[] | null; refresh_token?: string }>;
 const LEGACY_GRANT = null;
-type LinkGrant = Readonly<{ id: string; email: string; scopes: readonly string[] | null }>;
+type LinkGrant = Readonly<{ id: string; email: string; scopes: readonly string[] | null; profile?: GoogleProfile }>;
+// What Google said about one connected account at its latest connect: object KV 'google:profiles', keyed by account id.
+type GoogleProfileFact = GoogleProfile & Readonly<{ at: number }>;
 
 type OwnerRuntime = Readonly<{
   owner: number;
@@ -2046,6 +2049,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const vaultOwner = () => identity.get<string>('do_name');
     const stateOwner = () => vaultOwner() ?? (owner > 0 ? String(owner) : 'unlinked');
     const accounts = async () => (await storage.get<GoogleAccount[]>('google:accounts')) ?? [];
+    const googleProfiles = async () => (await storage.get<Record<string, GoogleProfileFact>>('google:profiles')) ?? {};
     const health = async () => (await storage.get<Record<string, string>>('google:health')) ?? {};
     const noteHealth = (id: string, error: string) => {
       this.ctx.waitUntil((async () => {
@@ -2098,7 +2102,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const account: GoogleAccount = 'id' in grant
           ? { id: grant.id, email, scopes: grant.scopes }
           : { id: `local:${email}`, email, scopes: grant.scopes ?? null, refresh_token: grant.refresh_token };
-        await storage.put('google:accounts', [...(await accounts()).filter((known) => known.email !== email), account]);
+        const kept = [...(await accounts()).filter((known) => known.email !== email), account];
+        // A profile lives only as long as its account. A connect that carries one replaces the old (an empty one clears
+        // it); a grant that carries none, from an edge that predates it or a migrated token, leaves it as it is.
+        const ids = new Set(kept.map((known) => known.id));
+        const profiles = Object.fromEntries(Object.entries(await googleProfiles()).filter(([id]) => ids.has(id) && !(grant.profile && id === account.id)));
+        if (grant.profile && Object.keys(grant.profile).length) profiles[account.id] = { ...grant.profile, at: Date.now() };
+        await storage.put({ 'google:accounts': kept, 'google:profiles': profiles });
         noteHealth(account.id, '');
         // The next sweep watches with the route this grant gives, rather than waiting out a stored skip or failure.
         gmailPushBook(identity).reset();
@@ -2149,9 +2159,19 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const account = all.find((known) => known.id === id);
         if (!account) return false;
         if (!id.startsWith('local:') && vault && doName) await vault.revoke(doName, id);
-        await storage.put('google:accounts', all.filter((known) => known.id !== id));
+        const { [id]: _profile, ...profiles } = await googleProfiles();
+        await storage.put({ 'google:accounts': all.filter((known) => known.id !== id), 'google:profiles': profiles });
         noteHealth(id, '');
         return true;
+      },
+      // The name Google gave for the first connected account that has one, in connect order (a reconnect moves an account last).
+      async nameLine(): Promise<string | null> {
+        const [all, profiles] = [await accounts(), await googleProfiles()];
+        for (const account of all) {
+          const line = googleNameLine(profiles[account.id] ?? {});
+          if (line) return line;
+        }
+        return null;
       },
       configured: () => Boolean(clientId && clientSecret && stateSecret),
       // Every call starts a fresh single-use attempt (state nonce + PKCE verifier) valid for 15 minutes.
@@ -2492,7 +2512,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       // The composer runs on every tool round; one health read serves the whole turn.
       let health: ReturnType<typeof healthContext.latest> | undefined;
       return createOwnerTurnContext(await surfaceOwnerAdmission({ scope, lookup, expectedPhysicalDoId: this.ctx.id.toString(), surface: 'telegram', subject, occurrenceKey: occurrence.id, occurredAt: occurrence.admittedAt, text: turn.text }),
-        { conversationRef: ownerChainRef('telegram', subject), health: () => health ??= healthContext.latest(turn.traceId) });
+        { conversationRef: ownerChainRef('telegram', subject), health: () => health ??= healthContext.latest(turn.traceId), ownerProfile: google.nameLine });
     } } } : undefined;
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
@@ -2555,15 +2575,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==record.text)throw new ClosedRunError();
         // The composer runs on every tool round; one health read serves the whole turn.
         let health:ReturnType<typeof healthContext.latest>|undefined;
-        const context=await this.appContext(record.owner,record.sessionHash,record.text,record.id,record.admittedAt,scope,{health:()=>health??=healthContext.latest(turn.traceId)});
+        const context=await this.appContext(record.owner,record.sessionHash,record.text,record.id,record.admittedAt,scope,{health:()=>health??=healthContext.latest(turn.traceId),ownerProfile:google.nameLine});
         if(context.conversationRef!==record.conversationRef)throw new ClosedRunError();
         return context;
       }},history:context=>({...indexedConversationStore(canonicalOwnerConversationStore(this.ctx.storage,context,this.logSkippedLoad),episodes,()=>Date.now()),
-        noteUnfinished:(line,scope)=>this.appInbox.noteLanded(scope.runId,scope.attempt,line)})} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
+        noteUnfinished:(line,scope)=>this.appInbox.noteLanded(scope.runId,scope.attempt,line)}),ownerProfile:google.nameLine} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
         const record=this.activeIMessage;
         if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==record.text)throw new ClosedRunError();
-        return iMessageOwnerContext(this.imessageHost,record,scope);
-      }},history:context=>canonicalOwnerConversationStore(this.ctx.storage,context)} : telegramContext,
+        return iMessageOwnerContext(this.imessageHost,record,scope,{ownerProfile:google.nameLine});
+      }},history:context=>canonicalOwnerConversationStore(this.ctx.storage,context),ownerProfile:google.nameLine} : {...telegramContext,ownerProfile:google.nameLine},
     );
     // A job prompt built on the ledger: the owner's health logs reach the model as this turn's context.
     const ledgerJob = async (trace: string, said: string, toolNames?: Parameters<typeof responder.prompt>[4]) =>
