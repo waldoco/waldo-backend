@@ -4,12 +4,12 @@ import {
   type IMessageBinding, type IMessageCommand, type IMessageEvent, type IMessageResult,
 } from '@waldo/contracts';
 import { armAlarm } from '../../scheduler/alarm-slot';
-import { ownerDirectory, type OwnerDirectoryEnv } from '../../identity/owner-directory';
+import { linkCodeHash, ownerDirectory, type OwnerDirectoryEnv } from '../../identity/owner-directory';
 import type { OwnerTurnEnvelope } from '../owner-turn-envelope';
 import { admitIMessageOwnerTurn, type IMessageAdmissionGrant } from './admission';
 import { BridgeStore, BridgeStoreError, parseStoredEvent, type DeliveryRow } from './bridge-store';
 import { mintHostKey, sha256Hex, signCommitment, signS2, unwrapCredential, verifyS2, type S2Headers } from './crypto';
-import { iMessageDirectory, IMessageDirectoryUnavailable, type BridgeAuthority } from './directory';
+import { iMessageDirectory, IMessageDirectoryUnavailable, type BridgeAuthority, type SenderAuthority } from './directory';
 import { parseIMessageConnectorPolicy, type IMessageConnectorPolicy } from './policy';
 import { heartbeatBodySchema, parseJson, pullBodySchema, resultBodySchema } from './wire';
 
@@ -21,6 +21,10 @@ export type IMessageEnv = OwnerDirectoryEnv & Readonly<{
   IMESSAGE_BRIDGE_DO?: DurableObjectNamespace;
   OWNER_DO?: DurableObjectNamespace;
   RESPONSIBILITY_RATE_LIMITER?: RateLimit;
+  /** Shared Waldo number: where a sender with no Waldo is sent (https only). Unset = strangers get no reply. */
+  IMESSAGE_ONBOARDING_URL?: string;
+  /** Shared Waldo number: the address owners text "waldo CODE" to, shown in the console. */
+  IMESSAGE_WALDO_ADDRESS?: string;
 }>;
 
 /** Composition gate: every piece must be present, otherwise the connector is disabled (no fallback). */
@@ -46,7 +50,8 @@ export type IMessageTurnHandoff = Readonly<{
   environment: string; bridgeDoName: string; ownerDoName: string; occurredAt: number;
 }>;
 export type IMessageResultReport = Readonly<{ replyRef: string; commandId: string; result: IMessageResult }>;
-export type ReplyHandoff = Readonly<{ replyRef: string; commandId: string; text: string; ownerDoName: string; revision: string; bindingDigest: string }>;
+/** subject: the sender the reply answers; on a shared bridge it selects that sender's own authority. */
+export type ReplyHandoff = Readonly<{ replyRef: string; commandId: string; text: string; ownerDoName: string; revision: string; bindingDigest: string; subject?: string }>;
 export type ReplyHandoffOutcome = { kind: 'queued' | 'retry' } | { kind: 'terminal'; result: IMessageResult };
 export interface OwnerIMessagePort {
   admitIMessageTurn(input: IMessageTurnHandoff): Promise<'admitted' | 'duplicate' | 'conflict' | 'capacity' | 'refused'>;
@@ -57,6 +62,23 @@ const reply = (status: number, body: unknown): HostReply => ({ status, json: JSO
 const fixed = (status: number, error: string): HostReply => reply(status, { error });
 const invalid = (): HostReply => fixed(401, 'invalid_request');
 const RETRY_MS = 5_000;
+/** System replies (onboarding, link results) have no owner: the bridge answers them itself. */
+const SYSTEM_REPLY_PREFIX = 'system:';
+export const SYSTEM_OWNER_ID = 'waldo-system';
+/** "waldo CODE": the one-time link code from the console (same alphabet as Telegram and WhatsApp codes). */
+const LINK_TEXT = /^waldo\s+([A-HJ-NP-Za-hj-np-z2-9]{10})$/i;
+export const LINK_REPLIES = {
+  redeemed: 'Linked. Texts from this number now go to your own Waldo.',
+  rejected: 'That code did not work. Get a new one from your Waldo console.',
+  uncertain: 'Linking could not be confirmed. Check your Waldo console before trying a new code.',
+} as const;
+export const onboardingReply = (url: string) =>
+  `Hi, I'm Waldo. This number only talks to people with their own Waldo. To get yours, join here: ${url} - already have one? Text waldo followed by the code from your Waldo console.`;
+const onboardingUrl = (raw: string | undefined): string | null => {
+  try { const u = new URL(raw ?? ''); return u.protocol === 'https:' && !u.username && !u.password ? u.toString() : null; } catch { return null; }
+};
+type SharedStrangerOutcome = 'link_redeemed' | 'link_failed' | 'link_throttled' | 'stranger_onboarded' | 'stranger_throttled' | 'stranger_ignored';
+const isSenderAuthority = (a: SenderAuthority | null): a is BridgeAuthority => !!a && a.state !== 'unknown_sender';
 
 export const bindingFromAuthority = (a: BridgeAuthority): IMessageBinding | null => {
   if (a.state !== 'active' || !a.subject || !a.chatGuid || !a.presenceId) return null;
@@ -179,12 +201,17 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
     if (prior) return prior.result ? { kind: 'terminal', result: prior.result } : { kind: 'queued' };
     const environment = store.meta('environment'), bridgeId = store.meta('bridge_id'), accountId = store.meta('account_id');
     if (!environment || !bridgeId || !accountId) return { kind: 'retry' };
-    let authority: BridgeAuthority | null;
-    try { authority = await this.directory().authority(environment, bridgeId, accountId); } catch { return { kind: 'retry' }; }
+    let found: SenderAuthority | null;
+    try {
+      found = input.subject !== undefined ? await this.directory().senderAuthority(environment, bridgeId, accountId, input.subject)
+        : await this.directory().authority(environment, bridgeId, accountId);
+    } catch { return { kind: 'retry' }; }
+    const authority = isSenderAuthority(found) ? found : null;
     const binding = authority ? bindingFromAuthority(authority) : null;
     // Fresh authority immediately before outbound publication: same owner DO, same revision, same exact binding.
     if (!authority || !binding || authority.doName !== input.ownerDoName || authority.revision !== input.revision || await bindingDigest(binding) !== input.bindingDigest) {
-      if (authority && authority.state !== 'active' && authority.state !== 'pending') this.applyRevocation(store, authority.revision);
+      // A sender that unlinked never revokes a shared bridge; only a bridge-level loss does.
+      if (authority && authority.state !== 'active' && authority.state !== 'pending' && (authority.kind === 'owner' || !authority.subject)) this.applyRevocation(store, authority.revision);
       return { kind: 'terminal', result: replyNotStarted(input.commandId, binding ?? null, 'authority_changed') };
     }
     const caps = store.capabilities(bridgeId, accountId);
@@ -265,6 +292,7 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
   /** At-least-once terminal result report to the owner outbox; the owner side is idempotent. */
   private async reportResults(store: BridgeStore): Promise<boolean> {
     for (const row of store.unreportedResults()) {
+      if (row.replyRef.startsWith(SYSTEM_REPLY_PREFIX)) { store.markReported(row.deliveryId); continue; }
       try {
         if (await this.owner(row.ownerDoName).recordIMessageResult({ replyRef: row.replyRef, commandId: row.commandId, result: row.result! })) store.markReported(row.deliveryId);
         else return false;
@@ -286,6 +314,16 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
       if (event.kind === 'receipt') { settle('acknowledged', store.sentCommandFor(event.target.messageGuid!) ? 'receipt_correlated' : 'receipt_uncorrelated'); continue; }
       if (event.kind !== 'message') { settle('acknowledged', 'non_turn_evidence'); continue; }
       if (event.isFromMe || event.isGroup || event.service !== 'iMessage') { settle('acknowledged', event.isFromMe ? 'echo' : event.isGroup ? 'group' : 'non_imessage_service'); continue; }
+      if (authority.kind === 'shared') {
+        // Shared Waldo number: a sender reaches only their own Waldo, through their own presence.
+        if (authority.state !== 'active') { settle('acknowledged', 'shared_bridge_pending'); continue; }
+        if (event.attachments.length) { settle('held', 'media_unsupported'); continue; }
+        if (event.chatGuid !== `iMessage;-;${event.senderHandle}`) { settle('acknowledged', 'not_sender_direct_chat'); continue; }
+        const outcome = await this.routeSharedSender(event, pending.digest, environment, bridgeId, accountId, store);
+        if (outcome === 'retry') return false;
+        settle(outcome === 'handed' ? 'handed' : outcome === 'held' ? 'held' : 'acknowledged', outcome);
+        continue;
+      }
       const binding = bindingFromAuthority(authority);
       if (!binding) { settle('held', 'binding_unavailable'); continue; }
       // Incoming media is retained as evidence and never treated as complete text.
@@ -297,11 +335,11 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
     return true;
   }
 
-  private async handToOwner(event: IMessageEvent, digest: string, authority: BridgeAuthority, binding: IMessageBinding, environment: string, store: BridgeStore)
+  private async handToOwner(event: IMessageEvent, digest: string, authority: BridgeAuthority, binding: IMessageBinding, environment: string, store: BridgeStore,
+    refresh: () => Promise<SenderAuthority | null> = () => this.directory().authority(environment, binding.bridgeId, binding.accountId))
     : Promise<'handed' | 'not_admitted' | 'held' | 'retry'> {
     let latest = authority;
     const grant: IMessageAdmissionGrant = { binding, revision: authority.revision, doName: authority.doName };
-    const directory = this.directory();
     try {
       const handoff = await admitIMessageOwnerTurn(event, {
         authority: {
@@ -313,9 +351,9 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
           byPresence: async (provider, subject) => {
             const [route, refreshed] = await Promise.all([
               ownerDirectory(this.env).byPresence(provider, subject),
-              directory.authority(environment, binding.bridgeId, binding.accountId),
+              refresh(),
             ]);
-            if (!refreshed) throw new Error('iMessage turn not admitted');
+            if (!isSenderAuthority(refreshed)) throw new Error('iMessage turn not admitted');
             latest = refreshed;
             return route;
           },
@@ -332,11 +370,85 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
     } catch (error) {
       if (error instanceof IMessageDirectoryUnavailable) return 'retry';
       if (error instanceof Error && error.message === 'iMessage turn not admitted') {
-        if (latest.state !== 'active') { this.applyRevocation(store, latest.revision); return 'held'; }
+        if (latest.state !== 'active') { if (authority.kind === 'owner') this.applyRevocation(store, latest.revision); return 'held'; }
         return 'not_admitted';
       }
       return 'retry';
     }
+  }
+
+  /** Shared bridge: the sender's own authority decides; no linked Waldo means the stranger path. */
+  private async routeSharedSender(event: IMessageEvent, digest: string, environment: string, bridgeId: string, accountId: string, store: BridgeStore)
+    : Promise<'handed' | 'not_admitted' | 'held' | 'retry' | SharedStrangerOutcome> {
+    // "waldo CODE" is always a link action, never a turn: it links a new sender and moves an already
+    // linked one (for example off their own per-owner Mac bridge) to the code's owner.
+    if (event.kind === 'message' && LINK_TEXT.test(event.text.trim())) return this.answerStranger(event, environment, bridgeId, accountId, store);
+    const read = () => this.directory().senderAuthority(environment, bridgeId, accountId, event.senderHandle);
+    let sender: SenderAuthority | null;
+    try { sender = await read(); } catch { return 'retry'; }
+    if (!sender) return 'held';
+    if (sender.state === 'unknown_sender') return this.answerStranger(event, environment, bridgeId, accountId, store);
+    if (sender.state !== 'active') return 'held';
+    const binding = bindingFromAuthority(sender);
+    if (!binding || binding.subject !== event.senderHandle) return 'held';
+    return this.handToOwner(event, digest, sender, binding, environment, store, read);
+  }
+
+  /** A "waldo CODE" link attempt from anyone, or one throttled onboarding reply to a sender with no Waldo. Never a turn. */
+  private async answerStranger(event: IMessageEvent, environment: string, bridgeId: string, accountId: string, store: BridgeStore)
+    : Promise<'retry' | 'held' | SharedStrangerOutcome> {
+    if (event.kind !== 'message') return 'stranger_ignored';
+    const ready = this.systemReplyReady(store, bridgeId, accountId);
+    if (ready === 'retry') return 'retry';
+    const subjectHash = await sha256Hex(JSON.stringify([bridgeId, event.senderHandle]));
+    const directory = this.directory();
+    const code = LINK_TEXT.exec(event.text.trim())?.[1];
+    try {
+      if (code) {
+        if (!(await directory.throttle(`imlink.sender.${subjectHash}`, 5, 3600))) return 'link_throttled';
+        const redeemHashed = ownerDirectory(this.env).redeemHashed;
+        const outcome = redeemHashed ? await redeemHashed('imessage', event.senderHandle, await linkCodeHash(code)) : { kind: 'uncertain' as const };
+        await this.enqueueSystemReply(store, event, environment, bridgeId, accountId, LINK_REPLIES[outcome.kind]);
+        return outcome.kind === 'redeemed' ? 'link_redeemed' : 'link_failed';
+      }
+      const url = onboardingUrl(this.env.IMESSAGE_ONBOARDING_URL);
+      if (!url || ready === 'unavailable') return 'stranger_ignored';
+      if (!(await directory.onboardingAllowed(environment, bridgeId, accountId, subjectHash))) return 'stranger_throttled';
+      await this.enqueueSystemReply(store, event, environment, bridgeId, accountId, onboardingReply(url));
+      return 'stranger_onboarded';
+    } catch (error) {
+      return error instanceof IMessageDirectoryUnavailable ? 'retry' : 'held';
+    }
+  }
+
+  /** A system reply needs a ready host and a free lane; 'unavailable' = the host cannot send text at all. */
+  private systemReplyReady(store: BridgeStore, bridgeId: string, accountId: string): 'ready' | 'retry' | 'unavailable' {
+    if (store.quarantined()) return 'unavailable';
+    const caps = store.capabilities(bridgeId, accountId);
+    if (!store.online() || !caps || caps.readiness !== 'ready' || !caps.features.text.send || !caps.features.text.verified || !caps.features.text.exactTarget) return 'unavailable';
+    return store.deliveries().some(d => d.state === 'queued' || d.state === 'delivered') ? 'retry' : 'ready';
+  }
+
+  /** Enqueues one fixed reply to the sender's own direct chat; identity is derived from the event, so a redrain never duplicates it. */
+  private async enqueueSystemReply(store: BridgeStore, event: IMessageEvent, environment: string, bridgeId: string, accountId: string, text: string): Promise<void> {
+    const c = this.composition();
+    if (!c) return;
+    const authority = await this.directory().authority(environment, bridgeId, accountId);
+    if (!authority || authority.kind !== 'shared' || authority.state !== 'active') return;
+    const key = await this.key(authority, environment, c.wrappingKey);
+    if (!key) return;
+    const binding = iMessageBindingSchema.parse({ ownerId: SYSTEM_OWNER_ID, presenceId: SYSTEM_OWNER_ID, subject: event.senderHandle, bridgeId, accountId,
+      chatGuid: `iMessage;-;${event.senderHandle}`, verified: true, conversationKind: 'direct', service: 'iMessage' });
+    const commandId = `wsys_${(await sha256Hex(JSON.stringify(['imessage-system', bridgeId, accountId, event.cursor.databaseGeneration, event.eventId]))).slice(0, 40)}`;
+    if (store.delivery({ commandId })) return;
+    const command = buildTextReply(binding, commandId, text);
+    const body = JSON.stringify(command), commandDigest = await sha256Hex(body), now = Date.now(), deliveryId = crypto.randomUUID();
+    const headers = await signS2(body, { version: 1, bridgeId, accountId, atMs: now, nonce: crypto.randomUUID() }, key);
+    const commitment = await signCommitment({ bridgeId, accountId, deliveryId, commandId, commandDigest, expiresAtMs: now + c.policy.commitmentMaxAgeMs }, key);
+    // A lane taken in the meantime (or a full store) means no system reply: never a retry that could resend.
+    try { store.enqueue({ deliveryId, body, headers, commitment, commandDigest, ownerDoName: '', replyRef: `${SYSTEM_REPLY_PREFIX}${commandId}` }); }
+    catch (error) { if (error instanceof BridgeStoreError) return; throw error; }
+    await this.rearm(store);
   }
 }
 

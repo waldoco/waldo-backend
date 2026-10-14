@@ -17,9 +17,9 @@ export type PresenceLookupProvider = PresenceProvider | 'imessage';
 
 export type RedemptionOutcome = { kind: 'redeemed' | 'rejected' | 'uncertain' };
 export type OwnerDirectory = Readonly<{
-  redeemHashed?(provider: PresenceProvider, subject: string, hash: string): Promise<RedemptionOutcome>;
+  redeemHashed?(provider: PresenceLookupProvider, subject: string, hash: string): Promise<RedemptionOutcome>;
   byPresence(provider: PresenceLookupProvider, subject: string): Promise<OwnerRoute | null>;
-  redeem(provider: PresenceProvider, subject: string, code: string): Promise<OwnerRoute | null>;
+  redeem(provider: PresenceLookupProvider, subject: string, code: string): Promise<OwnerRoute | null>;
 }>;
 
 type RouteRow = { do_name: string; subject: string; timezone: string | null; owner_id?: string; owner_email?: string | null };

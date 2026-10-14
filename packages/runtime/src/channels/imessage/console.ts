@@ -2,11 +2,12 @@ import type { IMessageBridgeDO } from './bridge-do';
 import { iMessageBridgeName, iMessageComposition, type IMessageEnv } from './bridge-do';
 import { mintSetupSecret, sha256Hex } from './crypto';
 import { iMessageDirectory, type BridgeListing } from './directory';
+import { consoleAuth } from '../../identity/console-auth';
 
 // Private owner lifecycle UI. The authenticated owner console session + CSRF is the sole authority
 // for pair/verify/activate/revoke; host S2 credentials can never reach these actions.
 export const CONSOLE_IMESSAGE_PATH = '/console/imessage';
-export const IMESSAGE_CONSOLE_ACTIONS = ['imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke'] as const;
+export const IMESSAGE_CONSOLE_ACTIONS = ['imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.pair_shared', 'imessage.activate_shared'] as const;
 export const isIMessageConsoleAction = (action: unknown): action is typeof IMESSAGE_CONSOLE_ACTIONS[number] => IMESSAGE_CONSOLE_ACTIONS.includes(action as never);
 
 const HEADERS = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' };
@@ -18,21 +19,26 @@ const field = (form: FormData, name: string, max = 512): string | null => {
   return typeof v === 'string' && v.length > 0 && v.length <= max && v.trim() === v && !/[\u0000-\u001f\u007f]/.test(v) ? v : null;
 };
 
-export function renderIMessage(rows: readonly (BridgeListing & { online?: boolean; textReady?: boolean; quarantine?: string | null })[], csrf: string): string {
+export function renderIMessage(rows: readonly (BridgeListing & { online?: boolean; textReady?: boolean; quarantine?: string | null })[], csrf: string, o: { admin?: boolean; address?: string } = {}): string {
   const hidden = `<input type="hidden" name="csrf" value="${escape(csrf)}">`;
   const form = (action: string, body: string, label: string) => `<form method="post" action="/console/action">${hidden}<input type="hidden" name="action" value="${action}">${body}<button>${label}</button></form>`;
   const row = (r: (typeof rows)[number]) => {
     const id = `<input type="hidden" name="id" value="${escape(r.bridge_id)}">`;
     const scope = `<input name="subject" placeholder="Your Apple ID sender" value="${escape(r.subject ?? '')}" required><input name="chat" placeholder="iMessage;-;sender" value="${escape(r.chat_guid ?? '')}" required>`;
+    const shared = r.kind === 'shared';
     const actions = r.state === 'pending'
-      ? form('imessage.verify', id + scope, 'Set exact sender and get a challenge') + (r.observed ? form('imessage.activate', id + `<input type="hidden" name="subject" value="${escape(r.subject ?? '')}"><input type="hidden" name="chat" value="${escape(r.chat_guid ?? '')}">`, `Confirm ${escape(r.subject ?? '')} in ${escape(r.chat_guid ?? '')}`) : '')
+      ? form('imessage.verify', id + scope, shared ? 'Set your challenge sender and get a challenge' : 'Set exact sender and get a challenge') + (r.observed ? form(shared ? 'imessage.activate_shared' : 'imessage.activate', id + `<input type="hidden" name="subject" value="${escape(r.subject ?? '')}"><input type="hidden" name="chat" value="${escape(r.chat_guid ?? '')}">`, shared ? 'Activate the shared Waldo number' : `Confirm ${escape(r.subject ?? '')} in ${escape(r.chat_guid ?? '')}`) : '')
       : '';
     const revoke = r.state === 'revoked' ? '' : form('imessage.revoke', id, 'Revoke');
     const health = r.state === 'active' ? ` · ${r.online ? 'online' : 'offline'} · ${r.textReady ? 'text verified' : 'text not verified'}${r.quarantine ? ' · sending paused (uncertain send)' : ''}` : '';
-    return `<tr><td>${escape(r.state)}${health}</td><td>${escape(r.subject ?? '')}</td><td>${escape(r.host_version)}</td><td>${actions}${revoke}</td></tr>`;
+    return `<tr><td>${shared ? 'shared Waldo number · ' : ''}${escape(r.state)}${health}</td><td>${shared ? '' : escape(r.subject ?? '')}</td><td>${escape(r.host_version)}</td><td>${actions}${revoke}</td></tr>`;
   };
+  const address = o.address ? escape(o.address) : 'the Waldo iMessage number';
   return `<!doctype html><html><head><meta charset="utf-8"><title>Waldo on iMessage</title></head><body><a href="/console">Back to console</a><h1>iMessage</h1>`
-    + `<p>Direct iMessage text only. Groups, SMS, files and reactions are not supported.</p>${form('imessage.pair', '', 'Pair a Mac host')}`
+    + `<p>Direct iMessage text only. Groups, SMS, files and reactions are not supported.</p>`
+    + `<h2>Text your Waldo from your iPhone</h2><p>Get a one-time code, then text <b>waldo CODE</b> to ${address} from your iPhone. Only your own number reaches your Waldo.</p>${form('imessage.link', '', 'Get an iMessage link code')}`
+    + `<h2>Your own Mac host</h2>${form('imessage.pair', '', 'Pair a Mac host')}`
+    + (o.admin ? `<h2>Shared Waldo number (operator)</h2><p>Pairs the Mac that runs ${address} for everyone. Each sender still reaches only their own Waldo.</p>${form('imessage.pair_shared', '', 'Pair the shared Waldo number host')}` : '')
     + `<table><tr><th>Status</th><th>Sender</th><th>Host</th><th>Actions</th></tr>${rows.map(row).join('')}</table></body></html>`;
 }
 
@@ -46,7 +52,8 @@ export async function iMessageConsolePage(env: IMessageEnv, owner: string, csrf:
       const s = await ns.get(ns.idFromName(iMessageBridgeName(environment, r.bridge_id, r.account_id))).status();
       return { ...r, online: s.online, textReady: s.textReady, quarantine: s.quarantine };
     }));
-    return new Response(renderIMessage(withStatus, csrf), { headers: HEADERS });
+    const admin = await consoleAuth(env)?.adminOverview(owner).then((v) => v !== null).catch(() => false) ?? false;
+    return new Response(renderIMessage(withStatus, csrf, { admin, ...(env.IMESSAGE_WALDO_ADDRESS ? { address: env.IMESSAGE_WALDO_ADDRESS } : {}) }), { headers: HEADERS });
   } catch { return new Response('iMessage status unavailable.', { status: 503, headers: HEADERS }); }
 }
 
@@ -57,7 +64,19 @@ export async function iMessageConsoleAction(form: FormData, csrf: string, owner:
   const directory = iMessageDirectory(env), lifetime = Math.floor(c.policy.setupLifetimeMs / 1000);
   try {
     const action = form.get('action');
-    if (action === 'imessage.pair') {
+    if (action === 'imessage.link') {
+      const code = await consoleAuth(env)?.issueProviderLinkCode?.(owner, 'imessage');
+      const to = env.IMESSAGE_WALDO_ADDRESS ?? 'the Waldo iMessage number';
+      if (code) return new Response(`waldo ${code}\nText exactly this to ${to} from your iPhone within 10 minutes. Your number then reaches only your Waldo.`, { headers: TEXT });
+    } else if (action === 'imessage.pair_shared') {
+      const code = mintSetupSecret('wim');
+      if (await directory.issueSharedInvitation(owner, c.environment, await sha256Hex(code), lifetime))
+        return new Response(`${code}\nEnter this on the shared Waldo number's Mac host. Single use, expires in ${Math.round(lifetime / 60)} minutes.`, { headers: TEXT });
+    } else if (action === 'imessage.activate_shared') {
+      const id = field(form, 'id', 64), subject = field(form, 'subject'), chat = field(form, 'chat');
+      if (!id || !BRIDGE.test(id) || !subject || !chat) return new Response('invalid', { status: 400 });
+      if (await directory.activateShared(owner, id, subject, chat)) return new Response(null, { status: 303, headers: { location: CONSOLE_IMESSAGE_PATH } });
+    } else if (action === 'imessage.pair') {
       const code = mintSetupSecret('wim');
       if (await directory.issueInvitation(owner, c.environment, await sha256Hex(code), lifetime))
         return new Response(`${code}\nEnter this on your Mac host. Single use, expires in ${Math.round(lifetime / 60)} minutes.`, { headers: TEXT });

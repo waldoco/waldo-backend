@@ -23,6 +23,8 @@ export type ConsoleAuth = Readonly<{
   // App sign-in: resolves an existing member, otherwise joins with the exact recipient-bound invite.
   verifyOrJoin(email: string, code: string, inviteCode: string): Promise<string | null>;
   issueLinkCode(doName: string): Promise<string | null>;
+  /** A one-time code for one provider: the sender texts "waldo CODE" (WhatsApp, iMessage) or /link CODE (Telegram). */
+  issueProviderLinkCode?(doName: string, provider: 'telegram' | 'whatsapp' | 'imessage'): Promise<string | null>;
   saveSettings(doName: string, settings: OwnerSettings): Promise<boolean>;
   adminOverview(doName: string): Promise<AdminOverview | null>;
   invite(doName: string, email: string, code: string): Promise<boolean>;
@@ -141,6 +143,11 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       const code = newLinkCode();
       const hash = await linkCodeHash(code);
       return (await rpc('issue_link_code', `link.${doName}.${hash}`, { p_do_name: doName, p_code_hash: hash })) ? code : null;
+    },
+    async issueProviderLinkCode(doName, provider) {
+      const code = newLinkCode();
+      const hash = await linkCodeHash(code);
+      return (await rpc('issue_provider_link_code', `link.${provider}.${doName}.${hash}`, { p_do_name: doName, p_provider: provider, p_code_hash: hash })) ? code : null;
     },
     async saveSettings(doName, { timezone, quiet_start: start, quiet_end: end, volume }) {
       const message = `settings.${doName}.${timezone}.${start ?? ''}.${end ?? ''}.${volume}`;
