@@ -23,10 +23,10 @@ beforeEach(() => vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: 
 }));
 afterEach(() => { vi.unstubAllGlobals(); asked.length = 0; provider.length = 0; duringAcquire = undefined; });
 const scope: RunEffectScope = { runId: 'app-run', attempt: 'app-attempt', deadline: Date.now() + 60_000, signal: new AbortController().signal, admit: () => undefined, commit: work => work() };
-const runtimeFor = (rows: Map<string, unknown>, actualDoId: string, env: Record<string, unknown> = {}) => ownerBrowserRuntime({
+const runtimeFor = (rows: Map<string, unknown>, actualDoId: string, env: Record<string, unknown> = {}, typedHost?: () => boolean) => ownerBrowserRuntime({
   env: { ...directory, WALDO_ENVIRONMENT: 'staging', BROWSER: {}, BROWSERBASE_API_KEY: 'synthetic', BROWSERBASE_PROJECT_ID: 'synthetic', OWNER_DO: { idFromName: (name: string) => ({ toString: () => `id-of-${name}` }) }, ...env } as never,
   storage: { kv: { get: (key: string) => rows.get(key), put: (key: string, value: unknown) => rows.set(key, value), list: () => [] }, transactionSync: <T>(work: () => T) => work(), getAlarm: async () => null, setAlarm: async () => undefined } as unknown as DurableObjectStorage,
-  actualDoId, activeScope: () => scope,
+  actualDoId, activeScope: () => scope, typedHost,
 });
 const appOwner = () => new Map<string, unknown>([['do_name', 'app-owner'], ['app_subject', String(appSubjectFor('app-owner'))]]);
 const ctx = { authenticatedUserId: `prn_${OWNER.replaceAll('-', '')}`, runScope: scope, turnId: 'app-turn', toolCallId: 'read', egressAllowlist: ['*'] } as never;
@@ -40,6 +40,19 @@ it('an app-only owner\'s browse_page is confirmed by the account directory and s
   expect(handle).not.toHaveBeenCalled();
   expect(asked).toContain('owner_runtime_authority'); expect(asked).not.toContain('common_owner_authority');
   expect(provider).toEqual(['acquire', 'close']);
+});
+
+it('browse tools are offered to an owner bound through Telegram or the app, and to no owner this object holds no binding for', async () => {
+  const offered = async (rows: Map<string, unknown>) => {
+    const runtime = runtimeFor(rows, 'id-of-app-owner', {}, () => true);
+    return [await runtime.read({ name: 'browse_page', handle: vi.fn() } as never).eligible!(), await runtime.act({ name: 'browse_act', handle: vi.fn() } as never).eligible!()];
+  };
+  const yes = { ok: true }, no = { ok: false, reason: 'not_configured' };
+  expect(await offered(appOwner())).toEqual([yes, yes]);
+  expect(await offered(new Map<string, unknown>([['do_name', 'app-owner'], ['telegram_subject', '81']]))).toEqual([yes, yes]);
+  // An iMessage-only owner: the object holds only imessage_subject, which binds no browser.
+  expect(await offered(new Map<string, unknown>([['do_name', 'app-owner'], ['imessage_subject', 'imessage-owner']]))).toEqual([no, no]);
+  expect(asked).toEqual([]); expect(provider).toEqual([]);
 });
 
 it('the same app owner on a foreign physical object is refused before any browser work', async () => {

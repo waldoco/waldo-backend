@@ -44,10 +44,11 @@ export function ownerBrowserRuntime(options: Readonly<{
     } : {}) });
   };
   const selectedConfiguration = async (cleanupOnly = false, normalRead = false) => automatic.selected || automatic.hasRetained() ? automatic.configuration(cleanupOnly) : configuration(cleanupOnly, normalRead);
-  // A held session, or the enabled typed task host for browse_act, serves browsing; otherwise only the owner's Cloudflare
-  // host does, on a staging Worker that registered its provider code and holds a browser binding. Browserbase keys never do.
+  // Browsing is offered only to an owner this object holds a binding for, since every browse call needs one. Then a held
+  // session, or the enabled typed task host for browse_act, serves browsing; otherwise only the owner's Cloudflare host
+  // does, on a staging Worker that registered its provider code and holds a browser binding. Browserbase keys never do.
   const cloudflareReady = () => options.env.WALDO_ENVIRONMENT === 'staging' && Boolean(options.env.BROWSER && (commonBrowserSdk() || commonPublicBrowserConfigured()));
-  const eligibleWith = (typed = false) => (): ToolEligibility => active || typed && options.typedHost?.() || cloudflareReady() ? { ok: true } : { ok: false, reason: 'not_configured' };
+  const eligibleWith = (typed = false) => (): ToolEligibility => binding() && (active || typed && options.typedHost?.() || cloudflareReady()) ? { ok: true } : { ok: false, reason: 'not_configured' };
   // The browser serves the owner bound to this physical object, through Telegram or the app; the directory confirms it.
   const binding = () => localOwnerBinding(options.storage.kv, options.env.OWNER_DO, options.actualDoId);
   const bound = (held: NonNullable<ReturnType<typeof binding>>) => ownerBindingCurrent(options.storage.kv, options.env.OWNER_DO, options.actualDoId, held);
