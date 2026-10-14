@@ -8,10 +8,9 @@
 import { execFileSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { compareHistory, localManifest, readHistory } from './staging-migration-preflight.mjs';
+import { compareHistory, localManifest, readHistory, STAGING_PROJECT as PROJECT } from './staging-migration-preflight.mjs';
 
-const WORKER_URL = 'https://waldo-runtime-staging.piyushfulper3210.workers.dev';
-const PROJECT = 'togdshayyxycitzckpqv';
+export const STAGING_WORKER_URL = 'https://waldo-runtime-staging.piyushfulper3210.workers.dev';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SHA = /^[0-9a-f]{7,40}$/;
 
@@ -36,6 +35,11 @@ export function versionFacts(version) {
   const { bindings } = version.resources;
   const release = bindings.find((b) => b.type === 'plain_text' && b.name === 'WALDO_RELEASE')?.text;
   return { id: version.id, release: typeof release === 'string' ? release : null, browser: bindings.some((b) => b.type === 'browser' && b.name === 'BROWSER') };
+}
+
+// Supabase skips underscore-prefixed function directories (shared helpers); so does this.
+export function functionSlugs(entries) {
+  return entries.filter((e) => e.dir && !e.name.startsWith('_')).map((e) => e.name).sort();
 }
 
 export function edgeFunctionFacts(list, slugs) {
@@ -103,8 +107,8 @@ const reason = (error) => (/^[a-z0-9_]+$/.test(error?.message) ? error.message :
 
 export async function main(argv = process.argv.slice(2), env = process.env) {
   const at = argv.indexOf('--expect-sha');
-  const expectSha = at >= 0 ? argv[at + 1] ?? '' : '';
-  if (expectSha && !SHA.test(expectSha)) throw new Error('expect_sha_invalid');
+  const expectSha = at >= 0 ? argv[at + 1] : '';
+  if (at >= 0 && !SHA.test(expectSha ?? '')) throw new Error('expect_sha_invalid');
   const checks = [];
   const record = (name, result, observed) => {
     checks.push({ name, result });
@@ -113,9 +117,9 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
 
   console.log('== Is it healthy? (unauthenticated, refusal paths only)');
   const probes = [
-    ['healthz', `${WORKER_URL}/healthz`, { method: 'GET' }],
-    ['telegram-unsigned', `${WORKER_URL}/telegram/webhook`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }],
-    ['gmail-push-unsigned', `${WORKER_URL}/events/gmail`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }],
+    ['healthz', `${STAGING_WORKER_URL}/healthz`, { method: 'GET' }],
+    ['telegram-unsigned', `${STAGING_WORKER_URL}/telegram/webhook`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }],
+    ['gmail-push-unsigned', `${STAGING_WORKER_URL}/events/gmail`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }],
     ['connector-proxy-unsigned', `https://${PROJECT}.supabase.co/functions/v1/connector-proxy`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }],
   ];
   let release = null;
@@ -141,7 +145,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   } else record('worker-version', 'UNAVAILABLE', 'CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID not set');
 
   if (env.SUPABASE_ACCESS_TOKEN) {
-    const slugs = readdirSync(new URL('../supabase/functions/', import.meta.url), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
+    const slugs = functionSlugs(readdirSync(new URL('../supabase/functions/', import.meta.url), { withFileTypes: true }).map((d) => ({ name: d.name, dir: d.isDirectory() })));
     try {
       for (const f of edgeFunctionFacts(await supabaseFunctions(env.SUPABASE_ACCESS_TOKEN), slugs)) {
         if (f.missing) record(`edge-function ${f.slug}`, 'FAIL', 'not deployed');
@@ -155,7 +159,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   } else record('supabase', 'UNAVAILABLE', 'SUPABASE_ACCESS_TOKEN not set');
 
   console.log('== How do we roll back? (printed only, never run here)');
-  console.log(`Worker: scripts/staging-rollback.sh ${worker?.rollbackTo ?? '<previous-version-id from: npx wrangler deployments list --env staging>'}`);
+  const target = worker?.rollbackTo ?? '<previous-version-id from: npx wrangler deployments list --env staging>';
+  console.log(`Worker: scripts/staging-rollback.sh ${target} --confirm ${target} --message '<reason>'`);
   console.log('Edge function: redeploy it from the previous reviewed SHA; Supabase keeps no restorable prior version.');
   console.log('Migrations: forward-only. Write a new reviewed migration; see docs/ops/REVIEWED_STAGING_MIGRATION_ROUTE.md.');
 

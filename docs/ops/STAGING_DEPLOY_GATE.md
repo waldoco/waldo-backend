@@ -6,8 +6,10 @@ Run this after every staging deploy. It answers three questions and changes noth
 node scripts/staging-gate.mjs --expect-sha "$(git rev-parse HEAD)"   # from the repo root, after pnpm install
 ```
 
-Or dispatch **Actions → staging-gate → Run workflow** on `beta-mvp`, with `expect_sha` set to the SHA you deployed.
-`--expect-sha` is optional; without it the gate reports what is running without comparing.
+The `deploy-staging` workflow runs it as the last step of every `operation=deploy`, against the SHA it
+just deployed. To run it alone, dispatch **Actions → deploy-staging** on `beta-mvp` with `operation=gate`,
+and set `expected_source_sha` to the deployed SHA. `--expect-sha` is optional; without it the gate
+reports what is running without comparing.
 
 Each line is `PASS`, `FAIL` or `UNAVAILABLE`, then `GATE PASS` (exit 0), `GATE FAIL` (exit 1) or
 `GATE INCOMPLETE` (exit 2: nothing failed, but a section had no credential).
@@ -34,7 +36,7 @@ so nothing ties it to a commit.
 | `worker-version` | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | Each live version id, its traffic share and the `WALDO_RELEASE` it was stamped with |
 | `browser-binding` | same | Whether every live version binds `BROWSER` |
 | `healthz-matches-version` | same | `/healthz` and the version's binding agree (single-version deployments only) |
-| `edge-function <slug>` | `SUPABASE_ACCESS_TOKEN` | Version, status, JWT setting and update time of each function in `supabase/functions/` |
+| `edge-function <slug>` | `SUPABASE_ACCESS_TOKEN` | Version, status, JWT setting and update time of each function in `supabase/functions/` (except `_`-prefixed helpers) |
 | `migrations` | `SUPABASE_ACCESS_TOKEN` | Last applied migration, and how many in this checkout are pending |
 
 Only these fields are printed. Version bindings carry other vars, and deployments carry the deployer's
@@ -45,8 +47,9 @@ email; neither is printed. The reads are `wrangler deployments list`, `wrangler 
 
 The gate prints the Worker command with the previous version filled in. It never runs it.
 
-- **Worker:** `scripts/staging-rollback.sh <version-id> [reason]`. It is pinned to `--env staging`,
-  and wrangler asks for confirmation. A rollback restores code and bindings only, not Durable Object
+- **Worker:** `scripts/staging-rollback.sh <version-id> --confirm <version-id> [--message <reason>]`.
+  It is pinned to `--env staging`. wrangler's own prompt answers yes without a TTY or under CI, so the
+  script refuses unless the same id is repeated via `--confirm` or `ROLLBACK_CONFIRM`. A rollback restores code and bindings only, not Durable Object
   state, secrets, edge functions or migrations. Cloudflare's [rollback limits](https://developers.cloudflare.com/workers/configuration/versions-and-deployments/rollbacks/)
   apply. Run the gate again afterwards.
 - **Edge function:** Supabase keeps no restorable earlier version. Check out the previous reviewed SHA

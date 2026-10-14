@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { deployedWorker, edgeFunctionFacts, evaluateProbe, main, verdict, versionFacts } from './staging-gate.mjs';
+import { readFileSync } from 'node:fs';
+import { STAGING_WORKER_URL, deployedWorker, edgeFunctionFacts, evaluateProbe, functionSlugs, main, verdict, versionFacts } from './staging-gate.mjs';
 
 const V1 = '11111111-1111-4111-8111-111111111111';
 const V2 = '22222222-2222-4222-8222-222222222222';
@@ -125,4 +126,36 @@ test('without credentials the gate probes, prints only allow-listed fields and r
 
 test('an invalid expected SHA is refused before any probe', async () => {
   await assert.rejects(main(['--expect-sha', 'main'], {}), /expect_sha_invalid/);
+});
+
+test('the function-level refusal counts only on HTTP 200', () => {
+  const inner = { error: { status: 401, message: 'unsigned proxy call' } };
+  for (const status of [201, 403, 500, 502]) assert.equal(evaluateProbe('connector-proxy-unsigned', { status, body: inner }).pass, false, String(status));
+});
+
+test('--expect-sha without a value is refused, not treated as absent', async () => {
+  await assert.rejects(main(['--expect-sha'], {}), /expect_sha_invalid/);
+});
+
+test('edge functions to check are the deployable directories, not _shared helpers', () => {
+  assert.deepEqual(functionSlugs([{ name: '_shared', dir: true }, { name: 'connector-proxy', dir: true }, { name: 'README.md', dir: false }, { name: 'a-fn', dir: true }]), ['a-fn', 'connector-proxy']);
+});
+
+test('the staging target constants are shared with the probe suite and migration preflight', async () => {
+  const preflight = await import('./staging-migration-preflight.mjs');
+  assert.equal(preflight.STAGING_PROJECT, 'togdshayyxycitzckpqv');
+  assert.match(readFileSync(new URL('./probe-staging.mjs', import.meta.url), 'utf8'), /import \{ STAGING_WORKER_URL \} from '\.\/staging-gate\.mjs'/);
+  assert.equal(STAGING_WORKER_URL, 'https://waldo-runtime-staging.piyushfulper3210.workers.dev');
+});
+
+test('deploy-staging runs the gate after every deploy and as a read-only operation', async () => {
+  const { parse } = await import('yaml');
+  const workflow = parse(readFileSync(new URL('../.github/workflows/deploy-staging.yml', import.meta.url), 'utf8'));
+  assert.ok(workflow.on.workflow_dispatch.inputs.operation.options.includes('gate'));
+  const deploySteps = workflow.jobs.deploy.steps;
+  assert.equal(deploySteps.at(-1).run, 'node scripts/staging-gate.mjs --expect-sha "$GITHUB_SHA"');
+  const gate = workflow.jobs.gate;
+  assert.equal(gate.if, "inputs.operation == 'gate'");
+  assert.ok(!gate.steps.some((s) => /wrangler|deploy-runtime|staging-rollback\.sh|supabase |db push/.test(s.run ?? '')));
+  assert.ok(!gate.steps.some((s) => (s.run ?? '').includes('${{')), 'inputs reach run: only through env');
 });
