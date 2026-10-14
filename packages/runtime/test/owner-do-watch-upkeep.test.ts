@@ -29,7 +29,7 @@ const CONFIG = { TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'syn
   GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', WALDO_ROUTER_HMAC_SECRET: 'router-secret-fixture-0000000000',
   SUPABASE_PROJECT_URL: 'https://edge.test', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable' };
 
-const edge = vi.hoisted(() => ({ ops: [] as Record<string, unknown>[], exchange: { id: '', scopes: [] as string[] }, failing: new Set<string>(),
+const edge = vi.hoisted(() => ({ ops: [] as Record<string, unknown>[], exchange: { id: '', scopes: [] as string[], email: '' }, failing: new Set<string>(),
   sends: [] as string[], models: 0, throwing: null as 'calendar' | 'gmail' | null, googleWatches: [] as Record<string, string>[] }));
 // A locally held refresh token resolves to a bearer route without reaching Google.
 vi.mock('../src/connectors/google', async load => {
@@ -73,7 +73,7 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 const answer = (body: Record<string, unknown>): unknown => {
   edge.ops.push(body);
   if (edge.failing.has(String(body.op))) return { error: { status: 503, message: 'backend unavailable' } };
-  if (body.op === 'exchange') return { id: edge.exchange.id, email: EMAIL, scopes: edge.exchange.scopes };
+  if (body.op === 'exchange') return { id: edge.exchange.id, email: edge.exchange.email, scopes: edge.exchange.scopes };
   if (body.op === 'gmail_watch') return { data: { historyId: '555', expiration: Date.now() + 7 * DAY } };
   if (body.op === 'calendar_watch') return { data: { channelId: body.channel_id, resourceId: 'res-1', expiration: Date.now() + 7 * DAY } };
   if (body.op === 'call') return { data: [] };
@@ -109,7 +109,7 @@ type Owner = Readonly<{ setup(channel?: string): Runtime; fetch(request: Request
 type Line = Readonly<{ raw: string; json: Record<string, unknown> }>;
 type World = Readonly<{
   state: DurableObjectState; owner: Owner;
-  connect(id: string, scopes: readonly string[]): Promise<void>;
+  connect(id: string, scopes: readonly string[], email?: string): Promise<void>;
   // One alarm pass at the wake the runtime armed; the wake it ran at, or null when nothing was armed.
   pass(): Promise<number | null>;
   watches(op: 'gmail_watch' | 'calendar_watch'): unknown[];
@@ -133,8 +133,8 @@ const world = async (name: string, setup: Setup, run: (world: World) => Promise<
     for (const kind of setup.off ?? []) state.storage.sql.exec('INSERT INTO schedule_preferences (kind, enabled) VALUES (?, 0)', kind);
     const owner = new OwnerDO(state, { ...env, ...CONFIG, WALDO_OWNER_TELEGRAM_ID: setup.surface === 'app' ? undefined : '7' }) as unknown as Owner;
     const logs: MockInstance = vi.spyOn(console, 'log');
-    const connect = async (id: string, scopes: readonly string[]) => {
-      edge.exchange = { id, scopes: [...scopes] };
+    const connect = async (id: string, scopes: readonly string[], email = EMAIL) => {
+      edge.exchange = { id, scopes: [...scopes], email };
       const store = { read: async () => (await state.storage.get<Record<string, ConsentFlow>>('google:consents')) ?? {}, write: (flows: Record<string, ConsentFlow>) => state.storage.put('google:consents', flows) };
       const { nonce } = await startConsent({ store, now: () => Date.now() }, { clientId: 'synthetic-client', clientSecret: 'synthetic-secret', redirectUri: 'https://fixture.invalid/oauth/google/callback' }, 'state-secret-fixture', '7');
       const reply = await owner.fetch(new Request(`https://owner.invalid${GOOGLE_FINISH_PATH}`, { method: 'POST', body: JSON.stringify({ nonce, code: 'synthetic-code', error: null }) }));
@@ -286,6 +286,22 @@ describe('Gmail and Calendar watch upkeep', () => {
       expect(codes(w, 'gmail_watch'), 'a skip is logged once with its reason; a fresh check is silent').toEqual(['gmail_watch_skipped:local_rail', 'gmail_watch_started']);
       for (const { raw } of w.lines('gmail_watch')) expect(raw).not.toMatch(/@|local:|conn-/);
       expect(await w.push('conn-2', '556'), 'a push for the new connection wakes the sweep').toBe('wake');
+    });
+  });
+
+  it('an older account with another address keeps the mail route, and reconnecting that account moves the watch', async () => {
+    const OLD = 'old@example.test';
+    await world('upkeep-older-account-first', { accounts: [{ id: `local:${OLD}`, email: OLD, refresh_token: 'synthetic-offline-only', scopes: MAIL }], off: ALL_OFF }, async w => {
+      await w.connect('conn-1', [...MAIL, CALENDAR]);
+      await w.pass();
+      expect(w.watches('gmail_watch'), 'mail still resolves to the older account, which cannot be watched').toEqual([]);
+      expect(codes(w, 'gmail_watch')).toEqual(['gmail_watch_skipped:local_rail']);
+      expect(w.watches('calendar_watch'), 'calendar resolves to the new grant').toEqual(['conn-1']);
+      // The fact's advice: reconnect the older account. Its grant joins the vault, and mail moves to a watchable route.
+      await w.connect('conn-old', MAIL, OLD);
+      await w.pass();
+      expect(w.watches('gmail_watch')).toEqual(['conn-1']);
+      expect(codes(w, 'gmail_watch')).toEqual(['gmail_watch_skipped:local_rail', 'gmail_watch_started']);
     });
   });
 

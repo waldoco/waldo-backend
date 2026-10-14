@@ -8,7 +8,10 @@ import { dueFailureNotices } from '../src/scheduler/failure-notice';
 import { ensureSchema } from '../src/tracer/schema';
 
 const AT = Date.parse('2030-11-04T09:00:00Z');
-const BOTH = { mail: true, calendar: true } as const;
+const MAIL = ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.compose'];
+const CALENDAR = 'https://www.googleapis.com/auth/calendar.events';
+const VAULT = { id: 'conn-1', email: 'owner@example.test', scopes: [...MAIL, CALENDAR] };
+const OLDER = { id: 'local:old@example.test', email: 'old@example.test', refresh_token: 'synthetic-offline-only', scopes: MAIL };
 const memoryKv = () => {
   const map = new Map<string, unknown>();
   return { get: <T>(key: string) => map.get(key) as T | undefined, put: (key: string, value: unknown) => { map.set(key, value); }, delete: (key: string) => map.delete(key) };
@@ -16,23 +19,25 @@ const memoryKv = () => {
 
 describe('the watch status host fact', () => {
   it('says nothing while every granted watch runs or has not been tried', () => {
-    expect(watchStatusLine({ grants: BOTH, gmail: null, calendar: null, timezone: 'UTC' })).toBe('');
+    expect(watchStatusLine({ accounts: [VAULT], gmail: null, calendar: null, timezone: 'UTC' })).toBe('');
   });
 
-  it('names an older mail connection and the console fix, with no account detail', () => {
+  it('names the account connected the older way, not a newer one, so reconnecting it is the true fix', () => {
     const kv = memoryKv();
     gmailPushBook(kv).fail(AT, 'local_rail');
-    const line = watchStatusLine({ grants: BOTH, gmail: gmailPushBook(kv).miss(), calendar: null, timezone: 'UTC' });
-    expect(line).toContain('older Google connection');
-    expect(line).toContain('console');
+    const line = watchStatusLine({ accounts: [OLDER, VAULT], gmail: gmailPushBook(kv).miss(), calendar: null, timezone: 'UTC' });
+    expect(line).toContain('the mail account "old@example.test" is connected the older way');
+    expect(line).toContain('Reconnecting that account, or disconnecting it if no longer used, fixes it.');
+    expect(line).not.toContain('owner@example.test');
+    expect(line).toContain('the app or the console');
     expect(line).toContain('send_console_link');
-    expect(line).not.toMatch(/@|conn-|local:/);
+    expect(line).not.toMatch(/conn-|local:|synthetic/);
   });
 
   it('names a failed start, when it failed and when Waldo tries again, in the owner\'s zone', () => {
     const kv = memoryKv();
     calendarPushBook(kv).fail(AT);
-    const line = watchStatusLine({ grants: BOTH, gmail: null, calendar: calendarPushBook(kv).miss(), timezone: 'Asia/Tokyo' });
+    const line = watchStatusLine({ accounts: [VAULT], gmail: null, calendar: calendarPushBook(kv).miss(), timezone: 'Asia/Tokyo' });
     expect(line).toContain('Calendar changes are not pushed');
     expect(line).toContain('2030-11-04 18:00');
     expect(line).toContain('2030-11-05 00:00');
@@ -42,14 +47,14 @@ describe('the watch status host fact', () => {
     const kv = memoryKv();
     kv.put('gmail_push', { failedAt: AT });
     expect(gmailPushBook(kv).miss()).toEqual({ at: AT, reason: 'failed' });
-    expect(watchStatusLine({ grants: BOTH, gmail: gmailPushBook(kv).miss(), calendar: null, timezone: 'UTC' })).toContain('New emails are not pushed');
+    expect(watchStatusLine({ accounts: [VAULT], gmail: gmailPushBook(kv).miss(), calendar: null, timezone: 'UTC' })).toContain('New emails are not pushed');
   });
 
   it('says nothing for a watch without its grant, or a Calendar start this server could not route', () => {
     const kv = memoryKv();
     gmailPushBook(kv).fail(AT, 'local_rail');
     calendarPushBook(kv).fail(AT, 'skipped');
-    expect(watchStatusLine({ grants: { mail: false, calendar: true }, gmail: gmailPushBook(kv).miss(), calendar: calendarPushBook(kv).miss(), timezone: 'UTC' })).toBe('');
+    expect(watchStatusLine({ accounts: [{ email: 'owner@example.test', scopes: [CALENDAR] }], gmail: gmailPushBook(kv).miss(), calendar: calendarPushBook(kv).miss(), timezone: 'UTC' })).toBe('');
   });
 });
 

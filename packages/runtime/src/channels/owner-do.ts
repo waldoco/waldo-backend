@@ -2757,7 +2757,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         { conversationRef: ownerChainRef('telegram', subject), health: () => health ??= healthContext.latest(turn.traceId), ownerProfile: google.nameLine });
     } } } : undefined;
     // Built from the watch books on each owner turn: a push that is not running, and what fixes it.
-    const watchStatus = () => watchStatusLine({ grants: watchGrants(identity.get<GoogleAccount[]>('google:accounts') ?? []),
+    const watchStatus = () => watchStatusLine({ accounts: identity.get<GoogleAccount[]>('google:accounts') ?? [],
       gmail: gmailPushBook(identity).miss(), calendar: calendarPushBook(identity).miss(), timezone: clock.timezone });
     const responder = createTelegramResponder(
       key, { ...indexedConversationStore(kv, episodes, () => Date.now()), recalls: (entryId: string) => recallReach(identity, identity.get<string>('owner_principal_ref'), null)(entryId) }, memory, log,

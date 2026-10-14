@@ -76,27 +76,34 @@ export const watchUpkeep = async (deps: WatchUpkeepDeps): Promise<void> => {
   if (unrecorded !== undefined) throw unrecorded;
 };
 
-// A host fact for the owner's turn, built from the books alone: which push is not running and what fixes it. A watch
-// with no grant says nothing (the turn already names features that are not connected), and neither does a Calendar
-// start this server could not route, which nothing the owner does would fix.
+// A host fact for the owner's turn, built from the books and the connected accounts alone: which push is not running and
+// what fixes it. A watch with no grant says nothing (the turn already names features that are not connected), and neither
+// does a Calendar start this server could not route, which nothing the owner does would fix. Mail is watched through the
+// first connected mail account, so an account connected the older way names itself: reconnecting a different account
+// would not move the watch.
 export const watchStatusLine = (input: Readonly<{
-  grants: WatchGrants; gmail: ReturnType<GmailPushBook['miss']>; calendar: ReturnType<CalendarPushBook['miss']>; timezone: string;
+  accounts: readonly (Scoped & Readonly<{ email: string; refresh_token?: string }>)[];
+  gmail: ReturnType<GmailPushBook['miss']>; calendar: ReturnType<CalendarPushBook['miss']>; timezone: string;
 }>): string => {
+  const grants = watchGrants(input.accounts);
   const at = (ms: number) => localIso(ms, input.timezone).replace('T', ' ');
   const failed = (what: string, miss: Readonly<{ at: number }>) =>
-    `${what} are not pushed to Waldo right now: starting that failed at ${at(miss.at)}. Waldo tries again by itself after ${at(miss.at + RETRY_AFTER_FAILURE_MS)}; reconnecting Google in the console can fix it sooner.`;
+    `${what} are not pushed to Waldo right now: starting that failed at ${at(miss.at)}. Waldo tries again by itself after ${at(miss.at + RETRY_AFTER_FAILURE_MS)}; reconnecting Google can fix it sooner.`;
+  const older = input.accounts.filter(account => account.refresh_token && googleHas(account.scopes, 'mail')).map(account => JSON.stringify(account.email));
   const gmail: Readonly<Record<GmailWatchMiss, (miss: Readonly<{ at: number }>) => string>> = {
     failed: miss => failed('New emails', miss),
-    local_rail: () => 'New emails are not pushed to Waldo: the connected mail account uses an older Google connection that cannot be watched. Reconnecting Google in the console fixes it.',
-    no_mail_grant: () => 'New emails are not pushed to Waldo: no connected Google account allows mail. Connecting Google with mail in the console fixes it.',
+    local_rail: () => older.length
+      ? `New emails are not pushed to Waldo: the mail account ${older.join(' and ')} is connected the older way, which cannot be watched. Reconnecting ${older.length > 1 ? 'those accounts' : 'that account'}, or disconnecting ${older.length > 1 ? 'them' : 'it'} if no longer used, fixes it.`
+      : 'New emails are not pushed to Waldo: the mail account is connected the older way, which cannot be watched. Reconnecting Google fixes it.',
+    no_mail_grant: () => 'New emails are not pushed to Waldo: no connected Google account allows mail. Connecting Google with mail fixes it.',
   };
   const calendar: Readonly<Record<CalendarWatchMiss, ((miss: Readonly<{ at: number }>) => string) | null>> = {
     failed: miss => failed('Calendar changes', miss),
     skipped: null,
   };
   const lines = [
-    input.grants.mail && input.gmail ? gmail[input.gmail.reason](input.gmail) : null,
-    input.grants.calendar && input.calendar ? calendar[input.calendar.reason]?.(input.calendar) ?? null : null,
+    grants.mail && input.gmail ? gmail[input.gmail.reason](input.gmail) : null,
+    grants.calendar && input.calendar ? calendar[input.calendar.reason]?.(input.calendar) ?? null : null,
   ].filter((line): line is string => line !== null);
-  return lines.length ? `Google push status, from the host: ${lines.join(' ')} Mail and calendar still work whenever the owner asks. Mention this only when it bears on what the owner asks; if they want it fixed, send_console_link sends them a sign-in link to their console.` : '';
+  return lines.length ? `Google push status, from the host: ${lines.join(' ')} Mail and calendar still work whenever the owner asks. The owner manages Google in the connections of the app or the console; send_console_link sends a console sign-in link where this chat supports it. Mention this only when it bears on what the owner asks.` : '';
 };
