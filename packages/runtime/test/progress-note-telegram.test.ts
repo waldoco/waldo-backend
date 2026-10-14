@@ -110,10 +110,11 @@ it('the note is not the reply and is kept out of storage, logs and traces', asyn
 it('a turn whose final reply is empty is not answered by its note', async () => {
   await telegramOwner('progress-note-telegram-empty', async owner => {
     world.final = '';
-    const state = await owner.send(950021, 'Find me a hotel near the station for Friday.');
-    expect(state).not.toBe('awaiting_delivery');
-    expect(state).not.toBe('completed');
+    expect(await owner.send(950021, 'Find me a hotel near the station for Friday.')).toBe('quarantined');
     expect(world.sends[0]).toEqual({ text: NOTE, chat: 42 });
     expect(stored(owner.state)).not.toContain('hotels under budget');
+    // A quarantined turn is not retried: later alarms neither deliver a reply nor send the note again.
+    expect(await owner.deliver(950021)).toBe('quarantined');
+    expect(world.sends.filter(sent => sent.text === NOTE)).toHaveLength(1);
   });
 });

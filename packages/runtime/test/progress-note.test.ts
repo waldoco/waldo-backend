@@ -170,6 +170,20 @@ describe('send_progress_note: offered on the owner\'s own turn only', () => {
     expect(delivered).toEqual([NOTE]);
   });
 
+  // The loop answers an identical call with its earlier result, so a note held back by the gap is resent in new words.
+  it('an identical note retried after too_soon is not sent again; a new note after the gap is', async () => {
+    const clock = { at: 0 };
+    const delivered: string[] = [];
+    const notes = ['Two hotels so far.', 'Checking a third.', 'Checking a third.', 'The third is sold out; trying one by the river.'];
+    const { requests, gateway } = scripted((_request, n) => { clock.at += 30_000; return n <= notes.length ? call('send_progress_note', { text: notes[n - 1] }, `c${n}`) : { text: 'Riverside Inn has rooms.' }; });
+    const responder = await responderWith(gateway, [progressNoteHandler({ now: () => clock.at, deliver: async text => { delivered.push(text); return true; } }) as never]);
+    expect(await responder.respond(ownerTyped({ traceId: 'tg-85', conversationRef: 'owner', surface: 'telegram', text: 'find me a hotel' }), timer)).toBe('Riverside Inn has rooms.');
+    expect(delivered).toEqual([notes[0], notes[3]]);
+    const results = JSON.stringify(requests.at(-1)!.tool_turns);
+    expect(results).toContain('too_soon');
+    expect(results).toContain('Same call already made this turn');
+  });
+
   it('an empty final reply after a note fails the turn: the note never stands in for the reply', async () => {
     const delivered: string[] = [];
     const { gateway } = scripted((_request, n) => n === 1 ? call('send_progress_note', { text: NOTE }) : { text: '' });
