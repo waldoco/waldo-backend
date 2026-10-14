@@ -46,6 +46,7 @@ import { TelegramFinalOutbox, redactMailFollowupEntries, redactCalendarPrepEntri
 import { computeAdmission } from '../delivery-gate/gate';
 import { DeliveryGateStore } from '../delivery-gate/store';
 import { ownerTurnTrace, type OwnerTurnEnvelope } from './owner-turn-envelope';
+import { inboundTurn, ownerWords } from './owner-inbound-turn';
 import type { OwnerContextIntegration, OwnerSkillHost } from './owner-turn';
 import { enrichOwnerTrace, identityForStorage, readOwnerTraceHeader } from '../observability/owner-trace-identity';
 import { adminRead, adminAction } from './dashboard-admin';
@@ -1698,9 +1699,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       probeGuard.suppressMemory = !live;
       probeGuard.stripLiveTools = !live;
       try {
-        const outcome = await listener.handle({
-          updateId: seq, messageId: null, senderId: owner, chatId: owner, sentAt: null, text: text.trim(),
-        });
+        const outcome = await listener.handle(inboundTurn({
+          updateId: seq, messageId: null, senderId: owner, chatId: owner, sentAt: null, parts: ownerWords(text.trim()),
+        }));
         return { trace: `tg-${seq}` as string | null, outcome, captured: capture === null ? null : capture.calls };
       } finally {
         probeCapture.current = null;

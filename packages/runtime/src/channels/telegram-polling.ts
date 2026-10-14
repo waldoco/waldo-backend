@@ -1,5 +1,5 @@
-import type { RunEffectScope } from './run-effect-scope';
 import { REPLY_QUOTE_LIMIT, type ReplyContext } from './owner-turn-envelope';
+import { inboundTurn, type InboundPart, type OwnerInboundTurn } from './owner-inbound-turn';
 import { telegramMessageUpdateSchema, telegramUnsupportedMessageSchema, type TelegramMessageUpdate } from '@waldo/contracts';
 
 export type TelegramPollingClient = Readonly<{
@@ -14,20 +14,9 @@ export type TelegramMedia = Readonly<{
   fileSize: number | null;
 }>;
 
-export type TelegramInboundTurn = Readonly<{
-  updateId: number;
-  messageId: number | null;
-  senderId: number;
-  chatId: number;
-  sentAt: number | null;
-  text: string;
-  sourceQuoteRanges?: readonly Readonly<{ start: number; end: number }>[];
-  media?: TelegramMedia;
-  replyTo?: ReplyContext;
-  runScope?: RunEffectScope;
-}>;
+export type TelegramInboundTurn = OwnerInboundTurn;
 
-export type TelegramUnsupportedTurn = Omit<TelegramInboundTurn, 'text' | 'sentAt' | 'media'> & Readonly<{ note?: string }>;
+export type TelegramUnsupportedTurn = Omit<TelegramInboundTurn, 'text' | 'parts' | 'sentAt' | 'media'> & Readonly<{ note?: string }>;
 
 // Parse-failure detail for the hop log: field paths and schema codes only - never message
 // content - so an unsupported reply stays diagnosable when Telegram's payload shape drifts.
@@ -56,6 +45,32 @@ const replyProvenance = (
   if (reply.from.is_bot && chatType === 'private') return { author: 'waldo', forwarded };
   if (!reply.from.is_bot && reply.from.id === senderId) return { author: 'owner', forwarded };
   return { author: 'other', forwarded };
+};
+
+const QUOTE_ENTITIES = new Set(['blockquote', 'expandable_blockquote', 'pre', 'code']);
+
+// Entity offsets count UTF-16 code units, as JavaScript strings do, so they index the text directly. A forward is
+// someone else's text throughout, a quote inside it included.
+const textParts = (text: string, entities: readonly Readonly<{ type: string; offset: number; length: number }>[], forwarded: boolean): readonly InboundPart[] => {
+  if (!text) return [];
+  if (forwarded) return [{ authorship: 'forwarded', text }];
+  const quotes: { start: number; end: number }[] = [];
+  for (const entity of entities.filter(entity => QUOTE_ENTITIES.has(entity.type)).sort((a, b) => a.offset - b.offset)) {
+    const last = quotes.at(-1), end = entity.offset + entity.length;
+    if (last && entity.offset <= last.end) last.end = Math.max(last.end, end);
+    else quotes.push({ start: entity.offset, end });
+  }
+  // Quote markup that does not fit the text cannot be placed, so none of the text counts as the owner's own words.
+  if (quotes.some(quote => quote.end > text.length)) return [{ authorship: 'quoted', text }];
+  const parts: InboundPart[] = [];
+  let at = 0;
+  for (const quote of quotes) {
+    if (quote.start > at) parts.push({ authorship: 'owner', text: text.slice(at, quote.start) });
+    parts.push({ authorship: 'quoted', text: text.slice(quote.start, quote.end) });
+    at = quote.end;
+  }
+  if (at < text.length) parts.push({ authorship: 'owner', text: text.slice(at) });
+  return parts;
 };
 
 export class TelegramPollingAdapter {
@@ -129,15 +144,15 @@ export class TelegramPollingAdapter {
           : message.audio
             ? { kind: 'audio', fileId: message.audio.file_id, fileName: message.audio.file_name ?? 'audio', mimeType: message.audio.mime_type ?? null, fileSize: message.audio.file_size ?? null }
             : undefined;
-    const sourceQuoteRanges = (message.entities ?? message.caption_entities ?? []).filter(entity => ['blockquote', 'expandable_blockquote', 'pre', 'code'].includes(entity.type)).map(entity => ({ start: entity.offset, end: entity.offset + entity.length }));
-    return Object.freeze({
+    return inboundTurn({
       updateId: update.update_id,
       messageId: message.message_id ?? null,
       senderId: message.from.id,
       chatId: message.chat.id,
       sentAt: message.date === undefined ? null : message.date * 1000,
-      text: message.text ?? message.caption ?? '',
-      ...(sourceQuoteRanges.length ? { sourceQuoteRanges } : {}),
+      parts: message.text === undefined
+        ? textParts(message.caption ?? '', message.caption_entities ?? [], message.forward_origin !== undefined)
+        : textParts(message.text, message.entities ?? [], message.forward_origin !== undefined),
       ...(message.reply_to_message ? { replyTo: Object.freeze({
         surface: 'telegram',
         messageId: String(message.reply_to_message.message_id),

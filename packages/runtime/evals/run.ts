@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { writeFileSync } from 'node:fs';
 import { TOOL_PERMISSIONS, modelNameSchema, triggerTypeSchema, webSearchArgsSchema, WALDO_CHAT_MODEL, type ModelName, type SetReminderArgs, type WebSearchArgs } from '@waldo/contracts';
 import { createTelegramResponder } from '../src/channels/telegram-turn';
+import { inboundTurn, ownerWords } from '../src/channels/owner-inbound-turn';
 import { reminderHandlers, type ReminderBook } from '../src/channels/reminders';
 import { loopBook, loopHandlers } from '../src/channels/loops';
 import { googleHandlers } from '../src/tools/live/google';
@@ -96,7 +97,7 @@ const runCase = async (item: EvalCase): Promise<Record_> => {
     n += 1;
     if (turn.startsWith('@plan ')) replies.push(await responder.planDay(`${item.id}-${n}`, turn.slice(6)));
     else if (turn.startsWith('@prompt ')) replies.push(await responder.prompt(`${item.id}-${n}`, 1, turn.slice(8), time));
-    else replies.push(await responder.respond({ updateId: n, chatId: 1, text: turn } as never, time));
+    else replies.push(await responder.respond(inboundTurn({ updateId: n, messageId: null, senderId: 1, chatId: 1, sentAt: null, parts: ownerWords(turn) }), time));
   }
   const ms = Date.now() - started;
   const toolPass = (item.mustCall ?? []).every((name) => tools.includes(name)) && (item.mustNotCall ?? []).every((name) => !tools.includes(name));

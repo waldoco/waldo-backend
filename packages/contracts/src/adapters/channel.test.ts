@@ -402,13 +402,26 @@ describe('telegram gate-2 shapes', () => {
     expect(telegramUnsupportedMessageSchema.safeParse({ ...baseTgMessage, message: { ...baseTgMessage.message, chat: { id: -9, type: 'group' } } }).success).toBe(false);
   });
 
-  it('rejects a forwarded message (forward_origin is an unrecognized key)', () => {
-    expect(
-      telegramMessageUpdateSchema.safeParse({
-        ...baseTgMessage,
-        message: { ...baseTgMessage.message, forward_origin: { type: 'user' } },
-      }).success,
-    ).toBe(false);
+  it('accepts a forwarded message in the shape the Bot API server sends: forward_origin beside the legacy forward fields', () => {
+    const sam = { id: 88, is_bot: false, first_name: 'Sam' };
+    const channel = { id: -100123, type: 'channel', title: 'News' };
+    for (const origin of [
+      { forward_origin: { type: 'user', date: 1_700_000_000, sender_user: sam }, forward_from: sam, forward_date: 1_700_000_000 },
+      { forward_origin: { type: 'hidden_user', date: 1_700_000_000, sender_user_name: 'Sam' }, forward_sender_name: 'Sam', forward_date: 1_700_000_000 },
+      { forward_origin: { type: 'channel', date: 1_700_000_000, chat: channel, message_id: 5, author_signature: 'Ed' }, forward_from_chat: channel, forward_from_message_id: 5, forward_signature: 'Ed', forward_date: 1_700_000_000 },
+    ]) {
+      const parsed = telegramMessageUpdateSchema.safeParse({ ...baseTgMessage, message: { ...baseTgMessage.message, ...origin } });
+      expect(parsed.success).toBe(true);
+      expect(parsed.data?.message.forward_origin?.type).toBe(origin.forward_origin.type);
+    }
+  });
+
+  it('rejects a forward origin without its date, and legacy forward fields without a forward origin', () => {
+    const parse = (fields: Record<string, unknown>) => telegramMessageUpdateSchema.safeParse({ ...baseTgMessage, message: { ...baseTgMessage.message, ...fields } }).success;
+    expect(parse({ forward_origin: { type: 'user' } })).toBe(false);
+    expect(parse({ forward_origin: { type: 'secret_agent', date: 1 } })).toBe(false);
+    expect(parse({ forward_from: { id: 88, is_bot: false }, forward_date: 1 })).toBe(false);
+    expect(parse({ forward_date: 1 })).toBe(false);
   });
 
   it('rejects a bot sender', () => {
