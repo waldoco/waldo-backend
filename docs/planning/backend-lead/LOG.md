@@ -493,3 +493,24 @@ How to track this session: `git fetch origin claude/backend-lead-log && git show
   1. **The voice-note follow-up to A1** (the ruling 6161323578, unassigned since lane C ended), session `session_01QXnd3q5gQB4XSfmjGEHQor`, branch `claude/voice-note-instruction` off `beta-mvp`. The owner's own Telegram voice note becomes their instruction as transcribed under its own label. An audio file and a **forwarded** voice note stay file transcripts. Memory keeps #1149's refusal, so the new part stays foreign for memory. **WhatsApp voice stays a file transcript until #1216 item 4 lands** (the lead's addition: until then a forwarded WhatsApp voice note can't be told apart from the owner's own). No `owner-do.ts` change expected.
   2. **Bringing the threads stack up to date**, session `session_01BkU4n3GtzKKoUoxw5jbbjF`. #1173 `90871987`, #1176 `7c21ad84` and #1179 `7471ab35`, whose builder (`session_0154…`) is held, get merge commits on their own branches in stack order, with no rebase and no base changes. The preview on `072bc383`: #1173 clean; #1176 conflicts in `episodes.ts`; #1179 in `episodes.ts`, `owner-do.ts` and `owner-turn-envelope.ts` (A1's envelope). The builder stops and asks on #1103 if a conflict needs a design call. Each new head needs a delta review; the stack stays last in the `owner-do.ts` order.
 - **Offered to the Mac:** a cloud session for #1108's fixes or the check-back machine turn, if releasing one helps its usage window. Claimed on the board before anyone writes.
+
+## 08:27Z (from `date -u`): check-in; every session's new claims recorded; the `owner-do.ts` order confirmed
+
+- **Check-in fired at 08:25Z.** Both lead builders are working (`get_session`: the voice-note builder running on `claude/voice-note-instruction`; the threads builder confirmed the three stack heads match and is reading the PR bodies).
+- **Board since 08:09Z:**
+  - **#1220,** #1214's nits N1–N3 (`15608c21`, 6163901017).
+  - **The Mac's 08:15Z note (6163982094):** four builder sessions at the owner's request: #1213's finish; (iv) the admin invite cap, migration `20261014060000` with pgTAP and the console quota, which needs a security review and is applied by the Mac after merge; #1216 items 1, 2 and 4; (ii) the first conversation, a memory decision record then the signal plus `set_timezone`, a draft stacked on #1218. Its rules: no merge, deploy or migration by the builders, no shared local Supabase reset, merge-commit carries only. It proposed an `owner-do.ts` order. #1218 is at `d41cbf11` with the tip carried.
+  - **The review session's 08:20Z claims (6164056682):** #1219 in a cloud builder, and a round-latency profile.
+  - **The review session's #1218 PASS WITH NITS at `d41cbf11`** (6164096988): the phone stays out of prompts and logs, nothing writes `owners.phone`, the name is fenced, 8 of 8 mutations, CI 6 of 6. Still a draft.
+- **Posted (6164174075):** the order #1213 → #1218 → #1216 → #1219 → (ii) → #1173 → #1176 → #1179 (non-overlapping clean PRs don't wait; the voice note and (iv) are outside it unless they touch `owner-do.ts`); the `messaging-behavior.ts` overlap between #1218, (ii) and the voice note (the later lander brings the tip in by merge commit); all claims recorded with no overlap; #1218 merges at `d41cbf11` once marked ready, edge before Worker; #1220 gates like any PR and needs the owner only if it changes workflow permissions or secrets.
+- **#1217 review (`wf_ef41be1a-589`), nine of ten agents done:**
+  - All four red-first edits reproduced the CI symptom, the fixed tests passed 3 of 3, every mutation was caught, the worktree was clean after each experiment, and no assertion was loosened.
+  - No blocker was claimed, so the challenge stage had nothing to refute.
+  - The browser fix is diagnostic only, as its body says, so #1196's browser red stays open.
+  - The nits so far:
+    - The new synthetic value is two-decimal, so a copy rounded to one decimal, the way the health tool formats values, would escape the leak check. A one-decimal value with an integer part of 60 to 99 keeps both properties.
+    - Sibling delivery-gate tests still build their dates from the wall clock.
+    - The body's line numbers for the browser throws are off.
+    - The diagnostic comment overclaims: the stored state narrows down which check refused, it doesn't name it.
+    - The failure message leaves out the dispatcher `reason`.
+  - The completeness critic is still running.
