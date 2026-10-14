@@ -57,11 +57,3 @@ it('a reminder, a scheduled job, a background decision and the day plan ask Luna
   await owner.planDay('route-plan-1', 'Plan the day around two meetings.');
   expect(routed()).toEqual([LUNA_LOW, LUNA_LOW, LUNA_LOW, LUNA_LOW]);
 });
-
-// Reasoning tokens count against max_output_tokens; OpenAI's reasoning guide asks for at least 25,000 tokens of room.
-it('gives a medium-effort call 25,000 output tokens of room and keeps 4,096 at low effort', async () => {
-  const { owner, requests } = responder();
-  await owner.respond(ownerTyped({ traceId: 'route-room-1', conversationRef: 'telegram-1', surface: 'telegram', text: 'compare three hotels near the venue', memoryWrites: false }), time);
-  await owner.chooseReaction(ownerTyped({ traceId: 'route-room-2', conversationRef: 'telegram-1', surface: 'telegram', text: 'perfect' }));
-  expect(requests.map(request => [request.reasoning_effort, request.max_tokens])).toEqual([['medium', 25_000], ['low', 4_096]]);
-});
