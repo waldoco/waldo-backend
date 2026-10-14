@@ -35,6 +35,7 @@ const fixture=()=>{
   if(url.includes('www.googleapis.com/calendar/')){effects++;if(lost)throw new Error('synthetic response loss');return init?.method==='DELETE'?new Response(null,{status:204}):Response.json({id:'event-one',summary:'fixture',start:{dateTime:'2026-10-01T00:00:00Z'},end:{dateTime:'2026-10-01T01:00:00Z'}});}
   if(url.includes('tasks.googleapis.com')){effects++;if(lost)throw new Error('synthetic response loss');return Response.json({kind:'tasks#task',id:'task-one',title:'fixture',status:'needsAction',etag:'"v1"'});}
   if(url.includes('gmail.googleapis.com')){effects++;if(lost)throw new Error('synthetic response loss');return Response.json({id:'provider-one'});}
+  if(url.startsWith('https://people.googleapis.com/v1/'))return Response.json({results:[{person:{names:[{displayName:'Fictional Person'}],emailAddresses:[{value:'person@example.test'}]}}]});
   throw new Error('unexpected fictional transport');
  }));return{hops,rows,effects:()=>effects,lose:()=>{lost=true;},scope:(value:unknown)=>{scopes=value;},healthFail:()=>{healthFail=true;},revoke:()=>{revoked=true;},suspend:()=>{active=false;},providerError:(text:string)=>{providerError=text;}};
 };
@@ -130,6 +131,17 @@ it('actual signed freebusy entry requires provider-compatible scope, uses owner 
  for(const scopes of [null,[],['https://www.googleapis.com/auth/calendar.events']]){const f=fixture();f.scope(scopes);expect(await(await serve(await request(input))).json()).toMatchObject({error:{status:403,message:'insufficient scopes'}});expect(f.hops).not.toContain('token');}
  for(const scope of ['calendar.events.freebusy','calendar.freebusy','calendar.readonly','calendar']){const f=fixture();f.scope([`https://www.googleapis.com/auth/${scope}`]);expect(await(await serve(await request(input))).json()).toMatchObject({data:{calendars:{primary:{busy:[]}}}});expect(f.hops).toContain('proxy_access');expect(f.hops).not.toContain('proxy_idem_claim');expect(f.effects()).toBe(0);}
  const f=fixture();f.scope(['https://www.googleapis.com/auth/calendar.events.freebusy']);expect(await(await serve(await request({...input,connection:'foreign'}))).json()).toMatchObject({error:{status:401}});expect(f.hops).not.toContain('token');
+});
+
+it('actual signed contacts search requires both contact scopes, never an effect intent, and logs no contact',async()=>{
+ const printed:string[]=[];const spies=(['log','info','warn','error'] as const).map(level=>vi.spyOn(console,level).mockImplementation((...parts:unknown[])=>{printed.push(parts.map(part=>typeof part==='string'?part:JSON.stringify(part)).join(' '));}));
+ const input={do_name:'owner',op:'call',connection:'conn',method:'searchContacts',args:['Fictional',5]};
+ for(const scopes of [null,[],['https://www.googleapis.com/auth/contacts.readonly'],['https://www.googleapis.com/auth/contacts.other.readonly']]){const f=fixture();f.scope(scopes);expect(await(await serve(await request(input))).json()).toMatchObject({error:{status:403,message:'insufficient scopes'}});expect(f.hops).not.toContain('token');}
+ const f=fixture();f.scope(['https://www.googleapis.com/auth/contacts.readonly','https://www.googleapis.com/auth/contacts.other.readonly']);
+ expect(await(await serve(await request(input))).json()).toEqual({data:[{name:'Fictional Person',emails:['person@example.test'],source:'contacts'},{name:'Fictional Person',emails:['person@example.test'],source:'other_contacts'}]});expect(f.hops).not.toContain('proxy_idem_claim');expect(f.effects()).toBe(0);
+ spies.forEach(spy=>spy.mockRestore());
+ expect(printed.join('\n')).toMatch(/insufficient scopes/);
+ for(const text of ['Fictional Person','person@example.test'])expect(printed.join('\n')).not.toContain(text);
 });
 
 const readBody = async () => ({do_name:'owner',op:'mcp_call',connection:'conn',server_url:'https://drivemcp.googleapis.com/mcp/v1',tool:'search_files',args:[{query:'fictional'}],intent_id:`mcpread:${'a'.repeat(64)}`,read_only:true});
@@ -389,4 +401,31 @@ it('logs provider_error for text that only starts with one of its codes, and onl
  const lines=logs.mock.calls.map(call=>JSON.parse(String(call[0])) as {hop:string;op?:string;method?:string;error?:string}).filter(line=>line.hop==='connector_proxy');
  expect(lines.map(({op,method,error})=>[op,method,error])).toEqual([['call','searchMail','provider_error'],['call','unknown','unknown operation'],['unknown',undefined,expect.any(String)]]);
  expect(JSON.stringify(logs.mock.calls)).not.toContain('friend@example.test');
+});
+
+const watchBody = {do_name:'owner',op:'calendar_watch',connection:'conn',channel_id:'chan-1',token:'v1.fixture',address:'https://w.test/events/gcal'};
+const withWatch = () => {
+ const inner = fetch;const seen:string[]=[];
+ vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
+  const url=String(input);
+  if(url==='https://www.googleapis.com/calendar/v3/calendars/primary/events/watch'){seen.push(String(init?.body));return Response.json({id:JSON.parse(String(init?.body)).id,resourceId:'res-1',expiration:'1760000000000'});}
+  if(url==='https://www.googleapis.com/calendar/v3/channels/stop'){seen.push(String(init?.body));return new Response(null,{status:204});}
+  return inner(input,init);
+ }));
+ return seen;
+};
+it('a signed calendar watch on a calendar grant starts the channel at the edge, with no ledger row',async()=>{
+ const f=fixture();const seen=withWatch();
+ expect(await(await serve(await request(watchBody))).json()).toEqual({data:{channelId:'chan-1',resourceId:'res-1',expiration:1760000000000}});
+ expect(JSON.parse(seen[0]!)).toMatchObject({id:'chan-1',type:'web_hook',address:'https://w.test/events/gcal',token:'v1.fixture'});
+ expect(f.hops).toContain('proxy_access');expect(f.hops).not.toContain('proxy_idem_claim');expect(f.rows.size).toBe(0);
+ expect(await(await serve(await request({do_name:'owner',op:'channel_stop',connection:'conn',channel_id:'chan-1',resource_id:'res-1'}))).json()).toEqual({data:null});
+ expect(JSON.parse(seen[1]!)).toEqual({id:'chan-1',resourceId:'res-1'});
+});
+it('a calendar watch without a calendar scope, on a foreign connection or to a foreign path never reaches Google',async()=>{
+ for(const [input,scopes] of [[watchBody,['https://www.googleapis.com/auth/gmail.send']],[{...watchBody,connection:'foreign'},undefined],[{...watchBody,address:'https://w.test/elsewhere'},undefined]] as const){
+  const f=fixture();if(scopes)f.scope(scopes);const seen=withWatch();
+  const out=await(await serve(await request(input))).json() as {error?:{message:string}};
+  expect(out.error).toBeDefined();expect(seen).toHaveLength(0);expect(f.hops).not.toContain('token');
+ }
 });

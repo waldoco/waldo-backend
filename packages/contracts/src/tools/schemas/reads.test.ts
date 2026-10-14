@@ -6,7 +6,7 @@ import {
   callMcpToolResultSchema,
   connectServiceArgsSchema,
   executeActionArgsSchema,
-  getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema,
+  getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, searchContactsArgsSchema, contactMatchSchema,
   queryAvailabilityArgsSchema, readOwnerContextArgsSchema,
   getContextArgsSchema,
   getCrsArgsSchema,
@@ -229,9 +229,17 @@ describe('executeActionArgs', () => {
 });
 
 describe('browsePageArgs', () => {
-  it('accepts only explicitly supported browser providers without authority or session arguments', () => {
-    for (const provider of ['cloudflare_playwright', 'browserbase_stagehand_http_v3']) expect(browsePageArgsSchema.parse({ url: 'https://example.com', instruction: 'read', provider })).toMatchObject({ provider });
-    for (const extra of [{ provider: 'auto' }, { provider: 'cloudflare_playwright', session_id: 'foreign' }, { provider: 'cloudflare_playwright', owner_id: 'foreign' }, { provider: 'cloudflare_playwright', allow_hosts: ['*'] }]) expect(browsePageArgsSchema.safeParse({ url: 'https://example.com', instruction: 'read', ...extra }).success).toBe(false);
+  it('still accepts a provider the earlier contract named, which the host ignores', () => {
+    for (const provider of ['cloudflare_playwright', 'browserbase_stagehand_http_v3']) {
+      expect(browsePageArgsSchema.safeParse({ url: 'https://example.com', instruction: 'read', provider }).success).toBe(true);
+      expect(browseActArgsSchema.safeParse({ url: 'https://example.com', task: 'read', provider }).success).toBe(true);
+    }
+  });
+  it('refuses an unknown provider and authority or session arguments', () => {
+    for (const extra of [{ provider: 'auto' }, { session_id: 'foreign' }, { owner_id: 'foreign' }, { allow_hosts: ['*'] }]) {
+      expect(browsePageArgsSchema.safeParse({ url: 'https://example.com', instruction: 'read', ...extra }).success).toBe(false);
+      expect(browseActArgsSchema.safeParse({ url: 'https://example.com', task: 'read', ...extra }).success).toBe(false);
+    }
   });
   it('accepts a url + instruction and rejects extras, empty instruction and non-urls', () => {
     expect(browsePageArgsSchema.parse({ url: 'https://example.com', instruction: 'what is on this page' })).toEqual({
@@ -360,6 +368,25 @@ describe('date_range guidance and strictness', () => {
   });
 });
 
+describe('searchContactsArgs', () => {
+  it('needs a name or address of 1 to 100 characters and caps the limit at 10, defaulting to 5', () => {
+    expect(searchContactsArgsSchema.parse({ query: 'Priya' })).toEqual({ query: 'Priya', limit: 5 });
+    expect(searchContactsArgsSchema.safeParse({ query: 'priya@', limit: 10, account: 'owner@example.com' }).success).toBe(true);
+    for (const bad of [{}, { query: '' }, { query: 'x'.repeat(101) }, { query: 'x', limit: 0 }, { query: 'x', limit: 11 }, { query: 'x', account: 'not-an-address' }, { query: 'x', phone: true }])
+      expect(searchContactsArgsSchema.safeParse(bad).success).toBe(false);
+  });
+  it('a match holds a name and up to three addresses, and nothing else', () => {
+    const match = { name: 'Priya Nair', emails: ['priya@northwind.example'], source: 'contacts' };
+    expect(contactMatchSchema.safeParse(match).success).toBe(true);
+    expect(contactMatchSchema.safeParse({ ...match, name: null, source: 'other_contacts' }).success).toBe(true);
+    for (const bad of [{ ...match, phone: '+1 555 0100' }, { ...match, organization: 'Northwind' }, { ...match, photo: 'https://example.test/p.jpg' }, { ...match, emails: [] }, { ...match, emails: ['a@x.example', 'b@x.example', 'c@x.example', 'd@x.example'] }, { ...match, emails: ['not an address'] }, { ...match, source: 'directory' }])
+      expect(contactMatchSchema.safeParse(bad).success).toBe(false);
+  });
+  it('lets a connect intent name the contacts feature', () => {
+    expect(connectIntentSchema.safeParse({ status: 'auth_required', service: 'google', reason: 'scope_missing', feature: 'contacts' }).success).toBe(true);
+  });
+});
+
 describe('searchCommunicationArgs / readThreadArgs (A1)', () => {
   it('search requires a non-empty query, caps the limit at 20, and defaults it to 10', () => {
     expect(searchCommunicationArgsSchema.safeParse({ query: 'from:sam' }).success).toBe(true);
@@ -433,7 +460,7 @@ it('browser native commands are strict and cannot smuggle owner, session or subm
 });
 
 it('validates explicit native filter choices without executable selectors or coerced checkbox state',()=>{
- const base={provider:'cloudflare_playwright',url:'https://example.com/',task:'Choose a public filter'};
+ const base={url:'https://example.com/',task:'Choose a public filter'};
  expect(browseActArgsSchema.safeParse({...base,command:{operation:'select',element_ref:'e:observed:0',value:''}}).success).toBe(true);
  expect(browseActArgsSchema.safeParse({...base,command:{operation:'set_checked',element_ref:'e:observed:1',checked:false}}).success).toBe(true);
  for(const command of [{operation:'set_checked',element_ref:'e:observed:1',checked:'true'},{operation:'select',element_ref:'e:observed:0',value:'north',selector:'input'},{operation:'set_checked',checked:true}])expect(browseActArgsSchema.safeParse({...base,command}).success).toBe(false);
