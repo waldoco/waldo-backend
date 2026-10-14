@@ -1,8 +1,11 @@
 // Trusted observation code; page content supplies evidence, never owner authority.
 export type GeneralSelectOption = Readonly<{ value: string; label: string; disabled: boolean; selected: boolean }>;
 export type GeneralElement = Readonly<{ selector: string; tag: string; role: string; name: string; href: string; value: string; type: string; disabled: boolean; selected: boolean; checked: boolean; inForm: boolean; editable?: boolean; readOnly?: boolean; secret?:boolean; options?: readonly GeneralSelectOption[] }>;
-export type GeneralPageState = Readonly<{ url: string; title: string; text: string; width: number; height: number; scrollX: number; scrollY: number; elements: readonly GeneralElement[] }>;
-export type GeneralObservation = Readonly<{ revision: string; tab_ref: string; url: string; title: string; text: string; viewport: Readonly<{ width: number; height: number }>; accessibility_snapshot?: string; elements: readonly Readonly<{ ref: string; role: string; name: string; tag: string; disabled: boolean; checked?: boolean; options?: readonly GeneralSelectOption[] }>[]; tabs: readonly Readonly<{ ref: string; url: string; title: string }>[] }>;
+export type GeneralPageState = Readonly<{ url: string; title: string; text: string; width: number; height: number; scrollX: number; scrollY: number; elements: readonly GeneralElement[]; challenge?: true }>;
+// Typed page facts the model decides on. Their meaning is structural (a password field, a known challenge widget
+// or Cloudflare's mitigation header), never a reading of the page's words.
+export type GeneralPageSignal = 'sign_in_requested' | 'verification_challenge';
+export type GeneralObservation = Readonly<{ revision: string; tab_ref: string; url: string; title: string; text: string; viewport: Readonly<{ width: number; height: number }>; accessibility_snapshot?: string; page_signals?: readonly GeneralPageSignal[]; elements: readonly Readonly<{ ref: string; role: string; name: string; tag: string; disabled: boolean; checked?: boolean; options?: readonly GeneralSelectOption[] }>[]; tabs: readonly Readonly<{ ref: string; url: string; title: string }>[] }>;
 export type GeneralSnapshot = Readonly<{ ownerId: string; sessionId: string; generation: number; targetId: string; digest: string; state: GeneralPageState; observation: GeneralObservation; image: Readonly<{ mime_type: 'image/png'; bytes: Uint8Array }> }>;
 export type GeneralActionSnapshot = Omit<GeneralSnapshot, 'image'>;
 
@@ -48,7 +51,10 @@ export function generalPageState(): GeneralPageState {
     const options = tag === 'select' ? Array.from(node.options).map((option: any) => ({ value: String(option.value), label: String(option.label), disabled: Boolean(option.disabled || option.parentElement?.disabled), selected: Boolean(option.selected) })) : undefined;
     elements.push({ selector: parts.join(' > '), tag, role, name, href: tag === 'a' ? node.href : '', value: secret || type === 'file' ? '' : String(node.value ?? ''), type, ...(secret?{secret:true}:{}), disabled: Boolean(node.disabled || node.matches(':disabled') || node.getAttribute('aria-disabled')==='true'), selected: Boolean(node.selected), checked: Boolean(node.checked), inForm: Boolean(node.form), editable:Boolean(node.isContentEditable), readOnly:Boolean(node.readOnly || node.getAttribute('aria-readonly')==='true'), ...(options ? { options } : {}) });
   }
-  return { url: root.location.href, title: document.title, text: document.body?.innerText ?? '', width: root.innerWidth, height: root.innerHeight, scrollX: root.scrollX, scrollY: root.scrollY, elements };
+  // Widgets of the common bot-verification vendors: Cloudflare Turnstile and its interstitial, reCAPTCHA, hCaptcha,
+  // DataDome, PerimeterX and Arkose. Kept inline: this function runs inside the page.
+  const challenge = Boolean(document.querySelector('iframe[src*="challenges.cloudflare.com"], .cf-turnstile, #challenge-form, .g-recaptcha, iframe[src*="google.com/recaptcha"], iframe[src*="recaptcha.net"], .h-captcha, iframe[src*="hcaptcha.com"], iframe[src*="captcha-delivery.com"], #px-captcha, iframe[src*="arkoselabs.com"]'));
+  return { url: root.location.href, title: document.title, text: document.body?.innerText ?? '', width: root.innerWidth, height: root.innerHeight, scrollX: root.scrollX, scrollY: root.scrollY, elements, ...(challenge ? { challenge: true as const } : {}) };
 }
 
 export async function generalDigest(value: string | Uint8Array): Promise<string> {

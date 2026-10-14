@@ -208,7 +208,7 @@ it('does not fulfill a denied document or report a click into it as useful work'
   const originalLocator=f.pages[0].locator;
   f.pages[0].locator = () => ({ ...originalLocator(), click: async () => {
     await f.route({ request: () => ({ url: () => 'https://docs.example/denied', method: () => 'GET', isNavigationRequest: () => true, frame: () => ({ parentFrame: () => null, page: () => f.pages[0] }) }),
-      fetch: async () => ({ status: () => 403 }), fulfill: async () => { routeCalls.push('fulfilled'); }, abort: async () => { routeCalls.push('blocked'); } });
+      fetch: async () => ({ status: () => 403, headers: () => ({}) }), fulfill: async () => { routeCalls.push('fulfilled'); }, abort: async () => { routeCalls.push('blocked'); } });
   } });
   await expect(driver.act(session, first, { operation: 'click', element_ref: first.observation.elements[0]!.ref }, async () => {})).rejects.toMatchObject({ code: 'outcome_uncertain', diagnostic: { status: 403 } });
   expect(routeCalls).toEqual(['blocked']);
@@ -284,7 +284,7 @@ it('keeps routed mutation uncertainty and separately records unconfirmed denied-
   f.browser.newBrowserCDPSession = async () => ({ send: async () => { throw Error('termination unconfirmed'); } });
   const originalLocator=f.pages[0].locator;
   f.pages[0].locator = () => ({ ...originalLocator(), click: async () => {
-    await f.route({ request: () => ({ url: () => 'https://docs.example/denied', method: () => 'GET', isNavigationRequest: () => true, frame: () => ({ parentFrame: () => null, page: () => f.pages[0] }) }), fetch: async () => ({ status: () => 403 }), abort: async () => {} });
+    await f.route({ request: () => ({ url: () => 'https://docs.example/denied', method: () => 'GET', isNavigationRequest: () => true, frame: () => ({ parentFrame: () => null, page: () => f.pages[0] }) }), fetch: async () => ({ status: () => 403, headers: () => ({}) }), abort: async () => {} });
   } });
   await expect(driver.act(session, first, { operation: 'click', element_ref: first.observation.elements[0]!.ref }, async () => {})).rejects.toMatchObject({ code: 'outcome_uncertain', diagnostic: { status: 403 }, cleanup_failed: true });
 });

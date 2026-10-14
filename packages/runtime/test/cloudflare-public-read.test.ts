@@ -40,8 +40,16 @@ it('refuses a read with neither Browserbase keys nor a Cloudflare reader, withou
   expect(paid).toBe(0);
 });
 it.each([403, 429, 500])('HTTP %s page failures do not return challenge/error text as useful content', async status => {
-  const f = fake(); f.page.goto = async () => ({ status: () => status });
+  const f = fake(); f.page.goto = async () => ({ status: () => status, headers: () => ({}) }) as never;
   expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context)).toMatchObject({ ok: false, code: 'transient', error: `The page did not load (HTTP ${status}).` });
+  expect(f.calls).toContain('Browser.close');
+});
+it.each([403, 503])('a Cloudflare challenge (HTTP %s) is a typed refusal naming the handoff route, not a page failure', async status => {
+  const f = fake(); f.page.goto = async () => ({ status: () => status, headers: () => ({ 'cf-mitigated': 'challenge' }) }) as never;
+  const result = await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context);
+  expect(result).toMatchObject({ ok: false, code: 'rejected' });
+  if (result.ok) return;
+  expect(result.error).toContain('verification_challenge'); expect(result.error).toContain('owner_login');
   expect(f.calls).toContain('Browser.close');
 });
 it('returns typed empty-page and timeout failures while terminating the owned session', async () => {
@@ -256,7 +264,7 @@ it.each(['http', 'empty', 'thrown'] as const)('preserves the original safe %s fa
   try {
     const f = fake(), settle = vi.fn();
     f.sdk.sessions = async () => [{ sessionId: 'private-id' }];
-    if (mode === 'http') f.page.goto = async () => ({ status: () => 403 });
+    if (mode === 'http') f.page.goto = async () => ({ status: () => 403, headers: () => ({}) }) as never;
     if (mode === 'empty') f.page.locator = () => ({ innerText: async () => '' });
     if (mode === 'thrown') f.page.goto = async () => { throw Error('secret-provider https://private.example/private-id'); };
     const read = cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never, reserveAllocation: async () => ({ settle }) })(args as never, context);

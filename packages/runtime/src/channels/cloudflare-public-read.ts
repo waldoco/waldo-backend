@@ -137,6 +137,7 @@ export function cloudflarePublicRead(options: Readonly<{ binding: BrowserWorker;
       await admit();
       const url = page.url();
       if (!allowed(url) || new URL(url).hostname !== target.hostname) result = failure('rejected', 'The page moved outside the selected public browser target.');
+      else if (response && response.status() >= 400 && response.headers()['cf-mitigated'] === 'challenge') result = failure('rejected', `The site answered with a bot-verification challenge (verification_challenge, HTTP ${response.status()}). A one-shot read cannot pass it. Read it with retain_session:true and offer the owner owner_login to pass it in the console, or use another source.`);
       else if (!response || response.status() >= 400) result = failure('transient', `The page did not load${response ? ` (HTTP ${response.status()})` : ''}.`);
       else {
         readStage = 'content';

@@ -26,6 +26,8 @@ const spendRefusal=(cause:unknown)=>{
     :'No browser was started: the owner\'s browser spend record needs reconciliation. Retrying will not help; tell the owner browsing is paused until it is reconciled.');
 };
 
+const PAGE_SIGNALS=' An observation\'s page_signals are typed page facts: sign_in_requested means a password field is showing; verification_challenge means a bot-verification challenge is showing. You cannot enter credentials or pass a challenge yourself. Decide whether to offer the owner owner_login so they do it in the console, or to take another route.';
+
 // The run lease's wake: maintenance runs when the lease's run deadline, its configuration or its session lifetime ends,
 // whichever comes first. It is a listed wake key, so an arbiter re-arm keeps it.
 export const COMMON_BROWSER_LEASE_DUE='common_browser_lease_due_v1';
@@ -145,7 +147,7 @@ export function ownerBrowserRuntime(options: Readonly<{
       } };
     },
     read(fallback: ToolHandler<BrowsePageArgs, unknown, ToolDispatcherContext>): ToolHandler<BrowsePageArgs, unknown, ToolDispatcherContext> {
-      return { ...fallback, eligible: eligibleWith(), schema: browsePageArgsSchema, description: fallback.description+' For interactive tasks use retain_session:true to receive DOM/accessibility, a PNG and session_handle, then call browse_act with that handle and current refs. Omit for a one-shot read.', async handle(args, ctx) {
+      return { ...fallback, eligible: eligibleWith(), schema: browsePageArgsSchema, description: fallback.description+' For interactive tasks use retain_session:true to receive DOM/accessibility, a PNG and session_handle, then call browse_act with that handle and current refs. Omit for a one-shot read.'+PAGE_SIGNALS, async handle(args, ctx) {
         try {
           const assertCurrent = current(ctx); await assertCurrent();
           // Omitted lifecycle fields must not silently discard an owner's
@@ -187,7 +189,7 @@ export function ownerBrowserRuntime(options: Readonly<{
       } };
     },
     act(fallback:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>):ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>{
-      return {...fallback,eligible:eligibleWith(true),schema:browseActArgsSchema,description:'Use the selected Cloudflare owner browser through observed refs. Read with browse_page retain_session:true first, then use its session_handle. Native actions: type, click, select, set_checked, scroll, goto, open_tab, switch_tab, close_tab, read, inspect, screenshot, download, owner_login, resume_owner_login, cancel. download uses an observed link for an authenticated GET attachment, stores and verifies bytes in your private workspace, and returns an exact-revision owner download link. Blob/data and POST exports are unsupported. owner_login pauses this turn for human sign-in in the authenticated console; end the turn and ask the owner to reply after Done. Resume only on that later owner reply, then verify the intended signed-in account from fresh evidence. session_handle explicitly continues an existing owner session. File selection and page sends are unsupported; uncertain effects cannot repeat.',async handle(args,ctx){
+      return {...fallback,eligible:eligibleWith(true),schema:browseActArgsSchema,description:'Use the selected Cloudflare owner browser through observed refs. Read with browse_page retain_session:true first, then use its session_handle. Native actions: type, click, select, set_checked, scroll, goto, open_tab, switch_tab, close_tab, read, inspect, screenshot, download, owner_login, resume_owner_login, cancel. download uses an observed link for an authenticated GET attachment, stores and verifies bytes in your private workspace, and returns an exact-revision owner download link. Blob/data and POST exports are unsupported. owner_login pauses this turn for human sign-in in the authenticated console; end the turn and ask the owner to reply after Done. Resume only on that later owner reply, then verify the intended signed-in account from fresh evidence. session_handle explicitly continues an existing owner session. File selection and page sends are unsupported; uncertain effects cannot repeat.'+PAGE_SIGNALS,async handle(args,ctx){
         try{
           const assertCurrent=current(ctx);await assertCurrent();
           // The owner's Cloudflare host acts only through a typed command; a plain action has no browser to run on.

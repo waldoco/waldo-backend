@@ -7,7 +7,7 @@ import type { APIResponse,Browser, BrowserContext, BrowserWorker, Page, Route } 
 import { browserSessionSchema, type BrowserSession } from '@waldo/contracts';
 import type { CloudflareBrowserSdkLoader } from './public-fixture-browser';
 import { cloudflareBrowserGuardOptions } from './cloudflare-browser-adapter';
-import { generalDigest, generalPageState, type GeneralSnapshot, type GeneralActionSnapshot,type GeneralPageState } from './general-browser-observation';
+import { generalDigest, generalPageState, type GeneralSnapshot, type GeneralActionSnapshot,type GeneralPageState,type GeneralPageSignal } from './general-browser-observation';
 import { parseGeneralBrowserAction, type GeneralBrowserAction } from './general-browser-actions';
 export type { GeneralBrowserAction } from './general-browser-actions';
 import { generalBrowserDiagnostic, type GeneralBrowserDiagnostic } from './general-browser-diagnostic';
@@ -19,6 +19,7 @@ export class GeneralBrowserError extends Error {
   constructor(readonly code: 'rejected' | 'session_lost' | 'provider_unavailable' | 'page_unavailable' | 'empty_content' | 'image_oversize' | 'observation_oversize' | 'cleanup_unconfirmed' | 'stale_observation' | 'outcome_uncertain', readonly diagnostic?: GeneralBrowserDiagnostic) { super(`browser_${code}`); }
 }
 type Options = Readonly<{ ownerId: string; binding: BrowserWorker; loadSdk: CloudflareBrowserSdkLoader; cleanupBinding?(providerSessionId:string):BrowserWorker; publicRead?:boolean; retainConnection?:boolean; now(): number; deadline(): number; cleanupTimeoutMs?: number; admit(): Promise<void>; authorizeRequest(url: string, method: string): Promise<boolean>; maxScreenshotBytes: number; authorizeHumanRequest?(url:string,method:string):Promise<boolean> }>;
+const PROVIDER_REQUEST_MS = 10000;
 type Navigation = Readonly<{ goto(page: Page, url: string): Promise<void>; finish(page: Page): Promise<void>; pending(page: Page): boolean; dispatched(): void }>;
 
 // The owner host owns the durable checkpoint, authority and serialization. This
@@ -29,6 +30,7 @@ export function cloudflareGeneralBrowser(options: Options) {
   let connected: Readonly<{ browser: Browser; context: BrowserContext; sessionKey: string }> | undefined;
   let documentFailure: GeneralBrowserError | undefined;
   const invalidDocuments = new Set<Page>();
+  const challengedDocuments = new WeakSet<Page>();
   let guardedContext: BrowserContext | undefined;
   const humanRequests=new Set<Promise<void>>();
   const humanRedirects=new WeakMap<Page,Set<string>>();
@@ -51,8 +53,14 @@ export function cloudflareGeneralBrowser(options: Options) {
     };
     try { return await work(step); } finally { clearTimeout(timer!); }
   };
+  // Provider control requests end with the turn. The devtools upgrade is the retained connection itself, so it carries
+  // no request signal; attaching it is raced against the turn instead.
   const binding = { fetch: async (...args: Parameters<BrowserWorker['fetch']>) => {
-    const response = await options.binding.fetch(...args);
+    const [input, init] = args;
+    const upgrade = new Headers(init?.headers).get('upgrade') !== null;
+    const remaining = options.deadline() - options.now();
+    const timeout = AbortSignal.timeout(remaining > 0 ? Math.min(PROVIDER_REQUEST_MS, remaining) : PROVIDER_REQUEST_MS);
+    const response = await options.binding.fetch(input, upgrade ? init : { ...init, signal: init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout });
     if (!response.ok && response.status !== 101) throw new GeneralBrowserError('provider_unavailable', await generalBrowserDiagnostic(response));
     return response;
   } } as BrowserWorker;
@@ -104,7 +112,7 @@ export function cloudflareGeneralBrowser(options: Options) {
           await admit(session);
           const next = redirects.get(page); redirects.delete(page);
           if (next) { url = next; continue; }
-          if (!response || response.status() >= 400) {
+          if (!response || response.status() >= 400 && !challengedDocuments.has(page)) {
             try { await cleanup(step => step(() => page.close())); } catch { await terminateId(session.providerSessionId); }
             throw new GeneralBrowserError('page_unavailable', response ? { status: response.status() } : undefined);
           }
@@ -132,7 +140,15 @@ export function cloudflareGeneralBrowser(options: Options) {
         const sdk = await options.loadSdk(); await admit(session);
         // Runtime 1.3.6 supports persistent, although its declaration omits it.
         const connectOptions = { sessionId: session.providerSessionId, persistent: true };
-        browser = await sdk.connect(binding, connectOptions); await admit(session);
+        const bound = actionTimeout(session);
+        let late = false, timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          browser = await Promise.race([
+            sdk.connect(binding, connectOptions).then(attached => { if (late) void attached.close().catch(() => {}); return attached; }),
+            new Promise<never>((_, reject) => { timer = setTimeout(() => { late = true; reject(new GeneralBrowserError('provider_unavailable')); }, bound); }),
+          ]);
+        } finally { clearTimeout(timer); }
+        await admit(session);
 
       }
       if (!context) {
@@ -170,7 +186,7 @@ export function cloudflareGeneralBrowser(options: Options) {
             // expiry rather than the model turn that has deliberately ended.
             const timeout=()=>{const remaining=session.expiresAt-options.now();if(remaining<=0)throw new GeneralBrowserError('rejected');return Math.min(10000,remaining);};
             let redirect:Readonly<{page:Page;url:string;committed:Promise<unknown>}>|undefined;
-            await guardGeneralBrowserRoute(route,{authorize,timeout,admit:()=>authorize(request.url(),request.method()),redirect:(page,url)=>{const committed=page.waitForEvent('domcontentloaded',{timeout:timeout()});void committed.catch(()=>undefined);redirect={page,url,committed};},denied:(page,status)=>{invalidDocuments.add(page);documentFailure=new GeneralBrowserError('page_unavailable',{status});}});
+            await guardGeneralBrowserRoute(route,{authorize,timeout,admit:()=>authorize(request.url(),request.method()),redirect:(page,url)=>{const committed=page.waitForEvent('domcontentloaded',{timeout:timeout()});void committed.catch(()=>undefined);redirect={page,url,committed};},denied:(page,status)=>{invalidDocuments.add(page);documentFailure=new GeneralBrowserError('page_unavailable',{status});},challenge:page=>{challengedDocuments.add(page);},document:page=>{challengedDocuments.delete(page);}});
             if(redirect){
               const visited=humanRedirects.get(page)??new Set<string>();visited.add(request.url());
               if(visited.has(redirect.url)||visited.size>GENERAL_BROWSER_REDIRECT_LIMIT)throw new GeneralBrowserError('rejected');humanRedirects.set(page,visited);
@@ -180,7 +196,8 @@ export function cloudflareGeneralBrowser(options: Options) {
             return;
           }
           await guardGeneralBrowserRoute(route, { authorize: (url, method) => allowed(session, url, method), timeout: () => actionTimeout(session), admit: () => admit(session),
-            redirect: (page, url) => { redirects.set(page, url); }, denied: (page, status) => { invalidDocuments.add(page); documentFailure = new GeneralBrowserError('page_unavailable', { status }); } });
+            redirect: (page, url) => { redirects.set(page, url); }, denied: (page, status) => { invalidDocuments.add(page); documentFailure = new GeneralBrowserError('page_unavailable', { status }); },
+            challenge: page => { challengedDocuments.add(page); }, document: page => { challengedDocuments.delete(page); } });
           await admit(session);
         }
         catch (error) {
@@ -304,8 +321,11 @@ export function cloudflareGeneralBrowser(options: Options) {
     const tabs = [];
     for (const tab of context.pages()) tabs.push({ ref: await tabRef(session, await targetId(context, tab)), url: tab.url(), title: await tab.title() });
     await admit(session);
+    const signals: GeneralPageSignal[] = [];
+    if (state.elements.some(element => element.type === 'password')) signals.push('sign_in_requested');
+    if (state.challenge || challengedDocuments.has(page)) signals.push('verification_challenge');
     return { ownerId: session.ownerId, sessionId: session.id, generation: session.generation, targetId: target, digest, state,
-      observation: { revision, tab_ref: await tabRef(session, target), url: state.url, title: state.title, text: state.text, accessibility_snapshot:semantic, viewport: { width: state.width, height: state.height },
+      observation: { revision, tab_ref: await tabRef(session, target), url: state.url, title: state.title, text: state.text, accessibility_snapshot:semantic, ...(signals.length ? { page_signals: signals } : {}), viewport: { width: state.width, height: state.height },
         elements: state.elements.map((element, index) => ({ ref: `e:${revision.slice(0, 24)}:${index}`, role: element.role, name: element.name, tag: element.tag, disabled: element.disabled, ...(['checkbox','radio'].includes(element.type)?{checked:element.checked}:{}), ...(element.options ? { options: element.options } : {}) })), tabs },
       image: { mime_type: 'image/png', bytes } };
   };

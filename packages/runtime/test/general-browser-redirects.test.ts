@@ -98,3 +98,33 @@ it('blocks cross-origin resource redirect before any cookie/origin-changing targ
   await expect(guardGeneralBrowserRoute(f.route as never, { authorize: async () => {}, timeout: () => 1000, admit: async () => {}, redirect: () => {}, denied: () => {} })).rejects.toMatchObject({ code: 'rejected' });
   expect(f.calls.map(call => call[0])).toEqual(['fetch']);
 });
+it('keeps a Cloudflare-mitigated challenge document as a typed fact instead of denying it', async () => {
+  const f = route(); f.responses[0] = { status: () => 403, headers: () => ({ 'cf-mitigated': 'challenge' }) };
+  const challenged: unknown[] = [], denied: unknown[] = [];
+  await guardGeneralBrowserRoute(f.route as never, { authorize: async () => {}, timeout: () => 1000, admit: async () => {}, redirect: () => {},
+    denied: (page, status) => { denied.push([page, status]); }, challenge: page => { challenged.push(page); } });
+  expect(challenged).toEqual([f.page]); expect(denied).toEqual([]);
+  expect(f.calls.map(call => call[0])).toEqual(['fetch', 'fulfill']);
+});
+it('still denies an ordinary 4xx main document, and a challenge header on a sub-resource changes nothing', async () => {
+  const f = route(); f.responses[0] = { status: () => 403, headers: () => ({}) };
+  const challenged: unknown[] = [], denied: unknown[] = [];
+  const routing = { authorize: async () => {}, timeout: () => 1000, admit: async () => {}, redirect: () => {}, denied: (page: unknown, status: number) => { denied.push([page, status]); }, challenge: (page: unknown) => { challenged.push(page); } };
+  await guardGeneralBrowserRoute(f.route as never, routing);
+  expect(denied).toEqual([[f.page, 403]]); expect(challenged).toEqual([]); expect(f.calls.map(call => call[0])).toEqual(['fetch', 'abort']);
+  const g = route('GET', false); g.responses[0] = { status: () => 403, headers: () => ({ 'cf-mitigated': 'challenge' }) };
+  await guardGeneralBrowserRoute(g.route as never, routing);
+  expect(challenged).toEqual([]); expect(g.calls.map(call => call[0])).toEqual(['fetch', 'fulfill']);
+});
+it('without a challenge receiver a mitigated document is denied as before', async () => {
+  const f = route(); f.responses[0] = { status: () => 503, headers: () => ({ 'cf-mitigated': 'challenge' }) };
+  const denied: unknown[] = [];
+  await guardGeneralBrowserRoute(f.route as never, { authorize: async () => {}, timeout: () => 1000, admit: async () => {}, redirect: () => {}, denied: (page, status) => { denied.push(status); } });
+  expect(denied).toEqual([503]);
+});
+it('a mitigation header other than challenge is an ordinary denied document', async () => {
+  const f = route(); f.responses[0] = { status: () => 403, headers: () => ({ 'cf-mitigated': 'block' }) };
+  const challenged: unknown[] = [], denied: unknown[] = [];
+  await guardGeneralBrowserRoute(f.route as never, { authorize: async () => {}, timeout: () => 1000, admit: async () => {}, redirect: () => {}, denied: (_, status) => { denied.push(status); }, challenge: page => { challenged.push(page); } });
+  expect(denied).toEqual([403]); expect(challenged).toEqual([]);
+});
