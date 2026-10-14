@@ -12,6 +12,8 @@ import { standingOrderBook, standingOrderHandlers, standingOrdersPrompt } from '
 import { DAY_CARDS } from '../src/prompt/day-cards';
 import { Scheduler, UnreadableScheduleRowError } from '../src/scheduler/multiplexer';
 import type { Deps } from '../src/seams/deps';
+// Stands in for the check-back turn: reports which loops it was given.
+const checkedBack = async (loops: readonly { title: string }[]) => `Checked ${loops.map(loop => loop.title).join(', ')}`;
 
 let seq = 0;
 const freshStub = (): Parameters<typeof runInDurableObject>[0] => {
@@ -182,7 +184,7 @@ describe('reading one id whose row this Worker cannot read', () => {
       const before = rowsLike(sql, unreadableCard);
       const loops = loopBook(sql, { newId: () => 'loop-1', now: () => now });
       await scheduler.schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', occurrenceAt: now - MINUTE, dueAt: now - MINUTE, payloadRefs: { id: HEARTBEAT_ID } });
-      await scheduler.dispatchDue({ heartbeat: heartbeatTick({ scheduler, sql, loops, plans: { heldToday: () => [unreadableCard, readableCard] }, timezone: 'UTC', now: () => now, enqueue: async () => undefined }) });
+      await scheduler.dispatchDue({ heartbeat: heartbeatTick({ scheduler, sql, loops, plans: { heldToday: () => [unreadableCard, readableCard] }, timezone: 'UTC', now: () => now, checkBack: checkedBack, enqueue: async () => undefined }) });
       expect(rowsLike(sql, unreadableCard)).toEqual(before);
       expect(scheduler.lookup(readableCard)).toMatchObject({ state: 'entry', entry: { due_at: now } });
     });

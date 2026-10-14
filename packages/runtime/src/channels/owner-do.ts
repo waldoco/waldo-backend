@@ -64,6 +64,7 @@ import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, claimStore, profile } from '../memory/claims';
 import { isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine } from './loops';
 import { armHeartbeat, HEARTBEAT_EVERY_MS, heartbeatTick, heartbeatEligible, settleHeartbeat } from './heartbeat';
+import { checkBackReply, loopCheckBackText, LOOP_CHECK_BACK_TOOLS } from './check-back';
 import { dueFailureNotices, failurePauseHolds, markFailureNoticed } from '../scheduler/failure-notice';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
@@ -1784,6 +1785,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
               && (!r.mailFollowup || (loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume !== 'low' && loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).reviewEligible(r.mailFollowup, this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')))
               && (!r.calendarPrep || await runtime.calendarPrepCurrent(r.calendarPrep))
               && (!r.scheduleNotice || failurePauseHolds(this.ctx.storage.sql, r.scheduleNotice))
+              // Cancelling a reminder deletes its note, so a check-back queued before the cancel never goes out.
+              && (!r.reminder || this.ctx.storage.sql.exec('SELECT 1 FROM reminder_notes WHERE id = ?', r.reminder.id).toArray().length > 0)
               && heartbeatEligible(r, this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC', Date.now()),
             defer: async r => {
               if(r.commonExecution&&!r.commonExecution.settled)return Date.now()+30_000;
@@ -2899,7 +2902,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
       };
       try {
-        const text = (await responder.remind(trace, owner, note, time)).trim() || note;
+        const text = checkBackReply(await responder.remind(trace, owner, note, time));
+        // The owner may have cancelled it while the turn ran; a silent decision ends the occurrence like a sent one.
+        if (text === null || book.note(entry.id) === null) {
+          book.fired(entry);
+          runs.finish(run.id, text === null ? 'completed' : 'stopped', text === null ? 'reminder checked; nothing to send' : 'reminder cancelled before delivery');
+          log({ trace, hop: 'reminder', ms: Date.now() - started, ok: true, detail: text === null ? 'silent' : 'cancelled' });
+          log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'reminder' });
+          return;
+        }
         if (channel === 'telegram') {
           await finalOutbox.enqueue({ id: `reminder:${entry.id}:${entry.occurrence_at}`, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text },
           receiptUrls: [...(turnReceiptUrls.get(trace) ?? [])],
@@ -2982,6 +2993,17 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       try {
         const delivery = await heartbeatTick({
           scheduler, sql: storage.sql, loops, plans, timezone: clock.timezone, now: () => Date.now(), releaseHeldCards: schedPrefs.enabled('daily_brief'),
+          checkBack: async due => checkBackReply(await responder.prompt(`${trace}:check-back`, owner, loopCheckBackText(due), async (hop, work) => {
+            const at = Date.now();
+            try {
+              const result = await work();
+              log({ trace, hop, ms: Date.now() - at, ok: true });
+              return result;
+            } catch (error) {
+              log({ trace, hop, ms: Date.now() - at, ok: false, error: String(error), code: turnFailureCode(error) });
+              throw error;
+            }
+          }, LOOP_CHECK_BACK_TOOLS)),
           enqueue: async (text, heartbeat) => finalOutbox.enqueue({
             id: `heartbeat:${entry.id}:${entry.occurrence_at}`, trace,
             payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),
@@ -3354,7 +3376,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (delivered) {
           if (record.reminder.once) this.ctx.storage.sql.exec('DELETE FROM reminder_notes WHERE id = ?', record.reminder.id);
           runs.finish(record.reminder.runId, 'completed', 'reminder sent');
-        } else runs.finish(record.reminder.runId, 'failed', 'reminder delivery unconfirmed');
+        } else if (record.status === 'blocked' && book.note(record.reminder.id) === null) runs.finish(record.reminder.runId, 'stopped', 'reminder cancelled before delivery');
+        else runs.finish(record.reminder.runId, 'failed', 'reminder delivery unconfirmed');
       }
       // Never mark a queued or ambiguous turn resolved. Reaction itself is best effort.
       if (delivered && record.reaction) await api.setMessageReaction({ chat_id: record.payload.chat_id,
