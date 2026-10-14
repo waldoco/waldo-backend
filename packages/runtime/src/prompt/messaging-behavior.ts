@@ -147,6 +147,21 @@ export function googleNameLine(profile: Readonly<{ name?: string; given_name?: s
   }
 }
 
+// Host facts for an owner who has told Waldo nothing about themselves yet, from owner state alone: counts and flags, never
+// provider text (a Google name has its own fenced line). Whether to get to know them, what to ask and how much is the model's call.
+export type NewOwnerFacts = Readonly<{ profileClaims: number; zone: string; zoneConfirmed: boolean; googleName: boolean; surfaces: readonly string[] }>;
+export function firstConversationLine(facts: NewOwnerFacts, tools: readonly string[]): string {
+  if (facts.profileClaims > 0 || !tools.includes('remember')) return '';
+  const known = [
+    'nothing they have told you about themselves is saved in memory yet',
+    facts.googleName ? 'the only name on record is the unconfirmed one from their Google account' : 'no name is on record',
+    facts.zoneConfirmed ? `their time zone, ${facts.zone}, is confirmed` : `their time zone is not confirmed (${facts.zone} is only a default)`,
+    ...(facts.surfaces.length ? [`they have written to you from ${facts.surfaces.join(', ')}`] : []),
+  ];
+  const zone = !facts.zoneConfirmed && tools.includes('set_timezone') ? ' If they tell you their time zone or where they are, set it with set_timezone.' : '';
+  return `Host facts about this owner: ${known.join('; ')}. This may be your first conversation with them. Answer what they asked first. Then, when it fits, get to know them: you decide whether to ask, what and how much, and you let it go when they would rather not. Save what they tell you about themselves with remember, quoting their own words.${zone}`;
+}
+
 // A host fact from granted scopes: tools for these features were left out, so the model offers the connection instead of denying the ability.
 export function unconnectedLine(features: readonly string[]): string {
   return features.length ? `Google features not connected for this owner: ${features.join(', ')}. Their tools are left out of this turn. If the owner asks for one, call connect_service with that feature; its result says whether a connect button reached the owner or where else they connect.` : '';

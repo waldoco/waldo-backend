@@ -55,6 +55,8 @@ export type Scenario = Readonly<{
     // The google client resolves to null: every google tool returns the not_connected auth
     // failure and the connect offer seam fires.
     googleNotConnected?: boolean;
+    // The owner object's first-conversation facts, read from the scenario's own claim store (zone unconfirmed, no Google name).
+    newOwner?: boolean;
   }>;
   assert?: Readonly<{
     mustCall?: readonly string[];

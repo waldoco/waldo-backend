@@ -116,6 +116,7 @@ describe('toolName', () => {
       'skills_load',
       'use_mac',
       'search_contacts',
+      'set_timezone',
     ]);
   });
 
@@ -292,6 +293,7 @@ describe('TOOL_PERMISSIONS', () => {
         'track_responsibility',
         'set_proactivity',
         'set_schedule_preference',
+        'set_timezone',
         'read_tool_output',
         'log_meal',
         'log_workout',

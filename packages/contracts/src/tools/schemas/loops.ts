@@ -30,3 +30,25 @@ export const setSchedulePreferenceArgsSchema = z.strictObject({
   kind: z.enum(SCHEDULE_KINDS).optional().describe('daily_brief: the day cards. followups: mail and calendar follow-ups. event_briefs: prep notes before events. nightly: overnight memory consolidation. heartbeat: periodic open-loop check. Required for on and off.'),
 });
 export type SetSchedulePreferenceArgs = z.infer<typeof setSchedulePreferenceArgsSchema>;
+
+// Runtimes list one name per zone, may trail IANA renames (Node lists Asia/Calcutta, not Asia/Kolkata) and may omit UTC.
+// A name the runtime resolves into its own list is the same zone; offsets, abbreviations and free text are not zones.
+let ianaZones: ReadonlySet<string> | undefined;
+const isIanaTimeZone = (zone: string): boolean => {
+  ianaZones ??= new Set(Intl.supportedValuesOf('timeZone'));
+  if (zone === 'UTC' || ianaZones.has(zone)) return true;
+  if (!/^[A-Z][A-Za-z0-9_+-]*(\/[A-Z][A-Za-z0-9_+-]*)+$/.test(zone)) return false;
+  try {
+    return ianaZones.has(new Intl.DateTimeFormat('en-US', { timeZone: zone }).resolvedOptions().timeZone);
+  } catch {
+    return false;
+  }
+};
+
+// The owner's own time zone, set from their explicit statement; the app's zone control writes through the same path.
+export const setTimezoneArgsSchema = z.strictObject({
+  timezone: z.string().min(1).max(64)
+    .refine(isIanaTimeZone, { message: 'Not an IANA time zone name. Use one such as Europe/London, America/New_York or Asia/Kolkata.' })
+    .describe('The IANA time zone the owner said they are in, such as Europe/London or Asia/Kolkata. Never an offset such as +05:30 or an abbreviation such as IST.'),
+});
+export type SetTimezoneArgs = z.infer<typeof setTimezoneArgsSchema>;

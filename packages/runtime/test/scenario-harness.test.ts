@@ -145,3 +145,28 @@ describe('recall by relevance', () => {
     expect(scribe(null)).toMatchObject({ ok: true, payload: [message] });
   });
 });
+
+describe('first conversation', () => {
+  it('a job carries no host facts and is not offered set_timezone; an owner turn gets both', async () => {
+    const scenario: Scenario = {
+      id: 'first-conversation-job-gate',
+      category: 'memory',
+      fixtures: { newOwner: true },
+      turns: ['@prompt Write the morning note.', 'I am in Lisbon these days'],
+      llm: [
+        { match: /morning note/, rounds: [{ text: 'Morning.' }] },
+        { match: /Lisbon/, rounds: [{ toolCalls: [{ name: 'set_timezone', arguments: { timezone: 'Europe/Lisbon' } }] }, { text: 'Set to Europe/Lisbon.' }] },
+      ],
+      assert: { hops: [{ hop: 'tool_set_timezone', ok: true, trace: /-2$/ }], replies: ['Morning.', 'Set to Europe/Lisbon.'] },
+    };
+    const run = await runScenario(scenario);
+    expect(checkScenario(scenario, run)).toEqual([]);
+    const replies = (turn: number) => (run.modelRequests[turn] ?? []).filter((request) => request.request.response_format === undefined);
+    const offers = (turn: number) => replies(turn).map((request) => (request.request.tools ?? []).map((tool) => tool.name));
+    expect(replies(0).length, 'the job reached the model').toBeGreaterThan(0);
+    expect(offers(0).flat(), 'a job is not offered set_timezone').not.toContain('set_timezone');
+    expect(replies(0).some((request) => (request.request.system ?? '').includes('Host facts about this owner')), 'a job carries no host facts').toBe(false);
+    expect(offers(1)[0], 'an owner turn is offered set_timezone').toContain('set_timezone');
+    expect(replies(1).every((request) => (request.request.system ?? '').includes('Host facts about this owner')), 'every round of the owner turn carries the host facts').toBe(true);
+  });
+});
