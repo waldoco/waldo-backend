@@ -2503,3 +2503,28 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
 - **The review session merged** #1222 (CI now runs the link-routing, iMessage and Mac-closeout pools), #1220 and #1226. The tip is `d591b7da`.
 - **The owner's doc:** my tab's "Next work" section is replaced by the end-of-day order.
 - **Staging is still `6be19816` (`a8c92893`).** The owner deploys `72030b34` next.
+
+## 10:46Z-11:38Z: #1218 merged after a tip carry; #1213 and #1229 merged by the review session
+
+- **#1218 merged as `4c41871c`** (11:34:58Z), pinned to `addba629`.
+  - **Why the head changed from `ee812f17`:** the 11:0xZ CI rerun failed at `guard-do-migration-lineage`. The close and reopen had reused an old merge ref, while the job fetched a newer `origin/beta-mvp`. The C1 builder carried the tip with a merge of `86f2bc23` (`addba629`), and its tree equals `git merge-tree ee812f17 86f2bc23`.
+  - **Gate:**
+    - verdicts 6164096228, 6165919118 and 6166727442 at `ee812f17`;
+    - a delta PASS at `addba629` from a fresh read-only reviewer (6167374947);
+    - CI 6 of 6 (run 38555461722), with verify running link routing, iMessage and Mac result recovery;
+    - merge-tree clean on `a6d305f8`;
+    - the advisor.
+  - **The merge commit's tree** equals the reviewed merge-tree onto `a6d305f8`.
+  - **Push CI at `4c41871c`** (38557599356) is the first joint test of #1218 and #1229. Deploy 2 is cut only after it's green.
+- **#1213 merged as `86f2bc23`** (pinned `8c2a7541`) by the review session. Its delta PASS is 6167013395, and the builder's M11 and M12 mutant record is 6167097566.
+- **#1229 merged as `a6d305f8`.** `intercept()` is deleted and #1219 is closed in code. Follow-up #1232.
+- **Merge-tree onto `4c41871c`:**
+  - #1173: clean. It's next in the `owner-do.ts` order.
+  - #1227: clean, but behind. Its author was messaged to carry the tip and take C2.
+  - #1230: CONFLICT in `imessage/owner-runtime.ts`. It needs a carry, and the conflict resolution needs its own verdict.
+- **CI note** (6167235711): a lineage-guard failure after beta-mvp moves, or after a reopen, is fixed by a new push, not a rerun.
+- **Deploy 2 handover:**
+  - the `connector-proxy` edge function goes first, then the Worker;
+  - `/run-eval` is UNAVAILABLE (#1185);
+  - it follows the Gmail check on `72030b34`.
+- **Staging is still `6be19816` (`a8c92893`).** The owner hasn't deployed `72030b34` yet.
