@@ -202,7 +202,8 @@ export const addressList = (header: string): string[] => {
   const seen = new Set<string>();
   return tokens.map((item) => (/<([^<>]*)>\s*$/.exec(item)?.[1] ?? item).trim()).filter((address) => {
     const key = address.toLowerCase();
-    if (!/^[^\s@<>"(),;:]+@[^\s@<>"(),;:]+\.[^\s@<>"(),;:]+$/.test(address) || seen.has(key)) return false;
+    // The length check comes first: the pattern backtracks quadratically on a long dotted domain that fails at its end.
+    if (address.length > 320 || !/^[^\s@<>"(),;:]+@[^\s@<>"(),;:]+\.[^\s@<>"(),;:]+$/.test(address) || seen.has(key)) return false;
     seen.add(key);
     return true;
   });

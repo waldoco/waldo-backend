@@ -12,6 +12,7 @@ import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/ap
 import { calendarDemand, demandCode, type DemandAnswer, type DemandRequest } from '../health/calendar-demand';
 import { CALENDAR_DEMAND_PATH, verifiedDemandRequest } from '../health/calendar-demand-route';
 import { surfaceOwnerAdmission } from '../identity/surface-owner-admission';
+import { localOwnerBinding, ownerBindingCurrent, verifyOwnerBinding } from '../identity/owner-binding';
 import { createOwnerTurnContext, ownerChainRef, surfaceChatRef, type OwnerContextSources } from '../context-composer/owner-turn';
 import { canonicalHistoryFault, canonicalOwnerConversationStore, skippedRowLines, type CanonicalSkipped } from '../conversation/canonical-owner-store';
 import {useMacHandler} from '../tools/live/use-mac';
@@ -79,7 +80,7 @@ import { redactConversationEntries, durableConversationStore, scrubConversationH
 import { egressGuardedCaller, redactSecretUrls } from './egress-guard';
 import { parseEgressAllowlistEnv } from '../hooks/egress-policy';
 import { toolOutputLedger , redactToolOutputLedger } from '../conversation/tool-output-ledger';
-import { armNightly, backfillEpisodes, consolidationDay, episodeIndex, indexedConversationStore, transcript } from './episodes';
+import { armNightly, backfillEpisodes, consolidationDay, consolidationSides, episodeIndex, indexedConversationStore, NIGHTLY_BACKLOG_DAYS, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, NIGHTLY_CHUNKS, NIGHTLY_THROUGH_KEY, transcript } from './episodes';
 import { nightlyDiagnostic } from './nightly-diagnostic';
 import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
 import { schedulePreferences, schedulePreferencesLine, schedulePreferenceHandlers, applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePreferences, replanDayCards, type ScheduleHold, type ScheduleKind } from './schedule-preferences';
@@ -246,14 +247,16 @@ const WHATSAPP_PENDING_CHECK_MS = 60_000;
 export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private readonly ownerBrowser: ReturnType<typeof ownerBrowserRuntime>;
   private browserTasks: ReturnType<typeof browserOwnerHost>;
+  // Whether the configured browser task host serves typed browse_act commands on this object.
+  private typedBrowserHost = false;
   private readonly makeBrowserHost: (config?: BrowserOwnerConfiguration) => ReturnType<typeof browserOwnerHost>;
   private readonly browserReady: Promise<void>;
   private readonly browserTrial: BrowserTrialPreparation | undefined;
   constructor(ctx: DurableObjectState, env: TelegramWebhookEnv, browserConfiguration?: BrowserOwnerConfiguration, browserTrial?: BrowserTrialPreparation) {
     super(ctx, env);
     this.browserTrial = browserTrial;
-    this.ownerBrowser = ownerBrowserRuntime({ env, storage: ctx.storage, actualDoId: ctx.id.toString(), activeScope: () => this.activeScope });
-    const makeBrowserHost = this.makeBrowserHost = (config?: BrowserOwnerConfiguration) => browserOwnerHost({ storage: ctx.storage, config, now: Date.now, newId: () => crypto.randomUUID(),
+    this.ownerBrowser = ownerBrowserRuntime({ env, storage: ctx.storage, actualDoId: ctx.id.toString(), activeScope: () => this.activeScope, typedHost: () => this.typedBrowserHost });
+    const makeBrowserHost = this.makeBrowserHost = (config?: BrowserOwnerConfiguration) => (this.typedBrowserHost = config?.enabled === true, browserOwnerHost({ storage: ctx.storage, config, now: Date.now, newId: () => crypto.randomUUID(),
       physical: () => { const doName = ctx.storage.kv.get<string>('do_name'); return { doName, subject: ctx.storage.kv.get<string>('telegram_subject'), matches: Boolean(doName && env.OWNER_DO && env.OWNER_DO.idFromName(doName).toString() === ctx.id.toString() && ctx.storage.kv.get<boolean>('telegram_unlinked') !== true) }; },
       approved: (approval, proposal) => {
         try {
@@ -265,7 +268,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           return Boolean(row && row.decided_at <= Date.now() && Date.now() - row.decided_at < 600000 && payload?.continuation?.proposalId === proposal && payload?.continuation?.taskRef === checkpoint?.taskId && prepared?.id === proposal && payload.url === prepared.url && payload.action?.selector === prepared.actionRef && payload.action?.method === 'click' && (payload.action?.arguments?.length ?? 0) === 0 && payload.continuation?.scopeDigest === prepared.scopeDigest && facts(payload.binding) === facts(prepared.binding));
         } catch { return false; }
       },
-    });
+    }));
     this.browserTasks = makeBrowserHost(browserConfiguration);
     this.browserReady = browserConfiguration ? Promise.resolve() : browserProductionConfiguration({ env, storage: ctx.storage,
       actualDoId: ctx.id.toString(), policy: browserTrial?.policy, loadSdk: browserTrial?.loadSdk }).then(config => { this.browserTasks = makeBrowserHost(config); })
@@ -2185,13 +2188,26 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return { outcome, fresh, bot: await botUsername() };
       },
     };
-    const currentTaskOwnerKey = async () => {
+    // The key browser task custody was held under before it moved to the owner principal; a Telegram owner's approval in
+    // flight still reads under it.
+    const telegramTaskOwnerKey = (): string | undefined => {
       const currentOwner = resolveOwnerTelegramId(identity.get<string>('telegram_subject'), this.env, consoleAuth(this.env) !== null);
       if (channel !== 'telegram' || owner <= 0 || currentOwner !== owner || identity.get('telegram_unlinked') === true
-        || !identity.get<string>('do_name') || this.env.OWNER_DO?.idFromName(identity.get<string>('do_name')!).toString() !== this.ctx.id.toString()) throw new ClosedRunError();
+        || !identity.get<string>('do_name') || this.env.OWNER_DO?.idFromName(identity.get<string>('do_name')!).toString() !== this.ctx.id.toString()) return undefined;
       return `telegram:${this.ctx.id.toString()}:${owner}`;
     };
-    const browserSources = browserTaskSourceCustody(storage.sql, storage.kv, currentTaskOwnerKey);
+    // Browser task custody belongs to the owner principal on whichever surface they use. Without a directory only the
+    // Telegram owner exists, under its own key.
+    const currentTaskOwnerKeys = async (): Promise<readonly string[]> => {
+      const legacy = telegramTaskOwnerKey();
+      if (!consoleAuth(this.env)) { if (!legacy) throw new ClosedRunError(); return [legacy]; }
+      const actualDoId = this.ctx.id.toString(), binding = localOwnerBinding(identity, this.env.OWNER_DO, actualDoId);
+      if (!binding) throw new ClosedRunError();
+      const verified = await verifyOwnerBinding(this.env, binding, actualDoId, this.env.OWNER_DO);
+      if (!verified || !ownerBindingCurrent(identity, this.env.OWNER_DO, actualDoId, binding)) throw new ClosedRunError();
+      return [`owner:${actualDoId}:${ownerPrincipalRef(verified.directoryOwnerId)}`, ...(legacy ? [legacy] : [])];
+    };
+    const browserSources = browserTaskSourceCustody(storage.sql, storage.kv, currentTaskOwnerKeys);
     const browserApproval = browserTaskApprovalBridge({ ownerId: () => this.browserTasks.principal, host: async (payload, operation) => {
       await this.browserReady;
       if (operation === 'deny') return this.browserTasks.resolve(this.browserTasks.principal);
@@ -2470,10 +2486,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           };
           if (scope) scope.commit(scrubEpisodes); else scrubEpisodes();
         },
-      }), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), this.ownerBrowser.read(browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env))), this.ownerBrowser.act(this.ownerBrowser.guard(browserTaskHandler({ legacy: browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
+      }), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), this.ownerBrowser.read(browsePageHandler(undefined, undefined, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env))), this.ownerBrowser.act(this.ownerBrowser.guard(browserTaskHandler({ legacy: browseActHandler(undefined, undefined, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
         if (!context.assertTaskSourceCurrent) throw Error('browser task source unavailable');
         await context.assertTaskSourceCurrent();
-        const ownerKey = await currentTaskOwnerKey(); await context.assertTaskSourceCurrent();
+        const [ownerKey] = await currentTaskOwnerKeys(); await context.assertTaskSourceCurrent();
+        if (!ownerKey) throw new ClosedRunError();
         browserSources.capture(payload, ownerKey);
         const id = await desk.proposeBrowserSubmit(payload); await context.assertTaskSourceCurrent(); return id;
       }, placement: id => desk.placement(id), stopAdmission: async context => { await this.ownerBrowser.current(context)(); this.ownerBrowser.stop(); await this.browserTasks.revoke(); } }), () => this.browserTasks.principal)), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), useMacHandler({ request: async (input, context) => {
@@ -2691,24 +2708,48 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         throw error;
       }
     };
+    // Memory learns from the conversation since the last pass that finished, oldest first and a bounded chunk at a time, so
+    // a night that failed or never ran is caught up later. Only a consolidated chunk moves the mark.
+    const consolidateBacklog = async (trace: string, now: number): Promise<'done' | 'more' | 'failed'> => {
+      const dayMs = 24 * 60 * 60_000;
+      const marked = storage.kv.get<number>(NIGHTLY_THROUGH_KEY) ?? now - dayMs, floor = now - NIGHTLY_BACKLOG_DAYS * dayMs;
+      // Conversation older than the backlog window is left unconsolidated; the line says it happened.
+      if (marked < floor) log({ trace, hop: 'nightly_memory', ms: 0, ok: true, code: 'backlog_clamped' });
+      let through = Math.max(marked, floor);
+      for (let chunk = 0; chunk < NIGHTLY_CHUNKS; chunk += 1) {
+        const rows = episodes.after(through, 40_000);
+        if (rows.length === 0) { if (chunk === 0) log({ trace, hop: 'nightly_memory', ms: 0, ok: true, detail: 'quiet day' }); return 'done'; }
+        const day = consolidationDay(rows);
+        if (day.length > 0) {
+          const started = Date.now();
+          try {
+            const sides = consolidationSides(day);
+            const { done, detail } = await responder.consolidate(trace, transcript(day, clock.timezone), sides);
+            log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: done, detail: `${day.length} turns; ${detail}` });
+            if (!done) return 'failed';
+          } catch (error) {
+            log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' });
+            return 'failed';
+          }
+        }
+        through = rows.at(-1)!.at;
+        storage.kv.put(NIGHTLY_THROUGH_KEY, through);
+      }
+      return episodes.after(through, 0).length > 0 ? 'more' : 'done';
+    };
     const nightly = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`;
       const started = Date.now();
+      if (entry.id === NIGHTLY_CATCH_UP_ID) {
+        // A catch-up that fails again is retried by the scheduler, which backs off and then pauses it; the next night resumes.
+        if (await consolidateBacklog(trace, entry.occurrence_at) === 'failed') throw new Error('nightly consolidation incomplete');
+        return;
+      }
       try {
         await migrateCoreFiles(`${trace}:migration`);
-        const day = consolidationDay(episodes.since(entry.occurrence_at - 24 * 60 * 60_000, 40_000));
-        if (day.length === 0) log({ trace, hop: 'nightly_memory', ms: 0, ok: true, detail: 'quiet day' });
-        else {
-          try {
-            const sides = {
-              owner: day.filter((episode) => episode.speaker === 'owner').map((episode) => episode.text).join('\n'),
-              waldo: day.filter((episode) => episode.speaker === 'waldo').map((episode) => episode.text).join('\n'),
-            };
-            const detail = await responder.consolidate(trace, transcript(day, clock.timezone), sides);
-            log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: true, detail: `${day.length} turns; ${detail}` });
-          } catch (error) {
-            log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' });
-          }
+        if (await consolidateBacklog(trace, entry.occurrence_at) !== 'done' && schedPrefs.enabled('nightly')) {
+          const at = Date.now() + NIGHTLY_CATCH_UP_DELAY_MS;
+          await scheduler.schedule({ id: NIGHTLY_CATCH_UP_ID, kind: 'dreaming', payloadRefs: { id: NIGHTLY_CATCH_UP_ID }, occurrenceAt: at, dueAt: at, recurrence: null });
         }
         const promoting = Date.now();
         await responder.promote(trace)
