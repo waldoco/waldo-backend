@@ -30,9 +30,11 @@ The domain is who the owner is and how to address them. In descending order:
 
 1. **Owner-stated.** A claim written through `remember` that quotes an owner-authored message verbatim: `origin: owner`, `source: stated`, `source_ref: owner, <message_ref>`, `verification_status: owner-grounded`. First-conversation answers are this class.
 2. **Setup answers.** What the owner chose or typed in the app's onboarding. The owner entered them, but a form answer is coarser than a chat statement and usually older.
-3. **Provider-asserted.** What a connected provider says about the account. Today that is only Google's `name` and `given_name` (D8).
-   - The phone number never enters prompts.
-   - Picture, birthday, gender and the account email are not read.
+3. **Provider-asserted.** What a connected provider says about the account, kept per account in object KV `google:profiles` (#1218):
+   - **stored:** the name parts (`name`, `given_name`, `family_name`) and, when the owner granted that scope, the phone number;
+   - **reaches prompts:** the fenced name line only. The phone never reaches a prompt or a log (#1218's tests);
+   - the account email is the connection's identity in `google:accounts`, not a profile fact;
+   - picture, birthday and gender are not requested (D8).
 
 **Reconciling this with ADR-0046.**
 - Google is the system of record for the label on the Google account. It is not the system of record for what the owner wants to be called.
@@ -59,7 +61,7 @@ A coded `dominates()` waits for the ADR-0046 build.
 ### 3.3 Correction and forget
 
 - **Owner claims:** corrected with `remember` plus `replaces_id`, and removed with `forget_memory`, whose barrier blocks relearning. Unchanged.
-- **The Google name:** `forget_memory` cannot reach it, because it is not a claim. Disconnecting the account removes it (#1218). This is acceptable for the beta:
+- **The Google name and phone:** `forget_memory` cannot reach them, because they are not claims. Disconnecting the account removes both (#1218). This is acceptable for the beta:
   1. it is provider data the owner controls at Google;
   2. every rendering marks it unconfirmed and says the owner's words win;
   3. "don't call me that" saved as a claim outranks it.
