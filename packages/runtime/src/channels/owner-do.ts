@@ -1500,9 +1500,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       await alarmPass(this.ctx.storage, () => this.alarmWork(held, held ? null : failed ?? null));
       if (!held) for (const key of [ALARM_FAILURES, ALARM_FAILED_LANE_KEY]) if (kv.get(key) !== undefined) kv.delete(key);
     } catch (error) {
-      // A streak is one lane's. Another lane failing before it clears can't be told apart from the pass failing, so the
-      // whole pass waits.
-      const thrown = error instanceof AlarmLaneFailure ? error.lane : 'pass', lane = failed === undefined || failed === thrown ? thrown : 'pass';
+      // The lane that threw is recorded unless a lane is held: a held pass failing elsewhere holds the whole pass, because
+      // keeping either lane would let the two take turns at the floor. That hold lasts one step; its retry runs every lane.
+      const thrown = error instanceof AlarmLaneFailure ? error.lane : 'pass', lane = held === null ? thrown : 'pass';
       const streak = (kv.get<number>(ALARM_FAILURES) ?? 0) + 1;
       const due = Date.now() + alarmRetryDelay(streak, this.ctx.id.toString(), HEARTBEAT_EVERY_MS);
       kv.put(ALARM_FAILURES, streak); kv.put(ALARM_FAILED_LANE_KEY, lane); kv.put(ALARM_RETRY_DUE_KEY, due);

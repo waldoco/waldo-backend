@@ -17,13 +17,13 @@ vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof im
   } }));
 vi.mock('openai', () => ({ default: class { responses = { create: async () => { throw new Error('lane fixture forbids model calls'); } }; } }));
 const { OwnerDO } = await import('../src/channels/owner-do');
-type Lanes = { alarm(info?: AlarmInvocationInfo): Promise<void>; drainApp(): Promise<void>; drainInbox(): Promise<void> };
+type Lanes = { alarm(info?: AlarmInvocationInfo): Promise<void>; drainApp(): Promise<void>; drainIMessage(): Promise<void>; drainInbox(): Promise<void>; setup(...args: unknown[]): unknown };
 type Owner = Lanes & { ctx: DurableObjectState };
 const proto = OwnerDO.prototype as unknown as Lanes;
-const real = { alarm: proto.alarm, drainApp: proto.drainApp, drainInbox: proto.drainInbox };
+const real = { alarm: proto.alarm, drainApp: proto.drainApp, drainIMessage: proto.drainIMessage, drainInbox: proto.drainInbox, setup: proto.setup };
 // The spies sit on the prototype, so each test acts only on its own owner; any other owner's pass runs the real code.
 const idOf = (name: string) => env.OWNER_DO!.idFromName(name).toString();
-const lane = (method: 'drainApp' | 'drainInbox', name: string, ...steps: ((owner: Owner) => Promise<void>)[]) => {
+const lane = (method: 'drainApp' | 'drainIMessage' | 'drainInbox', name: string, ...steps: ((owner: Owner) => Promise<void>)[]) => {
   const ran: number[] = [], id = idOf(name);
   const spy = vi.spyOn(proto, method).mockImplementation(async function (this: Owner) {
     if (this.ctx.id.toString() !== id) return real[method].call(this);
@@ -49,22 +49,26 @@ const streak = (state: DurableObjectState, count: number, lane: string, retryDue
   state.storage.kv.put(FAILURES, count); state.storage.kv.put(LANE, lane); state.storage.kv.put(RETRY_DUE, retryDue);
 };
 
-// Records when each pass starts and the platform's retry count for it; a firstPass replaces the first pass, for one that
-// dies. Every key and the alarm go before the spies do, so no pass runs the real lanes on this owner afterwards.
-const watch = async (name: string, seed: (state: DurableObjectState) => unknown, observe: (stub: DurableObjectStub, at: number[], retries: number[]) => Promise<void>,
+// Records when each pass starts, the platform's retry count for it and the streak record it leaves; a firstPass replaces
+// the first pass, for one that dies. Every key and the alarm go before the spies do, so no pass runs the real lanes on this
+// owner afterwards.
+type Pass = ReturnType<typeof record> & { startedAt: number };
+const watch = async (name: string, seed: (state: DurableObjectState) => unknown, observe: (stub: DurableObjectStub, at: number[], retries: number[], after: Pass[]) => Promise<void>,
   options: { firstPass?: (owner: Owner) => Promise<void>; arm?: boolean } = {}) => {
   const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   const inObject = <T>(work: (state: DurableObjectState) => Promise<T> | T) => runInDurableObject(stub, async (_instance, state) => work(state));
-  const at: number[] = [], retries: number[] = [], start = Date.now(), id = stub.id.toString();
+  const at: number[] = [], retries: number[] = [], after: Pass[] = [], start = Date.now(), id = stub.id.toString();
   const passes = vi.spyOn(proto, 'alarm').mockImplementation(async function (this: Owner, info?: AlarmInvocationInfo) {
     if (this.ctx.id.toString() !== id) return real.alarm.call(this, info);
-    at.push(Date.now() - start); retries.push(info?.retryCount ?? 0);
-    return options.firstPass && at.length === 1 ? options.firstPass(this) : real.alarm.call(this);
+    const startedAt = Date.now();
+    at.push(startedAt - start); retries.push(info?.retryCount ?? 0);
+    try { return await (options.firstPass && at.length === 1 ? options.firstPass(this) : real.alarm.call(this)); }
+    finally { after.push({ startedAt, ...record(this.ctx) }); }
   });
   sent.length = 0;
   try {
     await inObject(async state => { await seed(state); if (options.arm !== false) await armAlarm(state.storage, Date.now() + 100); });
-    await observe(stub, at, retries);
+    await observe(stub, at, retries, after);
   } finally {
     await inObject(state => state.storage.deleteAlarm());
     await sleep(300);
@@ -201,4 +205,72 @@ it('a link reply goes out inside its five-minute life during an inbound-lane str
       expect(await runInDurableObject(stub, (_instance, state) => record(state))).toEqual({ streak: 9, lane: 'inbox', retryDue });
     }, { arm: false });
   } finally { linkInbound.mockRestore(); }
+}, 20_000);
+
+// Two lanes failing in turn. Keeping either lane's record would let the other's past-due wake arm at the floor and fail, and
+// the two would take turns there. A lane failing while another is held holds the whole pass; that hold's retry runs every
+// lane and records the one that fails. So each backoff step allows one early pass, and the streak grows on the backoff.
+it('two lanes failing in turn get one early pass per backoff step and no more', async () => {
+  const name = 'lane-two-failing', subject = '706', lines = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  const app = lane('drainApp', name, fails), imessage = lane('drainIMessage', name, fails);
+  try {
+    await watch(name, state => {
+      ownedBy(state, name, subject);
+      for (const key of ['app_inbox_due_v1', 'imessage_owner_inbox_due_v1']) state.storage.kv.put(key, Date.now() - 1_000);
+    }, async (_stub, at, _retries, after) => {
+      await until(() => after.length >= 2, 3_000);
+      await until(() => after.length >= 4, Math.max(0, (after[1]?.retryDue ?? 0) - Date.now()) + 1_500);
+      await sleep(750);
+      const passes = `passes at ${at.join(', ')} ms; records ${JSON.stringify(after)}`;
+      expect(after.map(pass => pass.lane), passes).toEqual(['app', 'pass', 'app', 'pass']);
+      expect(after.map(pass => pass.streak), passes).toEqual([1, 2, 3, 4]);
+      expect(after[1]!.startedAt - after[0]!.startedAt, passes).toBeLessThan(1_000);
+      expect(after[2]!.startedAt, passes).toBeGreaterThanOrEqual(after[1]!.retryDue! - 50);
+      expect([app.ran.length, imessage.ran.length], passes).toEqual([2, 2]);
+    });
+  } finally { app.restore(); imessage.restore(); lines.mockRestore(); }
+}, 30_000);
+
+// A failed pass arms its retry, then re-arms every other lane's wake under it. Nothing else re-arms here, so a reply due
+// before a pass that fails ahead of the outbox goes out at the floor only through that re-arm.
+it('a reply due before a pass fails goes out from the failed pass\'s own re-arm, not behind its retry', async () => {
+  const name = 'lane-catch-rearm', subject = '707', lines = vi.spyOn(console, 'error').mockImplementation(() => undefined), app = lane('drainApp', name, fails);
+  try {
+    await watch(name, async state => {
+      ownedBy(state, name, subject);
+      await new TelegramFinalOutbox(state.storage.kv, () => Date.now() - 1_000).enqueue(reply(name, 'due before the failure', subject));
+    }, async (_stub, at, _retries, after) => {
+      await until(() => sentTo(subject).length > 0, 1_500);
+      const sentBy = Date.now(), passes = `passes at ${at.join(', ')} ms; records ${JSON.stringify(after)}`;
+      expect(sentTo(subject), passes).toEqual(['due before the failure']);
+      expect(after[0], passes).toMatchObject({ streak: 1, lane: 'app' });
+      expect(sentBy, passes).toBeLessThan(after[0]!.retryDue!);
+      expect(app.ran, passes).toHaveLength(1);
+    });
+  } finally { app.restore(); lines.mockRestore(); }
+}, 20_000);
+
+// A throw outside every lane holds the whole pass for one step: its retry runs every lane and records the lane that fails,
+// so a lane that then keeps failing is held alone and the other lanes' due work runs at the floor. The throw is a real one,
+// from the runtime setup the pass reaches after its app lane.
+it('a one-off throw outside every lane holds the whole pass for one step; at its retry a lane that keeps failing is held alone', async () => {
+  const name = 'lane-pass-one-step', subject = '708', id = idOf(name), lines = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  let throwNext = false;
+  const app = lane('drainApp', name, async () => { throwNext = true; }, fails), inbound = lane('drainInbox', name, consumesInbound);
+  const setup = vi.spyOn(proto, 'setup').mockImplementation(function (this: Owner, ...args: unknown[]) {
+    if (this.ctx.id.toString() !== id || !throwNext) return real.setup.apply(this, args);
+    throwNext = false;
+    throw new Error('synthetic failure outside every lane');
+  });
+  try {
+    await watch(name, async state => { ownedBy(state, name, subject); await admitInbound(state, name, subject); }, async (_stub, at, _retries, after) => {
+      await until(() => after.length >= 3, 4_500);
+      const passes = `passes at ${at.join(', ')} ms; records ${JSON.stringify(after)}`;
+      expect(after.map(pass => pass.lane), passes).toEqual(['pass', 'app', 'app']);
+      expect(after[1]!.startedAt, passes).toBeGreaterThanOrEqual(after[0]!.retryDue! - 50);
+      expect(inbound.ran, passes).toHaveLength(1);
+      expect(inbound.ran[0]!, passes).toBeLessThan(after[1]!.retryDue!);
+      expect(after[2], passes).toMatchObject({ streak: 2, lane: 'app', retryDue: after[1]!.retryDue });
+    });
+  } finally { setup.mockRestore(); app.restore(); inbound.restore(); lines.mockRestore(); }
 }, 20_000);
