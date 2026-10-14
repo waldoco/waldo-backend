@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
@@ -51,7 +52,7 @@ const harness = (state: DurableObjectState, probe = false, proposalState?: Propo
   const turn = async (traceId: string, text: string, call?: { name: string; arguments: string }) => {
     if (call) seen.calls.push(call);
     seen.requests.length = 0;
-    await responder.respond({ traceId, conversationRef: 'owner', surface: 'telegram', text }, timer);
+    await responder.respond(ownerTyped({ traceId, conversationRef: 'owner', surface: 'telegram', text }), timer);
     return seen.requests.filter(request => request.response_format === undefined);
   };
   return { seen, responder, turn };
@@ -133,7 +134,7 @@ it('text a tool echoes in a turn replying to an outside message stays out of lat
     const { seen, responder, turn } = harness(state);
     seen.calls.push({ name: 'set_reminder', arguments: JSON.stringify({ note: `Chase the vendor ${NOTE}`, at: '2026-10-13T09:00' }) });
     const replyTo = { surface: 'telegram', messageId: '9', conversationRef: 'telegram-7', authorId: '7', authorIsBot: false, text: 'Please chase the vendor about the invoice.', truncated: false, sourceTaint: 'external' as const };
-    await responder.respond({ traceId: 'owner-1', conversationRef: 'owner', surface: 'telegram', text: 'Remind me about this.', replyTo }, timer);
+    await responder.respond(ownerTyped({ traceId: 'owner-1', conversationRef: 'owner', surface: 'telegram', text: 'Remind me about this.', replyTo }), timer);
     expect(seen.calls).toEqual([]);
     const [first] = await turn('owner-2', 'Anything else?');
     expect(ownerTurn(first!)).not.toContain(NOTE);

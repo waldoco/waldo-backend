@@ -60,7 +60,7 @@ Staging Worker (`waldo-runtime-staging`):
 
 - From `packages/runtime`, `npx wrangler tail waldo-runtime-staging --format json` streams live logs.
 - Each Telegram turn logs one JSON line per hop, with a shared trace id `tg-<update_id>`. The fields are in [OBSERVABILITY.md](OBSERVABILITY.md).
-- `npx wrangler deployments list --name waldo-runtime-staging` shows what's deployed.
+- `npx wrangler deployments list --name waldo-runtime-staging` shows what's deployed. After a deploy, run the [staging gate](STAGING_DEPLOY_GATE.md).
 
 Telegram, webhook or local runner:
 

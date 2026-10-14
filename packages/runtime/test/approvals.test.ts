@@ -248,7 +248,7 @@ describe('approval desk', () => {
         owner: 42, google: async () => client, newId: () => String(++n), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
       });
       const id = await desk.propose({ action: 'move', event_id: 'e1', title: 'Gym', start: iso('2026-09-23T19:00:00+05:30'), end: iso('2026-09-23T20:00:00+05:30'), reason: 'you have a call at 6' });
-      expect(sent[0]!.body.text).toBe('Proposed: Move "Gym" from Wed 23 Sept, 18:00–19:00 to Wed 23 Sept, 19:00–20:00. you have a call at 6');
+      expect(sent[0]!.body.text).toBe('Move "Gym" from Wed 23 Sept, 18:00–19:00 to Wed 23 Sept, 19:00–20:00. you have a call at 6');
       expect(JSON.stringify(sent[0]!.body.reply_markup)).toContain(`a:${id}`);
       expect(google).toEqual([]);
 
@@ -1122,7 +1122,7 @@ describe('decisions from any surface', () => {
     });
   });
 
-  it('a message to a channel this Waldo cannot send on is refused before it is claimed, and the console needs a full-review card', async () => {
+  it('a message to a channel this Waldo cannot send on is refused before it is claimed, and the console never approves a message send', async () => {
     const { appCaller } = await import('../src/channels/surfaces/app');
     const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`approval-any-surface-send-${crypto.randomUUID()}`));
     await runInDurableObject(stub, async (_instance, state) => {
@@ -1134,7 +1134,10 @@ describe('decisions from any surface', () => {
       expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', whatsapp).one().status).toBe('open');
       expect([...state.storage.kv.list({ prefix: 'owner:effect:' })]).toEqual([]);
       const telegram = await desk.proposeSendMessage({ channel: 'telegram', content: 'On my way', idempotency_key: 'tg-1' });
-      expect((await desk.decide(telegram, 'a', 'trace', { surface: 'console' })).toast).toBe('Sent');
+      expect((await desk.decide(telegram, 'a', 'trace', { surface: 'console' })).toast).toBe('Not available here');
+      expect(sent).toEqual([]);
+      expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', telegram).one().status).toBe('open');
+      expect((await desk.decide(telegram, 'a', 'trace', { surface: 'app' })).toast).toBe('Sent');
       expect(sent).toEqual(['telegram:On my way']);
       const blocked = approvalDesk(state.storage.sql, { owner: 42, call: async () => undefined, google: async () => null, newId: () => `send${++n}`, now: () => NOW, timezone: 'UTC', log: () => {} });
       await expect(blocked.proposeSendMessage({ channel: 'telegram', content: 'x', idempotency_key: 'tg-2' })).rejects.toThrow('Approval card not confirmed');

@@ -1,6 +1,7 @@
 import { routerSignature, signedRpc, hex, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { ProxyIntentError, type ProxyIntent } from './proxy-intent';
 import { GOOGLE_METHODS, GoogleError, type GoogleClient, type GoogleTokens } from './google';
+import type { CalendarWatch, GmailWatch } from './google-push';
 
 // Google tokens live in Supabase Vault and are used only inside the connector-proxy Edge Function.
 // The runtime holds a connection id and gets data back; it never sees a bearer or refresh token.
@@ -12,6 +13,10 @@ export type GoogleProxy = Readonly<{
   // Google-auth MCP servers (WALDO_MCP_SERVERS entries with auth:'google') on a Vault-backed
   // grant: the edge attaches the token and runs the call; the runtime never sees a bearer.
   mcpCall(doName: string, connection: string, serverUrl: string, tool: string, args: Record<string, unknown>, intent?: ProxyIntent): Promise<unknown>;
+  // Calendar push channels: the edge starts and stops them with the grant's token.
+  calendarWatch(doName: string, connection: string, input: Readonly<{ channelId: string; token: string; address: string }>): Promise<CalendarWatch>;
+  stopChannel(doName: string, connection: string, channel: Readonly<{ channelId: string; resourceId: string }>): Promise<void>;
+  gmailWatch(doName: string, connection: string, topic: string): Promise<GmailWatch>;
   revoke(doName: string, connection: string): Promise<boolean>;
 }>;
 
@@ -70,6 +75,17 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       // read registry before it skips the ledger; this flag alone never lets a call skip anything.
       const readOnly = intent.readOnly === true && intent.id.startsWith('mcpread:');
       return(await post({ do_name: doName, op: 'mcp_call', connection, server_url: serverUrl, tool, args: [args], intent_id:intent.id, ...(readOnly ? { read_only: true } : {}) })).data;
+    },
+    calendarWatch: async (doName, connection, input) => {
+      const { data } = await post({ do_name: doName, op: 'calendar_watch', connection, channel_id: input.channelId, token: input.token, address: input.address }) as { data?: { channelId?: unknown; resourceId?: unknown; expiration?: unknown } };
+      if (data?.channelId !== input.channelId || typeof data.resourceId !== 'string' || typeof data.expiration !== 'number' || !Number.isSafeInteger(data.expiration)) throw new Error('calendar watch reply malformed');
+      return { channelId: input.channelId, resourceId: data.resourceId, expiration: data.expiration };
+    },
+    stopChannel: async (doName, connection, channel) => { await post({ do_name: doName, op: 'channel_stop', connection, channel_id: channel.channelId, resource_id: channel.resourceId }); },
+    gmailWatch: async (doName, connection, topic) => {
+      const { data } = await post({ do_name: doName, op: 'gmail_watch', connection, topic }) as { data?: { historyId?: unknown; expiration?: unknown } };
+      if (typeof data?.historyId !== 'string' || !/^\d{1,30}$/.test(data.historyId) || typeof data.expiration !== 'number' || !Number.isSafeInteger(data.expiration)) throw new Error('gmail watch reply malformed');
+      return { historyId: data.historyId, expiration: data.expiration };
     },
     revoke: async (doName, connection) => (await rpc('connection_revoke', `connrevoke.${doName}.${connection}`, { p_do_name: doName, p_connection: connection })) === true,
   };

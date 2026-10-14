@@ -1,6 +1,7 @@
 import type { LLMAttachment } from '@waldo/contracts';
 import { onlyArtifacts, quarantineArtifacts } from '../../security/artifact-hygiene';
 import { ownerTurnAttachments, type OwnerTurnEnvelope, type ReplyContext } from '../owner-turn-envelope';
+import { ownerWords } from '../owner-inbound-turn';
 import type { RunEffectScope } from '../run-effect-scope';
 import { splitTelegramText } from '../telegram-api';
 import type { WhatsAppCall, WaIngressMessage } from '../whatsapp-api';
@@ -82,14 +83,19 @@ export const createWhatsAppSurfaceAdapter = (options: Readonly<{ call: WhatsAppC
         text = (message.type === 'image' ? message.image?.caption : message.document?.caption) ?? '';
       } else if (message.type === 'audio') {
         if (update.transcript === undefined && !update.mediaNote) throw new Error('WhatsApp voice must be host-resolved');
-        text = update.transcript ?? '';
+        text = '';
       } else throw new Error('WhatsApp turn type requires host handling');
+      const typed = cleanOwnerText(text);
       const envelope: OwnerTurnEnvelope = {
         traceId: update.traceId, conversationRef, surface: 'whatsapp', service: 'WhatsApp',
         presentation: { surface: 'whatsapp', delivery: { text: true, approval: 'native_buttons', reactions: false, attachments: true }, commands: [] },
-        text: cleanOwnerText(text), runScope: update.runScope, messageRef: { id, conversationRef },
+        text: typed, runScope: update.runScope, messageRef: { id, conversationRef },
+        parts: [
+          ...ownerWords(typed),
+          ...(update.mediaNote ? [{ authorship: 'media_note' as const, text: update.mediaNote }] : []),
+          ...(update.transcript ? [{ authorship: 'file_transcript' as const, text: cleanOwnerText(update.transcript) }] : []),
+        ],
         ...(update.attachments ? { attachments: update.attachments } : {}),
-        ...(update.mediaNote ? { mediaNote: update.mediaNote } : {}),
         ...(update.replyTo ? { replyTo: update.replyTo } : {}),
       };
       ownerTurnAttachments(envelope);

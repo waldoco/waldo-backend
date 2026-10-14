@@ -3,6 +3,7 @@
 // scripted responders here cannot score a W/R model answer or emulate provider effects.
 import { handleTelegramWebhook } from '../src/channels/telegram-webhook';
 import { TelegramOwnerListener, type TelegramTurnOutcome, type TelegramOwnerApi, type TurnLogEntry } from '../src/channels/telegram-listener';
+import { inboundTurn, ownerWords } from '../src/channels/owner-inbound-turn';
 import type { OwnerDirectory, OwnerRoute } from '../src/identity/owner-directory';
 
 export type IngressRecord = Readonly<{
@@ -52,7 +53,7 @@ export const isolatedTelegramIngress = (
         saveOffset: async () => undefined,
         log: (entry) => bucket.hops.push(entry),
       });
-      bucket.outcomes.push(await listener.handle({ updateId: parsed.update_id, messageId: null, senderId: sender, chatId: sender, sentAt: null, text: parsed.message.text }));
+      bucket.outcomes.push(await listener.handle(inboundTurn({ updateId: parsed.update_id, messageId: null, senderId: sender, chatId: sender, sentAt: null, parts: ownerWords(parsed.message.text) })));
       return new Response('ok');
     } }),
   } as unknown as DurableObjectNamespace;

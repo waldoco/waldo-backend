@@ -7,7 +7,7 @@ import { applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePrefe
 import { dayPlanBook } from '../src/channels/day-cards';
 import { loopBook } from '../src/channels/loops';
 import { HEARTBEAT_ID } from '../src/channels/heartbeat';
-import { NIGHTLY_ID } from '../src/channels/episodes';
+import { NIGHTLY_CATCH_UP_ID, NIGHTLY_ID } from '../src/channels/episodes';
 import { BRIEF_SWEEP_ID } from '../src/channels/event-briefs';
 import { DAY_CARDS } from '../src/prompt/day-cards';
 import { Scheduler } from '../src/scheduler/multiplexer';
@@ -125,6 +125,26 @@ describe('schedule preferences survive an interrupt between the save and the can
       });
     });
   }
+
+  it('a nightly catch-up follows the nightly preference: off clears a due one unrun, and turning nightly off cancels it', async () => {
+    await withOwner(async ({ scheduler, prefs, ctx }) => {
+      const catchUp = () => scheduler.schedule({ id: NIGHTLY_CATCH_UP_ID, kind: 'dreaming', payloadRefs: { id: NIGHTLY_CATCH_UP_ID }, occurrenceAt: NOW, dueAt: NOW, recurrence: null });
+      const ran: string[] = [];
+      const executors = gateScheduleExecutors({ dreaming: async (entry: { id: string }) => { ran.push(entry.id); } } as ScheduleExecutors, prefs, scheduler);
+      prefs.set('nightly', false);
+      await catchUp();
+      await scheduler.dispatchDue(executors);
+      expect([ran, scheduler.read(NIGHTLY_CATCH_UP_ID)]).toEqual([[], null]);
+      await catchUp();
+      await reconcileSchedulePreferences(prefs.all(), ctx);
+      expect(scheduler.read(NIGHTLY_CATCH_UP_ID)).toBeNull();
+      prefs.set('nightly', true);
+      await catchUp();
+      prefs.set('nightly', false);
+      await applySchedulePreferences(prefs.all(), ctx, 'nightly');
+      expect(scheduler.read(NIGHTLY_CATCH_UP_ID)).toBeNull();
+    });
+  });
 
   it('startup reconcile cancels every entry of a kind that is off and arms nothing it should not', async () => {
     await withOwner(async ({ scheduler, prefs, ctx, ids }) => {

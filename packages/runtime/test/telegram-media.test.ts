@@ -11,7 +11,12 @@ const photo = { kind: 'photo' as const, fileId: 'big', fileName: null, mimeType:
 describe('telegram media', () => {
   it('attaches a downloaded photo and notes it in the conversation text', async () => {
     const loaded = await loadTelegramMedia(photo, { download: async () => new Uint8Array([1, 2, 3]) });
-    expect(loaded).toEqual({ note: '[Owner sent a photo, attached.]', attachment: { kind: 'image', mime_type: 'image/jpeg', filename: 'photo.jpg', data_base64: 'AQID' } });
+    expect(loaded).toEqual({ parts: [{ authorship: 'media_note', text: '[Owner sent a photo, attached.]' }], attachment: { kind: 'image', mime_type: 'image/jpeg', filename: 'photo.jpg', data_base64: 'AQID' } });
+  });
+
+  it('says when the media it notes was forwarded', async () => {
+    const forwarded = await loadTelegramMedia({ ...photo, forwarded: true }, { download: async () => new Uint8Array([1, 2, 3]) });
+    expect(forwarded.parts).toEqual([{ authorship: 'media_note', text: '[Owner sent a forwarded photo, attached.]' }]);
   });
 
   it('reads supported documents by extension and explains the ones it cannot read', async () => {
@@ -19,7 +24,7 @@ describe('telegram media', () => {
     const pdf = await loadTelegramMedia({ kind: 'document', fileId: 'd', fileName: 'Plan.PDF', mimeType: null, fileSize: 2 }, { download: bytes });
     expect(pdf.attachment).toMatchObject({ kind: 'file', mime_type: 'application/pdf', filename: 'Plan.PDF' });
     const zip = await loadTelegramMedia({ kind: 'document', fileId: 'z', fileName: 'a.zip', mimeType: 'application/zip', fileSize: 2 }, { download: bytes });
-    expect(zip).toEqual({ note: '[Owner sent a file "a.zip". This file type cannot be read yet.]' });
+    expect(zip).toEqual({ parts: [{ authorship: 'media_note', text: '[Owner sent a file "a.zip". This file type cannot be read yet.]' }] });
   });
 
   it('does not download oversized files and survives download failures', async () => {
@@ -28,7 +33,7 @@ describe('telegram media', () => {
     expect(called).toBe(false);
     expect(big.attachment).toBeUndefined();
     const failed = await loadTelegramMedia(photo, { download: async () => { throw new Error('down'); } });
-    expect(failed).toEqual({ note: '[Owner sent a photo, but it could not be downloaded.]' });
+    expect(failed).toEqual({ parts: [{ authorship: 'media_note', text: '[Owner sent a photo, but it could not be downloaded.]' }] });
   });
 
   it('resolves the file path with getFile before downloading', async () => {
@@ -43,15 +48,15 @@ describe('telegram media', () => {
     expect(urls).toEqual(['https://api.telegram.org/botT/getFile', 'https://api.telegram.org/file/botT/photos/f.jpg']);
   });
 
-  it('turns a voice note into a transcript note and never attaches audio', async () => {
+  it('turns a voice note into a note and its own transcript part, and never attaches audio', async () => {
     const voice = { kind: 'voice' as const, fileId: 'v', fileName: 'voice.ogg', mimeType: 'audio/ogg', fileSize: 10 };
     const seen: string[] = [];
     const heard = await loadTelegramMedia(voice, { download: async () => new Uint8Array([1]), transcribe: async (_audio, name, mime) => { seen.push(name, mime); return ' move gym to 7 '; } });
-    expect(heard).toEqual({ note: '[Owner sent a voice note. Transcript: move gym to 7]' });
+    expect(heard).toEqual({ parts: [{ authorship: 'media_note', text: '[Owner sent a voice note.]' }, { authorship: 'file_transcript', text: 'move gym to 7' }] });
     expect(seen).toEqual(['voice.ogg', 'audio/ogg']);
-    expect(await loadTelegramMedia(voice, { download: async () => new Uint8Array([1]), transcribe: async () => '  ' })).toEqual({ note: '[Owner sent a voice note with no speech that could be made out.]' });
-    expect(await loadTelegramMedia(voice, { download: async () => new Uint8Array([1]), transcribe: async () => { throw new Error('403'); } })).toEqual({ note: '[Owner sent a voice note, but it could not be transcribed.]' });
-    expect(await loadTelegramMedia(voice, { download: async () => new Uint8Array([1]) })).toEqual({ note: '[Owner sent a voice note, but voice reading is not set up here.]' });
+    expect(await loadTelegramMedia(voice, { download: async () => new Uint8Array([1]), transcribe: async () => '  ' })).toEqual({ parts: [{ authorship: 'media_note', text: '[Owner sent a voice note with no speech that could be made out.]' }] });
+    expect(await loadTelegramMedia(voice, { download: async () => new Uint8Array([1]), transcribe: async () => { throw new Error('403'); } })).toEqual({ parts: [{ authorship: 'media_note', text: '[Owner sent a voice note, but it could not be transcribed.]' }] });
+    expect(await loadTelegramMedia(voice, { download: async () => new Uint8Array([1]) })).toEqual({ parts: [{ authorship: 'media_note', text: '[Owner sent a voice note, but voice reading is not set up here.]' }] });
   });
 
   it('posts audio to the transcription endpoint and surfaces failures without the key', async () => {

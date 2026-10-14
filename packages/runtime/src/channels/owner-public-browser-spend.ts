@@ -60,6 +60,20 @@ export function ownerPublicBrowserAccounting(storage:Pick<DurableObjectStorage,'
  if(!Number.isSafeInteger(reservedMicrousd)||limitMicrousd!==undefined&&reservedMicrousd>limitMicrousd)throw Error('public browser retained cost conflict');
  return {ownerId,custodyDigest,limitMicrousd,reservedMicrousd,intents:[...(legacy?.intents??[]),...(current?.reservations.map(item=>item.intent)??[])]};
 }
+// Spend follows the directory owner, not one admission of it. The custody digest changes when the owner's binding moves
+// between surfaces or the directory re-admits the owner; a reservation under the newly verified custody then carries the
+// whole ledger forward, once it validates under the custody it was written with. Another owner's ledger, or one that does
+// not validate, still refuses. Settlement bound to the earlier custody is refused afterwards, so those holds stay charged
+// in full: never a refund.
+function carryLedgerCustody(storage:Pick<DurableObjectStorage,'kv'>,ownerId:string,custodyDigest:string){
+ const held=(storage.kv.get<Retained>(KEY)??storage.kv.get<Legacy>(LEGACY_KEY))?.custodyDigest;
+ if(held===undefined||held===custodyDigest)return;
+ if(!/^[a-f0-9]{64}$/.test(held))throw Error('public browser retained cost conflict');
+ ownerPublicBrowserAccounting(storage,ownerId,held);
+ for(const key of [KEY,LEGACY_KEY]){const row=storage.kv.get<Retained|Legacy>(key);if(row)storage.kv.put(key,{...row,custodyDigest});}
+}
+// No room under the owner's or this month's browser spend ceiling; no retry changes that.
+export class OwnerPublicBrowserCeilingExceeded extends Error {}
 export function reserveOwnerPublicBrowser(options:Readonly<{
  storage:DurableObjectStorage;ownerId:string;custodyDigest:string;intent:string;reservedBrowserMs:number;now:number;declaredLimitMicrousd?:number;assertCurrent():void;
 }>):PublicReadReservation{
@@ -69,6 +83,7 @@ export function reserveOwnerPublicBrowser(options:Readonly<{
  const month=new Date(now).toISOString().slice(0,7),monthKey=`common-public-browser-month:${month}`;
  storage.transactionSync(()=>{
   options.assertCurrent();
+  carryLedgerCustody(storage,ownerId,custodyDigest);
   const prior=ownerPublicBrowserAccounting(storage,ownerId,custodyDigest);
   if(prior?.intents.includes(intent))throw Error('public browser prior effect requires reconciliation');
   // Historical test declarations stay readable, but cannot restore old authority.
@@ -91,7 +106,7 @@ export function reserveOwnerPublicBrowser(options:Readonly<{
   }
   for(const [,amount] of storage.kv.list<number>({prefix:'common-public-browser-month:'}))if(!validAmount(amount)||amount>COMMON_BROWSER_MONTH_CEILING_MICROUSD)throw Error('public browser retained month conflict');
   const spent=storage.kv.get<number>(monthKey)??0;
-  if(!Number.isSafeInteger(aggregate+bound)||ceiling!==undefined&&aggregate+bound>ceiling||spent+bound>COMMON_BROWSER_MONTH_CEILING_MICROUSD)throw Error('public browser owner cost ceiling exceeded');
+  if(!Number.isSafeInteger(aggregate+bound)||ceiling!==undefined&&aggregate+bound>ceiling||spent+bound>COMMON_BROWSER_MONTH_CEILING_MICROUSD)throw new OwnerPublicBrowserCeilingExceeded('public browser owner cost ceiling exceeded');
   const current=storage.kv.get<Retained>(KEY);
   storage.kv.put(KEY,{ownerId,custodyDigest,...(ceiling===undefined?{}:{limitMicrousd:ceiling}),reservedMicrousd:(current?.reservedMicrousd??0)+bound,
    reservations:[...(current?.reservations??[]),{intent,month,reservedBrowserMs,chargedMicrousd:bound,settled:false}]} satisfies Retained);
@@ -134,5 +149,5 @@ export function assertOwnerPublicBrowserCapacity(storage:Pick<DurableObjectStora
   if(!row?.policy||row.policy.ownerId!==ownerId||key!==`common-spend:${row.policy.ref}`)throw Error('public browser retained owner conflict');
   aggregate+=commonSpendReservation(storage,row.policy,Date.now,()=>{}).reserved();ceiling=Math.min(ceiling,row.policy.limitMicrousd);
  }
- if(!Number.isSafeInteger(aggregate+additionalMicrousd)||aggregate+additionalMicrousd>ceiling)throw Error('public browser owner cost ceiling exceeded');
+ if(!Number.isSafeInteger(aggregate+additionalMicrousd)||aggregate+additionalMicrousd>ceiling)throw new OwnerPublicBrowserCeilingExceeded('public browser owner cost ceiling exceeded');
 }

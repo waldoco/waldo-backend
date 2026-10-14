@@ -1,4 +1,5 @@
 import type { RunEffectScope } from './run-effect-scope';
+import type { InboundPart } from './owner-inbound-turn';
 import { llmRequestSchema, type ToolName, type LLMAttachment } from '@waldo/contracts';
 import type { TurnTimer } from './owner-turn-types';
 import type { turnControl } from './turn-control';
@@ -27,10 +28,10 @@ export type OwnerTurnEnvelope = Readonly<{
   conversationRef: string;
   surface: string;
   presentation?: import('../prompt/messaging-behavior').SurfacePresentation;
+  // The message as the surface received it, which admission compares with the admitted input.
   text: string;
-  // Host-parsed source markup; these ranges never supply task-transition evidence.
-  sourceQuoteRanges?: readonly Readonly<{ start: number; end: number }>[];
-  mediaNote?: string;
+  // Who wrote what: the message's own parts, then any the host added for its media (a note, a transcript).
+  parts: readonly InboundPart[];
   replyTo?: ReplyContext;
   attachment?: LLMAttachment;
   attachments?: readonly LLMAttachment[];
@@ -46,18 +47,22 @@ export type OwnerResponder = Readonly<{
   chooseReaction(turn: OwnerTurnEnvelope): Promise<string | null>;
   remind(id: string, conversationRef: string, note: string, time: TurnTimer, surface?: string): Promise<string>;
   // `turnContext` reaches the model with `said` on this turn only; it is never stored with the conversation.
-  prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, turnContext?: string): Promise<string>;
-  consolidate(trace: string, day: string, sides?: { owner: string; waldo: string }): Promise<string>;
+  prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, turnContext?: string, sourceTaint?: 'external'): Promise<string>;
+  // done is false when the conversation was not consolidated and must be offered again.
+  consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; shared: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>): Promise<Readonly<{ done: boolean; detail: string }>>;
   migrate(trace: string, input: string): Promise<string>;
   promote(trace: string): Promise<string>;
   planDay(trace: string, input: string): Promise<string>;
+  // After a reply is delivered: compact the chain's older rows into one summary row when the last window dropped rows or
+  // ran near its budget. Never throws; a failure is one content-free `compaction` hop. Inert while the switch is off.
+  compactIfDue?(conversationRef: string): Promise<void>;
   control: ReturnType<typeof turnControl>;
 }>;
 
 // Host-selected surface, never inferred from owner text or transport payload.
 export const ownerTurnTrace = (surface: string, updateId: number): string => surface === 'telegram' ? `tg-${updateId}` : `${surface}-${updateId}`;
 
-export const ownerTurnAttachments = (turn: OwnerTurnEnvelope): readonly LLMAttachment[] | undefined => {
+export const ownerTurnAttachments = (turn: Pick<OwnerTurnEnvelope, 'attachment' | 'attachments'>): readonly LLMAttachment[] | undefined => {
   if (turn.attachment !== undefined && turn.attachments !== undefined) throw new Error('ambiguous turn media');
   const attachments = turn.attachments ?? (turn.attachment ? [turn.attachment] : undefined);
   if (!attachments?.length) return undefined;

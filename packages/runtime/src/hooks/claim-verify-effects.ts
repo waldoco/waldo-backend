@@ -4,7 +4,8 @@ import type { ToolName } from '@waldo/contracts';
 // effect (a read, a lookup, or a proposal that changes nothing). Typed over every tool name, so
 // adding a tool without deciding its effect fails the build, and the test checks the same list.
 export const TOOL_CLAIM_EFFECT: Readonly<Record<ToolName, string | null>> = {
-  get_crs: null, get_health: null, query_calendar: null, get_communication: null, search_communication: null,
+  use_mac: 'mac_action_requested',
+  get_crs: null, get_health: null, query_calendar: null, get_communication: null, search_communication: null, search_contacts: null,
   read_thread: null, get_tasks: null, get_master_metrics: null, get_context: null, query_availability: null,
   read_owner_context: null, read_memory: null, search_episodes: null, propose_action: null, web_search: null,
   read_document: null, list_artifacts: null, read_artifact: null, read_mcp_tool: null, read_drive: null,

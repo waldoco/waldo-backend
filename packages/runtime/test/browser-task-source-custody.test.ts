@@ -6,7 +6,7 @@ const fixture=()=>{
  const rows=new Map<string,unknown>();let source={taskId:'source-task',revision:1,sources:['web'],ready:true};
  const sql={exec:()=>({toArray:()=>[{task_id:source.taskId,revision:source.revision,sources_json:JSON.stringify(source.sources),ready:source.ready?1:0,start_ref:'input'}]})} as unknown as SqlStorage;
  const kv={get:<T>(key:string)=>structuredClone(rows.get(key)) as T,put:(key:string,value:unknown)=>{rows.set(key,structuredClone(value));}};
- let owner='owner-a';const custody=browserTaskSourceCustody(sql,kv,async()=>owner);
+ let owner='owner-a';const custody=browserTaskSourceCustody(sql,kv,async()=>[owner]);
  return {rows,sql,kv,custody,setOwner:(value:string)=>{owner=value;},restrict:()=>{source={...source,revision:2,sources:['workspace'],ready:false};}};
 };
 it('rejects approval after durable source scope is restricted/closed',async()=>{
@@ -15,17 +15,30 @@ it('rejects approval after durable source scope is restricted/closed',async()=>{
 });
 it('witness replacement during owner lookup must invalidate in-flight guard',async()=>{
  const f=fixture();let release!: (owner:string)=>void;
- const custody=browserTaskSourceCustody(f.sql,f.kv,()=>new Promise(resolve=>{release=resolve;}));
+ const custody=browserTaskSourceCustody(f.sql,f.kv,()=>new Promise<string>(resolve=>{release=resolve;}).then(owner=>[owner]));
  custody.capture(payload,'owner-a');const checking=custody.guard(payload)();
  custody.capture({...payload,continuation:{...payload.continuation!,proposalId:'new-proposal'}},'owner-a');release('owner-a');
  await expect(checking).rejects.toThrow();
+});
+it('a witness written under the owner\'s earlier key still reads while that owner holds it, and no other key does',async()=>{
+ const rows=new Map<string,unknown>();
+ const sql={exec:()=>({toArray:()=>[]})} as unknown as SqlStorage;
+ const kv={get:<T>(key:string)=>structuredClone(rows.get(key)) as T,put:(key:string,value:unknown)=>{rows.set(key,structuredClone(value));}};
+ let keys:readonly string[]=['owner:do-1:prn_a','telegram:do-1:81'];
+ const custody=browserTaskSourceCustody(sql,kv,async()=>keys);
+ custody.capture(payload,'telegram:do-1:81');
+ await custody.guard(payload)();
+ keys=['owner:do-1:prn_a'];
+ await expect(custody.guard(payload)()).rejects.toThrow('changed');
+ keys=['owner:do-1:prn_b','telegram:do-1:82'];
+ await expect(custody.guard(payload)()).rejects.toThrow('changed');
 });
 it('control: different current owner rejects before use',async()=>{
  const f=fixture();f.custody.capture(payload,'owner-a');f.setOwner('owner-b');await expect(f.custody.guard(payload)()).rejects.toThrow();
 });
 it('control: changed revoke marker during owner lookup rejects',async()=>{
  const f=fixture();let release!:(owner:string)=>void;
- const custody=browserTaskSourceCustody(f.sql,f.kv,()=>new Promise(resolve=>{release=resolve;}));custody.capture(payload,'owner-a');
+ const custody=browserTaskSourceCustody(f.sql,f.kv,()=>new Promise<string>(resolve=>{release=resolve;}).then(owner=>[owner]));custody.capture(payload,'owner-a');
  const checking=custody.guard(payload)();f.rows.set('browser_owner_task_revoked_v1','browser-task');release('owner-a');await expect(checking).rejects.toThrow();
 });
 
@@ -80,7 +93,7 @@ it('witness replacement in final asynchronous source wait does not fence physica
  let payload:BrowserSubmitProposal;let custody:ReturnType<typeof browserTaskSourceCustody>;
  custody=browserTaskSourceCustody(source.sql,source.kv,async()=>{
   if(replace){replace=false;custody.capture({...payload,continuation:{...payload.continuation!,proposalId:'replacement-proposal'}},'owner-a');}
-  return 'owner-a';
+  return ['owner-a'];
  });
  f.options.approved=()=>true;
  f.driver.submit=async(_id,_state,before,_source?,assertCurrent?)=>{

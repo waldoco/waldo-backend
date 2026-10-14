@@ -57,6 +57,7 @@ export type ParseToolCallsResult =
 export type ToolDispatcherContext = HookRuntimeContext & {
   authenticatedUserId: string;
   assertTaskSourceCurrent?: () => Promise<void>;
+  ownerInitiated?: boolean;
   turnId?: string;
   toolCallId?: string;
   runScope?: RunEffectScope;

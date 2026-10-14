@@ -16,7 +16,8 @@ vi.mock('../src/channels/telegram-turn', async load => {
     model.requests.push(request);
     const done = (text: string, tool_calls?: Array<{ call_id: string; name: string; arguments: string }>) => ({ ok: true as const, data: { model: request.model, text, ...(tool_calls ? { tool_calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
     if (request.response_format) return done(request.response_format.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[]}');
-    const asked = String(request.messages.at(-1)?.content ?? '');
+    // The owner's own words only: past messages recalled for this one follow them as fenced data.
+    const asked = String(request.messages.at(-1)?.content ?? '').split('\n\n[memory recalled for this message')[0]!;
     if (asked.includes('overnight HRV') && !request.tool_turns?.length) return done('', [{ call_id: 'hrv', name: 'get_health', arguments: JSON.stringify({ signals: ['hrv'], from: '2026-10-12', to: '2026-10-12' }) }]);
     return done('Noted.');
   } };

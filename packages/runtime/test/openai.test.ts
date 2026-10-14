@@ -175,20 +175,16 @@ describe('OpenAIResponsesAdapter', () => {
     expect(sent).toMatchObject({ max_output_tokens: 32, reasoning: { effort: 'low', summary: 'auto' } });
   });
 
-  it('a reasoning-only reply is asked for once more, and fails only when the second is also empty', async () => {
+  it('a reasoning-only reply is a transient miss that carries its tokens, and is not asked again here', async () => {
     const empty = { id: 'resp_e', status: 'completed', output_text: '', output: [{ type: 'reasoning', summary: [] }], usage: { input_tokens: 4, output_tokens: 2 } };
     const good = { id: 'resp_g', status: 'completed', output_text: 'Here is your plan.', output: [{ type: 'message', content: [{ type: 'output_text', text: 'Here is your plan.' }] }], usage: { input_tokens: 4, output_tokens: 3 } };
-    const run = async (replies: unknown[]) => {
-      let calls = 0;
-      const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async () => replies[calls++] as never) });
-      return { result: await adapter.complete(gatewayRequest()), calls };
-    };
-    const recovered = await run([empty, good]);
-    expect(recovered.calls).toBe(2);
-    expect(recovered.result).toMatchObject({ ok: true, data: { text: 'Here is your plan.', input_tokens: 8, output_tokens: 5 } });
-    const failed = await run([empty, empty]);
-    expect(failed.calls).toBe(2);
-    expect(failed.result).toEqual({ ok: false, code: 'invalid_args', error: 'OpenAI returned empty output' });
+    let calls = 0;
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async () => [empty, good][calls++] as never) });
+    await expect(adapter.complete(gatewayRequest())).resolves.toEqual({
+      ok: false, code: 'transient', error: 'OpenAI returned empty output',
+      spent: { input_tokens: 4, output_tokens: 2, cache_read_input_tokens: 0 },
+    });
+    expect(calls).toBe(1);
   });
   it('parallel tool calls in one round are replayed once each, not once from the model output and again per call', async () => {
     let sent: Array<{ type?: string; call_id?: string }> = [];
