@@ -10,7 +10,7 @@ import type { LLMGatewayRequest } from '../src/llm/provider';
 // A directory-backed Telegram owner asks for a long errand. The scripted model posts one progress note, then answers. The
 // note leaves while the turn runs, straight to the chat; the reply leaves later, on the alarm that drains the final outbox.
 const NOTE = 'Found two hotels under budget near the station; checking reviews on a third.';
-const world = vi.hoisted(() => ({ requests: [] as LLMGatewayRequest['request'][], sends: [] as { text: string; chat?: number }[], next: 500, final: 'Here are three hotels near the station.' }));
+const world = vi.hoisted(() => ({ requests: [] as LLMGatewayRequest['request'][], sends: [] as { text: string; chat?: number }[], next: 500, final: 'Here are three hotels near the station.', throttleNote: false }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
@@ -21,20 +21,21 @@ vi.mock('../src/channels/telegram-turn', async load => {
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
-vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(), createTelegramCaller: () => async (method: string, body: { chat_id?: number; text?: string }) => {
+vi.mock('../src/channels/telegram-api', async load => { const original = await load<typeof import('../src/channels/telegram-api')>(); return { ...original, createTelegramCaller: () => async (method: string, body: { chat_id?: number; text?: string }) => {
   if (method === 'getMe') return { username: 'fixture_bot' };
+  if (method === 'sendMessage' && world.throttleNote && body.text === NOTE) throw new original.TelegramRejection(429, 'Too Many Requests: retry after 7', 7, method);
   if (method !== 'sendMessage') return true;
   const message_id = world.next++;
   world.sends.push({ text: body.text ?? '', chat: body.chat_id });
   return { message_id, chat: { id: body.chat_id, type: 'private' }, text: body.text };
-} }));
+} }; });
 const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '5c2e66cc-bab5-47a4-83f9-5d8fde89849c';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 
 beforeEach(() => {
-  world.requests = []; world.sends = []; world.final = 'Here are three hotels near the station.';
+  world.requests = []; world.sends = []; world.final = 'Here are three hotels near the station.'; world.throttleNote = false;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
@@ -116,5 +117,19 @@ it('a turn whose final reply is empty is not answered by its note', async () => 
     // A quarantined turn is not retried: later alarms neither deliver a reply nor send the note again.
     expect(await owner.deliver(950021)).toBe('quarantined');
     expect(world.sends.filter(sent => sent.text === NOTE)).toHaveLength(1);
+  });
+});
+
+it('a Telegram 429 on the note does not fail the turn: the model hears send_failed and the reply still goes out', async () => {
+  await telegramOwner('progress-note-telegram-429', async owner => {
+    world.throttleNote = true;
+    expect(await owner.send(950031, 'Find me a hotel near the station for Friday.')).toBe('awaiting_delivery');
+    expect(world.sends).toEqual([]);
+    const result = JSON.stringify(world.requests[1]!.tool_turns);
+    expect(result).toContain('\\"sent\\":false');
+    expect(result).toContain('\\"reason\\":\\"send_failed\\"');
+    expect(result).not.toContain('Too Many Requests');
+    expect(await owner.deliver(950031)).toBe('completed');
+    expect(world.sends.map(sent => sent.text)).toEqual([world.final]);
   });
 });
