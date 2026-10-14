@@ -84,16 +84,17 @@ const world = async (name: string, accounts: unknown[], run: (world: World) => P
   });
 };
 
-it('a reconnect re-arms a Gmail watch that a locally held grant skipped, says why it skipped, and clears a Calendar failure', async () => {
+it('a reconnect re-arms a Gmail watch that a locally held grant skipped, says why it skipped, and retries a failed Calendar watch', async () => {
   await world('gmail-rearm-local-rail', [{ id: `local:${EMAIL}`, email: EMAIL, refresh_token: 'synthetic-offline-only', scopes: MAIL }], async ({ state, logs, sweep, reconnect, push, watches }) => {
     await sweep();
     expect(watches('gmail_watch')).toEqual([]);
     // The mail-only grant covers no calendar, so the Calendar watch stored a failure.
     expect(calendarPushBook(state.storage.kv).state()).toEqual({ failedAt: expect.any(Number) });
-    await reconnect('conn-2', MAIL);
+    await reconnect('conn-2', [...MAIL, CALENDAR]);
     expect.soft(calendarPushBook(state.storage.kv).state(), 'the keep clears a Calendar failure').toBeNull();
     await sweep();
     expect.soft(watches('gmail_watch'), 'the next sweep watches with the new connection').toEqual(['conn-2']);
+    expect.soft(watches('calendar_watch'), 'the next sweep retries the Calendar watch with the new grant').toEqual(['conn-2']);
     await sweep();
     expect.soft(watches('gmail_watch'), 'a fresh watch is left alone').toEqual(['conn-2']);
     const mail = lines(logs, 'gmail_watch');
