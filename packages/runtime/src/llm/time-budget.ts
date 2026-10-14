@@ -12,6 +12,18 @@ export const OWNER_TURN_CALL_TIMEOUT_MS = 120_000;
 // before the loop and any tool still running at the deadline, since started tools are never cut. A Telegram run is
 // closed 14 minutes after it is claimed, so its turn has 13.5; an app or iMessage run has 15 minutes, so its turn has 14.5.
 export const RUN_CLOSE_MARGIN_MS = 30_000;
+// Cloudflare stops an alarm handler at 15 minutes of wall time. Every run the owner object's alarm claims closes within
+// this budget, counted from the alarm's start; the minute left covers closing the last run.
+export const ALARM_TURN_BUDGET_MS = 14 * 60_000;
+// A run starts inside an alarm only with this much of the budget left: its close margin, one tool round's model call and
+// the answer reserve. Otherwise its row waits, admitted, for a fresh alarm.
+export const ALARM_TURN_MIN_MS = RUN_CLOSE_MARGIN_MS + MODEL_CALL_TIMEOUT_MS + MODEL_CALL_TIMEOUT_MS;
+// The deadline to claim a run with: its own window, cut to the alarm's budget when an alarm runs it. Null when too
+// little of that budget is left to start it.
+export const runClaimDeadline = (windowMs: number, alarmEnd: number | undefined, now = Date.now()): number | null => {
+  const deadline = Math.min(now + windowMs, alarmEnd ?? Infinity);
+  return deadline - now >= ALARM_TURN_MIN_MS ? deadline : null;
+};
 // The turn's time when no run bounds it, counted from the tool loop's start.
 export const TURN_TIME_BUDGET_MS = 120_000;
 // Tool rounds follow the time a turn has: 25 for two minutes, never fewer, and never past a ceiling that stops a model

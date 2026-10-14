@@ -11,7 +11,7 @@ import { TURN_TIMEOUT_MS } from '../src/channels/telegram-listener';
 import { TELEGRAM_TURN_DEADLINE_MS } from '../src/channels/telegram-owner-inbox';
 import { googleHandlers } from '../src/tools/live/google';
 import { sanitise } from '../src/scribe/sanitiser';
-import { FINAL_ANSWER_RESERVE_MS, MODEL_CALL_TIMEOUT_MS, OWNER_TURN_CALL_TIMEOUT_MS, RATE_LIMIT_BACKOFF_MS, RUN_CLOSE_MARGIN_MS, TOOL_ROUNDS_CEILING, toolRoundsFor, TURN_TIME_BUDGET_MS, turnDeadlineFor, withCallDeadline } from '../src/llm/time-budget';
+import { ALARM_TURN_MIN_MS, FINAL_ANSWER_RESERVE_MS, MODEL_CALL_TIMEOUT_MS, OWNER_TURN_CALL_TIMEOUT_MS, runClaimDeadline, RATE_LIMIT_BACKOFF_MS, RUN_CLOSE_MARGIN_MS, TOOL_ROUNDS_CEILING, toolRoundsFor, TURN_TIME_BUDGET_MS, turnDeadlineFor, withCallDeadline } from '../src/llm/time-budget';
 import type { HookRuntimeContext } from '../src/hooks/registry';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 
@@ -438,6 +438,14 @@ describe('the turn budget follows the run it serves', () => {
     await settle(responder.respond(ownerTyped({ traceId: 'long-turn', conversationRef: 'owner', surface: 'app', text: 'Work through my week.', memoryWrites: false, runScope: scope }), sameTime));
     return api.requests.filter((request) => request.body.tools !== undefined).length;
   };
+
+  it('cuts a run claimed inside an alarm to what is left of the alarm, and starts none with too little left', () => {
+    const now = 1_000_000, alarmEnd = now + 4 * 60_000;
+    expect(runClaimDeadline(15 * 60_000, undefined, now)).toBe(now + 15 * 60_000);
+    expect(runClaimDeadline(15 * 60_000, alarmEnd, now)).toBe(alarmEnd);
+    expect(runClaimDeadline(15 * 60_000, now + ALARM_TURN_MIN_MS, now)).toBe(now + ALARM_TURN_MIN_MS);
+    expect(runClaimDeadline(15 * 60_000, now + ALARM_TURN_MIN_MS - 1, now)).toBeNull();
+  });
 
   it('a short run still gets 25 tool rounds', async () => {
     expect(await roundsThroughResponder(TURN_TIMEOUT_MS)).toBe(25);
