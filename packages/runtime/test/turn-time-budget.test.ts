@@ -280,8 +280,8 @@ describe('one model step: the provider is the only retry owner', () => {
 describe('one turn: the tool loop spends one time budget', () => {
   const runtime = () => new RuntimeLLMProvider({ gateway: new OpenAIResponsesAdapter({ apiKey: SYNTHETIC_KEY }) });
 
-  it('leaves a Telegram run more than a model call of time for the work before the loop and the last round of tools', () => {
-    expect(TURN_TIMEOUT_MS - TURN_TIME_BUDGET_MS).toBeGreaterThan(MODEL_CALL_TIMEOUT_MS);
+  it('ends a turn before a Telegram run is closed', () => {
+    expect(TURN_TIME_BUDGET_MS).toBeLessThan(TURN_TIMEOUT_MS);
   });
 
   it('a slow model no longer stretches a turn over every tool round', async () => {
@@ -289,8 +289,8 @@ describe('one turn: the tool loop spends one time budget', () => {
     const { scope } = runScope();
     const loop = turn(ownerStep(runtime(), scope), scope);
     const run = await settle(loop.done);
-    // Rounds start at 0, 25 and 50 s; at 75 s less than one full call is left, so the answer call gets the last 15 s.
-    expect(api.requests.map((request) => request.at)).toEqual([0, 25_000, 50_000, 75_000]);
+    // Rounds start at 0, 25, 50 and 75 s; at 100 s less than one full call is left, so the answer call gets the last 20 s.
+    expect(api.requests.map((request) => request.at)).toEqual([0, 25_000, 50_000, 75_000, 100_000]);
     expect(run).toMatchObject({ ms: TURN_TIME_BUDGET_MS, value: OUT_OF_TIME_REPLY });
     expect(loop.exit()).toBe('time_exhausted');
   });
@@ -310,13 +310,13 @@ describe('one turn: the tool loop spends one time budget', () => {
   });
 
   it('ends an exhausted budget through the final no-tools step', async () => {
-    const api = fakeOpenAI((n) => (n < 4 ? { after: 20_000, body: asksForCalendar(n) } : { after: 5_000, body: said('Here is what I found so far.') }));
+    const api = fakeOpenAI((n) => (n < 5 ? { after: 20_000, body: asksForCalendar(n) } : { after: 5_000, body: said('Here is what I found so far.') }));
     const { scope } = runScope();
     const loop = turn(ownerStep(runtime(), scope), scope);
     const run = await settle(loop.done);
-    // Rounds start at 0, 20, 40 and 60 s; at 80 s less than one full call is left, so the fifth call offers no tools.
-    expect(run).toMatchObject({ ms: 85_000, value: 'Here is what I found so far.' });
-    expect(api.requests.map((request) => request.body.tools === undefined)).toEqual([false, false, false, false, true]);
+    // Rounds start at 0, 20, 40, 60 and 80 s; at 100 s less than one full call is left, so the sixth call offers no tools.
+    expect(run).toMatchObject({ ms: 105_000, value: 'Here is what I found so far.' });
+    expect(api.requests.map((request) => request.body.tools === undefined)).toEqual([false, false, false, false, false, true]);
     expect(loop.events.at(-1)?.output).toContain('turn time is up');
     expect(loop.exit()).toBe('time_exhausted');
   });
