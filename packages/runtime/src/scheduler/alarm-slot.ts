@@ -47,24 +47,33 @@ export function alarmRetryDelay(streak: number, objectId: string, capMs: number)
   return Math.min(Math.floor(2_000 * 2 ** Math.min(streak - 1, 20) * (1 + hash / 2 ** 32 / 4)), capMs);
 }
 
-// Objects whose alarm handler is running. A delete made there may cancel the platform's retry of a pass that then dies,
-// so inside the handler the arbiter never deletes the alarm.
-const inAlarmHandler = new WeakSet<DurableObjectStorage>();
-export async function insideAlarmHandler(storage: DurableObjectStorage, pass: () => Promise<void>): Promise<void> {
-  inAlarmHandler.add(storage);
-  try { await pass(); } finally { inAlarmHandler.delete(storage); }
+type PassRearm = Readonly<{ scheduleDue: number | null; retryDelayMs: number }>;
+// The re-arms of an alarm pass in flight, keyed by its object's storage. Inside the handler the arbiter only records them,
+// and the pass applies the last one once its work completes. A delete there could cancel the platform's retry of a pass
+// that then dies, and an arm made mid-pass would outlive a later re-arm that holds the schedule.
+const passRearms = new WeakMap<DurableObjectStorage, PassRearm | null>();
+export async function alarmPass(storage: DurableObjectStorage, work: () => Promise<void>): Promise<void> {
+  passRearms.set(storage, null);
+  let last: PassRearm | null | undefined;
+  try { await work(); last = passRearms.get(storage); } finally { passRearms.delete(storage); }
+  if (last) await arbitrate(storage, last.scheduleDue, Date.now(), last.retryDelayMs, false);
 }
 
 // The one arbiter: arms the earliest of the schedule's next entry and every listed lane's wake, never sooner than the
 // retry delay. While the alarm handler has a retry pending, it owns when past-due work runs again, so a past-due wake is
-// armed no sooner than that retry. With nothing due, a re-arm outside the handler clears the alarm; inside, it leaves it.
+// armed no sooner than that retry. With nothing due, a re-arm outside the handler clears the alarm; a pass leaves it.
 export async function rearmSharedAlarm(storage: DurableObjectStorage, scheduleDue: number | null, now: number, retryDelayMs = 250): Promise<void> {
+  if (passRearms.has(storage)) { passRearms.set(storage, { scheduleDue, retryDelayMs }); return; }
+  await arbitrate(storage, scheduleDue, now, retryDelayMs, true);
+}
+
+async function arbitrate(storage: DurableObjectStorage, scheduleDue: number | null, now: number, retryDelayMs: number, mayDelete: boolean): Promise<void> {
   const bounds = scheduleDue === null ? [] : [scheduleDue];
   for (const key of WAKE_DUE_KEYS) {
     const due = (await storage.get<number | null>(key)) ?? null;
     if (due !== null) bounds.push(due);
   }
-  if (!bounds.length) { if (!inAlarmHandler.has(storage)) await storage.deleteAlarm(); return; }
+  if (!bounds.length) { if (mayDelete) await storage.deleteAlarm(); return; }
   const earliest = Math.min(...bounds), retryDue = (await storage.get<number | null>(ALARM_RETRY_DUE_KEY)) ?? null;
   const floor = earliest <= now && retryDue !== null ? Math.max(retryDue, now + retryDelayMs) : now + retryDelayMs;
   await armAlarm(storage, Math.max(earliest, floor));

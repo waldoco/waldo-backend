@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
-import { rearmSharedAlarm, WAKE_DUE_KEYS } from '../src/scheduler/alarm-slot';
+import { ALARM_RETRY_DUE_KEY, rearmSharedAlarm, WAKE_DUE_KEYS } from '../src/scheduler/alarm-slot';
 import { COMMON_BROWSER_LEASE_DUE } from '../src/channels/owner-browser-runtime';
 
 // The owner object's one alarm is the earliest of its lanes' persisted wakes and the schedule's next entry.
@@ -27,6 +27,23 @@ it('every listed lane\'s wake alone arms the alarm at its time; the schedule\'s 
     await state.storage.delete([...WAKE_DUE_KEYS]);
     await rearmSharedAlarm(state.storage, null, now);
     expect(await state.storage.getAlarm()).toBeNull();
+  });
+});
+
+it('a past-due wake waits for the alarm handler\'s pending retry, otherwise the 250 ms floor; a sooner future wake keeps its time', async () => {
+  await inObject('wake-keys-retry-floor', async state => {
+    const now = Date.now();
+    await state.storage.delete([...WAKE_DUE_KEYS]);
+    await state.storage.put('telegram_link_due_v1', now - 1_000);
+    await rearmSharedAlarm(state.storage, null, now);
+    expect(await state.storage.getAlarm()).toBe(now + 250);
+    await state.storage.put(ALARM_RETRY_DUE_KEY, now + 8_000);
+    await rearmSharedAlarm(state.storage, null, now);
+    expect(await state.storage.getAlarm()).toBe(now + 8_000);
+    await state.storage.put('telegram_link_due_v1', now + 3_000);
+    await rearmSharedAlarm(state.storage, null, now);
+    expect(await state.storage.getAlarm()).toBe(now + 3_000);
+    await state.storage.delete([...WAKE_DUE_KEYS]);
   });
 });
 

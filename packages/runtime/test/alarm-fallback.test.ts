@@ -143,6 +143,22 @@ it('a pass that dies after the arbiter found nothing due still gets the platform
   } finally { work.mockRestore(); }
 }, 20_000);
 
+// The hold paths (an owner the directory doesn't admit) re-arm with the schedule held and nothing else due. A wake that an
+// earlier re-arm in the same pass armed for that schedule must not stand, or a held owner wakes every 250 ms.
+it('a pass whose last re-arm holds the schedule leaves no wake from an earlier re-arm in the same pass', async () => {
+  const work = vi.spyOn(proto, 'alarmWork').mockImplementation(async function (this: unknown) {
+    const storage = (this as { ctx: DurableObjectState }).ctx.storage;
+    await rearmSharedAlarm(storage, Date.now() - 1_000, Date.now());
+    await rearmSharedAlarm(storage, null, Date.now(), 30_000);
+  });
+  try {
+    await watchPasses('alarm-hold-pass', () => undefined, async (_stub, at) => {
+      await sleep(1_500);
+      expect(at.length, `passes at ${at.join(', ')} ms`).toBe(1);
+    });
+  } finally { work.mockRestore(); }
+}, 20_000);
+
 it('the retry delay starts at 2 s, doubles, adds a fixed share of up to a quarter per owner, and never passes the cap', () => {
   const owners = ['5f2d9c0e7a1b4c3d8e6f0a9b2c4d6e8f1a3b5c7d9e0f2a4b6c8d0e1f3a5b7c9d', 'c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00'];
   for (const owner of owners) for (let streak = 1; streak <= 12; streak++) {
