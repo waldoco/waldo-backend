@@ -2548,3 +2548,22 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
   - the trip eval case.
 - **Lane X** opened #1234.
 - **Staging is still `6be19816` (`a8c92893`).**
+
+## 12:32Z-16:32Z: staging moved to the tip; Gmail push works; no slash commands; #1246 merged
+
+- **Staging is `7f202f2b`** (version `6ef62710`, 13:52Z). The Mac didn't deploy it.
+  - The preflight shows 60 applied and 0 pending, so `20261014120000` is applied. The owner's `72030b34` deploy was cancelled.
+- **Gmail push works on staging.** `/events/gmail` returned 200 and the owner object woke (`sweep_pulled_forward`) at 15:11, 15:15, 15:24 and 15:25Z.
+  - After the owner reconnected, no `gmail_watch` line appeared.
+  - The likely cause is that watch upkeep lived only in the event-brief sweep. The fix is #1247 (scheduled upkeep, armed whenever a scoped grant exists), and its gate review is running.
+- **Owner rulings:**
+  - no user-facing slash commands and no Telegram-only paths (6171369798);
+  - "no need for stop" (6171907223);
+  - D5 = T1 (6168355119).
+- **Merged:**
+  - by the review session: #1236, #1237, #1230, #1179, #1239, #1234 and #1242;
+  - by the Mac: **#1246** (`6be693e3`, pinned to `8ee66ab1`), on a fresh reviewer's PASS WITH NITS (6172943637).
+- **Flaky test:** `owner-do-registered-workspace` failed on three runs. It's classified as a flake (6172552957), and a fix chip is queued.
+- **Deploy handover:** `e5c022ef` (green push CI, no migrations). The `connector-proxy` edge function goes first, then the Worker. The owner runs it.
+- **#1227 is waiting for the owner's approval** in its builder's session. #1238 and #1240 are stacked on it.
+- **The app restarted at about 15:35Z,** wiping the Mac's scratchpad helpers. The builders were resumed.
