@@ -142,7 +142,7 @@ export const createOwnerResponder = (
   let backgroundSourceTaint: 'external' | null = null;
   const assertCurrent = async () => { privateRunScope?.admit(); await context?.assertCurrent(); await skills?.admission?.assertCurrent(); await backgroundCurrent?.(); privateRunScope?.admit(); };
   // Before an effect or a published reply: authority read now, never a recent match.
-  const assertFresh = async () => { privateRunScope?.admit(); await context?.assertFresh(); await (skills?.admission?.assertFresh ?? skills?.admission?.assertCurrent)?.(); await backgroundCurrent?.(); privateRunScope?.admit(); };
+  const assertFresh = async () => { privateRunScope?.admit(); await context?.assertFresh(); await skills?.admission?.assertFresh(); await backgroundCurrent?.(); privateRunScope?.admit(); };
   const ownerId = invocation.verified_authority.principal_ref;
   const CANARIES = newSessionCanaryTokens();
   const cacheKey = `waldo:${ownerId}`;

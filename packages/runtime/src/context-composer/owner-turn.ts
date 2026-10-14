@@ -50,7 +50,7 @@ export function createOwnerTurnContext(admission: OwnerMessageAdmission, sources
   const tenant = invocation.verified_authority.tenant_ref;
   const now = sources.now ?? Date.now;
   const assertCurrent = async () => { await admission.assertCurrent(); await sources.assertSourceCurrent?.(); await admission.assertCurrent(); };
-  const assertFresh = async () => { await (admission.assertFresh ?? admission.assertCurrent)(); await sources.assertSourceCurrent?.(); await admission.assertCurrent(); };
+  const assertFresh = async () => { await admission.assertFresh(); await sources.assertSourceCurrent?.(); await admission.assertCurrent(); };
   const check = async (request: { principal_ref?: string; tenant_ref?: string; snapshot_ref: string; snapshot_at: number }) => {
     await assertCurrent();
     if ((request.principal_ref !== undefined && request.principal_ref !== principal)
