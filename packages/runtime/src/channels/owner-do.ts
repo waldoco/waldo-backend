@@ -12,6 +12,7 @@ import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/ap
 import { calendarDemand, demandCode, type DemandAnswer, type DemandRequest } from '../health/calendar-demand';
 import { CALENDAR_DEMAND_PATH, verifiedDemandRequest } from '../health/calendar-demand-route';
 import { surfaceOwnerAdmission } from '../identity/surface-owner-admission';
+import { localOwnerBinding, ownerBindingCurrent, verifyOwnerBinding } from '../identity/owner-binding';
 import { createOwnerTurnContext, ownerChainRef, surfaceChatRef, type OwnerContextSources } from '../context-composer/owner-turn';
 import { canonicalHistoryFault, canonicalOwnerConversationStore, skippedRowLines, type CanonicalSkipped } from '../conversation/canonical-owner-store';
 import {useMacHandler} from '../tools/live/use-mac';
@@ -246,14 +247,16 @@ const WHATSAPP_PENDING_CHECK_MS = 60_000;
 export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private readonly ownerBrowser: ReturnType<typeof ownerBrowserRuntime>;
   private browserTasks: ReturnType<typeof browserOwnerHost>;
+  // Whether the configured browser task host serves typed browse_act commands on this object.
+  private typedBrowserHost = false;
   private readonly makeBrowserHost: (config?: BrowserOwnerConfiguration) => ReturnType<typeof browserOwnerHost>;
   private readonly browserReady: Promise<void>;
   private readonly browserTrial: BrowserTrialPreparation | undefined;
   constructor(ctx: DurableObjectState, env: TelegramWebhookEnv, browserConfiguration?: BrowserOwnerConfiguration, browserTrial?: BrowserTrialPreparation) {
     super(ctx, env);
     this.browserTrial = browserTrial;
-    this.ownerBrowser = ownerBrowserRuntime({ env, storage: ctx.storage, actualDoId: ctx.id.toString(), activeScope: () => this.activeScope });
-    const makeBrowserHost = this.makeBrowserHost = (config?: BrowserOwnerConfiguration) => browserOwnerHost({ storage: ctx.storage, config, now: Date.now, newId: () => crypto.randomUUID(),
+    this.ownerBrowser = ownerBrowserRuntime({ env, storage: ctx.storage, actualDoId: ctx.id.toString(), activeScope: () => this.activeScope, typedHost: () => this.typedBrowserHost });
+    const makeBrowserHost = this.makeBrowserHost = (config?: BrowserOwnerConfiguration) => (this.typedBrowserHost = config?.enabled === true, browserOwnerHost({ storage: ctx.storage, config, now: Date.now, newId: () => crypto.randomUUID(),
       physical: () => { const doName = ctx.storage.kv.get<string>('do_name'); return { doName, subject: ctx.storage.kv.get<string>('telegram_subject'), matches: Boolean(doName && env.OWNER_DO && env.OWNER_DO.idFromName(doName).toString() === ctx.id.toString() && ctx.storage.kv.get<boolean>('telegram_unlinked') !== true) }; },
       approved: (approval, proposal) => {
         try {
@@ -265,7 +268,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           return Boolean(row && row.decided_at <= Date.now() && Date.now() - row.decided_at < 600000 && payload?.continuation?.proposalId === proposal && payload?.continuation?.taskRef === checkpoint?.taskId && prepared?.id === proposal && payload.url === prepared.url && payload.action?.selector === prepared.actionRef && payload.action?.method === 'click' && (payload.action?.arguments?.length ?? 0) === 0 && payload.continuation?.scopeDigest === prepared.scopeDigest && facts(payload.binding) === facts(prepared.binding));
         } catch { return false; }
       },
-    });
+    }));
     this.browserTasks = makeBrowserHost(browserConfiguration);
     this.browserReady = browserConfiguration ? Promise.resolve() : browserProductionConfiguration({ env, storage: ctx.storage,
       actualDoId: ctx.id.toString(), policy: browserTrial?.policy, loadSdk: browserTrial?.loadSdk }).then(config => { this.browserTasks = makeBrowserHost(config); })
@@ -2185,13 +2188,26 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return { outcome, fresh, bot: await botUsername() };
       },
     };
-    const currentTaskOwnerKey = async () => {
+    // The key browser task custody was held under before it moved to the owner principal; a Telegram owner's approval in
+    // flight still reads under it.
+    const telegramTaskOwnerKey = (): string | undefined => {
       const currentOwner = resolveOwnerTelegramId(identity.get<string>('telegram_subject'), this.env, consoleAuth(this.env) !== null);
       if (channel !== 'telegram' || owner <= 0 || currentOwner !== owner || identity.get('telegram_unlinked') === true
-        || !identity.get<string>('do_name') || this.env.OWNER_DO?.idFromName(identity.get<string>('do_name')!).toString() !== this.ctx.id.toString()) throw new ClosedRunError();
+        || !identity.get<string>('do_name') || this.env.OWNER_DO?.idFromName(identity.get<string>('do_name')!).toString() !== this.ctx.id.toString()) return undefined;
       return `telegram:${this.ctx.id.toString()}:${owner}`;
     };
-    const browserSources = browserTaskSourceCustody(storage.sql, storage.kv, currentTaskOwnerKey);
+    // Browser task custody belongs to the owner principal on whichever surface they use. Without a directory only the
+    // Telegram owner exists, under its own key.
+    const currentTaskOwnerKeys = async (): Promise<readonly string[]> => {
+      const legacy = telegramTaskOwnerKey();
+      if (!consoleAuth(this.env)) { if (!legacy) throw new ClosedRunError(); return [legacy]; }
+      const actualDoId = this.ctx.id.toString(), binding = localOwnerBinding(identity, this.env.OWNER_DO, actualDoId);
+      if (!binding) throw new ClosedRunError();
+      const verified = await verifyOwnerBinding(this.env, binding, actualDoId, this.env.OWNER_DO);
+      if (!verified || !ownerBindingCurrent(identity, this.env.OWNER_DO, actualDoId, binding)) throw new ClosedRunError();
+      return [`owner:${actualDoId}:${ownerPrincipalRef(verified.directoryOwnerId)}`, ...(legacy ? [legacy] : [])];
+    };
+    const browserSources = browserTaskSourceCustody(storage.sql, storage.kv, currentTaskOwnerKeys);
     const browserApproval = browserTaskApprovalBridge({ ownerId: () => this.browserTasks.principal, host: async (payload, operation) => {
       await this.browserReady;
       if (operation === 'deny') return this.browserTasks.resolve(this.browserTasks.principal);
@@ -2470,10 +2486,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           };
           if (scope) scope.commit(scrubEpisodes); else scrubEpisodes();
         },
-      }), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), this.ownerBrowser.read(browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env))), this.ownerBrowser.act(this.ownerBrowser.guard(browserTaskHandler({ legacy: browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
+      }), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), this.ownerBrowser.read(browsePageHandler(undefined, undefined, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env))), this.ownerBrowser.act(this.ownerBrowser.guard(browserTaskHandler({ legacy: browseActHandler(undefined, undefined, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
         if (!context.assertTaskSourceCurrent) throw Error('browser task source unavailable');
         await context.assertTaskSourceCurrent();
-        const ownerKey = await currentTaskOwnerKey(); await context.assertTaskSourceCurrent();
+        const [ownerKey] = await currentTaskOwnerKeys(); await context.assertTaskSourceCurrent();
+        if (!ownerKey) throw new ClosedRunError();
         browserSources.capture(payload, ownerKey);
         const id = await desk.proposeBrowserSubmit(payload); await context.assertTaskSourceCurrent(); return id;
       }, placement: id => desk.placement(id), stopAdmission: async context => { await this.ownerBrowser.current(context)(); this.ownerBrowser.stop(); await this.browserTasks.revoke(); } }), () => this.browserTasks.principal)), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), useMacHandler({ request: async (input, context) => {
