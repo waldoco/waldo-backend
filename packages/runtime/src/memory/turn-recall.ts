@@ -3,10 +3,10 @@ import { fence, type Claim, type ClaimStore } from './claims';
 import { ftsTerms, speakerOfEntry, type EpisodeHit } from '../channels/episodes';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 
-// Recall for one turn: the stored claims and past messages that share words with what the owner just said, shown as
-// <recalled> after the pinned blocks. The blocks carry what matters on most turns; this carries what matters to this
-// message; read_memory and search_episodes stay the model's deeper reach. Choosing terms, dedup and the cut are mechanical:
-// what a recalled line means is the model's call.
+// Recall for one turn: the stored claims and past messages that share words with what the owner just said, as a
+// <recalled> block. The pinned blocks in the system prompt carry what matters on most turns; this carries what matters to
+// this message, so the turn's own message carries it as data; read_memory and search_episodes stay the model's deeper
+// reach. Choosing terms, dedup and the cut are mechanical: what a recalled line means is the model's call.
 export const RECALL_MAX_CHARS = 3_000;
 const RECALL_CLAIMS = 12;
 const RECALL_EPISODES = 8;
