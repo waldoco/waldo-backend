@@ -40,7 +40,7 @@ import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { receiptUrl } from '../conversation/artifact-link-guard';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
-import { APP_INBOX_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, armWhatsappPendingWake, persistInboxWake, persistTransportWake, rearmSharedAlarm } from '../scheduler/alarm-slot';
+import { ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, alarmPass, alarmRetryDelay, armAlarm, armWhatsappPendingWake, persistInboxWake, persistTransportWake, rearmSharedAlarm } from '../scheduler/alarm-slot';
 import { admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
 import { TelegramFinalOutbox, redactMailFollowupEntries, redactCalendarPrepEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
@@ -61,7 +61,7 @@ import { SCHEDULE_KINDS, setProactivityArgsSchema, type ConnectIntent, type Conv
 import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, claimStore, profile } from '../memory/claims';
 import { isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine } from './loops';
-import { armHeartbeat, heartbeatTick, heartbeatEligible, settleHeartbeat } from './heartbeat';
+import { armHeartbeat, HEARTBEAT_EVERY_MS, heartbeatTick, heartbeatEligible, settleHeartbeat } from './heartbeat';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
 import { consoleAuth, presenceRecheck, type OwnerSettings } from '../identity/console-auth';
@@ -100,7 +100,7 @@ import { browserTrialConsent, BROWSER_TRIAL_PATH, BROWSER_TRIAL_PENDING_KEY, BRO
 import { browserOwnerAuthority } from './browser-owner-authority';
 import { browserTaskSourceCustody } from './browser-task-source';
 import { browserTaskHandler, browserTaskApprovalBridge } from '../tools/live/browser-task';
-import { ownerBrowserRuntime } from './owner-browser-runtime';
+import { COMMON_BROWSER_LEASE_DUE, ownerBrowserRuntime } from './owner-browser-runtime';
 import { COMMON_BROWSER_DUE } from './common-browser-host';
 import { browserPublicReadConfiguration } from './browser-public-read-configuration';
 import { browseActHandler, browsePageHandler, executeBrowserSubmit } from '../tools/live/browser';
@@ -206,6 +206,7 @@ type OwnerRuntime = Readonly<{
 }>;
 
 const LATE_FIRE_MS = 5 * 60_000;
+const ALARM_FAILURES = 'owner_alarm_failures_v1';
 // A directory outage at the alarm leaves the app owner's scheduled work waiting; this is how soon the alarm asks again.
 const APP_ADMISSION_RETRY_MS = 60_000;
 
@@ -1477,7 +1478,26 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return { outcome, bot };
   }
 
+  // The handler owns its retries. A wake the pass armed or deleted replaces or cancels the platform's retry, so a throw is
+  // counted and answered with the next attempt on a capped backoff, no later than one heartbeat away; a pass that
+  // completes clears the count. Any wake the failed pass replaced is recomputed from persisted keys by the next pass.
+  // The retry's wake is a listed due key, so a re-arm outside the handler keeps it; every pass is that retry, so it goes.
+  // The work runs as one alarm pass, whose last re-arm is applied once it completes; a failed pass's re-arms are dropped.
   override async alarm(): Promise<void> {
+    if (this.ctx.storage.kv.get(ALARM_RETRY_DUE_KEY) !== undefined) this.ctx.storage.kv.delete(ALARM_RETRY_DUE_KEY);
+    try {
+      await alarmPass(this.ctx.storage, () => this.alarmWork());
+      if (this.ctx.storage.kv.get(ALARM_FAILURES) !== undefined) this.ctx.storage.kv.delete(ALARM_FAILURES);
+    } catch {
+      const streak = (this.ctx.storage.kv.get<number>(ALARM_FAILURES) ?? 0) + 1;
+      const due = Date.now() + alarmRetryDelay(streak, this.ctx.id.toString(), HEARTBEAT_EVERY_MS);
+      this.ctx.storage.kv.put(ALARM_FAILURES, streak);
+      this.ctx.storage.kv.put(ALARM_RETRY_DUE_KEY, due);
+      await armAlarm(this.ctx.storage, due);
+      console.error(JSON.stringify({ hop: 'alarm', ok: false, code: 'retry_scheduled', streak }));
+    }
+  }
+  private async alarmWork(): Promise<void> {
     await this.browserReady;
     await this.recoverWhatsappPending();
     const mode=this.ctx.storage.kv.get<LinkBinding>(LINK_MODE);
@@ -1498,8 +1518,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const appOwner = telegramBound ? null : await this.appOwnerLookup();
         if (appOwner?.kind === 'admitted') { channel = 'app'; this.scheduledAppDelivery = this.appDeliveryFor(appOwner.authority); }
         if (!telegramBound && appOwner?.kind !== 'admitted') {
-          if (Math.min(this.ctx.storage.kv.get<number>('browser_owner_task_due_v1') ?? Infinity,
-            this.ctx.storage.kv.get<number>(COMMON_BROWSER_DUE) ?? Infinity) <= Date.now()) this.ctx.waitUntil(Promise.all([this.browserTasks.maintain(), this.ownerBrowser.maintain()]));
+          if (Math.min(this.ctx.storage.kv.get<number>('browser_owner_task_due_v1') ?? Infinity, this.ctx.storage.kv.get<number>(COMMON_BROWSER_DUE) ?? Infinity,
+            this.ctx.storage.kv.get<number>(COMMON_BROWSER_LEASE_DUE) ?? Infinity) <= Date.now()) this.ctx.waitUntil(Promise.all([this.browserTasks.maintain(), this.ownerBrowser.maintain()]));
           await rearmSharedAlarm(this.ctx.storage, appOwner?.kind === 'retry' ? Date.now() + APP_ADMISSION_RETRY_MS : null, Date.now(), 30_000);
           return;
         }
@@ -1521,7 +1541,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       try { await this.notifyUncertainRecovery(); } catch { console.error('uncertainty notice deferred to host recovery'); }
       const dueInbox = (await this.inbox.records()).some(r => r.state === 'admitted');
       const dueTransport = finals.some(r => r.status === 'attempting' || (r.status === 'pending' && r.dueAt <= Date.now()) || (r.status !== 'pending' && !r.settled));
-      const browserDue = Math.min(this.ctx.storage.kv.get<number>('browser_owner_task_due_v1') ?? Infinity, this.ctx.storage.kv.get<number>(COMMON_BROWSER_DUE) ?? Infinity);
+      const browserDue = Math.min(this.ctx.storage.kv.get<number>('browser_owner_task_due_v1') ?? Infinity, this.ctx.storage.kv.get<number>(COMMON_BROWSER_DUE) ?? Infinity,
+        this.ctx.storage.kv.get<number>(COMMON_BROWSER_LEASE_DUE) ?? Infinity);
       const readyKinds = [dueInbox, dueTransport, scheduler.hasDue(), browserDue !== undefined && browserDue !== null && browserDue <= Date.now()];
       const last = this.ctx.storage.kv.get<number>('owner_alarm_last_v1') ?? 2;
       let selected = -1;
