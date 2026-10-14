@@ -32,3 +32,11 @@ it('a hung attach to the retained session fails at the turn deadline instead of 
   await expect(driver(sdk, {}).observe(session(Date.now() + 600000))).rejects.toMatchObject({ code: 'provider_unavailable' });
   expect(Date.now() - started).toBeLessThan(2000);
 });
+
+it('a connection that arrives after the turn gave up on it is closed, not leaked', async () => {
+  let closed = 0;
+  const sdk = { connect: () => new Promise(resolve => setTimeout(() => resolve({ close: async () => { closed++; } }), 300)), sessions: async () => [] };
+  await expect(driver(sdk, {}).observe(session(Date.now() + 600000))).rejects.toMatchObject({ code: 'provider_unavailable' });
+  await new Promise(resolve => setTimeout(resolve, 400));
+  expect(closed).toBe(1);
+});

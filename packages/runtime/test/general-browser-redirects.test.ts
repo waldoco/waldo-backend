@@ -128,3 +128,10 @@ it('a mitigation header other than challenge is an ordinary denied document', as
   await guardGeneralBrowserRoute(f.route as never, { authorize: async () => {}, timeout: () => 1000, admit: async () => {}, redirect: () => {}, denied: (_, status) => { denied.push(status); }, challenge: page => { challenged.push(page); } });
   expect(denied).toEqual([403]); expect(challenged).toEqual([]);
 });
+it('a file capture never passes a challenge document through as its attachment', async () => {
+  const f = route(); f.responses[0] = { status: () => 403, headers: () => ({ 'cf-mitigated': 'challenge' }) };
+  const challenged: unknown[] = [], denied: unknown[] = [], captured: unknown[] = [];
+  await guardGeneralBrowserRoute(f.route as never, { authorize: async () => {}, timeout: () => 1000, admit: async () => {}, redirect: () => {}, denied: (_, status) => { denied.push(status); },
+    challenge: page => { challenged.push(page); }, attachment: async response => { captured.push(response); } });
+  expect(denied).toEqual([403]); expect(challenged).toEqual([]); expect(captured).toEqual([]); expect(f.calls.map(call => call[0])).toEqual(['fetch', 'abort']);
+});

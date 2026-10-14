@@ -51,9 +51,13 @@ export function generalPageState(): GeneralPageState {
     const options = tag === 'select' ? Array.from(node.options).map((option: any) => ({ value: String(option.value), label: String(option.label), disabled: Boolean(option.disabled || option.parentElement?.disabled), selected: Boolean(option.selected) })) : undefined;
     elements.push({ selector: parts.join(' > '), tag, role, name, href: tag === 'a' ? node.href : '', value: secret || type === 'file' ? '' : String(node.value ?? ''), type, ...(secret?{secret:true}:{}), disabled: Boolean(node.disabled || node.matches(':disabled') || node.getAttribute('aria-disabled')==='true'), selected: Boolean(node.selected), checked: Boolean(node.checked), inForm: Boolean(node.form), editable:Boolean(node.isContentEditable), readOnly:Boolean(node.readOnly || node.getAttribute('aria-readonly')==='true'), ...(options ? { options } : {}) });
   }
-  // Widgets of the common bot-verification vendors: Cloudflare Turnstile and its interstitial, reCAPTCHA, hCaptcha,
-  // DataDome, PerimeterX and Arkose. Kept inline: this function runs inside the page.
-  const challenge = Boolean(document.querySelector('iframe[src*="challenges.cloudflare.com"], .cf-turnstile, #challenge-form, .g-recaptcha, iframe[src*="google.com/recaptcha"], iframe[src*="recaptcha.net"], .h-captcha, iframe[src*="hcaptcha.com"], iframe[src*="captcha-delivery.com"], #px-captcha, iframe[src*="arkoselabs.com"]'));
+  // Visible widgets of the common bot-verification vendors: Cloudflare Turnstile and its interstitial, reCAPTCHA,
+  // hCaptcha, DataDome, PerimeterX and Arkose. Invisible reCAPTCHA/hCaptcha sit on ordinary pages and ask nothing of
+  // anyone, so a zero-size, hidden or invisible-mode widget is not a challenge. Kept inline: this runs inside the page.
+  const challenge = Array.from(document.querySelectorAll('iframe[src*="challenges.cloudflare.com"], .cf-turnstile, #challenge-form, .g-recaptcha, iframe[src*="/recaptcha/api2/anchor"], iframe[src*="/recaptcha/enterprise/anchor"], .h-captcha, iframe[src*="hcaptcha.com"], iframe[src*="captcha-delivery.com"], #px-captcha, iframe[src*="arkoselabs.com"]')).some((node: any) => {
+    const box = node.getBoundingClientRect(), style = root.getComputedStyle(node), src = String(node.getAttribute('src') ?? '');
+    return box.width > 0 && box.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && node.getAttribute('data-size') !== 'invisible' && !src.includes('size=invisible') && !src.includes('checkbox-invisible');
+  });
   return { url: root.location.href, title: document.title, text: document.body?.innerText ?? '', width: root.innerWidth, height: root.innerHeight, scrollX: root.scrollX, scrollY: root.scrollY, elements, ...(challenge ? { challenge: true as const } : {}) };
 }
 

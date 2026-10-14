@@ -51,13 +51,25 @@ it('a challenge widget found in the page is the same typed signal', async () => 
   expect(widget.observation.page_signals).toEqual(['sign_in_requested', 'verification_challenge']);
 });
 
-it('page evaluation reports known challenge widgets structurally and nothing for an ordinary page', () => {
-  const markers = ['iframe[src*="challenges.cloudflare.com"]', '.g-recaptcha', '.h-captcha', 'iframe[src*="captcha-delivery.com"]'];
-  for (const marker of [...markers, undefined]) {
-    const document: any = { body: { innerText: 'Page' }, title: 'Page', querySelectorAll: () => [], querySelector: (selector: string) => marker && selector.split(',').map(part => part.trim()).includes(marker) ? {} : null };
-    vi.stubGlobal('document', document); vi.stubGlobal('location', { href: 'https://shop.example/' });
-    try { expect(generalPageState().challenge === true).toBe(marker !== undefined); } finally { vi.unstubAllGlobals(); }
-  }
+it('page evaluation reports only visible challenge widgets', () => {
+  type Widget = Readonly<{ selector: string; src?: string; size?: string; box?: number }>;
+  const evaluate = (widget?: Widget) => {
+    const node = widget && { getBoundingClientRect: () => ({ width: widget.box ?? 300, height: widget.box ?? 80 }), getAttribute: (name: string) => name === 'src' ? widget.src ?? null : name === 'data-size' ? widget.size ?? null : null };
+    const document: any = { body: { innerText: 'Page' }, title: 'Page', querySelectorAll: (selector: string) => node && selector.split(',').map(part => part.trim()).includes(widget!.selector) ? [node] : [] };
+    vi.stubGlobal('document', document); vi.stubGlobal('location', { href: 'https://shop.example/' }); vi.stubGlobal('getComputedStyle', () => ({ visibility: 'visible', display: 'block' }));
+    try { return generalPageState().challenge === true; } finally { vi.unstubAllGlobals(); }
+  };
+  expect(evaluate()).toBe(false);
+  expect(evaluate({ selector: 'iframe[src*="challenges.cloudflare.com"]', src: 'https://challenges.cloudflare.com/cdn-cgi/challenge-platform/turnstile' })).toBe(true);
+  expect(evaluate({ selector: '.g-recaptcha' })).toBe(true);
+  expect(evaluate({ selector: 'iframe[src*="/recaptcha/api2/anchor"]', src: 'https://www.google.com/recaptcha/api2/anchor?k=site&size=normal' })).toBe(true);
+  expect(evaluate({ selector: '.h-captcha' })).toBe(true);
+  expect(evaluate({ selector: 'iframe[src*="captcha-delivery.com"]', src: 'https://geo.captcha-delivery.com/captcha/' })).toBe(true);
+  // Invisible reCAPTCHA (v3, or v2 invisible) and hidden widgets sit on ordinary pages and ask nothing of anyone.
+  expect(evaluate({ selector: 'iframe[src*="/recaptcha/api2/anchor"]', src: 'https://www.google.com/recaptcha/api2/anchor?k=site&size=invisible' })).toBe(false);
+  expect(evaluate({ selector: '.g-recaptcha', size: 'invisible' })).toBe(false);
+  expect(evaluate({ selector: 'iframe[src*="hcaptcha.com"]', src: 'https://newassets.hcaptcha.com/captcha/v1/static/hcaptcha.html#frame=checkbox-invisible' })).toBe(false);
+  expect(evaluate({ selector: '.cf-turnstile', box: 0 })).toBe(false);
 });
 
 it('the challenge signal clears once the same tab loads an ordinary document', async () => {
