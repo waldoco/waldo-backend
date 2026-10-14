@@ -2422,3 +2422,34 @@ This updates CAPABILITY_STATUS.md (written about 05:28Z, against app `7d0ea15b` 
   - **C:** A1 is #1209 at `1d1e386d`, CI 6/6. It waits on the lead's voice-note call (6160714254).
   - **T:** the browse `auth_failed` guard PR, then the #1201 fence follow-up. M1 for `use_mac` is withdrawn again, because `use_mac` is Ashish's.
 - **Usage:** 26% at 04:22Z, with the reset at 08:30Z. No new lanes until the burn allows.
+
+## 14 Oct, 04:22Z–08:01Z: the identity plan approved, Google work back on the Mac, #1209 and #1215 landed, deploy handed to the owner (Mac orchestrator)
+
+- **Staging:** at 04:56Z the owner deployed `a8c92893` (version `6be19816`; rollback `18a40222`). Smoke checks passed. The `WALDO_MCP_SERVERS` secret is removed. Plain `wrangler secret delete` fails with error 10215 because uploaded but undeployed versions exist; use `wrangler versions secret …` instead.
+- **Owner decisions** (06:05Z–06:20Z, #1103 6162172947):
+  - The identity and onboarding plan is approved. It's in this folder as `IDENTITY_ONBOARDING_PLAN.md`, at `73e693fd`.
+  - Keep Telegram, but decouple identity and traces from it.
+  - The reset waits for Ashish's final iMessage host.
+  - No Supabase token rotation.
+- **Google work back on the Mac** (06:38Z, 6162499685): the owner said the cloud session can't reach the GCP console.
+  - **Console pass, verified after a reload:**
+    - the People API is on;
+    - the contacts scopes and `profile` are listed, so #1189's owner steps are done;
+    - `user.phonenumbers.read` is added;
+    - Pub/Sub: Gmail's push service account can publish to the topic, and the subscription pushes signed messages to the staging events route with the right audience.
+- **Gmail watch defect:**
+  - **Cause:** a skipped watch was stored as a failure and retried only after 6 hours, and a reconnect never reset it. So a reconnect couldn't register the watch, and a skip was never logged.
+  - **Fix:** #1215 (lane G). The independent reviewer gave PASS WITH NITS at `f64d3654` (6163376845), with 4 of 4 mutations caught. It merged as `72030b34`.
+  - **New log codes** on hop `gmail_watch`: `started`, `failed`, and `skipped:` followed by `unconfigured`, `no_mail_grant` or `local_rail`.
+- **#1209 (A1):**
+  - At 06:31Z and 06:40Z the lead reported a PASS that did not exist; the Mac repeated it. The review session corrected this at 07:14Z (6163000037).
+  - The real verdict was PASS WITH NITS at `69afaa0a` (6163143228). The Mac merged it as `ca02691a`.
+  - The follow-up for the remaining forward paths, with the review's nits, is #1216.
+- **The lead landed #1207 and #1208.** #1213 FAILED its review (6162292926): it needs two real-scheduler tests plus the lead's `thrown` ruling. Lane A takes it after the reset.
+- **The tip `72030b34`:**
+  - Tested: CI `verify` passed; locally, typecheck, 507 files and 5,595 tests, and owner-ingress all PASS.
+  - Since `a8c92893`: no migration, no wrangler change, no edge change, no app contract change.
+  - Handed to the owner from `$SP/deploy-5` (6163715187). Rollback `6be19816`.
+- **Slice (i):** lane G2 opened draft #1218, stacked on #1215. Owner steps: deploy the edge, then the Worker, then reconnect Google.
+- **Suyash's handoff page:** not found. The two shared pages are the design system and the Build Bible. The owner was asked for the link.
+- **Usage:** 74% at 08:01Z. No new lanes until the 08:30Z reset. Then, in order: lane A on #1213, the admin cap (iv), and (ii) with the memory ADR.
