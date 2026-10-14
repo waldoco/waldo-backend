@@ -75,8 +75,11 @@ const binding = (): LocalSystemSkillBinding => ({
     }),
   },
 });
+// The system prompt prints the clock to the minute, so prompts compared by bytes share one instant.
+const clock = { timezone: "UTC", now: () => new Date("2026-10-13T23:41:59.900Z") };
 const responder = (skills?: LocalSystemSkillBinding) => {
   const args: Parameters<typeof createOwnerResponder> = ["fixture"];
+  args[4] = clock;
   args[20] = skills;
   return createOwnerResponder(...args);
 };
