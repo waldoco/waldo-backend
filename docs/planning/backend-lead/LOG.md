@@ -514,3 +514,16 @@ How to track this session: `git fetch origin claude/backend-lead-log && git show
     - The diagnostic comment overclaims: the stored state narrows down which check refused, it doesn't name it.
     - The failure message leaves out the dispatcher `reason`.
   - The completeness critic is still running.
+
+## 08:30Z (from `date -u`): #1217 landed on the review session's PASS; the lead's review confirms it with nits
+
+- **#1217 merged as `3c4d3fae2871a5cbf26977c2efbdd51575813346` at 08:25:41Z** by the review session, pinned to `a38a3878df51bb5fab0f00cbf08e08e2cbef4589`, on its own PASS WITH NITS at that head (6164152229, 08:25:37Z; 295 repeat runs with none failing, 3 of 3 mutations caught), CI 6 of 6, merge-tree clean on `072bc383`.
+  - **Independence:** the review session reviewed a PR its own builder made, which my 07:39Z claim had tried to avoid. The merge rests on its standing instruction from the owner to proceed without waiting. The lead's independent review below confirms the verdict, so the gate is satisfied after the fact.
+  - Tip `3c4d3fae`.
+- **The lead's review finished at 08:28Z** (run `wf_ef41be1a-589`, 10 agents, 47 minutes, worktree `/home/user/wt/r1217` clean after).
+  - **All four fixes:** the root cause is confirmed in source and matches the #1196 CI symptom. The red-first edit reproduced at the head, the fixed test passed 3 of 3, a mutation was caught, and nothing was loosened.
+  - **The critic's one "blocker" was an artifact of my own script, refuted from the journal.** The script cut the review data it handed the critic to 20,000 characters, so the critic saw two analyses and no experiment results. It then reported a coverage gap that the journal shows does not exist. Lesson: hand a critic the full results, or a summary built from structured fields, never a truncated string.
+- **Posted on #1217 (6164223897):** PASS WITH NITS. Nits for one test-only follow-up, owned by row 19's builder:
+  - the leak-check value should be one-decimal, so the health tool's rounding can't hide a copy, and `Date` should be frozen;
+  - three more `delivery-gate` tests (`:1042`, `:1385`, `:1526`) straddle a UTC day with a sub-second window;
+  - the browser diagnostic comment overclaims, the message should carry `reason`, and the body's line numbers are off.
