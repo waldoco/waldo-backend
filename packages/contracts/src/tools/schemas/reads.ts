@@ -137,6 +137,22 @@ export const searchCommunicationArgsSchema = z.strictObject({
 });
 export type SearchCommunicationArgs = z.infer<typeof searchCommunicationArgsSchema>;
 
+// People search over the owner's own contacts and "other contacts" (people they have mailed).
+// Google matches name and address prefixes; the result carries names and addresses only.
+export const searchContactsArgsSchema = z.strictObject({
+  account: z.email().optional(),
+  query: z.string().min(1).max(100),
+  limit: z.int().min(1).max(10).default(5),
+});
+export type SearchContactsArgs = z.infer<typeof searchContactsArgsSchema>;
+// A match carries a name and addresses only; there is no field for phone, organisation or photo.
+export const contactMatchSchema = z.strictObject({
+  name: z.string().min(1).max(200).nullable(),
+  emails: z.array(z.email().max(320)).min(1).max(3),
+  source: z.enum(['contacts', 'other_contacts']),
+});
+export type ContactMatch = z.infer<typeof contactMatchSchema>;
+
 export const readThreadArgsSchema = z.strictObject({
   account: z.email().optional(),
   cursor: z.string().min(1).max(4096).optional(),
@@ -252,7 +268,7 @@ export type WebSearchArgs = z.infer<typeof webSearchArgsSchema>;
 export const browsePageArgsSchema = z.strictObject({
   retain_session: z.boolean().optional().describe('Use true before an interactive browser journey. Returns DOM, accessibility, screenshot and session_handle for subsequent browse_act calls; omit for a one-shot page read.'),
   session_handle: z.string().min(1).max(80).optional().describe('Continue the exact owner browser session returned by a prior observation; never a provider ID.'),
-  provider: z.enum(['cloudflare_playwright', 'browserbase_stagehand_http_v3']).optional(),
+  provider: z.enum(['cloudflare_playwright', 'browserbase_stagehand_http_v3']).optional().describe('Ignored: the host always picks the browser.'),
   url: z.url().max(2000),
   instruction: z.string().min(1).max(1000),
 });
@@ -286,7 +302,7 @@ export const browserTaskCommandSchema = z.discriminatedUnion('operation', [
 ]);
 export type BrowserTaskCommand = z.infer<typeof browserTaskCommandSchema>;
 export const browseActArgsSchema = z.strictObject({
-  provider: z.enum(['cloudflare_playwright', 'browserbase_stagehand_http_v3']).optional(),
+  provider: z.enum(['cloudflare_playwright', 'browserbase_stagehand_http_v3']).optional().describe('Ignored: the host always picks the browser.'),
   session_handle: z.string().min(1).max(80).optional(),
   url: z.url().max(2000),
   task: z.string().min(1).max(1000),

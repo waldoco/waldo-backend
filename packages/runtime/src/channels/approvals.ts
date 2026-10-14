@@ -15,7 +15,7 @@ import { appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from
 export type TelegramCall = (method: string, body: object) => Promise<unknown>;
 export type CallbackQuery = Readonly<{ id: string; from: { id: number }; data?: string; message?: { message_id: number; chat: { id: number } } }>;
 
-type Undo = ({ op: 'cancel'; id: string } | { op: 'move'; id: string; start: string; end: string }) & { applied_etag?: string };
+type Undo = ({ op: 'cancel'; id: string } | { op: 'move'; id: string; start: string; end: string }) & { applied_etag?: string; calendar_id?: string; send_updates?: 'all' | 'none' };
 type LedgerRow = { id: string; kind: string; status: string; summary: string; payload_json: string; undo_json: string | null; created_at: number; decided_at: number | null; proposal_digest?: string | null; origin_run_ref?: string | null; deferred_at?: number | null };
 type DeskStatus = 'card_unconfirmed' | 'open' | 'review_only' | 'changing' | 'skipped' | 'expired' | 'done' | 'rejected' | 'failed' | 'stale' | 'uncertain' | 'unverified' | 'undone';
 // One app state per desk status. An approval claimed before its effect resolves reads outcome_unknown, never done.
@@ -34,7 +34,7 @@ export const UNDO_WINDOW_MS = 10 * 60_000;
 export const PROPOSAL_TTL_MS = 12 * 60 * 60_000;
 
 // seen_start/seen_end: the event's time when the card was made, so a move shows what it moves from.
-type Stored = ProposeCalendarChangeArgs & { seen_etag?: string; seen_start?: string; seen_end?: string; operation_ref?: string };
+type Stored = ProposeCalendarChangeArgs & { seen_etag?: string; seen_start?: string; seen_end?: string; seen_guests?: number; operation_ref?: string };
 
 // B-tool-3: the exact thing the owner approved. The executor replays it in a fresh browser
 // session and re-reads the binding from the page before acting - a changed price/item/destination
@@ -85,7 +85,12 @@ export type ApprovalReview =
   | Readonly<{ kind: 'email_send'; account?: string; to: readonly string[]; cc: readonly string[]; bcc: readonly string[]; subject: string; body: string }>
   | Readonly<{ kind: 'message_send'; channel: string; content: string }>
   | Readonly<{ kind: 'google_task_change'; account: string; proposal: GoogleTaskProposal; proposal_digest: string }>
-  | Readonly<{ kind: 'calendar_change'; account?: string; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string }>;
+  | Readonly<{ kind: 'calendar_change'; account?: string; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string;
+      calendar_id?: string; attendees?: readonly string[]; send_updates?: 'all' | 'none'; location?: string; description?: string; add_meet_link?: boolean }>;
+// What a calendar invite carries beyond the event and its times. The web surfaces (console and dashboards) render
+// the stored review themselves and do not show these in full, so a change carrying any of them is approved in chat or the app.
+export const calendarInviteDetails = (p: Readonly<{ calendar_id?: string; attendees?: readonly string[]; send_updates?: string; location?: string; description?: string; add_meet_link?: boolean }>): boolean =>
+  Boolean((p.calendar_id && p.calendar_id !== 'primary') || p.attendees?.length || p.send_updates || p.location || p.description || p.add_meet_link);
 // Where a proposal's card landed, and where a card that can approve it landed: on the proposing desk's own surface and in the app.
 export type CardPlacement = Readonly<{ here: boolean; hereApprovable: boolean; app: boolean; appApprovable: boolean }>;
 // What a proposing tool tells the model about the card, so a reply never points at buttons that are not there.
@@ -151,11 +156,18 @@ const reviewMessage = (p: MessageSendProposal) => p.content;
 // The summary is bounded: a browser summary carries its bindings, which can be as long as the content that did not fit.
 const unreviewable = (kind: string, summary: string) =>
   `${kind} ${summary.length > 1000 ? `${summary.slice(0, 999)}…` : summary}\n\nThe full content doesn't fit in this card, so it can't be approved here - approving would send text you haven't reviewed. Use the Not now instruction on the card and ask me to show you the full text first.`;
+// A browser expiry that isn't a safe integer closes the request when it was made.
 const expiresAt = (entry: LedgerRow) => {
   const p = JSON.parse(entry.payload_json) as Partial<Stored> & Partial<BrowserSubmitProposal>;
-  if (entry.kind === 'browser_submit') return Math.min(entry.created_at + BROWSER_SUBMIT_TTL_MS, p.approvalExpiresAt ?? Infinity);
+  if (entry.kind === 'browser_submit') return p.approvalExpiresAt !== undefined && !Number.isSafeInteger(p.approvalExpiresAt)
+    ? entry.created_at : Math.min(entry.created_at + BROWSER_SUBMIT_TTL_MS, p.approvalExpiresAt ?? Infinity);
   return entry.kind === 'calendar_change' && p.start ? Math.min(entry.created_at + PROPOSAL_TTL_MS, Date.parse(p.start)) : entry.created_at + PROPOSAL_TTL_MS;
 };
+// A request closes at expires_at; one with no readable expiry is closed.
+const pastExpiry = (entry: LedgerRow, now: number) => !(expiresAt(entry) > now);
+const operationRefOf = (entry: LedgerRow) => (JSON.parse(entry.payload_json) as { operation_ref?: string }).operation_ref ?? `approval:${entry.id}`;
+// The statuses a request can still be decided or edited from, which its expiry closes.
+const EXPIRING: readonly DeskStatus[] = ['card_unconfirmed', 'open', 'review_only', 'changing'];
 // The scope a browser approval names: the page without credentials, query string or fragment.
 const pageOf = (url: string) => { const page = new URL(url); return `${page.origin}${page.pathname}`; };
 const describeBrowser = (p: BrowserSubmitProposal) => {
@@ -179,7 +191,8 @@ const reviewText = (entry: LedgerRow): string => {
   if (entry.kind === 'browser_submit') return `Approve this browser action? ${describeBrowser(p)}`;
   if (entry.kind === 'google_task_change') return reviewGoogleTaskChange(googleTaskProposalSchema.parse(p));
   // A calendar change states the change itself, so the same text reads true before the owner decides and after it is done.
-  return entry.summary;
+  // Notes go to Google with the event and every guest can read them, so the owner reviews them word for word.
+  return `${entry.summary}${p.description ? `\n\nNotes on the event${p.attendees?.length ? ', which every guest can read' : ''}:\n${p.description}` : ''}`;
 };
 // The app's review: the same full review as a card, approvable while it fits the app's reply budget.
 const appReview = (entry: LedgerRow): Readonly<{ text: string; full: boolean }> => {
@@ -277,11 +290,25 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const day = (iso: string) => new Intl.DateTimeFormat('en-GB', { timeZone: deps.timezone, year: 'numeric', month: 'numeric', day: 'numeric' }).format(new Date(iso));
   const hour = (iso: string) => new Intl.DateTimeFormat('en-GB', { timeZone: deps.timezone, hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
   const span = (start: string, end: string) => day(start) === day(end) ? `${when(start)}–${hour(end)}` : `${when(start)} to ${when(end)}`;
+  // Who gets an invite or an email is what the owner is approving, so the card always says it.
+  const guests = (p: Stored) => {
+    const count = p.action === 'create' ? p.attendees?.length ?? 0 : p.seen_guests ?? 0;
+    const people = `${count === 1 ? 'the guest' : `the ${count} guests`}`;
+    return [
+      ...(p.attendees?.length ? [`Guests: ${p.attendees.join(', ')}.`] : []),
+      ...(p.location ? [`Place: ${p.location}.`] : []),
+      ...(p.add_meet_link ? ['With a Meet link.'] : []),
+      ...(count ? [p.send_updates === 'all' ? `Google emails ${people}.` : `Google does not email ${people}.`] : []),
+    ].map((part) => ` ${part}`).join('');
+  };
   const describe = (p: Stored) => {
     const name = p.title ? `"${p.title}"` : 'the event';
-    if (p.action === 'create') return `Add ${name}, ${when(p.start!)} to ${when(p.end!)}${p.account ? ` (${p.account})` : ''}`;
-    if (p.action === 'move') return `Move ${name}${p.seen_start && p.seen_end ? ` from ${span(p.seen_start, p.seen_end)}` : ''} to ${span(p.start!, p.end!)}${p.account ? ` (${p.account})` : ''}`;
-    return `Cancel ${name}${p.account ? ` (${p.account})` : ''}`;
+    const where = `${p.calendar_id && p.calendar_id !== 'primary' ? ` on ${p.calendar_id}` : ''}${p.account ? ` (${p.account})` : ''}`;
+    const details = guests(p);
+    const tail = details ? `.${details.replace(/\.$/, '')}` : '';
+    if (p.action === 'create') return `Add ${name}, ${when(p.start!)} to ${when(p.end!)}${where}${tail}`;
+    if (p.action === 'move') return `Move ${name}${p.seen_start && p.seen_end ? ` from ${span(p.seen_start, p.seen_end)}` : ''} to ${span(p.start!, p.end!)}${where}${tail}`;
+    return `Cancel ${name}${where}${tail}`;
   };
   const row = (id: string) => sql.exec<LedgerRow>('SELECT * FROM ledger WHERE id = ?', id).toArray()[0];
   const setStatus = (id: string, status: DeskStatus, undo: Undo | null = null) =>
@@ -345,7 +372,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const presentedTo = (entry: LedgerRow, via: ApprovalVia) => {
     const live = sql.exec<{ surface: string; message_ref: string; approvable: number }>('SELECT surface, message_ref, approvable FROM approval_presentations WHERE approval_id = ? AND retired_at IS NULL', entry.id).toArray();
     const approves = (p: { surface: string; approvable: number }) => p.approvable === 1 && (p.surface !== 'app' || appShowsInFull(entry));
-    if (via.surface === 'console') return live.some(approves);
+    if (via.surface === 'console') return !(entry.kind === 'calendar_change' && calendarInviteDetails(JSON.parse(entry.payload_json))) && live.some(approves);
     const mine = live.filter(p => p.surface === via.surface || (p.surface === 'legacy' && via.surface !== 'app'));
     const tapped = mine.filter(p => p.message_ref === via.messageRef);
     return (tapped.length ? tapped : mine).some(approves);
@@ -383,22 +410,52 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // first send instead of double-delivering.
   const keyHolder = (key: string, selfId: string) =>
     sql.exec<{ id: string; status: string; payload_json: string }>("SELECT id, status, payload_json FROM ledger WHERE kind = 'message_send' AND status IN ('done', 'uncertain') AND id != ? AND json_extract(payload_json, '$.idempotency_key') = ? LIMIT 1", selfId, key).toArray()[0];
-  const expired = (entry: LedgerRow, p: Stored) =>
-    (entry.kind === 'browser_submit' && (p as unknown as BrowserSubmitProposal).approvalExpiresAt !== undefined && (!Number.isSafeInteger((p as unknown as BrowserSubmitProposal).approvalExpiresAt) || deps.now() >= (p as unknown as BrowserSubmitProposal).approvalExpiresAt!)) ||
-    deps.now() - entry.created_at > (entry.kind === 'browser_submit' ? BROWSER_SUBMIT_TTL_MS : PROPOSAL_TTL_MS) || (entry.kind !== 'browser_submit' && p.start !== undefined && Date.parse(p.start) <= deps.now());
-  const apply = async (client: GoogleClient, p: Stored, eventId?: string, marker?: string): Promise<Undo | null | 'stale'> => {
-    if (p.action === 'create') {
-      const applied = await client.createEvent({ title: p.title!, start: p.start!, end: p.end!, ...(eventId ? { id: eventId } : {}), ...(marker ? { operationMarker:marker } : {}) });
-      return applied.etag ? { op: 'cancel', id: applied.id, applied_etag: applied.etag } : null;
+  // Once the apply effect is on record the change may have happened, so expiry never closes that request.
+  const applyOnRecord = (entry: LedgerRow) => !!deps.effects?.get(`${operationRefOf(entry)}:apply`);
+  // A request closes at its expiry the first time a read or a decision sees it. Only its status changes: every reader
+  // gates on status, and a messaging card keeps its buttons until a tap, which answers with the expiry.
+  const expireDue = (id?: string) => {
+    const now = deps.now();
+    const rows = sql.exec<LedgerRow>(`SELECT * FROM ledger WHERE kind IN (${PROPOSAL_KINDS.map(() => '?').join(', ')}) AND status IN (${EXPIRING.map(() => '?').join(', ')})${id === undefined ? '' : ' AND id = ?'}`,
+      ...PROPOSAL_KINDS, ...EXPIRING, ...(id === undefined ? [] : [id])).toArray();
+    let closed = 0;
+    for (const entry of rows) {
+      let closes: boolean;
+      try { closes = pastExpiry(entry, now) && !applyOnRecord(entry); }
+      catch { deps.log({ trace: entry.id, hop: 'approval_expiry', ms: 0, ok: false, code: 'unreadable' }); continue; }
+      if (closes) closed += sql.exec("UPDATE ledger SET status = 'expired', decided_at = ? WHERE id = ? AND status = ?", now, entry.id, entry.status).rowsWritten;
     }
-    const before = await client.event(p.event_id!);
+    if (closed) deps.log({ trace: 'approvals', hop: 'approvals_sweep', ms: 0, ok: true, code: 'approvals_expired', detail: String(closed) });
+  };
+  const expiredReply = (entry: LedgerRow): ApprovalDecision =>
+    ({ toast: 'This proposal expired', message: `That proposal expired, so nothing happened: ${describeAny(entry)}. Ask me again if you still want it.` });
+  // An approval that awaited after its checks can find its request gone: a read may have closed it at its expiry.
+  const noLongerOpen = (id: string): ApprovalDecision => {
+    const current = row(id);
+    return current?.status === 'expired' ? expiredReply(current) : { toast: 'Already handled.', message: 'Already handled.' };
+  };
+  // Synchronous compare-and-claim of an open request, right before its effect.
+  const claimOpen = (id: string): ApprovalDecision | null => {
+    sql.exec("UPDATE ledger SET status = 'uncertain', decided_at = ? WHERE id = ? AND status = 'open'", deps.now(), id);
+    return sql.exec<{ claimed: number }>('SELECT changes() AS claimed').one().claimed === 1 ? null : noLongerOpen(id);
+  };
+  const apply = async (client: GoogleClient, p: Stored, eventId?: string, marker?: string): Promise<Undo | null | 'stale'> => {
+    // No choice sends no options, so a change proposed before calendars and emailing existed keeps its intent bytes.
+    const target = p.calendar_id || p.send_updates ? { ...(p.calendar_id ? { calendarId: p.calendar_id } : {}), ...(p.send_updates ? { sendUpdates: p.send_updates } : {}) } : undefined;
+    const undoTarget = { ...(p.calendar_id ? { calendar_id: p.calendar_id } : {}), ...(p.send_updates ? { send_updates: p.send_updates } : {}) };
+    if (p.action === 'create') {
+      const applied = await client.createEvent({ title: p.title!, start: p.start!, end: p.end!, ...(eventId ? { id: eventId } : {}), ...(marker ? { operationMarker:marker } : {}), ...target,
+        ...(p.attendees ? { attendees: p.attendees } : {}), ...(p.description ? { description: p.description } : {}), ...(p.location ? { location: p.location } : {}), ...(p.add_meet_link ? { meet: true } : {}) });
+      return applied.etag ? { op: 'cancel', id: applied.id, applied_etag: applied.etag, ...undoTarget } : null;
+    }
+    const before = await client.event(p.event_id!, p.calendar_id);
     if (p.seen_etag && before.etag !== p.seen_etag) return 'stale';
     try {
       if (p.action === 'move') {
-        const applied = await client.moveEvent(p.event_id!, p.start!, p.end!, before.etag, marker);
-        return applied.etag ? { op: 'move', id: p.event_id!, start: before.start, end: before.end, applied_etag: applied.etag } : null;
+        const applied = await client.moveEvent(p.event_id!, p.start!, p.end!, before.etag, marker, target);
+        return applied.etag ? { op: 'move', id: p.event_id!, start: before.start, end: before.end, applied_etag: applied.etag, ...undoTarget } : null;
       }
-      await client.cancelEvent(p.event_id!, before.etag, marker);
+      await client.cancelEvent(p.event_id!, before.etag, marker, target);
     } catch (error) {
       if (error instanceof GoogleError && error.status === 412) return 'stale';
       throw error;
@@ -408,11 +465,13 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const revert = async (client: GoogleClient, undo: Undo, marker?: string): Promise<'undone' | 'stale' | 'unavailable'> => {
     // Legacy entries have no applied version. A fresh owner edit never grants Undo authority.
     if (!undo.applied_etag) return 'unavailable';
-    const current = await client.event(undo.id);
+    // Undo reaches the same calendar and emails the guests exactly as the change did.
+    const target = undo.calendar_id || undo.send_updates ? { ...(undo.calendar_id ? { calendarId: undo.calendar_id } : {}), ...(undo.send_updates ? { sendUpdates: undo.send_updates } : {}) } : undefined;
+    const current = await client.event(undo.id, undo.calendar_id);
     if (current.etag !== undo.applied_etag) return 'stale';
     try {
-      if (undo.op === 'cancel') await client.cancelEvent(undo.id, undo.applied_etag, marker);
-      else await client.moveEvent(undo.id, undo.start, undo.end, undo.applied_etag, marker);
+      if (undo.op === 'cancel') await client.cancelEvent(undo.id, undo.applied_etag, marker, target);
+      else await client.moveEvent(undo.id, undo.start, undo.end, undo.applied_etag, marker, target);
     } catch (error) {
       if (error instanceof GoogleError && error.status === 412) return 'stale';
       throw error;
@@ -422,8 +481,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
 
   const decide = async (id: string, action: DeskAction, trace: string, via: ApprovalVia = { surface }): Promise<ApprovalDecision> => {
     const started = deps.now();
+    expireDue(id);
     const entry = row(id);
-    const operationRef = entry ? (JSON.parse(entry.payload_json) as { operation_ref?: string }).operation_ref ?? `approval:${id}` : `approval:${id}`;
+    if (entry?.status === 'expired' && action !== 'u') return expiredReply(entry);
+    const operationRef = entry ? operationRefOf(entry) : `approval:${id}`;
     const expected = action === 'u' ? 'done' : 'open';
     if (deps.effects?.isActive(`${operationRef}:${action === 'u' ? 'undo' : 'apply'}`)) return { toast: 'Already handled.', message: 'Already handled.' };
     // An uncertain row with no effect record never reached dispatch (the record is written before the provider call), so it is safe to run again; a record sends it through reconcile instead.
@@ -434,9 +495,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const proposal = JSON.parse(entry.payload_json) as Stored;
     try {
       let out: ApprovalDecision;
-      if ((!recovering || !deps.effects?.get(`${operationRef}:apply`)) && action !== 'u' && action !== 's' && expired(entry, proposal)) {
+      if (!applyOnRecord(entry) && action !== 'u' && action !== 's' && pastExpiry(entry, deps.now())) {
         setStatus(id, 'expired');
-        out = { toast: 'This proposal expired', message: `That proposal expired, so nothing happened: ${describeAny(entry)}. Ask me again if you still want it.` };
+        out = expiredReply(entry);
       } else if (action === 's') {
         setStatus(id, 'skipped');
         if (entry.kind === 'browser_submit') await deps.browserDeny?.(JSON.parse(entry.payload_json) as BrowserSubmitProposal);
@@ -461,8 +522,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           const taskProposal = googleTaskProposalSchema.parse(JSON.parse(entry.payload_json));
           if (!entry.proposal_digest || await sha256Hex(JSON.stringify(taskProposal)) !== entry.proposal_digest) { setStatus(id, 'failed'); throw new Error('Google task proposal identity changed'); }
           if (!recovering) {
-            sql.exec("UPDATE ledger SET status = 'uncertain', decided_at = ? WHERE id = ? AND status = 'open'", deps.now(), id);
-            if (sql.exec<{ claimed: number }>('SELECT changes() AS claimed').one().claimed !== 1) return { toast: 'Already handled.', message: 'Already handled.' };
+            const lost = claimOpen(id);
+            if (lost) return lost;
           }
           const result = await deps.googleTasks().apply(id, taskProposal, operationRef);
           if (result.status === 'done') { setStatus(id, 'done'); out = { toast: 'Done', message: `The Google task change was applied and independently read back: ${describeGoogleTaskChange(taskProposal)}` }; }
@@ -480,9 +541,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             // Synchronous compare-and-claim before external await. Replay and crash
             // leave a consumed uncertain decision, never another blind browser act.
             if (!recovering) {
-              sql.exec("UPDATE ledger SET status = 'uncertain', decided_at = ? WHERE id = ? AND status = 'open'", deps.now(), id);
-              const claimed = sql.exec<{ claimed: number }>('SELECT changes() AS claimed').one().claimed;
-              if (claimed !== 1) return { toast: 'Already handled.', message: 'Already handled.' };
+              const lost = claimOpen(id);
+              if (lost) return lost;
             }
             let outcome: BrowserSubmitOutcome | undefined;
             const checkedBrowser = async (value: BrowserSubmitOutcome): Promise<EffectReadback> => {
@@ -543,8 +603,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             out = { toast: 'Email changed', message: `The stored email no longer matches what you approved, so nothing was sent: ${describeEmail(ep)}. Ask me again and I'll prepare a fresh one.` };
           } else {
             if (!recovering) {
-              sql.exec("UPDATE ledger SET status = 'uncertain', decided_at = ? WHERE id = ? AND status = 'open'", deps.now(), id);
-              if (sql.exec<{ claimed: number }>('SELECT changes() AS claimed').one().claimed !== 1) return { toast: 'Already handled.', message: 'Already handled.' };
+              const lost = claimOpen(id);
+              if (lost) return lost;
             }
             // Sent needs Gmail metadata with SENT, our exact Message-ID and the intended thread. Each step logs a
             // fixed code, never content, so a send that ends unknown says which check failed.
@@ -668,8 +728,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           }
         } else {
           if (!recovering) {
-            sql.exec("UPDATE ledger SET status = 'uncertain', decided_at = ? WHERE id = ? AND status = 'open'", deps.now(), id);
-            if (sql.exec<{ claimed: number }>('SELECT changes() AS claimed').one().claimed !== 1) return { toast: 'Already handled.', message: 'Already handled.' };
+            const lost = claimOpen(id);
+            if (lost) return lost;
           }
           try {
             await effect(`${operationRef}:apply`, 'send_message', mp, async () => { const sent = await deps.sendMessage!(mp); if (deps.effects && !sent?.provider_id) throw new EffectUnknownError(); return { provider_id: sent?.provider_id ?? mp.idempotency_key, result: null }; }, async () => ({ status: 'unknown' }));
@@ -708,12 +768,15 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         } else if (action === 'a') {
           const eventId = proposal.action === 'create' ? await sha256Hex(`${operationRef}:apply`) : proposal.event_id!;
           const marker = await sha256Hex(`${operationRef}:apply`);
+          // A read may have closed the request during the awaits above. The effect is reserved synchronously
+          // from here, so a later read sees it on record and leaves the request open.
+          if (!recovering && row(id)?.status !== 'open') return noLongerOpen(id);
           const receipt = await effect(`${operationRef}:apply`, 'calendar_change', proposal, async () => {
             const undo = await apply(client, proposal, deps.effects ? eventId : undefined, marker);
             return { provider_id: eventId, result: undo };
           }, async () => {
             try {
-              const current = await client.event(eventId);
+              const current = await client.event(eventId, proposal.calendar_id);
               if (current.operation_marker !== marker) return {status:'unknown'};
               if (proposal.action !== 'cancel' && current.status !== 'cancelled' && (proposal.action !== 'create' || current.title === proposal.title) && sameInstant(current.start, proposal.start!) && sameInstant(current.end, proposal.end!) && current.etag
                 && (!proposal.seen_etag || current.etag !== proposal.seen_etag)) {
@@ -741,7 +804,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           const receipt = await effect(`${operationRef}:undo`, 'calendar_undo', undo,
             async () => ({ provider_id: undo.id, result: await revert(client, undo, marker) }), async () => {
               try {
-                const current = await client.event(undo.id);
+                const current = await client.event(undo.id, undo.calendar_id);
                 if (current.operation_marker === marker && (undo.op === 'cancel' ? current.status === 'cancelled' : current.status !== 'cancelled' && current.start === undo.start && current.end === undo.end))
                   return {status:'done',receipt:{provider_id:undo.id,result:'undone'}};
               } catch (error) { deps.log({trace,hop:'calendar_undo_readback',ms:0,ok:false,error:String(error)}); }
@@ -794,19 +857,21 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   return {
     decide: decideOnce,
     waiting() {
+      expireDue();
       return sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status IN ('open', 'review_only') ORDER BY created_at").toArray()
-        .filter(entry => waitingRow(entry) && !expired(entry, JSON.parse(entry.payload_json) as Stored))
+        .filter(waitingRow)
         .map(entry => ({ approval_id: entry.id, kind: entry.kind, summary: summaryOf(entry), state: entry.status as 'open' | 'review_only', put_off: entry.deferred_at != null }));
     },
     async reraise(id) {
+      expireDue(id);
       const entry = row(id);
-      if (!entry || !waitingRow(entry)) return { outcome: 'not_waiting' };
-      if (raising.has(id)) return { outcome: 'not_put_off' };
-      if (expired(entry, JSON.parse(entry.payload_json) as Stored)) {
-        setStatus(id, 'expired');
+      // A read may already have closed it at its expiry: that answer is the expiry, not that nothing waits.
+      if (entry?.status === 'expired' && PROPOSAL_KINDS.includes(entry.kind) && entry.id.startsWith('p')) {
         await retire(id, { surface });
         return { outcome: 'expired' };
       }
+      if (!entry || !waitingRow(entry)) return { outcome: 'not_waiting' };
+      if (raising.has(id)) return { outcome: 'not_put_off' };
       if (entry.deferred_at == null) return { outcome: 'not_put_off' };
       raising.add(id);
       try {
@@ -927,7 +992,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       if (existing) {
         const id = await existing;
         const entry = row(id);
-        if (entry?.status === 'open' && !expired(entry, JSON.parse(entry.payload_json) as Stored)) return id;
+        if (entry?.status === 'open' && !pastExpiry(entry, deps.now())) return id;
       }
       const prepare = async () => {
         const id = `p${deps.newId()}`;
@@ -935,10 +1000,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         if((p.event_id || p.account)&&!client)throw new Error('The calendar account is unavailable; no proposal was prepared.');
         if (p.account && client?.account?.email?.toLowerCase() !== p.account.toLowerCase()) throw new Error('Selected calendar account is unavailable');
         const bound = { ...p, ...(client?.account?.email ? {account:client.account.email} : {}) };
-        const before = client && bound.event_id ? await client.event(bound.event_id) : undefined;
+        const before = client && bound.event_id ? await client.event(bound.event_id, bound.calendar_id) : undefined;
         const seen = before?.etag;
         const seenTime = before && !before.all_day && before.start && before.end ? { seen_start: before.start, seen_end: before.end } : {};
-        const stored: Stored = { ...bound, ...(seen ? { seen_etag: seen } : {}), ...seenTime, ...(operationRef ? { operation_ref: operationRef } : {}) };
+        const stored: Stored = { ...bound, ...(seen ? { seen_etag: seen } : {}), ...seenTime, ...(before?.attendees ? { seen_guests: before.attendees } : {}), ...(operationRef ? { operation_ref: operationRef } : {}) };
         const summary = `${describe(stored)}. ${bound.reason}`;
         sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'calendar_change', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(stored), deps.now());
         bindOrigin(id, originRunRef);
@@ -959,6 +1024,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     // The console must show the *stored* recipient, words and final calendar effect before
     // offering an approval action. Never expose raw MIME, tokens or arbitrary MCP args here.
     pending(now) {
+      expireDue();
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'open' ORDER BY created_at").toArray();
       const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind IN ('email_send', 'google_task_change') AND status = 'card_unconfirmed' ORDER BY created_at").toArray();
       const reviewOnly = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'review_only' ORDER BY created_at").toArray();
@@ -984,7 +1050,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             if (p.action === 'create' && (!p.title || !p.start || !p.end)) return null;
             if (p.action === 'move' && (!p.event_id || !p.title || !p.start || !p.end)) return null;
             if (p.action === 'cancel' && (!p.event_id || !p.title)) return null;
-            return { kind: 'calendar_change', ...(p.account ? {account:p.account} : {}), action: p.action, title: p.title ?? null, event_id: p.event_id ?? null, start: p.start ?? null, end: p.end ?? null, reason: p.reason };
+            return { kind: 'calendar_change', ...(p.account ? {account:p.account} : {}), action: p.action, title: p.title ?? null, event_id: p.event_id ?? null, start: p.start ?? null, end: p.end ?? null, reason: p.reason,
+              ...(p.calendar_id ? { calendar_id: p.calendar_id } : {}), ...(p.attendees?.length ? { attendees: p.attendees } : {}), ...(p.send_updates ? { send_updates: p.send_updates } : {}),
+              ...(p.location ? { location: p.location } : {}), ...(p.description ? { description: p.description } : {}), ...(p.add_meet_link ? { add_meet_link: true } : {}) };
           }
           return null;
         } catch { return null; }
@@ -1003,6 +1071,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       return { here: on(surface), hereApprovable: on(surface, true), app: on('app'), appApprovable: on('app', true) };
     },
     async approvals(now, filter = {}) {
+      expireDue();
       const statuses = filter.state ? (Object.keys(APP_APPROVAL_STATE) as DeskStatus[]).filter(status => APP_APPROVAL_STATE[status] === filter.state) : null;
       if (statuses?.length === 0) return [];
       // The default list leaves out an approval the owner put off, while it is still open or review-only; any decision
@@ -1042,6 +1111,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       await say(stillPutOff ? 'It is already put off for later, and still waiting.' : reported.message, action === 'a' && out.toast === 'Done' && out.message.includes('Undo is available') ? [['Undo', `u:${id}`]] : undefined);
     },
     ledger(reminders) {
+      expireDue();
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status IN ('open', 'changing') ORDER BY created_at").toArray();
       const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind IN ('email_send', 'browser_submit', 'message_send', 'mcp_call', 'calendar_change') AND status = 'card_unconfirmed' ORDER BY created_at").toArray();
       const reviewOnly = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'review_only' ORDER BY created_at").toArray();

@@ -198,7 +198,7 @@ export const createOwnerResponder = (
     const adapter = gateway ?? new OpenAIResponsesAdapter({ apiKey: openaiApiKey, onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; } });
     const admittedGateway: LLMGatewayAdapter = context || skills || backgroundCurrent ? { complete: async request => {
       await assertCurrent();
-      if (transientDecision && (request.context !== 'full_context' || new TextEncoder().encode(JSON.stringify(request.request)).byteLength > MODEL_CONTEXT_MAX_CHARS)) throw new Error('background decision context bound');
+      if (transientDecision && new TextEncoder().encode(JSON.stringify(request.request)).byteLength > MODEL_CONTEXT_MAX_CHARS) throw new Error('background decision context bound');
       if (!transientDecision && skills && expectedProcedure !== undefined) await skills.assertProcedureCurrent(expectedProcedure, CANARIES);
       mark('procedure_checked');
       mark(`gateway_call:messages=${request.request.messages.length}`);
@@ -680,6 +680,7 @@ export const createOwnerResponder = (
         turnReplyContext = await quoteContext(turn.replyTo);
         turnReplyOwnAuthored = turn.replyTo?.provenance !== undefined && turn.replyTo.provenance.author !== 'other' && !turn.replyTo.provenance.forwarded;
         const said = [turn.text, media?.note].filter(Boolean).join('\n');
+        conversationStore?.noteQuoteRanges?.(id, turn.text ?? '', turn.sourceQuoteRanges ?? []);
         return await converse(id, turn.conversationRef, said, time, true, turn.surface);
       } finally {
         recentOwnerTurns.set(turn.traceId, { message_ref: turn.messageRef?.id ?? turn.traceId, text: turn.text, sourceQuoteRanges: turn.sourceQuoteRanges });
@@ -724,12 +725,11 @@ export const createOwnerResponder = (
       } finally { backgroundCurrent = undefined; transientDecision = false; promptContext = ''; backgroundSourceTaint = null; }
     },
     async consolidate(trace, day, sides) {
-      if (!memory) return 'no memory';
-      if (memory.incompleteTopics().length) return 'historical memory consolidation deferred: forgetting coverage incomplete';
+      if (!memory) return { done: true, detail: 'no memory' };
+      if (memory.incompleteTopics().length) return { done: false, detail: 'historical memory consolidation deferred: forgetting coverage incomplete' };
 
       const raw = await ask(trace, 'nightly_memory', NIGHTLY_MEMORY_INSTRUCTION, nightlyInput(promptMemory()!, day), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, memoryModel);
-      const grounding = sides ? { owner: sides.owner, waldo: sides.waldo } : { owner: day };
-      return applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`, undefined, grounding, false);
+      return { done: true, detail: applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`, undefined, sides ?? { owner: day }, false) };
     },
     async migrate(trace, input) {
       if (!memory) return 'no memory';

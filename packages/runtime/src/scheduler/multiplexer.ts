@@ -127,6 +127,19 @@ export class Scheduler {
     return scheduled;
   }
 
+  // Moves an armed entry's next run earlier, to `at`, and nothing else: its last run, retry count and quarantine stay
+  // as the scheduler set them, so an outside wake never resets a retry or lifts a quarantine. A retrying entry keeps its
+  // backoff. Returns whether the entry moved.
+  async pullForward(id: string, at: number): Promise<boolean> {
+    const moved = this.sql.exec(
+      `UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ?
+        WHERE id = ? AND status = 'armed' AND attempts = 0 AND due_at > ?`,
+      at, at, this.deps.now(), id, at,
+    ).rowsWritten > 0;
+    if (moved) await this.rearm();
+    return moved;
+  }
+
   async cancel(id: string): Promise<void> {
     this.sql.exec('DELETE FROM schedule WHERE id = ?', id);
     await this.rearm();

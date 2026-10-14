@@ -7,7 +7,7 @@ const clock = { now: () => new Date('2026-10-02T00:00:00Z') } as never;
 it('the Google read, draft and send handlers and propose_calendar_change (which reads the account for its receipt) declare requires_connector', () => {
   const handlers = googleHandlers(google as never, desk, clock);
   const declared = connectorBackedTools(handlers);
-  expect(declared).toEqual(['draft_email', 'get_communication', 'get_tasks', 'propose_calendar_change', 'query_availability', 'query_calendar', 'read_thread', 'search_communication', 'send_email']);
+  expect(declared).toEqual(['draft_email', 'get_communication', 'get_tasks', 'propose_calendar_change', 'query_availability', 'query_calendar', 'read_thread', 'search_communication', 'search_contacts', 'send_email']);
 });
 it('omitting the declaration is not connector-backed', () => {
   expect(connectorBackedTools([{ name: 'read_thread' }, { name: 'get_tasks', requires_connector: true }])).toEqual(['get_tasks']);
