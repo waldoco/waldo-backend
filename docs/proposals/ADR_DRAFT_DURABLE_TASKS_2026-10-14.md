@@ -41,6 +41,8 @@ Author: the C7 builder session (claude.ai/code `session_01V7kpVJaPZUuGytfbo12xE3
 
 The runner owns retries, and the executor never throws a step's failure to the Scheduler.
 - A failed attempt arms the next one as its own entry, 30 s × n later, up to `TASK_STEP_MAX_ATTEMPTS = 3`.
+- A closed authority (`ClosedRunError` or `OwnerAdmissionError`: a revoke, a rebind, a directory outage) isn't the step failing. The same attempt is armed again 30 s later and spends nothing. While the owner isn't admitted, the scheduled pass holds before any executor runs.
+- Every entry has its own id and names its attempt (`payload_refs.attempt_id`). Arming never rewrites the entry being dispatched, and an entry for an attempt already replaced or settled runs nothing.
 - After the third failure the item fails, and the owner is told once.
 - The Scheduler's own retry and quarantine apply only to a crash of the executor itself.
 
@@ -67,7 +69,9 @@ On a wake, the runner may find a `running` attempt at the item's current revisio
 - **The delivery path:** all of these go through the same `api.sendMessage` the standing-order fire uses.
   - For an app owner that's `appDeliveryFor`, which re-asks the directory per row.
   - Before each send, the runner also calls the job admission's `assertFresh`.
-- **At most once:** the `report` column is set to `sending` before the send and `sent` after it, and nothing resends a line marked `sending`. A crash mid-send can lose a progress line, never repeat it. This is the trade the tracer takes: a lost progress line costs less than a stalled task or a duplicate.
+- **Progress lines are at most once.** The `report` column is set to `sending` before the send and `sent` after it, and a progress line is never sent again. A crash mid-send can lose a progress line, never repeat it.
+- **The result is at least once.** The result is kept nowhere but the owner's channel, so the last step is `done` only after its send succeeds. A failed send runs the step again: an ordinary failure spends an attempt, a closed authority doesn't. A crash mid-send can deliver the result twice, but never loses it.
+- **Owner steps:** when the owner marks their own step done (`update_todo`), any Waldo step waiting on it is armed.
 
 ### 2.7 Privacy
 
@@ -97,4 +101,9 @@ An older Worker reads a `task_step` row as unreadable and leaves it alone; that'
 
 - **Switch off (the default):** no responsibility tools, `delegate_task` behaves as before, and no `task_step` executor is registered. A `task_step` entry armed while the switch was on fails at hand-off ("no scheduler executor"), and the Scheduler retries and then pauses it like any entry with no executor. It has no failure-notice name, so the pause is silent.
 - **Roll-back of the Worker:** an older Worker skips `task_step` rows as unreadable. The `task_step_attempts` table and the book's rows stay, inert.
+- **Known gaps, named, not built:**
+  - A throw from `scheduler.schedule` right after an attempt row is armed leaves that row with no entry, so the step stalls. The journal write and the schedule insert can't share one synchronous transaction, because `schedule` awaits the alarm.
+  - A step the owner resets to `pending` after an attempt isn't re-armed.
+  - Switching off leaves armed `task_step` entries to the Scheduler's no-executor retry and pause.
+  - A literal forget doesn't reach `responsibilities` or `responsibility_items` text. Both are already `KNOWN_GAP` in `forget-store-table.test.ts`; this change makes them live behind the switch.
 - **Still open:** wait-on-event (approvals), effect-bearing steps with the `uncertain` rule, the app's Carrying rows, and a `progress` reply part, once the A4 seam exists. These are PR 2.

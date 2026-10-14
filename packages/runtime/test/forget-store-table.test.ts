@@ -60,6 +60,7 @@ const TABLES: Record<string, Row> = {
   approval_presentations: exempt('approval id, surface, provider chat/message or run ref, approvable flag, payload digest and times; the app card is rendered from the ledger row at read time, so no review text is stored here'),
   card_pins: exempt('card id and time'), heartbeat_notified: exempt('loop id and times'), artifact_exports: exempt('ids, format, size and time'),
   event_briefs: exempt('event id and times'), schedule_runs: exempt('ids, status codes and times'),
+  task_step_attempts: exempt('item id, attempt number, revision, status and report-state codes and times; no task text'),
   observed_mail: exempt('provider source/thread/message IDs, update-card row pointer, observation time and judged/attached flags; no sender/subject/snippet/body; unattached pointers expire after seven days'),
   loop_mail_sources: exempt('loop/source/message IDs, due/timezone, fixed delivery-state code and revisit time; source-derived title lives in loops and source text in update_cards'),
   // Text the owner made or the runtime stored, not reached by a literal forget

@@ -116,7 +116,8 @@ export type ResponsibilityBook = ReturnType<typeof responsibilityBook>;
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
 
-export const responsibilityHandlers = (book: ResponsibilityBook) => [
+// changed: told after an owner or Waldo update to a step, so work waiting on that step can start.
+export const responsibilityHandlers = (book: ResponsibilityBook, changed: (responsibilityId: string) => Promise<void> = async () => undefined) => [
   {
     name: 'track_responsibility',
     description: 'Record work you took on that is consequential or has several steps, with the owner\'s intent and the steps, so it stays on the owner\'s list until it is finished on evidence. Not for questions or one-step answers.',
@@ -137,6 +138,7 @@ export const responsibilityHandlers = (book: ResponsibilityBook) => [
     mutates_state: true,
     async handle(args) {
       const updated = book.update(args);
+      if (updated) await changed(updated.responsibility_id);
       return updated
         ? { ok: true, data: updated, source_taint: null }
         : { ok: false, error: 'No such item.', code: 'rejected', source_taint: null };

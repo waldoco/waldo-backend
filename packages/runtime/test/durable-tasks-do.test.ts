@@ -11,7 +11,7 @@ import { responsibilityBook } from '../src/channels/responsibilities';
 // machine-turn path as a standing order. Each phase below builds a fresh OwnerDO on the same storage, which is what an eviction
 // or a deploy between wakes leaves: the rows, and nothing in memory.
 const ERRAND = 'Look into venues for the offsite in the background';
-const model = vi.hoisted(() => ({ steps: [] as string[], tools: [] as string[][], turnTools: [] as string[], failStep: 0, revokeAtStep: false, healthStep: false }));
+const model = vi.hoisted(() => ({ steps: [] as string[], tools: [] as string[][], turnTools: [] as string[], failStep: 0, revokeAtStep: 0, healthStep: false }));
 const wire = vi.hoisted(() => ({ revoked: false }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
@@ -24,7 +24,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
       model.steps.push(step[0]);
       model.tools.push((request.tools ?? []).map(tool => tool.name));
       if (model.failStep > 0) { model.failStep -= 1; throw new Error('provider down'); }
-      if (model.revokeAtStep) wire.revoked = true;
+      if (model.revokeAtStep === Number(step[1])) wire.revoked = true;
       if (model.healthStep) return done('Found three venues. Your HRV was 42 ms this morning.');
       return done(step[1] === '1' ? 'Found three venues: the Hall, the Barn and the Loft.' : 'The Hall is the best fit: it holds 40 and has a projector.');
     }
@@ -47,7 +47,7 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 const OWNER_ID = '6d5c4b3a-2918-4f7e-8d6c-5b4a3c2d1e0f';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 beforeEach(() => {
-  model.steps = []; model.tools = []; model.turnTools = []; model.failStep = 0; model.revokeAtStep = false; model.healthStep = false; wire.revoked = false;
+  model.steps = []; model.tools = []; model.turnTools = []; model.failStep = 0; model.revokeAtStep = 0; model.healthStep = false; wire.revoked = false;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
@@ -152,11 +152,15 @@ describe('a two-step background task', () => {
   it('starts a fresh attempt for a step an eviction cut off, and the step still reports once', async () => {
     const name = 'durable-task-interrupted';
     await ask(name, ERRAND);
-    // The step was running when the object went away: its attempt row says running, and its entry is still armed.
+    // The step was running when the object went away: its attempt row and the scheduler's run row say running, and its entry
+    // is still armed, so the scheduler delivers it again.
     await phase(name, async (_owner, storage) => {
       const [item] = storage.sql.exec<{ id: string; revision: number }>('SELECT id, revision FROM responsibility_items ORDER BY rowid LIMIT 1').toArray();
       storage.sql.exec("UPDATE responsibility_items SET status = 'running', revision = revision + 1 WHERE id = ?", item!.id);
       storage.sql.exec("UPDATE task_step_attempts SET status = 'running', revision = ? WHERE item_id = ?", item!.revision + 1, item!.id);
+      const [armed] = storage.sql.exec<{ id: string; occurrence_at: number }>("SELECT id, occurrence_at FROM schedule WHERE kind = 'task_step'").toArray();
+      storage.sql.exec("UPDATE schedule SET attempts = 1, last_fired_at = ? WHERE id = ?", Date.now(), armed!.id);
+      storage.sql.exec("INSERT INTO schedule_runs (id, schedule_id, kind, fired_at, attempt) VALUES (?, ?, 'task_step', ?, 1)", `${armed!.id}:${armed!.occurrence_at}:1`, armed!.id, Date.now());
     });
     await wake(name);
     expect(model.steps).toEqual(['Step 1 of 2']);
@@ -203,17 +207,26 @@ describe('a two-step background task', () => {
     expect((await rows(name)).items).toEqual(['Find venue options: running', 'Pick the best venue: pending']);
   });
 
-  it('applies nothing and tells the owner nothing when the directory revokes the owner while a step runs', async () => {
+  it('applies nothing and tells the owner nothing when the directory revokes the owner while a step runs, and the same attempt runs once it admits them again', async () => {
     const name = 'durable-task-revoked-mid-step';
     await ask(name, ERRAND);
-    model.revokeAtStep = true;
     await wake(name);
-    expect(model.steps).toEqual(['Step 1 of 2']);
-    const after = await rows(name);
-    expect(after.items).toEqual(['Find venue options: running', 'Pick the best venue: pending']);
-    expect(after.attempts).toEqual(['1:failed:-', '2:armed:-']);
-    wire.revoked = false;
-    expect(await chat(name)).toEqual([`user: ${ERRAND}`, 'assistant: On it. I will report back.']);
+    model.revokeAtStep = 2;
+    await wake(name);
+    expect(model.steps).toEqual(['Step 1 of 2', 'Step 2 of 2']);
+    let after = await rows(name);
+    expect(after.items).toEqual(['Find venue options: done', 'Pick the best venue: running']);
+    // A closed authority does not spend an attempt: the same one is armed again.
+    expect(after.attempts).toEqual(['1:done:sent', '1:armed:-']);
+    expect(after.responsibility).toEqual([{ status: 'open', closed_by_evidence: null }]);
+    wire.revoked = false; model.revokeAtStep = 0;
+    expect(await chat(name)).toEqual([`user: ${ERRAND}`, 'assistant: On it. I will report back.', PROGRESS]);
+    await phase(name, async (_owner, storage) => { storage.sql.exec("UPDATE schedule SET due_at = ?, occurrence_at = ? WHERE kind = 'task_step'", Date.now() - 1, Date.now() - 1); });
+    await wake(name);
+    expect(await chat(name)).toEqual([`user: ${ERRAND}`, 'assistant: On it. I will report back.', PROGRESS, RESULT]);
+    after = await rows(name);
+    expect(after.attempts).toEqual(['1:done:sent', '1:done:sent']);
+    expect(after.responsibility).toEqual([{ status: 'done', closed_by_evidence: expect.stringMatching(/^task_step:/) }]);
   });
 });
 
