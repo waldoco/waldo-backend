@@ -7,6 +7,8 @@ import type { CloudflareBrowserSdkLoader } from '../src/channels/public-fixture-
 import { toolOutput } from './fixtures/tool-output';
 
 const proof = vi.hoisted(() => ({ subject: 81101, inputs: [] as { subject: number; input: any }[], delivered: [] as { subject: number; text: string }[] }));
+// The browser trial prices Luna only and refuses any other model, so these owner turns run on Luna to reach it.
+vi.mock('@waldo/contracts', async load => { const contracts = await load<typeof import('@waldo/contracts')>(); return { ...contracts, WALDO_CHAT_MODEL: contracts.OPENAI_GPT_6_LUNA_MODEL }; });
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: any) => {
   proof.inputs.push({ subject: proof.subject, input: structuredClone(input) });
   const format = input.text?.format?.name;

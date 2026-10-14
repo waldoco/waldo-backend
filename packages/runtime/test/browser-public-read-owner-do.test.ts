@@ -8,6 +8,8 @@ import { commonBrowserFixture, commonBrowserMeteredFixtureLoader } from './fixtu
 import { toolOutput } from './fixtures/tool-output';
 
 const proof = vi.hoisted(() => ({ inputs: [] as any[], delivered: [] as string[], directoryOwner: '10000000-0000-0000-0000-000000000001', doName: '', subject: '81101',normalCalls:0,phase:'main',phaseCalls:0,sessionHandle:'',tabRef:'',outputs:[] as any[],bodies:new Map<string,Uint8Array>() }));
+// The browser trial prices Luna only and refuses any other model, so these owner turns run on Luna to reach it.
+vi.mock('@waldo/contracts', async load => { const contracts = await load<typeof import('@waldo/contracts')>(); return { ...contracts, WALDO_CHAT_MODEL: contracts.OPENAI_GPT_6_LUNA_MODEL }; });
 vi.mock('../src/identity/common-owner-authority', () => ({ commonOwnerAuthority: () => ({ resolve: async () => ({ directoryOwnerId: proof.directoryOwner, custodyDigest: 'a'.repeat(64) }) }) }));
 vi.mock('../src/channels/workspace-host',async load=>{
  const actual=await load<typeof import('../src/channels/workspace-host')>();
