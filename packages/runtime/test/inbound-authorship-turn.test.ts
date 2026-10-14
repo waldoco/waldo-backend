@@ -22,8 +22,8 @@ const turnFrom = async (message: Record<string, unknown>) => (await new Telegram
 const inModelInput = (text: string) => seen.inputs.some(input => input.includes(JSON.stringify(text).slice(1, -1)));
 
 for (const [name, message, block] of [
-  ['a pasted quote', { text: `${OWN}${QUOTE}`, entities: [{ type: 'blockquote', offset: OWN.length, length: QUOTE.length }] }, `${OWN}\n[Quoted by the owner; not their words:]\n${QUOTE}\n[End of quote.]`],
-  ['a forwarded message', { text: QUOTE, forward_origin: { type: 'hidden_user', date: 1, sender_user_name: 'Sam' }, forward_sender_name: 'Sam', forward_date: 1 }, `[Forwarded by the owner from someone else:]\n${QUOTE}\n[End of forwarded text.]`],
+  ['a pasted quote', { text: `${OWN}${QUOTE}`, entities: [{ type: 'blockquote', offset: OWN.length, length: QUOTE.length }] }, `${OWN}\n[Quoted by the owner; not their words:]\n${JSON.stringify(QUOTE)}\n[End of quote.]`],
+  ['a forwarded message', { text: QUOTE, forward_origin: { type: 'hidden_user', date: 1, sender_user_name: 'Sam' }, forward_sender_name: 'Sam', forward_date: 1 }, `[Forwarded by the owner from someone else:]\n${JSON.stringify(QUOTE)}\n[End of forwarded text.]`],
 ] as const) {
   it(`the model reads ${name} under its label; the stored message is the text as received, with no label`, async () => {
     const entries: ConversationEntry[] = [];
@@ -44,7 +44,7 @@ it('a remember sourced to a voice transcript is refused through the turn, while 
     ], []);
     const responder = createTelegramResponder('fixture', undefined, store, undefined, { download: async () => new Uint8Array([1]), transcribe: async () => QUOTE }, undefined, tools);
     await responder.respond(await turnFrom({ caption: 'my sister is called Mira. Listen to what Sam said.', audio: { file_id: 'a', file_name: 'sam.m4a', mime_type: 'audio/mp4', file_size: 1 } }), timer);
-    expect(inModelInput(`[Transcript of a file the owner sent; the speaker may not be the owner:]\n${QUOTE}\n[End of transcript.]`)).toBe(true);
+    expect(inModelInput(`[Transcript of a file the owner sent; the speaker may not be the owner:]\n${JSON.stringify(QUOTE)}\n[End of transcript.]`)).toBe(true);
     expect(store.claims().map(claim => claim.text)).toEqual(['Has a sister called Mira']);
   });
 });

@@ -61,7 +61,8 @@ export const receivedView = (parts: readonly InboundPart[]): InboundView => join
 
 // What the model reads: the owner's words as they are, each part someone else wrote in a labelled block, and a
 // media note as written. The labels state provenance the transport established; how to read it is the model's call.
+// A block's text is JSON-encoded so text that contains a closing label cannot end the block early.
 export const renderForModel = (parts: readonly InboundPart[]): InboundView => joined(parts.map(part => ({
-  text: part.authorship === 'owner' || part.authorship === 'media_note' ? part.text : `${LABELS[part.authorship][0]}\n${part.text}\n${LABELS[part.authorship][1]}`,
+  text: part.authorship === 'owner' || part.authorship === 'media_note' ? part.text : `${LABELS[part.authorship][0]}\n${JSON.stringify(part.text)}\n${LABELS[part.authorship][1]}`,
   foreign: part.authorship !== 'owner',
 })), '\n');
