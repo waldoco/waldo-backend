@@ -24,7 +24,7 @@ for (const name of scenarioNames) {
     if(!skill)throw new Error('skill_missing');
     expect(skill.required_tools.length).toBeGreaterThan(0);
     await runInDurableObject(env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName(`l1-${skill.name}`)), async (_,state) => {
-      const scope = { runId:'run', attempt:'attempt', deadline:Date.now()+60000, signal:new AbortController().signal, admit(){}, commit<T>(work:()=>T){return work();} };
+      const scope = { runId:'run', attempt:'attempt', deadline:Date.now()+15*60_000, signal:new AbortController().signal, admit(){}, commit<T>(work:()=>T){return work();} };
       const seen: string[] = []; const successful: string[] = []; const systems: string[] = []; let step=0; let activeTool=skill.required_tools[0]!;
       const gateway: LLMGatewayAdapter = { complete: async ({request}) => {
         if(request.response_format) return {ok:true,data:{model:request.model,text:'{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}',input_tokens:1,output_tokens:1,cache_read_input_tokens:0,latency_ms:1}};

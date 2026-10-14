@@ -7,8 +7,7 @@ import type { RunEffectScope } from '../channels/run-effect-scope';
 export const MODEL_CALL_TIMEOUT_MS = 30_000;
 // A turn's tool rounds and answer end this long before its run is closed without its reply. The margin covers the work
 // before the loop and any tool still running at the deadline, since started tools are never cut. A Telegram run is
-// closed 150 s after it is claimed, so its turn has 120 s, past the slowest live turns measured (73 to 90 s end to end);
-// an app or iMessage run has 15 minutes, so its turn has 14.5.
+// closed 14 minutes after it is claimed, so its turn has 13.5; an app or iMessage run has 15 minutes, so its turn has 14.5.
 export const RUN_CLOSE_MARGIN_MS = 30_000;
 // The turn's time when no run bounds it, counted from the tool loop's start.
 export const TURN_TIME_BUDGET_MS = 120_000;
