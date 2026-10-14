@@ -66,7 +66,8 @@ it('host-disabled memory writes remove remember even if the model attempts to ca
 it('steering reaches the next main-model round without an intervening writer; a chosen remember call can store it', async () => {
   const { responder, run, writes } = setup({ loops: true });
   calls.outputs.push(tool('close_loop', { id: 'x', outcome: 'done' }), tool('remember', { kind: 'preference', text: 'Vegan', evidence_quote: 'I am vegan now' }), []);
-  calls.onFirstReply = () => { responder.control.steer(5, 'also I am vegan now'); };
+  responder.control.bindTarget('run');
+  calls.onFirstReply = () => { expect(responder.control.steerTarget('run', 5, { text: 'also I am vegan now', foreignRanges: [] })).toBe(true); };
   expect(await run('plan dinner')).toContain('memory stored');
   expect(calls.order).toEqual(['reply', 'reply', 'remember', 'reply']);
   expect(calls.replyInputs[1]).toContain('also I am vegan now');

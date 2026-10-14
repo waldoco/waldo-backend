@@ -174,6 +174,8 @@ export type ConsoleView = Readonly<{
   notice: string | null;
   google: Readonly<{ accounts: readonly Readonly<{ id: string; email: string; error: string | null; calendar: boolean; mail: boolean; tasks: boolean }>[]; connectAvailable: boolean }>;
   telegram: Readonly<{ linked: boolean; unlinkAvailable: boolean }>;
+  /** Whether this owner has an active iMessage link (their own handle, via "waldo CODE"). Absent = unknown. */
+  imessage?: Readonly<{ linked: boolean }>;
   profile: ReturnType<typeof profile>;
   barriers: number;
   spots: readonly Claim[];
@@ -543,7 +545,7 @@ export const renderConsole = (view: ConsoleView, page: string = '', banner = '')
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Waldo console</title>
 ${FONTS}<style>${STYLE}</style></head><body><div class="wrap">
 ${banner}<header><div class="brand">Waldo<small>Console</small></div><div class="env">Staging · ${esc(view.release)} · ${esc(view.now)} ${esc(view.timezone)}</div></header>
-<nav>${nav}<a href="${CONSOLE_PATH}/invites">Invites</a><a href="${CONSOLE_PATH}/devices">Devices</a></nav>
+<nav>${nav}<a href="${CONSOLE_PATH}/invites">Invites</a><a href="${CONSOLE_PATH}/devices">Devices</a><a href="${CONSOLE_PATH}/imessage">iMessage</a></nav>
 ${view.notice ? `<div class="notice">${esc(view.notice)}</div>` : ''}
 ${pages[page] ?? pages['']}
 <footer>Only you can open this page. Links come from your Telegram DM and expire after 10 minutes; a session lasts 12 hours.</footer>

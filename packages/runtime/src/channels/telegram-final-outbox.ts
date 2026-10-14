@@ -12,7 +12,7 @@ export type FinalPayload = TelegramFinalPayload;
 // One sendable sendMessage unit of a frozen final. Computed at enqueue and stored on the
 // record so redelivery resumes per part instead of resending the whole message.
 export type FinalPart = Readonly<{ text: string; fallback_text?: string }>;
-export type HeartbeatReceipt = { id: string; occurrence: number; schedulerRunId: string; runId?: string; loops: { id: string; due: string }[] };
+export type HeartbeatReceipt = { id: string; occurrence: number; schedulerRunId: string; runId?: string; loops: { id: string; due: string; status?: string }[] };
 export type MailFollowupReceipt = { loopId: string; due: string; sourceRef: string; timezone: string; messageId: string };
 export type CalendarPrepReceipt = { connectionId: string; calendarId: 'primary'; eventId: string; occurrence: string; start: string; revision: string | null; sourceDigest: string; timezone: string };
 export type FinalRecord = {
@@ -26,6 +26,8 @@ export type FinalRecord = {
   // Host-owned frozen settlement intent, committed with the physical final.
   commonExecution?: { request: Omit<import('../identity/common-execution-request').CommonExecutionRequest,'signature'>; settled?: boolean; disposition?:'indeterminate' };
   heartbeat?: HeartbeatReceipt;
+  // A paused job's notice, naming the pause: the route holds it through quiet hours and drops it once that pause is lifted.
+  scheduleNotice?: { scheduleId: string; until: number };
   mailFollowup?: MailFollowupReceipt;
   calendarPrep?: CalendarPrepReceipt;
   reaction?: { message_id: number; emoji: string };
