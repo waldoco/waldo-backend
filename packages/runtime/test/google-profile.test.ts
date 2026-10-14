@@ -4,6 +4,7 @@ import { googleProxy } from '../src/connectors/connections';
 import type { RunEffectScope } from '../src/channels/run-effect-scope';
 import { createOwnerTurnContext } from '../src/context-composer/owner-turn';
 import { ownerMessageAdmission } from '../src/identity/owner-message-admission';
+import { barredBy, forgetFingerprints } from '../src/memory/claims';
 import { googleNameLine } from '../src/prompt/messaging-behavior';
 
 const app = { clientId: 'cid', clientSecret: 'csecret', redirectUri: 'https://w.example/oauth/google/callback' };
@@ -147,7 +148,7 @@ describe('the name line in a composed owner context', () => {
       actualDoId: 'actual-do', expectedDoId: (name: string) => name === 'owner-demo' ? 'actual-do' : 'other-do',
       allowedDoNames: ['owner-demo'], provider: 'telegram' as const, subject: '1001', text: 'hello', occurrenceKey: 'name-line', occurredAt: Date.now() - 1, now: Date.now,
     });
-    const context = createOwnerTurnContext(admission, { ownerProfile: async () => googleNameLine(profile) });
+    const context = createOwnerTurnContext(admission, { ownerProfile: async () => googleNameLine(profile, () => false) });
     return context.composer.compose(context.invocation, { ...context.snapshot(), canary_tokens: ['a1b2c3d4e5f60718', 'b1b2c3d4e5f60718', 'c1b2c3d4e5f60718'], replay_context_ref: null });
   };
   it.each([
@@ -161,5 +162,29 @@ describe('the name line in a composed owner context', () => {
     expect(composed.prompt.split("From the owner's Google account, not yet confirmed by the owner").length - 1).toBe(shown);
     expect(composed.prompt).not.toContain('</system>');
     expect(composed.prompt).not.toContain('<ada@');
+  });
+});
+
+// A forget suppresses the name only on an exact match with one of its barrier fingerprints: the trimmed text as given, or
+// its lower-cased, space-collapsed form. Any name of the profile matching hides the whole line.
+describe('the name line under the owner\'s forget barriers', () => {
+  const forgot = (...topics: string[]) => barredBy(topics.flatMap(forgetFingerprints));
+  it.each([
+    ['the full name', 'Zoë Okonkwo-Ström', NAMES],
+    ['the given name alone', 'Zoë', NAMES],
+    ['the family name alone', 'Okonkwo-Ström', NAMES],
+    ['the name in another case and spacing', '  zoë   OKONKWO-ström ', NAMES],
+    ['the full name the parts make, when Google sent no full name', 'Zoë Okonkwo-Ström', { given_name: 'Zoë', family_name: 'Okonkwo-Ström' }],
+  ])('a forget of %s leaves no line', (_label, topic, profile) => {
+    expect(googleNameLine(profile, () => false), 'the profile gives a line before the forget').not.toBeNull();
+    expect(googleNameLine(profile, forgot(topic))).toBeNull();
+  });
+  it.each([
+    ['a longer text that holds the name', "Zoë's birthday"],
+    ['part of a name', 'Okonkwo'],
+    ['the name with a letter changed', 'Zoe Okonkwo-Ström'],
+    ['something unrelated', 'espresso'],
+  ])('a forget of %s leaves the line', (_label, topic) => {
+    expect(googleNameLine(NAMES, forgot(topic))).toContain('"Zoë Okonkwo-Ström"');
   });
 });

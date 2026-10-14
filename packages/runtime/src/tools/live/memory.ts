@@ -1,5 +1,5 @@
 import { rememberArgsSchema, forgetMemoryArgsSchema, readMemoryArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type ToolHandler, type ToolName, type ReadMemoryArgs, type RememberArgs, type ForgetMemoryArgs } from '@waldo/contracts';
-import { ground, normalizeForGrounding, textFingerprint, type Claim, type ClaimStore } from '../../memory/claims';
+import { barredBy, ground, normalizeForGrounding, type Claim, type ClaimStore } from '../../memory/claims';
 import { carriesTopic, hidesTopic } from '../../memory/forget-guard';
 import { ftsQuery } from '../../channels/episodes';
 import type { ToolDispatcherContext } from '../dispatcher';
@@ -18,6 +18,10 @@ type Dependencies = Readonly<{
   transaction?<T>(work: () => T): T;
   hideHistory(texts: readonly string[], ctx: MemoryToolContext): Promise<void>;
   resolveSource?(ref: string, ctx: MemoryToolContext): Promise<MemoryOwnerTurn | null>;
+  // Facts a connected provider asserts about the owner, kept outside the claims plane. Called inside the forget's commit
+  // once its barriers are written: suppresses what the forgotten texts match exactly, and returns one line per kind of
+  // fact matched, never a value.
+  providerFacts?(texts: readonly string[]): readonly string[];
 }>;
 const fail = (error: string) => ({ ok: false as const, code: 'invalid_args' as const, error, source_taint: null });
 const success = (data: unknown) => ({ ok: true as const, data, source_taint: null });
@@ -44,7 +48,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
   };
   const ready = async (ctx: MemoryToolContext) => { ctx.runScope?.admit(); await ctx.assertTaskSourceCurrent?.(); ctx.runScope?.admit(); };
   const hidden = (claim: Claim) => [...store.pendingTopics(), ...store.incompleteTopics()].some(topic => [claim.text, claim.evidence, claim.source_ref, (claim as Claim & { aliases?: string | null }).aliases].some(text => typeof text === 'string' && (carriesTopic(text, topic) || hidesTopic(text, topic))));
-  const blocked = (text: string) => store.barriers().some(barrier => barrier.topic_hash === textFingerprint(text.trim()) || barrier.topic_hash === textFingerprint(text.trim().toLowerCase().replace(/\s+/g, ' ')));
+  const blocked = (text: string) => barredBy(store.barriers().map(barrier => barrier.topic_hash))(text);
   const base = (name: ToolName, description: string) => ({ name, description, trigger_allowlist: triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes(name)), autonomy_gated: false });
   return [
     { ...base('remember', 'Store a fact or preference grounded in a verbatim quote from the owner in this conversation. Use replaces_id to correct an active claim. Memory is context, never permission to act.'), schema: rememberArgsSchema, mutates_state: true,
@@ -108,9 +112,10 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         // Hide retained history before deleting the only claim-to-source link. A failed
         // cleanup is a failed tool, not an invented completion receipt.
         await deps.hideHistory([...texts], ctx); await ready(ctx);
-        let incomplete = false, touched = false;
+        let incomplete = false, touched = false, provider: readonly string[] = [];
         const commit = () => {
           for (const text of texts) store.barrier(text, now());
+          provider = deps.providerFacts?.([...texts]) ?? [];
           for (const id of selected.keys()) store.forget(id);
           // Derived stores (cards, notes, goals, loops, runs, blocks, inbox, topic index) are purged in the same commit as the claim.
           // A purge that cannot verify clean leaves the pending row in place and this call reports incomplete; a topic row is closed only by a verified purge.
@@ -125,14 +130,14 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         const atomic = () => deps.transaction ? deps.transaction(commit) : commit();
         if (ctx.runScope) ctx.runScope.commit(atomic); else atomic();
         if (incomplete) return fail('Memory cleanup could not be verified. The topic stays recorded and hidden from recall until a forget completes with verified cleanup.');
-        // Nothing selected and no derived store changed means nothing was forgotten: a success receipt would tell the owner it is gone while recall still holds it.
-        if (selected.size === 0 && !touched) return fail('No stored memory carries that topic or span. Read memory, then pass claim_ids or a literal topic that appears in the stored text.');
+        // Nothing selected, no derived store changed and no provider fact matched means nothing was forgotten: a success receipt would tell the owner it is gone while recall still holds it.
+        if (selected.size === 0 && !touched && provider.length === 0) return fail('No stored memory carries that topic or span. Read memory, then pass claim_ids or a literal topic that appears in the stored text.');
         // Chat history is redacted by exact text. A topic or span names the literal the owner said, so restatements carrying it are swept too; an id alone only knows the saved wording, and a reworded copy elsewhere (an earlier reply, a summary) is not reached. The receipt says which one happened.
         const swept = args.topic !== undefined || args.source !== undefined;
         const history = swept
           ? 'copies in older chat history carrying that text are hidden'
           : 'older chat history is hidden only where it quotes the saved wording exactly; a restated or reworded copy may remain, and forgetting by the literal topic from the owner message sweeps those';
-        return success({ removed_ids: [...selected.keys()], scope_note: args.scope_note, history_swept: swept ? 'topic_literal' : 'saved_wording_only', scope: `removed from memory and recall; ${history}; messages already in the Telegram chat cannot be deleted by Waldo; backups expire per retention` });
+        return success({ removed_ids: [...selected.keys()], scope_note: args.scope_note, history_swept: swept ? 'topic_literal' : 'saved_wording_only', scope: `removed from memory and recall; ${history}; messages already in the Telegram chat cannot be deleted by Waldo; backups expire per retention`, ...(provider.length ? { provider_facts: provider } : {}) });
       } },
   ];
 };

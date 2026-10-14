@@ -59,7 +59,7 @@ import { workspaceToolHandlers } from '../tools/live/workspace';
 import { workspaceDownload, workspacePage, workspaceRead } from './console-workspace';
 import { SCHEDULE_KINDS, setProactivityArgsSchema, type ConnectIntent, type ConversationEntry, type ScheduleEntry } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
-import { FORGOTTEN, claimStore, profile } from '../memory/claims';
+import { FORGOTTEN, barredBy, claimStore, forgetFingerprints, ownerProfileClaimCount, profile } from '../memory/claims';
 import { isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine } from './loops';
 import { armHeartbeat, HEARTBEAT_EVERY_MS, heartbeatTick, heartbeatEligible, settleHeartbeat } from './heartbeat';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
@@ -122,7 +122,8 @@ import { BEGIN_SESSION_PATH, newTicket, ticketHash } from './connect-link';
 import { readConsoleTicket } from '../identity/console-ticket';
 import { signedRpc } from '../identity/owner-directory';
 import { googleProxy } from '../connectors/connections';
-import { googleNameLine } from '../prompt/messaging-behavior';
+import { googleNameLine, googleNameTexts } from '../prompt/messaging-behavior';
+import { timezoneHandlers } from './owner-timezone';
 import { googleCircuit } from '../connectors/google-circuit';
 import { confirmGoogleReadback, GoogleReadbackError, readbackFeature, reauthNoticeTransition } from '../connectors/google-reconnect';
 import { connectServiceHandler, googleHandlers } from '../tools/live/google';
@@ -2069,6 +2070,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const stateOwner = () => vaultOwner() ?? (owner > 0 ? String(owner) : 'unlinked');
     const accounts = async () => (await storage.get<GoogleAccount[]>('google:accounts')) ?? [];
     const googleProfiles = async () => (await storage.get<Record<string, GoogleProfileFact>>('google:profiles')) ?? {};
+    // The owner's forget barriers as they stand now: a provider fact one of them matches exactly is suppressed.
+    const forgotten = () => barredBy(memory.barriers().map((barrier) => barrier.topic_hash));
     const health = async () => (await storage.get<Record<string, string>>('google:health')) ?? {};
     const noteHealth = (id: string, error: string) => {
       this.ctx.waitUntil((async () => {
@@ -2126,7 +2129,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // it); a grant that carries none, from an edge that predates it or a migrated token, leaves it as it is.
         const ids = new Set(kept.map((known) => known.id));
         const profiles = Object.fromEntries(Object.entries(await googleProfiles()).filter(([id]) => ids.has(id) && !(grant.profile && id === account.id)));
-        if (grant.profile && Object.keys(grant.profile).length) profiles[account.id] = { ...grant.profile, at: Date.now() };
+        // A phone the owner asked to forget is not stored again while their barrier stands. A forgotten name is stored as
+        // Google sent it, and nameLine leaves it out.
+        const { phone, ...names } = grant.profile ?? {};
+        const profile = phone === undefined || forgotten()(phone) ? names : { ...names, phone };
+        if (grant.profile && Object.keys(profile).length) profiles[account.id] = { ...profile, at: Date.now() };
         await storage.put({ 'google:accounts': kept, 'google:profiles': profiles });
         noteHealth(account.id, '');
         // The next sweep watches with the route this grant gives, rather than waiting out a stored skip or failure.
@@ -2184,13 +2191,31 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return true;
       },
       // The name Google gave for the first connected account that has one, in connect order (a reconnect moves an account last).
+      // The barriers are read at every render, so an account whose name the owner forgot stays out after a reconnect.
       async nameLine(): Promise<string | null> {
-        const [all, profiles] = [await accounts(), await googleProfiles()];
+        const [all, profiles, barred] = [await accounts(), await googleProfiles(), forgotten()];
         for (const account of all) {
-          const line = googleNameLine(profiles[account.id] ?? {});
+          const line = googleNameLine(profiles[account.id] ?? {}, barred);
           if (line) return line;
         }
         return null;
+      },
+      // A forget's texts against the kept profiles, inside the forget's own transaction. A name they match exactly stays
+      // stored and nameLine leaves it out; a phone they match is deleted. One line per kind of fact matched, never a value.
+      forget(texts: readonly string[]): string[] {
+        const matched = barredBy(texts.flatMap(forgetFingerprints));
+        const profiles = storage.kv.get<Record<string, GoogleProfileFact>>('google:profiles') ?? {};
+        const hidesName = Object.values(profiles).some((profile) => googleNameTexts(profile).some(matched));
+        const dropsPhone = Object.values(profiles).some((profile) => profile.phone !== undefined && matched(profile.phone));
+        if (dropsPhone) storage.kv.put('google:profiles', Object.fromEntries(Object.entries(profiles).flatMap(([id, profile]) => {
+          if (profile.phone === undefined || !matched(profile.phone)) return [[id, profile]];
+          const { phone: _phone, at, ...facts } = profile;
+          return Object.keys(facts).length ? [[id, { ...facts, at }]] : [];
+        })));
+        return [
+          ...(hidesName ? ["The name from the owner's Google account matched: it is hidden from you, after a reconnect too. The account stays connected."] : []),
+          ...(dropsPhone ? ["The phone number from the owner's Google account matched and was deleted; a reconnect does not store it again. The account stays connected."] : []),
+        ];
       },
       configured: () => Boolean(clientId && clientSecret && stateSecret),
       // Every call starts a fresh single-use attempt (state nonce + PKCE verifier) valid for 15 minutes.
@@ -2413,6 +2438,17 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       schedPrefs.enabled('daily_brief') && armable('daily_brief') ? (replanCards ? replanDayCards(scheduler, plans, timezone, now).then(() => false) : armDayCards(scheduler, plans, timezone, now)) : Promise.resolve(false),
       schedPrefs.enabled('heartbeat') && armable('heartbeat') ? armHeartbeat(scheduler, now) : Promise.resolve(),
     ]);
+    // The one writer of a confirmed zone, for the app or console control and for the owner's own words in chat.
+    const confirmZone = async (zone: string, now: number, assertCurrent?: () => Promise<void>): Promise<boolean> => {
+      if (!validZone(zone) || !(await saveSettings({ timezone: zone, ...loops.proactivity() }))) return false;
+      await assertCurrent?.();
+      identity.put('timezone', zone);
+      identity.put('timezone_confirmed', true);
+      await armOwnJobs(zone, now, true);
+      // Rebuild runtimes so values captured at build time follow the new zone.
+      this.runtimes = {};
+      return true;
+    };
     // Native chat initialization cannot launch unrequested background model work.
     const ready = channel === 'imessage' ? this.browserReady : channel === 'app'
       ? (armable('nightly') ? Promise.all([backfillEpisodes(kv, episodes), armOwnJobs(clock.timezone, Date.now()), this.browserReady])
@@ -2533,6 +2569,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return createOwnerTurnContext(await surfaceOwnerAdmission({ scope, lookup, expectedPhysicalDoId: this.ctx.id.toString(), surface: 'telegram', subject, occurrenceKey: occurrence.id, occurredAt: occurrence.admittedAt, text: turn.text }),
         { conversationRef: ownerChainRef('telegram', subject), health: () => health ??= healthContext.latest(turn.traceId), ownerProfile: google.nameLine });
     } } } : undefined;
+    // Owner state for the first-conversation line: counts and flags only; the Google name keeps its own fenced line.
+    const newOwnerFacts = async () => ({ profileClaims: ownerProfileClaimCount(memory), zone: clock.timezone, zoneConfirmed: identity.get<boolean>('timezone_confirmed') === true,
+      googleName: (await google.nameLine()) !== null, surfaces: [...(this.appBound() ? ['the app'] : []), ...(this.ctx.storage.kv.get<string>('imessage_subject') ? ['iMessage'] : []),
+        ...(this.ctx.storage.kv.get<string>('telegram_subject') && !this.ctx.storage.kv.get<boolean>('telegram_unlinked') ? ['Telegram'] : [])] });
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
       { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...workspaceTools, ...reminderHandlers(book), ...healthLogHandlers(healthLogs), getHealthHandler(healthRead, clock), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
@@ -2545,6 +2585,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return true;
       }, effects), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), searchEpisodesHandler(episodes), ...memoryHandlers({
         sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: surfaceChatRef(channel, owner),
+        providerFacts: (texts) => google.forget(texts),
         hideHistory: async (texts, context) => {
           const scope = context.runScope;
           scope?.admit();
@@ -2584,7 +2625,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         context.runScope?.admit();
         if (!auth || auth.do_name !== doName || !auth.capabilities.includes(input.class) || identity.get<string>('do_name') !== doName) return { accepted: false, reason: 'unavailable' };
         return this.env.DEVICE_BRIDGE_DO.get(this.env.DEVICE_BRIDGE_DO.idFromName(device.device_id)).enqueueCommand({ ...input, owner_id: auth.owner_id, device_id: device.device_id });
-      } }), ...loopHandlers(loops), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable }))], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining }; }), undefined,
+      } }), ...loopHandlers(loops), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable })), ...timezoneHandlers((zone, ctx) => confirmZone(zone, Date.now(), async () => ctx.runScope?.admit()))], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining }; }), undefined,
       (opt) => opt ? openLoopsPrompt(loops, clock.timezone, opt.loopsRoom) : standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
@@ -2598,11 +2639,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if(context.conversationRef!==record.conversationRef)throw new ClosedRunError();
         return context;
       }},history:context=>({...indexedConversationStore(canonicalOwnerConversationStore(this.ctx.storage,context,this.logSkippedLoad),episodes,()=>Date.now()),
-        noteUnfinished:(line,scope)=>this.appInbox.noteLanded(scope.runId,scope.attempt,line)}),ownerProfile:google.nameLine} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
+        noteUnfinished:(line,scope)=>this.appInbox.noteLanded(scope.runId,scope.attempt,line)}),ownerProfile:google.nameLine,newOwnerFacts} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
         const record=this.activeIMessage;
         if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==record.text)throw new ClosedRunError();
         return iMessageOwnerContext(this.imessageHost,record,scope,{ownerProfile:google.nameLine});
-      }},history:context=>canonicalOwnerConversationStore(this.ctx.storage,context),ownerProfile:google.nameLine} : {...telegramContext,ownerProfile:google.nameLine},
+      }},history:context=>canonicalOwnerConversationStore(this.ctx.storage,context),ownerProfile:google.nameLine,newOwnerFacts} : {...telegramContext,ownerProfile:google.nameLine,newOwnerFacts},
     );
     // A job prompt built on the ledger: the owner's health logs reach the model as this turn's context.
     const ledgerJob = async (trace: string, said: string, toolNames?: Parameters<typeof responder.prompt>[4]) =>
@@ -3174,13 +3215,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           await assertCurrent?.();
           loops.setProactivity(parsed.data);
         } else if (action === 'timezone.set') {
-          if (!validZone(value) || !(await saveSettings({ timezone: value, ...loops.proactivity() }))) return false;
-          await assertCurrent?.();
-          identity.put('timezone', value);
-          identity.put('timezone_confirmed', true);
-          await armOwnJobs(value, now, true);
-          // Rebuild runtimes so values captured at build time follow the new zone.
-          this.runtimes = {};
+          if (!(await confirmZone(value, now, assertCurrent))) return false;
         } else if (action === 'spot.dismiss' || action === 'spot.forget' || action === 'spot.confirm') {
           // A claim mid-scrub (status 'purging') is the retry path: the stated 'try again'
           // must be able to select it. Dismiss/confirm stay active-only.

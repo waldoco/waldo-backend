@@ -100,6 +100,8 @@ export const toolNameSchema = z.enum([
   'use_mac',
   // search_contacts: the owner's Google contacts and other contacts, by name or address prefix.
   'search_contacts',
+  // set_timezone: the owner's time zone from their own statement in an owner turn, through the app zone control's writer.
+  'set_timezone',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -255,6 +257,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'track_responsibility',
     'set_proactivity',
     'set_schedule_preference',
+    'set_timezone',
     'read_tool_output',
     'log_meal',
     'log_workout',
