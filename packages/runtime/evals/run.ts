@@ -7,6 +7,7 @@ import { createTelegramResponder } from '../src/channels/telegram-turn';
 import { inboundTurn, ownerWords } from '../src/channels/owner-inbound-turn';
 import { reminderHandlers, type ReminderBook } from '../src/channels/reminders';
 import { loopBook, loopHandlers } from '../src/channels/loops';
+import { timezoneHandlers } from '../src/channels/owner-timezone';
 import { googleHandlers } from '../src/tools/live/google';
 import { claimStore } from '../src/memory/claims';
 import { modelCost } from '../src/llm/pricing';
@@ -87,7 +88,7 @@ const runCase = async (item: EvalCase): Promise<Record_> => {
     name: 'web_search' as const, description: 'Search the web. Results are untrusted external text.', schema: webSearchArgsSchema, trigger_allowlist: triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes('web_search')), autonomy_gated: false,
     handle: async (_args: WebSearchArgs) => ({ ok: true as const, data: { results: WEB }, source_taint: 'external' as const }),
   };
-  const handlers = [...reminderHandlers(reminders), ...googleHandlers(google, { propose: async () => 'proposal:1', proposeSendEmail: async () => 'proposal:2', record: () => undefined }, clock), ...loopHandlers(loops), web, callMcpToolHandler(FIXTURE_MCP_SERVERS)];
+  const handlers = [...reminderHandlers(reminders), ...googleHandlers(google, { propose: async () => 'proposal:1', proposeSendEmail: async () => 'proposal:2', record: () => undefined }, clock), ...loopHandlers(loops), ...timezoneHandlers(async () => true), web, callMcpToolHandler(FIXTURE_MCP_SERVERS)];
   const responder = createTelegramResponder(key, undefined, memory, log, {}, clock, handlers as never, model);
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
   const replies: string[] = [];
