@@ -62,7 +62,7 @@ beforeEach(() => {
     return new Response('unexpected', { status: 500 });
   });
 });
-afterEach(() => { vi.unstubAllGlobals(); });
+afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 const OTHER_PRINCIPAL = `prn_${'c'.repeat(32)}`;
 const telegramTurn = async (name: string, withDirectory: boolean, text: string, seed: Record<string, unknown> = {}) =>
@@ -161,12 +161,15 @@ it('a directory-backed Telegram turn continues the Telegram chain: it sees the e
 });
 
 // One directory-backed owner object for a whole scenario: owner messages through its inbox, reminders through its alarm.
+// The clock is fixed: on the real one, a default day card due within the scheduler's one-second lookahead fires in the
+// reminder's pass.
 type ChainRow = { id: string; chatId: string; ownerId: string; parentId: string | null; modelPayload: string };
 const directoryOwner = (name: string, run: (owner: Readonly<{
   send(update: number, message: Readonly<Record<string, unknown>>): Promise<string | undefined>;
   remind(note: string): Promise<void>;
   chain(): Promise<ReadonlyMap<string, ChainRow>>;
 }>) => Promise<void>) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2030-01-15T10:00:00Z') });
   claimStore(state.storage.sql);
   ensureSchema(state.storage);
   await state.storage.put({ telegram_subject: '42', do_name: name });
