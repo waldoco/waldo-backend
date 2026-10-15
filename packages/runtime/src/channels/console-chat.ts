@@ -1,8 +1,9 @@
 import { APP_SEND_MAX_WIRE_BYTES, appSendRequestV1Schema } from '../../../contracts/src/app/core';
 import { APP_CHAT_PATH, APP_CHAT_SEND_PATH, readBoundedBody } from './app-api';
 import { DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
-import { consoleAuth, OWNER_COOKIE, type ConsoleAuth } from '../identity/console-auth';
-import { linkCodeHash, type OwnerDirectoryEnv } from '../identity/owner-directory';
+import { consoleAuth, type ConsoleAuth } from '../identity/console-auth';
+import type { OwnerDirectoryEnv } from '../identity/owner-directory';
+import { ownerCookies, ownerSessionHash } from './session-fence';
 
 // Chat in the console is the app's main chat, reached with the console sign-in. The console's signed owner cookie
 // is a row in the same revocable session table the app bearer uses, and the owner object's app route accepts any live
@@ -17,15 +18,6 @@ type ChatEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace;
 
 const answer = (status: number, body: object, extra: Record<string, string> = {}) =>
   Response.json(body, { status, headers: { ...DASHBOARD_OVERVIEW_HEADERS, ...extra } });
-
-const ownerCookies = (request: Request) => (request.headers.get('cookie') ?? '').split(';').map(part => part.trim()).filter(part => part.startsWith(`${OWNER_COOKIE}=`));
-// The session id inside the owner cookie, read only after readOwnerCookie has checked its signature and that its row is live.
-const ownerSessionId = (request: Request): string | null => {
-  const raw = ownerCookies(request)[0]?.slice(OWNER_COOKIE.length + 1);
-  const sigDot = raw?.lastIndexOf('.') ?? -1;
-  const sessionDot = raw && sigDot > 0 ? raw.lastIndexOf('.', sigDot - 1) : -1;
-  return raw && sessionDot > 0 ? raw.slice(sessionDot + 1, sigDot) : null;
-};
 
 // Forged requests: the cookies are SameSite=Strict already; a credentialed call must also come from this origin and
 // carry the console header. Origin is required on a write, since browsers always send it there.
@@ -70,8 +62,8 @@ export const handleConsoleChat = async (request: Request, env: ChatEnv, auth: Co
   if (ownerCookies(request).length > 1) return answer(401, { error: 'sign_in_required' });
   let doName: string | null;
   try { doName = await auth.readOwnerCookie(request); } catch { return answer(503, { error: 'chat_unavailable' }); }
-  const sessionId = doName ? ownerSessionId(request) : null;
-  if (!doName || !sessionId) return answer(401, { error: 'sign_in_required' });
+  const sessionHash = doName ? await ownerSessionHash(request) : null;
+  if (!doName || !sessionHash) return answer(401, { error: 'sign_in_required' });
 
   // The app's own per-owner buckets: chat from the app and the console shares one budget, sized for the app's polling.
   if (!env.RESPONSIBILITY_RATE_LIMITER) return answer(503, { error: 'chat_unavailable' });
@@ -93,7 +85,7 @@ export const handleConsoleChat = async (request: Request, env: ChatEnv, auth: Co
 
   const forwarded = new Request(`https://telegram-owner${chosen.target}`, {
     method: chosen.method,
-    headers: { 'x-waldo-do-name': doName, 'x-waldo-app-session-hash': await linkCodeHash(sessionId), 'x-waldo-app-origin': url.origin, 'content-type': 'application/json' },
+    headers: { 'x-waldo-do-name': doName, 'x-waldo-app-session-hash': sessionHash, 'x-waldo-app-origin': url.origin, 'content-type': 'application/json' },
     ...(body ? { body } : {}),
   });
   let response: Response;
