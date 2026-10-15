@@ -192,6 +192,12 @@ describe('whatsapp voice notes (W4)', () => {
     expect(updates[0]).toMatchObject({ message: { audio: { file_id: 'media-2', mime_type: 'audio/mpeg' } } });
   });
 
+  it('audio with no voice flag is an audio file, not a voice note the owner recorded', () => {
+    const { updates } = whatsappIngressUpdates([{ id: 'wamid.u1', from: '15550001111', type: 'audio', audio: { id: 'media-4', mime_type: 'audio/ogg' } }], '15550001111', 0);
+    expect(updates[0]).toMatchObject({ message: { audio: { file_id: 'media-4', mime_type: 'audio/ogg' } } });
+    expect(updates[0]!.message).not.toHaveProperty('voice');
+  });
+
   it('the downloader does the Graph two-step with the bearer on both calls, never in a URL', async () => {
     const bytes = new Uint8Array([1, 2, 3]);
     const graph = vi.fn(async (input: unknown) => {

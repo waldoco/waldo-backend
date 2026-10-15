@@ -4,7 +4,7 @@ import { ownerTurnAttachments, type OwnerTurnEnvelope, type ReplyContext } from 
 import { ownerWords } from '../owner-inbound-turn';
 import type { RunEffectScope } from '../run-effect-scope';
 import { splitTelegramText } from '../telegram-api';
-import type { WhatsAppCall, WaIngressMessage } from '../whatsapp-api';
+import { whatsappForwarded, type WhatsAppCall, type WaIngressMessage } from '../whatsapp-api';
 
 // Pure transport adapter, not an owner-authentication or approval boundary. Core must
 // admit the sender/occurrence first and supply its own RunEffectScope and resolved media.
@@ -93,7 +93,7 @@ export const createWhatsAppSurfaceAdapter = (options: Readonly<{ call: WhatsAppC
         parts: [
           ...ownerWords(typed),
           ...(update.mediaNote ? [{ authorship: 'media_note' as const, text: update.mediaNote }] : []),
-          ...(update.transcript ? [{ authorship: 'file_transcript' as const, text: cleanOwnerText(update.transcript) }] : []),
+          ...(update.transcript ? [{ authorship: message.audio?.voice === true && !whatsappForwarded(message) ? 'owner_voice' as const : 'file_transcript' as const, text: cleanOwnerText(update.transcript) }] : []),
         ],
         ...(update.attachments ? { attachments: update.attachments } : {}),
         ...(update.replyTo ? { replyTo: update.replyTo } : {}),

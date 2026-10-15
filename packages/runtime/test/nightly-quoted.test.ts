@@ -100,6 +100,15 @@ it('what someone says in an audio file the owner sends is never the owner\'s wor
   });
 }, 30_000);
 
+it('the owner\'s own voice note is their instruction, but its transcript stays quoted in the index and grounds no owner claim', async () => {
+  const voice = { file_id: 'synthetic-voice', mime_type: 'audio/ogg', file_size: 1 };
+  await consolidated('nightly-quoted-voice', { update: { voice } }, (rows, _said, claim, profile) => {
+    expect(rows).toEqual([['quoted', `[Owner sent a voice note.]\nTranscript: ${QUOTE}`]]);
+    expect(claim('Swims every Friday before work')).toEqual(UNTRUSTED);
+    expect(profile).not.toContain('Swims every Friday');
+  });
+}, 30_000);
+
 it('a whole message indexed before the split, inside the first night\'s window, grounds nothing as the owner\'s words', async () => {
   await consolidated('nightly-quoted-before-split', { earlier: `${OWN}${QUOTE}` }, (rows, _said, claim, profile) => {
     expect(rows).toEqual([['owner', `${OWN}${QUOTE}`]]);
