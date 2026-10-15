@@ -117,6 +117,7 @@ describe('toolName', () => {
       'skills_load',
       'use_mac',
       'search_contacts',
+      'send_progress_note',
     ]);
   });
 
@@ -240,6 +241,7 @@ describe('TOOL_PERMISSIONS', () => {
         'query_calendar',
         'connect_service',
         'send_console_link',
+        'send_progress_note',
         'get_communication',
         'search_communication',
         'search_contacts',

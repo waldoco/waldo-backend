@@ -77,12 +77,15 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
           store: false,
           reasoning: { effort, summary: 'auto' },
           ...(input.request.cache_key ? { prompt_cache_key: input.request.cache_key } : {}),
-          ...(input.request.tools ? { tools: input.request.tools.map((tool) => ({ type: 'function' as const, name: tool.name, description: tool.description, parameters: tool.parameters, strict: false })) } : {}),
+          ...(input.request.tools || input.request.web_search ? { tools: [
+            ...(input.request.tools ?? []).map((tool) => ({ type: 'function' as const, name: tool.name, description: tool.description, parameters: tool.parameters, strict: false })),
+            ...(input.request.web_search ? [hostedWebSearch(input.request.web_search)] : []),
+          ] } : {}),
           ...(input.request.response_format ? { text: { format: { type: 'json_schema' as const, name: input.request.response_format.name, schema: input.request.response_format.schema, strict: true } } } : {}),
         },
         { signal: controller.signal },
       );
-      const text = responseText(response).trim();
+      const text = withCitedLinks(responseText(response).trim(), response);
       const toolCalls = response.output.flatMap((item) => item.type === 'function_call' ? [{ call_id: item.call_id, name: item.name, arguments: item.arguments }] : []);
       const incomplete = response.status === 'incomplete';
       if (incomplete && text.length === 0 && toolCalls.length === 0) {
@@ -167,6 +170,29 @@ function responsesInput(request: LLMGatewayRequest['request']): OpenAI.Responses
       });
     })(),
   ];
+}
+
+// The installed SDK types only the legacy web_search_preview tool; OpenAI's web search guide names web_search for new
+// Responses integrations, with the same approximate user_location.
+function hostedWebSearch(search: NonNullable<LLMGatewayRequest['request']['web_search']>): OpenAI.Responses.Tool {
+  return { type: 'web_search', user_location: { type: 'approximate', ...search } } as unknown as OpenAI.Responses.Tool;
+}
+
+// OpenAI requires web results shown to people to carry visible, clickable citations. The model usually links its
+// sources inline; a cited source the text does not link is listed after it, so every citation reaches the owner.
+function withCitedLinks(text: string, response: OpenAI.Responses.Response): string {
+  const missing = new Map<string, string>();
+  for (const item of response.output) {
+    if (item.type !== 'message') continue;
+    for (const part of item.content) {
+      if (part.type !== 'output_text') continue;
+      for (const annotation of part.annotations ?? []) {
+        if (annotation.type === 'url_citation' && !text.includes(annotation.url)) missing.set(annotation.url, annotation.title.replace(/\s+/g, ' ').trim());
+      }
+    }
+  }
+  if (missing.size === 0) return text;
+  return `${text}\n\nSources:\n${[...missing].map(([url, title]) => `- ${title ? `${title}: ` : ''}${url}`).join('\n')}`;
 }
 
 function reasoningSummary(response: OpenAI.Responses.Response): string {

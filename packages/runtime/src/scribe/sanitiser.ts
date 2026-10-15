@@ -643,15 +643,19 @@ function redactExternalHealthSpans(
 ): { invalid: boolean; payload: JsonValue; redactions: Redaction[] } {
   const counts = new Map<RedactionKind, number>();
   const patterns = [...RAW_SENSOR_PATTERNS, ...DERIVED_SCORE_PATTERNS, ...HEALTH_FREE_TEXT];
-  const transformed = transformJsonStrings(payload, (text) => {
-    // JSON-encoded structured health still belongs to the correlation check below.
-    // Rewriting its tokens first could destroy the structure and hide the measurement.
+  // A tool result reaches the model as a JSON-encoded string, so the page text sits inside it. Its string values are
+  // redacted in place; keys, numbers and nesting are kept, so structured health still reaches the correlation check below.
+  const redact = (text: string): string => {
     try {
       const parsed: unknown = JSON.parse(text);
-      if (typeof parsed === 'object' && parsed !== null) return text;
+      if (typeof parsed === 'object' && parsed !== null) {
+        const inner = transformJsonStrings(parsed as JsonValue, (value, field) => field === undefined ? value : redact(value));
+        return inner.invalid ? text : JSON.stringify(inner.payload);
+      }
     } catch { /* Ordinary free text is scanned for spans. */ }
     return patterns.reduce((output, pattern) => replaceAndCount(output, pattern, HEALTH_SPAN_MARKER, 'health_value', counts), text);
-  });
+  };
+  const transformed = transformJsonStrings(payload, (text) => redact(text));
   if (transformed.invalid) return { invalid: true, payload, redactions };
   const count = counts.get('health_value') ?? 0;
   return {

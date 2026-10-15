@@ -85,11 +85,11 @@ export class IMessageOwnerInbox {
       return fenced;
     });
   }
-  claim(id: string, current: boolean): IMessageInboxRecord | null {
+  claim(id: string, current: boolean, deadline = this.now() + IMESSAGE_TURN_DEADLINE_MS): IMessageInboxRecord | null {
     return this.storage.transactionSync(() => {
       const r = this.storage.kv.get<IMessageInboxRecord>(PREFIX + id);
       if (!r || r.state !== 'admitted') return null;
-      if (current) { r.state = 'running'; r.attempt = crypto.randomUUID(); r.deadline = this.now() + IMESSAGE_TURN_DEADLINE_MS; }
+      if (current) { r.state = 'running'; r.attempt = crypto.randomUUID(); r.deadline = deadline; }
       else { r.state = 'revoked'; r.closedReason = 'authority_revoked'; r.effectsUnconfirmed = false; r.closedAt = this.now(); clear(r); }
       this.storage.kv.put(PREFIX + id, r); this.storage.kv.put(IMESSAGE_INBOX_DUE_KEY, due(this.records(), this.now()));
       return current ? structuredClone(r) : null;
