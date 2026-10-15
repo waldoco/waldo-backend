@@ -167,6 +167,9 @@ export const createOwnerResponder = (
   const CANARIES = newSessionCanaryTokens();
   const cacheKey = `waldo:${ownerId}`;
   let traceId = '';
+  // Read once per turn: the provider's prompt cache matches an unchanged prefix, and a clock that moved each minute
+  // re-billed the whole prompt on the next call. get_context gives the model the exact time mid-turn.
+  let turnClockLine: string | undefined;
   let surfacePresentation: import('../prompt/messaging-behavior').SurfacePresentation | undefined;
   // Earlier turns' tool results, without anything the owner removed or is forgetting.
   const recentToolResults = async () => {
@@ -561,7 +564,7 @@ export const createOwnerResponder = (
             const healthSection = healthPrompt ? `Shared health today (derived by the app from the owner's own wearable data):\n${healthPrompt}` : undefined;
             // REASONS stages no tool results of its own, so it says there are none; point at the ones the owner turn carries.
             const toolResultsNote = reasons !== undefined && toolResultsShown ? "Earlier turns' tool results follow as external data in the owner turn, not in the recent-tool-results section above." : undefined;
-            const clockLine = ownerClockLine(clock);
+            const clockLine = turnClockLine ??= ownerClockLine(clock);
             // Stable head (behavior, catalog, orders, loops), then the procedure, then the per-turn tail; REASONS opens with the owner's text.
             const headWith = (loops = '') => [behavior, skillMetadata, ordersSection, loops].filter(Boolean).join('\n\n');
             const tailWith = (memoryPart: readonly string[]) => [...memoryPart, reasons, toolResultsNote, healthSection, ownerProfileLine, clockLine, taskContext, connections].filter(Boolean).join('\n\n');
@@ -705,6 +708,7 @@ export const createOwnerResponder = (
     windowingRef = conversationRef;
     backgroundToolNames = fromOwner ? undefined : toolNames;
     traceId = id;
+    turnClockLine = undefined;
     ownerTurnActive = fromOwner;
     turnToolEvents = [];
     control.begin(fromOwner);
