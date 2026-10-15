@@ -107,6 +107,11 @@ export function cloudflareGeneralBrowser(options: Options) {
     try { return (await cdp.send('Target.getTargetInfo')).targetInfo.targetId; }
     finally { await cdp.detach(); }
   };
+  // A listing that fails says nothing about the session, so it is treated as still present.
+  const providerSessionGone = async (sdk: Awaited<ReturnType<CloudflareBrowserSdkLoader>>, id: string): Promise<boolean> => {
+    try { const rows = await sdk.sessions(binding); return Array.isArray(rows) && !rows.some(row => row?.sessionId === id); }
+    catch { return false; }
+  };
   const attached = async <T>(session: BrowserSession, work: (browser: Browser, context: BrowserContext, navigation: Navigation) => Promise<T>): Promise<T> => {
     if(takeover)throw new GeneralBrowserError('rejected');
     let browser: Browser | undefined, context: BrowserContext | undefined, primary: GeneralBrowserError | undefined;
@@ -162,6 +167,10 @@ export function cloudflareGeneralBrowser(options: Options) {
             connecting,
             new Promise<never>((_, reject) => { timer = setTimeout(() => { late = true; reject(expiredBound()); }, bound); }),
           ]);
+        } catch (error) {
+          // The provider's own session list decides whether the session is gone, as opposed to unreachable this once.
+          if (!(error instanceof GeneralBrowserError && error.code === 'turn_deadline') && await providerSessionGone(sdk, session.providerSessionId)) throw new GeneralBrowserError('session_lost');
+          throw error;
         } finally { clearTimeout(timer); }
         await admit(session);
 
@@ -240,7 +249,7 @@ export function cloudflareGeneralBrowser(options: Options) {
     } catch (error) {
       primary = mutationDispatched || error instanceof GeneralBrowserError && error.code === 'outcome_uncertain'
         ? new GeneralBrowserError('outcome_uncertain', (error instanceof GeneralBrowserError ? error.diagnostic : undefined) ?? documentFailure?.diagnostic)
-        : documentFailure ?? (error instanceof GeneralBrowserError ? error : new GeneralBrowserError(error instanceof GeneralRedirectError ? 'rejected' : 'provider_unavailable'));
+        : documentFailure ?? (error instanceof GeneralBrowserError ? error : new GeneralBrowserError(error instanceof GeneralRedirectError ? 'rejected' : browser?.isConnected?.() === false ? 'session_lost' : 'provider_unavailable'));
       throw primary;
     } finally {
       // Aborted main navigations can retain a Chromium error document. Discard

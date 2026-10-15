@@ -65,6 +65,9 @@ export function commonBrowserHost(options:Readonly<{
  source():TaskSourceSnapshot;assertCurrent():Promise<void>;deadline():number;now():number;
 }>) {
  let images:LLMAttachment[]=[];
+ // Set when the last read failed because its retained session has ended and nothing on that session is unresolved,
+ // so the caller may replace the session once. An effect never sets it: its outcome stays fenced on the old session.
+ let sessionEnded=false;
  let handoffSession:BrowserSession|undefined;
  let human: Awaited<ReturnType<ReturnType<typeof cloudflareGeneralBrowser>['beginOwnerHandoff']>>|undefined;
  let execution:Readonly<{grant:string;driver:ReturnType<typeof cloudflareGeneralBrowser>}>|undefined;
@@ -77,6 +80,11 @@ export function commonBrowserHost(options:Readonly<{
  };
  type Record=BrowserRecord;
  const key=(taskId:string)=>`common-browser:${taskId}`;
+ const ended=(error:unknown)=>{
+  if(!(error instanceof GeneralBrowserError&&error.code==='session_lost'))return false;
+  const row=options.storage.kv.get<Record>(key(snapshot().taskId));
+  return !!row&&!row.cleanup&&!row.cleanupFailed&&!row.handoff&&row.allocation==='observed'&&row.action?.state!=='prepared'&&row.action?.state!=='uncertain'&&(!row.download||row.download.state==='ready');
+ };
  const liveHandle=()=>{const row=options.storage.kv.get<Record>(key(snapshot().taskId));return row&&!row.cleanup&&row.allocation==='observed'?row.session.id:undefined;};
  const makeDriver=(grant:CommonBrowserGrant,operationId?:string,retainConnection=false)=>cloudflareGeneralBrowser({ownerId:options.ownerId,publicRead:true,retainConnection,binding:operationId&&options.config.bindingForOperation?options.config.bindingForOperation(grant,operationId):options.config.binding,cleanupBinding:options.config.cleanupBinding? id=>options.config.cleanupBinding!(grant,id):undefined,loadSdk:options.config.loadSdk,now:options.now,deadline:options.deadline,cleanupTimeoutMs:10000,maxScreenshotBytes:grant.maxScreenshotBytes,
   admit:async()=>{await checked();await options.config.assertGrantCurrent(grant);await checked();const row=options.storage.kv.get<BrowserRecord>(key(grant.taskId));if(row?.cleanup||row?.handoff&&row.handoff.state!=='resuming')throw Error('common browser stopped');},
@@ -126,7 +134,7 @@ export function commonBrowserHost(options:Readonly<{
    ...(latest.action?.state==='uncertain'||latest.action?.state==='prepared'?{action_outcome:'uncertain'}:{})},source_taint:'external' as const};
  };
  const handler:ToolHandler<BrowsePageArgs,unknown,ToolDispatcherContext>={name:'browse_page',description:'Read a granted public page in the retained task browser. Returns a bounded observation; its screenshot reaches the model as an image. No login, page writes or submit.',schema:browsePageArgsSchema,trigger_allowlist:triggerTypeSchema.options.filter(trigger=>TOOL_PERMISSIONS[trigger].includes('browse_page')),autonomy_gated:false,
-  async handle(args,ctx){
+  async handle(args,ctx){sessionEnded=false;
    try{
     await ctx.assertTaskSourceCurrent?.();const grant=await granted();
     if(ctx.authenticatedUserId!==options.ownerId||args.session_handle&&options.storage.kv.get<Record>(key(grant.taskId))?.session.id!==args.session_handle||(!isPublicWebUrl(args.url,options.egressAllowlist)||!grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)&&!grant.allowedOrigins.includes(new URL(args.url).origin)))throw Error('common browser target rejected');
@@ -145,10 +153,10 @@ export function commonBrowserHost(options:Readonly<{
     const observed=record.observation?.observation.url===args.url&&driver.hasRetainedConnection()?await driver.observe(record.session,record.observation.observation.tab_ref):await driver.navigate(record.session,args.url);
     const published=await publishObservation(grant,record,observed,ctx);
     return {...published,data:{...published.data,...(recovering?{document_state:'recreated',previous_document_lost:true,document_notice:'The prior browser document was lost. Unsent form values and old action refs are unavailable. The page was recreated in the same paid session; no effect was replayed.'}:{})}};
-   }catch(error){return {ok:false,code:retryable(error)?'transient':'rejected',error:failureText('The browser read failed; nothing was read.','Retry the read, read the page without retain_session, or try another site.',error,liveHandle()),source_taint:'external'};}
+   }catch(error){sessionEnded=ended(error);return {ok:false,code:retryable(error)?'transient':'rejected',error:failureText('The browser read failed; nothing was read.','Retry the read, read the page without retain_session, or try another site.',error,liveHandle()),source_taint:'external'};}
   }};
  const actionHandler:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>={name:'browse_act',description:'Interact with the current Cloudflare public page using observed refs: goto, back, read, inspect, type, click, select, set_checked, scroll. Download observed HTTP GET attachment links into the private owner workspace. File selection, page sends and native submits are unsupported. Unknown outcomes block repeated effects; read evidence before deciding what completed.',schema:browseActArgsSchema,trigger_allowlist:triggerTypeSchema.options.filter(trigger=>TOOL_PERMISSIONS[trigger].includes('browse_act')),autonomy_gated:false,
-  async handle(args,ctx){let storageKey:string|undefined,digest:string|undefined;
+  async handle(args,ctx){let storageKey:string|undefined,digest:string|undefined;sessionEnded=false;
    try{
     if(options.config.retainInteractions!==true)throw Error('retained interaction capability unavailable');
     await ctx.assertTaskSourceCurrent?.();const grant=await granted();storageKey=key(grant.taskId);
@@ -270,6 +278,7 @@ export function commonBrowserHost(options:Readonly<{
     }
     return {...published,data:{...published.data,...(!['read','inspect','screenshot','switch_tab','back'].includes(command.operation)?{browser_action_session_handle:record.session.id}:{})}};
    }catch(error){
+    if(!digest&&['read','inspect','back'].includes(args.command?.operation??''))sessionEnded=ended(error);
     if(storageKey&&digest){const failed=digest;options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey!);if(latest?.action?.digest===failed)save({...latest,action:{digest:failed,state:'uncertain'}},storageKey!);});}
     return {ok:false,code:!digest&&retryable(error)?'transient':'rejected',error:failureText('The browser action failed or its outcome is unknown; no replacement browser or unapproved page write was used.','Read the current page with browse_act read and act on its fresh refs; if page actions keep being refused, end this session with cancel and start a new one.',error,liveHandle()),source_taint:'external'};
    }
@@ -294,7 +303,7 @@ export function commonBrowserHost(options:Readonly<{
    await api.cancel();
   }
  },
-resetAttachments(){images=[];},sessionHandle:()=>options.storage.kv.get<Record>(key(snapshot().taskId))?.session.id,attachments:()=>[...images],async cancel(){images=[];const task=snapshot();const record=options.storage.kv.get<Record>(key(task.taskId));if(!record||record.cleanup==='closed')return;
+resetAttachments(){images=[];},sessionEnded:()=>sessionEnded,sessionHandle:()=>options.storage.kv.get<Record>(key(snapshot().taskId))?.session.id,attachments:()=>[...images],async cancel(){images=[];const task=snapshot();const record=options.storage.kv.get<Record>(key(task.taskId));if(!record||record.cleanup==='closed')return;
   if(record.cleanupFailed)throw new GeneralBrowserError('cleanup_unconfirmed');
   save({...record,observation:undefined,tabs:[],cleanup:'pending'},key(task.taskId));
   if(record.session.providerSessionId==='pending')throw Error('common browser allocation uncertain');

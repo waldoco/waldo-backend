@@ -47,7 +47,7 @@ it('no allocation request is sent once the turn has no time left', async () => {
 it('a hung provider control request is still capped at ten seconds when the turn has longer', async () => {
   vi.useFakeTimers();
   try {
-    const sdk = { connect: async (provider: { fetch: typeof fetch }) => { await provider.fetch('https://browser.invalid/v1/sessions'); return never(); }, sessions: async () => [] };
+    const sdk = { connect: async (provider: { fetch: typeof fetch }) => { await provider.fetch('https://browser.invalid/v1/sessions'); return never(); }, sessions: async () => [{ sessionId: 'provider-session' }] };
     const observed = driver(sdk, hung(), 60_000).observe(session(Date.now() + 600000)).then(() => undefined, error => error);
     await vi.advanceTimersByTimeAsync(10_001);
     expect(await observed).toMatchObject({ code: 'provider_unavailable' });
@@ -86,4 +86,12 @@ it('an attach that fails after the turn gave up on it leaves no unhandled reject
     await new Promise(resolve => setTimeout(resolve, 400));
     expect(unhandled).toEqual([]);
   } finally { process.off('unhandledRejection', listener); }
+});
+
+it('a failed attach is a lost session only when the provider no longer lists it', async () => {
+  const refused = async () => { throw Error('websocket upgrade refused'); };
+  const attach = (sessions: () => Promise<unknown>) => driver({ connect: refused, sessions }, {}, 60_000).observe(session(Date.now() + 600000));
+  await expect(attach(async () => [])).rejects.toMatchObject({ code: 'session_lost' });
+  await expect(attach(async () => [{ sessionId: 'provider-session' }])).rejects.toMatchObject({ code: 'provider_unavailable' });
+  await expect(attach(async () => { throw Error('listing unavailable'); })).rejects.toMatchObject({ code: 'provider_unavailable' });
 });
