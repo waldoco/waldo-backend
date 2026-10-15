@@ -20,6 +20,7 @@ export const SOURCE_SCOPE_CLASS: Readonly<Record<ToolName, 'deny' | 'allow'>> = 
   use_mac: 'deny',
   send_console_link: 'allow',
   send_progress_note: 'allow',
+  show_view: 'allow',
   get_crs: 'deny', get_health: 'deny', query_calendar: 'deny', get_communication: 'deny', search_communication: 'deny', search_contacts: 'deny',
   read_thread: 'deny', get_tasks: 'deny', get_master_metrics: 'deny', get_context: 'allow', query_availability: 'deny',
   remember: 'allow', forget_memory: 'allow',

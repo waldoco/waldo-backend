@@ -4,6 +4,7 @@ import {
   replyFilePartV1Schema, replyQuickRepliesPartV1Schema, replyReceiptPartV1Schema, replyVisibilityV1Schema, replyVoicePartV1Schema,
 } from '../app/parts';
 import { waldoCardSchema } from '../ui/card';
+import { replyViewPartV1Schema } from '../app/view';
 
 export {
   approvalActionV1Schema, approvalIdV1Schema, approvalKindV1Schema, payloadDigestV1Schema, QUICK_REPLY_LABEL_MAX_CHARS, RECEIPT_MAX_ITEMS,
@@ -11,6 +12,7 @@ export {
   replyFilePartV1Schema, replyQuickRepliesPartV1Schema, replyReceiptPartV1Schema, replyVisibilityV1Schema, replyVoicePartV1Schema,
 } from '../app/parts';
 export type { ApprovalActionV1, ApprovalKindV1, ReplyVisibilityV1 } from '../app/parts';
+export * from '../app/view';
 
 export const REPLY_MAX_PARTS = 16;
 
@@ -21,7 +23,7 @@ export const replyArtifactPartV1Schema = z.strictObject({ type: z.literal('artif
 // Parts come from structured tool results and desk proposals, never from parsing reply text.
 export const replyPartV1Schema = z.discriminatedUnion('type', [
   replyTextPartV1Schema, replyCardPartV1Schema, replyApprovalPartV1Schema, replyQuickRepliesPartV1Schema,
-  replyChartSeriesPartV1Schema, replyFilePartV1Schema, replyArtifactPartV1Schema, replyVoicePartV1Schema, replyReceiptPartV1Schema,
+  replyChartSeriesPartV1Schema, replyFilePartV1Schema, replyArtifactPartV1Schema, replyVoicePartV1Schema, replyReceiptPartV1Schema, replyViewPartV1Schema,
 ]);
 
 // One reply, recorded once under reply_id; each surface delivery is a projection of it.

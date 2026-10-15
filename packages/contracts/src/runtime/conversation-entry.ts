@@ -1,3 +1,5 @@
+import { redactView, type ViewV1 } from '../app/view';
+
 export type ConversationSurface = 'app' | 'telegram' | 'cli' | (string & {});
 
 export type ConversationProjection =
@@ -39,6 +41,8 @@ export type ConversationEntry = Readonly<{
   // The turn's effect receipts, typed. `line` is the text form appended to appPayload, so a surface that shows
   // only text still shows it.
   receipt?: ConversationReceipt;
+  // What the turn showed with show_view, fitted. Their fallback text sits in appPayload before the receipt line, in order.
+  views?: readonly ViewV1[];
 }>;
 
 export type ConversationReceipt = Readonly<{
@@ -124,6 +128,7 @@ export const redactConversationEntry = (entry: ConversationEntry, redact: (value
     ? { mode: 'replace', payload: redact(entry.modelProjection.payload) } : entry.modelProjection,
   ...(entry.receipt ? { receipt: { ...entry.receipt, line: redact(entry.receipt.line),
     items: entry.receipt.items.map(item => (item.target === null ? item : { ...item, target: redact(item.target) })) } } : {}),
+  ...(entry.views ? { views: entry.views.map(view => redactView(view, redact)) } : {}),
 });
 
 export class ConversationTree {

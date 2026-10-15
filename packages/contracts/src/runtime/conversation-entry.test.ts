@@ -141,4 +141,18 @@ describe('redactConversationEntry', () => {
       items: [{ ...entry.receipt!.items[0]!, target: '[forgotten]-plan.md' }, entry.receipt!.items[1]] });
     expect(redactConversationEntry({ ...entry, receipt: undefined }, value => value)).not.toHaveProperty('receipt', expect.anything());
   });
+
+  it('redacts every word of a stored view, and leaves off a link it changed', () => {
+    const entry: ConversationEntry = { id: 'r', ownerId: 'o', chatId: 'c', parentId: null, threadAnchorId: null, surface: 'app', modelPayload: 'ok',
+      appPayload: 'ok', modelProjection: { mode: 'include' }, role: 'assistant', views: [
+        { kind: 'options', title: 'Divorce lawyers', items: [{ title: 'Mehta & Co', facts: [{ label: 'Focus', value: 'divorce' }], link: 'https://example.com/divorce' }] },
+        { kind: 'table', columns: ['Step'], rows: [['File divorce papers']] },
+      ] };
+    const redacted = redactConversationEntry(entry, literalTextRedactor(['divorce', 'Divorce'], '[forgotten]'));
+    expect(JSON.stringify(redacted)).not.toMatch(/divorce/i);
+    expect(redacted.views).toEqual([
+      { kind: 'options', title: '[forgotten] lawyers', items: [{ title: 'Mehta & Co', facts: [{ label: 'Focus', value: '[forgotten]' }] }] },
+      { kind: 'table', columns: ['Step'], rows: [['File [forgotten] papers']] },
+    ]);
+  });
 });

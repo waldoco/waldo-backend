@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, typ
 import { CHAT_TEXT_MAX, visibleText, type ChatMessage, type ChatPart } from './chat-model';
 import { anyWorking, chatStore, subscribeAnyChat, type ChatStore, type LocalMessage } from './chat-store';
 import { ChatText } from './chat-text';
+import { ViewCard } from './ChatViews';
 import { greeting } from './greeting';
 import { Icon, WaldoMark } from './icons';
 
@@ -60,20 +61,24 @@ function Trace({ part, zone }: { part: Extract<ChatPart, { type: 'receipt' }>; z
   </details>;
 }
 
+// Copy takes what the owner reads: the words, then each view as its plain text.
+const copyable = (text: string, message: ChatMessage) => [text, ...message.parts.flatMap(part => part.type === 'view' ? [part.fallback_text] : [])].filter(Boolean).join('\n\n');
+
 function WaldoMessage({ message, zone, arrived, replies, onReply }: { message: ChatMessage; zone: string; arrived: boolean; replies: boolean; onReply: (text: string) => void }) {
   const text = visibleText(message);
   return <article className={`chat-msg waldo${arrived ? ' arrived' : ''}`} aria-label="Waldo">
     <span className="chat-avatar" aria-hidden="true"><WaldoMark size={14}/></span>
     <div className="chat-body">
       {text && <div className="chat-prose"><ChatText text={text}/></div>}
-      {message.parts.map((part, i) => part.type === 'approval' ? <Approval key={i} part={part} zone={zone}/>
+      {message.parts.map((part, i) => part.type === 'view' ? <ViewCard key={i} part={part}/>
+        : part.type === 'approval' ? <Approval key={i} part={part} zone={zone}/>
         : part.type === 'receipt' ? <Trace key={i} part={part} zone={zone}/>
           : part.type === 'artifact' ? <p key={i} className="meta">File: {part.title}. Open it in the Waldo app.</p>
             : part.type === 'operation' && part.state !== 'completed' ? <p key={i}><span className="access-label">{part.state === 'interrupted' ? 'Didn’t finish' : part.state === 'revoked' ? 'Stopped' : 'Still working'}</span></p> : null)}
       {replies && message.parts.filter((p): p is Extract<ChatPart, { type: 'quick_replies' }> => p.type === 'quick_replies').map((part, i) => <div key={`q${i}`} className="chat-replies" role="group" aria-label="Suggested replies">
         {part.choices.map((choice, n) => <button key={choice.id} type="button" style={{ '--i': n } as React.CSSProperties} onClick={() => onReply(choice.label)}>{choice.label}</button>)}</div>)}
       <div className="chat-meta">{message.created_at !== null && <time className="time" dateTime={new Date(message.created_at).toISOString()} title={exact(message.created_at, zone)}>{clock(message.created_at, zone)}</time>}
-        {CHANNEL[message.channel] && <span>via {CHANNEL[message.channel]}</span>}<CopyButton text={text || message.text}/></div>
+        {CHANNEL[message.channel] && <span>via {CHANNEL[message.channel]}</span>}<CopyButton text={copyable(text, message) || message.text}/></div>
     </div>
   </article>;
 }
