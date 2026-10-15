@@ -31,7 +31,7 @@ import { JoinedConversationPath } from '../conversation/joined-path';
 import { COMPACTION, COMPACTION_INSTRUCTION, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, supersededCompaction, type CompactedStats } from '../conversation/compaction';
 import { numericHealthIn } from '../scribe/sanitiser';
 import { OpenAIResponsesAdapter } from '../llm/openai';
-import { createTurnTierDecider, openAIDecisionsPost, type TurnTierDecider, type TurnTierRoute } from '../llm/turn-tier';
+import type { TurnTierFactory, TurnTierRoute } from '../llm/turn-tier';
 import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
 import { messagingSystemPrompt, ownerClockLine, unconnectedLine, withOwnerSkillProcedures } from '../prompt/messaging-behavior';
@@ -89,9 +89,9 @@ export type OwnerJobHost = Readonly<{ admit(): Promise<OwnerMessageAdmission | u
 // ownerProfile: the host-framed line about who the owner is. An admitted job composes it into its owner context; a turn
 // without a composed owner context reads it directly.
 // watchStatus: the host fact about Google pushes that are not running, for the owner's own turns ('' when all run).
-export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string }>;
-// turnTier: the router that picks an owner turn's model. Undefined builds the live one, or none under a scripted gateway.
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; turnTier?: TurnTierDecider }>;
+// turnTier: the router that picks the model an owner's own turn runs on. Without one, every owner turn runs on the chat model.
+export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; turnTier?: TurnTierFactory }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; turnTier?: TurnTierFactory }>;
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 // The reply's system prompt with the byte size of each joined section, so a trace shows what fills it.
@@ -195,8 +195,7 @@ export const createOwnerResponder = (
     // Typed store provenance for the provider's retrieval receipts (owner review on #212).
     ...(offloadStore === undefined ? {} : { toolOutputStore: offloadStore }),
   };
-  // A scripted gateway answers every call itself, so without an injected router its owner turns stay on the chat model.
-  const turnTier = privateOwner?.turnTier ?? (gateway ? undefined : createTurnTierDecider({ post: openAIDecisionsPost(openaiApiKey), sanitise: safety.sanitise, canaryTokens: CANARIES }));
+  const turnTier = privateOwner?.turnTier?.({ sanitise: safety.sanitise, canaryTokens: CANARIES });
   const handlers = [getContextHandler(clock), ownerContextHandler(memory), ...tools, ...(skills?.handlers ?? []), ...(offloadStore === undefined ? [] : [readToolOutputHandler(offloadStore)])];
   // A turn-only output (the owner's health values) reaches the model in this turn and nowhere else: the ledger keeps a content-free line.
   const turnOnlyOutput = new Set<string>(handlers.filter((handler) => 'turn_only_output' in handler && handler.turn_only_output === true).map((handler) => handler.name));

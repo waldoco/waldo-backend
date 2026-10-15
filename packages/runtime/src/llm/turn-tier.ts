@@ -12,6 +12,8 @@ export type TurnTierReason = 'simple' | 'complex' | 'other' | 'low_confidence' |
 export type TurnTierRoute = Readonly<{ tier: TurnTier; reason: TurnTierReason; confidence?: number; inputTokens?: number }>;
 export type TurnTierInput = Readonly<{ current: string; previousOwner?: string; previousReply?: string }>;
 export type TurnTierDecider = (input: TurnTierInput, signal?: AbortSignal) => Promise<TurnTierRoute>;
+// The responder supplies its own sanitiser and session canaries; the host supplies how the router is reached.
+export type TurnTierFactory = (deps: Readonly<{ sanitise: Sanitise | undefined; canaryTokens: readonly string[] }>) => TurnTierDecider;
 
 // A simple answer below this confidence stays complex. The router's confidence is its own estimate, so the floor sits
 // well above a coin flip between the tiers; lowering it buys more small-model turns at more risk of a weak answer.
@@ -37,9 +39,9 @@ const TIER_QUESTION = {
   choices: CHOICES,
 } as const;
 
+type Sanitise = (input: SanitiseInput) => SanitiseResult | Promise<SanitiseResult>;
 export type DecisionsRequest = Readonly<{ model: typeof OPENAI_GPT_6_LUNA_MODEL; input: string; questions: readonly [typeof TIER_QUESTION] }>;
 export type DecisionsPost = (body: DecisionsRequest, signal: AbortSignal) => Promise<unknown>;
-type Sanitise = (input: SanitiseInput) => SanitiseResult | Promise<SanitiseResult>;
 
 const choiceAnswer = z.object({
   type: z.literal('choice'), name: z.string(), choice: z.string(), confidence: z.number().min(0).max(1),
@@ -52,11 +54,16 @@ const decisionsResponse = z.object({
 });
 
 const excerpt = (text: string, limit: number) => text.length > limit ? `${text.slice(0, limit)} [cut]` : text;
-const routerInput = ({ current, previousOwner, previousReply }: TurnTierInput): string => [
-  previousOwner === undefined ? undefined : `Owner, earlier: ${excerpt(previousOwner, TURN_TIER_EXCERPT_CHARS)}`,
-  previousReply === undefined ? undefined : `Waldo, earlier: ${excerpt(previousReply, TURN_TIER_EXCERPT_CHARS)}`,
-  `Owner, now: ${excerpt(current, TURN_TIER_CURRENT_CHARS)}`,
-].filter(Boolean).join('\n\n');
+// The turn travels to the sanitiser as conversation messages, the shape the reply's own history is checked in.
+const routerMessages = ({ current, previousOwner, previousReply }: TurnTierInput) => [
+  ...(previousOwner === undefined ? [] : [{ role: 'user' as const, content: excerpt(previousOwner, TURN_TIER_EXCERPT_CHARS) }]),
+  ...(previousReply === undefined ? [] : [{ role: 'assistant' as const, content: excerpt(previousReply, TURN_TIER_EXCERPT_CHARS) }]),
+  { role: 'user' as const, content: excerpt(current, TURN_TIER_CURRENT_CHARS) },
+];
+const sanitisedMessages = z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string() })).min(1);
+const routerInput = (messages: z.infer<typeof sanitisedMessages>): string => messages
+  .map((message, index) => `${index === messages.length - 1 ? 'Owner, now' : message.role === 'user' ? 'Owner, earlier' : 'Waldo, earlier'}: ${message.content}`)
+  .join('\n\n');
 
 const complexBecause = (reason: TurnTierReason, confidence?: number): TurnTierRoute => ({ tier: 'complex', reason, ...(confidence === undefined ? {} : { confidence }) });
 
@@ -92,9 +99,11 @@ export const createTurnTierDecider = ({ post, sanitise, canaryTokens, timeoutMs 
   let text: string;
   try {
     if (!sanitise) return complexBecause('sanitise_rejected');
-    const result = sanitiseResultSchema.parse(await sanitise({ payload: routerInput(input), destination: 'internal_context', canary_tokens: [...canaryTokens], source_taint: null }));
-    if (!result.ok || result.source_taint !== null || typeof result.payload !== 'string') return complexBecause('sanitise_rejected');
-    text = result.payload;
+    const result = sanitiseResultSchema.parse(await sanitise({ payload: routerMessages(input), destination: 'internal_context', canary_tokens: [...canaryTokens], source_taint: null }));
+    if (!result.ok || result.source_taint !== null) return complexBecause('sanitise_rejected');
+    const messages = sanitisedMessages.safeParse(result.payload);
+    if (!messages.success) return complexBecause('sanitise_rejected');
+    text = routerInput(messages.data);
   } catch {
     return complexBecause('sanitise_rejected');
   }
@@ -126,4 +135,10 @@ export const openAIDecisionsPost = (apiKey: string, { timeoutMs = TURN_TIER_TIME
   if (!validModelCredential(apiKey)) return async () => { throw new Error('model credential unavailable'); };
   let client: OpenAI | undefined;
   return (body, signal) => (client ??= new OpenAI({ apiKey, maxRetries: 0, timeout: timeoutMs, ...(fetch ? { fetch } : {}) })).post('/decisions', { body, signal });
+};
+
+// The deployed router: the Decisions API on the owner's model key.
+export const liveTurnTier = (apiKey: string): TurnTierFactory => {
+  const post = openAIDecisionsPost(apiKey);
+  return deps => createTurnTierDecider({ post, ...deps });
 };

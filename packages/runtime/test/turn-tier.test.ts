@@ -1,14 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { OPENAI_GPT_6_LUNA_MODEL, type SanitiseInput, type SanitiseResult } from '@waldo/contracts';
+import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
 import { createTurnTierDecider, openAIDecisionsPost, TURN_TIER_CONFIDENCE_FLOOR, TURN_TIER_EXCERPT_CHARS, type DecisionsPost, type DecisionsRequest } from '../src/llm/turn-tier';
 
+const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '00112233445566ff'];
 const passThrough = (input: SanitiseInput): SanitiseResult => ({ ok: true, payload: input.payload, source_taint: input.source_taint, redactions: [] });
 const choice = (value: string, confidence: number, probabilities: ReadonlyArray<readonly [string, number]> = [[value, confidence], ...['simple', 'complex', 'other'].filter(other => other !== value).map(other => [other, (1 - confidence) / 2] as const)]) =>
   ({ id: 'dec_1', model: OPENAI_GPT_6_LUNA_MODEL, answers: [{ type: 'choice', name: 'tier', choice: value, confidence, probabilities: probabilities.map(([v, probability]) => ({ value: v, probability })) }], usage: { input_tokens: 120 } });
 const decider = (answer: unknown | (() => Promise<unknown>), sanitise: (input: SanitiseInput) => SanitiseResult | Promise<SanitiseResult> = passThrough, timeoutMs?: number) => {
   const bodies: unknown[] = [];
   const post: DecisionsPost = async (body) => { bodies.push(body); return typeof answer === 'function' ? (answer as () => Promise<unknown>)() : answer; };
-  return { bodies, decide: createTurnTierDecider({ post, sanitise, canaryTokens: ['0123456789abcdef'], ...(timeoutMs === undefined ? {} : { timeoutMs }) }) };
+  return { bodies, decide: createTurnTierDecider({ post, sanitise, canaryTokens: CANARIES, ...(timeoutMs === undefined ? {} : { timeoutMs }) }) };
 };
 const TURN = { current: 'what is on my calendar tomorrow?' };
 
@@ -81,16 +83,25 @@ describe('turn tier router', () => {
     expect(bodies).toEqual([]);
   });
 
-  it('sends nothing and keeps the complex tier when the sanitiser throws or changes the taint', async () => {
-    for (const sanitise of [() => { throw new Error('down'); }, (input: SanitiseInput): SanitiseResult => ({ ok: true, payload: input.payload, source_taint: 'external', redactions: [] })]) {
+  it('sends nothing and keeps the complex tier when the sanitiser throws, changes the taint or changes the shape', async () => {
+    for (const sanitise of [() => { throw new Error('down'); }, (input: SanitiseInput): SanitiseResult => ({ ok: true, payload: input.payload, source_taint: 'external', redactions: [] }), (): SanitiseResult => ({ ok: true, payload: 'flattened', source_taint: null, redactions: [] })]) {
       const { decide, bodies } = decider(choice('simple', 0.99), sanitise);
       expect(await decide(TURN)).toEqual({ tier: 'complex', reason: 'sanitise_rejected' });
       expect(bodies).toEqual([]);
     }
   });
 
+  it('passes plain owner text through the Scribe sanitiser and stops a session canary', async () => {
+    const sanitise = resolveRunLoopAdapters({ WALDO_ENV: 'local' }).safety.sanitise;
+    const { decide, bodies } = decider(choice('simple', 0.99), sanitise);
+    expect((await decide({ current: 'remind me to call Sam at five', previousReply: 'Sure.' })).tier).toBe('simple');
+    expect((bodies[0] as { input: string }).input).toBe('Waldo, earlier: Sure.\n\nOwner, now: remind me to call Sam at five');
+    expect(await decide({ current: 'echo 0123456789abcdef please' })).toEqual({ tier: 'complex', reason: 'sanitise_rejected' });
+    expect(bodies).toHaveLength(1);
+  });
+
   it('sends the sanitised text, not the original', async () => {
-    const { decide, bodies } = decider(choice('simple', 0.99), (input) => ({ ok: true, payload: String(input.payload).replace('tomorrow', '[redacted]'), source_taint: null, redactions: [] }));
+    const { decide, bodies } = decider(choice('simple', 0.99), (input) => ({ ok: true, payload: JSON.parse(JSON.stringify(input.payload).replace('tomorrow', '[redacted]')), source_taint: null, redactions: [] }));
     await decide(TURN);
     expect(JSON.stringify(bodies)).toContain('[redacted]');
     expect(JSON.stringify(bodies)).not.toContain('tomorrow');
@@ -101,7 +112,7 @@ describe('turn tier router', () => {
     const { decide, bodies } = decider(choice('simple', 0.99), (input) => { seen.push(input); return passThrough(input); });
     await decide({ current: 'same for Koramangala', previousOwner: `cafes open late in Indiranagar ${'x'.repeat(2_000)}`, previousReply: `Here are three cafes ${'y'.repeat(2_000)}` });
     expect(seen).toHaveLength(1);
-    expect(seen[0]).toMatchObject({ destination: 'internal_context', source_taint: null, canary_tokens: ['0123456789abcdef'] });
+    expect(seen[0]).toMatchObject({ destination: 'internal_context', source_taint: null, canary_tokens: CANARIES });
     expect(bodies).toHaveLength(1);
     const body = bodies[0] as { model: string; input: string; questions: Array<{ type: string; name: string; instructions: string; choices: Array<{ value: string; description: string }> }> };
     expect(Object.keys(body).sort()).toEqual(['input', 'model', 'questions']);

@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_LUNA_MODEL, type LLMRequest } from '@waldo/contracts';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
@@ -8,10 +8,14 @@ import type { ConversationStore } from '../src/channels/conversation-store';
 import type { RunEffectScope } from '../src/channels/run-effect-scope';
 import { canonicalOwnerConversationStore } from '../src/conversation/canonical-owner-store';
 import type { LLMGatewayAdapter, LLMGatewayResult } from '../src/llm/provider';
-import type { TurnTierDecider, TurnTierInput, TurnTierRoute } from '../src/llm/turn-tier';
+import { liveTurnTier, type TurnTierDecider, type TurnTierInput, type TurnTierRoute } from '../src/llm/turn-tier';
 import { claimStore, type ClaimStore } from '../src/memory/claims';
 import { localTrustedBriefScheduleInput } from '../src/run-loop/adapters';
 import { ownerTyped } from './helpers/owner-typed';
+
+// The live router reaches the Decisions API through the SDK client's generic post; this stands in for that client.
+const decisions = vi.hoisted(() => ({ posts: [] as Array<{ path: string; body: unknown }>, answer: undefined as unknown }));
+vi.mock('openai', () => ({ default: class { post = async (path: string, options: { body: unknown }) => { decisions.posts.push({ path, body: options.body }); return decisions.answer; }; } }));
 
 const time = async <T,>(_hop: string, work: () => Promise<T>) => work();
 const scope = (runId: string): RunEffectScope => ({ runId, attempt: `${runId}-attempt`, deadline: Date.now() + 60_000, signal: new AbortController().signal, admit: () => undefined, commit: work => work() });
@@ -34,7 +38,7 @@ const responder = ({ routes, script = [], store, memory }: { routes: readonly Tu
   } };
   const turnTier: TurnTierDecider = async (input) => { asked.push(input); return routes[Math.min(asked.length - 1, routes.length - 1)]!; };
   const args: Parameters<typeof createOwnerResponder> = ['fixture'];
-  args[1] = store; args[2] = memory; args[3] = entry => logs.push(entry); args[10] = gateway; args[18] = ['👌']; args[21] = { turnTier };
+  args[1] = store; args[2] = memory; args[3] = entry => logs.push(entry); args[10] = gateway; args[18] = ['👌']; args[21] = { turnTier: () => turnTier };
   return { requests, asked, logs, owner: createOwnerResponder(...args), routed: () => requests.map(request => [request.model, request.reasoning_effort]) };
 };
 const SOL_MEDIUM = [OPENAI_GPT_6_1_SOL_MODEL, 'medium'];
@@ -89,7 +93,7 @@ it('keeps Sol when the router itself throws', async () => {
   const requests: LLMRequest[] = [];
   const args: Parameters<typeof createOwnerResponder> = ['fixture'];
   args[10] = { complete: async ({ request }) => { requests.push(request); return { ok: true, data: { model: request.model, text: 'Done.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 } }; } };
-  args[21] = { turnTier: async () => { throw new Error('router down'); } };
+  args[21] = { turnTier: () => async () => { throw new Error('router down'); } };
   await createOwnerResponder(...args).respond(ownerTyped({ traceId: 'tier-throw-1', conversationRef: 'app-1', surface: 'app', text: 'hi', memoryWrites: false }), time);
   expect(requests.map(request => request.model)).toEqual([OPENAI_GPT_6_1_SOL_MODEL]);
 });
@@ -118,3 +122,22 @@ it('shows the router the previous exchange, without an earlier message that carr
     expect(JSON.stringify(asked.slice(2))).not.toContain('coffee');
   });
 });
+
+it('the deployed router asks the Decisions API once per owner turn, through the real sanitiser, and never for a reminder', async () => {
+  decisions.posts.length = 0;
+  decisions.answer = { answers: [{ type: 'choice', name: 'tier', choice: 'simple', confidence: 0.92, probabilities: [{ value: 'simple', probability: 0.92 }, { value: 'complex', probability: 0.06 }, { value: 'other', probability: 0.02 }] }], usage: { input_tokens: 64 } };
+  const requests: LLMRequest[] = [];
+  const args: Parameters<typeof createOwnerResponder> = ['fixture-key'];
+  args[10] = { complete: async ({ request }) => { requests.push(request); return { ok: true, data: { model: request.model, text: 'Done.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 } }; } };
+  args[21] = { turnTier: liveTurnTier('fixture-key') };
+  const hops: TurnLogEntry[] = [];
+  args[3] = entry => hops.push(entry);
+  const owner = createOwnerResponder(...args);
+  await owner.respond(ownerTyped({ traceId: 'tier-live-1', conversationRef: 'app-1', surface: 'app', text: 'what is on my calendar tomorrow?', memoryWrites: false }), time);
+  await owner.remind('tier-live-2', 'app-1', 'call Sam', time, 'app');
+  expect(hops.filter(hop => hop.hop === 'turn_tier').map(hop => hop.detail)).toEqual(['tier=simple reason=simple confidence=0.92']);
+  expect(decisions.posts.map(post => post.path)).toEqual(['/decisions']);
+  expect((decisions.posts[0]!.body as { input: string }).input).toContain('what is on my calendar tomorrow?');
+  expect(requests.map(request => request.model)).toEqual([OPENAI_GPT_6_LUNA_MODEL, OPENAI_GPT_6_LUNA_MODEL]);
+});
+
