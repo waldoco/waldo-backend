@@ -122,6 +122,62 @@
       "vectorize": [
         { "binding": "VECTORIZE", "index_name": "waldo-recall" }
       ]
+    },
+    // Second non-production Worker for unmerged branches; staging stays the known-good rollback.
+    // Mirrors env.staging (same entrypoint, browser, limits, vars) with its own DO namespaces and
+    // its own R2 bucket, Vectorize index and limiter namespace. No cron: the retention sweep
+    // stays on staging. WALDO_ENVIRONMENT is "staging" because every staging-only gate in the
+    // runtime compares against that literal. WALDO_OWNER_DO_NAMESPACE stays empty: with the
+    // shared staging Supabase, a second namespace would claim the owner's per-environment
+    // workspace mapping first and lock the staging Worker out of it. Telegram and the iMessage
+    // bridge stay on staging. Runbook: docs/operations/EXPERIMENTAL_WORKER_RUNBOOK.md.
+    // guard-wrangler-local-bindings.mjs enforces all of the above.
+    "experimental": {
+      "name": "waldo-runtime-experimental",
+      "main": "src/staging-browser.ts",
+      "limits": { "cpu_ms": 300000 },
+      "compatibility_flags": ["nodejs_compat"],
+      "browser": { "binding": "BROWSER" },
+      "observability": {
+        "enabled": true,
+        "logs": { "enabled": true, "invocation_logs": false },
+        "traces": { "enabled": false }
+      },
+      "vars": { "WALDO_ENVIRONMENT": "staging", "WALDO_OWNER_DO_NAMESPACE": "", "WALDO_RELEASE": "unreleased", "WALDO_OWNER_TELEGRAM_ID": "", "CALENDAR_GROUNDED_PREP": "1", "MAIL_SOURCE_FOLLOWUPS": "1", "DRIVE_READS": "1", "MCP_READ_INTENTS": "1", "WALDO_MCP_SERVERS": "[{\"name\":\"gmail\",\"url\":\"https://gmailmcp.googleapis.com/mcp/v1\",\"auth\":\"google\"},{\"name\":\"calendar\",\"url\":\"https://calendarmcp.googleapis.com/mcp/v1\",\"auth\":\"google\"},{\"name\":\"drive\",\"url\":\"https://drivemcp.googleapis.com/mcp/v1\",\"auth\":\"google\"}]", "LANGFUSE_CAPTURE_TEXT": "true", "WALDO_EGRESS_ALLOWLIST": "*", "IMESSAGE_CONNECTOR_ENABLED": "0", "IMESSAGE_CONNECTOR_POLICY": "", "IMESSAGE_ONBOARDING_URL": "", "IMESSAGE_WALDO_ADDRESS": "" },
+      "assets": { "directory": "../dashboard-app/dist", "binding": "ASSETS", "run_worker_first": true },
+      "durable_objects": {
+        "bindings": [
+          { "name": "RUNTIME_DO", "class_name": "RuntimeProbeDO" },
+          { "name": "RUN_LOOP_DO", "class_name": "RunLoopDO" },
+          { "name": "TRACER_DO", "class_name": "TracerDO" },
+          { "name": "OWNER_DO", "class_name": "OwnerDO" },
+      { "name": "DEVICE_BRIDGE_DO", "class_name": "DeviceBridgeDO" },
+      { "name": "IMESSAGE_BRIDGE_DO", "class_name": "IMessageBridgeDO" }
+        ]
+      },
+      "r2_buckets": [
+        { "binding": "ARTIFACTS", "bucket_name": "waldo-artifacts-experimental" }
+      ],
+      "ratelimits": [
+        {
+          "name": "RESPONSIBILITY_RATE_LIMITER",
+          "namespace_id": "1003",
+          "simple": { "limit": 120, "period": 60 }
+        }
+      ],
+      "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["RuntimeProbeDO"] },
+        { "tag": "v2", "new_sqlite_classes": ["TracerDO"] },
+        { "tag": "v3", "new_sqlite_classes": ["RunLoopDO"] },
+        { "tag": "v4", "new_sqlite_classes": ["TelegramOwnerDO"] },
+        { "tag": "v5", "new_sqlite_classes": ["DeviceBridgeDO"] },
+        { "tag": "v6", "renamed_classes": [{ "from": "TelegramOwnerDO", "to": "OwnerDO" }] },
+        { "tag": "v7", "new_sqlite_classes": ["IMessageBridgeDO"] }
+      ],
+      "ai": { "binding": "AI" },
+      "vectorize": [
+        { "binding": "VECTORIZE", "index_name": "waldo-recall-experimental" }
+      ]
     }
   },
   "migrations": [
