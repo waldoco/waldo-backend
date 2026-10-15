@@ -8,9 +8,10 @@ import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import type { OwnerTurnEnvelope } from './owner-turn-envelope';
 import { receivedView, renderForModel, type InboundPart } from './owner-inbound-turn';
 import { ownerContextHandler } from '../tools/live/owner-context';
+import { searchLocation } from '../tools/live/search-location';
 import {
   deriveContextBudgetChars, EXTERNAL_ORIGIN_TOOLS, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, SANITISE_DESTINATION_POLICIES, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_PROVIDER, OPENAI_REASONING, routingPolicySchema, WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL,
-  type ConnectIntent, type LLMRequest, type LLMTool, type LLMToolTurn, type ModelName,
+  type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
 } from '@waldo/contracts';
 import type { ConversationModelMessage } from '@waldo/contracts';
 import { BUDGET_CHARS_PER_TOKEN, MODEL_CONTEXT_MAX_CHARS } from '@waldo/contracts';
@@ -74,10 +75,6 @@ const newSessionCanaryTokens = (): string[] =>
 // has run with.
 const OUTPUT_TOKENS: Readonly<Partial<Record<ModelName, number>>> = { [OPENAI_GPT_6_1_SOL_MODEL]: 25_000 };
 const EXTERNAL_DATA_MAX_BYTES = 4096;
-// Hosted web search is located by the owner's own time zone. Beta owners are in India, so a zone left unset keeps India.
-const INDIA_ZONES = new Set(['Asia/Kolkata', 'Asia/Calcutta']);
-const searchLocation = (timezone: string): NonNullable<LLMRequest['web_search']> =>
-  timezone === 'UTC' ? { country: 'IN' } : INDIA_ZONES.has(timezone) ? { country: 'IN', timezone } : { timezone };
 
 // Staging responder: the fixture invocation stands in for real per-user admission,
 // which the production tenancy work replaces.
