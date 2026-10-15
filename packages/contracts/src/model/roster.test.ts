@@ -10,6 +10,7 @@ import {
   ROSTER,
   WALDO_AUXILIARY_MODEL,
   WALDO_CHAT_MODEL,
+  WALDO_SIMPLE_TURN_MODEL,
 } from './roster';
 
 describe('modelName', () => {
@@ -39,6 +40,10 @@ describe('chat model seam', () => {
   it('runs owner conversation turns on Sol and every auxiliary call on Luna', () => {
     expect(WALDO_CHAT_MODEL).toBe(OPENAI_GPT_6_1_SOL_MODEL);
     expect(WALDO_AUXILIARY_MODEL).toBe(OPENAI_GPT_6_LUNA_MODEL);
+  });
+
+  it('runs an owner turn the router judges simple on Luna', () => {
+    expect(WALDO_SIMPLE_TURN_MODEL).toBe(OPENAI_GPT_6_LUNA_MODEL);
   });
 });
 

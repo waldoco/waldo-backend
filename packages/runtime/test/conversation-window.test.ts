@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { CONVERSATION_INPUT_BUDGET_TOKENS, estimateMessageTokens, windowModelMessages } from '../src/conversation/window';
+import { WALDO_CHAT_MODEL, WALDO_SIMPLE_TURN_MODEL } from '@waldo/contracts';
+import { CONVERSATION_INPUT_BUDGET_TOKENS, conversationInputBudgetTokens, estimateMessageTokens, windowModelMessages } from '../src/conversation/window';
 
 const msg = (chars: number, role: 'user' | 'assistant' = 'user') => ({ role, content: 'x'.repeat(chars) });
 
@@ -42,5 +43,10 @@ describe('conversation input window (F1)', () => {
     // Wire ceiling 100k with tighten-only per-model derivation (contracts/model/context-budget pattern);
     // for history; headroom covers system prompt, tool turns and the 4096 output pin.
     expect(CONVERSATION_INPUT_BUDGET_TOKENS).toBe(100_000);
+  });
+
+  // The owner's history is windowed before the turn-tier router picks the turn's model, so it must fit either one.
+  it('sizes the owner history window for whichever model an owner turn is routed to', () => {
+    for (const model of [WALDO_CHAT_MODEL, WALDO_SIMPLE_TURN_MODEL]) expect(CONVERSATION_INPUT_BUDGET_TOKENS).toBeLessThanOrEqual(conversationInputBudgetTokens(model));
   });
 });

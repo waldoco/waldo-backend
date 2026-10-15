@@ -22,6 +22,8 @@ export type ModelName = z.infer<typeof modelNameSchema>;
 
 // The owner's own conversation turns, on the app, iMessage and Telegram, and the delegate tasks they spawn.
 export const WALDO_CHAT_MODEL: ModelName = OPENAI_GPT_6_1_SOL_MODEL;
+// An owner's own turn the turn-tier router judges simple runs on this model instead, for the whole turn.
+export const WALDO_SIMPLE_TURN_MODEL: ModelName = OPENAI_GPT_6_LUNA_MODEL;
 // Every call that is not an owner's conversation turn: reaction choice, thread titles, memory extraction and
 // consolidation, conversation compaction, reminder, day-card, brief and heartbeat wording, and background decisions.
 // Not ROSTER.auxiliary below, which is the run loop's classifier role.

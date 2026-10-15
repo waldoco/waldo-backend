@@ -1,4 +1,4 @@
-import { BUDGET_CHARS_PER_TOKEN, MODEL_CONTEXT_MAX_CHARS, MODEL_CONTEXT_SPECS, WALDO_CHAT_MODEL, type ConversationModelMessage, type ModelName } from '@waldo/contracts';
+import { BUDGET_CHARS_PER_TOKEN, MODEL_CONTEXT_MAX_CHARS, MODEL_CONTEXT_SPECS, WALDO_CHAT_MODEL, WALDO_SIMPLE_TURN_MODEL, type ConversationModelMessage, type ModelName } from '@waldo/contracts';
 
 // F1 (paper audit, arXiv 2609.20804): the chat turn path had NO input-context bound - the full
 // conversation ancestor path went to the model every turn, so overflow terminated the turn with a
@@ -22,9 +22,10 @@ export const conversationInputBudgetTokens = (model: ModelName = WALDO_CHAT_MODE
   return Math.min(usable, CONVERSATION_HISTORY_WIRE_CEILING_TOKENS);
 };
 
-// Default budget for the current chat model: 100k (every roster model's usable window exceeds the
-// ceiling today, so the ceiling is the effective budget; a smaller-window model tightens instead).
-export const CONVERSATION_INPUT_BUDGET_TOKENS = conversationInputBudgetTokens();
+// Default budget for an owner turn: 100k (every roster model's usable window exceeds the ceiling today, so the ceiling
+// is the effective budget; a smaller-window model tightens instead). History is windowed before the turn-tier router
+// picks the turn's model, so the budget is the smaller of the two models a turn can run on.
+export const CONVERSATION_INPUT_BUDGET_TOKENS = Math.min(conversationInputBudgetTokens(WALDO_CHAT_MODEL), conversationInputBudgetTokens(WALDO_SIMPLE_TURN_MODEL));
 
 // Heuristic estimator: 4 bytes per token (UTF-8) plus a small per-message framing overhead.
 // Deliberately conservative-simple; no tokenizer dependency in the hot path.
