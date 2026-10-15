@@ -32,6 +32,39 @@ describe('a card carrying three independent one-layer encodings', () => {
     expect(scan(card.replace(token, deep))).toMatchObject({ ok: false, reason: 'invalid_payload' });
   });
 
+  it('passes base64 of percent-encoded text, two layers deep, and denies one more layer of base64', () => {
+    const twoLayers = btoa(encodeURIComponent('agenda: room one / notes'));
+    expect(scan(`ref ${twoLayers}`)).toMatchObject({ ok: true });
+    expect(scan(`ref ${btoa(twoLayers)}`)).toMatchObject({ ok: false, reason: 'invalid_payload' });
+    expect(scan(card.replace(token, btoa(twoLayers)))).toMatchObject({ ok: false, reason: 'invalid_payload' });
+  });
+
+  it('still finds a canary in a JSON-escaped sibling and one split across a JSON and a percent escape', () => {
+    expect(scan(card.replace('Planning \\u003e review', `Planning ${[...canaries[1]!].map(character => `\\u00${character.charCodeAt(0).toString(16)}`).join('')}`))).toMatchObject({ ok: false, reason: 'canary_leak' });
+    expect(scan(card.replace('room%20one', `room ${canaries[2]!.slice(0, 4)}\\u0063${canaries[2]!.slice(5, 11)}%36${canaries[2]!.slice(12)}`))).toMatchObject({ ok: false, reason: 'canary_leak' });
+  });
+
+  // Inside the full card these two exceed the 4x decode budget and fail closed as invalid_payload; alone they decode far
+  // enough to name the canary.
+  it('still finds a canary nested two layers deep, and fails closed with it beside the siblings', () => {
+    const nested = btoa(`ref ${[...canaries[0]!].map(character => `%${character.charCodeAt(0).toString(16)}`).join('')} here`);
+    expect(scan(`ref ${nested}`)).toMatchObject({ ok: false, reason: 'canary_leak' });
+    expect(scan(card.replace(token, nested))).toMatchObject({ ok: false });
+  });
+
+  it('still finds a canary whose base64 is cut by a JSON escape into a decodable prefix and a remainder', () => {
+    const whole = btoa(`ref ${canaries[0]} here`);
+    const split = `${whole.slice(0, 8)}\\u00${whole.charCodeAt(8).toString(16)}${whole.slice(9)}`;
+    expect(scan(`ref ${split}`)).toMatchObject({ ok: false, reason: 'canary_leak' });
+    expect(scan(card.replace(token, split))).toMatchObject({ ok: false });
+  });
+
+  it('passes nine hundred sibling encodings inside the 4x decode budget, and still finds a canary after them', () => {
+    const siblings = Array.from({ length: 300 }, (_, index) => `${btoa(`agenda item ${index}`)} \\u0041${index} %41${index}`).join('\n');
+    expect(scan(`${card}\n${siblings}`)).toMatchObject({ ok: true });
+    expect(scan(`${card}\n${siblings}\n${btoa(`ref ${canaries[1]} here`)}`)).toMatchObject({ ok: false, reason: 'canary_leak' });
+  });
+
   it('reaches the model as a scheduled job prompt instead of failing the card', async () => {
     await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('card-mixed-encodings')), async () => {
       const requests: LLMGatewayRequest[] = [];
