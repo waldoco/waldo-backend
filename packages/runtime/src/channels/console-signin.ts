@@ -7,10 +7,12 @@ import { MEMORY_GRAPH_PATH } from './memory-graph';
 import { consoleLog, consoleTrace, withConsoleTrace } from '../observability/console-correlation';
 import { consoleAuth, OWNER_COOKIE, type ConsoleAuth } from '../identity/console-auth';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
-import { CONSOLE_COOKIE, CONSOLE_PATH } from './console';
+import { CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_PATH } from './console';
 import { CONSOLE_DEVICES_PATH } from '../devices/contract';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
 import { DASHBOARD_TASKS_PATH } from './dashboard-tasks';
+import { clearOwnerCookie, consoleSignoutKind, prepareConsoleSignout, signedOut } from './console-signout';
+import { fenceSession, ownerSessionHash } from './session-fence';
 
 export const CONSOLE_SIGNIN_PATH = `${CONSOLE_PATH}/signin`;
 export const CONSOLE_VERIFY_PATH = `${CONSOLE_PATH}/verify`;
@@ -308,11 +310,16 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
   if (url.pathname === `${CONSOLE_PATH}/signout-all` && request.method === 'POST') {
     const doName = await auth.readOwnerCookie(request);
     if (doName) {
+      // The sessions about to be revoked, so their console and app turns can be stopped after; at least this browser's.
+      let hashes: readonly string[];
+      try { hashes = (await auth.listSessions(doName)).map(row => row.session); }
+      catch { const own = await ownerSessionHash(request); hashes = own ? [own] : []; }
       try { await auth.signOutAll(doName); }
       catch {
         event('console_route', false, 'signout_all_unconfirmed');
         return finish(new Response('Signing out everywhere did not finish. This browser is still signed in; go back and try again.', { status: 503, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } }));
       }
+      await Promise.all(hashes.map(hash => fenceSession(env, owners, doName, hash)));
     }
     const headers = new Headers({ location: CONSOLE_SIGNIN_PATH });
     const clear = `Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=0`;
@@ -348,6 +355,18 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
     if ([DASHBOARD_OVERVIEW_PATH,DASHBOARD_TASKS_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH].includes(url.pathname)||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json')) return finish(new Response('unauthorized', { status: 401, headers: DASHBOARD_OVERVIEW_HEADERS }));
     return finish(signin());
   }
+  const signout = await consoleSignoutKind(request, url);
+  let fenceAfter: readonly string[] = [];
+  if (signout) {
+    try { fenceAfter = await prepareConsoleSignout(signout, request, auth, env, owners, doName); }
+    catch {
+      event('console_route', false, 'signout_unconfirmed');
+      const message = 'Signing out did not finish. This browser is still signed in; go back and try again.';
+      return finish(url.pathname === CONSOLE_ACTION_PATH
+        ? new Response(message, { status: 503, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } })
+        : Response.json({ error: 'unavailable' }, { status: 503, headers: DASHBOARD_OVERVIEW_HEADERS }));
+    }
+  }
   const forwarded = new Request(request);
   forwarded.headers.set('x-waldo-do-name', doName);
   let response: Response;
@@ -357,6 +376,10 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
     throw error;
   }
   event('console_route', response.ok, response.ok ? 'forwarded' : 'forward_failed');
+  if (signout && signedOut(response)) {
+    await Promise.all(fenceAfter.map(hash => fenceSession(env, owners, doName, hash)));
+    response = clearOwnerCookie(response);
+  }
   if (resume && response.status === 401) return finish(signin());
   if ([DASHBOARD_OVERVIEW_PATH,DASHBOARD_TASKS_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH].includes(url.pathname)||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json')) {
     const headers = new Headers(response.headers);

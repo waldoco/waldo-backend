@@ -22,6 +22,7 @@ import { CONNECT_LINK_PREFIX, handleConnectTicket } from './channels/connect-lin
 import { GOOGLE_CALLBACK_PATH } from './connectors/google';
 import { CONSOLE_PATH } from './channels/console';
 import { handleApp } from './channels/app-api';
+import { handleConsoleChat } from './channels/console-chat';
 import { ownerDirectory, signedRpc } from './identity/owner-directory';
 import { sweepHealthRetention } from './health/retention-sweep';
 import { downloadReturnTarget, handleConsole, CONSOLE_SIGNIN_PATH } from './channels/console-signin';
@@ -175,6 +176,8 @@ export default {
     if (ticketResponse) return ticketResponse;
     const appResponse = await handleApp(request, env, undefined, (work) => ctx?.waitUntil(work));
     if (appResponse) return appResponse;
+    const consoleChat = await handleConsoleChat(request, env);
+    if (consoleChat) return consoleChat;
     const devicePath = new URL(request.url).pathname;
     // iMessage host profile waldo-imessage-http-v1: registered before generic routes/assets; 404 unless composed.
     if (isIMessageHostPath(devicePath)) return handleIMessageHost(request, env as never);
