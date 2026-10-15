@@ -74,7 +74,8 @@ const newSessionCanaryTokens = (): string[] =>
 // Reasoning tokens count against a call's output cap, and OpenAI's reasoning guide asks for at least 25,000 tokens of
 // room for reasoning and output. Sol gets that room whatever effort it runs at; other models keep the 4,096 cap Luna
 // has run with.
-const OUTPUT_TOKENS: Readonly<Partial<Record<ModelName, number>>> = { [OPENAI_GPT_6_1_SOL_MODEL]: 25_000 };
+// Luna's cap covers an owner turn the router judged simple: a reply that needs more than this was not a simple turn.
+const OUTPUT_TOKENS: Readonly<Partial<Record<ModelName, number>>> = { [OPENAI_GPT_6_1_SOL_MODEL]: 25_000, [OPENAI_GPT_6_LUNA_MODEL]: 4_096 };
 const EXTERNAL_DATA_MAX_BYTES = 4096;
 
 // One item of a smaller-model round, as the chat model may replay it: a call without its item id, the round's text as a

@@ -131,7 +131,8 @@ export const createTurnTierDecider = ({ post, sanitise, canaryTokens, timeoutMs 
 };
 
 // The installed SDK has no decisions resource; its generic post keeps the client's auth and timeout. Retries stay off:
-// the turn has one retry owner, and a router retry would only spend the owner's wait.
+// the turn has one retry owner, and a router retry would only spend the owner's wait. The body carries no storage
+// field: OpenAI documents no store parameter for /v1/decisions and no application-state retention for it.
 export const openAIDecisionsPost = (apiKey: string, { timeoutMs = TURN_TIER_TIMEOUT_MS, fetch }: Readonly<{ timeoutMs?: number; fetch?: typeof globalThis.fetch }> = {}): DecisionsPost => {
   if (!validModelCredential(apiKey)) return async () => { throw new Error('model credential unavailable'); };
   let client: OpenAI | undefined;
