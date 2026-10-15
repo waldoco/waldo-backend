@@ -157,3 +157,25 @@ it('duplicate remember is not receipted as a new save', async () => {
     expect(seen.inputs.at(-1)).toContain('duplicate');
   });
 });
+// A held topic is cut out of a public page the model reads; the rest of the page reaches the model and the reply trace.
+it('a held topic is cut from a public page in the owner turn, and the page is not withheld whole', async () => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('memory-loop-public-page')), async (_i, state) => {
+    const { browsePageHandler } = await import('../src/tools/live/browser');
+    const { HELD_TOPIC_MARKER, HELD_TURN_OUTPUT } = await import('../src/conversation/held-turns');
+    const memory = claimStore(state.storage.sql);
+    memory.beginTopicCoverage('zebra-topic', '2026-10-08T00:00:00Z');
+    const reader = browsePageHandler(undefined, undefined, undefined, fetch, { allowBrowserbase: false, cloudflare: async () => ({ ok: false, code: 'transient', error: 'unused', source_taint: 'external' }) });
+    const browse: typeof reader = { ...reader, handle: async ({ url }) => ({ ok: true, data: { url, data: { text: 'Results: Zebra-Topic lamp 1,299. Walnut desk 4,999.' } }, source_taint: 'external' }) };
+    const logs: { hop?: string }[] = [];
+    seen.outputs.push([{ type: 'function_call', call_id: 'page', name: 'browse_page', arguments: JSON.stringify({ url: 'https://example.com/search?q=desk', instruction: 'List the results' }) }], []);
+    const responder = createOwnerResponder('fixture', undefined, memory, entry => logs.push(entry as { hop?: string }), undefined, [browse], undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, ['example.com']);
+    await responder.respond(ownerTyped({ traceId: 'tg-shop', conversationRef: 'owner', surface: 'telegram', text: 'Find me a desk', memoryWrites: false }), timer);
+    expect(seen.inputs.at(-1)).toContain('Walnut desk 4,999');
+    expect(seen.inputs.at(-1)).toContain(`${HELD_TOPIC_MARKER} lamp 1,299`);
+    expect(seen.inputs.at(-1)).not.toContain(HELD_TURN_OUTPUT.slice(0, 40));
+    expect(seen.inputs.at(-1)).not.toMatch(/zebra-topic/i);
+    const replyHops = logs.filter(entry => entry.hop === 'llm_reply');
+    expect(replyHops.length).toBeGreaterThan(0);
+    expect(JSON.stringify(replyHops)).not.toMatch(/zebra-topic/i);
+  });
+});
