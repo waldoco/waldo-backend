@@ -1,7 +1,9 @@
 import { expect, it, vi } from 'vitest';
-import { browsePageArgsSchema } from '@waldo/contracts';
+import { browsePageArgsSchema, buildSessionState } from '@waldo/contracts';
 import { browsePageHandler } from '../src/tools/live/browser';
 import { PublicReadRefusal, cloudflarePublicRead } from '../src/channels/cloudflare-public-read';
+import { runToolLoop } from '../src/conversation/tool-loop';
+import { sanitise } from '../src/scribe/sanitiser';
 
 const args = { url: 'https://example.com/menu', instruction: 'Find vegetarian options' };
 const context = { authenticatedUserId: 'owner-a', egressAllowlist: ['*'], assertTaskSourceCurrent: async () => {} } as never;
@@ -43,9 +45,53 @@ it('refuses a read with neither Browserbase keys nor a Cloudflare reader, withou
   expect(await handler.handle(browsePageArgsSchema.parse(args), context)).toMatchObject({ ok: false, code: 'auth_failed' });
   expect(paid).toBe(0);
 });
-it.each([403, 429, 500])('HTTP %s page failures do not return challenge/error text as useful content', async status => {
-  const f = fake(); f.page.goto = async () => ({ status: () => status });
+it.each([429, 500, 503])('HTTP %s page failures stay transient and do not return error text as useful content', async status => {
+  const f = fake(); f.page.goto = async () => ({ status: () => status, headers: () => ({}) }) as never;
   expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context)).toMatchObject({ ok: false, code: 'transient', error: `The page did not load (HTTP ${status}).` });
+  expect(f.calls).toContain('Browser.close');
+});
+it('a navigation with no response stays transient', async () => {
+  const f = fake(); f.page.goto = async () => null as never;
+  expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context)).toMatchObject({ ok: false, code: 'transient', error: 'The page did not load.' });
+});
+it.each([401, 403, 451])('HTTP %s is a typed refusal that names the status and says retrying the same address will not help', async status => {
+  const f = fake(); f.page.goto = async () => ({ status: () => status, headers: () => ({}) }) as never;
+  const result = await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context);
+  expect(result).toMatchObject({ ok: false, code: 'rejected', source_taint: 'external' });
+  if (result.ok) return;
+  expect(result.error).toContain(`HTTP ${status}`); expect(result.error).toContain('will not help');
+  expect(result.error).toContain('retain_session:true'); expect(result.error).toContain('owner_login');
+  expect(result.error).not.toMatch(/example\.com|private-id|Vegetarian/);
+  expect(f.calls).toContain('Browser.close');
+});
+it.each([404, 410])('HTTP %s is not_found', async status => {
+  const f = fake(); f.page.goto = async () => ({ status: () => status, headers: () => ({}) }) as never;
+  expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context)).toMatchObject({ ok: false, code: 'not_found', error: expect.stringContaining(`HTTP ${status}`) });
+  expect(f.calls).toContain('Browser.close');
+});
+it('in the tool loop, a refused address is not fetched again this turn while a different address still is', async () => {
+  const f = fake(); let last = args.url;
+  f.page.goto = async (...input: unknown[]) => { last = input[0] as string; f.calls.push('navigate'); return { status: () => last === args.url ? 403 : 200, headers: () => ({}) }; };
+  f.page.url = () => last;
+  const handler = browsePageHandler(undefined, undefined, undefined, (async () => { throw Error('paid fallback'); }) as typeof fetch, { cloudflare: cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never }), allowBrowserbase: false });
+  const canaries = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
+  const ctx = { authenticatedUserId: 'owner-a', egressAllowlist: ['*'], assertTaskSourceCurrent: async () => {}, trigger: 'user_message' as const, canaryTokens: canaries, sourceTaint: null, toolArgSourceTaint: null, sanitise, session: buildSessionState({ trigger: 'user_message', canary_tokens: canaries, started_at: 0 }) };
+  const calls = [args, args, { ...args, url: 'https://example.com/other' }].map(call => JSON.stringify(call));
+  const outputs: string[] = []; let step = 0;
+  await runToolLoop({ handlers: [handler as never], ctx, maxSteps: 5, onTool: event => outputs.push(event.output), step: async tools => tools && step < calls.length ? { text: '', tool_calls: [{ call_id: `call-${step}`, name: 'browse_page', arguments: calls[step++]! }] } : { text: 'Done' } });
+  expect(outputs).toHaveLength(3);
+  expect(JSON.parse(outputs[0]!)).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining('HTTP 403') });
+  expect(outputs[1]).toContain('[repeat: cached failure');
+  expect(JSON.parse(outputs[1]!.split('\n')[0]!)).toEqual(JSON.parse(outputs[0]!));
+  expect(JSON.parse(outputs[2]!.split('\n')[0]!)).toMatchObject({ ok: true });
+  expect(f.calls.filter(call => call === 'acquire')).toHaveLength(2);
+});
+it.each([403, 503])('a Cloudflare challenge (HTTP %s) is a typed refusal naming the handoff route, not a page failure', async status => {
+  const f = fake(); f.page.goto = async () => ({ status: () => status, headers: () => ({ 'cf-mitigated': 'challenge' }) }) as never;
+  const result = await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context);
+  expect(result).toMatchObject({ ok: false, code: 'rejected' });
+  if (result.ok) return;
+  expect(result.error).toContain('verification_challenge'); expect(result.error).toContain('owner_login');
   expect(f.calls).toContain('Browser.close');
 });
 it('returns typed empty-page and timeout failures while terminating the owned session', async () => {
@@ -58,7 +104,7 @@ it('returns typed empty-page and timeout failures while terminating the owned se
       const read = cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context);
       await vi.advanceTimersByTimeAsync(3000);
       const result = await read;
-      expect(result).toMatchObject({ ok: false, code: mode === 'empty' ? 'not_found' : 'transient' });
+      expect(result).toMatchObject({ ok: false, code: mode === 'empty' ? 'not_found' : mode === 'http' ? 'rejected' : 'transient' });
       expect(JSON.stringify(result)).not.toContain('secret'); expect(f.calls).toContain('Browser.close');
     }
   } finally { vi.useRealTimers(); }
@@ -370,13 +416,13 @@ it.each(['http', 'empty', 'thrown'] as const)('preserves the original safe %s fa
   try {
     const f = fake(), settle = vi.fn();
     f.sdk.sessions = async () => [{ sessionId: 'private-id' }];
-    if (mode === 'http') f.page.goto = async () => ({ status: () => 403 });
+    if (mode === 'http') f.page.goto = async () => ({ status: () => 403, headers: () => ({}) }) as never;
     if (mode === 'empty') f.page.locator = () => ({ innerText: async () => '' });
     if (mode === 'thrown') f.page.goto = async () => { throw Error('secret-provider https://private.example/private-id'); };
     const read = cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never, reserveAllocation: async () => ({ settle }) })(args as never, context);
     await vi.advanceTimersByTimeAsync(mode === 'empty' ? 4000 : 1000);
     const result = await read;
-    expect(result).toMatchObject({ ok: false, code: mode === 'empty' ? 'not_found' : 'transient' });
+    expect(result).toMatchObject({ ok: false, code: mode === 'empty' ? 'not_found' : mode === 'http' ? 'rejected' : 'transient' });
     expect(result).toMatchObject({ error: expect.stringContaining(mode === 'http' ? 'HTTP 403' : mode === 'empty' ? 'no readable content' : 'browser read failed') });
     expect(result).toMatchObject({ error: expect.stringContaining(`Read stage: ${mode === 'empty' ? 'content' : 'navigation'}.`) });
     expect(result).toMatchObject({ error: expect.stringContaining('cleanup is unconfirmed') });

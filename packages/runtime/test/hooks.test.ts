@@ -134,6 +134,26 @@ describe('hook registry', () => {
     );
   });
 
+  it("keeps the run scope's AbortSignal itself through a hook's context copy, so later tools can still compose it", async () => {
+    const registry = registerHook<{ runScope: { signal: AbortSignal } }>({
+      name: 'scope_reader',
+      event: 'PostPromptBuild',
+      priority: 100,
+      async handle(_payload, ctx) {
+        expect(ctx.runScope.signal).toBe(signal);
+        return { ok: true };
+      },
+    });
+    const run = new AbortController();
+    const { signal } = run;
+    const ctx = { runScope: { signal } };
+    await runHooks('PostPromptBuild', postPromptPayload, ctx, { registry });
+    expect(ctx.runScope.signal).toBe(signal);
+    const composed = AbortSignal.any([ctx.runScope.signal, AbortSignal.timeout(60_000)]);
+    run.abort();
+    expect(composed.aborted).toBe(true);
+  });
+
   it('ignores in-place payload mutation unless a hook returns a replacement payload', async () => {
     const registry = registerHook<TestContext>(
       {

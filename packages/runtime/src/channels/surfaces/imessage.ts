@@ -14,7 +14,7 @@ import { appCaller } from './app';
 // iMessage is plain text and can never approve: its turns use the app's desk rules, so cards show only in the app.
 export const imessageSurface: SurfaceDescriptor = {
   name: 'imessage',
-  presentation: { surface: 'imessage', delivery: { text: true, approval: 'none', reactions: false, attachments: false }, commands: [] },
+  presentation: { surface: 'imessage', delivery: { text: true, approval: 'none', reactions: false, attachments: false } },
   native: true,
   offsetKey: 'imessage_offset',
   healthSource: 'console',

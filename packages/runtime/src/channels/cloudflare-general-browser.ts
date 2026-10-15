@@ -7,7 +7,7 @@ import type { APIResponse,Browser, BrowserContext, BrowserWorker, Page, Route } 
 import { browserSessionSchema, type BrowserSession } from '@waldo/contracts';
 import type { CloudflareBrowserSdkLoader } from './public-fixture-browser';
 import { cloudflareBrowserGuardOptions } from './cloudflare-browser-adapter';
-import { generalDigest, generalPageState, type GeneralSnapshot, type GeneralActionSnapshot,type GeneralPageState } from './general-browser-observation';
+import { generalDigest, generalPageState, type GeneralSnapshot, type GeneralActionSnapshot,type GeneralPageState,type GeneralPageSignal } from './general-browser-observation';
 import { parseGeneralBrowserAction, type GeneralBrowserAction } from './general-browser-actions';
 export type { GeneralBrowserAction } from './general-browser-actions';
 import { generalBrowserDiagnostic, type GeneralBrowserDiagnostic } from './general-browser-diagnostic';
@@ -16,9 +16,10 @@ import { GENERAL_BROWSER_REDIRECT_LIMIT, GeneralRedirectError, guardGeneralBrows
 export class GeneralBrowserError extends Error {
   release_failed?: true;
   cleanup_failed?: true;
-  constructor(readonly code: 'rejected' | 'session_lost' | 'provider_unavailable' | 'page_unavailable' | 'empty_content' | 'image_oversize' | 'observation_oversize' | 'cleanup_unconfirmed' | 'stale_observation' | 'outcome_uncertain', readonly diagnostic?: GeneralBrowserDiagnostic) { super(`browser_${code}`); }
+  constructor(readonly code: 'rejected' | 'turn_deadline' | 'session_lost' | 'provider_unavailable' | 'page_unavailable' | 'empty_content' | 'image_oversize' | 'observation_oversize' | 'cleanup_unconfirmed' | 'stale_observation' | 'outcome_uncertain', readonly diagnostic?: GeneralBrowserDiagnostic) { super(`browser_${code}`); }
 }
 type Options = Readonly<{ ownerId: string; binding: BrowserWorker; loadSdk: CloudflareBrowserSdkLoader; cleanupBinding?(providerSessionId:string):BrowserWorker; publicRead?:boolean; retainConnection?:boolean; now(): number; deadline(): number; cleanupTimeoutMs?: number; admit(): Promise<void>; authorizeRequest(url: string, method: string): Promise<boolean>; maxScreenshotBytes: number; authorizeHumanRequest?(url:string,method:string):Promise<boolean> }>;
+const PROVIDER_REQUEST_MS = 10000;
 type Navigation = Readonly<{ goto(page: Page, url: string): Promise<void>; finish(page: Page): Promise<void>; pending(page: Page): boolean; dispatched(): void }>;
 
 // The owner host owns the durable checkpoint, authority and serialization. This
@@ -29,6 +30,7 @@ export function cloudflareGeneralBrowser(options: Options) {
   let connected: Readonly<{ browser: Browser; context: BrowserContext; sessionKey: string }> | undefined;
   let documentFailure: GeneralBrowserError | undefined;
   const invalidDocuments = new Set<Page>();
+  const challengedDocuments = new WeakSet<Page>();
   let guardedContext: BrowserContext | undefined;
   const humanRequests=new Set<Promise<void>>();
   const humanRedirects=new WeakMap<Page,Set<string>>();
@@ -51,11 +53,31 @@ export function cloudflareGeneralBrowser(options: Options) {
     };
     try { return await work(step); } finally { clearTimeout(timer!); }
   };
-  const binding = { fetch: async (...args: Parameters<BrowserWorker['fetch']>) => {
-    const response = await options.binding.fetch(...args);
+  // A bound armed with the turn's remaining time is the turn's deadline when it fires, which a later turn can retry; any
+  // other bound is the provider failing to answer. The armed bound decides, because timers and the clock can disagree.
+  const expiredBound = (turn: boolean) => new GeneralBrowserError(turn ? 'turn_deadline' : 'provider_unavailable');
+  // Provider control requests end with the turn, capped at ten seconds; cleanup after the turn keeps that cap. The
+  // allocation is bounded by the turn alone: aborting it early can lose a session the provider has already billed. The
+  // devtools upgrade is the retained connection itself, so it carries no request signal; attaching it is raced instead.
+  const providerBinding = (allocation: boolean) => ({ fetch: async (...args: Parameters<BrowserWorker['fetch']>) => {
+    const [input, init] = args;
+    let response: Response;
+    if (new Headers(init?.headers).get('upgrade') !== null) response = await options.binding.fetch(input, init);
+    else {
+      const remaining = options.deadline() - options.now();
+      if (allocation && !(remaining > 0)) throw new GeneralBrowserError('turn_deadline');
+      const bound = allocation ? remaining : remaining > 0 ? Math.min(PROVIDER_REQUEST_MS, remaining) : PROVIDER_REQUEST_MS;
+      const turn = allocation || remaining > 0 && remaining <= PROVIDER_REQUEST_MS;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(expiredBound(turn)), bound);
+      try { response = await options.binding.fetch(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal }); }
+      catch (error) { if (controller.signal.aborted) throw controller.signal.reason; throw error; }
+      finally { clearTimeout(timer); }
+    }
     if (!response.ok && response.status !== 101) throw new GeneralBrowserError('provider_unavailable', await generalBrowserDiagnostic(response));
     return response;
-  } } as BrowserWorker;
+  } }) as BrowserWorker;
+  const binding = providerBinding(false), allocationBinding = providerBinding(true);
   const identity = (input: BrowserSession, cleanup = false) => {
     const parsed = browserSessionSchema.safeParse(input);
     if (!parsed.success) throw new GeneralBrowserError('rejected');
@@ -69,11 +91,12 @@ export function cloudflareGeneralBrowser(options: Options) {
     catch (error) { if (error instanceof GeneralBrowserError) throw error; throw new GeneralBrowserError('rejected'); }
   };
   const admit = async (session: BrowserSession) => { identity(session); await hostAdmit(); identity(session); };
-  const actionTimeout = (session: BrowserSession) => {
-    const remaining = Math.min(session.expiresAt, options.deadline()) - options.now();
-    if (!Number.isFinite(remaining) || remaining <= 0) throw new GeneralBrowserError('rejected');
-    return Math.min(10000, remaining);
+  const actionBound = (session: BrowserSession) => {
+    const deadline = options.deadline(), remaining = Math.min(session.expiresAt, deadline) - options.now();
+    if (!Number.isFinite(remaining) || remaining <= 0) throw new GeneralBrowserError(Number.isFinite(remaining) && deadline <= session.expiresAt ? 'turn_deadline' : 'rejected');
+    return { ms: Math.min(10000, remaining), turn: deadline <= session.expiresAt && remaining <= 10000 };
   };
+  const actionTimeout = (session: BrowserSession) => actionBound(session).ms;
   const allowed = async (session: BrowserSession, url: string, method = 'GET') => {
     await admit(session);
     const target = new URL(url);
@@ -85,6 +108,12 @@ export function cloudflareGeneralBrowser(options: Options) {
     const cdp = await context.newCDPSession(page);
     try { return (await cdp.send('Target.getTargetInfo')).targetInfo.targetId; }
     finally { await cdp.detach(); }
+  };
+  // Only the provider's own session list says a session is gone. A dropped or refused connection does not: the session,
+  // and any sign-in in it, may still be live. A listing that fails says nothing, so the session is treated as present.
+  const providerSessionGone = async (id: string): Promise<boolean> => {
+    try { const rows = await (await options.loadSdk()).sessions(binding); return Array.isArray(rows) && !rows.some(row => row?.sessionId === id); }
+    catch { return false; }
   };
   const attached = async <T>(session: BrowserSession, work: (browser: Browser, context: BrowserContext, navigation: Navigation) => Promise<T>): Promise<T> => {
     if(takeover)throw new GeneralBrowserError('rejected');
@@ -104,7 +133,7 @@ export function cloudflareGeneralBrowser(options: Options) {
           await admit(session);
           const next = redirects.get(page); redirects.delete(page);
           if (next) { url = next; continue; }
-          if (!response || response.status() >= 400) {
+          if (!response || response.status() >= 400 && !challengedDocuments.has(page)) {
             try { await cleanup(step => step(() => page.close())); } catch { await terminateId(session.providerSessionId); }
             throw new GeneralBrowserError('page_unavailable', response ? { status: response.status() } : undefined);
           }
@@ -121,9 +150,10 @@ export function cloudflareGeneralBrowser(options: Options) {
       if (connected && connected.sessionKey === connectionKey(session)) {
         browser = connected.browser;
         context = connected.context;
-        if(browser.isConnected?.()===false)throw new GeneralBrowserError('session_lost');
       }
       await admit(session);
+      // A dropped retained connection is released below; the next operation attaches afresh to the same session.
+      if (browser?.isConnected?.() === false) throw new GeneralBrowserError(await providerSessionGone(session.providerSessionId) ? 'session_lost' : 'provider_unavailable');
       if (documentFailure) throw documentFailure;
       if (connected) {
         if (connected.sessionKey !== connectionKey(session)) throw new GeneralBrowserError('session_lost');
@@ -132,7 +162,20 @@ export function cloudflareGeneralBrowser(options: Options) {
         const sdk = await options.loadSdk(); await admit(session);
         // Runtime 1.3.6 supports persistent, although its declaration omits it.
         const connectOptions = { sessionId: session.providerSessionId, persistent: true };
-        browser = await sdk.connect(binding, connectOptions); await admit(session);
+        const bound = actionBound(session);
+        let late = false, timer: ReturnType<typeof setTimeout> | undefined;
+        const connecting = sdk.connect(binding, connectOptions).then(attached => { if (late) void attached.close().catch(() => {}); return attached; });
+        connecting.catch(() => {});
+        try {
+          browser = await Promise.race([
+            connecting,
+            new Promise<never>((_, reject) => { timer = setTimeout(() => { late = true; reject(expiredBound(bound.turn)); }, bound.ms); }),
+          ]);
+        } catch (error) {
+          if (!(error instanceof GeneralBrowserError && error.code === 'turn_deadline') && await providerSessionGone(session.providerSessionId)) throw new GeneralBrowserError('session_lost');
+          throw error;
+        } finally { clearTimeout(timer); }
+        await admit(session);
 
       }
       if (!context) {
@@ -170,7 +213,7 @@ export function cloudflareGeneralBrowser(options: Options) {
             // expiry rather than the model turn that has deliberately ended.
             const timeout=()=>{const remaining=session.expiresAt-options.now();if(remaining<=0)throw new GeneralBrowserError('rejected');return Math.min(10000,remaining);};
             let redirect:Readonly<{page:Page;url:string;committed:Promise<unknown>}>|undefined;
-            await guardGeneralBrowserRoute(route,{authorize,timeout,admit:()=>authorize(request.url(),request.method()),redirect:(page,url)=>{const committed=page.waitForEvent('domcontentloaded',{timeout:timeout()});void committed.catch(()=>undefined);redirect={page,url,committed};},denied:(page,status)=>{invalidDocuments.add(page);documentFailure=new GeneralBrowserError('page_unavailable',{status});}});
+            await guardGeneralBrowserRoute(route,{authorize,timeout,admit:()=>authorize(request.url(),request.method()),redirect:(page,url)=>{const committed=page.waitForEvent('domcontentloaded',{timeout:timeout()});void committed.catch(()=>undefined);redirect={page,url,committed};},denied:(page,status)=>{invalidDocuments.add(page);documentFailure=new GeneralBrowserError('page_unavailable',{status});},challenge:page=>{challengedDocuments.add(page);},document:page=>{challengedDocuments.delete(page);}});
             if(redirect){
               const visited=humanRedirects.get(page)??new Set<string>();visited.add(request.url());
               if(visited.has(redirect.url)||visited.size>GENERAL_BROWSER_REDIRECT_LIMIT)throw new GeneralBrowserError('rejected');humanRedirects.set(page,visited);
@@ -180,7 +223,8 @@ export function cloudflareGeneralBrowser(options: Options) {
             return;
           }
           await guardGeneralBrowserRoute(route, { authorize: (url, method) => allowed(session, url, method), timeout: () => actionTimeout(session), admit: () => admit(session),
-            redirect: (page, url) => { redirects.set(page, url); }, denied: (page, status) => { invalidDocuments.add(page); documentFailure = new GeneralBrowserError('page_unavailable', { status }); } });
+            redirect: (page, url) => { redirects.set(page, url); }, denied: (page, status) => { invalidDocuments.add(page); documentFailure = new GeneralBrowserError('page_unavailable', { status }); },
+            challenge: page => { challengedDocuments.add(page); }, document: page => { challengedDocuments.delete(page); } });
           await admit(session);
         }
         catch (error) {
@@ -208,7 +252,7 @@ export function cloudflareGeneralBrowser(options: Options) {
     } catch (error) {
       primary = mutationDispatched || error instanceof GeneralBrowserError && error.code === 'outcome_uncertain'
         ? new GeneralBrowserError('outcome_uncertain', (error instanceof GeneralBrowserError ? error.diagnostic : undefined) ?? documentFailure?.diagnostic)
-        : documentFailure ?? (error instanceof GeneralBrowserError ? error : new GeneralBrowserError(error instanceof GeneralRedirectError ? 'rejected' : 'provider_unavailable'));
+        : documentFailure ?? (error instanceof GeneralBrowserError ? error : new GeneralBrowserError(error instanceof GeneralRedirectError ? 'rejected' : browser?.isConnected?.() === false && await providerSessionGone(session.providerSessionId) ? 'session_lost' : 'provider_unavailable'));
       throw primary;
     } finally {
       // Aborted main navigations can retain a Chromium error document. Discard
@@ -315,8 +359,11 @@ export function cloudflareGeneralBrowser(options: Options) {
     const tabs = [];
     for (const tab of context.pages()) tabs.push({ ref: await tabRef(session, await targetId(context, tab)), url: tab.url(), title: await tab.title() });
     await admit(session);
+    const signals: GeneralPageSignal[] = [];
+    if (state.elements.some(element => element.type === 'password')) signals.push('password_field');
+    if (state.challenge || challengedDocuments.has(page)) signals.push('verification_challenge');
     return { ownerId: session.ownerId, sessionId: session.id, generation: session.generation, targetId: target, digest, state,
-      observation: { revision, tab_ref: await tabRef(session, target), url: state.url, title: state.title, text: state.text, accessibility_snapshot:semantic, viewport: { width: state.width, height: state.height },
+      observation: { revision, tab_ref: await tabRef(session, target), url: state.url, title: state.title, text: state.text, accessibility_snapshot:semantic, ...(signals.length ? { page_signals: signals } : {}), ...(image ? {} : { image_omitted: 'oversize' as const }), viewport: { width: state.width, height: state.height },
         elements: state.elements.map((element, index) => ({ ref: `e:${revision.slice(0, 24)}:${index}`, role: element.role, name: element.name, tag: element.tag, disabled: element.disabled, ...(['checkbox','radio'].includes(element.type)?{checked:element.checked}:{}), ...(element.options ? { options: element.options } : {}) })), tabs },
       ...(image ? { image } : {}) };
   };
@@ -407,7 +454,7 @@ export function cloudflareGeneralBrowser(options: Options) {
         // The existing host reserves its actual hard grant/budget before any I/O.
         await beforeAllocate({ allowedDomains: domains, lifetimeMs }); await hostAdmit();
         const sdk = await options.loadSdk(); await hostAdmit();
-        const allocated = await sdk.acquire(binding, guard);
+        const allocated = await sdk.acquire(allocationBinding, guard);
         if (typeof allocated.sessionId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(allocated.sessionId)) throw new GeneralBrowserError('provider_unavailable');
         id = allocated.sessionId;
         // Record even if authority expired while acquire was in flight, so the
@@ -470,6 +517,25 @@ export function cloudflareGeneralBrowser(options: Options) {
     navigate: (session: BrowserSession, url: string, reference?: string) => attached(session, async (_, context, navigation) => {
       await allowed(session, url); const page = await select(session, context, reference); page.setDefaultTimeout(10000);
       await navigation.goto(page, url);
+      return observe(session, context, page);
+    }),
+    // One history entry back in the tab, observed like a navigation. Undefined when the tab has no earlier page.
+    back: (session: BrowserSession, reference: string) => attached(session, async (_, context, navigation): Promise<GeneralSnapshot | undefined> => {
+      const page = await select(session, context, reference);
+      const cdp = await boundedSemanticRead(session, () => context.newCDPSession(page));
+      let history: Awaited<ReturnType<typeof cdp.send<'Page.getNavigationHistory'>>>;
+      try { history = await boundedSemanticRead(session, () => cdp.send('Page.getNavigationHistory')); } finally { await cdp.detach(); }
+      await admit(session);
+      // A tab's first entry is the blank page it opened on, so there is nothing before it to return to.
+      const entry = history.entries[history.currentIndex - 1];
+      if (!entry || entry.url === 'about:blank') return undefined;
+      // History can point anywhere, so the earlier page passes the navigation egress check before any request.
+      // A page restored from the back/forward cache sends no request; observe re-checks the URL it lands on.
+      await allowed(session, entry.url);
+      try { await page.goBack({ waitUntil: 'domcontentloaded', timeout: actionTimeout(session) }); }
+      catch (error) { if (!navigation.pending(page)) throw error; }
+      await admit(session);
+      await navigation.finish(page);
       return observe(session, context, page);
     }),
     openTab: (session: BrowserSession, url: string) => attached(session, async (_, context, navigation) => {

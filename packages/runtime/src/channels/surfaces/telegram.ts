@@ -30,7 +30,7 @@ export const resolveOwnerTelegramId = (
 
 export const telegramSurface: SurfaceDescriptor = {
   name: 'telegram',
-  presentation: { surface: 'telegram', delivery: { text: true, approval: 'native_buttons', reactions: true, attachments: false }, commands: ['/stop', '/ledger'] },
+  presentation: { surface: 'telegram', delivery: { text: true, approval: 'native_buttons', reactions: true, attachments: false } },
   native: false,
   offsetKey: 'offset',
   healthSource: 'telegram',

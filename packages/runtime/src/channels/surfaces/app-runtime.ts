@@ -12,7 +12,7 @@ import { APP_CONNECT_GUIDANCE, appCaller } from './app';
 // imports reach the console modules that import approvals.
 export const appSurface: SurfaceDescriptor = {
   name: 'app',
-  presentation: { surface: 'app', delivery: { text: true, approval: 'native_buttons', reactions: false, attachments: false }, commands: [] },
+  presentation: { surface: 'app', delivery: { text: true, approval: 'native_buttons', reactions: false, attachments: false } },
   native: true,
   offsetKey: 'app_offset',
   healthSource: 'console',

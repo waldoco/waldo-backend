@@ -89,7 +89,7 @@ export const createWhatsAppSurfaceAdapter = (options: Readonly<{ call: WhatsAppC
       const typed = cleanOwnerText(text);
       const envelope: OwnerTurnEnvelope = {
         traceId: update.traceId, conversationRef, surface: 'whatsapp', service: 'WhatsApp',
-        presentation: { surface: 'whatsapp', delivery: { text: true, approval: 'native_buttons', reactions: false, attachments: true }, commands: [] },
+        presentation: { surface: 'whatsapp', delivery: { text: true, approval: 'native_buttons', reactions: false, attachments: true } },
         text: typed, runScope: update.runScope, messageRef: { id, conversationRef },
         parts: [
           ...ownerWords(typed),
@@ -142,7 +142,7 @@ export const createWhatsAppSurfaceAdapter = (options: Readonly<{ call: WhatsAppC
 // through the Telegram-shaped shim, and approval cards arrive as text callbacks.
 export const whatsappSurface: SurfaceDescriptor = {
   name: 'whatsapp',
-  presentation: { surface: 'whatsapp', delivery: { text: true, approval: 'text_callback', reactions: false, attachments: false }, commands: [] },
+  presentation: { surface: 'whatsapp', delivery: { text: true, approval: 'text_callback', reactions: false, attachments: false } },
   native: false,
   offsetKey: 'wa_offset',
   healthSource: 'whatsapp',

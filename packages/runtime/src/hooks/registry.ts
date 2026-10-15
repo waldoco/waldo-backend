@@ -684,6 +684,11 @@ function cloneHookValue<T>(value: T, seen = new WeakMap<object, unknown>()): T {
   if (value === null || typeof value !== 'object') {
     return value;
   }
+  // A copy of a platform AbortSignal keeps its prototype but is not one: workerd rejects it in AbortSignal.any and
+  // fetch, and it never sees the run's abort. Hooks cannot change a signal, so the run's own signal is shared.
+  if (value instanceof AbortSignal) {
+    return value;
+  }
 
   const source = value as object;
   const existing = seen.get(source);

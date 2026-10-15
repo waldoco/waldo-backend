@@ -18,7 +18,6 @@ describe('every registered surface declares itself completely', () => {
       expect(descriptor.presentation.surface).toBe(name);
       expect(Object.keys(descriptor.presentation.delivery).sort()).toEqual(['approval', 'attachments', 'reactions', 'text']);
       expect(['native_buttons', 'text_callback', 'none']).toContain(descriptor.presentation.delivery.approval);
-      expect(Array.isArray(descriptor.presentation.commands)).toBe(true);
       expect(descriptor.transport).toContain('sendMessage');
       // A surface that presents reactions carries them, and one that does not, does not.
       expect(descriptor.transport.includes('setMessageReaction')).toBe(descriptor.presentation.delivery.reactions);

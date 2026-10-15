@@ -11,7 +11,7 @@ type Send = (url: string, init: RequestInit) => Promise<Response>;
 type Span = Readonly<{ entry: TurnLogEntry; endMs: number; arrival: number }>;
 
 // Bump when a name, tag or metadata key below changes meaning, so dashboards can filter by it.
-export const TRACE_SCHEMA_VERSION = '7';
+export const TRACE_SCHEMA_VERSION = '8';
 
 // Every hop has one feature area and a Langfuse observation type. New hops land in `other`
 // as plain spans until they are added here; model calls (`llm_*`) are always generations.
@@ -127,11 +127,15 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
     const costs = usages.map(modelCost).filter((cost) => cost !== null);
     const cost = costs.reduce((sum, value) => sum + value.total, 0);
     const unpriced = usages.length - costs.length;
+    const searches = usages.reduce((sum, usage) => sum + (usage.web_searches ?? 0), 0);
+    const searchUsd = costs.reduce((sum, value) => sum + (value.web_search ?? 0), 0);
     return [
       attr('langfuse.trace.metadata.model_calls', String(usages.length)),
       attr('langfuse.trace.metadata.tokens_input', String(usages.reduce((sum, usage) => sum + usage.input, 0))),
       attr('langfuse.trace.metadata.tokens_output', String(usages.reduce((sum, usage) => sum + usage.output, 0))),
       attr('langfuse.trace.metadata.tokens_cached', String(usages.reduce((sum, usage) => sum + usage.cached, 0))),
+      attr('langfuse.trace.metadata.hosted_web_search_calls', String(searches)),
+      attr('langfuse.trace.metadata.hosted_web_search_usd', searchUsd.toFixed(8)),
       attr('langfuse.trace.metadata.cost_kind', 'estimate'),
       attr('langfuse.trace.metadata.cost_scope', 'pre_root_hops'),
       attr('langfuse.trace.metadata.pricing_limit', 'flat_table_not_tier_or_bill_reconciled'),
