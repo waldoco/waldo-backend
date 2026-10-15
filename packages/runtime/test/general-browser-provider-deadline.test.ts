@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { cloudflareGeneralBrowser } from '../src/channels/cloudflare-general-browser';
 import type { BrowserSession } from '@waldo/contracts';
 
@@ -9,13 +9,49 @@ const driver = (sdk: unknown, binding: unknown, turnMs = 150) => {
   return cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: binding as never, loadSdk: async () => sdk as never, now: Date.now, deadline: () => deadline, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
 };
 
-it('a hung provider request is aborted at the turn deadline and reported as provider unavailable', async () => {
+const hung = (signals: (AbortSignal | undefined)[] = []) => ({ fetch: (_input: unknown, init?: RequestInit) => { signals.push(init?.signal ?? undefined); return new Promise((_, reject) => init?.signal?.addEventListener('abort', () => reject(init.signal!.reason), { once: true })); } });
+
+it('a hung allocation request is aborted at the turn deadline and reported as a turn deadline', async () => {
   const signals: (AbortSignal | undefined)[] = [];
-  const binding = { fetch: (_input: unknown, init?: RequestInit) => { signals.push(init?.signal ?? undefined); return new Promise((_, reject) => init?.signal?.addEventListener('abort', () => reject(init.signal!.reason), { once: true })); } };
   const sdk = { acquire: async (provider: { fetch: typeof fetch }) => { await provider.fetch('https://browser.invalid/acquire', { method: 'POST' }); return { sessionId: 'never' }; }, sessions: async () => [] };
   const started = Date.now();
-  await expect(driver(sdk, binding).start('public', 600000, async () => {}, async () => {})).rejects.toMatchObject({ code: 'provider_unavailable' });
+  await expect(driver(sdk, hung(signals)).start('public', 600000, async () => {}, async () => {})).rejects.toMatchObject({ code: 'turn_deadline' });
   expect(signals[0]).toBeDefined(); expect(Date.now() - started).toBeLessThan(2000);
+});
+
+it('an allocation that answers after ten seconds but inside the turn is recorded and returned, not aborted', async () => {
+  vi.useFakeTimers();
+  try {
+    let aborted = false;
+    const binding = { fetch: (_input: unknown, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => { aborted = true; reject(init.signal!.reason); }, { once: true });
+      setTimeout(() => resolve(new Response('{}', { status: 200 })), 12_000);
+    }) };
+    const sdk = { acquire: async (provider: { fetch: typeof fetch }) => { await provider.fetch('https://browser.invalid/acquire', { method: 'POST' }); return { sessionId: 'late-session' }; }, sessions: async () => [] };
+    const recorded: string[] = [];
+    const started = driver(sdk, binding, 60_000).start('public', 600000, async () => {}, async id => { recorded.push(id); });
+    const settled = started.then(id => ({ id }), error => ({ error }));
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(await settled).toEqual({ id: 'late-session' });
+    expect(recorded).toEqual(['late-session']); expect(aborted).toBe(false);
+  } finally { vi.useRealTimers(); }
+});
+
+it('no allocation request is sent once the turn has no time left', async () => {
+  const signals: (AbortSignal | undefined)[] = [];
+  const sdk = { acquire: async (provider: { fetch: typeof fetch }) => { await provider.fetch('https://browser.invalid/acquire', { method: 'POST' }); return { sessionId: 'never' }; }, sessions: async () => [] };
+  await expect(driver(sdk, hung(signals), -1).start('public', 600000, async () => {}, async () => {})).rejects.toMatchObject({ code: 'turn_deadline' });
+  expect(signals).toEqual([]);
+});
+
+it('a hung provider control request is still capped at ten seconds when the turn has longer', async () => {
+  vi.useFakeTimers();
+  try {
+    const sdk = { connect: async (provider: { fetch: typeof fetch }) => { await provider.fetch('https://browser.invalid/v1/sessions'); return never(); }, sessions: async () => [] };
+    const observed = driver(sdk, hung(), 60_000).observe(session(Date.now() + 600000)).then(() => undefined, error => error);
+    await vi.advanceTimersByTimeAsync(10_001);
+    expect(await observed).toMatchObject({ code: 'provider_unavailable' });
+  } finally { vi.useRealTimers(); }
 });
 
 it('a provider upgrade request carries no turn signal, so the retained connection outlives one request', async () => {
@@ -29,14 +65,25 @@ it('a provider upgrade request carries no turn signal, so the retained connectio
 it('a hung attach to the retained session fails at the turn deadline instead of holding the turn', async () => {
   const sdk = { connect: never, sessions: async () => [] };
   const started = Date.now();
-  await expect(driver(sdk, {}).observe(session(Date.now() + 600000))).rejects.toMatchObject({ code: 'provider_unavailable' });
+  await expect(driver(sdk, {}).observe(session(Date.now() + 600000))).rejects.toMatchObject({ code: 'turn_deadline' });
   expect(Date.now() - started).toBeLessThan(2000);
 });
 
 it('a connection that arrives after the turn gave up on it is closed, not leaked', async () => {
   let closed = 0;
   const sdk = { connect: () => new Promise(resolve => setTimeout(() => resolve({ close: async () => { closed++; } }), 300)), sessions: async () => [] };
-  await expect(driver(sdk, {}).observe(session(Date.now() + 600000))).rejects.toMatchObject({ code: 'provider_unavailable' });
+  await expect(driver(sdk, {}).observe(session(Date.now() + 600000))).rejects.toMatchObject({ code: 'turn_deadline' });
   await new Promise(resolve => setTimeout(resolve, 400));
   expect(closed).toBe(1);
+});
+
+it('an attach that fails after the turn gave up on it leaves no unhandled rejection', async () => {
+  const unhandled: unknown[] = [], listener = (reason: unknown) => { unhandled.push(reason); };
+  process.on('unhandledRejection', listener);
+  try {
+    const sdk = { connect: () => new Promise((_, reject) => setTimeout(() => reject(Error('socket closed')), 300)), sessions: async () => [] };
+    await expect(driver(sdk, {}).observe(session(Date.now() + 600000))).rejects.toMatchObject({ code: 'turn_deadline' });
+    await new Promise(resolve => setTimeout(resolve, 400));
+    expect(unhandled).toEqual([]);
+  } finally { process.off('unhandledRejection', listener); }
 });

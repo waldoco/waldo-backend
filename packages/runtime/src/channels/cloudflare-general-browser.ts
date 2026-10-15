@@ -16,7 +16,7 @@ import { GENERAL_BROWSER_REDIRECT_LIMIT, GeneralRedirectError, guardGeneralBrows
 export class GeneralBrowserError extends Error {
   release_failed?: true;
   cleanup_failed?: true;
-  constructor(readonly code: 'rejected' | 'session_lost' | 'provider_unavailable' | 'page_unavailable' | 'empty_content' | 'image_oversize' | 'observation_oversize' | 'cleanup_unconfirmed' | 'stale_observation' | 'outcome_uncertain', readonly diagnostic?: GeneralBrowserDiagnostic) { super(`browser_${code}`); }
+  constructor(readonly code: 'rejected' | 'turn_deadline' | 'session_lost' | 'provider_unavailable' | 'page_unavailable' | 'empty_content' | 'image_oversize' | 'observation_oversize' | 'cleanup_unconfirmed' | 'stale_observation' | 'outcome_uncertain', readonly diagnostic?: GeneralBrowserDiagnostic) { super(`browser_${code}`); }
 }
 type Options = Readonly<{ ownerId: string; binding: BrowserWorker; loadSdk: CloudflareBrowserSdkLoader; cleanupBinding?(providerSessionId:string):BrowserWorker; publicRead?:boolean; retainConnection?:boolean; now(): number; deadline(): number; cleanupTimeoutMs?: number; admit(): Promise<void>; authorizeRequest(url: string, method: string): Promise<boolean>; maxScreenshotBytes: number; authorizeHumanRequest?(url:string,method:string):Promise<boolean> }>;
 const PROVIDER_REQUEST_MS = 10000;
@@ -53,17 +53,30 @@ export function cloudflareGeneralBrowser(options: Options) {
     };
     try { return await work(step); } finally { clearTimeout(timer!); }
   };
-  // Provider control requests end with the turn. The devtools upgrade is the retained connection itself, so it carries
-  // no request signal; attaching it is raced against the turn instead.
-  const binding = { fetch: async (...args: Parameters<BrowserWorker['fetch']>) => {
+  // A bound that fires once the turn has no time left is the turn's deadline, which a later turn can retry; a bound that
+  // fires earlier is the provider failing to answer.
+  const expiredBound = () => new GeneralBrowserError(options.deadline() - options.now() <= 0 ? 'turn_deadline' : 'provider_unavailable');
+  // Provider control requests end with the turn, capped at ten seconds; cleanup after the turn keeps that cap. The
+  // allocation is bounded by the turn alone: aborting it early can lose a session the provider has already billed. The
+  // devtools upgrade is the retained connection itself, so it carries no request signal; attaching it is raced instead.
+  const providerBinding = (allocation: boolean) => ({ fetch: async (...args: Parameters<BrowserWorker['fetch']>) => {
     const [input, init] = args;
-    const upgrade = new Headers(init?.headers).get('upgrade') !== null;
-    const remaining = options.deadline() - options.now();
-    const timeout = AbortSignal.timeout(remaining > 0 ? Math.min(PROVIDER_REQUEST_MS, remaining) : PROVIDER_REQUEST_MS);
-    const response = await options.binding.fetch(input, upgrade ? init : { ...init, signal: init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout });
+    let response: Response;
+    if (new Headers(init?.headers).get('upgrade') !== null) response = await options.binding.fetch(input, init);
+    else {
+      const remaining = options.deadline() - options.now();
+      if (allocation && !(remaining > 0)) throw new GeneralBrowserError('turn_deadline');
+      const bound = allocation ? remaining : remaining > 0 ? Math.min(PROVIDER_REQUEST_MS, remaining) : PROVIDER_REQUEST_MS;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(expiredBound()), bound);
+      try { response = await options.binding.fetch(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal }); }
+      catch (error) { if (controller.signal.aborted) throw controller.signal.reason; throw error; }
+      finally { clearTimeout(timer); }
+    }
     if (!response.ok && response.status !== 101) throw new GeneralBrowserError('provider_unavailable', await generalBrowserDiagnostic(response));
     return response;
-  } } as BrowserWorker;
+  } }) as BrowserWorker;
+  const binding = providerBinding(false), allocationBinding = providerBinding(true);
   const identity = (input: BrowserSession, cleanup = false) => {
     const parsed = browserSessionSchema.safeParse(input);
     if (!parsed.success) throw new GeneralBrowserError('rejected');
@@ -79,7 +92,7 @@ export function cloudflareGeneralBrowser(options: Options) {
   const admit = async (session: BrowserSession) => { identity(session); await hostAdmit(); identity(session); };
   const actionTimeout = (session: BrowserSession) => {
     const remaining = Math.min(session.expiresAt, options.deadline()) - options.now();
-    if (!Number.isFinite(remaining) || remaining <= 0) throw new GeneralBrowserError('rejected');
+    if (!Number.isFinite(remaining) || remaining <= 0) throw new GeneralBrowserError(Number.isFinite(remaining) && options.deadline() <= session.expiresAt ? 'turn_deadline' : 'rejected');
     return Math.min(10000, remaining);
   };
   const allowed = async (session: BrowserSession, url: string, method = 'GET') => {
@@ -142,10 +155,12 @@ export function cloudflareGeneralBrowser(options: Options) {
         const connectOptions = { sessionId: session.providerSessionId, persistent: true };
         const bound = actionTimeout(session);
         let late = false, timer: ReturnType<typeof setTimeout> | undefined;
+        const connecting = sdk.connect(binding, connectOptions).then(attached => { if (late) void attached.close().catch(() => {}); return attached; });
+        connecting.catch(() => {});
         try {
           browser = await Promise.race([
-            sdk.connect(binding, connectOptions).then(attached => { if (late) void attached.close().catch(() => {}); return attached; }),
-            new Promise<never>((_, reject) => { timer = setTimeout(() => { late = true; reject(new GeneralBrowserError('provider_unavailable')); }, bound); }),
+            connecting,
+            new Promise<never>((_, reject) => { timer = setTimeout(() => { late = true; reject(expiredBound()); }, bound); }),
           ]);
         } finally { clearTimeout(timer); }
         await admit(session);
@@ -333,7 +348,7 @@ export function cloudflareGeneralBrowser(options: Options) {
     for (const tab of context.pages()) tabs.push({ ref: await tabRef(session, await targetId(context, tab)), url: tab.url(), title: await tab.title() });
     await admit(session);
     const signals: GeneralPageSignal[] = [];
-    if (state.elements.some(element => element.type === 'password')) signals.push('sign_in_requested');
+    if (state.elements.some(element => element.type === 'password')) signals.push('password_field');
     if (state.challenge || challengedDocuments.has(page)) signals.push('verification_challenge');
     return { ownerId: session.ownerId, sessionId: session.id, generation: session.generation, targetId: target, digest, state,
       observation: { revision, tab_ref: await tabRef(session, target), url: state.url, title: state.title, text: state.text, accessibility_snapshot:semantic, ...(signals.length ? { page_signals: signals } : {}), ...(image ? {} : { image_omitted: 'oversize' as const }), viewport: { width: state.width, height: state.height },
@@ -427,7 +442,7 @@ export function cloudflareGeneralBrowser(options: Options) {
         // The existing host reserves its actual hard grant/budget before any I/O.
         await beforeAllocate({ allowedDomains: domains, lifetimeMs }); await hostAdmit();
         const sdk = await options.loadSdk(); await hostAdmit();
-        const allocated = await sdk.acquire(binding, guard);
+        const allocated = await sdk.acquire(allocationBinding, guard);
         if (typeof allocated.sessionId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(allocated.sessionId)) throw new GeneralBrowserError('provider_unavailable');
         id = allocated.sessionId;
         // Record even if authority expired while acquire was in flight, so the

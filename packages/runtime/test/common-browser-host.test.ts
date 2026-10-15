@@ -297,3 +297,23 @@ it('an over-limit PNG reaches the model as a smaller JPEG, while the owner\'s sc
  expect(shot).toMatchObject({ok:false});expect(JSON.stringify(shot)).toContain('image_oversize');
  await host.cancel();
 });
+const deadlineHost=(f:ReturnType<typeof fixture>,deadline:()=>number)=>commonBrowserHost({storage:f.storage,config:f.config,ownerId:'fixture-owner',source:()=>({taskId:'fixture-task',revision:1,sources:['browser'],ready:true,startRef:'fixture-owner'}),assertCurrent:async()=>{},deadline,now:Date.now});
+it('a read cut off by the turn deadline is transient, so a later turn can retry it',async()=>{
+ const f=fixture();let deadline=Date.now()+60000;const host=deadlineHost(f,()=>deadline);
+ const read=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.',retain_session:true} as never,f.ctx) as any;
+ expect(read.ok).toBe(true);
+ deadline=Date.now()-1;
+ const late=await host.actionHandler.handle({session_handle:read.data.session_handle,url:'https://public-pages.fixture.invalid/a',task:'Read it.',max_actions:1,command:{operation:'read'}} as never,f.ctx) as any;
+ expect(late).toMatchObject({ok:false,code:'transient'});expect(late.error).toContain('turn_deadline');
+ deadline=Date.now()+60000;await host.cancel();
+});
+it('a deadline hit after an effect was prepared stays a refused, uncertain effect rather than a retryable one',async()=>{
+ const f=fixture();let deadline=Date.now()+60000;const host=deadlineHost(f,()=>deadline);
+ const read=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.',retain_session:true} as never,f.ctx) as any;
+ commonBrowserFixture.onGoto=()=>{deadline=Date.now()-1;};
+ const moved=await host.actionHandler.handle({session_handle:read.data.session_handle,url:'https://public-pages.fixture.invalid/a',task:'Open B.',max_actions:1,command:{operation:'goto',url:'https://public-pages.fixture.invalid/b'}} as never,f.ctx) as any;
+ commonBrowserFixture.onGoto=undefined;
+ expect(moved).toMatchObject({ok:false,code:'rejected'});
+ expect((f.rows.get('common-browser:fixture-task') as any).action.state).toBe('uncertain');
+ deadline=Date.now()+60000;await host.cancel();
+});

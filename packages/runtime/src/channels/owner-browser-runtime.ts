@@ -36,7 +36,7 @@ const heldElsewhere=(handle:string)=>`An interactive browser session from an ear
 const trialPriced = (model: string | undefined): boolean => model === OPENAI_GPT_6_LUNA_MODEL;
 const trialUnpriced = (): GatewayFailure => ({ ok: false, code: 'invalid_args', error: 'browser trial model price unavailable' });
 
-const PAGE_SIGNALS=' page_signals (sign_in_requested, verification_challenge): offer the owner owner_login, or take another route.';
+const PAGE_SIGNALS=' page_signals (password_field, verification_challenge): offer the owner owner_login, or take another route.';
 
 // The run lease's wake: maintenance runs when the lease's run deadline, its configuration or its session lifetime ends,
 // whichever comes first. It is a listed wake key, so an arbiter re-arm keeps it.

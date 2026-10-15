@@ -53,7 +53,10 @@ const BROWSER_NEXT_STEP:Readonly<Record<GeneralBrowserError['code'],string>>={
  cleanup_unconfirmed:'The browser could not confirm this step closed cleanly, so nothing from it is claimed. Read the page again; if the session is gone, start a new one.',
  stale_observation:'The page changed since it was read. Read it again with browse_act read and use the new refs.',
  outcome_uncertain:'The step may or may not have taken effect, and it cannot be repeated. Read the page with browse_act read to see what changed.',
+ turn_deadline:'This turn ran out of time before the browser step finished, so nothing from it is claimed. The session stays open: continue it with its session_handle on the next turn.',
 };
+// Only the turn's own deadline makes a failed step retryable as such; every other failure keeps its typed next step.
+const retryable=(error:unknown)=>error instanceof GeneralBrowserError&&error.code==='turn_deadline';
 const failureText=(lead:string,otherwise:string,error:unknown,handle:string|undefined)=>`${lead} ${error instanceof GeneralBrowserError?BROWSER_NEXT_STEP[error.code]:otherwise}${handle?` This browser session's session_handle is ${handle}.`:''}`
  +(error instanceof GeneralBrowserError?' Browser diagnostic: '+JSON.stringify({browser_code:error.code,...(error.diagnostic?{diagnostic:error.diagnostic}:{}),...(error.cleanup_failed?{cleanup_failed:true}:{}),...(error.release_failed?{release_failed:true}:{})}):'');
 export function commonBrowserHost(options:Readonly<{
@@ -142,7 +145,7 @@ export function commonBrowserHost(options:Readonly<{
     const observed=record.observation?.observation.url===args.url&&driver.hasRetainedConnection()?await driver.observe(record.session,record.observation.observation.tab_ref):await driver.navigate(record.session,args.url);
     const published=await publishObservation(grant,record,observed,ctx);
     return {...published,data:{...published.data,...(recovering?{document_state:'recreated',previous_document_lost:true,document_notice:'The prior browser document was lost. Unsent form values and old action refs are unavailable. The page was recreated in the same paid session; no effect was replayed.'}:{})}};
-   }catch(error){return {ok:false,code:'rejected',error:failureText('The browser read failed; nothing was read.','Retry the read, read the page without retain_session, or try another site.',error,liveHandle()),source_taint:'external'};}
+   }catch(error){return {ok:false,code:retryable(error)?'transient':'rejected',error:failureText('The browser read failed; nothing was read.','Retry the read, read the page without retain_session, or try another site.',error,liveHandle()),source_taint:'external'};}
   }};
  const actionHandler:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>={name:'browse_act',description:'Interact with the current Cloudflare public page using observed refs: goto, read, inspect, type, click, select, set_checked, scroll. Download observed HTTP GET attachment links into the private owner workspace. File selection, page sends and native submits are unsupported. Unknown outcomes block repeated effects; read evidence before deciding what completed.',schema:browseActArgsSchema,trigger_allowlist:triggerTypeSchema.options.filter(trigger=>TOOL_PERMISSIONS[trigger].includes('browse_act')),autonomy_gated:false,
   async handle(args,ctx){let storageKey:string|undefined,digest:string|undefined;
@@ -262,7 +265,7 @@ export function commonBrowserHost(options:Readonly<{
     return {...published,data:{...published.data,...(!['read','inspect','screenshot','switch_tab'].includes(command.operation)?{browser_action_session_handle:record.session.id}:{})}};
    }catch(error){
     if(storageKey&&digest){const failed=digest;options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey!);if(latest?.action?.digest===failed)save({...latest,action:{digest:failed,state:'uncertain'}},storageKey!);});}
-    return {ok:false,code:'rejected',error:failureText('The browser action failed or its outcome is unknown; no replacement browser or unapproved page write was used.','Read the current page with browse_act read and act on its fresh refs; if page actions keep being refused, end this session with cancel and start a new one.',error,liveHandle()),source_taint:'external'};
+    return {ok:false,code:!digest&&retryable(error)?'transient':'rejected',error:failureText('The browser action failed or its outcome is unknown; no replacement browser or unapproved page write was used.','Read the current page with browse_act read and act on its fresh refs; if page actions keep being refused, end this session with cancel and start a new one.',error,liveHandle()),source_taint:'external'};
    }
   }};
  const api={handler,actionHandler,

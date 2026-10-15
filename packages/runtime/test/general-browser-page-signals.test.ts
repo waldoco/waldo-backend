@@ -7,7 +7,7 @@ const session: BrowserSession = { id: 'host-session', ownerId: 'owner-a', provid
 
 // One page whose document is served through the driver's own route guard, so the
 // HTTP status and headers the model's facts depend on come from the real guard path.
-function harness(document: { status: number; headers?: Record<string, string>; inputType?: string; challenge?: boolean }, maxScreenshotBytes = 1024) {
+function harness(document: { status: number; headers?: Record<string, string>; inputType?: string; challenge?: boolean }, maxScreenshotBytes = 1024, retained = false) {
   let routeHandler: ((route: unknown) => Promise<void>) | undefined, url = 'about:blank';
   const pages: any[] = [], shots: string[] = [];
   const page: any = {
@@ -24,18 +24,27 @@ function harness(document: { status: number; headers?: Record<string, string>; i
     locator: () => ({ click: async () => {} }), screenshot: async (options: { type: string; quality?: number }) => { shots.push(options.quality === undefined ? options.type : `${options.type}:${options.quality}`); return new Uint8Array([137, 80, 78, 71]); }, close: async () => { pages.splice(pages.indexOf(page), 1); },
   };
   pages.push(page);
-  const context = { pages: () => [...pages], serviceWorkers: () => [], newPage: async () => page, route: async (_: string, handler: (route: unknown) => Promise<void>) => { routeHandler = handler; },
-    newCDPSession: async () => ({ send: async (method: string) => method === 'Accessibility.getFullAXTree' ? { nodes: [{ nodeId: 'n1', backendDOMNodeId: 1, role: { value: 'textbox' }, name: { value: 'Field' } }] }
+  const context = { pages: () => [...pages], serviceWorkers: () => [], addInitScript: async () => {}, routeWebSocket: async () => {}, newPage: async () => { if (!pages.includes(page)) pages.push(page); return page; }, route: async (_: string, handler: (route: unknown) => Promise<void>) => { routeHandler = handler; },
+    newCDPSession: async () => ({ on() {}, off() {}, send: async (method: string) => method === 'Cloudflare.getSessionId' ? { sessionId: 'provider-session' } : method === 'Cloudflare.handoff' ? { targetId: 'target', handoffId: 'handoff-1' }
+      : method === 'Accessibility.getFullAXTree' ? { nodes: [{ nodeId: 'n1', backendDOMNodeId: 1, role: { value: 'textbox' }, name: { value: 'Field' } }] }
       : method === 'DOM.getDocument' ? { root: { nodeName: 'INPUT', backendNodeId: 1, attributes: ['type', 'password'] } } : { targetInfo: { targetId: 'target' } }, detach: async () => {} }) };
-  const browser = { contexts: () => [context], close: async () => {} };
+  const browser = { contexts: () => [context], newContext: async () => context, close: async () => {} };
   const sdk = { connect: async () => browser, sessions: async () => [] };
-  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes });
-  return { driver, pages, shots };
+  const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes,
+    ...(retained ? { retainConnection: true, publicRead: true, authorizeHumanRequest: async () => true } : {}) });
+  // A main-document request from the page, answered with this status and these headers.
+  const request = async (target: string, status: number, headers: Record<string, string> = {}) => {
+    let settled = '';
+    await routeHandler!({ request: () => ({ url: () => target, method: () => 'GET', isNavigationRequest: () => true, frame: () => ({ parentFrame: () => null, page: () => page }) }),
+      fetch: async () => ({ status: () => status, headers: () => headers }), fulfill: async () => { settled = 'fulfill'; }, abort: async () => { settled = 'abort'; } });
+    return settled;
+  };
+  return { driver, pages, shots, request };
 }
 
-it('a visible password field is reported to the model as a typed sign-in request, not inferred from page text', async () => {
+it('a visible password field is reported to the model as a typed password_field fact, not inferred from page text', async () => {
   const signIn = await harness({ status: 200, inputType: 'password' }).driver.navigate(session, 'https://accounts.example/login');
-  expect(signIn.observation.page_signals).toEqual(['sign_in_requested']);
+  expect(signIn.observation.page_signals).toEqual(['password_field']);
   const plain = await harness({ status: 200, inputType: 'text' }).driver.navigate(session, 'https://accounts.example/search');
   expect(plain.observation.page_signals).toBeUndefined();
 });
@@ -48,7 +57,7 @@ it('a Cloudflare-mitigated challenge document is observed with a typed challenge
 
 it('a challenge widget found in the page is the same typed signal', async () => {
   const widget = await harness({ status: 200, challenge: true, inputType: 'password' }).driver.navigate(session, 'https://shop.example/login');
-  expect(widget.observation.page_signals).toEqual(['sign_in_requested', 'verification_challenge']);
+  expect(widget.observation.page_signals).toEqual(['password_field', 'verification_challenge']);
 });
 
 it('page evaluation reports only visible challenge widgets', () => {
@@ -96,4 +105,12 @@ it('a click followed by an over-limit page image is a completed action, not an u
   const after = await driver.act(session, before, { operation: 'click', element_ref: before.observation.elements[0]!.ref }, async () => {});
   expect(shots.slice(-4)).toEqual(['png', 'jpeg:50', 'jpeg:35', 'jpeg:25']);
   expect(after.observation.image_omitted).toBe('oversize'); expect(after).not.toHaveProperty('image');
+});
+
+it('during an owner handoff a challenge document is kept for the owner, while any other error document is still denied', async () => {
+  const f = harness({ status: 200 }, 1024, true);
+  const before = await f.driver.navigate(session, 'https://shop.example/');
+  await f.driver.beginOwnerHandoff(session, before, 'Pass the verification check.', async () => {});
+  expect(await f.request('https://shop.example/', 403, { 'cf-mitigated': 'challenge' })).toBe('fulfill');
+  expect(await f.request('https://shop.example/', 403)).toBe('abort');
 });
