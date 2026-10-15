@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ConversationTree, literalJsonTextRedactor, literalTextRedactor, redactConversationEntry, type ConversationEntry } from './conversation-entry';
+import { viewFallbackText } from '../app/view';
 
 const entry = (overrides: Partial<ConversationEntry> = {}): ConversationEntry => ({
   id: 'root', ownerId: 'owner-a', chatId: 'chat-a', parentId: null,
@@ -140,5 +141,42 @@ describe('redactConversationEntry', () => {
     expect(redacted.receipt).toEqual({ ...entry.receipt, line: 'Done: workspace file written [forgotten]-plan.md',
       items: [{ ...entry.receipt!.items[0]!, target: '[forgotten]-plan.md' }, entry.receipt!.items[1]] });
     expect(redactConversationEntry({ ...entry, receipt: undefined }, value => value)).not.toHaveProperty('receipt', expect.anything());
+  });
+
+  it('redacts every word of a stored view, and leaves off a link it changed', () => {
+    const entry: ConversationEntry = { id: 'r', ownerId: 'o', chatId: 'c', parentId: null, threadAnchorId: null, surface: 'app', modelPayload: 'ok',
+      appPayload: 'ok', modelProjection: { mode: 'include' }, role: 'assistant', views: [
+        { kind: 'options', title: 'Divorce lawyers', items: [{ title: 'Mehta & Co', facts: [{ label: 'Focus', value: 'divorce' }], link: 'https://example.com/divorce' }] },
+        { kind: 'table', columns: ['Step'], rows: [['File divorce papers']] },
+      ] };
+    const redacted = redactConversationEntry(entry, literalTextRedactor(['divorce', 'Divorce'], '[forgotten]'));
+    expect(JSON.stringify(redacted)).not.toMatch(/divorce/i);
+    expect(redacted.views).toEqual([
+      { kind: 'options', title: '[forgotten] lawyers', items: [{ title: 'Mehta & Co', facts: [{ label: 'Focus', value: '[forgotten]' }] }] },
+      { kind: 'table', columns: ['Step'], rows: [['File [forgotten] papers']] },
+    ]);
+  });
+
+  it('rebuilds the reply\'s view text from the redacted views, so text and cards still agree', () => {
+    const views = [
+      { kind: 'options' as const, items: [{ title: 'Mehta & Co', link: 'https://example.com/divorce' }] },
+      { kind: 'steps' as const, items: [{ title: `${'a '.repeat(75)}divorce`, detail: 'Then file\ndivorce papers' }] },
+    ];
+    const receipt = { line: 'Done: reminder set', more: 0, items: [{ kind: 'reminder_set', target: null, outcome: 'accepted' as const, via_task: false, at: 1_790_000_000_000, digest: null }] };
+    const reply = 'Here are your options.';
+    const entry: ConversationEntry = { id: 'r', ownerId: 'o', chatId: 'c', parentId: null, threadAnchorId: null, surface: 'app', role: 'assistant', receipt, views,
+      modelPayload: [reply, ...views.map(viewFallbackText)].join('\n\n'), appPayload: [reply, ...views.map(viewFallbackText), receipt.line].join('\n\n'), modelProjection: { mode: 'include' } };
+    const redacted = redactConversationEntry(entry, literalTextRedactor(['file divorce', 'divorce'], '[forgotten]'));
+    expect(JSON.stringify(redacted)).not.toMatch(/divorce/i);
+    expect(redacted.views![0]).toEqual({ kind: 'options', items: [{ title: 'Mehta & Co' }] });
+    expect(redacted.views![1]!.kind === 'steps' && redacted.views![1]!.items[0]!.detail).toBe('Then [forgotten] papers');
+    expect(redacted.appPayload).toBe([reply, ...redacted.views!.map(viewFallbackText), receipt.line].join('\n\n'));
+    expect(redacted.modelPayload).toBe([reply, ...redacted.views!.map(viewFallbackText)].join('\n\n'));
+  });
+
+  it('redacts a payload whole when it does not end with its views\' text', () => {
+    const entry: ConversationEntry = { id: 'r', ownerId: 'o', chatId: 'c', parentId: null, threadAnchorId: null, surface: 'app', role: 'assistant',
+      views: [{ kind: 'steps', items: [{ title: 'Plan divorce' }] }], modelPayload: 'edited divorce text', appPayload: 'edited divorce text', modelProjection: { mode: 'include' } };
+    expect(redactConversationEntry(entry, literalTextRedactor(['divorce'], '[forgotten]')).appPayload).toBe('edited [forgotten] text');
   });
 });

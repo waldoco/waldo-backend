@@ -3,6 +3,7 @@ import {
   replyApprovalPartV1Schema, replyChartSeriesPartV1Schema, replyFilePartV1Schema, replyQuickRepliesPartV1Schema,
   replyReceiptPartV1Schema, replyVisibilityV1Schema, replyVoicePartV1Schema,
 } from './parts';
+import { replyViewPartV1Schema } from './view';
 
 export const APP_AGENT_VERSION = 'app.v1' as const;
 // The contract revisions an app build reads, as `name=revision` pairs, e.g. `approvals=2`. Installed builds parse
@@ -63,7 +64,7 @@ export const appMessagePartV1Schema = z.union([
   z.strictObject({ type: z.literal('operation'), operation_id: z.string(), state: z.enum(['admitted', 'running', 'completed', 'interrupted', 'revoked']), message: z.string() }),
   z.strictObject({ type: z.literal('artifact'), artifact_id: z.string(), revision: z.int().positive(), title: z.string(), download_path: z.string() }),
   replyApprovalPartV1Schema, replyQuickRepliesPartV1Schema, replyChartSeriesPartV1Schema, replyFilePartV1Schema, replyVoicePartV1Schema,
-  replyReceiptPartV1Schema,
+  replyReceiptPartV1Schema, replyViewPartV1Schema,
 ]);
 // `text` is never empty when `parts` holds anything other than a text part, so a reader that draws only `text`
 // always shows the message. `created_at` is epoch ms when the row was stored; rows stored before the time

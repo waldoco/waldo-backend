@@ -49,11 +49,25 @@ const chatRows = selected === 'empty' ? [] : [
       { type: 'receipt', items: [{ kind: 'calendar_change', target: 'Design review', outcome: 'accepted', via_task: false, at: Date.now() - 3600000 + 8000, digest: null }], more: 0, fallback_text: 'Done: 1 calendar change.' },
       { type: 'quick_replies', choices: [{ id: 'thanks', label: 'Thanks' }, { id: 'later', label: 'Remind me at 4' }], fallback_text: 'Thanks / Remind me at 4' }] },
 ];
+// A reply that shows views: its text ends with each view's plain-text form, as the backend stores it.
+const viewText = (view) => [view.title, ...(view.items ?? view.rows).map((item) => Array.isArray(item) ? item.join(' | ') : item.title)].filter(Boolean).join('\n');
+const viewRow = (id, parent, ago, words, ...views) => ({ id, role: 'assistant', channel: 'app', parent_id: parent, created_at: Date.now() - ago,
+  text: [words, ...views.map(viewText)].join('\n\n'), parts: [{ type: 'text', text: [words, ...views.map(viewText)].join('\n\n') }, ...views.map((view) => ({ type: 'view', view, fallback_text: viewText(view) }))] });
 const chatRuns = new Map();
 const threads = selected === 'empty' ? [] : [
   { thread_id: 'thr_6a1f0c2e-9b4d-4c3a-8e7f-1a2b3c4d5e6f', title: 'Goa trip in December', revision: 1, title_revision: 2, state: 'active', created_at: Date.now() - 3 * 86400000, last_activity_at: Date.now() - 2 * 3600000,
     rows: [{ id: 'syn-g1', role: 'user', text: 'Find three beach hotels in North Goa under 6k a night for Dec 20–23', parts: [], channel: 'app', parent_id: null, created_at: Date.now() - 2 * 3600000 - 60000 },
-      { id: 'syn-g2', role: 'assistant', text: 'Three options under ₹6,000 a night for Dec 20–23:\n\n1. **Ronil Beach Resort**, Baga · ₹5,400 · pool, 2 min to the beach\n2. **Casa Anjuna** · ₹5,900 · quiet, heritage house\n3. **Morjim Sands** · ₹4,800 · right on the beach\n\nWant me to hold one?', parts: [], channel: 'app', parent_id: 'syn-g1', created_at: Date.now() - 2 * 3600000 }] },
+      viewRow('syn-g2', 'syn-g1', 2 * 3600000, 'Three that fit Dec 20–23 under ₹6,000 a night. Ronil is my pick: closest to the beach, and it has a pool.', { kind: 'options', title: 'North Goa, Dec 20–23', items: [
+        { title: 'Ronil Beach Resort', subtitle: 'Baga', facts: [{ label: 'Per night', value: '₹5,400' }, { label: 'To the beach', value: '2 min walk' }, { label: 'Rating', value: '4.3' }], note: 'Pool, breakfast included.', link: 'https://example.com/ronil', pick: true },
+        { title: 'Casa Anjuna', subtitle: 'Anjuna', facts: [{ label: 'Per night', value: '₹5,900' }, { label: 'To the beach', value: '10 min walk' }, { label: 'Rating', value: '4.6' }], note: 'Quiet heritage house, nine rooms.', link: 'https://example.com/casa-anjuna' },
+        { title: 'Morjim Sands', subtitle: 'Morjim', facts: [{ label: 'Per night', value: '₹4,800' }, { label: 'To the beach', value: 'On the beach' }, { label: 'Rating', value: '4.1' }], link: 'https://example.com/morjim' }] }),
+      { id: 'syn-g3', role: 'user', text: 'Compare flights from Bengaluru on the 20th, and give me the plan', parts: [], channel: 'app', parent_id: null, created_at: Date.now() - 90 * 60000 },
+      viewRow('syn-g4', 'syn-g3', 90 * 60000 - 9000, 'The 06:10 IndiGo gets you to the beach by lunch.', { kind: 'table', title: 'BLR → GOI, Sat Dec 20', columns: ['Flight', 'Departs', 'Arrives', 'Price'], rows: [
+        ['IndiGo 6E 5302', '06:10', '07:25', '₹4,812'], ['Air India AI 863', '09:45', '11:05', '₹5,390'], ['Akasa QP 1325', '13:20', '14:40', '₹4,450'], ['IndiGo 6E 6137', '18:55', '20:10', '₹6,120'], ['Air India Express IX 2814', '21:30', '22:45', ''],
+        ['IndiGo 6E 404', '05:00', '06:15', '₹4,999'], ['Akasa QP 1121', '07:40', '09:00', '₹4,700'], ['SpiceJet SG 1083', '11:15', '12:35', '₹4,380'], ['IndiGo 6E 911', '16:05', '17:20', '₹5,750']] },
+        { kind: 'steps', title: 'Goa trip', items: [{ title: 'Pick the dates', state: 'done' }, { title: 'Shortlist hotels', state: 'done', detail: 'Ronil, Casa Anjuna, Morjim Sands' }, { title: 'Book the flight', state: 'current', detail: '6E 5302 holds at ₹4,812 until tonight' }, { title: 'Book the hotel', state: 'todo' }, { title: 'Tell the team you are off Dec 22–23', state: 'todo' }] },
+        { kind: 'timeline', title: 'Saturday, Dec 20', items: [{ when: '04:30', title: 'Leave for the airport', detail: 'Cab booked for 04:15' }, { when: '06:10', title: 'Fly BLR → GOI' }, { when: '07:25', title: 'Land at Dabolim' }, { when: '09:00', title: 'Check in at Ronil', detail: 'Early check-in requested' }, { when: '13:00', title: 'Lunch at Britto’s, Baga' }]
+        })] },
   { thread_id: 'thr_7b2e1d3f-0c5e-4d4b-9f8a-2b3c4d5e6f7a', title: null, revision: 1, title_revision: 1, state: 'active', created_at: Date.now() - 86400000, last_activity_at: Date.now() - 86400000, rows: [] },
   { thread_id: 'thr_8c3f2e4a-1d6f-4e5c-a09b-3c4d5e6f7a8b', title: 'Q3 board prep', revision: 2, title_revision: 2, state: 'archived', created_at: Date.now() - 20 * 86400000, last_activity_at: Date.now() - 12 * 86400000,
     rows: [{ id: 'syn-b1', role: 'user', text: 'Pull together last quarter’s numbers for the board deck', parts: [], channel: 'app', parent_id: null, created_at: Date.now() - 12 * 86400000 }] },

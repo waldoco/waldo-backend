@@ -9,6 +9,8 @@ export const TOOL_CLAIM_EFFECT: Readonly<Record<ToolName, string | null>> = {
   send_console_link: null,
   // A note says what the turn is doing, never that something is done; the effect claims stay with the tools that act.
   send_progress_note: null,
+  // A view shows content beside the reply; it changes nothing a claim could rest on.
+  show_view: null,
   get_crs: null, get_health: null, query_calendar: null, get_communication: null, search_communication: null, search_contacts: null,
   read_thread: null, get_tasks: null, get_master_metrics: null, get_context: null, query_availability: null,
   read_owner_context: null, read_memory: null, search_episodes: null, propose_action: null, web_search: null,

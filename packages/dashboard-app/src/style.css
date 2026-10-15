@@ -644,9 +644,9 @@ footer .refresh:disabled { opacity:1; }
 .chat-body { min-width:0; padding-top:3px; }
 /* A reply that arrives while you watch rises in, paragraph by paragraph. */
 .chat-msg.arrived { animation:none; }
-.chat-msg.arrived .chat-prose>*,.chat-msg.arrived .chat-card,.chat-msg.arrived .chat-trace,.chat-msg.arrived .chat-replies { animation:rise .5s var(--ease) backwards; }
+.chat-msg.arrived .chat-prose>*,.chat-msg.arrived .chat-card,.chat-msg.arrived .chat-view,.chat-msg.arrived .chat-trace,.chat-msg.arrived .chat-replies { animation:rise .5s var(--ease) backwards; }
 .chat-msg.arrived .chat-prose>:nth-child(2) { animation-delay:70ms; } .chat-msg.arrived .chat-prose>:nth-child(3) { animation-delay:140ms; }
-.chat-msg.arrived .chat-prose>:nth-child(n+4) { animation-delay:210ms; } .chat-msg.arrived .chat-trace,.chat-msg.arrived .chat-card { animation-delay:260ms; }
+.chat-msg.arrived .chat-prose>:nth-child(n+4) { animation-delay:210ms; } .chat-msg.arrived .chat-view { animation-delay:180ms; } .chat-msg.arrived .chat-trace,.chat-msg.arrived .chat-card { animation-delay:260ms; }
 
 /* Waldo's words: readable measure, quiet structure. */
 .chat-prose { color:var(--ink); font-size:15.5px; line-height:1.6; overflow-wrap:anywhere; }
@@ -703,6 +703,62 @@ footer .refresh:disabled { opacity:1; }
 .trace-step .icon { width:11px; height:11px; }
 .trace-step.failed { background:var(--red-soft); color:#be123c; } .trace-step.unconfirmed { background:var(--fill-2); color:var(--t2); }
 .trace-target { color:var(--t2); }
+
+/* Views: what Waldo shows beside its words. One tile, a quiet label, the content in the console's own type. */
+.chat-view { margin-top:12px; padding:14px 16px 16px; border-radius:16px; background:var(--tile); box-shadow:0 0 0 .5px var(--hair-strong); }
+.chat-view-head { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 10px; margin-bottom:12px; }
+.chat-view-head .label { flex:none; text-transform:uppercase; letter-spacing:.06em; font-size:11px; font-weight:600; }
+.chat-view-head h3 { flex:1 1 auto; min-width:0; margin:0; font-size:15px; font-weight:600; letter-spacing:-.01em; overflow-wrap:anywhere; }
+.chat-view .meta,.view-note { white-space:pre-line; overflow-wrap:anywhere; }
+.chat-view ol { list-style:none; margin:0; padding:0; }
+.chat-msg.arrived .chat-view li { animation:rise .45s var(--ease) backwards; animation-delay:calc(300ms + var(--i,0) * 55ms); }
+.view-options { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:10px; }
+.view-option { display:flex; flex-direction:column; gap:6px; padding:12px 14px; border-radius:var(--r-inner); background:var(--fill); transition:box-shadow .16s var(--ease),transform .16s var(--ease); }
+.view-option:hover { box-shadow:0 0 0 .5px var(--hair-strong); }
+.view-option.pick { background:var(--tile); box-shadow:0 0 0 1px var(--ink); }
+.view-option-head { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
+.view-option-head .strong { overflow-wrap:anywhere; }
+.view-option p { margin:0; }
+.access-label.pick { padding:4px 8px; font-size:11px; color:var(--on-ink); background:var(--ink); }
+.view-facts { display:grid; gap:4px; margin:2px 0 0; }
+.view-facts div { display:flex; justify-content:space-between; gap:12px; font-size:13px; }
+.view-facts dt { color:var(--t2); }
+.view-facts dd { margin:0; font-weight:500; text-align:right; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+.view-note { font-size:13px; color:var(--t2); }
+.view-link { display:inline-flex; align-items:center; gap:6px; align-self:flex-start; min-height:30px; margin-top:auto; font-size:13px; font-weight:500; color:var(--ink); text-decoration:underline; text-decoration-color:var(--hair-strong); text-underline-offset:3px; }
+.view-link .icon { width:11px; height:11px; transform:rotate(45deg); transition:transform .16s var(--spring); }
+.view-link:hover .icon { transform:rotate(45deg) translateY(-2px); }
+.view-table-wrap { overflow-x:auto; margin:0 -16px; padding:0 16px; }
+.view-table-wrap:focus-visible { outline:2px solid var(--action); outline-offset:-2px; }
+.view-table { width:100%; border-collapse:collapse; font-size:13.5px; }
+.view-table th,.view-table td { padding:8px 12px 8px 0; text-align:left; vertical-align:top; border-top:.5px solid var(--hair); }
+.view-table thead th { padding-top:0; border-top:0; font-size:12px; font-weight:500; color:var(--t2); white-space:nowrap; }
+.view-table tbody th { font-weight:500; }
+.view-table tbody tr { transition:background-color .12s; }
+.view-table tbody tr:hover { background:var(--fill); }
+.view-table .num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.view-table :is(th,td):last-child { padding-right:0; }
+.view-more { margin-top:6px; min-height:30px; font-size:13px; }
+.view-progress { display:flex; align-items:center; gap:10px; flex-basis:100%; }
+.view-bar { flex:1; max-width:160px; height:4px; border-radius:2px; background:var(--fill-2); overflow:hidden; }
+.view-bar i { display:block; height:100%; border-radius:2px; background:var(--green); transform-origin:left; animation:grow-x .7s var(--ease) backwards .2s; }
+.view-step { display:grid; grid-template-columns:22px minmax(0,1fr); gap:12px; padding:8px 0; border-top:.5px solid var(--hair); }
+.view-step:first-child { border-top:0; padding-top:0; }
+.view-step p { margin:2px 0 0; }
+.view-step-mark { display:grid; place-items:center; width:22px; height:22px; border-radius:50%; font-size:11px; font-weight:600; color:var(--t2); background:var(--fill-2); }
+.view-step-mark .icon { width:11px; height:11px; }
+.view-step.done .view-step-mark { color:#15803d; background:var(--green-soft); }
+.view-step.done>div>.strong { color:var(--t2); }
+.view-step.current .view-step-mark { position:relative; color:var(--on-ink); background:var(--ink); }
+.view-step.current .view-step-mark::after { content:''; position:absolute; inset:-1px; border-radius:50%; box-shadow:0 0 0 1.5px var(--accent); animation:halo 2.4s ease-out infinite; }
+.view-timeline li { display:grid; grid-template-columns:minmax(52px,auto) 10px minmax(0,1fr); gap:12px; }
+.view-timeline li>div { padding-bottom:14px; }
+.view-timeline li:last-child>div { padding-bottom:0; }
+.view-when { font-size:13px; font-weight:500; color:var(--t2); font-variant-numeric:tabular-nums; white-space:nowrap; padding-top:1px; }
+.view-rail { position:relative; }
+.view-rail::before { content:''; position:absolute; top:5px; left:.5px; width:9px; height:9px; border-radius:50%; background:var(--tile); box-shadow:0 0 0 1.5px var(--ink); }
+.view-timeline li:not(:last-child) .view-rail::after { content:''; position:absolute; top:17px; bottom:-4px; left:4.5px; width:1px; background:var(--hair-strong); }
+.view-timeline p { margin:2px 0 0; }
 
 /* Working: dots, a soft shimmer over the words, and the time it has taken so far. */
 .chat-msg.working .chat-body { display:flex; flex-direction:column; align-items:flex-start; gap:6px; padding-top:4px; }
