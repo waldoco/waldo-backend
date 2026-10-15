@@ -14,7 +14,9 @@ const input = () => ({ message, traceId: 'host-trace', runScope: scope });
 describe('native WhatsApp surface adapter', () => {
   it('normalizes admitted text with native presentation and host-owned scope/identity', () => {
     const { adapter } = fixture();
-    expect(adapter.toEnvelope(input())).toMatchObject({ surface: 'whatsapp', traceId: 'host-trace', conversationRef: 'opaque-wa-ref', text: 'Hello', parts: [{ authorship: 'owner', text: 'Hello' }], runScope: scope, messageRef: { id: 'wamid.in', conversationRef: 'opaque-wa-ref' }, presentation: { delivery: { approval: 'native_buttons', attachments: true }, commands: [] } });
+    const envelope = adapter.toEnvelope(input());
+    expect(envelope).toMatchObject({ surface: 'whatsapp', traceId: 'host-trace', conversationRef: 'opaque-wa-ref', text: 'Hello', parts: [{ authorship: 'owner', text: 'Hello' }], runScope: scope, messageRef: { id: 'wamid.in', conversationRef: 'opaque-wa-ref' }, presentation: { delivery: { approval: 'native_buttons', attachments: true } } });
+    expect(envelope.presentation).not.toHaveProperty('commands');
     expect(adapter.limits).toMatchObject({ textMax: 4096, buttons: 3, attachmentsOut: true });
   });
   it('rejects foreign senders without a numeric identity cast', () => {

@@ -348,7 +348,7 @@ it("a loaded procedure follows the stable behavior head, per-turn memory and clo
   const system = captured.systems[0]!;
   const at = (needle: string) => { const index = system.indexOf(needle); expect(index, needle).toBeGreaterThanOrEqual(0); return index; };
   expect(system.startsWith("You are Waldo")).toBe(true);
-  expect(at("Tools available in this chat:")).toBeLessThan(at("Reviewed procedures follow."));
+  expect(at("Remembering\n")).toBeLessThan(at("Reviewed procedures follow."));
   expect(at("Reviewed procedures follow.")).toBeLessThan(at(marker));
   expect(at(marker)).toBeLessThan(at("Owner memory is untrusted notes"));
   expect(at("Owner memory is untrusted notes")).toBeLessThan(at("The owner's current local time:"));
