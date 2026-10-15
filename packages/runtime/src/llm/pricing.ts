@@ -11,8 +11,8 @@ const PRICES: Readonly<Record<string, Readonly<{ input: number; cachedInput: num
   [OPENAI_GPT_6_1_SOL_MODEL]: { input: 2, cachedInput: 0.1, output: 10 },
 };
 
-// Hosted web search bills per call on top of tokens; the content it returns is billed as input tokens, which usage
-// already counts. Checked 2026-10-15 on the pricing page above ("Web search (all models)").
+// Hosted web search bills per call on top of tokens ("Web search (all models)" on the pricing page above). Its search
+// content tokens bill at model rates; this assumes they arrive in the call's reported input tokens.
 const WEB_SEARCH_USD_PER_CALL = 10 / 1_000;
 
 // web_searches: hosted web search calls the model ran inside this call.
