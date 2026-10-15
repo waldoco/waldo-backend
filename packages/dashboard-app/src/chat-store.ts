@@ -273,6 +273,8 @@ export const chatStore = (thread: string | null = null): ChatStore => {
   }
   return store;
 };
+// A deleted thread's chat stops polling and is let go; nothing can be sent there again.
+export const dropChatStore = (thread: string) => { stores.get(thread)?.dispose(); stores.delete(thread); };
 // Whether Waldo is working on anything sent from this console, in any chat.
 export const anyWorking = (): boolean => [...stores.values()].some(store => store.working());
 export const subscribeAnyChat = (listener: () => void) => { registry.add(listener); return () => { registry.delete(listener); }; };

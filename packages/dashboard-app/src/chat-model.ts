@@ -110,22 +110,29 @@ export const readReceipt = (value: unknown): ChatReceipt => {
   return { message_id: value.message_id, state: value.state, closed_reason: str(value.closed_reason) ? value.closed_reason : null, effects_unconfirmed: value.effects_unconfirmed === true };
 };
 
+const CHANGED = 'This chat changed in another window. Try again.';
+const BY_CODE: Record<string, string> = {
+  inbox_full: 'Waldo’s inbox is full for the moment. Try again shortly.', capacity: 'Waldo’s inbox is full for the moment. Try again shortly.',
+  conflict: 'This message clashed with an earlier one. Send it again.', client_message_id_reused: 'This message clashed with an earlier one. Send it again.',
+  thread_archived: 'This chat is archived. Unarchive it to keep talking here.',
+  thread_deleted: 'This chat was deleted.',
+  thread_not_found: 'This chat doesn’t exist.',
+  thread_revision_conflict: CHANGED, title_revision_conflict: CHANGED, operation_conflict: CHANGED,
+  thread_capacity: 'You’ve reached the most chats Waldo keeps. Delete one you no longer need first.',
+};
+
 const failure = async (response: Response): Promise<ChatRequestError> => {
   let code: string | null = null;
   try { const body: unknown = await response.json(); if (obj(body) && str(body.code)) code = body.code; else if (obj(body) && str(body.error) && body.error !== 'unavailable') code = body.error; } catch { /* no body */ }
   const after = Number(response.headers.get('retry-after'));
   const retryAfter = Number.isFinite(after) && after > 0 ? after : null;
-  const message = response.status === 429 ? 'Waldo is getting a lot of messages from you right now. Try again in a minute.'
-    : response.status === 413 ? 'That message is too long to send.'
-      : code === 'inbox_full' || code === 'capacity' ? 'Waldo’s inbox is full for the moment. Try again shortly.'
-        : code === 'conflict' || code === 'client_message_id_reused' ? 'This message clashed with an earlier one. Send it again.'
-          : code === 'thread_archived' ? 'This chat is archived. Unarchive it to keep talking here.'
-            : code === 'thread_deleted' || response.status === 410 ? 'This chat was deleted.'
-              : code === 'thread_not_found' ? 'This chat doesn’t exist.'
-                : code === 'thread_revision_conflict' || code === 'title_revision_conflict' || code === 'operation_conflict' ? 'This chat changed in another window. Try again.'
-                  : code === 'thread_capacity' ? 'You’ve reached the most chats Waldo keeps. Delete one you no longer need first.'
+  // The server's code says why; the status only says how, so a code is read first (thread_capacity also arrives as 429).
+  const message = (code !== null && Object.hasOwn(BY_CODE, code) ? BY_CODE[code] : null)
+    ?? (response.status === 429 ? 'Waldo is getting a lot of messages from you right now. Try again in a minute.'
+      : response.status === 413 ? 'That message is too long to send.'
+        : response.status === 410 ? 'This chat was deleted.'
           : response.status === 403 ? 'This browser can’t send to Waldo. Reload the console and try again.'
-            : 'Waldo couldn’t be reached. Try again.';
+            : 'Waldo couldn’t be reached. Try again.');
   return new ChatRequestError(response.status, message, code, retryAfter);
 };
 

@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { resolveRoute } from './App';
 import { ChatWorkspace } from './ChatThreads';
 import { archiveThread, ChatRequestError, createThread, deleteThread, readThread, renameThread, sendChatMessage, type ChatThread } from './chat-model';
-import { createThreadsStore, threadDeps, type ThreadsDeps } from './chat-store';
+import { chatStore, createThreadsStore, dropChatStore, threadDeps, type ThreadsDeps } from './chat-store';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const ID = 'thr_0b9e7f2a-1c3d-4e5f-8a9b-0c1d2e3f4a5b', OLD = 'thr_1c9e7f2a-1c3d-4e5f-8a9b-0c1d2e3f4a5b';
@@ -127,6 +127,21 @@ describe('thread transport', () => {
     expect(sends).toEqual([1, 1, 3]);
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => init?.method === 'POST' ? Response.json({ error: 'thread_archived' }, { status: 409 }) : Response.json({ thread: thread(), history })));
     await expect(threadDeps(ID, store).send('console-abcdefgh', 'Hi')).rejects.toMatchObject({ code: 'thread_archived', message: 'This chat is archived. Unarchive it to keep talking here.' });
+  });
+
+  it('says the chat limit when the owner object refuses a new chat for it, though it arrives as a 429', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ error: 'thread_capacity' }, { status: 429 })));
+    await expect(createThread()).rejects.toMatchObject({ status: 429, code: 'thread_capacity', message: 'You’ve reached the most chats Waldo keeps. Delete one you no longer need first.' });
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ error: 'rate_limited' }, { status: 429, headers: { 'retry-after': '30' } })));
+    await expect(createThread()).rejects.toMatchObject({ status: 429, retryAfter: 30, message: 'Waldo is getting a lot of messages from you right now. Try again in a minute.' });
+  });
+
+  it('lets go of a deleted thread\'s chat, so it stops polling and a later visit starts fresh', () => {
+    const before = chatStore(OLD);
+    expect(chatStore(OLD)).toBe(before);
+    dropChatStore(OLD);
+    expect(chatStore(OLD)).not.toBe(before);
+    dropChatStore(OLD);
   });
 
   it('reads a thread strictly, and keeps the list newest first as reads arrive', () => {

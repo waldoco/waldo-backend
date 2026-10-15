@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { ChatPanel } from './Chat';
 import type { ChatThread } from './chat-model';
-import { chatStore, threadsStore, type ThreadsStore } from './chat-store';
+import { chatStore, dropChatStore, threadsStore, type ThreadsStore } from './chat-store';
 import { Icon, WaldoMark } from './icons';
 import { relativeTime } from './time';
 
@@ -39,7 +39,7 @@ function ThreadHead({ thread, id, threads, onMenu }: { thread: ChatThread | null
     {thread && renaming === null && <div id="thread-actions" className={`thread-actions${more ? ' open' : ''}`}>
       <button type="button" className="quiet" disabled={busy} onClick={() => setRenaming(thread.title ?? '')}>Rename</button>
       <button type="button" className="quiet" disabled={busy} onClick={() => void act(threads.archive(thread, thread.state !== 'archived'))}>{thread.state === 'archived' ? 'Unarchive' : 'Archive'}</button>
-      <button type="button" className="quiet danger" disabled={busy} onClick={() => { if (window.confirm('Delete this chat? Its messages are erased. What Waldo learned here stays in memory, where you can correct it.')) void act(threads.remove(thread), () => go(null)); }}>Delete</button>
+      <button type="button" className="quiet danger" disabled={busy} onClick={() => { if (window.confirm('Delete this chat? Its messages are erased. What Waldo learned here stays in memory, where you can correct it.')) void act(threads.remove(thread), () => { go(null); dropChatStore(thread.thread_id); }); }}>Delete</button>
     </div>}
     {error && <p className="chat-notice" role="alert">{error}</p>}
   </div>;
