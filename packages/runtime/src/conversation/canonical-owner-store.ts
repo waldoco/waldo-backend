@@ -115,9 +115,16 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
     };
     const orphaned = (entry: ConversationEntry) => entry.parentId !== null && left.has(entry.parentId);
     const moved = new Map<string, Readonly<{ stored: ConversationEntry; loaded: ConversationEntry }>>();
+    // One store holds every chain of this owner (the app chat and each iMessage chat). An older build could hang a row
+    // under another chain's row; for a turn that row hangs on the last earlier row of its own chain instead, in memory only.
+    const byId = new Map(entries.map(entry => [entry.id, entry]));
+    const chainLeaves = new Map<string, string>();
     const loaded = relink ? entries.map(entry => {
-      if (!orphaned(entry)) return entry;
-      const linked = { ...entry, parentId: above(entry.parentId!) };
+      let parentId = orphaned(entry) ? above(entry.parentId!) : entry.parentId;
+      if (parentId !== null && byId.get(parentId)?.chatId !== entry.chatId) parentId = chainLeaves.get(entry.chatId) ?? null;
+      if (entry.role !== 'compaction') chainLeaves.set(entry.chatId, entry.id);
+      if (parentId === entry.parentId) return entry;
+      const linked = { ...entry, parentId };
       moved.set(entry.id, { stored: entry, loaded: linked });
       return linked;
     }) : entries;
