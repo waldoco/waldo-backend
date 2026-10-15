@@ -2,6 +2,7 @@ import {
   TOOL_PERMISSIONS, triggerTypeSchema, webSearchArgsSchema,
   type ToolHandler, type ToolName, type WebSearchArgs,
 } from '@waldo/contracts';
+import { searchLocation } from './search-location';
 import type { ToolDispatcherContext } from '../dispatcher';
 import { effectSignal } from '../../channels/run-effect-scope';
 
@@ -14,6 +15,7 @@ const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger)
 export const webSearchHandler = (
   apiKey: string | undefined,
   fetcher: typeof fetch = fetch,
+  ownerTimezone?: () => string,
 ): ToolHandler<WebSearchArgs, Readonly<{ query: string; hits: readonly SearchHit[] }>, ToolDispatcherContext> => ({
   name: 'web_search',
   description: 'Search the public web. Use for current facts, places, prices, documentation or news - anything you do not already know.',
@@ -22,7 +24,8 @@ export const webSearchHandler = (
   autonomy_gated: false,
   async handle({ query, limit }: WebSearchArgs, ctx) {
     if (!apiKey) return { ok: false, code: 'auth_failed', source_taint: 'external', error: 'Web search is not set up on this Waldo yet.' };
-    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${limit}`;
+    const country = ownerTimezone ? searchLocation(ownerTimezone()).country : undefined;
+    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${limit}${country ? `&country=${country}` : ''}`;
     let response: Response;
     try {
       await ctx?.assertTaskSourceCurrent?.();

@@ -133,6 +133,20 @@ describe('otlpTurnExporter', () => {
     expect(attrs(known!)['langfuse.observation.metadata.price_source']).toBeDefined();
     expect(attrs(unknown!)['langfuse.observation.cost_details']).toBeUndefined();
   });
+  it('counts hosted web search calls and their cost in the turn estimate, numbers only', async () => {
+    const { send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send);
+    const usage = { model: OPENAI_GPT_6_LUNA_MODEL, input: 100, cached: 10, output: 20 };
+    await log({ trace: 'tg-search', hop: 'llm_reply', ms: 1, ok: true, usage: { ...usage, web_searches: 2 } });
+    await log({ trace: 'tg-search', hop: 'llm_reply', ms: 1, ok: true, usage });
+    await log({ trace: 'tg-search', hop: 'turn', ms: 2, ok: true });
+    const [root, searched] = spans(0);
+    const tokens = modelCost(usage)!.total;
+    expect(attrs(root!)['langfuse.trace.metadata.hosted_web_search_calls']).toBe('2');
+    expect(Number(attrs(root!)['langfuse.trace.metadata.hosted_web_search_usd'])).toBeCloseTo(0.02, 8);
+    expect(Number(attrs(root!)['langfuse.trace.metadata.estimated_cost_usd'])).toBeCloseTo(2 * tokens + 0.02, 8);
+    expect(JSON.parse(String(attrs(searched!)['langfuse.observation.cost_details'])).web_search).toBeCloseTo(0.02, 12);
+  });
   it('enforces the existing production privacy policy at serialization even if captureText is mis-set', async () => {
     const { calls, send } = capture();
     const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, { ...context, environment: 'production', captureText: true }, send);
@@ -251,7 +265,7 @@ describe('otlpTurnExporter', () => {
       'langfuse.trace.name': 'telegram.turn', 'langfuse.user.id': 'telegram:1', 'langfuse.session.id': 'telegram-dm:1',
       'langfuse.environment': 'staging', 'langfuse.release': 'abc1234',
       'langfuse.trace.tags': ['channel:telegram', 'feature:reactions', 'feature:reply'],
-      'langfuse.trace.metadata.schema_version': '7', 'langfuse.trace.metadata.trace_key': 'tg-4', 'langfuse.trace.metadata.outcome': 'answered',
+      'langfuse.trace.metadata.schema_version': '8', 'langfuse.trace.metadata.trace_key': 'tg-4', 'langfuse.trace.metadata.outcome': 'answered',
     });
     expect(attrs(receipt!)).toMatchObject({ 'langfuse.observation.metadata.hop': 'receipt', 'langfuse.observation.metadata.feature': 'reactions', 'langfuse.observation.type': 'tool' });
     expect(hopFeature('brand_new_hop')).toBe('other');

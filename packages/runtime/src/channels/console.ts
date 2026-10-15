@@ -236,7 +236,7 @@ const connectors = (view: ConsoleView) => {
       google.accounts.length ? '' : status(false, 'Not connected'),
       google.connectAvailable ? form(csrf, 'google.connect', google.accounts.length ? 'Add account' : 'Connect Google', { value: 'calendar' }, { tone: google.accounts.length ? 'quiet' : 'primary' }) : '<span class="note">OAuth app keys are not set on this server yet</span>'),
     row('Telegram', 'Your owner DM. Chat, cards and reminders arrive here, and it is how you sign in to this console.', status(telegram.linked, telegram.linked ? 'Connected' : 'Unlinked'), telegramAction),
-    row('iMessage', 'Text Waldo from your own iPhone. Only you reach your Waldo: link your number with a one-time code.', '', `<a href="/console/imessage">Set up</a>`),
+    row('iMessage', 'Text Waldo from your own iPhone. Only you reach your Waldo: link your number with a one-time code.', view.imessage ? status(view.imessage.linked, view.imessage.linked ? 'Connected' : 'Not linked') : '', `<a class="btn quiet" href="/console/imessage">${view.imessage?.linked ? 'Manage' : 'Set up'}</a>`),
     row('WhatsApp', 'Chat with your Waldo on WhatsApp after linking your number with a one-time code.', '', form(csrf, 'whatsapp.link', 'Get a WhatsApp link code', {}, {})),
     row('Console session', `Signed in until ${esc(view.sessionUntil)} on ${view.sessionCount} ${view.sessionCount === 1 ? 'browser' : 'browsers'}. Send /console on Telegram for a fresh link.`, status(true, 'Active'),
       form(csrf, 'session.signout', 'Sign out') + form(csrf, 'session.signout.all', 'Sign out everywhere', {}, { tone: 'danger', confirm: 'Sign out of every browser and the app?' })),
