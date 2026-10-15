@@ -69,10 +69,11 @@ const parseTelegram=(text:string, inBold=false, inLink=false):string|null=>{
  return out;
 };
 // The plain text sent when Telegram rejects the HTML: emphasis markers dropped, links as "text (url)", code and
-// fences untouched. Bullets and stars that are not paired around a word stay as written.
-const plainTelegram=(text:string):string=>text.split(/(```[\s\S]*?```|`[^`\n]*`)/).map((part,index)=>index%2?part:part
+// fences untouched. Bullets and stars that are not paired around a word stay as written. Only the rejection retry
+// uses it; the frozen fallback_text stays the Markdown source that split parts are rendered from.
+export const plainTelegram=(text:string):string=>text.split(/(```[\s\S]*?```|`[^`\n]*`)/).map((part,index)=>index%2?part:part
  .replace(/\[([^\[\]\n]+)\]\((https?:\/\/[^\s<>"'`()]+)\)/g,'$1 ($2)')
  .replace(/\*\*(?=\S)([^*\n]*?\S)\*\*/g,'$1')
  .replace(/__(?=\S)([^_\n]*?\S)__/g,'$1')
  .replace(/(^|[^\w*])\*(?=\S)([^*\n]*?\S)\*(?![\w*])/gm,'$1$2')).join('');
-export const telegramRichReply=(text:string):Readonly<{text:string;parse_mode:'HTML';fallback_text:string}>=>({text:parseTelegram(text)??escapeRich(text),parse_mode:'HTML',fallback_text:plainTelegram(text)});
+export const telegramRichReply=(text:string):Readonly<{text:string;parse_mode:'HTML';fallback_text:string}>=>({text:parseTelegram(text)??escapeRich(text),parse_mode:'HTML',fallback_text:text});
