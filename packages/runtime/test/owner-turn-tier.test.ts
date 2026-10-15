@@ -89,14 +89,18 @@ it('keeps a delegated subagent of a Luna turn on Sol, and moves the turn itself 
 
 it('moves a Luna turn to Sol after it browses, replaying every call without Luna reasoning or item ids, and keeps Sol to the end', async () => {
   const { owner, routed, requests, logs } = responder({ routes: [SIMPLE], tools: [browsePage as never], script: [
-    toolCall('browse_page', { url: 'https://example.com/venue' }, [reasoning('rs_luna')], 'browse-1'),
+    toolCall('browse_page', { url: 'https://example.com/venue' }, [reasoning('rs_luna'), { type: 'message', id: 'msg_luna', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'Checking the venue page.', annotations: [] }] }], 'browse-1'),
     toolCall('get_context', {}, [reasoning('rs_sol')], 'ctx-1'),
   ] });
   await owner.respond(ownerTyped({ traceId: 'tier-escalate-1', conversationRef: 'app-1', surface: 'app', text: 'is the venue open late?', memoryWrites: false }), time);
   expect(routed()).toEqual([LUNA_LOW, SOL_MEDIUM, SOL_MEDIUM]);
-  expect(itemTypes(requests[1]!)).toEqual([['browse-1', ['function_call']]]);
-  expect(itemTypes(requests[2]!)).toEqual([['browse-1', ['function_call']], ['ctx-1', ['reasoning:rs_sol', 'function_call']]]);
-  expect(requests[1]!.tool_turns![0]!.prior_items).toEqual([{ type: 'function_call', call_id: 'browse-1', name: 'browse_page', arguments: JSON.stringify({ url: 'https://example.com/venue' }) }]);
+  expect(itemTypes(requests[1]!)).toEqual([['browse-1', ['message', 'function_call']]]);
+  expect(itemTypes(requests[2]!)).toEqual([['browse-1', ['message', 'function_call']], ['ctx-1', ['reasoning:rs_sol', 'function_call']]]);
+  expect(requests[1]!.tool_turns![0]!.prior_items).toEqual([
+    { type: 'message', role: 'assistant', content: 'Checking the venue page.' },
+    { type: 'function_call', call_id: 'browse-1', name: 'browse_page', arguments: JSON.stringify({ url: 'https://example.com/venue' }) },
+  ]);
+  expect(requests[2]!.tool_turns![1]!.prior_items!.at(-1)).toMatchObject({ id: 'fc-ctx-1' });
   expect(requests[2]!.tool_turns!.map(turn => [turn.call.name, turn.output.length > 0])).toEqual([['browse_page', true], ['get_context', true]]);
   const hops = logs.filter(entry => entry.hop === 'turn_tier');
   expect(hops.map(entry => [entry.code, entry.detail])).toEqual([

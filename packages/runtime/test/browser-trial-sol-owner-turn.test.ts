@@ -6,8 +6,8 @@ import { registerCommonBrowserSdk } from '../src/channels/common-staging-registr
 import type { CloudflareBrowserSdkLoader } from '../src/channels/public-fixture-browser';
 
 const SUBJECT = 81201;
-const proof = vi.hoisted(() => ({ models: [] as string[], delivered: [] as string[] }));
-vi.mock('openai', () => ({ default: class { responses = { create: async (input: any) => {
+const proof = vi.hoisted(() => ({ models: [] as string[], delivered: [] as string[], decisions: [] as string[] }));
+vi.mock('openai', () => ({ default: class { post = async (path: string) => { proof.decisions.push(path); return { answers: [] }; }; responses = { create: async (input: any) => {
   proof.models.push(input.model);
   const format = input.text?.format?.name;
   const read = !format && !(Array.isArray(input.input) && input.input.some((item: any) => item.type === 'function_call_output'));
@@ -71,6 +71,10 @@ it('an owner turn on Sol that funds a browser trial run gets a coded refusal in 
       }, { timeout: 8000, interval: 50 });
       const replies = logs.mock.calls.flatMap(([raw]) => { try { const row = JSON.parse(String(raw)); return row.trace === `tg-${id}` && row.hop === 'llm_reply' ? [row] : []; } catch { return []; } });
       expect(replies.map(row => [row.ok, row.code])).toEqual([[true, undefined], [false, 'invalid_args:browser trial model price unavailable']]);
+      // The deployed owner object asks the turn-tier router once for the owner's turn; an empty answer keeps the chat model.
+      expect(proof.decisions).toEqual(['/decisions']);
+      const tiers = logs.mock.calls.flatMap(([raw]) => { try { const row = JSON.parse(String(raw)); return row.trace === `tg-${id}` && row.hop === 'turn_tier' ? [row.code] : []; } catch { return []; } });
+      expect(tiers).toEqual(['invalid_response']);
       // Only the unfunded first call reached the provider, and the trial ledger metered the browser and no model call.
       expect(proof.models.filter(model => model === OPENAI_GPT_6_1_SOL_MODEL)).toHaveLength(1);
       const ledgers = [...state.storage.kv.list<any>({ prefix: 'common-spend:' })].map(([, row]) => row);

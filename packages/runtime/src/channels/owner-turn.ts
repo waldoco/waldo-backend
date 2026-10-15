@@ -77,6 +77,18 @@ const newSessionCanaryTokens = (): string[] =>
 const OUTPUT_TOKENS: Readonly<Partial<Record<ModelName, number>>> = { [OPENAI_GPT_6_1_SOL_MODEL]: 25_000 };
 const EXTERNAL_DATA_MAX_BYTES = 4096;
 
+// One item of a smaller-model round, as the chat model may replay it: a call without its item id, the round's text as a
+// plain assistant message, and nothing else.
+const unsealedItem = (item: Readonly<Record<string, unknown>>): Record<string, unknown>[] => {
+  if (item.type === 'function_call') { const { id: _sealed, ...call } = item; return [call]; }
+  if (item.type !== 'message' || !Array.isArray(item.content)) return [];
+  const text = item.content.flatMap((part: unknown) => {
+    const output = part as { type?: unknown; text?: unknown };
+    return output.type === 'output_text' && typeof output.text === 'string' ? [output.text] : [];
+  }).join('\n');
+  return text ? [{ type: 'message', role: 'assistant', content: text }] : [];
+};
+
 // Staging responder: the fixture invocation stands in for real per-user admission,
 // which the production tenancy work replaces.
 export type OwnerSkillHost = Readonly<{ browserAttachments?(scope?: RunEffectScope): readonly LLMAttachment[]; prepare(turn: OwnerTurnEnvelope, contextOwnerId: string, scope: RunEffectScope): Promise<OwnerSkillCapability | undefined> }>;
@@ -390,8 +402,9 @@ export const createOwnerResponder = (
         const trace = traceId;
       // Started beside the turn's own preparation and awaited at its first reply call; a machine turn keeps the auxiliary model.
       const replyModel = ownerTurnActive ? routeOwnerTurn(trace, request.messages).catch(() => model) : Promise.resolve(auxiliaryModel);
-      // How many of this turn's tool turns the smaller model produced before the turn moved to the chat model.
-      let escalatedAfter: number | undefined;
+      // The calls the smaller model made before the turn moved to the chat model, by call id: a long turn's replay window
+      // slides, so positions do not identify them.
+      let escalatedFrom: ReadonlySet<string> | undefined;
       // Capture-mode probe turns run on the stripped handler set; delegation wraps that
       // same set so probe confinement applies to children too (children are read-only by
       // construction, and the strip list is not widened here).
@@ -616,19 +629,19 @@ export const createOwnerResponder = (
           const routed = await replyModel;
           // A routed turn that browses, delegates or searches the web has shown it is multi-step work: the rest of it runs on
           // the chat model. Every call and its output replays; the smaller model's reasoning and hosted-search items do not,
-          // because they are sealed for the model that wrote them, and its call and message items replay without the item
-          // ids that point at that reasoning.
-          if (ownerTurnActive && routed !== model && escalatedAfter === undefined) {
+          // because they are sealed for the model that wrote them. Its calls replay without their item ids, and its text as
+          // a plain assistant message, so nothing points at the reasoning left out.
+          if (ownerTurnActive && routed !== model && escalatedFrom === undefined) {
             const trigger = turns.find(turn => COMPLEX_WORK_TOOLS.includes(turn.call.name as ToolName))?.call.name
               ?? (turns.some(turn => turn.prior_items?.some(item => item.type === 'web_search_call')) ? 'web_search' : undefined);
             if (trigger !== undefined) {
-              escalatedAfter = turns.length;
+              escalatedFrom = new Set(turns.map(turn => turn.call.call_id));
               log({ trace, hop: 'turn_tier', ms: 0, ok: true, code: 'escalated', detail: `from=${routed} to=${model} tool=${trigger}` });
             }
           }
-          const stepModel = escalatedAfter === undefined ? routed : model;
-          const replayed = escalatedAfter === undefined ? turns : turns.map((turn, index) => index < escalatedAfter! && turn.prior_items
-            ? { ...turn, prior_items: turn.prior_items.filter(item => item.type === 'function_call' || item.type === 'message').map(({ id: _sealed, ...item }) => item) } : turn);
+          const stepModel = escalatedFrom === undefined ? routed : model;
+          const replayed = escalatedFrom === undefined ? turns : turns.map(turn => escalatedFrom!.has(turn.call.call_id) && turn.prior_items
+            ? { ...turn, prior_items: turn.prior_items.flatMap(unsealedItem) } : turn);
           return complete(trace, 'reply',
           unboundSystem(),
           entries,
