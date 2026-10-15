@@ -31,6 +31,8 @@ import {
 } from '../src/tools/dispatcher';
 import type { HookRegistry } from '../src/hooks/registry';
 import { sanitise } from '../src/scribe/sanitiser';
+import { webSearchHandler } from '../src/tools/live/web-search';
+import type { RunEffectScope } from '../src/channels/run-effect-scope';
 
 const canaryTokens = ['1111111111111111', '2222222222222222', '3333333333333333'];
 
@@ -378,6 +380,27 @@ describe('ToolDispatcher', () => {
 
     expect(result).toMatchObject({ ok: true, source_taint: null });
     expect(received?.content).toBe('email alice@example.com');
+  });
+
+  it("web_search after an earlier tool in the same turn still composes the run's own signal", async () => {
+    const run = new AbortController();
+    const runScope: RunEffectScope = { runId: 'run', attempt: 'one', deadline: Date.now() + 60_000, signal: run.signal, admit() {}, commit: work => work() };
+    const ctx = { ...dispatcherContext('user_message'), runScope };
+    const first: ToolHandler<GetCrsArgs, { summary: string }, ToolDispatcherContext> = {
+      name: 'get_crs', description: 'Return a summary.', schema: getCrsArgsSchema,
+      trigger_allowlist: triggerAllowlistFor('get_crs'), autonomy_gated: false,
+      async handle() { return { ok: true, data: { summary: 'steady' }, source_taint: null }; },
+    };
+    let seen: AbortSignal | undefined;
+    const search = webSearchHandler('key', (async (_url: string, init?: RequestInit) => {
+      seen = init?.signal ?? undefined;
+      return new Response(JSON.stringify({ web: { results: [] } }), { status: 200 });
+    }) as typeof fetch);
+    await dispatchTool({ id: 'call-first', name: 'get_crs', args: {} }, ctx, { handlers: [first, search] });
+    const result = await dispatchTool({ id: 'call-search', name: 'web_search', args: { query: 'waldo', limit: 3 } }, ctx, { handlers: [first, search] });
+    expect(result).toMatchObject({ ok: true });
+    run.abort();
+    expect(seen?.aborted).toBe(true);
   });
 
   it('a non-external tool failure carrying source_taint null keeps its own error instead of invalid_handler_result', async () => {
