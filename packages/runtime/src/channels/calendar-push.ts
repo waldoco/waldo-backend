@@ -23,7 +23,12 @@ export const calendarPushBook = (kv: Kv) => {
     connection: (): string | null | undefined => { const stored = read(); return stored && !('failedAt' in stored) ? stored.connection : undefined; },
     record: (watch: CalendarWatch, connection: string | null) => kv.put(KEY, { ...watch, connection, highest: 0 }),
     fail: (now: number, reason: CalendarWatchMiss = 'failed') => kv.put(KEY, { failedAt: now, reason }),
-    miss: (): Readonly<{ at: number; reason: CalendarWatchMiss }> | null => { const stored = read(); return stored && 'failedAt' in stored ? { at: stored.failedAt, reason: stored.reason ?? 'failed' } : null; },
+    // Read for the owner's turn, so a stored value of any shape is no miss rather than a throw.
+    miss: (): Readonly<{ at: number; reason: CalendarWatchMiss }> | null => {
+      const stored: unknown = kv.get(KEY);
+      if (typeof stored !== 'object' || stored === null || !('failedAt' in stored) || typeof stored.failedAt !== 'number') return null;
+      return { at: stored.failedAt, reason: 'reason' in stored && stored.reason === 'skipped' ? 'skipped' : 'failed' };
+    },
     // A new grant may fix what failed, so the next sweep retries at once. A live channel is left alone: starting
     // another while it lives would deliver every change twice.
     clearFailure: () => { const stored = read(); if (stored && 'failedAt' in stored) kv.delete(KEY); },

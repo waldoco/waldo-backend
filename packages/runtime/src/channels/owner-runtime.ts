@@ -159,6 +159,8 @@ export type SurfaceAdapter = SurfaceDescriptor & Readonly<{
   traceOccurrences(): readonly InboxRecord[];
   download: TelegramFileDownloader;
   consoleLink(parts: Pick<SurfaceTurnParts, 'owner' | 'routedCall'>): ConsoleLinkRoute;
+  // Progress notes go only where a send can leave while the turn runs; a surface without this field is not offered the tool.
+  progressNote?(parts: Pick<SurfaceTurnParts, 'owner' | 'routedCall'>): import('../tools/live/progress-note').ProgressNoteDeliver;
   // Set where the chat has no connect button: what the model is told instead, and no link is minted or sent.
   connectGuidance?: string;
   // Binds a turn to the occurrence this surface admitted. The returned check throws ClosedRunError once the turn, the

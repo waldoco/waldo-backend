@@ -69,6 +69,10 @@ export const surfaceAdapter = (host: SurfaceHost): SurfaceAdapter => {
     traceOccurrences: () => identity.get<InboxRecord[]>(OWNER_INBOX_KEY) ?? [],
     download: createTelegramFileDownloader(env.TELEGRAM_BOT_TOKEN ?? ''),
     consoleLink: ({ owner, routedCall }) => telegramConsoleRoute((body) => routedCall('sendMessage', { chat_id: owner, ...body }), identity),
+    // A Telegram turn runs inside alarm(), so its note goes straight out on the reply caller, not through the final outbox
+    // that alarm drains. iMessage replies leave through an outbox drained after the turn and the app has no part type for a
+    // note, so neither declares this; WhatsApp stays off until a mid-turn send there is tested.
+    progressNote: ({ owner, routedCall }) => async (text, turn) => { turn.runScope?.admit(); return (await routedCall('sendMessage', { chat_id: owner, text })) !== undefined; },
     ownerIdentity,
     skillHost: ({ owner, probeCapture }, curated) => ({ browserAttachments: scope => host.browserAttachments(scope), prepare: async (turn, contextOwnerId, scope) => {
       if (probeCapture.current !== null) return undefined;

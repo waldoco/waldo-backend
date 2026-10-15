@@ -97,7 +97,7 @@ it('a scheduled prompt such as the Brief tells the model the shared health conte
 });
 
 const owner = '10000000-0000-0000-0000-000000000001';
-const scope = (): RunEffectScope => ({ runId: 'run-one', attempt: 'attempt-one', deadline: Date.now() + 30_000, signal: new AbortController().signal, admit: vi.fn(), commit: work => work() });
+const scope = (): RunEffectScope => ({ runId: 'run-one', attempt: 'attempt-one', deadline: Date.now() + 15 * 60_000, signal: new AbortController().signal, admit: vi.fn(), commit: work => work() });
 const appContext = async (health: boolean, text: string) => {
   const admission = await ownerMessageAdmission({
     lookup: async () => ({ owner_id: owner, do_name: 'owner-demo', state_version: 0, admission_revision: '1', presence_id: '20000000-0000-0000-0000-000000000001', provider: 'telegram', subject: '1001' }),

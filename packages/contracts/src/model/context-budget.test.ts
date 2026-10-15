@@ -8,6 +8,7 @@ import {
 import {
   ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL,
   ANTHROPIC_CLAUDE_SONNET_4_6_MODEL,
+  OPENAI_GPT_6_1_SOL_MODEL,
   OPENAI_GPT_6_LUNA_MODEL,
   WORKERS_AI_GEMMA_4_26B_MODEL,
   modelNameSchema,
@@ -43,6 +44,9 @@ describe('deriveContextBudgetChars', () => {
       (131_072 - 8_192 - 8_192) * BUDGET_CHARS_PER_TOKEN,
     );
     expect(deriveContextBudgetChars(OPENAI_GPT_6_LUNA_MODEL, 10_000_000)).toBe(
+      (1_050_000 - 128_000 - 8_192) * BUDGET_CHARS_PER_TOKEN,
+    );
+    expect(deriveContextBudgetChars(OPENAI_GPT_6_1_SOL_MODEL, 10_000_000)).toBe(
       (1_050_000 - 128_000 - 8_192) * BUDGET_CHARS_PER_TOKEN,
     );
   });

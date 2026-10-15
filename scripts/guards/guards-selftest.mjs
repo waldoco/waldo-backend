@@ -1146,6 +1146,18 @@ if (surfaceCompareOutsideBaseline.status === 0 || !surfaceCompareOutsideBaseline
   failures += 1;
 }
 
+const surfaceCheckOutsideAdapter = runSurfaceNeutralGuardWith({}, 'packages/runtime/src/channels/core.ts', "if (turnOnSurface(turn, 'app')) {}\n");
+if (surfaceCheckOutsideAdapter.status === 0 || !surfaceCheckOutsideAdapter.stderr.includes('baseline 0')) {
+  process.stderr.write('guards-selftest: guard-surface-neutral-core MISSED a turnOnSurface call outside the surface adapters\n');
+  failures += 1;
+}
+
+const surfaceCheckInAdapter = runSurfaceNeutralGuardWith({}, 'packages/runtime/src/channels/surfaces/app.ts', "if (!turnOnSurface(turn, 'app')) throw new Error();\n");
+if (!reportsClean(surfaceCheckInAdapter)) {
+  process.stderr.write(`guards-selftest: guard-surface-neutral-core FLAGGED a surface adapter checking its own turns:\n${surfaceCheckInAdapter.stderr}`);
+  failures += 1;
+}
+
 const surfaceCompareInTest = runSurfaceNeutralGuardWith({}, 'packages/runtime/src/channels/core.test.ts', SURFACE_CORE);
 if (!reportsClean(surfaceCompareInTest)) {
   process.stderr.write(`guards-selftest: guard-surface-neutral-core FALSE POSITIVE on a test file:\n${surfaceCompareInTest.stderr}`);

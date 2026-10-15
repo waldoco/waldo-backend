@@ -186,7 +186,8 @@ export class Scheduler {
       || readable(this.sql.exec<ScheduleSqlRow>(`SELECT * FROM schedule WHERE ${PAUSE_ENDED}`, now).toArray()).entries.length > 0;
   }
 
-  async dispatchDue(executors: ScheduleExecutors): Promise<readonly ScheduleEntry[]> {
+  // canStart: asked before each entry; false leaves it and the rest armed and due for the next wake.
+  async dispatchDue(executors: ScheduleExecutors, canStart?: () => boolean): Promise<readonly ScheduleEntry[]> {
     const now = this.deps.now();
     this.reapQuarantine(now);
     const { entries, unreadable } = this.dueEntries(now);
@@ -196,6 +197,7 @@ export class Scheduler {
 
     try {
       for (const entry of due) {
+        if (canStart?.() === false) break;
         let fresh = this.read(entry.id);
         if (fresh === null || fresh.status !== 'armed' || fresh.due_at > now + DUE_LOOKAHEAD_MS) {
           continue;

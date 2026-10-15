@@ -1944,6 +1944,33 @@ describe('sanitiseRequest structural degradation', () => {
     expect(turns![0]!.output).toContain('do not report it as empty');
   });
 
+  it('withholds an external tool result that carries a wearable reading, and the turn goes on', async () => {
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest: () => ({
+          messages: [{ role: 'user' as const, content: 'current question' }],
+          tool_turns: [
+            { call: { call_id: 'c1', name: 'web_search', arguments: '{"q":"hotel"}' }, output: JSON.stringify({ ok: true, data: { metric: 'hrv', value: 42, unit: 'ms' } }) },
+            { call: { call_id: 'c2', name: 'web_search', arguments: '{"q":"hotel near the beach"}' }, output: JSON.stringify({ ok: true, data: { text: 'Deluxe Twin, free cancellation.' } }) },
+          ],
+          max_tokens: 512,
+          temperature: 0.3,
+        }),
+      },
+      runtimeCtx(),
+    );
+    expect(result.ok).toBe(true);
+    const turns = gateway.requests[0]!.request.tool_turns!;
+    expect(turns).toHaveLength(2);
+    expect(turns[0]!.call).toEqual({ call_id: 'c1', name: 'web_search', arguments: '{}' });
+    expect(turns[0]!.output).toContain('withheld by the health-data filter');
+    expect(JSON.stringify(turns[0])).not.toMatch(/hrv|42/i);
+    expect(turns[1]!.output).toContain('Deluxe Twin');
+  });
+
   it('keeps every tool turn when populated Google reads overflow the batch policy together', async () => {
     // Regression for the live break: two populated reads overflowed the 32,768-char
     // internal_context batch policy as a SET, and the all-or-nothing degrade dropped both -

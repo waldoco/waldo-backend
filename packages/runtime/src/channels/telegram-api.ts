@@ -1,5 +1,6 @@
 import type { TelegramOwnerApi } from './telegram-listener';
 import { redactSecretUrls } from './egress-guard';
+import { plainTelegram } from './rich-format';
 
 // Every Bot API call is bounded: a hung response (the API applied the change but the
 // connection never completed) must reject, or a single wedged egress stalls the whole turn.
@@ -55,8 +56,8 @@ export const splitTelegramText = (text: string, limit: number = TELEGRAM_MESSAGE
   return parts;
 };
 
-// Only generated finals carry a frozen fallback. Definite entity rejection means
-// the rich send was not applied; transport uncertainty never permits a second send.
+// Only generated finals carry a frozen fallback, the Markdown source. Definite entity rejection means
+// the rich send was not applied, so its plain rendering goes instead; transport uncertainty never permits a second send.
 export const sendTelegramFinal = async (send: TelegramOwnerApi['sendMessage'], payload: TelegramFinalPayload,
   allowed: () => Promise<boolean> = async () => true): Promise<unknown> => {
   const { fallback_text, ...request } = payload;
@@ -65,7 +66,7 @@ export const sendTelegramFinal = async (send: TelegramOwnerApi['sendMessage'], p
     if (!(error instanceof TelegramRejection) || error.errorCode !== 400 || payload.parse_mode !== 'HTML'
       || fallback_text === undefined || !error.message.includes("can't parse entities")) throw error;
     if (!(await allowed())) return undefined;
-    return send({ chat_id: payload.chat_id, text: redactSecretUrls(fallback_text).text });
+    return send({ chat_id: payload.chat_id, text: plainTelegram(redactSecretUrls(fallback_text).text) });
   }
 };
 
