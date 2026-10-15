@@ -3,6 +3,7 @@ import { APP_INBOX_DUE_KEY, persistAppInboxWake } from '../scheduler/alarm-slot'
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { sha256Hex, stableJson } from '../context-composer/canonical';
 import { redactSecretUrls } from './egress-guard';
+export const APP_TURN_DEADLINE_MS = 15 * 60_000;
 
 const PREFIX = 'app:inbox-record:';
 // A finished row keeps its receipt, and so the idempotency of its client_message_id, for this long. After that a late
@@ -109,11 +110,11 @@ export class AppInbox {
       return row;
     });
   }
-  claim(id:string,sessionCurrent:boolean):AppInboxRecord|null {
+  claim(id:string,sessionCurrent:boolean,deadline=this.now()+APP_TURN_DEADLINE_MS):AppInboxRecord|null {
     return this.storage.transactionSync(()=>{
       const row=this.storage.kv.get<AppInboxRecord>(PREFIX+id);if(!row||row.state!=='admitted')return null;
       row.state=sessionCurrent?'running':'revoked';
-      if(sessionCurrent){row.attempt=crypto.randomUUID();row.deadline=this.now()+15*60_000;}
+      if(sessionCurrent){row.attempt=crypto.randomUUID();row.deadline=deadline;}
       else{row.closedAt=this.now();row.closedReason='session_revoked';row.effectsUnconfirmed=false;clear(row);}
       this.storage.kv.put(PREFIX+id,row);this.storage.kv.put(APP_INBOX_DUE_KEY,due(this.records(),this.now()));
       return sessionCurrent?structuredClone(row):null;

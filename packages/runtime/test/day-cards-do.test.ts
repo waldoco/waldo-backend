@@ -1,5 +1,5 @@
 import { sanitise } from '../src/scribe/sanitiser';
-import { deriveContextBudgetChars, SANITISE_DESTINATION_POLICIES, WALDO_CHAT_MODEL } from '@waldo/contracts';
+import { deriveContextBudgetChars, SANITISE_DESTINATION_POLICIES, WALDO_AUXILIARY_MODEL } from '@waldo/contracts';
 import { claimStore } from '../src/memory/claims';
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
@@ -30,7 +30,7 @@ describe('scheduled day cards', () => {
     const ledger = lines('ledger', 4000);
     const updates = lines('update', 4000);
     const prompt = await composeDayCard(cardFor('card:close')!, now, tz, { google, connectable: false, ledger, today: lines('today', 100), updates });
-    const limit = deriveContextBudgetChars(WALDO_CHAT_MODEL, SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
+    const limit = deriveContextBudgetChars(WALDO_AUXILIARY_MODEL, SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
     expect(JSON.stringify([{ role: 'user', content: prompt }]).length).toBeLessThanOrEqual(limit / 2);
     expect(prompt).toContain('Investor call');
     expect(prompt).toContain('The Close');
@@ -125,7 +125,7 @@ describe('scheduled day cards', () => {
 
 
 describe('day-plan memory budget', () => {
-  const limit = deriveContextBudgetChars(WALDO_CHAT_MODEL, SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
+  const limit = deriveContextBudgetChars(WALDO_AUXILIARY_MODEL, SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
   const wireSize = (content: string) => JSON.stringify([{ role: 'user', content }]).length;
   const input = dayPlanInput({ localNow: '2026-10-04T08:00', calendar: 'No events.', cards: DAY_CARDS, proactivity: 'Quiet hours 23:00-07:00' });
   const withMemory = (name: string, work: (store: ReturnType<typeof claimStore>) => void) =>

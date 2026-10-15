@@ -146,6 +146,7 @@ export function SetupControls({ record }: { record: SetupRecord }) {
   const items = [
     { title: 'Link Telegram', recorded: record.data.telegram_linked, href: '#/connections', description: 'Link your owner DM so chat, cards and reminders reach the right account.' },
     { title: 'Connect Google', recorded: record.data.google_access_granted, href: '#/connections', description: 'Saved grants are access permission. Check an actual Calendar or Gmail request in chat to verify a live read.' },
+    { title: 'Connect iMessage', recorded: record.data.imessage_linked === true, href: '/console/imessage', description: 'Text Waldo from your own iPhone. Get a one-time code, then tap Open Messages and send it; only your number reaches your Waldo.' },
     { title: 'Set quiet hours', recorded: record.data.quiet_hours_set, href: '#/day', description: 'Choose when Waldo holds cards and updates. Reminders you set still fire.' },
   ];
   return <section className="panel"><h2>Setup</h2>{items.map(item => <article className="control-row" key={item.title}><div><h3>{item.title}</h3><p>{item.description}</p><span className="access-label">{item.recorded ? 'Setting recorded' : 'To do'}</span></div><a href={item.href}>Manage {item.title.toLowerCase()}</a></article>)}</section>;

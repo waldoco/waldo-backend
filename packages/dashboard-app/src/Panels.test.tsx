@@ -99,6 +99,12 @@ describe('profile, setup, usage and Telegram references', () => {
     expect(html).toContain('href="#/connections"'); expect(html).toContain('href="#/day"'); expect(html).toContain('To do');
     expect(html).toContain('verify a live read'); expect(html).not.toContain('/console/connections');
   });
+  it('offers Connect iMessage in setup, marked done once the owner linked their number', () => {
+    const todo = renderToStaticMarkup(<SetupControls record={{ ...base, view: 'setup', data: { telegram_linked: true, google_access_granted: true, quiet_hours_set: true } }}/>);
+    expect(todo).toContain('Connect iMessage'); expect(todo).toContain('href="/console/imessage"'); expect(todo).toContain('To do');
+    const linked = renderToStaticMarkup(<SetupControls record={{ ...base, view: 'setup', data: { telegram_linked: true, google_access_granted: true, quiet_hours_set: true, imessage_linked: true } }}/>);
+    expect(linked).not.toContain('To do');
+  });
   it('labels cost as a recorded estimate, preserves tokens, and escapes model names', () => {
     const record: UsageRecord = { ...base, view: 'usage', data: { rows: [{ model: '<script>model</script>', calls: 1, input: 100, cached: 50, output: 10, usd: .0123 }] } };
     const html = renderToStaticMarkup(<UsageControls record={record}/>);

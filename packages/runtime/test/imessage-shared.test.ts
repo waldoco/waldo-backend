@@ -98,7 +98,8 @@ async function world() {
   };
   const linkCode = async (o: typeof alice) => {
     const text = await (await o.action('imessage.link')).text();
-    const code = /^waldo ([A-Z2-9]{10})\n/.exec(text)?.[1];
+    const code = /waldo ([A-Z2-9]{10})</.exec(text)?.[1];
+    expect(text).toContain(`sms:waldo@fixture.invalid&#38;body=waldo%20${code}`); // the one-tap Open Messages link
     expect(code, text).toBeTruthy();
     return code!;
   };
