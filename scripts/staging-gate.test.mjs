@@ -154,8 +154,40 @@ test('deploy-staging runs the gate after every deploy and as a read-only operati
   assert.ok(workflow.on.workflow_dispatch.inputs.operation.options.includes('gate'));
   const deploySteps = workflow.jobs.deploy.steps;
   assert.equal(deploySteps.at(-1).run, 'node scripts/staging-gate.mjs --expect-sha "$GITHUB_SHA"');
+  assert.equal(deploySteps.at(-1).if, undefined, 'the gate runs only when the deploy step succeeded');
   const gate = workflow.jobs.gate;
   assert.equal(gate.if, "inputs.operation == 'gate'");
   assert.ok(!gate.steps.some((s) => /wrangler|deploy-runtime|staging-rollback\.sh|supabase |db push/.test(s.run ?? '')));
   assert.ok(!gate.steps.some((s) => (s.run ?? '').includes('${{')), 'inputs reach run: only through env');
+});
+
+const stubProbes = (t, releases) => {
+  let healthz = 0;
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    const path = new URL(url).pathname;
+    if (path === '/healthz') return Response.json({ ok: true, release: releases[Math.min(healthz++, releases.length - 1)] });
+    if (path === '/functions/v1/connector-proxy') return Response.json({ error: { status: 401, message: 'unsigned proxy call' } });
+    return new Response('forbidden', { status: 403 });
+  });
+  t.mock.method(console, 'log', () => {});
+  return () => healthz;
+};
+
+test('healthz waits for the expected release to propagate: up to 3 tries, 10 s apart', async (t) => {
+  const tries = stubProbes(t, ['a8c9289', 'a8c9289', '929fd79']);
+  const waits = [];
+  assert.equal(await main(['--expect-sha', '929fd79a8c9289'], {}, async (ms) => { waits.push(ms); }), 2);
+  assert.equal(tries(), 3);
+  assert.deepEqual(waits, [10000, 10000]);
+});
+
+test('healthz fails after 3 tries of a stale release, and never retries without an expected SHA', async (t) => {
+  const tries = stubProbes(t, ['a8c9289']);
+  const waits = [];
+  assert.equal(await main(['--expect-sha', '929fd79a8c9289'], {}, async (ms) => { waits.push(ms); }), 1);
+  assert.equal(tries(), 3);
+  assert.equal(waits.length, 2);
+  const untargeted = stubProbes(t, ['unreleased']);
+  assert.equal(await main([], {}, async () => { throw new Error('must not wait'); }), 1);
+  assert.equal(untargeted(), 1);
 });

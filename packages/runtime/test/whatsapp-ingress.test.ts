@@ -1,7 +1,8 @@
 import { claimNewWhatsAppMessages, WAMID_RETENTION_MS } from '../src/channels/whatsapp-api';
 import { describe, expect, it, vi } from 'vitest';
-import { WA_UPDATE_BASE, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from '../src/channels/whatsapp-api';
+import { WA_UPDATE_BASE, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim, type WaIngressMessage } from '../src/channels/whatsapp-api';
 import { gatedCaller } from '../src/channels/telegram-api';
+import { isForward, TelegramPollingAdapter } from '../src/channels/telegram-polling';
 
 describe('whatsapp ingress normalization', () => {
   it('text from the bound subject becomes a telegram-shaped message update in the 9e12 namespace', () => {
@@ -10,6 +11,34 @@ describe('whatsapp ingress normalization', () => {
     ], '15550001111', 0);
     expect(seq).toBe(1);
     expect(updates).toEqual([{ update_id: WA_UPDATE_BASE + 1, message: { from: { id: 15550001111, is_bot:false }, chat: { id: 15550001111, type: 'private' }, text: 'hello waldo' } }]);
+  });
+
+  it('a forward, by either Cloud API flag, parses as someone else\'s text, approval replies included; reply context is not a forward, and an unreadable flag counts as one', async () => {
+    const text = (id: string, body: string, context: unknown) => ({ id, from: '15550001111', type: 'text', text: { body }, context }) as unknown as WaIngressMessage;
+    const { updates } = whatsappIngressUpdates([
+      text('wamid.f1', '/fire nightly', { forwarded: true }),
+      text('wamid.f2', 'a:p12', { frequently_forwarded: true }),
+      text('wamid.f3', '/ledger', { forwarded: 'yes' }),
+      text('wamid.r1', '/fire nightly', { from: '15550002222', id: 'wamid.original' }),
+    ], '15550001111', 0);
+    // Through the parser the turn pipeline uses: a mark that does not parse would fail here, not pass as an unsupported turn.
+    const { accepted } = await new TelegramPollingAdapter({ getUpdates: async () => updates }, 0).poll(0);
+    expect(accepted.map(turn => turn.parts)).toEqual([
+      [{ authorship: 'forwarded', text: '/fire nightly' }],
+      [{ authorship: 'forwarded', text: 'a:p12' }],
+      [{ authorship: 'forwarded', text: '/ledger' }],
+      [{ authorship: 'owner', text: '/fire nightly' }],
+    ]);
+    expect(updates.map(update => isForward(update.message as object | undefined))).toEqual([true, true, true, false]);
+  });
+
+  it('a forwarded voice note or captioned image is marked too', async () => {
+    const { updates } = whatsappIngressUpdates([
+      { id: 'wamid.fa', from: '15550001111', type: 'audio', audio: { id: 'media-a', voice: true }, context: { forwarded: true } },
+      { id: 'wamid.fi', from: '15550001111', type: 'image', image: { id: 'media-i', caption: 'look at this' }, context: { forwarded: true } },
+    ] as unknown as WaIngressMessage[], '15550001111', 0);
+    const { accepted } = await new TelegramPollingAdapter({ getUpdates: async () => updates }, 0).poll(0);
+    expect(accepted.map(turn => [turn.media?.forwarded, turn.parts])).toEqual([[true, []], [true, [{ authorship: 'forwarded', text: 'look at this' }]]]);
   });
 
   it('an approval reply synthesizes the callback_query the approval desk expects', () => {

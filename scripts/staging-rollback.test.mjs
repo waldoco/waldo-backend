@@ -42,7 +42,11 @@ test('refuses a malformed version id or an unknown flag', () => {
 });
 
 test('a matching confirmation rolls back staging only, by flag or env', () => {
-  const expected = ['--no-install', 'wrangler', 'rollback', ID, '--env', 'staging', '--message', 'bad deploy', '--yes'];
+  const expected = ['--no-install', 'wrangler', 'rollback', ID, '--env', 'staging', '--message=bad deploy', '--yes'];
   assert.deepEqual(run([ID, '--confirm', ID, '--message', 'bad deploy']).npx, expected);
   assert.deepEqual(run([ID, '--message', 'bad deploy'], { ROLLBACK_CONFIRM: ID }).npx, expected);
+});
+
+test('a reason that looks like a flag stays the message', () => {
+  assert.deepEqual(run([ID, '--confirm', ID, '--message', '--name=waldo-runtime']).npx, ['--no-install', 'wrangler', 'rollback', ID, '--env', 'staging', '--message=--name=waldo-runtime', '--yes']);
 });

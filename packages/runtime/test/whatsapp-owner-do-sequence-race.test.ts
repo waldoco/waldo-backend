@@ -8,6 +8,8 @@ vi.mock('openai', () => ({ default: class {
   responses = { create: async () => ({ id: 'fixture', output_text: '{}', output: [], usage: { input_tokens: 1, output_tokens: 1 } }) };
 } }));
 
+// Admission acks before the turns run; settle waits for them, as the webhook's waitUntil would.
+const settle = (instance: OwnerDO) => Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
 const deferred = () => {
   let resolve!: () => void;
   const promise = new Promise<void>(done => { resolve = done; });
@@ -43,7 +45,7 @@ it('allocates distinct update_ids for overlapping different wamids (known wa_seq
       if (state.storage.kv.get('wamid:wamid.concurrent.B') !== undefined) secondQueued.resolve();
       return result;
     });
-    const post = (id: string) => instance.fetch(new Request('https://telegram-owner/whatsapp-turn', {
+    const post = (id: string) => instance.fetch(new Request('https://telegram-owner/whatsapp-admit', {
       method: 'POST', headers: { 'x-waldo-whatsapp-subject': '15550001111' },
       body: JSON.stringify({ messages: [{ from: '15550001111', id, type: 'text', text: { body: '/stop' } }] }),
     }));
@@ -59,6 +61,7 @@ it('allocates distinct update_ids for overlapping different wamids (known wa_seq
       releaseSend.resolve();
       const replies = await Promise.all(pending);
       expect(replies.map(reply => reply.status)).toEqual([200, 200]);
+      await settle(instance);
       expect(turns).toHaveBeenCalledTimes(2);
       const ids = turns.mock.calls.map(([update]) => update.update_id);
       // Before the fix this yielded [BASE+1, BASE+1].
@@ -85,10 +88,14 @@ const harness = async (name: string, work: (instance: OwnerDO, state: DurableObj
     try { await work(instance, state, turns as never); } finally { await state.storage.deleteAlarm(); turns.mockRestore(); }
   });
 };
-const post = (instance: OwnerDO, messages: { id: string }[]) => instance.fetch(new Request('https://telegram-owner/whatsapp-turn', {
-  method: 'POST', headers: { 'x-waldo-whatsapp-subject': '15550001111' },
-  body: JSON.stringify({ messages: messages.map(m => ({ from: '15550001111', id: m.id, type: 'text', text: { body: 'hi' } })) }),
-}));
+const post = async (instance: OwnerDO, messages: { id: string }[]) => {
+  const response = await instance.fetch(new Request('https://telegram-owner/whatsapp-admit', {
+    method: 'POST', headers: { 'x-waldo-whatsapp-subject': '15550001111' },
+    body: JSON.stringify({ messages: messages.map(m => ({ from: '15550001111', id: m.id, type: 'text', text: { body: 'hi' } })) }),
+  }));
+  await settle(instance);
+  return response;
+};
 
 it('a turn that throws does not let the next message reuse its update_id', async () => {
   await harness('whatsapp-seq-after-throw', async (instance, state, turns) => {

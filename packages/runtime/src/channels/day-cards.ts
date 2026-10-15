@@ -1,4 +1,4 @@
-import { deriveContextBudgetChars, SANITISE_DESTINATION_POLICIES, WALDO_CHAT_MODEL, type ModelName } from '@waldo/contracts';
+import { deriveContextBudgetChars, SANITISE_DESTINATION_POLICIES, WALDO_AUXILIARY_MODEL, type ModelName } from '@waldo/contracts';
 import { turnMemoryPrompt, type ClaimStore } from '../memory/claims';
 import { DAY_CARDS, dayCardPrompt, SKIP_CARD, type CardId, type DayCard } from '../prompt/day-cards';
 import { calendarPromptProjection, type CalendarItem, type GoogleClient } from '../connectors/google';
@@ -185,7 +185,7 @@ const fitLines = (text: string, room: number, keep: 'head' | 'tail'): string => 
 export const composeDayCard = async (
   card: DayCard, now: number, timezone: string,
   sources: Readonly<{ google: GoogleClient | null; connectable: boolean; ledger: string; today: string; updates: string }>,
-  model: ModelName = WALDO_CHAT_MODEL,
+  model: ModelName = WALDO_AUXILIARY_MODEL,
 ): Promise<string> => {
   const cap = Math.floor(deriveContextBudgetChars(model, SANITISE_DESTINATION_POLICIES.internal_context.max_chars) / 2);
   const calendar = await readCalendar(cardWindow(card, now, timezone), timezone, sources.google, sources.connectable);
@@ -245,7 +245,7 @@ export const latestDelivery = (delivery: CardDelivery | undefined, shown: string
 };
 
 // planDay sends this as one user message; the sanitiser budgets its JSON wire form.
-export const composeDayPlanInput = (input: string, memory?: ClaimStore, model: ModelName = WALDO_CHAT_MODEL): string => {
+export const composeDayPlanInput = (input: string, memory?: ClaimStore, model: ModelName = WALDO_AUXILIARY_MODEL): string => {
   const limit = deriveContextBudgetChars(model, SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
   const wireSize = (content: string) => JSON.stringify([{ role: 'user', content }]).length;
   if (wireSize(input) > limit) throw new Error('day plan input exceeds provider context budget');

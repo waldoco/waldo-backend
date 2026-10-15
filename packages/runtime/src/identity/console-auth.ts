@@ -23,6 +23,8 @@ export type ConsoleAuth = Readonly<{
   // App sign-in: resolves an existing member, otherwise joins with the exact recipient-bound invite.
   verifyOrJoin(email: string, code: string, inviteCode: string): Promise<string | null>;
   issueLinkCode(doName: string): Promise<string | null>;
+  /** A one-time code for one provider: the sender texts "waldo CODE" (WhatsApp, iMessage) or /link CODE (Telegram). */
+  issueProviderLinkCode?(doName: string, provider: 'telegram' | 'whatsapp' | 'imessage'): Promise<string | null>;
   saveSettings(doName: string, settings: OwnerSettings): Promise<boolean>;
   adminOverview(doName: string): Promise<AdminOverview | null>;
   invite(doName: string, email: string, code: string): Promise<boolean>;
@@ -30,6 +32,9 @@ export type ConsoleAuth = Readonly<{
   memberInvites(doName: string): Promise<readonly Readonly<{ email: string | null; created_at: string; expires_at: string | null; used_at: string | null; revoked_at: string | null }>[]>;
   revokeInvite(doName: string, invite: string): Promise<boolean>;
   unlinkTelegram(doName: string): Promise<boolean>;
+  unlinkIMessage?(doName: string): Promise<boolean>;
+  /** The last 2-4 characters of the owner's linked iMessage handle, or null; the full handle never leaves the database. */
+  iMessageHandleHint?(doName: string): Promise<string | null>;
   // Send-time ownership re-check: true only while an active presence binds this channel subject to this owner.
   assertChannelPresence(doName: string, provider: string, subject: string): Promise<boolean>;
   deleteOwner(doName: string): Promise<boolean>;
@@ -142,6 +147,11 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       const hash = await linkCodeHash(code);
       return (await rpc('issue_link_code', `link.${doName}.${hash}`, { p_do_name: doName, p_code_hash: hash })) ? code : null;
     },
+    async issueProviderLinkCode(doName, provider) {
+      const code = newLinkCode();
+      const hash = await linkCodeHash(code);
+      return (await rpc('issue_provider_link_code', `link.${provider}.${doName}.${hash}`, { p_do_name: doName, p_provider: provider, p_code_hash: hash })) ? code : null;
+    },
     async saveSettings(doName, { timezone, quiet_start: start, quiet_end: end, volume }) {
       const message = `settings.${doName}.${timezone}.${start ?? ''}.${end ?? ''}.${volume}`;
       return (await rpc('set_owner_settings', message, { p_do_name: doName, p_timezone: timezone, p_quiet_start: start ?? '', p_quiet_end: end ?? '', p_volume: volume })) === true;
@@ -160,6 +170,11 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     memberInvites: async (doName) => (await rpc('member_invites', `memberinvites.${doName}`, { p_do_name: doName })) as AdminOverview['invites'],
     revokeInvite: async (doName, invite) => (await rpc('admin_revoke', `revoke.${doName}.${invite}`, { p_do_name: doName, p_invite: invite })) === true,
     unlinkTelegram: async (doName) => (await rpc('unlink_presence', `unlink.${doName}.telegram`, { p_do_name: doName, p_provider: 'telegram' })) === true,
+    unlinkIMessage: async (doName) => (await rpc('unlink_presence', `unlink.${doName}.imessage`, { p_do_name: doName, p_provider: 'imessage' })) === true,
+    async iMessageHandleHint(doName) {
+      const hint = await rpc('presence_hint', `presencehint.${doName}.imessage`, { p_do_name: doName, p_provider: 'imessage' });
+      return typeof hint === 'string' && hint.length >= 2 && hint.length <= 4 ? hint : null;
+    },
     assertChannelPresence: async (doName, provider, subject) => (await rpc('assert_channel_presence', `presence.${doName}.${provider}.${subject}`, { p_do_name: doName, p_provider: provider, p_subject: subject })) === true,
     deleteOwner: async (doName) => (await rpc('delete_owner', `delown.${doName}`, { p_do_name: doName })) === true,
     ownerCookie: (doName) => mint(doName, cookieSig),

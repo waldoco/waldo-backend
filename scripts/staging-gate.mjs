@@ -105,7 +105,12 @@ const supabaseFunctions = async (token) => {
 
 const reason = (error) => (/^[a-z0-9_]+$/.test(error?.message) ? error.message : 'unexpected_error');
 
-export async function main(argv = process.argv.slice(2), env = process.env) {
+// A fresh deploy can take a few seconds to reach every edge; only a pinned release is retried.
+const HEALTHZ_TRIES = 3;
+const HEALTHZ_WAIT_MS = 10000;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export async function main(argv = process.argv.slice(2), env = process.env, wait = sleep) {
   const at = argv.indexOf('--expect-sha');
   const expectSha = at >= 0 ? argv[at + 1] : '';
   if (at >= 0 && !SHA.test(expectSha ?? '')) throw new Error('expect_sha_invalid');
@@ -124,12 +129,20 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   ];
   let release = null;
   for (const [name, url, init] of probes) {
-    try {
-      const response = await probe(url, init);
-      const { pass, observed } = evaluateProbe(name, response, expectSha);
-      if (name === 'healthz' && pass) release = response.body.release;
-      record(name, pass ? 'PASS' : 'FAIL', observed);
-    } catch (error) { record(name, 'FAIL', `unreachable ${error?.name ?? 'error'}`); }
+    const tries = name === 'healthz' && expectSha ? HEALTHZ_TRIES : 1;
+    for (let attempt = 1; ; attempt += 1) {
+      let outcome;
+      try {
+        const response = await probe(url, init);
+        outcome = evaluateProbe(name, response, expectSha);
+        if (name === 'healthz' && outcome.pass) release = response.body.release;
+      } catch (error) { outcome = { pass: false, observed: `unreachable ${error?.name ?? 'error'}` }; }
+      if (outcome.pass || attempt === tries) {
+        record(name, outcome.pass ? 'PASS' : 'FAIL', tries > 1 ? `${outcome.observed} (try ${attempt}/${tries})` : outcome.observed);
+        break;
+      }
+      await wait(HEALTHZ_WAIT_MS);
+    }
   }
 
   console.log('== What is deployed?');

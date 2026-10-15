@@ -42,11 +42,6 @@ vi.mock('../src/channels/conversation-store', async load => {
     return receipt;
   } };
 });
-vi.mock('../src/channels/telegram-api', async (load) => ({
-  ...await load<typeof import('../src/channels/telegram-api')>(),
-  createTelegramCaller: () => async (method: string) => method === 'getMe' ? { username: 'fixture_bot' }
-    : method === 'sendMessage' ? { message_id: 1, chat: { id: 42 } } : true,
-}));
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
   const name = (body as { text?: { format?: { name?: string } } }).text?.format?.name;
   if (!name) seen.requests.push(body);

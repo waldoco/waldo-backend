@@ -76,8 +76,11 @@ const binding = (): LocalSystemSkillBinding => ({
     }),
   },
 });
+// The system prompt prints the clock to the minute, so prompts compared by bytes share one instant.
+const clock = { timezone: "UTC", now: () => new Date("2026-10-13T23:41:59.900Z") };
 const responder = (skills?: LocalSystemSkillBinding) => {
   const args: Parameters<typeof createOwnerResponder> = ["fixture"];
+  args[4] = clock;
   args[20] = skills;
   return createOwnerResponder(...args);
 };
@@ -145,7 +148,7 @@ it("paused repository resumed after close cannot reach model or persist", async 
   const scope = {
     runId: "fixture",
     attempt: "1",
-    deadline: Date.now() + 10000,
+    deadline: Date.now() + 15 * 60_000,
     signal: new AbortController().signal,
     admit,
     commit: <T>(w: () => T) => {
@@ -284,7 +287,7 @@ it("closing after model starts cannot persist its resumed reply", async () => {
       runScope: {
         runId: "late",
         attempt: "1",
-        deadline: Date.now() + 10000,
+        deadline: Date.now() + 15 * 60_000,
         signal: new AbortController().signal,
         admit,
         commit: (w) => {
@@ -327,7 +330,7 @@ it("override-style procedure cannot replace or reorder captured final safeguards
   );
   expect(system.endsWith(OWNER_SKILL_SAFEGUARDS)).toBe(true);
   expect(system).toContain(
-    "Anything that reaches another person, spends money or changes a shared calendar needs",
+    "Booking, paying, sending something to another person or changing a shared calendar needs confirmed details and the owner's clear yes first.",
   );
 });
 

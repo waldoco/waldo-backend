@@ -73,6 +73,17 @@ describe('otlpTurnExporter', () => {
     expect(JSON.stringify(second.calls)).not.toContain(identityA.owner_email);
   });
 
+  it('files a trace under the user id current when it is written, so hops buffered before the owner resolved carry it too', async () => {
+    const { send, spans } = capture();
+    let principal: string | undefined;
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, { ...context, userId: () => principal ?? 'telegram:1' }, send);
+    await log({ trace: 'tg-105', hop: 'pickup', ms: 1, ok: true });
+    principal = `prn_${'a'.repeat(32)}`;
+    await log({ trace: 'tg-105', hop: 'turn', ms: 2, ok: true });
+    expect(spans(0).map((span) => attrs(span)['langfuse.user.id'])).toEqual([principal, principal]);
+    await expect(otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, { ...context, userId: () => ' ' }, send)({ trace: 'tg-106', hop: 'turn', ms: 1, ok: true })).rejects.toThrow('otlp_context_invalid');
+  });
+
   it('keeps owner_id but withholds the verified email when text capture is off', async () => {
     const { send, spans } = capture();
     const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send);
@@ -240,7 +251,7 @@ describe('otlpTurnExporter', () => {
       'langfuse.trace.name': 'telegram.turn', 'langfuse.user.id': 'telegram:1', 'langfuse.session.id': 'telegram-dm:1',
       'langfuse.environment': 'staging', 'langfuse.release': 'abc1234',
       'langfuse.trace.tags': ['channel:telegram', 'feature:reactions', 'feature:reply'],
-      'langfuse.trace.metadata.schema_version': '6', 'langfuse.trace.metadata.trace_key': 'tg-4', 'langfuse.trace.metadata.outcome': 'answered',
+      'langfuse.trace.metadata.schema_version': '7', 'langfuse.trace.metadata.trace_key': 'tg-4', 'langfuse.trace.metadata.outcome': 'answered',
     });
     expect(attrs(receipt!)).toMatchObject({ 'langfuse.observation.metadata.hop': 'receipt', 'langfuse.observation.metadata.feature': 'reactions', 'langfuse.observation.type': 'tool' });
     expect(hopFeature('brand_new_hop')).toBe('other');

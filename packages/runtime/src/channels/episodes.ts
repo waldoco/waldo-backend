@@ -23,6 +23,8 @@ export type EpisodeHit = Readonly<{ ref: string; entry_id: string; speaker: Spea
 
 export type EpisodeIndex = Readonly<{
   add(entryId: string, speaker: StoredSpeaker, text: string, at: number): void;
+  // Removes every row of the given entries, as when the chat that held them is deleted.
+  remove(entryIds: readonly string[]): void;
   count(): number;
   get(ref: string): Episode | null;
   search(query: string, limit: number, from?: number, to?: number): readonly EpisodeHit[];
@@ -51,6 +53,7 @@ export const episodeIndex = (sql: SqlStorage): EpisodeIndex => {
     add(entryId, speaker, text, at) {
       if (text.trim()) sql.exec('INSERT INTO episodes (entry_id, speaker, at, text) VALUES (?, ?, ?, ?)', entryId, speaker, at, text);
     },
+    remove(entryIds) { for (const entryId of new Set(entryIds)) sql.exec('DELETE FROM episodes WHERE entry_id = ?', entryId); },
     count: () => sql.exec<{ n: number }>('SELECT count(*) AS n FROM episodes').one().n,
     get(ref) {
       const row = Number(ref);

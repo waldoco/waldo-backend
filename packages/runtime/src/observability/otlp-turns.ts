@@ -4,13 +4,14 @@ import { gateTraceEntry, resolveCaptureText } from './trace-privacy';
 import { ownerTraceFields, ownerTraceIdentity } from './owner-trace-identity';
 
 export type OtlpConfig = Readonly<{ endpoint: string; headers: Readonly<Record<string, string>> }>;
-export type TraceContext = Readonly<{ environment: string; release: string; channel: string; userId: string; sessionId: string; captureText: boolean }>;
+// userId may be read when a trace is written, so a trace buffered before its owner resolved still files under that owner.
+export type TraceContext = Readonly<{ environment: string; release: string; channel: string; userId: string | (() => string); sessionId: string; captureText: boolean }>;
 type Env = Readonly<{ LANGFUSE_PUBLIC_KEY?: string; LANGFUSE_SECRET_KEY?: string; LANGFUSE_BASE_URL?: string }>;
 type Send = (url: string, init: RequestInit) => Promise<Response>;
 type Span = Readonly<{ entry: TurnLogEntry; endMs: number; arrival: number }>;
 
 // Bump when a name, tag or metadata key below changes meaning, so dashboards can filter by it.
-export const TRACE_SCHEMA_VERSION = '6';
+export const TRACE_SCHEMA_VERSION = '7';
 
 // Every hop has one feature area and a Langfuse observation type. New hops land in `other`
 // as plain spans until they are added here; model calls (`llm_*`) are always generations.
@@ -58,7 +59,9 @@ const tagsFor = (context: TraceContext, spans: readonly Span[]) => [
 // and a generation per model call with tokens and explicit USD estimates. Message text only when captureText is on.
 export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceContext, send: Send = fetch, now: () => number = Date.now) => {
   const context = { ...suppliedContext, captureText: resolveCaptureText({ WALDO_ENVIRONMENT: suppliedContext.environment, LANGFUSE_CAPTURE_TEXT: suppliedContext.captureText ? 'true' : 'false' }) };
-  const validContext = [context.environment, context.release, context.channel, context.userId, context.sessionId].every((value) => typeof value === 'string' && value.trim().length > 0) && typeof suppliedContext.captureText === 'boolean';
+  const userId = () => typeof context.userId === 'function' ? context.userId() : context.userId;
+  const nonBlank = (value: unknown) => typeof value === 'string' && value.trim().length > 0;
+  const validContext = [context.environment, context.release, context.channel, context.sessionId].every(nonBlank) && (typeof context.userId === 'function' || nonBlank(context.userId)) && typeof suppliedContext.captureText === 'boolean';
   const pending = new Map<string, Span[]>();
   let nextArrival = 0;
   let bufferedHops = 0;
@@ -145,7 +148,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
     startTimeUnixNano: nanos(endMs - entry.ms), endTimeUnixNano: nanos(endMs),
     attributes: [
       attr('langfuse.environment', context.environment),
-      attr('langfuse.user.id', context.userId),
+      attr('langfuse.user.id', userId()),
       attr('langfuse.session.id', context.sessionId),
       attr('langfuse.release', context.release),
       attr('langfuse.version', context.release),
@@ -211,7 +214,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
   };
 
   return (entry: TurnLogEntry): Promise<void> => {
-    if (!validContext) return Promise.reject(new Error('otlp_context_invalid'));
+    if (!validContext || !nonBlank(userId())) return Promise.reject(new Error('otlp_context_invalid'));
     const gated = gateTraceEntry(entry, context.captureText);
     const item = { entry: { ...gated, text: context.captureText && gated.text ? { ...gated.text } : undefined, usage: gated.usage ? { ...gated.usage } : undefined }, endMs: now(), arrival: nextArrival++ };
     const done = exported.get(entry.trace);

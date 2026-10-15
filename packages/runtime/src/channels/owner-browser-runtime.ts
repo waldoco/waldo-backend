@@ -1,5 +1,5 @@
 import {browserHandoffConsole} from './browser-handoff-console';
-import { browsePageArgsSchema, browseActArgsSchema, WALDO_CHAT_MODEL, type BrowseActArgs, type BrowsePageArgs, type LLMAttachment, type ToolEligibility, type ToolHandler } from '@waldo/contracts';
+import { browsePageArgsSchema, browseActArgsSchema, OPENAI_GPT_6_LUNA_MODEL, type BrowseActArgs, type BrowsePageArgs, type LLMAttachment, type ToolEligibility, type ToolHandler } from '@waldo/contracts';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
@@ -9,7 +9,7 @@ import { COMMON_TEST_CEILING_MICROUSD, commonBrowserSdk, commonStagingRegistrati
 import { OpenAIResponsesAdapter } from '../llm/openai';
 import { armAlarm } from '../scheduler/alarm-slot';
 import { commonOwnerBrowserRegistration,CommonBrowserRegistrationUnavailable } from './common-owner-browser-registration';
-import type { LLMGatewayAdapter } from '../llm/provider';
+import type { GatewayFailure, LLMGatewayAdapter } from '../llm/provider';
 import { localOwnerBinding, ownerBindingCurrent, verifyOwnerBinding } from '../identity/owner-binding';
 import { workspaceOwnerHost, workspaceMetadata } from './workspace-host';
 import {cloudflarePublicRead,PublicReadRefusal,PUBLIC_READ_RESERVED_BROWSER_MS} from './cloudflare-public-read';
@@ -25,6 +25,16 @@ const spendRefusal=(cause:unknown)=>{
     ?'No browser was started: the owner\'s browser spend limit is used up. Retrying will not help; tell the owner browsing is paused until the limit allows more.'
     :'No browser was started: the owner\'s browser spend record needs reconciliation. Retrying will not help; tell the owner browsing is paused until it is reconciled.');
 };
+
+// A browser refusal the model can act on: it names the open session's handle and the ways forward.
+class BrowserSessionRefusal extends Error {}
+const heldElsewhere=(handle:string)=>`An interactive browser session from an earlier turn is still open (session_handle ${handle}). Continue it by passing that session_handle, or end it with browse_act command cancel and that session_handle, then start a new one. A read without retain_session works now.`;
+
+// The browser trial meters a funded run's model calls with a Luna price envelope, so it refuses any other model before
+// the meter takes an ordinal or a reservation. The refusal is coded, not thrown, so the turn's trace names it and the
+// provider does not resend it.
+const trialPriced = (model: string | undefined): boolean => model === OPENAI_GPT_6_LUNA_MODEL;
+const trialUnpriced = (): GatewayFailure => ({ ok: false, code: 'invalid_args', error: 'browser trial model price unavailable' });
 
 // The run lease's wake: maintenance runs when the lease's run deadline, its configuration or its session lifetime ends,
 // whichever comes first. It is a listed wake key, so an arbiter re-arm keeps it.
@@ -90,7 +100,7 @@ export function ownerBrowserRuntime(options: Readonly<{
   const bindHost=async(ctx:ToolDispatcherContext,sessionHandle?:string,retainSession=false)=>{
     const assertCurrent=current(ctx);await assertCurrent();
     const scope=options.activeScope()!,pointerBefore=retainedTask();
-    const ordinary=!!options.storage.kv.get(`ordinary-public-browser-grant:${sessionHandle?pointerBefore?.taskId:active?.taskId??scope.runId}`);
+    const ordinary=!!options.storage.kv.get(`ordinary-public-browser-grant:${sessionHandle?pointerBefore?.taskId??active?.taskId:active?.taskId??scope.runId}`);
     let config;
     if(!ordinary){try{config=await selectedConfiguration(false,retainSession);}catch(cause){if(!retainSession||!(cause instanceof CommonBrowserRegistrationUnavailable))throw cause;}}
     let expiredSpend=false;
@@ -106,11 +116,20 @@ export function ownerBrowserRuntime(options: Readonly<{
     if(!config)throw new ClosedRunError();
     if(active&&options.storage.kv.get<{cleanup?:string}>(`common-browser:${active.taskId}`)?.cleanup==='closed'){active=undefined;lease=undefined;options.storage.kv.put(continuationKey,null);}
     const pointer=retainedTask();
-    if(sessionHandle&&pointer?.sessionHandle!==sessionHandle)throw new ClosedRunError();
+    // The run that holds the session may name it before its first read succeeds; other runs only through the published pointer.
+    if(sessionHandle&&pointer?.sessionHandle!==sessionHandle&&(active?.scope!==scope||active.host.sessionHandle()!==sessionHandle))throw new BrowserSessionRefusal(pointer?heldElsewhere(pointer.sessionHandle):'That session_handle is not an open browser session. Start a new one with retain_session:true and no session_handle, or read without retain_session.');
     if(active){
-      if(active.ownerId!==config.ownerId||active.scope&&active.scope!==scope||active.scope!==scope&&active.host.sessionHandle()!==sessionHandle)throw new ClosedRunError();
-      active.scope=scope;
-    }else{
+      if(active.ownerId!==config.ownerId)throw new ClosedRunError();
+      if(active.scope&&active.scope!==scope)throw new BrowserSessionRefusal('The browser is still in use by an earlier turn that is finishing. Try again shortly, or read without retain_session.');
+      if(active.scope!==scope&&active.host.sessionHandle()!==sessionHandle){
+        if(pointer?.taskId===active.taskId)throw new BrowserSessionRefusal(heldElsewhere(pointer.sessionHandle));
+        // A finished turn's session whose first read never succeeded: no handle for it was ever published, so end it and start fresh.
+        const stale=active;active=undefined;lease=undefined;
+        try{await stale.host.cancel();}catch{/* its row keeps the cleanup obligation; maintenance owns it */}
+      }
+    }
+    if(active)active.scope=scope;
+    else{
       const taskId=sessionHandle?pointer!.taskId:scope.runId,initialAttempt=scope.attempt;
       active={scope,taskId,ownerId:config.ownerId,host:commonBrowserHost({storage:options.storage,config:{...config,retainInteractions:true},ownerId:config.ownerId,egressAllowlist:ctx.egressAllowlist,
         source:()=>({taskId,revision:1,sources:['browser'],ready:true,startRef:initialAttempt}),
@@ -148,11 +167,10 @@ export function ownerBrowserRuntime(options: Readonly<{
       return { ...fallback, eligible: eligibleWith(), schema: browsePageArgsSchema, description: fallback.description+' For interactive tasks use retain_session:true to receive DOM/accessibility, a PNG and session_handle, then call browse_act with that handle and current refs. Omit for a one-shot read.', async handle(args, ctx) {
         try {
           const assertCurrent = current(ctx); await assertCurrent();
-          // Omitted lifecycle fields must not silently discard an owner's
-          // unsent page state or buy a second browser during a retained journey.
-          const heldPointer=options.storage.kv.get<{taskId:string;sessionHandle:string}>(continuationKey);
-          const held=heldPointer?options.storage.kv.get<{cleanup?:string;session:{id:string}}>(`common-browser:${heldPointer.taskId}`):undefined;
-          if(!args.session_handle&&!args.retain_session&&heldPointer&&held?.session.id===heldPointer.sessionHandle&&held.cleanup!=='closed'&&options.storage.kv.get(`ordinary-public-browser-grant:${heldPointer.taskId}`))return {ok:false,code:'rejected',error:'An owner browser journey is already retained. Use its returned session_handle to read the current page, or cancel that session before starting a fresh one-shot read.',source_taint:'external'};
+          // The run holding an open journey keeps it: an omitted handle must not quietly leave its unsent page state behind.
+          // A session held by another turn never blocks this one; the read below names it instead.
+          const journey=retainedTask(),held=journey&&options.storage.kv.get(`ordinary-public-browser-grant:${journey.taskId}`)?journey:undefined;
+          if(!args.session_handle&&!args.retain_session&&held&&active&&active.scope===options.activeScope()&&active.taskId===held.taskId)return {ok:false,code:'rejected',error:`This turn has an interactive browser session open (session_handle ${held.sessionHandle}). Read its current page with that session_handle, or end it with browse_act command cancel and that session_handle before a read without retain_session.`,source_taint:'external'};
           // A normal fresh public read does not require a paid-test registration.
           // Retained session handles still select their existing exact-session host.
           if(!args.session_handle&&!args.retain_session){
@@ -178,12 +196,13 @@ export function ownerBrowserRuntime(options: Readonly<{
                   return reserveOwnerPublicBrowser({storage:options.storage,ownerId,custodyDigest:owner.custodyDigest,intent:`${scope.runId}:${scope.attempt}:${ctx.toolCallId}`,reservedBrowserMs:PUBLIC_READ_RESERVED_BROWSER_MS,now:Date.now(),declaredLimitMicrousd:effectiveLimitMicrousd,assertCurrent:()=>{scope.admit();if(options.activeScope()!==scope||!binding())throw new ClosedRunError();}});
                 }catch(cause){if(cause instanceof ClosedRunError)throw cause;throw spendRefusal(cause);}
               }});
-              return read(args,{...ctx,authenticatedUserId:ownerId,assertTaskSourceCurrent:assertReadCurrent});
+              const result=await read(args,{...ctx,authenticatedUserId:ownerId,assertTaskSourceCurrent:assertReadCurrent});
+              return held&&result.ok?{...result,data:{...result.data,open_browser_session:{session_handle:held.sessionHandle,notice:'An interactive browser session from an earlier turn is still open. This read used a separate page and did not see or change it. Continue that session with its session_handle, or end it with browse_act command cancel.'}}}:result;
             }
           }
           const bound=await bindHost(ctx,args.session_handle,args.retain_session);
-          const result=await bound.active.host.handler.handle(args,bound.context);publishPointer();return result;
-        } catch(cause) { traceBrowserFailure('read',cause);return { ok: false, code: 'rejected', error: `The browser owner or retained session is unavailable (${browserFailureClass(cause)}). No replacement was allocated.`, source_taint: 'external' }; }
+          const result=await bound.active.host.handler.handle(args,bound.context);if(result.ok)publishPointer();return result;
+        } catch(cause) { traceBrowserFailure('read',cause);return { ok: false, code: 'rejected', error: cause instanceof BrowserSessionRefusal?cause.message:`The browser owner or retained session is unavailable (${browserFailureClass(cause)}). No replacement was allocated.`, source_taint: 'external' }; }
       } };
     },
     act(fallback:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>):ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>{
@@ -197,8 +216,8 @@ export function ownerBrowserRuntime(options: Readonly<{
           const bound=await bindHost(ctx,args.session_handle);
           const result=await bound.active.host.actionHandler.handle(args,bound.context);
           if(args.command?.operation==='owner_login'&&result.ok){const origin=options.storage.kv.get<string>('origin');if(origin&&new URL(origin).protocol==='https:'&&'data' in result&&result.data&&typeof result.data==='object')Object.assign(result.data,{console_url:new URL('/console/browser-handoff',origin).href});}
-          if(args.command?.operation==='cancel'&&result.ok){active=undefined;lease=undefined;options.storage.kv.put(continuationKey,null);}else publishPointer();return result;
-        }catch(cause){traceBrowserFailure('act',cause);return {ok:false,code:'rejected',error:`The selected owner browser session or current action is unavailable (${browserFailureClass(cause)}). No replacement or provider switch was made.`,source_taint:'external'};}
+          if(args.command?.operation==='cancel'&&result.ok){active=undefined;lease=undefined;options.storage.kv.put(continuationKey,null);}else if(result.ok)publishPointer();return result;
+        }catch(cause){traceBrowserFailure('act',cause);return {ok:false,code:'rejected',error:cause instanceof BrowserSessionRefusal?cause.message:`The selected owner browser session or current action is unavailable (${browserFailureClass(cause)}). No replacement or provider switch was made.`,source_taint:'external'};}
       }};
     },
     gateway() {
@@ -228,9 +247,8 @@ export function ownerBrowserRuntime(options: Readonly<{
             if(pinned&&(pinned.custodyDigest!==owner.custodyDigest||pinned.registration?.policy?.directoryOwnerId!==owner.directoryOwnerId))throw Error('automatic browser policy requires reconciliation');
             return gateway.complete(request);
           }
-          // The live trial quote covers Luna only; normal model policy remains
-          // with the ordinary adapter when trial registration is unavailable.
-          if (request.request.model !== WALDO_CHAT_MODEL) throw Error('automatic browser model price unavailable');
+          // Normal model policy remains with the ordinary adapter when trial registration is unavailable.
+          if (!trialPriced(request.request.model)) return trialUnpriced();
           // Share one wrapper even across concurrent first calls: physical model
           // ordinals must never restart within this constructed owner host.
           metered ??= Promise.resolve(config.meterGateway(gateway));
@@ -246,9 +264,11 @@ export function ownerBrowserRuntime(options: Readonly<{
       // Only a run that holds a browser allocation is metered. An expired or used-up registration denies browser allocations, never ordinary model calls.
       return new Proxy(base, { get(target, key) {
         if (key !== 'complete') { const value = Reflect.get(target, key, target); return typeof value === 'function' ? value.bind(target) : value; }
-        return (request: { runScope?: RunEffectScope }) => {
+        return async (request: { runScope?: RunEffectScope; request?: { model?: string } }) => {
           const scope = request.runScope;
-          return scope && funded(scope)&&config.expiresAt>Date.now()&&(!manual||manual.spend.policy.validUntil>Date.now()) ? metered.complete(request as never) : target.complete(request as never);
+          if (!(scope && funded(scope)&&config.expiresAt>Date.now()&&(!manual||manual.spend.policy.validUntil>Date.now()))) return target.complete(request as never);
+          if (!trialPriced(request.request?.model)) return trialUnpriced();
+          return metered.complete(request as never);
         };
       } });
     },

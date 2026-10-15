@@ -19,8 +19,10 @@ export const renderArtifactBody=(kind:ArtifactKind,body:string):string=>{
 // link tokens without changing their URL bytes. Raw model HTML remains text.
 // Code stays opaque. Telegram forbids code entities nested in links/bold, so a
 // code-styled link label uses literal escaped contents rather than a code entity.
+// Bold may wrap a link and a link label may carry bold; a link never nests in a link.
 // Unsupported nesting/malformed delimiters leave the reply literal.
-const parseTelegram=(text:string, label=false):string|null=>{
+const parseTelegram=(text:string, inBold=false, inLink=false):string|null=>{
+ const label=inBold||inLink;
  let out='',i=0;
  while(i<text.length){
   if(text[i]==='\\'&&text[i+1]&&/[\\`*\[\]()]/.test(text[i+1]!)){
@@ -46,17 +48,17 @@ const parseTelegram=(text:string, label=false):string|null=>{
    if(!label&&/^`[^`\n]+`$/.test(body)){
     out+=`<code>${escapeRich(body.slice(1,-1))}</code>`;i=end+2;continue;
    }
-   if(!body||body.trim()!==body||/[*\n]/.test(body)||body.includes('](')||text[end+2]==='*')return null;
-   const contents=parseTelegram(body,true);if(contents===null)return null;
+   if(!body||body.trim()!==body||/[*\n]/.test(body)||(inLink&&body.includes(']('))||text[end+2]==='*')return null;
+   const contents=parseTelegram(body,true,inLink);if(contents===null)return null;
    out+=`<b>${contents}</b>`;i=end+2;continue;
   }
-  if(text[i]==='['&&!label){
+  if(text[i]==='['&&!inLink){
    const close=text.indexOf('](',i+1);
    if(close>=0){const end=text.indexOf(')',close+2);
     if(end>=0){const url=text.slice(close+2,end);
      if(/^https?:\/\/[^\s<>"'`()]+$/.test(url)){
       const labelText=text.slice(i+1,close);if(labelText.includes('['))return null;
-      const name=parseTelegram(labelText,true);if(name===null)return null;
+      const name=parseTelegram(labelText,inBold,true);if(name===null)return null;
       out+=`<a href="${escapeRich(url)}">${name}</a>`;i=end+1;continue;
      }
     }
@@ -66,4 +68,12 @@ const parseTelegram=(text:string, label=false):string|null=>{
  }
  return out;
 };
+// The plain text sent when Telegram rejects the HTML: emphasis markers dropped, links as "text (url)", code and
+// fences untouched. Bullets and stars that are not paired around a word stay as written. Only the rejection retry
+// uses it; the frozen fallback_text stays the Markdown source that split parts are rendered from.
+export const plainTelegram=(text:string):string=>text.split(/(```[\s\S]*?```|`[^`\n]*`)/).map((part,index)=>index%2?part:part
+ .replace(/\[([^\[\]\n]+)\]\((https?:\/\/[^\s<>"'`()]+)\)/g,'$1 ($2)')
+ .replace(/\*\*(?=\S)([^*\n]*?\S)\*\*/g,'$1')
+ .replace(/__(?=\S)([^_\n]*?\S)__/g,'$1')
+ .replace(/(^|[^\w*])\*(?=\S)([^*\n]*?\S)\*(?![\w*])/gm,'$1$2')).join('');
 export const telegramRichReply=(text:string):Readonly<{text:string;parse_mode:'HTML';fallback_text:string}>=>({text:parseTelegram(text)??escapeRich(text),parse_mode:'HTML',fallback_text:text});

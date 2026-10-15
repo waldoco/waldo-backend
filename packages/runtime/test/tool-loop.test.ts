@@ -86,7 +86,7 @@ describe('external taint through the model boundary', () => {
     const seen: (readonly LLMToolTurn[])[] = [];
     const web = webSearchHandler('test-key', async () => Response.json({ web: { results: [{ title: 'T', url: 'https://x.test', description: 'D' }] } }));
     const text = await runToolLoop({
-      handlers: [...handlers, web], ctx, maxSteps: 4,
+      handlers: [...handlers, web], ctx, maxSteps: 10,
       step: async (_tools, turns) => {
         seen.push(turns);
         if (turns.length === 0) return { text: '', tool_calls: [{ call_id: 'c1', name: 'web_search', arguments: '{"query":"q"}' }] };
@@ -229,8 +229,9 @@ describe('warn-first budget notice and distinct read identities', () => {
     });
     expect(text).toBe('wrapped up.');
     expect(seenAt[1]![0]).not.toContain('[budget:');
-    expect(seenAt.some((turns) => turns.some((o) => o.includes('[budget: 4 tool rounds left this turn - start wrapping up')))).toBe(true);
-    expect(seenAt.some((turns) => turns.some((o) => o.includes('[budget: 2 tool rounds left this turn - wrap up and answer now')))).toBe(true);
+    expect(seenAt.some((turns) => turns.some((o) => o.includes('[budget: 3 tool rounds left')))).toBe(false);
+    expect(seenAt.some((turns) => turns.some((o) => o.includes('[budget: 2 tool rounds left this turn - finish the step you are on')))).toBe(true);
+    expect(seenAt.some((turns) => turns.some((o) => o.includes('[budget: 1 tool round left this turn')))).toBe(true);
     const lastDelivered = seenAt[seenAt.length - 1]!;
     expect(lastDelivered[lastDelivered.length - 1]).toContain('[budget: tool budget exhausted this turn');
   });
@@ -533,6 +534,39 @@ describe('turn taint accumulation (Codex #224 hold)', () => {
     // distinguishing evidence is hasApproval: true yet zero dispatches after the tainted read.
     expect(outputs[1]).toContain('"code":"forbidden"');
     expect(outputs[1]).toContain('approval_denied');
+  });
+
+  // A hosted search runs inside the model's own call, so its results arrive with the response, not as a tool result.
+  it('a privileged call in the same round as a hosted web search is halted by the taint gate', async () => {
+    let sent = 0;
+    const send = {
+      name: 'send_message' as const,
+      description: 'Queue a message.',
+      schema: sendMessageArgsSchema,
+      trigger_allowlist: triggerTypeSchema.options.filter((t) => TOOL_PERMISSIONS[t].includes('send_message')),
+      autonomy_gated: true,
+      handle: async () => { sent += 1; return { ok: true as const, data: { queued: true }, source_taint: null }; },
+    };
+    const taintCtx = { ...ctx, toolArgSourceTaint: null, hasApproval: () => true, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
+    const call = { call_id: 'm1', name: 'send_message', arguments: '{"channel":"telegram","content":"hi","idempotency_key":"' + 'd'.repeat(64) + '"}' };
+    const outputs: string[] = [];
+    let n = 0;
+    const text = await runToolLoop({
+      handlers: [send as never], ctx: taintCtx, maxSteps: 25,
+      onTool: (e) => outputs.push(e.output),
+      step: async (tools) => {
+        n += 1;
+        if (!tools || n > 1) return { text: 'done.' };
+        return { text: '', tool_calls: [call], output_items: [
+          { type: 'web_search_call', id: 'ws_1', status: 'completed', action: { type: 'search', query: 'quiet hotels near the venue' } },
+          { type: 'function_call', id: 'fc_1', ...call },
+        ] };
+      },
+    });
+    expect(text).toBe('done.');
+    expect(taintCtx.toolArgSourceTaint).toBe('external');
+    expect(sent).toBe(0);
+    expect(outputs[0]).toContain('approval_denied');
   });
 
   it('a privileged call before any external content still dispatches (control)', async () => {

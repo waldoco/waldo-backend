@@ -12,7 +12,7 @@ const asked: string[] = [], provider: string[] = [];
 let duringAcquire: (() => void) | undefined;
 registerCommonBrowserSdk(async () => ({
   acquire: async () => { provider.push('acquire'); duringAcquire?.(); return { sessionId: 'app-owner-session' }; },
-  connect: async () => ({ newContext: async () => ({ route: async () => {}, newPage: async () => ({ mainFrame: () => null, setDefaultTimeout() {}, goto: async () => ({ status: () => 200 }), url: () => 'https://example.com/menu', title: async () => 'Menu', locator: () => ({ innerText: async () => 'Vegetarian pasta' }) }), close: async () => {} }),
+  connect: async () => ({ newContext: async () => ({ serviceWorkers: () => [], addInitScript: async () => {}, routeWebSocket: async () => {}, route: async () => {}, newPage: async () => ({ mainFrame: () => null, setDefaultTimeout() {}, on() {}, waitForLoadState: async () => {}, evaluate: async () => {}, goto: async () => ({ status: () => 200 }), url: () => 'https://example.com/menu', title: async () => 'Menu', locator: () => ({ innerText: async () => 'Vegetarian pasta' }) }), close: async () => {} }),
     newBrowserCDPSession: async () => ({ send: async () => { provider.push('close'); } }), close: async () => {} }),
   sessions: async () => [], endpointURLString: () => '',
 }) as never);

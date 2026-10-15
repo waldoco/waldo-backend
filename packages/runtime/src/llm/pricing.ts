@@ -1,4 +1,4 @@
-import { OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
+import { OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
 
 // USD per 1M tokens, standard tier. The one place model prices live; update from
 // https://developers.openai.com/api/docs/pricing when OpenAI changes them (checked 2026-09-23).
@@ -6,6 +6,9 @@ const PRICES: Readonly<Record<string, Readonly<{ input: number; cachedInput: num
   // checked 2026-09-28 on the pricing page above (short-context tier; >272K input tokens bills
   // 2x input / 1.5x output, which this flat table does not model - same shape as existing rows)
   [OPENAI_GPT_6_LUNA_MODEL]: { input: 0.1, cachedInput: 0.01, output: 0.5 },
+  // Short-context tier from the same page. Not modelled here either: cache writes bill $2.50 (usage reports no write
+  // count), and >272K input tokens bills 2x input / 1.5x output.
+  [OPENAI_GPT_6_1_SOL_MODEL]: { input: 2, cachedInput: 0.1, output: 10 },
 };
 
 export type ModelUsage = Readonly<{ model: string; input: number; output: number; cached: number }>;

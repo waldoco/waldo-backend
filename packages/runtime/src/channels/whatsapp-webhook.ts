@@ -1,5 +1,5 @@
 import { ownerDirectory, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
-import { createWhatsAppCaller, sendWhatsAppText } from './whatsapp-api';
+import { createWhatsAppCaller, sendWhatsAppText, whatsappForwarded } from './whatsapp-api';
 
 export type WhatsAppWebhookEnv = Readonly<{
   OWNER_DO?: DurableObjectNamespace;
@@ -46,7 +46,8 @@ const bySender = (body: WaBody): { sender: string; value: WaValue }[] => {
 const linkCode = (body: WaBody, senderId: string): string | null => {
   for (const entry of body.entry ?? []) for (const change of entry.changes ?? []) {
     for (const message of change.value?.messages ?? []) {
-      if (message.from !== senderId) continue;
+      // A forwarded code is someone else's text, never this sender's setup command.
+      if (message.from !== senderId || whatsappForwarded(message)) continue;
       const text = (message as { text?: { body?: string } }).text?.body?.trim() ?? '';
       const [command, code] = text.split(/\s+/, 2);
       if (command?.toLowerCase() === 'waldo' && code) return code;

@@ -35,6 +35,8 @@ export * from './tools/acl-intersection';
 export * from './tools/schemas/artifacts';
 export * from './tools/schemas/workspace';
 export * from './tools/schemas/reads';
+export * from './tools/schemas/console-link';
+export * from './tools/schemas/progress-note';
 export * from './tools/schemas/writes';
 export * from './tools/schemas/delegate';
 export * from './tools/schemas/reminders';

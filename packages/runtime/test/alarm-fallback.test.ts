@@ -1,18 +1,20 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
-import { alarmPass, alarmRetryDelay, armAlarm, rearmSharedAlarm } from '../src/scheduler/alarm-slot';
+import { alarmPass, alarmRetryDelay, armAlarm, rearmSharedAlarm, WAKE_DUE_KEYS } from '../src/scheduler/alarm-slot';
 import { HEARTBEAT_EVERY_MS } from '../src/channels/heartbeat';
 
 // Every pass here is fired by workerd's own alarm scheduler at a real owner object. A wake armed or deleted during a pass
 // replaces or cancels the platform's retry, so the handler owns its retries: it counts the failure, arms its own backoff
 // and returns. The four throw shapes: before any re-arm (a); after the arbiter deleted the alarm (b); after it armed its
-// 250 ms floor for a past-due key (c); after it armed a later wake (d).
+// 250 ms floor for the failing lane's past-due key (c); after it armed a later wake (d).
 const { OwnerDO } = await import('../src/channels/owner-do');
 type Passes = { alarm(info?: AlarmInvocationInfo): Promise<void>; alarmWork(): Promise<void>; drainApp(): Promise<void>; drainIMessage(): Promise<void> };
 const proto = OwnerDO.prototype as unknown as Passes;
 const FAILURES = 'owner_alarm_failures_v1';
 const RETRY_DUE = 'owner_alarm_retry_due_v1';
+const LANE = 'owner_alarm_failed_lane_v1';
+const IMESSAGE_DUE = 'imessage_owner_inbox_due_v1';
 const LINK_DUE = 'telegram_link_due_v1';
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -36,7 +38,7 @@ const watchPasses = async (name: string, seed: (state: DurableObjectState) => vo
     // The failing lane stays mocked until no wake is left, so no pass runs the real alarm work on this owner afterwards.
     await inObject(state => state.storage.deleteAlarm());
     await sleep(300);
-    await inObject(state => { state.storage.kv.delete(LINK_DUE); return state.storage.deleteAlarm(); });
+    await inObject(async state => { await state.storage.delete([...WAKE_DUE_KEYS]); await state.storage.deleteAlarm(); });
     const left = await inObject(state => state.storage.getAlarm());
     passes.mockRestore();
     expect(left).toBeNull();
@@ -47,6 +49,7 @@ const untilPasses = async (at: number[], count: number, withinMs: number) => {
   while (at.length < count && Date.now() < deadline) await sleep(50);
 };
 const failing = (lane: 'drainApp' | 'drainIMessage') => vi.spyOn(proto, lane).mockRejectedValue(new Error('synthetic lane failure'));
+const laneOf = { drainApp: 'app', drainIMessage: 'imessage' } as const;
 
 it.each([
   ['a', 'drainApp', () => undefined],
@@ -63,15 +66,15 @@ it.each([
       expect(at[1]! - at[0]!, `passes at ${at.join(', ')} ms; first step ${step} ms`).toBeLessThanOrEqual(step + 1_000);
     });
     const logged = lines.mock.calls.map(call => String(call[0]));
-    expect(logged).toContain(JSON.stringify({ hop: 'alarm', ok: false, code: 'retry_scheduled', streak: 1 }));
+    expect(logged).toContain(JSON.stringify({ hop: 'alarm', ok: false, code: 'retry_scheduled', lane: laneOf[lane], streak: 1 }));
     expect(logged.join('\n')).not.toContain('synthetic lane failure');
   } finally { fail.mockRestore(); lines.mockRestore(); }
 }, 20_000);
 
-it('throw shape (c): a past-due key and a throwing lane back off instead of re-arming every 250 ms', async () => {
+it('throw shape (c): a throwing lane with its own past-due key backs off instead of re-arming every 250 ms', async () => {
   const lines = vi.spyOn(console, 'error').mockImplementation(() => undefined), fail = failing('drainIMessage');
   try {
-    await watchPasses('alarm-retry-c', state => state.storage.kv.put(LINK_DUE, Date.now() - 1_000), async (_stub, at) => {
+    await watchPasses('alarm-retry-c', state => state.storage.kv.put(IMESSAGE_DUE, Date.now() - 1_000), async (_stub, at) => {
       await sleep(9_000);
       expect(at.length, `passes at ${at.join(', ')} ms`).toBeLessThanOrEqual(3);
     });
@@ -88,9 +91,10 @@ it('a pass that succeeds after a failure clears the streak, and the next wake is
     await watchPasses('alarm-retry-reset', state => state.storage.kv.put(LINK_DUE, later), async (stub, at) => {
       await untilPasses(at, 2, 4_000);
       await sleep(200);
-      const after = await runInDurableObject(stub, async (_instance, state) => ({ streak: state.storage.kv.get(FAILURES), retryDue: state.storage.kv.get(RETRY_DUE), armed: await state.storage.getAlarm() }));
+      const after = await runInDurableObject(stub, async (_instance, state) => ({ streak: state.storage.kv.get(FAILURES), lane: state.storage.kv.get(LANE), retryDue: state.storage.kv.get(RETRY_DUE), armed: await state.storage.getAlarm() }));
       expect(at.length, `passes at ${at.join(', ')} ms`).toBe(2);
       expect(after.streak).toBeUndefined();
+      expect(after.lane).toBeUndefined();
       expect(after.retryDue).toBeUndefined();
       expect(after.armed).toBe(later);
     });
@@ -118,11 +122,11 @@ it('the retry wake is a listed due key, so an arbiter re-arm outside the handler
   } finally { fail.mockRestore(); lines.mockRestore(); }
 }, 20_000);
 
-// The handler owns the retry, so the arbiter's 250 ms floor is no second backoff while one is pending.
-it('while a retry is pending, a re-arm outside the handler arms a past-due key no sooner than that retry', async () => {
+// The handler owns the failing lane's retry, so the arbiter's 250 ms floor is no second backoff for that lane's work.
+it('while a retry is pending, a re-arm outside the handler arms the failing lane\'s past-due key no sooner than that retry', async () => {
   const lines = vi.spyOn(console, 'error').mockImplementation(() => undefined), fail = failing('drainIMessage');
   try {
-    await watchPasses('alarm-retry-past-due', state => state.storage.kv.put(LINK_DUE, Date.now() - 1_000), async (stub, at) => {
+    await watchPasses('alarm-retry-past-due', state => state.storage.kv.put(IMESSAGE_DUE, Date.now() - 1_000), async (stub, at) => {
       const kept = await rearmAfterFirstFailure(stub);
       expect(kept.armed, `armed ${kept.armed}, retry key ${kept.retryDue}`).toBe(kept.retryDue);
       await untilPasses(at, 2, 4_000);

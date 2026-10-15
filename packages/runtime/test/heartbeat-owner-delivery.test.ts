@@ -22,7 +22,11 @@ vi.mock('../src/scheduler/alarm-slot', async load => {
     }
   } };
 });
-vi.mock('openai', () => ({ default: class { responses = { create: async () => { throw new Error('heartbeat fixture forbids model calls'); } }; } }));
+// Only the check-back turn may call the model; its reply carries a link the outbox must redact.
+vi.mock('openai', () => ({ default: class { responses = { create: async (body: { input: unknown }) => {
+  if (!JSON.stringify(body.input).includes('[Check-back due now')) throw new Error('heartbeat fixture allows only the check-back turn');
+  return { status: 'completed', output_text: 'Still open: Synthetic errand https://fixture.invalid/page?code=fixture-code', output: [], usage: { input_tokens: 1, output_tokens: 1 } };
+} }; } }));
 const { OwnerDO } = await import('../src/channels/owner-do');
 let sequence = 0;
 it.each(['ack', 'blocked', 'unlink', 'enqueueCrash', 'enqueueFailure'])('actual owner alarm keeps heartbeat background delivery truthful: %s', async mode => {
@@ -51,7 +55,9 @@ it.each(['ack', 'blocked', 'unlink', 'enqueueCrash', 'enqueueFailure'])('actual 
       rows[0]!.dueAt = Date.now() - 1; state.storage.kv.put(FINAL_OUTBOX_KEY, rows);
       if (mode === 'unlink') state.storage.kv.put('telegram_unlinked', true);
       await owner.alarm();
-      expect(state.storage.kv.get('owner_alarm_failures_v1')).toBeUndefined();
+      // The crash failed the schedule lane, which waits for its retry; the outbox lane delivers the reply meanwhile.
+      expect(state.storage.kv.get('owner_alarm_failures_v1')).toBe(mode === 'enqueueCrash' ? 1 : undefined);
+      expect(state.storage.kv.get('owner_alarm_failed_lane_v1')).toBe(mode === 'enqueueCrash' ? 'schedule' : undefined);
       expect(effects.sends).toBe(mode === 'unlink' ? 0 : 1);
       if (mode !== 'unlink') expect(effects.sentText).toBe(rows[0]!.payload.text);
       expect(state.storage.sql.exec("SELECT status FROM background_runs WHERE kind = 'heartbeat'").toArray()).toEqual([{ status: effects.ack ? 'completed' : 'failed' }]);

@@ -80,6 +80,7 @@ const projections = {
     telegram_linked: view.telegram.linked,
     google_access_granted: view.google.accounts.some((account) => !account.error),
     quiet_hours_set: view.proactivity.quiet_start !== null,
+    ...(view.imessage ? { imessage_linked: view.imessage.linked } : {}),
   }),
   usage: (view: ConsoleView) => ({ rows: view.usage.map((row) => ({ model: row.model, calls: row.calls, input: row.input, cached: row.cached, output: row.output, usd: row.usd })) }),
   files: (view: ConsoleView) => ({

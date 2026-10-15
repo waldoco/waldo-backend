@@ -1,6 +1,6 @@
 // Typed connector proxy. The only place a Google token is read, refreshed or used: the runtime
 // sends a connection id and a typed operation, signed with the router secret, and gets data back.
-import { exchangeGoogleCode, GOOGLE_METHODS, googleClient, googleHas, GoogleError, proxyClientOptions, type GoogleErrorReason, type GoogleClient, type GoogleMethod } from '../../../packages/runtime/src/connectors/google.ts';
+import { exchangeGoogleCode, GOOGLE_METHODS, googleClient, googleHas, GoogleError, proxyClientOptions, type GoogleErrorReason, type GoogleClient, type GoogleMethod, type GoogleProfile } from '../../../packages/runtime/src/connectors/google.ts';
 import { driveRestClient, DRIVE_REST_METHODS, DriveRestError, type DriveRestMethod } from '../../../packages/runtime/src/connectors/drive-rest.ts';
 import { googleAccessToken, GoogleTokenError } from '../../../packages/runtime/src/connectors/google.ts';
 import { executeProxyIntent, ProxyIntentError, type IntentClaim } from '../../../packages/runtime/src/connectors/proxy-intent.ts';
@@ -37,9 +37,10 @@ const db = async (fn: string, args: Record<string, unknown>) => {
   if (!response.ok) throw new Error(`db ${fn} ${response.status}`);
   return response.json();
 };
-const store = async (doName: string, email: string, scopes: readonly string[], token: string) => {
+// The Google profile only passes through to the owner object: the edge stores none of it.
+const store = async (doName: string, email: string, scopes: readonly string[], token: string, profile?: GoogleProfile) => {
   const id = await db('proxy_store', { p_do_name: doName, p_provider: 'google', p_account: email, p_scopes: scopes.join(' '), p_secret: token }) as string | null;
-  return id ? reply({ id, email: email.toLowerCase(), scopes }) : fail(404, 'unknown owner');
+  return id ? reply({ id, email: email.toLowerCase(), scopes, ...(profile ? { profile } : {}) }) : fail(404, 'unknown owner');
 };
 
 type Body = Readonly<{ intent_id?: string; read_only?: boolean; do_name: string; op: 'exchange' | 'adopt' | 'call' | 'mcp_call' | 'calendar_watch' | 'channel_stop' | 'gmail_watch'; topic?: string; channel_id?: string; token?: string; address?: string; resource_id?: string; server_url?: string; tool?: string; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[]; calendar_details?: boolean }>;
@@ -88,7 +89,7 @@ const handle = async (body: Body): Promise<Response> => {
   try {
     if (body.op === 'exchange' && body.code) {
       const tokens = await exchangeGoogleCode(app, body.code, fetch, body.code_verifier);
-      return store(body.do_name, tokens.email ?? 'google', tokens.scopes ?? [], tokens.refresh_token);
+      return store(body.do_name, tokens.email ?? 'google', tokens.scopes ?? [], tokens.refresh_token, tokens.profile);
     }
     // One-time move of a token saved in the Durable Object before this proxy existed.
     if (body.op === 'adopt' && body.refresh_token) return store(body.do_name, body.email ?? 'google', body.scopes ?? [], body.refresh_token);

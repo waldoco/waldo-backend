@@ -67,6 +67,9 @@ it.each(['resume','restart'])('protocol double: real owner inbox and console han
    const opened=await instance.fetch(new Request(url,{method:'POST',headers:{cookie,origin:'https://local.invalid','content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({csrf:session.csrf,action:'open'})}));expect(opened.status).toBe(200);expect(await opened.text()).toContain('FICTIONAL_BEARER');
    nativeHandoffDouble.emit(true);commonBrowserFixture.text='Signed in as fictional intended owner';proof.phase='resume';proof.phaseCalls=0;
    await send(`I used Done; resume browser ${proof.sessionHandle} and verify the intended account.`);
+   // browse_act answers one generic error for every plain throw, and several throws leave the same retained record, so the record only narrows down which check refused the resume.
+   const resumed=proof.outputs.at(-1),retained=[...state.storage.kv.list<any>({prefix:'common-browser:'})].map(([,row])=>({handoff:row.handoff?.state,allocation:row.allocation,cleanup:row.cleanup,action:row.action?.state,expired:row.session?.expiresAt<=Date.now()}));
+   expect(resumed?.error,JSON.stringify({code:resumed?.code,reason:resumed?.reason,error:resumed?.error,retained})).toBeUndefined();
    expect(proof.outputs.at(-1)).toMatchObject({ok:true,data:{owner_login:'completed',intended_account_verification_required:true,text:'Signed in as fictional intended owner'}});
    expect(commonBrowserFixture.allocations).toBe(1);expect(commonBrowserFixture.ends).toBe(0);
    expect(JSON.stringify(proof.inputs)+JSON.stringify([...state.storage.kv.list({prefix:'common-browser:'})])).not.toContain('FICTIONAL_BEARER');expect(JSON.stringify(proof.inputs)).not.toContain('fixture-retained-provider');expect(denied).not.toHaveBeenCalled();

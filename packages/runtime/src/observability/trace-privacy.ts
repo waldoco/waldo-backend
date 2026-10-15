@@ -18,7 +18,7 @@ const validGuard = (guard: unknown): string | undefined =>
 const SAFE_DETAIL_HOPS = new Set([
   'stop', 'steer', 'connect_offer', 'google_token_migrated', 'memory_backup',
   'egress_scrub', 'egress_redacted', 'oauth_exchange', 'oauth_callback', 'google_linked',
-  'day_plan', 'nightly_memory', 'brief_sweep', 'day_card', 'update_card', 'console_action',
+  'day_plan', 'nightly_memory', 'brief_sweep', 'day_card', 'update_card', 'console_action', 'console_link',
 ]);
 
 // These receipts are strictly enum/count-only, even if a caller supplies a free-form
