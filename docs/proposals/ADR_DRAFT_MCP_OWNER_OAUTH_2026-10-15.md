@@ -31,7 +31,7 @@ Status: proposal. On 15 Oct the owner approved designing this sign-in path; buil
 - **Tokens.** Access tokens last 5 days. Refresh tokens last 30 days and **rotate**. Codes last 120 s. Redirect URIs must match exactly.
 - **Production gating.** An application (it asks for "static IP ranges or gateway IPs"), then staging "green for ≥ 48 hours", "idempotency guards for order placement" and "user-visible cart confirmation".
 - **Ordering.** `place_food_order` takes `addressId`, `paymentMethod`, UPI flags and a note. It acts on the server-side cart, has no idempotency key, and its docs require the user to confirm address and payment. UPI returns `PENDING_PAYMENT` with a `bridgeUrl`, then `check_payment_status` and `confirm_order`. SwiggyPay debits inline.
-- **Data.** Swiggy is fiduciary and the integrator is processor. "Do not persist user PII longer than needed to serve the current session"; no training; inference outside India needs a DPA and transfer mechanisms.
+- **Data.** Swiggy is fiduciary and the integrator is processor. "Do not persist user PII longer than needed to serve the current session"; no training without consent and a DPA; inference outside India needs a DPA and transfer mechanisms.
 - **Versioning.** Description-only changes fall outside the 6-month promise.
 
 **Zepto** `[unverified by me; both first-party pages returned 403]`. Coordinator research reports OTP sign-in and a redirect allowlist limited to known clients (Claude, VS Code, Postman, localhost); no documented multi-tenant track or DCR; real orders; UPI Reserve Pay payment.
@@ -101,7 +101,7 @@ Swiggy's scopes carry no read/write split, so the **adapter class is the only au
 | spend | one card per order, plus the budget check | `place_food_order`; `checkout`, `book_table` and `place_event_order` on the other servers |
 | excluded | not callable | `create_address`, `delete_address`, `report_error`, cancellation (Swiggy routes it to customer care) |
 
-- **Reads run under a scoped, revocable grant**, not a card for every call. Swiggy's food recipe uses about seven tools, so a card per call does not fit. Connecting creates that grant: this owner, this server, read-class tools only, within the adapter's parameter schemas, expiring with the connection. Each call re-checks it at dispatch against the connection status, the kill switch and the review state. Disconnecting revokes it. It is not a preauthorised capability: the owner creates it by signing in, and it never covers a write.
+- **Reads run under a scoped, revocable grant**, not a card for every call. Swiggy's food recipe uses about seven tools, so a card per call does not fit. Connecting creates that grant: this owner, this server, read-class tools only, within the adapter's parameter schemas, expiring with the connection. Each call re-checks it at dispatch against the connection status, the kill switch and the review state. Disconnecting revokes it. It is not a preauthorised capability: the owner creates it by signing in, and it never covers a write. Its budget is the turn's bounded-work limit plus the provider's rate limit. Its time limit is the connection's lifetime, rechecked on every call. Both are sized to real errands, not set to block them.
 - **Cart edits need a card.** They change the live cart that the owner's phone app also shows, and their arguments come from tainted search results, so ADR-0049 routes them to the desk. One card shows the whole proposed cart, not one card per item.
 - **Orders use a frozen intent.**
   1. The order card is rendered from a fresh `get_food_cart`. It shows the items, the total, the restaurant, the address as the owner's own label, and the payment method. This is Swiggy's own "user-visible cart confirmation".
@@ -113,7 +113,7 @@ Swiggy's scopes carry no read/write split, so the **adapter class is the only au
 - **Payment always happens in the provider's own flow.**
   - A UPI `bridgeUrl` or `upiIntentUrl` is checked against the registry's payment hosts. The host delivers it as a button; the model never types it.
   - Cash on delivery commits spend immediately, so it still needs the card.
-  - **SwiggyPay and UPI Reserve Pay are excluded in the zod enums.** Both debit with no provider payment step in front of the owner.
+  - **SwiggyPay and UPI Reserve Pay are excluded in the zod enums.** SwiggyPay debits inline (Swiggy docs). Reserve Pay is a pre-authorised mandate debit `[inference; no source read]`. If it is Zepto's only rail, Phase 2 needs an owner decision.
   - Waldo never holds a VPA, card data or any other payment credential.
 - **Budget.** The owner sets a per-order cap and a rolling daily cap in the console. These caps are deterministic because spend is a hard safety boundary, not a judgment call.
 
