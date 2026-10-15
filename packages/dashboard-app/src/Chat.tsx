@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react';
 import { CHAT_TEXT_MAX, visibleText, type ChatMessage, type ChatPart } from './chat-model';
-import { chatStore, type ChatStore, type LocalMessage } from './chat-store';
+import { anyWorking, chatStore, subscribeAnyChat, type ChatStore, type LocalMessage } from './chat-store';
 import { ChatText } from './chat-text';
 import { greeting } from './greeting';
 import { Icon, WaldoMark } from './icons';
@@ -116,7 +116,8 @@ function Working({ item, queued, store, now }: { item: LocalMessage; queued: num
   </div>;
 }
 
-export function ChatPanel({ zone: rawZone, store = chatStore() }: { zone?: string; store?: ChatStore }) {
+// One conversation: main, or a thread. `head` replaces the default heading; `locked` replaces the composer, as for an archived thread.
+export function ChatPanel({ zone: rawZone, thread = null, store = chatStore(thread), head, locked }: { zone?: string; thread?: string | null; store?: ChatStore; head?: ReactNode; locked?: ReactNode }) {
   const chat = useChat(store);
   const zone = zoneOr(rawZone);
   const [now, setNow] = useState(() => Date.now());
@@ -169,13 +170,13 @@ export function ChatPanel({ zone: rawZone, store = chatStore() }: { zone?: strin
   let lastDay = '';
 
   return <div className="chat">
-    <div className="chat-head reveal"><h1>Chat</h1><p className="label">Same conversation as your Waldo app.</p></div>
+    {head ?? <div className="chat-head reveal"><h1>Chat</h1><p className="label">Same conversation as your Waldo app.</p></div>}
     <div ref={log} className="chat-log" role="log" aria-live="polite" aria-relevant="additions" aria-busy={chat.phase === 'loading'} aria-label="Conversation with Waldo">
       {chat.phase === 'loading' && <div className="chat-skeleton" role="status"><span className="visually-hidden">Loading your conversation…</span><i className="sk owner"/><i className="sk waldo"/><i className="sk waldo short"/></div>}
-      {chat.phase === 'error' && <section className="panel" role="alert"><h2>Couldn’t load your conversation.</h2><p>{chat.error}</p><button onClick={() => store.retryLoad()}>Try again</button></section>}
+      {chat.phase === 'error' && <section className="panel" role="alert"><h2>Couldn’t load this chat.</h2><p>{chat.error}</p><div className="control-actions"><button onClick={() => store.retryLoad()}>Try again</button>{thread !== null && <a className="quiet-link" href="#/chat">Back to main chat</a>}</div></section>}
       {loaded && chat.nextCursor && <div className="chat-older"><button type="button" className="quiet" disabled={chat.older === 'loading'} onClick={() => { prepend.current = document.documentElement.scrollHeight - window.scrollY; void store.loadOlder(); }}>{chat.older === 'loading' ? 'Loading earlier messages…' : chat.older === 'error' ? 'Couldn’t load earlier messages. Try again' : 'Earlier messages'}</button></div>}
       {empty && <div className="chat-empty reveal"><span className="chat-avatar large" aria-hidden="true"><WaldoMark size={22}/></span><h2 className="chat-greeting">{(() => { const m = /^(Good )(\w+)(\.)$/.exec(greeting(zone, new Date(now))); return m ? <>{m[1]}<em>{m[2]}</em>{m[3]}</> : greeting(zone, new Date(now)); })()}</h2>
-        <p>Ask Waldo anything about your day. This is the same Waldo, with the same memory, as your app, Telegram and iMessage.</p>
+        <p>{thread === null ? 'Ask Waldo anything about your day. This is the same Waldo, with the same memory, as your app, Telegram and iMessage.' : 'A fresh chat with Waldo, with the same memory. What you say here stays in this chat.'}</p>
         <div className="chat-suggestions">{SUGGESTIONS.map((text, i) => <button key={text} type="button" style={{ '--i': i } as React.CSSProperties} onClick={() => { store.setDraft(text); input.current?.focus(); }}>{text}</button>)}</div></div>}
       {chat.messages.map(message => {
         const day = message.created_at === null ? lastDay : dayKey(message.created_at, zone);
@@ -192,7 +193,7 @@ export function ChatPanel({ zone: rawZone, store = chatStore() }: { zone?: strin
     <div className="chat-dock">
       {behind && <button type="button" className="chat-jump" onClick={() => toBottom(true)}><Icon name="arrow"/>Latest</button>}
       {chat.notice && <p className="chat-notice" role="status">{chat.notice}</p>}
-      <form className={`composer${over ? ' over' : ''}`} onSubmit={event => { event.preventDefault(); submit(); }}>
+      {locked ?? <form className={`composer${over ? ' over' : ''}`} onSubmit={event => { event.preventDefault(); submit(); }}>
         <label className="visually-hidden" htmlFor="chat-input">Message Waldo</label>
         <textarea id="chat-input" ref={input} rows={1} value={chat.draft} placeholder="Message Waldo" aria-describedby="chat-hint" aria-invalid={over || undefined}
           disabled={chat.phase === 'loading' || chat.phase === 'error'} onChange={event => store.setDraft(event.target.value)} onKeyDown={onKey}/>
@@ -202,14 +203,14 @@ export function ChatPanel({ zone: rawZone, store = chatStore() }: { zone?: strin
             ? <button type="button" className="composer-send stop" aria-label="Stop Waldo" title="Stop · Esc" disabled={first.stopping} onClick={() => void store.stop(first.clientId)}><i aria-hidden="true"/></button>
             : <button type="submit" className="composer-send" aria-label="Send message" title="Send · Enter" disabled={!length || over || !loaded}><Icon name="arrow"/></button>}
         </div>
-      </form>
+      </form>}
     </div>
   </div>;
 }
 
-// The top bar's way into chat; a dot shows while Waldo is working on something you sent here.
-export function ChatLink({ current, store = chatStore() }: { current: boolean; store?: ChatStore }) {
-  const working = useSyncExternalStore(store.subscribe, () => store.working(), () => false);
+// The top bar's way into chat; a dot shows while Waldo is working on something you sent here, in any chat.
+export function ChatLink({ current, store }: { current: boolean; store?: ChatStore }) {
+  const working = useSyncExternalStore(store ? store.subscribe : subscribeAnyChat, store ? () => store.working() : anyWorking, () => false);
   return <a className="chat-link" href="#/chat" aria-label={working ? 'Chat with Waldo, Waldo is working' : 'Chat with Waldo'} aria-current={current ? 'page' : undefined} title="Chat · G then C">
     <Icon name="chat"/>{working && <span className="chat-link-dot" aria-hidden="true"/>}</a>;
 }

@@ -1,4 +1,4 @@
-import { cancelChatMessage, ChatRequestError, ChatSignInRequired, fetchChatPage, fetchReceipt, newClientId, sendChatMessage, type ChatMessage, type ChatPage, type ChatReceipt, type RunState } from './chat-model';
+import { archiveThread, cancelChatMessage, ChatRequestError, ChatSignInRequired, createThread, deleteThread, fetchChatPage, fetchReceipt, fetchThreadPage, fetchThreads, newClientId, renameThread, sendChatMessage, type ChatMessage, type ChatPage, type ChatReceipt, type ChatThread, type RunState } from './chat-model';
 
 // A message typed here, from the moment it is sent until history shows it and its turn has closed. `landed` means
 // the server's copy is in history, so only the turn's state is still drawn from here.
@@ -28,6 +28,8 @@ export type ChatDeps = {
   setTimer: (run: () => void, ms: number) => number;
   clearTimer: (id: number) => void;
   visible: () => boolean;
+  // After a turn closes: a thread may have been named, and its place in the list moved.
+  settled?: () => void;
 };
 
 const PAGE = 30;
@@ -128,7 +130,7 @@ export function createChatStore(deps: ChatDeps) {
       entry.failures = 0;
       setLocal(clientId, { state: receipt.state, messageId: receipt.message_id, closedReason: receipt.closed_reason, effectsUnconfirmed: receipt.effects_unconfirmed, stopping: false });
       if (snap.notice) set({ notice: null });
-      if (closed(receipt.state)) { polls.delete(clientId); await refresh(); scheduleIdle(); return; }
+      if (closed(receipt.state)) { polls.delete(clientId); await refresh(); scheduleIdle(); deps.settled?.(); return; }
       // Progress notes and earlier replies land in history while a long turn runs.
       if (deps.now() - lastHistory > HISTORY_DURING_RUN) void refresh();
       poll(clientId, nextDelay(clientId));
@@ -206,6 +208,71 @@ export function createChatStore(deps: ChatDeps) {
 }
 export type ChatStore = ReturnType<typeof createChatStore>;
 
-let shared: ChatStore | null = null;
-// One store per page load, so a sent message keeps its state while you move between console pages.
-export const chatStore = (): ChatStore => shared ?? (shared = createChatStore(browserDeps()));
+// The thread list beside main. Reads replace it whole; each change is recorded under its own operation id and reread.
+export type ThreadsSnapshot = { phase: 'idle' | 'loading' | 'ready' | 'error'; threads: readonly ChatThread[]; error: string | null; busy: boolean };
+export type ThreadsDeps = Readonly<{ list: () => Promise<ChatThread[]>; create: (title?: string) => Promise<string>; rename: (thread: ChatThread, title: string) => Promise<string>; archive: (thread: ChatThread, archived: boolean) => Promise<string>; remove: (thread: ChatThread) => Promise<string> }>;
+export function createThreadsStore(deps: ThreadsDeps) {
+  let snap: ThreadsSnapshot = { phase: 'idle', threads: [], error: null, busy: false };
+  const listeners = new Set<() => void>();
+  const set = (next: Partial<ThreadsSnapshot>) => { snap = { ...snap, ...next }; listeners.forEach(listener => listener()); };
+  let loading: Promise<void> | null = null;
+  const load = (): Promise<void> => loading ?? (loading = (async () => {
+    if (snap.phase === 'idle' || snap.phase === 'error') set({ phase: 'loading' });
+    try { set({ phase: 'ready', threads: await deps.list(), error: null }); }
+    catch (error) { if (snap.phase !== 'ready') set({ phase: 'error', error: error instanceof Error ? error.message : 'Couldn’t load your chats.' }); }
+    finally { loading = null; }
+  })());
+  // A change's error is returned for the caller to show where the owner acted; the list rereads either way.
+  const change = async <T>(work: () => Promise<T>): Promise<T | Error> => {
+    set({ busy: true });
+    try { return await work(); }
+    catch (error) { return error instanceof Error ? error : new Error('That change didn’t go through.'); }
+    finally { set({ busy: false }); void load(); }
+  };
+  return {
+    subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    get: () => snap,
+    load,
+    // A thread read sees the newest revision first; the list takes it so the next change is made against it.
+    seen(thread: ChatThread) {
+      const rest = snap.threads.filter(item => item.thread_id !== thread.thread_id);
+      set({ threads: thread.state === 'deleted' ? rest : [thread, ...rest].sort((a, b) => b.last_activity_at - a.last_activity_at || (a.thread_id < b.thread_id ? -1 : 1)) });
+    },
+    create: (title?: string) => change(() => deps.create(title)),
+    rename: (thread: ChatThread, title: string) => change(() => deps.rename(thread, title)),
+    archive: (thread: ChatThread, archived: boolean) => change(() => deps.archive(thread, archived)),
+    remove: (thread: ChatThread) => change(() => deps.remove(thread)),
+  };
+}
+export type ThreadsStore = ReturnType<typeof createThreadsStore>;
+
+// A thread's chat: its page also carries the thread, whose revision every message names. A message written against a
+// revision that moved (an archive and unarchive elsewhere) is sent once more against the new one.
+export const threadDeps = (thread: string, threads: ThreadsStore, base: ChatDeps = browserDeps()): ChatDeps => {
+  let revision: number | null = null;
+  const page = async (cursor: string | null, limit: number) => { const read = await fetchThreadPage(thread, cursor, limit); revision = read.thread.revision; threads.seen(read.thread); return read.page; };
+  const sendOnce = async (id: string, text: string) => { if (revision === null) await page(null, 1); return sendChatMessage(id, text, thread, revision!); };
+  return { ...base, page,
+    send: async (id, text) => { try { return await sendOnce(id, text); } catch (error) { if (!(error instanceof ChatRequestError && error.code === 'thread_revision_conflict')) throw error; await page(null, 1); return sendOnce(id, text); } },
+    receipt: id => fetchReceipt(id, thread), cancel: id => cancelChatMessage(id, thread),
+    settled: () => void threads.load() };
+};
+let sharedThreads: ThreadsStore | null = null;
+export const threadsStore = (): ThreadsStore => sharedThreads ?? (sharedThreads = createThreadsStore({ list: fetchThreads, create: createThread, rename: renameThread, archive: archiveThread, remove: deleteThread }));
+
+// One store per conversation for the page load, so a sent message keeps its state while you move between chats and pages.
+const stores = new Map<string, ChatStore>();
+const registry = new Set<() => void>();
+export const chatStore = (thread: string | null = null): ChatStore => {
+  const key = thread ?? 'main';
+  let store = stores.get(key);
+  if (!store) {
+    store = createChatStore(thread === null ? browserDeps() : threadDeps(thread, threadsStore()));
+    stores.set(key, store);
+    store.subscribe(() => registry.forEach(listener => listener()));
+  }
+  return store;
+};
+// Whether Waldo is working on anything sent from this console, in any chat.
+export const anyWorking = (): boolean => [...stores.values()].some(store => store.working());
+export const subscribeAnyChat = (listener: () => void) => { registry.add(listener); return () => { registry.delete(listener); }; };
