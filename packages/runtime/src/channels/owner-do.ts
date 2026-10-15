@@ -96,6 +96,7 @@ import { armBriefSweep, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT } 
 import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardDeliveries, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, recordCardDelivery } from './day-cards';
 import { DAY_CARDS, dayPlanInput } from '../prompt/day-cards';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview } from './dashboard-overview';
+import { DASHBOARD_TASKS_PATH, TASKS_CLOSED_LIMIT, dashboardTasks } from './dashboard-tasks';
 import { SKIP_UPDATE, updateCardPrompt } from '../prompt/update-cards';
 import { changeLines, collectChanges, reviewMailFollowup, updateBook, type UpdateBook } from './update-cards';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
@@ -1368,7 +1369,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const url = new URL(request.url);
     const memoryRoute = url.pathname === MEMORY_GRAPH_PATH;
     const ownerControlsRoute=url.pathname===OWNER_CONTROLS_PATH,ownerActionsRoute=url.pathname===OWNER_CONTROLS_ACTION_PATH;
-    const memoryControlsRoute=url.pathname===MEMORY_CONTROL_PATH,controlsRoute=url.pathname===CONTROLS_PATH||memoryControlsRoute||ownerControlsRoute,actionsRoute=url.pathname===CONTROL_ACTION_PATH||ownerActionsRoute;
+    const tasksRoute=url.pathname===DASHBOARD_TASKS_PATH;
+    const memoryControlsRoute=url.pathname===MEMORY_CONTROL_PATH,controlsRoute=url.pathname===CONTROLS_PATH||memoryControlsRoute||ownerControlsRoute||tasksRoute,actionsRoute=url.pathname===CONTROL_ACTION_PATH||ownerActionsRoute;
     const overviewRoute = url.pathname === DASHBOARD_OVERVIEW_PATH || memoryRoute || controlsRoute || actionsRoute;
     if ((overviewRoute && !actionsRoute && request.method !== 'GET') || (actionsRoute && request.method !== 'POST')) return new Response('method not allowed', { status: 405, headers: DASHBOARD_OVERVIEW_HEADERS });
     const link = url.pathname === CONSOLE_PATH ? url.searchParams.get('t') : null;
@@ -1485,6 +1487,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             return response;
           }
           const runtime=this.setup();await runtime.ready;
+          if(tasksRoute){
+            if(url.search)return Response.json({error:'invalid_query'},{status:400,headers:DASHBOARD_OVERVIEW_HEADERS});
+            const memory=claimStore(this.ctx.storage.sql),loops=loopBook(this.ctx.storage.sql,{newId:()=>crypto.randomUUID(),now:Date.now});
+            const held=[...memory.claims('purging').flatMap(claim=>[claim.text,claim.evidence]),...memory.pendingTopics(),...memory.incompleteTopics()];
+            return Response.json(dashboardTasks({now:Date.now(),open:loops.list('open'),closed:loops.closed(TASKS_CLOSED_LIMIT),held}),{headers:DASHBOARD_OVERVIEW_HEADERS});
+          }
           if(controlsRoute){
             if(memoryControlsRoute){
               if([...url.searchParams.keys()].some(key=>key!=='id')||url.searchParams.getAll('id').length!==1||(url.searchParams.get('id')?.length??0)>256)return Response.json({error:'invalid_query'},{status:400,headers:DASHBOARD_OVERVIEW_HEADERS});
