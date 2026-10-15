@@ -136,7 +136,7 @@ it('reads an oversized-screenshot page as text only and keeps provider cancellat
   const f = harness('input');
   const driver = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => f.sdk as never, now: () => 1, deadline: () => 60000, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 3 });
   const first = await driver.navigate(session, 'https://docs.example/index');
-  expect(first.image).toBeUndefined();
+  expect(first.image).toBeUndefined(); expect(first.observation.image_omitted).toBe('oversize');
   expect(first.observation).toMatchObject({ text: 'Compare Browser Run sessions and contexts.', elements: [{ name: 'Session reuse' }] });
   // The re-observation after a dispatched action is text-only too; it stays a known outcome, not outcome_uncertain.
   const filled = await driver.act(session, first, { operation: 'fill', element_ref: first.observation.elements[0]!.ref, value: 'Walrus' }, async () => {});
@@ -230,7 +230,7 @@ it('does not fulfill a denied document or report a click into it as useful work'
   const originalLocator=f.pages[0].locator;
   f.pages[0].locator = () => ({ ...originalLocator(), click: async () => {
     await f.route({ request: () => ({ url: () => 'https://docs.example/denied', method: () => 'GET', isNavigationRequest: () => true, frame: () => ({ parentFrame: () => null, page: () => f.pages[0] }) }),
-      fetch: async () => ({ status: () => 403 }), fulfill: async () => { routeCalls.push('fulfilled'); }, abort: async () => { routeCalls.push('blocked'); } });
+      fetch: async () => ({ status: () => 403, headers: () => ({}) }), fulfill: async () => { routeCalls.push('fulfilled'); }, abort: async () => { routeCalls.push('blocked'); } });
   } });
   await expect(driver.act(session, first, { operation: 'click', element_ref: first.observation.elements[0]!.ref }, async () => {})).rejects.toMatchObject({ code: 'outcome_uncertain', diagnostic: { status: 403 } });
   expect(routeCalls).toEqual(['blocked']);
@@ -306,7 +306,7 @@ it('keeps routed mutation uncertainty and separately records unconfirmed denied-
   f.browser.newBrowserCDPSession = async () => ({ send: async () => { throw Error('termination unconfirmed'); } });
   const originalLocator=f.pages[0].locator;
   f.pages[0].locator = () => ({ ...originalLocator(), click: async () => {
-    await f.route({ request: () => ({ url: () => 'https://docs.example/denied', method: () => 'GET', isNavigationRequest: () => true, frame: () => ({ parentFrame: () => null, page: () => f.pages[0] }) }), fetch: async () => ({ status: () => 403 }), abort: async () => {} });
+    await f.route({ request: () => ({ url: () => 'https://docs.example/denied', method: () => 'GET', isNavigationRequest: () => true, frame: () => ({ parentFrame: () => null, page: () => f.pages[0] }) }), fetch: async () => ({ status: () => 403, headers: () => ({}) }), abort: async () => {} });
   } });
   await expect(driver.act(session, first, { operation: 'click', element_ref: first.observation.elements[0]!.ref }, async () => {})).rejects.toMatchObject({ code: 'outcome_uncertain', diagnostic: { status: 403 }, cleanup_failed: true });
 });

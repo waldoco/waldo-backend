@@ -18,6 +18,14 @@ it('retains exact grant/session and guarded documents after host reconstruction 
  expect(commonBrowserFixture.allocations).toBe(1);expect(commonBrowserFixture.pages).toHaveLength(1);
  await two.cancel();expect(commonBrowserFixture.pages).toHaveLength(0);expect(commonBrowserFixture.ends).toBe(1);
 });
+it('an over-limit page image is left out of the model attachments; an explicit screenshot save still refuses it',async()=>{
+ const f=fixture();(f.grant as {maxScreenshotBytes:number}).maxScreenshotBytes=8;const host=f.host();
+ const read=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.',retain_session:true} as never,f.ctx) as any;
+ expect(read).toMatchObject({ok:true,data:{image_omitted:'oversize'}});expect(host.attachments()).toEqual([]);
+ const saved=await host.actionHandler.handle({session_handle:read.data.session_handle,url:'https://public-pages.fixture.invalid/a',task:'Save it.',max_actions:1,command:{operation:'screenshot'}} as never,f.ctx) as any;
+ expect(saved).toMatchObject({ok:false});expect(saved.error).toContain('image_oversize');
+ await host.cancel();
+});
 it('changed grant and pending allocation refuse replacement allocation',async()=>{
  const f=fixture();await f.host().handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read.'},f.ctx);
  (f.grant as {expiresAt:number}).expiresAt++;

@@ -3,6 +3,9 @@ import {
   type ToolHandler, type ToolName, type WebSearchArgs,
 } from '@waldo/contracts';
 import type { ToolDispatcherContext } from '../dispatcher';
+import { effectSignal } from '../../channels/run-effect-scope';
+
+const SEARCH_CEILING_MS = 15_000;
 
 export type SearchHit = Readonly<{ title: string; url: string; snippet: string }>;
 
@@ -23,8 +26,9 @@ export const webSearchHandler = (
     let response: Response;
     try {
       await ctx?.assertTaskSourceCurrent?.();
-      response = await fetcher(url, { headers: { 'X-Subscription-Token': apiKey, Accept: 'application/json' } });
+      response = await fetcher(url, { headers: { 'X-Subscription-Token': apiKey, Accept: 'application/json' }, signal: effectSignal(ctx?.runScope, SEARCH_CEILING_MS) });
     } catch (error) {
+      if (error instanceof DOMException && (error.name === 'TimeoutError' || error.name === 'AbortError')) return { ok: false, code: 'transient', source_taint: 'external', error: 'Web search did not answer in the time this turn had left.' };
       return { ok: false, code: 'transient', source_taint: 'external', error: error instanceof Error ? error.message : String(error) };
     }
     if (response.status === 401 || response.status === 403) {
