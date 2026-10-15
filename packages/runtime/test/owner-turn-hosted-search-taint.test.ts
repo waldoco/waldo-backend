@@ -2,6 +2,7 @@ import { expect, it } from 'vitest';
 import { sendMessageArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type LLMResponse } from '@waldo/contracts';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
+import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { ownerTyped } from './helpers/owner-typed';
 
 const time = async <T,>(_hop: string, work: () => Promise<T>) => work();
@@ -9,7 +10,7 @@ const call = { call_id: 'm1', name: 'send_message', arguments: JSON.stringify({ 
 const SEARCH = { type: 'web_search_call', id: 'ws_1', status: 'completed', action: { type: 'search', query: 'quiet hotels near the venue' } };
 
 // One owner turn whose first response asks to send a message, with or without a hosted web search in the same response.
-const turn = async (searched: boolean) => {
+const turn = async (searched: boolean, entries: TurnLogEntry[] = []) => {
   let sent = 0;
   const send = {
     name: 'send_message' as const, description: 'Queue a message.', schema: sendMessageArgsSchema, autonomy_gated: true,
@@ -25,6 +26,7 @@ const turn = async (searched: boolean) => {
     return { ok: true, data };
   } };
   const args: Parameters<typeof createOwnerResponder> = ['fixture'];
+  args[3] = (entry) => { entries.push(entry); };
   args[5] = [send as never]; args[10] = gateway;
   await createOwnerResponder(...args).respond(ownerTyped({ traceId: `search-taint-${searched}`, conversationRef: 'telegram-1', surface: 'telegram', text: 'book the quieter hotel and tell Sam', memoryWrites: false }), time);
   return sent;
@@ -33,4 +35,12 @@ const turn = async (searched: boolean) => {
 it('a privileged call in the same response as a hosted web search is refused by the turn taint gate', async () => {
   expect(await turn(false)).toBe(1);
   expect(await turn(true)).toBe(0);
+});
+
+it('a reply call records how many hosted web searches it ran, and no search text', async () => {
+  const entries: TurnLogEntry[] = [];
+  await turn(true, entries);
+  const replies = entries.filter((entry) => entry.hop === 'llm_reply' && entry.usage);
+  expect(replies.map((entry) => entry.usage?.web_searches ?? 0)).toEqual([1, 0]);
+  expect(JSON.stringify(replies.map((entry) => entry.usage))).not.toContain('quiet hotels');
 });

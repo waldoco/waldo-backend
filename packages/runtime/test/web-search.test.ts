@@ -21,6 +21,36 @@ describe('web_search', () => {
     expect(result.data.hits[0]).toEqual({ title: 't0', url: 'https://example.com/0', snippet: 'd0' });
   });
 
+  it.each([
+    { timezone: 'Asia/Kolkata', country: 'IN' },
+    { timezone: 'UTC', country: 'IN' },
+    { timezone: 'Europe/London', country: null },
+  ])('asks Brave for the country the owner time zone gives: $timezone', async ({ timezone, country }) => {
+    const urls: string[] = [];
+    const fetcher = (async (url: string) => { urls.push(url); return Response.json({ web: { results: [] } }); }) as unknown as typeof fetch;
+    const result = await webSearchHandler('key', fetcher, () => timezone).handle({ query: 'dosa near me', limit: 3 }, ctx);
+    expect(result.ok).toBe(true);
+    expect(new URL(urls[0]!).searchParams.get('country')).toBe(country);
+  });
+
+  it('reads the owner time zone on each search, not when the tool is built', async () => {
+    const urls: string[] = [];
+    const fetcher = (async (url: string) => { urls.push(url); return Response.json({ web: { results: [] } }); }) as unknown as typeof fetch;
+    let timezone = 'Europe/London';
+    const handler = webSearchHandler('key', fetcher, () => timezone);
+    await handler.handle({ query: 'q', limit: 1 }, ctx);
+    timezone = 'Asia/Kolkata';
+    await handler.handle({ query: 'q', limit: 1 }, ctx);
+    expect(urls.map((url) => new URL(url).searchParams.get('country'))).toEqual([null, 'IN']);
+  });
+
+  it('sends no country when no owner time zone is supplied', async () => {
+    const urls: string[] = [];
+    const fetcher = (async (url: string) => { urls.push(url); return Response.json({ web: { results: [] } }); }) as unknown as typeof fetch;
+    await webSearchHandler('key', fetcher).handle({ query: 'q', limit: 1 }, ctx);
+    expect(new URL(urls[0]!).searchParams.has('country')).toBe(false);
+  });
+
   it('no key configured: honest auth_failed, never a fabricated answer', async () => {
     const handler = webSearchHandler(undefined, braveOk([]) as typeof fetch);
     const result = await handler.handle({ query: 'waldo', limit: 5 }, ctx);
