@@ -19,7 +19,7 @@ const time = async <T,>(_hop: string, work: () => Promise<T>) => work();
 const scope = (runId: string): RunEffectScope => ({ runId, attempt: `${runId}-attempt`, deadline: Date.now() + 60_000, signal: new AbortController().signal, admit: () => undefined, commit: work => work() });
 
 // A responder with the production model defaults, whose gateway records the model and effort of every call it receives.
-const responder = ({ store, memory, privateOwner }: { store?: ConversationStore; memory?: ClaimStore; privateOwner?: Parameters<typeof createOwnerResponder>[21] } = {}) => {
+const responder = ({ store, memory, privateOwner, timezone }: { store?: ConversationStore; memory?: ClaimStore; privateOwner?: Parameters<typeof createOwnerResponder>[21]; timezone?: string } = {}) => {
   const requests: LLMRequest[] = [];
   const gateway: LLMGatewayAdapter = { complete: async ({ request }) => {
     requests.push(request);
@@ -28,6 +28,7 @@ const responder = ({ store, memory, privateOwner }: { store?: ConversationStore;
   } };
   const args: Parameters<typeof createOwnerResponder> = ['fixture'];
   args[1] = store; args[2] = memory; args[10] = gateway; args[18] = ['👌']; args[21] = privateOwner;
+  if (timezone) args[4] = { timezone, now: () => new Date() };
   return { requests, owner: createOwnerResponder(...args), routed: () => requests.map(request => [request.model, request.reasoning_effort]) };
 };
 const SOL_MEDIUM = [OPENAI_GPT_6_1_SOL_MODEL, 'medium'];
@@ -101,4 +102,25 @@ it('gives a Sol owner turn 25,000 output tokens of room and keeps a Luna auxilia
   await owner.respond(ownerTyped({ traceId: 'route-room-1', conversationRef: 'telegram-1', surface: 'telegram', text: 'compare three hotels near the venue', memoryWrites: false }), time);
   await owner.chooseReaction(ownerTyped({ traceId: 'route-room-2', conversationRef: 'telegram-1', surface: 'telegram', text: 'perfect' }));
   expect(requests.map(request => [request.model, request.reasoning_effort, request.max_tokens])).toEqual([[...SOL_MEDIUM, 25_000], [...LUNA_LOW, 4_096]]);
+});
+
+// Hosted search is offered on the owner's own reply with tools, located by the owner's time zone; an unset zone keeps
+// the India default.
+it.each([
+  ['Asia/Kolkata', { country: 'IN', timezone: 'Asia/Kolkata' }],
+  ['America/New_York', { timezone: 'America/New_York' }],
+  [undefined, { country: 'IN' }],
+] as const)('an owner reply in %s offers hosted search located at %j', async (timezone, location) => {
+  const { owner, requests } = responder(timezone ? { timezone } : {});
+  await owner.respond(ownerTyped({ traceId: `route-search-${timezone ?? 'unset'}`, conversationRef: 'telegram-1', surface: 'telegram', text: 'find a quiet hotel near the venue', memoryWrites: false }), time);
+  expect(requests.map((request) => [request.tools !== undefined, request.web_search])).toEqual([[true, location]]);
+});
+
+it('a reaction, a reminder and a scheduled job never offer hosted search', async () => {
+  const { owner, requests } = responder({ timezone: 'Asia/Kolkata' });
+  await owner.chooseReaction(ownerTyped({ traceId: 'route-nosearch-1', conversationRef: 'telegram-1', surface: 'telegram', text: 'thanks' }));
+  await owner.remind('route-nosearch-2', 'telegram-1', 'call Sam', time, 'telegram');
+  await owner.prompt('route-nosearch-3', 'telegram-1', 'Write the morning card from these facts: two meetings.', time, 'telegram');
+  expect(requests).toHaveLength(3);
+  expect(requests.every((request) => request.web_search === undefined)).toBe(true);
 });

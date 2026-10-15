@@ -160,6 +160,11 @@ export async function runToolLoop(input: Readonly<{
       return unfinishedReply('time_exhausted', done);
     }
     input.ctx.runScope?.admit();
+    // A hosted web search runs inside the model's own call, so its results arrive in the response rather than as a tool
+    // result. They taint the rest of the turn the same way (ADR-0049), before this round's calls are dispatched.
+    if (response.output_items?.some((item) => item.type === 'web_search_call')) {
+      (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint = 'external';
+    }
     if (response.tool_calls === undefined || (!offer && !repairEmptyCeiling)) {
       input.onSettle?.(exit);
       return guardArtifactLinks(response.text || (exit === 'budget_exhausted' || exit === 'time_exhausted'

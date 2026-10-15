@@ -115,6 +115,15 @@ describe('llmRequest', () => {
       expect(llmRequestSchema.safeParse({ ...baseRequest, reasoning_effort: effort }).success, effort).toBe(false);
     }
   });
+
+  it('carries an optional hosted web search with an approximate location', () => {
+    for (const web_search of [{}, { country: 'IN' }, { timezone: 'Asia/Kolkata' }, { country: 'IN', timezone: 'Asia/Kolkata' }]) {
+      expect(llmRequestSchema.safeParse({ ...baseRequest, web_search }).success, JSON.stringify(web_search)).toBe(true);
+    }
+    for (const web_search of [{ country: 'India' }, { country: 'in' }, { timezone: '' }, { city: 'Bengaluru' }, null]) {
+      expect(llmRequestSchema.safeParse({ ...baseRequest, web_search }).success, JSON.stringify(web_search)).toBe(false);
+    }
+  });
 });
 
 describe('llmResponse metering', () => {
