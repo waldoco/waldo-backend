@@ -2,9 +2,10 @@
 // guard-surface-neutral-core — the runtime core decides by declared capability, not by
 // which surface a turn came from. Every comparison against the surface list in
 // packages/runtime/src is counted per file and held to the committed baseline: a file
-// may only lose compares. A turnOnSurface( call counts as a compare everywhere except the surface adapters. The surface list is read from the app contract so a new
-// surface is ratcheted the day it is declared. Raising a baseline number is the
-// backend lead's merge-gate decision; lowering one is the author's duty in the same PR.
+// may only lose compares, and a turnOnSurface( call counts as one everywhere except the
+// surface adapters. The surface list is read from the app contract so a new surface is
+// ratcheted the day it is declared. Raising a baseline number is the backend lead's
+// merge-gate decision; lowering one is the author's duty in the same PR.
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
