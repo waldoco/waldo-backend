@@ -226,6 +226,36 @@ describe('the window read gives a turn the same context and leaf as a whole-chai
   });
 });
 
+// A load as a write outside a turn makes it, with no chat: the model's view of a next row on the returned leaf.
+const leafView = async (storage: DurableObjectStorage) => {
+  const { entries, leafId } = await canonicalOwnerConversationStore(storage, contextFor()).load();
+  const tree = new ConversationTree();
+  for (const entry of entries) tree.append(entry);
+  tree.append(row('next', leafId, 'assistant', 'Scheduled message.', { chatId: tree.get(leafId!)!.chatId }));
+  return { leafId, messages: compactedHistory(tree, 'next').messages };
+};
+
+describe('each path the read follows is needed', () => {
+  it('the turn chat is read back to its own window when the stored leaf sits on another chat', async () => {
+    const data = stored([...chain(500), ...chain(1, IMESSAGE)], `${IMESSAGE}-u0-reply`);
+    const { view } = await equivalent(data, MAIN);
+    expect(view.messages.length).toBeGreaterThan(150);
+  });
+
+  it('a retried owner message keeps its whole window under a did-not-finish row as large as the budget, left as the stored leaf', async () => {
+    const rows = [...chain(500), row('retry', `${MAIN}-u499-reply`, 'user', text('retried question')), row('retry-did-not-finish', 'retry', 'assistant', text('did not finish', 360_000))];
+    const { view } = await equivalent(stored(rows, 'retry-did-not-finish'), MAIN, { retry: 'retry' });
+    expect(view.messages.length).toBeGreaterThan(150);
+  });
+
+  it('a load with no chat reads back to the stored leaf and its window when the leaf is more than a page behind the newest row', async () => {
+    const data = stored([...chain(300), ...chain(100, IMESSAGE)], `${MAIN}-u299-reply`);
+    const bounded = await leafView(countingStorage(new Map(data)));
+    expect(bounded).toEqual(await leafView(unboundedView(new Map(data))));
+    expect(bounded.messages.length).toBeGreaterThan(150);
+  });
+});
+
 describe('writes after a window read', () => {
   it('a save after the read lists one row, and the boundary row it re-rooted is saved back as stored', async () => {
     const storage = countingStorage(stored(chain(2_500), `${MAIN}-u2499-reply`));
