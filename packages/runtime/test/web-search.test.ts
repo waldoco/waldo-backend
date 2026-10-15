@@ -21,6 +21,36 @@ describe('web_search', () => {
     expect(result.data.hits[0]).toEqual({ title: 't0', url: 'https://example.com/0', snippet: 'd0' });
   });
 
+  it.each([
+    { timezone: 'Asia/Kolkata', country: 'IN' },
+    { timezone: 'UTC', country: 'IN' },
+    { timezone: 'Europe/London', country: null },
+  ])('asks Brave for the country the owner time zone gives: $timezone', async ({ timezone, country }) => {
+    const urls: string[] = [];
+    const fetcher = (async (url: string) => { urls.push(url); return Response.json({ web: { results: [] } }); }) as unknown as typeof fetch;
+    const result = await webSearchHandler('key', fetcher, () => timezone).handle({ query: 'dosa near me', limit: 3 }, ctx);
+    expect(result.ok).toBe(true);
+    expect(new URL(urls[0]!).searchParams.get('country')).toBe(country);
+  });
+
+  it('reads the owner time zone on each search, not when the tool is built', async () => {
+    const urls: string[] = [];
+    const fetcher = (async (url: string) => { urls.push(url); return Response.json({ web: { results: [] } }); }) as unknown as typeof fetch;
+    let timezone = 'Europe/London';
+    const handler = webSearchHandler('key', fetcher, () => timezone);
+    await handler.handle({ query: 'q', limit: 1 }, ctx);
+    timezone = 'Asia/Kolkata';
+    await handler.handle({ query: 'q', limit: 1 }, ctx);
+    expect(urls.map((url) => new URL(url).searchParams.get('country'))).toEqual([null, 'IN']);
+  });
+
+  it('sends no country when no owner time zone is supplied', async () => {
+    const urls: string[] = [];
+    const fetcher = (async (url: string) => { urls.push(url); return Response.json({ web: { results: [] } }); }) as unknown as typeof fetch;
+    await webSearchHandler('key', fetcher).handle({ query: 'q', limit: 1 }, ctx);
+    expect(new URL(urls[0]!).searchParams.has('country')).toBe(false);
+  });
+
   it('no key configured: honest auth_failed, never a fabricated answer', async () => {
     const handler = webSearchHandler(undefined, braveOk([]) as typeof fetch);
     const result = await handler.handle({ query: 'waldo', limit: 5 }, ctx);
@@ -150,5 +180,43 @@ describe('web_search dispatcher receipts', () => {
       ok: false, call_id: 'search-receipt', tool: 'web_search',
       code: 'transient', error: 'tool handler returned invalid result', reason: 'invalid_handler_result',
     });
+  });
+});
+
+describe('web_search turn bound', () => {
+  const hung = (seen: { signal?: AbortSignal }) => (async (_url: string, init?: RequestInit) => {
+    seen.signal = init?.signal ?? undefined;
+    return new Promise<Response>((_, reject) => init?.signal?.addEventListener('abort', () => reject(init.signal!.reason), { once: true }));
+  }) as typeof fetch;
+  const scoped = (deadline: number, signal = new AbortController().signal) =>
+    ({ runScope: { runId: 'r', attempt: 'a', deadline, signal, admit() {}, commit: <T>(work: () => T) => work() } }) as unknown as ToolDispatcherContext;
+
+  it('a hung provider aborts at the run deadline and reports transient', async () => {
+    const seen: { signal?: AbortSignal } = {};
+    const started = Date.now();
+    const result = await webSearchHandler('key', hung(seen)).handle({ query: 'waldo', limit: 5 }, scoped(Date.now() + 150));
+    expect(seen.signal).toBeDefined();
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('transient');
+  });
+
+  it('the run being cancelled aborts the in-flight search', async () => {
+    const seen: { signal?: AbortSignal } = {};
+    const run = new AbortController();
+    const pending = webSearchHandler('key', hung(seen)).handle({ query: 'waldo', limit: 5 }, scoped(Date.now() + 60_000, run.signal));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    run.abort();
+    const result = await pending;
+    expect(result.ok).toBe(false);
+  });
+
+  it('without a run scope the search still has a finite ceiling', async () => {
+    const seen: { signal?: AbortSignal } = {};
+    void webSearchHandler('key', hung(seen)).handle({ query: 'waldo', limit: 5 }, ctx).catch(() => undefined);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(seen.signal).toBeDefined();
+    expect(seen.signal!.aborted).toBe(false);
   });
 });

@@ -31,6 +31,18 @@ interface DecodeBundle {
   views: string[];
 }
 
+interface EncodedSpan {
+  key: string;
+  start: number;
+  end: number;
+  decoded: string;
+}
+
+interface DecodeNode {
+  text: string;
+  spans: EncodedSpan[];
+}
+
 interface TransformResult {
   invalid: boolean;
   payload: JsonValue;
@@ -110,7 +122,9 @@ const PERSON_NAME = /^[\p{L}][\p{L}'-]+(?:\s+[\p{L}][\p{L}'-]+){1,3}$/u;
 const BASE64_TOKEN = /(?<![A-Za-z0-9+\/_-])(?:(?:[A-Za-z0-9+\/_-]{4})*(?:[A-Za-z0-9+\/_-]{2}==|[A-Za-z0-9+\/_-]{3}=)|(?:[A-Za-z0-9+\/_-]{4})+(?:[A-Za-z0-9+\/_-]{2,3})?)(?![A-Za-z0-9+\/_=-])/g;
 const PHONE_PATTERN = /\+?\b(?:1?[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/g;
 const JSON_ESCAPE = /\\u[0-9a-fA-F]{4}/;
+const JSON_ESCAPES = /\\u[0-9a-fA-F]{4}/g;
 const PERCENT_ESCAPE = /%[0-9a-fA-F]{2}/;
+const PERCENT_RUNS = /(?:%[0-9a-fA-F]{2})+/g;
 
 function deny(check: SanitiseCheck, reason: SanitiseFailureReason): SanitiseResult {
   return { ok: false, check, reason };
@@ -247,6 +261,52 @@ function canDecodeAgain(text: string): boolean {
   return false;
 }
 
+function encodedSpans(text: string): EncodedSpan[] {
+  const spans: EncodedSpan[] = [];
+  for (const match of text.matchAll(JSON_ESCAPES)) {
+    const decoded = String.fromCharCode(Number.parseInt(match[0].slice(2), 16));
+    spans.push({ key: `json:${match[0]}`, start: match.index, end: match.index + match[0].length, decoded });
+  }
+  if (typeof decodePercent(text) === 'string') {
+    for (const match of text.matchAll(PERCENT_RUNS)) {
+      const decoded = decodePercent(match[0]);
+      if (typeof decoded !== 'string') continue;
+      spans.push({ key: `percent:${match[0]}`, start: match.index, end: match.index + match[0].length, decoded });
+    }
+  }
+  for (const match of text.matchAll(BASE64_TOKEN)) {
+    const decoded = printableUtf8FromBase64(match[0]);
+    if (decoded === undefined) continue;
+    spans.push({ key: `base64:${match[0]}`, start: match.index, end: match.index + match[0].length, decoded });
+  }
+  return spans.sort((left, right) => left.start - right.start);
+}
+
+// Decodes every span the text carries at once: independent encodings side by side are one layer.
+// Where two kinds claim overlapping characters the earlier span wins; the single-kind views keep
+// the other reading.
+function decodeLayer(node: DecodeNode): string {
+  let output = '';
+  let cursor = 0;
+  for (const span of node.spans) {
+    if (span.start < cursor) continue;
+    output += node.text.slice(cursor, span.start) + span.decoded;
+    cursor = span.end;
+  }
+  return output + node.text.slice(cursor);
+}
+
+function exposesNewSpan(child: EncodedSpan[], parent: EncodedSpan[]): boolean {
+  const remaining = new Map<string, number>();
+  for (const span of parent) remaining.set(span.key, (remaining.get(span.key) ?? 0) + 1);
+  for (const span of child) {
+    const count = remaining.get(span.key) ?? 0;
+    if (count === 0) return true;
+    remaining.set(span.key, count - 1);
+  }
+  return false;
+}
+
 function decodedViews(text: string): DecodeBundle {
   const views = [text];
   const known = new Set(views);
@@ -261,33 +321,44 @@ function decodedViews(text: string): DecodeBundle {
   // unchanged and still denies genuinely deeper nesting. The context-composer fence scan
   // (source-sanitisation.ts) has always used this uniform 4x form.
   const maxDecodedChars = Math.max(text.length, 1) * 4;
-  let frontier = [text];
+  let frontier: DecodeNode[] = [{ text, spans: encodedSpans(text) }];
   let decodedChars = 0;
 
+  // Depth is counted per lineage: a view sits one layer below the view it was decoded from.
+  // The all-spans view goes deeper while anything stays decodable. A single-kind view goes
+  // deeper only when its decode exposed a span its parent did not carry (a nested encoding,
+  // or characters that joined a neighbour into a new token); its parent's sibling spans are
+  // already decoded together in the all-spans view, so they are not counted as nesting.
   for (let pass = 0; pass < MAX_DECODE_PASSES; pass += 1) {
-    const next: string[] = [];
-    for (const candidate of frontier) {
+    const next: DecodeNode[] = [];
+    for (const node of frontier) {
       // A percent sequence the strict decoder rejects is not an encoding - the model cannot
       // decode it either, so no obfuscation channel exists. The raw string stays in views[0]
       // and is scanned as-is; ordinary text like "20%DEALS" must not deny the payload (#152).
-      const percent = decodePercent(candidate) ?? undefined;
-      const generated = [decodeJsonEscapes(candidate), percent, decodeBase64Tokens(candidate)];
-      for (const value of generated) {
-        if (typeof value !== 'string' || value === candidate || known.has(value)) continue;
+      const percent = decodePercent(node.text) ?? undefined;
+      const generated = [
+        { value: decodeLayer(node), allSpans: true },
+        { value: decodeJsonEscapes(node.text), allSpans: false },
+        { value: percent, allSpans: false },
+        { value: decodeBase64Tokens(node.text), allSpans: false },
+      ];
+      for (const { value, allSpans } of generated) {
+        if (typeof value !== 'string' || value === node.text || known.has(value)) continue;
         decodedChars += value.length;
         if (value.length > maxDecodedChars || decodedChars > maxDecodedChars) {
           return { invalid: true, views };
         }
         known.add(value);
         views.push(value);
-        next.push(value);
+        const spans = encodedSpans(value);
+        if (allSpans ? spans.length > 0 : exposesNewSpan(spans, node.spans)) next.push({ text: value, spans });
       }
     }
     frontier = next;
     if (frontier.length === 0) break;
   }
 
-  if (frontier.some(canDecodeAgain)) return { invalid: true, views };
+  if (frontier.some((node) => canDecodeAgain(node.text))) return { invalid: true, views };
   return { invalid: false, views };
 }
 
@@ -643,15 +714,19 @@ function redactExternalHealthSpans(
 ): { invalid: boolean; payload: JsonValue; redactions: Redaction[] } {
   const counts = new Map<RedactionKind, number>();
   const patterns = [...RAW_SENSOR_PATTERNS, ...DERIVED_SCORE_PATTERNS, ...HEALTH_FREE_TEXT];
-  const transformed = transformJsonStrings(payload, (text) => {
-    // JSON-encoded structured health still belongs to the correlation check below.
-    // Rewriting its tokens first could destroy the structure and hide the measurement.
+  // A tool result reaches the model as a JSON-encoded string, so the page text sits inside it. Its string values are
+  // redacted in place; keys, numbers and nesting are kept, so structured health still reaches the correlation check below.
+  const redact = (text: string): string => {
     try {
       const parsed: unknown = JSON.parse(text);
-      if (typeof parsed === 'object' && parsed !== null) return text;
+      if (typeof parsed === 'object' && parsed !== null) {
+        const inner = transformJsonStrings(parsed as JsonValue, (value, field) => field === undefined ? value : redact(value));
+        return inner.invalid ? text : JSON.stringify(inner.payload);
+      }
     } catch { /* Ordinary free text is scanned for spans. */ }
     return patterns.reduce((output, pattern) => replaceAndCount(output, pattern, HEALTH_SPAN_MARKER, 'health_value', counts), text);
-  });
+  };
+  const transformed = transformJsonStrings(payload, (text) => redact(text));
   if (transformed.invalid) return { invalid: true, payload, redactions };
   const count = counts.get('health_value') ?? 0;
   return {

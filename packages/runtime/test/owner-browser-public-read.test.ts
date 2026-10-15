@@ -8,7 +8,7 @@ const calls:string[]=[];let alive=false,cleanupConfirmed=true,clock=Date.now();
 afterEach(()=>vi.restoreAllMocks());
 registerCommonBrowserSdk(async()=>({
  acquire:async()=>{calls.push('acquire');alive=true;return {sessionId:'owned-public-read'};},
- connect:async()=>({newContext:async()=>({route:async()=>{},newPage:async()=>({mainFrame:()=>null,setDefaultTimeout(){},goto:async()=>({status:()=>200}),url:()=> 'https://example.com/menu',title:async()=> 'Menu',locator:()=>({innerText:async()=> 'Vegetarian pasta'})}),close:async()=>{}}),newBrowserCDPSession:async()=>({send:async()=>{calls.push('close');if(cleanupConfirmed)alive=false;}}),close:async()=>{}}),
+ connect:async()=>({newContext:async()=>({serviceWorkers:()=>[],addInitScript:async()=>{},routeWebSocket:async()=>{},route:async()=>{},newPage:async()=>({mainFrame:()=>null,setDefaultTimeout(){},on(){},waitForLoadState:async()=>{},evaluate:async()=>{},goto:async()=>({status:()=>200}),url:()=> 'https://example.com/menu',title:async()=> 'Menu',locator:()=>({innerText:async()=> 'Vegetarian pasta'})}),close:async()=>{}}),newBrowserCDPSession:async()=>({send:async()=>{calls.push('close');if(cleanupConfirmed)alive=false;}}),close:async()=>{}}),
  sessions:async()=>{clock+=4000;return alive?[{sessionId:'owned-public-read'}]:[];},endpointURLString:()=>'',
 } as never));
 function fixture(){

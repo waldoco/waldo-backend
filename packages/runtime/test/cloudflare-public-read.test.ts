@@ -5,17 +5,21 @@ import { PublicReadRefusal, cloudflarePublicRead } from '../src/channels/cloudfl
 
 const args = { url: 'https://example.com/menu', instruction: 'Find vegetarian options' };
 const context = { authenticatedUserId: 'owner-a', egressAllowlist: ['*'], assertTaskSourceCurrent: async () => {} } as never;
+type FakeFrame = { parentFrame(): FakeFrame | null };
 const fake = () => {
   const calls: string[] = []; let active = true;
-  const page = { mainFrame: () => 'main-frame', setDefaultTimeout() {}, goto: async () => { calls.push('navigate'); return { status: () => 200 }; }, url: () => args.url, title: async () => 'Menu', locator: () => ({ innerText: async () => 'Vegetarian pasta — £12' }) };
-  let routed: ((route: any) => Promise<void>) | undefined;
-  const browser = { newContext: async (options: unknown) => { expect(options).toEqual({ serviceWorkers: 'block' }); return { route: async (_pattern: string, callback: (route: any) => Promise<void>) => { routed = callback; }, newPage: async () => page, close: async () => { calls.push('context.close'); } }; }, newBrowserCDPSession: async () => ({ send: async (method: string) => { calls.push(method); active = false; } }), close: async () => { calls.push('disconnect'); } };
-  const sdk = { acquire: async () => { calls.push('acquire'); return { sessionId: 'private-id' }; }, endpointURLString: () => 'https://fake.host/v1/devtools/browser/private-id', connect: async () => { calls.push('connect'); return browser; }, sessions: async () => active ? [{ sessionId: 'private-id' }] : [] };
-  return { calls, page, sdk, browser, route: async (url: string, method = 'GET', status = 200, location?: string) => {
-    const events: string[] = [];
-    await routed!({ request: () => ({ url: () => url, method: () => method, isNavigationRequest: () => Boolean(location), frame: () => 'main-frame' }), abort: async () => { events.push('abort'); }, fetch: async (options: unknown) => { expect(options).toEqual({ maxRedirects: 0, timeout: 10000 }); events.push('fetch'); return { status: () => status, headers: () => location ? { location } : {} }; }, fulfill: async () => { events.push('fulfill'); } });
+  const mainFrame: FakeFrame = { parentFrame: () => null }, listeners: Record<string, ((request: unknown) => void)[]> = {};
+  const page = { mainFrame: () => mainFrame, setDefaultTimeout() {}, on: (event: string, listener: (request: unknown) => void) => { (listeners[event] ??= []).push(listener); }, goto: async (..._input: unknown[]): Promise<{ status(): number }> => { calls.push('navigate'); return { status: () => 200 }; }, waitForLoadState: async (_state?: string): Promise<void> => {}, evaluate: async (_script?: unknown): Promise<void> => { calls.push('scroll'); }, url: () => args.url, title: async () => 'Menu', locator: () => ({ innerText: async () => 'Vegetarian pasta — £12' }) };
+  let routed: ((route: any) => Promise<void>) | undefined, socketRouted: ((socket: { close(): void }) => void) | undefined;
+  const privateContext = { serviceWorkers: () => [] as unknown[], addInitScript: async () => { calls.push('init-script'); }, routeWebSocket: async (_pattern: string, handler: (socket: { close(): void }) => void) => { socketRouted = handler; }, route: async (_pattern: string, callback: (route: any) => Promise<void>) => { routed = callback; }, newPage: async () => page, close: async () => { calls.push('context.close'); } };
+  const browser = { newContext: async (options: unknown) => { expect(options).toEqual({ serviceWorkers: 'block' }); return privateContext; }, newBrowserCDPSession: async () => ({ send: async (method: string) => { calls.push(method); active = false; } }), close: async () => { calls.push('disconnect'); } };
+  const sdk = { acquire: async (..._input: unknown[]) => { calls.push('acquire'); return { sessionId: 'private-id' }; }, endpointURLString: () => 'https://fake.host/v1/devtools/browser/private-id', connect: async () => { calls.push('connect'); return browser; }, sessions: async () => active ? [{ sessionId: 'private-id' }] : [] };
+  const emit = (event: string, request: unknown) => { for (const listener of listeners[event] ?? []) listener(request); };
+  return { calls, page, sdk, browser, privateContext, mainFrame, emit, socket: () => socketRouted, route: async (url: string, method = 'GET', status = 200, location?: string, request: Readonly<{ type?: string; navigation?: boolean; frame?: FakeFrame }> = {}) => {
+    const events: string[] = [], navigation = request.navigation ?? Boolean(location);
+    await routed!({ request: () => ({ url: () => url, method: () => method, resourceType: () => request.type ?? (navigation ? 'document' : 'fetch'), isNavigationRequest: () => navigation, frame: () => request.frame ?? mainFrame }), abort: async () => { events.push('abort'); }, fetch: async (options: unknown) => { expect(options).toEqual({ maxRedirects: 0, timeout: 10000 }); events.push('fetch'); return { status: () => status, headers: () => location ? { location } : {} }; }, fulfill: async () => { events.push('fulfill'); } });
     return events;
-  } }; 
+  } };
 };
 it('on a host without Browserbase keys, browse_page returns real page text through Cloudflare and physically terminates its session', async () => {
   const f = fake(); let paid = 0;
@@ -24,7 +28,7 @@ it('on a host without Browserbase keys, browse_page returns real page text throu
   const result = await handler.handle(browsePageArgsSchema.parse(args), context);
   expect(result).toMatchObject({ ok: true, data: { url: args.url, provider: 'cloudflare_playwright', data: { title: 'Menu', text: 'Vegetarian pasta — £12' } }, source_taint: 'external' });
   expect(JSON.stringify(result)).not.toContain('private-id'); expect(paid).toBe(0);
-  expect(f.calls).toEqual(['acquire', 'connect', 'navigate', 'context.close', 'Browser.close', 'disconnect']);
+  expect(f.calls).toEqual(['acquire', 'connect', 'init-script', 'navigate', 'scroll', 'context.close', 'Browser.close', 'disconnect']);
 });
 it('a configured Cloudflare reader serves the read even when Browserbase keys are configured, never paying Browserbase', async () => {
   let paid = 0, cloudflare = 0;
@@ -40,19 +44,32 @@ it('refuses a read with neither Browserbase keys nor a Cloudflare reader, withou
   expect(paid).toBe(0);
 });
 it.each([403, 429, 500])('HTTP %s page failures do not return challenge/error text as useful content', async status => {
-  const f = fake(); f.page.goto = async () => ({ status: () => status });
+  const f = fake(); f.page.goto = async () => ({ status: () => status, headers: () => ({}) }) as never;
   expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context)).toMatchObject({ ok: false, code: 'transient', error: `The page did not load (HTTP ${status}).` });
   expect(f.calls).toContain('Browser.close');
 });
+it.each([403, 503])('a Cloudflare challenge (HTTP %s) is a typed refusal naming the handoff route, not a page failure', async status => {
+  const f = fake(); f.page.goto = async () => ({ status: () => status, headers: () => ({ 'cf-mitigated': 'challenge' }) }) as never;
+  const result = await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context);
+  expect(result).toMatchObject({ ok: false, code: 'rejected' });
+  if (result.ok) return;
+  expect(result.error).toContain('verification_challenge'); expect(result.error).toContain('owner_login');
+  expect(f.calls).toContain('Browser.close');
+});
 it('returns typed empty-page and timeout failures while terminating the owned session', async () => {
-  for (const mode of ['empty', 'timeout']) {
-    const f = fake();
-    if (mode === 'empty') f.page.locator = () => ({ innerText: async () => '  ' });
-    else f.page.goto = async () => { throw Error('TimeoutError with secret raw diagnostic'); };
-    const result = await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context);
-    expect(result).toMatchObject({ ok: false, code: mode === 'empty' ? 'not_found' : 'transient' });
-    expect(JSON.stringify(result)).not.toContain('secret'); expect(f.calls).toContain('Browser.close');
-  }
+  vi.useFakeTimers();
+  try {
+    for (const mode of ['empty', 'timeout']) {
+      const f = fake();
+      if (mode === 'empty') f.page.locator = () => ({ innerText: async () => '  ' });
+      else f.page.goto = async () => { throw Error('TimeoutError with secret raw diagnostic'); };
+      const read = cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context);
+      await vi.advanceTimersByTimeAsync(3000);
+      const result = await read;
+      expect(result).toMatchObject({ ok: false, code: mode === 'empty' ? 'not_found' : 'transient' });
+      expect(JSON.stringify(result)).not.toContain('secret'); expect(f.calls).toContain('Browser.close');
+    }
+  } finally { vi.useRealTimers(); }
 });
 it('denies missing/currently revoked source and private egress before allocating', async () => {
   const f = fake(), read = cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never });
@@ -113,16 +130,121 @@ it('a host that does not allow Browserbase never pays for it, keys or not', asyn
   expect(paid).toBe(0);
 });
 
-it('exercises subresource routing: private/foreign/credential/port requests and all redirects are denied before following', async () => {
+it('sub-resources load from any host and with any method that passes egress; private, credential, port, redirect and unread media requests are still refused', async () => {
   const f = fake(); const initial = f.page.goto;
   f.page.goto = async () => {
     expect(await f.route('https://example.com/style.css')).toEqual(['fetch', 'fulfill']);
-    for (const url of ['https://example.com:8443/data', 'http://169.254.169.254/', 'https://other.example/data', 'https://user:pass@example.com/data']) expect(await f.route(url)).toEqual(['abort']);
-    expect(await f.route('https://example.com/post', 'POST')).toEqual(['abort']);
-    expect(await f.route('https://example.com/redirect', 'GET', 302)).toEqual(['fetch', 'abort']);
+    expect(await f.route('https://cdn.other.example/app.js', 'GET', 200, undefined, { type: 'script' })).toEqual(['fetch', 'fulfill']);
+    expect(await f.route('https://api.other.example/graphql', 'POST', 200, undefined, { type: 'xhr' })).toEqual(['fetch', 'fulfill']);
+    expect(await f.route('https://example.com/post', 'POST')).toEqual(['fetch', 'fulfill']);
+    for (const url of ['https://example.com:8443/data', 'http://169.254.169.254/', 'http://10.0.0.5/app.js', 'http://localhost/app.js', 'https://user:pass@cdn.other.example/data']) expect(await f.route(url, 'GET', 200, undefined, { type: 'script' })).toEqual(['abort']);
+    expect(await f.route('https://cdn.other.example/redirect', 'GET', 302)).toEqual(['fetch', 'abort']);
+    for (const type of ['image', 'media', 'font']) expect(await f.route('https://cdn.other.example/asset', 'GET', 200, undefined, { type })).toEqual(['abort']);
     return initial();
   };
   expect((await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context)).ok).toBe(true);
+});
+it('acquires the provider session without a host guardrail, so cross-host sub-resources reach the per-request egress check, with recording off', async () => {
+  const f = fake(), acquired: unknown[] = []; const acquire = f.sdk.acquire;
+  f.sdk.acquire = async (...input: unknown[]) => { acquired.push(input[1]); return acquire(); };
+  expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context)).toMatchObject({ ok: true });
+  expect(acquired).toEqual([{ recording: false, keep_alive: 10000 }]);
+});
+it('top-level navigation, a popup\'s included, stays on the requested host while a cross-host frame is a sub-resource', async () => {
+  const f = fake(); const initial = f.page.goto;
+  f.page.goto = async () => {
+    const popup: FakeFrame = { parentFrame: () => null }, frame: FakeFrame = { parentFrame: () => f.mainFrame };
+    expect(await f.route('https://example.com/next', 'GET', 200, undefined, { navigation: true })).toEqual(['fetch', 'fulfill']);
+    expect(await f.route('https://other.example/next', 'GET', 200, undefined, { navigation: true })).toEqual(['abort']);
+    expect(await f.route('https://other.example/next', 'GET', 200, undefined, { navigation: true, frame: popup })).toEqual(['abort']);
+    expect(await f.route('https://example.com/search', 'POST', 200, undefined, { navigation: true })).toEqual(['abort']);
+    expect(await f.route('https://widgets.other.example/embed', 'GET', 200, undefined, { navigation: true, frame })).toEqual(['fetch', 'fulfill']);
+    return initial();
+  };
+  expect((await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context)).ok).toBe(true);
+});
+it('closes every WebSocket and locks service workers before the page opens', async () => {
+  const f = fake();
+  expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context)).toMatchObject({ ok: true });
+  const close = vi.fn(); f.socket()!({ close }); expect(close).toHaveBeenCalledOnce();
+  expect(f.calls.indexOf('init-script')).toBeLessThan(f.calls.indexOf('navigate'));
+  const g = fake(); g.privateContext.serviceWorkers = () => [{}];
+  expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => g.sdk as never })(args as never, context)).toMatchObject({ ok: false });
+  expect(g.calls).not.toContain('navigate'); expect(g.calls).toContain('Browser.close');
+});
+it('navigation gets more than ten seconds, still inside the run deadline', async () => {
+  for (const [deadline, expected] of [[Infinity, 20000], [Date.now() + 8000, 8000]] as const) {
+    const f = fake(), options: unknown[] = [];
+    f.page.goto = async (...input: unknown[]) => { options.push(input[1]); return { status: () => 200 }; };
+    expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, { ...context as object, runScope: { deadline, admit() {} } } as never)).toMatchObject({ ok: true });
+    expect(options).toHaveLength(1);
+    const { waitUntil, timeout } = options[0] as { waitUntil: string; timeout: number };
+    expect(waitUntil).toBe('domcontentloaded'); expect(timeout).toBeGreaterThan(expected - 100); expect(timeout).toBeLessThanOrEqual(expected);
+  }
+});
+it('reads only after requests in flight have finished and the network has been quiet for 500 ms', async () => {
+  vi.useFakeTimers();
+  try {
+    const f = fake(), startedAt = Date.now(); let readAt: number | undefined;
+    const script = { resourceType: () => 'script' }, socket = { resourceType: () => 'websocket' };
+    f.page.goto = async () => { f.emit('request', script); f.emit('request', socket); setTimeout(() => f.emit('requestfinished', script), 1000); return { status: () => 200 }; };
+    f.page.locator = () => ({ innerText: async () => { readAt = Date.now() - startedAt; return 'Rendered by script'; } });
+    const read = cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context);
+    await vi.advanceTimersByTimeAsync(1499); expect(readAt).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(501);
+    expect(await read).toMatchObject({ ok: true, data: { data: { text: 'Rendered by script' } } });
+    expect(readAt).toBeGreaterThanOrEqual(1500); expect(readAt).toBeLessThan(2000);
+    expect(f.calls.filter(call => call === 'scroll')).toHaveLength(1);
+  } finally { vi.useRealTimers(); }
+});
+it('a request that never finishes stops holding the read after 2 s', async () => {
+  vi.useFakeTimers();
+  try {
+    const f = fake(), startedAt = Date.now(); let readAt: number | undefined;
+    f.page.goto = async () => { f.emit('request', { resourceType: () => 'fetch' }); return { status: () => 200 }; };
+    f.page.locator = () => ({ innerText: async () => { readAt = Date.now() - startedAt; return 'Vegetarian pasta — £12'; } });
+    const read = cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context);
+    await vi.advanceTimersByTimeAsync(2100);
+    expect(await read).toMatchObject({ ok: true });
+    expect(readAt).toBeGreaterThanOrEqual(2000); expect(readAt).toBeLessThan(2100);
+  } finally { vi.useRealTimers(); }
+});
+it('every settle wait is bounded: a load that never fires, endless requests and a failing scroll still end in a read', async () => {
+  vi.useFakeTimers();
+  try {
+    for (const [nearDeadline, budget] of [[false, 12000], [true, 3000]] as const) {
+      const f = fake(), startedAt = Date.now(); let readAt: number | undefined, ticker: ReturnType<typeof setInterval> | undefined;
+      f.page.waitForLoadState = () => new Promise<void>(() => {});
+      f.page.evaluate = async () => { f.calls.push('scroll'); throw Error('page script failed'); };
+      f.page.goto = async () => { ticker = setInterval(() => f.emit('request', { resourceType: () => 'xhr' }), 100); return { status: () => 200 }; };
+      f.page.locator = () => ({ innerText: async () => { readAt = Date.now() - startedAt; return 'Vegetarian pasta — £12'; } });
+      const read = cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, { ...context as object, runScope: { deadline: nearDeadline ? Date.now() + 8000 : Infinity, admit() {} } } as never);
+      await vi.advanceTimersByTimeAsync(budget + 200);
+      clearInterval(ticker);
+      expect(await read).toMatchObject({ ok: true });
+      expect(readAt).toBeGreaterThanOrEqual(budget - 200); expect(readAt).toBeLessThanOrEqual(budget + 200);
+    }
+  } finally { vi.useRealTimers(); }
+});
+it('a settle wait that throws synchronously still ends in a read', async () => {
+  const f = fake();
+  f.page.waitForLoadState = () => { throw Error('load state unavailable'); };
+  f.page.evaluate = () => { throw Error('page script unavailable'); };
+  expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context)).toMatchObject({ ok: true, data: { data: { text: 'Vegetarian pasta — £12' } } });
+});
+it('a body that is still empty after the waits is read once more about 3 s later before it counts as empty', async () => {
+  vi.useFakeTimers();
+  try {
+    for (const later of ['Rendered later', '']) {
+      const f = fake(); let reads = 0;
+      f.page.locator = () => ({ innerText: async () => reads++ ? later : '' });
+      const read = cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context);
+      await vi.advanceTimersByTimeAsync(2999); expect(reads).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await read).toMatchObject(later ? { ok: true, data: { data: { text: later } } } : { ok: false, code: 'not_found' });
+      expect(reads).toBe(2);
+    }
+  } finally { vi.useRealTimers(); }
 });
 it('honors the canonical run deadline during hanging allocation without creating a second session', async () => {
   const f = fake(); f.sdk.acquire = async () => { f.calls.push('acquire'); return new Promise(() => {}); };
@@ -256,11 +378,11 @@ it.each(['http', 'empty', 'thrown'] as const)('preserves the original safe %s fa
   try {
     const f = fake(), settle = vi.fn();
     f.sdk.sessions = async () => [{ sessionId: 'private-id' }];
-    if (mode === 'http') f.page.goto = async () => ({ status: () => 403 });
+    if (mode === 'http') f.page.goto = async () => ({ status: () => 403, headers: () => ({}) }) as never;
     if (mode === 'empty') f.page.locator = () => ({ innerText: async () => '' });
     if (mode === 'thrown') f.page.goto = async () => { throw Error('secret-provider https://private.example/private-id'); };
     const read = cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never, reserveAllocation: async () => ({ settle }) })(args as never, context);
-    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(mode === 'empty' ? 4000 : 1000);
     const result = await read;
     expect(result).toMatchObject({ ok: false, code: mode === 'empty' ? 'not_found' : 'transient' });
     expect(result).toMatchObject({ error: expect.stringContaining(mode === 'http' ? 'HTTP 403' : mode === 'empty' ? 'no readable content' : 'browser read failed') });

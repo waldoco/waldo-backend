@@ -4,6 +4,8 @@ export const OWNER_INBOX_KEY = 'telegram_owner_inbox_v1';
 export const OWNER_INBOX_DUE_KEY = 'telegram_owner_inbox_due_v1';
 const RETENTION_MS = 25 * 60 * 60_000;
 const CAPACITY = 512;
+// A Telegram run is drained inside the owner object's alarm handler, which Cloudflare stops at 15 minutes of wall time.
+export const TELEGRAM_TURN_DEADLINE_MS = 14 * 60_000;
 export type InboxBinding = { bot: string; subject: string; doName: string; traceIdentity?: OwnerTraceIdentity };
 export type InboxRecord = InboxBinding & {
   id: string; digest: string; sequence: number; updateId: number; body: string;

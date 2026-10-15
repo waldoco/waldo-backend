@@ -26,11 +26,19 @@ const spendRefusal=(cause:unknown)=>{
     :'No browser was started: the owner\'s browser spend record needs reconciliation. Retrying will not help; tell the owner browsing is paused until it is reconciled.');
 };
 
+// A browser refusal the model can act on: it names the open session's handle and the ways forward.
+class BrowserSessionRefusal extends Error {}
+const heldElsewhere=(handle:string)=>`An interactive browser session from an earlier turn is still open (session_handle ${handle}). Continue it by passing that session_handle, or end it with browse_act command cancel and that session_handle, then start a new one. A read without retain_session works now.`;
+
 // The browser trial meters a funded run's model calls with a Luna price envelope, so it refuses any other model before
 // the meter takes an ordinal or a reservation. The refusal is coded, not thrown, so the turn's trace names it and the
 // provider does not resend it.
 const trialPriced = (model: string | undefined): boolean => model === OPENAI_GPT_6_LUNA_MODEL;
 const trialUnpriced = (): GatewayFailure => ({ ok: false, code: 'invalid_args', error: 'browser trial model price unavailable' });
+
+type BrowserResult=Awaited<ReturnType<ReturnType<typeof commonBrowserHost>['handler']['handle']>>;
+
+const PAGE_SIGNALS=' page_signals (password_field, verification_challenge): offer the owner owner_login, or take another route.';
 
 // The run lease's wake: maintenance runs when the lease's run deadline, its configuration or its session lifetime ends,
 // whichever comes first. It is a listed wake key, so an arbiter re-arm keeps it.
@@ -93,10 +101,10 @@ export function ownerBrowserRuntime(options: Readonly<{
     const admit=async()=>{await assertCurrent();scope?.admit();if(scope&&options.activeScope()!==scope||options.storage.kv.get('do_name')!==doName)throw new ClosedRunError();const owner=await assertOwner();if(ownerId!==owner.directoryOwnerId&&ownerId!==`prn_${owner.directoryOwnerId.replaceAll('-','')}`)throw new ClosedRunError();const bound=workspaceMetadata(options.storage,scope).transaction(state=>state.binding);if(bound&&bound.ownerId!==owner.directoryOwnerId)throw new ClosedRunError();await assertCurrent();};
     await admit();const workspace=await workspaceOwnerHost(options.env,options.storage,options.actualDoId,doName,fetch,scope,admit);await admit();const origin=options.storage.kv.get<string>('origin');if(!origin)throw new ClosedRunError();return {workspace,origin};
   };
-  const bindHost=async(ctx:ToolDispatcherContext,sessionHandle?:string,retainSession=false)=>{
+  const bindHost=async(ctx:ToolDispatcherContext,sessionHandle?:string,retainSession=false,freshTaskId?:string)=>{
     const assertCurrent=current(ctx);await assertCurrent();
     const scope=options.activeScope()!,pointerBefore=retainedTask();
-    const ordinary=!!options.storage.kv.get(`ordinary-public-browser-grant:${sessionHandle?pointerBefore?.taskId:active?.taskId??scope.runId}`);
+    const ordinary=!!options.storage.kv.get(`ordinary-public-browser-grant:${freshTaskId??(sessionHandle?pointerBefore?.taskId??active?.taskId:active?.taskId??scope.runId)}`);
     let config;
     if(!ordinary){try{config=await selectedConfiguration(false,retainSession);}catch(cause){if(!retainSession||!(cause instanceof CommonBrowserRegistrationUnavailable))throw cause;}}
     let expiredSpend=false;
@@ -112,12 +120,21 @@ export function ownerBrowserRuntime(options: Readonly<{
     if(!config)throw new ClosedRunError();
     if(active&&options.storage.kv.get<{cleanup?:string}>(`common-browser:${active.taskId}`)?.cleanup==='closed'){active=undefined;lease=undefined;options.storage.kv.put(continuationKey,null);}
     const pointer=retainedTask();
-    if(sessionHandle&&pointer?.sessionHandle!==sessionHandle)throw new ClosedRunError();
+    // The run that holds the session may name it before its first read succeeds; other runs only through the published pointer.
+    if(sessionHandle&&pointer?.sessionHandle!==sessionHandle&&(active?.scope!==scope||active.host.sessionHandle()!==sessionHandle))throw new BrowserSessionRefusal(pointer?heldElsewhere(pointer.sessionHandle):'That session_handle is not an open browser session. Start a new one with retain_session:true and no session_handle, or read without retain_session.');
     if(active){
-      if(active.ownerId!==config.ownerId||active.scope&&active.scope!==scope||active.scope!==scope&&active.host.sessionHandle()!==sessionHandle)throw new ClosedRunError();
-      active.scope=scope;
-    }else{
-      const taskId=sessionHandle?pointer!.taskId:scope.runId,initialAttempt=scope.attempt;
+      if(active.ownerId!==config.ownerId)throw new ClosedRunError();
+      if(active.scope&&active.scope!==scope)throw new BrowserSessionRefusal('The browser is still in use by an earlier turn that is finishing. Try again shortly, or read without retain_session.');
+      if(active.scope!==scope&&active.host.sessionHandle()!==sessionHandle){
+        if(pointer?.taskId===active.taskId)throw new BrowserSessionRefusal(heldElsewhere(pointer.sessionHandle));
+        // A finished turn's session whose first read never succeeded: no handle for it was ever published, so end it and start fresh.
+        const stale=active;active=undefined;lease=undefined;
+        try{await stale.host.cancel();}catch{/* its row keeps the cleanup obligation; maintenance owns it */}
+      }
+    }
+    if(active)active.scope=scope;
+    else{
+      const taskId=freshTaskId??(sessionHandle?pointer!.taskId:scope.runId),initialAttempt=scope.attempt;
       active={scope,taskId,ownerId:config.ownerId,host:commonBrowserHost({storage:options.storage,config:{...config,retainInteractions:true},ownerId:config.ownerId,egressAllowlist:ctx.egressAllowlist,
         source:()=>({taskId,revision:1,sources:['browser'],ready:true,startRef:initialAttempt}),
         files:commonFiles,
@@ -130,6 +147,20 @@ export function ownerBrowserRuntime(options: Readonly<{
     options.storage.kv.put(COMMON_BROWSER_LEASE_DUE,wake);
     await armAlarm(options.storage,Math.max(Date.now()+250,prior===null?wake:Math.min(prior,wake)));await assertCurrent();
     return {active,context:{...ctx,authenticatedUserId:config.ownerId,assertTaskSourceCurrent:assertCurrent}};
+  };
+  // A read whose retained session has ended gets one fresh session and one retry. The fresh session is funded, allocated
+  // and recorded like any new one, under a new task, after the ended one is closed; if that close cannot be confirmed,
+  // the original failure stands. The host marks only reads, never effects, so an unknown outcome stays fenced.
+  const restartRead=async(ctx:ToolDispatcherContext,failed:NonNullable<typeof active>,failure:BrowserResult,read:Readonly<{url:string;instruction:string}>,detail:Readonly<Record<string,string>>={}):Promise<BrowserResult>=>{
+    if(active!==failed||!failed.host.sessionEnded())return failure;
+    try{await failed.host.cancel();}catch(cause){traceBrowserFailure('restart_cleanup',cause);return failure;}
+    active=undefined;lease=undefined;options.storage.kv.put(continuationKey,null);
+    console.warn(JSON.stringify({event:'owner_browser_restart'}));
+    const bound=await bindHost(ctx,undefined,true,`${options.activeScope()!.runId}:restart:${crypto.randomUUID()}`);
+    const retried=await bound.active.host.handler.handle({url:read.url,instruction:read.instruction,retain_session:true},bound.context);
+    if(!retried.ok)return {...retried,error:`The browser session had ended, so one fresh session was started, and the read failed there too. ${retried.error}`};
+    publishPointer();
+    return {...retried,data:{...retried.data as object,restarted:true,...detail,restart_notice:'The previous browser session had ended, so a fresh one was started and this read was retried once. Its tabs, form values and sign-ins are gone, and its old refs and session_handle no longer work; use this session_handle.'}};
   };
   const publishPointer=()=>{const handle=active?.host.sessionHandle();if(active&&handle)options.storage.kv.put(continuationKey,{taskId:active.taskId,sessionHandle:handle});};
   const funded=(scope:RunEffectScope)=>active?.scope===scope||options.storage.kv.get(`common-browser:${scope.runId}`)!==undefined||options.storage.kv.get(`common-browser-run:${scope.runId}`)!==undefined;
@@ -151,14 +182,13 @@ export function ownerBrowserRuntime(options: Readonly<{
       } };
     },
     read(fallback: ToolHandler<BrowsePageArgs, unknown, ToolDispatcherContext>): ToolHandler<BrowsePageArgs, unknown, ToolDispatcherContext> {
-      return { ...fallback, eligible: eligibleWith(), schema: browsePageArgsSchema, description: fallback.description+' For interactive tasks use retain_session:true to receive DOM/accessibility, a PNG and session_handle, then call browse_act with that handle and current refs. Omit for a one-shot read.', async handle(args, ctx) {
+      return { ...fallback, eligible: eligibleWith(), schema: browsePageArgsSchema, description: fallback.description+' For interactive tasks use retain_session:true to receive DOM/accessibility, a PNG and session_handle, then call browse_act with that handle and current refs. Omit for a one-shot read.'+PAGE_SIGNALS, async handle(args, ctx) {
         try {
           const assertCurrent = current(ctx); await assertCurrent();
-          // Omitted lifecycle fields must not silently discard an owner's
-          // unsent page state or buy a second browser during a retained journey.
-          const heldPointer=options.storage.kv.get<{taskId:string;sessionHandle:string}>(continuationKey);
-          const held=heldPointer?options.storage.kv.get<{cleanup?:string;session:{id:string}}>(`common-browser:${heldPointer.taskId}`):undefined;
-          if(!args.session_handle&&!args.retain_session&&heldPointer&&held?.session.id===heldPointer.sessionHandle&&held.cleanup!=='closed'&&options.storage.kv.get(`ordinary-public-browser-grant:${heldPointer.taskId}`))return {ok:false,code:'rejected',error:'An owner browser journey is already retained. Use its returned session_handle to read the current page, or cancel that session before starting a fresh one-shot read.',source_taint:'external'};
+          // The run holding an open journey keeps it: an omitted handle must not quietly leave its unsent page state behind.
+          // A session held by another turn never blocks this one; the read below names it instead.
+          const journey=retainedTask(),held=journey&&options.storage.kv.get(`ordinary-public-browser-grant:${journey.taskId}`)?journey:undefined;
+          if(!args.session_handle&&!args.retain_session&&held&&active&&active.scope===options.activeScope()&&active.taskId===held.taskId)return {ok:false,code:'rejected',error:`This turn has an interactive browser session open (session_handle ${held.sessionHandle}). Read its current page with that session_handle, or end it with browse_act command cancel and that session_handle before a read without retain_session.`,source_taint:'external'};
           // A normal fresh public read does not require a paid-test registration.
           // Retained session handles still select their existing exact-session host.
           if(!args.session_handle&&!args.retain_session){
@@ -184,16 +214,18 @@ export function ownerBrowserRuntime(options: Readonly<{
                   return reserveOwnerPublicBrowser({storage:options.storage,ownerId,custodyDigest:owner.custodyDigest,intent:`${scope.runId}:${scope.attempt}:${ctx.toolCallId}`,reservedBrowserMs:PUBLIC_READ_RESERVED_BROWSER_MS,now:Date.now(),declaredLimitMicrousd:effectiveLimitMicrousd,assertCurrent:()=>{scope.admit();if(options.activeScope()!==scope||!binding())throw new ClosedRunError();}});
                 }catch(cause){if(cause instanceof ClosedRunError)throw cause;throw spendRefusal(cause);}
               }});
-              return read(args,{...ctx,authenticatedUserId:ownerId,assertTaskSourceCurrent:assertReadCurrent});
+              const result=await read(args,{...ctx,authenticatedUserId:ownerId,assertTaskSourceCurrent:assertReadCurrent});
+              return held&&result.ok?{...result,data:{...result.data,open_browser_session:{session_handle:held.sessionHandle,notice:'An interactive browser session from an earlier turn is still open. This read used a separate page and did not see or change it. Continue that session with its session_handle, or end it with browse_act command cancel.'}}}:result;
             }
           }
           const bound=await bindHost(ctx,args.session_handle,args.retain_session);
-          const result=await bound.active.host.handler.handle(args,bound.context);publishPointer();return result;
-        } catch(cause) { traceBrowserFailure('read',cause);return { ok: false, code: 'rejected', error: `The browser owner or retained session is unavailable (${browserFailureClass(cause)}). No replacement was allocated.`, source_taint: 'external' }; }
+          const result=await bound.active.host.handler.handle(args,bound.context);if(result.ok){publishPointer();return result;}
+          return await restartRead(ctx,bound.active,result,{url:args.url,instruction:args.instruction});
+        } catch(cause) { traceBrowserFailure('read',cause);return { ok: false, code: 'rejected', error: cause instanceof BrowserSessionRefusal?cause.message:`The browser owner or retained session is unavailable (${browserFailureClass(cause)}). No replacement was allocated.`, source_taint: 'external' }; }
       } };
     },
     act(fallback:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>):ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>{
-      return {...fallback,eligible:eligibleWith(true),schema:browseActArgsSchema,description:'Use the selected Cloudflare owner browser through observed refs. Read with browse_page retain_session:true first, then use its session_handle. Native actions: type, click, select, set_checked, scroll, goto, open_tab, switch_tab, close_tab, read, inspect, screenshot, download, owner_login, resume_owner_login, cancel. download uses an observed link for an authenticated GET attachment, stores and verifies bytes in your private workspace, and returns an exact-revision owner download link. Blob/data and POST exports are unsupported. owner_login pauses this turn for human sign-in in the authenticated console; end the turn and ask the owner to reply after Done. Resume only on that later owner reply, then verify the intended signed-in account from fresh evidence. session_handle explicitly continues an existing owner session. File selection and page sends are unsupported; uncertain effects cannot repeat.',async handle(args,ctx){
+      return {...fallback,eligible:eligibleWith(true),schema:browseActArgsSchema,description:'Use the selected Cloudflare owner browser through observed refs. Read with browse_page retain_session:true first, then use its session_handle. Native actions: type, click, select, set_checked, scroll, goto, back, open_tab, switch_tab, close_tab, read, inspect, screenshot, download, owner_login, resume_owner_login, cancel. download uses an observed link for an authenticated GET attachment, stores and verifies bytes in your private workspace, and returns an exact-revision owner download link. Blob/data and POST exports are unsupported. owner_login pauses this turn for human sign-in in the authenticated console; end the turn and ask the owner to reply after Done. Resume only on that later owner reply, then verify the intended signed-in account from fresh evidence. session_handle explicitly continues an existing owner session. File selection and page sends are unsupported; uncertain effects cannot repeat.'+PAGE_SIGNALS,async handle(args,ctx){
         try{
           const assertCurrent=current(ctx);await assertCurrent();
           // The owner's Cloudflare host acts only through a typed command; a plain action has no browser to run on.
@@ -202,9 +234,10 @@ export function ownerBrowserRuntime(options: Readonly<{
           if(!args.session_handle&&options.typedHost?.()&&!options.env.COMMON_BROWSER_REGISTRATION&&!automatic.hasRetained()&&!active)return fallback.handle(args,{...ctx,assertTaskSourceCurrent:assertCurrent});
           const bound=await bindHost(ctx,args.session_handle);
           const result=await bound.active.host.actionHandler.handle(args,bound.context);
+          if(!result.ok&&(args.command.operation==='read'||args.command.operation==='inspect'||args.command.operation==='back'))return await restartRead(ctx,bound.active,result,{url:args.url,instruction:args.task},args.command.operation==='back'?{back:'history_lost',back_notice:'The back history ended with the old session, so this is the page it was on.'}:{});
           if(args.command?.operation==='owner_login'&&result.ok){const origin=options.storage.kv.get<string>('origin');if(origin&&new URL(origin).protocol==='https:'&&'data' in result&&result.data&&typeof result.data==='object')Object.assign(result.data,{console_url:new URL('/console/browser-handoff',origin).href});}
-          if(args.command?.operation==='cancel'&&result.ok){active=undefined;lease=undefined;options.storage.kv.put(continuationKey,null);}else publishPointer();return result;
-        }catch(cause){traceBrowserFailure('act',cause);return {ok:false,code:'rejected',error:`The selected owner browser session or current action is unavailable (${browserFailureClass(cause)}). No replacement or provider switch was made.`,source_taint:'external'};}
+          if(args.command?.operation==='cancel'&&result.ok){active=undefined;lease=undefined;options.storage.kv.put(continuationKey,null);}else if(result.ok)publishPointer();return result;
+        }catch(cause){traceBrowserFailure('act',cause);return {ok:false,code:'rejected',error:cause instanceof BrowserSessionRefusal?cause.message:`The selected owner browser session or current action is unavailable (${browserFailureClass(cause)}). No replacement or provider switch was made.`,source_taint:'external'};}
       }};
     },
     gateway() {

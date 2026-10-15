@@ -41,12 +41,33 @@ const publishCleanup=(storage:DurableObjectStorage,key:string,expected:BrowserRe
  if(!current||!sameSession(current,expected)||current.cleanup==='closed')return;
  storage.kv.put(key,{...current,cleanup:closed?'closed':'pending',cleanupFailed:closed?undefined:true,session:{...current.session,state:closed?'ended':current.session.state}});
 });
+// What the model can try after a failed browser step, by browser_code. Options for the model, never owner instructions.
+const BROWSER_NEXT_STEP:Readonly<Record<GeneralBrowserError['code'],string>>={
+ rejected:'The browser refused this page or step: it opens public http(s) pages with read-only requests, and this session or turn may have run out of time. Try another public page or site.',
+ session_lost:'The browser session was lost. Start a new one with browse_page retain_session:true and no session_handle, or read the page without retain_session.',
+ provider_unavailable:'The browser service failed on this step. Retry once; if it fails again, try another site, or read the page without retain_session.',
+ page_unavailable:'The site did not serve this page (see the status). Try another page on the site, or another site.',
+ empty_content:'The page showed no readable text yet. Read it again, or try another page or site.',
+ image_oversize:'The screenshot is over the size limit, so it was not saved. The page itself was read: use browse_act read for its text and controls.',
+ observation_oversize:'This page is too large for one observation. Open a narrower page, such as a search result or a detail page, or read it without retain_session for its text.',
+ cleanup_unconfirmed:'The browser could not confirm this step closed cleanly, so nothing from it is claimed. Read the page again; if the session is gone, start a new one.',
+ stale_observation:'The page changed since it was read. Read it again with browse_act read and use the new refs.',
+ outcome_uncertain:'The step may or may not have taken effect, and it cannot be repeated. Read the page with browse_act read to see what changed.',
+ turn_deadline:'This turn ran out of time before the browser step finished, so nothing from it is claimed. The session stays open: continue it with its session_handle on the next turn.',
+};
+// Only the turn's own deadline makes a failed step retryable as such; every other failure keeps its typed next step.
+const retryable=(error:unknown)=>error instanceof GeneralBrowserError&&error.code==='turn_deadline';
+const failureText=(lead:string,otherwise:string,error:unknown,handle:string|undefined)=>`${lead} ${error instanceof GeneralBrowserError?BROWSER_NEXT_STEP[error.code]:otherwise}${handle?` This browser session's session_handle is ${handle}.`:''}`
+ +(error instanceof GeneralBrowserError?' Browser diagnostic: '+JSON.stringify({browser_code:error.code,...(error.diagnostic?{diagnostic:error.diagnostic}:{}),...(error.cleanup_failed?{cleanup_failed:true}:{}),...(error.release_failed?{release_failed:true}:{})}):'');
 export function commonBrowserHost(options:Readonly<{
  storage:DurableObjectStorage;config:CommonBrowserConfiguration;ownerId:string;egressAllowlist?:readonly string[];
  files?(assertCurrent:()=>Promise<void>,ownerId:string):Promise<{workspace:Awaited<ReturnType<typeof workspaceOwnerHost>>;origin:string}>;
  source():TaskSourceSnapshot;assertCurrent():Promise<void>;deadline():number;now():number;
 }>) {
  let images:LLMAttachment[]=[];
+ // Set when the last read failed because its retained session has ended and nothing on that session is unresolved,
+ // so the caller may replace the session once. An effect never sets it: its outcome stays fenced on the old session.
+ let sessionEnded=false;
  let handoffSession:BrowserSession|undefined;
  let human: Awaited<ReturnType<ReturnType<typeof cloudflareGeneralBrowser>['beginOwnerHandoff']>>|undefined;
  let execution:Readonly<{grant:string;driver:ReturnType<typeof cloudflareGeneralBrowser>}>|undefined;
@@ -59,6 +80,12 @@ export function commonBrowserHost(options:Readonly<{
  };
  type Record=BrowserRecord;
  const key=(taskId:string)=>`common-browser:${taskId}`;
+ const ended=(error:unknown)=>{
+  if(!(error instanceof GeneralBrowserError&&error.code==='session_lost'))return false;
+  const row=options.storage.kv.get<Record>(key(snapshot().taskId));
+  return !!row&&!row.cleanup&&!row.cleanupFailed&&!row.handoff&&row.allocation==='observed'&&row.action?.state!=='prepared'&&row.action?.state!=='uncertain'&&(!row.download||row.download.state==='ready');
+ };
+ const liveHandle=()=>{const row=options.storage.kv.get<Record>(key(snapshot().taskId));return row&&!row.cleanup&&row.allocation==='observed'?row.session.id:undefined;};
  const makeDriver=(grant:CommonBrowserGrant,operationId?:string,retainConnection=false)=>cloudflareGeneralBrowser({ownerId:options.ownerId,publicRead:true,retainConnection,binding:operationId&&options.config.bindingForOperation?options.config.bindingForOperation(grant,operationId):options.config.binding,cleanupBinding:options.config.cleanupBinding? id=>options.config.cleanupBinding!(grant,id):undefined,loadSdk:options.config.loadSdk,now:options.now,deadline:options.deadline,cleanupTimeoutMs:10000,maxScreenshotBytes:grant.maxScreenshotBytes,
   admit:async()=>{await checked();await options.config.assertGrantCurrent(grant);await checked();const row=options.storage.kv.get<BrowserRecord>(key(grant.taskId));if(row?.cleanup||row?.handoff&&row.handoff.state!=='resuming')throw Error('common browser stopped');},
   authorizeHumanRequest:async(url,_method)=>{await handoffCurrent(grant);return isPublicWebUrl(url,options.egressAllowlist)&&(grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)||grant.allowedOrigins.includes(new URL(url).origin));},
@@ -96,15 +123,18 @@ export function commonBrowserHost(options:Readonly<{
    throw new GeneralBrowserError('observation_oversize');
   }
   save(checkpoint,key(grant.taskId));
-  let binary='';for(const byte of observed.image.bytes)binary+=String.fromCharCode(byte);
-  if(images.length>=4)images.shift();
-  images.push({kind:'image',filename:`browser-${observed.observation.revision}.png`,mime_type:observed.image.mime_type,data_base64:btoa(binary)});
+  if(observed.image){
+   let binary='';for(const byte of observed.image.bytes)binary+=String.fromCharCode(byte);
+   if(images.length>=4)images.shift();
+   images.push({kind:'image',filename:`browser-${observed.observation.revision}.${observed.image.mime_type==='image/png'?'png':'jpg'}`,mime_type:observed.image.mime_type,data_base64:btoa(binary)});
+  }
   return {ok:true as const,data:{...observed.observation,session_handle:record.session.id,text:observed.observation.text.slice(0,8000),elements:observed.observation.elements.slice(0,64),tabs:observed.observation.tabs.slice(0,8),
    field_values:observed.state.elements.slice(0,64).flatMap((element,index)=>['input','textarea','select'].includes(element.tag)&&!['password','file','hidden'].includes(element.type)?[{ref:observed.observation.elements[index]!.ref,name:element.name,value:element.value}]:[]),
+   ...(observed.image?{}:{text_only:true,image_notice:'The screenshot was over the size limit, so no image of this page is attached. Use its text, accessibility_snapshot and element refs; any attached images are from earlier pages.'}),
    ...(latest.action?.state==='uncertain'||latest.action?.state==='prepared'?{action_outcome:'uncertain'}:{})},source_taint:'external' as const};
  };
  const handler:ToolHandler<BrowsePageArgs,unknown,ToolDispatcherContext>={name:'browse_page',description:'Read a granted public page in the retained task browser. Returns a bounded observation; its screenshot reaches the model as an image. No login, page writes or submit.',schema:browsePageArgsSchema,trigger_allowlist:triggerTypeSchema.options.filter(trigger=>TOOL_PERMISSIONS[trigger].includes('browse_page')),autonomy_gated:false,
-  async handle(args,ctx){
+  async handle(args,ctx){sessionEnded=false;
    try{
     await ctx.assertTaskSourceCurrent?.();const grant=await granted();
     if(ctx.authenticatedUserId!==options.ownerId||args.session_handle&&options.storage.kv.get<Record>(key(grant.taskId))?.session.id!==args.session_handle||(!isPublicWebUrl(args.url,options.egressAllowlist)||!grant.allowedOrigins.includes(PUBLIC_WEB_ORIGIN)&&!grant.allowedOrigins.includes(new URL(args.url).origin)))throw Error('common browser target rejected');
@@ -123,17 +153,19 @@ export function commonBrowserHost(options:Readonly<{
     const observed=record.observation?.observation.url===args.url&&driver.hasRetainedConnection()?await driver.observe(record.session,record.observation.observation.tab_ref):await driver.navigate(record.session,args.url);
     const published=await publishObservation(grant,record,observed,ctx);
     return {...published,data:{...published.data,...(recovering?{document_state:'recreated',previous_document_lost:true,document_notice:'The prior browser document was lost. Unsent form values and old action refs are unavailable. The page was recreated in the same paid session; no effect was replayed.'}:{})}};
-   }catch(error){return {ok:false,code:'rejected',error:'Public browser read is unavailable or uncertain. Inspect retained task state before retrying; no successful read is claimed.'+(error instanceof GeneralBrowserError?' Browser diagnostic: '+JSON.stringify({browser_code:error.code,...(error.diagnostic?{diagnostic:error.diagnostic}:{}),...(error.cleanup_failed?{cleanup_failed:true}:{}),...(error.release_failed?{release_failed:true}:{})}):''),source_taint:'external'};}
+   }catch(error){sessionEnded=ended(error);return {ok:false,code:retryable(error)?'transient':'rejected',error:failureText('The browser read failed; nothing was read.','Retry the read, read the page without retain_session, or try another site.',error,liveHandle()),source_taint:'external'};}
   }};
- const actionHandler:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>={name:'browse_act',description:'Interact with the current Cloudflare public page using observed refs: goto, read, inspect, type, click, select, set_checked, scroll. Download observed HTTP GET attachment links into the private owner workspace. File selection, page sends and native submits are unsupported. Unknown outcomes block repeated effects; read evidence before deciding what completed.',schema:browseActArgsSchema,trigger_allowlist:triggerTypeSchema.options.filter(trigger=>TOOL_PERMISSIONS[trigger].includes('browse_act')),autonomy_gated:false,
-  async handle(args,ctx){let storageKey:string|undefined,digest:string|undefined;
+ const actionHandler:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>={name:'browse_act',description:'Interact with the current Cloudflare public page using observed refs: goto, back, read, inspect, type, click, select, set_checked, scroll. Download observed HTTP GET attachment links into the private owner workspace. File selection, page sends and native submits are unsupported. Unknown outcomes block repeated effects; read evidence before deciding what completed.',schema:browseActArgsSchema,trigger_allowlist:triggerTypeSchema.options.filter(trigger=>TOOL_PERMISSIONS[trigger].includes('browse_act')),autonomy_gated:false,
+  async handle(args,ctx){let storageKey:string|undefined,digest:string|undefined;sessionEnded=false;
    try{
     if(options.config.retainInteractions!==true)throw Error('retained interaction capability unavailable');
     await ctx.assertTaskSourceCurrent?.();const grant=await granted();storageKey=key(grant.taskId);
     let record=options.storage.kv.get<Record>(storageKey);
-    if(ctx.authenticatedUserId!==options.ownerId||!args.command||!record||args.session_handle&&record.session.id!==args.session_handle||record.cleanup||record.allocation!=='observed'||JSON.stringify(record.grant)!==JSON.stringify(grant)||!record.handoff&&(!record.observation||args.url!==record.observation.observation.url))throw Error('current browser observation unavailable');
+    if(ctx.authenticatedUserId!==options.ownerId||!args.command||!record||args.session_handle&&record.session.id!==args.session_handle||record.cleanup||record.allocation!=='observed'||JSON.stringify(record.grant)!==JSON.stringify(grant))throw Error('current browser observation unavailable');
     const command=args.command;
+    // Ending the session needs only its identity, not a current page: a session whose read failed must still close.
     if(command.operation==='cancel'){await api.cancel();return {ok:true,data:{ended:true},source_taint:'external'};}
+    if(!record.handoff&&(!record.observation||args.url!==record.observation.observation.url))throw Error('current browser observation unavailable');
     if(record.handoff){
      if(command.operation!=='resume_owner_login'||record.handoff.requestRunId===(ctx.runScope?.runId??ctx.turnId)||!human){if(!human)await api.cancel();throw Error('owner login pending');}
      const held=human;
@@ -210,6 +242,12 @@ export function commonBrowserHost(options:Readonly<{
     if(command.operation==='resume_owner_login')throw Error('no pending login');
     let observed:GeneralSnapshot;
     if(command.operation==='read'||command.operation==='inspect'||command.operation==='screenshot'||command.operation==='switch_tab')observed=await driver.observe(record.session,command.operation==='switch_tab'?command.tab_ref:before.observation.tab_ref);
+    // Going back is a read: it loads an earlier page, which passes the same egress check as any navigation.
+    else if(command.operation==='back'){
+     const returned=await driver.back(record.session,before.observation.tab_ref);
+     if(!returned)return {ok:true,data:{session_handle:record.session.id,back:'no_history',notice:'This tab has no earlier page to go back to, so nothing changed. The current page and its refs are still valid; use goto to open another page.'},source_taint:'external'};
+     observed=returned;
+    }
     else {
      if(record.action?.state==='prepared'||record.action?.state==='uncertain')throw Error('prior browser effect uncertain');
      if('intent' in command&&command.intent==='send')throw Error('browser approval required');
@@ -231,15 +269,18 @@ export function commonBrowserHost(options:Readonly<{
     if(digest){const completed=digest;options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey!);if(latest?.action?.digest===completed)save({...latest,action:{digest:completed,state:'observed'}},storageKey!);});}
     const published=await publishObservation(grant,record,observed,ctx);
     if(command.operation==='screenshot'){
+      // The owner workspace stores the PNG capture only; a JPEG means the PNG was over the size limit.
+      if(observed.image?.mime_type!=='image/png')throw new GeneralBrowserError('image_oversize');
       if(!options.files)throw Error('owner screenshot storage unavailable');
       const files=await options.files(async()=>{await checked();},options.ownerId);
       const receipt=await browserScreenshotToWorkspace({...files,image:observed.image.bytes,maxScreenshotBytes:grant.maxScreenshotBytes,operationId:crypto.randomUUID(),deadline:Math.min(record.session.expiresAt,options.deadline()),now:options.now,assertCurrent:async()=>{await checked();}});
       return {...published,data:{...published.data,screenshot:receipt}};
     }
-    return {...published,data:{...published.data,...(!['read','inspect','screenshot','switch_tab'].includes(command.operation)?{browser_action_session_handle:record.session.id}:{})}};
+    return {...published,data:{...published.data,...(!['read','inspect','screenshot','switch_tab','back'].includes(command.operation)?{browser_action_session_handle:record.session.id}:{})}};
    }catch(error){
+    if(!digest&&['read','inspect','back'].includes(args.command?.operation??''))sessionEnded=ended(error);
     if(storageKey&&digest){const failed=digest;options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey!);if(latest?.action?.digest===failed)save({...latest,action:{digest:failed,state:'uncertain'}},storageKey!);});}
-    return {ok:false,code:'rejected',error:'The public browser action was rejected or its outcome is uncertain. No replacement browser or unapproved page write was allowed. Inspect the current page before retrying.'+(error instanceof GeneralBrowserError?' Browser diagnostic: '+JSON.stringify({browser_code:error.code,...(error.diagnostic?{diagnostic:error.diagnostic}:{}),...(error.cleanup_failed?{cleanup_failed:true}:{}),...(error.release_failed?{release_failed:true}:{})}):''),source_taint:'external'};
+    return {ok:false,code:!digest&&retryable(error)?'transient':'rejected',error:failureText('The browser action failed or its outcome is unknown; no replacement browser or unapproved page write was used.','Read the current page with browse_act read and act on its fresh refs; if page actions keep being refused, end this session with cancel and start a new one.',error,liveHandle()),source_taint:'external'};
    }
   }};
  const api={handler,actionHandler,
@@ -262,7 +303,7 @@ export function commonBrowserHost(options:Readonly<{
    await api.cancel();
   }
  },
-resetAttachments(){images=[];},sessionHandle:()=>options.storage.kv.get<Record>(key(snapshot().taskId))?.session.id,attachments:()=>[...images],async cancel(){images=[];const task=snapshot();const record=options.storage.kv.get<Record>(key(task.taskId));if(!record||record.cleanup==='closed')return;
+resetAttachments(){images=[];},sessionEnded:()=>sessionEnded,sessionHandle:()=>options.storage.kv.get<Record>(key(snapshot().taskId))?.session.id,attachments:()=>[...images],async cancel(){images=[];const task=snapshot();const record=options.storage.kv.get<Record>(key(task.taskId));if(!record||record.cleanup==='closed')return;
   if(record.cleanupFailed)throw new GeneralBrowserError('cleanup_unconfirmed');
   save({...record,observation:undefined,tabs:[],cleanup:'pending'},key(task.taskId));
   if(record.session.providerSessionId==='pending')throw Error('common browser allocation uncertain');

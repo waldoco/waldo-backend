@@ -56,6 +56,22 @@ const enqueueSend = (sql: SqlStorage, storage: DurableObjectStorage, scheduler: 
     await storage.deleteAlarm();
   };
 
+describe('a due entry the alarm has no time for', () => {
+  it('is not started and stays armed and due for the next wake', async () => {
+    const now = at('2026-09-26T10:00:00Z');
+    await withBeat(now, async ({ scheduler }) => {
+      await scheduler.schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', occurrenceAt: now, dueAt: now, payloadRefs: { id: HEARTBEAT_ID } });
+      let started = 0;
+      const executors = { heartbeat: async () => { started += 1; } } as unknown as ScheduleExecutors;
+      expect(await scheduler.dispatchDue(executors, () => false)).toEqual([]);
+      expect(started).toBe(0);
+      expect(scheduler.read(HEARTBEAT_ID)).toMatchObject({ status: 'armed', due_at: now });
+      await scheduler.dispatchDue(executors, () => true);
+      expect(started).toBe(1);
+    });
+  });
+});
+
 describe('heartbeat tick (H1, scheduler-owned run history)', () => {
   it('arms one interval schedule entry and re-arming is a no-op', async () => {
     await withBeat(at('2026-09-26T10:00:00Z'), async ({ scheduler }) => {
