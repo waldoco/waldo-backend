@@ -507,6 +507,25 @@ export function cloudflareGeneralBrowser(options: Options) {
       await navigation.goto(page, url);
       return observe(session, context, page);
     }),
+    // One history entry back in the tab, observed like a navigation. Undefined when the tab has no earlier page.
+    back: (session: BrowserSession, reference: string) => attached(session, async (_, context, navigation): Promise<GeneralSnapshot | undefined> => {
+      const page = await select(session, context, reference);
+      const cdp = await boundedSemanticRead(session, () => context.newCDPSession(page));
+      let history: Awaited<ReturnType<typeof cdp.send<'Page.getNavigationHistory'>>>;
+      try { history = await boundedSemanticRead(session, () => cdp.send('Page.getNavigationHistory')); } finally { await cdp.detach(); }
+      await admit(session);
+      // A tab's first entry is the blank page it opened on, so there is nothing before it to return to.
+      const entry = history.entries[history.currentIndex - 1];
+      if (!entry || entry.url === 'about:blank') return undefined;
+      // History can point anywhere, so the earlier page passes the navigation egress check before any request.
+      // A page restored from the back/forward cache sends no request; observe re-checks the URL it lands on.
+      await allowed(session, entry.url);
+      try { await page.goBack({ waitUntil: 'domcontentloaded', timeout: actionTimeout(session) }); }
+      catch (error) { if (!navigation.pending(page)) throw error; }
+      await admit(session);
+      await navigation.finish(page);
+      return observe(session, context, page);
+    }),
     openTab: (session: BrowserSession, url: string) => attached(session, async (_, context, navigation) => {
       await allowed(session, url); const page = await context.newPage();
       await navigation.goto(page, url);

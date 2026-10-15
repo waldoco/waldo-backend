@@ -317,3 +317,17 @@ it('a deadline hit after an effect was prepared stays a refused, uncertain effec
  expect((f.rows.get('common-browser:fixture-task') as any).action.state).toBe('uncertain');
  deadline=Date.now()+60000;await host.cancel();
 });
+it('browse_act back returns to the previous page as a read, and says so plainly when there is none',async()=>{
+ const f=fixture(),host=f.host();
+ const first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.',retain_session:true} as never,f.ctx) as any;
+ const none=await host.actionHandler.handle({session_handle:first.data.session_handle,url:first.data.url,task:'Go back.',max_actions:1,command:{operation:'back'}} as never,f.ctx) as any;
+ expect(none).toMatchObject({ok:true,data:{back:'no_history',session_handle:first.data.session_handle}});
+ const second=await host.handler.handle({url:'https://public-pages.fixture.invalid/b',instruction:'Read B.',session_handle:first.data.session_handle} as never,f.ctx) as any;
+ expect(second).toMatchObject({ok:true,data:{url:'https://public-pages.fixture.invalid/b'}});
+ const back=await host.actionHandler.handle({session_handle:first.data.session_handle,url:second.data.url,task:'Go back.',max_actions:1,command:{operation:'back'}} as never,f.ctx) as any;
+ expect(back).toMatchObject({ok:true,data:{url:'https://public-pages.fixture.invalid/a',text:'Option A costs 10 fictional tokens.'}});
+ expect(back.data.browser_action_session_handle).toBeUndefined();
+ expect((f.rows.get('common-browser:fixture-task') as any).action).toBeUndefined();
+ expect(commonBrowserFixture.allocations).toBe(1);
+ await host.cancel();
+});

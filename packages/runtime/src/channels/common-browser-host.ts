@@ -147,7 +147,7 @@ export function commonBrowserHost(options:Readonly<{
     return {...published,data:{...published.data,...(recovering?{document_state:'recreated',previous_document_lost:true,document_notice:'The prior browser document was lost. Unsent form values and old action refs are unavailable. The page was recreated in the same paid session; no effect was replayed.'}:{})}};
    }catch(error){return {ok:false,code:retryable(error)?'transient':'rejected',error:failureText('The browser read failed; nothing was read.','Retry the read, read the page without retain_session, or try another site.',error,liveHandle()),source_taint:'external'};}
   }};
- const actionHandler:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>={name:'browse_act',description:'Interact with the current Cloudflare public page using observed refs: goto, read, inspect, type, click, select, set_checked, scroll. Download observed HTTP GET attachment links into the private owner workspace. File selection, page sends and native submits are unsupported. Unknown outcomes block repeated effects; read evidence before deciding what completed.',schema:browseActArgsSchema,trigger_allowlist:triggerTypeSchema.options.filter(trigger=>TOOL_PERMISSIONS[trigger].includes('browse_act')),autonomy_gated:false,
+ const actionHandler:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>={name:'browse_act',description:'Interact with the current Cloudflare public page using observed refs: goto, back, read, inspect, type, click, select, set_checked, scroll. Download observed HTTP GET attachment links into the private owner workspace. File selection, page sends and native submits are unsupported. Unknown outcomes block repeated effects; read evidence before deciding what completed.',schema:browseActArgsSchema,trigger_allowlist:triggerTypeSchema.options.filter(trigger=>TOOL_PERMISSIONS[trigger].includes('browse_act')),autonomy_gated:false,
   async handle(args,ctx){let storageKey:string|undefined,digest:string|undefined;
    try{
     if(options.config.retainInteractions!==true)throw Error('retained interaction capability unavailable');
@@ -234,6 +234,12 @@ export function commonBrowserHost(options:Readonly<{
     if(command.operation==='resume_owner_login')throw Error('no pending login');
     let observed:GeneralSnapshot;
     if(command.operation==='read'||command.operation==='inspect'||command.operation==='screenshot'||command.operation==='switch_tab')observed=await driver.observe(record.session,command.operation==='switch_tab'?command.tab_ref:before.observation.tab_ref);
+    // Going back is a read: it loads an earlier page, which passes the same egress check as any navigation.
+    else if(command.operation==='back'){
+     const returned=await driver.back(record.session,before.observation.tab_ref);
+     if(!returned)return {ok:true,data:{session_handle:record.session.id,back:'no_history',notice:'This tab has no earlier page to go back to, so nothing changed. The current page and its refs are still valid; use goto to open another page.'},source_taint:'external'};
+     observed=returned;
+    }
     else {
      if(record.action?.state==='prepared'||record.action?.state==='uncertain')throw Error('prior browser effect uncertain');
      if('intent' in command&&command.intent==='send')throw Error('browser approval required');
@@ -262,7 +268,7 @@ export function commonBrowserHost(options:Readonly<{
       const receipt=await browserScreenshotToWorkspace({...files,image:observed.image.bytes,maxScreenshotBytes:grant.maxScreenshotBytes,operationId:crypto.randomUUID(),deadline:Math.min(record.session.expiresAt,options.deadline()),now:options.now,assertCurrent:async()=>{await checked();}});
       return {...published,data:{...published.data,screenshot:receipt}};
     }
-    return {...published,data:{...published.data,...(!['read','inspect','screenshot','switch_tab'].includes(command.operation)?{browser_action_session_handle:record.session.id}:{})}};
+    return {...published,data:{...published.data,...(!['read','inspect','screenshot','switch_tab','back'].includes(command.operation)?{browser_action_session_handle:record.session.id}:{})}};
    }catch(error){
     if(storageKey&&digest){const failed=digest;options.storage.transactionSync(()=>{const latest=options.storage.kv.get<Record>(storageKey!);if(latest?.action?.digest===failed)save({...latest,action:{digest:failed,state:'uncertain'}},storageKey!);});}
     return {ok:false,code:!digest&&retryable(error)?'transient':'rejected',error:failureText('The browser action failed or its outcome is unknown; no replacement browser or unapproved page write was used.','Read the current page with browse_act read and act on its fresh refs; if page actions keep being refused, end this session with cancel and start a new one.',error,liveHandle()),source_taint:'external'};
