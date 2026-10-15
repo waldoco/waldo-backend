@@ -29,7 +29,7 @@ it('strict schemas, registry ACL and taint gate cover every lifecycle entry',asy
   closed=true;await expect(cap.prompt(canaries)).rejects.toThrow('closed');
  });
 });
-it('renders the catalog as one line per skill with name, version, description and enabled state, smaller than JSON',async()=>{
+it('renders the catalog as one line per skill with name, version and description, marks disabled skills, and is smaller than JSON',async()=>{
  const stub=env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('curated-skills-catalog-lines'));
  await runInDurableObject(stub,async(_,state)=>{
   const scope={runId:'run',attempt:'attempt',deadline:Date.now()+60000,signal:new AbortController().signal,admit(){},commit<T>(work:()=>T){return work();}};
@@ -40,14 +40,13 @@ it('renders the catalog as one line per skill with name, version, description an
   const catalog=createScopedCuratedSkillCapability(state.storage.sql,turn,scope).metadata();
   const lines=catalog.split('\n');
   for(const s of CURATED_SKILLS){
-   const line=lines.filter(l=>l.startsWith(`- ${s.name}@${s.version} `));
+   const line=lines.filter(l=>l.startsWith(`- ${s.name}@${s.version}${s.name===day.name?' (disabled)':''}: `));
    expect(line,s.name).toHaveLength(1);
    expect(line[0]).toContain(s.trigger_condition);
-   expect(line[0]!.endsWith(s.name===day.name?'(disabled)':'(enabled)')).toBe(true);
   }
   expect(catalog.startsWith('Reviewed skill catalog (metadata only)')).toBe(true);
   expect(catalog).toContain('skills_load');
-  expect(catalog).toContain('Disabled skills cannot load');
+  expect(catalog).toContain('disabled skills cannot load');
   expect(catalog).not.toContain('{');
   expect(catalog.length).toBeLessThan(JSON.stringify(book.list()).length);
  });
