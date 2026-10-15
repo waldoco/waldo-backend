@@ -3,12 +3,12 @@ import { iMessageSendUrl } from './imessage/send-url';
 import { APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appCodeRequestSchema, appContractHeaderV1Schema, appIMessageLinkCodeV1Schema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
 import type { AppApprovalCards } from './approvals';
 import { consoleAuth, type ConsoleAuth } from '../identity/console-auth';
-import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
 import { readOwnerDemand } from '../health/calendar-demand-route';
 import { linkCodeHash, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { signedRpc } from '../identity/owner-directory';
 import { computeDailyScores } from '../health/scores';
 import { APP_HEALTH_PATH, handleAppHealth } from './app-health';
+import { fenceSession } from './session-fence';
 import { CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS, CONSOLE_OTP_SEND_LIMIT, CONSOLE_OTP_VERIFY_LIMIT } from './console-signin';
 
 export const APP_PATH = '/app/v1';
@@ -33,7 +33,7 @@ const readJson = async (request: Request): Promise<Record<string, unknown> | nul
   let text: string; try { text = new TextDecoder('utf-8', {fatal:true,ignoreBOM:true}).decode(bytes); } catch { return null; }
   try { const value: unknown = JSON.parse(text); return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null; } catch { return null; }
 };
-const readBoundedBody = async (request:Request, max:number):Promise<Uint8Array|null> => {
+export const readBoundedBody = async (request:Request, max:number):Promise<Uint8Array|null> => {
   if (!request.body) return new Uint8Array();
   const reader=request.body.getReader(), chunks:Uint8Array[]=[]; let size=0, expired=false;
   const timer=setTimeout(()=>{expired=true;void reader.cancel();},5000);
@@ -84,22 +84,6 @@ const sessionView = async (auth: ConsoleAuth, doName: string, credential: string
   const created = row ? Date.parse(row.created_at) : NaN;
   if (!Number.isFinite(created) || created + 12 * 60 * 60_000 <= Date.now()) throw new Error('expired session');
   return appSessionV1Schema.parse({ state: 'active', session_ref: `sess_${hash}`, account_ref: `acct_${await linkCodeHash(doName)}`, surface: 'app', absolute_expires_at: created + 12 * 60 * 60_000 });
-};
-
-// Closes the session's queued work and stops its running turn in the owner Durable Object; false when it cannot be confirmed.
-// Signout calls it before the revoke, which makes a retry safe, and again after it for work admitted in between.
-const fenceSession = async (env: AppEnv, owners: NonNullable<AppEnv['OWNER_DO']>, doName: string, sessionHash: string): Promise<boolean> => {
-  const secret = env.WALDO_ROUTER_HMAC_SECRET;
-  if (!secret) return false;
-  try {
-    const response = await owners.get(owners.idFromName(doName)).fetch(new Request(`https://telegram-owner${APP_SESSION_FENCE_PATH}`, {
-      method: 'POST',
-      headers: { 'x-waldo-do-name': doName, 'x-waldo-app-session-hash': sessionHash, 'x-waldo-fence-sig': await appSessionFenceSignature(secret, doName, sessionHash) },
-    }));
-    if (response.ok) return true;
-  } catch { /* reported below */ }
-  console.error('app session fence unavailable');
-  return false;
 };
 
 // App sign-in and the shared main chat. Returns null for paths outside /app/v1 so the caller keeps routing.
