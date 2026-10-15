@@ -76,3 +76,29 @@ it('a read that fails while the provider still holds the session is not a restar
  commonBrowserFixture.onGoto=undefined;
  expect(commonBrowserFixture.allocations).toBe(1);
 });
+it('a dropped connection to a session the provider still holds is not restarted: the read fails honestly and the next one reconnects',async()=>{
+ const f=fixture(),first=await f.read();
+ commonBrowserFixture.dropConnection();
+ const read=await f.act(first.data.session_handle,{operation:'read'});
+ expect(read).toMatchObject({ok:false});expect(read.error).toContain('provider_unavailable');expect(read.data).toBeUndefined();
+ expect(commonBrowserFixture.allocations).toBe(1);
+ expect(f.sessions()).toHaveLength(1);expect(f.sessions()[0].cleanup).toBeUndefined();
+ const again=await f.read('https://example.com/a',first.data.session_handle);
+ expect(again).toMatchObject({ok:true,data:{session_handle:first.data.session_handle}});expect(again.data.restarted).toBeUndefined();
+ expect(commonBrowserFixture.allocations).toBe(1);
+});
+it('a connection that drops mid-read while the provider still holds the session is not restarted',async()=>{
+ const f=fixture(),first=await f.read();
+ commonBrowserFixture.onGoto=()=>{commonBrowserFixture.dropConnection();throw Error('socket closed');};
+ const read=await f.read('https://example.com/b',first.data.session_handle);
+ commonBrowserFixture.onGoto=undefined;
+ expect(read).toMatchObject({ok:false});expect(read.error).toContain('provider_unavailable');
+ expect(commonBrowserFixture.allocations).toBe(1);expect(f.sessions()[0].cleanup).toBeUndefined();
+});
+it('a connection that drops mid-read because the provider ended the session still gets the bounded restart',async()=>{
+ const f=fixture(),first=await f.read();
+ commonBrowserFixture.onGoto=()=>{commonBrowserFixture.onGoto=undefined;commonBrowserFixture.endProviderSession();throw Error('socket closed');};
+ const read=await f.read('https://example.com/b',first.data.session_handle);
+ expect(read).toMatchObject({ok:true,data:{restarted:true,url:'https://example.com/b'}});
+ expect(commonBrowserFixture.allocations).toBe(2);
+});

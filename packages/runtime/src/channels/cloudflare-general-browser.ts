@@ -53,9 +53,9 @@ export function cloudflareGeneralBrowser(options: Options) {
     };
     try { return await work(step); } finally { clearTimeout(timer!); }
   };
-  // A bound that fires once the turn has no time left is the turn's deadline, which a later turn can retry; a bound that
-  // fires earlier is the provider failing to answer.
-  const expiredBound = () => new GeneralBrowserError(options.deadline() - options.now() <= 0 ? 'turn_deadline' : 'provider_unavailable');
+  // A bound armed with the turn's remaining time is the turn's deadline when it fires, which a later turn can retry; any
+  // other bound is the provider failing to answer. The armed bound decides, because timers and the clock can disagree.
+  const expiredBound = (turn: boolean) => new GeneralBrowserError(turn ? 'turn_deadline' : 'provider_unavailable');
   // Provider control requests end with the turn, capped at ten seconds; cleanup after the turn keeps that cap. The
   // allocation is bounded by the turn alone: aborting it early can lose a session the provider has already billed. The
   // devtools upgrade is the retained connection itself, so it carries no request signal; attaching it is raced instead.
@@ -67,8 +67,9 @@ export function cloudflareGeneralBrowser(options: Options) {
       const remaining = options.deadline() - options.now();
       if (allocation && !(remaining > 0)) throw new GeneralBrowserError('turn_deadline');
       const bound = allocation ? remaining : remaining > 0 ? Math.min(PROVIDER_REQUEST_MS, remaining) : PROVIDER_REQUEST_MS;
+      const turn = allocation || remaining > 0 && remaining <= PROVIDER_REQUEST_MS;
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(expiredBound()), bound);
+      const timer = setTimeout(() => controller.abort(expiredBound(turn)), bound);
       try { response = await options.binding.fetch(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal }); }
       catch (error) { if (controller.signal.aborted) throw controller.signal.reason; throw error; }
       finally { clearTimeout(timer); }
@@ -90,11 +91,12 @@ export function cloudflareGeneralBrowser(options: Options) {
     catch (error) { if (error instanceof GeneralBrowserError) throw error; throw new GeneralBrowserError('rejected'); }
   };
   const admit = async (session: BrowserSession) => { identity(session); await hostAdmit(); identity(session); };
-  const actionTimeout = (session: BrowserSession) => {
-    const remaining = Math.min(session.expiresAt, options.deadline()) - options.now();
-    if (!Number.isFinite(remaining) || remaining <= 0) throw new GeneralBrowserError(Number.isFinite(remaining) && options.deadline() <= session.expiresAt ? 'turn_deadline' : 'rejected');
-    return Math.min(10000, remaining);
+  const actionBound = (session: BrowserSession) => {
+    const deadline = options.deadline(), remaining = Math.min(session.expiresAt, deadline) - options.now();
+    if (!Number.isFinite(remaining) || remaining <= 0) throw new GeneralBrowserError(Number.isFinite(remaining) && deadline <= session.expiresAt ? 'turn_deadline' : 'rejected');
+    return { ms: Math.min(10000, remaining), turn: deadline <= session.expiresAt && remaining <= 10000 };
   };
+  const actionTimeout = (session: BrowserSession) => actionBound(session).ms;
   const allowed = async (session: BrowserSession, url: string, method = 'GET') => {
     await admit(session);
     const target = new URL(url);
@@ -107,9 +109,10 @@ export function cloudflareGeneralBrowser(options: Options) {
     try { return (await cdp.send('Target.getTargetInfo')).targetInfo.targetId; }
     finally { await cdp.detach(); }
   };
-  // A listing that fails says nothing about the session, so it is treated as still present.
-  const providerSessionGone = async (sdk: Awaited<ReturnType<CloudflareBrowserSdkLoader>>, id: string): Promise<boolean> => {
-    try { const rows = await sdk.sessions(binding); return Array.isArray(rows) && !rows.some(row => row?.sessionId === id); }
+  // Only the provider's own session list says a session is gone. A dropped or refused connection does not: the session,
+  // and any sign-in in it, may still be live. A listing that fails says nothing, so the session is treated as present.
+  const providerSessionGone = async (id: string): Promise<boolean> => {
+    try { const rows = await (await options.loadSdk()).sessions(binding); return Array.isArray(rows) && !rows.some(row => row?.sessionId === id); }
     catch { return false; }
   };
   const attached = async <T>(session: BrowserSession, work: (browser: Browser, context: BrowserContext, navigation: Navigation) => Promise<T>): Promise<T> => {
@@ -147,9 +150,10 @@ export function cloudflareGeneralBrowser(options: Options) {
       if (connected && connected.sessionKey === connectionKey(session)) {
         browser = connected.browser;
         context = connected.context;
-        if(browser.isConnected?.()===false)throw new GeneralBrowserError('session_lost');
       }
       await admit(session);
+      // A dropped retained connection is released below; the next operation attaches afresh to the same session.
+      if (browser?.isConnected?.() === false) throw new GeneralBrowserError(await providerSessionGone(session.providerSessionId) ? 'session_lost' : 'provider_unavailable');
       if (documentFailure) throw documentFailure;
       if (connected) {
         if (connected.sessionKey !== connectionKey(session)) throw new GeneralBrowserError('session_lost');
@@ -158,18 +162,17 @@ export function cloudflareGeneralBrowser(options: Options) {
         const sdk = await options.loadSdk(); await admit(session);
         // Runtime 1.3.6 supports persistent, although its declaration omits it.
         const connectOptions = { sessionId: session.providerSessionId, persistent: true };
-        const bound = actionTimeout(session);
+        const bound = actionBound(session);
         let late = false, timer: ReturnType<typeof setTimeout> | undefined;
         const connecting = sdk.connect(binding, connectOptions).then(attached => { if (late) void attached.close().catch(() => {}); return attached; });
         connecting.catch(() => {});
         try {
           browser = await Promise.race([
             connecting,
-            new Promise<never>((_, reject) => { timer = setTimeout(() => { late = true; reject(expiredBound()); }, bound); }),
+            new Promise<never>((_, reject) => { timer = setTimeout(() => { late = true; reject(expiredBound(bound.turn)); }, bound.ms); }),
           ]);
         } catch (error) {
-          // The provider's own session list decides whether the session is gone, as opposed to unreachable this once.
-          if (!(error instanceof GeneralBrowserError && error.code === 'turn_deadline') && await providerSessionGone(sdk, session.providerSessionId)) throw new GeneralBrowserError('session_lost');
+          if (!(error instanceof GeneralBrowserError && error.code === 'turn_deadline') && await providerSessionGone(session.providerSessionId)) throw new GeneralBrowserError('session_lost');
           throw error;
         } finally { clearTimeout(timer); }
         await admit(session);
@@ -249,7 +252,7 @@ export function cloudflareGeneralBrowser(options: Options) {
     } catch (error) {
       primary = mutationDispatched || error instanceof GeneralBrowserError && error.code === 'outcome_uncertain'
         ? new GeneralBrowserError('outcome_uncertain', (error instanceof GeneralBrowserError ? error.diagnostic : undefined) ?? documentFailure?.diagnostic)
-        : documentFailure ?? (error instanceof GeneralBrowserError ? error : new GeneralBrowserError(error instanceof GeneralRedirectError ? 'rejected' : browser?.isConnected?.() === false ? 'session_lost' : 'provider_unavailable'));
+        : documentFailure ?? (error instanceof GeneralBrowserError ? error : new GeneralBrowserError(error instanceof GeneralRedirectError ? 'rejected' : browser?.isConnected?.() === false && await providerSessionGone(session.providerSessionId) ? 'session_lost' : 'provider_unavailable'));
       throw primary;
     } finally {
       // Aborted main navigations can retain a Chromium error document. Discard

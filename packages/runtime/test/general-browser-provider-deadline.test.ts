@@ -69,6 +69,20 @@ it('a hung attach to the retained session fails at the turn deadline instead of 
   expect(Date.now() - started).toBeLessThan(2000);
 });
 
+// Timers and the injected clock can disagree by a few milliseconds, so the clock may still show turn time left when the
+// turn-bounded timer fires. A clock that never advances makes that disagreement total.
+it('a turn-bounded attach that fires is a turn deadline even when the clock still shows time left', async () => {
+  const at = Date.now(), sdk = { connect: never, sessions: async () => [{ sessionId: 'provider-session' }] };
+  const frozen = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: {} as never, loadSdk: async () => sdk as never, now: () => at, deadline: () => at + 50, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  await expect(frozen.observe(session(at + 600000))).rejects.toMatchObject({ code: 'turn_deadline' });
+});
+
+it('a turn-bounded provider request that fires is a turn deadline even when the clock still shows time left', async () => {
+  const at = Date.now(), sdk = { connect: async (provider: { fetch: typeof fetch }) => { await provider.fetch('https://browser.invalid/v1/sessions'); return never(); }, sessions: async () => [{ sessionId: 'provider-session' }] };
+  const frozen = cloudflareGeneralBrowser({ ownerId: 'owner-a', binding: hung() as never, loadSdk: async () => sdk as never, now: () => at, deadline: () => at + 50, admit: async () => {}, authorizeRequest: async () => true, maxScreenshotBytes: 1024 });
+  await expect(frozen.observe(session(at + 600000))).rejects.toMatchObject({ code: 'turn_deadline' });
+});
+
 it('a connection that arrives after the turn gave up on it is closed, not leaked', async () => {
   let closed = 0;
   const sdk = { connect: () => new Promise(resolve => setTimeout(() => resolve({ close: async () => { closed++; } }), 300)), sessions: async () => [] };
