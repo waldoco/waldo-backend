@@ -15,8 +15,9 @@ export type TurnTierDecider = (input: TurnTierInput, signal?: AbortSignal) => Pr
 // The responder supplies its own sanitiser and session canaries; the host supplies how the router is reached.
 export type TurnTierFactory = (deps: Readonly<{ sanitise: Sanitise | undefined; canaryTokens: readonly string[] }>) => TurnTierDecider;
 
-// A simple answer below this confidence stays complex. The router's confidence is its own estimate, so the floor sits
-// well above a coin flip between the tiers; lowering it buys more small-model turns at more risk of a weak answer.
+// A simple answer below this confidence stays complex. 0.8 is a starting value, well above a coin flip between the
+// tiers: lowering it buys more small-model turns at more risk of a weak answer. The turn_tier hop logs each turn's tier,
+// confidence and any escalation, which is what tunes it.
 export const TURN_TIER_CONFIDENCE_FLOOR = 0.8;
 // The router answers in about a second; past this the turn stops waiting and takes the complex tier.
 export const TURN_TIER_TIMEOUT_MS = 5_000;

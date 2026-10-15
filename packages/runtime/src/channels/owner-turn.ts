@@ -10,8 +10,8 @@ import { receivedView, renderForModel, type InboundPart } from './owner-inbound-
 import { ownerContextHandler } from '../tools/live/owner-context';
 import { searchLocation } from '../tools/live/search-location';
 import {
-  deriveContextBudgetChars, EXTERNAL_ORIGIN_TOOLS, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, SANITISE_DESTINATION_POLICIES, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, OPENAI_REASONING, routingPolicySchema, WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL, WALDO_SIMPLE_TURN_MODEL,
-  type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
+  COMPLEX_WORK_TOOLS, deriveContextBudgetChars, EXTERNAL_ORIGIN_TOOLS, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, SANITISE_DESTINATION_POLICIES, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, OPENAI_REASONING, routingPolicySchema, WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL, WALDO_SIMPLE_TURN_MODEL,
+  type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName, type ToolName,
 } from '@waldo/contracts';
 import type { ConversationModelMessage } from '@waldo/contracts';
 import { BUDGET_CHARS_PER_TOKEN, MODEL_CONTEXT_MAX_CHARS } from '@waldo/contracts';
@@ -390,6 +390,8 @@ export const createOwnerResponder = (
         const trace = traceId;
       // Started beside the turn's own preparation and awaited at its first reply call; a machine turn keeps the auxiliary model.
       const replyModel = ownerTurnActive ? routeOwnerTurn(trace, request.messages).catch(() => model) : Promise.resolve(auxiliaryModel);
+      // How many of this turn's tool turns the smaller model produced before the turn moved to the chat model.
+      let escalatedAfter: number | undefined;
       // Capture-mode probe turns run on the stripped handler set; delegation wraps that
       // same set so probe confinement applies to children too (children are read-only by
       // construction, and the strip list is not widened here).
@@ -611,14 +613,29 @@ export const createOwnerResponder = (
           const browserImages = privateOwner?.skillHost?.browserAttachments?.(privateRunScope) ?? [];
           const attachments = [...(pending ?? []), ...browserImages];
           // The reply step serves machine turns too (reminders, jobs, cards, briefs); only the owner's own turn is routed.
-          const stepModel = await replyModel;
+          const routed = await replyModel;
+          // A routed turn that browses, delegates or searches the web has shown it is multi-step work: the rest of it runs on
+          // the chat model. Every call and its output replays; the smaller model's reasoning and hosted-search items do not,
+          // because they are sealed for the model that wrote them, and its call and message items replay without the item
+          // ids that point at that reasoning.
+          if (ownerTurnActive && routed !== model && escalatedAfter === undefined) {
+            const trigger = turns.find(turn => COMPLEX_WORK_TOOLS.includes(turn.call.name as ToolName))?.call.name
+              ?? (turns.some(turn => turn.prior_items?.some(item => item.type === 'web_search_call')) ? 'web_search' : undefined);
+            if (trigger !== undefined) {
+              escalatedAfter = turns.length;
+              log({ trace, hop: 'turn_tier', ms: 0, ok: true, code: 'escalated', detail: `from=${routed} to=${model} tool=${trigger}` });
+            }
+          }
+          const stepModel = escalatedAfter === undefined ? routed : model;
+          const replayed = escalatedAfter === undefined ? turns : turns.map((turn, index) => index < escalatedAfter! && turn.prior_items
+            ? { ...turn, prior_items: turn.prior_items.filter(item => item.type === 'function_call' || item.type === 'message').map(({ id: _sealed, ...item }) => item) } : turn);
           return complete(trace, 'reply',
           unboundSystem(),
           entries,
           undefined,
           attachments.length ? attachments : undefined,
           tools,
-          withholdHeldTurns(turns, output => holdsHeldTopic(output), output => narrowHeldJson(output, (value, tally) => withholdHeldItems(value, tally))),
+          withholdHeldTurns(replayed, output => holdsHeldTopic(output), output => narrowHeldJson(output, (value, tally) => withholdHeldItems(value, tally))),
           stepModel,
           );
         },

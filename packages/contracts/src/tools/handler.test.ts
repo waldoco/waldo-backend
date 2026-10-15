@@ -22,13 +22,14 @@ import { triggerTypeSchema } from '../core/trigger';
 import {
   EXTERNAL_ORIGIN_TOOLS,
   externalToolResultSchema,
+  COMPLEX_WORK_TOOLS,
   GENERAL_AGENT_TOOLS,
   handlerAllowlistMatchesAcl,
   PRIVILEGED_ACTION_TOOLS,
   taintGateBlocksDirectExecution,
   toolResultSchema,
 } from './handler';
-import { LAZY_DISCOVERY_TRIGGERS, TOOL_PERMISSIONS } from './permissions';
+import { LAZY_DISCOVERY_TRIGGERS, TOOL_PERMISSIONS, toolNameSchema } from './permissions';
 
 const echoSchema = z.strictObject({ echo: z.string() });
 const resultSchema = toolResultSchema(echoSchema);
@@ -252,6 +253,13 @@ describe('taint gate — hostile path (ADR-0049)', () => {
 describe('general-agent tools — gate coupling (ADR-0049)', () => {
   it('is exactly the three tools that ship only with the taint gate', () => {
     expect(GENERAL_AGENT_TOOLS).toEqual(['web_search', 'read_document', 'call_mcp_tool']);
+  });
+});
+
+describe('complex-work tools', () => {
+  it('are the browsing, delegation and web search tools, all real tool names', () => {
+    expect(COMPLEX_WORK_TOOLS).toEqual(['browse_page', 'browse_act', 'delegate_task', 'web_search']);
+    for (const name of COMPLEX_WORK_TOOLS) expect(toolNameSchema.safeParse(name).success, name).toBe(true);
   });
 });
 
