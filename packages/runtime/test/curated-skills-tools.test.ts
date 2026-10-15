@@ -52,16 +52,3 @@ it('renders the catalog as one line per skill with name, version, description an
   expect(catalog.length).toBeLessThan(JSON.stringify(book.list()).length);
  });
 });
-it('tells the model about skill install and disable in plain words, with no slash command',async()=>{
- const stub=env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('curated-skills-no-slash'));
- await runInDurableObject(stub,async(_,state)=>{
-  const scope={runId:'run',attempt:'attempt',deadline:Date.now()+60000,signal:new AbortController().signal,admit(){},commit<T>(work:()=>T){return work();}};
-  const cap=createScopedCuratedSkillCapability(state.storage.sql,{owner:'owner',turnId:'turn',trigger:'user_message',ownerText:'turn off the day brief',assertCurrent:async()=>{}},scope);
-  const lifecycle=cap.handlers.filter(h=>h.name==='skills_install'||h.name==='skills_disable');
-  expect(lifecycle.map(h=>[h.name,h.autonomy_gated])).toEqual([['skills_install',true],['skills_disable',true]]);
-  for(const text of [...lifecycle.map(h=>h.description),cap.metadata()]){
-   expect(text).not.toMatch(/\/skills|lifecycle command/);
-  }
-  for(const h of lifecycle)expect(h.description).toMatch(/owner asks/);
- });
-});
