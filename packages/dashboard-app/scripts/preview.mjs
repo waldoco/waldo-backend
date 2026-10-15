@@ -50,14 +50,48 @@ const chatRows = selected === 'empty' ? [] : [
       { type: 'quick_replies', choices: [{ id: 'thanks', label: 'Thanks' }, { id: 'later', label: 'Remind me at 4' }], fallback_text: 'Thanks / Remind me at 4' }] },
 ];
 const chatRuns = new Map();
+const threads = selected === 'empty' ? [] : [
+  { thread_id: 'thr_6a1f0c2e-9b4d-4c3a-8e7f-1a2b3c4d5e6f', title: 'Goa trip in December', revision: 1, title_revision: 2, state: 'active', created_at: Date.now() - 3 * 86400000, last_activity_at: Date.now() - 2 * 3600000,
+    rows: [{ id: 'syn-g1', role: 'user', text: 'Find three beach hotels in North Goa under 6k a night for Dec 20–23', parts: [], channel: 'app', parent_id: null, created_at: Date.now() - 2 * 3600000 - 60000 },
+      { id: 'syn-g2', role: 'assistant', text: 'Three options under ₹6,000 a night for Dec 20–23:\n\n1. **Ronil Beach Resort**, Baga · ₹5,400 · pool, 2 min to the beach\n2. **Casa Anjuna** · ₹5,900 · quiet, heritage house\n3. **Morjim Sands** · ₹4,800 · right on the beach\n\nWant me to hold one?', parts: [], channel: 'app', parent_id: 'syn-g1', created_at: Date.now() - 2 * 3600000 }] },
+  { thread_id: 'thr_7b2e1d3f-0c5e-4d4b-9f8a-2b3c4d5e6f7a', title: null, revision: 1, title_revision: 1, state: 'active', created_at: Date.now() - 86400000, last_activity_at: Date.now() - 86400000, rows: [] },
+  { thread_id: 'thr_8c3f2e4a-1d6f-4e5c-a09b-3c4d5e6f7a8b', title: 'Q3 board prep', revision: 2, title_revision: 2, state: 'archived', created_at: Date.now() - 20 * 86400000, last_activity_at: Date.now() - 12 * 86400000,
+    rows: [{ id: 'syn-b1', role: 'user', text: 'Pull together last quarter’s numbers for the board deck', parts: [], channel: 'app', parent_id: null, created_at: Date.now() - 12 * 86400000 }] },
+];
 const chatJson = (res, status, body) => { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)); };
 const chatReceipt = (client) => { const run = chatRuns.get(client); if (!run) return null; const done = Date.now() - run.at > 4000;
-  if (done && !run.replied) { run.replied = true; chatRows.push({ id: `syn-r${chatRows.length}`, role: 'assistant', text: `Synthetic reply to “${run.text.slice(0, 80)}”.\n\nThis preview has no model; on staging Waldo answers here.`, parts: [], channel: 'app', parent_id: run.id, created_at: Date.now() }); }
+  if (done && !run.replied) { run.replied = true; const rows = run.rows ?? chatRows; rows.push({ id: `syn-r${Date.now()}`, role: 'assistant', text: `Synthetic reply to “${run.text.slice(0, 80)}”.\n\nThis preview has no model; on staging Waldo answers here.`, parts: [], channel: 'app', parent_id: run.id, created_at: Date.now() });
+    if (run.thread) { run.thread.last_activity_at = Date.now(); if (run.thread.title === null) { run.thread.title = run.text.split(' ').slice(0, 4).join(' '); run.thread.title_revision += 1; } } }
   return { accepted: true, message_id: run.id, state: run.cancelled ? 'revoked' : done ? 'completed' : 'running', ...(run.cancelled ? { closed_reason: 'cancelled' } : {}) }; };
 const server = createServer((req, res) => {
   if(req.url?.startsWith('/console/dashboard/api/v1/memory?')) {
     const data=memoryPreview(new URL(req.url,'http://localhost').searchParams,selected==='memory-partial');
     res.writeHead(selected==='memory-error'?503:data.error?404:200,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(selected==='memory-error'?{error:'memory_unavailable'}:data));return;
+  }
+  if (req.url?.startsWith('/console/dashboard/api/v1/chat/threads')) {
+    const url = new URL(req.url, 'http://localhost'), [, , id, action, client, extra] = url.pathname.slice('/console/dashboard/api/v1/chat'.length).split('/');
+    const body = () => new Promise(done => { let raw = ''; req.on('data', c => raw += c); req.on('end', () => done(raw ? JSON.parse(raw) : {})); });
+    const shown = t => ({ ...t, preview: [...t.rows].reverse().find(r => r.text)?.text.slice(0, 280) ?? null });
+    const recorded = t => ({ operation_id: crypto.randomUUID(), state: 'recorded', thread_id: t.thread_id, revision: t.revision, title_revision: t.title_revision, thread_state: t.state });
+    if (!id && req.method === 'GET') return chatJson(res, 200, { threads: threads.filter(t => t.state !== 'deleted').sort((a, b) => b.last_activity_at - a.last_activity_at).map(({ rows, ...t }) => shown({ ...t, rows })).map(({ rows, ...t }) => t) });
+    if (!id && req.method === 'POST') return void body().then(b => { const t = { thread_id: `thr_${crypto.randomUUID()}`, title: b.title ?? null, revision: 1, title_revision: 1, state: 'active', created_at: Date.now(), last_activity_at: Date.now(), rows: [] }; threads.push(t); chatJson(res, 200, recorded(t)); });
+    const t = threads.find(item => item.thread_id === id);
+    if (!t) return chatJson(res, 404, { error: 'thread_not_found' });
+    if (t.state === 'deleted') return chatJson(res, 410, { error: 'thread_deleted' });
+    if (!action && req.method === 'GET') { const { rows, ...meta } = shown(t); return chatJson(res, 200, { thread: meta, history: { messages: [...rows].reverse(), next_cursor: null } }); }
+    if (['rename', 'archive', 'delete'].includes(action)) return void body().then(b => {
+      if (action === 'rename') { t.title = b.title; t.title_revision += 1; }
+      if (action === 'archive') { t.state = b.archived ? 'archived' : 'active'; t.revision += 1; }
+      if (action === 'delete') { t.state = 'deleted'; t.revision += 1; }
+      chatJson(res, 200, recorded(t));
+    });
+    if (action === 'messages' && !client && req.method === 'POST') return void body().then(b => {
+      if (t.state === 'archived') return chatJson(res, 409, { error: 'thread_archived' });
+      const rid = `syn-t${Date.now()}`; t.rows.push({ id: rid, role: 'user', text: b.text, parts: [], channel: 'app', parent_id: null, created_at: Date.now() });
+      chatRuns.set(b.client_message_id, { id: rid, text: b.text, at: Date.now(), rows: t.rows, thread: t }); chatJson(res, 202, { accepted: true, message_id: rid, state: 'admitted' });
+    });
+    if (action === 'messages' && client) { const run = chatRuns.get(client); if (run && extra === 'cancel') run.cancelled = true; const receipt = chatReceipt(client); return chatJson(res, receipt ? 200 : 404, receipt ?? { error: 'message_not_found' }); }
+    return chatJson(res, 404, { error: 'not_found' });
   }
   if (req.url?.startsWith('/console/dashboard/api/v1/chat')) {
     const url = new URL(req.url, 'http://localhost'), rest = url.pathname.slice('/console/dashboard/api/v1/chat'.length);

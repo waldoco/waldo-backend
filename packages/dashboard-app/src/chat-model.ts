@@ -72,6 +72,11 @@ const failure = async (response: Response): Promise<ChatRequestError> => {
     : response.status === 413 ? 'That message is too long to send.'
       : code === 'inbox_full' || code === 'capacity' ? 'Waldo’s inbox is full for the moment. Try again shortly.'
         : code === 'conflict' || code === 'client_message_id_reused' ? 'This message clashed with an earlier one. Send it again.'
+          : code === 'thread_archived' ? 'This chat is archived. Unarchive it to keep talking here.'
+            : code === 'thread_deleted' || response.status === 410 ? 'This chat was deleted.'
+              : code === 'thread_not_found' ? 'This chat doesn’t exist.'
+                : code === 'thread_revision_conflict' || code === 'title_revision_conflict' || code === 'operation_conflict' ? 'This chat changed in another window. Try again.'
+                  : code === 'thread_capacity' ? 'You’ve reached the most chats Waldo keeps. Delete one you no longer need first.'
           : response.status === 403 ? 'This browser can’t send to Waldo. Reload the console and try again.'
             : 'Waldo couldn’t be reached. Try again.';
   return new ChatRequestError(response.status, message, code, retryAfter);
@@ -86,18 +91,51 @@ const request = async (url: string, init: RequestInit = {}): Promise<unknown> =>
   try { return await response.json(); } catch { throw new ChatRequestError(response.status, 'Waldo sent a reply this console cannot read.'); }
 };
 
-export const fetchChatPage = async (cursor: string | null, limit: number, signal?: AbortSignal): Promise<ChatPage> => {
-  const query = new URLSearchParams({ limit: String(limit) });
-  if (cursor) query.set('cursor', cursor);
-  return readChatPage(await request(`${CHAT_URL}?${query}`, { signal }));
+// A conversation is main (null) or one of the owner's threads, each at its own base path.
+const base = (thread: string | null) => thread === null ? CHAT_URL : `${CHAT_URL}/threads/${encodeURIComponent(thread)}`;
+const pageQuery = (cursor: string | null, limit: number) => { const query = new URLSearchParams({ limit: String(limit) }); if (cursor) query.set('cursor', cursor); return query; };
+const json = (body: object): RequestInit => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
+export const fetchChatPage = async (cursor: string | null, limit: number, signal?: AbortSignal): Promise<ChatPage> =>
+  readChatPage(await request(`${CHAT_URL}?${pageQuery(cursor, limit)}`, { signal }));
+export const fetchThreadPage = async (thread: string, cursor: string | null, limit: number): Promise<{ thread: ChatThread; page: ChatPage }> => {
+  const value = await request(`${base(thread)}?${pageQuery(cursor, limit)}`);
+  if (!obj(value)) throw new ChatRequestError(200, 'Waldo sent a chat this console cannot read.');
+  return { thread: readThread(value.thread), page: readChatPage(value.history) };
 };
-export const sendChatMessage = async (clientId: string, text: string): Promise<ChatReceipt> => {
-  const value = await request(`${CHAT_URL}/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_message_id: clientId, text }) });
+// A thread message names the thread revision it was written against, so archiving or deleting the thread stops it.
+export const sendChatMessage = async (clientId: string, text: string, thread: string | null = null, revision?: number): Promise<ChatReceipt> => {
+  const value = await request(`${base(thread)}/messages`, json({ client_message_id: clientId, text, ...(thread === null ? {} : { expected_revision: revision }) }));
   if (!obj(value) || value.accepted !== true || !str(value.message_id)) throw new ChatRequestError(202, 'Waldo took the message but its receipt was unreadable.');
   return { message_id: value.message_id, state: runState(value.state) ? value.state : 'admitted', closed_reason: null, effects_unconfirmed: false };
 };
-export const fetchReceipt = async (clientId: string): Promise<ChatReceipt> => readReceipt(await request(`${CHAT_URL}/messages/${encodeURIComponent(clientId)}`));
-export const cancelChatMessage = async (clientId: string): Promise<ChatReceipt> => readReceipt(await request(`${CHAT_URL}/messages/${encodeURIComponent(clientId)}/cancel`, { method: 'POST' }));
+export const fetchReceipt = async (clientId: string, thread: string | null = null): Promise<ChatReceipt> => readReceipt(await request(`${base(thread)}/messages/${encodeURIComponent(clientId)}`));
+export const cancelChatMessage = async (clientId: string, thread: string | null = null): Promise<ChatReceipt> => readReceipt(await request(`${base(thread)}/messages/${encodeURIComponent(clientId)}/cancel`, { method: 'POST' }));
+
+// The owner's chats beside main. Titles and previews are owner or model text and render as plain text.
+export type ChatThread = { thread_id: string; title: string | null; preview: string | null; revision: number; title_revision: number; state: 'active' | 'archived' | 'deleted'; created_at: number; last_activity_at: number };
+const revision = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 1;
+export const readThread = (value: unknown): ChatThread => {
+  if (!obj(value) || !str(value.thread_id) || !/^thr_[0-9a-f-]{36}$/.test(value.thread_id) || !(value.title === null || str(value.title)) || !(value.preview === null || str(value.preview))
+    || !revision(value.revision) || !revision(value.title_revision) || !['active', 'archived', 'deleted'].includes(String(value.state)) || !epoch(value.created_at) || !epoch(value.last_activity_at))
+    throw new ChatRequestError(200, 'Waldo sent a chat this console cannot read.');
+  return { thread_id: value.thread_id, title: value.title, preview: value.preview, revision: value.revision, title_revision: value.title_revision, state: value.state as ChatThread['state'], created_at: value.created_at, last_activity_at: value.last_activity_at };
+};
+export const fetchThreads = async (): Promise<ChatThread[]> => {
+  const value = await request(`${CHAT_URL}/threads?state=all`);
+  if (!obj(value) || !Array.isArray(value.threads)) throw new ChatRequestError(200, 'Waldo sent a chat list this console cannot read.');
+  return value.threads.map(readThread);
+};
+// A repeated operation id returns the first result, so a retry after a lost answer never acts twice.
+const operate = async (path: string, body: object): Promise<string> => {
+  const value = await request(path, json({ operation_id: crypto.randomUUID(), ...body }));
+  if (!obj(value) || value.state !== 'recorded' || !str(value.thread_id)) throw new ChatRequestError(200, 'Waldo recorded the change but its receipt was unreadable.');
+  return value.thread_id;
+};
+export const createThread = (title?: string): Promise<string> => operate(`${CHAT_URL}/threads`, title ? { title } : {});
+export const renameThread = (thread: ChatThread, title: string): Promise<string> => operate(`${base(thread.thread_id)}/rename`, { expected_title_revision: thread.title_revision, title });
+export const archiveThread = (thread: ChatThread, archived: boolean): Promise<string> => operate(`${base(thread.thread_id)}/archive`, { expected_revision: thread.revision, archived });
+export const deleteThread = (thread: ChatThread): Promise<string> => operate(`${base(thread.thread_id)}/delete`, { expected_revision: thread.revision });
 
 const ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
 export const newClientId = (): string => `console-${[...crypto.getRandomValues(new Uint8Array(20))].map(byte => ALPHABET[byte % ALPHABET.length]).join('')}`;
