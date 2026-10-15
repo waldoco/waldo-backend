@@ -31,7 +31,7 @@ import telegram from './assets/logos/telegram.svg?inline';
 
 // SF Symbols from Waldo's icon set (Waldo-App/assets/sf, waldo-landing). Drawn as masks so each
 // glyph takes the colour of the text around it.
-const glyphs = { today, waiting, memory, patrol, settings, brief, spot, calendar, calendarClock, envelope, paperplane, checklist, close, entry, warning, person, bell, check, pending, retry, chevron, arrow, chat, sun, moon, graph };
+const glyphs = { today, waiting, memory, patrol, settings, brief, spot, calendar, calendarClock, envelope, paperplane, checklist, close, entry, warning, person, bell, check, pending, retry, chevron, arrow, chat, sun, moon, graph, tasks: checklist };
 export type IconName = keyof typeof glyphs;
 export const Icon = ({ name, className }: { name: IconName; className?: string }) =>
   <span className={className ? `icon ${className}` : 'icon'} style={{ '--icon': `url("${glyphs[name]}")` } as CSSProperties} aria-hidden="true"/>;

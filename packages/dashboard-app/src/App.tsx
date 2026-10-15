@@ -10,6 +10,7 @@ import {OwnerControlsPanel} from './OwnerControls';
 import {ControlsPanel} from './Controls';
 import { MemoryPanel } from './Memory';
 import { ChatLink, ChatPanel } from './Chat';
+import { TasksPanel } from './Tasks';
 import { AdminPanel, type AdminState } from './Admin';
 import { fetchAdmin } from './admin-model';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -19,9 +20,9 @@ import { fetchOverview, SignInRequired } from './model';
 import { nextLiveDelay, sameRecord, shouldPoll } from './live';
 import './style.css';
 
-export type Route = 'not-found' | 'today' | 'chat' | 'overview' | 'waiting' | 'patrol' | 'memory' | 'memory/spots' | 'memory/constellation' | 'memory/profile' | 'connections' | 'day' | 'admin' | 'files' | 'usage' | 'setup' | 'invites' | 'account' | 'files/workspace' | 'settings' | 'settings/not-found' | `settings/${SettingsSection}`;
+export type Route = 'not-found' | 'today' | 'chat' | 'overview' | 'waiting' | 'tasks' | 'patrol' | 'memory' | 'memory/spots' | 'memory/constellation' | 'memory/profile' | 'connections' | 'day' | 'admin' | 'files' | 'usage' | 'setup' | 'invites' | 'account' | 'files/workspace' | 'settings' | 'settings/not-found' | `settings/${SettingsSection}`;
 const routes = [
-  { key: 'today', label: 'Today' }, { key: 'chat', label: 'Chat' }, { key: 'waiting', label: 'Waiting' },
+  { key: 'today', label: 'Today' }, { key: 'chat', label: 'Chat' }, { key: 'waiting', label: 'Waiting' }, { key: 'tasks', label: 'Tasks' },
   { key: 'memory', label: 'Memory' }, { key: 'patrol', label: 'Patrol' },
 ] as const;
 export const resolveRoute = (raw: string): Route => {
@@ -52,7 +53,7 @@ const Greeting = ({ text }: { text: string }) => { const match = /^(Good )(\w+)(
 
 export const isSettingsRoute = (route: Route) => route === 'admin' || ['connections', 'files', 'files/workspace', 'invites', 'day', 'usage', 'account', 'setup', 'settings'].includes(route) || route.startsWith('settings/');
 
-const shortcut: Record<string, string> = { today: 'T', chat: 'C', waiting: 'W', memory: 'M', patrol: 'P' };
+const shortcut: Record<string, string> = { today: 'T', chat: 'C', waiting: 'W', tasks: 'K', memory: 'M', patrol: 'P' };
 export function DashboardNavigation({ route, onNavigate,waitingCount }: { route: Route;waitingCount?:number; onNavigate?: () => void }) {
   const selected = route.startsWith('memory') ? 'memory' : route === 'overview' ? 'today' : route;
   const nav = useRef<HTMLElement>(null);
@@ -80,6 +81,7 @@ export function Dashboard({ data, route, now = new Date(), isAdmin = false }: { 
   if(route==='settings/not-found')return <><SettingsHead selected="day" isAdmin={isAdmin}/><section className="tile notice" role="status"><h2>Settings page not found</h2><p>This settings page doesn’t exist.</p><a className="button-link" href="#/settings">Open Settings</a></section></>;
   if(route==='connections')return <><SettingsHead selected="connections" isAdmin={isAdmin}/><ControlsPanel key={route} view="connections" section="connections" embedded/></>;
   if(route==='files'||route==='files/workspace')return <><SettingsHead selected="files" isAdmin={isAdmin}/><nav className="segmented small" aria-label="File storage views"><a href="#/files" aria-current={route==='files'?'page':undefined}>Telegram references</a><a href="#/files/workspace" aria-current={route==='files/workspace'?'page':undefined}>Private workspace</a></nav>{route==='files/workspace'?<WorkspacePanel/>:<ControlsPanel key="files" view="files" embedded/>}</>;
+  if(route==='tasks')return <TasksPanel zone={data.timezone}/>;
   if(route==='waiting'||route==='patrol')return <ControlsPanel key={route} view={route==='patrol'?'activity':'waiting'}/>;
   if(route==='invites')return <><SettingsHead selected="invites" isAdmin={isAdmin}/><OwnerControlsPanel view={route} embedded/></>;
   if(route==='settings'||route.startsWith('settings/')||['day','usage','account','setup'].includes(route)){const section=(route==='settings'?'day':route.startsWith('settings/')?route.slice(9):route) as SettingsSection;return <SettingsPanel section={section} isAdmin={isAdmin}/>;}
@@ -189,7 +191,7 @@ export function App() {
     schedule();
     return () => { stopped = true; window.clearTimeout(timer); controller?.abort(); document.removeEventListener('visibilitychange', onVisible); };
   }, [hasData]);
-  // Linear-style jumps: G, then T, C, W, M or P. Ignored while typing.
+  // Linear-style jumps: G, then T, C, W, K, M or P. Ignored while typing.
   useEffect(() => {
     let armed = 0;
     const onKey = (event: KeyboardEvent) => {
@@ -197,7 +199,7 @@ export function App() {
       if (event.metaKey || event.ctrlKey || event.altKey || target?.closest('input,textarea,select,[contenteditable="true"]')) return;
       const key = event.key.toLowerCase();
       if (key === 'g') { armed = Date.now(); return; }
-      const page = ({ t: 'today', c: 'chat', w: 'waiting', m: 'memory', p: 'patrol', s: 'settings' } as Record<string, string>)[key];
+      const page = ({ t: 'today', c: 'chat', w: 'waiting', k: 'tasks', m: 'memory', p: 'patrol', s: 'settings' } as Record<string, string>)[key];
       if (page && Date.now() - armed < 1200) { armed = 0; window.location.hash = `#/${page}`; }
     };
     window.addEventListener('keydown', onKey);
