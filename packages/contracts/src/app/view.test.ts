@@ -101,3 +101,22 @@ it('keeps a redacted view within its bounds when the replacement is longer than 
   const out = redactView(view, value => value.replaceAll('x', '[forgotten]'));
   expect(viewV1Schema.safeParse(out).success).toBe(true);
 });
+
+describe('what a view keeps', () => {
+  it('keeps only links a browser opens as given, and refuses a stored one that does not parse', () => {
+    const broken = ['https://[', 'https://a|b', 'https://exa^mple.com', 'https://user@', 'https://:80', 'https://#frag', 'https://xn--a.com'];
+    const view = fitView({ kind: 'options', items: [...broken, 'https://example.com/ok'].map((link, i) => ({ title: `T${i}`, link })) }).view;
+    if (view.kind !== 'options') throw new Error('kind changed');
+    expect(view.items.map(item => item.link).filter(Boolean)).toEqual(['https://example.com/ok']);
+    for (const link of broken) expect(viewV1Schema.safeParse({ kind: 'options', items: [{ title: 'T', link }] }).success).toBe(false);
+  });
+
+  it('never cuts a character in half', () => {
+    const view = fitView({ kind: 'steps', items: [{ title: `ab${'😀'.repeat(100)}` }] }).view;
+    if (view.kind !== 'steps') throw new Error('kind changed');
+    const title = view.items[0]!.title;
+    expect(title.endsWith('…')).toBe(true);
+    expect(/[\ud800-\udbff](?![\udc00-\udfff])/.test(title)).toBe(false);
+    expect(title.length).toBeLessThanOrEqual(VIEW_BOUNDS.title);
+  });
+});

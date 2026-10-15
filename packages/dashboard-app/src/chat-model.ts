@@ -40,8 +40,12 @@ const words = (v: unknown): v is string => str(v) && v.trim() !== '';
 const optional = (v: unknown): string | null => (words(v) ? v : null);
 const entries = <T>(v: unknown, read: (item: Record<string, unknown>) => T | null): T[] =>
   Array.isArray(v) ? v.flatMap(item => { const out = obj(item) ? read(item) : null; return out === null ? [] : [out]; }) : [];
-// Only a link the owner can open as given: https, no spaces. Anything else is left off, never repaired.
-const openable = (v: unknown): string | null => (str(v) && /^https:\/\/[^\s<>"]+$/.test(v) ? v : null);
+// Only a link the owner can open as given: https, no spaces, and one the browser parses. Anything else is left off,
+// never repaired, so drawing it can never throw.
+const openable = (v: unknown): string | null => {
+  if (!str(v) || !/^https:\/\/[^\s<>"]+$/.test(v)) return null;
+  try { return new URL(v).protocol === 'https:' ? v : null; } catch { return null; }
+};
 const STEP_STATES: readonly ChatStepState[] = ['done', 'current', 'todo'];
 
 const readView = (raw: unknown): ChatView | null => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSessionState, handlerAllowlistMatchesAcl, viewFallbackText, type ConversationEntry, type ViewInput } from '@waldo/contracts';
+import { buildSessionState, handlerAllowlistMatchesAcl, VIEW_MAX_PER_REPLY, viewFallbackText, type ConversationEntry, type ViewInput } from '@waldo/contracts';
 import { appMessageV1Schema } from '../../contracts/src/app/core';
 import { appTranscriptPage } from '../src/channels/app-api';
 import { dispatchTool } from '../src/tools/dispatcher';
@@ -40,6 +40,12 @@ describe('show_view', () => {
   it('reads a turn\'s views back from its successful calls only, in call order', () => {
     const views = turnViews([call(1, hotels), call(2, plan, false), { seq: 3, call: { name: 'web_search', args: {} }, ok: true }, call(4, { kind: 'nope' }), call(5, plan)]);
     expect(views.map(view => view.kind)).toEqual(['options', 'steps']);
+  });
+
+  it('shows the first views of a reply up to the count the tool states', () => {
+    expect(showViewHandler().description).toContain(`up to ${VIEW_MAX_PER_REPLY} per reply`);
+    const views = turnViews(Array.from({ length: VIEW_MAX_PER_REPLY + 2 }, (_, i) => call(i + 1, { kind: 'steps', items: [{ title: `Plan ${i}` }] })));
+    expect(views.map(view => view.kind === 'steps' && view.items[0]!.title)).toEqual(Array.from({ length: VIEW_MAX_PER_REPLY }, (_, i) => `Plan ${i}`));
   });
 
   it('stores the views as text after the reply, and serves them as parts while the text stays what older builds show', () => {

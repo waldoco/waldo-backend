@@ -10,8 +10,13 @@ export const VIEW_BOUNDS = {
   options: 10, facts: 6, columns: 8, rows: 50, steps: 20, timeline: 24,
 } as const;
 export const VIEW_STEP_STATES = ['done', 'current', 'todo'] as const;
-// Shown to the owner to open, never fetched by the host.
+// One reply shows at most this many views; the tool says so, and later calls are not shown.
+export const VIEW_MAX_PER_REPLY = 4;
+// Shown to the owner to open, never fetched by the host: plain https that a browser parses as given.
 export const VIEW_LINK_PATTERN = /^https:\/\/[^\s<>"]+$/;
+const parsesAsHttps = z.url({ protocol: /^https$/ });
+export const isOpenableLink = (link: string): boolean =>
+  link.length <= VIEW_BOUNDS.link && VIEW_LINK_PATTERN.test(link) && parsesAsHttps.safeParse(link).success;
 
 type Strict = boolean;
 const ONE_LINE = /^[^\n\r\u2028\u2029]*$/;
@@ -20,7 +25,7 @@ const words = (strict: Strict, max: number, oneLine = true) => {
   return strict ? (oneLine ? text.max(max).regex(ONE_LINE) : text.max(max)) : text;
 };
 const list = <Item extends z.ZodType>(strict: Strict, item: Item, max: number) => strict ? z.array(item).min(1).max(max) : z.array(item).min(1);
-const link = (strict: Strict) => strict ? z.string().max(VIEW_BOUNDS.link).regex(VIEW_LINK_PATTERN) : z.string();
+const link = (strict: Strict) => strict ? z.string().refine(isOpenableLink, 'a link opens as given over https') : z.string();
 
 const viewSchemaOf = (strict: Strict) => {
   const B = VIEW_BOUNDS;
@@ -85,9 +90,8 @@ export const mapViewText = <View extends ViewInput>(view: View, text: Rewrite): 
 };
 
 // A link that cannot be opened as given is left off, never shortened or repaired.
-const openable = (link: string) => link.length <= VIEW_BOUNDS.link && VIEW_LINK_PATTERN.test(link);
 const withOpenableLinks = <View extends ViewInput>(view: View): View => view.kind !== 'options' ? view
-  : { ...view, items: view.items.map(({ link, ...item }) => (link !== undefined && openable(link) ? { ...item, link } : item)) };
+  : { ...view, items: view.items.map(({ link, ...item }) => (link !== undefined && isOpenableLink(link) ? { ...item, link } : item)) };
 
 // Forgetting rewrites a stored view's text and keeps it within its bounds; a link the rewrite changed no longer opens,
 // so it goes.
@@ -97,7 +101,12 @@ export const redactView = (view: ViewV1, redact: (value: string) => string): Vie
   return { ...out, items: out.items.map(({ link, ...item }, index) => (link !== undefined && link === view.items[index]!.link ? { ...item, link } : item)) };
 };
 
-const cut = (value: string, max: number) => value.length <= max ? value : `${value.slice(0, max - 1).trimEnd()}…`;
+// The cut never ends on the first half of a surrogate pair, which would leave a broken character before the ellipsis.
+const cut = (value: string, max: number) => {
+  if (value.length <= max) return value;
+  const end = /[\ud800-\udbff]/.test(value[max - 2] ?? '') ? max - 2 : max - 1;
+  return `${value.slice(0, end).trimEnd()}…`;
+};
 const fitText: Rewrite = (value, max, oneLine) => cut(oneLine ? value.replace(/\s*[\n\r\u2028\u2029]+\s*/g, ' ') : value, max);
 
 // The model's view fitted to the bounds, with how many entries did not fit. Nothing is refused for its size: the owner

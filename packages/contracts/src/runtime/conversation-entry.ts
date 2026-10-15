@@ -1,4 +1,4 @@
-import { redactView, type ViewV1 } from '../app/view';
+import { redactView, viewFallbackText, type ViewV1 } from '../app/view';
 
 export type ConversationSurface = 'app' | 'telegram' | 'cli' | (string & {});
 
@@ -55,7 +55,8 @@ export type ConversationReceipt = Readonly<{
 export const literalTextRedactor = (texts: readonly string[], marker: string): ((value: string) => string) => {
   const patterns = [...new Set(texts.map(text => text.trim()).filter(Boolean))]
     .sort((a, b) => b.length - a.length)
-    .map(text => new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'));
+    // Words of a topic match across any run of whitespace, so a line break inside stored text does not hide them.
+    .map(text => new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+'), 'gi'));
   return value => patterns.reduce((text, pattern) => text.replace(pattern, () => marker), value);
 };
 
@@ -121,15 +122,31 @@ export const conversationModelMessages = (entries: readonly ConversationEntry[])
   return [role === 'compaction' ? compactionMessage(entry, projected) : { role, content: projected }];
 });
 
-export const redactConversationEntry = (entry: ConversationEntry, redact: (value: string) => string): ConversationEntry => ({
-  ...entry,
-  modelPayload: redact(entry.modelPayload), appPayload: redact(entry.appPayload),
-  modelProjection: entry.modelProjection.mode === 'replace'
-    ? { mode: 'replace', payload: redact(entry.modelProjection.payload) } : entry.modelProjection,
-  ...(entry.receipt ? { receipt: { ...entry.receipt, line: redact(entry.receipt.line),
-    items: entry.receipt.items.map(item => (item.target === null ? item : { ...item, target: redact(item.target) })) } } : {}),
-  ...(entry.views ? { views: entry.views.map(view => redactView(view, redact)) } : {}),
-});
+// A row with views holds each view's text after the reply (and before the receipt line). Redacting that text on its own
+// would drift from the redacted views (a link left off, a field cut to its bound), so it is rebuilt from them. A payload
+// that does not end with the views' text is redacted whole.
+const withViewText = (payload: string, before: readonly ViewV1[], after: readonly ViewV1[], tail: readonly [string, string] | null, redact: (value: string) => string) => {
+  const old = [...before.map(viewFallbackText), ...(tail ? [tail[0]] : [])].join('\n\n');
+  const head = payload === old ? '' : payload.endsWith(`\n\n${old}`) ? payload.slice(0, -old.length - 2) : null;
+  if (head === null) return redact(payload);
+  return [redact(head), ...after.map(viewFallbackText), ...(tail ? [tail[1]] : [])].filter(text => text.trim()).join('\n\n');
+};
+
+export const redactConversationEntry = (entry: ConversationEntry, redact: (value: string) => string): ConversationEntry => {
+  const views = entry.views?.map(view => redactView(view, redact));
+  const receipt = entry.receipt ? { ...entry.receipt, line: redact(entry.receipt.line),
+    items: entry.receipt.items.map(item => (item.target === null ? item : { ...item, target: redact(item.target) })) } : undefined;
+  const text = (payload: string, tail: readonly [string, string] | null) => entry.views && views ? withViewText(payload, entry.views, views, tail, redact) : redact(payload);
+  return {
+    ...entry,
+    modelPayload: text(entry.modelPayload, null),
+    appPayload: text(entry.appPayload, entry.receipt && receipt ? [entry.receipt.line, receipt.line] : null),
+    modelProjection: entry.modelProjection.mode === 'replace'
+      ? { mode: 'replace', payload: redact(entry.modelProjection.payload) } : entry.modelProjection,
+    ...(receipt ? { receipt } : {}),
+    ...(views ? { views } : {}),
+  };
+};
 
 export class ConversationTree {
   private readonly entries = new Map<string, ConversationEntry>();

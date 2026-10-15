@@ -63,6 +63,12 @@ describe('drawing views', () => {
     expect(view.innerHTML).not.toContain('javascript:');
   });
 
+  it('leaves off a link the browser cannot parse, so drawing it never throws', async () => {
+    const [message] = page('x', [{ type: 'view', view: { kind: 'options', items: [{ title: 'A', link: 'https://[' }, { title: 'B', link: 'https://exa^mple.com' }, { title: 'C', link: 'https://example.com/c' }] }, fallback_text: 'x' }]).messages;
+    const view = await mount(<ViewCard part={viewOf(message!)}/>);
+    expect([...view.querySelectorAll('a')].map(a => a.getAttribute('href'))).toEqual(['https://example.com/c']);
+  });
+
   it('draws model text as text, never as markup', async () => {
     const [message] = page('x', [{ type: 'view', view: { kind: 'timeline', items: [{ when: '09:00', title: '<img src=x onerror=alert(1)>' }] }, fallback_text: 'day' }]).messages;
     const view = await mount(<ViewCard part={viewOf(message!)}/>);
