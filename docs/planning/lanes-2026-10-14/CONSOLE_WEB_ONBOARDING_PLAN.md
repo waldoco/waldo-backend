@@ -69,17 +69,17 @@ Rejected: a form that writes setup answers through a new route (new trust bounda
 
 ## Slice status
 
-Each section was written from source by one agent, attacked by an independent reviewer (source accuracy, then rules, security and copy), and revised. The review files are not in the repo; their findings are folded into the sections.
+Each section was written from source by one agent, attacked by an independent reviewer (source accuracy, then rules, security and copy), and revised. The UI sections were then rendered as static mockups with the console's real stylesheet, and the layout and copy problems that showed up were fixed in the specs. "Scratch copy" means a throwaway copy of the pinned base outside the repo; nothing here ran in CI or on staging. Review files and mockups are not in the repo; their findings are folded into the sections.
 
 | Slice | PR(s) | Outcome | Review state |
 |---|---|---|---|
 | S0 | none (runbook) | The operator can run the showcase and the post-demo rollout without leaking invites or visitor data | Reviewed and revised |
-| S1 | `onboarding/s1-console-origin` | A console-only owner can start Google connect | Reviewed; see the status line in the section |
+| S1 | `onboarding/s1-console-origin` | A console-only owner can start Google connect | Reviewed and revised; its tests and five mutants run in a scratch copy |
 | S2 | `onboarding/s2-pre-auth-pages` | Signup and sign-in in Waldo's design, landing on `#/welcome` | Reviewed and revised |
 | S3 | `onboarding/s3-welcome` | The `#/welcome` flow and the Today resume card | Reviewed and revised |
-| S4 | `onboarding/s4a-console-chat`, `onboarding/s4b-say-hello` | Chat with Waldo in the console; the visitor's answers become their first message | Reviewed; see the status line in the section |
+| S4 | `onboarding/s4a-console-chat`, `onboarding/s4b-say-hello` | Chat with Waldo in the console; the visitor's answers become their first message | Reviewed and revised; the S4a security changes applied and run in a scratch copy |
 | S5 | `onboarding/s5a-setup-and-copy`, `onboarding/s5b-tour-and-readback` | Setup that reflects onboarding, copy and contrast fixes; the tour and the "what he saved" readback | Reviewed and revised |
-| S6 | `onboarding/s6-imessage-react` | iMessage linking in the React console when the shared number is live | Reviewed; see the status line in the section |
+| S6 | `onboarding/s6-imessage-react` | iMessage linking in the React console when the shared number is live | Reviewed and revised; type-checked and tested in a scratch copy |
 
 ## Architecture at a glance
 
@@ -611,100 +611,155 @@ S. About 2 h tonight (R1 step 1, R2, R4, R5, R6), 2 h on the morning (R1, the R5
 
 ## S1 Google connect for console-only owners
 
-> **Status:** designed and tested in a scratch copy (the new tests fail 5 of 8 before the fix and pass 8 of 8 after); the independent review is still running. Do not start S1 until this line is gone.
+**Anchors.** Every line number is at `a643bcab`. Its code tree is identical to `beta-mvp` `04bb8c89`: `git diff 04bb8c89 a643bcab -- packages supabase scripts` is empty. `owner-do.ts` lines moved after `e5c022ef` (#1241, #1247/#1254, #1257).
 
-Anchors are at `beta-mvp` `04bb8c89`. The planning branch `a643bcab` has the same code tree plus one docs commit. `owner-do.ts` line numbers moved after `e5c022ef` (#1241, #1247/#1254, #1257). Every `[verified]` line below was read at `04bb8c89`. "Scratch run" means I ran vitest in a throwaway copy of `04bb8c89` under the scratchpad, with the repo's own `node_modules`. The repo itself was never edited.
+**Labels.**
+- `[verified]` lines were read at `a643bcab`.
+- "Scratch run" means vitest in a throwaway copy of the `a643bcab` tree under the scratchpad, using the repo's own `node_modules`. These runs are local, not CI. The repo was never edited.
 
 ### Outcome
 
-A visitor who signed up from an invite, and who has only ever used the browser console, opens Settings › Connections (later the S3 Welcome "Connect" step) and presses **Connect Google**. They get "Receipt recorded. Google connect is ready to begin. Access has not been granted or tested." and a **Continue to Google** link to this deployment's own `/c/<ticket>`. Google's consent screen sends them back to the same staging host, the callback page says "Google is connected", and the account appears under Connections as "Access granted · read unverified". Today the same visitor gets "Change not applied. Google connect could not start. Try again." The job to be done: let Waldo read my calendar and mail without me needing Telegram or the iPhone app. Owners whose origin Telegram, the app or WhatsApp recorded keep working exactly as before.
+A visitor who signed up from an invite, and has only ever used the browser console, opens Settings › Connections and presses **Connect Google**. Later this is the S3 Welcome "Connect" step.
+
+- **Before S1:** "Change not applied. Google connect could not start. Try again."
+- **After S1:**
+  1. They get "Receipt recorded. Google connect is ready to begin. Access has not been granted or tested." and a **Continue to Google** link to this deployment's own `/c/<ticket>`.
+  2. Google's consent screen sends them back to the same staging host.
+  3. The callback page says "Google is connected".
+  4. The account appears under Connections as "Access granted · read unverified".
+
+The job to be done: let Waldo read my calendar and mail without needing Telegram or the iPhone app.
+
+**Second user-visible change, on staging's live iMessage surface.** Owners who paired iMessage in the console, and have no Telegram or app history, now have a stored origin.
+- Asking Waldo in iMessage for the console link returns "Console (link works once, for 10 minutes): https://<console host>/console?t=…". Before, Waldo told them the link was unavailable.
+- When an iMessage turn needs Google, Waldo now issues a connect ticket. The button itself still does not reach iMessage: the iMessage caller drops keyboard sends.
+
+Owners whose origin Telegram, the app or WhatsApp recorded on the same host see no change.
 
 ### Depends on / blocks
 
-- **Depends on:** no other slice.
-  - Owner actions (S0): add each visitor's Google account as an OAuth test user, and deploy a SHA that contains S1.
-  - The OAuth client must list `https://waldo-runtime-staging.piyushfulper3210.workers.dev/oauth/google/callback` as a redirect URI. The repo documents it (`docs/planning/waldo-agent-mvp/OWNER_STEP_BY_STEP_SETUP_2026-09-24.md:41`), but the live Google Cloud setting is UNVERIFIED.
-- **Blocks:**
-  - S3 Connect step. It posts the same `google.connect` action, so without S1 it fails for every visitor.
-  - S0 rehearsal step "connect from the console".
-  - S4, partly. S4's console chat route lives inside `OwnerDO.console()` after session admission, so S1's write also gives chat-issued `connect_service` links and console links a stored origin [inference].
-- **Merge window:**
-  - The coordinator reports that Ansh approved a demo freeze on #1103 at 19:27Z on 14 Oct. Only #1258, agent headroom, #1259, #1261 and #1227/#1240 merge before the showcase, with one pinned SHA and one deploy. `owner-do.ts` belongs to the Mac lane. (I did not read that comment myself; the #1103 thread is long and I read only its first page.)
-  - **S1 therefore lands after the demo unless Ansh adds it to the pin.** It is a 2-line `owner-do.ts` change, so the Mac lane sequences it.
-- **Textual overlap:** S1 inserts after `owner-do.ts:1379`.
-  - #1241 is already merged.
-  - Draft #1227/#1240 hunks touch the `setup()` region and the turn assembly, not `console()` [verified on `origin/mac/first-conversation` relative to its merge-base; re-check after that rebase].
+**Depends on:** no other slice.
+- Owner actions (S0): add each visitor's Google account as an OAuth test user, and deploy a SHA that contains S1.
+- The OAuth client must list `https://waldo-runtime-staging.piyushfulper3210.workers.dev/oauth/google/callback` as a redirect URI. The repo documents it (`docs/planning/waldo-agent-mvp/OWNER_STEP_BY_STEP_SETUP_2026-09-24.md:41`). The live Google Cloud setting is UNVERIFIED.
 
-**Demo-day workaround while S1 is not in the pin** [verified in source]. An owner whose origin a Telegram turn (or an app request) already recorded can connect Google from the console today. Use it only on an operator-run demo account. Visitors are never shown Telegram (owner default; S0).
+**Blocks:**
+- **S3 Connect step.** It posts the same `google.connect` action, so without S1 it fails for every visitor.
+- **S0 rehearsal step** "connect from the console".
+- **S4, partly.** S4's console chat route sits inside `OwnerDO.console()` after session admission. So S1's write also gives chat-issued connect offers and console links a stored origin [inference].
 
+**Merge window.**
+- The coordinator reports that Ansh approved a demo freeze on #1103 at 19:27Z on 14 Oct. Only #1258, agent headroom, #1259, #1261 and #1227/#1240 merge before the showcase. There is one pinned SHA and one deploy, and the Mac lane owns `owner-do.ts`.
+- **S1 therefore lands after the demo, unless Ansh adds it to the pin.** It is a 2-line `owner-do.ts` change for the Mac lane to sequence.
+
+**Textual overlap.** S1 inserts after `owner-do.ts:1379`.
+- #1241 is already merged.
+- The #1227/#1240 draft hunks touch the `setup()` region and turn assembly, not `console()` [verified on `origin/mac/first-conversation` against its merge-base]. Re-check after it rebases.
+
+**Demo-day workaround while S1 is not in the pin** [verified in source].
+
+An owner whose origin a Telegram turn already recorded can connect Google from the console today. Use this only on an operator-run demo account. Visitors are never shown Telegram (owner default; S0).
+
+Preconditions:
+- The demo Telegram account must not be linked to any other Waldo owner. The directory refuses a second link with "presence already linked to another owner" (`identity/owner-directory.ts:51`), so the founder's Telegram cannot be reused.
+- Re-check `telegram-webhook.ts:102,127`, `owner-do.ts:460`, `owner-do.ts:1503` and `dashboard-control-actions.ts:25` at the pinned demo SHA before relying on this. The anchors below are at `a643bcab`, and the pin adds #1258, #1259, #1261 and #1227/#1240.
+
+Steps:
 1. On the staging host, sign in as the demo account and open Settings › Connections › **Link a Telegram account**. The receipt reads "Send this to the Waldo bot on Telegram within 10 minutes: /link CODE" (`owner-do.ts:1506`).
-2. Send `/link CODE` to the bot from the demo Telegram account. A separate link object redeems it (`telegram-webhook.ts:103-121`, `owner-do.ts:570-578`). It does **not** write the owner's origin.
-3. Send **one ordinary message** (not `/start` or `/link`) to the bot.
-   - The webhook routes it to the owner object with `x-waldo-origin` set to the webhook request's own origin (`telegram-webhook.ts:102,127`).
+2. Send `/link CODE` to the bot from the demo Telegram account.
+   - A separate `telegram-link:` object admits and applies it (`telegram-webhook.ts:103-121`; `owner-do.ts:570-580`, `enqueueLink`/`drainLink`). It does **not** write the owner's origin.
+   - Wait for the bot's link confirmation before step 3. [inference] A message sent before the link completes routes to no owner.
+3. Send **one ordinary message** to the bot. Do not send `/start` or `/link`: that text returns before the origin write (`owner-do.ts:429-433`).
+   - The webhook routes the message to the owner object with `x-waldo-origin` set to the webhook request's own origin (`telegram-webhook.ts:102,127`).
    - The owner object stores it after admission (`owner-do.ts:460`).
-   - `/start` and `/link` text returns before that write (`owner-do.ts:429-433`).
-4. Press **Connect Google** in the console, **on the same host Telegram's webhook uses**. The receipt accepts only a ticket link whose origin equals the console request's origin (`dashboard-control-actions.ts:25`, `owner-do.ts:1503`). On any other host it reads "Google connect returned an unavailable destination. Try again later."
-   - Scratch run: an owner with the console host already stored gets a `recorded` receipt at `04bb8c89` with no S1 change. That is the "same host" test below, which passes before and after S1.
-   - Which host Telegram uses is the URL the bot webhook is registered at. The docs name `https://waldo-runtime-staging.piyushfulper3210.workers.dev` [inference]. An operator with the bot token can confirm it with Telegram's `getWebhookInfo`.
+   - The message runs a real model turn, and staging Langfuse captures text for opted-in testers. Keep the message neutral.
+4. Press **Connect Google** in the console, on the host Telegram's webhook uses.
+   - The receipt accepts only a ticket link whose origin equals the console request's origin (`dashboard-control-actions.ts:25`, `owner-do.ts:1503`). On any other host it reads "Google connect returned an unavailable destination. Try again later."
+   - The webhook host is wherever the bot webhook is registered. The docs name `https://waldo-runtime-staging.piyushfulper3210.workers.dev` [inference]. An operator with the bot token can confirm it with Telegram's `getWebhookInfo`.
+   - Scratch run: an owner whose origin is already the console host gets a `recorded` receipt at `a643bcab` without S1. That is the "same host" test below, which passes before and after S1.
 5. Side effect: the demo account becomes Telegram-bound, so its alarm runs scheduled Telegram work (`owner-do.ts:1716-1733`).
 
-Alternative: open the main chat once in the iPhone app signed in as the same account.
+Alternative: open the main chat once in the iPhone app, signed in as the same account.
 - App chat, controls, actions and approvals requests carry `x-waldo-app-origin` set to the app API base (`app-api.ts:185-196`). The owner object stores it after app authentication (`owner-do.ts:887-893`).
 - `/app/v1/session` alone never reaches the owner object.
 - The app's API base must be the same host as the console.
 
 ### Current state
 
-[verified at `04bb8c89` unless marked]
+[verified at `a643bcab` unless marked]
 
-- **The Worker forwards console requests with the public URL and every client header.**
-  - `handleConsole` does `new Request(request)` and sets only `x-waldo-do-name` (`console-signin.ts:350-353`). The ticket-console path does the same (`index.ts:140-142`).
-  - The shell's owner check builds `new URL(DASHBOARD_OVERVIEW_PATH, url)` (`dashboard-static.ts:33`).
-  - So inside `OwnerDO.console()`, `new URL(request.url).origin` is the public host the browser used. Any `x-waldo-origin`, `x-waldo-app-origin`, `Origin` or `X-Forwarded-Host` the client sent arrives unchanged.
-- **The console never records an origin.**
-  - In `OwnerDO.fetch`, `/grant-console` (`owner-do.ts:1027`) and every `/console*` path (`:1028`) return before the generic origin write (`:1043-1045`).
-  - Signup's and sign-in's only owner-object call is `POST https://telegram-owner/grant-console`, an internal URL with no origin header (`console-signup.ts:114`, `console-signin.ts:287`).
-  - The OAuth hops (`/google/begin-session` `:1034-1040`, Google finish `:1030-1033`) also use internal URLs.
-- **The origin writers today all take the Worker-derived `new URL(request.url).origin`:**
+**1. The Worker forwards console requests with the public URL and every client header.**
+- `handleConsole` does `new Request(request)` and sets only `x-waldo-do-name` (`console-signin.ts:350-353`). The ticket-console path does the same (`index.ts:140-142`).
+- The shell's owner check builds `new URL(DASHBOARD_OVERVIEW_PATH, url)` (`dashboard-static.ts:33`).
+- So inside `OwnerDO.console()`, `new URL(request.url).origin` is the host the Worker received. Any `x-waldo-origin`, `x-waldo-app-origin`, `Origin` or `X-Forwarded-Host` the client sent arrives unchanged.
+- No source fetches a `/console*` path on an internal `https://telegram-owner/...` URL (grep: 0 matches).
 
-  | Ingress | Header source | Owner-object write |
-  |---|---|---|
-  | Telegram enqueue, after admission | `telegram-webhook.ts:102,127` | `owner-do.ts:460` |
-  | App route, after app session authority | `app-api.ts:196` | `owner-do.ts:893` |
-  | Generic path; also re-registers the bot webhook when the origin changes | event-ingress `event-ingress.ts:199,212`, probe `probe-turn.ts:108` | `owner-do.ts:1043-1052` |
-  | WhatsApp | `whatsapp-webhook.ts:83,95` | `owner-do.ts:1210` |
+**2. The console never records an origin.**
+- In `OwnerDO.fetch`, `/grant-console` (`owner-do.ts:1027`) and every `/console*` path (`:1028`) return before the generic origin write (`:1043-1045`).
+- Signup's and sign-in's only owner-object call is `POST https://telegram-owner/grant-console`, with no origin header (`console-signup.ts:114`, `console-signin.ts:287`).
+- The OAuth hops also use internal URLs: begin-session `:1034-1040`, Google finish `:1030-1033`.
 
-- **Readers that fail without an origin:**
-  - `googleApp()` returns null, because the redirect URI is `${origin}/oauth/google/callback` (`owner-do.ts:2269-2271`).
-  - `connectUrl()` returns null before issuing a ticket (`:2414-2429`).
-  - The waiting link (`:2526-2527`), export links (`:2571`) and artifact delivery (`:2649`) need it too.
-  - The calendar watch address skips (`:3190`; `calendar-push.ts:69`).
-  - The consent attempt freezes `redirect_uri` when it starts (`connectors/google-consent.ts:51`). The code exchange uses that frozen value (`:77`).
-- **The console action itself:**
-  - `google.connect` calls `googleConnectReceipt(await runtime.googleConnectUrl(value,'console'), url.origin)` (`owner-do.ts:1503`). The receipt rejects a null link with `NOTICES['google.connect.failed']` = "Google connect could not start. Try again." (`console.ts:152`).
-  - It also rejects a link whose origin is not the request's ("Google connect returned an unavailable destination. Try again later.", `dashboard-control-actions.ts:22-27`).
-  - The legacy console path calls the same `googleConnectUrl` (`owner-do.ts:1569`).
-  - The button shows anyway, because `connectAvailable` is `google.configured()`, which checks secrets only (`:2406`, `:3409`; `Controls.tsx:95`).
-- **Observed failure (scratch run at `04bb8c89`):**
-  - A console-only owner (signup grant, then the dashboard read and action) gets HTTP 409 with a `rejected` receipt.
-  - The body read at `e5c022ef` on the same path was `{"receipt":{"state":"rejected","message":"Google connect could not start. Try again."},"duplicate":false}`.
-  - The SPA shows that as "Change not applied." plus the message (`Controls.tsx:111-117`).
-- **Telegram-first owner on a different host:** today the stored origin stays the Telegram host, so the `/c/` link fails the receipt's same-origin rule. The ticket has already been issued by then [inference from `connectUrl` order, `owner-do.ts:2419-2429`].
-- **Consent completion:**
-  - The callback routes by the signed state's owner (`google-oauth.ts:72-92`). A console ticket begins with surface `dashboard` (`owner-do.ts:2431-2435`), so the page's button is "Back to your console" (`google-oauth.ts:18-32`).
-  - `finishGoogle` sends "Google is connected …" to Telegram only (`owner-do.ts:1664-1672`). For a console-only owner that send fails and is logged as `google_linked_notice`; the outcome is unaffected.
-- **Hidden dependencies on Telegram secrets:**
-  - The console controls read uses `this.setup()` (Telegram runtime) (`owner-do.ts:1481`). It throws "telegram owner runtime is unconfigured" without `TELEGRAM_BOT_TOKEN` (`:2121`); the scratch run without a token got 503 `controls_unavailable`.
-  - `TELEGRAM_WEBHOOK_SECRET` is the OAuth state key (`:2406`).
-  - Staging is believed to set both [inference].
-- **Tests:**
-  - No test covers a console `google.connect` for a console-only owner. The app twin exists: `test/app-google-connect.test.ts`.
-  - `test/imessage-e2e.test.ts:509-519` ("an iMessage turn with no public origin on record mints nothing…") gets its "no origin" premise only because console pairing (`pairAndActivate`, `:70-80`, which posts `/console/action`) writes no origin. The scratch run with S1 applied: this test fails, 1 of 45 in `vitest.imessage.config.ts`.
-- **No custom hosts:** `wrangler.jsonc` sets no `routes`, `custom_domain`, `workers_dev` or `preview_urls` (grep: 0 matches). The deployment answers on its `workers.dev` host. Whether Cloudflare version-preview hosts are enabled is UNVERIFIED.
+**3. Origin writers today.** The Worker reads the origin from the URL it received and passes it on internal hops in a Worker-set header:
+
+| Ingress | Worker source | Owner-object write |
+|---|---|---|
+| Telegram enqueue, after admission | `telegram-webhook.ts:102,127` | `owner-do.ts:460` |
+| App route, after app session authority | `app-api.ts:194-196` | `owner-do.ts:893` |
+| Generic path: event-ingress `/event` and probe turns (also re-registers the bot webhook to that header's origin when it changes) | `event-ingress.ts:199,212`; `probe-turn.ts:108` | `owner-do.ts:1043-1052` |
+| WhatsApp | `whatsapp-webhook.ts:83,95` | `owner-do.ts:1210` |
+
+**4. Readers that fail or degrade without an origin:**
+- `googleApp()` returns null, because the redirect URI is `${origin}/oauth/google/callback` (`owner-do.ts:2269-2271`).
+- `connectUrl()` returns null before issuing a ticket (`:2414-2429`).
+- `mintConsoleLink` returns null, so `send_console_link` answers "unavailable" (`console-link.ts:12-16`).
+- The waiting link (`owner-do.ts:2526-2527`), export links (`:2571`) and artifact delivery (`:2649`).
+- The calendar watch address is skipped (`:3190`; `calendar-push.ts:69`).
+- The owner browser workspace: `owner-browser-runtime.ts:88` throws `ClosedRunError` with no origin, which gates the browser's workspace files.
+- `owner-browser-runtime.ts:199` adds `console_url` to an `owner_login` result only for an https origin.
+- The consent attempt freezes `redirect_uri` when `/c/<ticket>` is opened. Begin-session reads the stored origin then (`owner-do.ts:2431-2435` via `googleApp`, `connectors/google-consent.ts:51`), and the code exchange uses the frozen value (`google-consent.ts:77`).
+- Gmail push does not read `origin` (`owner-do.ts:3192`). The app's `google.connect` receipt compares against the origin its own request has just written (`:893`, `:931`).
+
+**5. The console action itself.**
+- `google.connect` calls `googleConnectReceipt(await runtime.googleConnectUrl(value,'console'), url.origin)` (`owner-do.ts:1503`).
+- The receipt rejects a null link with `NOTICES['google.connect.failed']`: "Google connect could not start. Try again." (`console.ts:152`).
+- It also rejects a link whose origin is not the request's: "Google connect returned an unavailable destination. Try again later." (`dashboard-control-actions.ts:22-27`).
+- The legacy console calls the same `googleConnectUrl` (`owner-do.ts:1569`).
+- The button shows anyway. `connectAvailable` is `google.configured()`, which checks secrets only (`:2406`, `:3409`; `Controls.tsx:95`).
+
+**6. Observed failure (scratch run at `a643bcab`).**
+- A console-only owner (signup grant, then the dashboard read and action) gets HTTP 409 with a `rejected` receipt.
+- The body, read at `e5c022ef` on the same path, was `{"receipt":{"state":"rejected","message":"Google connect could not start. Try again."},"duplicate":false}`.
+- The SPA shows it as "Change not applied." plus the message (`Controls.tsx:111-117`).
+
+**7. Telegram-first owner on a different host.** Today the stored origin stays the Telegram host, so the `/c/` link fails the receipt's same-origin rule. The ticket has already been issued by then [inference from `connectUrl` order, `owner-do.ts:2419-2429`].
+
+**8. iMessage owners.**
+- Pairing is a console action: `imessage.pair`/`verify`/`activate` post `/console/action` (`imessage-e2e.test.ts:59-63,71-80`). It records no origin today.
+- So `test/imessage-e2e.test.ts:510-519` ("…no public origin on record mints nothing…") passes only because console pairing writes none.
+- The console-link case seeds the origin by hand at `:472`.
+- On iMessage, a Google offer goes through `offerConnect` (`owner-do.ts:2236-2267`), then `connectUrl`, then `deliverConnectLink` (`:2210-2220`). The iMessage caller is `appCaller()` (`:2181-2183`), which drops any send with a keyboard (`surfaces/app.ts:20-28`). So the offer is logged `oauth_link_sent` failed.
+- Every ticket issue revokes the owner's other open Google tickets (`supabase/migrations/20260926120000_waldo_connect_session_ttl.sql:15-16`).
+
+**9. Consent completion.**
+- The callback routes by the signed state's owner (`google-oauth.ts:72-92`).
+- A console ticket begins with surface `dashboard` (`owner-do.ts:2431-2435`), so the page's button is "Back to your console" (`google-oauth.ts:18-32`).
+- `finishGoogle` sends "Google is connected …" to Telegram only (`owner-do.ts:1664-1672`). For a console-only owner that send fails and is logged as `google_linked_notice`. The outcome is unaffected.
+
+**10. Hidden dependency on Telegram secrets.**
+- The console controls read uses the Telegram runtime, `this.setup()` (`owner-do.ts:1481`).
+- It throws "telegram owner runtime is unconfigured" without `TELEGRAM_BOT_TOKEN` (`:2121`). A scratch run without a token got 503 `controls_unavailable`.
+- `TELEGRAM_WEBHOOK_SECRET` is the OAuth state key (`:2406`).
+- Staging is believed to set both [inference].
+
+**11. Tests.** No test covers a console `google.connect` for a console-only owner. The app twin exists: `test/app-google-connect.test.ts`.
+
+**12. Hosts** [inference].
+- `wrangler.jsonc` sets no `routes`, `custom_domain`, `workers_dev` or `preview_urls` (grep: 0 matches). So the deployment presumably answers on its `workers.dev` host.
+- Two things source cannot show: custom domains or routes added in the Cloudflare dashboard, and whether preview URLs are on. With no routes, the installed wrangler 4.105.0 defaults `workers_dev` to true and leaves `preview_urls` undefined, so the server default applies (`getSubdomainValues`, `node_modules/.pnpm/wrangler@4.105.0…/wrangler-dist/cli.js:145623-145631`) [verified].
+- From memory, not checked: Cloudflare does not generate preview URLs for Workers that implement Durable Objects, and this Worker exports `OwnerDO`.
 
 ### Design
 
-**Change:** in `OwnerDO.console()`, right after the console session is validated, record the request's own origin:
+**Change.** In `OwnerDO.console()`, immediately after the console session is validated, record the request's own origin:
 
 ```ts
 if (this.ctx.storage.kv.get<string>('origin') !== url.origin) this.ctx.storage.kv.put('origin', url.origin);
@@ -712,309 +767,409 @@ if (this.ctx.storage.kv.get<string>('origin') !== url.origin) this.ctx.storage.k
 
 Why this shape:
 
-- **The only trusted source.**
-  - On the console path the DO request URL is the public URL the browser used, and the Worker forwards client headers verbatim. So the URL is trusted and the headers are not.
-  - Telegram, app and WhatsApp each derive origin the same way, from `new URL(request.url).origin` in the Worker. The console derives it one hop later, because its Worker forwarder passes the URL through.
-- **After authentication, like the app path** (`owner-do.ts:887-893`).
-  - A request without a live DO-local console session returns 401 at `:1379`, before the write. So a stale cookie, a signed-out session or the unauthenticated ticket passthrough cannot plant or move an origin.
-  - SameSite=Strict cookies (`console-signin.ts:297`) mean no cross-site page can drive the write.
-- **Every authenticated console request, compared first.**
-  - It matches the other ingress paths, which record on every authenticated request.
-  - It covers the whole bug class at once: React connect (`:1503`), legacy connect (`:1569`), waiting, export and artifact links, the calendar watch address, and S4's chat `connect_service`.
-  - It heals a stale host.
-  - The compare avoids one storage write per SPA poll.
-- **The redirect URI.**
-  - Google accepts only an exact registered redirect URI, and the stored origin decides it (`:2271`). Recording the host the owner is actually on makes the redirect equal the host serving the console.
-  - Only registered hosts work. On staging that is the one `workers.dev` host. A console opened on an unregistered host, such as a version-preview URL, gets Google's `redirect_uri_mismatch` page instead of a silent wrong redirect.
-- **Telegram-first owners do not regress.**
-  - Same host: the compare makes it a no-op.
-  - Different host: today's console connect already fails on the same-origin rule. After S1 it works, and the stored origin follows the host last used.
-  - Their next Telegram update rewrites the origin to the webhook host (`:460`) without touching the webhook. Only an event-ingress or probe request on the generic path (`:1043-1052`) re-registers the bot webhook, and only when the hosts differ. App-origin writes (`:893`) already trigger that same behaviour today.
-- **No surface compare**, so `guard-surface-neutral-core` stays at 58 for `owner-do.ts`.
+**The only trusted source.**
+- On the console path, the owner-object request URL is the URL the Worker received. Client headers are forwarded verbatim. So the URL is trusted and the headers are not.
+- Every other ingress takes `new URL(request.url).origin` in the Worker and passes it in a Worker-set header. The console takes it one hop later, because its forwarder passes the URL through.
 
-Rejected:
+**Authenticated before the write, like the app path (`owner-do.ts:887-893`).**
+- A request without a live owner-object console session returns 401 at `:1379`, before the write.
+- So a stale cookie, a signed-out session or the unauthenticated ticket passthrough cannot plant or move an origin.
+- Console cookies are HttpOnly, host-only and SameSite=Strict (`console-signin.ts:297`).
 
-- **Write at `/grant-console`.** That request's URL is the internal `https://telegram-owner/...`, so it would store the wrong origin, and it would never heal owners who already signed up.
-- **The Worker sets `x-waldo-origin` and the DO reads it.** Two files for a fact the DO already holds. It also adds a header-read path that a future forwarder could leave client-controlled.
-- **Pass `url.origin` into `connectUrl`/`googleApp` per call.** Begin-session and finish run on internal URLs, so the origin would have to be threaded through the ticket and consent records. That means a larger `owner-do.ts` diff, and the other origin readers stay broken.
-- **Write only inside the `google.connect` branch.** Fixes one reader and leaves console links, export links, S4 chat connect and the calendar watch without an origin (AGENTS.md: fix the whole bug class).
-- **Write only if absent.** Pins a console-only owner to the first host forever, and leaves the different-host Telegram owner on today's failure.
-- **A code allowlist of hosts.** Production and staging differ, and AGENTS.md rejects env vars for non-secret config. The host trust is the same as for every other ingress.
+**Host threat model.**
+- Only a holder of the owner's live console session can trigger the write, on the owner's own object.
+- The value is bounded to hostnames Cloudflare routes to this Worker. Every ingress already trusts `request.url` the same way (`invite-code.ts:7-8`, `telegram-webhook.ts:102`).
+- `workers.dev` is on the Public Suffix List, so sibling Workers on the account subdomain are same-site. They still cannot change the Host header the browser sends.
+- The worst case is self-inflicted: links and the redirect follow a host the owner chose. Google refuses an unregistered `redirect_uri`.
+
+**On every authenticated console request, compared first.**
+- It matches the other ingress paths, which record on every authenticated request.
+- It fixes the whole bug class at once: React connect (`:1503`), legacy connect (`:1569`), console links (including from iMessage), waiting, export and artifact links, the browser workspace gates, the calendar watch address, and S4's chat connect.
+- It heals a stale host.
+- The compare avoids a storage write on every SPA poll.
+
+**The redirect URI.**
+- Google accepts only an exact registered redirect URI, and the stored origin decides it (`:2271`).
+- Recording the host the owner is actually on makes the redirect equal the host serving the console.
+- A console opened on an unregistered host gets Google's `redirect_uri_mismatch` page, not a silent wrong redirect.
+
+**Telegram-first owners do not regress.**
+- Same host: the compare makes it a no-op.
+- Different host: today's console connect already fails on the same-origin rule. After S1 it works, and the stored origin follows the last host used.
+- Their next Telegram update rewrites it to the webhook host (`:460`) without touching the bot webhook. `setWebhook` uses the generic path's own header origin, never the stored value (`:1043-1052`). App-origin writes (`:893`) already move the stored value the same way.
+
+**No surface compare is added**, so `guard-surface-neutral-core` stays at 58 for `owner-do.ts`.
+
+**Rejected:**
+- **Write at `/grant-console`.** That request's URL is the internal `https://telegram-owner/...`, so it would store the wrong origin. It would also never heal owners who already signed up.
+- **The Worker sets `x-waldo-origin` and the owner object reads it.** That touches two files for a fact the object already holds, and adds a header-read path that a future forwarder could leave client-controlled.
+- **Pass `url.origin` into `connectUrl`/`googleApp` per call.** Begin-session and finish run on internal URLs, so the value would have to be threaded through the ticket and consent records. The diff is larger, and the other readers stay broken.
+- **Write only inside the `google.connect` branch.** It leaves console links, the browser workspace, S4 chat connect and the calendar watch without an origin (AGENTS.md: fix the whole bug class).
+- **Write only if absent.** It pins a console-only owner to the first host forever, and leaves the different-host Telegram owner on today's failure.
+- **A code allowlist of hosts.** Production and staging differ, and AGENTS.md rejects env vars for non-secret config.
 
 ### Changes, file by file
 
-1. **`packages/runtime/src/channels/owner-do.ts`, `OwnerDO.console()`.** Insert after line 1379 (`if (!session) return new Response('Send /console to Waldo on Telegram for a sign-in link.', …)`) and before line 1380 (`/console/browser-handoff`). This is the exact diff I applied in the scratch copy:
+**1. `packages/runtime/src/channels/owner-do.ts`, `OwnerDO.console()`.**
 
-   ```diff
-   @@ -1379,2 +1379,4 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
-        if (!session) return new Response('Send /console to Waldo on Telegram for a sign-in link.', { status: 401, headers: overviewRoute ? DASHBOARD_OVERVIEW_HEADERS : undefined });
-   +    // The Worker forwards console requests with the caller's own headers, so the public origin comes from the URL alone.
-   +    if (this.ctx.storage.kv.get<string>('origin') !== url.origin) this.ctx.storage.kv.put('origin', url.origin);
-        if (url.pathname === '/console/browser-handoff') return this.ownerBrowser.consoleHandoff(...);
-   ```
+Insert after line 1379 (`if (!session) return new Response('Send /console to Waldo on Telegram for a sign-in link.', …)`) and before line 1380 (`/console/browser-handoff`). This is the exact diff applied in the scratch copy:
 
-   `url` is already `new URL(request.url)` at `:1362`. `kv.put` is synchronous, and the async `storage.get('origin')` readers see the same key; the existing tests mix both APIs on it (for example `whatsapp-owner-do-admission.test.ts:122`, `owner-do-google-profile.test.ts:113`).
+```diff
+@@ -1379,2 +1379,4 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
+     if (!session) return new Response('Send /console to Waldo on Telegram for a sign-in link.', { status: 401, headers: overviewRoute ? DASHBOARD_OVERVIEW_HEADERS : undefined });
++    // The Worker forwards console requests with the caller's own headers, so the public origin comes from the URL alone.
++    if (this.ctx.storage.kv.get<string>('origin') !== url.origin) this.ctx.storage.kv.put('origin', url.origin);
+     if (url.pathname === '/console/browser-handoff') return this.ownerBrowser.consoleHandoff(...);
+```
 
-2. **`packages/runtime/test/console-google-connect-origin.test.ts`, new.**
-   - `vitest.config.ts` picks it up (`test/**/*.test.ts`, not excluded), so CI runs it through `verify:workers`.
-   - It drives the real `handleConsole` forwarder into a real `OwnerDO`, starting from signup's actual `/grant-console` call.
-   - It typechecks under `packages/runtime/tsconfig.json` (`tsc --noEmit` exit 0 in the scratch copy).
-   - Paste as is:
+- `url` is already `new URL(request.url)` at `:1362`.
+- `kv.put` is synchronous, and the async `storage.get('origin')` readers see the same key. Existing tests mix both APIs on it, for example `whatsapp-owner-do-admission.test.ts:122` and `owner-do-google-profile.test.ts:113`.
 
-   ```ts
-   import { env, runInDurableObject } from 'cloudflare:test';
-   import { expect, it, vi } from 'vitest';
-   import { OwnerDO } from '../src/channels/owner-do';
-   import { handleConsole } from '../src/channels/console-signin';
-   import { BEGIN_SESSION_PATH, ticketHash } from '../src/channels/connect-link';
-   import { CONTROLS_PATH } from '../src/channels/dashboard-controls';
-   import { CONTROL_ACTION_PATH } from '../src/channels/dashboard-control-actions';
-   import { GOOGLE_CALLBACK_PATH, readConsentState } from '../src/connectors/google';
-   import { routerSignature } from '../src/identity/owner-directory';
-   import type { ConsoleAuth } from '../src/identity/console-auth';
+**2. `packages/runtime/test/console-google-connect-origin.test.ts`, new.**
+- The default `vitest.config.ts` picks it up: it matches `test/**/*.test.ts` and is not excluded.
+- CI runs it in the sharded `verify-runtime` job (`.github/workflows/verify.yml:88-119`, `npx vitest run --shard=N/4`), after the dashboard assets build (`:114-115`).
+- Cases 1-8 enter at `handleConsole` with a stub owner-cookie reader and drive a real `OwnerDO`, starting from signup's actual `/grant-console` call.
+- Case 9 enters at the Worker's `fetch`, with a signed owner cookie and the real `serveDashboard` shell GET. That is the first request after signup.
+- It typechecks under `packages/runtime/tsconfig.json` (`tsc --noEmit` exit 0 in the scratch copy).
+- Paste as is:
 
-   vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(), createTelegramCaller: () => async () => { throw Error('No Telegram binding exists'); } }));
+```ts
+import { env, runInDurableObject } from 'cloudflare:test';
+import { expect, it, vi } from 'vitest';
+import worker from '../src/index';
+import { consoleAccess } from '../src/channels/console';
+import { OwnerDO } from '../src/channels/owner-do';
+import { handleConsole } from '../src/channels/console-signin';
+import { BEGIN_SESSION_PATH, ticketHash } from '../src/channels/connect-link';
+import { CONTROLS_PATH } from '../src/channels/dashboard-controls';
+import { CONTROL_ACTION_PATH } from '../src/channels/dashboard-control-actions';
+import { GOOGLE_CALLBACK_PATH, readConsentState } from '../src/connectors/google';
+import { routerSignature } from '../src/identity/owner-directory';
+import type { ConsoleAuth } from '../src/identity/console-auth';
 
-   const SECRET = 'fictional-console-connect-router-secret-000000', STATE_SECRET = 'fictional-console-connect-state-secret', DIRECTORY = 'https://console-connect.fixture.invalid';
-   const ORIGIN = 'https://staging.fixture.invalid', HOSTILE = 'https://evil.fixture.invalid';
-   const OWNER = '10000000-0000-0000-0000-000000000003';
+vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(), createTelegramCaller: () => async () => { throw Error('No Telegram binding exists'); } }));
 
-   type Console = (path: string, init?: { form?: Record<string, string>; headers?: Record<string, string>; origin?: string; cookie?: string }) => Promise<Response>;
-   type Fixture = Readonly<{ call: Console; issued: Record<string, string>[]; instance: OwnerDO; state: DurableObjectState; token: string; failIssue(): void }>;
+const SECRET = 'fictional-console-connect-router-secret-000000', STATE_SECRET = 'fictional-console-connect-state-secret', DIRECTORY = 'https://console-connect.fixture.invalid';
+const ORIGIN = 'https://staging.fixture.invalid', HOSTILE = 'https://evil.fixture.invalid';
+const OWNER = '10000000-0000-0000-0000-000000000003';
 
-   const fixture = async (opts: Readonly<{ google: boolean; storedOrigin?: string }>, run: (f: Fixture) => Promise<void>) => {
-     const name = `console-connect-owner-${crypto.randomUUID()}`, stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
-     await runInDurableObject(stub, async (_unused, state) => {
-       const issued: Record<string, string>[] = []; let issueFails = false;
-       const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
-         const url = new URL(String(input)); expect(url.origin).toBe(DIRECTORY); const a = JSON.parse(String(init?.body ?? '{}'));
-         const fn = url.pathname.split('/').at(-1)!;
-         if (fn === 'connect_session_issue') {
-           if (issueFails) return new Response('unavailable', { status: 503 });
-           expect(a.p_sig).toBe(await routerSignature(SECRET, a.p_at, `connsess.issue.${a.p_do_name}.${a.p_provider}.${a.p_channel}.${a.p_ticket_hash}`));
-           issued.push(a); return Response.json('30000000-0000-0000-0000-000000000003');
-         }
-         if (fn === 'owner_runtime_authority') return Response.json(a.p_do_name === name ? { owner_id: OWNER, auth_user_id: OWNER, do_name: name, state_version: 0, admission_revision: '1' } : null);
-         if (fn === 'workspace_owner_binding') return Response.json({ owner_id: OWNER, environment: 'staging', namespace: 'console-connect-owner', do_name: name, do_id: state.id.toString(), state_version: 0, mapping_version: 1 });
-         if (fn === 'health_plane' || fn === 'health_context_read') return Response.json(null);
-         if (fn === 'google_connections' || fn === 'connections_list' || fn === 'console_session_list' || fn === 'health_log_recent') return Response.json([]);
-         throw Error(`Unlisted fixture RPC ${fn}`);
-       });
-       const settings = { ...env, TELEGRAM_BOT_TOKEN: '123:synthetic', WALDO_OWNER_TELEGRAM_ID: undefined, OPENAI_API_KEY: 'synthetic-model-key', COMMON_OWNER_TASKS: '0', COMMON_BROWSER_REGISTRATION: undefined, WALDO_ENVIRONMENT: 'staging', WALDO_OWNER_DO_NAMESPACE: 'console-connect-owner', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_TOOL_OFFLOAD: '0', SUPABASE_PROJECT_URL: DIRECTORY, SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key', WALDO_ROUTER_HMAC_SECRET: SECRET, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) }, BROWSER: undefined,
-         TELEGRAM_WEBHOOK_SECRET: STATE_SECRET, GOOGLE_CLIENT_ID: opts.google ? 'fictional-client.apps.googleusercontent.com' : undefined, GOOGLE_CLIENT_SECRET: opts.google ? 'fictional-client-secret' : undefined };
-       const instance = new OwnerDO(state, settings as never);
-       if (opts.storedOrigin) state.storage.kv.put('origin', opts.storedOrigin);
-       // Signup's only owner-DO call: the console grant, on the internal URL, with no origin header.
-       const grant = await instance.fetch(new Request('https://telegram-owner/grant-console', { method: 'POST', headers: { 'x-waldo-do-name': name } }));
-       expect(grant.status).toBe(200); const token = await grant.text();
-       const owners = { idFromName: (n: string) => n, get: () => ({ fetch: (r: Request) => instance.fetch(r) }) } as unknown as DurableObjectNamespace;
-       const auth = { readOwnerCookie: async () => name } as unknown as ConsoleAuth;
-       const call: Console = async (path, init = {}) => {
-         const form = init.form ? new URLSearchParams(init.form) : undefined;
-         const request = new Request(`${init.origin ?? ORIGIN}${path}`, { method: form ? 'POST' : 'GET', headers: { cookie: `waldo_owner=signed; waldo_console=${init.cookie ?? token}`, ...(form ? { 'content-type': 'application/x-www-form-urlencoded' } : {}), ...init.headers }, ...(form ? { body: form } : {}) });
-         const response = await handleConsole(request, { OWNER_DO: owners } as never, auth);
-         expect(response).not.toBeNull(); return response!;
-       };
-       try { await run({ call, issued, instance, state, token, failIssue: () => { issueFails = true; } }); } finally { fetcher.mockRestore(); }
-     });
-   };
+type Console = (path: string, init?: { form?: Record<string, string>; headers?: Record<string, string>; origin?: string; cookie?: string }) => Promise<Response>;
+type Fixture = Readonly<{ call: Console; issued: Record<string, string>[]; instance: OwnerDO; state: DurableObjectState; token: string; failIssue(): void }>;
 
-   type Read = { csrf: string; revision: string; data: { google: { connectAvailable: boolean } } };
-   const connections = async (call: Console, init?: Parameters<Console>[1]) => { const r = await call(`${CONTROLS_PATH}?view=connections`, init); expect(r.status).toBe(200); return r.json() as Promise<Read>; };
-   const connect = (call: Console, read: Read, requestId: string, init?: Parameters<Console>[1]) =>
-     call(CONTROL_ACTION_PATH, { ...init, form: { csrf: read.csrf, revision: read.revision, view: 'connections', action: 'google.connect', value: 'calendar', request_id: requestId } });
+const fixture = async (opts: Readonly<{ google: boolean; storedOrigin?: string }>, run: (f: Fixture) => Promise<void>) => {
+  const name = `console-connect-owner-${crypto.randomUUID()}`, stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
+  await runInDurableObject(stub, async (_unused, state) => {
+    const issued: Record<string, string>[] = []; let issueFails = false;
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = new URL(String(input)); expect(url.origin).toBe(DIRECTORY); const a = JSON.parse(String(init?.body ?? '{}'));
+      const fn = url.pathname.split('/').at(-1)!;
+      if (fn === 'connect_session_issue') {
+        if (issueFails) return new Response('unavailable', { status: 503 });
+        expect(a.p_sig).toBe(await routerSignature(SECRET, a.p_at, `connsess.issue.${a.p_do_name}.${a.p_provider}.${a.p_channel}.${a.p_ticket_hash}`));
+        issued.push(a); return Response.json('30000000-0000-0000-0000-000000000003');
+      }
+      if (fn === 'owner_runtime_authority') return Response.json(a.p_do_name === name ? { owner_id: OWNER, auth_user_id: OWNER, do_name: name, state_version: 0, admission_revision: '1' } : null);
+      if (fn === 'workspace_owner_binding') return Response.json({ owner_id: OWNER, environment: 'staging', namespace: 'console-connect-owner', do_name: name, do_id: state.id.toString(), state_version: 0, mapping_version: 1 });
+      if (fn === 'health_plane' || fn === 'health_context_read') return Response.json(null);
+      if (fn === 'google_connections' || fn === 'connections_list' || fn === 'console_session_list' || fn === 'health_log_recent') return Response.json([]);
+      throw Error(`Unlisted fixture RPC ${fn}`);
+    });
+    const settings = { ...env, TELEGRAM_BOT_TOKEN: '123:synthetic', WALDO_OWNER_TELEGRAM_ID: undefined, OPENAI_API_KEY: 'synthetic-model-key', COMMON_OWNER_TASKS: '0', COMMON_BROWSER_REGISTRATION: undefined, WALDO_ENVIRONMENT: 'staging', WALDO_OWNER_DO_NAMESPACE: 'console-connect-owner', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_TOOL_OFFLOAD: '0', SUPABASE_PROJECT_URL: DIRECTORY, SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key', WALDO_ROUTER_HMAC_SECRET: SECRET, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) }, BROWSER: undefined,
+      TELEGRAM_WEBHOOK_SECRET: STATE_SECRET, GOOGLE_CLIENT_ID: opts.google ? 'fictional-client.apps.googleusercontent.com' : undefined, GOOGLE_CLIENT_SECRET: opts.google ? 'fictional-client-secret' : undefined };
+    const instance = new OwnerDO(state, settings as never);
+    if (opts.storedOrigin) state.storage.kv.put('origin', opts.storedOrigin);
+    // Signup's only owner-DO call: the console grant, on the internal URL, with no origin header.
+    const grant = await instance.fetch(new Request('https://telegram-owner/grant-console', { method: 'POST', headers: { 'x-waldo-do-name': name } }));
+    expect(grant.status).toBe(200); const token = await grant.text();
+    const owners = { idFromName: (n: string) => n, get: () => ({ fetch: (r: Request) => instance.fetch(r) }) } as unknown as DurableObjectNamespace;
+    const auth = { readOwnerCookie: async () => name } as unknown as ConsoleAuth;
+    const call: Console = async (path, init = {}) => {
+      const form = init.form ? new URLSearchParams(init.form) : undefined;
+      const request = new Request(`${init.origin ?? ORIGIN}${path}`, { method: form ? 'POST' : 'GET', headers: { cookie: `waldo_owner=signed; waldo_console=${init.cookie ?? token}`, ...(form ? { 'content-type': 'application/x-www-form-urlencoded' } : {}), ...init.headers }, ...(form ? { body: form } : {}) });
+      const response = await handleConsole(request, { OWNER_DO: owners } as never, auth);
+      expect(response).not.toBeNull(); return response!;
+    };
+    try { await run({ call, issued, instance, state, token, failIssue: () => { issueFails = true; } }); } finally { fetcher.mockRestore(); }
+  });
+};
 
-   it('a console-only owner (signup grant, then the dashboard) starts Google connect: a same-origin /c/ ticket whose consent returns to this host', async () => {
-     await fixture({ google: true }, async ({ call, issued, instance, state }) => {
-       expect(state.storage.kv.get('origin')).toBeUndefined();
-       const read = await connections(call);
-       expect(read.data.google.connectAvailable).toBe(true);
-       const response = await connect(call, read, 'console-connect-0001');
-       expect(response.status).toBe(200);
-       const { receipt } = await response.json() as { receipt: { state: string; navigation?: string } };
-       expect(receipt.state).toBe('recorded');
-       expect(receipt.navigation).toMatch(/^\/c\/[A-Za-z0-9_-]{22}$/);
-       expect(issued).toHaveLength(1);
-       expect(issued[0]).toMatchObject({ p_provider: 'google', p_channel: 'console', p_ticket_hash: await ticketHash(receipt.navigation!.slice(3)) });
-       expect(state.storage.kv.get('origin')).toBe(ORIGIN);
-       const begun = await instance.fetch(new Request(`https://telegram-owner${BEGIN_SESSION_PATH}`, { method: 'POST', body: JSON.stringify({ ticket_hash: issued[0]!.p_ticket_hash }) }));
-       const consent = new URL((await begun.json() as { url: string }).url);
-       expect(consent.origin).toBe('https://accounts.google.com');
-       expect(consent.searchParams.get('redirect_uri')).toBe(`${ORIGIN}${GOOGLE_CALLBACK_PATH}`);
-       expect((await readConsentState(STATE_SECRET, consent.searchParams.get('state')!))?.surface).toBe('dashboard');
-     });
-   });
+type Read = { csrf: string; revision: string; data: { google: { connectAvailable: boolean } } };
+const connections = async (call: Console, init?: Parameters<Console>[1]) => { const r = await call(`${CONTROLS_PATH}?view=connections`, init); expect(r.status).toBe(200); return r.json() as Promise<Read>; };
+const connect = (call: Console, read: Read, requestId: string, init?: Parameters<Console>[1]) =>
+  call(CONTROL_ACTION_PATH, { ...init, form: { csrf: read.csrf, revision: read.revision, view: 'connections', action: 'google.connect', value: 'calendar', request_id: requestId } });
 
-   it('the origin comes from the request the Worker forwarded, never from a client-supplied origin header', async () => {
-     await fixture({ google: true }, async ({ call, issued, instance, state }) => {
-       const headers = { 'x-waldo-origin': HOSTILE, 'x-waldo-app-origin': HOSTILE, origin: HOSTILE, 'x-forwarded-host': 'evil.fixture.invalid' };
-       const read = await connections(call, { headers });
-       const { receipt } = await (await connect(call, read, 'console-connect-0002', { headers })).json() as { receipt: { state: string } };
-       expect(receipt.state).toBe('recorded');
-       expect(state.storage.kv.get('origin')).toBe(ORIGIN);
-       const begun = await instance.fetch(new Request(`https://telegram-owner${BEGIN_SESSION_PATH}`, { method: 'POST', body: JSON.stringify({ ticket_hash: issued[0]!.p_ticket_hash }) }));
-       expect(new URL((await begun.json() as { url: string }).url).searchParams.get('redirect_uri')).toBe(`${ORIGIN}${GOOGLE_CALLBACK_PATH}`);
-     });
-   });
+it('a console-only owner (signup grant, then the dashboard) starts Google connect: a same-origin /c/ ticket whose consent returns to this host', async () => {
+  await fixture({ google: true }, async ({ call, issued, instance, state }) => {
+    expect(state.storage.kv.get('origin')).toBeUndefined();
+    const read = await connections(call);
+    expect(read.data.google.connectAvailable).toBe(true);
+    const response = await connect(call, read, 'console-connect-0001');
+    expect(response.status).toBe(200);
+    const { receipt } = await response.json() as { receipt: { state: string; navigation?: string } };
+    expect(receipt.state).toBe('recorded');
+    expect(receipt.navigation).toMatch(/^\/c\/[A-Za-z0-9_-]{22}$/);
+    expect(issued).toHaveLength(1);
+    expect(issued[0]).toMatchObject({ p_provider: 'google', p_channel: 'console', p_ticket_hash: await ticketHash(receipt.navigation!.slice(3)) });
+    expect(state.storage.kv.get('origin')).toBe(ORIGIN);
+    const begun = await instance.fetch(new Request(`https://telegram-owner${BEGIN_SESSION_PATH}`, { method: 'POST', body: JSON.stringify({ ticket_hash: issued[0]!.p_ticket_hash }) }));
+    const consent = new URL((await begun.json() as { url: string }).url);
+    expect(consent.origin).toBe('https://accounts.google.com');
+    expect(consent.searchParams.get('redirect_uri')).toBe(`${ORIGIN}${GOOGLE_CALLBACK_PATH}`);
+    expect((await readConsentState(STATE_SECRET, consent.searchParams.get('state')!))?.surface).toBe('dashboard');
+  });
+});
 
-   it('a request without a live console session cannot plant an origin', async () => {
-     await fixture({ google: true }, async ({ call, state }) => {
-       const response = await call(`${CONTROLS_PATH}?view=connections`, { cookie: 'not-a-session', origin: HOSTILE });
-       expect(response.status).toBe(401);
-       expect(state.storage.kv.get('origin')).toBeUndefined();
-     });
-   });
+it('the origin comes from the request the Worker forwarded, never from a client-supplied origin header', async () => {
+  await fixture({ google: true }, async ({ call, issued, instance, state }) => {
+    const headers = { 'x-waldo-origin': HOSTILE, 'x-waldo-app-origin': HOSTILE, origin: HOSTILE, 'x-forwarded-host': 'evil.fixture.invalid' };
+    const read = await connections(call, { headers });
+    const { receipt } = await (await connect(call, read, 'console-connect-0002', { headers })).json() as { receipt: { state: string } };
+    expect(receipt.state).toBe('recorded');
+    expect(state.storage.kv.get('origin')).toBe(ORIGIN);
+    const begun = await instance.fetch(new Request(`https://telegram-owner${BEGIN_SESSION_PATH}`, { method: 'POST', body: JSON.stringify({ ticket_hash: issued[0]!.p_ticket_hash }) }));
+    expect(new URL((await begun.json() as { url: string }).url).searchParams.get('redirect_uri')).toBe(`${ORIGIN}${GOOGLE_CALLBACK_PATH}`);
+  });
+});
 
-   it('an owner whose origin another surface recorded on this host keeps it and connects as before', async () => {
-     await fixture({ google: true, storedOrigin: ORIGIN }, async ({ call, state }) => {
-       const read = await connections(call);
-       expect(state.storage.kv.get('origin')).toBe(ORIGIN);
-       expect((await (await connect(call, read, 'console-connect-0003')).json() as { receipt: { state: string } }).receipt.state).toBe('recorded');
-     });
-   });
+it('a request without a live console session cannot plant an origin', async () => {
+  await fixture({ google: true }, async ({ call, state }) => {
+    const response = await call(`${CONTROLS_PATH}?view=connections`, { cookie: 'not-a-session', origin: HOSTILE });
+    expect(response.status).toBe(401);
+    expect(state.storage.kv.get('origin')).toBeUndefined();
+  });
+});
 
-   it('an owner whose origin another host recorded connects from the console host, and the redirect follows that host', async () => {
-     await fixture({ google: true, storedOrigin: 'https://telegram-host.fixture.invalid' }, async ({ call, issued, instance, state }) => {
-       const read = await connections(call);
-       expect(state.storage.kv.get('origin')).toBe(ORIGIN);
-       const { receipt } = await (await connect(call, read, 'console-connect-0004')).json() as { receipt: { state: string; navigation?: string } };
-       expect(receipt.state).toBe('recorded');
-       const begun = await instance.fetch(new Request(`https://telegram-owner${BEGIN_SESSION_PATH}`, { method: 'POST', body: JSON.stringify({ ticket_hash: issued[0]!.p_ticket_hash }) }));
-       expect(new URL((await begun.json() as { url: string }).url).searchParams.get('redirect_uri')).toBe(`${ORIGIN}${GOOGLE_CALLBACK_PATH}`);
-     });
-   });
+it('an owner whose origin another surface recorded on this host keeps it and connects as before', async () => {
+  await fixture({ google: true, storedOrigin: ORIGIN }, async ({ call, state }) => {
+    const read = await connections(call);
+    expect(state.storage.kv.get('origin')).toBe(ORIGIN);
+    expect((await (await connect(call, read, 'console-connect-0003')).json() as { receipt: { state: string } }).receipt.state).toBe('recorded');
+  });
+});
 
-   it('Google unconfigured: the button is unavailable and no ticket is issued', async () => {
-     await fixture({ google: false }, async ({ call, issued }) => {
-       const read = await connections(call);
-       expect(read.data.google.connectAvailable).toBe(false);
-       expect((await connect(call, read, 'console-connect-0005')).status).toBe(409);
-       expect(issued).toHaveLength(0);
-     });
-   });
+it('an owner whose origin another host recorded connects from the console host, and the redirect follows that host', async () => {
+  await fixture({ google: true, storedOrigin: 'https://telegram-host.fixture.invalid' }, async ({ call, issued, instance, state }) => {
+    const read = await connections(call);
+    expect(state.storage.kv.get('origin')).toBe(ORIGIN);
+    const { receipt } = await (await connect(call, read, 'console-connect-0004')).json() as { receipt: { state: string; navigation?: string } };
+    expect(receipt.state).toBe('recorded');
+    const begun = await instance.fetch(new Request(`https://telegram-owner${BEGIN_SESSION_PATH}`, { method: 'POST', body: JSON.stringify({ ticket_hash: issued[0]!.p_ticket_hash }) }));
+    expect(new URL((await begun.json() as { url: string }).url).searchParams.get('redirect_uri')).toBe(`${ORIGIN}${GOOGLE_CALLBACK_PATH}`);
+  });
+});
 
-   it('a directory failure while issuing the ticket is an unconfirmed receipt with no destination', async () => {
-     await fixture({ google: true }, async ({ call, issued, failIssue }) => {
-       const read = await connections(call); failIssue();
-       const response = await connect(call, read, 'console-connect-0006');
-       expect(response.status).toBe(503);
-       expect(await response.json()).toEqual({ duplicate: false, receipt: { state: 'unconfirmed', message: 'The outcome is not confirmed. Refresh the records before attempting another change.' } });
-       expect(issued).toHaveLength(0);
-     });
-   });
+it('Google unconfigured: the button is unavailable and no ticket is issued', async () => {
+  await fixture({ google: false }, async ({ call, issued }) => {
+    const read = await connections(call);
+    expect(read.data.google.connectAvailable).toBe(false);
+    expect((await connect(call, read, 'console-connect-0005')).status).toBe(409);
+    expect(issued).toHaveLength(0);
+  });
+});
 
-   it('after sign-out the stale cookie can neither act nor move the origin', async () => {
-     await fixture({ google: true }, async ({ call, state }) => {
-       const read = await connections(call);
-       const out = await call(CONTROL_ACTION_PATH, { form: { csrf: read.csrf, revision: read.revision, view: 'connections', action: 'session.signout', request_id: 'console-signout-0001' } });
-       expect(out.status).toBe(200);
-       expect((await connect(call, read, 'console-connect-0007', { origin: 'https://other.fixture.invalid' })).status).toBe(401);
-       expect(state.storage.kv.get('origin')).toBe(ORIGIN);
-     });
-   });
-   ```
+it('a directory failure while issuing the ticket is an unconfirmed receipt with no destination', async () => {
+  await fixture({ google: true }, async ({ call, issued, failIssue }) => {
+    const read = await connections(call); failIssue();
+    const response = await connect(call, read, 'console-connect-0006');
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ duplicate: false, receipt: { state: 'unconfirmed', message: 'The outcome is not confirmed. Refresh the records before attempting another change.' } });
+    expect(issued).toHaveLength(0);
+  });
+});
 
-3. **`packages/runtime/test/imessage-e2e.test.ts`, test at `:509`.** Insert after `await w.pairAndActivate();` (line 511). The premise is "an owner with no public origin on record". Pairing now goes through the console, which records one, so the test states the premise explicitly. The assertions stay unchanged. This is an in-branch failure class: the premise moved, the behaviour under test did not.
+it('after sign-out the stale cookie can neither act nor move the origin', async () => {
+  await fixture({ google: true }, async ({ call, state }) => {
+    const read = await connections(call);
+    const out = await call(CONTROL_ACTION_PATH, { form: { csrf: read.csrf, revision: read.revision, view: 'connections', action: 'session.signout', request_id: 'console-signout-0001' } });
+    expect(out.status).toBe(200);
+    expect((await connect(call, read, 'console-connect-0007', { origin: 'https://other.fixture.invalid' })).status).toBe(401);
+    expect(state.storage.kv.get('origin')).toBe(ORIGIN);
+  });
+});
 
-   ```ts
-     // Pairing went through the console, which records the console's origin; this case is an owner with none on record.
-     await runInDurableObject(w.ownerStub, (_i, state) => { state.storage.kv.delete('origin'); });
-   ```
+it('the first shell load through the Worker entry, with a signed owner cookie, records the origin', async () => {
+  const name = `console-connect-shell-${crypto.randomUUID()}`, stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
+  const session = await runInDurableObject(stub, (instance, state) => {
+    Object.assign((instance as unknown as { env: Record<string, unknown> }).env, { TELEGRAM_BOT_TOKEN: '123:synthetic', OPENAI_API_KEY: 'synthetic-model-key' });
+    return consoleAccess(state.storage).grant();
+  });
+  const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    const url = new URL(String(input)); expect(url.origin).toBe(DIRECTORY);
+    const fn = url.pathname.split('/').at(-1)!, a = JSON.parse(String(init?.body ?? '{}'));
+    if (fn === 'console_session_touch') return Response.json(a.p_do_name === name);
+    throw Error(`Unlisted fixture RPC ${fn}`);
+  });
+  try {
+    const owner = `${name}.session_fixture.${await routerSignature(SECRET, 0, `cookie.${name}.session_fixture`)}`;
+    const bindings = { ...env, SUPABASE_PROJECT_URL: DIRECTORY, SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key', WALDO_ROUTER_HMAC_SECRET: SECRET };
+    const shell = await worker.fetch(new Request(`${ORIGIN}/console`, { headers: { cookie: `waldo_owner=${owner}; waldo_console=${session}`, 'x-waldo-origin': HOSTILE } }), bindings as never);
+    expect(shell.status).toBe(200);
+    expect(await runInDurableObject(stub, (_i, state) => state.storage.kv.get('origin'))).toBe(ORIGIN);
+  } finally { fetcher.mockRestore(); }
+});
+```
 
-4. **`docs/planning/waldo-agent-mvp/ENGINEERING_FUNDAMENTALS.md`.** AGENTS.md requires a checklist line and a bug-log row in the same commit.
-   - Under `### Trust boundaries` (lines 98-116), after line 106 (the connect-intent line), add:
-     `- An owner ingress records the public origin only from the Worker-forwarded request URL, after its session or signature check: never from a client-supplied header, and never on an internal hop (https://telegram-owner/...). Every surface that can start a connect, including the console, records it.`
-   - In `## Bug log`, after the header row at line 149, add this row, with `<landing date>` replaced by the day it merges:
-     `| <landing date> | Console-only owners could not start Google connect: the console path returned before any origin write, so connectUrl and googleApp had no origin and the receipt said "Google connect could not start" | Trust boundaries | console-google-connect-origin.test.ts: fresh signup-grant owner connects through handleConsole; hostile origin headers, sessionless and signed-out requests cannot set it; imessage-e2e no-origin case states its premise | Ingress origin line under Trust boundaries |`
+**3. `packages/runtime/test/imessage-e2e.test.ts`: two edits.**
 
-No change to `console-signin.ts`, `console-signup.ts`, contracts, the SPA, migrations or `wrangler.jsonc`.
+(a) **The console-link case at `:469`** ("an iMessage owner's own request queues the console link…"): delete the seeding line at `:472`.
+- Its assertion at `:483` (the link text starts with `${HOST_ORIGIN}/console?t=c1.`) then proves that console pairing records the origin and that iMessage delivers the link on that host.
+- This is the positive test for the new iMessage behaviour.
+
+```diff
+   const w = await world();
++  // Pairing ran in the console on HOST_ORIGIN, which recorded it as the owner's origin; nothing seeds it here.
+   await w.pairAndActivate();
+-  await runInDurableObject(w.ownerStub, async (_i, state) => { await state.storage.put('origin', HOST_ORIGIN); });
+   proof.outputs.push([{ type: 'function_call', call_id: 'console', name: 'send_console_link', arguments: '{}' }], []);
+```
+
+(b) **The no-origin case at `:510`:** insert after `await w.pairAndActivate();` (line 512).
+- The test guards the null path, and its precondition used to be implicit. Now it is explicit.
+- The console-paired path gaining links is covered by edit (a).
+
+```ts
+  // Pairing went through the console, which records the console's origin; this case is an owner with none on record.
+  await runInDurableObject(w.ownerStub, (_i, state) => { state.storage.kv.delete('origin'); });
+```
+
+**4. `docs/planning/waldo-agent-mvp/ENGINEERING_FUNDAMENTALS.md`.**
+
+AGENTS.md (last line) requires an adversarial test and a checklist line in the same commit. `ENGINEERING_FUNDAMENTALS.md:15-18` adds the bug-log row.
+
+- Under `### Trust boundaries` (lines 98-116), after line 106 (the connect-intent line), add:
+  `- An owner ingress records the public origin only from the URL the Worker itself received - through a Worker-set header on internal hops, or the forwarded URL on the console path - and only after that ingress's session or signature check; never from a client-supplied header and never from an internal hop's own URL (https://telegram-owner/...). Every surface that can start a connect, including the console, records it.`
+- In `## Bug log` (header row line 148, separator line 149), insert after line 149 so the newest row comes first. Replace `<landing date>` with the merge day:
+  `| <landing date> | Console-only owners could not start Google connect: the console path returned before any origin write, so connectUrl and googleApp had no origin and the receipt said "Google connect could not start" | Trust boundaries | console-google-connect-origin.test.ts: fresh signup-grant owner connects through handleConsole and the Worker shell; hostile origin headers, sessionless and signed-out requests cannot set it; imessage-e2e console-paired owner gets its console link, and the no-origin case states its premise | Ingress origin line under Trust boundaries |`
+
+**Not changed:** `console-signin.ts`, `console-signup.ts`, contracts, the SPA, migrations, `wrangler.jsonc`.
 
 ### UI and copy
 
-S1 adds no UI and no copy. These existing strings now appear for a console-only owner, verbatim and unchanged:
+S1 adds no UI and no copy. These existing strings now appear, verbatim and unchanged.
 
-- **Settings › Connections receipt after Connect Google** (`Controls.tsx:111-117`, message from `dashboard-control-actions.ts:26`):
-  - Heading: "Receipt recorded."
-  - Body: "Google connect is ready to begin. Access has not been granted or tested."
-  - Link: "Continue to Google". Same tab, `/c/<ticket>`.
-- **Before S1** the owner saw "Change not applied." and "Google connect could not start. Try again." After S1 that string appears only when Google is configured but ticket issue returns no link.
-- **Callback page** (`google-oauth.ts:35`): "Google is connected", the account email, "Google access was saved. This does not confirm a live Calendar or Gmail read yet. Try a request in chat to check it. You can close this tab.", and the button "Back to your console".
-  - Copy drift, not fixed here: the runtime now checks one live read before "linked" (`owner-do.ts:2448-2457`), and a console-only owner has no chat until S4. The page copy and the "Google blocked you" help belong to S3/S4.
-- **Connections row:** the account email plus "Access granted · read unverified" (`Controls.tsx:79`).
+**Settings › Connections receipt after Connect Google** (`Controls.tsx:111-117`; message from `dashboard-control-actions.ts:26`):
+- Heading: "Receipt recorded."
+- Body: "Google connect is ready to begin. Access has not been granted or tested."
+- Link: "Continue to Google". It opens in the same tab and goes to `/c/<ticket>`.
+- Before S1 the visitor saw "Change not applied." and "Google connect could not start. Try again." After S1 that pair appears only when Google is configured but ticket issue returns no link.
+
+**Callback page** (`google-oauth.ts:35`):
+- Title "Google is connected" and the account email.
+- Body: "Google access was saved. This does not confirm a live Calendar or Gmail read yet. Try a request in chat to check it. You can close this tab."
+- Button "Back to your console".
+- Copy drift, not fixed here: the runtime now checks one live read before reporting "linked" (`owner-do.ts:2448-2457`), and a console-only owner has no chat until S4. That copy and the "Google blocked you" help belong to S3/S4.
+
+**Connections row:** the account email plus "Access granted · read unverified" (`Controls.tsx:79`).
+
+**iMessage console-paired owners:** asking for the console link gets "Console (link works once, for 10 minutes): <link>" (`console-link.ts:8`) on the console's host.
 
 ### Security, privacy and authority
 
-- **Authentication:**
-  - The Worker requires a valid signed owner cookie before forwarding (`console-signin.ts:339-349`).
-  - The write sits after the DO-local console session check (`owner-do.ts:1378-1379`). Missing, expired and signed-out sessions return 401 first. The tests cover sessionless and signed-out requests.
-- **Source of the value:** only `new URL(request.url).origin` of the forwarded request. The code never reads `x-waldo-origin`, `x-waldo-app-origin`, `Origin`, `Referer` or `X-Forwarded-*` on this path. The hostile test sends `x-waldo-origin`, `x-waldo-app-origin`, `Origin` and `X-Forwarded-Host` and asserts the stored value and the Google `redirect_uri`.
-- **Host trust:** Cloudflare delivers requests to this Worker only on its hostnames, the same trust every other ingress already places in `request.url` [inference]. With no custom routes, that is the `workers.dev` host plus any version-preview host, which is UNVERIFIED.
-- **CSRF:** no new endpoint or action. The write also happens on authenticated GETs. SameSite=Strict console cookies (`console-signin.ts:297`) keep cross-site pages from driving it, and the only value it can write is a hostname that reached this Worker.
-- **Rate limits:** unchanged. Controls allow 90 reads and 20 actions per minute per owner (`owner-do.ts:1469-1472`). No new route.
-- **Stored data:** one existing owner-object KV key, `origin`, holding a URL origin. No PII, health data, token or ticket.
-  - No new logging; the existing connect hops log only an 8-character hash prefix (`owner-do.ts:2428`, `connect-link.ts:22`).
-  - The ticket, consent URL, OAuth code and state must never be logged.
-- **Health:** none touched. `guard-health-leak` was run on the repo at HEAD: ok.
-- **Authority:** connecting Google stays an explicit owner click plus Google consent. S1 grants nothing; it only lets the existing flow start.
-- **Security review trigger: yes.** The change sets the OAuth redirect URI for console owners and the host of every owner-delivered link (AGENTS.md "auth flows"). Ask one `security-reviewer` pass scoped to: the write position, the header-spoofing test, preview-host behaviour and the Telegram-first host flip.
+**Authentication.**
+- The Worker requires a valid signed owner cookie before it forwards (`console-signin.ts:339-349`).
+- The write sits after the owner-object console session check (`owner-do.ts:1378-1379`). Missing, expired and signed-out sessions return 401 first.
+- Tests cover sessionless and signed-out requests.
+
+**Source of the value.**
+- Only `new URL(request.url).origin` of the forwarded request.
+- This path never reads `x-waldo-origin`, `x-waldo-app-origin`, `Origin`, `Referer` or `X-Forwarded-*`.
+- The hostile test sends `x-waldo-origin`, `x-waldo-app-origin`, `Origin` and `X-Forwarded-Host`, and asserts both the stored value and Google's `redirect_uri`. The Worker-entry case also sends a hostile `x-waldo-origin`.
+
+**Host trust.**
+- Only a holder of the owner's live console session can trigger the write.
+- The value is bounded to hostnames Cloudflare routes to this Worker.
+- The worst case is self-inflicted on the owner's own object, and Google refuses unregistered redirects.
+- Which hostnames exist is an S0 operator check (see Risks): dashboard-added custom domains or routes, and preview URLs.
+
+**CSRF.**
+- No new endpoint or action. The write also happens on authenticated GETs.
+- SameSite=Strict console cookies (`console-signin.ts:297`) keep cross-site pages from driving it, and the only value it can write is a hostname that reached this Worker.
+
+**Rate limits.** Unchanged: 90 reads and 20 actions per minute per owner (`owner-do.ts:1469-1472`). No new route.
+
+**What widens for console-only and console-paired iMessage owners.** This is the point of S1; each item already runs today for Telegram, app and WhatsApp owners:
+- console and Google connect tickets;
+- the iMessage console link;
+- the browser workspace gate (`owner-browser-runtime.ts:88`) and `console_url` on `owner_login` (`:199`);
+- export, artifact and waiting links;
+- the calendar watch address.
+
+**Unaffected.** Gmail push does not read `origin`. The app receipt compares against the origin its own request just wrote (`owner-do.ts:893`, `:931`).
+
+**Stored data.**
+- One existing owner-object KV key, `origin`, holding a URL origin. No PII, health data, token or ticket.
+- No new logging. The existing connect hops log only an 8-character hash prefix (`owner-do.ts:2428`, `connect-link.ts:22`).
+- The ticket, consent URL, OAuth code and state must never be logged.
+
+**Health.** None touched. `guard-health-leak` on the repo at HEAD: ok.
+
+**Authority.** Connecting Google stays an explicit owner click plus Google consent. S1 grants nothing; it lets the existing flows start.
+
+**Security review trigger: yes.** S1 sets the OAuth redirect URI for console owners and the host of every owner-delivered link (AGENTS.md "auth flows"). Ask for one `security-reviewer` pass, scoped to:
+- the write position;
+- the header-spoofing tests;
+- the host threat model, including preview URLs and dashboard domains;
+- the Telegram-first host flip;
+- the iMessage console-link and Google-ticket path for console-paired owners;
+- the browser workspace gates.
 
 ### Tests
 
-All tests sit in `packages/runtime/test/console-google-connect-origin.test.ts` unless named otherwise. They run through the real `handleConsole` → `OwnerDO.fetch` → `console()` path.
+All cases sit in `packages/runtime/test/console-google-connect-origin.test.ts` unless named otherwise.
 
-| Kind | Case | Setup | Action | Assert | RED at `04bb8c89` |
+| Kind | Case | Setup | Action | Assert | RED without S1 |
 |---|---|---|---|---|---|
-| Golden | Console-only owner connects | `/grant-console` only, no origin | Connections read, then `google.connect` | Origin unset first; then 200 `recorded`; navigation `/c/<22>`; one `connect_session_issue` with `p_channel:'console'` and a matching ticket hash; origin = request host; begin-session consent URL on `accounts.google.com` with `redirect_uri` = `https://staging.fixture.invalid/oauth/google/callback` and signed surface `dashboard` | Yes (409 `rejected`) |
-| Hostile | Spoofed origin headers | Same | Read and act with `x-waldo-origin`, `x-waldo-app-origin`, `Origin`, `X-Forwarded-Host` = evil | Stored origin and `redirect_uri` use the request host, never evil | Yes |
-| Hostile / null | Sessionless request | Same | Read with a bogus console cookie on the evil host | 401; origin unset | No (guard) |
+| Golden | Console-only owner connects | `/grant-console` only, no origin | Connections read, then `google.connect` | Origin unset first, then: 200 `recorded`; navigation `/c/<22>`; one `connect_session_issue` with `p_channel:'console'` and a matching ticket hash; origin = request host; the begin-session consent URL is on `accounts.google.com` with `redirect_uri` = `https://staging.fixture.invalid/oauth/google/callback` and signed surface `dashboard` | Yes (409 `rejected`) |
+| Serving path | First shell load through the Worker | Real DO console session, signed owner cookie, `console_session_touch` true | `worker.fetch` GET `/console`, with a hostile `x-waldo-origin` | Shell 200; stored origin = request host | Yes (origin undefined) |
+| Hostile | Spoofed origin headers | `/grant-console` only, no origin | Read and act with `x-waldo-origin`, `x-waldo-app-origin`, `Origin`, `X-Forwarded-Host` = evil | Stored origin and `redirect_uri` use the request host, never evil | Yes |
+| Hostile / null | Sessionless request | `/grant-console` only, no origin | Read with a bogus console cookie on the evil host | 401; origin unset | No (guard) |
 | Regression | Telegram-first owner, same host | Origin preset to the request host | Read, connect | Origin unchanged; `recorded` | No (guard; also proves the demo workaround) |
 | Regression | Telegram-first owner, other host | Origin preset to another host | Read, connect | Origin follows the console host; `recorded`; `redirect_uri` on the console host | Yes |
 | Null / empty | Google unconfigured | No client id or secret | Read, connect | `connectAvailable:false`; 409; no ticket | No (guard) |
-| Network failure | Directory RPC down at ticket issue | `connect_session_issue` → 503 | Connect | 503 `unconfirmed` with "The outcome is not confirmed. Refresh the records before attempting another change."; no navigation; no ticket | Yes (409 at base: no origin, so no RPC) |
-| Revoked | Signed-out session | Read, then `session.signout` | Connect with the old cookie on another host | 401; origin still the first host | Yes (origin was never set at base) |
-| Premise | `imessage-e2e.test.ts:509` | `pairAndActivate`, then delete `origin` | Unchanged | Unchanged | Fails with S1 unless the premise line is added |
+| Network failure | Directory RPC down at ticket issue | `connect_session_issue` returns 503 | Connect | 503 `unconfirmed`, "The outcome is not confirmed. Refresh the records before attempting another change."; no navigation; no ticket | Yes (409: with no origin, no RPC runs) |
+| Revoked | Signed-out session | Read, then `session.signout` | Connect with the old cookie on another host | 401; origin still the first host | Yes (origin never set) |
+| Behaviour change | `imessage-e2e.test.ts:469`, seeding line removed | `pairAndActivate` through the console | `send_console_link` | Link text starts with `${HOST_ORIGIN}/console?t=c1.` | Yes (1 of 45 fails without S1) |
+| Premise | `imessage-e2e.test.ts:510` | `pairAndActivate`, then delete `origin` | Unchanged | Unchanged | Fails with S1 unless the premise lines are added |
 
-Scratch runs, all on the `04bb8c89` code tree (locally run, not CI):
-- **New test file:**
-  - Without the `owner-do.ts` change: 5 failed and 3 passed. The three that pass are the guards: sessionless, same host and unconfigured.
-  - With the change: 8/8 pass.
-- **`vitest.imessage.config.ts`:**
-  - With the change but without the premise lines: 1 failed of 45.
-  - With both: 45/45.
-- **Regression sweep with the change:**
-  - The 48 default-config test files that touch console, dashboard or Worker routes: 501/501.
-    - Two asset tests (`console-entry`, `dashboard-static-worker`) first failed only because the scratch copy lacked the gitignored `packages/dashboard-app/dist`. With `dist` copied in, they pass.
-  - `vitest.console-ticket.config.ts`: 13/13. `vitest.link-routing.config.ts`: 37/37. `vitest.devices.config.ts`: 4/4.
-- **Typecheck and guards:**
-  - `tsc --noEmit` in `packages/runtime`: exit 0. It includes `test/`.
-  - `guard-surface-neutral-core`: ok, 101 compares in 13 files.
-- **NOT RUN:** the full default suite. I stopped it after 15 minutes, while another session's vitest was running on the same machine. The implementer runs it as `verify:workers`.
+**Scratch runs** (all on the `a643bcab` tree; local, not CI):
+- The new file without the `owner-do.ts` change: 6 failed, 3 passed. The 3 that pass are the guards: sessionless, same host and unconfigured.
+- The new file with the change: 9/9 pass.
+- `vitest.imessage.config.ts` with both edits:
+  - without S1: 1 of 45 fails (`:469`);
+  - with S1: 45/45 pass;
+  - with S1 but without the `:510` premise lines: 1 of 45 fails.
+- The regression sweep with S1 (the earlier 8-case file; the default suite does not include the iMessage files, so the `:469` edit does not touch these numbers):
+  - The 48 default-config test files that touch console, dashboard or Worker routes: 501/501 pass. Two asset tests (`console-entry`, `dashboard-static-worker`) first failed only because the scratch copy lacked the gitignored `packages/dashboard-app/dist`. With it copied in, they pass.
+  - `vitest.console-ticket.config.ts`: 13/13.
+  - `vitest.link-routing.config.ts`: 37/37.
+  - `vitest.devices.config.ts`: 4/4.
+- `tsc --noEmit` in `packages/runtime`, which includes `test/`: exit 0 with all three file changes.
+- `guard-surface-neutral-core`: ok (101 compares in 13 files).
+- NOT RUN: the full default suite (stopped after 15 minutes under contention with another session), `verify:guards` (the scratch copy is not a git repository) and Supabase.
 
-Suites:
-- The new file and the default suite: `pnpm verify:workers` (CI).
-- The iMessage premise: `pnpm --filter @waldo/runtime test:owner-ingress`, part of `pnpm verify`.
+**Where CI runs them:**
+- The new file runs in `verify-runtime`, the sharded default config.
+- The iMessage edits run in the `verify` job's "iMessage bridge" step (`verify.yml:72-74`). `pnpm --filter @waldo/runtime test:imessage` runs the same files locally.
 
 ### Acceptance trace
 
-Claims so far:
+**Claims so far:**
 - SOURCE: the fix and the root cause, as cited above.
-- CI: the new file and the iMessage premise, once the PR runs.
+- CI: the new file and the iMessage edits, once the PR runs.
 - STAGING: none yet. Nothing has been deployed or probed from this planning session.
 
 **STAGING trace**, after the owner deploys a SHA containing S1 (S0):
 
 1. As admin on `https://waldo-runtime-staging.piyushfulper3210.workers.dev/console#/admin`, issue an invite for an email whose Google account is on the OAuth test-user list.
-2. In a fresh browser profile, open the invite link, sign up with the email code, and land on `/console`.
-   - Do not link Telegram.
-   - Do not open the iPhone app as this account.
-3. Open Settings › Connections. You see **Connect Google**.
+2. In a fresh browser profile, open the invite link, sign up with the email code and land on `/console`. Do not link Telegram, and do not open the iPhone app as this account.
+3. Open Settings › Connections. **Connect Google** is shown.
 4. Click it.
    - Must see: "Receipt recorded." / "Google connect is ready to begin. Access has not been granted or tested." / **Continue to Google**.
    - Fail: "Change not applied." / "Google connect could not start. Try again."
-5. Click **Continue to Google**. The browser is on `accounts.google.com`, and the address bar's `redirect_uri` parameter is `https://waldo-runtime-staging.piyushfulper3210.workers.dev/oauth/google/callback`.
-6. Consent with the listed account. The callback page shows "Google is connected", the email, and **Back to your console**.
+5. Click **Continue to Google**. The browser is on `accounts.google.com`, and the `redirect_uri` parameter in the address bar is `https://waldo-runtime-staging.piyushfulper3210.workers.dev/oauth/google/callback`.
+6. Consent with the listed account. The callback shows "Google is connected", the email and **Back to your console**.
 7. Return to Connections. The account email shows with "Access granted · read unverified".
-8. In `wrangler tail` (operator), for that owner you see these hops in order:
+8. In `wrangler tail` (operator), for that owner, these hops appear in order:
    - `connect_issued` ok
    - `connect_link` ok
    - `connect_begin` ok:true
@@ -1022,15 +1177,20 @@ Claims so far:
    - `oauth_callback` ok, detail `linked`
    - `google_linked`
    - `connect_completed` ok
-   - `google_linked_notice` failing with `send_failed` is expected for a console-only owner.
-9. Regression check: as a Telegram-first owner (the founder account), open the console on the same host and connect, or add a second Google account. It must be `recorded`. A later Telegram connect link still opens on the same host.
 
-**Screenshots:** staging only.
-- Capture `s1-staging-desktop-connections-receipt.png` (1440x900) and `s1-staging-phone-connections-receipt.png` (390x844) at step 4, and `s1-staging-callback.png` at step 6.
-- Keep the visitor email out of the frame, or use a test account.
+   A failing `google_linked_notice` (`send_failed`) is expected for a console-only owner.
+9. **Regression:** as a Telegram-first owner (the founder account), open the console on the same host and connect or add a Google account. The receipt is `recorded`, and a later Telegram connect link still opens on the same host.
+10. **Only if S6 or the classic console iMessage page is used:** an owner who paired iMessage in the console asks Waldo in iMessage for the console link. It arrives as "Console (link works once, for 10 minutes): https://waldo-runtime-staging.piyushfulper3210.workers.dev/console?t=…".
+
+**Screenshots** (staging only):
+- `s1-staging-desktop-connections-receipt.png` (1440x900) and `s1-staging-phone-connections-receipt.png` (390x844), at step 4.
+- `s1-staging-callback.png`, at step 6.
+- Keep the visitor's email out of frame, or use a test account.
 - The local preview (`packages/dashboard-app/scripts/preview.mjs`) serves synthetic fixtures with no owner object, so it cannot exercise this path.
 
-LIVE (owner action): the Google Cloud redirect URI and test-user list (S0).
+**LIVE (owner actions, S0):**
+- the Google Cloud redirect URI and test-user list;
+- the host inventory check under Risks.
 
 ### Verification commands
 
@@ -1038,43 +1198,69 @@ Run from `/home/user/waldo-backend`, in order:
 
 ```bash
 git diff --check
-# RED first: add the test file, run it before the owner-do.ts change (expect 5 failed / 3 passed)
-npx -y pnpm@10.34.4 --filter @waldo/runtime exec vitest run test/console-google-connect-origin.test.ts
-# apply the owner-do.ts lines and the imessage premise line, then GREEN:
-npx -y pnpm@10.34.4 --filter @waldo/runtime exec vitest run test/console-google-connect-origin.test.ts
-npx -y pnpm@10.34.4 --filter @waldo/runtime exec vitest run --config vitest.imessage.config.ts
+# RED first: add the test file and the imessage-e2e edits, run before the owner-do.ts change
+npx -y pnpm@10.34.4 --filter @waldo/runtime exec vitest run test/console-google-connect-origin.test.ts   # expect 6 failed / 3 passed
+npx -y pnpm@10.34.4 --filter @waldo/runtime exec vitest run --config vitest.imessage.config.ts           # expect 1 failed (:469)
+# apply the two owner-do.ts lines, then GREEN:
+npx -y pnpm@10.34.4 --filter @waldo/runtime exec vitest run test/console-google-connect-origin.test.ts   # 9/9
+npx -y pnpm@10.34.4 --filter @waldo/runtime exec vitest run --config vitest.imessage.config.ts           # 45/45
 npx -y pnpm@10.34.4 --filter @waldo/runtime typecheck
 WALDO_DO_MIGRATION_BASE_REF=HEAD^1 npx -y pnpm@10.34.4 verify:guards   # origin/main is absent locally
+npx -y pnpm@10.34.4 --filter @waldo/dashboard-app build                 # Worker-backed tests need dashboard-app/dist
 npx -y pnpm@10.34.4 verify:workers
 npx -y pnpm@10.34.4 --filter @waldo/runtime test:owner-ingress
-npx -y pnpm@10.34.4 verify   # full wall: verify:supabase and verify:supabase:session-revocation need Docker/Supabase -> UNAVAILABLE in the cloud container; record them so
+npx -y pnpm@10.34.4 verify   # full wall; verify:supabase and verify:supabase:session-revocation need Docker/Supabase -> UNAVAILABLE in the cloud container
 git status --short           # vitest must leave no tracked changes
 ```
 
-Record PASS, FAIL, NOT RUN and UNAVAILABLE separately, at the exact head SHA. CI runs the Supabase parts.
+Record PASS, FAIL, NOT RUN and UNAVAILABLE separately, at the exact head SHA. CI runs the Supabase parts in `verify` and `verify-supabase`.
 
 ### Rollback
 
-- Revert the commit: two source lines, one test file, two test premise lines and two doc lines. Redeploy the previous staging Worker version with the S0 rollback command.
+- Revert the commit: two source lines, one new test file, the two `imessage-e2e.test.ts` edits and two doc lines. Then redeploy the previous staging Worker version with the S0 rollback command.
 - No migration and no contract change.
-- Origins that S1 wrote stay in owner objects. They hold the same kind of value the other ingress paths write, so leaving them is harmless. After a revert, owners who already have one can still connect; new console-only owners return to "could not start".
+- Origins that S1 wrote stay in owner objects. They are the same kind of value the other ingress paths write, so leaving them is harmless.
+- After a revert, owners who already have an origin keep working. New console-only owners return to "could not start", and new console-paired iMessage owners to "unavailable".
 
 ### Risks and open questions
 
-- **Not in the demo pin** (freeze on #1103). Default: run the demo-day workaround above on an operator account, and have visitors skip Google (S0 fallbacks). Ask Ansh before the pin whether S1 joins; it is the highest-leverage slice for web visitors.
-- **Second host** (a Cloudflare version-preview URL, or a future custom domain). The stored origin follows it, and Google refuses an unregistered redirect with `redirect_uri_mismatch`. Default: issue invites and open the console only on the one registered staging host (S0). Register any new host in Google Cloud before use.
-- **Host flip for owners who use two hosts.** Telegram links and the Google redirect follow the last host used. An event-ingress or probe request on the generic path then re-registers the bot webhook to its own (live) host. Default: accept. It is the existing app-path behaviour, and staging has one host.
-- **The console controls read depends on Telegram secrets.** It needs `TELEGRAM_BOT_TOKEN` (`owner-do.ts:1481,2121`) and `TELEGRAM_WEBHOOK_SECRET` (OAuth state key). Default: unchanged; staging has both [inference]. A deployment without them cannot run console connect, with or without S1.
-- **Web-only owners get no post-connect push.** The "Google is connected" notice is Telegram-only, and console-only owners get no scheduled pass, so no calendar watch or Brief either (`owner-do.ts:1716-1733`) [inference]. Default: S3 polls Connections for the result; S4's console chat may bind the owner to the app chain.
+**Not in the demo pin** (freeze on #1103).
+- Default: run the demo-day workaround above on an operator account, and have visitors skip Google (S0 fallbacks).
+- Ask Ansh before the pin whether S1 joins. It is the highest-leverage slice for web visitors.
+
+**Second host** (a dashboard-added custom domain or route, or a preview URL).
+- The stored origin follows the host, and Google refuses an unregistered redirect with `redirect_uri_mismatch`.
+- The redirect is fixed when the owner opens `/c/<ticket>`, not when the ticket is issued (`owner-do.ts:2431-2435`, `google-consent.ts:51`). So a Telegram update arriving on another host between **Connect Google** and **Continue to Google** moves the callback to that host. There the host-only console cookie is absent, and "Back to your console" lands on sign-in.
+- The same window can make the receipt's same-origin check reject, because `console()` writes the origin at the top and `connectUrl` reads it again after several awaits.
+- Default: accept, because staging serves one host. Add an S0 operator check: Workers › `waldo-runtime-staging` › Settings › Domains & Routes lists only the `workers.dev` host, and Preview URLs are off or absent. Register any new host in Google Cloud before use.
+
+**Host flip for owners who use two hosts.**
+- Telegram links and the Google redirect follow the last host used.
+- A later event-ingress or probe request re-registers the bot webhook to its own live host.
+- Default: accept. This is the existing app-path behaviour, and staging has one host.
+
+**iMessage Google offers now issue tickets.**
+- For a console-paired iMessage owner, a turn that needs Google now issues a ticket. That revokes any open console **Continue to Google** link (the TTL migration, `:15-16`), and the button still does not reach iMessage (`surfaces/app.ts:20-28`).
+- The model is told the offer was not sent. The offer is throttled to one per service and reason per 60 s (`owner-do.ts:2238-2242`).
+- Default: accept. Telegram owners behave the same today.
+- [inference] The iMessage connect affordance belongs to S6.
+
+**The console controls read depends on Telegram secrets.**
+- `TELEGRAM_BOT_TOKEN` (`owner-do.ts:1481,2121`) and `TELEGRAM_WEBHOOK_SECRET` (the OAuth state key).
+- Default: unchanged; staging has both [inference]. A deployment without them cannot run console connect, with or without S1.
+
+**Web-only owners get no post-connect push.**
+- The "Google is connected" notice is Telegram-only. Console-only owners also get no scheduled pass, so no calendar watch or Brief (`owner-do.ts:1716-1733`) [inference].
+- Default: S3 polls Connections for the result. S4's console chat may bind the owner to the app chain.
 
 ### Effort
 
-**S**, about 2 hours. That covers 30 minutes of code and tests already proven in a scratch copy, the full verify wall (the default runtime suite is long) and one security review.
+**S**, about 2 hours: 30 minutes of code and tests already proven in a scratch copy, the full verify wall (the default runtime suite is long) and one security review.
 
-Lanes:
-- `owner-do.ts` (Mac lane, 2 lines)
-- runtime tests (one new file, two lines in `imessage-e2e.test.ts`)
-- one docs file
+**Lanes:**
+- `owner-do.ts`: Mac lane, 2 lines.
+- Runtime tests: one new file, plus two edits in `imessage-e2e.test.ts` (one line removed, three added).
+- One docs file.
 
 No SPA work and no migrations.
 
@@ -1886,7 +2072,10 @@ What is broken or absent for a new visitor ([verified] unless marked):
    - "Access saved" mirrors the console's own "Access granted · read unverified". The flow never says "Connected", "verified" or "watching".
    - All set says what starts the Brief, Check-in and Close, in two fixed sentences chosen by `timezone_confirmed`. S4 replaces that element.
    - "Already on it." is not used: on S3 alone nothing runs for a web-only owner, so the line would overclaim.
-8. **The time zone is shown by name.** `zoneName(zone)` gives the long generic name, for example "India Standard Time", with the IANA ID as a hint. The button says "Use this time zone". The ID saved is exactly the one the device reported, so the saved check stays a string compare.
+8. **Zones and times are shown the way the device shows them.**
+   - Visible copy names a zone only by `zoneName(zone)`, the long generic name, for example "India Standard Time". The IANA ID appears only in the action and in the "Choose another" input. Chrome reports `Asia/Calcutta` for India, so showing the ID would look wrong.
+   - The button says "Use this time zone". The ID saved is exactly the one the device reported, so the saved check stays a string compare.
+   - Quiet-hour times in copy go through `timeLabel(hhmm)`, which formats in the device locale. They then match what the `type="time"` inputs show: "10:00 PM" in en-US, "22:00" in en-GB.
 9. **One waitlist constant.** `src/links.ts` exports `IPHONE_WAITLIST_URL = 'https://www.heywaldo.in/waitlist'` for every slice. It is a code constant, not an env var (`AGENTS.md:57`). The button reads "Join the iPhone app waitlist" and opens in a new tab.
 
 ### Changes, file by file
@@ -1948,6 +2137,12 @@ export const deviceZone = (): string | null => {
 export const zoneName = (zone: string): string => {
   try { return new Intl.DateTimeFormat(undefined, { timeZone: zone, timeZoneName: 'longGeneric' }).formatToParts(new Date()).find(part => part.type === 'timeZoneName')?.value ?? zone; } catch { return zone; }
 };
+// An HH:MM setting in the device's own clock style, so copy matches what the time inputs show.
+export const timeLabel = (hhmm: string): string => {
+  const [h, m] = hhmm.split(':').map(Number);
+  if (!Number.isInteger(h) || !Number.isInteger(m)) return hhmm;
+  return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit', timeZone: 'UTC' }).format(Date.UTC(1970, 0, 1, h!, m!));
+};
 export const openSetup = (day: DayRecord | null, services: OverviewV1['services']) => ({
   zone: day !== null && !day.data.timezone_confirmed,
   google: !services.some(service => service.health === 'access_granted'),
@@ -1984,7 +2179,7 @@ import { Icon, Logo, WaldoMark } from './icons';
 import { DayRail, localMinutes } from './Infographics';
 import { shouldPoll } from './live';
 import { IPHONE_WAITLIST_URL } from './links';
-import { GOOGLE_POLL_MS, GOOGLE_WAIT_MS, QUIET_DEFAULT, STEPS, accountHealth, deviceZone, googleArrival, granted, openSetup, readLocal, resumeStep, writeLocal, zoneName, type GoogleHealth, type StepId, type WelcomeReads } from './welcome-model';
+import { GOOGLE_POLL_MS, GOOGLE_WAIT_MS, QUIET_DEFAULT, STEPS, accountHealth, deviceZone, googleArrival, granted, openSetup, readLocal, resumeStep, timeLabel, writeLocal, zoneName, type GoogleHealth, type StepId, type WelcomeReads } from './welcome-model';
 
 type Load = { kind: 'loading' } | { kind: 'ready'; reads: WelcomeReads } | { kind: 'error'; signedOut: boolean };
 type StepProps = Readonly<{ reads: WelcomeReads; reload: () => Promise<WelcomeReads>; advance: () => void; signedOut: () => void }>;
@@ -2099,7 +2294,7 @@ function useSave({ reload, signedOut }: Pick<StepProps, 'reload' | 'signedOut'>)
 - Defaults: `proactivity.quiet_start ?? QUIET_DEFAULT.start` and likewise for the end.
 - If both equal the saved values, the `type="submit"` primary reads "Continue" and submit just advances.
 - Otherwise: `save(reads.day, 'proactivity.set', { quiet_start: start, quiet_end: end, volume: reads.day.data.proactivity.volume }, d => d.data.proactivity.quiet_start === start && d.data.proactivity.quiet_end === end)`. Volume is passed through unchanged; the schema requires it.
-- Preview: `<DayRail marks={[]} now={localMinutes(new Date(), zone) ?? 0} quiet={from !== null && to !== null ? { start: from, end: to } : null} summary={`Quiet from ${start} to ${end}, ${zoneName(zone)}.`}/>`, with `from = clockMinutes(start)` and `to = clockMinutes(end)`.
+- Preview: `<DayRail marks={[]} now={localMinutes(new Date(), zone) ?? 0} quiet={from !== null && to !== null ? { start: from, end: to } : null} summary={`Quiet from ${timeLabel(start)} to ${timeLabel(end)}, ${zoneName(zone)}.`}/>`, with `from = clockMinutes(start)` and `to = clockMinutes(end)`.
 
 **Connect: state, start and watch**
 ```tsx
@@ -2176,13 +2371,15 @@ function useGoogleWatch(state: Connect, arrived: (service: OverviewV1['services'
 ```
 
 Other Connect cases:
-- **Already connected.** On entry, or after the mount read triggers `reload()`, a non-empty `granted(reads.connections)` shows those emails with an "Access saved" chip, primary "Continue", and "Add another Google account", which calls `start()`.
+- **Already connected.** On entry, or after the mount read triggers `reload()`, a non-empty `granted(reads.connections)` shows the same saved block as the Saved state, one row per email. It has primary "Continue" and "Add another Google account", which calls `start()`.
 - **Connect unavailable.** If `!reads.connections.data.google.connectAvailable`, the step shows the unavailable copy and "Continue".
 - **Layout.** The Google tile is `<section className="tile welcome-permission reveal" aria-labelledby="welcome-google">`. The Body data tile is `<section className="tile welcome-body-data reveal" aria-labelledby="welcome-body-data">`.
 
 **All set**
 - `DoneStep({ reads, reload, goTo, onFinish }: StepProps & { goTo: (id: StepId) => void; onFinish: () => void })` calls `reload()` once on mount, best effort.
-- Rows come from `reads`. An unsaved row gets a quiet "Set it now" button that calls `goTo('meet' | 'day' | 'connect')`.
+- Rows come from `reads`. Each is `<li className="welcome-summary-row">` with `<span className="welcome-summary-name">`, `<span className="welcome-summary-value">` and `<span className="welcome-summary-state">`.
+- An unsaved row's state cell holds a quiet "Set it now" button that calls `goTo('meet' | 'day' | 'connect')`.
+- Every link pair (the waitlist link here, and in the Body data tile) sits in a `div.welcome-actions`, so it gets the same block width and spacing as the step's buttons.
 - The next-steps note is one element, `<p className="welcome-note">`. It renders one of two fixed sentences from `reads.day.data.timezone_confirmed`.
 - Primary "Go to Today" calls `onFinish`.
 
@@ -2235,6 +2432,7 @@ export function WelcomeResume({ services }: { services: OverviewV1['services'] }
 **S6 seam:**
 - In `ConnectStep`, S6 inserts `<IMessageLink placement="welcome"/>` as a sibling directly after the Google tile's closing `</section>` (`aria-labelledby="welcome-google"`) and before the Body data tile (`className="tile welcome-body-data …"`).
 - It renders nothing when hidden, so the step needs no conditional.
+- In the `welcome` placement, S6 renders its "Get my code" (and "Get a new code") as `button.secondary`, not `primary`. That keeps "Connect Google" the step's one ink primary. The `connections` placement keeps its primary.
 
 Write no comment in code that names a slice or a PR (`mental-model.md` §5).
 
@@ -2283,20 +2481,26 @@ button[aria-disabled=true] { opacity:.6; cursor:progress; }
 .welcome-status { font-size:13.5px; color:var(--t2); margin-top:10px; }
 .welcome-help { margin-top:14px; border-top:.5px solid var(--hair); }
 .welcome-summary { list-style:none; margin:0; padding:0; }
-.welcome-summary li { display:grid; grid-template-columns:110px minmax(0,1fr) auto; gap:12px; align-items:center; padding:12px 0; border-top:.5px solid var(--hair); }
-.welcome-summary li:first-child { border-top:0; }
+.welcome-summary-row { display:grid; grid-template-columns:110px minmax(0,1fr) auto; gap:12px; align-items:center; padding:12px 0; border-top:.5px solid var(--hair); }
+.welcome-summary-row:first-child { border-top:0; }
+.welcome-summary-name { color:var(--t2); font-size:13.5px; }
+.welcome-summary-value { color:var(--ink); font-weight:500; overflow-wrap:anywhere; }
+.welcome-summary-state { justify-self:end; }
 .welcome-app { display:grid; grid-template-columns:120px minmax(0,1fr); gap:18px; align-items:center; }
-.welcome-footer { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:auto; padding-top:24px; }
+/* The step footer is a <footer>, so it must undo the console's page-footer rule (centred, 48px padding). */
+.welcome-footer { display:flex; justify-content:space-between; align-items:center; gap:12px; max-width:none; margin:auto 0 0; padding:24px 0 0; }
 @media(max-width:640px) {
   .welcome { padding:0 16px calc(24px + env(safe-area-inset-bottom)); }
   .welcome-top { height:54px; }
   .welcome-body { padding:24px 0 8px; }
   .welcome-lists,.welcome-app { grid-template-columns:1fr; }
-  .welcome-summary li { grid-template-columns:minmax(0,1fr) auto; }
-  .welcome-summary li>:first-child { grid-column:1 / -1; }
+  .welcome-summary-row { grid-template-columns:minmax(0,1fr) auto; }
+  .welcome-summary-name { grid-column:1 / -1; }
   .welcome-app .figure { max-width:160px; margin:0 auto; }
+  .welcome-footer { padding:20px 0 0; }
 }
 ```
+- `.welcome-footer` must override the global `footer` rule. That rule sets `max-width:960px; margin:0 auto; padding:48px 28px 56px` (`style.css:102`), plus a 92 px bottom pad on phones (`:407`), and on its own it would centre Back and Skip together. A class selector beats the element selector wherever it sits.
 - No new assets, fonts or `import()`, so the build still emits one JS file and one CSS file (`verify-assets.mjs:4-7`).
 - The cross mark is inline SVG reusing the path at `Infographics.tsx:65`.
 - In TSX, never set `fontWeight` or any style key containing "weight" (guard-health-leak's `weight` token).
@@ -2344,7 +2548,7 @@ Global rules:
 - `.tile`:
   - h2 "A few things I’ll need."
   - p "First, your time zone. I plan your day in it, and I don’t schedule anything for you until you’ve confirmed it."
-  - `.welcome-zone`: hint "This device", strong "{India Standard Time}", hint "{Asia/Kolkata} · It’s {7:42 pm} there now."
+  - `.welcome-zone`: hint "This device", strong "{India Standard Time}", hint "It’s {7:42 pm} there now." There is no IANA ID in visible copy.
 - Actions: primary "Use this time zone" (busy "Saving your time zone…"); secondary "Choose another time zone".
 - Choosing:
   - form label "Time zone", hint "A name like Europe/London or America/New_York."
@@ -2358,9 +2562,9 @@ Global rules:
 - h1 "When should I stay quiet?"
 - lead "During quiet hours I hold cards, updates and event briefs. Reminders you set still go off." (matches `Controls.tsx:57`)
 - `.tile`:
-  - `DayRail` preview with a quiet band, aria-label "Quiet from 22:00 to 07:00, {zone name}."
-  - Fields "Quiet from" and "Quiet until" (`required`).
-  - hint "In {zone name} time. You can change this any time in Settings › Your day."
+  - `DayRail` preview with a quiet band, aria-label "Quiet from {timeLabel(start)} to {timeLabel(end)}, {zone name}."
+  - Fields "Quiet from" and "Quiet until" (`required`). The browser shows them in its own clock style.
+  - hint "These times are in {India Standard Time}. You can change them any time in Settings › Your day."
 - Submit "Save quiet hours" (busy "Saving quiet hours…"). When unchanged from a saved value it reads "Continue", with an `access-label done` "Saved".
 - Errors: the `FAILURE` lines.
 
@@ -2368,7 +2572,7 @@ Global rules:
 - h1 "Connect your calendar and mail."
 - lead "Calendar and mail are how I learn what’s on your plate. You can do this later, too."
 - Google tile:
-  - Head: icon tile (Google Calendar and Gmail logos), h2 "Google" (`id="welcome-google"`), and an "Access saved" chip when an account is granted.
+  - Head: icon tile (Google Calendar and Gmail logos) and h2 "Google" (`id="welcome-google"`). No chip in the head: saved access is said once, in the state block below.
   - Purpose: "I read your calendar and mail to plan your day around what’s on it."
   - h3 "Waldo can" with checks:
     - "Read your calendar, mail, tasks, contacts and Drive files."
@@ -2389,10 +2593,11 @@ Global rules:
     - `role="status"` "Waiting for Google. Come back to this tab when you’re done."
     - the anchor stays, so the person can reopen Google
     - secondary "Continue without it"
-  - **Saved**:
-    - `role="status"`: "Access saved" chip and strong "{email}"
-    - p "Google access is saved. You can disconnect it any time in Settings › Connections."
+  - **Saved** (also the "already connected" view, one row per email):
+    - `role="status"`: one `access-label done` "Access saved" followed by strong "{email}"
+    - p "You can disconnect it any time in Settings › Connections."
     - primary "Continue" (focused); secondary "Add another Google account"
+    - "Access saved" appears exactly once per account on the screen.
   - **Broken**:
     - `role="status"` "Google sent {email}, but I couldn’t read it. Try again, or continue without it."
     - primary "Try again"; secondary "Continue without it"
@@ -2411,14 +2616,14 @@ Global rules:
 - Body data tile:
   - h2 "Body data" (`id="welcome-body-data"`)
   - "Sleep and activity from your watch reach me through the iPhone app, not the browser."
-  - secondary "Join the iPhone app waitlist" + hidden "(opens in a new tab)", `target="_blank" rel="noopener noreferrer"`
+  - `div.welcome-actions` holding a secondary `.button-link` "Join the iPhone app waitlist" + hidden "(opens in a new tab)", `target="_blank" rel="noopener noreferrer"`
 
 **All set**
 - h1 "All set."
 - lead "Here’s what’s saved. You can change any of it in Settings."
-- `.tile ul.welcome-summary`, each row `name | value | state`:
-  - "Time zone" | "{zone name} · {IANA id}", or "Not confirmed" | "Saved", or quiet "Set it now"
-  - "Quiet hours" | "22:00 to 07:00", or "None" | "Saved", or "Set it now"
+- `.tile ul.welcome-summary`, each `li.welcome-summary-row` = `.welcome-summary-name | .welcome-summary-value | .welcome-summary-state`:
+  - "Time zone" | "{India Standard Time}", or "Not confirmed" | "Saved", or quiet "Set it now"
+  - "Quiet hours" | "{timeLabel(start)} to {timeLabel(end)}" (for example "10:00 PM to 7:00 AM" in en-US, "22:00 to 07:00" in en-GB), or "None" | "Saved", or "Set it now"
   - "Google" | "{email, email}", or "Not connected" | "Access saved", or "Set it now"
 - `p.welcome-note` (S4 replaces this element):
   - Zone confirmed: "Here on the web you can see what’s waiting for you, what I’ve saved and what I’ve done. My Brief, Check-in and Close start after your first message to me. For now that happens in the iPhone app."
@@ -2427,8 +2632,8 @@ Global rules:
   - `Phone` figure, label "A phone, an interactive illustration. Decorative."
   - h2 "The iPhone app"
   - "It’s where we chat and where your body data comes in. It isn’t open to everyone yet."
-  - secondary "Join the iPhone app waitlist" (new tab)
-- primary "Go to Today", which sets `done` and goes to `#/today`.
+  - `div.welcome-actions` holding a secondary `.button-link` "Join the iPhone app waitlist" (new tab)
+- `div.welcome-actions` holding primary "Go to Today", which sets `done` and goes to `#/today`.
 
 **Today card** (after a visit to `#/welcome`, not finished and not dismissed)
 - `.tile` placed after the greeting.
@@ -2489,16 +2694,17 @@ Shared setup for `Welcome.test.tsx`:
 - `openSetup`: `null` day → `zone:false`, and every combination of the rest.
 - `deviceZone` returns `null` for an `undefined` or invalid zone.
 - `zoneName('Asia/Kolkata') === 'India Standard Time'`, and an invalid zone returns itself.
+- `timeLabel('22:00')` equals `new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit', timeZone: 'UTC' }).format(Date.UTC(1970, 0, 1, 22, 0))`, so the test does not hard-code a locale. `timeLabel('bad')` returns `'bad'`.
 - `readLocal` without storage returns all false.
 
 **`src/Welcome.test.tsx`** (happy-dom)
 1. **Golden: fresh owner, end to end.** Render `<Welcome onLeave={spy}/>`.
-   - The live line reads "Step 1 of 4: Meet". "India Standard Time" and "Use this time zone" show.
+   - The live line reads "Step 1 of 4: Meet". "India Standard Time" and "Use this time zone" show, and the visible text (outside the input) does not contain "Asia/Kolkata".
    - Click "Use this time zone". The POST is `{csrf, revision: <day revision>, view: 'day', action: 'timezone.set', value: 'Asia/Kolkata'}`, and `request_id` matches `/^[A-Za-z0-9_-]{8,80}$/`.
    - "Step 2 of 4: Your day" appears with `value="22:00"`/`"07:00"`. Submitting the form sends `{action: 'proactivity.set', quiet_start: '22:00', quiet_end: '07:00', volume: 'normal', view: 'day'}`, with the **re-read** day revision.
    - On Connect, "Connect Google" sends `{action: 'google.connect', value: 'calendar', view: 'connections'}`. The receipt `/c/AAAAAAAAAAAAAAAAAAAAAA` renders an anchor with `href="https://console.test/c/AAAAAAAAAAAAAAAAAAAAAA"`, `target="_blank"` and a `rel` containing `noopener`, and it has focus.
-   - Click the anchor; the stub adds an `access_granted` service. Within 5 s the "Access saved" status and the email show, "Continue" has focus, and the text "Connected" appears nowhere.
-   - All set shows "India Standard Time · Asia/Kolkata", "22:00 to 07:00", the email and the confirmed-zone sentence. The waitlist `href === 'https://www.heywaldo.in/waitlist'` with `target="_blank"`.
+   - Click the anchor; the stub adds an `access_granted` service. Within 5 s the "Access saved" status and the email show, "Continue" has focus, "Access saved" occurs exactly once in the step, and the text "Connected" appears nowhere.
+   - All set shows "India Standard Time" in `.welcome-summary-value`, `${timeLabel('22:00')} to ${timeLabel('07:00')}`, the email and the confirmed-zone sentence. The waitlist `href === 'https://www.heywaldo.in/waitlist'` with `target="_blank"`, inside `.welcome-actions`.
    - "Go to Today" sets `location.hash === '#/today'`, calls `spy` once, and sets `localStorage['waldo.welcome.v1'].done` to true.
    - Exactly 3 POSTs. All Google detection reads are `overview` URLs.
 2. **Chrome hidden.** `<App/>` at `#/welcome`, with the overview, controls and admin (404) stubbed. No `.topbar`, no `.primary-nav`, no `/console/legacy` link; the h1 reads "Hello. I’m Waldo.".
@@ -2565,7 +2771,8 @@ The labels are SOURCE, LOCAL (dashboard vitest, not in CI), CI (typecheck, build
 3. **STAGING (after deploy; after the demo).** Use a fresh browser profile on desktop and on a phone (390 wide).
    - (a) Open an admin-issued invite link and sign up. With S2 the browser lands on `/console#/welcome`; without S2, open it by hand. Expect "Hello. I’m Waldo.", the progress row with Meet as current, and no nav or tab bar.
    - (b) "Use this time zone". The strong line shows the zone's name (for example "India Standard Time"). In devtools, `GET …/controls?view=day` returns `"timezone_confirmed":true`.
-   - (c) Save 22:00 to 07:00. Settings › Setup shows "Set quiet hours · Setting recorded".
+   - (c) Save the default quiet hours (shown as 10:00 PM and 7:00 AM, or 22:00 and 07:00, depending on the device). Settings › Setup shows "Set quiet hours · Setting recorded".
+   - (c2) On desktop and phone, Back sits at the left edge and Skip at the right, at the bottom of the frame, not centred together.
    - (d) Needs S1 deployed and a Google test user.
      - "Connect Google", then "Open Google" opens a new tab.
      - Google shows its unverified-app warning; choose Continue and approve. The callback says "Google is connected".
@@ -2640,142 +2847,204 @@ Add 0.5 h for the staging trace after a deploy. No `owner-do.ts`, runtime, contr
 
 ## S4 Console chat end to end, and Say hello
 
-> **Status:** reviewed; the review found a sign-out blocker (sign-out waits behind a running turn) and three major issues, and the revision is in progress. It also splits S4 into S4a (console chat) and S4b (Say hello). Do not start S4 until this line is gone.
+This section ships as **two PRs, each one user-visible outcome** (`AGENTS.md`, Build Unit):
+- **S4a, console chat.** Runtime routes, the `#/chat` view, the sign-out fence, and per-message surface facts (connect guidance, the console link, honest approval delivery).
+- **S4b, Say hello.** The SPA welcome step that composes the first message. It merges after S4a and after S3. S5b follows S4a.
 
-Citations are at the tree the implementing session will start from: `claude/focused-allen-85v68f` HEAD `a643bcab`, which carries `beta-mvp` `04bb8c89` (it moved past `e5c022ef` during planning: #1241, #1247, #1254, #1257 and others landed). Every `[verified]` line was read there. Re-check the line numbers against whatever tip you rebase onto.
+Citations are at `claude/focused-allen-85v68f` HEAD `a643bcab`, which carries `beta-mvp` `04bb8c89`. Every `[verified]` line was read there. Re-check line numbers on the tip you rebase onto.
 
 ### Outcome
 
-A visitor who signed up on the web can talk to Waldo in the console. A chat button in the top bar opens `#/chat`. There, the person types, presses Enter and sees honest progress ("Waldo has your message.", then "Waldo is working on it."), then Waldo's reply. This is the same main chat the iPhone app shows, so the conversation carries over when they install it.
+**S4a.** A person who signed up on the web can talk to Waldo in the console.
+- A chat button in the top bar opens `#/chat`. They type, press Enter and see honest progress ("Waldo has your message.", then "Waldo is working on it."), then Waldo's reply.
+- It is the same main chat the iPhone app shows.
+- When Waldo needs a decision, the console says truthfully where it can be made: Waiting for some calendar changes; sends not yet from the web. Waldo is told the same, so he never asks them to tap a button that is not there.
+- "Sign out" on this browser ends this browser's chat work at once and revokes its server session.
 
-In the welcome flow, the **Say hello** step asks four skippable questions: their week, what slips, who matters, and how much Waldo should do on his own. Each question also has "Or say it your way". The answers are joined into an editable first message in the person's own words. Sending it opens the chat, where Waldo answers and, through the model's own judgement, gets to know them. Whatever he saves comes from `remember`, grounded in words the owner sent.
+JTBD: "Let me use Waldo right now, from the browser I signed up in."
 
-JTBD: "Let me tell Waldo who I am and start using him right now, from the browser I signed up in."
+**S4b.** The welcome flow's **Say hello** step asks four skippable questions, each with "Or say it your way": their week, what slips, who matters, how much Waldo should do on his own.
+- The answers are joined into an editable first message in the person's own words.
+- Sending it opens the chat, where Waldo answers and, by the model's own judgement, gets to know them. Anything he keeps is saved by `remember`, grounded in words the owner sent.
+- On every path out of the flow the person can reach the iPhone app waitlist.
+
+JTBD: "Let me tell Waldo who I am without filling in a form he can’t use."
 
 ### Depends on / blocks
 
-- **Demo freeze (hard gate on landing).** Ansh approved a freeze on #1103 at 19:27Z on 14 Oct. Only #1258, agent headroom, #1259, #1261 and #1227/#1240 merge before the showcase, and `owner-do.ts` belongs to the Mac lane. **Default: build and review S4 now, merge after the demo.** It lands before the demo only if Ansh adds it to the freeze list on #1103, and the Mac lane then sequences the `owner-do.ts` hunks.
-- **#1260 (A2 PR 1, draft, frozen until after the demo).** Branch `claude/a2-owner-runtime`, now at head `e4a476ca`, not the `588ad87a` named on the PR, because it has since merged `beta-mvp` `04e02124`. It moves surface behaviour out of `owner-do.ts` into `surfaces/{telegram,app-runtime,imessage,whatsapp}.ts` and `surfaces/registry.ts`, and lowers the `owner-do.ts` surface-compare baseline from 58 to 26. S4's surface mechanism is built to work on both trees (see Design → "Surface capability").
-  - **Recommended order: #1260 first, then S4 rebases.** On the A2 tree, two S4 lines move from `owner-do.ts` into `surfaces/app-runtime.ts`.
-  - **If Ansh pulls S4 into the demo,** S4 lands first. #1260's next `beta-mvp` merge then carries the same two reads into `app-runtime.ts`. That is the A2 author's job, and this section spells it out.
-- **S1** (persist origin on the console path). This is not a code dependency. Without it, though, the console connect guidance ("open Settings, then Connections") leads a console-only owner to "Google connect could not start". Land S1 first.
-- **S3** (`#/welcome`). Whichever of S3 and S4 lands second wires the `SayHello` component into step 4. S4 does not wait for S3: `SayHello` also renders in the empty chat (two consumers).
-- **#1227 / #1240** (Mac first conversation, both on the freeze list). They make Waldo lead the getting-to-know-you conversation. S4 neither depends on them nor edits their files. See Design → "Waldo's reply is model-led".
-- **S2**: signup lands on `/console#/welcome`. This is soft: chat works from any landing.
-- **Blocks S5.** S5's tour "chat entry" step, the "what Waldo saved" link from the chat and the "First chat" Setup row all need `#/chat` to exist.
-- **Owner actions (S0).**
-  - Staging Langfuse text capture is on, so visitors' hello text is captured.
-  - Every visitor who sends a message gets scheduled work, which adds spend (see Risks).
-  - Google test users.
-- **Review.** `security-reviewer` is mandatory: auth flow, a new authenticated endpoint, and sign-out revocation (`AGENTS.md`, Security Review Triggers). Ask for the `owner-do.ts` slot on #1103 before opening the PR, on branch `onboarding/s4-console-chat`.
+- **Demo freeze (gates merging).** Ansh approved a freeze on #1103 at 19:27Z on 14 Oct. Only #1258, agent headroom, #1259, #1261 and #1227/#1240 merge before the showcase, and `owner-do.ts` belongs to the Mac lane.
+  - Default: build and review S4a and S4b now, merge after the demo.
+  - S4a lands earlier only if Ansh adds it on #1103; the Mac lane then sequences its `owner-do.ts` hunks. Ask for the slot on #1103 before opening S4a (`onboarding/s4a-console-chat`).
+- **#1260 (A2 PR 1, draft, frozen until after the demo).** Branch `claude/a2-owner-runtime`, head now `e4a476ca` (it merged `beta-mvp` `04e02124` after `588ad87a`). It moves surface behaviour into `surfaces/{telegram,app-runtime,imessage,whatsapp}.ts` plus `surfaces/registry.ts`, retires `createTelegramResponder`, and lowers the `owner-do.ts` surface-compare baseline from 58 to 26.
+  - **Recommended order: #1260 first, then S4a rebases.** S4a's three per-message reads (connect guidance, console link, presentation) then live in `surfaces/app-runtime.ts`, and S4a's `telegram-turn.ts` edit is dropped. Both variants are given under Changes.
+  - If Ansh pulls S4a before #1260, the #1260 author carries the same three reads into `app-runtime.ts` on their next `beta-mvp` merge.
+- **S1** (persist origin on the console path). Not a code dependency, but without it the console's connect guidance ("Settings, then Connections") leads a console-only owner to "Google connect could not start". Land S1 first.
+- **S3.** S4b fills S3's exact seam (`sections/S3.md`, "S4 seam") and so merges after S3.
+  - S4a replaces S3's All set `welcome-note`, because S4a makes it untrue. If S3 has not merged when S4a does, S3 adopts the S4a copy given under UI.
+  - S4b imports `IPHONE_WAITLIST_URL` from S3's `src/links.ts`.
+- **#1227 / #1240** (Mac first conversation, both on the freeze list) make Waldo lead the getting-to-know-you conversation. S4 neither depends on them nor edits their files (see Design).
+- **S2** (signup lands on `/console#/welcome`). Soft dependency.
+- **Blocks S5b:** the tour's chat step, the "what Waldo saved" link from the chat, and the Setup row "First chat".
+- **Owner actions (S0):**
+  - Staging Langfuse captures visitors' chat text.
+  - Every visitor who sends a first message gets scheduled work, which costs spend (see Risks).
+  - Google test users must be added.
+  - Presenters should not demo email sends from a web-only account: they cannot be approved from the web.
+- **Review.** `security-reviewer` is mandatory for S4a: auth flow, a new authenticated endpoint, session revocation (`AGENTS.md`, Security Review Triggers). S4b is SPA-only, and one independent review is enough.
 
 ### Current state
 
-What exists to reuse:
+**What exists to reuse** [verified]:
 
-- **App chain, end to end.** [verified]
-  - `appRoute` (`owner-do.ts:881-945`) checks the physical id, then `do_name`, then `appSessionAuthority` (`:889`). It binds `owner_principal_ref` (`:890-892`) and stores `origin` from a Worker-set header (`:893`), then dispatches: send (`:894` → `appSend` `:1069-1078`), receipt (`:900-905`), cancel (`:906-913`), history (`:938-943` → `appChatPage` `:948`).
-  - `AppInbox.admit` is the single durable writer. It is idempotent on client id plus digest, and it commits the row and the wake before the 202 (`app-inbox.ts:45-68`).
-  - `drainApp` re-reads authority before each claim (`owner-do.ts:1100`), runs `turn(…,'app',true,scope)` (`:1108`) and re-reads authority after the turn (`:1109`). The turn re-reads it again at `:1974-1980`, and `appAdmission` (`:842`) re-asks on every context step.
-- **Cookie sessions already pass app authority.** [verified]
+- **App chain.**
+  - `appRoute` (`owner-do.ts:881-945`) checks the physical id, then `do_name`, then `appSessionAuthority` (`:889`). It pins `owner_principal_ref` (`:890-892`) and stores `origin` from a Worker-set header (`:893`).
+  - It then dispatches: send (`:894` → `appSend` `:1069-1078`), receipt (`:900-905`), cancel (`:906-913`), history (`:938-943`, which calls `recoverApp()` at `:939` before `appChatPage` `:948`).
+  - `AppInbox.admit` is the single durable writer. It is idempotent on client id plus digest, and commits the row and the wake before the 202 (`app-inbox.ts:45-68`).
+  - `drainApp` re-reads authority before each claim (`owner-do.ts:1100`), runs `turn(…,'app',true,scope)` (`:1108`), and re-reads authority after the turn (`:1109`).
+  - The turn re-reads authority at `:1974-1980`, and `appAdmission` (`:842`) asks again on every context step.
+- **Cookie sessions, for owners with an email (Auth) identity.**
   - The owner cookie is minted through the same `console_session_open` row as the app bearer, signed under a `cookie.` context (`console-auth.ts:83-91,180`).
-  - `waldo.app_session_authority` joins `waldo.console_sessions` by hash, active owner and an age under 12 hours, whichever artifact minted the row (`20261010010000_app_session_authority.sql:10-16`).
-  - So `appSessionAuthority(name, cookieSessionHash)` succeeds today.
-- **Console routing.** [verified]
-  - `handleConsole` verifies the signed owner cookie, touching the directory (`console-signin.ts:340`, via `readOwnerCookie`).
-  - It then forwards **the client's own headers** with only `x-waldo-do-name` replaced (`:350-351`).
-  - Only the paths in its four duplicated lists answer 401 JSON, at `:342,347,355,360`. Any other path gets a 303 to sign-in. The SPA fetches with `redirect: 'error'` (`controls-model.ts:138,176`).
-- **Inside the DO.** [verified]
-  - `console()` checks the DO-local browser session at `owner-do.ts:1378-1379`; its `session.csrf` is what the SPA's actions send.
-  - S1 (scratch copy) inserts its origin write directly after `:1379`.
-- **CSRF pattern.** [verified] Controls reads return `csrf` in the record. Actions send it back as a form field and are compared with `!==` (`console.ts:126`). The workspace read returns `{version:1, csrf, …}` in a GET body too (`Workspace.tsx:5`).
-- **Rate limiting.** [verified] `handleApp` spends `app-chat-send:<doName>` on sends and `app-read:<doName>` on reads and stops (`app-api.ts:155-158`). The binding allows 120 per 60 s per key (`wrangler.jsonc:42-44,104-106`). The DO can reach it as `this.env.RESPONSIBILITY_RATE_LIMITER` (used at `owner-do.ts:1401`).
-- **History shape.** [verified] `appTranscriptPage` (`app-api.ts:213`) pages newest first, at most 50 per page, with cursor `before:<id>`. Each message is `{id, role, text, parts, channel, parent_id, created_at?}`. Approval parts sit on the newest reply to a run. A reader must ignore any part it cannot read and show `text` (`app-api.ts:205-207`).
+  - `waldo.app_session_authority` joins `console_sessions` by hash, an active owner, `auth.users` on `auth_user_id`, and a session under 12 h old (`20261010010000_app_session_authority.sql:10-16`).
+  - So `appSessionAuthority(name, cookieSessionHash)` succeeds for every invited email signup. An owner with no Auth identity fails it. `auth_user_id` is nullable (`20260924120000_waldo_owners.sql:7`); for example, a Telegram-ticket-only owner.
+- **Console routing.**
+  - `handleConsole` resolves the signed owner cookie with a directory touch (`console-signin.ts:340`).
+  - It then forwards **the client's own headers**, with only `x-waldo-do-name` replaced (`:350-351`).
+  - Only the paths in four duplicated lists answer JSON (`:342,347,355,360`). Any other path gets a 303 to sign-in, which the SPA's `redirect: 'error'` fetches cannot follow (`controls-model.ts:138,176`).
+  - When the touch throws (directory down), those JSON paths answer **401**, so an outage reads as "signed out" (`:340-343`).
+- **The DO.**
+  - `console()` checks the DO-local browser session at `owner-do.ts:1378-1379`. `session.csrf` is what the SPA's actions send.
+  - The dashboard controls and actions route runs entirely inside `this.serial` (`:1464-1466`).
+  - `serial` chains on one promise queue (`:1905-1910`), and every app drain is queued through it (`:981,1076,1085`). A running reply therefore holds any later controls request.
+- **CSRF pattern.**
+  - Controls reads return `csrf` in the record. Actions send it back as a form field and compare it with `!==` (`console.ts:126`).
+  - The workspace read already returns `{version:1, csrf, …}` in a GET body (`Workspace.tsx:5`).
+- **Rate limits.**
+  - `handleApp` spends `app-chat-send:<doName>` on sends and `app-read:<doName>` on reads and stops (`app-api.ts:155-158`). The binding allows 120 requests per 60 s per key (`wrangler.jsonc:42-44,104-106`).
+  - The DO reaches the binding as `this.env.RESPONSIBILITY_RATE_LIMITER` (`owner-do.ts:1401`).
+- **History.**
+  - `appTranscriptPage` (`app-api.ts:213`) pages newest first, at most 50 per page, with cursor `before:<id>`.
+  - Each message is `{id, role, text, parts, channel, parent_id, created_at?}`. A reader ignores parts it cannot read and shows `text` (`:205-207`).
+- **Model abort.** The OpenAI adapter aborts the request when the turn's run-scope signal fires (`llm/openai.ts:57-59,76`).
 
-What is broken or missing:
+**What is broken or missing:**
 
-1. **No browser chat.** [verified] `resolveRoute` has no chat route (`App.tsx:26-37`). Nothing in `packages/dashboard-app/src` posts to a chat path.
-2. **Stated invariant.** [verified] `console-auth.ts:46-47` says "a console cookie is never accepted as an app bearer", and `app-api.ts:50` says "it is never a console cookie". The owner approved replacing both (14 Oct).
+1. **No browser chat.** [verified] There is no chat route in `resolveRoute` (`App.tsx:26-37`), and nothing in `packages/dashboard-app/src` posts to a chat path.
+2. **The stated invariant needs rewording.** [verified] `console-auth.ts:46-47` says "a console cookie is never accepted as an app bearer", and `app-api.ts:50` says "it is never a console cookie". The owner approved replacing both on 14 Oct.
 3. **Single-browser sign-out is incomplete.** [verified]
-   - It only deletes the DO-local session (`owner-do.ts:1514` dashboard path, `:1608` legacy path).
-   - The directory row stays live for up to 12 hours, and queued or running app-chain work from that session is not fenced.
-   - App sign-out, by contrast, fences, revokes and fences again (`app-api.ts:91-103,176-183`; `app-inbox.ts:85-97`).
-4. **Wrong-surface guidance.** [verified] Both answers below are wrong in a browser.
-   - On the `app` channel, `offerConnect` returns `APP_CONNECT_GUIDANCE`: "go back to Home, open the menu at the top left…" (`owner-do.ts:2236-2237`; `surfaces/app.ts:12`).
-   - `send_console_link` answers `app_unsupported` (`owner-do.ts:2224-2232`).
-5. **Guard ceiling.** [verified] `owner-do.ts` sits at its baseline of 58 surface compares; the guard run gives "ok (101 surface compares in 13 files)". The guard counts any `channel ===` / `surface ===`, any quoted surface name next to `===`/`!==`, and any `case '<surface>':`. `'console'` counts because it is in `surfaceNameV1Schema` (`scripts/guards/guard-surface-neutral-core.mjs`; `contracts/src/app/surfaces.ts:7`). S4 adds **zero** compares.
-6. **Web-only owners get no scheduled work.** [verified] The alarm picks `app` only when `appOwnerLookup` admits, and that needs `app_subject` (`owner-do.ts:724-727,1723`). The first app-chain send binds it (`bindAppSubject` `:1079-1081`). On the `app` channel, jobs arm only once `timezone_confirmed` is true (`:2622`); until then they are held (`:1832`).
+   - It deletes only the DO-local session (`owner-do.ts:1514` dashboard, `:1608` legacy). The directory row stays live for up to 12 h, and queued or running chat work from that session continues.
+   - App sign-out, by contrast, fences, revokes, re-lists to confirm the row is gone, and fences again (`app-api.ts:91-103,176-183`; `app-inbox.ts:85-97`).
+   - Any new fence on the dashboard path would wait behind a running reply in the serial queue.
+4. **Wrong-surface facts in a browser.** [verified]
+   - `offerConnect` returns iPhone directions (`owner-do.ts:2236-2237`; `surfaces/app.ts:12`).
+   - `send_console_link` answers `app_unsupported` (`:2224-2232`).
+   - The prompt says `Approval delivery: native_buttons` for every app turn (`telegram-turn.ts:16`; `prompt/messaging-behavior.ts:101`), but the console cannot approve sends (`consoleMayApprove`, `console.ts:275`).
+5. **Guard ceiling.** [verified] `owner-do.ts` is at its baseline of 58. The guard prints "ok (101 surface compares in 13 files)".
+   - Any `channel ===` / `surface ===` adds a compare, as does a quoted surface name next to `===`/`!==` or `case '<surface>':`. `'console'` counts (`guard-surface-neutral-core.mjs`; `contracts/src/app/surfaces.ts:7`).
+   - `telegram-turn.ts` is at its baseline of 5.
+6. **Web-only owners get no scheduled work.** [verified]
+   - The alarm runs app work only once `appOwnerLookup` admits, and that needs `app_subject` (`owner-do.ts:724-727,1723`).
+   - The first app-chain send binds it (`bindAppSubject` `:1079-1081`).
+   - On the `app` channel, jobs arm only after `timezone_confirmed` (`:2622`); until then they are held (`:1832`).
 
 ### Design
 
-**Route placement.** The chat endpoints live inside `OwnerDO.console()`, right after the DO session check. Most of the logic sits in a new deep module, `channels/console-chat.ts`, behind a small host interface, following the same pattern as `appThreadsRequest` and `threadsHost` (`owner-do.ts:974`). `owner-do.ts` gains one dispatch line and one host method (~15 lines). Base `/console/dashboard/api/v1/chat`:
+**Route (S4a).** The routes live inside `OwnerDO.console()`, after the DO session check. The logic is a deep module, `channels/console-chat.ts`, behind a small host interface (the `appThreadsRequest` / `threadsHost` pattern, `owner-do.ts:974`). Base `/console/dashboard/api/v1/chat`:
 
 | Method | Path | Body / query | Answer |
 |---|---|---|---|
-| GET | `/chat` | `?cursor=before:<id>&limit=1..50` | 200 `{version:1, csrf, messages: AppMessageV1[], next_cursor}` |
-| POST | `/chat/messages` | `application/json` `{client_message_id, text}` (app schema) + header `x-waldo-csrf` | 202 `{accepted:true, message_id, state}` |
-| GET | `/chat/messages/{client_message_id}` | none | 200 receipt (app receipt shape) / 404 |
+| GET | `/chat` | `?cursor=before:<id>&limit=1..50` | 200 `{version:1, csrf, messages, next_cursor}` |
+| POST | `/chat/messages` | `application/json` `{client_message_id, text}` + header `x-waldo-csrf` | 202 `{accepted:true, message_id, state}` |
+| GET | `/chat/messages/{client_message_id}` | none | 200 receipt / 404 |
 | POST | `/chat/messages/{client_message_id}/cancel` | header `x-waldo-csrf` | 200 receipt / 404 |
 
-**Session identity: derived, never forwarded.** The session hash comes from the signed `waldo_owner` cookie, re-verified **inside the DO** with the router secret. This check is a pure HMAC with no network call. The DO also checks that the cookie's `doName` equals its own `do_name`, and the directory is then asked through `appSessionAuthority` on every request.
-- The DO never reads `x-waldo-app-session-hash`. `handleConsole` forwards client headers verbatim, so a header is attacker-controlled on this path.
-- Rejected alternative: have the Worker set the header. It works, but it leaves a header-trusting route reachable from the ticket fallback (`index.ts:208-215`), which also forwards client headers.
+**Session identity: derived in the DO, never forwarded.**
+- The session hash comes from the signed `waldo_owner` cookie. The DO re-verifies it with the router secret: a pure HMAC, no network call.
+- The DO checks that the cookie's `doName` equals its own `do_name`.
+- The directory is then asked through `appSessionAuthority` on every request.
+- The DO never reads `x-waldo-app-session-hash`. `handleConsole` forwards client headers as they came, so that header is attacker-controlled on this path.
+- Rejected: having the Worker set the header. It leaves a header-trusting route reachable from the ticket fallback (`index.ts:208-215`), which also forwards client headers.
 
-**CSRF.** Every POST needs the DO session's `csrf` in `x-waldo-csrf`, and a send must be `content-type: application/json`.
-- This sits on top of `SameSite=Strict` cookies. A custom header also forces a CORS preflight, which a cross-origin page cannot pass, because nothing answers CORS.
-- A header is used rather than a body field because the app send schema is `strictObject`.
+**CSRF.**
+- Every POST needs the DO session's `csrf` in `x-waldo-csrf`, and a send must be `application/json`. This is on top of `SameSite=Strict`; the custom header also forces a CORS preflight that nothing answers.
+- It is a header, not a body field, because the app send schema is `strictObject`.
 
-**Rate limit.** The same buckets and keys as the app: `app-chat-send:<doName>` for send, `app-read:<doName>` for history, receipt and cancel. One main chat gets one budget, whichever surface uses it. The route fails closed (503) when the binding is absent. The 2 s receipt poll costs 30 reads a minute per open tab, under 120.
+**Rate limit.** Same buckets and keys as the app: `app-chat-send:<doName>` for send; `app-read:<doName>` for history, receipt and cancel.
+- One main chat, one budget. A missing binding fails closed (503).
+- The 2 s receipt poll costs 30 reads per minute per open tab.
 
-**Same main chat.** Admission is `AppInbox.admit(name, cookieHash, clientId, text, ownerChainRef('app', principal), …, 'console')`. Messages ride `drainApp` and `turn('app')` unchanged, so there is no new writer, no new SQL and no new transcript.
-- The user and assistant rows carry `surface: 'app'`, and the iPhone app shows them in Main.
-- The inbox row text is cleared at settle (`app-inbox.ts:34`), exactly as for app messages. No new conversation-body storage is created, so the CLAUDE.md contract and ADR trigger does not fire.
+**Same main chat.**
+- Admission is `AppInbox.admit(name, cookieHash, clientId, text, ownerChainRef('app', principal), …, 'console')`. The message rides `drainApp` and `turn('app')` unchanged: no new writer, no new SQL, no new transcript.
+- Rows carry `surface: 'app'`, and the iPhone app shows them in Main.
+- The inbox row's text is cleared at settle (`app-inbox.ts:34,132`), as for app messages. No new conversation-body storage, so the CLAUDE.md contract/ADR trigger does not fire.
 
-**Intended effect: scheduled work turns on.** The first console send binds `app_subject`. From then on the alarm treats the owner as app-bound, and Briefs, Check-ins, Closes and nightly passes are written into this same main chat. They arm only after the zone is confirmed (S3's Meet step). That is what makes the console chat the web-only owner's home, and the history poll shows them. Implications: spend per visitor, and a Brief arriving in a chat the person may never reopen. Both are listed under Risks.
+**First-request side effects (intended; documented because they outlive a rollback).**
+- The first chat request of any method pins `owner_principal_ref`, exactly as the app's first request does (`owner-do.ts:890-892`). That fixes `ownerRef` and `appIdentity` for the approval desk and effect custody (`:2507,2522`).
+- The first **send** binds `app_subject`. From then on the alarm treats the owner as app-bound: Briefs, Check-ins, Closes and nightly passes are written into this main chat once the zone is confirmed, and the history poll shows them.
+- Costs: spend per visitor, and Briefs in a chat the person may never reopen (Risks).
 
-**Sign-out completes.** Single-browser sign-out (both paths) runs these steps in order:
-1. Fence this session's app-chain rows: `AppInbox.revokeSession(hash)`, and abort the running turn if it belongs to this session.
-2. Revoke the directory row with `auth.revokeSession`.
-3. Fence again, for work admitted in between.
-4. Delete the DO session.
+**Sign-out: fence first, outside the queue, then revoke and confirm (S4a).** For "Sign out" of one browser:
+1. **Before the serial queue.** In `console()`, after the DO session check, the dashboard actions request's form is peeked from a clone. Only when `action === 'session.signout'` and its `csrf` matches does the DO run `endBrowserSession(request)`:
+   1. fence this session's app-chain rows (`AppInbox.revokeSession`) and abort the running turn if it is this session's (the abort reaches the model request);
+   2. revoke the directory row;
+   3. re-list the sessions and fail if the row is still there, as app sign-out does;
+   4. fence again, for work admitted in between.
+2. **Inside the queue.** The act only deletes the DO session, or answers `unconfirmed` when step 1 could not confirm. Because this browser's own running reply was aborted in step 1, the queue frees within moments.
+3. **The legacy `/console/action` path** is not queued; it calls `endBrowserSession` directly.
 
-If the revoke fails, the browser stays signed in with an `unconfirmed` receipt, the same posture as `signOutEverywhere` (`owner-do.ts:1332-1339`). No push revoke is needed [inference]: a console session never registers push, and no push registration path exists in `packages/runtime/src`.
+Residuals:
+- A reply on another session (for example the iPhone app's) still holds the queue. The directory revoke and fence have already happened by then; only the HTTP answer waits.
+- If the queued action is later refused (stale revision), the directory session is still gone, so the browser reads as signed out, which is what was asked.
+- "Sign out everywhere" is unchanged: the directory drops every session, and per-step authority re-reads stop running work at their next check.
 
-**Surface capability, with no new compare.** The inbox row records what admitted it: `via?: 'console'`. A field-free table in `surfaces/app.ts` maps `via` to what the turn tells the model:
+**Per-message surface facts, with no new compare (S4a).** The inbox row records what admitted it: `via?: 'console'`. A field-free table in `surfaces/app.ts` maps `via` to what the turn tells the model:
 
-| via | connect guidance | console link |
-|---|---|---|
-| absent (app) | `APP_CONNECT_GUIDANCE` (unchanged) | `app_unsupported` |
-| `console` | `CONSOLE_CONNECT_GUIDANCE` (new) | `in_console` (new, additive reason) |
+| via | connect guidance | console link | approval delivery |
+|---|---|---|---|
+| absent (iPhone app, scheduled work) | `APP_CONNECT_GUIDANCE` | `app_unsupported` | unchanged (`native_buttons`) |
+| `console` | `CONSOLE_CONNECT_GUIDANCE` | `in_console` (new, additive) | `none` + `CONSOLE_APPROVAL_NOTE` |
 
-The table is read per turn from `this.activeApp`.
-- **Today:** `owner-do.ts:2227` and `:2237` read `appChatPresence(this.activeApp)`. The value changes, the compare count does not. The console-link entry is a getter, because `consoleLinkSender` reads `route.unsupported` at call time (`console-link.ts:40-41`) while the route object is built once per runtime.
-- **On #1260:** the same helper is read in `surfaces/app-runtime.ts`, inside the adapter. There, `connectGuidance` becomes a getter over `host.activeApp()`, and `consoleLink` returns the same getter route. #1260's `SurfaceAdapter.connectGuidance?: string` and `consoleLink(...)` types accept both. `surfaces/app.ts` stays import-free, which #1260's commit `e4a476ca` requires to avoid the approvals import cycle.
-- Rejected: a `'console'` `ChannelKind`, which would duplicate the inbox, chain and runtime and is option (c) in the research. Also rejected: a surface compare in `owner-do.ts`, which fails the guard.
+These are read **per turn** from the record in hand (`this.activeApp`; `host.activeApp()` on #1260):
+- The console-link entry and the presentation are getter objects, because they are built once per runtime but read during each turn (`console-link.ts:40-41`; `owner-turn.ts:784` with `messaging-behavior.ts:101`).
+- A new optional `SurfacePresentation.approvalNote` prints one line after "Approval delivery". Existing surfaces leave it unset, so their prompt and the snapshot are unchanged.
+- On today's tree, the presentation passes through a new trailing argument to `createTelegramResponder` and `telegramTurnEnvelope`, with identity by default. On #1260's tree it is a property of the app adapter.
+- The guard count stays at 58 and 5.
+- Rejected:
+  - a `'console'` `ChannelKind` (duplicates inbox, chain and runtime);
+  - a compare in `owner-do.ts` or `telegram-turn.ts` (fails the guard);
+  - routing the note through the owner-profile line (wrong owner for that line, and it collides with #1227).
 
-**Approvals in the chat: a fallback card, no buttons.** The console may approve only calendar changes (`consoleMayApprove`, `console.ts:275`). Approving sends from the web is a policy change outside this slice. Approval parts render as a card with the review text and "Open Waiting →". This leaves one known gap: the model is still told `approval: native_buttons` for app turns (`telegram-turn.ts:16`). See Risks.
+**Approvals in the chat (S4a).** Approval parts render as a card with the review text and "Open Waiting →", with no buttons. Approving sends from the web would change `consoleMayApprove`, which is a policy decision outside this slice. The page copy and Waldo's own presentation now say the same true thing.
 
-**Message text: plain, no markdown.** Rendered as plain text with `white-space: pre-wrap`, through React text nodes only: no new dependency, no `dangerouslySetInnerHTML`, no auto-linking. The prompt already bans markdown headings and tables (`messaging-behavior.ts:7`).
+**Message text.** Plain text with `white-space: pre-wrap`, through React text nodes only: no new dependency, no `dangerouslySetInnerHTML`, no auto-linking. The prompt already bans markdown headings and tables (`messaging-behavior.ts:7`).
 
-**Say hello: a client template, not a judgement rule.** The template only joins the person's own selections, lightly normalised (lower-case first letter), plus their typed words, under fixed first-person prefixes. The person sees and edits the result before sending. There is no classification, no claims write and no setup route, per the owner's decision.
-- `SayHello` is one component with two consumers: S3's step 4, and the empty chat ("Not sure where to start?"). S4 therefore does not need S3 to land first.
-- After a send from the welcome flow, it records S3's step as done and goes to `#/chat?from=welcome`. The chat then shows "Finish setting up", so All set (waitlist link, honest next steps) is one tap away. This follows the brief's "routes to #/chat" without losing S3's All set.
+**Say hello (S4b): a client template, not a judgement rule.**
+- It joins the person's own selections (first letter lower-cased) and their typed words under fixed first-person prefixes. The person sees and edits the result before sending.
+- No classification, no claims write, no setup route, per the owner decision. The autonomy answer is only words in their message.
+- S4b follows S3's seam exactly:
+  - `hello` is finished when the chat read returns any messages;
+  - the step renders `<SayHello variant="welcome" onSkip={props.advance} onSent={() => { window.location.hash = '#/chat?from=welcome'; }}/>`;
+  - `onSent` writes nothing local.
+- Because S3 resumes at the first unfinished step, the chat shows the All set essentials inline when `from=welcome` is present: one line of next steps, the waitlist link (new tab) and "Finish setting up".
+- The waitlist is reachable on every path: All set (skip), the Connect step's body data tile (S3), and this banner (send).
+- `SayHello` also fills the empty chat ("Not sure where to start?"), its second consumer.
 
-**Pending messages live in a small outbox store.** `chat-model.ts` keeps them in a module-level store (`useSyncExternalStore`). A message sent in `#/welcome` therefore keeps its pending state across the hash change into `#/chat`; hash routing does not reload the page. On a reload the store is empty and history shows the row once the turn writes it.
+**Pending messages** live in a module-level outbox store in `chat-model.ts` (`useSyncExternalStore`). A message sent from `#/welcome` keeps its pending state across the hash change to `#/chat`; hash routing does not reload the page. After a reload, history shows the row once the turn writes it.
 
-**Waldo's reply is model-led.** [verified on `origin/mac/first-conversation` `092a60ba`, draft, still conflicting with `04bb8c89` in `owner-do.ts`, `owner-turn.ts`, the prompt snapshot and `context-composer.test.ts`]
-- #1227 adds `firstConversationLine` (`messaging-behavior.ts`). It renders only while the owner has zero owner-grounded profile claims and `remember` is offered that turn. It tells the model to answer first, then decide whether and what to ask, and to save with `remember` in the owner's own words.
-- Its `newOwnerFacts` supplier is wired for the app, iMessage and Telegram contexts. A console message rides the app context, so it is covered.
-- Its `surfaces` fact labels an app-bound owner "the app". For a console-first owner that reads slightly wrong. This is a coordination note for the Mac lane; S4 does not touch that file.
-- **Without #1227,** Waldo still answers through the normal prompt, and `MEMORY_MANNERS` already lets him `remember` facts the owner volunteers (`messaging-behavior.ts`, "Remembering and reaching out").
-- **Acceptance never depends on scripted questions,** and the composed message must stay plain owner text: no quotes or `>` prefixes, so `remember` grounding (`tools/live/memory.ts:52-55`) treats it as owner-authored.
+**Waldo's reply is model-led.** [verified on `origin/mac/first-conversation` `092a60ba`, draft, still conflicting with `04bb8c89`]
+- #1227's `firstConversationLine` appears only while the owner has zero owner-grounded profile claims and `remember` is offered. It tells the model to answer first, then decide whether and what to ask, and to save with `remember` in the owner's words.
+- Its `newOwnerFacts` supplier is wired for the app, iMessage and Telegram contexts. A console message rides the app context, so it is covered. Its `surfaces` fact labels a console-first owner "the app" (a note for the Mac lane).
+- Without #1227, Waldo still answers, and `MEMORY_MANNERS` already lets him `remember` facts the owner volunteers.
+- Acceptance never depends on scripted questions. The composed message stays plain owner text (no quotes, no `>`), so `remember` grounding treats it as owner-authored (`tools/live/memory.ts:50-55`).
 
 ### Changes, file by file
 
-**1. `packages/runtime/src/channels/dashboard-overview.ts`.** Add next to `DASHBOARD_OVERVIEW_PATH` (`:5`). It lives here, not in `console-chat.ts`, because `console-signin.ts` already imports this module, and importing `console-chat.ts` would close the cycle `console-signin → console-chat → app-api → console-signin`.
+#### S4a: console chat
+
+**1. `packages/runtime/src/channels/dashboard-overview.ts`.** Add next to `DASHBOARD_OVERVIEW_PATH` (`:5`):
 ```ts
 export const CONSOLE_CHAT_PATH = '/console/dashboard/api/v1/chat';
 ```
+It lives here, not in `console-chat.ts`, because `console-signin.ts` already imports this module. Importing `console-chat.ts` would close `console-signin → console-chat → app-api → console-signin`.
 
 **2. `packages/runtime/src/channels/console-chat.ts` (new).**
 ```ts
@@ -2828,6 +3097,7 @@ export const consoleChatRequest = async (request: Request, host: ConsoleChatHost
   try { if (!(await host.limiter.limit({ key: `${route === 'send' ? 'app-chat-send' : 'app-read'}:${host.doName}` })).success) return fail(429); } catch { return fail(503); }
   let ownerId: string;
   try { ({ ownerId } = await host.authority(session.sessionHash)); }
+  // A directory outage is not a sign-out: only a session the directory no longer admits answers 401.
   catch (error) { return fail(error instanceof AppSessionAuthorityError && error.kind !== 'revoked' ? 503 : 401); }
   const chat = host.mainChat(ownerId);
   if (!chat) return fail(403);
@@ -2842,7 +3112,7 @@ export const consoleChatRequest = async (request: Request, host: ConsoleChatHost
   if (length && (!/^\d+$/.test(length) || Number(length) > APP_SEND_MAX_WIRE_BYTES)) return fail(413);
   const body = await readBoundedBody(request, APP_SEND_MAX_WIRE_BYTES);
   if (!body) return fail(413);
-  let raw: string; try { raw = new TextDecoder('utf-8', { fatal: true }).decode(body); } catch { return fail(403); }
+  let raw: string; try { raw = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(body); } catch { return fail(403); }
   const send = parseAppSend(raw);
   if (!send) return fail(403);
   const result = await host.admit(session.sessionHash, chat, send.clientMessageId, send.text);
@@ -2851,25 +3121,41 @@ export const consoleChatRequest = async (request: Request, host: ConsoleChatHost
   return reply({ accepted: true, message_id: result.record.id, state: result.record.state }, 202);
 };
 ```
-Rules for this module:
-- It writes no logs. Failures in the history read are logged by the host with existing hop codes only.
-- It never logs or echoes message text, cookies or hashes.
+The module writes no logs and never echoes message text, cookies or hashes.
 
-**3. `packages/runtime/src/identity/console-auth.ts`.**
-- Lift the signature check out of `readSigned` (`:93-109`) into a module-level `verifySigned(raw, sign)` that returns `{doName, sessionId} | null` with no network call. `readSigned` keeps calling it, then does its `console_session_touch`.
-- Lift the cookie parse at `:181-184` into `ownerCookieValue(request)`.
-- Add:
+**3. `packages/runtime/src/identity/console-auth.ts`.** Keep one definition of the cookie signature, and lift the network-free checks out of `consoleAuth`:
 ```ts
+// The one cookie signature: minting (ownerCookie) and both readers use it, so they can never drift apart.
+const cookieSignature = (secret: string) => (doName: string, sessionId: string) => routerSignature(secret, 0, `cookie.${doName}.${sessionId}`);
+const ownerCookieValue = (request: Request): string | undefined =>
+  (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${OWNER_COOKIE}=`))?.slice(OWNER_COOKIE.length + 1);
+// A malformed artifact is simply not valid: it never throws, so a bad value cannot read as an outage.
+const verifySigned = async (raw: string | null | undefined, sign: (doName: string, sessionId: string) => Promise<string>): Promise<Readonly<{ doName: string; sessionId: string }> | null> => {
+  const sigDot = raw?.lastIndexOf('.') ?? -1;
+  if (!raw || sigDot < 1) return null;
+  const sessionDot = raw.lastIndexOf('.', sigDot - 1);
+  if (sessionDot < 1) return null;
+  let doName: string;
+  try { doName = decodeURIComponent(raw.slice(0, sessionDot)); } catch { return null; }
+  const sessionId = raw.slice(sessionDot + 1, sigDot);
+  const expected = new TextEncoder().encode(await sign(doName, sessionId));
+  const given = new TextEncoder().encode(raw.slice(sigDot + 1));
+  let diff = expected.length ^ given.length;
+  for (let i = 0; i < expected.length; i += 1) diff |= expected[i]! ^ (given[i] ?? 0);
+  return diff === 0 ? { doName, sessionId } : null;
+};
 // The directory session a signed console owner cookie names, from its signature alone. Whether that session is still
 // live is the directory's answer (app_session_authority), which a caller acting on it must ask.
 export const ownerCookieSession = async (request: Request, secret: string): Promise<Readonly<{ doName: string; sessionHash: string }> | null> => {
-  const signed = await verifySigned(ownerCookieValue(request), (doName, sessionId) => routerSignature(secret, 0, `cookie.${doName}.${sessionId}`));
+  const signed = await verifySigned(ownerCookieValue(request), cookieSignature(secret));
   return signed ? { doName: signed.doName, sessionHash: await linkCodeHash(signed.sessionId) } : null;
 };
 ```
-`cookieSig` (`:83`) must produce exactly the same signature, so keep one definition for both.
-
-Replace the comment at `:46-47` with:
+- Inside `consoleAuth`:
+  - `:83` becomes `const cookieSig = cookieSignature(secret);`
+  - `readSigned` (`:93-109`) becomes `verifySigned`, followed by its existing `console_session_touch`.
+  - `readOwnerCookie` (`:181-184`) reads `ownerCookieValue(request)`.
+- Replace the comment at `:46-47` with:
 ```ts
   // The mobile app's bearer: the same kind of server-side session, signed under its own context, so it is never accepted
   // as a console cookie and /app/v1 never accepts a console cookie. The console reaches the same main chat through its own
@@ -2878,57 +3164,98 @@ Replace the comment at `:46-47` with:
 
 **4. `packages/runtime/src/channels/app-api.ts`.**
 - `:36`: `const readBoundedBody` becomes `export const readBoundedBody`.
-- `:50`: the comment becomes "The app credential is its own signed artifact backed by a server-side session row. /app/v1 never accepts a console cookie; the console uses its own csrf-checked route to the same main chat."
+- `:50` comment becomes: "The app credential is its own signed artifact backed by a server-side session row. /app/v1 never accepts a console cookie; the console uses its own csrf-checked route to the same main chat."
 
 **5. `packages/runtime/src/channels/app-inbox.ts`.**
 - `AppInboxRecord` (`:19-32`) gains:
 ```ts
   // The first-party session that admitted the message, when it was not the iPhone app. Read per turn for what the
-  // model is told about where the owner is reading; absent on app rows and rows from older builds.
+  // model is told about where the owner is reading; absent on app rows and on rows from older builds.
   via?: 'console';
 ```
-- `admit` (`:45`) gains a trailing `via?: 'console'` parameter. The record literal at `:62` adds `...(via === undefined ? {} : { via })`.
-- `scope()` does not compare `via`, so the turn identity is unchanged.
+- `admit` (`:45`) gains a trailing `via?: 'console'`. The record literal (`:62`) adds `...(via === undefined ? {} : { via })`.
+- `scope()` does not compare `via`.
 
-**6. `packages/runtime/src/channels/surfaces/app.ts`.** Add after `:12`. No imports: the file must stay a leaf, because `approvals.ts` imports it.
+**6. `packages/runtime/src/prompt/messaging-behavior.ts`.**
+- `SurfacePresentation` (`:76-80`) gains:
+```ts
+  // One host fact about how this surface shows approvals, said after the delivery line; absent for most surfaces.
+  approvalNote?: string;
+```
+- In `surfacePresentationPrompt`, after `:101`, insert `...(presentation.approvalNote ? [presentation.approvalNote] : []),`.
+- Unset for every existing surface, so the `prompt-builder.test.ts` snapshot does not change.
+
+**7. `packages/runtime/src/channels/surfaces/app.ts`.**
+- Add `import type { SurfacePresentation } from '../../prompt/messaging-behavior';`.
+- No runtime import may reach `approvals.ts` or the console modules (#1260 `e4a476ca` found that cycle). The file already imports `@waldo/contracts` and a `zod` type.
+- Add after `:12`:
 ```ts
 export const CONSOLE_CONNECT_GUIDANCE = 'No connect button was sent: the web console chat has none. Tell the owner to open Settings with the gear at the top right of the console, choose Connections and connect Google there - never quote or retype any link yourself.';
+export const CONSOLE_APPROVAL_NOTE = 'Console chat: the owner is reading this in the web console, where approval cards have no buttons. Raise proposals as usual; each one also waits on the console\'s Waiting page. There the owner can approve a calendar change whose full details are shown, and can dismiss a send, but cannot approve a send from the web yet. Say where to decide in plain words and never ask them to tap a button.';
 // What a turn on the app chain tells the model about where the owner is reading: the inbox row says when the console
-// admitted it. Scheduled work and the iPhone app read the app's own guidance.
-const READING = {
+// admitted it. Scheduled work and the iPhone app keep the app's own facts.
+const READING: Readonly<Record<'app' | 'console', Readonly<{ connectGuidance: string; consoleLink: 'app_unsupported' | 'in_console'; approval?: 'none'; approvalNote?: string }>>> = {
   app: { connectGuidance: APP_CONNECT_GUIDANCE, consoleLink: 'app_unsupported' },
-  console: { connectGuidance: CONSOLE_CONNECT_GUIDANCE, consoleLink: 'in_console' },
-} as const;
+  console: { connectGuidance: CONSOLE_CONNECT_GUIDANCE, consoleLink: 'in_console', approval: 'none', approvalNote: CONSOLE_APPROVAL_NOTE },
+};
 export const appChatPresence = (record: Readonly<{ via?: 'console' }> | null | undefined) => READING[record?.via ?? 'app'];
+// A runtime builds its presentation once; these getters read the message in hand when the prompt is built.
+export const liveReading = (base: SurfacePresentation, active: () => Readonly<{ via?: 'console' }> | null): SurfacePresentation => ({
+  ...base,
+  delivery: { ...base.delivery, get approval() { return appChatPresence(active()).approval ?? base.delivery.approval; } },
+  get approvalNote() { return appChatPresence(active()).approvalNote; },
+});
 ```
 
-**7. `packages/contracts/src/tools/schemas/console-link.ts`.**
-- Add `'in_console'` to `CONSOLE_LINK_UNSENT_REASONS` (`:10-25`), with the comment `// The owner is writing from their console in the browser right now; there is nothing to send.` This is an additive enum value: nothing in the runtime parses it strictly before this PR.
-- `console-link.test.ts:22`: add `'in_console'` to the accepted reasons.
+**8. Contracts and the console-link tool.**
+- `packages/contracts/src/tools/schemas/console-link.ts`: add `'in_console'` to `CONSOLE_LINK_UNSENT_REASONS` (`:10-25`) with the comment `// The owner is writing from their console in the browser right now; there is nothing to send.` This is additive.
+- Its test `console-link.test.ts:22`: accept it.
+- `packages/runtime/src/channels/console-link.ts:22`: the union becomes `'app_unsupported' | 'surface_unsupported' | 'in_console'`.
+- `packages/runtime/src/tools/live/console-link.ts:23`: insert after the `app_unsupported` clause: `in_console, they are writing from their console in the browser right now, so tell them the page they have open is it;`.
 
-**8. `packages/runtime/src/channels/console-link.ts:22`.** The union becomes `'app_unsupported' | 'surface_unsupported' | 'in_console'`.
+**9. `packages/runtime/src/channels/telegram-turn.ts`** (today's tree only; drop this hunk on #1260, which deletes the file).
+- `telegramTurnEnvelope` (`:12-21`) gains a third parameter, `present: (presentation: SurfacePresentation) => SurfacePresentation = presentation => presentation`.
+- `:16` becomes `presentation: present({ …unchanged literal… }),`. The compare count stays at 5.
+- `createTelegramResponder` (`:24`) accepts a trailing `present?: (presentation: SurfacePresentation) => SurfacePresentation` as `args[23]`. Its `envelope` passes it: `telegramTurnEnvelope(turn, surface, args[23])`.
 
-**`packages/runtime/src/tools/live/console-link.ts:23`.** Insert after the `app_unsupported` clause: `in_console, they are writing from their console in the browser right now, so tell them the page they have open is it;`.
-
-**9. `packages/runtime/src/channels/console-signin.ts`.**
-- Import `CONSOLE_CHAT_PATH` from `./dashboard-overview` (already imported at `:12`).
-- Replace the four duplicated path lists (`:342,347,355,360`) with one helper. This fixes the whole class: chat, and any later JSON route, gets 401 JSON instead of a 303.
+**10. `packages/runtime/src/channels/dashboard-control-actions.ts`.** Add:
 ```ts
-// The dashboard's JSON reads and writes: without a valid session they answer 401 JSON, never the sign-in redirect a page gets.
+// Whether this request is the browser's own sign-out, read from a copy so the queued action still reads the body.
+export const isBrowserSignOut = async (request: Request, csrf: string): Promise<boolean> => {
+  const form = await request.clone().formData().catch(() => null);
+  return form?.get('action') === 'session.signout' && form.get('csrf') === csrf;
+};
+```
+
+**11. `packages/runtime/src/channels/console-signin.ts`.**
+- Import `CONSOLE_CHAT_PATH` from `./dashboard-overview` (already imported at `:12`).
+- Replace the four duplicated path lists (`:342,347,355,360`) with one helper.
+- In the `catch` at `:340-343`, answer **503** for these paths: a directory outage is not a sign-out.
+```ts
+// The dashboard's JSON reads and writes: without a valid session they answer JSON, never the sign-in redirect a page gets.
 const dashboardJson = (url: URL, request: Request): boolean =>
   [DASHBOARD_OVERVIEW_PATH, MEMORY_GRAPH_PATH, CONTROLS_PATH, CONTROL_ACTION_PATH, MEMORY_CONTROL_PATH, OWNER_CONTROLS_PATH, OWNER_CONTROLS_ACTION_PATH].includes(url.pathname)
   || url.pathname === CONSOLE_CHAT_PATH || url.pathname.startsWith(`${CONSOLE_CHAT_PATH}/`)
   || (url.pathname.startsWith('/console/workspace') && request.headers.get('accept') === 'application/json');
 ```
-S2 edits sign-in and verify in this file (`:196-304`). This edit sits in `:340-363`, so rebase if S2 lands first.
+- Side effect: during a directory outage, the shell check in `dashboard-static.ts:38-42` now shows its 503 "dashboard unavailable" instead of redirecting to sign-in.
+- S2 edits sign-in and verify in this file (`:196-304`). Rebase if S2 lands first.
 
-**10. `packages/runtime/src/channels/owner-do.ts`** (Mac lane slot; about 35 lines; **no new surface compare**).
-
-- **Dispatch.** In `console()`, after the session check at `:1379` and after S1's origin write if it has landed:
+**12. `packages/runtime/src/channels/owner-do.ts`** (Mac-lane slot, about 45 lines; **no new surface compare**).
+- **Imports:**
+  - `consoleChatRequest` from `./console-chat`;
+  - `CONSOLE_CHAT_PATH` from `./dashboard-overview` (already imported);
+  - `ownerCookieSession` added to the `console-auth` import at `:71`;
+  - `isBrowserSignOut` added to the `dashboard-control-actions` import;
+  - at `:146`, replace `APP_CONNECT_GUIDANCE` with `appChatPresence, liveReading`. `APP_CONNECT_GUIDANCE` has no other use there.
+- **Dispatch and pre-queue sign-out.** In `console()`, directly after the session check at `:1379` (and after S1's origin write if it has landed):
 ```ts
     if (url.pathname === CONSOLE_CHAT_PATH || url.pathname.startsWith(`${CONSOLE_CHAT_PATH}/`)) return this.consoleChat(request, session.csrf);
+    // This browser's sign-out ends its chat work and directory session before the serial queue, where its own running
+    // reply would hold it. Null when the request is anything else.
+    const browserEnded = url.pathname === CONTROL_ACTION_PATH && request.method === 'POST' && await isBrowserSignOut(request, session.csrf) ? await this.endBrowserSession(request) : null;
 ```
-- **Host method.** Next to `threadsHost` (`:974`):
+- **Host and helpers**, next to `threadsHost` (`:974`):
 ```ts
   // The console's main chat: the browser's signed owner session on the app's one inbox, drain and transcript.
   private consoleChat(request: Request, csrf: string): Promise<Response> {
@@ -2939,48 +3266,49 @@ S2 edits sign-in and verify in this file (`:196-304`). This edit sits in `:340-3
       admit: async (hash, chat, clientId, text) => { this.bindAppSubject(name); const result = await this.appInbox.admit(name, hash, clientId, text, chat, undefined, undefined, 'console'); if (result.kind === 'admitted') this.ctx.waitUntil(this.serial(() => this.drainApp()).catch(() => { console.error('app inbox drain deferred'); })); return result; },
       receipt: (chat, clientId) => { this.recoverApp(); return this.appInbox.receipt(name, clientId, chat); },
       cancel: (chat, clientId) => { this.recoverApp(); const row = this.appInbox.cancel(name, clientId, chat); if (!row) return null; if (this.activeApp?.id === row.id) this.activeAbort?.abort(); return this.appInbox.receipt(name, clientId, chat); },
-      history: (hash, cursor, limit) => { const at = { step: 'context' }; return this.appChatPage(name, hash, undefined, cursor, limit, at).catch(error => { logAppReadFailure('app_history_read', at.step, error); throw error; }); },
+      history: (hash, cursor, limit) => { this.recoverApp(); const at = { step: 'context' }; return this.appChatPage(name, hash, undefined, cursor, limit, at).catch(error => { logAppReadFailure('app_history_read', at.step, error); throw error; }); },
     });
   }
-```
-- **Fence helper and browser sign-out.** Add a shared fence. `appSessionFence` (`:864-865`) then calls `this.fenceAppSession(hash)` and returns `{fenced}`.
-```ts
   private fenceAppSession(hash: string): number { const fenced = this.appInbox.revokeSession(hash); if (this.activeApp?.sessionHash === hash) this.activeAbort?.abort(); return fenced; }
-  // One browser's sign-out ends its directory session too: its queued and running chat work stops first, then the row goes,
-  // then work admitted in between stops. A ticket-only browser has no directory session. False keeps this browser signed in.
+  // One browser's sign-out ends its directory session too: its queued and running chat work stops, the row goes and is
+  // read back as gone, then work admitted in between stops. A browser without a directory session has nothing to end.
+  // False keeps the browser signed in to retry.
   private async endBrowserSession(request: Request): Promise<boolean> {
     const auth = consoleAuth(this.env), secret = this.env.WALDO_ROUTER_HMAC_SECRET, name = this.ctx.storage.kv.get<string>('do_name');
     const owner = auth && secret ? await ownerCookieSession(request, secret) : null;
     if (!auth || !name || !owner || owner.doName !== name) return true;
     this.fenceAppSession(owner.sessionHash);
-    try { await auth.revokeSession(name, owner.sessionHash); } catch { consoleLog(consoleTrace(), 'console_signout', false, 'directory_unconfirmed'); return false; }
+    try {
+      await auth.revokeSession(name, owner.sessionHash);
+      if ((await auth.listSessions(name)).some(row => row.session === owner.sessionHash)) throw new Error('session still listed');
+    } catch { consoleLog(consoleTrace(), 'console_signout', false, 'directory_unconfirmed'); return false; }
     this.fenceAppSession(owner.sessionHash);
     return true;
   }
 ```
-- **The two sign-out sites.**
-  - `:1514`: `else await access.signOut(session.token);` becomes
-    `else { if (!await this.endBrowserSession(request)) return {state:'unconfirmed' as const,message:'Signing out did not finish. This browser is still signed in; try again.'}; await access.signOut(session.token); }`
-  - `:1608`: the same, returning `new Response('Signing out did not finish. This browser is still signed in; go back and try again.', { status: 503, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } })`.
-- **Surface capability (today's tree).**
+- **`appSessionFence`** (`:864-865`): becomes `const fenced = this.fenceAppSession(hash);`.
+- **Sign-out sites:**
+  - `:1514`: `else await access.signOut(session.token);` becomes `else { if (browserEnded === false) return {state:'unconfirmed' as const,message:'Signing out did not finish. This browser is still signed in; try again.'}; await access.signOut(session.token); }`.
+  - `:1608` (legacy, not queued): `} else { if (!await this.endBrowserSession(request)) return new Response('Signing out did not finish. This browser is still signed in; go back and try again.', { status: 503, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } }); await access.signOut(session.token); }`.
+- **Per-turn facts** in `setup()`:
   - Add `const reading = () => appChatPresence(this.activeApp);` next to `const storage` (`:2222`).
-  - `:2227`: `app: { unsupported: 'app_unsupported' },` becomes `app: { get unsupported() { return reading().consoleLink; } },` with the comment "// Read per turn: the console admits messages onto this same app runtime."
-  - `:2237`: `if (channel === 'app') return APP_CONNECT_GUIDANCE;` becomes `if (channel === 'app') return reading().connectGuidance;`.
-  - The compare count stays at 58. Run the guard to prove it.
-- **Imports.**
-  - `consoleChatRequest` from `./console-chat`.
-  - `CONSOLE_CHAT_PATH` from `./dashboard-overview` (already imported for other names).
-  - `ownerCookieSession` added to the existing `console-auth` import at `:70`.
-  - `appChatPresence` added next to `APP_CONNECT_GUIDANCE`. `APP_CONNECT_GUIDANCE` stays imported if no other use remains; delete it otherwise.
+  - `:2227`: `app: { get unsupported() { return reading().consoleLink; } },` with the comment `// Read per turn: the console admits messages onto this same app runtime.`
+  - `:2237`: `if (channel === 'app') return reading().connectGuidance;`.
+  - In the `createTelegramResponder(` call (`:2755`), add the trailing argument `, presentation => liveReading(presentation, () => this.activeApp)` before its `);` at `:2827`.
+  - During any non-app turn, `this.activeApp` is null, so the presentation is unchanged. Turns are serial, so no app turn overlaps another surface's.
+- Prove the guard still prints 101 in 13 files.
 
-**On #1260's tree** (rebase plan): the two `setup()` hunks move into `surfaces/app-runtime.ts` `surfaceAdapter`:
+**On #1260's tree** (rebase plan): drop item 9 and the three `setup()` hunks. In `surfaces/app-runtime.ts` `surfaceAdapter`'s returned object, add:
 ```ts
+    presentation: liveReading(appSurface.presentation, () => host.activeApp()),
     consoleLink: () => ({ get unsupported() { return appChatPresence(host.activeApp()).consoleLink; } }),
     get connectGuidance() { return appChatPresence(host.activeApp()).connectGuidance; },
 ```
-The `console()`, sign-out, fence and host hunks are untouched by #1260 [verified: its `owner-do.ts` keeps `console()` at `:1361` and the sign-out lines at `:1514` and `:1608`].
+- `surfaceResponder(core, adapter.presentation, media)` captures that object and reads the getters while each prompt is built (#1260 `owner-runtime.ts:265-280`).
+- `connectGuidance` stays truthy for both readings, so #1260's "no connect button" reauth skip is unchanged.
+- The `console()`, sign-out, fence and host hunks are untouched by #1260 [verified: its `owner-do.ts` keeps `console()` at `:1361` and the sign-out lines at `:1514` and `:1608`].
 
-**11. `packages/dashboard-app/src/chat-model.ts` (new).** Wire types and readers, written by hand like `controls-model.ts`; the SPA does not import contracts.
+**13. `packages/dashboard-app/src/chat-model.ts` (new).** Hand-written readers, like `controls-model.ts`; the SPA does not import contracts.
 ```ts
 import { SignInRequired } from './model';
 export const CHAT_URL = '/console/dashboard/api/v1/chat';
@@ -2993,73 +3321,47 @@ export type ReceiptState = 'admitted' | 'running' | 'completed' | 'interrupted' 
 export type Receipt = { messageId: string; state: ReceiptState; closedReason: 'interrupted' | 'session_revoked' | 'cancelled' | null; unconfirmed: boolean };
 export type ChatProblem = 'lost' | 'limited' | 'full' | 'reused' | 'rejected';
 export class ChatError extends Error { constructor(readonly problem: ChatProblem) { super(problem); } }
-export const newClientId = () => `web-${crypto.randomUUID()}`;           // 40 chars, matches ^[A-Za-z0-9_-]{8,64}$
-export function readChatPage(value: unknown): ChatPage { /* version 1; csrf string; messages[] each id/role/text/parent_id/created_at?;
-  approvals = parts of type 'approval' with string approval_id/kind/review (question optional); every other part ignored; next_cursor string|null */ }
+export const newClientId = () => `web-${crypto.randomUUID()}`;           // 40 characters, matches ^[A-Za-z0-9_-]{8,64}$
+export function readChatPage(value: unknown): ChatPage { /* version 1; csrf string; each message id/role/text/parent_id/created_at?;
+  approvals = parts of type 'approval' with string approval_id, kind and review (question optional); every other part ignored */ }
 export async function fetchChat(q: { cursor?: string | null; limit?: number } = {}, signal?: AbortSignal): Promise<ChatPage>
 export async function sendChat(csrf: string, clientId: string, text: string): Promise<{ messageId: string; state: ReceiptState }>
-  // fetch(`${CHAT_URL}/messages`, { method:'POST', credentials:'same-origin', cache:'no-store', redirect:'error',
-  //   headers:{ accept:'application/json', 'content-type':'application/json', 'x-waldo-csrf': csrf }, body: JSON.stringify({ client_message_id: clientId, text }) })
-  // 401 → SignInRequired; 409 → ChatError('reused'); 429 → 'limited'; 503 with {error:'inbox_full'} → 'full'; 403 → 'rejected'; throw/other → 'lost'
+  // POST `${CHAT_URL}/messages`, credentials 'same-origin', cache 'no-store', redirect 'error',
+  // headers { accept, 'content-type': 'application/json', 'x-waldo-csrf': csrf }, body { client_message_id, text }.
+  // 401 → SignInRequired; 409 → 'reused'; 429 → 'limited'; 503 {error:'inbox_full'} → 'full'; 403 → 'rejected'; throw/other → 'lost'
 export async function fetchReceipt(clientId: string, signal?: AbortSignal): Promise<Receipt | null>     // 404 → null
 export async function stopChat(csrf: string, clientId: string): Promise<Receipt>
 export type Pending = { clientId: string; text: string; messageId: string | null; status: 'sending' | 'failed' | ReceiptState; closedReason: Receipt['closedReason']; unconfirmed: boolean; problem: ChatProblem | null };
 export function createOutbox(io = { sendChat, fetchReceipt, stopChat }) { /* subscribe/snapshot for useSyncExternalStore;
-  send(csrf, text) → appends {status:'sending'} then admits; retry(csrf, clientId) re-POSTs the SAME id and text;
-  resend(csrf, clientId) → new id (after 'reused'); poll() reads receipts of admitted/running; stop(csrf, clientId);
-  settle(shownIds) drops 'completed' entries whose messageId history now shows; active() */ }
+  send(csrf, text); retry(csrf, clientId) re-POSTs the SAME id and text; resend(csrf, clientId) mints a new id (after 'reused');
+  poll() reads receipts of admitted/running entries; stop(csrf, clientId); settle(shownIds) drops completed entries history shows; active() */ }
 export const outbox = createOutbox();
 ```
 
-**12. `packages/dashboard-app/src/Chat.tsx` (new).**
-- `export function ChatPanel({ timezone }: { timezone: string })` and `export function Composer(props)`.
-- **ChatPanel state:**
-  - the newest page plus the older pages loaded through `nextCursor`, deduplicated by `id` and shown oldest first;
-  - the `csrf` from the latest read;
-  - `signedOut`, `paused` and `error` flags.
-- **Polling** (visibility-aware, like `App.tsx:165-190`):
+**14. `packages/dashboard-app/src/Chat.tsx` (new).** Exports `ChatPanel({ timezone })` and `Composer(props)`.
+- **ChatPanel state:** the newest page plus older pages (through `nextCursor`), deduplicated by `id` and shown oldest first; `csrf`; and `signedOut`, `paused` and `error`.
+- **Polling** (visibility-aware, as at `App.tsx:165-190`):
   - while `outbox.active()`, `outbox.poll()` runs every `RECEIPT_POLL_MS`;
-  - when an entry turns terminal, read the newest page and call `outbox.settle`;
-  - otherwise re-read the newest page on `nextLiveDelay(failures)` from `live.ts`;
+  - when an entry turns terminal, read the newest page and `outbox.settle`;
+  - otherwise re-read the newest page on `nextLiveDelay(failures)` (`live.ts`);
   - a 401 stops polling.
-- **Scrolling:** scroll to the end on new rows only if the reader is within 120 px of the bottom.
-- **Composer** (used by ChatPanel and SayHello):
-  - a `textarea` with `maxLength={MESSAGE_MAX}` and `field-sizing: content`;
+- **Scrolling:** follow new rows only if the reader is within 120 px of the bottom.
+- **Message markup.** Each row is `<article className="bubble waldo|you">`. It holds a visually hidden "Waldo said " or "You said ", then the text, then, as its last child, `<time dateTime={iso}>{clockLabel(new Date(created_at), timezone)}</time>`. The time sits on its own line at the bubble's bottom right, in the bubble's own colour. Approval cards and pending lines follow the bubble they belong to, as siblings in `.chat-log`.
+- **`Composer`:**
+  - a `<form className="chat-composer">` holding the hidden label, a `textarea` (`rows={1}`, `maxLength={MESSAGE_MAX}`, `field-sizing: content` as progressive enhancement) and the Send button;
   - Enter sends (no Shift, not `nativeEvent.isComposing`, not `matchMedia('(pointer: coarse)')`); Shift+Enter adds a newline;
-  - the send button is disabled while the text is empty after trimming, or while sending.
+  - send is disabled while the trimmed text is empty or a send is in flight.
+- **Hint placement.** The key hint is a sibling **after** the form, outside the sticky composer, so the composer never covers it: `<p className="chat-hint" id="chat-hint">`. It renders, and the textarea's `aria-describedby="chat-hint"` is set, only when `matchMedia('(pointer: coarse)')` is false: on touch, Enter adds a newline. The "{n} characters left" line sits inside the form, under the textarea, in `.chat-state` style.
 
-**13. `packages/dashboard-app/src/SayHello.tsx` (new).**
-- `export function SayHello({ variant, onSent, onSkip, onCompose })`. `variant: 'welcome' | 'chat'`.
-- `'welcome'` sends through `outbox.send` after reading `csrf` with `fetchChat({ limit: 1 })` on mount. `'chat'` hands the text to the chat composer with `onCompose(text)`.
-- The four fieldsets use a local `ChoiceRow` (native radio or checkbox inside a `<label>`). Each fieldset has an "Or say it your way" input, `maxLength` 500.
-- Then a multiline "Anything else I should know?" field, `maxLength` 500, and the editable composed message.
-- Exported pure helper:
-```ts
-export type HelloAnswers = { week: string[]; weekOwn: string; slips: string[]; slipsOwn: string; people: string[]; peopleOwn: string; autonomy: string[]; autonomyOwn: string; more: string };
-const lower = (label: string) => label.charAt(0).toLowerCase() + label.slice(1);
-const joined = (picked: string[], own: string) => [picked.map(lower).join(', '), own.trim()].filter(Boolean).join('; ');
-const stop = (text: string) => /[.?!]$/.test(text) ? text : `${text}.`;
-export function composeHello(a: HelloAnswers): string {
-  const lines = [['A usual week', joined(a.week, a.weekOwn)], ['What tends to slip', joined(a.slips, a.slipsOwn)],
-    ['Who matters most day to day', joined(a.people, a.peopleOwn)], ["How much I'd like you to do on your own", joined(a.autonomy, a.autonomyOwn)]]
-    .filter(([, value]) => value).map(([prefix, value]) => stop(`${prefix}: ${value}`));
-  const more = a.more.trim();
-  return lines.length || more ? ['Hello Waldo. Here is a bit about me.', ...lines, ...(more ? [stop(`Also: ${more}`)] : [])].join('\n') : 'Hello Waldo.';
-}
-```
-The text tracks the answers until the person edits it. After an edit, answers no longer overwrite it, and "Rebuild from my answers" appears. Sending posts exactly the textarea value.
-
-**14. `packages/dashboard-app/src/App.tsx`.**
+**15. `packages/dashboard-app/src/App.tsx`.**
 - `Route` (`:21`) gains `'chat'`.
-- `resolveRoute` (`:26-37`): add `if (value === 'chat') return 'chat';` before the final line. Because it splits on `?` (`:31`), `#/chat?from=welcome` also resolves.
+- `resolveRoute` (`:26-37`): add `if (value === 'chat') return 'chat';`. Since it splits on `?` (`:31`), `#/chat?from=welcome` resolves too.
 - `Dashboard` (`:75`): before `:85`, add `if (route === 'chat') return <ChatPanel timezone={data.timezone}/>;`.
-- Top bar (`:212`): wrap the settings link in `<div className="topbar-actions">`, preceded by `<a className="settings-link" href="#/chat" aria-label="Chat with Waldo" title="Chat with Waldo" aria-current={route === 'chat' ? 'page' : undefined}><Icon name="chat"/></a>`. The `chat` glyph already exists (`icons.tsx`).
+- Top bar (`:212`): wrap the settings link in `<div className="topbar-actions">`, preceded by `<a className="settings-link" href="#/chat" aria-label="Chat with Waldo" title="Chat with Waldo" aria-current={route === 'chat' ? 'page' : undefined}><Icon name="chat"/></a>`. The `chat` glyph exists in `icons.tsx`.
 - The primary nav stays at four, so the `App.test.tsx:7` pin is untouched.
 - Keyboard (`:191-204`): add `c: 'chat'` to the G-then map.
 
-**15. S3's welcome step list** (whichever lands second): step 4 renders `<SayHello variant="welcome" onSkip={next} onSent={() => { /* S3's step store */ save('done'); location.hash = '#/chat?from=welcome'; }}/>`.
-
-**16. `packages/dashboard-app/src/style.css`.** These rules use existing tokens only. They add no shadows or gradients, and state lines use `--t2` because `--t3` fails contrast until S5.
+**16. `packages/dashboard-app/src/style.css`.** Existing tokens only. No shadows or gradients. State lines use `--t2`, because `--t3` fails contrast until S5.
 ```css
 textarea { font:inherit; font-size:14.5px; color:var(--ink); padding:10px 14px; border:0; border-radius:18px; background:var(--fill); box-shadow:inset 0 0 0 .5px var(--hair-strong); resize:none; max-width:100%; min-width:0; }
 textarea:focus { box-shadow:inset 0 0 0 1px var(--ink); }
@@ -3072,51 +3374,137 @@ textarea:focus { box-shadow:inset 0 0 0 1px var(--ink); }
 .chat-approval { align-self:flex-start; max-width:min(36rem,85%); background:var(--tile); border-radius:var(--r-inner); box-shadow:0 0 0 .5px var(--hair-strong); padding:12px 14px; }
 .chat-composer { position:sticky; bottom:0; display:flex; gap:8px; align-items:flex-end; padding:12px 0 16px; background:var(--canvas); }
 .chat-composer textarea { flex:1; field-sizing:content; min-height:44px; max-height:9.5em; }
-.choice-row { display:grid; grid-template-columns:auto 1fr; gap:4px 10px; padding:12px 14px; border-radius:var(--r-inner); background:var(--tile); box-shadow:0 0 0 .5px var(--hair); cursor:pointer; }
-.choice-row:has(input:checked) { box-shadow:0 0 0 1px var(--ink); }
-.choice-row input { accent-color:var(--accent); }
+.bubble time { display:block; margin-top:4px; font-size:11.5px; opacity:.7; text-align:right; }
+.chat-hint { margin:0 0 8px; font-size:12.5px; color:var(--t2); }
+@media(pointer:coarse) { .chat-hint { display:none; } }
 @media(max-width:640px) { .chat-composer { bottom:calc(64px + env(safe-area-inset-bottom)); } .bubble,.chat-approval { max-width:92%; } }
 ```
-Also delete `justify-self:end` from `.settings-link` (`:98`); the wrapper now places it. Assets stay at one JS and one CSS file, with no new import and no `import()` (`verify-assets.mjs`).
+- Remove `justify-self:end` from `.settings-link` (`:98`).
+- `opacity:.7` keeps the time readable on both bubbles: ink on white, white on ink.
+- Assets stay at one JS and one CSS file: no new asset import and no `import()` (`verify-assets.mjs`).
 
 **17. `packages/dashboard-app/scripts/preview.mjs`.**
 - Add `'chat'` to `cases`.
-- Add synthetic `/console/dashboard/api/v1/chat` routes: GET returns four messages, one of them with an approval part. POST returns 202. The receipt returns `running` twice, then `completed`.
-- Mark the file "synthetic preview only", as it already is.
+- Synthetic `/console/dashboard/api/v1/chat` routes:
+  - GET returns `messages: []` for every case except `chat`, which returns four rows (one assistant row carries an approval part);
+  - POST returns 202;
+  - the receipt returns `running` twice, then `completed`.
+- Keep "synthetic preview only".
 
-**18. `packages/dashboard-app/README.md:27`.** Drop "web chat" from the "need explicit contracts" list. Add one line: "`#/chat` is the owner's main chat over `/console/dashboard/api/v1/chat` (cookie + csrf), the same transcript as the iPhone app."
+**18. `packages/dashboard-app/README.md:27`.** Drop "web chat" from the "need explicit contracts" list. Add: "`#/chat` is the owner’s main chat over `/console/dashboard/api/v1/chat` (cookie plus csrf), the same transcript as the iPhone app."
+
+**19. S3's `DoneStep` `p.welcome-note`** (in `Welcome.tsx`). Replace the two sentences with the S4a copy under UI. Done in S4a if S3 has merged; otherwise S3 ships that copy.
+
+#### S4b: Say hello
+
+**1. `packages/dashboard-app/src/SayHello.tsx` (new).** `export function SayHello({ variant, onSent, onSkip, onCompose })`, with `variant: 'welcome' | 'chat'`.
+- **`'welcome'`:**
+  - reads `csrf` with `fetchChat({ limit: 1 })` on mount;
+  - sends through `outbox.send(csrf, text)`, then calls `onSent()` on a 202;
+  - `onSkip` renders "Skip for now".
+- **`'chat'`:** hands the text to the chat composer with `onCompose(text)` and does not send.
+- **Markup.** The root is `<div className="say-hello">`. Each question is:
+```tsx
+<fieldset aria-describedby={`${id}-hint`}>
+  <legend>{question}</legend>
+  <p className="say-hint" id={`${id}-hint`}>{hint}</p>
+  <div className="say-options">{options.map(option =>
+    <label className="choice-row" key={option}><input type={multi ? 'checkbox' : 'radio'} name={id} value={option} checked={…} onChange={…}/><span>{option}</span></label>)}</div>
+  <label className="say-own">Or say it your way<input value={own} maxLength={500} placeholder={placeholder} onChange={…}/></label>
+</fieldset>
+```
+- **After the four questions:**
+  - `<label className="say-own">Anything else I should know?<textarea rows={3} maxLength={500} …/></label>`;
+  - the message box `<label className="say-own say-message-label">Your first message<textarea className="say-message" rows={8} aria-describedby="say-message-help" …/></label>`, followed by `<p className="say-hint" id="say-message-help">`;
+  - then `.control-actions` with the buttons.
+- **Exported pure helper:**
+```ts
+export type HelloAnswers = { week: string[]; weekOwn: string; slips: string[]; slipsOwn: string; people: string[]; peopleOwn: string; autonomy: string[]; autonomyOwn: string; more: string };
+const lower = (label: string) => label.charAt(0).toLowerCase() + label.slice(1);
+const joined = (picked: string[], own: string) => [picked.map(lower).join(', '), own.trim()].filter(Boolean).join('; ');
+const stop = (text: string) => /[.?!]$/.test(text) ? text : `${text}.`;
+export function composeHello(a: HelloAnswers): string {
+  const lines = [['A usual week', joined(a.week, a.weekOwn)], ['What tends to slip', joined(a.slips, a.slipsOwn)],
+    ['Who matters most day to day', joined(a.people, a.peopleOwn)], ['How much I’d like you to do on your own', joined(a.autonomy, a.autonomyOwn)]]
+    .filter(([, value]) => value).map(([prefix, value]) => stop(`${prefix}: ${value}`));
+  const more = a.more.trim();
+  return lines.length || more ? ['Hello Waldo. Here is a bit about me.', ...lines, ...(more ? [stop(`Also: ${more}`)] : [])].join('\n') : 'Hello Waldo.';
+}
+```
+The message tracks the answers until the person edits it. After that, answers never overwrite it, and "Rebuild from my answers" appears. The send posts exactly the textarea value.
+
+**2. S3's seam, verbatim from `sections/S3.md` "S4 seam"** (in S3's files):
+- **`welcome-model.ts`:**
+  - add `'hello'` to `StepId`;
+  - insert `{ id: 'hello', label: 'Say hello', title: 'Tell me a little about you.' }` before `done`;
+  - add `chat: ChatPage | null` to `WelcomeReads`;
+  - add `hello: reads => (reads.chat?.messages.length ?? 0) > 0` to `finished`.
+- **`Welcome.tsx` `readAll`:** add `fetchChat({ limit: 1 }, signal).catch((error: unknown) => { if (error instanceof SignInRequired) throw error; return null; })`.
+- **`Welcome.tsx` step switch:** `current.id === 'hello' ? <SayHello variant="welcome" onSkip={props.advance} onSent={() => { window.location.hash = '#/chat?from=welcome'; }}/>`. Nothing is written locally. The footer's "Skip for now" stays limited to `meet` and `day`.
+- S3's `ProgressSteps` list then shows Meet · Your day · Connect · Say hello · All set.
+
+**3. `Chat.tsx`:**
+- **Welcome banner:** when the hash query has `from=welcome`, render the All set essentials above the log, with the waitlist link from `IPHONE_WAITLIST_URL` (S3's `src/links.ts`).
+- **Empty chat:** add `<SayHello variant="chat" onCompose={setDraft}/>` under "Not sure where to start?".
+
+**4. `style.css`.** Two rules in the existing CSS fight this markup:
+- the global `input,select` rule (`style.css:251`: 38px `min-height`, padding, `--fill` background and an inset hairline) draws a tall box around every radio and checkbox;
+- `.tile label` (`:249`: grid, 12.5px, `--t3`) restyles any label inside a tile.
+
+The selectors below are therefore scoped under `.say-hello`, which outranks `.tile label`. Radios and checkboxes inside `.choice-row` are reset explicitly.
+```css
+.say-hello fieldset { min-width:0; margin:0 0 26px; padding:0; border:0; }
+.say-hello legend { padding:0; font-size:15px; font-weight:600; letter-spacing:-.01em; color:var(--ink); }
+.say-hello .say-hint { margin:2px 0 10px; font-size:13px; color:var(--t2); }
+.say-options { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:8px; }
+.say-hello label.choice-row { display:grid; grid-template-columns:auto 1fr; align-items:start; gap:10px; padding:12px 14px; border-radius:var(--r-inner); background:var(--tile); box-shadow:0 0 0 .5px var(--hair); font-size:14.5px; color:var(--ink); cursor:pointer; }
+.say-hello label.choice-row:has(input:checked) { box-shadow:0 0 0 1px var(--ink); }
+.say-hello label.choice-row:has(input:focus-visible) { outline:2px solid var(--action); outline-offset:2px; }
+.say-hello .choice-row input[type=radio],.say-hello .choice-row input[type=checkbox] { width:16px; height:16px; min-height:auto; margin:3px 0 0; padding:0; border:0; background:none; box-shadow:none; outline:none; accent-color:var(--accent); }
+.say-hello label.say-own { display:grid; gap:6px; margin-top:10px; font-size:13px; color:var(--t2); }
+.say-hello label.say-own input,.say-hello label.say-own textarea { width:100%; }
+.say-hello label.say-message-label { margin-top:26px; font-size:15px; font-weight:600; color:var(--ink); }
+.say-hello .say-message { min-height:calc(8lh + 20px); line-height:1.45; field-sizing:content; font-weight:400; }
+.chat-start { margin-top:28px; }
+.chat-start>p { margin:6px 0 18px; }
+@media(max-width:640px) { .say-options { grid-template-columns:1fr; } .say-hello .control-actions>* { width:100%; } }
+```
+- The "Or say it your way" fields and the message box use the global `input` and `textarea` rules (S4a) for their fill, hairline and focus.
+- The row shows focus; the native mark's own outline is suppressed.
+- `.chat-start` wraps the empty chat's "Not sure where to start?" block.
 
 ### UI and copy
 
-All copy below is verbatim. It is in sentence case, uses British spelling, has no exclamation marks, and calls Waldo "he".
+All copy is verbatim: sentence case, British spelling, curly apostrophes (’) in every UI string and in `composeHello`’s output, no exclamation marks, Waldo is "he".
 
-**Top bar (all routes).**
-- A chat icon sits left of the settings gear. Its accessible name and tooltip are "Chat with Waldo".
+Voice depends on where the words appear:
+- **Chat chrome stays third person.** The page heading and body, pending lines, approval card, banner, empty state and the "Not sure where to start?" lead name Waldo as "Waldo" or "he" (B13: interface chrome refers to "Waldo").
+- **Say hello is Waldo speaking, first person.** That covers the questions, hints, lead, "Or say it your way" fields, message helper and errors (B15 "Hello. I’m Waldo."), in **both** placements: the welcome step, and the copy inside the empty chat's `SayHello`. A question there still reads "How much should I do on my own?" under a third-person lead: the questions are Waldo asking.
+- **The composed message is the person's own words to Waldo,** so it says "you".
+- **The buttons "Send to Waldo" and "Use as my message"** name the effect, so they read the same in both placements.
+
+**S4a: top bar (all routes).**
+- A chat icon sits left of the gear. Accessible name and tooltip: "Chat with Waldo".
 - It carries `aria-current="page"` on `#/chat`.
-- On phones it sits in the top bar; the four-item tab bar is unchanged.
+- Same placement on phones; the four-item tab bar is unchanged.
 
-**`#/chat`, conversation.**
-- **Layout:**
-  - `.page-heading` with h1 "Chat." and the body "The same conversation as the Waldo iPhone app. Anything that counts still waits for your approval.";
-  - then `.chat-log` (`role="log"`, `aria-live="polite"`, `aria-label="Conversation with Waldo"`);
-  - then the sticky composer.
-- When the hash carries `from=welcome`, a `.quiet-link` "Finish setting up →" (to `#/welcome`) sits under the heading.
-- **Each message** is an `<article>` with a visually hidden "Waldo said" or "You said" and a `<time>` from `clockLabel(new Date(created_at), timezone)`. It is omitted when there is no `created_at`; no time is invented.
-- **Older messages:** a quiet button "Show earlier messages". While it works, the text reads "Opening earlier messages…".
-
-**Approval card** (after the reply that carries it):
-- label "Needs your decision" (`.access-label.needs`);
-- the part's `question`, or the first 280 characters of `review` plus "…";
-- the line "Read it in full in Waiting. Calendar changes can be approved there. Sends can't be approved from the web yet.";
-- a link "Open Waiting →" to `#/waiting`.
-
-**Composer.**
-- Visually hidden label: "Message to Waldo".
-- Placeholder: "Tell Waldo, ask, or correct…".
-- Button: "Send".
-- Desktop hint (`.meta`, `aria-describedby`): "Enter sends. Shift and Enter starts a new line."
-- Over 3,600 characters: "{n} characters left".
-- At 4,000: "That's the most one message can hold."
+**S4a: `#/chat`.**
+- **Heading:** `.page-heading` h1 "Chat."
+- **Body:** "The same conversation as the Waldo iPhone app. Anything he asks you to decide also shows in Waiting."
+- **Log:** `.chat-log` with `role="log"`, `aria-live="polite"` and `aria-label="Conversation with Waldo"`.
+- **Each message:** an `<article className="bubble …">` that starts with a visually hidden "Waldo said" or "You said". It ends with `<time>` from `clockLabel(new Date(created_at), timezone)`, on its own line at the bottom right **inside** the bubble. The time is omitted without `created_at`; it is never invented.
+- **Older messages:** quiet "Show earlier messages"; while it reads, "Opening earlier messages…".
+- **Approval card:**
+  - label "Needs your decision" (`.access-label.needs`);
+  - the part's `question`, or the first 280 characters of `review` plus "…";
+  - the line "Read it in full in Waiting. Some calendar changes can be approved there; sends can’t be approved from the web yet.";
+  - the link "Open Waiting →" to `#/waiting`.
+- **Composer:**
+  - hidden label "Message to Waldo";
+  - placeholder "Tell Waldo, ask, or correct…";
+  - button "Send";
+  - key hint "Enter sends. Shift and Enter starts a new line." It is a `p.chat-hint` directly **after** the composer form, outside the sticky bar, so the composer cannot cover it. It is linked by `aria-describedby` and shown only for fine pointers (hidden on touch, where Enter adds a newline);
+  - over 3,600 characters: "{n} characters left"; at 4,000: "That’s the most one message can hold."
 
 **Pending lines** (`.chat-state` under the person's bubble, `role="status"`):
 
@@ -3125,284 +3513,349 @@ All copy below is verbatim. It is in sentence case, uses British spelling, has n
 | sending | "Sending…" | none |
 | admitted | "Waldo has your message." | quiet "Stop" |
 | running | "Waldo is working on it." | quiet "Stop" |
-| failed, lost | "This didn't reach Waldo." | "Try again" (same id) |
-| failed, limited | "That's a lot at once. Try again in a minute." | "Try again" |
+| failed, lost | "This didn’t reach Waldo." | "Try again" (same id) |
+| failed, limited | "That’s a lot at once. Try again in a minute." | "Try again" |
 | failed, full | "Waldo has a lot queued. Try again in a minute." | "Try again" |
 | failed, reused | "This clashed with an earlier message." | "Send as new" |
-| cancelled | "Stopped. Waldo didn't finish this one." | none |
+| cancelled | "Stopped. Waldo didn’t finish this one." | none |
 | cancelled, effects unconfirmed | "Stopped. Something may already have happened; check before asking again." | none |
-| interrupted | "This didn't finish. Waldo's note is below." | none |
+| interrupted | "This didn’t finish. Waldo’s note is below." | none |
 | session_revoked / revoked | "This browser was signed out before Waldo answered." | none |
-| receipt read failed | "Couldn't check just now. Trying again." | none |
+| receipt read failed | "Couldn’t check just now. Trying again." | none |
 
-**Other chat states.**
-- **Empty:** a `.tile` with h2 "Nothing said yet." and "Tell Waldo what you're carrying this week, or ask him anything." Below it sits `SayHello variant="chat"`, introduced by h2 "Not sure where to start?" and "Answer a few questions and they become your first message. Edit it before you send.", with the button "Use as my message".
-- **Loading:** a skeleton with a visually hidden "Opening your conversation…". Never "Loading…".
-- **Read failed:** h2 "The conversation didn't open.", body "Nothing you sent is lost by this; the read didn't come back.", button "Try again".
-- **Signed out:** h2 "Sign in to keep talking to Waldo.", `.button-link` "Sign in" to `/console/signin`.
+**Other states:**
+- **Empty:** `.tile` with h2 "Nothing said yet." and "Tell Waldo what you’re carrying this week, or ask him anything."
+- **Loading:** skeleton, with visually hidden "Opening your conversation…".
+- **Read failed:** h2 "The conversation didn’t open.", "This read didn’t come back. Try again.", button "Try again".
+- **Service down (503):** the same as read failed.
+- **Signed out (401):** h2 "Sign in to keep talking to Waldo." and `.button-link` "Sign in" to `/console/signin`.
 - **Live paused:** meta "Live updates paused, retrying".
 
-**Say hello (welcome step 4 of 5, inside S3's frame and ProgressSteps).**
-- **Heading** (S3's headline style): "Tell me a little about you."
-- **Body:** "Pick what fits, or say it your way. Skip anything. It all goes into your first message to me, and you can change every word before it goes."
-- **Fieldset 1** (single). Legend: "What does a usual week look like?". Hint: "Pick one, or say it your way.". Options:
-  - "Mostly meetings and people"
-  - "Mostly focused work on my own"
-  - "A mix that changes week to week"
-  - "Studying"
-  - "Looking after home and family"
+**S4a: S3's All set `p.welcome-note` replacement** (first person, chosen by `reads.day.data.timezone_confirmed`):
+- **Zone confirmed:** "Here on the web you can see what’s waiting for you, what I’ve saved and what I’ve done. Chat with me any time from the chat button at the top of the console. My Brief, Check-in and Close arrive in that chat after your first message to me."
+- **Zone not confirmed:** "Here on the web you can see what’s waiting for you, what I’ve saved and what I’ve done. Chat with me any time from the chat button at the top of the console. My Brief, Check-in and Close arrive in that chat once your time zone is confirmed and you’ve sent me your first message."
+
+**S4b: welcome banner in `#/chat?from=welcome`** (`.tile` above the log):
+- h2 "Your first message is with Waldo."
+- "Waldo’s Brief, Check-in and Close arrive in this chat once your time zone is confirmed. The iPhone app isn’t open to everyone yet."
+- secondary `.button-link.secondary` "Join the iPhone app waitlist", with hidden "(opens in a new tab)", `target="_blank" rel="noopener noreferrer"`, `href={IPHONE_WAITLIST_URL}`
+- quiet link "Finish setting up" → `#/welcome`, which resumes at the first unfinished step
+
+**S4b: empty chat addition.** h2 "Not sure where to start?", "Answer a few questions and they become your message. Edit it before you send.", button "Use as my message".
+
+**S4b: Say hello** (welcome step 4 of 5, inside S3's frame; S3 renders the title "Tell me a little about you." as the heading):
+- **Lead:** "Pick what fits, or say it your way. Skip anything. It all goes into your first message to me, and you can change every word before it goes."
+- **Fieldset 1, single:** legend "What does a usual week look like?", hint "Pick one, or say it your way.".
+  - Options: "Mostly meetings and people" · "Mostly focused work on my own" · "A mix that changes week to week" · "Studying" · "Looking after home and family".
   - "Or say it your way", placeholder "For example: I run a small design studio".
-- **Fieldset 2** (multi). Legend: "What tends to slip?". Hint: "Pick any that apply.". Options:
-  - "Replies I owe people"
-  - "Follow-ups after meetings"
-  - "Deadlines"
-  - "Bills, forms and admin"
-  - "Time for exercise and rest"
+- **Fieldset 2, multi:** legend "What tends to slip?", hint "Pick any that apply.".
+  - Options: "Replies I owe people" · "Follow-ups after meetings" · "Deadlines" · "Bills, forms and admin" · "Time for exercise and rest".
   - "Or say it your way", placeholder "Anything else that slips".
-- **Fieldset 3** (multi). Legend: "Who matters most day to day?". Hint: "Names help. Share only what you're happy for me to remember.". Options:
-  - "My team"
-  - "A cofounder or manager"
-  - "Clients"
-  - "Family"
-  - "Friends"
+- **Fieldset 3, multi:** legend "Who matters most day to day?", hint "Names help. Share only what you’re happy for me to know.".
+  - Options: "My team" · "A cofounder or manager" · "Clients" · "Family" · "Friends".
   - "Or say it your way", placeholder "Names, and who they are to you".
-- **Fieldset 4** (single, nothing preselected). Legend: "How much should I do on my own?". Hint: "I'll remember this as your preference. It never lets me do more than you approve.". Options:
-  - "Just tell me things": "I explain; you decide and act."
-  - "Suggest, and let me approve": "I prepare the change and wait for you."
-  - "Handle the routine things": "I take small things off your plate and ask before anything that counts."
+- **Fieldset 4, single, nothing preselected:** legend "How much should I do on my own?", hint "Your answer goes into your message as you chose it. It doesn’t change what I’m allowed to do.".
+  - Options, with no descriptions; they are the person's words: "Just tell me things" · "Suggest, and let me approve" · "Take routine things off my plate".
   - "Or say it your way", placeholder "In your own words".
-- **Free text.** Label: "Anything else I should know?". Placeholder: "As much or as little as you like".
-- **Message.** Label: "Your first message". Helper: "This is what Waldo will read. Edit anything." After a manual edit, the quiet button "Rebuild from my answers" appears.
-- **Buttons:** primary "Send to Waldo" (disabled until the message is non-empty; the reason reads "Write something to send."), secondary "Skip for now".
+- **Free text:** label "Anything else I should know?", placeholder "As much or as little as you like".
+- **Message:** label "Your first message", helper "This is what I’ll read. Change anything." After an edit, quiet "Rebuild from my answers" appears.
+- **Buttons:** primary "Send to Waldo". It is disabled until the message is non-empty, with the reason "Write something to send." Secondary "Skip for now".
 - **Errors** (`role="alert"`):
-  - "That didn't reach Waldo. Try again." The text is kept, and the retry reuses the client id while the text is unchanged.
-  - Signed out: "You're signed out. Sign in, then come back to send this." with a "Sign in" link.
-  - CSRF read failed: "Waldo's chat didn't open. Try again in a moment." with "Try again".
-- **Already chatted** (the history read returned messages): "You've already said hello. Anything you send here joins the same conversation."
-- **Phone:** the rows stack full width, buttons are at least 44 px and full-width blocks, and the composed message grows to 9.5 lines, then scrolls.
+  - "That didn’t reach Waldo. Try again." The text is kept, and the same id is used while the text is unchanged.
+  - Signed out: "You’re signed out. Sign in, then come back to send this." plus "Sign in".
+  - Chat read failed: "My chat didn’t open. Try again in a moment." plus "Try again".
+- **Already chatted** (reached with Back): "You’ve already said hello. Anything you send here joins the same conversation."
+- **Phone:**
+  - rows stack full width;
+  - buttons are full-width blocks, at least 44 px;
+  - the message shows eight rows. It grows further only where `field-sizing` is supported, otherwise it scrolls.
 
 **Accessibility.**
-- Real `fieldset` and `legend`, native inputs, and focus visible on the row.
-- `aria-describedby` for hints.
-- The composed message does not live-announce on each change.
-- Reduced motion: the existing global rule (`style.css:433`) applies.
+- Real `fieldset` and `legend`, native inputs, focus visible on the row.
+- Hints linked with `aria-describedby`.
+- The composed message does not live-announce on every change.
+- Reduced motion follows the global rule (`style.css:433`).
 
 ### Security, privacy and authority
 
+S4a carries all of this; S4b adds no endpoint and no storage.
+
 - **Authentication.** Two credentials are both required:
-  - the Worker-verified owner cookie, which `handleConsole` resolves with a directory touch;
+  - the owner cookie, which the Worker resolves with a directory touch;
   - the DO-local browser session.
 
-  In the DO, the session hash comes from the signed cookie, re-verified there. The directory decides liveness on every request (`app_session_authority`: active owner, row under 12 hours) and again at claim, turn and every effect, through existing `drainApp`/`turn` re-reads. Headers never name the session.
-- **Isolation.** The cookie's `doName` must equal the DO's `do_name`. The principal must match `owner_principal_ref`. Receipts and cancels are keyed by owner and main chain. No cross-owner read exists.
+  In the DO, the session hash comes from the signed cookie, re-verified there. The directory decides liveness on every request, and again at claim, at the turn and before every effect (existing re-reads). Headers never name the session.
+- **Isolation.**
+  - The cookie's `doName` must equal the DO's `do_name`.
+  - The principal must match `owner_principal_ref`, which the first request pins.
+  - Receipts and cancels are keyed by owner and main chain.
 - **CSRF.**
-  - `x-waldo-csrf` must equal the DO session csrf on POST, and a send needs a JSON content type.
+  - `x-waldo-csrf` must equal the DO session csrf on both POSTs, and send needs JSON.
   - Cookies are `SameSite=Strict`, and no CORS is answered.
-  - The csrf compare uses `!==`, matching `parseConsoleAction`.
-- **Rate limits.** `app-chat-send:<doName>` and `app-read:<doName>`, shared with the app. The route fails closed without the binding. 429 carries `retry-after: 60`.
+  - The sign-out peek checks the same csrf before touching anything.
+- **Rate limits.** `app-chat-send:<doName>` and `app-read:<doName>`, shared with the app. Fails closed without the binding. A 429 carries `retry-after: 60`.
 - **Input bounds.**
-  - 32,768 wire bytes (`readBoundedBody`, which times out after 5 s).
-  - Strict UTF-8.
-  - `appSendRequestV1Schema`: text trimmed, 1 to 4,000 characters.
-  - Client id `^[A-Za-z0-9_-]{8,64}$`; cursor at most 300 characters; limit clamped to 1-50 by `appTranscriptPage`.
-- **Errors.** Generic `{error:'unavailable'}` everywhere except two actionable codes: `client_message_id_reused` and `inbox_full`. Nothing echoes text, hashes or internals.
-- **Logging.** No new log line carries text, cookies, hashes, ids or emails. History failures use the existing `app_history_read` step codes. Sign-out failure logs `console_signout`/`directory_unconfirmed` via `consoleLog`.
+  - 32,768 wire bytes (`readBoundedBody`, 5 s);
+  - strict UTF-8 with `ignoreBOM`;
+  - `appSendRequestV1Schema`: trimmed text, 1 to 4,000 characters;
+  - client id `^[A-Za-z0-9_-]{8,64}$`;
+  - cursor at most 300 characters; limit clamped to 1-50.
+- **Errors.**
+  - Generic `{error:'unavailable'}`, except `client_message_id_reused` and `inbox_full`.
+  - A directory outage answers 503, both in the DO and now in the Worker's touch path. It never reads as signed out.
+- **Sign-out.**
+  - Fence, revoke and re-list happen before the serial queue, then a second fence.
+  - The running turn's model request is aborted.
+  - A failed revoke keeps the browser signed in and answers `unconfirmed`.
+- **Logging.** New lines carry no text, cookies, hashes, ids or emails: the existing `app_history_read` codes, and `console_signout`/`directory_unconfirmed` through `consoleLog`.
 - **Storage.**
-  - Nothing new. The inbox row (text cleared at settle) and transcript rows are existing aggregates, written by their existing single writers.
+  - Nothing new: the existing inbox (text cleared at settle) and transcript, written by their existing single writers.
   - `via` is an enum.
-  - The Say hello answers exist only in the browser until the person sends them, as their own message.
+  - The Say hello answers stay in the browser until the person sends them as their own message.
   - Nothing is written to `goals`, `memory_blocks`, `core_file_revisions` or `owner_settings`.
-- **Memory.** Answers reach memory only if the model calls `remember`, which is grounded in the owner's sent text. The autonomy answer is a stated preference, never a grant. No control, grant or budget changes.
-- **Health.** Onboarding copy carries no health number and no `weight`/HR token near a numeric literal in source (`guard-health-leak`). Free text is the owner's own chat. `remember` has no numeric-health floor today [verified in research, `tools/live/memory.ts`]; that is pre-existing and flagged under Risks.
-- **Egress.** Visitor text reaches the model provider and, on staging, Langfuse with text capture on. That is an owner decision (S0).
-- **Credentials.** None in prompts or fixtures. Tests use synthetic secrets.
-- **Security review: YES (mandatory).** The reviewer must check:
+- **Memory and authority.**
+  - Memory is written only if the model calls `remember`, grounded in the owner's sent text.
+  - The autonomy answer is words in a message: no control, grant or budget changes.
+  - The approval note changes how Waldo describes where to decide. It does not change any approval rule.
+- **Health.** No health number in copy, and no health token next to a numeric literal in source (`guard-health-leak`). `remember` has no numeric-health floor today; this is pre-existing (Risks).
+- **Egress.** Visitors' text reaches the model provider and, on staging, Langfuse with text capture on (S0 decision).
+- **Security review for S4a: YES.** Checklist:
   1. no path reads a session from a header;
-  2. cookie signature verification is constant-time and rejects the app bearer artifact;
-  3. CSRF and content type on both POSTs;
-  4. sign-out revokes the directory row and fences before and after;
-  5. 401 versus 503 mapping (a directory outage never reads as signed out, and the reverse);
+  2. cookie verification is constant-time, rejects the app bearer artifact, and uses the one `cookieSignature`;
+  3. csrf and content type on both POSTs, plus the sign-out peek;
+  4. sign-out fences before the queue, then revokes, re-lists and fences again, and the running turn's model request aborts;
+  5. 401 versus 503 (outage is never "signed out");
   6. rate-limit keys equal the app's;
-  7. no `dangerouslySetInnerHTML` and no auto-linking in the SPA;
-  8. the `/app/v1` cookie rejection is unchanged;
-  9. the guard count is unchanged;
+  7. no `dangerouslySetInnerHTML` and no auto-linking;
+  8. `/app/v1` still rejects cookies;
+  9. guard counts unchanged (`owner-do.ts` 58, `telegram-turn.ts` 5);
   10. no new env var, dependency or migration.
 
 ### Tests
 
-Runtime tests run in the workers pool, `packages/runtime/vitest.config.ts`, included by `test/**/*.test.ts`.
+Runtime tests run in the workers pool (`packages/runtime/vitest.config.ts`, `test/**/*.test.ts`). Dashboard tests run in happy-dom (like `App.live.test.tsx`). Dashboard tests are **not in CI**: run them and paste the result.
 
-**`packages/runtime/test/console-chat.test.ts`** (new).
-- **Fixture:** clone `console-signout-everywhere.test.ts`. It has the directory RPC mock with `console_session_open/touch/list/revoke`, `app_session_authority` and `owner_runtime_authority`, plus `vi.mock('openai')` returning "Hello from your console." as in `app-basic-serving.test.ts`.
+#### S4a
+
+**`packages/runtime/test/console-chat.test.ts` (new).**
+- **Fixture:** clone the shape of `app-basic-serving.test.ts:19-56`, but track sessions in a set so an app bearer and an owner cookie can be live at once:
+  - `const live = new Set<string>()`;
+  - `console_session_open` adds the hash;
+  - `console_session_touch`, `console_session_list` and `app_session_authority` check membership;
+  - `console_session_revoke` deletes the hash and returns whether it was present;
+  - `app_push_revoke_session` returns `0`;
+  - `owner_runtime_authority` as there.
+- **Model mock:** `vi.mock('openai')`. `responses.create(input, options)` returns "Hello from your console.". While `proof.hold` is set, it awaits `Promise.race([hold, aborted(options.signal)])`, where `aborted` rejects on the signal's `abort` event.
 - **Requests** go through `handleConsole(request, routed)` with `cookie: waldo_console=<grant>; waldo_owner=<auth.ownerCookie(name)>`. `csrf` comes from `consoleAccess(state.storage).session(grant)`.
-- **Cases:**
-  1. **Golden.**
-     - GET `/chat` → 200 `{version:1, csrf, messages:[], next_cursor:null}`.
-     - POST a send → 202 `admitted`. Poll the receipt until `completed`.
-     - GET `/chat` → the user row has `id === message_id` and the text; the assistant reply has `parent_id === message_id`.
-     - The KV row `app:inbox-record:<id>` has `via:'console'` and a `sessionHash` equal to the hash `console_session_open` received.
-     - `app_subject` is bound.
-     - The same message appears through `handleApp` `/app/v1/chat/main` with a bearer minted by `/auth/verify` (same main chat).
-  2. **CSRF.** Missing header → 403. Wrong value → 403. `content-type: text/plain` → 403. No inbox row in any case.
-  3. **Signed out.** No cookies → 401 JSON from the Worker, not a 303. A bad owner-cookie signature → 401. A directory row gone (`app_session_authority` → null) → 401 and no row. Directory 503 → 503, not 401.
-  4. **Sign-out fence.**
-     - Hold the model call (the `proof.hold` pattern), then POST `session.signout`. Do it once through `/console/dashboard/api/v1/actions` (view `connections`, revision from the controls read) and once through legacy `/console/action`.
-     - Assert:
-       - `console_session_revoke` was called with the cookie hash;
-       - the row is `revoked` with `closed_reason:'session_revoked'`, or `interrupted` if it was already running;
-       - the next chat GET → 401;
-       - an app bearer for a different session still reads 200.
-     - Then make `console_session_revoke` throw: the receipt is `unconfirmed` with 503, and the DO session is still valid.
-  5. **Hostile header.** A valid send also carrying `x-waldo-app-session-hash: <the app bearer's live hash>` and `x-waldo-do-name: other` → the row's `sessionHash` equals the cookie's hash.
-  6. **Cross-owner.** An owner cookie signed for `other-owner` sent straight to this DO → 401 and no row. In a second DO, the receipt for owner A's client id → 404.
-  7. **Idempotent.** The same id and text twice → the same `message_id`, one model call. The same id with new text → 409 `client_message_id_reused`.
-  8. **Rate limit.**
-     - A limiter failing `app-chat-send:<name>` → 429 with `retry-after: 60`, and the keys seen are exactly `app-chat-send:<name>` and `app-read:<name>`.
-     - A missing binding → 503.
-  9. **Bounds and methods.**
-     - 4,001 characters → 403.
-     - A 40 KB body → 413.
-     - GET on `/chat/messages` → 405, DELETE → 405, `/chat/other` → 404, an invalid client id → 404.
-  10. **Stop.** Cancel while held → receipt `interrupted`/`cancelled`.
-  11. **/app/v1 still rejects cookies.** `/app/v1/chat/main` with only the console cookies → 401.
 
-**`packages/runtime/test/console-chat-surface.test.ts`** (new; clone `console-link-app.test.ts`).
-- Admit a row with `via:'console'` through the console route and run the turn with the scripted gateway calling `send_console_link`. The prompt contains `"sent":false,"reason":"in_console"`, and no `console:link` is minted.
-- Script `connect_service {service:'google',feature:'calendar'}` with the Google connections read answering `[]`. The next model request contains `CONSOLE_CONNECT_GUIDANCE` and not "menu at the top left".
-- `console-link-app.test.ts` stays unchanged and must still pass (`app_unsupported` for app rows).
+Cases:
+1. **Golden.**
+   - GET `/chat` returns 200 `{version:1, csrf, messages:[], next_cursor:null}`.
+   - POST a send returns 202 `admitted`. Poll the receipt until `completed`.
+   - GET `/chat` returns the user row with `id === message_id` and the text, and the reply with `parent_id === message_id`.
+   - The KV row has `via:'console'` and `sessionHash` equal to the cookie session's hash.
+   - `app_subject` and `owner_principal_ref` are set.
+   - With a bearer minted by `/app/v1/auth/verify` (a second live session), `handleApp` `/app/v1/chat/main` shows the same two rows.
+2. **CSRF, send.** Missing → 403. Wrong → 403. `text/plain` → 403. No inbox row in any case.
+3. **CSRF, cancel.** Hold a turn. Cancel without `x-waldo-csrf` → 403; with a wrong one → 403. The row stays `running`. With the right one → 200 `interrupted`/`cancelled`.
+4. **Sign-out stops a running reply and returns promptly.**
+   - Read `/controls?view=connections` for `csrf` and `revision` **before** holding the turn (the controls read is queued behind a running reply too). Then hold the console turn and wait for its row to be `running`. POST `session.signout` through `/console/dashboard/api/v1/actions` (view `connections`, that `revision`). **Do not release the hold.**
+   - The response arrives within 2 s: assert with `Promise.race` against a 2 s timer. It is 200 with receipt `recorded` and `signed_out:true`.
+   - The row is `revoked` with `closed_reason:'session_revoked'` and `effects_unconfirmed:true`.
+   - `console_session_revoke` was called with the cookie hash, and `console_session_list` was read after it.
+   - The next chat GET → 401.
+   - The app bearer's session still reads 200.
+   - Repeat through legacy `/console/action` (`action=session.signout`, `csrf`).
+   - Then make `console_session_revoke` throw: the receipt is `unconfirmed` with 503, and the DO session is still valid.
+   - Make `console_session_list` still contain the hash: also `unconfirmed`.
+5. **Signed out.**
+   - No cookies → 401 JSON from the Worker, not a 303.
+   - The directory row gone → 401, no row.
+   - `app_session_authority` 503 → 503, not 401.
+6. **The DO verifies the signature itself.** Straight to the DO stub, with a valid `waldo_console`:
+   - `waldo_owner=<encodeURIComponent(name)>.<the live app bearer's sessionId>.<64 zeros>` → 401;
+   - then the app bearer artifact itself as `waldo_owner` → 401;
+   - in both cases no inbox row and no `app_session_authority` call.
+7. **Hostile header.** A valid send also carrying `x-waldo-app-session-hash: <the app bearer's live hash>` and `x-waldo-do-name: other` → the row's `sessionHash` equals the cookie's hash.
+8. **Cross-owner.** An owner cookie validly signed for `other-owner`, sent to this DO → 401, no row. In a second DO, the receipt for this owner's client id → 404.
+9. **Idempotent.** The same id and text twice → the same `message_id` and one model call. The same id with new text → 409 `client_message_id_reused`.
+10. **Rate limit.**
+    - A limiter that fails `app-chat-send:<name>` → 429 with `retry-after: 60`. The keys seen are exactly `app-chat-send:<name>` and `app-read:<name>`.
+    - A missing binding → 503.
+11. **Bounds and methods.** 4,001 characters → 403. A 40 KB body → 413. GET on `/chat/messages` → 405, DELETE → 405, `/chat/other` → 404, an invalid id → 404.
+12. **Restart recovery.**
+    - Leave a row `running` with no live attempt, rebuild `OwnerDO`, then GET `/chat`.
+    - The row turns `interrupted` with `notice:'due'`, and a drain writes the "did not finish" reply (`recoverApp` on history).
+13. **Cookie-only `/app/v1`.** `/app/v1/chat/main` with only console cookies → 401.
 
-**`packages/runtime/test/app-inbox.test.ts`** (extend). `admit(…, 'console')` persists `via`. Calling without it leaves `via` absent. Claim, settle and `revokeSession` keep it.
+**`packages/runtime/test/console-chat-surface.test.ts` (new; clone `console-link-app.test.ts`).** For a console-admitted turn:
+- The scripted `send_console_link` call yields `"sent":false,"reason":"in_console"`, with no `console:link` minted.
+- `connect_service {service:'google',feature:'calendar'}`, with the Google read answering `[]`, puts `CONSOLE_CONNECT_GUIDANCE` in the next request and not "menu at the top left".
+- The instructions contain "Approval delivery: none." and `CONSOLE_APPROVAL_NOTE`.
 
-**`packages/runtime/test/console-auth.test.ts`** (extend, near `:93`).
+For an app-admitted turn in the same file, the instructions contain "Approval delivery: native_buttons." and not the note. `console-link-app.test.ts` and `prompt-builder.test.ts` must pass unchanged.
+
+**`packages/runtime/test/app-inbox.test.ts` (extend).** `admit(…, 'console')` persists `via`. Without it, `via` is absent. Claim, settle and `revokeSession` keep it.
+
+**`packages/runtime/test/console-auth.test.ts` (extend, near `:93`).**
 - `ownerCookieSession` returns `{doName, sessionHash: sha256(sessionId)}` with **zero** fetch calls.
-- It returns null for: a tampered `doName`, the app bearer presented as a cookie, another secret, an empty cookie and a malformed percent-encoding.
-- `readOwnerCookie` behaviour is unchanged.
+- It returns null for: a tampered `doName`, a tampered signature, the app bearer as a cookie, another secret, an empty cookie, and a malformed percent-encoding.
+- A cookie from `ownerCookie` verifies under `ownerCookieSession` (one signature).
+- `readOwnerCookie` behaves as before.
 
-**`packages/runtime/test/console-owner-routing.test.ts`** (extend). A signed-out GET to `/console/dashboard/api/v1/chat` and to `/chat/messages/abc12345` → 401 with `DASHBOARD_OVERVIEW_HEADERS`. The existing download-resume and artifact 303 tests still pass.
+**`packages/runtime/test/console-owner-routing.test.ts` (extend).**
+- Signed-out GET `/console/dashboard/api/v1/chat` and `/chat/messages/abc12345` → 401 with `DASHBOARD_OVERVIEW_HEADERS` and no `location`.
+- With `readOwnerCookie` throwing, `/console/dashboard/api/v1/overview` and `/chat` → 503, not 401.
+- The existing download-resume and artifact 303 tests still pass.
 
-**`packages/contracts/src/tools/schemas/console-link.test.ts`** (extend). `in_console` parses, and `in-console` and `'console'` do not.
+**`packages/contracts/src/tools/schemas/console-link.test.ts` (extend).** `in_console` parses; `in-console` and `console` do not.
 
-**Dashboard tests (happy-dom, like `App.live.test.tsx`).** These are **not in CI**: run them and paste the result.
-- **`src/chat-model.test.ts`**:
-  - `readChatPage` rejects version 2 and missing csrf; keeps approval parts and ignores the rest; maps `created_at` absent to null;
-  - `sendChat` sends the `x-waldo-csrf` and JSON headers with `redirect:'error'`;
-  - the error mapping covers 401, 403, 409, 429, 503 `inbox_full` and a thrown fetch;
-  - the outbox: `retry` reuses the client id, and `resend` mints a new one.
-- **`src/Chat.test.tsx`**:
+**Dashboard:**
+- **`src/chat-model.test.ts`:**
+  - `readChatPage` rejects version 2 and a missing csrf, keeps approval parts, ignores other parts, and maps a missing `created_at` to null;
+  - `sendChat` sends `x-waldo-csrf`, JSON, and `redirect:'error'`;
+  - the mapping of 401, 403, 409, 429, 503 `inbox_full` and a thrown fetch;
+  - outbox `retry` keeps the client id, and `resend` mints a new one.
+- **`src/Chat.test.tsx`:**
   - empty-state copy;
-  - Enter sends while Shift+Enter does not;
-  - pending lines progress through "Waldo has your message." and "Waldo is working on it.", then the reply appears;
-  - a lost send shows "This didn't reach Waldo." and two POST bodies share `client_message_id`;
-  - an interrupted state with `effects_unconfirmed` shows its line;
-  - an approval card links `#/waiting`;
+  - Enter sends, Shift+Enter does not;
+  - the pending lines progress, and the reply appears;
+  - a lost send shows "This didn’t reach Waldo.", and both POST bodies share `client_message_id`;
+  - interrupted with `effects_unconfirmed` shows its line;
+  - the approval card links `#/waiting` and carries the "sends can’t be approved" line;
   - `<img src=x onerror=alert(1)>` renders as text;
-  - with `visibilityState` `'hidden'` no receipt fetch fires;
-  - a 401 shows "Sign in to keep talking to Waldo.".
-- **`src/SayHello.test.tsx`**:
-  - `composeHello` exact strings for: all skipped (`'Hello Waldo.'`), one of each, multiple selections, own words with and without a full stop, and "Also:";
-  - after an edit, a choice no longer overwrites;
-  - "Send to Waldo" posts the edited text exactly once and calls `onSent`;
+  - a hidden tab triggers no receipt fetch;
+  - 401 shows "Sign in to keep talking to Waldo.";
+  - 503 shows "The conversation didn’t open.".
+- **`src/App.test.tsx` (extend):**
+  - `resolveRoute('chat')` and `resolveRoute('chat?from=welcome')` give `'chat'`;
+  - the `:7` nav pin passes unchanged;
+  - the top bar has `href="#/chat"` with `aria-label="Chat with Waldo"`.
+
+#### S4b
+
+- **`src/SayHello.test.tsx`:**
+  - `composeHello` gives exact strings for: all skipped (`'Hello Waldo.'`), one of each, multiple selections, own words with and without a full stop, and "Also:";
+  - after an edit, a choice no longer overwrites the message;
+  - "Send to Waldo" posts the edited text exactly once and then calls `onSent`;
   - a failure keeps the text and shows the alert;
-  - the source holds no banned word ("dashboard", "Get started", "Learn more", "Oops", "Loading…", "!").
-- **`src/App.test.tsx`** (extend): `resolveRoute('chat')` and `resolveRoute('chat?from=welcome')` give `'chat'`; the nav pin at `:7` passes unchanged; the top bar has `href="#/chat"` with `aria-label="Chat with Waldo"`.
+  - the `chat` variant calls `onCompose` and does not fetch;
+  - the **rendered text** of both variants (`renderToStaticMarkup`, then text content) contains no `!` and none of "dashboard", "Get started", "Learn more", "Oops" or "Loading".
+- **`src/Welcome.test.tsx` (extend S3's file):**
+  - `resumeStep` skips `hello` when the chat read has messages, and stops at it when `messages` is empty;
+  - a chat read failing with 503 does not block the flow (`reads.chat === null`);
+  - "Skip for now" in Say hello advances to All set;
+  - a successful send sets `location.hash` to `#/chat?from=welcome` and writes nothing to `localStorage`.
+- **`src/Chat.test.tsx` (extend):** with `#/chat?from=welcome`, the banner shows the waitlist link (`href === 'https://www.heywaldo.in/waitlist'`, `target="_blank"`, `rel="noopener noreferrer"`) and "Finish setting up" → `#/welcome`. Without the query there is no banner.
 
 ### Acceptance trace
 
-| # | Steps | Must observe | Label |
-|---|---|---|---|
-| 1 | Admin issues an invite (S0). The visitor opens it on a phone, signs up and lands on `/console#/welcome` (S2, S3). | Welcome flow, step 1. | STAGING |
-| 2 | Confirm the zone and quiet hours. Connect Google or skip (S3, S1). | Steps advance. | STAGING |
-| 3 | Say hello: pick "Mostly meetings and people", "Replies I owe people" and "Suggest, and let me approve", type one name, edit one word, then press "Send to Waldo". | The composed text updates live until the edit, and the sent text equals the edited text. | STAGING |
-| 4 | Watch `#/chat?from=welcome`. | Own bubble, then "Waldo has your message.", then "Waldo is working on it.", then Waldo's reply, usually within 60 s. The reply answers the message; with #1227 deployed it may ask about them. Questions are not asserted. "Finish setting up →" is visible. | STAGING |
-| 5 | Send "What did I tell you about my week?". | The reply uses the earlier message. | STAGING |
-| 6 | Open Memory › Profile. | Facts appear only if Waldo called `remember`. Report it; do not require it. | STAGING |
-| 7 | Ask "connect my calendar" before connecting. | Waldo points to Settings › Connections, never "menu at the top left" and never a link. | STAGING |
-| 8 | Ask "send me my console link". | Waldo says this page is the console. | STAGING |
-| 9 | Optional, if a TestFlight build exists: sign into the iPhone app with the same email. | Main shows the console conversation. | STAGING |
-| 10 | Settings › Sessions → Sign out. | Signed-out state. Reopening `#/chat` from history asks to sign in. | STAGING |
-| 11 | CSRF 403, forged header, cross-owner, rate limit, fence ordering. | `console-chat.test.ts` passes. | CI (runtime shard) |
-| 12 | Staging Langfuse shows the turn trace (owner's call). | Trace present. | STAGING (S0) |
+| # | PR | Steps | Must observe | Label |
+|---|---|---|---|---|
+| 1 | S4a | A signed-in email owner opens the console and taps the chat icon. | `#/chat`, empty state. | STAGING |
+| 2 | S4a | Type a message and press Enter. | Own bubble, then "Waldo has your message.", then "Waldo is working on it.", then Waldo's reply, usually within 60 s. | STAGING |
+| 3 | S4a | Ask "connect my calendar" before connecting. | Waldo points to Settings › Connections, never "menu at the top left" and never a link. | STAGING |
+| 4 | S4a | Ask "send me my console link". | Waldo says this page is the console. | STAGING |
+| 5 | S4a | With Google connected, ask Waldo to email a test address. | The reply and card say sends can’t be approved from the web, and nothing says "tap". | STAGING |
+| 6 | S4a | Optional, with TestFlight: the same email in the iPhone app. | Main shows the console conversation. | STAGING |
+| 7 | S4a | While a reply is in progress, open Settings › Sessions → Sign out. | Signed out within a few seconds. Reopening `#/chat` asks to sign in. | STAGING |
+| 8 | S4a | CSRF, tampered cookie, forged header, cross-owner, rate limit, sign-out ordering. | `console-chat.test.ts` passes. | CI (runtime shard) |
+| 9 | S4b | Invite → signup (S2) → `#/welcome` (S3); confirm zone and quiet hours; Google or skip. | Say hello is step 4 of 5. | STAGING |
+| 10 | S4b | Pick "Mostly meetings and people", "Replies I owe people" and "Suggest, and let me approve", type one name, edit one word, then "Send to Waldo". | The message tracks the choices until the edit, and the sent text equals the edited text. | STAGING |
+| 11 | S4b | Land on `#/chat?from=welcome`. | Banner with the waitlist link (new tab) and "Finish setting up". Waldo's reply answers; with #1227 it may ask about them. Questions are not asserted. | STAGING |
+| 12 | S4b | Open Memory › Profile. | Facts only if Waldo called `remember`. Report it; do not require it. | STAGING |
+| 13 | S4b | Reopen `#/welcome`. | It resumes after Say hello (the chat read has messages). | STAGING |
+| 14 | S0 | Staging Langfuse shows the turn trace (owner's call). | Trace present. | STAGING |
 
-No LIVE (production) claim: production is out of scope.
+No production (LIVE) claim is made.
 
-**Screenshots** (local preview, synthetic only):
+**Screenshots** (synthetic preview only). No scratch files are needed. Save this as `/tmp/shoot-chat.cjs`:
+```js
+// Synthetic preview screenshots of the console chat. Usage: node /tmp/shoot-chat.cjs <outDir>
+const { chromium } = require('/opt/node-tools/node_modules/playwright'); // preinstalled 1.56.1
+const out = process.argv[2] ?? '.';
+const shots = [['chat', 4189, '#/chat'], ['chat-empty', 4180, '#/chat'], ['chat-from-welcome', 4189, '#/chat?from=welcome']];
+const viewports = { desktop: { width: 1440, height: 900 }, phone: { width: 390, height: 844 } };
+(async () => {
+  const browser = await chromium.launch();
+  for (const [vp, viewport] of Object.entries(viewports)) for (const [name, port, hash] of shots) {
+    const context = await browser.newContext({ viewport, deviceScaleFactor: vp === 'phone' ? 2 : 1, isMobile: vp === 'phone', hasTouch: vp === 'phone', locale: 'en-GB' });
+    const page = await context.newPage();
+    page.on('pageerror', (error) => console.error(`${vp}/${name}: ${error.message}`));
+    await page.goto(`http://127.0.0.1:${port}/console/dashboard${hash}`, { waitUntil: 'load', timeout: 15000 });
+    await page.waitForTimeout(2500);
+    await page.screenshot({ path: `${out}/s4-${vp}-${name}.png`, fullPage: true, animations: 'disabled' });
+    await context.close();
+  }
+  await browser.close();
+})();
+```
+Then run:
 ```bash
 cd /home/user/waldo-backend
 npx -y pnpm@10.34.4 --filter @waldo/dashboard-app build
 node packages/dashboard-app/scripts/preview.mjs --case=chat --port=4189 &
 node packages/dashboard-app/scripts/preview.mjs --case=empty --port=4180 &
-PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers node <scratchpad>/shoot-console.cjs <outDir>
+mkdir -p /tmp/s4-shots && PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers node /tmp/shoot-chat.cjs /tmp/s4-shots
+kill %1 %2
 ```
-Add these rows to the script's `shots` list:
-- `['chat', 4189, '#/chat', 2500]`
-- `['chat-empty', 4180, '#/chat', 1500]`
-- `['chat-from-welcome', 4189, '#/chat?from=welcome', 2500]`
-
-Capture each at desktop 1440x900 and phone 390x844. After S3 lands, also capture `#/welcome` at step 4 with selections made.
+- After S4b and S3, add `['welcome-hello', 4180, '#/welcome']` and click "Continue" through the earlier steps, or stub them as S3's preview case does.
+- Only Chromium is installed (`/opt/pw-browsers`), so WebKit layout (`field-sizing`) is UNAVAILABLE here. Check it on a real iPhone at Acceptance step 9.
 
 ### Verification commands
 
-Run in order, at the exact head SHA. Record PASS, FAIL, NOT RUN or UNAVAILABLE for each.
+Run in order at the exact head SHA of each PR. Record PASS, FAIL, NOT RUN or UNAVAILABLE for each.
 ```bash
 cd /home/user/waldo-backend
 git diff --check
 npx -y pnpm@10.34.4 install --frozen-lockfile
 npx -y pnpm@10.34.4 -r typecheck
 npx -y pnpm@10.34.4 --filter @waldo/contracts test
-npx -y pnpm@10.34.4 --filter @waldo/runtime exec vitest run test/console-chat.test.ts test/console-chat-surface.test.ts test/console-link-app.test.ts test/console-link.test.ts test/console-link-telegram.test.ts test/app-inbox.test.ts test/app-basic-serving.test.ts test/console-auth.test.ts test/console-owner-routing.test.ts test/console-signin.test.ts test/console-signout-everywhere.test.ts test/dashboard-controls-owner.test.ts test/dashboard-control-actions.test.ts
-npx -y pnpm@10.34.4 --filter @waldo/dashboard-app test            # not in CI: paste "N files / M tests passed" (baseline at a643bcab: 31 / 216)
+npx -y pnpm@10.34.4 --filter @waldo/runtime exec vitest run test/console-chat.test.ts test/console-chat-surface.test.ts test/console-link-app.test.ts test/console-link.test.ts test/console-link-telegram.test.ts test/app-inbox.test.ts test/app-basic-serving.test.ts test/console-auth.test.ts test/console-owner-routing.test.ts test/console-signin.test.ts test/console-signout-everywhere.test.ts test/dashboard-controls-owner.test.ts test/dashboard-control-actions.test.ts test/prompt-builder.test.ts
+npx -y pnpm@10.34.4 --filter @waldo/dashboard-app test            # not in CI: paste "N files / M tests" (baseline at a643bcab: 31 / 216)
 npx -y pnpm@10.34.4 --filter @waldo/dashboard-app build && npx -y pnpm@10.34.4 --filter @waldo/dashboard-app verify:assets
-node scripts/guards/guard-surface-neutral-core.mjs                  # must still print 101 compares in 13 files (owner-do.ts 58)
+node scripts/guards/guard-surface-neutral-core.mjs                  # must still print 101 compares in 13 files
 WALDO_DO_MIGRATION_BASE_REF=HEAD^1 npx -y pnpm@10.34.4 verify:guards   # guard-pgtap downloads PG15: NOT RUN if offline
-npx -y pnpm@10.34.4 verify:workers                                  # full runtime suite, long; CI runs it in shards anyway
+npx -y pnpm@10.34.4 verify:workers                                  # full runtime suite (long); CI shards it
 npx -y pnpm@10.34.4 verify                                          # UNAVAILABLE here: verify:supabase and session revocation need Docker
 ```
+- For S4b the runtime lines are unchanged, so run only the dashboard lines.
+- On #1260's tree, the guard prints #1260's own baseline (`owner-do.ts` 26). It must not rise.
 
 ### Rollback
 
-Revert the PR. Nothing else needs undoing:
-- no migration, no DO schema, no env var, no dependency;
-- `via` on existing inbox rows is ignored by older code, since rows are JSON in KV;
-- `in_console` is never emitted after the revert;
-- the sign-out path returns to DO-only.
+**S4a.** Revert the PR. There is no migration, DO schema, env var or dependency.
+- `via` on existing inbox rows is ignored by older code.
+- `in_console` and `approvalNote` are never produced again.
+- Sign-out returns to DO-only.
+- The Worker's outage answer returns to 401.
 
-Two effects do not roll back:
-- messages already sent stay in the owner's main chat, which is correct;
-- `app_subject` stays bound, so scheduled work keeps running for owners who chatted. To stop it for demo accounts, delete those accounts in Settings › Account or through the admin (S0).
+Three effects remain after a revert:
+- Messages already sent stay in the main chat, which is correct.
+- `owner_principal_ref` stays pinned. That matches what the app sets.
+- `app_subject` stays bound, so scheduled work keeps running for owners who chatted. Delete demo accounts in Settings › Account or through the admin (S0) to stop it.
 
-The SPA reverts with the next deploy's bundle.
+**S4b.** Revert the SPA-only PR. S3's flow returns to four steps, and nothing server-side changes.
 
 ### Risks and open questions
 
-1. **The freeze excludes S4.** *Default:* merge after the demo. The showcase then uses #1227 on the app or iMessage paths. Ansh decides on #1103 whether S4 joins.
-2. **#1260 ordering.** *Default:* #1260 first, post-demo. S4 rebases and moves two lines into `surfaces/app-runtime.ts` (shown above), and the `console-chat-surface.test.ts` assertions stay valid. If S4 goes first, the #1260 author carries the same two getters into `app-runtime.ts` and adds a console case to `surface-adapters.test.ts`.
-3. **The model is told "Surface: app … native_buttons" on console turns** (`telegram-turn.ts:16`; on #1260, `appSurface.presentation`). It may say "tap Approve" while the console card links to Waiting. *Default:* accept for v1. Follow-up: make presentation per-turn via `appChatPresence`, which #1260's adapter makes a one-line change.
-4. **Sends cannot be approved from the web.** *Default:* honest card copy. Changing `consoleMayApprove` is a policy decision for the owner, not this slice.
-5. **Scheduled work for every visitor after their first message** (Brief, Check-in, Close and nightly, once the zone is confirmed). This adds staging spend and messages into chats nobody reads. *Default:* accept, intended. S0 lists account cleanup after the showcase.
-6. **Staging Langfuse captures visitor hello text** environment-wide. *Default:* owner decision in S0, made before visitors type.
-7. **`remember` has no numeric-health floor.** A visitor's own words could put numbers into claims. *Default:* out of scope; flag it to the memory owners. S4's template adds no numbers.
-8. **#1227's `surfaces` fact says "the app" for console-first owners.** *Default:* a note to the Mac lane; it is cosmetic for the model.
-9. **The rate limiter is per Cloudflare location and shared with the iPhone app.** *Default:* accept. 120 per minute leaves room for two open tabs plus the app.
+1. **The freeze excludes S4.** Default: merge after the demo. Ansh decides on #1103 whether S4a joins.
+2. **#1260 ordering.** Default: #1260 first, then S4a moves three getters into `surfaces/app-runtime.ts` and drops its `telegram-turn.ts` hunk (shown above). If S4a goes first, the #1260 author carries those getters and adds a console case to `surface-adapters.test.ts`.
+3. **Sends cannot be approved from the web.** The copy and the model now say so. Default: S0 tells presenters not to demo sends from web-only accounts. Changing `consoleMayApprove` is an owner policy decision.
+4. **Sign-out still waits behind another session's running work** in the serial queue, though this browser's chat work and directory session have already ended. Default: accept. A follow-up could move the DO-local sign-out out of the queue as well.
+5. **Scheduled work for every visitor who sends a message** (once the zone is confirmed). Default: accept, as intended. S0 lists account cleanup after the showcase.
+6. **Staging Langfuse captures visitors' chat text.** Default: owner decision in S0, before visitors type.
+7. **Owners with no Auth identity** (Telegram-ticket-only) pass the console's Worker check but fail `app_session_authority`, so chat shows "Sign in to keep talking to Waldo", and signing in may not help. Default: showcase visitors are email signups. Accept, and note it in S0.
+8. **`remember` has no numeric-health floor.** A visitor's own words could put numbers into claims. Default: out of scope; flag it to the memory owners. S4 adds no numbers.
+9. **#1227's `surfaces` fact says "the app" for console-first owners.** Default: a note to the Mac lane.
+10. **The rate limiter is per Cloudflare location and shared with the iPhone app.** Default: accept; 120 per minute leaves room for two tabs plus the app.
 
 ### Effort
 
-L, about 12 hours. Done serially by one engineer it splits:
-- runtime 5-6 h:
-  - `console-chat.ts`, `console-auth.ts`, `app-api.ts`, `app-inbox.ts`, `surfaces/app.ts`, `console-link.ts` ×2, `console-signin.ts`, `dashboard-overview.ts` and the contracts enum;
-  - `owner-do.ts`, about 35 lines;
-  - runtime tests;
-- SPA 5-6 h:
-  - `chat-model.ts`, `Chat.tsx`, `SayHello.tsx`, `App.tsx`, `style.css`, `preview.mjs`, README;
-  - dashboard tests;
-- security review and fixes, about 1 h.
-
-| Lane | Files |
-|---|---|
-| SPA | `packages/dashboard-app` |
-| Runtime, not `owner-do.ts` | see the runtime list above |
-| `owner-do.ts` | Mac-lane slot on #1103 |
-| Contracts | console-link enum (additive) |
-| Migrations | none |
+| PR | Size | Hours | Files | Lanes |
+|---|---|---|---|---|
+| S4a | L | about 10: runtime 5-6, SPA 3-4, review 1 | `console-chat.ts`, `console-auth.ts`, `app-api.ts`, `app-inbox.ts`, `surfaces/app.ts`, `messaging-behavior.ts`, `telegram-turn.ts` (today's tree only), `console-link.ts` ×2, `dashboard-control-actions.ts`, `console-signin.ts`, `dashboard-overview.ts`; `owner-do.ts`, about 45 lines; the contracts enum; `chat-model.ts`, `Chat.tsx`, `App.tsx`, `style.css`, `preview.mjs`, README, S3's `welcome-note` | runtime (non-owner-do), `owner-do.ts` (Mac-lane slot on #1103), contracts, SPA. No migrations. |
+| S4b | M | about 4 | `SayHello.tsx`, S3's `welcome-model.ts` and `Welcome.tsx` seam, `Chat.tsx` banner and empty-state entry, `style.css`, tests | SPA only |
 
 ## S5 Tour, what Waldo saved, Setup checklist and copy fixes
 
@@ -3756,7 +4209,7 @@ export function Tour({ onClose, steps = TOUR_STEPS }: { onClose: () => void; ste
       : <div className="coach-scrim" aria-hidden="true"/>}
     <div ref={card} className="coach-card" data-side={place?.side ?? 'below'} style={place?.top === undefined ? undefined : { top: place.top, left: place.left }}>
       <div aria-live="polite"><p className="label">{at + 1} of {shown.length}</p><h2 id="coach-title">{step.title}</h2><p id="coach-body">{step.body}</p></div>
-      <div className="control-actions">
+      <div className="coach-actions">
         <button type="button" className="quiet" onClick={close}>Close</button>
         {at > 0 && <button type="button" onClick={() => setAt(n => n - 1)}>Back</button>}
         <button ref={primary} type="button" className="primary" onClick={() => last ? close() : setAt(n => n + 1)}>{last ? 'Done' : 'Next'}</button>
@@ -3839,14 +4292,14 @@ useEffect(() => { if (touring) window.history.replaceState(window.history.state,
 .coach-scrim { position:fixed; inset:0; background:rgba(18,18,18,.4); }
 .coach-card { position:fixed; width:340px; max-width:calc(100vw - 32px); padding:18px 20px; background:var(--tile); border-radius:var(--r-card); box-shadow:0 12px 32px rgba(26,26,26,.12),0 2px 6px rgba(26,26,26,.06); animation:rise .4s var(--ease) backwards; }
 .coach-card h2 { font-size:17px; margin:4px 0 6px; }
-.coach-card .control-actions { justify-content:flex-end; }
+/* Its own row class: the phone rule `.control-actions button { width:100% }` (:424) would stack these. */
+.coach-actions { display:flex; align-items:center; justify-content:flex-end; flex-wrap:nowrap; gap:8px; margin:14px 0 0; }
 .readback { margin:8px 0 16px; }
 @media(max-width:640px) {
   .coach-card { left:16px; right:16px; width:auto; max-width:none; }
   .coach-card[data-side="sheet-bottom"] { top:auto; bottom:calc(16px + env(safe-area-inset-bottom)); }
   .coach-card[data-side="sheet-top"] { top:calc(16px + env(safe-area-inset-top)); bottom:auto; }
-  .coach-card .control-actions { flex-direction:row; }
-  .coach-card button { min-height:44px; }
+  .coach-actions button { min-height:44px; padding:9px 14px; }
 }
 ```
 The existing reduced-motion rule (`:433-435`) removes the rise and the transition.
@@ -3860,7 +4313,7 @@ All copy uses sentence case, British spelling and "he", with no exclamation mark
 **Tour.**
 - **Desktop:** a 340px white card with radius 20 and the overlay shadow. It sits 12px below its anchor, or above it when there is no room, and is clamped 16px from the edges. The anchor gets a 2px ink ring and the rest of the page is dimmed to 40%.
 - **Card contents:** a `.label` counter ("1 of 5"), an h2, the body, then right-aligned quiet "Close", grey "Back" (from step 2) and ink "Next", which becomes "Done" on the last step.
-- **Phone (≤640px):** a full-width sheet, 16px from the edge, on the half away from the anchor. The buttons are 44px.
+- **Phone (≤640px):** a full-width sheet, 16px from the edge, on the half away from the anchor. Close, Back and Next are 44px tall and stay on one row at 390px (`.coach-actions`, not `.control-actions`, which stacks full-width buttons on phones).
 
 | # | Anchor | Heading | Body |
 |---|---|---|---|
@@ -4050,7 +4503,7 @@ node scripts/preview.mjs --case=empty --port=4178 &
   - Desktop 1440x900 and phone 390x844.
   - Capture `#/settings/setup` (`s5a-setup`), `#/connections` (`s5a-connections`) and `#/today` (`s5a-today`). Compare against `screens/current-*-settings-setup.png` and `current-*-today.png`.
   - With S5b, capture `#/today?tour=1` and press Next between `s5b-tour-1` and `s5b-tour-5`.
-  - **Check:** grey text is darker, a focused button shows the ink ring, the phone sheet sits at the top for the Memory step, and there is no Telegram row.
+  - **Check:** grey text is darker, a focused button shows the ink ring, the phone sheet sits at the top for the Memory step with Close, Back and Next on one row, and there is no Telegram row.
 
 **STAGING** (after an owner-authorised deploy, with S3 and S4 live):
 1. A fresh invited visitor finishes `#/welcome` and sends a first message in `#/chat`.
@@ -4114,116 +4567,133 @@ Revert S5b, then S5a.
 
 ## S6 iMessage linking in the React console (staging, post-demo)
 
-> **Status:** reviewed; the revision against S5a's final Setup and Connections shapes is in progress. Do not start S6 until this line is gone.
-
-> **Base note.** The brief pinned e5c022ef. While this section was being written, beta-mvp moved to **04bb8c89**, which includes #1257 (`ashish/connect-imessage-one-tap`) and #1241. #1257 already ships one-tap linking on the classic page and the app. This section is rescoped to the **remaining gap** and anchored at 04bb8c89. I diffed every cited file between e5c022ef and 04bb8c89: `bridge-do.ts`, `directory.ts`, `dashboard-owner-controls.ts`, `dashboard-control-actions.ts`, `console-auth.ts`, `Controls.tsx`, `OwnerControls.tsx`, `style.css` and the iMessage fixture are unchanged; `owner-do.ts`, `imessage/console.ts`, `app-api.ts`, `Panels.tsx`, `App.tsx`, `console-signin.ts` and the migration lists moved, and are cited at their 04bb8c89 lines.
+> **Base.** Citations are at the working tree **a643bcab**, which is beta-mvp **04bb8c89** plus the plan docs. 04bb8c89 already contains #1257 (`ashish/connect-imessage-one-tap`), which ships one-tap linking on the classic page and an app route. This slice covers the **remaining gap only**.
 >
-> **Freeze.** Ansh approved a demo freeze on #1103 at 19:27Z on 14 Oct. S6 lands **after the 15 Oct showcase** unless Ansh adds it.
+> **Order.** Merge order is **S3 → S5a → S6**. S6's SPA hunks target S5a's `SetupRow`/`setupRows`/`iMessageSetupRow` and `chatRows` shapes, and S3's `Welcome.tsx` `ConnectStep` seam.
+>
+> **Freeze.** Ansh approved a demo freeze on #1103 at 19:27Z on 14 Oct, so S6 lands after the showcase unless Ansh adds it.
+>
+> **PR label.** S6 is a **"needs owner (migration)"** PR: it adds one migration, which only an owner-authorised rollout applies.
 
 ### Outcome
 
-On staging, an owner opens **Connections** in the React console (or reaches the **Connect** step of `#/welcome`) and sees an **iMessage** row in Waldo's design. The row offers "Get my code", then shows `waldo CODE`, Waldo's address and an **Open Messages** button that prefills the text. The row moves to **Linked** on its own once the text arrives, shows the masked handle and offers **Unlink iMessage**. The row exists only when the connector is on **and** the shared Waldo number can answer right now. Otherwise nothing is shown, so a visitor never gets a code that nobody will redeem. The job to be done: "let me text my Waldo from my iPhone without leaving the console or reading an unstyled operator page".
+On staging, a signed-in owner opens **Connections** (or the **Connect** step of `#/welcome`) and sees an **iMessage** row in Waldo's design, which offers "Get my code".
+
+1. **Open Messages.** On the iPhone, "Open Messages" opens Messages with `waldo CODE` already filled in, addressed to Waldo's number. The code itself stays hidden on screen unless the owner asks to see it.
+2. **Linked.** When the text arrives, the row says which handle was linked and when, masked so the owner can recognise it: `a•••e@icloud.com` or `•••7731`. It also offers an immediate "Unlink this number" in case it is not theirs.
+3. **Hidden when it can't work.** The row exists only when the connector is on and the shared Waldo number would answer right now. Otherwise nothing is shown, so a visitor never holds a code nobody will redeem.
+
+The job to be done: "let me text my Waldo from my iPhone without leaving the console or using an operator page".
 
 ### Depends on / blocks
 
-- **Builds on #1257 (merged):** `imessage/send-url.ts` (`iMessageSendUrl`), the app contract `appIMessageLinkCodeV1Schema` and the issuer path. S6 reuses all three and adds no second flow.
-- **S0 (operator actions):**
-  - apply the new migration on staging (`deploy-staging.yml`, operation `migration-apply`);
-  - deploy the Worker;
-  - confirm on `/console/imessage` as the operator that the shared number shows "active · online · text verified";
-  - have a real iPhone ready for the trace.
-- **S3 (soft):** S6 exports `<IMessageLink placement="welcome"/>` for S3's Connect step. If S3 has merged, S6 mounts it. If not, S6 ships the Connections row and S3 mounts the card using the snippet below.
-- **S5 (coordinate):** S5 reworks the Setup rows and the Connections copy. S6 touches the Setup "Connect iMessage" row from #1257 and one line in the Chat group of `Controls.tsx`. Whichever lands second rebases. If S5 removes the iMessage Setup row, S6 drops that hunk.
-- **Lanes:**
-  - Ashish owns `channels/imessage/**` and must review.
+- **Builds on #1257 (merged).** It reuses:
+  - `imessage/send-url.ts` (`iMessageSendUrl`);
+  - the issuer `consoleAuth.issueProviderLinkCode(…, 'imessage')`;
+  - the app contract `appIMessageLinkCodeV1Schema`.
+
+  No second flow is added.
+- **S3 (merges first).** S6 mounts `<IMessageLink placement="welcome"/>` at S3's seam in `Welcome.tsx` `ConnectStep`, directly after the Google tile's `</section>` (`aria-labelledby="welcome-google"`) and before the Body data tile.
+- **S5a (merges first).** S6 makes three changes on top of it:
+  - replaces S5a's `iMessageSetupRow` and its call site in `SetupControls`;
+  - appends its entry to S5a's `chatRows` in `ConnectionsControls`;
+  - follows the shared Chat rule: a row renders only when it applies, and the group and its label are hidden when no row renders.
+- **Migration rollout (owner-authorised, after the freeze).**
+  - The sequence: preflight → review of the full pending migration set → owner authorisation → `migration-apply` via `deploy-staging.yml` → Worker deploy. Details are in Acceptance trace, step 0.
+  - The order is safe: a Worker deployed before the function exists keeps the row hidden for unlinked owners (tested).
+- **Reviews.**
+  - Ashish owns `channels/imessage/**` and the hint function.
   - The Mac lane sequences `owner-do.ts`; S6 changes 2 existing lines there and adds none.
-  - The migration lane takes one additive function.
+  - A security review is required (see below).
+- **S0.** Nothing to do for S6. S0's "No S6" fallback (S0 line 350) uses the footer link, which S6 removes. That stays consistent, because once S6 is merged the "No S6" case no longer applies.
 - **Blocks:** nothing.
 
 ### Current state
 
-What exists and can be reused (all [verified] at 04bb8c89 unless marked otherwise):
+All [verified] at a643bcab unless labelled otherwise.
 
-- **Issuer:** `consoleAuth.issueProviderLinkCode(doName, 'imessage')` (`identity/console-auth.ts:150-154`).
-  - The code is 10 characters from `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` (`:55-56`).
-  - The SQL replaces any unused code for the provider and expires it after 10 minutes (`supabase/migrations/20261014120000_waldo_imessage_shared_bridge.sql:41-42`).
-  - Redemption upper-cases the code (`identity/owner-directory.ts:30-31`).
-- **Masked hint and unlink:**
-  - `iMessageHandleHint` (`console-auth.ts:174-177`) returns the last 4 characters, or 2 for handles shorter than 8 (`20261014120000:282-295`).
-  - `unlinkIMessage` is at `console-auth.ts:173`.
-- **One-tap link (#1257):**
-  - `iMessageSendUrl(address, code)` builds `sms:<address>&body=waldo%20CODE` (`channels/imessage/send-url.ts:5`). It is dependency-free so `app-api.ts` loads in plain Node (commit 42f036ce).
-  - The classic page renders it (`imessage/console.ts:51-59`, used at `:85-87`).
-  - The app route `POST /app/v1/channels/imessage/link-code` returns `appIMessageLinkCodeV1Schema` = `{code,text,address,send_url,expires_in_seconds:600}` (`app-api.ts:165-175`; `contracts/src/app/core.ts:91-94`).
-- **Bridge behaviour:**
-  - "waldo CODE" is always a link action, never a model turn (`bridge-do.ts:384-386`; `LINK_TEXT` `:69`).
-  - Redemption is throttled to 5 per sender per hour (`:409`).
-  - Fixed replies are in `LINK_REPLIES` (`:70-75`).
-  - The bridge's own system-reply readiness gate is `systemReplyReady` (`:425-431`): host online, fresh capabilities ready, text send, verified and exact-target, and no quarantine.
-  - `status()` (`:253-261`) omits `exactTarget`.
-- **JSON owner-controls route:** `dashboard-owner-controls.ts` serves `/console/dashboard/api/v1/owner[/actions]` (`:7-8`).
-  - It has a field allowlist (`:52-53`), a view/action pairing allowlist (`:55`), a csrf check through `parseConsoleAction` (`console.ts:124-129`), `request_id` idempotency (`:57-71`), a revision check (`:75`) and a pending receipt written before the effect (`:77-78`).
-  - It keeps raw codes out of the durable journal (`:49-50`, `:88`).
-  - owner-do wires it inside `this.serial` after the session re-check. The rate limit is 90 reads and 20 actions per minute per owner (`owner-do.ts:1464-1474`). The deps object is at `:1474`.
+- **Issuer.** `issueProviderLinkCode(doName, 'imessage')` (`packages/runtime/src/identity/console-auth.ts:150-154`) issues 10 characters from `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` (`:55-56`). The SQL replaces any unused code for the provider and expires it after 10 minutes (`supabase/migrations/20261014120000_waldo_imessage_shared_bridge.sql:41-42`). Redemption upper-cases the code (`identity/owner-directory.ts:30-31`).
+- **Hint.** `waldo.presence_hint` returns `right(subject, 4)`, or 2 characters when the handle is shorter than 8 (`20261014120000:282-295`). For `name@icloud.com` that is `.com`, which an owner cannot tell apart from anyone else's iCloud address. The runtime accepts only 2-4 characters (`console-auth.ts:174-177`).
+  - **Consumers:** the classic page renders `Linked: •••${hint}` (`imessage/console.ts:39`), and owner-do uses only `!== null` (`owner-do.ts:3410-3415`).
+  - **Tests pinning the format:** `supabase/tests/waldo_imessage_shared_bridge.sql:120,124` and `packages/runtime/test/imessage-shared.test.ts:230,320`.
+- **One-tap link (#1257).**
+  - `iMessageSendUrl(address, code)` returns `sms:<address>&body=waldo%20CODE` (`imessage/send-url.ts:5`). It is dependency-free so that `app-api.ts` loads in plain Node (commit 42f036ce).
+  - The app route returns `{code,text,address,send_url,expires_in_seconds:600}` (`channels/app-api.ts:165-175`; `contracts/src/app/core.ts:91-94`). It is gated on the address only (`app-api.ts:167-168`).
+- **Bridge.**
+  - "waldo CODE" is always a link action, never a model turn (`imessage/bridge-do.ts:384-386`), with redemption throttled at 5 per sender per hour (`:409`).
+  - `answerStranger` returns early only on `'retry'`. It still redeems the code when `systemReplyReady` is `'unavailable'`, but then the "Linked." reply cannot go out (`:402-413`). `'unavailable'` means the host is offline, its capabilities are stale or not text-ready, or the lane is quarantined (`:425-431`).
+  - `status()` omits `exactTarget` (`:253-261`).
+- **No readiness read for a normal owner.**
+  - The bridge DO name needs both ids (`bridge-do.ts:41`).
+  - `imessage_list` returns only the caller's own bridges (`20261014120000:252-260`), and the shared bridge belongs to the operator (`:53`).
+  - Every other directory read takes the ids (`imessage/directory.ts:74-81`).
+- **JSON owner-controls route** (`channels/dashboard-owner-controls.ts`).
+  - The route has a field allowlist (`:52-53`), view/action pairing (`:55`), csrf through `parseConsoleAction` (`console.ts:124-129`), `request_id` idempotency (`:57-71`), a read-revision check (`:75`) and a pending receipt written before the effect (`:77-78`). Raw codes never enter the durable journal (`:49-50,88`).
+  - Two places build its deps:
+    - owner-do, inside `this.serial` after a session re-check, rate-limited to 90 reads and 20 actions per owner per minute (`owner-do.ts:1464-1474`);
+    - the app controls, for `account` only (`app-controls.ts:42,63,82`).
   - The Worker forwards these paths only for a verified owner cookie, with JSON 401s (`console-signin.ts:342-360`).
-- **Config:**
-  - Production has `IMESSAGE_CONNECTOR_ENABLED "0"` and `IMESSAGE_WALDO_ADDRESS ""` (`packages/runtime/wrangler.jsonc:20`).
-  - Staging has `"1"` and `woof@heywaldo.in` (`:87`).
-  - The composition gate is `iMessageComposition` (`bridge-do.ts:31-39`).
-
-What is missing or broken:
-
-1. **No readiness signal for normal owners.** A normal owner cannot learn whether the shared number is online:
-   - `imessage_list` returns only bridges the caller owns (`20261014120000:252-260`), and the shared bridge is owned by the operator (`:53`);
-   - every other read needs the bridge ids;
-   - no runtime code stores a pointer to the shared bridge (grep for `bridgeDoName` and `shared` under `channels/`).
-2. **No React UI for linking.**
-   - The React Connections Chat group has only Telegram (`dashboard-app/src/Controls.tsx:90-93`).
-   - The connections action allowlist has no `imessage.*` (`dashboard-control-actions.ts:19`).
-3. **#1257 entry points lead to the classic page and are never gated.**
-   - The Setup row "Connect iMessage" links `/console/imessage` (`Panels.tsx:149`), and the footer links it too (`App.tsx:217`).
-   - On production that page answers 404 "iMessage is not enabled." (`imessage/console.ts:61-62`), so both are dead ends there.
-   - On staging they show whether or not the bridge is online.
-4. **Out of scope, noted.**
-   - The app route is gated on the address only, not on composition or readiness (`app-api.ts:167-168`).
-   - owner-do reads `presence_hint` on every console view build, even with the connector off (`owner-do.ts:3410-3415`).
-5. **Scheduled delivery.** Scheduled work (Brief, reminders) runs only for app-bound or Telegram-linked owners (`owner-do.ts:678-695`). iMessage gets replies only, and the copy must say so.
+  - `console-signin.ts:1` imports this module, and `app-api.ts:12` imports `console-signin.ts`, so this module must stay loadable in plain Node.
+- **SPA entry points from #1257.**
+  - The Setup row "Connect iMessage" links `/console/imessage` (`dashboard-app/src/Panels.tsx:149`); S5a keeps it as `iMessageSetupRow`.
+  - The footer links it too (`App.tsx:217`).
+  - [SOURCE] On production that page answers 404 "iMessage is not enabled.": `wrangler.jsonc:20` sets `IMESSAGE_CONNECTOR_ENABLED "0"`, so `iMessageComposition` returns null (`bridge-do.ts:32`) and the page refuses (`imessage/console.ts:61-62`). The production deploy SHA was not checked.
+- **Connections UI.** Connections has no iMessage row (`Controls.tsx:90-93`), and the SPA's only client for the owner route is `OwnerControls.tsx:9-61`.
+- **Scheduled work.** Brief and reminders run only for app-bound or Telegram-linked owners (`owner-do.ts:678-695`), so over iMessage Waldo only replies.
 
 ### Design
 
-**Approach.** Add a third view, `imessage_link`, to the existing JSON owner-controls module. It has a read with readiness, and two actions (`imessage.link`, `imessage.unlink`) that call the same issuer and unlink as the classic page and app. The view's runtime state comes from a port in `imessage/console.ts`, which owner-do injects into the owner-controls deps. The port does four things:
+**Runtime.** Add a third owner-controls view, `imessage_link`, with:
+- a read: `{offer, address, linked_hint}`;
+- two actions, `imessage.link` and `imessage.unlink`, using the existing issuer and unlink.
 
-1. Gates on `iMessageComposition` and a configured address. This makes no remote calls on production.
-2. Reads the masked hint.
-3. Asks a new signed SQL function for the environment's one active shared bridge (ids only).
-4. Asks that bridge DO a new boolean `linkReady()`. That method is `systemReplyReady(...) !== 'unavailable'`, the exact gate the bridge uses to answer "waldo CODE".
+owner-do injects a port into the deps. The port lives in `imessage/console.ts`, which needs workerd, so it can't be imported by the Node-loadable owner-controls module. Its `state()` does three things:
+1. On production (connector off or no address), it returns "off" with no remote call.
+2. It reads the masked hint.
+3. It asks a new signed SQL function, `waldo.imessage_shared_bridge`, for the environment's one active shared bridge (ids only), then asks that bridge DO a new `linkReady()`. `linkReady()` is the gate the bridge applies before it sends any system reply. If the host could not send "Linked.", the console offers no code.
 
-The action response carries the same `appIMessageLinkCodeV1Schema` payload as the app route, built by one shared helper in `send-url.ts`. The SPA adds one self-contained component, `IMessageLink`, with two placements, plus a tiny read hook. The hook gates the #1257 Setup row and re-points it to `#/connections`.
+The action answers with the same `appIMessageLinkCodeV1Schema` payload as the app route. One builder in `send-url.ts` serves both, and the payload is parsed before the receipt is kept.
+
+**Recognisable hint.** The same migration redefines `waldo.presence_hint` so an owner can recognise their own handle:
+- an Apple ID email keeps its first and last local characters and its domain: `a•••e@icloud.com`;
+- anything else, phone numbers included, keeps its last 4 characters: `•••7731`.
+
+The full handle still never leaves the database.
+
+**SPA:**
+- `IMessage.tsx` holds all link state in `useIMessageLink()`. That lets the Connections parent decide row placement without unmounting a live code. The single `IMessageLink` component has two placements.
+- It reuses one owner-route client, factored out of `OwnerControls.tsx`.
+- The code is hidden by default. "Open Messages" carries it on the iPhone, and "Show the code" exists for typing it on another device.
+- Copy comes in two voices: Connections speaks about Waldo ("he"), and the welcome card speaks as Waldo ("I"), like the rest of `#/welcome`.
+- No ink buttons on this card. Each screen already has its one ink action: Connect Google in the welcome step, and Add Google account in Connections (`Controls.tsx:95`). So every emphasised iMessage action is a `secondary` outline in both placements, stacked full width in `welcome-actions` in the welcome step.
+- The can/can't lists use S3's checks and crosses in both placements.
+- Polls run every 4 s with a 10 s timeout and stop at link, expiry or sign-out. A link counts only when the polled hint differs from the hint at issue time.
 
 Why this shape:
+- **No code in the receipt book.** Owner-controls already keeps codes out of it. The connections action path persists receipt text (`dashboard-control-actions.ts:64-71`), and its `telegram.link` receipt carries the raw code (`owner-do.ts:1504-1506`).
+- **Smallest owner-do footprint.** Owner-do changes by one deps property.
+- **Surface guard.** The view is named `imessage_link` because `'imessage'` is a declared surface (`contracts/src/app/surfaces.ts:5`) and `guard-surface-neutral-core` counts `=== 'imessage'`.
 
-- **Codes never reach the durable receipt book.** Owner-controls already guarantees it (`dashboard-owner-controls.ts:49-50`). The connections action path stores receipt messages durably (`dashboard-control-actions.ts:64-71`), and its `telegram.link` receipt already carries the raw code (`owner-do.ts:1504-1506`).
-- **Smaller owner-do footprint.** Owner-controls needs one deps property in owner-do. The connections path needs `runtime.setup()`/`runtime.view()` and a `ConsoleView` change (`owner-do.ts:1481-1490`).
-- **Plain-Node constraint.** `dashboard-owner-controls.ts` is in `app-api.ts`'s import graph (`console-signin.ts:1`, imported by `app-api.ts:12`). It may only `import type` from `imessage/console.ts`, which pulls in `cloudflare:workers`. That is why the port is injected.
-- **Surface guard.** `'imessage'` is a declared surface (`contracts/src/app/surfaces.ts:5`). `guard-surface-neutral-core` counts any `=== 'imessage'` compare in a new file, so the view is named `imessage_link`. Action strings like `'imessage.link'` do not match the guard pattern.
-
-Alternatives rejected:
-
-- **Connections allowlist + `ConsoleView` block** (the brief's first idea): the code would persist in the receipt book, and the change touches owner-do view building.
-- **Readiness from `status()`:** it misses `exactTarget`. `linkReady()` is the authoritative gate.
-- **Gate on composition plus address only (#1257's app route):** it offers codes while the Mac is offline. The owner rule is never a dead end.
-- **A shared-bridge pointer written by the bridge DO on heartbeat:** a second writer and new state.
-- **Bridge ids as code constants:** they change on every re-pair.
-- **No deep link:** #1257 shipped `iMessageSendUrl` as the team's single owner for it. S6 reuses it and always shows the code and copy buttons as fallback. On-device behaviour is a STAGING/LIVE check in the trace.
+Rejected alternatives:
+- **Connections allowlist plus a `ConsoleView` block:** the code would persist, and owner-do view building would change.
+- **`status()` as the gate:** it lacks `exactTarget`.
+- **Gating on the address only (as #1257's app route does):** it offers codes while the Mac is offline.
+- **A shared-bridge pointer written on heartbeat:** a second writer and new state.
+- **Bridge ids as constants:** they change on every re-pair.
+- **A separate `presence_label` function next to `presence_hint`:** two representations of one fact.
+- **Width-based code hiding:** fragile. Hidden-by-default is simpler and covers projected screens on any device.
 
 ### Changes, file by file
 
-**1. `supabase/migrations/<UTC timestamp>_waldo_imessage_shared_readiness.sql` (new).** Default name `20261015120000_waldo_imessage_shared_readiness.sql`. The timestamp must sort after every file in `supabase/migrations` at merge: staging applies only a canonical prefix (`scripts/staging-migration-preflight.mjs:17`), and #1241 already added `20261014130000`.
+All code below compiled with the repo's `tsc` and its tests passed. The SPA hunks sat on S5a's shapes, copied verbatim from S5. The runs were in a scratch copy of a643bcab, not in the repo; see Verification for the evidence.
+
+**1. `supabase/migrations/20261015120000_waldo_imessage_shared_readiness.sql` (new).** The timestamp must sort after every file in `supabase/migrations` when the PR merges, because staging applies a canonical prefix (`scripts/staging-migration-preflight.mjs:17`) and #1241 added `20261014130000`.
 
 ```sql
--- Owner console readiness for the shared Waldo number: the environment's one active shared bridge, ids only,
--- so the console can ask that bridge whether it can answer "waldo CODE" now. No credential, operator, sender or
--- handle leaves; only the router-signed runtime can call it.
+-- Owner console readiness for the shared Waldo number, and a masked hint an owner can recognise.
+
+-- 1. The environment's one active shared bridge, ids only, so the owner console can ask that bridge whether it would
+-- send a system reply now. No credential, operator, sender or handle leaves; only the router-signed runtime can call it.
 create function waldo.imessage_shared_bridge(p_environment text, p_locator text, p_at bigint, p_sig text) returns jsonb
 language plpgsql stable security definer set search_path = '' as $$
 declare r record;
@@ -4236,15 +4706,53 @@ begin
 end $$;
 revoke all on function waldo.imessage_shared_bridge(text, text, bigint, text) from public, anon, authenticated;
 grant execute on function waldo.imessage_shared_bridge(text, text, bigint, text) to anon;
+
+-- 2. The console hint names the linked handle without it leaving the database. An Apple ID email keeps its first and
+-- last local characters and its domain (a•••e@icloud.com), so an owner can tell their own address from someone else's;
+-- anything else, a phone number included, keeps its last 4 characters (2 when shorter than 8): •••7731.
+create or replace function waldo.presence_hint(p_do_name text, p_provider text, p_at bigint, p_sig text) returns text
+language plpgsql stable security definer set search_path = '' as $$
+declare v_subject text; v_local text; v_domain text;
+begin
+  if not waldo.router_signed('presencehint.' || p_do_name || '.' || p_provider, p_at, p_sig) then
+    raise exception 'unsigned router call' using errcode = '42501';
+  end if;
+  select p.subject into v_subject from waldo.presences p join waldo.owners o on o.id = p.owner_id
+    where o.do_name = p_do_name and o.state = 'active' and p.provider = p_provider and p.state = 'active';
+  if v_subject is null then return null; end if;
+  v_local := split_part(v_subject, '@', 1);
+  v_domain := substr(v_subject, length(v_local) + 2);
+  if length(v_local) >= 1 and position('@' in v_subject) > 0 and length(v_domain) between 1 and 64 then
+    return left(v_local, 1) || '•••' || case when length(v_local) >= 3 then right(v_local, 1) else '' end || '@' || v_domain;
+  end if;
+  return '•••' || right(v_subject, case when length(v_subject) >= 8 then 4 else 2 end);
+end $$;
 ```
 
-There is at most one active shared bridge per environment (`20261014120000:56`). The grant pattern matches the siblings (`:297-308`).
+- The signing, locator and grant pattern match the siblings (`20261012000000:77-87`; `20261014120000:297-308`).
+- There is at most one active shared bridge per environment (`20261014120000:56`).
+- `create or replace` keeps `presence_hint`'s existing grants.
 
 **2. Migration lists.**
-- `scripts/verify-supabase-migrations.mjs:65`: add the filename after `'20261014130000_waldo_device_pairing_owner.sql',`.
-- `supabase/fixtures/assert-canonical-migration-history.sql:65`: add a comma after `'20261014130000'` and the new version on the next line. `guard-migration-fixture-sync` checks both.
+- `scripts/verify-supabase-migrations.mjs:65`: append `'20261015120000_waldo_imessage_shared_readiness.sql',`.
+- `supabase/fixtures/assert-canonical-migration-history.sql:65`: add a comma after `'20261014130000'`, then `'20261015120000'`.
 
-**3. `supabase/tests/waldo_imessage_shared_bridge.sql`.** Insert before `select * from finish();` (`:175`). The shared bridge `bid('5')` is still active at that point.
+**3. `supabase/tests/waldo_imessage_shared_bridge.sql`.**
+- Replace `:120` and `:124`, then insert the new rows and assertions after `:124`:
+
+```sql
+select is(pg_temp.hint('sh-a', 'imessage'), 'a•••@icloud.test', 'an email hint keeps its first local character and its domain');
+-- (the sh-short insert at :122-123 stays)
+select is(pg_temp.hint('sh-short', 'imessage'), 'a•••@c.io', 'a two-character local part shows only its first character');
+insert into waldo.owners(do_name, email) values ('sh-phone', 'phone@test.invalid'), ('sh-mail', 'mail@test.invalid');
+insert into waldo.presences(owner_id, provider, subject) select id, 'imessage', '+15550000009' from waldo.owners where do_name = 'sh-phone';
+insert into waldo.presences(owner_id, provider, subject) select id, 'imessage', 'alice@icloud.test' from waldo.owners where do_name = 'sh-mail';
+select is(pg_temp.hint('sh-phone', 'imessage'), '•••0009', 'a phone number shows only its last 4 digits');
+select is(pg_temp.hint('sh-mail', 'imessage'), 'a•••e@icloud.test', 'an email shows its first and last local characters and its domain');
+select ok(pg_temp.hint('sh-mail', 'imessage') not like '%lic%', 'the middle of the local part never leaves');
+```
+
+- Insert this block before `select * from finish();` (`:175`). Shared bridge `bid('5')` is still active at that point.
 
 ```sql
 create function pg_temp.shared(env text default 'test') returns jsonb language sql as $$
@@ -4253,6 +4761,9 @@ select throws_ok($$ select waldo.imessage_shared_bridge('test', '["test"]', pg_t
 select throws_ok($$ select waldo.imessage_shared_bridge('test', '["other"]', pg_temp.at(), pg_temp.isig('shared', '["other"]')) $$, '42501', 'imessage locator mismatch', 'a locator for another environment is refused');
 select is(pg_temp.shared(), jsonb_build_object('bridge_id', pg_temp.bid('5'), 'account_id', pg_temp.aid('5')), 'the active shared bridge, ids only');
 select is(pg_temp.shared('other'), null, 'another environment has no shared bridge');
+select ok(has_function_privilege('anon', 'waldo.imessage_shared_bridge(text,text,bigint,text)', 'execute'), 'shared-bridge lookup callable only with a router signature');
+select ok(not has_function_privilege('authenticated', 'waldo.imessage_shared_bridge(text,text,bigint,text)', 'execute'), 'shared-bridge lookup not callable by signed-in users');
+select ok(not exists (select 1 from pg_proc p, aclexplode(p.proacl) a where p.oid = 'waldo.imessage_shared_bridge(text,text,bigint,text)'::regprocedure and a.grantee = 0), 'shared-bridge lookup not granted to PUBLIC');
 select is(waldo.imessage_revoke('sh-op', pg_temp.bid('5'), jsonb_build_array('sh-op', pg_temp.bid('5'))::text, pg_temp.at(),
   pg_temp.isig('revoke', jsonb_build_array('sh-op', pg_temp.bid('5'))::text)), true, 'the operator revokes the shared bridge');
 select is(pg_temp.shared(), null, 'a revoked shared bridge is not offered');
@@ -4271,10 +4782,10 @@ select is(pg_temp.shared(), null, 'a revoked shared bridge is not offered');
     },
 ```
 
-**5. `packages/runtime/src/channels/imessage/bridge-do.ts`.** Add after `status()` (`:253-261`):
+**5. `packages/runtime/src/channels/imessage/bridge-do.ts`.** Add after `status()` (`:253-261`). `'retry'` means the lane is busy, so it counts as ready.
 
 ```ts
-  /** Whether this bridge can answer a "waldo CODE" text now: the same gate as its system replies. A boolean only. */
+  /** Whether this bridge would send a system reply ("Linked.") right now: the gate every system reply passes. A boolean only. */
   async linkReady(): Promise<boolean> {
     const c = this.composition();
     if (!c) return false;
@@ -4283,24 +4794,22 @@ select is(pg_temp.shared(), null, 'a revoked shared bridge is not offered');
   }
 ```
 
-`'retry'` (lane busy) counts as ready.
-
-**6. `packages/runtime/src/channels/imessage/send-url.ts`.** Add one shared payload builder. The app route and the console are its two callers.
+**6. `packages/runtime/src/channels/imessage/send-url.ts`.** Append:
 
 ```ts
 /** The answer to "connect iMessage": the code, the exact text, where to send it, the one-tap link and the code's
- * lifetime (waldo.issue_provider_link_code expires it after 10 minutes). */
+ * lifetime (waldo.issue_provider_link_code expires it after 10 minutes). The app route and the console both return it. */
 export const iMessageLinkCode = (address: string, code: string) =>
   ({ code, text: `waldo ${code}`, address, send_url: iMessageSendUrl(address, code), expires_in_seconds: 600 as const });
 ```
 
-**7. `packages/runtime/src/channels/app-api.ts`.**
-- `:2`: import `iMessageLinkCode` alongside `iMessageSendUrl`, or instead of it if `iMessageSendUrl` becomes unused there.
-- `:172`: replace the inline literal with `return ok(appIMessageLinkCodeV1Schema.parse(iMessageLinkCode(address, code)));`.
+**7. `packages/runtime/src/channels/app-api.ts`.** No behaviour change.
+- `:2`: `import { iMessageLinkCode } from './imessage/send-url';`. `iMessageSendUrl` is no longer used in this file.
+- `:172`: `return ok(appIMessageLinkCodeV1Schema.parse(iMessageLinkCode(address, code)));`
 
-There is no behaviour change; the existing `app-api.test.ts` iMessage cases must stay green.
-
-**8. `packages/runtime/src/channels/imessage/console.ts`.** Append:
+**8. `packages/runtime/src/channels/imessage/console.ts`.**
+- `:39`: the classic page now renders the hint as given: `` `<p>Linked: ${escape(o.linkedHint)}. Texts from it reach your Waldo.</p>…` ``.
+- Append the port:
 
 ```ts
 /** What the owner console shows for "text Waldo": readiness, the address and the masked hint. Never a bridge id, the operator or a full handle. */
@@ -4308,7 +4817,7 @@ export type IMessageLinkState = Readonly<{ offer: boolean; address: string | nul
 export type IMessageLinkPort = Readonly<{ state(owner: string): Promise<IMessageLinkState>; issue(owner: string): Promise<string | null>; unlink(owner: string): Promise<boolean> }>;
 const LINK_OFF: IMessageLinkState = { offer: false, address: null, linkedHint: null };
 
-// Readiness is the shared bridge's own reply gate. Any doubt reads as not ready: a code nobody can answer is a dead end.
+// Readiness is the shared bridge's own system-reply gate. Any doubt reads as not ready: a code nobody can answer is a dead end.
 const sharedBridgeReady = async (env: IMessageEnv, environment: string): Promise<boolean> => {
   try {
     const shared = await iMessageDirectory(env).sharedBridge(environment);
@@ -4321,7 +4830,8 @@ const sharedBridgeReady = async (env: IMessageEnv, environment: string): Promise
 export const iMessageLinkPort = (env: IMessageEnv): IMessageLinkPort => ({
   async state(owner) {
     const c = iMessageComposition(env), address = env.IMESSAGE_WALDO_ADDRESS ?? '', hint = consoleAuth(env)?.iMessageHandleHint;
-    if (!c || !address || !owner || !hint) return LINK_OFF; // connector off (production): no directory or bridge calls at all
+    // Connector off (production): no directory or bridge call at all.
+    if (!c || !address || !owner || !hint) return LINK_OFF;
     const [linkedHint, offer] = await Promise.all([hint(owner), sharedBridgeReady(env, c.environment)]);
     return { offer, address, linkedHint };
   },
@@ -4330,20 +4840,30 @@ export const iMessageLinkPort = (env: IMessageEnv): IMessageLinkPort => ({
 });
 ```
 
-A failure in `hint` propagates, so the read is a 503 and the SPA hides the row. A "not linked" state is never assumed.
+A failed hint read propagates, so the owner-controls read returns 503 and the SPA hides the row. The port never invents a "not linked" state.
 
-**9. `packages/runtime/src/channels/dashboard-owner-controls.ts`.**
+**9. `packages/runtime/src/identity/console-auth.ts`.**
+- `:36`: change the doc comment to "The masked linked iMessage handle (a•••e@icloud.com, •••7731), or null; the full handle never leaves the database."
+- `:176`: `return typeof hint === 'string' && hint.includes('•••') && hint.length >= 5 && hint.length <= 72 ? hint : null;`
+
+**10. `packages/runtime/src/channels/dashboard-owner-controls.ts`.** This version compiles. The `'offer' in current.data` check narrows the projection union, and `deps.auth` is re-asserted before the invite and account branches.
 
 ```ts
-import type { IMessageLinkPort } from './imessage/console'; // type only: app-api.ts loads this file in plain Node via console-signin.ts
+// after the existing imports (:1-5)
+// Type only: app-api.ts loads this file in plain Node (through console-signin.ts), and imessage/console.ts needs workerd.
+import type { IMessageLinkPort } from './imessage/console';
 import { iMessageLinkCode } from './imessage/send-url';
 import { appIMessageLinkCodeV1Schema } from '../../../contracts/src/app/core';
-export type OwnerControlsView = 'invites' | 'account' | 'imessage_link';
-// OwnerControlsDeps gains:  imessage: IMessageLinkPort | null;
+
+export type OwnerControlsView = 'invites' | 'account' | 'imessage_link';                       // :9
+// OwnerControlsDeps (:12-17) gains, after eraseOwnerStorage:
+  /** The shared Waldo number link; null where the surface has no iMessage link control (the app has its own route). */
+  imessage: IMessageLinkPort | null;
+// next to `unknown` (:22):
 const iMessageUnknown: Receipt = { state: 'unconfirmed', message: 'The outcome is unconfirmed. Refresh to see whether your number is linked. A new code replaces any earlier one.' };
 const iMessageIssued: Receipt = { state: 'recorded', message: 'Link code issued. It works once, for 10 minutes. This receipt does not keep it.' };
 
-async function projection(view: OwnerControlsView, deps: OwnerControlsDeps) {
+async function projection(view: OwnerControlsView, deps: OwnerControlsDeps) {                // :25-36
   if (!deps.owner) return null;
   if (view === 'imessage_link') {
     if (!deps.imessage) return null;
@@ -4352,379 +4872,706 @@ async function projection(view: OwnerControlsView, deps: OwnerControlsDeps) {
       data: { offer: link.offer, address: link.offer ? link.address : null, linked_hint: link.linkedHint } };
   }
   if (!deps.auth) return null;
-  /* existing invites/account body unchanged */
+  /* existing `const data = …` and return, unchanged */
 }
+// ownerControlsView (:40): return view === 'invites' || view === 'account' || view === 'imessage_link' ? view : null;
 ```
 
-- `ownerControlsView` (`:37-41`): accept `'imessage_link'`.
-- `ownerControlsAction`:
-  - `:55`: `const iMessage = view === 'imessage_link' && (action?.action === 'imessage.link' || action?.action === 'imessage.unlink');` and add `|| iMessage` to the pairing allowlist.
-  - `:59`: `if (!deps.owner || (iMessage ? !deps.imessage : !deps.auth)) return unavailable();`
-  - After the quota check at `:76`: `if (iMessage && 'offer' in current.data && !(action.action === 'imessage.link' ? current.data.offer : current.data.linked_hint !== null)) return reply({ error: 'no_longer_eligible' }, 409);`
-  - `:77`: the pending receipt is `iMessage ? iMessageUnknown : unknown`.
-  - Before the `invite.member` branch (`:80`), add:
+Inside `ownerControlsAction`:
 
 ```ts
-  if (iMessage) {
+  const action = parseConsoleAction(form, deps.csrf), view = form.get('view');                // :54
+  const iMessage = view === 'imessage_link' && (action?.action === 'imessage.link' || action?.action === 'imessage.unlink');
+  if (!action || !((view === 'invites' && action.action === 'invite.member') || (view === 'account' && action.action === 'account.delete') || iMessage)) return reply({ error: 'invalid_action' }, 403);
+  // … :56-58 unchanged …
+  if (!deps.owner || (iMessage && !deps.imessage) || (!iMessage && !deps.auth)) return unavailable();   // :59
+  // … :60-76 unchanged …
+  if ('offer' in current.data && !(action.action === 'imessage.link' ? current.data.offer : current.data.linked_hint !== null)) return reply({ error: 'no_longer_eligible' }, 409);
+  book[key] = { fingerprint, expires: deps.expires, status: 503, receipt: iMessage ? iMessageUnknown : unknown };  // :77
+  await deps.store.put('console:owner-control-receipts', book);
+  let receipt: Receipt = unknown, status = 503;
+  if ('offer' in current.data) {
+    const port = deps.imessage, address = current.data.address;
+    if (!port) return unavailable();
     let code: string | null = null, done: boolean;
-    try { done = action.action === 'imessage.link' ? (code = await deps.imessage!.issue(deps.owner)) !== null : await deps.imessage!.unlink(deps.owner); }
+    try { done = action.action === 'imessage.link' ? (code = await port.issue(deps.owner)) !== null : await port.unlink(deps.owner); }
     catch { return reply({ receipt: iMessageUnknown, duplicate: false }, 503); }
+    // Built before the receipt is kept: a code that cannot be shown leaves the pending "unconfirmed" receipt, never "recorded".
+    const link = code && address ? appIMessageLinkCodeV1Schema.safeParse(iMessageLinkCode(address, code)) : null;
+    if (link && !link.success) return reply({ receipt: iMessageUnknown, duplicate: false }, 503);
     receipt = action.action === 'imessage.link'
       ? (done ? iMessageIssued : { state: 'rejected', message: 'A link code could not be issued. Nothing changed.' })
       : (done ? { state: 'recorded', message: 'Unlinked. Texts from that number no longer reach your Waldo.' } : { state: 'rejected', message: 'Nothing was linked, so nothing changed.' });
     status = done ? 200 : 409;
     book[key] = { fingerprint, expires: deps.expires, status, receipt };
     try { await deps.store.put('console:owner-control-receipts', book); } catch { return reply({ receipt: iMessageUnknown, duplicate: false }, 503); }
-    const address = 'address' in current.data ? current.data.address : null;
-    return reply({ receipt, duplicate: false, ...(code && address ? { link: appIMessageLinkCodeV1Schema.parse(iMessageLinkCode(address, code)) } : {}) }, status);
+    return reply({ receipt, duplicate: false, ...(link?.success ? { link: link.data } : {}) }, status);
   }
+  if (!deps.auth) return unavailable();
+  // existing invite.member branch (:80) and account.delete branch, unchanged
 ```
 
-**10. `packages/runtime/src/channels/owner-do.ts` (2 lines changed, 0 added; the Mac lane sequences it).**
-- `:7`: add `iMessageLinkPort` to the existing `./imessage/console` import.
-- `:1474`: append `,imessage:iMessageLinkPort(this.imessageHost.env)` to the `deps` object. `imessageHost` is at `:617`.
+**11. `packages/runtime/src/channels/owner-do.ts` (2 lines changed).**
+- `:7`: add `iMessageLinkPort` to the `./imessage/console` import.
+- `:1474`: end the deps object with `…,eraseOwnerStorage:()=>this.ctx.storage.deleteAll(),imessage:iMessageLinkPort(this.imessageHost.env)};`. `imessageHost` is at `:617`.
 
-No surface compares are added, so the `guard-surface-neutral-core` baseline of 58 stays.
+**12. `packages/runtime/src/channels/app-controls.ts:42`.** End the deps object with `…,store:host.storage,imessage:null};`. The app keeps its own link route, and `appControlActionV1Schema` already refuses `imessage.*` (`:78,87`).
 
-**11. `packages/runtime/test/helpers/imessage-fixture-directory.ts`.**
-- Add the handler: `imessage_shared_bridge: (a) => { const b = [...bridges.values()].find((x) => x.kind === 'shared' && x.state === 'active' && x.environment === a.p_environment && owner(x.owner)?.state === 'active'); return b ? { bridge_id: b.bridge_id, account_id: b.account_id } : null; },`
-- Add `imessage_shared_bridge: 'shared'` to the op map at `:142-144`.
+**13. `packages/runtime/test/helpers/imessage-fixture-directory.ts`.**
+- Before `class ClaimedElsewhere` (`:16`), add a mirror of the SQL mask:
 
-**12. `packages/dashboard-app/src/IMessage.tsx` (new).** The sketch below is complete except for the JSX, which follows "UI and copy".
+```ts
+// Mirrors waldo.presence_hint: an Apple ID email keeps its first and last local characters and its domain; anything else its tail.
+const maskHandle = (subject: string) => {
+  const at = subject.indexOf('@'), local = subject.slice(0, Math.max(at, 0)), domain = subject.slice(at + 1);
+  if (at > 0 && domain.length >= 1 && domain.length <= 64) return `${local[0]}•••${local.length >= 3 ? local.at(-1) : ''}@${domain}`;
+  return `•••${subject.slice(subject.length >= 8 ? -4 : -2)}`;
+};
+```
+
+- `:129`: return `maskHandle(p.subject)`.
+- Before `route_presence`, add a handler:
+
+```ts
+    imessage_shared_bridge: (a) => {
+      const b = [...bridges.values()].find((x) => x.kind === 'shared' && x.state === 'active' && x.environment === a.p_environment && owner(x.owner)?.state === 'active');
+      return b ? { bridge_id: b.bridge_id, account_id: b.account_id } : null;
+    },
+```
+
+- In the op map (`:142-144`), add `imessage_shared_bridge: 'shared'`.
+
+**14. `packages/dashboard-app/src/OwnerControls.tsx`: one client for the owner route.**
+- `:9-12` becomes:
+
+```ts
+// One client for /console/dashboard/api/v1/owner: the invites and account panels and the iMessage link control share it.
+export const OWNER_CONTROLS_PATH = '/console/dashboard/api/v1/owner';
+export const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+export const text = (value: unknown): value is string => typeof value === 'string';
+```
+
+- `readOwnerControls` (`:16-18`) splits into an exported `readOwnerBase(raw, view: string): { base: Base; data: Record<string, unknown> }`, which holds the existing first-line checks, plus the unchanged view-specific part.
+- `fetchOwnerControls` (`:30-35`) delegates to an exported `fetchOwnerRaw(view: string, signal?: AbortSignal): Promise<unknown>`. That function holds the existing 401/`!ok` handling and returns `result.json()`.
+- `submitOwnerControl` (`:51-61`) becomes a one-line call to an exported `postOwnerControl(fields: Readonly<Record<string, string>>, origin: string): Promise<{ result: OwnerResult; raw: Record<string, unknown> }>`. That function holds the existing body unchanged (same status mapping, `OwnerChangeError` and errors). It returns `{ result: decoded, raw: raw as Record<string, unknown> }`.
+- The existing `OwnerControls.test.tsx` passes unchanged.
+
+**15. `packages/dashboard-app/src/IMessage.tsx` (new; full file).**
 
 ```tsx
-import { useEffect, useRef, useState, type Ref } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { SignInRequired } from './model';
 import { Icon } from './icons';
 import { shouldPoll } from './live';
-const PATH = '/console/dashboard/api/v1/owner';
+import { fetchOwnerRaw, object, OwnerChangeError, postOwnerControl, readOwnerBase, text } from './OwnerControls';
+
 export const LINK_POLL_MS = 4_000;
+const POLL_TIMEOUT_MS = 10_000;
+const CODE_LIFETIME_MS = 600_000;
 const CODE = /^[A-HJ-NP-Z2-9]{10}$/;
-export type IMessageLinkRead = { csrf: string; revision: string; offer: boolean; address: string | null; linkedHint: string | null };
-export type IMessageCode = { code: string; text: string; address: string; sendUrl: string; expiresAt: number };
 type Action = 'imessage.link' | 'imessage.unlink';
-type Receipt = { state: 'recorded' | 'incomplete' | 'rejected' | 'unconfirmed'; message: string };
-export type IMessageResult = { duplicate: boolean; receipt: Receipt; code: IMessageCode | null };
-export class IMessageChangeError extends Error {}
-const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
-const text = (v: unknown): v is string => typeof v === 'string';
-export const COPY = { /* every string from "UI and copy", in one place for tests */ } as const;
+export type Placement = 'connections' | 'welcome';
+export type Notice = { tone: 'status' | 'alert'; key: NoticeKey };
+export type IMessageLinkRead = { csrf: string; revision: string; offer: boolean; address: string | null; linkedHint: string | null };
+export type IMessageCode = { text: string; address: string; sendUrl: string; expiresAt: number; issuedHint: string | null };
+type Linked = { hint: string; at: string };
+
+// Connections speaks about Waldo; the welcome flow is Waldo speaking, so its card says "I".
+const CONNECTIONS = {
+  heading: 'Text Waldo from your iPhone',
+  intro: 'Link your number once, then text Waldo like anyone else.',
+  can: ['Answer the texts you send him from your linked number or Apple ID.'],
+  cannot: ['Read photos, files, group chats or SMS. Only direct iMessage text reaches him.', 'Send your Brief or reminders by text.'],
+  stores: 'Waldo keeps the number or Apple ID you link on your account, so only you reach your Waldo. Your texts pass through the Mac that runs Waldo’s number.',
+  getCode: 'Get my code', getting: 'Getting your code…', newCode: 'Get a new code', replaces: 'A new code replaces this one.',
+  sendHeading: 'Send your code from your iPhone',
+  sendHow: 'On your iPhone, tap Open Messages, then Send. The code stays hidden here so nobody nearby can use it first.',
+  openMessages: 'Open Messages', copyText: 'Copy the text', showCode: 'Show the code', hideCode: 'Hide the code', copyAddress: 'Copy address',
+  computer: (address: string) => `On a computer, show the code and text it from your iPhone to ${address}.`,
+  works: 'The code works once, for 10 minutes. Send it from the number or Apple ID you want to link.',
+  waiting: 'Waiting for your text…',
+  notAnswering: 'Waldo’s iMessage number isn’t answering right now. If nothing links before the code runs out, try again later.',
+  expired: 'That code has expired. Get a new one when you’re ready to send it.',
+  justLinked: (l: Linked) => `Linked ${l.hint} at ${l.at}. Texts from it now reach your Waldo.`,
+  notYours: 'Not yours? Someone else may have sent your code first. Unlink it now, then get a new code.',
+  unlinkNow: 'Unlink this number',
+  linked: (hint: string) => `Linked to ${hint}. Texts from it reach only your Waldo.`,
+  offline: 'Waldo’s iMessage number is offline right now. Your link stays in place.',
+  unlink: 'Unlink iMessage',
+  confirmUnlink: (hint: string) => `Unlink ${hint}? Its texts stop reaching Waldo. You can link again with a new code.`,
+  manage: 'Manage it in Connections',
+  issueRejected: 'Waldo couldn’t make a code just now. Nothing changed. Try again in a moment.',
+  unconfirmed: 'Waldo couldn’t confirm that. If no code appears, get a new one; it replaces any earlier code.',
+  refused: 'That change wasn’t accepted, or something changed while you were here. Waldo checked again.',
+  unlinked: 'Unlinked. Texts from that number no longer reach your Waldo.',
+  unlinkRejected: 'Nothing was linked, so nothing changed.',
+  unlinkUnconfirmed: 'Waldo couldn’t confirm the unlink. Check again in a moment.',
+  copiedText: 'Copied the text. Paste it into Messages and send it to Waldo’s address.',
+  copiedAddress: 'Copied the address.',
+  copyFailed: 'Couldn’t copy. Show the code and type it instead.',
+  signedOut: 'Your session ended. Sign in again to link iMessage.',
+  setup: 'Text Waldo from your own iPhone. Get a one-time code in Connections and send it from Messages. Only your number reaches your Waldo.',
+  linkedLabel: 'Linked', notLinkedLabel: 'Not linked',
+};
+type Copy = typeof CONNECTIONS;
+const WELCOME: Copy = {
+  ...CONNECTIONS,
+  heading: 'Text me from your iPhone',
+  intro: 'Link your number once, then text me like anyone else.',
+  can: ['Answer the texts you send from your linked number or Apple ID.'],
+  cannot: ['Read photos, files, group chats or SMS. Only direct iMessage text reaches me.', 'Send your Brief or reminders by text.'],
+  stores: 'I keep the number or Apple ID you link on your account, so only you reach me. Your texts pass through the Mac that runs my number.',
+  notAnswering: 'My iMessage number isn’t answering right now. If nothing links before the code runs out, try again later.',
+  justLinked: (l: Linked) => `Linked ${l.hint} at ${l.at}. Texts from it now reach me.`,
+  linked: (hint: string) => `Linked to ${hint}. Texts from it reach only me.`,
+  offline: 'My iMessage number is offline right now. Your link stays in place.',
+  confirmUnlink: (hint: string) => `Unlink ${hint}? Its texts stop reaching me. You can link again with a new code.`,
+  issueRejected: 'I couldn’t make a code just now. Nothing changed. Try again in a moment.',
+  unconfirmed: 'I couldn’t confirm that. If no code appears, get a new one; it replaces any earlier code.',
+  refused: 'That change wasn’t accepted, or something changed while you were here. I checked again.',
+  unlinked: 'Unlinked. Texts from that number no longer reach me.',
+  unlinkUnconfirmed: 'I couldn’t confirm the unlink. Check again in a moment.',
+  copiedText: 'Copied the text. Paste it into Messages and send it to my address.',
+};
+export const COPY: Readonly<Record<Placement, Copy>> = { connections: CONNECTIONS, welcome: WELCOME };
+type NoticeKey = 'issueRejected' | 'unconfirmed' | 'refused' | 'unlinked' | 'unlinkRejected' | 'unlinkUnconfirmed' | 'copiedText' | 'copiedAddress' | 'copyFailed';
 
 export function readIMessageLink(raw: unknown): IMessageLinkRead {
-  const fail = () => new Error('imessage_link_unreadable');
-  if (!object(raw) || raw.version !== 1 || raw.view !== 'imessage_link' || raw.state !== 'available' || !text(raw.csrf) || !raw.csrf || !text(raw.revision) || !/^[0-9a-f]{64}$/.test(raw.revision) || !object(raw.data)) throw fail();
-  const d = raw.data;
-  if (typeof d.offer !== 'boolean' || !(d.address === null || text(d.address) && d.address.length >= 3) || (d.offer && d.address === null)
-    || !(d.linked_hint === null || text(d.linked_hint) && d.linked_hint.length >= 2 && d.linked_hint.length <= 4)) throw fail();
-  return { csrf: raw.csrf, revision: raw.revision, offer: d.offer, address: d.address as string | null, linkedHint: d.linked_hint as string | null };
+  const { base, data } = readOwnerBase(raw, 'imessage_link');
+  const { offer, address, linked_hint: hint } = data;
+  if (typeof offer !== 'boolean' || !(address === null || text(address) && address.length >= 3 && address.length <= 320) || (offer && address === null)
+    || !(hint === null || text(hint) && hint.includes('•••') && hint.length >= 5 && hint.length <= 72)) throw new Error('imessage_link_unreadable');
+  return { csrf: base.csrf, revision: base.revision, offer, address, linkedHint: hint };
 }
-export async function fetchIMessageLink(signal?: AbortSignal): Promise<IMessageLinkRead> {
-  const response = await fetch(`${PATH}?view=imessage_link`, { credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal, headers: { accept: 'application/json' } });
-  if (response.status === 401) throw new SignInRequired();
-  if (!response.ok) throw new Error('imessage_link_unavailable');
-  return readIMessageLink(await response.json());
-}
+export const fetchIMessageLink = async (signal?: AbortSignal) => readIMessageLink(await fetchOwnerRaw('imessage_link', signal));
 export const iMessageVisible = (read: IMessageLinkRead | null) => !!read && (read.offer || read.linkedHint !== null);
-export function readIMessageResult(raw: Record<string, unknown>, action: Action, now: number): IMessageResult {
-  const r = raw.receipt;
-  if (typeof raw.duplicate !== 'boolean' || !object(r) || !['recorded', 'incomplete', 'rejected', 'unconfirmed'].includes(String(r.state)) || !text(r.message)) throw new IMessageChangeError(COPY.unconfirmed);
-  let code: IMessageCode | null = null;
-  if (raw.link !== undefined) {
-    const l = raw.link;
-    if (action !== 'imessage.link' || raw.duplicate || r.state !== 'recorded' || !object(l) || !text(l.code) || !CODE.test(l.code) || l.text !== `waldo ${l.code}`
-      || !text(l.address) || l.address.length < 3 || !text(l.send_url) || !l.send_url.startsWith('sms:') || l.send_url.length > 512 || l.expires_in_seconds !== 600) throw new IMessageChangeError(COPY.unconfirmed);
-    code = { code: l.code, text: l.text, address: l.address, sendUrl: l.send_url, expiresAt: now + 600_000 };
-  }
-  return { duplicate: raw.duplicate, receipt: { state: r.state as Receipt['state'], message: r.message }, code };
+
+export function readIMessageLinkCode(value: unknown, now: number): Omit<IMessageCode, 'issuedHint'> {
+  if (!object(value) || !text(value.code) || !CODE.test(value.code) || value.text !== `waldo ${value.code}` || !text(value.address) || value.address.length < 3 || value.address.length > 320
+    || !text(value.send_url) || !value.send_url.startsWith('sms:') || value.send_url.length > 512 || value.expires_in_seconds !== 600) throw new Error('imessage_code_unreadable');
+  return { text: value.text, address: value.address, sendUrl: value.send_url, expiresAt: now + CODE_LIFETIME_MS };
 }
-export async function submitIMessage(read: IMessageLinkRead, action: Action, requestId: string, now = Date.now()): Promise<IMessageResult> {
-  const form = new FormData();
-  for (const [k, v] of Object.entries({ csrf: read.csrf, view: 'imessage_link', revision: read.revision, request_id: requestId, action })) form.set(k, v);
-  let response: Response;
-  try { response = await fetch(`${PATH}/actions`, { method: 'POST', body: form, credentials: 'same-origin', cache: 'no-store', redirect: 'error', headers: { accept: 'application/json' } }); }
-  catch { throw new IMessageChangeError(COPY.unconfirmed); }
-  if (response.status === 401) throw new SignInRequired();
-  if (response.status === 429) throw new IMessageChangeError(COPY.rateLimited);
-  if (response.status === 400 || response.status === 403) throw new IMessageChangeError(COPY.refused);
-  let raw: unknown; try { raw = await response.json(); } catch { throw new IMessageChangeError(COPY.unconfirmed); }
-  if (!object(raw) || !object(raw.receipt)) throw new IMessageChangeError(response.status === 409 ? COPY.changed : COPY.unconfirmed);
-  const result = readIMessageResult(raw, action, now);
-  const coherent = response.ok && result.receipt.state === 'recorded' || response.status === 409 && result.receipt.state === 'rejected' || response.status === 503 && result.receipt.state === 'unconfirmed';
-  if (!coherent) throw new IMessageChangeError(COPY.unconfirmed);
-  return result;
+/** One link or unlink through the shared owner-controls client. The code is read only from a fresh recorded link response. */
+export async function submitIMessage(read: IMessageLinkRead, action: Action, requestId: string, origin: string, now = Date.now()) {
+  const { result, raw } = await postOwnerControl({ csrf: read.csrf, view: 'imessage_link', revision: read.revision, request_id: requestId, action }, origin);
+  const fresh = action === 'imessage.link' && !result.duplicate && result.receipt.state === 'recorded';
+  if (raw.link !== undefined && !fresh) throw new Error('imessage_code_unexpected');
+  return { state: result.receipt.state, code: fresh && raw.link !== undefined ? readIMessageLinkCode(raw.link, now) : null };
 }
-export function useIMessageLinkRead(): IMessageLinkRead | null { /* one fetchIMessageLink in an effect with AbortController; null on any failure */ }
-export function IMessageBody(props: { placement: 'connections' | 'welcome'; read: IMessageLinkRead | null; code: IMessageCode | null; expired: boolean; busy: boolean;
-  notice: { tone: 'status' | 'alert'; text: string } | null; signedOut: boolean; openRef?: Ref<HTMLAnchorElement>;
-  onIssue(): void; onUnlink(): void; onCopy(value: string, what: 'text' | 'address'): void }) { /* pure states, see UI and copy */ }
-export function IMessageLink({ placement }: { placement: 'connections' | 'welcome' }) {
-  // State: read, code, expired, busy, signedOut, notice, reload; refs inFlight and openRef.
-  // Effect 1 [reload]: fetchIMessageLink -> setRead; on SignInRequired setSignedOut(true); other errors -> setRead(null).
-  // Effect 2 [code]: while code is set, a setTimeout chain every LINK_POLL_MS: at Date.now() >= code.expiresAt -> setCode(null), setExpired(true), stop;
-  //   skip the fetch while !shouldPoll(document.visibilityState); a read with linkedHint !== null -> setRead, setCode(null), notice COPY.linked(hint), stop;
-  //   SignInRequired -> setSignedOut(true), setCode(null), stop; other errors -> keep polling. The cleanup clears the timer.
-  // Effect 3 [code]: when a code appears, openRef.current?.focus().
-  // act(action): guarded by inFlight; unlink first window.confirm(COPY.confirmUnlink(hint)); submitIMessage(read, action, crypto.randomUUID());
-  //   link -> setCode(result.code) or a notice (rejected -> COPY.issueRejected, else COPY.unconfirmed);
-  //   unlink -> notice COPY.unlinked | COPY.unlinkRejected | COPY.unlinkUnconfirmed; errors -> SignInRequired or notice(error.message); finally setReload(n+1).
-  // copy(value, what): navigator.clipboard.writeText -> notice COPY.copiedText / COPY.copiedAddress; a throw -> notice COPY.copyFailed.
-  // Visible only when iMessageVisible(read) || code || expired || notice; otherwise return null (hidden entirely).
+
+/** The read alone, for places that only decide whether to point at Connections (Setup). Null while loading or on any failure. */
+export function useIMessageLinkRead(): IMessageLinkRead | null {
+  const [read, setRead] = useState<IMessageLinkRead | null>(null);
+  useEffect(() => {
+    const abort = new AbortController();
+    fetchIMessageLink(abort.signal).then(value => { if (!abort.signal.aborted) setRead(value); }, () => { if (!abort.signal.aborted) setRead(null); });
+    return () => abort.abort();
+  }, []);
+  return read;
+}
+
+export type IMessageLinkModel = {
+  read: IMessageLinkRead | null; code: IMessageCode | null; shown: boolean; expired: boolean; busy: boolean; linked: Linked | null;
+  notice: Notice | null; signedOut: boolean; visible: boolean;
+  issue(): void; unlink(): void; toggleCode(): void; copy(value: string, what: 'text' | 'address'): void;
+};
+/** All link state lives here, so a parent can decide where the row goes without unmounting a live code. */
+export function useIMessageLink(enabled = true, voice: Placement = 'connections'): IMessageLinkModel {
+  const [read, setRead] = useState<IMessageLinkRead | null>(null);
+  const [code, setCode] = useState<IMessageCode | null>(null);
+  const [shown, setShown] = useState(false);
+  const [expired, setExpired] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [linked, setLinked] = useState<Linked | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [signedOut, setSignedOut] = useState(false);
+  const [reload, setReload] = useState(0);
+  const inFlight = useRef(false);
+  useEffect(() => {
+    if (!enabled) return;
+    const abort = new AbortController();
+    fetchIMessageLink(abort.signal).then(value => { if (!abort.signal.aborted) setRead(value); }, (error: unknown) => {
+      if (abort.signal.aborted) return;
+      if (error instanceof SignInRequired) setSignedOut(true); else setRead(null);
+    });
+    return () => abort.abort();
+  }, [reload, enabled]);
+  useEffect(() => {
+    if (!code) return;
+    let stopped = false, timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = async () => {
+      if (stopped) return;
+      if (Date.now() >= code.expiresAt) { setCode(null); setShown(false); setExpired(true); return; }
+      if (shouldPoll(document.visibilityState)) {
+        const abort = new AbortController(), limit = setTimeout(() => abort.abort(), POLL_TIMEOUT_MS);
+        try {
+          const next = await fetchIMessageLink(abort.signal);
+          if (stopped) return;
+          setRead(next);
+          if (next.linkedHint !== null && next.linkedHint !== code.issuedHint) {
+            setCode(null); setShown(false); setLinked({ hint: next.linkedHint, at: new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(new Date()) });
+            return;
+          }
+        } catch (error) {
+          if (error instanceof SignInRequired) { setSignedOut(true); setCode(null); setShown(false); return; }
+        } finally { clearTimeout(limit); }
+      }
+      if (!stopped) timer = setTimeout(tick, LINK_POLL_MS);
+    };
+    timer = setTimeout(tick, LINK_POLL_MS);
+    return () => { stopped = true; clearTimeout(timer); };
+  }, [code]);
+  const act = async (action: Action) => {
+    if (!read || inFlight.current) return;
+    if (action === 'imessage.unlink' && !window.confirm(COPY[voice].confirmUnlink(read.linkedHint ?? 'this number'))) return;
+    inFlight.current = true; setBusy(true); setNotice(null); setExpired(false);
+    try {
+      const result = await submitIMessage(read, action, crypto.randomUUID(), window.location.origin);
+      if (action === 'imessage.link') {
+        setShown(false); setLinked(null);
+        setCode(result.code ? { ...result.code, issuedHint: read.linkedHint } : null);
+        if (!result.code) setNotice({ tone: 'alert', key: result.state === 'rejected' ? 'issueRejected' : 'unconfirmed' });
+      } else {
+        setCode(null); setShown(false); setLinked(null);
+        setNotice(result.state === 'recorded' ? { tone: 'status', key: 'unlinked' } : { tone: 'alert', key: result.state === 'rejected' ? 'unlinkRejected' : 'unlinkUnconfirmed' });
+      }
+    } catch (error) {
+      if (error instanceof SignInRequired) setSignedOut(true);
+      else setNotice({ tone: 'alert', key: error instanceof OwnerChangeError ? 'refused' : action === 'imessage.unlink' ? 'unlinkUnconfirmed' : 'unconfirmed' });
+    } finally { inFlight.current = false; setBusy(false); setReload(n => n + 1); }
+  };
+  const copy = async (value: string, what: 'text' | 'address') => {
+    try { await navigator.clipboard.writeText(value); setNotice({ tone: 'status', key: what === 'text' ? 'copiedText' : 'copiedAddress' }); }
+    catch { setNotice({ tone: 'alert', key: 'copyFailed' }); }
+  };
+  const visible = iMessageVisible(read) || code !== null || expired || linked !== null || notice !== null;
+  return { read, code, shown, expired, busy, linked, notice, signedOut, visible,
+    issue: () => void act('imessage.link'), unlink: () => void act('imessage.unlink'), toggleCode: () => setShown(value => !value), copy: (value, what) => void copy(value, what) };
+}
+
+export function IMessageBody({ placement, link }: { placement: Placement; link: IMessageLinkModel }) {
+  const { read, code, linked } = link, offer = !!read?.offer, hint = read?.linkedHint ?? null, copy = COPY[placement];
+  // Both screens already carry their one ink action (Connect Google, Add Google account), so this card's actions are outlines;
+  // the welcome step stacks them full width like its other actions.
+  const welcome = placement === 'welcome', actions = welcome ? 'welcome-actions' : 'control-actions';
+  const openRef = useRef<HTMLAnchorElement>(null);
+  useEffect(() => { if (code) openRef.current?.focus(); }, [code]);
+  const unlinkButton = (label: string, emphasis: boolean) => <button type="button" className={emphasis ? 'secondary' : undefined} disabled={link.busy} onClick={link.unlink}>{label}</button>;
+  return <div className="imessage-body">
+    {link.notice && <p role={link.notice.tone}>{copy[link.notice.key]}</p>}
+    {link.signedOut && <p role="alert">{copy.signedOut} <a href="/console/signin">Sign in</a></p>}
+    {code ? <>
+      <h3>{copy.sendHeading}</h3>
+      <p>{copy.sendHow}</p>
+      <div className={actions}>
+        <a ref={openRef} className="button-link secondary" href={code.sendUrl}>{copy.openMessages}</a>
+        <button type="button" className={welcome ? 'secondary' : 'quiet'} onClick={() => link.copy(code.text, 'text')}>{copy.copyText}</button>
+        <button type="button" className={welcome ? 'secondary' : 'quiet'} aria-expanded={link.shown} onClick={link.toggleCode}>{link.shown ? copy.hideCode : copy.showCode}</button>
+      </div>
+      {link.shown && <p className="imessage-code"><span aria-hidden="true">{code.text}</span><span className="visually-hidden">{`waldo ${code.text.slice(6).split('').join(' ')}`}</span></p>}
+      <p>{copy.computer(code.address)} <button type="button" className="quiet" onClick={() => link.copy(code.address, 'address')}>{copy.copyAddress}</button></p>
+      <p>{copy.works}</p>
+      {!offer && <p>{copy.notAnswering}</p>}
+      <p role="status" aria-live="polite">{copy.waiting}</p>
+      {offer && <div className={actions}><button type="button" className={welcome ? 'secondary' : 'quiet'} disabled={link.busy} onClick={link.issue}>{copy.newCode}</button><span className="meta">{copy.replaces}</span></div>}
+    </> : linked ? <>
+      <p role="status">{copy.justLinked(linked)}</p>
+      <p>{copy.notYours}</p>
+      <div className={actions}>{unlinkButton(copy.unlinkNow, true)}</div>
+    </> : hint ? <>
+      <p>{copy.linked(hint)}</p>
+      {!offer && <p>{copy.offline}</p>}
+      {welcome ? <p><a href="#/connections">{copy.manage}</a></p> : <div className={actions}>{unlinkButton(copy.unlink, false)}</div>}
+    </> : offer ? <>
+      <p>{link.expired ? copy.expired : copy.intro}</p>
+      {!link.expired && <div className="welcome-lists">
+        <div><h3>Waldo can</h3><ul>{copy.can.map(line => <li key={line}><Icon name="check"/><span>{line}</span></li>)}</ul></div>
+        <div><h3>Waldo can’t</h3><ul>{copy.cannot.map(line => <li key={line}><svg className="welcome-cross" viewBox="0 0 16 16" aria-hidden="true"><path d="m5 5 6 6m0-6-6 6"/></svg><span>{line}</span></li>)}</ul></div>
+      </div>}
+      {!link.expired && <p>{copy.stores}</p>}
+      <div className={actions}><button type="button" className="secondary" aria-busy={link.busy} disabled={link.busy} onClick={link.issue}>{link.busy ? copy.getting : link.expired ? copy.newCode : copy.getCode}</button></div>
+    </> : null}
+  </div>;
+}
+
+/** The iMessage link control. Renders nothing unless the read says it applies, so it is never a dead end.
+ * Pass `link` when the parent must know visibility first (the Connections chat rows); without it the control reads for itself. */
+export function IMessageLink({ placement, link: given }: { placement: Placement; link?: IMessageLinkModel }) {
+  const own = useIMessageLink(!given, placement), link = given ?? own;
+  if (!link.visible) return null;
+  const hint = link.read?.linkedHint ?? null;
+  if (placement === 'welcome') return <section className="tile imessage-card" aria-labelledby="imessage-title">
+    <div className="imessage-head"><span className="kind"><Icon name="chat"/></span><h2 id="imessage-title">{COPY.welcome.heading}</h2></div>
+    <IMessageBody placement={placement} link={link}/>
+  </section>;
+  return <li className={`branch${hint ? '' : ' broken'}`}><details name="connections" className="disclosure">
+    <summary><span className={`marks${hint ? '' : ' off'}`}><Icon name="chat"/></span><span className="value">iMessage</span><span className={`access-label${hint ? ' done' : ''}`}>{hint ? COPY.connections.linkedLabel : COPY.connections.notLinkedLabel}</span></summary>
+    <div className="disclosure-body"><IMessageBody placement={placement} link={link}/></div>
+  </details></li>;
 }
 ```
 
-**13. `packages/dashboard-app/src/Controls.tsx:91`.** In the Chat `<ul>`, insert `<IMessageLink placement="connections"/>` as the first child, before the Telegram `<li>`. Import it from `./IMessage`.
+**16. `packages/dashboard-app/src/Controls.tsx` (on S5a's `chatRows`).** Three lines:
 
-**14. `packages/dashboard-app/src/Panels.tsx:145-151`.**
-- Call `const link = useIMessageLinkRead();` at the top of `SetupControls`.
-- Replace the #1257 item with `...(iMessageVisible(link) ? [{ title: 'Connect iMessage', recorded: record.data.imessage_linked === true, href: '#/connections', description: COPY.setup }] : [])`. `recorded` keeps the existing `imessage_linked` field, so no orphan is created.
-- Update `Panels.test.tsx:102-107`. Under SSR the item is now absent because the read has not run. The visible case moves to `IMessage.test.tsx`.
+```tsx
+import { IMessageLink, useIMessageLink } from './IMessage';
+// in ConnectionsControls, after `const { google, telegram, sessions } = record.data;` (the Sessions section never reads it):
+const iMessage = useIMessageLink(section !== 'sessions');
+// last entry of S5a's chatRows list:
+...(iMessage.visible ? [{ key: 'imessage', node: <IMessageLink placement="connections" link={iMessage}/> }] : []),
+```
 
-**15. `packages/dashboard-app/src/App.tsx:217`.** Remove `<a href="/console/imessage">iMessage</a> · ` from the footer. Connections now carries the flow. Operators still reach the classic page through the classic console nav (`runtime/src/channels/console.ts:548`). Default: remove. If Ashish wants it kept in review, keep it and note the production 404.
+S5a's `{chatRows.length > 0 && …}` then hides the "Chat" label when neither Telegram nor iMessage applies.
 
-**16. `packages/dashboard-app/src/style.css` (append; CSS is not scanned by `guard-health-leak`, but TSX is, so put no font weights inline in TSX).**
+**17. `packages/dashboard-app/src/Panels.tsx` (on S5a's Setup shape).** Replace S5a's `iMessageSetupRow` and its call site:
+
+```tsx
+import { COPY as IMESSAGE_COPY, iMessageVisible, useIMessageLinkRead, type IMessageLinkRead } from './IMessage';
+// Shown only when the iMessage link read says it applies, so Setup never points at a link nobody can answer.
+export const iMessageSetupRow = (d: SetupRecord['data'], link: IMessageLinkRead | null): SetupRow | null => iMessageVisible(link)
+  ? { key: 'imessage', title: 'Connect iMessage', body: IMESSAGE_COPY.connections.setup, state: known(d.imessage_linked), done: 'Linked', href: '#/connections', link: 'Open Connections' }
+  : null;
+// SetupControls: first line `const iMessage = useIMessageLinkRead();`, and the call becomes setupRows(record.data, iMessageSetupRow(record.data, iMessage))
+```
+
+`known` is S5a's module-level helper. S5a's test "With `iMessageSetupRow(data)`, the row sits fourth" changes to pass a visible read (see Tests).
+
+**18. `Welcome.tsx` (S3's file).** At S3's seam, add `<IMessageLink placement="welcome"/>` and `import { IMessageLink } from './IMessage';`. No conditional is needed.
+
+**19. `packages/dashboard-app/src/App.tsx:217`.** Remove `<a href="/console/imessage">iMessage</a> · `. Operators still reach the classic page through the classic console nav (`runtime/src/channels/console.ts:548`).
+
+**20. `packages/dashboard-app/src/style.css`.** Append the block below. It is CSS, so no font weight goes inline in TSX, which `guard-health-leak` scans for "weight" (commit ebb070a5).
+
+The can/can't lists, the welcome action stack and the outline buttons reuse S3's classes, which exist because S3 merges first:
+- `.welcome-lists`, holding `<Icon name="check"/>` and the inline `svg.welcome-cross`, in both placements;
+- `.welcome-actions` (full width) in the welcome placement;
+- `button.secondary` / `.button-link.secondary`.
 
 ```css
 .imessage-head { display:flex; align-items:center; gap:10px; margin:0 0 8px; }
 .imessage-head h2 { margin:0; }
 .imessage-code { display:block; width:fit-content; max-width:100%; margin:4px 0 12px; padding:12px 16px; border-radius:var(--r-inner); background:var(--fill); color:var(--ink); font-size:26px; font-weight:600; letter-spacing:.06em; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; user-select:all; -webkit-user-select:all; }
-.imessage-lists { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px 20px; margin:6px 0 10px; }
-.imessage-lists h3 { font-size:13px; font-weight:600; margin:0 0 4px; }
-.imessage-lists ul { margin:0; padding-left:18px; color:var(--t2); font-size:14px; }
-@media(max-width:640px) { .imessage-code { font-size:22px; } .imessage-lists { grid-template-columns:1fr; } }
+/* .control-actions and .welcome-actions have no bottom margin (style.css:209, S3); give the next line room. */
+.imessage-body :is(.control-actions,.welcome-actions)+p { margin-top:14px; }
+/* .marks .icon is green for granted access (style.css:270); an unlinked channel's mark stays neutral. */
+.marks.off .icon { color:var(--t2); }
+@media(max-width:640px) { .imessage-code { font-size:22px; } }
 ```
 
-**17. Welcome mount.** If S3 has merged, add `<IMessageLink placement="welcome"/>` in S3's Connect step, directly below the Google card. The file is S3's: find the `#/welcome` renderer and its Connect step. The card renders nothing when hidden, so the step needs no conditional.
-
-**18. `packages/dashboard-app/scripts/preview.mjs`.**
-- Add cases `imessage`, `imessage-linked` and `imessage-off`.
-- `GET /console/dashboard/api/v1/owner?view=imessage_link` returns synthetic reads:
-  - `imessage`: offer true, address `waldo@example.test`. After 2 GETs that follow a POST, return `linked_hint: '7731'`.
-  - `imessage-linked`: offer true, hint `7731`.
-  - `imessage-off`: offer false, address and hint null.
-- `POST .../owner/actions` returns `{receipt:{state:'recorded',message:'…'},duplicate:false,link:{code:'K7QM2XRT9P',text:'waldo K7QM2XRT9P',address:'waldo@example.test',send_url:'sms:waldo@example.test&body=waldo%20K7QM2XRT9P',expires_in_seconds:600}}`.
+**21. `packages/dashboard-app/scripts/preview.mjs`.** Add cases `imessage`, `imessage-linked` and `imessage-off`.
+- **GET** `/console/dashboard/api/v1/owner?view=imessage_link`:
+  - `imessage`: offer true, address `waldo@example.test`, hint null. Two GETs after a POST, return hint `a•••e@example.test`.
+  - `imessage-linked`: hint `•••7731`.
+  - `imessage-off`: offer false, address null, hint null.
+- **POST** `…/owner/actions`: return `{receipt:{state:'recorded',message:'Link code issued.'},duplicate:false,link:{code:'K7QM2XRT9P',text:'waldo K7QM2XRT9P',address:'waldo@example.test',send_url:'sms:waldo@example.test&body=waldo%20K7QM2XRT9P',expires_in_seconds:600}}`.
 
 ### UI and copy
 
-All copy lives in `COPY` in `IMessage.tsx`. Waldo is "he"; interface chrome says "Waldo". There are no exclamation marks or banned words, and spelling is British.
+All copy lives in `COPY` in `IMessage.tsx`, verbatim as below. There are no exclamation marks or banned words, and spelling is British. Essential copy is always a plain `<p>` (`--t2`), never `.meta`; `.meta` is used only for "A new code replaces this one.".
 
-**Connections row (placement `connections`).**
-- **Layout.** A `<li className="branch">` inside the Chat group, first, before Telegram. When the owner is not linked it gets `branch broken`, the dashed "Needs you" line, matching Telegram. It holds a `details.disclosure` (name `connections`). The summary has `<span className="marks"><Icon name="chat"/></span>`, value **iMessage**, and an `access-label` that reads **Linked** or **Not linked** (plain, not red).
-- **Body states:**
-  - **Ready** (offer, not linked, no code):
-    - `<p>` "Link your number once, then text Waldo like anyone else."
-    - `.imessage-lists` with two columns:
-      - h3 "Waldo can": "Answer the texts you send him from your linked number or Apple ID address."
-      - h3 "Waldo can't": "Read photos, files, group chats or SMS. Only direct iMessage text reaches him." and "Send your Brief or reminders by text."
-    - `<p>` "Waldo keeps the number or address you link on your account, so only you reach your Waldo. Your texts pass through the Mac that runs Waldo’s number."
-    - Primary button "Get my code". While the request is in flight it reads "Getting your code…" and is disabled with `aria-busy`.
-  - **Code:**
-    - h3 "Send this from your iPhone".
-    - `<p className="imessage-code" aria-label="waldo K 7 Q M …">` showing `waldo K7QM2XRT9P`.
-    - Actions: `<a className="button-link">` "Open Messages" (`href` = `send_url`) and a button "Copy the text".
-    - `<p>` "On your iPhone, tap Open Messages, then Send. On a computer, text it from your iPhone to **woof@heywaldo.in**." followed by a quiet button "Copy address".
-    - `<p>` "The code works once, for 10 minutes. Send it from the number or Apple ID you want to link."
-    - `<p role="status" aria-live="polite">` "Waiting for your text…"
-    - Quiet button "Get a new code", then `.meta` "A new code replaces this one." Both appear only while `offer` is true.
-    - If a poll shows offer false while the code is shown: `<p>` "Waldo’s iMessage number isn’t answering right now. If nothing links before the code runs out, try again later."
-  - **Linked:**
-    - On the poll that sees the link: status "Linked. Texts from the number or address ending in 7731 now reach your Waldo."
-    - Steady state: `<p>` "Linked to the number or address ending in **7731**. Texts from it reach only your Waldo."
-    - If not `offer`: `<p>` "Waldo’s iMessage number is offline right now. Your link stays in place."
-    - `.meta` "Not yours? Unlink it."
-    - Button "Unlink iMessage". Confirm text: "Unlink iMessage? Texts from the number or address ending in 7731 stop reaching Waldo. You can link again with a new code."
-  - **Expired:** `<p>` "That code has expired. Get a new one when you’re ready to send it." and primary "Get a new code".
-- **Notices** (`role="status"` for success, `role="alert"` for problems):
-  - Copied: "Copied the text." / "Copied the address."
-  - Copy failed: "Couldn’t copy. Select it and copy it yourself."
-  - Issue rejected: "Waldo couldn’t make a code just now. Nothing changed. Try again in a moment."
-  - Unconfirmed: "Waldo couldn’t confirm that. If no code appears, get a new one; it replaces any earlier code."
-  - Changed (409 without receipt): "Something changed while you were here, so nothing was done. Waldo checked again."
-  - Refused (400/403): "That change wasn’t accepted. Reload the page and try again."
-  - Rate limited: "Too many changes in a minute. Wait a moment, then try again."
-  - Unlinked: "Unlinked. Texts from that number no longer reach your Waldo."
-  - Unlink rejected: "Nothing was linked, so nothing changed."
-  - Unlink unconfirmed: "Waldo couldn’t confirm the unlink. Check again in a moment."
-  - Signed out (only while the row is visible): "Your session ended. Sign in again to link iMessage." with link "Sign in" (`/console/signin`).
-- **Hidden:** while loading, on read failure, when the connector is off, or when the bridge is not ready and the owner is not linked. No skeleton is shown, so nothing flashes on production.
+**Two voices:**
+- `COPY.connections` is interface chrome. It says "Waldo" and "he". The table below is this voice.
+- `COPY.welcome` is Waldo speaking, matching the rest of `#/welcome` ("I read your calendar and mail…"). It overrides these keys:
 
-**Welcome card (placement `welcome`).**
-- `<section className="tile" aria-labelledby="imessage-title">` with `.imessage-head`: `<span className="kind"><Icon name="chat"/></span>` and h2 "Text Waldo from your iPhone".
-- The body states match the row, with one difference in the linked state: no Unlink button. Instead `.meta` reads "Not yours? Unlink it in [Connections](#/connections)."
-- The step's own "Continue" or skip control is S3's. The card adds no skip.
+| Key (welcome voice) | Text |
+|---|---|
+| heading | Text me from your iPhone |
+| intro | Link your number once, then text me like anyone else. |
+| can | Answer the texts you send from your linked number or Apple ID. |
+| cannot | Read photos, files, group chats or SMS. Only direct iMessage text reaches me. · Send your Brief or reminders by text. |
+| stores | I keep the number or Apple ID you link on your account, so only you reach me. Your texts pass through the Mac that runs my number. |
+| notAnswering / offline | My iMessage number isn’t answering right now. If nothing links before the code runs out, try again later. · My iMessage number is offline right now. Your link stays in place. |
+| justLinked / linked | Linked {hint} at {at}. Texts from it now reach me. · Linked to {hint}. Texts from it reach only me. |
+| confirmUnlink | Unlink {hint}? Its texts stop reaching me. You can link again with a new code. |
+| issueRejected / unconfirmed / refused | I couldn’t make a code just now. Nothing changed. Try again in a moment. · I couldn’t confirm that. If no code appears, get a new one; it replaces any earlier code. · That change wasn’t accepted, or something changed while you were here. I checked again. |
+| unlinked / unlinkUnconfirmed / copiedText | Unlinked. Texts from that number no longer reach me. · I couldn’t confirm the unlink. Check again in a moment. · Copied the text. Paste it into Messages and send it to my address. |
 
-**Setup row (#1257 item, re-pointed).** Title "Connect iMessage". Description: "Text Waldo from your own iPhone. Get a one-time code in Connections and send it from Messages. Only your number reaches your Waldo." It links to `#/connections` and appears only when `iMessageVisible`.
+The list headings stay "Waldo can" and "Waldo can’t" in both voices, exactly as on S3's Google tile.
 
-**Accessibility.**
-- The code's `aria-label` spells the characters out.
-- Focus moves to "Open Messages" when a code appears.
-- Polling announces only state changes, through the `role="status"` line.
-- Every button names its effect.
-- The unlink confirmation names the consequence.
-- Essential copy stays in `<p>` (`--t2`), not `.meta` (`--t3`, below 4.5:1 [inference]; S5 owns that fix).
+**Connections voice (and the base for every key not overridden above):**
 
-**Phone vs desktop.** At 640px or less the code is 22px, the lists stack, and `.control-actions` wraps so buttons sit full width. On a phone "Open Messages" is the main path. On desktop the person reads the code and texts it from their iPhone. "Open Messages" stays visible because a Mac signed in to Messages may handle `sms:` [inference].
+| Key | Text |
+|---|---|
+| heading | Text Waldo from your iPhone |
+| intro | Link your number once, then text Waldo like anyone else. |
+| can | Answer the texts you send him from your linked number or Apple ID. |
+| cannot | Read photos, files, group chats or SMS. Only direct iMessage text reaches him. · Send your Brief or reminders by text. |
+| stores | Waldo keeps the number or Apple ID you link on your account, so only you reach your Waldo. Your texts pass through the Mac that runs Waldo’s number. |
+| getCode / getting / newCode / replaces | Get my code · Getting your code… · Get a new code · A new code replaces this one. |
+| sendHeading | Send your code from your iPhone |
+| sendHow | On your iPhone, tap Open Messages, then Send. The code stays hidden here so nobody nearby can use it first. |
+| openMessages / copyText / showCode / hideCode / copyAddress | Open Messages · Copy the text · Show the code · Hide the code · Copy address |
+| computer(address) | On a computer, show the code and text it from your iPhone to {address}. |
+| works | The code works once, for 10 minutes. Send it from the number or Apple ID you want to link. |
+| waiting | Waiting for your text… |
+| notAnswering | Waldo’s iMessage number isn’t answering right now. If nothing links before the code runs out, try again later. |
+| expired | That code has expired. Get a new one when you’re ready to send it. |
+| justLinked({hint,at}) | Linked {hint} at {at}. Texts from it now reach your Waldo. |
+| notYours / unlinkNow | Not yours? Someone else may have sent your code first. Unlink it now, then get a new code. · Unlink this number |
+| linked(hint) / offline | Linked to {hint}. Texts from it reach only your Waldo. · Waldo’s iMessage number is offline right now. Your link stays in place. |
+| unlink / confirmUnlink(hint) / manage | Unlink iMessage · Unlink {hint}? Its texts stop reaching Waldo. You can link again with a new code. · Manage it in Connections |
+| issueRejected | Waldo couldn’t make a code just now. Nothing changed. Try again in a moment. |
+| unconfirmed | Waldo couldn’t confirm that. If no code appears, get a new one; it replaces any earlier code. |
+| refused | That change wasn’t accepted, or something changed while you were here. Waldo checked again. |
+| unlinked / unlinkRejected / unlinkUnconfirmed | Unlinked. Texts from that number no longer reach your Waldo. · Nothing was linked, so nothing changed. · Waldo couldn’t confirm the unlink. Check again in a moment. |
+| copiedText / copiedAddress / copyFailed | Copied the text. Paste it into Messages and send it to Waldo’s address. · Copied the address. · Couldn’t copy. Show the code and type it instead. |
+| signedOut | Your session ended. Sign in again to link iMessage. (link "Sign in" → `/console/signin`) |
+| setup | Text Waldo from your own iPhone. Get a one-time code in Connections and send it from Messages. Only your number reaches your Waldo. |
+| linkedLabel / notLinkedLabel | Linked · Not linked |
+
+**States:**
+- **Ready.** Shows the intro, the "Waldo can" and "Waldo can’t" lists, the stores line, and "Get my code".
+  - The lists are S3's `.welcome-lists`: checks (`<Icon name="check"/>`) and crosses (inline `svg.welcome-cross`), two columns, stacked at 640px or less.
+  - "Get my code" is `secondary` in both placements, and full width in welcome.
+- **Code.**
+  - Shows the sendHeading and sendHow.
+  - The buttons are "Open Messages" (focus moves here), "Copy the text", and "Show the code" (with `aria-expanded`).
+    - In Connections they sit in `control-actions`: "Open Messages" is `button-link secondary`, and "Copy the text" and "Show the code" are quiet. "Add Google account" stays the screen's one ink action.
+    - In welcome all three are full-width `secondary` in `welcome-actions`.
+    - A 14px gap separates the action row from the paragraph after it (`.imessage-body :is(.control-actions,.welcome-actions)+p`).
+  - When shown, the code is `<p class="imessage-code">` with the visible text `aria-hidden`, plus a `.visually-hidden` span that spells out the characters.
+  - Then the computer line with "Copy address", the works line, `notAnswering` when `offer` turns false, and the waiting status (`role="status"`, `aria-live="polite"`).
+  - "Get a new code" appears only while `offer` is true.
+- **Just linked (both placements).** The `justLinked` status, `notYours` and "Unlink this number" (`secondary`; full width in welcome).
+- **Linked (steady).** `linked(hint)`, plus `offline` when the shared number is not ready. Connections shows "Unlink iMessage", which confirms with `confirmUnlink`. Welcome shows the link "Manage it in Connections".
+- **Expired.** The expired text and "Get a new code", with the same classes as "Get my code".
+- **Hidden.** Nothing renders while loading, on a failed read, when the connector is off, or when the number is not ready and nothing is linked. Not even a skeleton.
+
+**Placements:**
+- **Connections:** a `<li className="branch">` in S5a's Chat group (`branch broken` until linked), holding a `details.disclosure`. The summary has three parts:
+  - **The mark.** The `chat` glyph sits in `<span className="marks off">` while not linked; `.marks.off .icon` is `--t2`, overriding the green of `.marks .icon` (`style.css:270`). It is `marks` (green, the done colour) once linked.
+  - **The value** "iMessage".
+  - **The chip.** `access-label` reads "Not linked" (neutral) or "Linked". "Linked" uses `access-label done`, the same chip Setup uses for a done row (S5a's `SetupRowView`).
+- **Welcome:** a `<section className="tile imessage-card">` with `.imessage-head` (`.kind` glyph and h2 "Text me from your iPhone"). The welcome voice is used throughout, and no ink button: Connect Google keeps the step's one primary.
+- **Setup:** the row titled "Connect iMessage" with body `setup`, done label "Linked" and link "Open Connections" → `#/connections`, only when visible.
+
+**Phone vs desktop.** On the iPhone, "Open Messages" sends without the code ever showing. On a computer, the person taps "Show the code" and types it on their iPhone; the code is 22px at 640px or less. The `sms:` link may also open Messages on a Mac [inference].
 
 ### Security, privacy and authority
 
-- **Authentication.** Reads and actions go through the existing verified-owner-cookie forward (`console-signin.ts:342-360`) and the DO session re-check inside `this.serial` (`owner-do.ts:1464-1474`). The owner is the DO's own `do_name`. A forged `owner` field is refused by the field allowlist (`dashboard-owner-controls.ts:52-53`).
-- **CSRF and freshness.** Form csrf must equal the session csrf (`console.ts:124-129`). The view and action must pair (`:55` plus the new rule). The read revision must match (`:75`). `request_id` makes requests idempotent (`:57-71`). Eligibility is rechecked from a fresh projection before any effect.
+- **Severity HIGH, inherited, and reduced in this PR.** The link code is a 10-minute bearer secret. Whoever texts it first binds their handle to the owner's Waldo, which gives access to replies grounded in the owner's memory, calendar, mail and (by the beta ruling) wearable context. The same exposure already exists in #1257's classic page (the code at 24px), its app route, and the Telegram and WhatsApp codes. Mitigations in this PR:
+  - the code is hidden by default, and "Open Messages" sends it without displaying it;
+  - the moment a link lands, the owner sees which masked handle linked and when, with a primary "Unlink this number";
+  - an email hint is now recognisable (`a•••e@icloud.com`).
+
+  **Structural follow-up (Ashish lane), required before public or production use:** console-confirmed linking, where the redeemed handle stays pending until the owner confirms it in the console. The security reviewer decides whether it blocks S6.
+- **Authentication and authorisation.**
+  - The Worker forwards only for a verified owner cookie (`console-signin.ts:342-360`).
+  - The DO re-checks the session inside `this.serial` (`owner-do.ts:1464-1474`).
+  - The owner is the DO's own `do_name`.
+  - The field allowlist refuses a forged `owner` (`dashboard-owner-controls.ts:52-53`).
+  - The app path passes `imessage: null` and cannot reach the view.
+- **CSRF and freshness.** The csrf must match the session (`console.ts:124-129`). The view and action must pair, the read revision must match (`:75`), `request_id` makes the action idempotent (`:57-71`), and eligibility is rechecked from a fresh projection before any effect.
 - **Rate limits.**
-  - Existing per-owner buckets: 90 reads and 20 actions per minute (`owner-do.ts:1469-1472`), and 100 receipts per session (`:71`).
+  - The existing per-owner buckets: 90 reads and 20 actions per minute (`owner-do.ts:1469-1472`); polls share the read bucket with every other controls read, including S3's Google poll.
+  - 100 receipts per session (`dashboard-owner-controls.ts:71`).
   - Redemption: 5 per sender per hour (`bridge-do.ts:409`).
-  - Codes are single-use, last 10 minutes, and replace the owner's previous code (`20261014120000:41-42`).
-  - No new limiter is added: each issue only replaces the caller's own code.
-- **What is stored.**
-  - S6 stores no code. The durable receipt is fixed text, and a test asserts the receipt book never contains the code.
-  - The code appears only in the one action response and in the DOM. It never goes into a URL, `localStorage` or logs.
-  - The link text is never a model turn (`bridge-do.ts:384-386`), so it never reaches Langfuse.
-  - The browser receives only `offer`, the public address and a 2-4 character hint. Bridge ids, the operator and full handles stay server-side.
-- **New SQL function.** It is router-signed, `stable` and returns ids only, with the same grant pattern as its siblings. The ids are not credentials: host requests need the wrapped key.
-- **Health.** None is involved. `guard-health-leak` does not apply beyond keeping font weights in CSS.
-- **Inherited risk (MEDIUM, by design).** The code is a 10-minute bearer secret. Whoever texts it first links their handle to that owner's Waldo. Mitigations in S6:
-  - the linked state names the hint, with "Not yours? Unlink it.";
-  - S0 should tell showcase hosts not to project a visitor's code on a shared screen.
-- **Outside the diff (LOW, noted only).** The Telegram link code persists in the controls receipt book for the session (`owner-do.ts:1504-1506` into `dashboard-control-actions.ts:71`).
-- **Security review: yes.** Presence linking is an identity binding, and S6 adds a new signed SQL function and new authenticated actions (AGENTS.md "Security Review Triggers").
+  - Codes are single-use, last 10 minutes, and replace the previous code.
+  - Each poll occupies the owner DO's serial queue briefly (two Supabase RPCs and one bridge RPC). It queues behind a running turn rather than racing it, and the 10 s client timeout keeps a stuck poll from stalling the chain.
+- **Where the code exists:**
+  - the one action response;
+  - the DOM, only after "Show the code";
+  - the `sms:` link (`href`);
+  - the clipboard, when copied;
+  - the shared Mac's Messages history, after sending.
+
+  It is never in an http(s) URL, `localStorage`, receipts (asserted by test) or logs. It never becomes a model turn (`bridge-do.ts:384-386`), so it never reaches Langfuse.
+- **What the browser sees.** Only `offer`, the public address, and a masked hint that always contains `•••`. Bridge ids, the operator and full handles stay server-side (asserted by test).
+- **New SQL.** One router-signed, `stable` function that returns ids only (not credentials: host requests need the wrapped key), granted like its siblings. `presence_hint` keeps its signature and grants and still never returns the full handle.
+- **Health.** None involved.
+- **Outside the diff (LOW, noted only):**
+  - the Telegram link code persists in the controls receipt book (`owner-do.ts:1504-1506` → `dashboard-control-actions.ts:71`);
+  - #1257's app route offers codes without a readiness gate (`app-api.ts:167-168`).
+- **Security review: required.** Presence linking is an identity binding, and S6 adds a signed SQL function and authenticated actions.
 
 ### Tests
 
-**Runtime unit tests.** `packages/runtime/test/dashboard-owner-controls.test.ts` (default runtime config). Extend `setup()` with a fake `imessage` port: `state` resolves `{offer:true,address:'waldo@fixture.invalid',linkedHint:null}`, `issue` resolves `'K7QM2XRT9P'`, `unlink` resolves `true`.
-1. `ownerControlsView('view=imessage_link')` returns `'imessage_link'`. `view=imessage` returns null.
-2. **Read shape.** The data keys are exactly `address, linked_hint, offer`. When offline but linked, `address` is null and `linked_hint` is `'7731'`. When off, it is `{offer:false,address:null,linked_hint:null}`.
-3. **Read failure.** The port throws, so the status is 503 with `{error:'owner_controls_unavailable'}`.
-4. **Golden.** `imessage.link` returns 200 `recorded`. `link` passes `appIMessageLinkCodeV1Schema.parse`, and `send_url === 'sms:waldo@fixture.invalid&body=waldo%20K7QM2XRT9P'`. `JSON.stringify([...stored])` does not contain `K7QM2XRT9P`. A replay returns `duplicate:true` with no `link`. `issue` was called once, with `'trusted-owner'`.
-5. **Not eligible.** With `offer:false`, the action returns 409 `no_longer_eligible`, `issue` is not called and no receipt row is written. An unlink while not linked returns 409.
-6. **Hostile:**
-   - wrong csrf returns 403;
-   - `imessage_link` with `invite.member` returns 403;
-   - `invites` with `imessage.link` returns 403;
-   - an extra `owner` field returns 400;
-   - a stale revision returns 409.
-7. **Failure.** `issue` throws, so the status is 503 `unconfirmed` and the message does not contain "invite". `issue` returning null gives 409 `rejected`.
+The tests below are written and were passed in the scratch copy (see Verification). Copy them into the repo.
 
-**Workerd end-to-end tests.** `packages/runtime/test/imessage-shared.test.ts` (the iMessage suite). Extend `consoleFor` (`:52`) with `controls(view)` (GET `OWNER_CONTROLS_PATH?view=`) and `ownerAct(fields)` (POST to `OWNER_CONTROLS_ACTION_PATH` with cookie, csrf, revision and request_id).
-1. **Golden: "Connections links iMessage end to end".**
-   - Before `sharedLive()` (`:89`), Alice's read has `offer:false`.
-   - After it, the read has `offer:true` and address `waldo@fixture.invalid`, and `bridgeStub().linkReady()` is true.
-   - `imessage.link` returns `link`. The host sends `link.text` from `ALICE`, then `pump()` and `deliverNext()` produce `LINK_REPLIES.redeemed`.
-   - The read then has `linked_hint === ALICE.slice(-4)`.
-   - `proof.turns` is empty.
-   - No response body contains `host.bridgeId`, `host.accountId` or the operator's `do_name`.
-2. **Offline.** After `vi.useFakeTimers({toFake:['Date']})` and `setSystemTime(t0+91_000)` (the pattern in `imessage-e2e.test.ts`), the read has `offer:false` and `linkReady()` is false. `imessage.link` returns 409 and `fx.linkCodes` size is unchanged.
-3. **Unlink.** After linking, unlink returns 200. The read then has `linked_hint:null` and Alice's presence is inactive.
-4. **Cross-owner.** While Alice is linked, Bob's read has `linked_hint:null` and Bob's unlink returns 409. Alice stays linked.
-5. **Connector off.** `iMessageLinkPort({...env, IMESSAGE_CONNECTOR_ENABLED:'0'} as never).state(alice)` returns the off state, and `fx.calls` gains no `presence_hint` and no `imessage_shared_bridge`.
-6. **Directory down.** With `fx.setUnavailable(true)`, the read is 503 with no internals in the body.
+**`packages/runtime/test/dashboard-owner-controls.test.ts`.** Add `imessage: null` to `setup()`'s deps (`:9`).
 
-**pgTAP.** The six assertions in change 3.
+**`packages/runtime/test/dashboard-owner-controls-imessage.test.ts` (new; default runtime config).** It uses fakes for `state`, `issue` and `unlink`.
+1. **View and read.** `view=imessage_link` parses and `view=imessage` does not. The data keys are exactly `address, linked_hint, offer`. When offline and linked, the result is `{offer:false,address:null,linked_hint:'•••7731'}`.
+2. **Golden.**
+   - Returns 200 with a `recorded` receipt, and `link` passes `appIMessageLinkCodeV1Schema`. `send_url` is `sms:waldo@fixture.invalid&body=waldo%20K7QM2XRT9P`.
+   - The stored receipt book does not contain the code.
+   - A replay returns `duplicate:true` with no `link`.
+   - `issue` is called once, with `'trusted-owner'`.
+3. **Not eligible and hostile.**
+   - With `offer:false`, both link and unlink return 409 and no port method is called.
+   - Wrong csrf returns 403, and `invite.member` on this view returns 403.
+   - An extra `owner` field returns 400, and a stale revision returns 409.
+4. **Failure.** An `issue` that throws gives 503 `unconfirmed`, with no "invite" in the message. An `issue` that returns null gives 409.
+5. **App deps.** With `imessage: null`, the read returns 503.
 
-**SPA tests.** `packages/dashboard-app/src/IMessage.test.tsx`. Use SSR for the pure view; add `// @vitest-environment happy-dom` for the flows, following the `App.live.test.tsx` pattern.
-1. `readIMessageLink` accepts the valid shape and drops extra fields. It rejects a bad revision, `offer:true` with a null address, and a 5-character hint.
-2. `readIMessageResult` rejects a code containing `I`, a text mismatch, `send_url` `javascript:…`, a link on a duplicate, and a link on unlink.
-3. **SSR `IMessageBody`.**
-   - The ready, code, linked and offline-linked states show the exact `COPY` strings.
-   - The `Open Messages` href starts with `sms:`.
-   - A hostile address `<script>` is escaped.
-   - The text content (tags stripped) contains no `!`, "dashboard", "Get started", "Learn more", "Oops", "Loading…" or "seamless".
-4. **Golden flow.** Click "Get my code". The POST form has `view=imessage_link`, `action=imessage.link`, csrf, revision and request_id. The code is shown and focus is on "Open Messages". Advance 4 s; the read returns hint `7731` and "Linked." is announced. Advance another 8 s; no more GETs are made.
-5. **Hidden.** `offer:false` with no hint renders an empty container. A read 503 renders an empty container.
-6. **Expiry.** Advance 600 s with no link; the expired copy appears and polling stops.
-7. **Failure.**
-   - A POST that throws shows the unconfirmed copy, and "Get a new code" stays enabled.
-   - A 409 without a receipt shows the changed copy and triggers a re-read.
-   - A 401 during a poll shows the sign-in line.
-   - With `visibilityState: 'hidden'`, ticks make no GETs.
-8. **Setup.** `SetupControls` (happy-dom): a visible read shows "Connect iMessage" with `href="#/connections"`; a hidden read shows no item. Update `Panels.test.tsx:102-107`.
+**`packages/runtime/test/imessage-shared.test.ts` (iMessage workerd suite).**
+- Change `:230` and `:320` to expect `'Linked: a•••e@icloud.invalid'`.
+- Extend `consoleFor` (`:52-67`) with two helpers:
+
+```ts
+    const link = () => call(new Request(`${HOST_ORIGIN}${OWNER_CONTROLS_PATH}?view=imessage_link`, { headers: { cookie, accept: 'application/json' } }));
+    const linkAct = async (actionName: string, extra: Record<string, string> = {}) => {
+      const read = await (await link()).json() as { revision: string };
+      const form = new FormData();
+      for (const [k, v] of Object.entries({ csrf, action: actionName, view: 'imessage_link', revision: read.revision, request_id: crypto.randomUUID(), ...extra })) form.set(k, v);
+      return call(new Request(`${HOST_ORIGIN}${OWNER_CONTROLS_ACTION_PATH}`, { method: 'POST', body: form, headers: { cookie, accept: 'application/json' } }));
+    };
+    return { stub, action, page, link, linkAct, name };
+```
+
+- Add four tests:
+  1. **"Connections links iMessage end to end, hidden until the shared number can answer".**
+     - Before `sharedLive()`: `{offer:false,address:null,linked_hint:null}`.
+     - After it: `linkReady()` is true and the data is `{offer:true,address:'waldo@fixture.invalid',linked_hint:null}`.
+     - `imessage.link` returns 200, with `send_url` starting `sms:waldo@fixture.invalid&body=waldo%20`.
+     - After the host sends `link.text` from Alice and `pump()` runs, `deliverNext()` produces `LINK_REPLIES.redeemed`, and the read shows `linked_hint === 'a•••e@icloud.invalid'`.
+     - `proof.turns` is empty, and the read body contains no bridge id, account id or operator `do_name`.
+     - Bob's read shows no hint, and Bob's unlink returns 409.
+     - Alice's unlink returns 200, then her hint is null and her presence inactive.
+  2. **"no code is offered once the shared number stops answering".** With `vi.useFakeTimers({toFake:['Date']})` at `t0+91_000`: `linkReady()` is false, `offer` is false, and link returns 409 with `fx.linkCodes` unchanged.
+  3. **"linkReady follows the system-reply gate".**
+     - True when live.
+     - `host.capabilities(false)` makes it false; `host.capabilities()` makes it true again.
+     - Still true while a "Linked." reply is queued for Bob.
+     - False after a `quarantine` meta row is inserted with `runInDurableObject`.
+  4. **"connector off: no directory or bridge call; a missing readiness function hides the offer, not the link".**
+     - `iMessageLinkPort({...env, IMESSAGE_CONNECTOR_ENABLED:'0'} as never).state(...)` returns the off state and adds no `fx.calls`.
+     - With `/rpc/imessage_shared_bridge` answering 404 (the rollout-order case), the read is 200 with `{offer:false,address:null,linked_hint:'a•••e@icloud.invalid'}`.
+     - With `/rpc/presence_hint` answering 503, the read is 503 and the body has no `imessage_`, `presence` or `supabase`.
+
+**pgTAP.** The assertions in change 3: the email, short and phone hints; the middle never leaving; forged and locator refusals; the ids-only result; another environment; the three grant checks; revocation.
+
+**`packages/dashboard-app/src/IMessage.test.tsx` (new; `// @vitest-environment happy-dom`; pattern of `App.live.test.tsx`).**
+1. **Golden.**
+   - The row shows "Not linked", with `marks off` and a neutral chip. "Get my code" POSTs `view=imessage_link`, `action=imessage.link`, csrf and revision.
+   - "Open Messages" has the `sms:` href, class `button-link secondary`, and focus. No `.primary` renders anywhere in the component.
+   - The code is not in the text until "Show the code"; then the visible span is `aria-hidden` and the hidden span reads `waldo K 7 Q M 2 X R T 9 P`.
+   - One poll still shows "Waiting for your text". The next poll, with hint `a•••e@icloud.com`, shows "Linked a•••e@icloud.com at" and "Unlink this number". The mark is then `marks` and the chip `access-label done`. After 3 more intervals there are no more GETs.
+2. **Hidden.** `offer:false` renders `<ul></ul>`, and a 503 read renders `<ul></ul>`.
+3. **Expiry.** After 600 s plus one interval, the expired copy shows and polling stops.
+4. **Lost POST.** A thrown fetch on POST shows "Waldo couldn’t confirm that".
+5. **Parsers.** They refuse `offer:true` with a null address, a hint without `•••`, a `javascript:` `send_url`, and a code with `I`.
+6. **SSR `IMessageBody`.** A hostile address is escaped, and the stripped text matches none of `!`, dashboard, Get started, Learn more, Oops, `Loading...` or seamless.
+7. **Welcome.** `<IMessageLink placement="welcome"/>` reads for itself and renders the titled tile.
+   - The h2 is "Text me from your iPhone", and the body says "text me like anyone else" with no "him" or "your Waldo".
+   - "Get my code" has class `secondary` inside `.welcome-actions`.
+   - The lists hold one check icon and two `svg.welcome-cross`.
+8. **Setup.** "Connect iMessage" with `href="#/connections"` appears only when the read applies.
+
+Also update S5a's Setup test so its iMessage case passes a visible read, and add a `Controls.test.tsx` case:
+- Telegram unlinked with a hidden read: no "Chat" label;
+- with a visible read: the iMessage row is present (happy-dom with a fetch stub).
 
 ### Acceptance trace
 
-The trace runs after the freeze lifts, with S0 done. Claims are labelled.
+**0. Rollout (post-merge; owner-authorised; this PR is "needs owner (migration)").**
+1. **Preflight at the merged SHA** (read-only):
 
-1. [SOURCE/CI] All tests above pass at the PR head. `guard-surface-neutral-core` stays at 58 for `owner-do.ts`, and `guard-migration-fixture-sync` passes.
-2. [STAGING] Operator, on `/console/imessage`: the shared number shows "shared Waldo number · active · online · text verified".
-3. [STAGING] A tester signed in to staging opens `#/connections`. The Chat group shows **iMessage · Not linked** above Telegram.
-4. [STAGING] The tester opens the row and taps "Get my code". The page shows `waldo XXXXXXXXXX`, `woof@heywaldo.in` and "Open Messages".
-5. [LIVE] With the console open on the iPhone in Safari, tapping "Open Messages" opens Messages to `woof@heywaldo.in` with the text filled in. If it does not, record that and use "Copy the text".
-6. [LIVE] After sending, the iPhone receives "Linked. Texts from this number now go to your own Waldo."
-7. [STAGING] Within about 8 s, without a reload, the row shows **Linked** and "ending in" plus the last 4 characters.
-8. [LIVE] Texting "hello" gets Waldo's reply.
-9. [STAGING] Unlink, then confirm. The row returns to Not linked.
-10. [LIVE] The next text gets the stranger onboarding reply, or nothing if this sender already had one in the last 30 days.
-11. [STAGING] The operator pauses the Mac host for more than 90 s. A not-linked tester reloads Connections: no iMessage row, and no Setup item. A linked tester sees the offline line.
-12. [STAGING] If S3 has merged, the same card states appear in `#/welcome` at the Connect step.
+   ```
+   gh workflow run deploy-staging.yml --repo waldoco/waldo-backend --ref beta-mvp -f operation=preflight -f expected_source_sha=<merged40> -f run_migrations=false
+   ```
 
-Production behaviour (no row, no RPC) is [SOURCE/CI] only, through runtime test 5.
+2. **Review the packet.** It must name every pending version: `20261015120000` plus anything staging lags on, such as `20261014120000` or `20261014130000`. A reviewer reads each pending file.
+3. **Owner authorisation** for exactly that pending set and its `pendingManifestSha256`. The workflow recipe itself "is not owner authorization for SQL effects" (`deploy-staging.yml:180-191`).
+4. **Apply:**
+
+   ```
+   gh workflow run deploy-staging.yml --repo waldoco/waldo-backend --ref beta-mvp -f operation=migration-apply -f expected_source_sha=<merged40> -f reviewed_pending_sha256=<packet sha> -f run_migrations=false
+   ```
+
+5. **Then the Worker deploy** (`operation=deploy`) under its own owner approval.
+6. If the deploy happens first, unlinked owners see no row until the apply (test 4 above).
+
+**Trace (claims labelled):**
+1. **[SOURCE/CI]** All tests pass at the PR head; the `owner-do.ts` surface-compare baseline stays at 58; `guard-migration-fixture-sync` passes.
+2. **[STAGING]** As the operator, `/console/imessage` shows "shared Waldo number · active · online · text verified".
+3. **[STAGING]** A tester opens `#/connections` and the Chat group shows **iMessage · Not linked**. A tester without Telegram sees only this row.
+4. **[STAGING]** "Get my code" shows "Open Messages", "Copy the text" and "Show the code", with no code visible.
+5. **[LIVE]** With the console in Safari on the iPhone, "Open Messages" opens Messages to `woof@heywaldo.in` with `waldo XXXXXXXXXX` filled in. If not, record it and use "Copy the text".
+6. **[LIVE]** Send it. The iPhone receives "Linked. Texts from this number now go to your own Waldo."
+7. **[STAGING]** Within about 8 s, without a reload, the console shows "Linked •••NNNN at HH:MM" (or the masked Apple ID) and "Unlink this number".
+8. **[LIVE]** Texting "hello" gets Waldo's reply.
+9. **[STAGING]** "Unlink this number" works. The next text gets the stranger reply, or nothing if this sender already got one in the last 30 days.
+10. **[STAGING]** With the Mac paused for more than 90 s, a not-linked tester sees no row and no Setup item; a linked tester sees the offline line.
+11. **[STAGING]** `#/welcome`, Connect step: the same card states.
+
+Production behaviour (no row, no RPC) is **[SOURCE/CI]** only.
 
 **Screenshots (local preview):**
 
 ```
-cd packages/dashboard-app
-npx -y pnpm@10.34.4 build
-node scripts/preview.mjs --case=imessage --port=4178
+cd packages/dashboard-app && npx -y pnpm@10.34.4 build && node scripts/preview.mjs --case=imessage --port=4178
 ```
 
-Open `http://localhost:4178/console/dashboard/#/connections` at 1440x900 and 390x844 and capture:
-- `connections-imessage-ready-{desktop,phone}.png`
-- `-code-` and `-linked-` captures (a click, then wait 8 s)
-
-Repeat with `--case=imessage-linked` and `--case=imessage-off` (expect no row).
+Open `#/connections` at 1440x900 and 390x844 and capture the ready, code (hidden, then shown) and just-linked states. Repeat with `--case=imessage-linked` and `--case=imessage-off` (expect no row).
 
 ### Verification commands
 
-Run from the repo root at the PR head and record PASS / FAIL / NOT RUN / UNAVAILABLE.
+**Scratch-copy evidence.** These ran on 14–15 Oct in a scratch copy of a643bcab plus S5a's shapes (copied verbatim from S5) plus S6. The repo was untouched and `git status` is clean. Each result is labelled per run; nothing ran in the repo with S6 applied.
+
+| Run | Result |
+|---|---|
+| runtime `tsc -p tsconfig.json` (src and changed tests) | PASS, exit 0 |
+| dashboard-app `tsc` | PASS, except 2 pre-existing environment errors (`node:fs` types in `GraphMap.regressions.test.tsx`, also present without S6 in the copy) |
+| runtime unit, plain Node (proves the module stays Node-loadable): existing 11 + new 5 | PASS, 16/16 |
+| workerd `vitest.imessage.config.ts test/imessage-shared.test.ts`: existing 9 incl. 2 updated + new 4 | PASS, 13/13 |
+| dashboard-app `IMessage.test.tsx` 8 + `OwnerControls.test.tsx` 9 | PASS, 17/17 |
+| `Controls.test.tsx` | 1 FAIL, from S5a's Telegram change (fixture unlinked), which S5a's own test update covers; not S6 |
+| `guard-surface-neutral-core --root <copy>` | ok, 101 compares in 13 files, unchanged |
+| `guard-health-leak --root <copy>` | ok |
+| pgTAP (`scripts/pgtap/run-local.sh` on the copy) | UNAVAILABLE: the PGDG bootstrap downloaded nothing in this container |
+
+Baselines at a643bcab without S6: `imessage-shared` 9/9, `dashboard-owner-controls` 11/11, `OwnerControls` + `Controls` 15/15.
+
+**At the PR head, run in order and record PASS / FAIL / NOT RUN / UNAVAILABLE:**
 
 ```
 git diff --check
-(cd packages/runtime && npx vitest run test/dashboard-owner-controls.test.ts)
-npx -y pnpm@10.34.4 --filter @waldo/runtime test:imessage            # workerd; baseline imessage-shared 9/9 PASS at a643bcab
-npx -y pnpm@10.34.4 --filter @waldo/runtime test:scenarios           # proves app-api.ts still loads in plain Node
-npx -y pnpm@10.34.4 --filter @waldo/runtime exec vitest run test/app-api.test.ts
-npx -y pnpm@10.34.4 --filter @waldo/dashboard-app test               # not in CI: record as locally run
+npx -y pnpm@10.34.4 --filter @waldo/runtime exec vitest run test/dashboard-owner-controls.test.ts test/dashboard-owner-controls-imessage.test.ts test/app-api.test.ts
+npx -y pnpm@10.34.4 --filter @waldo/runtime test:imessage
+npx -y pnpm@10.34.4 --filter @waldo/runtime test:scenarios              # app-api.ts still loads in plain Node
+npx -y pnpm@10.34.4 --filter @waldo/dashboard-app test                  # not in CI: record as locally run
 npx -y pnpm@10.34.4 --filter @waldo/dashboard-app build && npx -y pnpm@10.34.4 --filter @waldo/dashboard-app verify:assets
 npx -y pnpm@10.34.4 -r typecheck
 node scripts/verify-supabase-migrations.mjs && node scripts/guards/guard-migration-fixture-sync.mjs
 node scripts/guards/guard-surface-neutral-core.mjs && node scripts/guards/guard-health-leak.mjs
-bash scripts/pgtap/run-local.sh                                      # bootstraps PG15 from PGDG; UNAVAILABLE if the download is blocked
+bash scripts/pgtap/run-local.sh                                         # UNAVAILABLE here (PGDG bootstrap); must PASS on the Mac gate
 WALDO_DO_MIGRATION_BASE_REF=HEAD^1 npx -y pnpm@10.34.4 verify:guards
-npx -y pnpm@10.34.4 verify                                           # verify:supabase needs Docker: UNAVAILABLE in the cloud container
+npx -y pnpm@10.34.4 verify                                              # verify:supabase needs Docker: UNAVAILABLE in the cloud container
 ```
-
-The baselines were observed at a643bcab with a clean tree:
-- `imessage-shared.test.ts`: 9 passed;
-- `dashboard-owner-controls.test.ts`: 11 passed;
-- dashboard-app `OwnerControls.test.tsx` and `Controls.test.tsx`: 15 passed.
 
 ### Rollback
 
-- **Code.** Revert the PR. SPA and Worker roll back together, because the SPA is served by the Worker. A newer SPA against an older Worker gets 400 `invalid_query` for `view=imessage_link`, so the row stays hidden.
-- **Migration.** Leave `waldo.imessage_shared_bridge` in place. It is read-only and signed, and with no caller it does nothing. Never delete an applied migration file. If removal is required, ship a forward migration that drops the function, plus a list update.
-- **#1257 entry points.** Reverting restores the Setup and footer links to `/console/imessage`.
+- **Code.** Revert the PR; the SPA and Worker roll back together. A newer SPA against an older Worker gets 400 for `view=imessage_link`, so the row and the Setup item stay hidden.
+- **Migration.**
+  - `waldo.imessage_shared_bridge` is read-only and inert without a caller, so leave it.
+  - The `presence_hint` change is forward-compatible with the old Worker. The old runtime accepts only 2-4 characters (`console-auth.ts:176`), so it treats the new hint as null: the classic page and the setup projection would show "not linked" until the Worker is redeployed.
+  - If that matters, ship a forward migration restoring the old body. Never delete an applied file.
 
 ### Risks and open questions
 
-1. **Freeze.** Default: land after the showcase. Ansh can add it to the demo.
-2. **Shared host not live on staging.** The setup doc (13 Oct) says the host is fixtures-only; its live state is unverified. Then S6 is correct but invisible. Default: hidden is the intended outcome; S0 checks it first.
-3. **`sms:` with an email address and `body=` is not verified on device by this doc.** #1257 asserts it works. Default: reuse it with the copy fallback always visible. If step 5 fails, change `iMessageSendUrl` once; the classic page, app and console all follow.
-4. **Bearer-code shoulder-surfing** (see Security). Default: the hint plus "Not yours? Unlink it." and the S0 note.
-5. **Migration ordering.** Default: a timestamp later than any migration file at merge. Re-check after rebasing.
-6. **Polling load on the single shared bridge DO.** At most 15 reads a minute per linking owner, each a meta read. Default: accept. If load shows, cache readiness in the owner DO for 10 s.
-7. **Follow-ups for other lanes, not in S6.**
-   - The app route `link-code` offers codes with the connector off or the bridge offline (`app-api.ts:167-168`). It needs a Node-safe readiness path because `app-api.ts` must load in plain Node.
-   - owner-do reads `presence_hint` on every view build even with the connector off (`owner-do.ts:3410-3415`). Gate it on `iMessageComposition` in the Mac lane.
-8. **Footer link removal** (change 15). Default: remove. Keep it if Ashish asks.
+1. **Freeze.** Default: land after the showcase.
+2. **Shared host not live on staging** (the setup doc of 13 Oct says fixtures-only; unverified). S6 is then correct but invisible. Default: accept that; the trace waits for the host.
+3. **On-device `sms:` with an email recipient and `body=`.** This document has not verified it on a device; #1257 asserts it. Default: reuse it with the copy and show fallbacks. If trace step 5 fails, fix `iMessageSendUrl` once and all surfaces follow.
+4. **Bearer-code race (HIGH, inherited).** Default: the in-PR mitigations above, with console-confirmed linking as the Ashish follow-up and the security reviewer's call on blocking.
+5. **Migration ordering.** Default: a timestamp newer than every migration at merge; re-check after rebase.
+6. **Poll load in the owner DO's serial queue and on the shared bridge DO.** Default: accept up to 15 polls a minute per linking owner, each bounded at 10 s. If needed, cache readiness in the owner DO for 10 s.
+7. **Footer link removal.** Default: remove. Keep it if Ashish asks; then it still 404s on production.
+8. **Follow-ups for other lanes:**
+   - add a readiness gate to the app route (it must stay Node-safe);
+   - gate owner-do's per-view `presence_hint` read on `iMessageComposition` (`owner-do.ts:3410-3415`).
 
 ### Effort
 
-**M, 7-9 h:**
-- runtime and SQL: about 3.5 h (port, owner-controls, `linkReady`, directory, migration with pgTAP, fixture, tests);
-- SPA: about 3.5 h (component, CSS, Setup/footer, preview cases, tests);
-- staging trace with a real iPhone: about 1 h.
-
-**Lanes:**
+**M, about 8-10 h:**
+- runtime and SQL: about 3.5 h;
+- SPA: about 3.5 h;
+- rollout and the staging trace with a real iPhone: about 1.5 h;
+- review fixes: about 1 h.
 
 | Lane | Files |
 |---|---|
-| SPA | `IMessage.tsx`, `Controls.tsx`, `Panels.tsx`, `App.tsx`, `style.css`, `preview.mjs` |
-| Runtime, non-owner-do (Ashish reviews `imessage/**`) | `imessage/{console,directory,bridge-do,send-url}.ts`, `app-api.ts` (1 line), `dashboard-owner-controls.ts`, tests and fixture |
-| `owner-do.ts` (Mac lane sequences) | 2 lines changed |
-| Migrations | 1 additive function, 2 list entries, pgTAP |
+| SPA | `IMessage.tsx` (new), `OwnerControls.tsx` (client refactor), `Controls.tsx` (3 lines on S5a), `Panels.tsx` (on S5a), `Welcome.tsx` mount (on S3), `App.tsx:217`, `style.css`, `preview.mjs`, tests |
+| Runtime, non-owner-do (Ashish reviews `imessage/**`) | `imessage/{console,directory,bridge-do,send-url}.ts`, `identity/console-auth.ts`, `dashboard-owner-controls.ts`, `app-api.ts` (1 line), `app-controls.ts` (1 line), fixture and tests |
+| `owner-do.ts` (Mac lane) | 2 lines changed |
+| Migrations ("needs owner") | 1 new file (function plus `presence_hint` redefinition), 2 list entries, pgTAP |
