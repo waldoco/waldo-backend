@@ -67,6 +67,8 @@ export function DayControls({ record, busy, onAction }: { record: DayRecord } & 
 
 export function ConnectionsControls({ record, busy, onAction, section }: { record: ConnectionsRecord; section?: 'connections'|'sessions' } & ActionProps) {
   const { google, telegram, sessions } = record.data;
+  // Absent means the directory did not answer for iMessage; that reads as unknown, never as unlinked.
+  const imessage = record.data.channels?.find(item => item.channel === 'imessage');
   return <>
     {section!=='sessions'&&<section className="tile reveal" style={{ '--i': 0 } as React.CSSProperties} aria-labelledby="tree-title">
       <div className="chart-head"><h2 id="tree-title">Connected to Waldo</h2><span className="legend"><i className="line"/>Access saved<i className="line dashed"/>Needs you</span></div>
@@ -90,7 +92,13 @@ export function ConnectionsControls({ record, busy, onAction, section }: { recor
         <p className="tree-group label">Chat</p>
         <ul><li className={`branch${telegram.linked ? '' : ' broken'}`}><details name="connections" className="disclosure"><summary><span className="marks"><Logo name="telegram"/></span><span className="value">Telegram</span><span className={`access-label${telegram.linked ? '' : ' reconnect'}`}>{telegram.linked ? 'Linked' : 'Unlinked'}</span></summary>
           <div className="disclosure-body"><p>Chat, cards and reminders arrive in your Telegram DM. Instructions appear here once you ask to link.</p>
-            <div className="control-actions"><button disabled={busy} onClick={() => onAction('telegram.link')}>Link a Telegram account</button>{telegram.linked && telegram.unlinkAvailable && <button disabled={busy} onClick={() => { if (window.confirm('Unlink Telegram? Waldo stops messaging it. Sign in with your email to link again.')) onAction('telegram.unlink'); }}>Unlink Telegram</button>}</div></div></details></li></ul>
+            <div className="control-actions"><button disabled={busy} onClick={() => onAction('telegram.link')}>Link a Telegram account</button>{telegram.linked && telegram.unlinkAvailable && <button disabled={busy} onClick={() => { if (window.confirm('Unlink Telegram? Waldo stops messaging it. Sign in with your email to link again.')) onAction('telegram.unlink'); }}>Unlink Telegram</button>}</div></div></details></li>
+          <li className={`branch${imessage?.state === 'linked' ? '' : ' broken'}`}><details name="connections" className="disclosure"><summary><span className="marks"><Icon name="chat"/></span><span className="value">iMessage</span><span className={`access-label${imessage?.state === 'linked' ? '' : imessage ? ' reconnect' : ''}`}>{imessage?.state === 'linked' ? 'Linked' : imessage?.state === 'blocked' ? 'Blocked' : imessage?.state === 'pending' ? 'Pending' : imessage ? 'Not linked' : 'Status unknown'}</span></summary>
+            <div className="disclosure-body"><p>Text Waldo from your own iPhone. It’s the same Waldo and memory as here. Link your number by texting Waldo a one-time code.</p>
+              <div className="control-actions"><a className="quiet-link" href="/console/imessage">{imessage?.state === 'linked' ? 'Manage iMessage' : 'Set up iMessage'}</a></div></div></details></li>
+          <li className="branch"><details name="connections" className="disclosure"><summary><span className="marks"><Icon name="chat"/></span><span className="value">This console</span><span className="access-label">Signed in</span></summary>
+            <div className="disclosure-body"><p>Chat with Waldo right here. It’s the same conversation as the Waldo app.</p>
+              <div className="control-actions"><a className="quiet-link" href="#/chat">Open chat</a></div></div></details></li></ul>
       </div><Patch className="figure" label="A patch panel of ports, an interactive illustration. Decorative."/></div>
       <div className="control-actions">{google.connectAvailable ? <button className="primary" disabled={busy} onClick={() => onAction('google.connect', { value: 'calendar' })}>{google.accounts.length ? 'Add Google account' : 'Connect Google'}</button> : <p className="meta">Google connection is unavailable on this server.</p>}</div>
       <p className="meta">Google asks for its usual scopes together and lets you pick the account. Mail sends still need your exact approval in chat.</p>

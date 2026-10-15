@@ -9,6 +9,7 @@ import {WorkspacePanel} from './Workspace';
 import {OwnerControlsPanel} from './OwnerControls';
 import {ControlsPanel} from './Controls';
 import { MemoryPanel } from './Memory';
+import { ChatLink, ChatPanel } from './Chat';
 import { AdminPanel, type AdminState } from './Admin';
 import { fetchAdmin } from './admin-model';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -18,9 +19,9 @@ import { fetchOverview, SignInRequired } from './model';
 import { nextLiveDelay, sameRecord, shouldPoll } from './live';
 import './style.css';
 
-export type Route = 'not-found' | 'today' | 'overview' | 'waiting' | 'patrol' | 'memory' | 'memory/spots' | 'memory/constellation' | 'memory/profile' | 'connections' | 'day' | 'admin' | 'files' | 'usage' | 'setup' | 'invites' | 'account' | 'files/workspace' | 'settings' | 'settings/not-found' | `settings/${SettingsSection}`;
+export type Route = 'not-found' | 'today' | 'chat' | 'overview' | 'waiting' | 'patrol' | 'memory' | 'memory/spots' | 'memory/constellation' | 'memory/profile' | 'connections' | 'day' | 'admin' | 'files' | 'usage' | 'setup' | 'invites' | 'account' | 'files/workspace' | 'settings' | 'settings/not-found' | `settings/${SettingsSection}`;
 const routes = [
-  { key: 'today', label: 'Today' }, { key: 'waiting', label: 'Waiting' },
+  { key: 'today', label: 'Today' }, { key: 'chat', label: 'Chat' }, { key: 'waiting', label: 'Waiting' },
   { key: 'memory', label: 'Memory' }, { key: 'patrol', label: 'Patrol' },
 ] as const;
 export const resolveRoute = (raw: string): Route => {
@@ -51,7 +52,7 @@ const Greeting = ({ text }: { text: string }) => { const match = /^(Good )(\w+)(
 
 export const isSettingsRoute = (route: Route) => route === 'admin' || ['connections', 'files', 'files/workspace', 'invites', 'day', 'usage', 'account', 'setup', 'settings'].includes(route) || route.startsWith('settings/');
 
-const shortcut: Record<string, string> = { today: 'T', waiting: 'W', memory: 'M', patrol: 'P' };
+const shortcut: Record<string, string> = { today: 'T', chat: 'C', waiting: 'W', memory: 'M', patrol: 'P' };
 export function DashboardNavigation({ route, onNavigate,waitingCount }: { route: Route;waitingCount?:number; onNavigate?: () => void }) {
   const selected = route.startsWith('memory') ? 'memory' : route === 'overview' ? 'today' : route;
   const nav = useRef<HTMLElement>(null);
@@ -188,7 +189,7 @@ export function App() {
     schedule();
     return () => { stopped = true; window.clearTimeout(timer); controller?.abort(); document.removeEventListener('visibilitychange', onVisible); };
   }, [hasData]);
-  // Linear-style jumps: G, then T, W, M or P. Ignored while typing.
+  // Linear-style jumps: G, then T, C, W, M or P. Ignored while typing.
   useEffect(() => {
     let armed = 0;
     const onKey = (event: KeyboardEvent) => {
@@ -196,7 +197,7 @@ export function App() {
       if (event.metaKey || event.ctrlKey || event.altKey || target?.closest('input,textarea,select,[contenteditable="true"]')) return;
       const key = event.key.toLowerCase();
       if (key === 'g') { armed = Date.now(); return; }
-      const page = ({ t: 'today', w: 'waiting', m: 'memory', p: 'patrol', s: 'settings' } as Record<string, string>)[key];
+      const page = ({ t: 'today', c: 'chat', w: 'waiting', m: 'memory', p: 'patrol', s: 'settings' } as Record<string, string>)[key];
       if (page && Date.now() - armed < 1200) { armed = 0; window.location.hash = `#/${page}`; }
     };
     window.addEventListener('keydown', onKey);
@@ -209,14 +210,14 @@ export function App() {
     <header className="topbar"><div className="topbar-inner">
       <a className="brand" href="#/today" aria-label="Waldo dashboard home"><WaldoMark/><span aria-hidden="true">Waldo</span></a>
       <DashboardNavigation route={route} waitingCount={ready?.waiting.count}/>
-      <a className="settings-link" href="#/settings" aria-label="Settings" aria-current={isSettingsRoute(route) ? 'page' : undefined}><Icon name="settings"/></a>
+      <div className="topbar-actions"><ChatLink current={route === 'chat'}/><a className="settings-link" href="#/settings" aria-label="Settings" aria-current={isSettingsRoute(route) ? 'page' : undefined}><Icon name="settings"/></a></div>
     </div></header>
-    <main id="main" tabIndex={-1}>{route === 'admin' ? <><SettingsHead selected="admin" isAdmin={isAdmin}/><AdminPanel state={adminState} onRefresh={refreshAdmin}/></>
+    <main id="main" tabIndex={-1} className={route === 'chat' ? 'chat-main' : undefined}>{route === 'chat' ? <ChatPanel zone={ready?.timezone}/> : route === 'admin' ? <><SettingsHead selected="admin" isAdmin={isAdmin}/><AdminPanel state={adminState} onRefresh={refreshAdmin}/></>
       : state.kind !== 'ready' ? <DashboardFeedback state={state} onRetry={() => setRetry((n) => n + 1)}/>
       : <div className="route" key={route.split('/')[0]}><Dashboard data={state.data} route={route} now={now} isAdmin={isAdmin}/></div>}</main>
-    <footer><p><a href="/console/legacy">Classic console</a> · <a href="/console/imessage">iMessage</a> · <a href="#/connections">Connections</a> · <a href="#/files">Files</a> · <a href="#/invites">Invites</a></p>
+    {route !== 'chat' && <footer><p><a href="/console/legacy">Classic console</a> · <a href="/console/imessage">iMessage</a> · <a href="#/connections">Connections</a> · <a href="#/files">Files</a> · <a href="#/invites">Invites</a></p>
       {ready && <p><span title={`${exactTime(ready.as_of, ready.timezone)} · ${ready.timezone}`}>Updated {relativeTime(ready.as_of, now)}</span><span className="live-status" role="status" aria-live="polite">{livePaused ? ' · Live updates paused, retrying' : ' · Live'}</span><button type="button" className="refresh" aria-busy={refreshing} disabled={refreshing} onClick={() => setRetry((n) => n + 1)}><Icon name="retry"/>Refresh records</button></p>}
       <p>Recorded activity can include attempts and failures. Check the result before treating work as done.</p>
-    </footer>
+    </footer>}
   </div>;
 }
