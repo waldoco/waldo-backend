@@ -466,6 +466,12 @@ it('validates explicit native filter choices without executable selectors or coe
  for(const command of [{operation:'set_checked',element_ref:'e:observed:1',checked:'true'},{operation:'select',element_ref:'e:observed:0',value:'north',selector:'input'},{operation:'set_checked',checked:true}])expect(browseActArgsSchema.safeParse({...base,command}).success).toBe(false);
 });
 
+it('browser back is a bare command: it names no destination, steps or session', () => {
+  const base = { url: 'https://example.com/results', task: 'Return to the results' };
+  expect(browseActArgsSchema.safeParse({ ...base, command: { operation: 'back' } }).success).toBe(true);
+  for (const command of [{ operation: 'back', url: 'https://elsewhere.example/' }, { operation: 'back', steps: 2 }, { operation: 'back', session_id: 'foreign' }]) expect(browseActArgsSchema.safeParse({ ...base, command }).success).toBe(false);
+});
+
 describe('Calendar discovery', () => {
   const account = { connection_id: 'connection', email: 'owner@example.test' };
   const item = { id: 'team@group.calendar.google.com', title: 'Team', timezone: 'Asia/Kolkata', access_role: 'reader' as const, primary: false, selected: true, hidden: false };
