@@ -212,6 +212,14 @@ describe('web_search turn bound', () => {
     expect(result.ok).toBe(false);
   });
 
+  it('a run scope whose signal is not an AbortSignal still searches, bounded by the deadline', async () => {
+    const seen: { signal?: AbortSignal } = {};
+    void webSearchHandler('key', hung(seen)).handle({ query: 'waldo', limit: 5 }, scoped(Date.now() + 60_000, {} as AbortSignal)).catch(() => undefined);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(seen.signal).toBeInstanceOf(AbortSignal);
+    expect(seen.signal!.aborted).toBe(false);
+  });
+
   it('without a run scope the search still has a finite ceiling', async () => {
     const seen: { signal?: AbortSignal } = {};
     void webSearchHandler('key', hung(seen)).handle({ query: 'waldo', limit: 5 }, ctx).catch(() => undefined);

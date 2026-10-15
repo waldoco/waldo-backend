@@ -15,5 +15,7 @@ export class ClosedRunError extends Error {
 // Outbound I/O never outlives the run that admitted it. Without a run, the ceiling alone bounds it.
 export const effectSignal = (scope: RunEffectScope | undefined, ceilingMs: number): AbortSignal => {
   const timeout = AbortSignal.timeout(Math.max(1, Math.min(ceilingMs, (scope?.deadline ?? Infinity) - Date.now())));
-  return scope ? AbortSignal.any([scope.signal, timeout]) : timeout;
+  // On staging a turn's scope reached web_search with a signal workerd did not accept as an AbortSignal, and every search
+  // threw. The deadline still bounds the I/O through the timeout; only the early cancel is lost in that case.
+  return scope?.signal instanceof AbortSignal ? AbortSignal.any([scope.signal, timeout]) : timeout;
 };
