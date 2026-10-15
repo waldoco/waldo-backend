@@ -10,6 +10,7 @@ import type { OwnerDirectoryEnv } from '../identity/owner-directory';
 import { CONSOLE_COOKIE, CONSOLE_PATH } from './console';
 import { CONSOLE_DEVICES_PATH } from '../devices/contract';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
+import { DASHBOARD_TASKS_PATH } from './dashboard-tasks';
 
 export const CONSOLE_SIGNIN_PATH = `${CONSOLE_PATH}/signin`;
 export const CONSOLE_VERIFY_PATH = `${CONSOLE_PATH}/verify`;
@@ -339,12 +340,12 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
   let doName: string | null;
   try { doName = await auth.readOwnerCookie(request); }
   catch {
-    if ([DASHBOARD_OVERVIEW_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH].includes(url.pathname)||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json')) return finish(new Response('unauthorized', { status: 401, headers: DASHBOARD_OVERVIEW_HEADERS }));
+    if ([DASHBOARD_OVERVIEW_PATH,DASHBOARD_TASKS_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH].includes(url.pathname)||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json')) return finish(new Response('unauthorized', { status: 401, headers: DASHBOARD_OVERVIEW_HEADERS }));
     throw new Error('owner session validation failed');
   }
   if (!doName) {
     event('console_route', false, 'no_valid_owner_cookie');
-    if ([DASHBOARD_OVERVIEW_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH].includes(url.pathname)||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json')) return finish(new Response('unauthorized', { status: 401, headers: DASHBOARD_OVERVIEW_HEADERS }));
+    if ([DASHBOARD_OVERVIEW_PATH,DASHBOARD_TASKS_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH].includes(url.pathname)||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json')) return finish(new Response('unauthorized', { status: 401, headers: DASHBOARD_OVERVIEW_HEADERS }));
     return finish(signin());
   }
   const forwarded = new Request(request);
@@ -352,12 +353,12 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
   let response: Response;
   try { response = await owners.get(owners.idFromName(doName)).fetch(forwarded); }
   catch (error) {
-    if ([DASHBOARD_OVERVIEW_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH].includes(url.pathname)||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json')) return finish(new Response('overview unavailable', { status: 503, headers: DASHBOARD_OVERVIEW_HEADERS }));
+    if ([DASHBOARD_OVERVIEW_PATH,DASHBOARD_TASKS_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH].includes(url.pathname)||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json')) return finish(new Response('overview unavailable', { status: 503, headers: DASHBOARD_OVERVIEW_HEADERS }));
     throw error;
   }
   event('console_route', response.ok, response.ok ? 'forwarded' : 'forward_failed');
   if (resume && response.status === 401) return finish(signin());
-  if ([DASHBOARD_OVERVIEW_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH].includes(url.pathname)||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json')) {
+  if ([DASHBOARD_OVERVIEW_PATH,DASHBOARD_TASKS_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH].includes(url.pathname)||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json')) {
     const headers = new Headers(response.headers);
     for (const [key, value] of Object.entries(DASHBOARD_OVERVIEW_HEADERS)) headers.set(key, value);
     return finish(new Response(response.body, { status: response.status, headers }));
