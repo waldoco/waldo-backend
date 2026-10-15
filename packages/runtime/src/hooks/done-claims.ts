@@ -29,7 +29,7 @@ const label = (effect: string) => effect.split('_').join(' ');
 
 export type DoneClaimDesk = Readonly<{
   tool: LLMTool;
-  // Records one note_done call and returns what the model reads as its result, including this claim's finding.
+  // Records one note_done call and returns what the model reads as its result, including this claim's finding so far.
   note: (args: string) => string;
   // Host facts for the turn's one revision, or null when every standing claim is backed (or the check cannot run).
   revision: () => string | null;
@@ -39,10 +39,19 @@ export type DoneClaimDesk = Readonly<{
   notice: () => string | null;
 }>;
 
+type Claim = Readonly<{ effect: string; ref?: string }>;
+
 export const doneClaimDesk = (events: () => readonly LoopEventLike[], evaluate: typeof evaluateTurnClaims = evaluateTurnClaims): DoneClaimDesk => {
-  let claims: DoneClaim[] = [];
-  const findings = (): readonly ClaimFinding[] | null => {
-    try { return evaluate(claims, events()); } catch { return null; }
+  let claims: Claim[] = [];
+  // A claim describes the reply, so every receipt that has landed by the time it is checked can back it: each claim is
+  // sequenced after the turn's receipts at check time, never when note_done was called.
+  const findings = (): readonly (ClaimFinding & { index: number })[] | null => {
+    try {
+      const landed = events();
+      const after = landed.reduce((top, event) => Math.max(top, event.seq), 0) + 1;
+      const typed: DoneClaim[] = claims.map((claim, index) => ({ seq: after + index, ...claim }));
+      return evaluate(typed, landed).map(finding => ({ ...finding, index: finding.claim_seq - after }));
+    } catch { return null; }
   };
   return {
     tool: NOTE_DONE_TOOL,
@@ -51,13 +60,12 @@ export const doneClaimDesk = (events: () => readonly LoopEventLike[], evaluate: 
       try { args = JSON.parse(raw || '{}'); } catch { args = undefined; }
       const parsed = noteDoneArgsSchema.safeParse(args);
       if (!parsed.success) return JSON.stringify({ ok: false, error: `note_done needs effect, one of: ${CLAIMABLE_EFFECTS.join(', ')}.` });
-      // A claim can be backed only by a receipt that landed before it.
       // Only a file receipt carries a ref; a ref on any other effect has nothing to match, so it is dropped.
       const ref = REF_EFFECTS.has(parsed.data.effect) ? parsed.data.ref : undefined;
-      const claim: DoneClaim = { seq: events().length + 1, effect: parsed.data.effect, ...(ref ? { ref } : {}) };
-      claims.push(claim);
+      claims.push({ effect: parsed.data.effect, ...(ref ? { ref } : {}) });
+      const index = claims.length - 1;
       const all = findings();
-      const own = all?.find(finding => finding.claim_seq === claim.seq && finding.effect === claim.effect);
+      const own = all?.find(finding => finding.index === index);
       return JSON.stringify(all === null ? { ok: true, noted: true, backed: false, finding: 'check_unavailable' } : own ? { ok: true, noted: true, backed: false, finding: own.reason } : { ok: true, noted: true, backed: true });
     },
     revision: () => {

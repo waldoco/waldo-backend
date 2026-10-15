@@ -39,11 +39,19 @@ describe('doneClaimDesk', () => {
     expect(desk.notice()).toBeNull();
   });
 
-  it('a receipt that lands after the claim does not back it', () => {
+  it('a claim noted before its receipt landed is backed once the receipt is in', () => {
     const events: LoopEventLike[] = [];
     const desk = deskOver(events);
-    desk.note('{"effect":"message_send_proposed"}');
+    expect(JSON.parse(desk.note('{"effect":"message_send_proposed"}'))).toMatchObject({ backed: false });
     events.push(sent(1));
+    expect(desk.revision()).toBeNull();
+    expect(desk.notice()).toBeNull();
+  });
+
+  it('one receipt backs one claim: a second identical claim is still unbacked', () => {
+    const desk = deskOver([sent(1)]);
+    expect(JSON.parse(desk.note('{"effect":"message_send_proposed"}'))).toMatchObject({ backed: true });
+    expect(JSON.parse(desk.note('{"effect":"message_send_proposed"}'))).toMatchObject({ backed: false, finding: 'no_matching_receipt' });
     expect(desk.notice()).toBe('Not confirmed: message send proposed (nothing ran)');
   });
 

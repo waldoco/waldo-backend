@@ -484,7 +484,7 @@ export const createOwnerResponder = (
       });
       const turnHandlers = withDelegation(activeHandlers, delegate, ownerTurnActive);
       let withheldLogged = false;
-      return runToolLoop({
+      const replied = await runToolLoop({
         handlers: turnHandlers,
         budget: turnBudget,
         ...(offloadStore === undefined ? {} : { offload: offloadStore }),
@@ -604,6 +604,9 @@ export const createOwnerResponder = (
         onTool: (event) => {
           // Typed receipt input for the owner reply's last line (receiptLine reads no wording).
           const receipt = event.call.name === 'remember' && event.ok ? JSON.parse(event.output) as { data?: { status?: string } } : undefined;
+          const loopEvent: LoopEventLike = { seq: claimEvents.length + 1, call: { name: event.call.name, args: parseToolArgs(event.call.arguments, event.call.name) }, ok: event.ok, at: Date.now(), ...(event.code ? { code: event.code } : {}) };
+          // A duplicate save is already stored: it backs a memory_stored claim, but the receipt line does not show it as new.
+          claimEvents.push(loopEvent);
           if (receipt?.data?.status !== 'duplicate') turnToolEvents.push({ seq: turnToolEvents.length + 1, call: { name: event.call.name, args: parseToolArgs(event.call.arguments, event.call.name) }, ok: event.ok, at: Date.now(), ...(event.code ? { code: event.code } : {}) });
           privateRunScope?.admit();
           log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: event.call.arguments, output: event.output } });
@@ -613,6 +616,10 @@ export const createOwnerResponder = (
         ...(offerConnect ? { onConnect: offerConnect } : {}),
         ...(turnClaims ? { claims: turnClaims } : {}),
       });
+      // An unbacked claim is never delivered as done. The notice is part of the reply, so the stored conversation and the
+      // next turn's model see what the owner saw; converse() keeps the receipt line last, for the app's receipt part.
+      const notice = turnClaims?.notice() ?? null;
+      return notice ? `${replied}\n\n${notice}` : replied;
     },
   }, tree, undefined, pathObservers);
   const conversationLeaves = new Map<string, string>();
@@ -622,7 +629,8 @@ export const createOwnerResponder = (
   // Room left in the system prompt for owner memory: the sanitiser drops a system prompt over its limit whole.
   const systemRoom = (others: string) => SANITISE_DESTINATION_POLICIES.system_prompt.max_chars - others.length - 2_048;
   let turnToolEvents: LoopEventLike[] = [];
-  // The owner turn's done-claims, checked against turnToolEvents before the reply is delivered.
+  // The owner turn's done-claims, checked against every receipt of the turn (claimEvents) before the reply is delivered.
+  let claimEvents: LoopEventLike[] = [];
   let turnClaims: DoneClaimDesk | undefined;
   const parseToolArgs = (raw: unknown, tool: string): unknown => {
     if (typeof raw !== 'string') return raw;
@@ -716,7 +724,8 @@ export const createOwnerResponder = (
     turnClockLine = undefined;
     ownerTurnActive = fromOwner;
     turnToolEvents = [];
-    turnClaims = fromOwner ? doneClaimDesk(() => turnToolEvents) : undefined;
+    claimEvents = [];
+    turnClaims = fromOwner ? doneClaimDesk(() => claimEvents) : undefined;
     control.begin(fromOwner);
     try {
       const userEntry = tree.get(id) ?? { id, ownerId, chatId: conversationRef, parentId: conversationLeaves.get(conversationRef) ?? null, threadAnchorId: null, surface, modelPayload: said, appPayload: received, modelProjection: { mode: 'include' as const }, role:'user' as const, inputOrigin: fromOwner ? 'owner' as const : 'machine' as const, createdAt: Date.now() };
@@ -733,10 +742,7 @@ export const createOwnerResponder = (
       const reply = tree.get(publication.leafId)!.appPayload;
       // Native delivery reads durable history, so the visible effect receipt belongs in that row, as text and typed.
       const receipt = fromOwner ? await turnReceipt(turnToolEvents) : null;
-      // An unbacked claim is never delivered as done. The notice sits above the receipt line, which stays last for the app's receipt part.
-      const notice = turnClaims?.notice() ?? null;
-      const told = notice ? `${reply}\n\n${notice}` : reply;
-      const out = receipt ? `${told}\n\n${receipt.line}` : told;
+      const out = receipt ? `${reply}\n\n${receipt.line}` : reply;
       const redact = literalTextRedactor([...removedTopics], FORGOTTEN);
       const savedEntries = [tree.get(id)!, { ...tree.get(publication.leafId)!, ...(context ? { appPayload: out, ...(receipt ? { receipt } : {}) } : {}) }].map(entry => redactConversationEntry(entry, redact));
       await conversationStore?.save(savedEntries, publication.leafId, privateRunScope);
