@@ -1,4 +1,5 @@
-import { appApprovalDecisionResultV1Schema, appApprovalDecisionV1Schema, appApprovalListQueryV1Schema, appApprovalListV1Schema, appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
+import { appApprovalAtRevision, appApprovalDecisionResultV1Schema, appApprovalDecisionV1Schema, appApprovalListQueryV1Schema, appApprovalListV1Schema, appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
+import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import { approvalControlReceipt, controlRevision, loadReceiptBook, receiptCapacityReached, RECEIPT_BOOK_KEY, type ControlReceipt } from './dashboard-control-actions';
 import { APP_APPROVAL_DECISIONS_PATH, APP_APPROVALS_PATH } from './app-api';
 import type { ApprovalDesk } from './approvals';
@@ -25,7 +26,8 @@ export async function appApprovalsRequest(request: Request, host: AppApprovalsHo
     if (request.method !== 'GET') return reply({ error: 'method_not_allowed' }, 405);
     if ([...url.searchParams.keys()].some(key => key !== 'state' || url.searchParams.getAll(key).length !== 1)) return reply({ error: 'invalid_query' }, 400);
     const query = appApprovalListQueryV1Schema.safeParse(Object.fromEntries(url.searchParams)); if (!query.success) return reply({ error: 'invalid_query' }, 400);
-    const parsed = appApprovalListV1Schema.safeParse({ approvals: await listed(query.data) });
+    const revision = appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'approvals');
+    const parsed = appApprovalListV1Schema.safeParse({ approvals: (await listed(query.data)).map(item => appApprovalAtRevision(item, revision)) });
     await host.assertCurrent(); return parsed.success ? reply(parsed.data) : reply({ error: 'projection_unavailable' }, 503);
   }
   if (url.pathname !== APP_APPROVAL_DECISIONS_PATH) return reply({ error: 'not_found' }, 404);

@@ -18,6 +18,7 @@ import { persistTransportWake } from '../src/scheduler/alarm-slot';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
+import { presenceAuthority } from './helpers/directory-presence';
 
 // Proactive work for an owner on both Telegram and the app goes to the app, and Telegram gets one plain copy of it.
 const CARD_TEXT = 'Your morning is clear until noon.';
@@ -25,6 +26,7 @@ const UPDATE_TEXT = 'Your 10:30 moved to 11:00.';
 const FOLLOWUP_TEXT = 'Have you handled the deck review? Pat asked for it by 10.';
 const PREP_TEXT = 'Design review at 09:30. Bring the onboarding mocks; Pat is listed.';
 const ORDER_TEXT = 'Inbox triage done: two threads need you.';
+const CHECK_BACK_TEXT = 'I looked for the invoice in your sent mail and found nothing yet. Want me to draft it?';
 const NUDGE_TEXT = 'A nudge queued for the app.';
 const REPLY_TEXT = 'Here is your answer.';
 const fixture = vi.hoisted(() => ({ event: null as CalendarItem | null, changes: [] as CalendarChange[], requests: [] as string[] }));
@@ -47,7 +49,8 @@ vi.mock('../src/channels/telegram-turn', async load => {
       : content.includes('[Mail follow-up check') ? FOLLOWUP_TEXT
       : content.includes('[Update check') ? UPDATE_TEXT
       : content.includes('[Scheduled card') ? CARD_TEXT
-      : content.includes('[Standing order due now') ? ORDER_TEXT : 'SKIP';
+      : content.includes('[Standing order due now') ? ORDER_TEXT
+      : content.includes('[Check-back due now') ? CHECK_BACK_TEXT : 'SKIP';
     return { ok: true, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
@@ -81,6 +84,7 @@ beforeEach(() => {
     if (fn === 'health_log_recent') return Response.json([]);
     if (fn === 'health_context_read') return Response.json(null);
     if (fn === 'assert_channel_presence') return Response.json(wire.presence);
+    if (fn === 'common_owner_authority') return presenceAuthority(OWNER_ID, init?.body);
     if (/^https:\/\/api\.telegram\.org\/bot[^/]+\/sendMessage$/.test(url)) {
       const sent = JSON.parse(String(init?.body)) as Sent & { link_preview_options?: unknown };
       wire.previews.push(sent.link_preview_options);
@@ -215,16 +219,15 @@ describe('proactive work for an owner on Telegram who also uses the app', () => 
     });
   });
 
-  it('a heartbeat nudge is queued for the app, reaches the app chat, and Telegram gets one plain copy', async () => {
+  it('the check-back of a due loop is queued for the app, reaches the app chat, and Telegram gets one plain copy', async () => {
     await withOwner('routing-heartbeat', async (owner, state, ctx) => {
       loopBook(state.storage.sql, { newId: () => 'loop-1', now: () => AT }).open({ title: 'Send the invoice', due: `${DAY}T08:00` });
       await armHeartbeat(new Scheduler(state.storage.sql, state.storage, productionDeps()), Date.now() - 60 * 60_000);
       await schedulePass(owner, state);
       expect(outbox(state).filter(record => record.heartbeat).map(record => record.payload.chat_id)).toEqual([ctx.appSubject]);
       await outboxPass(owner, state, ctx);
-      const nudge = 'From your list, past due:\n- Send the invoice (due 2026-10-03 08:00)';
-      expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: nudge, channel: 'app' }]);
-      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: nudge }]);
+      expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: CHECK_BACK_TEXT, channel: 'app' }]);
+      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: CHECK_BACK_TEXT }]);
     });
   });
 

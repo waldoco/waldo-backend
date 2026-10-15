@@ -64,8 +64,9 @@ export const reminderBook = (sql: SqlStorage, scheduler: Scheduler, clock: Owner
     async cancel(id) {
       const known = scheduler.read(id)?.kind === 'reminder';
       if (known) await scheduler.cancel(id);
-      sql.exec('DELETE FROM reminder_notes WHERE id = ?', id);
-      return known;
+      // A fired reminder whose check-back is still queued has no schedule row; deleting its note stops that send.
+      const queued = sql.exec('DELETE FROM reminder_notes WHERE id = ? RETURNING id', id).toArray().length > 0;
+      return known || queued;
     },
     async cancelAll() {
       sql.exec('DELETE FROM reminder_notes');

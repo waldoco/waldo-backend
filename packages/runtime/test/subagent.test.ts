@@ -15,7 +15,7 @@ import {
   type WebSearchArgs,
 } from '@waldo/contracts';
 import { runToolLoop, type LoopExit, type ToolLoopEvent } from '../src/conversation/tool-loop';
-import { assertChildEffectsReceivable, childReceiptEvent, CHILD_TOOL_NAMES, delegateTaskHandler, runChildLoop, SUBAGENT_MAX_ROUNDS, SUBAGENT_MAX_SPAWNS_PER_TURN, SUBAGENT_SYSTEM_PROMPT, withDelegation } from '../src/conversation/subagent';
+import { assertChildEffectsReceivable, childReceiptEvent, CHILD_TOOL_NAMES, delegateTaskHandler, runChildLoop, SUBAGENT_MAX_SPAWNS_PER_TURN, SUBAGENT_SYSTEM_PROMPT, withDelegation } from '../src/conversation/subagent';
 import { dispatchTool, type ToolDispatcherContext } from '../src/tools/dispatcher';
 import type { LoopEventLike } from '../src/hooks/claim-hook';
 import { evaluateTurnClaims, receiptsFromLoopEvents } from '../src/hooks/claim-hook';
@@ -50,7 +50,7 @@ describe('delegate_task (subagent orchestration v1)', () => {
       let exit: LoopExit = 'completed';
       const text = await runToolLoop({
         handlers: [stubRead('web_search'), stubRead('read_memory')],
-        ctx, maxSteps: SUBAGENT_MAX_ROUNDS,
+        ctx, maxSteps: 15,
         onSettle: (settled) => { exit = settled; },
         step: async (tools, turns) => {
           childToolSets.push(tools?.map((tool: LLMTool) => tool.name));
@@ -344,8 +344,8 @@ describe('Codex #224 holds (regressions)', () => {
     expect(budget.remaining).toBe(0);
   });
 
-  it('child loop observes the shared budget: 2 remaining rounds cap a 10-round slice', async () => {
-    const budget = { remaining: 2 };
+  it('child loop draws down the shared budget and leaves the parent rounds for its report', async () => {
+    const budget = { remaining: 5 };
     let offered = 0;
     const result = await runChildLoop('research topic', {
       handlers: [stubRead('web_search')],
@@ -359,8 +359,8 @@ describe('Codex #224 holds (regressions)', () => {
         return { text: '', tool_calls: [{ call_id: `k${offered}`, name: 'web_search', arguments: `{"q":"q${offered}"}` }] };
       },
     });
-    expect(offered).toBe(2);
-    expect(budget.remaining).toBe(0);
+    expect(offered).toBe(3);
+    expect(budget.remaining).toBe(2);
     expect(result.exit).toBe('budget_exhausted');
   });
 });
@@ -435,7 +435,7 @@ describe('runChildLoop delegated effect receipts', () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       try {
         const result = await runChildLoop('write a note', {
-          handlers: [handler, stubRead('read_memory')], ctx: { ...ctx }, budget: { remaining: 3 },
+          handlers: [handler, stubRead('read_memory')], ctx: { ...ctx }, budget: { remaining: 5 },
           controlRound: () => '', onTool, onReceipt,
           complete: async (_content, tools, turns) => {
             expect(tools?.map(tool => (tool as LLMTool).name)).toContain('workspace_write');

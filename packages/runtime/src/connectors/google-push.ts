@@ -7,7 +7,7 @@ export const CALENDAR_WATCH_URL = 'https://www.googleapis.com/calendar/v3/calend
 export const CHANNEL_STOP_URL = 'https://www.googleapis.com/calendar/v3/channels/stop';
 const WATCH_TTL_S = 7 * 24 * 3600;
 const RENEW_BEFORE_MS = 24 * 3_600_000;
-const RETRY_AFTER_FAILURE_MS = 6 * 3_600_000;
+export const RETRY_AFTER_FAILURE_MS = 6 * 3_600_000;
 
 export type CalendarWatch = Readonly<{ channelId: string; resourceId: string; expiration: number }>;
 export type CalendarWatchState = CalendarWatch | Readonly<{ failedAt: number }>;

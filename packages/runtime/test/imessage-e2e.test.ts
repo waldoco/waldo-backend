@@ -8,15 +8,16 @@ import { sha256Hex } from '../src/channels/imessage/crypto';
 import { IMessageFinalOutbox } from '../src/channels/imessage/final-outbox';
 import { IMessageOwnerInbox } from '../src/channels/imessage/owner-inbox';
 import { BridgeStore } from '../src/channels/imessage/bridge-store';
+import { gmailPushBook } from '../src/channels/gmail-push';
 import { PROPOSED_LOCAL_TEST_POLICY } from '../src/channels/imessage/policy';
 import { fixtureDirectory, type FixtureOwner } from './helpers/imessage-fixture-directory';
 import { SimulatedHost } from './helpers/imessage-sim-host';
 
 // Scripted model: every non-structured responses.create call is one owner turn.
-const proof = vi.hoisted(() => ({ turns: [] as string[], reply: 'Scripted owner reply.', hold: null as null | (() => Promise<void>), outputs: [] as any[][] }));
+const proof = vi.hoisted(() => ({ turns: [] as string[], systems: [] as string[], reply: 'Scripted owner reply.', hold: null as null | (() => Promise<void>), outputs: [] as any[][] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: any) => {
   const format = input.text?.format?.name;
-  if (!format) { proof.turns.push(JSON.stringify(input.input ?? '')); if (proof.hold) { const h = proof.hold; proof.hold = null; await h(); } }
+  if (!format) { proof.turns.push(JSON.stringify(input.input ?? '')); proof.systems.push(String(input.instructions ?? '')); if (proof.hold) { const h = proof.hold; proof.hold = null; await h(); } }
   return { id: 'scripted', output: format ? [] : proof.outputs.shift() ?? [], output_text: format === 'claim_ops' ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : format ? '{}' : proof.reply, usage: { input_tokens: 1, output_tokens: 1 } };
 } }; } }));
 vi.mock('../src/connectors/google', async load => ({ ...await load<typeof import('../src/connectors/google')>(), googleClient: () => ({
@@ -28,7 +29,7 @@ const HOST_ORIGIN = 'https://imessage.fixture.invalid';
 const SUBJECT = 'owner@example.invalid', CHAT = `iMessage;-;${SUBJECT}`;
 const forbiddenEgress: string[] = [];
 
-afterEach(() => { vi.restoreAllMocks(); proof.turns = []; proof.hold = null; proof.outputs = []; });
+afterEach(() => { vi.restoreAllMocks(); proof.turns = []; proof.systems = []; proof.hold = null; proof.outputs = []; });
 
 async function world(ownerName = `imsg-owner-${crypto.randomUUID()}`, ownerId = '10000000-0000-4000-8000-000000000001') {
   const owners: FixtureOwner[] = [{ do_name: ownerName, owner_id: ownerId, state: 'active', state_version: 1, admission_revision: 1 }];
@@ -516,4 +517,18 @@ it('an iMessage turn with no public origin on record mints nothing, says so, and
   expect(proof.turns.join('\n').replaceAll('\\"', '"')).toContain('"sent":false,"reason":"unavailable"');
   await runInDurableObject(w.ownerStub, async (_i, state) => { expect(state.storage.kv.get('console:link')).toBeUndefined(); });
   expect((await outbox(w.ownerStub)).map(row => row.replyRef.split(':')[0])).toEqual(['reply']);
+});
+
+it('an iMessage owner turn carries the host fact about a Gmail watch that failed to start', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    await state.storage.put('google:accounts', [{ id: 'conn-1', email: 'mail-owner@example.invalid', scopes: ['gmail.readonly', 'gmail.send', 'gmail.compose'].map(scope => `https://www.googleapis.com/auth/${scope}`) }]);
+    gmailPushBook(state.storage.kv).fail(Date.now());
+  });
+  await replyFor(w, 'Did my new email come in?');
+  expect(proof.systems).toHaveLength(1);
+  expect(proof.systems[0]!.split('New emails are not pushed to Waldo').length - 1).toBe(1);
+  expect(proof.systems[0]).not.toContain('mail-owner@example.invalid');
+  expect(forbiddenEgress).toEqual([]);
 });

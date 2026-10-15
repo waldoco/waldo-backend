@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { appThreadListV1Schema, appThreadOperationResultV1Schema } from '../../contracts/src/app/threads';
 import { appSubjectFor } from '../src/channels/app-api';
 import type { AppInboxRecord } from '../src/channels/app-inbox';
-import { redactThreadTitles } from '../src/channels/app-threads';
+import { nameThread, redactThreadTitles } from '../src/channels/app-threads';
 import { claimStore, FORGOTTEN } from '../src/memory/claims';
 import { THREAD_TITLE_BUDGET_MS } from '../src/llm/time-budget';
 import { ensureSchema } from '../src/tracer/schema';
@@ -152,6 +152,17 @@ describe('the model naming an untitled thread', () => {
         expect(await listed(call, id)).toMatchObject({ title: null, title_revision: 1 });
         expect(titleLog(state)).toEqual([{ ok: 0, note: expect.stringMatching(answer instanceof Error ? /model_failed/ : /unreadable/) }]);
       });
+    }
+  });
+
+  it('a model title with a control or format character is unreadable, and the thread stays untitled', () => {
+    for (const [name, char] of [['newline', '\n'], ['NUL', '\u0000'], ['bidi override', '\u202E'], ['zero-width space', '\u200B']] as const) {
+      const untitled = { state: 'active', title: null, title_revision: 1 };
+      const rows = new Map<string, unknown>([['app:thread:t1', untitled]]);
+      const kv = { get: (key: string) => rows.get(key), put: (key: string, value: unknown) => { rows.set(key, value); } } as unknown as Parameters<typeof nameThread>[0];
+      expect(nameThread(kv, 't1', JSON.stringify({ title: `Lisbon${char}trip` })), name).toBe('unreadable');
+      expect(rows.get('app:thread:t1'), name).toBe(untitled);
+      expect(nameThread(kv, 't1', JSON.stringify({ title: 'Lisbon trip' })), name).toBe('named');
     }
   });
 

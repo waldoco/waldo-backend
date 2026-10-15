@@ -5,7 +5,7 @@ import type { InboundSpan, InboundView } from './owner-inbound-turn';
 export const STOPPED_REPLY = 'Stopped. Nothing more on that one.';
 
 export const turnControl = () => {
-  let child: { bindTarget(id: string): void; durableConsume(hook: (ids: readonly number[]) => Promise<void>): void; stopTarget(id: string): boolean; steerTarget(targetId: string, id: number, steer: InboundView): boolean; stop(): boolean; steer(id: number, text: string): boolean } | undefined;
+  let child: { bindTarget(id: string): void; durableConsume(hook: (ids: readonly number[]) => Promise<void>): void; stopTarget(id: string): boolean; steerTarget(targetId: string, id: number, steer: InboundView): boolean } | undefined;
   let revision = 0;
   let running = false;
   let target: string | null = null;
@@ -57,27 +57,6 @@ export const turnControl = () => {
     revision: () => revision,
     heard: (): readonly InboundView[] => heard,
     unconsumed: (): readonly { id: number; text: string; foreignRanges: readonly InboundSpan[] }[] => leftover,
-    stop(): boolean {
-      if (child) return child.stop();
-      if (running) { stopped = true; revision++; }
-      return running;
-    },
-    steer(id: number, text: string): boolean {
-      if (child) return child.steer(id, text);
-      const open = running && steerable && !stopped;
-      if (open) { pending.push({ id, text, foreignRanges: [] }); revision++; }
-      return open;
-    },
-    // Called before each model round: null means stop, otherwise the owner's additions so far.
-    round(): string | null {
-      if (stopped) return null;
-      for (const { id, ...steer } of pending) {
-        heard.push(steer);
-        absorbed.add(id);
-      }
-      pending = [];
-      return heard.length === 0 ? '' : `\n\n[While you were working, the owner added: ${heard.map((steer) => `"${steer.text}"`).join('; ')}. Take it into account in this answer.]`;
-    },
     absorbed(id: number): boolean {
       return absorbed.delete(id);
     },
