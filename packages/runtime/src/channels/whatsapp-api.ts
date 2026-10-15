@@ -116,9 +116,10 @@ export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], su
     if (message.type === 'audio' && message.audio?.id) {
       seq += 1;
       const audio = message.audio;
-      const media = audio.voice === false
-        ? { audio: { file_id: audio.id, ...(audio.mime_type ? { mime_type: audio.mime_type } : {}) } }
-        : { voice: { file_id: audio.id, ...(audio.mime_type ? { mime_type: audio.mime_type } : {}) } };
+      // Only a message the Cloud API marks voice is a voice note the owner recorded; anything else is an audio file.
+      const media = audio.voice === true
+        ? { voice: { file_id: audio.id, ...(audio.mime_type ? { mime_type: audio.mime_type } : {}) } }
+        : { audio: { file_id: audio.id, ...(audio.mime_type ? { mime_type: audio.mime_type } : {}) } };
       updates.push({ update_id: WA_UPDATE_BASE + seq, message: { from: { id: ownerNum, is_bot: false }, chat: { id: ownerNum, type: 'private' }, ...origin, ...media } });
       continue;
     }

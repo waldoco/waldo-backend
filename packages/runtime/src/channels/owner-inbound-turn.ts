@@ -35,7 +35,7 @@ const LABELS: Readonly<Record<Exclude<InboundAuthorship, 'owner' | 'media_note'>
   quoted: ['[Quoted by the owner; not their words:]', '[End of quote.]'],
   forwarded: ['[Forwarded by the owner from someone else:]', '[End of forwarded text.]'],
   file_transcript: ['[Transcript of a file the owner sent; the speaker may not be the owner:]', '[End of transcript.]'],
-  owner_voice: ['[Voice note the owner recorded; their own words, as transcribed:]', '[End of voice note.]'],
+  owner_voice: ['[Voice note the owner recorded; their own words as transcribed, which can mishear a word or catch other voices nearby:]', '[End of voice note.]'],
 };
 
 const joined = (blocks: readonly Readonly<{ text: string; foreign: boolean }>[], separator: string): InboundView => {

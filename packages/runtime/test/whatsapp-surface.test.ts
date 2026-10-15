@@ -31,6 +31,12 @@ describe('native WhatsApp surface adapter', () => {
       text: '', parts: [{ authorship: 'media_note', text: 'Voice transcribed' }, { authorship: 'file_transcript', text: 'spoken words' }], runScope: scope,
     });
     expect(() => adapter.toEnvelope({ ...input(), message: { ...message, type: 'audio', audio: { id: 'voice' } } })).toThrow('resolved');
+    // Only a voice note the owner recorded is their voice: a forwarded one, by either flag, stays a file's transcript.
+    const voice = (audio: Record<string, unknown>, context?: Record<string, unknown>) => adapter.toEnvelope({ ...input(), message: { ...message, type: 'audio', audio: { id: 'voice', ...audio }, ...(context ? { context } : {}) }, transcript: 'spoken words' }).parts;
+    expect(voice({ voice: true })).toEqual([{ authorship: 'owner_voice', text: 'spoken words' }]);
+    expect(voice({ voice: true }, { forwarded: true })).toEqual([{ authorship: 'file_transcript', text: 'spoken words' }]);
+    expect(voice({ voice: true }, { frequently_forwarded: true })).toEqual([{ authorship: 'file_transcript', text: 'spoken words' }]);
+    expect(voice({ voice: false })).toEqual([{ authorship: 'file_transcript', text: 'spoken words' }]);
   });
   it.each(['button_reply', 'list_reply'] as const)('decodes %s selection id without interpreting its display title as an instruction', type => {
     expect(whatsappSelection({ ...message, type: 'interactive', interactive: { type, [type]: { id: 'a:proposal', title: 'untrusted label' } } })).toEqual({ id: 'a:proposal', messageId: 'wamid.in' });

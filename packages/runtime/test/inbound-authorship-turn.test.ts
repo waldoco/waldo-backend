@@ -4,6 +4,7 @@ import { queryCalendarArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type Conv
 import { claimStore } from '../src/memory/claims';
 import { memoryHandlers } from '../src/tools/live/memory';
 import { TelegramPollingAdapter } from '../src/channels/telegram-polling';
+import { whatsappIngressUpdates, type WaIngressMessage } from '../src/channels/whatsapp-api';
 
 const seen = vi.hoisted(() => ({ inputs: [] as string[], outputs: [] as unknown[][] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
@@ -52,7 +53,7 @@ it('a remember sourced to a voice transcript is refused through the turn, while 
 const ASK = "What's on my calendar today?";
 const VOICE = { file_id: 'synthetic-voice', mime_type: 'audio/ogg', file_size: 1 };
 const FORWARD = { forward_origin: { type: 'hidden_user', date: 1, sender_user_name: 'Sam' }, forward_sender_name: 'Sam', forward_date: 1 };
-const OWNER_VOICE_BLOCK = `[Voice note the owner recorded; their own words, as transcribed:]\n${JSON.stringify(ASK)}\n[End of voice note.]`;
+const OWNER_VOICE_BLOCK = `[Voice note the owner recorded; their own words as transcribed, which can mishear a word or catch other voices nearby:]\n${JSON.stringify(ASK)}\n[End of voice note.]`;
 const FILE_BLOCK = `[Transcript of a file the owner sent; the speaker may not be the owner:]\n${JSON.stringify(ASK)}\n[End of transcript.]`;
 const calendarTurn = async (message: Record<string, unknown>) => {
   const calendar = vi.fn(async () => ({ ok: true as const, data: { events: [{ title: 'Design review', starts_at: '2026-10-14T15:00:00+05:30' }] }, source_taint: 'external' as const }));
@@ -99,8 +100,30 @@ it('a remember sourced to the owner\'s own voice note is refused: a mis-heard fa
     ], []);
     const responder = createTelegramResponder('fixture', undefined, store, undefined, { download: async () => new Uint8Array([1]), transcribe: async () => QUOTE }, undefined, tools);
     await responder.respond(await turnFrom({ voice: VOICE }), timer);
-    expect(inModelInput(`[Voice note the owner recorded; their own words, as transcribed:]\n${JSON.stringify(QUOTE)}\n[End of voice note.]`)).toBe(true);
+    expect(inModelInput(`[Voice note the owner recorded; their own words as transcribed, which can mishear a word or catch other voices nearby:]\n${JSON.stringify(QUOTE)}\n[End of voice note.]`)).toBe(true);
     expect(seen.inputs.some(input => input.includes('from-voice'))).toBe(true);
     expect(store.claims()).toEqual([]);
   });
+});
+
+// The live WhatsApp path: Cloud API messages become telegram-shaped updates, then run the same parser and media loader.
+const whatsappCalendarTurn = async (audio: Record<string, unknown>, context?: Record<string, unknown>) => {
+  const { updates } = whatsappIngressUpdates([{ id: 'wamid.voice', from: '15550001111', type: 'audio', audio: { id: 'synthetic-media', ...audio }, ...(context ? { context } : {}) } as WaIngressMessage], '15550001111', 0);
+  const [turn] = (await new TelegramPollingAdapter({ getUpdates: async () => updates }, 0).poll(0)).accepted;
+  const calendar = vi.fn(async () => ({ ok: true as const, data: { events: [] }, source_taint: 'external' as const }));
+  seen.outputs.push([{ type: 'function_call', call_id: 'wa-calendar', name: 'query_calendar', arguments: '{}' }], []);
+  await createTelegramResponder('fixture', undefined, undefined, undefined, { download: async () => new Uint8Array([1]), transcribe: async () => ASK }, undefined, [
+    { name: 'query_calendar', description: 'Read the fixture calendar', schema: queryCalendarArgsSchema, autonomy_gated: false, requires_connector: true, trigger_allowlist: triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes('query_calendar')), handle: calendar },
+  ]).respond(turn!, timer);
+};
+
+it('WhatsApp: the owner\'s own voice note is their words; a forwarded one, by either flag, or audio without the voice flag stays a file\'s transcript', async () => {
+  await whatsappCalendarTurn({ voice: true });
+  expect(inModelInput(OWNER_VOICE_BLOCK)).toBe(true);
+  for (const [audio, context] of [[{ voice: true }, { forwarded: true }], [{ voice: true }, { frequently_forwarded: true }], [{}, undefined], [{ voice: false }, undefined]] as const) {
+    seen.inputs.length = 0;
+    await whatsappCalendarTurn(audio, context);
+    expect(inModelInput(FILE_BLOCK)).toBe(true);
+    expect(inModelInput('[Voice note the owner recorded')).toBe(false);
+  }
 });

@@ -14,7 +14,7 @@ const BLOCK: Readonly<Record<Exclude<InboundAuthorship, 'owner'>, string>> = {
   quoted: '[Quoted by the owner; not their words:]\n"Sam: call me at 6"\n[End of quote.]',
   forwarded: '[Forwarded by the owner from someone else:]\n"Sam: call me at 6"\n[End of forwarded text.]',
   file_transcript: '[Transcript of a file the owner sent; the speaker may not be the owner:]\n"Sam: call me at 6"\n[End of transcript.]',
-  owner_voice: '[Voice note the owner recorded; their own words, as transcribed:]\n"move gym to 7"\n[End of voice note.]',
+  owner_voice: '[Voice note the owner recorded; their own words as transcribed, which can mishear a word or catch other voices nearby:]\n"move gym to 7"\n[End of voice note.]',
   media_note: '[Owner sent a photo, attached.]',
 };
 
