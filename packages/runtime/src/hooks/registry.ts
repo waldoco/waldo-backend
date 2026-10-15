@@ -107,6 +107,7 @@ import {
   writeSheetCellArgsSchema,
   writeTaskArgsSchema,
   archiveThreadArgsSchema,
+  showViewArgsSchema,
 } from '@waldo/contracts';
 import { EGRESS_TARGET_PATHS, OPEN_PUBLIC, OPEN_PUBLIC_TOOLS, evaluateDeclaredEgress } from './egress-policy';
 
@@ -168,6 +169,7 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   connect_service: connectServiceArgsSchema,
   send_console_link: sendConsoleLinkArgsSchema,
   send_progress_note: sendProgressNoteArgsSchema,
+  show_view: showViewArgsSchema,
   query_calendar: queryCalendarArgsSchema,
   get_communication: getCommunicationArgsSchema,
   search_communication: searchCommunicationArgsSchema,

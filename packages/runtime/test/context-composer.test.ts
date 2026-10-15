@@ -1550,10 +1550,10 @@ describe('ContextComposer', () => {
 // user_message ACL ceiling wording, 2026-09-25; delegate_task joined it, 2026-09-26; the A9
 // health tools joined it, 2026-09-27; the A7 standing-order tools the A1 gmail tools and the A5 artifact tools joined it, 2026-09-27);
 // query_availability and read_owner_context joined it 2026-09-30. read_mcp_tool joined it 2026-10-02. export_artifact joined it 2026-10-02. workspace_list, workspace_read and workspace_write joined it 2026-10-02. workspace_render and curated skills lifecycle tools joined it 2026-10-03.
-// set_schedule_preference joined it 2026-10-07. propose_google_task_change joined it 2026-10-10. use_mac joined it 2026-10-13. search_contacts joined it 2026-10-13. send_console_link joined it 2026-10-14. send_progress_note joined it.
+// set_schedule_preference joined it 2026-10-07. propose_google_task_change joined it 2026-10-10. use_mac joined it 2026-10-13. search_contacts joined it 2026-10-13. send_console_link joined it 2026-10-14. send_progress_note joined it. show_view joined it.
 // The serializer revision moved to context-reasons-v3 2026-10-14 (a recall that did not run stops reading as an empty one).
 // determinism is proven by first===second above.
-    expect(first.checkpoint.context_ref).toBe('ctx_c01aefb0caab0bb687dd4fc5f05fbeb3');
+    expect(first.checkpoint.context_ref).toBe('ctx_7a14ceeffcb3018fdad740f1f5800884');
     expect(first.prompt.indexOf('Workspace source key a- marker.')).toBeLessThan(
       first.prompt.indexOf('Workspace source key a: marker.'),
     );

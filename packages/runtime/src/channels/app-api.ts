@@ -1,4 +1,4 @@
-import type { ConversationEntry } from '@waldo/contracts';
+import { viewPart, type ConversationEntry } from '@waldo/contracts';
 import { iMessageSendUrl } from './imessage/send-url';
 import { APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appCodeRequestSchema, appContractHeaderV1Schema, appIMessageLinkCodeV1Schema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
 import type { AppApprovalCards } from './approvals';
@@ -211,7 +211,9 @@ export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor:
     const text = entry.appPayload.trim() || !presented.fallbacks.length ? entry.appPayload : presented.fallbacks.join('\n\n');
     const operation = entry.operation ? [{ type: 'operation' as const, operation_id: entry.operation.id, state: entry.operation.state, message: text }] : [];
     const receipt = entry.receipt ? [{ type: 'receipt' as const, items: [...entry.receipt.items], more: entry.receipt.more, fallback_text: entry.receipt.line }] : [];
-    return { id: entry.id, role: entry.role, text, parts: [{ type: 'text' as const, text }, ...operation, ...presented.live, ...receipt], channel: entry.surface, parent_id: entry.parentId,
+    // Views follow the same rule: `text` carries each view's fallback, in order, before the receipt line.
+    const views = (entry.views ?? []).map(viewPart);
+    return { id: entry.id, role: entry.role, text, parts: [{ type: 'text' as const, text }, ...operation, ...views, ...presented.live, ...receipt], channel: entry.surface, parent_id: entry.parentId,
       ...(entry.createdAt === undefined ? {} : { created_at: entry.createdAt }) };
   });
   return { messages, next_cursor: start > 0 ? `before:${shown[start]!.id}` : null };

@@ -68,6 +68,19 @@ describe('console chat page', () => {
     expect(page.querySelector('.chat-day')?.textContent).toBeTruthy();
   });
 
+  it('draws a view after the words, keeps its text out of the words, and copies both', async () => {
+    const view = { kind: 'steps' as const, title: 'Trip', items: [{ title: 'Book', detail: null, state: 'done' as const }, { title: 'Pack', detail: null, state: null }] };
+    const reply: ChatMessage = { id: 'r', role: 'assistant', text: 'Here is the plan.\n\nTrip\n[x] Book\n- Pack', channel: 'app', parent_id: null, created_at: 1_760_000_000_000,
+      parts: [{ type: 'view', view, fallback_text: 'Trip\n[x] Book\n- Pack' }] };
+    const copied: string[] = [];
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => { copied.push(text); } } });
+    const page = await mount(<ChatPanel zone="UTC" store={createChatStore(deps(async () => ({ messages: [reply], next_cursor: null })))}/>);
+    expect(page.querySelector('.chat-prose')?.textContent).toBe('Here is the plan.');
+    expect(page.querySelector('.chat-prose + .chat-view h3')?.textContent).toBe('Trip');
+    await act(async () => page.querySelector<HTMLButtonElement>('.chat-msg.waldo .chat-action')!.click()); await flush();
+    expect(copied).toEqual(['Here is the plan.\n\nTrip\n[x] Book\n- Pack']);
+  });
+
   it('holds back an over-long message and says how long it is', async () => {
     const store = createChatStore(deps(async () => ({ messages: [], next_cursor: null })));
     const page = await mount(<ChatPanel zone="UTC" store={store}/>);

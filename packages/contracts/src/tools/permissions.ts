@@ -104,6 +104,8 @@ export const toolNameSchema = z.enum([
   'search_contacts',
   // send_progress_note: a short non-blocking note to the owner's chat while their own turn keeps working.
   'send_progress_note',
+  // show_view: structured content (options, a table, steps, a timeline) beside the reply, text where it cannot be drawn.
+  'show_view',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -207,6 +209,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'connect_service',
     'send_console_link',
     'send_progress_note',
+    'show_view',
     'get_communication',
     'search_communication',
     'search_contacts',
@@ -305,6 +308,7 @@ export const LAZY_DISCOVERY_TRIGGERS: readonly TriggerType[] = ['user_message', 
 // connect_service joined the always-on set (owner direction 2026-09-24): connect intent must be
 // prompt-visible without discovery - the model cannot search_tools for a tool it does not know exists.
 // send_console_link joined for the same reason: the owner asks for their console in words, never a slash command.
+// show_view joined so the model knows it can show a comparison, table, plan or timeline without searching for how.
 export const ALWAYS_ON_TOOLS: readonly ToolName[] = [
   'read_memory',
   'remember',
@@ -314,6 +318,7 @@ export const ALWAYS_ON_TOOLS: readonly ToolName[] = [
   'search_tools',
   'connect_service',
   'send_console_link',
+  'show_view',
   'skills_list',
   'use_mac',
 ];

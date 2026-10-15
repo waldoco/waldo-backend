@@ -118,6 +118,7 @@ describe('toolName', () => {
       'use_mac',
       'search_contacts',
       'send_progress_note',
+      'show_view',
     ]);
   });
 
@@ -242,6 +243,7 @@ describe('TOOL_PERMISSIONS', () => {
         'connect_service',
         'send_console_link',
         'send_progress_note',
+        'show_view',
         'get_communication',
         'search_communication',
         'search_contacts',
@@ -407,7 +409,7 @@ describe('search_tools — ADR-0034 Option A, first-class', () => {
   });
 
   it('pins the always-on discovery and skill metadata set', () => {
-    expect(ALWAYS_ON_TOOLS).toEqual(['read_memory', 'remember', 'forget_memory', 'send_message', 'propose_action', 'search_tools', 'connect_service', 'send_console_link', 'skills_list', 'use_mac']);
+    expect(ALWAYS_ON_TOOLS).toEqual(['read_memory', 'remember', 'forget_memory', 'send_message', 'propose_action', 'search_tools', 'connect_service', 'send_console_link', 'show_view', 'skills_list', 'use_mac']);
   });
 
   it('grants connect_service exactly where query_calendar is granted', () => {

@@ -5,12 +5,20 @@ export const CHAT_TEXT_MAX = 4000;
 const HEADERS = { Accept: 'application/json', 'x-waldo-console': '1' } as const;
 
 export type ChatReceiptItem = { kind: string; target: string | null; outcome: 'accepted' | 'failed' | 'unconfirmed'; at: number };
+export type ChatStepState = 'done' | 'current' | 'todo';
+// Structured content Waldo showed beside its words. Every field is the model's own text, drawn as text, never as markup.
+export type ChatView =
+  | { kind: 'options'; title: string | null; items: { title: string; subtitle: string | null; facts: { label: string; value: string }[]; note: string | null; link: string | null; pick: boolean }[] }
+  | { kind: 'table'; title: string | null; columns: string[]; rows: string[][] }
+  | { kind: 'steps'; title: string | null; items: { title: string; detail: string | null; state: ChatStepState | null }[] }
+  | { kind: 'timeline'; title: string | null; items: { when: string; title: string; detail: string | null }[] };
 export type ChatPart =
   | { type: 'quick_replies'; choices: { id: string; label: string }[] }
   | { type: 'approval'; approval_id: string; kind: string; review: string; question: string | null; expires_at: number; fallback_text: string }
   | { type: 'receipt'; items: ChatReceiptItem[]; more: number; fallback_text: string }
   | { type: 'operation'; state: RunState }
-  | { type: 'artifact'; title: string };
+  | { type: 'artifact'; title: string }
+  | { type: 'view'; view: ChatView; fallback_text: string };
 export type ChatMessage = { id: string; role: 'user' | 'assistant'; text: string; parts: ChatPart[]; channel: string; parent_id: string | null; created_at: number | null };
 export type ChatPage = { messages: ChatMessage[]; next_cursor: string | null };
 export type RunState = 'admitted' | 'running' | 'completed' | 'interrupted' | 'revoked';
@@ -28,6 +36,44 @@ const RUN_STATES: readonly RunState[] = ['admitted', 'running', 'completed', 'in
 const runState = (v: unknown): v is RunState => RUN_STATES.includes(v as RunState);
 const epoch = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
 
+const words = (v: unknown): v is string => str(v) && v.trim() !== '';
+const optional = (v: unknown): string | null => (words(v) ? v : null);
+const entries = <T>(v: unknown, read: (item: Record<string, unknown>) => T | null): T[] =>
+  Array.isArray(v) ? v.flatMap(item => { const out = obj(item) ? read(item) : null; return out === null ? [] : [out]; }) : [];
+// Only a link the owner can open as given: https, no spaces, and one the browser parses. Anything else is left off,
+// never repaired, so drawing it can never throw.
+const openable = (v: unknown): string | null => {
+  if (!str(v) || !/^https:\/\/[^\s<>"]+$/.test(v)) return null;
+  try { return new URL(v).protocol === 'https:' ? v : null; } catch { return null; }
+};
+const STEP_STATES: readonly ChatStepState[] = ['done', 'current', 'todo'];
+
+const readView = (raw: unknown): ChatView | null => {
+  if (!obj(raw)) return null;
+  const title = optional(raw.title);
+  if (raw.kind === 'options') {
+    const items = entries(raw.items, item => words(item.title) ? {
+      title: item.title, subtitle: optional(item.subtitle), note: optional(item.note), link: openable(item.link), pick: item.pick === true,
+      facts: entries(item.facts, fact => words(fact.label) && words(fact.value) ? { label: fact.label, value: fact.value } : null),
+    } : null);
+    return items.length ? { kind: 'options', title, items } : null;
+  }
+  if (raw.kind === 'table' && Array.isArray(raw.columns) && raw.columns.every(words) && raw.columns.length > 0 && Array.isArray(raw.rows)) {
+    const columns = raw.columns as string[];
+    const rows = raw.rows.filter((row): row is string[] => Array.isArray(row) && row.length === columns.length && row.every(str));
+    return rows.length ? { kind: 'table', title, columns, rows } : null;
+  }
+  if (raw.kind === 'steps') {
+    const items = entries(raw.items, item => words(item.title) ? { title: item.title, detail: optional(item.detail), state: STEP_STATES.includes(item.state as ChatStepState) ? item.state as ChatStepState : null } : null);
+    return items.length ? { kind: 'steps', title, items } : null;
+  }
+  if (raw.kind === 'timeline') {
+    const items = entries(raw.items, item => words(item.when) && words(item.title) ? { when: item.when, title: item.title, detail: optional(item.detail) } : null);
+    return items.length ? { kind: 'timeline', title, items } : null;
+  }
+  return null;
+};
+
 // A part this console cannot draw is dropped; the message's text always carries what it says.
 const readPart = (raw: unknown): ChatPart | null => {
   if (!obj(raw)) return null;
@@ -44,6 +90,7 @@ const readPart = (raw: unknown): ChatPart | null => {
   }
   if (raw.type === 'operation' && runState(raw.state)) return { type: 'operation', state: raw.state };
   if (raw.type === 'artifact' && str(raw.title)) return { type: 'artifact', title: raw.title };
+  if (raw.type === 'view' && str(raw.fallback_text)) { const view = readView(raw.view); return view ? { type: 'view', view, fallback_text: raw.fallback_text } : null; }
   return null;
 };
 
@@ -140,11 +187,13 @@ export const deleteThread = (thread: ChatThread): Promise<string> => operate(`${
 const ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
 export const newClientId = (): string => `console-${[...crypto.getRandomValues(new Uint8Array(20))].map(byte => ALPHABET[byte % ALPHABET.length]).join('')}`;
 
-// The text a reply shows once its typed parts are drawn: the receipt part repeats its fallback line at the end of
-// `text`, and a reply whose only text is its approval cards' fallbacks says nothing the cards don't.
+// The text a reply shows once its typed parts are drawn. `text` ends with each view's fallback, in order, then the
+// receipt line; each is taken off the end only where it is there exactly, so text a part does not repeat stays. A reply
+// whose only text is its approval cards' fallbacks says nothing the cards don't.
 export const visibleText = (message: ChatMessage): string => {
   let text = message.text;
-  for (const part of message.parts) if (part.type === 'receipt' && text.trimEnd().endsWith(part.fallback_text.trim())) text = text.trimEnd().slice(0, -part.fallback_text.trim().length);
+  const trailing = [...message.parts.filter(part => part.type === 'receipt'), ...message.parts.filter(part => part.type === 'view').reverse()];
+  for (const part of trailing) if (text.trimEnd().endsWith(part.fallback_text.trim())) text = text.trimEnd().slice(0, -part.fallback_text.trim().length);
   const approvals = message.parts.filter((p): p is Extract<ChatPart, { type: 'approval' }> => p.type === 'approval');
   if (approvals.length && text.trim() === approvals.map(a => a.fallback_text).join('\n\n').trim()) return '';
   return text.trim();
