@@ -188,8 +188,8 @@ export function cloudflarePublicRead(options: Readonly<{ binding: BrowserWorker;
       const url = page.url();
       if (!allowed(url) || new URL(url).hostname !== target.hostname) result = failure('rejected', 'The page moved outside the selected public browser target.');
       else if (response && response.status() >= 400 && response.headers()['cf-mitigated'] === 'challenge') result = failure('rejected', `The site answered with a bot-verification challenge (verification_challenge, HTTP ${response.status()}). A one-shot read cannot pass it. Read it with retain_session:true and offer the owner owner_login to pass it in the console, or use another source.`);
-      // The site's own answer for the main document. A refusal or a missing page is settled for this address; only
-      // rate limits, server errors and no answer at all may change on a retry.
+      // The site's own answer for the main document. A refusal or a missing page is settled for this address; any
+      // other failure, rate limits and server errors included, may change on a retry.
       else if (response && REFUSED_STATUSES.has(response.status())) result = failure('rejected', `The site refused this reader (HTTP ${response.status()}). Retrying the same address will not help. Use another source or a search result, or, if signing in could help, read it with retain_session:true and offer the owner owner_login.`);
       else if (response && GONE_STATUSES.has(response.status())) result = failure('not_found', `The site has no page at this address (HTTP ${response.status()}). Try another page on the site, or another source.`);
       else if (!response || response.status() >= 400) result = failure('transient', `The page did not load${response ? ` (HTTP ${response.status()})` : ''}.`);
