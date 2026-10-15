@@ -9,7 +9,8 @@ import {WorkspacePanel} from './Workspace';
 import {OwnerControlsPanel} from './OwnerControls';
 import {ControlsPanel} from './Controls';
 import { MemoryPanel } from './Memory';
-import { ChatLink, ChatPanel } from './Chat';
+import { ChatLink } from './Chat';
+import { ChatWorkspace, isThreadRoute } from './ChatThreads';
 import { AdminPanel, type AdminState } from './Admin';
 import { fetchAdmin } from './admin-model';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -19,7 +20,7 @@ import { fetchOverview, SignInRequired } from './model';
 import { nextLiveDelay, sameRecord, shouldPoll } from './live';
 import './style.css';
 
-export type Route = 'not-found' | 'today' | 'chat' | 'overview' | 'waiting' | 'patrol' | 'memory' | 'memory/spots' | 'memory/constellation' | 'memory/profile' | 'connections' | 'day' | 'admin' | 'files' | 'usage' | 'setup' | 'invites' | 'account' | 'files/workspace' | 'settings' | 'settings/not-found' | `settings/${SettingsSection}`;
+export type Route = 'not-found' | 'today' | 'chat' | `chat/${string}` | 'overview' | 'waiting' | 'patrol' | 'memory' | 'memory/spots' | 'memory/constellation' | 'memory/profile' | 'connections' | 'day' | 'admin' | 'files' | 'usage' | 'setup' | 'invites' | 'account' | 'files/workspace' | 'settings' | 'settings/not-found' | `settings/${SettingsSection}`;
 const routes = [
   { key: 'today', label: 'Today' }, { key: 'chat', label: 'Chat' }, { key: 'waiting', label: 'Waiting' },
   { key: 'memory', label: 'Memory' }, { key: 'patrol', label: 'Patrol' },
@@ -33,6 +34,7 @@ export const resolveRoute = (raw: string): Route => {
   if(['settings','settings/day','settings/sessions','settings/usage','settings/account','settings/setup','day','connections'].includes(value))return value as Route;
   if (value === 'admin' || value==='files'||value==='usage'||value==='setup'||value==='invites'||value==='account'||value==='files/workspace') return value;
   if (value === 'memory/spots' || value === 'memory/constellation' || value === 'memory/profile') return value;
+  if(isThreadRoute(value))return value as Route;
   if(value===''||value==='overview')return 'today';
   return routes.find((r) => r.key === value)?.key ?? 'not-found';
 };
@@ -54,7 +56,7 @@ export const isSettingsRoute = (route: Route) => route === 'admin' || ['connecti
 
 const shortcut: Record<string, string> = { today: 'T', chat: 'C', waiting: 'W', memory: 'M', patrol: 'P' };
 export function DashboardNavigation({ route, onNavigate,waitingCount }: { route: Route;waitingCount?:number; onNavigate?: () => void }) {
-  const selected = route.startsWith('memory') ? 'memory' : route === 'overview' ? 'today' : route;
+  const selected = route.startsWith('memory') ? 'memory' : route.startsWith('chat') ? 'chat' : route === 'overview' ? 'today' : route;
   const nav = useRef<HTMLElement>(null);
   // One white pill slides to the chosen page; it follows the link as its icon opens.
   useLayoutEffect(() => {
@@ -210,12 +212,12 @@ export function App() {
     <header className="topbar"><div className="topbar-inner">
       <a className="brand" href="#/today" aria-label="Waldo dashboard home"><WaldoMark/><span aria-hidden="true">Waldo</span></a>
       <DashboardNavigation route={route} waitingCount={ready?.waiting.count}/>
-      <div className="topbar-actions"><ChatLink current={route === 'chat'}/><a className="settings-link" href="#/settings" aria-label="Settings" aria-current={isSettingsRoute(route) ? 'page' : undefined}><Icon name="settings"/></a></div>
+      <div className="topbar-actions"><ChatLink current={route.startsWith('chat')}/><a className="settings-link" href="#/settings" aria-label="Settings" aria-current={isSettingsRoute(route) ? 'page' : undefined}><Icon name="settings"/></a></div>
     </div></header>
-    <main id="main" tabIndex={-1} className={route === 'chat' ? 'chat-main' : undefined}>{route === 'chat' ? <ChatPanel zone={ready?.timezone}/> : route === 'admin' ? <><SettingsHead selected="admin" isAdmin={isAdmin}/><AdminPanel state={adminState} onRefresh={refreshAdmin}/></>
+    <main id="main" tabIndex={-1} className={route.startsWith('chat') ? 'chat-main' : undefined}>{route.startsWith('chat') ? <ChatWorkspace thread={route === 'chat' ? null : route.slice(5)} zone={ready?.timezone}/> : route === 'admin' ? <><SettingsHead selected="admin" isAdmin={isAdmin}/><AdminPanel state={adminState} onRefresh={refreshAdmin}/></>
       : state.kind !== 'ready' ? <DashboardFeedback state={state} onRetry={() => setRetry((n) => n + 1)}/>
       : <div className="route" key={route.split('/')[0]}><Dashboard data={state.data} route={route} now={now} isAdmin={isAdmin}/></div>}</main>
-    {route !== 'chat' && <footer><p><a href="/console/legacy">Classic console</a> · <a href="/console/imessage">iMessage</a> · <a href="#/connections">Connections</a> · <a href="#/files">Files</a> · <a href="#/invites">Invites</a></p>
+    {!route.startsWith('chat') && <footer><p><a href="/console/legacy">Classic console</a> · <a href="/console/imessage">iMessage</a> · <a href="#/connections">Connections</a> · <a href="#/files">Files</a> · <a href="#/invites">Invites</a></p>
       {ready && <p><span title={`${exactTime(ready.as_of, ready.timezone)} · ${ready.timezone}`}>Updated {relativeTime(ready.as_of, now)}</span><span className="live-status" role="status" aria-live="polite">{livePaused ? ' · Live updates paused, retrying' : ' · Live'}</span><button type="button" className="refresh" aria-busy={refreshing} disabled={refreshing} onClick={() => setRetry((n) => n + 1)}><Icon name="retry"/>Refresh records</button></p>}
       <p>Recorded activity can include attempts and failures. Check the result before treating work as done.</p>
     </footer>}
