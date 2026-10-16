@@ -61,11 +61,12 @@ describe('the reply to an unlinked sender', () => {
     expect(sent[0]!.text.body).not.toContain('/console/whatsapp/link');
   });
 
-  it('a throttled sender, or one that became linked meanwhile, gets no reply', async () => {
+  it('a throttled sender, one whose earlier link is still live, or one that became linked meanwhile, gets no reply', async () => {
     const throttled = links(async () => 'opened');
     expect((await run(await inbound('again'), unlinked, { links: throttled, throttle: async () => false })).sent).toEqual([]);
     expect(throttled.open).not.toHaveBeenCalled();
-    expect((await run(await inbound('again'), unlinked, { links: links(async () => 'linked'), throttle: async () => true })).sent).toEqual([]);
+    for (const answer of ['pending', 'linked'] as const)
+      expect((await run(await inbound('again'), unlinked, { links: links(async () => answer), throttle: async () => true })).sent).toEqual([]);
   });
 
   it('the throttle key is a hash, never the number', async () => {

@@ -25,8 +25,9 @@ alter table waldo.presence_link_requests enable row level security;
 alter table waldo.presence_link_requests force row level security;
 revoke all on waldo.presence_link_requests from public, anon, authenticated;
 
--- 'opened': a request now exists for this sender and its matching owner. 'linked': the sender already has an
--- active presence. 'waitlist': no single active owner has this number on file.
+-- 'opened': a request now exists for this sender and its matching owner. 'pending': a live link was already sent
+-- and still works, so nothing new is opened (a second text or a webhook redelivery must not kill the first link).
+-- 'linked': the sender already has an active presence. 'waitlist': no single active owner has this number on file.
 create function waldo.open_presence_link_request(p_provider text, p_subject text, p_token_hash text, p_at bigint, p_sig text) returns text
 language plpgsql security definer set search_path = '' as $$
 declare v_owners uuid[];
@@ -38,8 +39,9 @@ begin
   if exists (select 1 from waldo.presences where provider = p_provider and subject = p_subject and state = 'active') then return 'linked'; end if;
   select array_agg(id) into v_owners from waldo.owners where state = 'active' and phone = '+' || p_subject;
   if coalesce(array_length(v_owners, 1), 0) <> 1 then return 'waitlist'; end if;
-  -- One live request per sender: a new one replaces any earlier unconsumed link.
-  delete from waldo.presence_link_requests where provider = p_provider and subject = p_subject and consumed_at is null;
+  if exists (select 1 from waldo.presence_link_requests where provider = p_provider and subject = p_subject and consumed_at is null and expires_at > now()) then
+    return 'pending';
+  end if;
   delete from waldo.presence_link_requests where expires_at < now() - interval '1 day';
   insert into waldo.presence_link_requests (token_hash, provider, subject, owner_id, expires_at)
     values (p_token_hash, p_provider, p_subject, v_owners[1], now() + interval '10 minutes');

@@ -30,7 +30,8 @@ const textFirstReply = async (sender: string, origin: string, env: WhatsAppWebho
   const token = newWhatsAppLinkToken();
   const opened = await textFirst.links.open(sender, await whatsappLinkTokenHash(token));
   if (opened === 'opened') return `Tap to link this WhatsApp number to your Waldo. You'll sign in and confirm the number; the link works once, for 10 minutes: ${whatsappLinkUrl(origin, token)}`;
-  if (opened === 'linked') return null;
+  // pending: the link sent earlier still works, so the sender is not sent a second one.
+  if (opened === 'linked' || opened === 'pending') return null;
   const waitlist = /^https:\/\/[^\s]+$/.test(env.WHATSAPP_ONBOARDING_URL ?? '') ? ` Join the waitlist: ${env.WHATSAPP_ONBOARDING_URL}` : '';
   return `Waldo is invite-only for now.${waitlist}\n\nAlready on Waldo? Link WhatsApp from your console.`;
 };

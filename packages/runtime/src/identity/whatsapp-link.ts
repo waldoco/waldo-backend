@@ -17,7 +17,7 @@ export const whatsappLinkTokenHash = async (token: string): Promise<string> =>
 export const whatsappLinkToken = (path: string): string | null => WHATSAPP_LINK_TARGET.exec(path)?.[1] ?? null;
 export const whatsappLinkUrl = (origin: string, token: string): string => `${origin}${WHATSAPP_LINK_PATH}/${token}`;
 
-export type WhatsAppLinkOpen = 'opened' | 'linked' | 'waitlist';
+export type WhatsAppLinkOpen = 'opened' | 'pending' | 'linked' | 'waitlist';
 export type WhatsAppLinkConsume = 'linked' | 'rejected' | 'claimed';
 export type WhatsAppLinkDirectory = Readonly<{
   open(subject: string, tokenHash: string): Promise<WhatsAppLinkOpen>;
@@ -36,7 +36,7 @@ export const whatsappLinkDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fe
   if (!rpc) return null;
   return {
     open: async (subject, tokenHash) => oneOf(await rpc('open_presence_link_request', `linkreq.open.whatsapp.${subject}.${tokenHash}`,
-      { p_provider: 'whatsapp', p_subject: subject, p_token_hash: tokenHash }), ['opened', 'linked', 'waitlist'] as const),
+      { p_provider: 'whatsapp', p_subject: subject, p_token_hash: tokenHash }), ['opened', 'pending', 'linked', 'waitlist'] as const),
     subject: async (doName, tokenHash) => {
       const subject = await rpc('presence_link_request_subject', `linkreq.view.${doName}.${tokenHash}`, { p_do_name: doName, p_token_hash: tokenHash });
       if (subject === null) return null;
