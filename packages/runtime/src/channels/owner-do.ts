@@ -29,6 +29,7 @@ import {MEMORY_CONTROL_PATH,projectMemoryControl,resolveMemoryAction} from './da
 import {CONTROLS_PATH,readControlsQuery,projectControls} from './dashboard-controls';
 import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,googleConnectReceipt} from './dashboard-control-actions';
 import {channelControlsAction,channelControlsQuery,channelControlsRead,channelControlView} from './dashboard-channel-controls';
+import { dashboardReceipt } from './dashboard-receipts';
 import { createScopedCuratedSkillCapability, type OwnerSkillCapability } from '../skills/curated-host';
 import { seededSkillCustody } from '../skills/curated-owner';
 import { OwnerAdmissionError, ownerMessageAdmission, type OwnerMessageAdmission } from '../identity/owner-message-admission';
@@ -148,6 +149,7 @@ import { stableJson } from '../context-composer/canonical';
 import { APP_CONNECT_GUIDANCE, appApprovalLink, appCaller } from './surfaces/app';
 import { appApprovalsRequest } from './app-approvals';
 import { WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
+import { deliverHeldWhatsApp, recordWhatsAppInbound, whatsappTemplateConfig, whatsappWindowCaller } from './whatsapp-window';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
 import { sendMessageHandler } from '../tools/live/messaging';
@@ -1178,6 +1180,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // Sequence allocation, the turns and the persisted counter are one serial unit, so an overlapping
     // request cannot read the same wa_seq and hand a different message the same update_id.
     await this.serial(async () => {
+      // Messages held outside the 24-hour window go out first, so this reply's turn sees what the owner has seen.
+      try { await deliverHeldWhatsApp(this.ctx.storage.kv, this.setup('whatsapp').call, Date.now(), event => console.log(JSON.stringify(event))); } catch { console.error('whatsapp held delivery unavailable'); }
       const { updates, seq } = whatsappIngressUpdates(claimed, subject, (await this.ctx.storage.get<number>('wa_seq')) ?? 0);
       // The counter is persisted before each turn, so a turn that throws can never lead the next message to reuse
       // its update_id. Every claimed message still gets its turn; the first failure is rethrown afterwards.
@@ -1235,6 +1239,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     this.ctx.storage.transactionSync(() => {
       claimed = claimNewWhatsAppMessages(kv, value.messages ?? [], Date.now());
       if (!claimed.length) return;
+      recordWhatsAppInbound(kv, claimed, Date.now());
       kv.put(pendingKey, { subject, admittedAt: Date.now(), ids: claimed.flatMap(m => typeof m.id === 'string' && m.id !== '' ? [m.id] : []) });
       kv.put(WHATSAPP_PENDING_DUE_KEY, Date.now() + WHATSAPP_PENDING_CHECK_MS);
     });
@@ -1572,7 +1577,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     const { ready, view, act, googleConnectUrl, openFile, desk } = this.setup();
     await ready;
-    const back = (notice: string) => new Response(null, { status: 303, headers: { location: `${CONSOLE_PATH}?m=${notice}` } });
+    const resultPage = (message: string, ok: boolean) => new Response(message, { status: ok ? 200 : 400, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } });
+    const noticePage = (key: string) => { const receipt = dashboardReceipt(key); return resultPage(receipt.message, receipt.outcome !== 'failed'); };
     if (url.pathname === CONSOLE_GOOGLE_PATH) return new Response(null, { status: 303, headers: { location: CONSOLE_PATH } });
     const admin = consoleAuth(this.env);
     const doName = this.ctx.storage.kv.get<string>('do_name');
@@ -1593,35 +1599,36 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const ticketUrl = isGoogleFeature(action.value) ? await googleConnectUrl(action.value, 'console') : null;
         return ticketUrl
           ? new Response(null, { status: 303, headers: { location: ticketUrl } })
-          : back('google.connect.failed');
+          : noticePage('google.connect.failed');
       }
       if (action?.action === 'invite.create' || action?.action === 'invite.revoke') {
         const code = action.action === 'invite.create' ? newInviteCode() : '';
         const done = admin && doName ? await (action.action === 'invite.create' ? admin.invite(doName, action.value, code) : admin.revokeInvite(doName, action.id)) : false;
         if (done && code) return new Response(`Invite for ${action.value}: ${inviteLink(request.url, action.value, code)} (expires in 14 days). Copy it now and send it yourself. Waldo did not email anyone.`, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } });
-        return new Response(null, { status: 303, headers: { location: done ? CONSOLE_ADMIN_PATH : `${CONSOLE_PATH}?m=invalid` } });
+        return done ? new Response(null, { status: 303, headers: { location: CONSOLE_ADMIN_PATH } }) : noticePage('invalid');
       }
       if (action?.action === 'invite.member') {
         const code = newInviteCode();
         const done = admin && doName ? await admin.memberInvite(doName, action.value, code) : false;
-        return done ? new Response(`Invite for ${action.value}: ${inviteLink(request.url, action.value, code)} (expires in 14 days). Copy it now and send it yourself. Waldo did not email anyone.`, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } }) : back('invalid');
+        return done ? new Response(`Invite for ${action.value}: ${inviteLink(request.url, action.value, code)} (expires in 14 days). Copy it now and send it yourself. Waldo did not email anyone.`, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } }) : noticePage('invalid');
       }
       if (action?.action === 'telegram.unlink') {
         const done = admin && doName ? await admin.unlinkTelegram(doName) : false;
         if (done) this.markUnlinked();
-        return back(done ? 'telegram.unlink' : 'invalid');
+        return noticePage(done ? 'telegram.unlink' : 'invalid');
       }
       if (action && ['approval.approve', 'approval.skip', 'approval.undo'].includes(action.action)) {
         const key = { 'approval.approve': 'a', 'approval.skip': 's', 'approval.undo': 'u' } as const;
         // Approve stays gated to calendar changes with full review (consoleMayApprove); skip
         // and undo are safe-direction decisions desk.decide validates by ledger state.
-        if (action.action === 'approval.approve' && !consoleMayApprove(desk.pending(Date.now()).find((item) => item.id === action.id))) return back('invalid');
+        if (action.action === 'approval.approve' && !consoleMayApprove(desk.pending(Date.now()).find((item) => item.id === action.id))) return noticePage('invalid');
         const out = await this.serial(() => desk.decide(action.id, key[action.action as keyof typeof key], 'console:approval', { surface: 'console' }));
-        return new Response(null, { status: 303, headers: { location: `${CONSOLE_PATH}?m=${encodeURIComponent(approvalControlReceipt(out).message)}` } });
+        const receipt = approvalControlReceipt(out);
+        return resultPage(receipt.message, receipt.state !== 'rejected');
       }
       if (action?.action === 'account.delete') {
         const done = admin && doName ? await this.purgeOwnerFiles() && await admin.deleteOwner(doName) : false;
-        if (!done) return back('invalid');
+        if (!done) return noticePage('invalid');
         const response = new Response('Account deleted. Everything Waldo held for you is gone.', { headers: { 'set-cookie': `${CONSOLE_COOKIE}=; Path=${CONSOLE_PATH}; Max-Age=0` } });
         await this.channelSerial(() => this.ctx.storage.deleteAll());
         return response;
@@ -1634,7 +1641,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       const done = action ? await this.serial(() => act(action)) : false;
       // A string result is a NOTICES key (e.g. an honest partial-failure receipt); boolean keeps the old path.
-      return back(typeof done === 'string' ? done : done && action ? action.action : 'invalid');
+      return typeof done === 'string' ? noticePage(done) : done && action ? resultPage(NOTICES[action.action] ?? 'The change was recorded.', true) : noticePage('invalid');
     }
     // B9: the background task list as a first-class read-only endpoint (same console session).
     if (url.pathname === CONSOLE_RUNS_PATH) {
@@ -1650,7 +1657,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const pageSlug = url.pathname === CONSOLE_PATH || url.pathname === `${CONSOLE_PATH}/legacy` ? '' : url.pathname.startsWith(`${CONSOLE_PATH}/`) ? url.pathname.slice(CONSOLE_PATH.length + 1) : null;
     if (pageSlug === null || !CONSOLE_PAGES.some((item) => item.slug === pageSlug)) return new Response('not found', { status: 404 });
     const mKey = url.searchParams.get('m') ?? '';
-    const dynamicNotice = NOTICES[mKey] ?? null;
+    const dynamicNotice = Object.hasOwn(NOTICES, mKey) ? NOTICES[mKey]! : null;
     // B9 dashboard bar: the same handlers serve JSON when asked (content-negotiated) - the
     // worker keeps owning auth, data and actions; no new auth surface, no client secrets.
     const num = (key: string) => { const raw = url.searchParams.get(key); const parsed = raw === null ? NaN : Number(raw); return Number.isFinite(parsed) ? parsed : undefined; };
@@ -2234,7 +2241,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       : channel === 'imessage'
         ? appCaller()
       : channel === 'whatsapp'
-        ? whatsappTelegramShim(this.env.WHATSAPP_ACCESS_TOKEN!, this.env.WHATSAPP_PHONE_NUMBER_ID!, identity.get<string>('whatsapp_subject') ?? '')
+        ? whatsappWindowCaller(whatsappTelegramShim(this.env.WHATSAPP_ACCESS_TOKEN!, this.env.WHATSAPP_PHONE_NUMBER_ID!, identity.get<string>('whatsapp_subject') ?? ''),
+          { kv: identity, template: whatsappTemplateConfig(this.env), log: event => console.log(JSON.stringify(event)) })
         : createTelegramCaller(token!);
     const egressDoName = identity.get<string>('do_name');
     const egressSubject = identity.get<string>(channel === 'telegram' ? 'telegram_subject' : `${channel}_subject`);

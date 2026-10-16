@@ -17,7 +17,7 @@ describe('simplified console shell',()=>{
   for(const section of ['day','usage','setup'] as const)expect(renderToStaticMarkup(<SettingsPanel section={section} isAdmin={false}/>)).not.toContain('/console/legacy');
  });
  it('resolves every route the classic console pages now open',()=>{
-  for(const route of ['waiting','setup','connections','memory/spots','memory/constellation','day','memory','files','usage','patrol','account','invites','admin'])expect(resolveRoute(route)).not.toBe('not-found');
+  for(const route of ['waiting','setup','connections','memory/spots','memory/constellation','day','memory','files','usage','patrol','account','invites'])expect(resolveRoute(route)).not.toBe('not-found');
  });
  it('supports settings destinations and deliberate old links',()=>{
   for(const route of ['settings','settings/day','settings/sessions','settings/usage','settings/account','settings/setup'])expect(resolveRoute(route)).toBe(route);

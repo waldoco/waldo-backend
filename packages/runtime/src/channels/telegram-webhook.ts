@@ -40,6 +40,9 @@ export type TelegramWebhookEnv = Readonly<{
   WHATSAPP_APP_SECRET?: string;
   WHATSAPP_ACCESS_TOKEN?: string;
   WHATSAPP_PHONE_NUMBER_ID?: string;
+  // The approved re-engagement template (WhatsApp Manager) sent when the 24-hour window is closed; unset holds without knocking.
+  WHATSAPP_REENGAGE_TEMPLATE?: string;
+  WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string;
   WALDO_MCP_SERVERS?: string;
   MCP_READ_INTENTS?: string;
   DRIVE_READS?: string;

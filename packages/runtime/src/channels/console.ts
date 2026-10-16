@@ -526,9 +526,9 @@ export const CONSOLE_PAGES = [
 // dashboard route. JSON reads and form posts keep their handlers. A ?m notice is dropped,
 // never carried, so a crafted link cannot put its own words on the console.
 const CLASSIC_PAGE_ROUTES: Readonly<Record<string, string>> = {
-  legacy: '', waiting: 'waiting', setup: 'setup', connections: 'connections', spots: 'memory/spots',
+  '': '', legacy: '', waiting: 'waiting', setup: 'setup', connections: 'connections', spots: 'memory/spots',
   constellation: 'memory/constellation', day: 'day', memory: 'memory', files: 'files', usage: 'usage',
-  activity: 'patrol', account: 'account', invites: 'invites', admin: 'admin',
+  activity: 'patrol', account: 'account', invites: 'invites',
   imessage: 'connections/imessage', devices: 'connections/devices',
 };
 export const classicConsoleRedirect = (request: Request): Response | null => {
