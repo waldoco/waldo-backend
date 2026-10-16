@@ -27,7 +27,7 @@ import { taskSourceFetch } from '../tools/task-source-io';
 import {OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,ownerControlsView,ownerControlsRead,ownerControlsAction} from './dashboard-owner-controls';
 import {MEMORY_CONTROL_PATH,projectMemoryControl,resolveMemoryAction} from './dashboard-memory-actions';
 import {CONTROLS_PATH,readControlsQuery,projectControls} from './dashboard-controls';
-import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,googleConnectReceipt} from './dashboard-control-actions';
+import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,googleConnectReceipt,whatsappLinkReceipt} from './dashboard-control-actions';
 import { createScopedCuratedSkillCapability, type OwnerSkillCapability } from '../skills/curated-host';
 import { seededSkillCustody } from '../skills/curated-owner';
 import { OwnerAdmissionError, ownerMessageAdmission, type OwnerMessageAdmission } from '../identity/owner-message-admission';
@@ -1514,6 +1514,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
               if(action.action==='telegram.link'){
                 const name=this.ctx.storage.kv.get<string>('do_name'),code=name?await consoleAuth(this.env)?.issueLinkCode(name):null;
                 return code?{state:'recorded' as const,message:`Send this to the Waldo bot on Telegram within 10 minutes: /link ${code}`}:{state:'rejected' as const,message:'Linking Telegram needs account sign-in, which is not configured on this server.'};
+              }
+              if(action.action==='whatsapp.link'){
+                const name=this.ctx.storage.kv.get<string>('do_name');
+                return whatsappLinkReceipt(name?await consoleAuth(this.env)?.issueProviderLinkCode?.(name,'whatsapp')??null:null);
               }
               if(action.action==='telegram.unlink'){
                 const name=this.ctx.storage.kv.get<string>('do_name'),done=name?await consoleAuth(this.env)?.unlinkTelegram(name):false;
