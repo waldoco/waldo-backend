@@ -10,6 +10,17 @@ export type WhatsAppCall = (body: object) => Promise<unknown>;
 // so this caller never retries and never reports a successful acknowledgement.
 export const WHATSAPP_API_TIMEOUT_MS = 15_000;
 export const WHATSAPP_GRAPH_VERSION = 'v21.0';
+// A Graph refusal with Meta's numeric error code (error.code in the JSON body), or null when the body has none.
+export class WhatsAppApiError extends Error {
+  readonly code: number | null;
+  constructor(readonly status: number, body: string) {
+    super(`whatsapp ${status}: ${body.slice(0, 200)}`);
+    let code: unknown = null;
+    try { code = (JSON.parse(body) as { error?: { code?: unknown } }).error?.code; } catch { /* not JSON */ }
+    this.code = typeof code === 'number' && Number.isSafeInteger(code) ? code : null;
+  }
+}
+
 export const createWhatsAppCaller = (token: string, phoneNumberId: string, fetcher: typeof fetch = fetch): WhatsAppCall =>
   async (body) => {
     const controller = new AbortController();
@@ -22,7 +33,7 @@ export const createWhatsAppCaller = (token: string, phoneNumberId: string, fetch
         body: JSON.stringify({ messaging_product: 'whatsapp', ...body }),
         signal: controller.signal,
       }),timeout]);
-      if (!response.ok) throw new Error(`whatsapp ${response.status}: ${(await Promise.race([response.text(),timeout])).slice(0, 200)}`);
+      if (!response.ok) throw new WhatsAppApiError(response.status, await Promise.race([response.text(),timeout]));
       return await Promise.race([response.json(),timeout]);
     } finally {
       clearTimeout(timer!);
@@ -43,6 +54,11 @@ export const whatsappTelegramShim = (token: string, phoneNumberId: string, to: s
   const call = createWhatsAppCaller(token, phoneNumberId, fetcher);
   const upload = createWhatsAppMediaUploader(token, phoneNumberId, fetcher);
   return async (method, body) => {
+    // An approved template with no variables: agent text never rides in a template.
+    if (method === 'sendTemplate') {
+      const { name, language } = body as { name: string; language: string };
+      return call({ to, type: 'template', template: { name, language: { code: language } } });
+    }
     if (method === 'sendDocument') {
       const { file } = body as { file: WhatsAppOutboundFile };
       const kind = whatsappOutboundKind(file);
