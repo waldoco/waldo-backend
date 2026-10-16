@@ -374,7 +374,8 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
     if ([DASHBOARD_OVERVIEW_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH].includes(url.pathname)||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json')) return finish(new Response('overview unavailable', { status: 503, headers: DASHBOARD_OVERVIEW_HEADERS }));
     throw error;
   }
-  event('console_route', response.ok, response.ok ? 'forwarded' : 'forward_failed');
+  const routed = response.ok || (response.status >= 300 && response.status < 400);
+  event('console_route', routed, routed ? 'forwarded' : 'forward_failed');
   if (signout && signedOut(response)) {
     await Promise.all(fenceAfter.map(hash => fenceSession(env, owners, doName, hash)));
     response = clearOwnerCookie(response);

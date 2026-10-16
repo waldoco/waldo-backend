@@ -223,7 +223,8 @@ export default {
         return withConsoleTrace(new Response(null, { status: 303, headers: { location: `${CONSOLE_SIGNIN_PATH}?return_to=${encodeURIComponent(resume)}` } }), consoleRequestTrace ?? consoleTrace());
       }
       if (consoleRequestTrace) {
-        consoleLog(consoleRequestTrace, 'console_route', response.ok, response.ok ? 'forwarded' : 'forward_failed');
+        const routed = response.ok || (response.status >= 300 && response.status < 400);
+        consoleLog(consoleRequestTrace, 'console_route', routed, routed ? 'forwarded' : 'forward_failed');
         return withConsoleTrace(response, consoleRequestTrace);
       }
       return response;
