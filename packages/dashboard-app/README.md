@@ -1,6 +1,6 @@
 # Waldo React dashboard
 
-Normal browser visits to `/console` serve the authenticated React dashboard; `/console/dashboard` remains a compatible alias. Existing control pages and the old overview at `/console/legacy` remain protected and reachable. Root JSON, ticket redemption and action receipts retain their existing handlers. Signed-out shell visits redirect to the fixed `/console/signin` route.
+Normal browser visits to `/console` serve the authenticated React dashboard; `/console/dashboard` remains a compatible alias. A browser visit to a classic page URL, including `/console/legacy`, `/console/imessage` and `/console/devices`, opens the matching dashboard route. Root JSON, ticket redemption and action receipts retain their existing handlers. Signed-out shell visits redirect to the fixed `/console/signin` route.
 
 The authenticated React dashboard reads only `/console/dashboard/api/v1/overview` on the same origin, with same-origin credentials and no-store requests. It does not read the full `/console` JSON (which includes memory and CSRF). The Worker gates the HTML shell through the same owner-session read; only content-hashed JS/CSS are served as public immutable assets. Unknown static paths do not fall back to the app.
 
@@ -30,7 +30,7 @@ Chat (`#/chat`, also the top bar's chat button, G then C) is the app's main chat
 
 Threads: `#/chat` is main chat, where Waldo also reaches you; `#/chat/<thread id>` is one of the owner's chats beside it, from the app.v1 threads routes (list, create, read, rename, archive, delete, send, receipt, stop) that the Worker maps one to one under the same console session. A thread keeps its own transcript and the same memory. New chat starts an untitled thread, which Waldo names after its first exchange. A thread message names the thread revision it was written against and is sent once more after a revision conflict. An archived thread locks its composer behind Unarchive, and delete asks first. Each change carries its own operation id. On phones the rail opens from the Chats button, and the thread actions sit behind More.
 
-Connections lists iMessage beside Telegram from the connections read's `channels` field when the directory answered, and links to the iMessage setup page. `node scripts/preview.mjs` serves a synthetic chat whose reply lands about four seconds after each message.
+Connections lists iMessage beside Telegram from the connections read's `channels` field when the directory answered. iMessage setup (`#/connections/imessage`) and Mac pairing through Kennel (`#/connections/devices`) read `?view=imessage` and `?view=devices` from the controls route and act through the control-action path. Each read lists the actions it offers, and the server re-reads and enforces that list. Liveness (online, last seen, command history) comes back beside the hashed read, so a heartbeat never makes a decision stale. A pairing code, link code or verify challenge comes back once, in that action's response; the receipt book never stores it, and the page keeps it only in component state. `node scripts/preview.mjs` serves a synthetic chat whose reply lands about four seconds after each message.
 
 See `docs/planning/waldo-agent-mvp/CODEX_L7_CONTROLS.md` for the route/action map, evidence and acceptance handoff.
 

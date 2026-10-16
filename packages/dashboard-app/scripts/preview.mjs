@@ -35,9 +35,19 @@ const controls = (view) => {
     setup: { telegram_linked: true, google_access_granted: true, quiet_hours_set: false },
     usage: { rows: [{ model: 'synthetic-model', calls: 42, input: 120000, cached: 80000, output: 9000, usd: 0.4312 }] },
     files: { storage: 'telegram_reference', items: [{ id: 1, kind: 'document', name: 'itinerary.pdf', mime: 'application/pdf', size: 48213, caption: 'Flights for October', at: 1790000000 }] },
+    imessage: { enabled: true, address: 'waldo@example.test', linked_hint: '4321', admin: true, actions: ['imessage.link', 'imessage.unlink', 'imessage.pair', 'imessage.pair_shared'], bridges: [
+      { id: 'imb_' + '1'.repeat(32), kind: 'owner', state: 'pending', subject: 'sample@example.test', chat: 'iMessage;-;sample@example.test', observed: true, host_version: 'synthetic-host-1', actions: ['imessage.verify', 'imessage.activate', 'imessage.revoke'] },
+      { id: 'imb_' + '2'.repeat(32), kind: 'shared', state: 'active', subject: 'operator@example.test', chat: 'iMessage;-;operator@example.test', observed: true, host_version: 'synthetic-host-1', actions: ['imessage.revoke'] }] },
+    devices: { actions: ['device.pair'], devices: [{ id: 'dev_synthetic', label: 'Synthetic MacBook', capabilities: ['machine_state_query', 'notify_local'], created_at: '2026-10-16 09:00', actions: ['device.revoke', 'device.query', 'device.notify'] }],
+      query_kinds: ['session_status', 'attempt_status', 'worktree_watch'], notification_bodies: ['Your Mac is connected.', 'Your Mac needs attention.', 'Status update'] },
   }[view];
-  return { ...base, data };
+  const status = { imessage: { bridges: [{ id: 'imb_' + '2'.repeat(32), online: true, text_ready: true, sending_paused: false }] },
+    devices: { devices: [{ id: 'dev_synthetic', online: true, last_seen_at: '2026-10-16 10:42', commands: [{ class: 'machine_state_query', state: 'answered', result_state: 'idle' }] }] } }[view];
+  return { ...base, data, ...(status ? { status } : {}) };
 };
+// Synthetic one-time values in the real formats, so the shown-once display can be checked. Nothing is minted.
+const reveals = { 'imessage.link': { kind: 'link_code', value: 'waldo ABCDEFGHJK', send_url: 'sms:waldo@example.test&body=waldo%20ABCDEFGHJK' }, 'imessage.pair': { kind: 'host_code', value: 'wim_' + '0123456789abcdef'.repeat(3) },
+  'imessage.pair_shared': { kind: 'host_code', value: 'wim_' + 'fedcba9876543210'.repeat(3) }, 'imessage.verify': { kind: 'challenge', value: 'wic_' + '0123456789abcdef'.repeat(3) }, 'device.pair': { kind: 'pairing_code', value: 'wp1.00000000-0000-4000-8000-000000000000.' + 'S'.repeat(43) } };
 let adminReadFailed=false;
 // Synthetic chat: a short history, and a reply that lands about four seconds after each message.
 const chatRows = selected === 'empty' ? [] : [
@@ -106,6 +116,14 @@ const server = createServer((req, res) => {
   if(req.url?.startsWith('/console/dashboard/api/v1/controls?')) {
     const view=new URL(req.url,'http://localhost').searchParams.get('view');
     res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(controls(view)));return;
+  }
+  if (req.url === '/console/dashboard/api/v1/actions' && req.method === 'POST') {
+    const chunks = []; req.on('data', chunk => chunks.push(chunk)); req.on('end', async () => {
+      const form = await new Request('http://preview.invalid', { method: 'POST', headers: { 'content-type': req.headers['content-type'] ?? '' }, body: Buffer.concat(chunks) }).formData();
+      const reveal = reveals[String(form.get('action'))];
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ receipt: { state: 'recorded', message: 'Synthetic receipt only. Nothing was paired, linked or sent.' }, duplicate: false, ...(reveal ? { reveal } : {}) }));
+    }); return;
   }
   if(req.url === '/console/admin') {
     res.writeHead(selected.startsWith('admin') ? (adminReadFailed?503:200):404,{'Content-Type':'application/json','Cache-Control':'no-store'});
