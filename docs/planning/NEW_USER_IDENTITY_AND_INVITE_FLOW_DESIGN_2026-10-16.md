@@ -40,13 +40,17 @@ This doc covers only the identity-binding layer under them, and does not change 
      - `[inference]` This is from Supabase's documented behaviour, and the build slice must prove it with a test.
    - No path ever creates a second owner for the same person.
 2. **Email is the account key and the recovery factor.** It is verified when the person joins. Invites stay keyed by email.
-3. **Phone is verified contact evidence plus a presence, never a sign-in or recovery factor.**
-   - It is proven only by **possession**: an inbound WhatsApp or iMessage message from that number, closed by a confirm in the owner's signed-in app or console.
-   - It is stored canonically as `+E.164` in `owners.phone`, with `phone_verified_at` and a new `phone_verified_via`.
-   - Presence subjects stay in their provider's own form: WhatsApp digits, the iMessage handle.
+3. **Phone is possession evidence, never a sign-in or recovery factor.**
+   - It is proven only by an inbound WhatsApp or iMessage message from that number, closed by a confirm in the owner's signed-in app or console.
    - Recommendation: phone does **not** become a Supabase phone identity. That would need an SMS provider and a new login path, and it would make SIM swap an account-takeover path. See decision D2.
-4. **One verified phone per owner, one owner per verified phone:** a partial unique index on `owners.phone` where `phone_verified_at is not null`.
-5. **An iMessage handle that is an email is a presence, not evidence.** It proves neither the email nor a phone. Only an E.164 handle may set the verified phone.
+4. **Proof lives on each presence, not on the owner.**
+   - Many people use different numbers on different channels: WhatsApp on a +91 number, iMessage on a US number or an Apple ID.
+   - With a single `owners.phone_verified_at`, linking iMessage on number B would silently re-point the "verified phone" away from a live WhatsApp presence on A. Unlinking one channel would also clear the proof that the other still relies on.
+   - So each `presences` row carries its own `proven_at`, set only by the confirm. The `presences_whatsapp_verified_phone` trigger is rewritten to require `new.proven_at` instead of `owners.phone_verified_at`.
+   - Presence subjects stay in their provider's own form: WhatsApp digits plus the business-scoped user ID (BSUID, see F3 and F5), or the iMessage handle.
+   - `owners.phone` (`+E.164`) becomes the owner's **contact number** only. The first confirm fills it, and the owner may pick another proven presence later. `phone_verified_at` then means "this contact number matches a proven presence".
+5. **Uniqueness:** one owner per live subject per provider. That rule already exists as `presences_live_subject`. A partial unique index on verified `owners.phone` stops two owners from showing the same contact number (D6).
+6. **An iMessage handle that is an email is a presence, not phone evidence.** It proves neither the email nor a phone, and it can never become `owners.phone`.
 
 ## Entry points
 
@@ -61,7 +65,7 @@ This doc covers only the identity-binding layer under them, and does not change 
    3. The person taps Send.
    4. The redemption opens a **pending** link request, not a live presence.
    5. The app or console that issued the code shows "Link +91 98765 43210?" with **Yes** and **Not my number**.
-   6. Yes binds the presence, sets `phone_verified_at` and `phone_verified_via`, and satisfies the existing trigger.
+   6. Yes binds the presence with `proven_at`, which satisfies the rewritten trigger, and fills `owners.phone` if it is empty.
 
 Two sides together make the proof: the code shows the sender acted for this owner, and the confirm shows the signed-in owner saw this exact number.
 - This is the same request-and-confirm aggregate as #1294, opened from the other side.
@@ -94,23 +98,23 @@ The same as C, through `/console/signin` and `/console/signup`, plus Google behi
 | Case | Behaviour |
 |---|---|
 | The number is live under **another owner** | `claimed`: nothing moves, the code is not spent, and the sender hears "this number is linked to another Waldo account". The confirming owner sees the same. **Beta:** an admin resolves it by hand. Post-beta: a reclaim flow (D4). |
-| The number is verified on another owner with no live presence | Refused at confirm by the unique index, same as above. |
-| The owner re-links a new number | It replaces the old presence and the verified phone, as `redeem_link_code` already does. The old number is no longer admitted (#1294 fixes the DO rebind). |
+| The number is another owner's contact number but has no live presence on this provider | The presence binds, and the contact number stays empty for this owner (unique index). An admin sees both. |
+| WhatsApp and iMessage on different numbers | Allowed. Each presence is proven separately, and the owner picks one contact number. |
+| The owner re-links a new number on one provider | It replaces that provider's presence, as `redeem_link_code` already does. The other provider's presence and proof are untouched. The old number is no longer admitted (#1294 fixes the DO rebind). |
 | The Google email differs from the invite or account email | `needs_invite`, the 11 Oct ruling. A signed-in owner adding a *different* Google login through Supabase manual linking is D3. |
 | The invite email is not the address the person wants | The admin revokes it and reissues. No in-flow edit. |
-| The unverified `owners.phone` from signup differs from the texting number | Code-first ignores `owners.phone` and overwrites it at confirm. Text-first (#1294) falls back to the waitlist. #1294's stated gap, "no phone on file means no way to link", is closed by code-first. |
+| The unverified `owners.phone` from signup differs from the texting number | Code-first ignores `owners.phone`. The confirm replaces an unverified contact number with the proven one. Text-first (#1294) falls back to the waitlist. #1294's stated gap, "no phone on file means no way to link", is closed by code-first. |
 | The same person tries to join with a second email | It needs a second invite. The unique phone index stops that second owner from verifying the same phone. |
 
 ## Recovery
 
 - **Lost device:** sign in again by email code or Google. Revoke the old session from the sessions list, or sign out everywhere.
 - **Lost number or new SIM:** unlink in the console. The phone becomes unverified, and the person re-links with the new number.
-- **Lost email access:** there is no self-serve path, by design. An admin-assisted recovery that changes the owner's email would require **two** of:
-  - the verified phone,
-  - a linked Google login,
-  - the admin knowing the person.
-
-  It is never phone alone (D5).
+- **Lost email access:** there is no self-serve path, by design.
+  - A Google login is not an independent factor in the beta, because it must match the account email.
+    - For a Gmail address, it is the same factor.
+    - For a non-Gmail Google account, the person is not locked out: they just sign in with Google.
+  - So an admin-assisted email change rests on two things: a proven presence messaging from its number, **and** the admin knowing the person. It is never the phone alone (D5).
 - **Changing email** while signed in: a code to the new address, then `auth.users` and `owners.email` are updated together, and the old address is notified. Not designed in detail here.
 - **Delete and rejoin is not recovery.** `delete_owner` erases the identity, and a rejoin makes a new, empty owner (pgTAP `waldo_delete_then_rejoin.sql`).
 
@@ -122,22 +126,30 @@ Each one needs a named failing test before its slice is built.
   - *Attack:* the attacker texts Waldo and forwards the link to the victim. The victim signs in, and the attacker's WhatsApp now reaches the victim's Waldo.
   - *Existing members:* #1294 holds, because the request is bound to the single owner whose phone matches.
   - *New users:* that binding **does not exist** for someone with no phone on file. So a message-started signup must never auto-bind its sender (B, D1).
-  - *Test:* a signup started from a WhatsApp link creates an owner with no presence and no verified phone.
+  - *Test:* a signup started from a WhatsApp link creates an owner with no presence and no proven contact number.
 - **F2. Reverse takeover, code-first.**
   - *Attack:* the attacker sees or is forwarded the owner's code and texts it first.
   - *Defence:* redemption opens only a pending request. The owner's confirm shows the full number, and "Not my number" spends the request.
   - *Test:* a redeemed code with no confirm admits nothing, and a confirm naming a different subject is refused.
 - **F3. Recycled numbers.**
   - *Risk:* a carrier reassigns the number, and the old presence still routes to the old owner. A live presence outlives the SIM, and nothing on `beta-mvp` detects this.
-  - *Signal:* Meta's business-scoped user ID (BSUID) regenerates when a user changes number, and Meta sends a system webhook (per Meta's BSUID docs). That webhook should unlink the presence and clear `phone_verified_at`.
-  - *Fallback:* a re-proof after long inactivity (D4).
-  - *Test:* the number-change system event unlinks the presence and admits nothing afterwards.
+  - *The deliberate move:* Meta's `user_changed_number` system webhook covers a user who moves with WhatsApp's Change Number feature. It carries the new number, the new BSUID and the previous BSUID. That event should unlink the old presence and offer the owner a re-link of the new number.
+  - *The common case is different:* an abandoned SIM is reassigned by the carrier, and someone else registers it.
+    - WhatsApp's help center treats a number as recycled after 45 days of inactivity followed by activation on a new device, and deletes the old account data.
+    - `[inference]` The new user then arrives as a different WhatsApp user with a **new BSUID** and no linking event. I found no Meta text that states this.
+  - *Detector:* key the WhatsApp presence on the **BSUID** as well as the digits. An inbound message from linked digits with an unfamiliar BSUID is refused. The presence drops to "needs re-proof", and the owner is told in the app.
+  - This makes BSUID capture the core of F3, not only of F5. Until Meta sends BSUIDs on this integration, there is no detector.
+  - *Fallback that does not depend on Meta:* a re-proof after long inactivity (D4).
+  - *Tests:*
+    - the Change Number event unlinks the old presence;
+    - linked digits arriving with a different BSUID admit nothing;
+    - re-proof restores the presence only through the owner confirm.
 - **F4. SIM swap.**
   - *Risk:* an attacker re-registers the victim's number. The BSUID does not change, so it is invisible from the channel `[inference]`.
   - *Bound:* phone is never a sign-in or recovery factor (model §3, D2, D5). Consequential actions keep app- or console-side approval (13 Oct ruling: approvals go through an app link).
   - *Residual risk, stated plainly:* a swapped number can still converse with the owner's Waldo, and read through it whatever the conversation may read.
 - **F5. BSUID and usernames.**
-  - *Risk:* a user with a username who hides their number arrives with only `user_id` and no phone. Phone proof holds **only when the phone is present**, so such a sender can link a presence but cannot set the verified phone.
+  - *Risk:* a user with a username who hides their number arrives with only `user_id` and no phone. Phone proof holds **only when the phone is present**. Such a sender can link a presence keyed on the BSUID alone, but it never becomes `owners.phone`.
   - *Bug today:* `whatsapp-webhook.ts:37` (`if (!message.from) continue;`) silently drops these senders.
   - *Change:* store the BSUID on the WhatsApp presence.
   - *Unverified:* the rollout date. Secondary sources give dates from late March to May 2026; check Meta's page.
@@ -155,15 +167,21 @@ Each one needs a named failing test before its slice is built.
 ## Contracts and migrations it would touch
 
 - **Database functions**
-  - Changed: `signup_owner_for_auth` (stop treating the signup phone as data, or drop it), `redeem_link_code` / `redeem_link` (whatsapp and imessage open a pending request instead of a presence), `delete_owner` (clear the new columns).
+  - Changed:
+    - `signup_owner_for_auth`: stop treating the signup phone as data, or drop it.
+    - `redeem_link_code` / `redeem_link`: whatsapp and imessage open a pending request instead of a presence.
+      - This alters the **live iMessage shared-number flow**, which the iMessage lane owns (`20261014120000`).
+      - Existing active presences must keep routing unchanged; give them `proven_at` = `created_at` in the migration.
+      - Coordinate with that lane before I1.
+    - `delete_owner`: clear the new columns.
   - Adopted: #1294's `open_presence_link_request` / `consume_presence_link_request`, generalised to both entry sides.
   - Affected: `route_presence`, `assert_channel_presence` and `admin_overview` (a verified-phone hint, never the full number).
 - **Schema**
-  - New columns: `owners.phone_verified_via`, and a BSUID column on WhatsApp presences.
-  - New indexes: a partial unique index on verified `owners.phone`, and possibly a second presence-subject index for the BSUID.
+  - New columns: `presences.proven_at`, and a BSUID column on WhatsApp presences.
+  - New indexes: a partial unique index on verified `owners.phone`, and a live-presence index on the BSUID.
   - New tables: #1294's link-request table, and the O2 Google handoff table.
   - Optional: `invites.phone`, only if D1 is accepted.
-  - The `presences_whatsapp_verified_phone` trigger stays and is satisfied by the confirm.
+  - The `presences_whatsapp_verified_phone` trigger is rewritten to check `new.proven_at`.
 - **Runtime contracts**
   - `ConsoleAuth`: provider link status and a confirm method.
   - `SignupProgress.phoneVerification`.
@@ -180,22 +198,22 @@ Each one needs a named failing test before its slice is built.
 | D1 | Can an uninvited or phone-invited first text start a signup? | Beta: waitlist only. Later: phone-keyed invites with no sender auto-bind. |
 | D2 | Is phone a sign-in identity (Supabase phone and SMS) or verified evidence only? | Evidence only. |
 | D3 | May a signed-in owner add a Google login with a different email? | Later, through Supabase manual linking, from a signed-in session only. Beta keeps `needs_invite`. |
-| D4 | Recycled-number policy: unlink on Meta's number-change event, re-proof after inactivity, a reclaim flow for `claimed`? | Unlink on the event now. Re-proof after 90 days without inbound traffic. Admins resolve `claimed` by hand for the beta. |
-| D5 | Recovery when email access is lost | Admin-assisted, two factors, never phone alone. |
-| D6 | One verified phone per owner, and per number? | Yes, both. |
+| D4 | Recycled-number policy | Unlink on Meta's Change Number event. Refuse and re-prove on a BSUID mismatch. Re-prove after 90 days without inbound traffic. Admins resolve `claimed` by hand for the beta. |
+| D5 | Recovery when email access is lost | Admin-assisted: a proven presence plus the admin knowing the person. Never the phone alone. |
+| D6 | Proof per presence, with one contact number per owner and one owner per contact number? | Yes. |
 | D7 | Does code-first linking require the owner-side confirm (one extra tap)? | Yes. It is the F2 defence. |
 | D8 | Does #1294 keep binding its text-first offer on the unverified `owners.phone`? | Yes, as a hint only, since the confirm is what binds. |
 | D9 | Apple sign-in before App Store submission (guideline 4.8) | Revisit then. It stays out of the beta (12 Oct ruling). |
 
 ## Build slices, after approval
 
-| Slice | Content | Depends on |
-|---|---|---|
-| I1 | Code-first phone link with the owner confirm; verified phone plus the unique index; one confirm writer shared with #1294 | #1294's review, D2, D6, D7 |
-| I2 | Capture the BSUID; stop dropping `from`-less senders; unlink on the number-change event | D4 |
-| I3 | Google sign-in (O2-A) for the app and console | D3; the Google client in the dashboard |
-| I4 | Phone-keyed invites | D1 |
-| I5 | Admin-assisted recovery and email change | D5 |
+| Slice | Content | Depends on | Rollback |
+|---|---|---|---|
+| I1 | Code-first phone link with the owner confirm; `proven_at`, rewritten trigger, contact-number index; one confirm writer shared with #1294 | #1294's review, D2, D6, D7, the iMessage lane | Revert the runtime. The additive columns stay unused. Existing presences keep `proven_at`. |
+| I2 | Capture the BSUID; stop dropping `from`-less senders; Change Number event and BSUID-mismatch refusal | D4 | Flag off the mismatch refusal. The BSUID column is additive. |
+| I3 | Google sign-in (O2-A) for the app and console | D3; the Google client in the dashboard | `GOOGLE_SIGNIN_ENABLED` off. Email code is untouched. |
+| I4 | Phone-keyed invites | D1 | Stop issuing them. Email invites are unchanged. |
+| I5 | Admin-assisted recovery and email change | D5 | Disable the admin action. |
 
 Each slice ships with pgTAP for its database functions, runtime tests for F1–F8 as they apply, and a staging trace on a test account, never the owner's.
 
@@ -205,11 +223,20 @@ Each slice ships with pgTAP for its database functions, runtime tests for F1–F
   - The files and migrations cited above, read at `ee487af2`.
   - #1294's description at `1bcb0ca7` (its diff was not reviewed line by line).
   - #1297's description.
-  - Grep: no Google sign-in source; `phone_verified_at` is never set; no unique index on phone.
+  - Grep across `packages`, `supabase` and `wrangler.jsonc`: no Google sign-in source.
+  - Grep: `phone_verified_at` is written only in migration comments and the trigger, never set.
+  - Grep for any index naming phone in `supabase/migrations`: no matches.
 - **Inference:**
   - That `waldo CODE` cannot bind WhatsApp on staging; I did not query staging.
   - Supabase's automatic linking on verified email.
   - SIM-swap invisibility.
   - That `wa_id` can differ from E.164.
+  - That a recycled number arrives with a new BSUID and no linking event.
 - **Unverified:**
-  - Meta's BSUID rollout date and the exact shape of the number-change webhook. Sources: [Meta, business-scoped user IDs](https://developers.facebook.com/documentation/business-messaging/whatsapp/business-scoped-user-ids), [YCloud BSUID guide](https://docs.ycloud.com/reference/bsuid).
+  - Meta's BSUID rollout date for this integration, and the recycled-number BSUID behaviour.
+  - Sources:
+    - [Meta, business-scoped user IDs](https://developers.facebook.com/documentation/business-messaging/whatsapp/business-scoped-user-ids)
+    - [Meta, system message webhooks](https://developers.secure.facebook.com/documentation/business-messaging/whatsapp/webhooks/reference/messages/system/)
+    - [WhatsApp FAQ on recycled numbers](https://whatsapp.com/faq/en/general/24068052)
+    - [YCloud BSUID guide](https://docs.ycloud.com/reference/bsuid)
+    - [Clickatell on BSUIDs](https://clickatell.com/blog/what-whatsapps-bsuid-means-for-your-business/)
