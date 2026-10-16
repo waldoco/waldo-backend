@@ -29,8 +29,9 @@ export const createWhatsAppCaller = (token: string, phoneNumberId: string, fetch
     }
   };
 
-export const sendWhatsAppText = (call: WhatsAppCall, to: string, text: string) =>
-  call({ to, type: 'text', text: { body: text } });
+// preview_url makes WhatsApp fetch the first http(s) link with no tap from the owner, so it is opt-in per send.
+export const sendWhatsAppText = (call: WhatsAppCall, to: string, text: string, preview = false) =>
+  call({ to, type: 'text', text: { body: text, ...(preview && /https?:\/\//i.test(text) ? { preview_url: true } : {}) } });
 
 // Telegram-shaped compatibility caller. WhatsApp currently uses explicit text
 // instructions for approvals and exact URL text for link buttons. Unsupported
@@ -41,10 +42,10 @@ export const whatsappTelegramShim = (token: string, phoneNumberId: string, to: s
   const call = createWhatsAppCaller(token, phoneNumberId, fetcher);
   return async (method, body) => {
     if (method === 'sendMessage') {
-      const b = body as { text: string; fallback_text?: string; reply_markup?: { inline_keyboard?: { text: string; callback_data?: string; url?: string }[][] } };
+      const b = body as { text: string; fallback_text?: string; link_preview_options?: { is_disabled?: boolean }; reply_markup?: { inline_keyboard?: { text: string; callback_data?: string; url?: string }[][] } };
       const buttons = (b.reply_markup?.inline_keyboard ?? []).flat().filter((x) => x.callback_data || x.url);
       const suffix = buttons.length ? `\n\n${buttons.map((x) => x.url ? `- ${x.text}: ${x.url}` : `- ${x.text}: reply "${x.callback_data}"`).join('\n')}` : '';
-      return sendWhatsAppText(call, to, (b.fallback_text ?? b.text) + suffix);
+      return sendWhatsAppText(call, to, (b.fallback_text ?? b.text) + suffix, b.link_preview_options?.is_disabled !== true);
     }
     console.log(JSON.stringify({ hop: 'whatsapp_shim', ok: false, skipped: method, code: 'unsupported_surface_action' }));
     return undefined;
