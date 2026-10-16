@@ -87,14 +87,14 @@ What's missing today:
 
 ## Open owner decisions, all in one place
 
-1. **The time-zone write:** pick L2's option. The alignment session recommends (a), write only while the stored zone is the UTC default. Say it in L2's session.
-2. **#1066:** merge after the 503 is fixed.
+1. **The time-zone write: decided.** The owner chose (a) in L2's session, about 21:25Z on 11 Oct (relayed by L2): write only while unconfirmed and still the UTC default.
+2. **#1066:** the hold rule was accepted by the owner (about 21:25Z, L2's session). The overnight review failed it on a re-plan bug and a clock-dependent test, and found a health-destination question for the owner; see `OVERNIGHT_LOG_2026-10-12.md`.
 3. **Push (S7):**
    - choose the provider (direct APNs recommended, no new processor);
    - give the go for a preview deploy to test whether Workers reach APNs over HTTP/2;
    - security-review the token read path;
    - create the APNs key and enter it in the secrets store yourself.
-4. **Apple sign-in:** recommendation is to keep it dropped for the beta, and add it before App Store submission if guideline 4.8 requires it. Check the current text then.
+4. **Apple sign-in: decided.** No Apple sign-in for the beta; revisit before any App Store submission (owner, about 21:25Z on 11 Oct, L2's session, relayed by L2).
 5. **The 6:30 notification:** decide the rule that releases an overnight Needs You as one push at wake time, with Suyash.
 6. **Kennel and iMessage scope.** Rulings 4 and 13 put them in this push; the ledger's §9 Wave 6 and CLAUDE.md say later.
 7. **Merges:**
