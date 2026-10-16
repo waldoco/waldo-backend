@@ -72,20 +72,20 @@ select is(pg_temp.link_consume('do-alice', pg_temp.h('e'), '15550001111'), 'reje
 update waldo.owners set phone = '+15550001111' where do_name = 'do-alice';
 
 -- Claimed meanwhile by another owner: nothing changes.
-select is(pg_temp.link_open('15550001111', pg_temp.h('g')), 'opened', 'a fresh link');
+select is(pg_temp.link_open('15550001111', pg_temp.h('1')), 'opened', 'a fresh link');
 update waldo.owners set phone_verified_at = now() where do_name = 'do-mallory';
 insert into waldo.presences (owner_id, provider, subject) select id, 'whatsapp', '15550001111' from waldo.owners where do_name = 'do-mallory';
-select is(pg_temp.link_consume('do-alice', pg_temp.h('g'), '15550001111'), 'claimed', 'a sender that became active elsewhere is reported claimed');
+select is(pg_temp.link_consume('do-alice', pg_temp.h('1'), '15550001111'), 'claimed', 'a sender that became active elsewhere is reported claimed');
 select is(pg_temp.link_active('do-mallory'), '15550001111', 'the other owner keeps it');
 select is(pg_temp.link_active('do-alice'), null, 'and this owner gains nothing');
 
 -- Relinking replaces the owner's earlier number.
 update waldo.presences set state = 'unlinked', unlinked_at = now() where subject = '15550001111';
-select is(pg_temp.link_open('15550001111', pg_temp.h('i')), 'opened', 'a link for the first number');
-select is(pg_temp.link_consume('do-alice', pg_temp.h('i'), '15550001111'), 'linked', 'linked once');
+select is(pg_temp.link_open('15550001111', pg_temp.h('2')), 'opened', 'a link for the first number');
+select is(pg_temp.link_consume('do-alice', pg_temp.h('2'), '15550001111'), 'linked', 'linked once');
 update waldo.owners set phone = '+15550008888' where do_name = 'do-alice';
-select is(pg_temp.link_open('15550008888', pg_temp.h('j')), 'opened', 'a link for the new number');
-select is(pg_temp.link_consume('do-alice', pg_temp.h('j'), '15550008888'), 'linked', 'the new number links');
+select is(pg_temp.link_open('15550008888', pg_temp.h('3')), 'opened', 'a link for the new number');
+select is(pg_temp.link_consume('do-alice', pg_temp.h('3'), '15550008888'), 'linked', 'the new number links');
 select is((select count(*)::int from waldo.presences p join waldo.owners w on w.id = p.owner_id where w.do_name = 'do-alice' and p.provider = 'whatsapp' and p.state = 'active'), 1, 'only one WhatsApp presence stays active');
 select is(pg_temp.link_active('do-alice'), '15550008888', 'and it is the new number');
 
