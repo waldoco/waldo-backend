@@ -58,11 +58,11 @@ export class TelegramOwnerListener {
     }
   }
 
-  async pollOnce(adapter: TelegramPollingAdapter, timeout = 25): Promise<readonly TelegramTurnOutcome[]> {
+  async pollOnce(adapter: TelegramPollingAdapter, timeout = 25, runScope?: RunEffectScope): Promise<readonly TelegramTurnOutcome[]> {
     const polled = await adapter.poll(timeout);
     const outcomes: TelegramTurnOutcome[] = [];
-    for (const turn of polled.accepted) outcomes.push(await this.handle(turn));
-    for (const turn of polled.unsupported) outcomes.push(await this.handleUnsupported(turn));
+    for (const turn of polled.accepted) outcomes.push(await this.handle(runScope ? { ...turn, runScope } : turn));
+    for (const turn of polled.unsupported) { runScope?.admit(); outcomes.push(await this.handleUnsupported(turn)); }
     await this.options.saveOffset(polled.nextOffset);
     return outcomes;
   }

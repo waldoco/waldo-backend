@@ -155,7 +155,7 @@ import { mcpServers, callMcpToolHandler, readMcpToolHandler, executeMcp, McpConn
 import { sendMessageHandler } from '../tools/live/messaging';
 import { createTelegramFileDownloader } from './telegram-media';
 import { selectTranscriber } from '../llm/transcriber';
-import { TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './telegram-listener';
+import { TURN_TIMEOUT_MS, TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './telegram-listener';
 import { isForward, TelegramPollingAdapter } from './telegram-polling';
 import { createTelegramResponder } from './telegram-turn';
 import type { OwnerJobHost } from './owner-turn';
@@ -272,6 +272,8 @@ const offsetKeyOf = (channel: ChannelKind) => channel === 'whatsapp' ? 'wa_offse
 // Channels whose replies never use Telegram transport, commands or reactions.
 const nativeSurface = (channel: ChannelKind) => channel === 'app' || channel === 'imessage';
 const WHATSAPP_PENDING_PREFIX = 'wa_pending:';
+// Message ids only, never message text.
+type WhatsappPending = Readonly<{ subject: string; admittedAt: number; ids: readonly string[] }>;
 // How often an unfinished WhatsApp payload is looked at again. A cadence, not a limit on how long a turn may run.
 const WHATSAPP_PENDING_CHECK_MS = 60_000;
 
@@ -1187,7 +1189,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           failure ??= { error }; break;
         }
         started += 1;
-        try { await this.turn(update, 'whatsapp'); } catch (error) { failure ??= { error }; }
+        try { await this.whatsappTurn(update, pendingKey, subject); } catch (error) { failure ??= { error }; }
       }
       try { await this.ctx.storage.put('wa_seq', seq); } catch (error) { failure ??= { error }; }
       if (failure) {
@@ -1195,14 +1197,51 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // text, no error text). If no turn started it is safe to resend; if one started it may have had effects, so the notice says
         // to check first. A turn that already started is never replayed. Listener failures propagate here for this fixed notice.
         // Consume the pending record before the send so a cold instance recovering during this request cannot send a second notice.
-        this.liveWhatsapp.delete(pendingKey); this.ctx.storage.kv.delete(pendingKey);
-        try {
+        // A record that is already gone was taken by recovery, which has told the owner. A rebound or unlinked sender is not told.
+        const { kv } = this.ctx.storage;
+        const owned = this.ctx.storage.transactionSync(() => { const held = kv.get(pendingKey) !== undefined; kv.delete(pendingKey); return held; });
+        this.liveWhatsapp.delete(pendingKey);
+        if (owned && kv.get<string>('whatsapp_subject') === subject && kv.get<boolean>('whatsapp_unlinked') !== true) try {
           const { api, owner } = this.setup('whatsapp');
           await api.sendMessage({ chat_id: owner, text: started === 0 ? WHATSAPP_UNSTARTED_NOTICE : WHATSAPP_PARTIAL_NOTICE });
         } catch { console.error('whatsapp failure notice unavailable'); }
         throw failure.error;
       }
     });
+  }
+
+  // One WhatsApp turn under its own run scope. A commit holds only while this payload's pending record is still held (recovery
+  // deletes it), the admitted sender is still the bound, linked subject, the owner name is unchanged, and the run is neither
+  // aborted nor past its deadline. The scope is aborted when its turn ends, so a turn that outlived its race cannot commit
+  // after the next one starts, and an unlink or rebind mid-turn closes every later tool effect and the final send.
+  private async whatsappTurn(update: unknown, pendingKey: string, subject: string): Promise<void> {
+    const { kv } = this.ctx.storage;
+    const run = { runId: crypto.randomUUID(), attempt: crypto.randomUUID(), deadline: Date.now() + TURN_TIMEOUT_MS };
+    const doName = kv.get<string>('do_name');
+    const abort = new AbortController();
+    const scope: RunEffectScope = {
+      ...run, signal: abort.signal,
+      admit: () => { scope.commit(() => undefined); },
+      commit: work => this.ctx.storage.transactionSync(() => {
+        if (kv.get<WhatsappPending>(pendingKey)?.subject !== subject || kv.get<string>('whatsapp_subject') !== subject || kv.get<boolean>('whatsapp_unlinked') === true || kv.get<string>('do_name') !== doName
+          || abort.signal.aborted || Date.now() >= run.deadline) throw new ClosedRunError();
+        const result = work();
+        if (result && typeof (result as { then?: unknown }).then === 'function') throw new Error('run commit must be synchronous');
+        return result;
+      }),
+    };
+    this.activeScope = scope; this.activeAbort = abort;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const expired = new Promise<never>((_, reject) => {
+        abort.signal.addEventListener('abort', () => reject(new ClosedRunError()), { once: true });
+        timeout = setTimeout(() => abort.abort(), Math.max(0, run.deadline - Date.now()));
+      });
+      await Promise.race([this.turn(update, 'whatsapp', false, scope), expired]);
+    } finally {
+      clearTimeout(timeout); abort.abort();
+      if (this.activeScope === scope) { this.activeScope = undefined; this.activeAbort = undefined; }
+    }
   }
 
   // Durable admission (#745): the webhook acks Meta only after this returns. In one synchronous storage step it claims the
@@ -1232,7 +1271,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       claimed = claimNewWhatsAppMessages(kv, value.messages ?? [], Date.now());
       if (!claimed.length) return;
       recordWhatsAppInbound(kv, claimed, Date.now());
-      kv.put(pendingKey, { subject, admittedAt: Date.now(), ids: claimed.flatMap(m => typeof m.id === 'string' && m.id !== '' ? [m.id] : []) });
+      kv.put(pendingKey, { subject, admittedAt: Date.now(), ids: claimed.flatMap(m => typeof m.id === 'string' && m.id !== '' ? [m.id] : []) } satisfies WhatsappPending);
       kv.put(WHATSAPP_PENDING_DUE_KEY, Date.now() + WHATSAPP_PENDING_CHECK_MS);
     });
     if (!claimed.length) return new Response('ok');
@@ -1256,10 +1295,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // WhatsApp-only owner is covered, and uses the WhatsApp api directly, never the shared final outbox.
   private async recoverWhatsappPending(): Promise<void> {
     const { kv } = this.ctx.storage;
-    const dead = [...kv.list<{ subject: string }>({ prefix: WHATSAPP_PENDING_PREFIX })].filter(([key]) => !this.liveWhatsapp.has(key));
+    const dead = [...kv.list<WhatsappPending>({ prefix: WHATSAPP_PENDING_PREFIX })].filter(([key]) => !this.liveWhatsapp.has(key));
     for (const [key, record] of dead) {
       kv.delete(key);
-      if (kv.get<string>('whatsapp_subject') !== record.subject) continue;
+      if (kv.get<string>('whatsapp_subject') !== record.subject || kv.get<boolean>('whatsapp_unlinked') === true) continue;
       try { const { api, owner } = this.setup('whatsapp'); await api.sendMessage({ chat_id: owner, text: WHATSAPP_PARTIAL_NOTICE }); } catch { console.error('whatsapp recovery notice unavailable'); }
     }
     this.refreshWhatsappDue();
@@ -2084,7 +2123,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (durable) {
       const parsed = await new TelegramPollingAdapter({ getUpdates: async () => [update] }, 0).poll(0);
       for (const inbound of parsed.accepted) { scope?.admit(); await listener.handle({ ...inbound, ...(scope ? { runScope: scope } : {}) }); }
-    } else await listener.pollOnce(new TelegramPollingAdapter({ getUpdates: async () => [update] }, offset), 0);
+    } else await listener.pollOnce(new TelegramPollingAdapter({ getUpdates: async () => [update] }, offset), 0, scope);
     } finally {
       try { await this.ownerBrowser.finish(scope); await this.browserTasks.finishRun(); }
       catch {
