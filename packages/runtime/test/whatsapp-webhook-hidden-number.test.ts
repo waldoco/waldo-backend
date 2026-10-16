@@ -127,6 +127,9 @@ it('a refused reply logs the Graph status, never the response body', async () =>
   expect((await h.handle(payload([{ userId: BSUID }]))).status).toBe(200);
   expect(h.graph).toHaveLength(1);
   const failure = h.logs.map(line => JSON.parse(line) as Record<string, unknown>).find(entry => entry.hop === 'whatsapp_hidden_number' && entry.ok === false);
-  expect(failure).toMatchObject({ status: 400 });
+  // A failed send is a hashed log line and still a 200: Meta is not asked to redeliver, and nothing retries.
+  const senderKey = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`whatsapp.bsuid.${BSUID}`)))].map(b => b.toString(16).padStart(2, '0')).join('');
+  expect(failure).toMatchObject({ status: 400, sender: senderKey.slice(0, 16) });
+  expect(h.graph).toHaveLength(1);
   for (const line of h.logs) { expect(line).not.toContain('fictional rejection'); expect(line).not.toContain(BSUID); }
 });

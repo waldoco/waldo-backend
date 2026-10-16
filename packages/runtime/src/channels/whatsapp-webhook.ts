@@ -143,15 +143,20 @@ export const handleWhatsAppWebhook = async (
     const call = createWhatsAppCaller(env.WHATSAPP_ACCESS_TOKEN, env.WHATSAPP_PHONE_NUMBER_ID);
     deferred.push((async () => {
       const senderKey = hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`whatsapp.bsuid.${userId}`)));
-      const allowed = await auth.throttle(`wahidden.${senderKey}`, HIDDEN_NUMBER_REPLIES, CONSOLE_AUTH_WINDOW_SECONDS);
-      // Meta addresses a BSUID through recipient, never to.
-      if (allowed) await call({ recipient: userId, type: 'text', text: { body: WHATSAPP_HIDDEN_NUMBER_REPLY } });
-      console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: true, replied: allowed }));
-    })().catch((error: unknown) => {
-      // The Graph status shows whether v21.0 refuses recipient; the response body is never logged.
-      const status = error instanceof Error ? /^whatsapp (\d{3}):/.exec(error.message)?.[1] : undefined;
-      console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: false, error: error instanceof Error ? error.name : 'unknown', ...(status ? { status: Number(status) } : {}) }));
-    }));
+      // A prefix of the hash correlates one sender's log lines; the BSUID itself is never logged.
+      const sender = senderKey.slice(0, 16);
+      try {
+        const allowed = await auth.throttle(`wahidden.${senderKey}`, HIDDEN_NUMBER_REPLIES, CONSOLE_AUTH_WINDOW_SECONDS);
+        // Meta addresses a BSUID through recipient, never to.
+        if (allowed) await call({ recipient: userId, type: 'text', text: { body: WHATSAPP_HIDDEN_NUMBER_REPLY } });
+        console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: true, replied: allowed, sender }));
+      } catch (error) {
+        // Not retried: the slot is spent and the payload is still acked. The Graph status shows whether v21.0 refuses
+        // recipient; the response body is never logged.
+        const status = error instanceof Error ? /^whatsapp (\d{3}):/.exec(error.message)?.[1] : undefined;
+        console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: false, sender, error: error instanceof Error ? error.name : 'unknown', ...(status ? { status: Number(status) } : {}) }));
+      }
+    })());
   }
   if (deferred.length) waitUntil(Promise.all(deferred));
   if (unavailable) return new Response('unavailable', { status: 503 });
