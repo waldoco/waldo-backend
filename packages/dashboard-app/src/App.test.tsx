@@ -9,7 +9,8 @@ describe('dashboard routing and overview boundaries', () => {
     for (const path of ['today', 'chat', 'waiting', 'memory', 'patrol']) expect(html).toContain(`href="#/${path}"`);
     for (const path of ['#/connections', '#/files', '#/invites', '#/settings', '/console/legacy']) expect(html).not.toContain(`href="${path}"`);
     const settings = renderToStaticMarkup(<Dashboard data={empty} route="settings"/>);
-    for (const path of ['#/settings/day', '#/connections', '#/files', '#/settings/usage', '#/settings/account', '#/invites', '/console/legacy']) expect(settings).toContain(`href="${path}"`);
+    for (const path of ['#/settings/day', '#/connections', '#/files', '#/settings/usage', '#/settings/account', '#/invites']) expect(settings).toContain(`href="${path}"`);
+    expect(settings).not.toContain('href="/console/legacy"');
     expect(settings).not.toContain('href="#/admin"');
     expect(renderToStaticMarkup(<Dashboard data={empty} route="settings" isAdmin/>)).toContain('href="#/admin"');
     expect(settings).not.toContain('href="#/account"');
