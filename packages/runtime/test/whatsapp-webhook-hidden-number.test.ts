@@ -105,3 +105,11 @@ it('with no owner directory to throttle against, the sender is logged but not an
   expect(h.graph).toEqual([]);
   expect(h.logs.some(line => line.includes('whatsapp_hidden_number'))).toBe(true);
 });
+
+it('a from that is not a phone number is never used as one', async () => {
+  const h = harness();
+  expect((await h.handle(payload([{ from: BSUID, userId: BSUID, text: 'waldo ABCDEFGH23' }]))).status).toBe(200);
+  expect(h.byPresence).not.toHaveBeenCalled();
+  expect(h.redeem).not.toHaveBeenCalled();
+  expect(h.graph).toEqual([expect.objectContaining({ recipient: BSUID })]);
+});

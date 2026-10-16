@@ -32,16 +32,20 @@ type WaContact = { wa_id?: string; user_id?: string; profile?: { name?: string; 
 type WaValue = { metadata?: { phone_number_id?: string }; contacts?: WaContact[]; messages?: WaMessage[]; statuses?: unknown[] };
 type WaBody = { entry?: { changes?: { value?: WaValue }[] }[] };
 
+// Presences are keyed by phone digits and nothing downstream checks the shape, so only E.164 digits are a sender.
+const phoneOf = (message: WaMessage): string | null => message.from && /^\d{1,15}$/.test(message.from) ? message.from : null;
+
 // One payload can carry several senders; each owner's DO receives only its own sender's messages.
 const bySender = (body: WaBody): { sender: string; value: WaValue }[] => {
   const out = new Map<string, { sender: string; value: WaValue }>();
   for (const entry of body.entry ?? []) for (const change of entry.changes ?? []) {
     const value = change.value ?? {};
     for (const message of value.messages ?? []) {
-      if (!message.from) continue;
-      const bucket = out.get(message.from) ?? { sender: message.from, value: { metadata: value.metadata, messages: [] } };
+      const sender = phoneOf(message);
+      if (!sender) continue;
+      const bucket = out.get(sender) ?? { sender, value: { metadata: value.metadata, messages: [] } };
       (bucket.value.messages as WaMessage[]).push(message);
-      out.set(message.from, bucket);
+      out.set(sender, bucket);
     }
   }
   return [...out.values()];
@@ -52,7 +56,7 @@ const bySender = (body: WaBody): { sender: string; value: WaValue }[] => {
 const hiddenNumberSenders = (body: WaBody): string[] => {
   const out = new Set<string>();
   for (const entry of body.entry ?? []) for (const change of entry.changes ?? []) {
-    for (const message of change.value?.messages ?? []) if (!message.from && message.from_user_id) out.add(message.from_user_id);
+    for (const message of change.value?.messages ?? []) if (!phoneOf(message) && message.from_user_id) out.add(message.from_user_id);
   }
   return [...out];
 };
