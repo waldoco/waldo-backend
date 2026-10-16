@@ -12,7 +12,7 @@ const HEADERS = {
 };
 const escape = (value: string) => value.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const page = (body: string, status = 200) => new Response(
-  `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Link WhatsApp</title><style>body{font:17px/1.5 system-ui,sans-serif;background:#FAFAF8;color:#1A1A1A;margin:0;display:grid;place-items:center;min-height:100vh}main{width:min(420px,90vw);display:grid;gap:12px}.number{font-size:28px;font-weight:700;letter-spacing:.02em}button{font:inherit;padding:12px;border:0;border-radius:10px;background:#1A1A1A;color:#FAFAF8;cursor:pointer;width:100%}</style></head><body><main>${body}</main></body></html>`,
+  `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Link WhatsApp</title><style>body{font:17px/1.5 system-ui,sans-serif;background:#FAFAF8;color:#1A1A1A;margin:0;display:grid;place-items:center;min-height:100vh}main{width:min(420px,90vw);display:grid;gap:12px}.number{font-size:28px;font-weight:bold;letter-spacing:.02em}button{font:inherit;padding:12px;border:0;border-radius:10px;background:#1A1A1A;color:#FAFAF8;cursor:pointer;width:100%}</style></head><body><main>${body}</main></body></html>`,
   { status, headers: HEADERS },
 );
 const notFound = () => page(`<h1>This link has expired</h1><p>It may have been used already, be older than 10 minutes, or be for a different Waldo account. Text Waldo on WhatsApp again for a new link.</p><p><a href="${CONSOLE_PATH}">Open your console</a></p>`, 404);
