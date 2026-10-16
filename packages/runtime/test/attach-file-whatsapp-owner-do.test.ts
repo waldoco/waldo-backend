@@ -1,13 +1,18 @@
-// attach_file through the real owner runtime on WhatsApp. The surface offers it and says attachments are available.
-// A WhatsApp turn runs without a run scope today, and the workspace opens only inside one, so the tool answers
-// "unavailable" and the reply goes out with no file. This pins that gap until WhatsApp turns carry a run scope.
+// attach_file through the real owner runtime on WhatsApp, where the surface offers it.
+// A WhatsApp turn runs without a run scope today, and the workspace opens only inside one, so the prompt says attachments
+// are unavailable, the tool answers "unavailable" without reaching the workspace host, and the reply goes out with no file.
+// This pins that gap until WhatsApp turns carry a run scope.
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 
 const FILE = 'abcdefab-cdef-4abc-8abc-00000000000a';
-const world = vi.hoisted(() => ({ requests: [] as LLMGatewayRequest['request'][] }));
+const world = vi.hoisted(() => ({ requests: [] as LLMGatewayRequest['request'][], workspaceOpened: 0 }));
+vi.mock('../src/channels/workspace-host', async load => {
+  const original = await load<typeof import('../src/channels/workspace-host')>();
+  return { ...original, workspaceOwnerHost: (...args: Parameters<typeof original.workspaceOwnerHost>) => { world.workspaceOpened += 1; return original.workspaceOwnerHost(...args); } };
+});
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
@@ -20,7 +25,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
 });
 const { OwnerDO } = await import('../src/channels/owner-do');
 
-it('a WhatsApp turn is offered attach_file, and without a run scope the file is unavailable and only the reply goes out', async () => {
+it('a WhatsApp turn without a run scope is told attachments are unavailable, and an attach never reaches the workspace', async () => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('attach-file-whatsapp')), async (_instance, state) => {
     const graph: string[] = [];
     const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
@@ -39,8 +44,9 @@ it('a WhatsApp turn is offered attach_file, and without a run scope the file is 
       expect(response.status).toBe(200);
       await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
       expect(world.requests[0]!.tools?.map(tool => tool.name)).toContain('attach_file');
-      expect(world.requests[0]!.system).toContain('Attachment sending: available');
+      expect(world.requests[0]!.system).toContain('Attachment sending: unavailable');
       expect(JSON.stringify(world.requests[1]!.tool_turns)).toContain('\\"reason\\":\\"unavailable\\"');
+      expect(world.workspaceOpened).toBe(0);
       expect(graph).toEqual(['text']);
       expect([...state.storage.kv.list({ prefix: 'owner:effect:' })]).toEqual([]);
     } finally { fetcher.mockRestore(); logs.mockRestore(); await state.storage.deleteAlarm(); }

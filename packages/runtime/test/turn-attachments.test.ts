@@ -10,7 +10,9 @@ import { deliverTurnAttachments, turnAttachmentBook, type AttachmentSend } from 
 import { EffectNotAppliedError, EffectUnknownError, ownerEffectLedger } from '../src/channels/owner-effect-ledger';
 import { deliverWhatsAppFile, whatsappOutboundKind, type WhatsAppOutboundFile } from '../src/channels/whatsapp-api';
 import { TelegramOwnerListener, type TelegramOwnerApi } from '../src/channels/telegram-listener';
-import { TelegramPollingAdapter } from '../src/channels/telegram-polling';
+import { TelegramPollingAdapter, type TelegramInboundTurn } from '../src/channels/telegram-polling';
+import { telegramTurnEnvelope } from '../src/channels/telegram-turn';
+import type { RunEffectScope } from '../src/channels/run-effect-scope';
 
 const id = (n: number) => `abcdefab-cdef-4abc-8abc-${n.toString(16).padStart(12, '0')}`;
 const PDF = new TextEncoder().encode('%PDF-1.4 plan');
@@ -174,4 +176,13 @@ describe('the listener hands queued files over only after the reply is out', () 
       deliverAttachments: async () => { throw new EffectUnknownError(); } });
     await expect(listener.pollOnce(owned(9), 0)).rejects.toBeInstanceOf(EffectUnknownError);
   });
+});
+
+it('the prompt says attachments are available only on a WhatsApp turn whose run scope lets the workspace open', () => {
+  const turn = { updateId: 1, chatId: OWNER, senderId: OWNER, messageId: 1, sentAt: null, text: 'send me the plan' } as unknown as TelegramInboundTurn;
+  const runScope = { runId: 'run', attempt: '1', deadline: Date.now() + 60_000, signal: new AbortController().signal, admit() {}, commit: <T>(work: () => T) => work() } satisfies RunEffectScope;
+  const attachments = (surface: string, scoped: boolean) => telegramTurnEnvelope(scoped ? { ...turn, runScope } : turn, surface).presentation?.delivery.attachments;
+  expect(attachments('whatsapp', false)).toBe(false);
+  expect(attachments('whatsapp', true)).toBe(true);
+  expect(attachments('telegram', true)).toBe(false);
 });

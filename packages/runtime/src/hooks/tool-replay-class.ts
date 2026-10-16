@@ -21,7 +21,7 @@ const NO_HANDLER = 'no live handler in this tree (see TOOL_CLAIM_EFFECT)';
 
 export const TOOL_REPLAY_CLASS: Readonly<Record<ToolName, ToolReplayRow>> = {
   send_progress_note: unknown('sends a note straight to the owner chat with no send key; a re-run sends it again'),
-  attach_file: {replay:'provider_idempotent',basis:'The tool only queues the file for its turn; the send runs after the reply under an effect intent keyed by owner, turn and file revision, and an unknown outcome is never resent.',evidence:{file:'channels/turn-attachments.ts',needle:'const operationId = `attach:'}},
+  attach_file: unknown('queues the file; the send after the reply is keyed only in the local effect ledger, WhatsApp cannot be asked whether an upload landed, so an unknown send is never retried'),
   send_console_link: unknown('mints the one console grant and sends it; a re-run voids the link already sent, so it never auto-retries'),
   use_mac: {replay:'provider_idempotent',basis:'The stable request_id reaches DeviceCommandStore and never reissues a started Mac effect.',evidence:{file:'tools/live/use-mac.ts',needle:'request_id'}},
   get_crs: read(), get_health: read(), query_calendar: read(), get_communication: read(), search_communication: read(), search_contacts: read(),
