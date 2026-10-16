@@ -222,6 +222,21 @@ export const healthScoresUnavailableV1Schema = z.strictObject({
 });
 export const healthScoresResponseV1Schema = z.union([healthScoresV1Schema, healthScoresUnavailableV1Schema]);
 
+// The detail chart's window: local days from and to, inclusive, at most 31 of them.
+export const HEALTH_SCORES_HISTORY_MAX_DAYS_V1 = 31;
+const windowDays = (from: string, to: string): number => (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000 + 1;
+const inWindow = (window: { from: string; to: string }): boolean => windowDays(window.from, window.to) >= 1 && windowDays(window.from, window.to) <= HEALTH_SCORES_HISTORY_MAX_DAYS_V1;
+export const healthScoresHistoryQueryV1Schema = z.strictObject({ from: healthDayV1Schema, to: healthDayV1Schema })
+  .refine(inWindow, { error: `from to to spans 1 to ${HEALTH_SCORES_HISTORY_MAX_DAYS_V1} days`, path: ['to'] });
+// Each day is the same row /health/scores answers for it, oldest first. A day with no row is left out, so the chart shows a
+// gap rather than a zero.
+export const healthScoresHistoryV1Schema = z.strictObject({
+  state: z.literal('available'), from: healthDayV1Schema, to: healthDayV1Schema, days: z.array(healthScoresV1Schema).max(HEALTH_SCORES_HISTORY_MAX_DAYS_V1),
+}).refine(inWindow, { error: `from to to spans 1 to ${HEALTH_SCORES_HISTORY_MAX_DAYS_V1} days`, path: ['to'] })
+  .refine(history => history.days.every((row, i) => row.day >= history.from && row.day <= history.to && (i === 0 || history.days[i - 1]!.day < row.day)),
+    { error: 'days fall inside the window, oldest first, once each', path: ['days'] });
+export const healthScoresHistoryResponseV1Schema = z.union([healthScoresHistoryV1Schema, healthScoresUnavailableV1Schema]);
+
 // The runtime may attach a short message; a client acts on `error` only.
 export const healthApiErrorV1Schema = z.strictObject({
   error: z.enum(['invalid_request', 'not_linked', 'consent_required', 'consent_withdrawn', 'epoch_conflict', 'idempotency_conflict', 'anchor_conflict', 'sample_conflict', 'unavailable']),
