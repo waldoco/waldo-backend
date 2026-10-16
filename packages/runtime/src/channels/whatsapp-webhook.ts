@@ -1,4 +1,6 @@
-import { ownerDirectory, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
+import { consoleAuth } from '../identity/console-auth';
+import { hex, ownerDirectory, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
+import { newWhatsAppLinkToken, whatsappLinkDirectory, whatsappLinkTokenHash, whatsappLinkUrl, type WhatsAppLinkDirectory } from '../identity/whatsapp-link';
 import { createWhatsAppCaller, sendWhatsAppText, whatsappForwarded } from './whatsapp-api';
 
 export type WhatsAppWebhookEnv = Readonly<{
@@ -7,7 +9,31 @@ export type WhatsAppWebhookEnv = Readonly<{
   WHATSAPP_APP_SECRET?: string;
   WHATSAPP_ACCESS_TOKEN?: string;
   WHATSAPP_PHONE_NUMBER_ID?: string;
+  // Where a sender with no Waldo account is sent (the waitlist). Unset, the reply carries no link.
+  WHATSAPP_ONBOARDING_URL?: string;
 }> & OwnerDirectoryEnv;
+
+// Text-first linking for a sender with no owner: the link request and a per-sender reply throttle, both held by the
+// directory. Absent (no directory configured), unlinked senders get no reply.
+export type WhatsAppTextFirst = Readonly<{ links: WhatsAppLinkDirectory; throttle(key: string, limit: number, windowSeconds: number): Promise<boolean> }>;
+const textFirstFromEnv = (env: WhatsAppWebhookEnv): WhatsAppTextFirst | null => {
+  const links = whatsappLinkDirectory(env), auth = consoleAuth(env);
+  return links && auth ? { links, throttle: (key, limit, windowSeconds) => auth.throttle(key, limit, windowSeconds) } : null;
+};
+// A sender keeps texting while they read the reply; three link replies an hour is enough to tap one.
+const TEXT_FIRST_REPLIES = 3;
+const TEXT_FIRST_WINDOW_SECONDS = 60 * 60;
+
+const textFirstReply = async (sender: string, origin: string, env: WhatsAppWebhookEnv, textFirst: WhatsAppTextFirst): Promise<string | null> => {
+  const senderKey = hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`whatsapp.${sender}`)));
+  if (!(await textFirst.throttle(`walink.${senderKey}`, TEXT_FIRST_REPLIES, TEXT_FIRST_WINDOW_SECONDS))) return null;
+  const token = newWhatsAppLinkToken();
+  const opened = await textFirst.links.open(sender, await whatsappLinkTokenHash(token));
+  if (opened === 'opened') return `Tap to link this WhatsApp number to your Waldo. You'll sign in and confirm the number; the link works once, for 10 minutes: ${whatsappLinkUrl(origin, token)}`;
+  if (opened === 'linked') return null;
+  const waitlist = /^https:\/\/[^\s]+$/.test(env.WHATSAPP_ONBOARDING_URL ?? '') ? ` Join the waitlist: ${env.WHATSAPP_ONBOARDING_URL}` : '';
+  return `Waldo is invite-only for now.${waitlist}\n\nAlready on Waldo? Link WhatsApp from your console.`;
+};
 
 export const WHATSAPP_WEBHOOK_PATH = '/whatsapp/webhook';
 
@@ -58,12 +84,14 @@ const linkCode = (body: WaBody, senderId: string): string | null => {
 
 // The webhook verifies Meta's signature, resolves which owner a WhatsApp sender belongs to and
 // wakes only that owner's Durable Object. Status callbacks are acknowledged and dropped.
-// A sender with no owner can only redeem a one-time link code ("waldo CODE") from the console.
+// A sender with no owner can redeem a one-time console link code ("waldo CODE"); any other message gets the
+// text-first reply: a one-tap sign-in link when one owner has this number on file, otherwise the waitlist.
 export const handleWhatsAppWebhook = async (
   request: Request,
   env: WhatsAppWebhookEnv,
   waitUntil: (work: Promise<unknown>) => void,
   directory: OwnerDirectory = ownerDirectory(env),
+  textFirst: WhatsAppTextFirst | null = textFirstFromEnv(env),
 ): Promise<Response> => {
   if (!env.OWNER_DO) return new Response('not found', { status: 404 });
   const url = new URL(request.url);
@@ -101,7 +129,18 @@ export const handleWhatsAppWebhook = async (
       continue;
     }
     const code = linkCode(payload, sender);
-    if (!code || !env.WHATSAPP_ACCESS_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) continue;
+    if (!env.WHATSAPP_ACCESS_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) continue;
+    if (!code) {
+      if (!textFirst) continue;
+      // The reply goes straight to the sender: there is no owner yet, so no owner gate applies. It never asks for a
+      // link preview, and the link itself is never logged.
+      deferred.push((async () => {
+        const reply = await textFirstReply(sender, origin, env, textFirst);
+        console.log(JSON.stringify({ hop: 'whatsapp_text_first', ok: true, replied: reply !== null }));
+        if (reply) await sendWhatsAppText(createWhatsAppCaller(env.WHATSAPP_ACCESS_TOKEN!, env.WHATSAPP_PHONE_NUMBER_ID!), sender, reply);
+      })().catch((error: unknown) => console.log(JSON.stringify({ hop: 'whatsapp_text_first', ok: false, error: error instanceof Error ? error.name : 'unknown' }))));
+      continue;
+    }
     deferred.push((async () => {
       const linked = await directory.redeem('whatsapp', sender, code).catch(() => null);
       const call = createWhatsAppCaller(env.WHATSAPP_ACCESS_TOKEN!, env.WHATSAPP_PHONE_NUMBER_ID!);
