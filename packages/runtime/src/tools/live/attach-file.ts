@@ -27,9 +27,7 @@ export const attachFileHandler = (deps: Readonly<{
     if (ctx.trigger !== 'user_message' || ctx.ownerInitiated !== true || !ctx.turnId) return result({ queued: false, reason: 'not_owner_turn' });
     let meta: Awaited<ReturnType<WorkspaceStore['stat']>>;
     try {
-      const store = await deps.open(ctx);
-      ctx.runScope?.admit();
-      meta = await store.stat(args.file_id);
+      meta = await (await deps.open(ctx)).stat(args.file_id);
     } catch (error) {
       if (error instanceof WorkspaceError && error.code === 'invalid') return result({ queued: false, reason: 'not_found' });
       if (ctx.runScope && error instanceof ClosedRunError) throw error;

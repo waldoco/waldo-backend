@@ -7,9 +7,10 @@ import { workspaceDelivery, type WorkspaceDeliveryOptions } from './workspace-de
 // A workspace file the model queued to go out with its turn's reply. Names the file only; the bytes are read at send time.
 export type TurnAttachment = Readonly<{ file_id: string; revision: number; filename: string; mime: string }>;
 export type OutboundFile = Readonly<{ bytes: Uint8Array; mime: string; filename: string }>;
+// degraded: a link text went out instead of the file. held: the surface holds that link text for later; nothing was delivered.
 export type AttachmentOutcome =
   | Readonly<{ status: 'sent'; providerMessageId: string }>
-  | Readonly<{ status: 'degraded'; reason: string }>
+  | Readonly<{ status: 'degraded' | 'held'; reason: string }>
   | Readonly<{ status: 'blocked' }>;
 // A surface that carries files. A file it cannot carry goes as a text built from the fallback, which is read only then.
 export type AttachmentSend = (file: OutboundFile, fallback: () => Promise<string>) => Promise<AttachmentOutcome>;
@@ -57,7 +58,7 @@ export const deliverTurnAttachments = async (attachments: readonly TurnAttachmen
         sendStarted = true;
         const outcome = await deps.send({ bytes, mime: attachment.mime, filename: attachment.filename }, fallback);
         if (outcome.status === 'blocked') { blocked = true; throw new Error('attachment send blocked'); }
-        return { provider_id: outcome.status === 'sent' ? outcome.providerMessageId : `degraded:${outcome.reason}`, result: outcome };
+        return { provider_id: outcome.status === 'sent' ? outcome.providerMessageId : `${outcome.status}:${outcome.reason}`, result: outcome };
       },
       // Only this process's own attempt can say nothing left; an attempt found on restart stays unknown.
       reconcile: async () => ({ status: dispatched && (!sendStarted || blocked) ? 'not_applied' : 'unknown' }),

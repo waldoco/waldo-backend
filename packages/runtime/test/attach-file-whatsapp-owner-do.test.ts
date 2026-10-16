@@ -2,8 +2,9 @@
 // upload. Graph, the signed directory RPC and R2 are local. The model writes a file, attaches it and replies; the
 // document goes out after the reply, once, under one effect intent.
 import { env, runInDurableObject } from 'cloudflare:test';
-import { expect, it, vi } from 'vitest';
+import { beforeEach, expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
+import { WA_HELD_PREFIX } from '../src/channels/whatsapp-window';
 import { toolOutput } from './fixtures/tool-output';
 
 type RequestBody = { instructions?: string; tools?: { name?: string }[]; input: string | { type?: string; call_id?: string; output?: string }[]; text?: { format?: { name?: string } } };
@@ -34,18 +35,23 @@ vi.mock('openai', () => ({ default: class {
 const SUBJECT = '15550001111';
 const OWNER = '10000000-0000-0000-0000-000000000001';
 
-it('a WhatsApp owner asks for a file: the reply goes out, then the file as a document, with one effect record', async () => {
-  const name = 'attach-file-whatsapp-e2e';
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+beforeEach(() => { model.requests = []; });
+
+type GraphCall = { type: string; text?: string; document?: { id: string; filename: string }; upload?: { type: string; filename: string; size: number } };
+type Owner = Readonly<{ state: DurableObjectState; graph: GraphCall[]; attachEffects(): Array<{ state: string; receipt?: { provider_id: string } }> }>;
+// One owner asks for the plan in a message sent `ageMs` ago, through the real admission path. unlinkOnFileRead unlinks
+// WhatsApp when the file's bytes are read after the attach was queued (the delivery step), closing the run mid-delivery.
+const whatsappOwner = (name: string, ageMs: number, check: (owner: Owner) => void, unlinkOnFileRead = false) =>
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const bytes = new Map<string, Uint8Array>();
-    const graph: Array<{ type: string; text?: string; document?: { id: string; filename: string }; upload?: { type: string; filename: string; size: number } }> = [];
+    const graph: GraphCall[] = [];
     const mapping = { owner_id: OWNER, environment: 'fixture', namespace: 'fixture-owner-namespace', do_name: name, do_id: state.id.toString(), state_version: 0, mapping_version: 1 };
     const fixtureEnv = { ...env, OPENAI_API_KEY: 'fictional-model-key', WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id',
       WALDO_ENVIRONMENT: mapping.environment, WALDO_OWNER_DO_NAMESPACE: mapping.namespace,
       SUPABASE_PROJECT_URL: 'https://signed-metadata.invalid', SUPABASE_PUBLISHABLE_KEY: 'fictional-publishable', WALDO_ROUTER_HMAC_SECRET: 'fictional-router-secret',
       ARTIFACTS: {
         put: async (key: string, value: Uint8Array) => { bytes.set(key, value.slice()); return null; },
-        get: async (key: string) => { const value = bytes.get(key); return value ? { arrayBuffer: async () => value.slice().buffer } : null; },
+        get: async (key: string) => { if (unlinkOnFileRead && outputOf('attach')) state.storage.kv.put('whatsapp_unlinked', true); const value = bytes.get(key); return value ? { arrayBuffer: async () => value.slice().buffer } : null; },
         delete: async (key: string) => { bytes.delete(key); },
       } as unknown as R2Bucket,
     };
@@ -68,23 +74,43 @@ it('a WhatsApp owner asks for a file: the reply goes out, then the file as a doc
     const instance = new OwnerDO(state, fixtureEnv);
     try {
       const response = await instance.fetch(new Request('https://telegram-owner/whatsapp-admit', {
-        method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT, 'x-waldo-do-name': name },
-        body: JSON.stringify({ messages: [{ from: SUBJECT, id: 'wamid.ask', timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: 'Write up the plan and send me the file.' } }] }),
+        method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT, 'x-waldo-do-name': name, 'x-waldo-origin': 'https://waldo.example' },
+        body: JSON.stringify({ messages: [{ from: SUBJECT, id: 'wamid.ask', timestamp: String(Math.floor((Date.now() - ageMs) / 1000)), type: 'text', text: { body: 'Write up the plan and send me the file.' } }] }),
       }));
       expect(response.status).toBe(200);
       await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
-      const turn = model.requests.find(request => request.tools?.some(tool => tool.name === 'attach_file'));
-      expect(turn?.instructions).toContain('Attachment sending: available');
       expect(outputOf('attach')).toMatchObject({ ok: true, data: { queued: true, filename: 'plan.txt' } });
-      expect(graph).toEqual([
-        { type: 'text', text: expect.stringMatching(/^Here is the plan; the file follows\./) },
-        { type: 'upload', upload: { type: 'text/plain', filename: 'plan.txt', size: 'Plan for Friday\n'.length } },
-        { type: 'document', document: { id: 'media.1', filename: 'plan.txt' } },
-      ]);
-      // The reply's receipt trail names the write, never the attachment: the file was only queued when the reply was written.
-      expect(graph[0]!.text).not.toMatch(/attach|sent/i);
-      const effects = [...state.storage.kv.list<{ tool: string; state: string; receipt?: { provider_id: string } }>({ prefix: 'owner:effect:' })].map(([, row]) => row).filter(row => row.tool === 'attach_file');
-      expect(effects).toMatchObject([{ state: 'done', receipt: { provider_id: 'wamid.out.3' } }]);
+      check({ state, graph, attachEffects: () => [...state.storage.kv.list<{ tool: string; state: string; receipt?: { provider_id: string } }>({ prefix: 'owner:effect:' })].map(([, row]) => row).filter(row => row.tool === 'attach_file') });
     } finally { network.mockRestore(); await state.storage.deleteAlarm(); }
   });
+
+it('a WhatsApp owner asks for a file: the reply goes out, then the file as a document, with one effect record', async () => {
+  await whatsappOwner('attach-file-whatsapp-e2e', 0, ({ graph, attachEffects }) => {
+    const turn = model.requests.find(request => request.tools?.some(tool => tool.name === 'attach_file'));
+    expect(turn?.instructions).toContain('Attachment sending: available');
+    expect(graph).toEqual([
+      { type: 'text', text: expect.stringMatching(/^Here is the plan; the file follows\./) },
+      { type: 'upload', upload: { type: 'text/plain', filename: 'plan.txt', size: 'Plan for Friday\n'.length } },
+      { type: 'document', document: { id: 'media.1', filename: 'plan.txt' } },
+    ]);
+    // The file was only queued when the reply was written, so the reply never claims it.
+    expect(graph[0]!.text).not.toMatch(/attach|sent/i);
+    expect(attachEffects()).toMatchObject([{ state: 'done', receipt: { provider_id: 'wamid.out.3' } }]);
+  });
+});
+
+it('a message answered after the 24-hour window closed: the reply is held, no bytes leave, and the link is held behind it', async () => {
+  await whatsappOwner('attach-file-whatsapp-window-closed', 25 * 60 * 60 * 1000, ({ state, graph, attachEffects }) => {
+    expect(graph.filter(call => call.type === 'upload' || call.type === 'document')).toEqual([]);
+    const held = [...state.storage.kv.list<{ body: { text: string } }>({ prefix: WA_HELD_PREFIX })].map(([, record]) => record.body.text);
+    expect(held).toEqual([expect.stringMatching(/^Here is the plan; the file follows\./), expect.stringMatching(/^Here is plan\.txt\. Open it here: https:\/\/waldo\.example\/console\/workspace\/file\?id=[^&]+&revision=1$/)]);
+    expect(attachEffects()).toMatchObject([{ state: 'done', receipt: { provider_id: 'held:window_closed' } }]);
+  });
+});
+
+it('a run closed while the file is being read sends no bytes, records the file as not sent, and tells no unlinked sender', async () => {
+  await whatsappOwner('attach-file-whatsapp-closed-run', 0, ({ graph, attachEffects }) => {
+    expect(graph).toEqual([{ type: 'text', text: expect.stringMatching(/^Here is the plan; the file follows\./) }]);
+    expect(attachEffects()).toMatchObject([{ state: 'rejected' }]);
+  }, true);
 });

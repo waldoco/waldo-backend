@@ -10,6 +10,7 @@ import { deliverTurnAttachments, turnAttachmentBook, type AttachmentSend } from 
 import { EffectNotAppliedError, EffectUnknownError, ownerEffectLedger } from '../src/channels/owner-effect-ledger';
 import { deliverWhatsAppFile, whatsappOutboundKind, type WhatsAppOutboundFile } from '../src/channels/whatsapp-api';
 import { TelegramOwnerListener, type TelegramOwnerApi } from '../src/channels/telegram-listener';
+import { WA_HELD_PREFIX, WA_LAST_INBOUND_KEY, WHATSAPP_HELD, deliverWhatsAppFileInWindow } from '../src/channels/whatsapp-window';
 import { TelegramPollingAdapter, type TelegramInboundTurn } from '../src/channels/telegram-polling';
 import { telegramTurnEnvelope } from '../src/channels/telegram-turn';
 import { ClosedRunError, type RunEffectScope } from '../src/channels/run-effect-scope';
@@ -75,6 +76,52 @@ const whatsappLike = (sent: Array<{ method: string; file?: WhatsAppOutboundFile;
     sent.push({ method, ...b });
     return blocked ? undefined : { messages: [{ id: 'wamid.doc' }] };
   }, 15550001111, file, fallback);
+
+// The service window decides whether bytes may leave: a file goes only while the window is open and nothing is held,
+// so it never lands before a reply the window layer is still holding.
+describe('a WhatsApp file and the 24-hour window', () => {
+  const kvWith = (lastInbound: number | undefined, held = false) => {
+    const map = new Map<string, unknown>(lastInbound === undefined ? [] : [[WA_LAST_INBOUND_KEY, lastInbound]]);
+    if (held) map.set(`${WA_HELD_PREFIX}000000000001`, { heldAt: 0, body: { text: 'the reply' } });
+    return { get: <T>(key: string) => map.get(key) as T | undefined, put: (key: string, value: unknown) => { map.set(key, value); }, delete: (key: string) => map.delete(key),
+      list: <T>({ prefix }: { prefix: string }) => [...map].filter(([key]) => key.startsWith(prefix)) as [string, T][] };
+  };
+  const pdf: WhatsAppOutboundFile = { bytes: PDF, mime: 'application/pdf', filename: 'plan.pdf' };
+  const recording = (answer: (method: string) => unknown) => {
+    const calls: Array<{ method: string; text?: string }> = [];
+    return { calls, call: async (method: string, body: object) => { calls.push({ method, ...(method === 'sendMessage' ? { text: (body as { text: string }).text } : {}) }); return answer(method); } };
+  };
+  const now = Date.now();
+
+  it('outside the window no bytes leave: the link text goes to the window layer, which holds it behind the reply', async () => {
+    const { calls, call } = recording(() => WHATSAPP_HELD);
+    expect(await deliverWhatsAppFileInWindow(kvWith(now - 25 * 60 * 60 * 1000), now, call, 15550001111, pdf, async () => 'Open it here: https://waldo.example/f')).toEqual({ status: 'held', reason: 'window_closed' });
+    expect(calls).toEqual([{ method: 'sendMessage', text: 'Here is plan.pdf. Open it here: https://waldo.example/f' }]);
+  });
+
+  it('inside the window, a reply already held keeps the file behind it too', async () => {
+    const { calls, call } = recording(() => WHATSAPP_HELD);
+    expect(await deliverWhatsAppFileInWindow(kvWith(now, true), now, call, 15550001111, pdf, async () => 'Open it here: https://waldo.example/f')).toEqual({ status: 'held', reason: 'window_closed' });
+    expect(calls.map(c => c.method)).toEqual(['sendMessage']);
+  });
+
+  it('inside the window with nothing held the document goes out', async () => {
+    const { calls, call } = recording(() => ({ messages: [{ id: 'wamid.doc' }] }));
+    expect(await deliverWhatsAppFileInWindow(kvWith(now), now, call, 15550001111, pdf, async () => 'unused')).toEqual({ status: 'sent', providerMessageId: 'wamid.doc' });
+    expect(calls.map(c => c.method)).toEqual(['sendDocument']);
+  });
+
+  it('a type WhatsApp cannot carry is a link either way, and a blocked link is blocked', async () => {
+    const md: WhatsAppOutboundFile = { bytes: PDF, mime: 'text/markdown', filename: 'plan.md' };
+    const held = recording(() => WHATSAPP_HELD);
+    expect(await deliverWhatsAppFileInWindow(kvWith(undefined), now, held.call, 15550001111, md, async () => 'Open it here: https://waldo.example/f')).toEqual({ status: 'held', reason: 'unsupported_type' });
+    expect(held.calls).toEqual([{ method: 'sendMessage', text: "WhatsApp can't carry plan.md (this file type). Open it here: https://waldo.example/f" }]);
+    const sent = recording(() => ({ messages: [{ id: 'wamid.text' }] }));
+    expect(await deliverWhatsAppFileInWindow(kvWith(now), now, sent.call, 15550001111, md, async () => 'link')).toEqual({ status: 'degraded', reason: 'unsupported_type' });
+    const blocked = recording(() => undefined);
+    expect(await deliverWhatsAppFileInWindow(kvWith(undefined), now, blocked.call, 15550001111, pdf, async () => 'link')).toEqual({ status: 'blocked' });
+  });
+});
 
 const delivering = (name: string, run: (state: DurableObjectState) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`turn-attachments-${name}-${crypto.randomUUID()}`)), async (_instance, state) => run(state));

@@ -149,8 +149,8 @@ import { appThreadsRequest, askThreadTitle, nameThread, recallReach, redactThrea
 import { stableJson } from '../context-composer/canonical';
 import { APP_CONNECT_GUIDANCE, appApprovalLink, appCaller } from './surfaces/app';
 import { appApprovalsRequest } from './app-approvals';
-import { WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, deliverWhatsAppFile, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
-import { deliverHeldWhatsApp, recordWhatsAppInbound, whatsappTemplateConfig, whatsappWindowCaller } from './whatsapp-window';
+import { WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
+import { deliverHeldWhatsApp, deliverWhatsAppFileInWindow, recordWhatsAppInbound, whatsappTemplateConfig, whatsappWindowCaller } from './whatsapp-window';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
 import { sendMessageHandler } from '../tools/live/messaging';
@@ -2745,7 +2745,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // Files go out with the reply only where the reply is a direct send that can carry them. Elsewhere the model shares
     // the owner link from the file's receipt.
     const attachmentRoutes: Record<ChannelKind, AttachmentSend | null> = {
-      whatsapp: (file, fallback) => deliverWhatsAppFile(routedCall, owner, file, fallback),
+      whatsapp: (file, fallback) => deliverWhatsAppFileInWindow(identity, Date.now(), routedCall, owner, file, fallback),
       telegram: null, imessage: null, app: null,
     };
     const attachmentRoute = attachmentRoutes[channel];

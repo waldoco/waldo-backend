@@ -172,14 +172,20 @@ export const createWhatsAppMediaUploader = (token: string, phoneNumberId: string
 };
 
 type Caller = (method: string, body: object) => Promise<unknown>;
+// Why the owner got a link text instead of the file: WhatsApp cannot carry it, or the service window was closed.
+export type WhatsAppFileLinkReason = WhatsAppFileRefusal | 'window_closed';
+// degraded: the link text was sent. held: the window layer holds the link text until the owner's next message.
 export type WhatsAppFileOutcome =
   | Readonly<{ status: 'sent'; providerMessageId: string }>
-  | Readonly<{ status: 'degraded'; reason: WhatsAppFileRefusal }>
+  | Readonly<{ status: 'degraded'; reason: WhatsAppFileLinkReason }>
+  | Readonly<{ status: 'held'; reason: WhatsAppFileLinkReason }>
   | Readonly<{ status: 'blocked' }>;
 
 const REFUSAL_WORDS: Readonly<Record<WhatsAppFileRefusal, string>> = {
   unsupported_type: 'this file type', too_large: 'a file this large', empty: 'an empty file', invalid_filename: 'this file name',
 };
+export const whatsappFileLinkText = (file: WhatsAppOutboundFile, reason: WhatsAppFileLinkReason, link: string): string =>
+  reason === 'window_closed' ? `Here is ${file.filename}. ${link}` : `WhatsApp can't carry ${file.filename} (${REFUSAL_WORDS[reason]}). ${link}`;
 
 // Sends one file through the owner's gated, egress-guarded caller. A file WhatsApp cannot carry is a
 // definite refusal made before any upload, so the owner gets a plain text instead, naming the file
@@ -191,7 +197,7 @@ export const deliverWhatsAppFile = async (call: Caller, chatId: number, file: Wh
     ack = await call('sendDocument', { chat_id: chatId, file });
   } catch (error) {
     if (!(error instanceof WhatsAppFileRefused)) throw error;
-    const sent = await call('sendMessage', { chat_id: chatId, text: `WhatsApp can't carry ${file.filename} (${REFUSAL_WORDS[error.reason]}). ${await fallback()}` });
+    const sent = await call('sendMessage', { chat_id: chatId, text: whatsappFileLinkText(file, error.reason, await fallback()) });
     return sent === undefined ? { status: 'blocked' } : { status: 'degraded', reason: error.reason };
   }
   if (ack === undefined) return { status: 'blocked' };
