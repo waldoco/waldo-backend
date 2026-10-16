@@ -106,7 +106,7 @@ describe('a card whose newest message trips the decoder', () => {
     const outcome = await respond('card-newest-withheld', `${card}\nLink: ${link}`);
     expect(outcome.reply).toBe('Morning card.');
     const sent = outcome.requests.at(-1)!.request.messages.at(-1)!.content;
-    expect(sent).toBe(`${card}\nLink: [encoded text withheld]`);
+    expect(sent).toBe(`${card}\nLink: https:[encoded text withheld]`);
     const hop = outcome.logs.find(entry => entry.hop === 'llm_reply');
     expect(hop).toMatchObject({ ok: true, shape: { context: { scribe_withheld: 1 } } });
   });
@@ -116,6 +116,19 @@ describe('a card whose newest message trips the decoder', () => {
   it('still fails the card closed for a secret inside the withheld link', async () => {
     const secret = `sk-proj-${'Ab1'.repeat(10)}`;
     const outcome = await respond('card-newest-secret', `${card}\nLink: ${link.replace('a%2520b', secret)}`);
+    expect(outcome.requests).toHaveLength(0);
+    expect(outcome.error).toContain('secret_leak');
+  });
+
+  // A secret pattern spanning whitespace, its label encoded and its value plain: withholding the label must not send
+  // the value.
+  const value = 'Zq9xWv3LmN8pRt2YkB7sHd4F';
+  it.each([
+    ['bearer', `${btoa(encodeURIComponent('Authorization: Bearer'))} ${value}`],
+    ['api-key', `${btoa(encodeURIComponent('config api_key:'))} ${value}`],
+    ['pem', `${btoa(encodeURIComponent('-----BEGIN PRIVATE KEY-----'))}\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----`],
+  ])('still fails the card closed when only the %s label is encoded', async (name, fragment) => {
+    const outcome = await respond(`card-newest-split-${name}`, `${card}\n${fragment}\nLink: ${link}`);
     expect(outcome.requests).toHaveLength(0);
     expect(outcome.error).toContain('secret_leak');
   });

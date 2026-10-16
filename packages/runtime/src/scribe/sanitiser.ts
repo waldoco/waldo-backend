@@ -1222,53 +1222,117 @@ export function sanitise(raw: SanitiseInput): SanitiseResult {
 }
 
 export const ENCODED_SPAN_MARKER = '[encoded text withheld]';
-// A withheld span is read deeper than the scan's own two passes before it may be dropped: what it hides must be proven
-// free of a canary or secret, never merely skipped. A span that does not finish decoding inside this bound fails closed.
+// A withheld unit is read deeper than the scan's own two passes before it may be dropped: what it hides must be proven
+// free of a canary, a secret and (where this taint may not carry one) a health value, never merely skipped. A unit
+// that does not finish decoding inside these bounds fails closed.
 const WITHHELD_SCAN_PASSES = 8;
 const WITHHELD_SCAN_BUDGET = WITHHELD_SCAN_PASSES * 4;
+const WITHHELD_SCAN_VARIANTS = 64;
+const WITHHELD_GREEDY_STEPS = 8;
+// Encoded spans never contain whitespace or these JSON delimiters, and decoding never removes one, so a run between
+// them is a unit no decode reaches past. Splitting on them keeps a compact JSON field's neighbours out of a withheld
+// link, and the marker, which starts and ends with a delimiter, cannot join its neighbours into a new token.
+const WITHHOLD_UNIT = /[^\s",:{}[\]]+/g;
+const WITHHELD_HEALTH_PATTERNS: readonly RegExp[] = [...RAW_SENSOR_PATTERNS, ...DERIVED_SCORE_PATTERNS, ...HEALTH_FREE_TEXT];
 
 export type WithheldText =
   | Readonly<{ ok: true; text: string; withheld: number }>
-  | Readonly<{ ok: false; reason: 'canary_leak' | 'secret_leak' | 'invalid_payload' }>;
+  | Readonly<{ ok: false; reason: 'canary_leak' | 'secret_leak' | 'health_value_leak' | 'invalid_payload' }>;
 
-// The provider's degrade for its newest message when the decoder denies it (owner ruling: a shape false positive on
-// the owner's own context degrades, it does not fail). It does not decide what passes: the caller re-runs the full
-// sanitise on the result. Decoding never joins characters across whitespace, so a non-whitespace token is the unit:
-// first the tokens that fail on their own, then, if the text as a whole still fails (siblings sharing the decode
-// budget), every token that decodes more than one layer. A canary or secret anywhere in a withheld token is a hard
-// denial of the whole text.
-export function withholdUndecodableSpans(text: string, canaryTokens: readonly string[]): WithheldText {
+// The provider's degrade for the newest message headed to the model when the decoder denies it (owner ruling: a shape
+// false positive degrades, it does not fail). It runs at any taint, since withheld bytes never reach the model, and it
+// does not decide what passes: the caller re-runs the full sanitise on the result.
+// - Picking: the units that fail on their own; then, if the text as a whole still fails (siblings sharing the decode
+//   budget), units that decode more than one layer, largest first, until it passes.
+// - Before anything is dropped, the whole message is scanned with every encoded unit replaced in place by each of its
+//   decoded views (withheld units read eight layers deep), so a pattern spanning a withheld unit and its plain
+//   neighbour (a bearer label and its token, a key header and its body) is seen whole. A canary or secret anywhere
+//   denies the whole text, and so does a health value reaching into a withheld unit at a taint that may not carry
+//   one: the rule the trim applies to content it does not send.
+export function withholdUndecodableSpans(text: string, canaryTokens: readonly string[], sourceTaint: SourceTaint): WithheldText {
   if (!decodedViews(text).invalid) return { ok: true, text, withheld: 0 };
-  const tokens = Array.from(text.matchAll(/\S+/g), (match) => ({ start: match.index, value: match[0] }))
-    .filter((token) => encodedSpans(token.value).length > 0)
-    .map((token) => ({ ...token, decoded: decodedViews(token.value) }));
-  const withhold = (picked: readonly (typeof tokens)[number][]): string => {
+  const units = Array.from(text.matchAll(WITHHOLD_UNIT), (match) => ({ start: match.index, value: match[0] }))
+    .filter((unit) => encodedSpans(unit.value).length > 0)
+    .map((unit) => ({ ...unit, decoded: decodedViews(unit.value) }));
+  type Unit = (typeof units)[number];
+  const withhold = (picked: ReadonlySet<Unit>): string => {
     let output = '';
     let cursor = 0;
-    for (const token of picked) {
-      output += text.slice(cursor, token.start) + ENCODED_SPAN_MARKER;
-      cursor = token.start + token.value.length;
+    for (const unit of units) {
+      if (!picked.has(unit)) continue;
+      output += text.slice(cursor, unit.start) + ENCODED_SPAN_MARKER;
+      cursor = unit.start + unit.value.length;
     }
     return output + text.slice(cursor);
   };
-  let picked = tokens.filter((token) => token.decoded.invalid);
-  let candidate = withhold(picked);
-  if (decodedViews(candidate).invalid) {
-    picked = tokens.filter((token) => token.decoded.invalid || token.decoded.depth >= 2);
-    candidate = withhold(picked);
-    if (picked.length === 0 || decodedViews(candidate).invalid) return { ok: false, reason: 'invalid_payload' };
+  const picked = new Set(units.filter((unit) => unit.decoded.invalid));
+  if (decodedViews(withhold(picked)).invalid) {
+    const nested = units
+      .filter((unit) => !picked.has(unit) && unit.decoded.depth >= 2)
+      .sort((left, right) => right.value.length - left.value.length);
+    for (const [step, unit] of nested.entries()) {
+      if (step === WITHHELD_GREEDY_STEPS) {
+        for (const rest of nested.slice(step)) picked.add(rest);
+        break;
+      }
+      picked.add(unit);
+      if (!decodedViews(withhold(picked)).invalid) break;
+    }
   }
-  const canaries = canaryTokens.map((token) => token.toLowerCase());
-  for (const token of picked) {
-    const deep = decodedViews(token.value, WITHHELD_SCAN_PASSES, WITHHELD_SCAN_BUDGET);
+  const candidate = withhold(picked);
+  if (picked.size === 0 || decodedViews(candidate).invalid) return { ok: false, reason: 'invalid_payload' };
+
+  const views = new Map<Unit, readonly string[]>();
+  for (const unit of units) {
+    if (!picked.has(unit)) {
+      views.set(unit, unit.decoded.views);
+      continue;
+    }
+    const deep = decodedViews(unit.value, WITHHELD_SCAN_PASSES, WITHHELD_SCAN_BUDGET);
     if (deep.invalid) return { ok: false, reason: 'invalid_payload' };
-    if (deep.views.some((view) => canaries.some((canary) => view.toLowerCase().includes(canary)))) return { ok: false, reason: 'canary_leak' };
-    if (deep.views.some((view) => SECRET_PATTERNS.some((pattern) => matches(pattern, view)))) return { ok: false, reason: 'secret_leak' };
+    views.set(unit, deep.views);
   }
-  return { ok: true, text: candidate, withheld: picked.length };
+  const variants = Math.max(...Array.from(views.values(), (list) => list.length));
+  if (variants > WITHHELD_SCAN_VARIANTS) return { ok: false, reason: 'invalid_payload' };
+  const canaries = canaryTokens.map((token) => token.toLowerCase());
+  const healthChecked = !ownerHealthAllowed({ destination: 'internal_context', source_taint: sourceTaint });
+  // Each variant reads every withheld unit at one depth, with the units left in place either at that depth too or as
+  // written, so a plain neighbour that only looks encoded is also seen as written.
+  for (let variant = 0; variant < variants * 2; variant += 1) {
+    const index = variant >> 1;
+    const othersAsWritten = (variant & 1) === 1;
+    let joint = '';
+    let cursor = 0;
+    const withheldRanges: Array<{ start: number; end: number }> = [];
+    for (const unit of units) {
+      const list = views.get(unit)!;
+      const view = othersAsWritten && !picked.has(unit) ? unit.value : list[Math.min(index, list.length - 1)]!;
+      joint += text.slice(cursor, unit.start);
+      if (picked.has(unit)) withheldRanges.push({ start: joint.length, end: joint.length + view.length });
+      joint += view;
+      cursor = unit.start + unit.value.length;
+    }
+    joint += text.slice(cursor);
+    const lower = joint.toLowerCase();
+    if (canaries.some((canary) => lower.includes(canary))) return { ok: false, reason: 'canary_leak' };
+    if (SECRET_PATTERNS.some((pattern) => matches(pattern, joint))) return { ok: false, reason: 'secret_leak' };
+    if (healthChecked && WITHHELD_HEALTH_PATTERNS.some((pattern) => matchReaches(pattern, joint, withheldRanges))) {
+      return { ok: false, reason: 'health_value_leak' };
+    }
+  }
+  return { ok: true, text: candidate, withheld: picked.size };
 }
 
-const HEALTH_MEASUREMENT_SUFFIX =/(?:datum|measurement|value|reading|amount|score|sample|quantity|duration|minutes?|mins?)$/i;
+function matchReaches(pattern: RegExp, text: string, ranges: readonly { start: number; end: number }[]): boolean {
+  const global = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
+  for (const match of text.matchAll(global)) {
+    const end = match.index + match[0].length;
+    if (ranges.some((range) => match.index < range.end && end > range.start)) return true;
+  }
+  return false;
+}
+
+const HEALTH_MEASUREMENT_SUFFIX = /(?:datum|measurement|value|reading|amount|score|sample|quantity|duration|minutes?|mins?)$/i;
 
 function numericFromBase64(token: string): string | undefined {
   const trimmed = token.trim();

@@ -15,8 +15,8 @@ vi.mock('openai', () => ({
 
 const { createTelegramResponder } = await import('../src/channels/telegram-turn');
 
-// A triple-nested percent encoding still decodes after the scribe's 2-pass limit, so the deny is
-// correct and stays: this shape is probe-verified to fail decodedViews at internal_context.
+// A triple-nested percent encoding still decodes after the scribe's 2-pass limit, so the scribe denies it at
+// internal_context: in history it is trimmed, as the newest message it is withheld behind a marker.
 const POISON = 'look %252525 here';
 
 describe('poisoned history degrade', () => {

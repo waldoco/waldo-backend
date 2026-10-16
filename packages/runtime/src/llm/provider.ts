@@ -1548,11 +1548,13 @@ async function sanitiseRequest(
   let messages = await trimmed(history);
   // The trim never cuts the newest message, and a day card is that one message. When it still fails soft, its
   // encoded spans that keep the decoder failing are withheld behind a marker, and the whole history is scribed again
-  // from the start: every hard check runs on the result, and a canary or secret inside a withheld span still denies.
+  // from the start: every hard check runs on the result. A canary or secret in or across a withheld span, or health a
+  // non-owner taint may not carry, still denies. This applies at any request taint (RunLoop runs included); withheld
+  // bytes never reach the model.
   let withheld = 0;
   if (!messages.ok && softScribe(messages.error)) {
     const newest = history[history.length - 1]!;
-    const degraded = withholdUndecodableSpans(newest.content, canaryTokens ?? []);
+    const degraded = withholdUndecodableSpans(newest.content, canaryTokens ?? [], sourceTaint.data);
     if (!degraded.ok && degraded.reason !== 'invalid_payload') {
       return { ok: false, error: new HookHaltError('scribe_sanitise', `scribe:${degraded.reason}`, 'forbidden'), scribeDestination: 'internal_context' };
     }

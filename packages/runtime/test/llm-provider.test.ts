@@ -2343,11 +2343,11 @@ describe('newest-message degrade for a decode false positive', () => {
     `https://redirect.example.test/url?q=${encodeURIComponent(`https://docs.example.test/doc?ref=${encodeURIComponent(target)}`)}`;
   const link = redirectTo('https://example.test/a b');
   const marker = '[encoded text withheld]';
-  const run = async (messages: ReadonlyArray<{ role: 'user' | 'assistant'; content: string }>) => {
+  const run = async (messages: ReadonlyArray<{ role: 'user' | 'assistant'; content: string }>, overrides: Partial<HookRuntimeContext> = {}) => {
     const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
     const result = await new RuntimeLLMProvider({ gateway }).complete(
       { trigger: 'brief', renderRequest: () => ({ messages: [...messages], max_tokens: 512, temperature: 0.3 }) },
-      runtimeCtx(),
+      runtimeCtx(overrides),
     );
     return { result, sent: gateway.requests[0]?.request.messages };
   };
@@ -2360,7 +2360,7 @@ describe('newest-message degrade for a decode false positive', () => {
   it('withholds the nested link in a single-message card, keeps the rest intact, and runs the model', async () => {
     const { result, sent } = await run([{ role: 'user', content: `${card}\nLink: ${link}` }]);
     expect(result.ok).toBe(true);
-    expect(sent).toEqual([{ role: 'user', content: `${card}\nLink: ${marker}` }]);
+    expect(sent).toEqual([{ role: 'user', content: `${card}\nLink: https:${marker}` }]);
     if (result.ok) expect(result.scribe_withheld).toBe(1);
   });
 
@@ -2395,6 +2395,39 @@ describe('newest-message degrade for a decode false positive', () => {
     expect(sent).toBeUndefined();
   });
 
+  // A secret pattern that spans whitespace, with its label encoded and its value plain: withholding the label must not
+  // send the value. Each one alone is denied as secret_leak; beside the card's siblings it trips the decoder first.
+  const value = 'Zq9xWv3LmN8pRt2YkB7sHd4F';
+  it.each([
+    ['a bearer label', `${btoa(encodeURIComponent('Authorization: Bearer'))} ${value}`],
+    ['an api_key label', `${btoa(encodeURIComponent('config api_key:'))} ${value}`],
+    ['a private key header', `${btoa(encodeURIComponent('-----BEGIN PRIVATE KEY-----'))}\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----`],
+  ])('still denies a secret whose encoded half is withheld and whose other half is plain: %s', async (_name, fragment) => {
+    expect(sanitise({ payload: [{ role: 'user', content: fragment }], destination: 'internal_context', canary_tokens: canaryTokens, source_taint: null })).toMatchObject({ ok: false, reason: 'secret_leak' });
+    const { result, sent } = await run([{ role: 'user', content: `${card}\n${fragment}\nLink: ${link}` }]);
+    expect(result).toMatchObject({ ok: false, scribe: { reason: 'secret_leak' } });
+    expect(sent).toBeUndefined();
+  });
+
+  it('denies external health inside a withheld span, and withholds the owner\'s own', async () => {
+    const health = btoa(encodeURIComponent('hrv: 42 ms resting heart rate 51 bpm'));
+    const content = `${card}\nNote ${health}\nLink: ${link}`;
+    const external = await run([{ role: 'user', content }], { sourceTaint: 'external' });
+    expect(external.result).toMatchObject({ ok: false, scribe: { reason: 'health_value_leak' } });
+    expect(external.sent).toBeUndefined();
+    const owner = await run([{ role: 'user', content }]);
+    expect(owner.result.ok).toBe(true);
+    expect(owner.sent?.[0]?.content).not.toContain(health);
+  });
+
+  it('withholds a link inside compact JSON without taking its neighbouring fields', async () => {
+    const event = `{"htmlLink":"https://calendar.example.test/event?eid=abc","location":"${link}"}`;
+    const { result, sent } = await run([{ role: 'user', content: `${card}\nEvent: ${event}` }]);
+    expect(result.ok).toBe(true);
+    expect(sent?.[0]?.content).toContain('"htmlLink":"https://calendar.example.test/event?eid=abc"');
+    expect(sent?.[0]?.content).toContain(`"location":"https:${marker}"`);
+  });
+
   it('still fails closed on a hard reason outside the withheld span', async () => {
     const { result, sent } = await run([{ role: 'user', content: `${card}\nremember ${canaryTokens[1]}\nLink: ${link}` }]);
     expect(result).toMatchObject({ ok: false, scribe: { reason: 'canary_leak' } });
@@ -2418,7 +2451,7 @@ describe('newest-message degrade for a decode false positive', () => {
       { role: 'user', content: `${card}\nLink: ${link}` },
     ]);
     expect(result.ok).toBe(true);
-    expect(sent).toEqual([{ role: 'assistant', content: 'earlier reply' }, { role: 'user', content: `${card}\nLink: ${marker}` }]);
+    expect(sent).toEqual([{ role: 'assistant', content: 'earlier reply' }, { role: 'user', content: `${card}\nLink: https:${marker}` }]);
   });
 
   it('labels a failure it cannot degrade with the bounded decode stage', async () => {
