@@ -67,8 +67,9 @@ export function DayControls({ record, busy, onAction }: { record: DayRecord } & 
 
 export function ConnectionsControls({ record, busy, onAction, section }: { record: ConnectionsRecord; section?: 'connections'|'sessions' } & ActionProps) {
   const { google, telegram, sessions } = record.data;
-  // Absent means the directory did not answer for iMessage; that reads as unknown, never as unlinked.
+  // Absent means the directory did not answer for that channel; that reads as unknown, never as unlinked.
   const imessage = record.data.channels?.find(item => item.channel === 'imessage');
+  const whatsapp = record.data.channels?.find(item => item.channel === 'whatsapp');
   return <>
     {section!=='sessions'&&<section className="tile reveal" style={{ '--i': 0 } as React.CSSProperties} aria-labelledby="tree-title">
       <div className="chart-head"><h2 id="tree-title">Connected to Waldo</h2><span className="legend"><i className="line"/>Access saved<i className="line dashed"/>Needs you</span></div>
@@ -96,9 +97,9 @@ export function ConnectionsControls({ record, busy, onAction, section }: { recor
           <li className={`branch${imessage?.state === 'linked' ? '' : ' broken'}`}><details name="connections" className="disclosure"><summary><span className="marks"><Icon name="chat"/></span><span className="value">iMessage</span><span className={`access-label${imessage?.state === 'linked' ? '' : imessage ? ' reconnect' : ''}`}>{imessage?.state === 'linked' ? 'Linked' : imessage?.state === 'blocked' ? 'Blocked' : imessage?.state === 'pending' ? 'Pending' : imessage ? 'Not linked' : 'Status unknown'}</span></summary>
             <div className="disclosure-body"><p>Text Waldo from your own iPhone. It’s the same Waldo and memory as here. Link your number by texting Waldo a one-time code.</p>
               <div className="control-actions"><a className="quiet-link" href="/console/imessage">{imessage?.state === 'linked' ? 'Manage iMessage' : 'Set up iMessage'}</a></div></div></details></li>
-          <li className="branch"><details name="connections" className="disclosure"><summary><span className="marks"><Icon name="chat"/></span><span className="value">WhatsApp</span></summary>
+          <li className={`branch${whatsapp?.state === 'linked' ? '' : ' broken'}`}><details name="connections" className="disclosure"><summary><span className="marks"><Icon name="chat"/></span><span className="value">WhatsApp</span><span className={`access-label${whatsapp?.state === 'linked' ? '' : whatsapp ? ' reconnect' : ''}`}>{whatsapp?.state === 'linked' ? 'Linked' : whatsapp ? 'Not linked' : 'Status unknown'}</span></summary>
             <div className="disclosure-body"><p>Chat with your Waldo on WhatsApp. It’s the same Waldo and memory as here. Get a one-time code, then send it from your WhatsApp to the Waldo number.</p>
-              <div className="control-actions"><button disabled={busy} onClick={() => onAction('whatsapp.link')}>Get a WhatsApp link code</button></div></div></details></li>
+              <div className="control-actions"><button disabled={busy} onClick={() => onAction('whatsapp.link')}>Get a WhatsApp link code</button>{whatsapp?.state === 'linked' && <button disabled={busy} onClick={() => { if (window.confirm('Unlink WhatsApp? Messages from that number stop reaching your Waldo, and Waldo stops messaging it. Get a new code to link again.')) onAction('whatsapp.unlink'); }}>Unlink WhatsApp</button>}</div></div></details></li>
           <li className="branch"><details name="connections" className="disclosure"><summary><span className="marks"><Icon name="chat"/></span><span className="value">This console</span><span className="access-label">Signed in</span></summary>
             <div className="disclosure-body"><p>Chat with Waldo right here. It’s the same conversation as the Waldo app.</p>
               <div className="control-actions"><a className="quiet-link" href="#/chat">Open chat</a></div></div></details></li></ul>

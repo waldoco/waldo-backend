@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(5);
+select plan(10);
 delete from vault.secrets where name = 'waldo_router_hmac';
 select vault.create_secret('test-router-secret', 'waldo_router_hmac');
 create function pg_temp.at() returns bigint language sql as $$ select extract(epoch from now())::bigint $$;
@@ -12,5 +12,12 @@ select is(waldo.unlink_presence('do-a', 'telegram', pg_temp.at(), pg_temp.sig('u
 select is((select count(*)::int from waldo.route_presence('telegram', '111', pg_temp.at(), pg_temp.sig('route.telegram.111'))), 0, 'the unlinked subject no longer routes');
 select is((select count(*)::int from waldo.route_presence('telegram', '222', pg_temp.at(), pg_temp.sig('route.telegram.222'))), 1, 'another owner keeps its presence');
 select is(waldo.unlink_presence('do-a', 'telegram', pg_temp.at(), pg_temp.sig('unlink.do-a.telegram')), false, 'nothing left to unlink');
+update waldo.owners set phone_verified_at = now() where do_name in ('do-a', 'do-b');
+insert into waldo.presences (owner_id, provider, subject) select id, 'whatsapp', case do_name when 'do-a' then '15550001111' else '15550002222' end from waldo.owners;
+select is(waldo.presence_hint('do-a', 'whatsapp', pg_temp.at(), pg_temp.sig('presencehint.do-a.whatsapp')), '1111', 'the console sees WhatsApp linked');
+select is(waldo.unlink_presence('do-a', 'whatsapp', pg_temp.at(), pg_temp.sig('unlink.do-a.whatsapp')), true, 'the owner unlinks WhatsApp');
+select is((select count(*)::int from waldo.route_presence('whatsapp', '15550001111', pg_temp.at(), pg_temp.sig('route.whatsapp.15550001111'))), 0, 'the old WhatsApp sender no longer routes');
+select is((select count(*)::int from waldo.route_presence('whatsapp', '15550002222', pg_temp.at(), pg_temp.sig('route.whatsapp.15550002222'))), 1, 'another owner keeps its WhatsApp presence');
+select is(waldo.presence_hint('do-a', 'whatsapp', pg_temp.at(), pg_temp.sig('presencehint.do-a.whatsapp')), null, 'the console sees WhatsApp unlinked');
 select * from finish();
 rollback;

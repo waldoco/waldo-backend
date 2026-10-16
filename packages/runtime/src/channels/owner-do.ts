@@ -27,7 +27,7 @@ import { taskSourceFetch } from '../tools/task-source-io';
 import {OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,ownerControlsView,ownerControlsRead,ownerControlsAction} from './dashboard-owner-controls';
 import {MEMORY_CONTROL_PATH,projectMemoryControl,resolveMemoryAction} from './dashboard-memory-actions';
 import {CONTROLS_PATH,readControlsQuery,projectControls} from './dashboard-controls';
-import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,googleConnectReceipt,whatsappLinkReceipt} from './dashboard-control-actions';
+import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,googleConnectReceipt,whatsappLinkReceipt,whatsappUnlinkReceipt} from './dashboard-control-actions';
 import { createScopedCuratedSkillCapability, type OwnerSkillCapability } from '../skills/curated-host';
 import { seededSkillCustody } from '../skills/curated-owner';
 import { OwnerAdmissionError, ownerMessageAdmission, type OwnerMessageAdmission } from '../identity/owner-message-admission';
@@ -1522,6 +1522,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
               if(action.action==='telegram.unlink'){
                 const name=this.ctx.storage.kv.get<string>('do_name'),done=name?await consoleAuth(this.env)?.unlinkTelegram(name):false;
                 if(done)this.markUnlinked();return !!done;
+              }
+              if(action.action==='whatsapp.unlink'){
+                // The directory unlink stops routing; only then is the bound sender cleared, so a new number can bind
+                // and sends resolve no owner. A refused unlink keeps the binding, since the old number still routes here.
+                const name=this.ctx.storage.kv.get<string>('do_name'),done=name?await consoleAuth(this.env)?.unlinkWhatsApp?.(name)===true:false;
+                if(done){this.ctx.storage.kv.delete('whatsapp_subject');this.runtimes={};}
+                return whatsappUnlinkReceipt(done);
               }
               if(action.action==='session.signout'||action.action==='session.signout.all'){
                 if(action.action==='session.signout.all'){if(!await this.signOutEverywhere())return {state:'unconfirmed' as const,message:'Signing out everywhere did not finish. This browser is still signed in; try again.'};}
@@ -3454,10 +3461,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           sessionUntil: localIso(session.expires, clock.timezone).slice(0, 16).replace('T', ' '), sessionCount: (await consoleAccess(this.ctx.storage).list()).length, sessions: consoleSessionRows(await consoleAccess(this.ctx.storage).list(), session, clock.timezone), approvals: desk.pending(Date.now()), usage: traces.usageRows(), csrf: session.csrf, notice,
           google: { accounts: linked, connectAvailable: google.configured() },
           telegram: { linked: telegramLinked(identity), unlinkAvailable: consoleAuth(this.env) !== null && identity.get<string>('do_name') !== undefined },
+          // A channel's link state is present only when the directory answered; a failed read stays unknown, never unlinked.
           ...(await (async () => {
-            const name = identity.get<string>('do_name'), hint = consoleAuth(this.env)?.iMessageHandleHint;
-            if (!name || !hint) return {};
-            try { return { imessage: { linked: (await hint(name)) !== null } }; } catch { return {}; }
+            const name = identity.get<string>('do_name'), auth = consoleAuth(this.env);
+            if (!name || !auth) return {};
+            const known = async (hint?: (doName: string) => Promise<string | null>) => { if (!hint) return undefined; try { return { linked: (await hint(name)) !== null }; } catch { return undefined; } };
+            const [imessage, whatsapp] = await Promise.all([known(auth.iMessageHandleHint), known(auth.whatsAppHandleHint)]);
+            return { ...(imessage ? { imessage } : {}), ...(whatsapp ? { whatsapp } : {}) };
           })()),
           profile: profile(memory.claims()), spots: memory.claims(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => memory.claims(status)), forgettingSpots: memory.claims('purging'),
           holds: memory.holds().map(({ id, kind, reason, created_at }) => ({ id, kind, reason, created_at })),
