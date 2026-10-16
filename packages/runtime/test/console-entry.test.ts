@@ -49,11 +49,14 @@ describe('console entry across actual owner sessions', () => {
     expect(await opens('/console/invites')).toBe('/console#/invites');
     expect((await json('/console/waiting')).csrf).toBe(current.csrf);
     expect((await json('/console?m=' + encodeURIComponent('Your account is locked.')) as { notice?: unknown }).notice ?? null).toBeNull();
+    expect((await json('/console?m=invalid') as { notice?: unknown }).notice).toBe(NOTICES.invalid);
+    const signedOut = await worker.fetch(new Request(origin + '/console/waiting', { redirect: 'manual' }), bindings);
+    expect({ status: signedOut.status, location: signedOut.headers.get('location') }).toEqual({ status: 401, location: null });
     const imessage = await worker.fetch(new Request(origin + '/console/imessage', { redirect: 'manual', headers: { cookie } }), bindings);
     expect(imessage.headers.get('location') ?? '').not.toContain('#/');
     const missingFile = await worker.fetch(new Request(origin + '/console/file?id=987654', { redirect: 'manual', headers: { cookie } }), bindings);
-    expect({ status: missingFile.status, location: missingFile.headers.get('location'), type: missingFile.headers.get('content-type'), body: await missingFile.text() })
-      .toEqual({ status: 502, location: null, type: 'text/plain; charset=utf-8', body: NOTICES['file.unavailable'] });
+    expect({ status: missingFile.status, location: missingFile.headers.get('location'), type: missingFile.headers.get('content-type'), cache: missingFile.headers.get('cache-control'), body: await missingFile.text() })
+      .toEqual({ status: 502, location: null, type: 'text/plain; charset=utf-8', cache: 'no-store', body: NOTICES['file.unavailable'] });
     expect((await worker.fetch(new Request(origin + '/console/unknown', { headers: { cookie } }), bindings)).status).toBe(404);
     const denied = await worker.fetch(new Request(origin + '/console/action', { method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ action: 'timezone.set', csrf: 'wrong', value: 'Pacific/Auckland' }) }), bindings);
     expect(denied.status).toBe(303);

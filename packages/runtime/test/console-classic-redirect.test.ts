@@ -14,13 +14,17 @@ describe('classic console pages open the new console',()=>{
   });
   expect(location('/console/legacy')).toBe('/console');
   expect(location('/console/invites')).toBe('/console#/invites');
-  expect(location('/console/admin')).toBe('/console#/admin');
+  expect(location('/console/')).toBe('/console');
   expect(open('/console/waiting')?.status).toBe(303);
  });
  it('drops a notice instead of showing URL text on the console',()=>{
   expect(location('/console?m=invalid')).toBe('/console');
   expect(location('/console?m='+encodeURIComponent('Your account is locked. Call +1 555 0100.'))).toBe('/console');
   expect(location('/console/waiting?m=invalid')).toBe('/console#/waiting');
+  expect(location('/console/?m=x')).toBe('/console');
+ });
+ it('keeps /console/admin standalone, because the dashboard admin error states link to it as the fallback',()=>{
+  expect(open('/console/admin')).toBeNull();
  });
  it('leaves JSON reads, form posts, sign-in links, the plain root and standalone pages alone',()=>{
   expect(open('/console/waiting',{headers:{accept:'application/json'}})).toBeNull();

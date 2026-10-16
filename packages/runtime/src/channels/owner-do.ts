@@ -1638,7 +1638,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const pageSlug = url.pathname === CONSOLE_PATH || url.pathname === `${CONSOLE_PATH}/legacy` ? '' : url.pathname.startsWith(`${CONSOLE_PATH}/`) ? url.pathname.slice(CONSOLE_PATH.length + 1) : null;
     if (pageSlug === null || !CONSOLE_PAGES.some((item) => item.slug === pageSlug)) return new Response('not found', { status: 404 });
     const mKey = url.searchParams.get('m') ?? '';
-    const dynamicNotice = NOTICES[mKey] ?? null;
+    const dynamicNotice = Object.hasOwn(NOTICES, mKey) ? NOTICES[mKey]! : null;
     // B9 dashboard bar: the same handlers serve JSON when asked (content-negotiated) - the
     // worker keeps owning auth, data and actions; no new auth surface, no client secrets.
     const num = (key: string) => { const raw = url.searchParams.get(key); const parsed = raw === null ? NaN : Number(raw); return Number.isFinite(parsed) ? parsed : undefined; };
