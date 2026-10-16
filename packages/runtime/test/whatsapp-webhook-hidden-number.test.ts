@@ -2,7 +2,6 @@
 // with messages[].from_user_id and no messages[].from; contacts[] carries user_id and profile.username
 // (https://developers.facebook.com/documentation/business-messaging/whatsapp/business-scoped-user-ids).
 import { afterEach, expect, it, vi } from 'vitest';
-import { CONSOLE_AUTH_WINDOW_SECONDS } from '../src/channels/console-signin';
 import { handleWhatsAppWebhook, type WhatsAppWebhookEnv } from '../src/channels/whatsapp-webhook';
 import type { OwnerDirectory } from '../src/identity/owner-directory';
 
@@ -26,12 +25,11 @@ const harness = (throttleAllows = true, graphStatus = 200) => {
   const doCalls: { url: string; body: string }[] = [];
   const graph: Record<string, unknown>[] = [];
   const throttleKeys: string[] = [];
-  const throttleWindows: { limit: number; window: number }[] = [];
+  const sharedThrottle: string[] = [];
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
-    if (url.endsWith('/rest/v1/rpc/console_auth_throttle')) {
-      const args = JSON.parse(String(init?.body)) as { p_key: string; p_limit: number; p_window_seconds: number };
-      throttleKeys.push(args.p_key);
-      throttleWindows.push({ limit: args.p_limit, window: args.p_window_seconds });
+    if (url.endsWith('/rest/v1/rpc/console_auth_throttle')) { sharedThrottle.push(String(init?.body)); return Response.json(true); }
+    if (url.endsWith('/rest/v1/rpc/whatsapp_onboarding_allowed')) {
+      throttleKeys.push((JSON.parse(String(init?.body)) as { p_subject_hash: string }).p_subject_hash);
       return Response.json(throttleAllows);
     }
     if (url.startsWith('https://graph.facebook.com/')) { graph.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
@@ -54,7 +52,7 @@ const harness = (throttleAllows = true, graphStatus = 200) => {
     await Promise.all(deferred);
     return response;
   };
-  return { env, handle, doCalls, graph, throttleKeys, throttleWindows, byPresence, redeem, logs };
+  return { env, handle, doCalls, graph, throttleKeys, sharedThrottle, byPresence, redeem, logs };
 };
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
@@ -70,8 +68,9 @@ it('a sender with no phone number is answered by BSUID, never routed, and never 
   expect((h.graph[0]!.text as { body: string }).body).toMatch(/phone number/);
   expect(h.throttleKeys).toHaveLength(1);
   expect(h.throttleKeys[0]).not.toContain(BSUID);
-  // The sign-in window: console_auth_throttle's shared cleanup wipes any other window's buckets.
-  expect(h.throttleWindows).toEqual([{ limit: 1, window: CONSOLE_AUTH_WINDOW_SECONDS }]);
+  // The 30-day store keyed by the hash, never the shared sign-in throttle, whose cleanup would wipe a 30-day count.
+  expect(h.throttleKeys[0]).toMatch(/^[0-9a-f]{64}$/);
+  expect(h.sharedThrottle).toEqual([]);
   expect(h.logs.some(line => line.includes('whatsapp_hidden_number'))).toBe(true);
   for (const line of h.logs) { expect(line).not.toContain(BSUID); expect(line).not.toContain(USERNAME); }
 });

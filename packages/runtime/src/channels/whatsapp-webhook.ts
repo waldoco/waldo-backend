@@ -1,6 +1,4 @@
-import { consoleAuth } from '../identity/console-auth';
-import { hex, ownerDirectory, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
-import { CONSOLE_AUTH_WINDOW_SECONDS } from './console-signin';
+import { hex, ownerDirectory, signedRpc, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { createWhatsAppCaller, sendWhatsAppText, whatsappForwarded } from './whatsapp-api';
 
 export type WhatsAppWebhookEnv = Readonly<{
@@ -63,9 +61,6 @@ const hiddenNumberSenders = (body: WaBody): string[] => {
 };
 
 const WHATSAPP_HIDDEN_NUMBER_REPLY = "WhatsApp didn't share this chat's phone number, so I can't tell which Waldo account it belongs to and couldn't act on your message. Please use the Waldo app for now.";
-// console_auth_throttle's cleanup drops older buckets across all keys, and a bucket's number depends on its window, so
-// any window other than the sign-in one is wiped by the next sign-in call. At most one reply per sign-in window.
-const HIDDEN_NUMBER_REPLIES = 1;
 
 const linkCode = (body: WaBody, senderId: string): string | null => {
   for (const entry of body.entry ?? []) for (const change of entry.changes ?? []) {
@@ -132,11 +127,12 @@ export const handleWhatsAppWebhook = async (
       await sendWhatsAppText(call, sender, linked ? 'Linked. This chat now talks to your Waldo.' : 'That code did not work. Get a new one from your console.');
     })().catch((error: unknown) => console.log(JSON.stringify({ hop: 'whatsapp_route', ok: false, error: String(error) }))));
   }
-  const auth = consoleAuth(env);
+  // At most one reply per sender per 30 days and 20 an hour overall, decided by the directory from the hash alone.
+  const onboard = signedRpc(env);
   for (const userId of hiddenNumberSenders(payload)) {
-    // The reply is the only answer such a sender can get, so it needs the token and a durable per-sender throttle;
+    // The reply is the only answer such a sender can get, so it needs the token and the durable per-sender limit;
     // without either the sender is only logged. The BSUID is never logged.
-    if (!auth || !env.WHATSAPP_ACCESS_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) {
+    if (!onboard || !env.WHATSAPP_ACCESS_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) {
       console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: true, replied: false }));
       continue;
     }
@@ -146,12 +142,12 @@ export const handleWhatsAppWebhook = async (
       // A prefix of the hash correlates one sender's log lines; the BSUID itself is never logged.
       const sender = senderKey.slice(0, 16);
       try {
-        const allowed = await auth.throttle(`wahidden.${senderKey}`, HIDDEN_NUMBER_REPLIES, CONSOLE_AUTH_WINDOW_SECONDS);
+        const allowed = (await onboard('whatsapp_onboarding_allowed', `waonboard.${senderKey}`, { p_subject_hash: senderKey })) === true;
         // Meta addresses a BSUID through recipient, never to.
         if (allowed) await call({ recipient: userId, type: 'text', text: { body: WHATSAPP_HIDDEN_NUMBER_REPLY } });
         console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: true, replied: allowed, sender }));
       } catch (error) {
-        // Not retried: the slot is spent and the payload is still acked. The Graph status shows whether v21.0 refuses
+        // Not retried, and the payload is still acked. The Graph status shows whether v21.0 refuses
         // recipient; the response body is never logged.
         const status = error instanceof Error ? /^whatsapp (\d{3}):/.exec(error.message)?.[1] : undefined;
         console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: false, sender, error: error instanceof Error ? error.name : 'unknown', ...(status ? { status: Number(status) } : {}) }));
