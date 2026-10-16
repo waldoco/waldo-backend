@@ -149,7 +149,7 @@ Each one needs a named failing test before its slice is built.
   - *Bound:* phone is never a sign-in or recovery factor (model §3, D2, D5). Consequential actions keep app- or console-side approval (13 Oct ruling: approvals go through an app link).
   - *Residual risk, stated plainly:* a swapped number can still converse with the owner's Waldo, and read through it whatever the conversation may read.
 - **F5. BSUID and usernames.**
-  - *Risk:* a user with a username who hides their number arrives with only `user_id` and no phone. Phone proof holds **only when the phone is present**. Such a sender can link a presence keyed on the BSUID alone, but it never becomes `owners.phone`.
+  - *Risk:* a user with a username who hides their number arrives with no `from`. The BSUID is on `messages[].from_user_id`, and `user_id` and `profile.username` are on `contacts[]` (per the BSUID side session's reading of Meta's docs). Phone proof holds **only when the phone is present**. Such a sender can link a presence keyed on the BSUID alone, but it never becomes `owners.phone`.
   - *Bug today:* `whatsapp-webhook.ts:37` (`if (!message.from) continue;`) silently drops these senders.
   - *Change:* store the BSUID on the WhatsApp presence.
   - *Unverified:* the rollout date. Secondary sources give dates from late March to May 2026; check Meta's page.
