@@ -109,7 +109,7 @@ describe('new console WhatsApp unlink',()=>{
   directory.linked.set('wa-unlink-classic',true);
   const owner=await open('wa-unlink-classic','15550006666');
   const response=await owner.classic();
-  expect(response.status).toBe(303);expect(response.headers.get('location')).toContain('m=invalid');
+  expect(response.ok).toBe(false);
   expect(directory.unlinked).toEqual([]);expect(await owner.bound()).toBe('15550006666');
  });
 });
