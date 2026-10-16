@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import worker from '../src/index';
-import { consoleAccess } from '../src/channels/console';
+import { consoleAccess, NOTICES } from '../src/channels/console';
 
 const origin = 'https://waldo.invalid';
 describe('console entry across actual owner sessions', () => {
@@ -51,6 +51,9 @@ describe('console entry across actual owner sessions', () => {
     expect((await json('/console?m=' + encodeURIComponent('Your account is locked.')) as { notice?: unknown }).notice ?? null).toBeNull();
     const imessage = await worker.fetch(new Request(origin + '/console/imessage', { redirect: 'manual', headers: { cookie } }), bindings);
     expect(imessage.headers.get('location') ?? '').not.toContain('#/');
+    const missingFile = await worker.fetch(new Request(origin + '/console/file?id=987654', { redirect: 'manual', headers: { cookie } }), bindings);
+    expect({ status: missingFile.status, location: missingFile.headers.get('location'), type: missingFile.headers.get('content-type'), body: await missingFile.text() })
+      .toEqual({ status: 502, location: null, type: 'text/plain; charset=utf-8', body: NOTICES['file.unavailable'] });
     expect((await worker.fetch(new Request(origin + '/console/unknown', { headers: { cookie } }), bindings)).status).toBe(404);
     const denied = await worker.fetch(new Request(origin + '/console/action', { method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ action: 'timezone.set', csrf: 'wrong', value: 'Pacific/Auckland' }) }), bindings);
     expect(denied.status).toBe(303);
