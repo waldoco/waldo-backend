@@ -12,6 +12,8 @@ import {
   type Redaction,
   type RedactionKind,
   type SanitiseCheck,
+  type SanitiseDecodeFailure,
+  type SanitiseDenialDiagnostic,
   type SanitiseDestination,
   type SanitiseDestinationPolicy,
   type SanitiseFailureReason,
@@ -26,10 +28,11 @@ interface PreparedInput extends Omit<SanitiseInput, 'payload'> {
   payload: JsonValue;
 }
 
-interface DecodeBundle {
-  invalid: boolean;
-  views: string[];
-}
+// An invalid bundle says why decoding stopped short.
+type DecodeBundle = { views: string[] } & (
+  | { invalid: false }
+  | { invalid: true; failure: SanitiseDecodeFailure }
+);
 
 interface EncodedSpan {
   key: string;
@@ -53,6 +56,14 @@ const MAX_PREFLIGHT_NODES = 20_000;
 // One string may be as long as the model's own context allows; the destination policy then enforces its own cap.
 const MAX_PREFLIGHT_STRING_CHARS = MODEL_CONTEXT_MAX_CHARS;
 const MAX_DECODE_PASSES = 2;
+// The most views decodedViews can generate. Each frontier node yields at most DECODE_VIEW_KINDS new views per pass
+// (all spans, JSON escapes, percent, base64), and each of those may join the next frontier, so pass p yields at most
+// DECODE_VIEW_KINDS^p views and all passes together sum(DECODE_VIEW_KINDS^p, p = 1..MAX_DECODE_PASSES) = 4 + 16 = 20.
+// Every decoder only shortens text (a JSON escape is 6 characters to 1, a percent byte 3 to at most 1, base64 4 to 3),
+// so no view is longer than the text, and the decoded total is at most MAX_DECODE_VIEWS times the text length. A
+// decoder that ever lengthened text, or a wider fan-out, would trip this cap and fail closed as decode:budget.
+const DECODE_VIEW_KINDS = 4;
+const MAX_DECODE_VIEWS = Array.from({ length: MAX_DECODE_PASSES }, (_, pass) => DECODE_VIEW_KINDS ** (pass + 1)).reduce((sum, views) => sum + views, 0);
 const REDACTION_ORDER: readonly RedactionKind[] = [
   'email',
   'phone',
@@ -128,6 +139,11 @@ const PERCENT_RUNS = /(?:%[0-9a-fA-F]{2})+/g;
 
 function deny(check: SanitiseCheck, reason: SanitiseFailureReason): SanitiseResult {
   return { ok: false, check, reason };
+}
+
+// Every structural denial names the stage that produced it, so a trace says which check fired without any content.
+function denyInvalid(diagnostic: SanitiseDenialDiagnostic): SanitiseResult {
+  return { ok: false, check: 'size_cap', reason: 'invalid_payload', diagnostic };
 }
 
 function cloneRegex(pattern: RegExp): RegExp {
@@ -310,17 +326,10 @@ function exposesNewSpan(child: EncodedSpan[], parent: EncodedSpan[]): boolean {
 function decodedViews(text: string): DecodeBundle {
   const views = [text];
   const known = new Set(views);
-  // Uniform 4x decode budget (live RCA 2026-09-28: brief card failed internal_context
-  // invalid_payload at 08:46 and 14:01). The old min(destination.max_chars, 4x) formula let
-  // the budget SHRINK below 4x for strings over max_chars/4, so a legal 17k+ card prompt
-  // carrying ordinary nested encodings (a redirect-wrapped URL, an encoded token) generated
-  // two full-length decode views and died on a shape false positive - while the identical
-  // content in a shorter string passed. The payload itself is already capped at
-  // destination.max_chars by applyDestinationPolicy, so total decode work stays bounded at
-  // 4x that cap either way; the recursion defense (MAX_DECODE_PASSES + canDecodeAgain) is
-  // unchanged and still denies genuinely deeper nesting. The context-composer fence scan
-  // (source-sanitisation.ts) has always used this uniform 4x form.
-  const maxDecodedChars = Math.max(text.length, 1) * 4;
+  // The budget bounds work; it is not the security boundary (MAX_DECODE_PASSES + canDecodeAgain is). It is the
+  // algorithm's own maximum, so ordinary sibling encodings cannot use it up and deny a legitimate token beside them:
+  // a fixed 4x of the text did exactly that to every day card (decode:budget:mixed:2). See MAX_DECODE_VIEWS.
+  const maxDecodedChars = Math.max(text.length, 1) * MAX_DECODE_VIEWS;
   let frontier: DecodeNode[] = [{ text, spans: encodedSpans(text) }];
   let decodedChars = 0;
 
@@ -337,16 +346,16 @@ function decodedViews(text: string): DecodeBundle {
       // and is scanned as-is; ordinary text like "20%DEALS" must not deny the payload (#152).
       const percent = decodePercent(node.text) ?? undefined;
       const generated = [
-        { value: decodeLayer(node), allSpans: true },
-        { value: decodeJsonEscapes(node.text), allSpans: false },
-        { value: percent, allSpans: false },
-        { value: decodeBase64Tokens(node.text), allSpans: false },
-      ];
-      for (const { value, allSpans } of generated) {
+        { value: decodeLayer(node), allSpans: true, kind: 'mixed' },
+        { value: decodeJsonEscapes(node.text), allSpans: false, kind: 'json' },
+        { value: percent, allSpans: false, kind: 'percent' },
+        { value: decodeBase64Tokens(node.text), allSpans: false, kind: 'base64' },
+      ] as const;
+      for (const { value, allSpans, kind } of generated) {
         if (typeof value !== 'string' || value === node.text || known.has(value)) continue;
         decodedChars += value.length;
         if (value.length > maxDecodedChars || decodedChars > maxDecodedChars) {
-          return { invalid: true, views };
+          return { invalid: true, views, failure: { cause: 'budget', kind, depth: pass + 1 } };
         }
         known.add(value);
         views.push(value);
@@ -358,8 +367,18 @@ function decodedViews(text: string): DecodeBundle {
     if (frontier.length === 0) break;
   }
 
-  if (frontier.some((node) => canDecodeAgain(node.text))) return { invalid: true, views };
+  const pending = frontier.find((node) => canDecodeAgain(node.text));
+  if (pending !== undefined) {
+    return { invalid: true, views, failure: { cause: 'nesting', kind: pendingKind(pending.text), depth: MAX_DECODE_PASSES + 1 } };
+  }
   return { invalid: false, views };
+}
+
+// The encoding still decodable after the last pass, named in canDecodeAgain's order.
+function pendingKind(text: string): SanitiseDecodeFailure['kind'] {
+  if (JSON_ESCAPE.test(text)) return 'json';
+  if (PERCENT_ESCAPE.test(text) && typeof decodePercent(text) === 'string') return 'percent';
+  return 'base64';
 }
 
 function hasDecodedHealthIndicator(
@@ -375,7 +394,7 @@ function visitStrings(
   destination: SanitiseDestination,
   visitor: (text: string, key: boolean) => boolean,
   skipEligibleHealthViews = false,
-): { invalid: boolean; matched: boolean } {
+): { invalid?: SanitiseDenialDiagnostic; matched: boolean } {
   const pending: Array<{ value: JsonValue; key: boolean }> = [{ value: payload, key: false }];
   while (pending.length > 0) {
     const current = pending.pop();
@@ -383,9 +402,9 @@ function visitStrings(
     const { value } = current;
     if (typeof value === 'string') {
       const decoded = decodedViews(value);
-      if (decoded.invalid) return { invalid: true, matched: false };
+      if (decoded.invalid) return { invalid: { stage: 'decode', decode: decoded.failure }, matched: false };
       if (decoded.views.some((view) => visitor(view, current.key))) {
-        return { invalid: false, matched: true };
+        return { matched: true };
       }
       continue;
     }
@@ -408,13 +427,13 @@ function visitStrings(
       pending.push({ value: item, key: false });
     }
   }
-  return { invalid: false, matched: false };
+  return { matched: false };
 }
 
 function containsCanaryOrSecret(
   payload: JsonValue,
   input: PreparedInput,
-): SanitiseFailureReason | undefined {
+): SanitiseResult | undefined {
   // Only this session's three canaries are tripwires. A regex for any 16-hex run
   // rejected ordinary provider IDs and tracking codes in mail/card context.
   // visitStrings also checks decoded views and object keys at every taint and destination.
@@ -428,9 +447,9 @@ function containsCanaryOrSecret(
     if (SECRET_PATTERNS.some((pattern) => matches(pattern, text))) secretFound = true;
     return false;
   });
-  if (result.invalid) return 'invalid_payload';
-  if (canaryFound) return 'canary_leak';
-  return secretFound ? 'secret_leak' : undefined;
+  if (result.invalid !== undefined) return denyInvalid(result.invalid);
+  if (canaryFound) return deny('canary_token', 'canary_leak');
+  return secretFound ? deny('canary_token', 'secret_leak') : undefined;
 }
 
 function containsStructuredSecret(
@@ -630,9 +649,9 @@ function objectHasHealthCorrelation(value: JsonValue, destination: SanitiseDesti
 function containsForbiddenHealth(
   input: PreparedInput,
   jsonPass = 0,
-): { invalid: boolean; matched: boolean } {
+): { invalid?: SanitiseDenialDiagnostic; matched: boolean } {
   if (objectHasHealthCorrelation(input.payload, input.destination)) {
-    return { invalid: false, matched: true };
+    return { matched: true };
   }
   // Free-text scan scope (owner decision 2026-09-28, direction A): the scan exists to keep raw
   // PROVIDER payloads out of the model's context. Owner/model conversation is null-taint, and at
@@ -659,7 +678,7 @@ function containsForbiddenHealth(
       input.destination === 'system_prompt' ||
       input.destination === 'owner_reply')
   );
-  let nestedInvalid = false;
+  let nestedInvalid: SanitiseDenialDiagnostic | undefined;
   const visited = visitStrings(
     input.payload,
     input.destination,
@@ -679,7 +698,7 @@ function containsForbiddenHealth(
         return false;
       }
       if (jsonPass >= MAX_DECODE_PASSES) {
-        nestedInvalid = true;
+        nestedInvalid ??= { stage: 'health' };
         return false;
       }
       try {
@@ -689,11 +708,11 @@ function containsForbiddenHealth(
         }
         const prepared = prepareInput({ ...input, payload } as SanitiseInput);
         if (prepared === undefined || 'reason' in prepared) {
-          nestedInvalid = true;
+          nestedInvalid ??= { stage: 'health' };
           return false;
         }
         const nested = containsForbiddenHealth(prepared, jsonPass + 1);
-        nestedInvalid ||= nested.invalid;
+        nestedInvalid ??= nested.invalid;
         return nested.matched;
       } catch {
         return false;
@@ -701,7 +720,8 @@ function containsForbiddenHealth(
     },
     true,
   );
-  return { invalid: visited.invalid || nestedInvalid, matched: visited.matched };
+  const invalid = visited.invalid ?? nestedInvalid;
+  return invalid === undefined ? { matched: visited.matched } : { invalid, matched: visited.matched };
 }
 
 const HEALTH_SPAN_MARKER = '[health value withheld]';
@@ -983,7 +1003,7 @@ function inspectInstructions(
       return tag.replace('<', '&lt;').replace('>', '&gt;');
     });
   const transformed = transformJsonStrings(payload, escapeTags);
-  if (transformed.invalid) return deny('size_cap', 'invalid_payload');
+  if (transformed.invalid) return denyInvalid({ stage: 'policy' });
   if (tagCount === 0) return { payload, redactions };
   return {
     payload: transformed.payload,
@@ -1044,14 +1064,14 @@ function applyDestinationPolicy(
     isStructured &&
     !isEligibleHealthView(payload, input.destination)
   ) {
-    return deny('size_cap', 'invalid_payload');
+    return denyInvalid({ stage: 'policy' });
   }
   if (
     (policy.payload_kind === 'text' && !isText) ||
     (policy.payload_kind === 'structured' && !isStructured) ||
     (policy.payload_kind === 'text_or_structured' && !isText && !isStructured)
   ) {
-    return deny('size_cap', 'invalid_payload');
+    return denyInvalid({ stage: 'policy' });
   }
 
   const serialized = isText ? payload : JSON.stringify(payload);
@@ -1112,20 +1132,19 @@ function applyDestinationPolicy(
 // read chunks.
 export function guardForOffload(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
-  if (!input) return deny('size_cap', 'invalid_payload');
+  if (!input) return denyInvalid({ stage: 'prepare' });
   if ('reason' in input) return deny('size_cap', input.reason);
 
   const secret = containsCanaryOrSecret(input.payload, input);
-  if (secret === 'invalid_payload') return deny('size_cap', secret);
-  if (secret !== undefined) return deny('canary_token', secret);
+  if (secret !== undefined) return secret;
 
   const health = containsForbiddenHealth(input);
-  if (health.invalid) return deny('size_cap', 'invalid_payload');
+  if (health.invalid !== undefined) return denyInvalid(health.invalid);
   if (health.matched) return deny('health_value', 'health_value_leak');
 
   // The offload store persists, so it never gets the model/owner readable seam: redact as memory_block.
   const pii = redactPii(input.payload, 'memory_block', input.source_taint, input.canary_tokens);
-  if (pii.invalid) return deny('size_cap', 'invalid_payload');
+  if (pii.invalid) return denyInvalid({ stage: 'pii' });
 
   const instructions = inspectsInstructions(input) ? inspectInstructions(pii.payload, pii.redactions) : { payload: pii.payload, redactions: pii.redactions };
   if ('ok' in instructions) return instructions;
@@ -1158,15 +1177,14 @@ function ownerHealthAllowed(input: { destination: SanitiseDestination; source_ta
 
 export function sanitiseVerifyOnly(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
-  if (!input) return deny('size_cap', 'invalid_payload');
+  if (!input) return denyInvalid({ stage: 'prepare' });
   if ('reason' in input) return deny('size_cap', input.reason);
 
   const secret = containsCanaryOrSecret(input.payload, input);
-  if (secret === 'invalid_payload') return deny('size_cap', secret);
-  if (secret !== undefined) return deny('canary_token', secret);
+  if (secret !== undefined) return secret;
 
   const health = containsForbiddenHealth(input);
-  if (health.invalid) return deny('size_cap', 'invalid_payload');
+  if (health.invalid !== undefined) return denyInvalid(health.invalid);
   if (health.matched && !ownerHealthAllowed(input)) return deny('health_value', 'health_value_leak');
 
   return applyDestinationPolicy(input, input.payload, []);
@@ -1174,12 +1192,11 @@ export function sanitiseVerifyOnly(raw: SanitiseInput): SanitiseResult {
 
 export function sanitise(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
-  if (!input) return deny('size_cap', 'invalid_payload');
+  if (!input) return denyInvalid({ stage: 'prepare' });
   if ('reason' in input) return deny('size_cap', input.reason);
 
   const secret = containsCanaryOrSecret(input.payload, input);
-  if (secret === 'invalid_payload') return deny('size_cap', secret);
-  if (secret !== undefined) return deny('canary_token', secret);
+  if (secret !== undefined) return secret;
 
   // External content to the model: withhold matched health spans, then the unchanged scan below
   // still denies structured health correlation.
@@ -1187,15 +1204,15 @@ export function sanitise(raw: SanitiseInput): SanitiseResult {
     input.source_taint === 'external' && input.destination === 'internal_context'
       ? redactExternalHealthSpans(input.payload, [])
       : { invalid: false, payload: input.payload, redactions: [] as Redaction[] };
-  if (withheld.invalid) return deny('size_cap', 'invalid_payload');
+  if (withheld.invalid) return denyInvalid({ stage: 'external_health' });
   const scanned = { ...input, payload: withheld.payload };
 
   const health = containsForbiddenHealth(scanned);
-  if (health.invalid) return deny('size_cap', 'invalid_payload');
+  if (health.invalid !== undefined) return denyInvalid(health.invalid);
   if (health.matched && !ownerHealthAllowed(input)) return deny('health_value', 'health_value_leak');
 
   const pii = redactPii(scanned.payload, input.destination, input.source_taint, input.canary_tokens);
-  if (pii.invalid) return deny('size_cap', 'invalid_payload');
+  if (pii.invalid) return denyInvalid({ stage: 'pii' });
   pii.redactions.unshift(...withheld.redactions);
 
   const instructions = inspectsInstructions(input) ? inspectInstructions(pii.payload, pii.redactions) : { payload: pii.payload, redactions: pii.redactions };

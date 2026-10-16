@@ -573,6 +573,8 @@ export class HookHaltError extends Error {
     readonly hook: string,
     readonly reason: string,
     readonly code: ErrorCode,
+    // A content-free diagnostic for traces (the scribe's denial stage); never part of the reason.
+    readonly detail?: string,
   ) {
     super(`hook ${hook} halted: ${reason}`);
     this.name = 'HookHaltError';

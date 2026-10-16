@@ -306,6 +306,23 @@ describe('sanitiseResult', () => {
     ).toBe(false);
   });
 
+  it('accepts a bounded, content-free stage diagnostic on a rejection', () => {
+    expect(sanitiseResultSchema.safeParse({ ...baseReject, reason: 'invalid_payload', diagnostic: { stage: 'pii' } }).success).toBe(true);
+    expect(sanitiseResultSchema.safeParse({
+      ...baseReject, reason: 'invalid_payload',
+      diagnostic: { stage: 'decode', decode: { cause: 'nesting', kind: 'percent', depth: 3 } },
+    }).success).toBe(true);
+  });
+
+  it('rejects a diagnostic with an unknown stage, an unbounded depth or extra fields', () => {
+    expect(sanitiseResultSchema.safeParse({ ...baseReject, diagnostic: { stage: 'secret' } }).success).toBe(false);
+    expect(sanitiseResultSchema.safeParse({
+      ...baseReject, diagnostic: { stage: 'decode', decode: { cause: 'nesting', kind: 'percent', depth: 99 } },
+    }).success).toBe(false);
+    expect(sanitiseResultSchema.safeParse({ ...baseReject, diagnostic: { stage: 'decode', span: 'https%253A' } }).success).toBe(false);
+    expect(sanitiseResultSchema.safeParse({ ...baseOk, diagnostic: { stage: 'decode' } }).success).toBe(false);
+  });
+
   it('rejects an unknown failure reason', () => {
     expect(
       sanitiseResultSchema.safeParse({ ...baseReject, reason: 'pii_found' }).success,

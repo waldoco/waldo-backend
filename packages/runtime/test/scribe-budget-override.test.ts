@@ -52,6 +52,6 @@ describe('preflight size failure across sanitizer entrypoints', () => {
     }
     const cycle: Record<string, unknown> = {};
     cycle.self = cycle;
-    expect(inspect(input(cycle))).toEqual({ ok: false, check: 'size_cap', reason: 'invalid_payload' });
+    expect(inspect(input(cycle))).toEqual({ ok: false, check: 'size_cap', reason: 'invalid_payload', diagnostic: { stage: 'prepare' } });
   });
 });

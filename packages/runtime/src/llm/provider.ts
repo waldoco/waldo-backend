@@ -35,6 +35,7 @@ import {
   type RoutingLogEvent,
   type RoutingPolicy,
   type SanitiseDestination,
+  type SanitiseDenialDiagnostic,
   type SanitiseFailureReason,
   type SourceTaint,
   type TrustedRunV2ProviderExecutionWitness,
@@ -238,6 +239,8 @@ export type RuntimeLLMFailure = {
     destination: SanitiseDestination;
     reason: SanitiseFailureReason;
   };
+  // Which scribe stage produced a structural denial, e.g. 'decode:nesting:percent:3'. Enums and a small integer only.
+  scribe_stage?: string;
   // Typed marker: the system prompt itself failed the scribe. It is never cut or dropped.
   code_detail?: 'system_prompt_rejected';
   halted_by?: string;
@@ -1228,6 +1231,7 @@ function failFromHook(
   };
   if (scribeDestination !== undefined && scribeReason?.success === true) {
     failure.scribe = { destination: scribeDestination, reason: scribeReason.data };
+    if (error.detail !== undefined) failure.scribe_stage = error.detail;
     if (scribeDestination === 'system_prompt') failure.code_detail = 'system_prompt_rejected';
   }
   return failure;
@@ -1388,6 +1392,10 @@ function spendCapExceeded(spend: RouteSpendState | undefined): boolean {
   );
 }
 
+// 'decode:nesting:percent:3' or 'health': the diagnostic's enums and integer joined, nothing from the payload.
+const scribeStageLabel = ({ stage, decode }: SanitiseDenialDiagnostic): string =>
+  decode === undefined ? stage : `${stage}:${decode.cause}:${decode.kind}:${decode.depth}`;
+
 const SCRIBE_HARD_REASONS: ReadonlySet<string> = new Set([
   'canary_leak',
   'secret_leak',
@@ -1455,6 +1463,7 @@ async function sanitiseRequest(
             'scribe_sanitise',
             `scribe:${result.reason}`,
             result.reason === 'oversize' ? 'oversize' : 'forbidden',
+            result.diagnostic === undefined ? undefined : scribeStageLabel(result.diagnostic),
           ),
         };
       }
