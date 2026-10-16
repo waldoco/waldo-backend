@@ -24,6 +24,8 @@ export default defineConfig({
     // Runtime fakes intentionally keep process-local state across DO eviction; keep files serial
     // so per-test resets cannot race another file's fake-sink assertions.
     fileParallelism: false,
+    // Tests here run real Durable Objects in workerd; the first use of an owner object alone can pass vitest's 5 s default.
+    testTimeout: 20_000,
   },
   plugins: [
     cloudflareTest({
