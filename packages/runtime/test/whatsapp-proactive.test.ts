@@ -79,7 +79,7 @@ describe('the WhatsApp outbox receipt', () => {
 
   it('through the outbox: a WhatsApp receipt delivers with its message id, a Telegram-shaped answer is quarantined, held and gate-blocked ones are blocked and kept', async () => {
     for (const [answer, expected] of [
-      [ack('wamid.ok'), { status: 'delivered', providerMessageId: 'wamid.ok' }],
+      [ack('wamid.ok'), { status: 'delivered', providerMessageIds: ['wamid.ok'] }],
       [{ message_id: 3, chat: { id: 15550001111 } }, { status: 'quarantined', reason: 'invalid_ack' }],
       [WHATSAPP_HELD, { status: 'blocked', reason: 'surface_held' }],
       // The owner's egress gate refused the send (e.g. presence_unavailable): never delivered, never removed.

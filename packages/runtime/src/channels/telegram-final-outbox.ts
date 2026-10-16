@@ -20,8 +20,9 @@ export type FinalRecord = {
   expiresAt?: number; bot?: string;
   receiptUrls?: string[]; ownerSubject: string; doName: string; status: 'pending' | 'attempting' | 'delivered' | 'quarantined' | 'blocked';
   dueAt: number; createdAt: number; attempts: number; settled?: boolean; messageId?: number; deliveredAt?: number; reason?: string;
-  // A surface whose receipt names its message by a string id (WhatsApp's wamid) records it here instead of messageId.
-  providerMessageId?: string;
+  // A surface whose receipt names its message by a string id (WhatsApp's wamid) records each part's id here, by part
+  // index (null for a part that was held instead of sent), instead of messageId.
+  providerMessageIds?: (string | null)[];
   inbox?: { id: string; runId: string; attempt: string };
   parts?: FinalPart[];
   deliveredParts?: number;
@@ -251,7 +252,12 @@ export class TelegramFinalOutbox {
       if (receipt === 'held') { held = true; row.reason = 'surface_held'; }
       else {
         if (receipt.messageId !== undefined) row.messageId = receipt.messageId;
-        if (receipt.providerMessageId !== undefined) row.providerMessageId = receipt.providerMessageId;
+        if (receipt.providerMessageId !== undefined) {
+          const ids = [...(row.providerMessageIds ?? [])];
+          while (ids.length < index) ids.push(null);
+          ids[index] = receipt.providerMessageId;
+          row.providerMessageIds = ids;
+        }
       }
       // Persist each ACKed part before the next send; storage faults must propagate.
       row.deliveredParts = index + 1;

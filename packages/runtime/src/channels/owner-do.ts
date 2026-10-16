@@ -148,7 +148,7 @@ import { stableJson } from '../context-composer/canonical';
 import { APP_CONNECT_GUIDANCE, appApprovalLink, appCaller } from './surfaces/app';
 import { appApprovalsRequest } from './app-approvals';
 import { WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
-import { deliverHeldWhatsApp, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
+import { deliverHeldWhatsApp, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
 import { sendMessageHandler } from '../tools/live/messaging';
@@ -1274,14 +1274,17 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const runtime = this.setup('whatsapp'), records = runtime.finalOutbox.records(), log = (event: object) => console.log(JSON.stringify(event));
     let closed = false;
     for (const { id, at } of refused) {
-      const record = records.find(row => row.providerMessageId === id && row.ownerSubject === subject);
-      // The receipt names the record's last part, so only that part is held again; earlier parts were accepted on their own ids.
-      const text = record ? (record.parts?.at(-1)?.text ?? record.payload.text) : '';
+      // Each part of a split record went out under its own id, so a refusal names one part, and that part is held again.
+      const record = records.find(row => row.ownerSubject === subject && row.providerMessageIds?.includes(id));
+      const part = record?.providerMessageIds?.indexOf(id) ?? -1;
+      const text = record ? (record.parts?.[part]?.text ?? (part === 0 ? record.payload.text : '')) : '';
       closed = whatsappWindowRefused(kv, { providerMessageId: id, refusedAt: at ?? Date.now() }, text || null, runtime.owner, Date.now(), log) || closed;
     }
     this.ctx.waitUntil(this.serial(async () => {
       const current = this.setup('whatsapp');
-      if (closed) await whatsappKnock(kv, template => current.call('sendTemplate', template), whatsappTemplateConfig(this.env), log);
+      // The window is checked again here: the owner may have written since the refusal, and a knock into an open window
+      // would mark this window knocked, so its real closure would never knock.
+      if (closed && !whatsappWindowOpen(kv, Date.now())) await whatsappKnock(kv, template => current.call('sendTemplate', template), whatsappTemplateConfig(this.env), log);
       // A refusal from before the owner's latest message leaves the window open, so what it held goes out now.
       await deliverHeldWhatsApp(kv, current.call, Date.now(), log);
     }).catch(() => { console.error('whatsapp status follow-up deferred'); }));
