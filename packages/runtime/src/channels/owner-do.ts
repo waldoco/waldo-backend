@@ -1774,8 +1774,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (appOwner?.kind === 'admitted') {
           channel = 'app'; this.scheduledAppDelivery = this.appDeliveryFor(appOwner.authority);
           this.jobOwner = Promise.resolve(this.appScheduledOwner(appOwner.authority));
-        } else if (!telegramBound && !this.appBound() && this.whatsappBound()) channel = 'whatsapp';
-        if (!telegramBound && appOwner?.kind !== 'admitted' && channel !== 'whatsapp') {
+        }
+        const whatsappOnly = !telegramBound && appOwner?.kind !== 'admitted' && !this.appBound() && this.whatsappBound();
+        if (whatsappOnly) channel = 'whatsapp';
+        if (!telegramBound && appOwner?.kind !== 'admitted' && !whatsappOnly) {
           if (Math.min(this.ctx.storage.kv.get<number>('browser_owner_task_due_v1') ?? Infinity, this.ctx.storage.kv.get<number>(COMMON_BROWSER_DUE) ?? Infinity,
             this.ctx.storage.kv.get<number>(COMMON_BROWSER_LEASE_DUE) ?? Infinity) <= Date.now()) this.ctx.waitUntil(Promise.all([this.browserTasks.maintain(), this.ownerBrowser.maintain()]));
           await rearmSharedAlarm(this.ctx.storage, appOwner?.kind === 'retry' ? Date.now() + APP_ADMISSION_RETRY_MS : null, Date.now(), 30_000);
@@ -1904,9 +1906,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
       send: payload => runtime.call('sendMessage', payload),
     };
-    if (surface !== 'whatsapp') return route;
-    return whatsappWindowRoute(route, { kv: this.ctx.storage.kv, subject: this.ctx.storage.kv.get<string>('whatsapp_subject') ?? '', template: whatsappTemplateConfig(this.env),
-      knock: template => runtime.call('sendTemplate', template), log: event => console.log(JSON.stringify(event)) });
+    // Surfaces whose platform limits when a business may write first wrap their route in that rule.
+    const windowed: Partial<Record<ChannelKind, (inner: OutboxRoute) => OutboxRoute>> = {
+      whatsapp: inner => whatsappWindowRoute(inner, { kv: this.ctx.storage.kv, subject: this.ctx.storage.kv.get<string>('whatsapp_subject') ?? '',
+        template: whatsappTemplateConfig(this.env), knock: template => runtime.call('sendTemplate', template), log: event => console.log(JSON.stringify(event)) }),
+    };
+    return windowed[surface]?.(route) ?? route;
   }
 
   // An alarm waits in the serial queue behind work a request started, which can hold it for a whole turn. It has claimed
@@ -3004,8 +3009,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'reminder' });
           return;
         }
-        // WhatsApp reminders wait in the outbox too, so one held for a closed window still honours a later cancel.
-        if (channel === 'telegram' || channel === 'whatsapp') {
+        // Messaging surfaces deliver reminders through the outbox, so one WhatsApp holds for a closed window still honours a later cancel.
+        if (!nativeSurface(channel)) {
           await finalOutbox.enqueue({ id: `reminder:${entry.id}:${entry.occurrence_at}`, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text },
           receiptUrls: [...(turnReceiptUrls.get(trace) ?? [])],
             ownerSubject: String(owner), doName: identity.get<string>('do_name') ?? '',
