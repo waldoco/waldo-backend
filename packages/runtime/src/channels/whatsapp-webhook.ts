@@ -1,5 +1,6 @@
 import { ownerDirectory, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { createWhatsAppCaller, sendWhatsAppText, whatsappForwarded } from './whatsapp-api';
+import { WHATSAPP_REENGAGEMENT_ERROR } from './whatsapp-window';
 
 export type WhatsAppWebhookEnv = Readonly<{
   OWNER_DO?: DurableObjectNamespace;
@@ -43,6 +44,22 @@ const bySender = (body: WaBody): { sender: string; value: WaValue }[] => {
   return [...out.values()];
 };
 
+// Meta can accept a send and refuse it afterwards because the 24-hour window had closed on its clock: a failed status
+// carrying 131047. Only those are kept, with the time Meta refused them, grouped by the recipient they were sent to; every
+// other status is dropped.
+type WaStatus = { id?: unknown; status?: unknown; timestamp?: unknown; recipient_id?: unknown; errors?: { code?: unknown }[] };
+type WaRefusal = { id: string; at: number | null };
+const windowRefusals = (body: WaBody): Map<string, WaRefusal[]> => {
+  const out = new Map<string, WaRefusal[]>();
+  for (const entry of body.entry ?? []) for (const change of entry.changes ?? []) for (const status of (Array.isArray(change.value?.statuses) ? change.value.statuses : []) as WaStatus[]) {
+    if (status?.status !== 'failed' || typeof status.id !== 'string' || !status.id || typeof status.recipient_id !== 'string' || !status.recipient_id) continue;
+    if (!Array.isArray(status.errors) || !status.errors.some(error => error?.code === WHATSAPP_REENGAGEMENT_ERROR)) continue;
+    const at = typeof status.timestamp === 'string' && /^\d{1,12}$/.test(status.timestamp) ? Number(status.timestamp) * 1000 : null;
+    out.set(status.recipient_id, [...(out.get(status.recipient_id) ?? []), { id: status.id, at }]);
+  }
+  return out;
+};
+
 const linkCode = (body: WaBody, senderId: string): string | null => {
   for (const entry of body.entry ?? []) for (const change of entry.changes ?? []) {
     for (const message of change.value?.messages ?? []) {
@@ -57,7 +74,8 @@ const linkCode = (body: WaBody, senderId: string): string | null => {
 };
 
 // The webhook verifies Meta's signature, resolves which owner a WhatsApp sender belongs to and
-// wakes only that owner's Durable Object. Status callbacks are acknowledged and dropped.
+// wakes only that owner's Durable Object. A status callback reaches the owner only when Meta refused a send for the
+// 24-hour window; the rest are acknowledged and dropped.
 // A sender with no owner can only redeem a one-time link code ("waldo CODE") from the console.
 export const handleWhatsAppWebhook = async (
   request: Request,
@@ -107,6 +125,18 @@ export const handleWhatsAppWebhook = async (
       const call = createWhatsAppCaller(env.WHATSAPP_ACCESS_TOKEN!, env.WHATSAPP_PHONE_NUMBER_ID!);
       await sendWhatsAppText(call, sender, linked ? 'Linked. This chat now talks to your Waldo.' : 'That code did not work. Get a new one from your console.');
     })().catch((error: unknown) => console.log(JSON.stringify({ hop: 'whatsapp_route', ok: false, error: String(error) }))));
+  }
+  // A refusal the owner could not take for now (unreachable, or a 5xx) answers 503, so Meta delivers it again; the owner
+  // handles each message id once. A definite refusal (a 4xx: a subject no longer bound, a malformed batch) is acknowledged,
+  // since redelivering it can never succeed.
+  for (const [recipient, refused] of windowRefusals(payload)) {
+    try {
+      const route = await directory.byPresence('whatsapp', recipient);
+      if (!route) continue;
+      const taken = await owners.get(owners.idFromName(route.doName)).fetch('https://telegram-owner/whatsapp-status', {
+        method: 'POST', body: JSON.stringify({ refused }), headers: { 'x-waldo-whatsapp-subject': route.subject } });
+      if (!taken.ok) { console.log(JSON.stringify({ hop: 'whatsapp_status', ok: false, status: taken.status })); if (taken.status >= 500) unavailable = true; }
+    } catch (error) { console.log(JSON.stringify({ hop: 'whatsapp_status', ok: false, error: String(error) })); unavailable = true; }
   }
   if (deferred.length) waitUntil(Promise.all(deferred));
   if (unavailable) return new Response('unavailable', { status: 503 });
