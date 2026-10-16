@@ -81,7 +81,7 @@ const raw=(subject:number,id:number,text:string)=>JSON.stringify({update_id:id,m
 const webhook=async(subject:number,id:number,text:string)=>handleTelegramWebhook(new Request('https://fixture.invalid/telegram/webhook',{method:'POST',headers:{'x-telegram-bot-api-secret-token':env.TELEGRAM_WEBHOOK_SECRET!},body:raw(subject,id,text)}),env,()=>{},ownerDirectory(env));
 const boot=async(name:string)=>runInDurableObject(stub(name),async(instance,state)=>{
  const token=await (await instance.fetch!(new Request('https://owner/grant-console',{method:'POST',headers:{'x-waldo-do-name':name}}))).text();
- const r=await instance.fetch!(new Request('https://owner/console/connections',{headers:{cookie:`${CONSOLE_COOKIE}=${token}`}}));expect(r.status).toBe(200);
+ const r=await instance.fetch!(new Request('https://owner/console/connections',{headers:{accept:'application/json',cookie:`${CONSOLE_COOKIE}=${token}`}}));expect(r.status).toBe(200);
  await state.storage.deleteAlarm();
 });
 const link=async(name:string,subject:number,id:number)=>{

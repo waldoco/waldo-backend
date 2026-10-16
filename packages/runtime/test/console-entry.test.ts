@@ -6,7 +6,7 @@ import { consoleAccess } from '../src/channels/console';
 
 const origin = 'https://waldo.invalid';
 describe('console entry across actual owner sessions', () => {
-  it('serves the root shell after ticket redemption and preserves legacy JSON, notices and controls', async () => {
+  it('serves the root shell after ticket redemption, opens classic pages in the new console and keeps JSON and controls', async () => {
     const name = 'console-entry-owner';
     const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
     const ticket = await runInDurableObject(stub, (instance, state) => {
@@ -36,13 +36,21 @@ describe('console entry across actual owner sessions', () => {
     };
     const current = await json('/console');
     expect((await json('/console/legacy')).csrf).toBe(current.csrf);
-    const notice = await worker.fetch(new Request(origin + '/console?m=invalid', { headers: { cookie } }), bindings);
-    expect(await notice.text()).toContain('That change could not be applied');
-    const legacy = await worker.fetch(new Request(origin + '/console/legacy', { headers: { cookie } }), bindings);
-    expect(legacy.status).toBe(200);
-    expect(await legacy.text()).toContain('Overview');
-    const waiting = await worker.fetch(new Request(origin + '/console/waiting', { headers: { cookie } }), bindings);
-    expect(waiting.status).toBe(200);
+    const opens = async (path: string) => {
+      const response = await worker.fetch(new Request(origin + path, { redirect: 'manual', headers: { cookie } }), bindings);
+      expect({ path, status: response.status }).toEqual({ path, status: 303 });
+      return response.headers.get('location');
+    };
+    expect(await opens('/console/waiting')).toBe('/console#/waiting');
+    expect(await opens('/console?m=invalid')).toBe('/console');
+    expect(await opens('/console?m=' + encodeURIComponent('Your account is locked. Call +1 555 0100.'))).toBe('/console');
+    expect(await opens('/console/legacy')).toBe('/console');
+    expect(await opens('/console/activity')).toBe('/console#/patrol');
+    expect(await opens('/console/invites')).toBe('/console#/invites');
+    expect((await json('/console/waiting')).csrf).toBe(current.csrf);
+    expect((await json('/console?m=' + encodeURIComponent('Your account is locked.')) as { notice?: unknown }).notice ?? null).toBeNull();
+    const imessage = await worker.fetch(new Request(origin + '/console/imessage', { redirect: 'manual', headers: { cookie } }), bindings);
+    expect(imessage.headers.get('location') ?? '').not.toContain('#/');
     expect((await worker.fetch(new Request(origin + '/console/unknown', { headers: { cookie } }), bindings)).status).toBe(404);
     const denied = await worker.fetch(new Request(origin + '/console/action', { method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ action: 'timezone.set', csrf: 'wrong', value: 'Pacific/Auckland' }) }), bindings);
     expect(denied.status).toBe(303);

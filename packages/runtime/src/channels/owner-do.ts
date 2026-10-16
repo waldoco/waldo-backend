@@ -73,7 +73,7 @@ import { proactiveEnabled } from './proactive-gate';
 import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
 import { CONSOLE_INVITES_PATH, renderMemberInvites } from './console-invites';
 import { newInviteCode, inviteLink } from '../identity/invite-code';
-import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, consoleActionTraceDetail, consoleMayApprove, consoleSessionRows, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, CONSOLE_RUNS_PATH, CONSOLE_PAGES, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
+import { type ConsoleAction, type ConsoleSession, type ConsoleView, classicConsoleRedirect, consoleAccess, consoleActionTraceDetail, consoleMayApprove, consoleSessionRows, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, CONSOLE_RUNS_PATH, CONSOLE_PAGES, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
 import { consoleLinkSender, consoleLinkText, maskCredentialReply, mintConsoleLink, recordCredentialMessage, telegramConsoleRoute, type ConsoleLinkRoute } from './console-link';
 import { iMessageConsoleRoute } from './imessage/console-link';
 import { consoleLinkHandler } from '../tools/live/console-link';
@@ -1387,6 +1387,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     const session = await access.session(sessionCookie(request));
     if (!session) return new Response('Send /console to Waldo on Telegram for a sign-in link.', { status: 401, headers: overviewRoute ? DASHBOARD_OVERVIEW_HEADERS : undefined });
+    const classic = classicConsoleRedirect(request);
+    if (classic) return classic;
     if (url.pathname === '/console/browser-handoff') return this.ownerBrowser.consoleHandoff(request,session.csrf,async()=>{const fresh=await access.session(sessionCookie(request));if(!fresh||fresh.csrf!==session.csrf)throw new Error('console session expired');});
     if (url.pathname === CONSOLE_DEVICES_PATH && request.method === 'GET') {
       const owner = this.ctx.storage.kv.get<string>('do_name') ?? '';
@@ -1636,7 +1638,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const pageSlug = url.pathname === CONSOLE_PATH || url.pathname === `${CONSOLE_PATH}/legacy` ? '' : url.pathname.startsWith(`${CONSOLE_PATH}/`) ? url.pathname.slice(CONSOLE_PATH.length + 1) : null;
     if (pageSlug === null || !CONSOLE_PAGES.some((item) => item.slug === pageSlug)) return new Response('not found', { status: 404 });
     const mKey = url.searchParams.get('m') ?? '';
-    const dynamicNotice = NOTICES[mKey] ?? (mKey.length > 0 && mKey.length <= 200 ? mKey : null);
+    const dynamicNotice = NOTICES[mKey] ?? null;
     // B9 dashboard bar: the same handlers serve JSON when asked (content-negotiated) - the
     // worker keeps owning auth, data and actions; no new auth surface, no client secrets.
     const num = (key: string) => { const raw = url.searchParams.get(key); const parsed = raw === null ? NaN : Number(raw); return Number.isFinite(parsed) ? parsed : undefined; };

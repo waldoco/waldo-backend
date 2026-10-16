@@ -1,7 +1,7 @@
 import {describe,it,expect} from 'vitest';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {DashboardNavigation,resolveRoute} from './App';
-import {SettingsNavigation} from './Settings';
+import {SettingsNavigation,SettingsPanel} from './Settings';
 import type {ConnectionsRecord} from './controls-model';
 import {ConnectionsControls} from './Controls';
 const connection:ConnectionsRecord={version:1,view:'connections',state:'available',csrf:'fixture',revision:'fixture',data:{google:{connectAvailable:true,accounts:[]},telegram:{linked:false,unlinkAvailable:true},sessions:{count:2,until:'2026-10-04T09:00:00Z',items:[{signed_in:'2026-10-02 00:00',until:'2026-10-04T09:00:00Z',current:true}]}}};
@@ -12,6 +12,12 @@ describe('simplified console shell',()=>{
   expect(html).not.toMatch(/aria-current="page"/);
   const tabs=renderToStaticMarkup(<SettingsNavigation selected="account"/>);
   for(const href of ['#/settings/day','#/connections','#/files','#/settings/usage','#/settings/account','#/invites'])expect(tabs).toContain(`href="${href}"`);
+ });
+ it('no longer links to the classic console',()=>{
+  for(const section of ['day','usage','setup'] as const)expect(renderToStaticMarkup(<SettingsPanel section={section} isAdmin={false}/>)).not.toContain('/console/legacy');
+ });
+ it('resolves every route the classic console pages now open',()=>{
+  for(const route of ['waiting','setup','connections','memory/spots','memory/constellation','day','memory','files','usage','patrol','account','invites','admin'])expect(resolveRoute(route)).not.toBe('not-found');
  });
  it('supports settings destinations and deliberate old links',()=>{
   for(const route of ['settings','settings/day','settings/sessions','settings/usage','settings/account','settings/setup'])expect(resolveRoute(route)).toBe(route);
