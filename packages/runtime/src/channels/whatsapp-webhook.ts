@@ -1,4 +1,5 @@
-import { ownerDirectory, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
+import { consoleAuth } from '../identity/console-auth';
+import { hex, ownerDirectory, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { createWhatsAppCaller, sendWhatsAppText, whatsappForwarded } from './whatsapp-api';
 
 export type WhatsAppWebhookEnv = Readonly<{
@@ -24,8 +25,11 @@ const hmacSha256Hex = async (secret: string, body: string): Promise<string> => {
   return [...new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body)))].map((b) => b.toString(16).padStart(2, '0')).join('');
 };
 
-type WaMessage = { from?: string; id?: string; type?: string };
-type WaValue = { metadata?: { phone_number_id?: string }; messages?: WaMessage[]; statuses?: unknown[] };
+// from is the sender's phone number; Meta omits it when it may not share the number, for a sender with a WhatsApp
+// username. from_user_id (the business-scoped user id, BSUID) and contacts[].user_id are always present.
+type WaMessage = { from?: string; from_user_id?: string; id?: string; type?: string };
+type WaContact = { wa_id?: string; user_id?: string; profile?: { name?: string; username?: string } };
+type WaValue = { metadata?: { phone_number_id?: string }; contacts?: WaContact[]; messages?: WaMessage[]; statuses?: unknown[] };
 type WaBody = { entry?: { changes?: { value?: WaValue }[] }[] };
 
 // One payload can carry several senders; each owner's DO receives only its own sender's messages.
@@ -42,6 +46,20 @@ const bySender = (body: WaBody): { sender: string; value: WaValue }[] => {
   }
   return [...out.values()];
 };
+
+// Owners are bound by phone number, so a sender Meta names only by BSUID cannot be routed to one yet: such a sender is
+// told so, and their messages, a "waldo CODE" included, go no further.
+const hiddenNumberSenders = (body: WaBody): string[] => {
+  const out = new Set<string>();
+  for (const entry of body.entry ?? []) for (const change of entry.changes ?? []) {
+    for (const message of change.value?.messages ?? []) if (!message.from && message.from_user_id) out.add(message.from_user_id);
+  }
+  return [...out];
+};
+
+const WHATSAPP_HIDDEN_NUMBER_REPLY = "WhatsApp didn't share this chat's phone number, so I can't tell which Waldo account it belongs to and couldn't act on your message. Please use the Waldo app for now.";
+const HIDDEN_NUMBER_REPLIES = 1;
+const HIDDEN_NUMBER_WINDOW_SECONDS = 60 * 60;
 
 const linkCode = (body: WaBody, senderId: string): string | null => {
   for (const entry of body.entry ?? []) for (const change of entry.changes ?? []) {
@@ -107,6 +125,23 @@ export const handleWhatsAppWebhook = async (
       const call = createWhatsAppCaller(env.WHATSAPP_ACCESS_TOKEN!, env.WHATSAPP_PHONE_NUMBER_ID!);
       await sendWhatsAppText(call, sender, linked ? 'Linked. This chat now talks to your Waldo.' : 'That code did not work. Get a new one from your console.');
     })().catch((error: unknown) => console.log(JSON.stringify({ hop: 'whatsapp_route', ok: false, error: String(error) }))));
+  }
+  const auth = consoleAuth(env);
+  for (const userId of hiddenNumberSenders(payload)) {
+    // The reply is the only answer such a sender can get, so it needs the token and a durable per-sender throttle;
+    // without either the sender is only logged. The BSUID is never logged.
+    if (!auth || !env.WHATSAPP_ACCESS_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) {
+      console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: true, replied: false }));
+      continue;
+    }
+    const call = createWhatsAppCaller(env.WHATSAPP_ACCESS_TOKEN, env.WHATSAPP_PHONE_NUMBER_ID);
+    deferred.push((async () => {
+      const senderKey = hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`whatsapp.bsuid.${userId}`)));
+      const allowed = await auth.throttle(`wahidden.${senderKey}`, HIDDEN_NUMBER_REPLIES, HIDDEN_NUMBER_WINDOW_SECONDS);
+      // Meta addresses a BSUID through recipient, never to.
+      if (allowed) await call({ recipient: userId, type: 'text', text: { body: WHATSAPP_HIDDEN_NUMBER_REPLY } });
+      console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: true, replied: allowed }));
+    })().catch((error: unknown) => console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: false, error: error instanceof Error ? error.name : 'unknown' }))));
   }
   if (deferred.length) waitUntil(Promise.all(deferred));
   if (unavailable) return new Response('unavailable', { status: 503 });
