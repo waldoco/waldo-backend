@@ -27,14 +27,23 @@ const open=async(name:string,subject?:string)=>{
  const unlink=async(request_id:string)=>{const {csrf,revision}=await read();return stub.fetch(root+CONTROL_ACTION_PATH,{method:'POST',headers:{...cookie,'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({csrf,revision,view:'connections',action:'whatsapp.unlink',request_id})});};
  const classic=async()=>{const {csrf}=await read();return stub.fetch(root+CONSOLE_ACTION_PATH,{method:'POST',headers:{...cookie,'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({csrf,action:'whatsapp.unlink'}),redirect:'manual'});};
  const bound=()=>runInDurableObject(stub,(_i,state)=>state.storage.kv.get<string>('whatsapp_subject'));
- // One WhatsApp send through the owner runtime's gated caller; reports whether it reached the network.
- const send=()=>runInDurableObject(stub,async instance=>{
-  const net=vi.spyOn(globalThis,'fetch').mockImplementation(async()=>Response.json({messages:[{id:'wamid.out'}]}));
-  try{await (instance as unknown as {setup(channel:string):{call(method:string,body:object):Promise<unknown>}}).setup('whatsapp').call('sendMessage',{chat_id:0,text:'synthetic'});return net.mock.calls.length;}finally{net.mockRestore();}
+ // One WhatsApp send through the owner runtime's gated caller. Callers hold one fetch mock for the whole test:
+ // a cached runtime keeps the fetch it was built with, so a mock restored in between would let it reach the network.
+ const send=()=>runInDurableObject(stub,async instance=>{await (instance as unknown as {setup(channel:string):{call(method:string,body:object):Promise<unknown>}}).setup('whatsapp').call('sendMessage',{chat_id:0,text:'synthetic'});});
+ // One inbound text through the real admit path, which is what opens WhatsApp's 24-hour service window.
+ // The turn it would start is stubbed out; the admission record and window bookkeeping still run.
+ const inbound=(sender:string)=>runInDurableObject(stub,async instance=>{
+  const live=instance as unknown as {turn():Promise<void>;whatsappInflight:Set<Promise<void>>};
+  const turn=vi.spyOn(live,'turn').mockImplementation(async()=>undefined);
+  try{
+   const response=await instance.fetch(new Request(root+'/whatsapp-admit',{method:'POST',headers:{'x-waldo-whatsapp-subject':sender},
+    body:JSON.stringify({messages:[{from:sender,id:'wamid.'+crypto.randomUUID(),timestamp:String(Math.floor(Date.now()/1000)),type:'text',text:{body:'synthetic'}}]})}));
+   expect(response.status).toBe(200);await Promise.all([...live.whatsappInflight]);
+  }finally{turn.mockRestore();}
  });
  // Admission with no messages binds the subject without running a turn.
  const admit=(sender:string)=>stub.fetch(root+'/whatsapp-admit',{method:'POST',headers:{'x-waldo-whatsapp-subject':sender},body:JSON.stringify({messages:[]})});
- return {read,unlink,classic,bound,admit,send};
+ return {read,unlink,classic,bound,admit,send,inbound};
 };
 const whatsapp=(data:{channels?:{channel:string;state:string}[]})=>data.channels?.find(c=>c.channel==='whatsapp');
 
@@ -63,9 +72,15 @@ describe('new console WhatsApp unlink',()=>{
  it('stops sends to the old number without asking the directory once the bound sender is cleared',async()=>{
   directory.linked.set('wa-unlink-send',true);
   const owner=await open('wa-unlink-send','15550007777');
-  expect(await owner.send()).toBe(1);expect(directory.asserted).toBe(1);
-  expect((await owner.unlink('wa-unlink-request-03')).status).toBe(200);
-  expect(await owner.send()).toBe(0);expect(directory.asserted).toBe(1);
+  const net=vi.spyOn(globalThis,'fetch').mockImplementation(async()=>Response.json({messages:[{id:'wamid.out'}]}));
+  const sends=()=>net.mock.calls.filter(([input])=>String(input instanceof Request?input.url:input).endsWith('/messages')).length;
+  try{
+   await owner.inbound('15550007777');
+   const asked=directory.asserted,before=sends();
+   await owner.send();expect(sends()-before).toBe(1);expect(directory.asserted).toBe(asked+1);
+   expect((await owner.unlink('wa-unlink-request-03')).status).toBe(200);
+   await owner.send();expect(sends()-before).toBe(1);expect(directory.asserted).toBe(asked+1);
+  }finally{net.mockRestore();}
  });
  it('refuses to unlink when WhatsApp is not linked or its state is unknown',async()=>{
   directory.linked.set('wa-refuse-unlinked',false);directory.unavailable.add('wa-refuse-unknown');
