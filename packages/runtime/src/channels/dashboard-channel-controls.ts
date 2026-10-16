@@ -1,5 +1,5 @@
 import type { ConsoleAction } from './console';
-import { controlAction, controlRevision } from './dashboard-control-actions';
+import { controlAction, controlRevision, type ControlReceipt, type RevealingReceipt } from './dashboard-control-actions';
 import { DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
 import type { IMessageEnv } from './imessage/bridge-do';
 import { iMessageControlAct, iMessageControls, iMessageControlsStatus, type IMessageControls } from './imessage/dashboard';
@@ -25,24 +25,43 @@ export type ChannelControlsDeps = Readonly<{
   onIMessageRevoked(bridgeDoName: string): void;
 }>;
 
+// One entry per view. fresh() pairs the hashed read with an executor bound to that same read.
+type ChannelControl = Readonly<{
+  status(deps: ChannelControlsDeps): Promise<Readonly<{ controls: IMessageControls | DevicesControls; status: unknown }>>;
+  fresh(deps: ChannelControlsDeps): Promise<Readonly<{ controls: IMessageControls | DevicesControls; act(action: ConsoleAction, fields: Readonly<Record<string, string>>): Promise<ControlReceipt | RevealingReceipt> }>>;
+}>;
+const CHANNEL_CONTROLS: Readonly<Record<ChannelControlView, ChannelControl>> = {
+  imessage: {
+    status: (deps) => iMessageControlsStatus(deps.imessage, deps.owner, deps.csrf),
+    fresh: async (deps) => {
+      const controls = await iMessageControls(deps.imessage, deps.owner, deps.csrf);
+      return { controls, act: (action, fields) => iMessageControlAct(deps.imessage, deps.owner, controls, action, fields, deps.onIMessageRevoked) };
+    },
+  },
+  devices: {
+    status: (deps) => devicesControlsStatus(deps.devices, deps.deviceBridges, deps.owner, deps.csrf),
+    fresh: async (deps) => ({ controls: await devicesControls(deps.devices, deps.owner, deps.csrf), act: (action, fields) => deviceControlAct(deps.devices, deps.deviceBridges, deps.owner, action, fields) }),
+  },
+};
+
 // Liveness rides beside the hashed read: a heartbeat between read and action never makes it stale.
 export async function channelControlsRead(view: ChannelControlView, deps: ChannelControlsDeps): Promise<Response> {
   try {
-    const { controls, status } = view === 'imessage' ? await iMessageControlsStatus(deps.imessage, deps.owner, deps.csrf) : await devicesControlsStatus(deps.devices, deps.deviceBridges, deps.owner, deps.csrf);
+    const { controls, status } = await CHANNEL_CONTROLS[view].status(deps);
     return Response.json({ ...controls, revision: await controlRevision(controls), status }, { headers: DASHBOARD_OVERVIEW_HEADERS });
   } catch { return Response.json({ error: 'controls_unavailable' }, { status: 503, headers: DASHBOARD_OVERVIEW_HEADERS }); }
 }
 
 export function channelControlsAction(form: FormData, deps: ChannelControlsDeps): Promise<Response> {
-  let fresh: IMessageControls | DevicesControls | undefined;
+  let fresh: Awaited<ReturnType<ChannelControl['fresh']>> | undefined;
   return controlAction(form, {
     csrf: deps.csrf, expires: deps.expires, sessions: deps.sessions, store: deps.store, book: CHANNEL_RECEIPT_BOOK_KEY,
-    projection: async (view) => {
-      const selected = channelControlView(view);
-      fresh = selected === 'imessage' ? await iMessageControls(deps.imessage, deps.owner, deps.csrf) : selected === 'devices' ? await devicesControls(deps.devices, deps.owner, deps.csrf) : undefined;
-      return fresh ?? null;
+    projection: async (name) => {
+      const view = channelControlView(name);
+      fresh = view ? await CHANNEL_CONTROLS[view].fresh(deps) : undefined;
+      return fresh?.controls ?? null;
     },
-    act: async (action: ConsoleAction, fields) => fresh?.view === 'imessage' ? iMessageControlAct(deps.imessage, deps.owner, fresh, action, fields, deps.onIMessageRevoked)
-      : deviceControlAct(deps.devices, deps.deviceBridges, deps.owner, action, fields),
+    // controlAction acts only after this request's projection returned its fresh read.
+    act: (action, fields) => fresh!.act(action, fields),
   });
 }

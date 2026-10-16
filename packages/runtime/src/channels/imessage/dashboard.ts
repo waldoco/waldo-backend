@@ -1,8 +1,7 @@
 import type { ConsoleAction } from '../console';
 import type { ControlReceipt, RevealingReceipt } from '../dashboard-control-actions';
 import { consoleAuth } from '../../identity/console-auth';
-import type { IMessageBridgeDO } from './bridge-do';
-import { iMessageBridgeName, iMessageComposition, type IMessageEnv } from './bridge-do';
+import { iMessageBridgeName, iMessageComposition, type IMessageBridgeDO, type IMessageEnv } from './bridge-do';
 import { iMessageAction, type IMessageOutcome } from './console';
 import { iMessageDirectory, type BridgeListing } from './directory';
 
