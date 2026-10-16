@@ -21,7 +21,7 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (input: 
 const ORIGIN = 'https://imessage-directory.fixture.invalid', SECRET = 'fictional-imessage-router-secret-0000000000', HOST_ORIGIN = 'https://imessage.fixture.invalid';
 const SUBJECT = 'owner@example.invalid', CHAT = `iMessage;-;${SUBJECT}`;
 type Read = { csrf: string; revision: string; data: { enabled: boolean; address: string | null; linked_hint: string | null; admin: boolean; actions: string[]; bridges: { id: string; kind: string; state: string; subject: string | null; chat: string | null; observed: boolean; actions: string[] }[] }; status: { bridges: { id: string; online: boolean; text_ready: boolean; sending_paused: boolean }[] } };
-type Acted = { status: number; body: { receipt?: { state: string; message: string }; duplicate?: boolean; reveal?: { kind: string; value: string; send_url?: string }; error?: string }; location: string | null };
+type Acted = { status: number; body: { receipt?: { state: string; message: string }; duplicate?: boolean; reveal?: { kind: string; value: string; send_url?: string }; error?: string }; location: string | null; cache: string | null };
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 async function world(o: { admin?: boolean } = {}) {
@@ -55,7 +55,7 @@ async function world(o: { admin?: boolean } = {}) {
     const current = over.revision && over.csrf ? null : await read();
     const body = new URLSearchParams({ csrf: over.csrf ?? current!.csrf, revision: over.revision ?? current!.revision, view: 'imessage', action, request_id: over.request_id ?? `imsg-request-${++n}`, ...fields });
     const response = await call(new Request(`${HOST_ORIGIN}/console/dashboard/api/v1/actions`, { method: 'POST', redirect: 'manual', headers: { cookie, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body }));
-    return { status: response.status, body: await response.json(), location: response.headers.get('location') };
+    return { status: response.status, body: await response.json(), location: response.headers.get('location'), cache: response.headers.get('cache-control') };
   };
   const host = new SimulatedHost(call, HOST_ORIGIN);
   const settle = async () => { while (pending.length) await pending.shift(); };
@@ -84,6 +84,7 @@ it('pairs and activates a Mac host from the new console: each code is shown once
   expect(issued.status).toBe(200); expect(issued.location).toBeNull();
   const code = issued.body.reveal!.value;
   expect(issued.body.reveal).toEqual({ kind: 'host_code', value: expect.stringMatching(/^wim_[a-f0-9]{48}$/) });
+  expect(issued.cache).toBe('private, no-store');
   expect(await w.book()).not.toContain(code);
   const replay = await w.act('imessage.pair', {}, { csrf: empty.csrf, revision: empty.revision, request_id: 'imsg-pair-once' });
   expect(replay.body).toEqual({ receipt: issued.body.receipt, duplicate: true });

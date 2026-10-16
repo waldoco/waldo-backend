@@ -13,7 +13,7 @@ import type { DeviceBridgeDO } from '../src/devices/device-bridge-do';
 // Pairing-code expiry is enforced in SQL and proved by supabase/tests/waldo_device_bridge.sql ('exact expiry boundary refused').
 const SECRET = 'fictional-device-router-secret', OWNER_UUID = 'e2e00000-0000-4000-8000-0000000000aa', PUBKEY = 'A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg';
 type Read = { csrf: string; revision: string; data: { actions: string[]; devices: { id: string; label: string; capabilities: string[]; created_at: string; actions: string[] }[]; query_kinds: string[]; notification_bodies: string[] }; status: { devices: { id: string; online: boolean; last_seen_at: string | null; commands: { class: string; state: string; result_state: string | null }[] }[] } };
-type Acted = { status: number; body: { receipt?: { state: string; message: string }; duplicate?: boolean; reveal?: { kind: string; value: string }; error?: string } };
+type Acted = { status: number; body: { receipt?: { state: string; message: string }; duplicate?: boolean; reveal?: { kind: string; value: string }; error?: string }; cache: string | null };
 afterEach(() => vi.unstubAllGlobals());
 
 async function world() {
@@ -59,7 +59,7 @@ async function world() {
     const current = over.revision && over.csrf ? null : await read();
     const body = new URLSearchParams({ csrf: over.csrf ?? current!.csrf, revision: over.revision ?? current!.revision, view: 'devices', action, request_id: over.request_id ?? `device-request-${++n}`, ...fields });
     const response = await call(new Request('https://bridge.test/console/dashboard/api/v1/actions', { method: 'POST', headers: { cookie, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body }));
-    return { status: response.status, body: await response.json() };
+    return { status: response.status, body: await response.json(), cache: response.headers.get('cache-control') };
   };
   const seed = new Uint8Array(32).map((_, index) => index), pkcs8 = new Uint8Array(48);
   pkcs8.set([0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20]); pkcs8.set(seed, 16);
@@ -83,7 +83,7 @@ async function world() {
     return { socket, heartbeat };
   };
   const book = () => runInDurableObject(ownerStub, async (_i, state) => JSON.stringify(await state.storage.get(RECEIPT_BOOK_KEY) ?? null));
-  const commands = () => runInDurableObject(deviceStub, async (_i, state) => state.storage.sql.exec<{ request_id: string; class: string }>('SELECT request_id,class FROM commands ORDER BY issued_at,command_id').toArray());
+  const commands = () => runInDurableObject(deviceStub, async (_i, state) => state.storage.sql.exec<{ request_id: string; class: string }>('SELECT request_id,class FROM commands ORDER BY rowid').toArray());
   return { owner, device, directory, deviceStub, read, act, redeem, connect, book, commands };
 }
 
@@ -97,6 +97,7 @@ it('pairs Kennel from the new console: one copyable code, shown once, never stor
 
   const issued = await w.act('device.pair', {}, { request_id: 'device-pair-once' });
   expect(issued.status).toBe(200);
+  expect(issued.cache).toBe('private, no-store');
   expect(issued.body.reveal).toEqual({ kind: 'pairing_code', value: expect.stringMatching(new RegExp(`^wp1\\.${OWNER_UUID}\\.[A-Za-z0-9_-]{43}$`)) });
   const value = issued.body.reveal!.value, code = value.split('.').at(-1)!;
   expect(await w.book()).not.toContain(code);
