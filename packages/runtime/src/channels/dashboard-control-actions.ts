@@ -29,7 +29,7 @@ export const whatsappLinkReceipt=(code:string|null):ControlReceipt=>code
  ?{state:'recorded',message:`Send this to the Waldo WhatsApp number within 10 minutes: waldo ${code}`}
  :{state:'rejected',message:'Linking WhatsApp needs account sign-in, which is not configured on this server.'};
 export const whatsappUnlinkReceipt=(done:boolean):ControlReceipt=>done
- ?{state:'recorded',message:'WhatsApp unlinked. Messages from that number no longer reach your Waldo, and Waldo will not message it.'}
+ ?{state:'recorded',message:'WhatsApp unlinked. New messages from that number no longer reach your Waldo, and Waldo will not message it.'}
  :{state:'rejected',message:'WhatsApp was not unlinked. Refresh the records and try again.'};
 export async function controlRevision(value:unknown):Promise<string>{const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(value)));return Array.from(new Uint8Array(bytes),v=>v.toString(16).padStart(2,'0')).join('');}
 function eligible(action:ConsoleAction,view:ConsoleView):boolean {

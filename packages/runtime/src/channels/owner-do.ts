@@ -3465,8 +3465,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           ...(await (async () => {
             const name = identity.get<string>('do_name'), auth = consoleAuth(this.env);
             if (!name || !auth) return {};
-            const known = async (hint?: (doName: string) => Promise<string | null>) => { if (!hint) return undefined; try { return { linked: (await hint(name)) !== null }; } catch { return undefined; } };
-            const [imessage, whatsapp] = await Promise.all([known(auth.iMessageHandleHint), known(auth.whatsAppHandleHint)]);
+            const known = async (channel: 'imessage' | 'whatsapp', hint?: (doName: string) => Promise<string | null>) => {
+              if (!hint) return undefined;
+              try { return { linked: (await hint(name)) !== null }; } catch { log({ trace: `presence:${channel}`, hop: 'presence_hint', ms: 0, ok: false, code: 'read_failed' }); return undefined; }
+            };
+            const [imessage, whatsapp] = await Promise.all([known('imessage', auth.iMessageHandleHint), known('whatsapp', auth.whatsAppHandleHint)]);
             return { ...(imessage ? { imessage } : {}), ...(whatsapp ? { whatsapp } : {}) };
           })()),
           profile: profile(memory.claims()), spots: memory.claims(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => memory.claims(status)), forgettingSpots: memory.claims('purging'),

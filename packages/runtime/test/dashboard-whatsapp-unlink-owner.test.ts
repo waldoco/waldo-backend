@@ -33,10 +33,10 @@ const open=async(name:string,subject?:string)=>{
  // One inbound text through the real admit path, which is what opens WhatsApp's 24-hour service window.
  // The turn it would start is stubbed out; the admission record and window bookkeeping still run.
  const inbound=(sender:string)=>runInDurableObject(stub,async instance=>{
-  const live=instance as unknown as {turn():Promise<void>;whatsappInflight:Set<Promise<void>>};
+  const live=instance as unknown as {fetch(request:Request):Promise<Response>;turn():Promise<void>;whatsappInflight:Set<Promise<void>>};
   const turn=vi.spyOn(live,'turn').mockImplementation(async()=>undefined);
   try{
-   const response=await instance.fetch(new Request(root+'/whatsapp-admit',{method:'POST',headers:{'x-waldo-whatsapp-subject':sender},
+   const response=await live.fetch(new Request(root+'/whatsapp-admit',{method:'POST',headers:{'x-waldo-whatsapp-subject':sender},
     body:JSON.stringify({messages:[{from:sender,id:'wamid.'+crypto.randomUUID(),timestamp:String(Math.floor(Date.now()/1000)),type:'text',text:{body:'synthetic'}}]})}));
    expect(response.status).toBe(200);await Promise.all([...live.whatsappInflight]);
   }finally{turn.mockRestore();}
@@ -54,7 +54,13 @@ describe('new console WhatsApp unlink',()=>{
   directory.linked.set('wa-state-linked',true);directory.linked.set('wa-state-unlinked',false);directory.unavailable.add('wa-state-unknown');
   expect(whatsapp((await (await open('wa-state-linked','15550001111')).read()).data)).toEqual({channel:'whatsapp',state:'linked',masked_label:'Your WhatsApp'});
   expect(whatsapp((await (await open('wa-state-unlinked')).read()).data)).toEqual({channel:'whatsapp',state:'unlinked',masked_label:null});
-  expect(whatsapp((await (await open('wa-state-unknown')).read()).data)).toBeUndefined();
+  const logged=vi.spyOn(console,'log');
+  try{
+   expect(whatsapp((await (await open('wa-state-unknown')).read()).data)).toBeUndefined();
+   const failures=logged.mock.calls.map(([line])=>String(line)).filter(line=>line.includes('"hop":"presence_hint"'));
+   expect(failures.some(line=>line.includes('"trace":"presence:whatsapp"')&&line.includes('"code":"read_failed"'))).toBe(true);
+   expect(failures.join('')).not.toContain('directory down');
+  }finally{logged.mockRestore();}
  });
  it('unlinks this owner only, clears the bound sender, and lets a new number bind',async()=>{
   directory.linked.set('wa-unlink-a',true);directory.linked.set('wa-unlink-b',true);

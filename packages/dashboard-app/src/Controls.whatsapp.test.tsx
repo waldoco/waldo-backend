@@ -28,6 +28,9 @@ it('shows WhatsApp as linked, not linked, or unknown, and offers unlink only whi
   ] as const) {
     const view = await mount(record(channels as ConnectionsRecord['data']['channels']));
     expect(view.row.querySelector('.access-label')?.textContent).toBe(label);
+    // The connector is solid ("Access saved") only while linked; unknown and not linked draw it broken.
+    expect(view.row.classList.contains('broken')).toBe(label !== 'Linked');
+    expect(view.row.querySelector('.access-label')!.classList.contains('reconnect')).toBe(label === 'Not linked');
     expect(!!view.unlink).toBe(offered);
     expect(view.row.textContent).toContain('Get a WhatsApp link code');
     await view.cleanup();
