@@ -522,6 +522,25 @@ export const CONSOLE_PAGES = [
   { slug: 'account', title: 'Account' },
 ] as const;
 
+// The classic pages now live in the dashboard app: an HTML visit opens the matching
+// dashboard route. JSON reads and form posts keep their handlers. A ?m notice is dropped,
+// never carried, so a crafted link cannot put its own words on the console.
+const CLASSIC_PAGE_ROUTES: Readonly<Record<string, string>> = {
+  '': '', legacy: '', waiting: 'waiting', setup: 'setup', connections: 'connections', spots: 'memory/spots',
+  constellation: 'memory/constellation', day: 'day', memory: 'memory', files: 'files', usage: 'usage',
+  activity: 'patrol', account: 'account', invites: 'invites',
+};
+export const classicConsoleRedirect = (request: Request): Response | null => {
+  if (request.method !== 'GET' && request.method !== 'HEAD') return null;
+  if ((request.headers.get('accept') ?? '').includes('application/json')) return null;
+  const url = new URL(request.url);
+  const slug = url.pathname === CONSOLE_PATH ? (url.searchParams.has('m') ? 'legacy' : null)
+    : url.pathname.startsWith(`${CONSOLE_PATH}/`) ? url.pathname.slice(CONSOLE_PATH.length + 1) : null;
+  if (slug === null || !Object.hasOwn(CLASSIC_PAGE_ROUTES, slug)) return null;
+  const route = CLASSIC_PAGE_ROUTES[slug];
+  return new Response(null, { status: 303, headers: { location: route ? `${CONSOLE_PATH}#/${route}` : CONSOLE_PATH, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } });
+};
+
 export const renderConsole = (view: ConsoleView, page: string = '', banner = ''): string => {
   const sentToday = view.cards.filter((card) => card.sent).length;
   const seen = view.steps.filter((step) => step.state === 'ok').length;
