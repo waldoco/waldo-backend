@@ -1,7 +1,9 @@
 // Proactive WhatsApp sends below the owner DO: the shim splits long text, the window caller holds only what did not go out,
 // the outbox route accepts only an honest WhatsApp receipt, and Meta's later 131047 closes the window and re-holds the text.
 import { describe, expect, it, vi } from 'vitest';
-import type { OutboxRoute } from '../src/channels/delivery-routes';
+import { SEND_NOW_ONLY, type OutboxRoute } from '../src/channels/delivery-routes';
+import { egressGuardedCaller } from '../src/channels/egress-guard';
+import { createTelegramCaller, gatedCaller } from '../src/channels/telegram-api';
 import { TelegramFinalOutbox } from '../src/channels/telegram-final-outbox';
 import { WHATSAPP_TEXT_MAX_CHARS, WhatsAppPartialSend, whatsappTelegramShim } from '../src/channels/whatsapp-api';
 import { WHATSAPP_HELD, WA_HELD_PREFIX, deliverHeldWhatsApp, forgetHeldWhatsApp, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappReceipt, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from '../src/channels/whatsapp-window';
@@ -186,5 +188,70 @@ describe('owner forget reaches held WhatsApp text', () => {
       expect(held(map)).toEqual(['Lunch at noon.']);
       expect(forgetHeldWhatsApp(kv, [])).toEqual({ rewritten: 0, remaining: 0 });
     });
+  });
+});
+
+describe('a send that is only worth delivering now (a one-time code, a signed link)', () => {
+  // The owner's real call stack above the window layer: link redaction, then the egress gate.
+  const stack = (graph: ReturnType<typeof vi.fn>, opened: number | null) => {
+    const { kv, map } = fakeKv();
+    if (opened !== null) recordWhatsAppInbound(kv, [{ timestamp: String(opened / 1000) }], opened);
+    const window = whatsappWindowCaller(whatsappTelegramShim('tok', 'pn1', SUBJECT, graph as unknown as typeof fetch), { kv, template, log: vi.fn() });
+    return { map, call: egressGuardedCaller(gatedCaller(window, () => false), () => undefined) };
+  };
+
+  it('outside the window is refused, not held, through the real call stack; the owner still gets one knock', async () => {
+    const graph = vi.fn(async () => Response.json(ack('wamid.knock')));
+    const { map, call } = stack(graph, Date.now() - 30 * 60 * 60_000);
+    expect(await call('sendMessage', { chat_id: 1, text: 'Code: 482913', [SEND_NOW_ONLY]: true })).toBeUndefined();
+    expect(await call('sendMessage', { chat_id: 1, text: 'Code: 551200', [SEND_NOW_ONLY]: true })).toBeUndefined();
+    expect([...map.keys()].filter(key => key.startsWith(WA_HELD_PREFIX))).toEqual([]);
+    expect(JSON.stringify([...map.values()])).not.toContain('482913');
+    expect(bodiesOf(graph).map(body => body.type)).toEqual(['template']);
+  });
+
+  it('inside the window goes out as ordinary text', async () => {
+    const graph = vi.fn(async () => Response.json(ack('wamid.code')));
+    const { call } = stack(graph, Date.now());
+    expect(await call('sendMessage', { chat_id: 1, text: 'Code: 482913', [SEND_NOW_ONLY]: true })).toEqual(ack('wamid.code'));
+    expect(bodiesOf(graph)).toEqual([{ messaging_product: 'whatsapp', to: SUBJECT, type: 'text', text: { body: 'Code: 482913' } }]);
+  });
+
+  it('a 131047 refusal inside our window is refused too, and closes the window', async () => {
+    const { kv, map } = fakeKv();
+    recordWhatsAppInbound(kv, [{ timestamp: String(T0 / 1000) }], T0);
+    const graph = vi.fn(async (_url: string, init?: RequestInit) => JSON.parse(String(init?.body)).type === 'template'
+      ? Response.json(ack('wamid.knock')) : Response.json({ error: { code: 131047 } }, { status: 400 }));
+    const call = whatsappWindowCaller(whatsappTelegramShim('tok', 'pn1', SUBJECT, graph as unknown as typeof fetch), { kv, template, now: () => T0 + 60_000, log: vi.fn() });
+    expect(await call('sendMessage', { chat_id: 1, text: 'Code: 482913', [SEND_NOW_ONLY]: true })).toBeUndefined();
+    expect(held(map)).toEqual([]);
+    expect(whatsappWindowOpen(kv, T0 + 60_000)).toBe(false);
+  });
+
+  it('never reaches Telegram\'s JSON body', async () => {
+    const telegram = vi.fn(async (_url: string, _init?: RequestInit) => Response.json({ ok: true, result: { message_id: 9, chat: { id: 7 } } }));
+    const call = egressGuardedCaller(createTelegramCaller('7:token', telegram as unknown as typeof fetch), () => undefined);
+    await call('sendMessage', { chat_id: 7, text: 'Code: 482913', [SEND_NOW_ONLY]: true });
+    expect(JSON.parse(String(telegram.mock.calls[0]![1]!.body))).toEqual({ chat_id: 7, text: 'Code: 482913', link_preview_options: { is_disabled: true } });
+  });
+});
+
+describe('the knock marker after a failed knock', () => {
+  const knocks = async (status: number) => {
+    const { kv } = fakeKv();
+    let knocked = 0;
+    const graph = vi.fn(async () => { knocked += 1; return knocked === 1 ? Response.json({ error: { code: status === 500 ? 1 : 132001 } }, { status }) : Response.json(ack('wamid.k')); });
+    const call = whatsappWindowCaller(whatsappTelegramShim('tok', 'pn1', SUBJECT, graph as unknown as typeof fetch), { kv, template, now: () => T0, log: vi.fn() });
+    await call('sendMessage', { chat_id: 1, text: 'first' });
+    await call('sendMessage', { chat_id: 1, text: 'second' });
+    return knocked;
+  };
+
+  it('is taken back after a definite refusal (4xx), so the next held message knocks again', async () => {
+    expect(await knocks(404)).toBe(2);
+  });
+
+  it('stays after a server error (5xx), which may have sent the knock', async () => {
+    expect(await knocks(500)).toBe(1);
   });
 });

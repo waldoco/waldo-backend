@@ -4,6 +4,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { SEND_NOW_ONLY } from '../src/channels/delivery-routes';
 import { traceBook } from '../src/channels/harness';
 import { reminderBook } from '../src/channels/reminders';
 import { claimStore } from '../src/memory/claims';
@@ -59,6 +60,8 @@ const drive = async (name: string, script: (steps: Readonly<{
   reply(): Promise<void>;
   cancel(): Promise<void>;
   refuse(id: string): Promise<number>;
+  sendNowOnly(text: string): Promise<unknown>;
+  held(): string[];
   ledger(): Readonly<{ runs: { outcome: string; delivery: string | null }[]; outbox: Outbox; notes: number; notices: number; scheduled: { status: string; attempts: number }[] }>;
 }>) => Promise<void>) => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
@@ -90,6 +93,12 @@ const drive = async (name: string, script: (steps: Readonly<{
           await Promise.all([...(owner as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
         },
         cancel: async () => { expect(await book.cancel(reminder.id)).toBe(true); },
+        // The owner runtime's own call stack (routing, link redaction, egress gate, window layer, shim).
+        sendNowOnly: async text => {
+          const runtime = (owner as unknown as { setup(channel: string): { call(method: string, body: object): Promise<unknown>; owner: number } }).setup('whatsapp');
+          return runtime.call('sendMessage', { chat_id: runtime.owner, text, [SEND_NOW_ONLY]: true });
+        },
+        held: () => [...state.storage.kv.list<{ body: { text: string } }>({ prefix: 'wa_held:' })].map(([, record]) => record.body.text),
         refuse: async id => (await owner.fetch(new Request('https://telegram-owner/whatsapp-status', {
           method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ refused: [{ id, at: Date.now() }] }),
         }))).status,
@@ -192,6 +201,14 @@ describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }
       }));
       expect(response.status).toBe(403);
       expect(wire.events).toEqual([]);
+    });
+  });
+
+  it('a one-time code outside the window is refused through the owner runtime, never held, with one knock', async () => {
+    await drive('whatsapp-only-now-only', async ({ sendNowOnly, held }) => {
+      expect(await sendNowOnly('From bank:\nCode: 482913')).toBeUndefined();
+      expect(held()).toEqual([]);
+      expect(wire.events).toEqual(['template:waldo_update_ready']);
     });
   });
 });

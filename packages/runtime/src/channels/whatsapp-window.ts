@@ -1,4 +1,4 @@
-import { routedDelivery, type OutboxRoute } from './delivery-routes';
+import { SEND_NOW_ONLY, routedDelivery, type OutboxRoute } from './delivery-routes';
 import type { DeliveryReceipt, FinalRecord, TelegramFinalOutbox } from './telegram-final-outbox';
 import { WhatsAppApiError, WhatsAppPartialSend } from './whatsapp-api';
 
@@ -84,7 +84,8 @@ const knockOnce = async (kv: Kv, knock: (template: WhatsAppTemplate) => Promise<
     await knock(template);
     log({ hop: 'whatsapp_window', ok: true, held: true, knocked: true });
   } catch (error) {
-    if (error instanceof WhatsAppApiError) { if (previous === undefined) kv.delete(KNOCKED_KEY); else kv.put(KNOCKED_KEY, previous); }
+    // Only a definite refusal (a 4xx) takes the marker back for a retry; a 5xx or a timeout may have sent the knock.
+    if (error instanceof WhatsAppApiError && error.status < 500) { if (previous === undefined) kv.delete(KNOCKED_KEY); else kv.put(KNOCKED_KEY, previous); }
     log({ hop: 'whatsapp_window', ok: false, held: true, code: error instanceof WhatsAppApiError && error.code !== null ? error.code : 'knock_failed' });
   }
 };
@@ -93,17 +94,20 @@ const reengagement = (error: unknown): boolean => error instanceof WhatsAppApiEr
 // Wraps the WhatsApp shim beneath the owner's egress gate, so a held message and the knock have already
 // passed the same ownership check and link redaction as any other send. A held message answers WHATSAPP_HELD.
 // A long text the shim split goes out part by part; when the window refuses a later part, only the parts not yet
-// sent are held, and the receipt of the last part that went out is returned.
+// sent are held, and the receipt of the last part that went out is returned. A SEND_NOW_ONLY send is never held: outside
+// the window it answers nothing (not sent), and the owner still gets the knock, so a reply lets Waldo offer it afresh.
 export const whatsappWindowCaller = (inner: Caller, options: Readonly<{ kv: Kv; template: WhatsAppTemplate | null; now?: () => number; log: Log }>): Caller => {
   const { kv, template, log } = options;
   const now = options.now ?? Date.now;
   return async (method, body) => {
     if (method !== 'sendMessage') return inner(method, body);
+    const nowOnly = (body as { [SEND_NOW_ONLY]?: unknown })[SEND_NOW_ONLY] === true;
     let held: readonly object[] = [body];
     let receipt: unknown = WHATSAPP_HELD;
     if (whatsappWindowOpen(kv, now())) {
       try { return await inner(method, body); }
       catch (error) {
+        if (nowOnly && error instanceof WhatsAppPartialSend) throw error;
         if (error instanceof WhatsAppPartialSend && reengagement(error.cause)) {
           const { chat_id } = body as { chat_id?: unknown };
           held = error.remaining.map(text => ({ chat_id, text }));
@@ -112,6 +116,11 @@ export const whatsappWindowCaller = (inner: Caller, options: Readonly<{ kv: Kv; 
         // Meta's clock closed the window before ours: it stays closed until the owner writes, so the next send waits.
         kv.put(REFUSED_KEY, kv.get<number>(WA_LAST_INBOUND_KEY) ?? 0);
       }
+    }
+    if (nowOnly) {
+      log({ hop: 'whatsapp_window', ok: false, held: false, code: 'now_only_window_closed' });
+      await knockOnce(kv, t => inner('sendTemplate', t), template, log);
+      return undefined;
     }
     for (const part of held) holdBody(kv, part, now());
     await knockOnce(kv, t => inner('sendTemplate', t), template, log);

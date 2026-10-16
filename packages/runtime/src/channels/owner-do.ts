@@ -43,7 +43,7 @@ import { receiptUrl } from '../conversation/artifact-link-guard';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, TELEGRAM_TURN_DEADLINE_MS, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
 import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armWhatsappPendingWake, heldLane, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
-import { admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
+import { SEND_NOW_ONLY, admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
 import { TelegramFinalOutbox, redactMailFollowupEntries, redactCalendarPrepEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
 import { DeliveryGateStore } from '../delivery-gate/store';
@@ -147,7 +147,7 @@ import { stableJson } from '../context-composer/canonical';
 import { APP_CONNECT_GUIDANCE, appApprovalLink, appCaller } from './surfaces/app';
 import { appApprovalsRequest } from './app-approvals';
 import { WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
-import { deliverHeldWhatsApp, forgetHeldWhatsApp, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
+import { deliverHeldWhatsApp, forgetHeldWhatsApp, whatsappHeld, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
 import { sendMessageHandler } from '../tools/live/messaging';
@@ -2289,7 +2289,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       probeCapture.current === null ? call(method, request) : probeCapture.current.record(method, request);
     const api = createTelegramOwnerApi(routedCall);
     // A blocked send (unlinked or rebound owner) returns no message. A producer must not record that as sent, completed or folded.
-    const sentOrThrow = async (sending: Promise<unknown>) => { const sent = await sending; if (sent === undefined) throw new Error('telegram send blocked'); return sent; };
+    // A held send (WhatsApp outside its window) is not blocked: its text goes out on the owner's next message, or lapses
+    // unsent after retention. The producer records it as sent; the trace says it was held.
+    const sentOrThrow = async (sending: Promise<unknown>) => {
+      const sent = await sending; if (sent === undefined) throw new Error('telegram send blocked');
+      if (whatsappHeld(sent)) log({ trace: 'delivery', hop: 'delivery_held', ms: 0, ok: true });
+      return sent;
+    };
     // The trace names the attempt by its nonce prefix; the signed URL itself is never logged.
     const deliverConnectLink = async (url: string, purpose: 'connect' | 'reconnect' = 'connect', email?: string): Promise<boolean> => {
       const trace = url.includes('/c/') ? 'connect:deliver' : `oauth:${(new URL(url).searchParams.get('state') ?? '').split('.').at(-2)?.slice(0, 8) ?? 'unknown'}`;
@@ -2300,6 +2306,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         chat_id: owner,
         text,
         reply_markup: { inline_keyboard: [[{ text: purpose === 'reconnect' ? 'Reconnect Google' : 'Connect Google', url }]] },
+        // A signed, short-lived link is never kept for later delivery.
+        [SEND_NOW_ONLY]: true,
       }).then((sent) => { if (sent === undefined) throw new Error('telegram send blocked'); log({ trace, hop: 'oauth_link_sent', ms: 0, ok: true }); return true; })
         .catch((error: unknown) => (log({ trace, hop: 'oauth_link_sent', ms: 0, ok: false, error: String(error), code: 'send_failed' }), false));
     };
@@ -2853,7 +2861,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // as a direct message - fixed copy, no model involvement, and the send is never logged
         // with the artifact text (kinds + sender only; the code itself touches no store).
         const lines = artifacts.map((artifact) => artifact.kind === 'otp' ? `Code: ${artifact.value}` : `Link: ${artifact.value}`);
-        await sentOrThrow(api.sendMessage({ chat_id: owner, text: `From ${from}:\n${lines.join('\n')}` }));
+        // A one-time code is never kept for later delivery.
+        await sentOrThrow(routedCall('sendMessage', { chat_id: owner, text: `From ${from}:\n${lines.join('\n')}`, [SEND_NOW_ONLY]: true }));
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
       }, effects), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, ...progressNoteTools, searchEpisodesHandler(episodes), ...memoryHandlers({

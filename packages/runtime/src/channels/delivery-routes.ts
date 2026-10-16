@@ -29,6 +29,11 @@ export const routedDelivery = (routes: readonly OutboxRoute[]) => {
   };
 };
 
+// Marks a send that is only worth delivering now: a one-time code, a short-lived signed link. A surface that can defer
+// delivery (WhatsApp outside its 24-hour window) must refuse such a send instead of keeping it for later. A symbol key, so
+// it never reaches a provider's JSON body.
+export const SEND_NOW_ONLY: unique symbol = Symbol('send.now_only');
+
 export type Admission = 'admitted' | 'dormant' | 'retry';
 
 // A route whose records go out only while the owner is admitted, on top of the route's own checks: an outage holds a record
