@@ -89,6 +89,30 @@ select is(pg_temp.link_consume('do-alice', pg_temp.h('3'), '15550008888'), 'link
 select is((select count(*)::int from waldo.presences p join waldo.owners w on w.id = p.owner_id where w.do_name = 'do-alice' and p.provider = 'whatsapp' and p.state = 'active'), 1, 'only one WhatsApp presence stays active');
 select is(pg_temp.link_active('do-alice'), '15550008888', 'and it is the new number');
 
+-- Unsigned reads and binds are refused, like the unsigned open.
+select throws_ok($$ select waldo.presence_link_request_subject('do-alice', repeat('a', 64), extract(epoch from now())::bigint, repeat('0', 64)) $$, '42501', null, 'an unsigned view is refused');
+select throws_ok($$ select waldo.consume_presence_link_request('do-alice', repeat('a', 64), '15550001111', extract(epoch from now())::bigint, repeat('0', 64)) $$, '42501', null, 'an unsigned consume is refused');
+
+-- The phone is verified only by a successful bind: a refused or claimed confirm leaves it unverified.
+insert into waldo.owners (do_name, email, phone) values ('do-carol', 'carol@test.invalid', '+15550004444');
+select is(pg_temp.link_open('15550004444', pg_temp.h('4')), 'opened', 'a link for an unverified owner');
+select is(pg_temp.link_consume('do-carol', pg_temp.h('4'), '15550005555'), 'rejected', 'a confirm naming another number is refused');
+select is((select phone_verified_at from waldo.owners where do_name = 'do-carol'), null, 'a refused confirm does not verify the phone');
+update waldo.presence_link_requests set consumed_at = now() where token_hash = pg_temp.h('4');
+select is(pg_temp.link_open('15550004444', pg_temp.h('5')), 'opened', 'a fresh link for the same owner');
+insert into waldo.presences (owner_id, provider, subject) select id, 'whatsapp', '15550004444' from waldo.owners where do_name = 'do-mallory';
+select is(pg_temp.link_consume('do-carol', pg_temp.h('5'), '15550004444'), 'claimed', 'a number claimed elsewhere meanwhile');
+select is((select phone_verified_at from waldo.owners where do_name = 'do-carol'), null, 'a claimed confirm does not verify the phone');
+update waldo.presences set state = 'unlinked', unlinked_at = now() where subject = '15550004444';
+
+-- The webhook's per-sender reply throttle (one per 15 minutes) holds across a sign-in attempt, which runs the shared
+-- cleanup on the same 900 s window.
+create function pg_temp.throttle(k text, lim integer, win integer) returns boolean language sql as $$
+  select waldo.console_auth_throttle(k, lim, win, pg_temp.at(), pg_temp.rsig('throttle.' || k || '.' || lim || '.' || win)) $$;
+select is(pg_temp.throttle('walink.' || repeat('7', 64), 1, 900), true, 'the first reply to a sender is allowed');
+select is(pg_temp.throttle('send:someone@test.invalid', 5, 900), true, 'a sign-in attempt runs the shared cleanup');
+select is(pg_temp.throttle('walink.' || repeat('7', 64), 1, 900), false, 'the sender is still throttled after it');
+
 -- Table access.
 select is((select has_table_privilege('anon', 'waldo.presence_link_requests', 'select')), false, 'anon cannot read link requests directly');
 
