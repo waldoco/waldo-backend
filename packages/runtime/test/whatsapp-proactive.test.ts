@@ -75,11 +75,13 @@ describe('the WhatsApp outbox receipt', () => {
       expect(whatsappReceipt(bad, SUBJECT)).toBeNull();
   });
 
-  it('through the outbox: a WhatsApp receipt delivers with its message id, a Telegram-shaped answer is quarantined, a held one is blocked', async () => {
+  it('through the outbox: a WhatsApp receipt delivers with its message id, a Telegram-shaped answer is quarantined, held and gate-blocked ones are blocked and kept', async () => {
     for (const [answer, expected] of [
       [ack('wamid.ok'), { status: 'delivered', providerMessageId: 'wamid.ok' }],
       [{ message_id: 3, chat: { id: 15550001111 } }, { status: 'quarantined', reason: 'invalid_ack' }],
       [WHATSAPP_HELD, { status: 'blocked', reason: 'surface_held' }],
+      // The owner's egress gate refused the send (e.g. presence_unavailable): never delivered, never removed.
+      [undefined, { status: 'blocked', reason: 'egress_blocked' }],
     ] as const) {
       const { kv } = fakeKv();
       recordWhatsAppInbound(kv, [{ timestamp: String(Date.now() / 1000) }], Date.now());
@@ -89,7 +91,8 @@ describe('the WhatsApp outbox receipt', () => {
         { kv, subject: SUBJECT, template, knock: vi.fn(), log: vi.fn() });
       const settled = vi.fn(async () => undefined);
       await releaseWhatsAppOutbox(outbox, route, settled);
-      expect(outbox.records()[0]).toMatchObject(expected);
+      expect(outbox.records()).toHaveLength(1);
+      expect(outbox.records()[0]).toMatchObject({ ...expected, payload: { text: 'Checking in.' } });
       expect(settled).toHaveBeenCalledTimes(1);
     }
   });
