@@ -5,6 +5,7 @@ import { ownerControlsAction, ownerControlsRead, type OwnerControlsDeps } from '
 import type { ConsoleAction, ConsoleView } from './console';
 import { readMemoryGraph } from './memory-graph';
 import { pageMemoryGraph } from './memory-graph-page';
+import { withOpenWork } from './app-overview';
 
 export type AppControlsHost = Readonly<{
   csrf:string; expires:number; storage:DurableObjectStorage;
@@ -69,7 +70,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     // The revision guards what an action changes, so it is taken before latest is added: an action rebuilds the day without it.
     const revision=await controlRevision(result);
     const {csrf:_csrf,...shown}=query.data.view==='day'&&host.cardsLatest&&built?projectControls({...built,cards:await host.cardsLatest(built)},'day'):result;
-    const parsed=appControlProjectionV1Schema.safeParse({...shown,revision});
+    const parsed=appControlProjectionV1Schema.safeParse(query.data.view==='day'?withOpenWork({...shown,revision},host.storage.sql):{...shown,revision});
     await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
   }
   if(path!=='/app/v1/actions')return reply({error:'not_found'},404);
