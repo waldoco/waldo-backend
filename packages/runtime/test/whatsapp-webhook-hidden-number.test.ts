@@ -2,6 +2,7 @@
 // with messages[].from_user_id and no messages[].from; contacts[] carries user_id and profile.username
 // (https://developers.facebook.com/documentation/business-messaging/whatsapp/business-scoped-user-ids).
 import { afterEach, expect, it, vi } from 'vitest';
+import { CONSOLE_AUTH_WINDOW_SECONDS } from '../src/channels/console-signin';
 import { handleWhatsAppWebhook, type WhatsAppWebhookEnv } from '../src/channels/whatsapp-webhook';
 import type { OwnerDirectory } from '../src/identity/owner-directory';
 
@@ -21,16 +22,21 @@ const payload = (senders: Sender[]) => JSON.stringify({ entry: [{ changes: [{ fi
   messages: senders.map((s, i) => ({ ...(s.from ? { from: s.from } : {}), from_user_id: s.userId, id: `wamid.${i}`, timestamp: '1700000000', type: 'text', text: { body: s.text ?? 'hi' } })),
 } }] }] });
 
-const harness = (throttleAllows = true) => {
+const harness = (throttleAllows = true, graphStatus = 200) => {
   const doCalls: { url: string; body: string }[] = [];
   const graph: Record<string, unknown>[] = [];
   const throttleKeys: string[] = [];
+  const throttleWindows: { limit: number; window: number }[] = [];
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     if (url.endsWith('/rest/v1/rpc/console_auth_throttle')) {
-      throttleKeys.push((JSON.parse(String(init?.body)) as { p_key: string }).p_key);
+      const args = JSON.parse(String(init?.body)) as { p_key: string; p_limit: number; p_window_seconds: number };
+      throttleKeys.push(args.p_key);
+      throttleWindows.push({ limit: args.p_limit, window: args.p_window_seconds });
       return Response.json(throttleAllows);
     }
-    if (url.startsWith('https://graph.facebook.com/')) { graph.push(JSON.parse(String(init?.body)) as Record<string, unknown>); return Response.json({ messages: [{ id: 'wamid.out' }] }); }
+    if (url.startsWith('https://graph.facebook.com/')) { graph.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return graphStatus === 200 ? Response.json({ messages: [{ id: 'wamid.out' }] }) : Response.json({ error: { message: `fictional rejection for ${BSUID}` } }, { status: graphStatus });
+    }
     return new Response('unexpected', { status: 500 });
   }));
   const byPresence = vi.fn<OwnerDirectory['byPresence']>(async (_provider, subject) => subject === '15550001111' ? { doName: 'do-a', subject, timezone: null } : null);
@@ -48,7 +54,7 @@ const harness = (throttleAllows = true) => {
     await Promise.all(deferred);
     return response;
   };
-  return { env, handle, doCalls, graph, throttleKeys, byPresence, redeem, logs };
+  return { env, handle, doCalls, graph, throttleKeys, throttleWindows, byPresence, redeem, logs };
 };
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
@@ -64,6 +70,8 @@ it('a sender with no phone number is answered by BSUID, never routed, and never 
   expect((h.graph[0]!.text as { body: string }).body).toMatch(/phone number/);
   expect(h.throttleKeys).toHaveLength(1);
   expect(h.throttleKeys[0]).not.toContain(BSUID);
+  // The sign-in window: console_auth_throttle's shared cleanup wipes any other window's buckets.
+  expect(h.throttleWindows).toEqual([{ limit: 1, window: CONSOLE_AUTH_WINDOW_SECONDS }]);
   expect(h.logs.some(line => line.includes('whatsapp_hidden_number'))).toBe(true);
   for (const line of h.logs) { expect(line).not.toContain(BSUID); expect(line).not.toContain(USERNAME); }
 });
@@ -112,4 +120,13 @@ it('a from that is not a phone number is never used as one', async () => {
   expect(h.byPresence).not.toHaveBeenCalled();
   expect(h.redeem).not.toHaveBeenCalled();
   expect(h.graph).toEqual([expect.objectContaining({ recipient: BSUID })]);
+});
+
+it('a refused reply logs the Graph status, never the response body', async () => {
+  const h = harness(true, 400);
+  expect((await h.handle(payload([{ userId: BSUID }]))).status).toBe(200);
+  expect(h.graph).toHaveLength(1);
+  const failure = h.logs.map(line => JSON.parse(line) as Record<string, unknown>).find(entry => entry.hop === 'whatsapp_hidden_number' && entry.ok === false);
+  expect(failure).toMatchObject({ status: 400 });
+  for (const line of h.logs) { expect(line).not.toContain('fictional rejection'); expect(line).not.toContain(BSUID); }
 });

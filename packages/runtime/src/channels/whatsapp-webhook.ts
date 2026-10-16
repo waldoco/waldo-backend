@@ -1,5 +1,6 @@
 import { consoleAuth } from '../identity/console-auth';
 import { hex, ownerDirectory, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
+import { CONSOLE_AUTH_WINDOW_SECONDS } from './console-signin';
 import { createWhatsAppCaller, sendWhatsAppText, whatsappForwarded } from './whatsapp-api';
 
 export type WhatsAppWebhookEnv = Readonly<{
@@ -62,8 +63,9 @@ const hiddenNumberSenders = (body: WaBody): string[] => {
 };
 
 const WHATSAPP_HIDDEN_NUMBER_REPLY = "WhatsApp didn't share this chat's phone number, so I can't tell which Waldo account it belongs to and couldn't act on your message. Please use the Waldo app for now.";
+// console_auth_throttle's cleanup drops older buckets across all keys, and a bucket's number depends on its window, so
+// any window other than the sign-in one is wiped by the next sign-in call. At most one reply per sign-in window.
 const HIDDEN_NUMBER_REPLIES = 1;
-const HIDDEN_NUMBER_WINDOW_SECONDS = 60 * 60;
 
 const linkCode = (body: WaBody, senderId: string): string | null => {
   for (const entry of body.entry ?? []) for (const change of entry.changes ?? []) {
@@ -141,11 +143,15 @@ export const handleWhatsAppWebhook = async (
     const call = createWhatsAppCaller(env.WHATSAPP_ACCESS_TOKEN, env.WHATSAPP_PHONE_NUMBER_ID);
     deferred.push((async () => {
       const senderKey = hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`whatsapp.bsuid.${userId}`)));
-      const allowed = await auth.throttle(`wahidden.${senderKey}`, HIDDEN_NUMBER_REPLIES, HIDDEN_NUMBER_WINDOW_SECONDS);
+      const allowed = await auth.throttle(`wahidden.${senderKey}`, HIDDEN_NUMBER_REPLIES, CONSOLE_AUTH_WINDOW_SECONDS);
       // Meta addresses a BSUID through recipient, never to.
       if (allowed) await call({ recipient: userId, type: 'text', text: { body: WHATSAPP_HIDDEN_NUMBER_REPLY } });
       console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: true, replied: allowed }));
-    })().catch((error: unknown) => console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: false, error: error instanceof Error ? error.name : 'unknown' }))));
+    })().catch((error: unknown) => {
+      // The Graph status shows whether v21.0 refuses recipient; the response body is never logged.
+      const status = error instanceof Error ? /^whatsapp (\d{3}):/.exec(error.message)?.[1] : undefined;
+      console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: false, error: error instanceof Error ? error.name : 'unknown', ...(status ? { status: Number(status) } : {}) }));
+    }));
   }
   if (deferred.length) waitUntil(Promise.all(deferred));
   if (unavailable) return new Response('unavailable', { status: 503 });
