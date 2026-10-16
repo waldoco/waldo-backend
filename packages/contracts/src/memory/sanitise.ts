@@ -164,6 +164,33 @@ export const sanitiseFailureReasonSchema = z.enum([
 ]);
 export type SanitiseFailureReason = z.infer<typeof sanitiseFailureReasonSchema>;
 
+// Which sanitiser stage produced an invalid_payload denial. Diagnostic only, never a reason: hard/soft
+// handling keys on `reason`. A decode failure inside the secret or health scan reports `decode`, the stage
+// that actually failed, with the view kind, the decode layer and whether nesting or the decode budget ran out.
+// Content-free by construction: enums and a small integer.
+export const sanitiseDenialStageSchema = z.enum([
+  'prepare',
+  'decode',
+  'health',
+  'external_health',
+  'pii',
+  'policy',
+]);
+export type SanitiseDenialStage = z.infer<typeof sanitiseDenialStageSchema>;
+
+export const sanitiseDecodeFailureSchema = z.strictObject({
+  cause: z.enum(['nesting', 'budget']),
+  kind: z.enum(['json', 'percent', 'base64', 'mixed']),
+  depth: z.int().min(1).max(16),
+});
+export type SanitiseDecodeFailure = z.infer<typeof sanitiseDecodeFailureSchema>;
+
+export const sanitiseDenialDiagnosticSchema = z.strictObject({
+  stage: sanitiseDenialStageSchema,
+  decode: sanitiseDecodeFailureSchema.optional(),
+});
+export type SanitiseDenialDiagnostic = z.infer<typeof sanitiseDenialDiagnosticSchema>;
+
 // Which composer layer rejected the fragment - the reason names the guard, this names where
 // the poisoned bytes entered, so a typed failure points at one store. Content-free like the
 // reason vocabulary (2026-09-27 P0: canary_leak with no source hid the fragment for hours).
@@ -227,6 +254,7 @@ export const sanitiseResultSchema = z.discriminatedUnion('ok', [
     ok: z.literal(false),
     check: sanitiseCheckSchema,
     reason: sanitiseFailureReasonSchema,
+    diagnostic: sanitiseDenialDiagnosticSchema.optional(),
   }),
 ]);
 export type SanitiseResult = z.infer<typeof sanitiseResultSchema>;

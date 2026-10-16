@@ -2,6 +2,7 @@ import { env, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
+import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { sanitise } from '../src/scribe/sanitiser';
 
 // Three ordinary encodings, each one layer deep, in one card: a JSON escape, a URL percent escape and a mixed-case token
@@ -74,5 +75,59 @@ describe('a card carrying three independent one-layer encodings', () => {
       await expect(reply).resolves.toBe('Morning card.');
       expect(requests.at(-1)!.request.messages.at(-1)!.content).toContain(token);
     });
+  });
+});
+
+// The live failure: a two-layer link passes alone but trips the decoder beside the card's one-layer siblings, and a
+// card is one message, so nothing can be trimmed. The responder now withholds the link and the card runs.
+describe('a card whose newest message trips the decoder', () => {
+  const link = `https://redirect.example.test/url?q=${encodeURIComponent(`https://docs.example.test/doc?ref=${encodeURIComponent('https://example.test/a b')}`)}`;
+  const respond = async (name: string, said: string) => {
+    let outcome: { reply?: string; error?: string; requests: LLMGatewayRequest[]; logs: TurnLogEntry[] } = { requests: [], logs: [] };
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async () => {
+      const requests: LLMGatewayRequest[] = [];
+      const logs: TurnLogEntry[] = [];
+      const gateway: LLMGatewayAdapter = { complete: async request => { requests.push(request); return { ok: true, data: { model: request.request.model, text: 'Morning card.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } }; } };
+      const args: Parameters<typeof createOwnerResponder> = ['fixture']; args[3] = entry => { logs.push(entry); }; args[10] = gateway;
+      try {
+        outcome = { reply: await createOwnerResponder(...args).prompt(name, 'owner:fixture', said, async (_hop, work) => work()), requests, logs };
+      } catch (error) {
+        outcome = { error: String(error), requests, logs };
+      }
+    });
+    return outcome;
+  };
+
+  it('is denied by the scribe today, with the decode stage named', () => {
+    expect(scan(`${card}\nLink: ${link}`)).toMatchObject({ ok: false, reason: 'invalid_payload', diagnostic: { stage: 'decode' } });
+  });
+
+  it('reaches the model with the link withheld and the rest of the card intact, and says so in the trace as a count', async () => {
+    const outcome = await respond('card-newest-withheld', `${card}\nLink: ${link}`);
+    expect(outcome.reply).toBe('Morning card.');
+    const sent = outcome.requests.at(-1)!.request.messages.at(-1)!.content;
+    expect(sent).toBe(`${card}\nLink: [encoded text withheld]`);
+    const hop = outcome.logs.find(entry => entry.hop === 'llm_reply');
+    expect(hop).toMatchObject({ ok: true, shape: { context: { scribe_withheld: 1 } } });
+  });
+
+  // The responder draws fresh canaries per session, so the hard-denial case here uses a secret; the provider tests
+  // cover a canary inside a withheld span.
+  it('still fails the card closed for a secret inside the withheld link', async () => {
+    const secret = `sk-proj-${'Ab1'.repeat(10)}`;
+    const outcome = await respond('card-newest-secret', `${card}\nLink: ${link.replace('a%2520b', secret)}`);
+    expect(outcome.requests).toHaveLength(0);
+    expect(outcome.error).toContain('secret_leak');
+  });
+
+  it('labels a failure it cannot degrade on the reply hop and in the card error, content-free', async () => {
+    const tooDeep = Array.from({ length: 9 }).reduce<string>(text => encodeURIComponent(text), 'room one');
+    const outcome = await respond('card-newest-label', `${card}\nNote: ${tooDeep}`);
+    expect(outcome.requests).toHaveLength(0);
+    // Beside the card's siblings the decode budget runs out before the nesting bound is reached.
+    expect(outcome.error).toContain('invalid_payload: decode:budget:mixed:2');
+    const hop = outcome.logs.find(entry => entry.hop === 'llm_reply');
+    expect(hop).toMatchObject({ ok: false, code: 'forbidden:scribe_sanitise:invalid_payload:decode:budget:mixed:2' });
+    expect(JSON.stringify(hop?.code)).not.toContain('room');
   });
 });

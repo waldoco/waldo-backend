@@ -34,10 +34,15 @@ describe('poisoned history degrade', () => {
     for (const body of requests) expect(JSON.stringify(body)).not.toContain('%252525');
   });
 
-  it('the sanitizer still denies the poisoned shape when it is the CURRENT message - no bypass', async () => {
+  it('the poisoned shape never reaches the model when it is the CURRENT message: it is withheld, the turn runs', async () => {
+    requests.length = 0;
     const responder = createTelegramResponder('test-key');
-    await expect(
-      responder.respond(ownerTyped({ updateId: 3, messageId: null, senderId: 7, chatId: 7, sentAt: null, text: POISON }), (_name, run) => run()),
-    ).rejects.toThrow('scribe_sanitise');
+    const text = await responder.respond(ownerTyped({ updateId: 3, messageId: null, senderId: 7, chatId: 7, sentAt: null, text: POISON }), (_name, run) => run());
+    expect(text).toBe('pong');
+    expect(requests.length).toBeGreaterThan(0);
+    for (const body of requests) {
+      expect(JSON.stringify(body)).not.toContain('%252525');
+      expect(JSON.stringify(body)).toContain('look [encoded text withheld] here');
+    }
   });
 });
