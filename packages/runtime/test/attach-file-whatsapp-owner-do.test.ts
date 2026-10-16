@@ -52,7 +52,7 @@ it('a WhatsApp owner asks for a file: the reply goes out, then the file as a doc
     const network = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       if (url === 'https://graph.facebook.com/v21.0/fictional-phone-id/media') {
-        const form = init?.body as FormData, file = form.get('file') as File;
+        const form = init?.body as FormData, file = form.get('file') as unknown as File;
         graph.push({ type: 'upload', upload: { type: String(form.get('type')), filename: file.name, size: file.size } });
         return Response.json({ id: 'media.1' });
       }
