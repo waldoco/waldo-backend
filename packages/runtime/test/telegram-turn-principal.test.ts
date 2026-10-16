@@ -19,24 +19,24 @@ const model = vi.hoisted(() => ({ requests: [] as string[] }));
 // Before the context host prepares a turn it is offered near-miss copies of it; the outcomes say which it admitted.
 type NearMiss = readonly [label: string, turn: OwnerTurnEnvelope, scope: RunEffectScope];
 const nearMiss = vi.hoisted(() => ({ variants: null as null | ((turn: OwnerTurnEnvelope, scope: RunEffectScope) => readonly NearMiss[]), outcomes: [] as (readonly [string, string])[] }));
-vi.mock('../src/channels/telegram-turn', async load => {
-  const original = await load<typeof import('../src/channels/telegram-turn')>();
+vi.mock('../src/channels/owner-turn', async load => {
+  const original = await load<typeof import('../src/channels/owner-turn')>();
   const { ClosedRunError } = await import('../src/channels/run-effect-scope');
   const gateway = { async complete({ request }: LLMGatewayRequest) {
     const text = request.response_format ? '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : 'Noted.';
     if (!request.response_format) model.requests.push(JSON.stringify(request));
     return { ok: true as const, data: { model: request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
-  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => {
-    args[11] = gateway;
-    const host = args[22]?.contextHost;
-    if (host) args[22] = { ...args[22], contextHost: { prepare: async (turn, scope) => {
+  return { ...original, createOwnerResponder: (...args: Parameters<typeof original.createOwnerResponder>) => {
+    args[10] = gateway;
+    const host = args[21]?.contextHost;
+    if (host) args[21] = { ...args[21], contextHost: { prepare: async (turn, scope) => {
       for (const [label, variant, variantScope] of nearMiss.variants?.(turn, scope) ?? []) {
         nearMiss.outcomes.push([label, await host.prepare(variant, variantScope).then(() => 'admitted', (error: unknown) => error instanceof ClosedRunError ? 'closed' : 'failed')]);
       }
       return host.prepare(turn, scope);
     } } };
-    return original.createTelegramResponder(...args);
+    return original.createOwnerResponder(...args);
   } };
 });
 vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(), createTelegramCaller: () => async (method: string) => method === 'getMe' ? { username: 'fixture_bot' } : method === 'sendMessage' ? { message_id: 1 } : true }));

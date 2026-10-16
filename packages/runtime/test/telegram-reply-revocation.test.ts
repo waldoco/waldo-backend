@@ -11,14 +11,14 @@ import type { LLMGatewayRequest } from '../src/llm/provider';
 // time passing: a recent matching read would still look current, so only a fresh read stops the reply.
 const REPLY = 'Your afternoon is clear.';
 const world = vi.hoisted(() => ({ live: true, revokeOnReply: false, sent: [] as string[] }));
-vi.mock('../src/channels/telegram-turn', async load => {
-  const original = await load<typeof import('../src/channels/telegram-turn')>();
+vi.mock('../src/channels/owner-turn', async load => {
+  const original = await load<typeof import('../src/channels/owner-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
     if (!request.response_format && world.revokeOnReply) world.live = false;
     const text = request.response_format ? '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : REPLY;
     return { ok: true as const, data: { model: request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
-  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
+  return { ...original, createOwnerResponder: (...args: Parameters<typeof original.createOwnerResponder>) => { args[10] = gateway; return original.createOwnerResponder(...args); } };
 });
 vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(),
   createTelegramCaller: () => async (method: string, payload?: { text?: string }) => {

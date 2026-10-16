@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PRIVILEGED_ACTION_TOOLS } from '@waldo/contracts';
-import { telegramOwnerApproval } from '../src/channels/telegram-turn';
+import { ownerToolApproval as telegramOwnerApproval } from '../src/channels/owner-turn';
 
 describe('telegramOwnerApproval', () => {
   it('passes first-party privileged tools (owner state only)', () => {

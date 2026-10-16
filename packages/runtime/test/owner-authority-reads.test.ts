@@ -9,8 +9,8 @@ import { ensureSchema } from '../src/tracer/schema';
 const OWNER_ID = '5d1f8a20-6c3b-4e9a-b7d2-0e4f6a8c1b3d';
 const TOOLS = ['list_reminders', 'list_standing_orders', 'list_artifacts'];
 const world = vi.hoisted(() => ({ replies: 0, sessionReads: 0, live: true, skew: 0, quietSet: false, tools: undefined as undefined | readonly { name: string; args: object }[], onReply: undefined as undefined | ((round: number) => void) }));
-vi.mock('../src/channels/telegram-turn', async load => {
-  const original = await load<typeof import('../src/channels/telegram-turn')>();
+vi.mock('../src/channels/owner-turn', async load => {
+  const original = await load<typeof import('../src/channels/owner-turn')>();
   const gateway: LLMGatewayAdapter = { async complete(request) {
     const data = { model: request.request.model, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 };
     if (request.request.response_format) return { ok: true, data: { ...data, text: '{"decision":"retain","sources":[],"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' } };
@@ -19,7 +19,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     const tool = (world.tools ?? TOOLS.map(name => ({ name, args: {} })))[world.replies - 1];
     return { ok: true, data: tool ? { ...data, text: '', tool_calls: [{ call_id: `c${world.replies}`, name: tool.name, arguments: JSON.stringify(tool.args) }] } : { ...data, text: 'Done.' } };
   } };
-  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
+  return { ...original, createOwnerResponder: (...args: Parameters<typeof original.createOwnerResponder>) => { args[10] = gateway; return original.createOwnerResponder(...args); } };
 });
 const { OwnerDO } = await import('../src/channels/owner-do');
 

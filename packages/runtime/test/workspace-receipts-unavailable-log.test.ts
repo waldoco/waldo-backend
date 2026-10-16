@@ -10,15 +10,15 @@ const DAY_BRIEF = CURATED_SKILLS.find(skill => skill.name === 'day-brief')!;
 const wire = vi.hoisted(() => ({ workspace: 'fails' as 'fails' | 'empty', steps: 0 }));
 vi.mock('../src/channels/workspace-host', async load => ({ ...await load<typeof import('../src/channels/workspace-host')>(),
   workspaceOwnerHost: async () => { if (wire.workspace === 'fails') throw new Error(LEAK); return { recentWrites: async () => [] }; } }));
-vi.mock('../src/channels/telegram-turn', async load => {
-  const original = await load<typeof import('../src/channels/telegram-turn')>();
+vi.mock('../src/channels/owner-turn', async load => {
+  const original = await load<typeof import('../src/channels/owner-turn')>();
   // Two tool rounds, so the receipt read runs twice in one turn.
   const gateway = { async complete({ request }: LLMGatewayRequest) {
     const done = (text: string, tool_calls?: Array<{ call_id: string; name: string; arguments: string }>) => ({ ok: true as const, data: { model: request.model, text, ...(tool_calls ? { tool_calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
     if (request.response_format) return done('{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}');
     return wire.steps++ === 0 ? done('', [{ call_id: 'load', name: 'skills_load', arguments: JSON.stringify({ name: DAY_BRIEF.name, version: DAY_BRIEF.version }) }]) : done('Done.');
   } };
-  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
+  return { ...original, createOwnerResponder: (...args: Parameters<typeof original.createOwnerResponder>) => { args[10] = gateway; return original.createOwnerResponder(...args); } };
 });
 const { OwnerDO } = await import('../src/channels/owner-do');
 

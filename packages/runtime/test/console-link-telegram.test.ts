@@ -13,8 +13,8 @@ import type { LLMGatewayRequest } from '../src/llm/provider';
 // could carry the link actually receives the turn's text.
 const world = vi.hoisted(() => ({ requests: [] as string[], outputs: [] as string[], sends: [] as { text: string; message_id: number; chat?: number }[], next: 500, otlp: [] as string[],
   firstTool: undefined as string | undefined, during: undefined as (() => Promise<void>) | undefined }));
-vi.mock('../src/channels/telegram-turn', async load => {
-  const original = await load<typeof import('../src/channels/telegram-turn')>();
+vi.mock('../src/channels/owner-turn', async load => {
+  const original = await load<typeof import('../src/channels/owner-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
     if (request.response_format) return { ok: true as const, data: { model: request.model, text: '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
     world.requests.push(JSON.stringify(request));
@@ -28,7 +28,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     world.outputs.push(text);
     return { ok: true as const, data: { model: request.model, text, ...(name ? { tool_calls: [{ call_id: 'first', name, arguments: '{}' }] } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
-  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
+  return { ...original, createOwnerResponder: (...args: Parameters<typeof original.createOwnerResponder>) => { args[10] = gateway; return original.createOwnerResponder(...args); } };
 });
 vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(), createTelegramCaller: () => async (method: string, body: { chat_id?: number; text?: string }) => {
   if (method === 'getMe') return { username: 'fixture_bot' };

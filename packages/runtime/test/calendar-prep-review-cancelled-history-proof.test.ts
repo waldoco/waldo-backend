@@ -23,8 +23,8 @@ vi.mock('../src/channels/telegram-api', async load => {
     return fixture.ack ? { message_id: fixture.sent.length, chat: { id: payload.chat_id } } : { message_id: fixture.sent.length, chat: { id: 999 } };
   } };
 });
-vi.mock('../src/channels/telegram-turn', async load => {
-  const original = await load<typeof import('../src/channels/telegram-turn')>();
+vi.mock('../src/channels/owner-turn', async load => {
+  const original = await load<typeof import('../src/channels/owner-turn')>();
   const gateway: LLMGatewayAdapter = { async complete(request) {
     fixture.requests.push(request);
     const content = request.request.messages.at(-1)?.content ?? '';
@@ -32,7 +32,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     if (prep) { const mutate = fixture.mutate; fixture.mutate = null; mutate?.(); }
     return { ok: true, data: { model: request.request.model, text: prep ? JSON.stringify({ kind: fixture.decision, text: fixture.decision === 'notify' ? content.includes('Bring revised diagrams') ? 'Design review at 10:30 IST. Bring revised diagrams.' : 'Design review at 10:30 IST. Bring the onboarding mocks.' : '' }) : 'SKIP', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
-  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
+  return { ...original, createOwnerResponder: (...args: Parameters<typeof original.createOwnerResponder>) => { args[10] = gateway; return original.createOwnerResponder(...args); } };
 });
 const { OwnerDO } = await import('../src/channels/owner-do');
 

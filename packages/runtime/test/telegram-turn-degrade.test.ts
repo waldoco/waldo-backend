@@ -13,7 +13,9 @@ vi.mock('openai', () => ({
   },
 }));
 
-const { createTelegramResponder } = await import('../src/channels/telegram-turn');
+const { createOwnerResponder } = await import('../src/channels/owner-turn');
+const { surfaceResponder } = await import('../src/channels/owner-runtime');
+const { telegramSurface } = await import('../src/channels/surfaces/telegram');
 
 // A triple-nested percent encoding still decodes after the scribe's 2-pass limit, so the deny is
 // correct and stays: this shape is probe-verified to fail decodedViews at internal_context.
@@ -27,7 +29,7 @@ describe('poisoned history degrade', () => {
       modelPayload: POISON, appPayload: POISON, modelProjection: { mode: 'include' },
     };
     const store = { load: async () => ({ entries: [entry], leafId: 'h1' }), save: async () => undefined };
-    const responder = createTelegramResponder('test-key', store as never);
+    const responder = surfaceResponder(createOwnerResponder('test-key', store as never), telegramSurface.presentation);
     const text = await responder.respond(ownerTyped({ updateId: 2, messageId: null, senderId: 7, chatId: 7, sentAt: null, text: 'hello' }), (_name, run) => run());
     expect(text).toBe('pong');
     expect(requests.length).toBeGreaterThan(0);
@@ -35,7 +37,7 @@ describe('poisoned history degrade', () => {
   });
 
   it('the sanitizer still denies the poisoned shape when it is the CURRENT message - no bypass', async () => {
-    const responder = createTelegramResponder('test-key');
+    const responder = surfaceResponder(createOwnerResponder('test-key'), telegramSurface.presentation);
     await expect(
       responder.respond(ownerTyped({ updateId: 3, messageId: null, senderId: 7, chatId: 7, sentAt: null, text: POISON }), (_name, run) => run()),
     ).rejects.toThrow('scribe_sanitise');

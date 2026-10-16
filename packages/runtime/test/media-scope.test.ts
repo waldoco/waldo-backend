@@ -16,7 +16,9 @@ vi.mock('openai', () => ({ default: class {
   } };
 } }));
 
-const { createTelegramResponder } = await import('../src/channels/telegram-turn');
+const { createOwnerResponder } = await import('../src/channels/owner-turn');
+const { surfaceResponder } = await import('../src/channels/owner-runtime');
+const { SURFACES } = await import('../src/channels/surfaces/registry');
 const time = <T>(_hop: string, work: () => Promise<T>) => work();
 // `note` is what the model reads; `stored` is the conversation's copy when it differs (a transcript is labelled only for the model).
 const cases: readonly { name: string; media: TelegramMedia; text: string; note: string; stored?: string; image: boolean }[] = [
@@ -38,17 +40,17 @@ describe('media-scope: media and voice retain tools and conversation history', (
       ];
       let leafId = 'prior-reply';
       const calendar = vi.fn(async () => ({ ok: true as const, data: { events: [{ title: 'Design review', starts_at: '2026-10-08T15:00:00+05:30' }] }, source_taint: 'external' as const }));
-      const args: Parameters<typeof createTelegramResponder> = ['fixture-key', {
+      const args: Parameters<typeof createOwnerResponder> = ['fixture-key', {
         load: async () => ({ entries: [...entries], leafId }),
         save: async (rows, leaf) => { entries.push(...rows); leafId = leaf; },
       }];
-      args[4] = { download: vi.fn(async () => new Uint8Array([1, 2, 3])), transcribe: vi.fn(async () => "What's on my calendar?") };
-      args[6] = [{ name: 'query_calendar', description: 'Read the fixture calendar', schema: queryCalendarArgsSchema, autonomy_gated: false, requires_connector: true, trigger_allowlist: triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes('query_calendar')), handle: calendar }];
-      args[20] = surface;
+      const readers = { download: vi.fn(async () => new Uint8Array([1, 2, 3])), transcribe: vi.fn(async () => "What's on my calendar?") };
+      args[5] = [{ name: 'query_calendar', description: 'Read the fixture calendar', schema: queryCalendarArgsSchema, autonomy_gated: false, requires_connector: true, trigger_allowlist: triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes('query_calendar')), handle: calendar }];
+      const { presentation } = SURFACES[surface as 'telegram' | 'whatsapp'].descriptor;
       // Media turns are prepared like any other turn.
       const prepare = vi.fn(async () => undefined);
-      args[21] = { prepare };
-      const responder = createTelegramResponder(...args);
+      args[21] = { skillHost: { prepare } };
+      const responder = surfaceResponder(createOwnerResponder(...args), presentation, readers);
       const turn = { updateId: 12, messageId: 12, senderId: 7, chatId: 7, sentAt: null, text, media, runScope: {
         runId: 'media-run', attempt: 'media-attempt', deadline: Date.now() + 150_000, signal: new AbortController().signal,
         admit: () => undefined, commit: <T>(work: () => T) => work(),
@@ -77,7 +79,7 @@ describe('media-scope: media and voice retain tools and conversation history', (
       // Recreate the responder to prove the note and earlier conversation survive a store reload.
       model.requests = [];
       model.queryCalendar = false;
-      const restored = createTelegramResponder(...args);
+      const restored = surfaceResponder(createOwnerResponder(...args), presentation, readers);
       await restored.respond(ownerTyped({ ...turn, updateId: 13, messageId: 13, text: 'Thanks for checking.', media: undefined }), time);
       expect(model.requests).toHaveLength(1);
       const next = JSON.stringify(model.requests[0]);

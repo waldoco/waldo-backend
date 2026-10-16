@@ -14,8 +14,8 @@ import { ensureSchema } from '../src/tracer/schema';
 // caught up, and a pass that fails leaves a consolidation-only catch-up that the scheduler retries.
 const HOUR = 3_600_000, DAY = 24 * HOUR;
 const model = vi.hoisted(() => ({ fail: false, asked: [] as string[], nights: [] as string[] }));
-vi.mock('../src/channels/telegram-turn', async load => {
-  const original = await load<typeof import('../src/channels/telegram-turn')>();
+vi.mock('../src/channels/owner-turn', async load => {
+  const original = await load<typeof import('../src/channels/owner-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
     const done = (text: string) => ({ ok: true as const, data: { model: request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
     const format = request.response_format?.name ?? 'reply';
@@ -31,7 +31,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     if (format === 'promotion') return done('{"nodes":[],"edges":[],"promoted":[]}');
     return done('{}');
   } };
-  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
+  return { ...original, createOwnerResponder: (...args: Parameters<typeof original.createOwnerResponder>) => { args[10] = gateway; return original.createOwnerResponder(...args); } };
 });
 const { OwnerDO } = await import('../src/channels/owner-do');
 

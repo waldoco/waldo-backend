@@ -16,8 +16,8 @@ const CARD_TEXT = 'Your morning is clear until noon.';
 const REMINDER_TEXT = 'Time to call Sam.';
 // duringModel runs inside each model call, after the job's admission and before its reply is published.
 const fixture = vi.hoisted(() => ({ requests: [] as string[], duringModel: undefined as ((content: string) => void) | undefined }));
-vi.mock('../src/channels/telegram-turn', async load => {
-  const original = await load<typeof import('../src/channels/telegram-turn')>();
+vi.mock('../src/channels/owner-turn', async load => {
+  const original = await load<typeof import('../src/channels/owner-turn')>();
   const gateway: LLMGatewayAdapter = { async complete(request) {
     fixture.requests.push(JSON.stringify(request.request));
     const content = request.request.messages.at(-1)?.content ?? '';
@@ -28,7 +28,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
       : content.includes('[Reminder due now') ? REMINDER_TEXT : 'SKIP';
     return { ok: true, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
-  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
+  return { ...original, createOwnerResponder: (...args: Parameters<typeof original.createOwnerResponder>) => { args[10] = gateway; return original.createOwnerResponder(...args); } };
 });
 const { OwnerDO } = await import('../src/channels/owner-do');
 

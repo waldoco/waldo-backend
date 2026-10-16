@@ -87,9 +87,9 @@ vi.mock('../src/channels/telegram-api', async load => {
     if (method === 'sendMessage') { updateFixture.sent.push(payload.text ?? ''); updateFixture.markups.push(payload.reply_markup); return { message_id: updateFixture.sent.length, chat: { id: payload.chat_id } }; } return true;
   } };
 });
-vi.mock('../src/channels/telegram-turn', async load => {
-  const original = await load<typeof import('../src/channels/telegram-turn')>();
-  return { ...original, createTelegramResponder: () => ({ prompt: async (_id: string, _chat: number, text: string) => { updateFixture.prompts.push(text); return 'Calendar update: Lunch added.'; } }) };
+vi.mock('../src/channels/owner-turn', async load => {
+  const original = await load<typeof import('../src/channels/owner-turn')>();
+  return { ...original, createOwnerResponder: () => ({ prompt: async (_id: string, _chat: string, text: string) => { updateFixture.prompts.push(text); return 'Calendar update: Lunch added.'; } }) };
 });
 const { OwnerDO: UpdateOwner } = await import('../src/channels/owner-do');
 const { loopBook: updateLoops } = await import('../src/channels/loops');

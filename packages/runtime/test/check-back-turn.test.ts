@@ -24,8 +24,8 @@ const fixture = vi.hoisted(() => ({
   script: undefined as ((request: LLMGatewayRequest['request'], asked: string) => { text: string; calls?: Call[] }) | undefined,
   outage: false,
 }));
-vi.mock('../src/channels/telegram-turn', async load => {
-  const original = await load<typeof import('../src/channels/telegram-turn')>();
+vi.mock('../src/channels/owner-turn', async load => {
+  const original = await load<typeof import('../src/channels/owner-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
     fixture.requests.push(request);
     const done = (text: string, tool_calls?: Call[]) => ({ ok: true as const, data: { model: request.model, text, ...(tool_calls?.length ? { tool_calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
@@ -35,7 +35,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     const step = fixture.script?.(request, asked) ?? { text: 'SKIP' };
     return done(step.text, step.calls);
   } };
-  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway as never; return original.createTelegramResponder(...args); } };
+  return { ...original, createOwnerResponder: (...args: Parameters<typeof original.createOwnerResponder>) => { args[10] = gateway as never; return original.createOwnerResponder(...args); } };
 });
 const { OwnerDO } = await import('../src/channels/owner-do');
 

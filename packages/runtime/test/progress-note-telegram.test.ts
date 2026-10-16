@@ -11,15 +11,15 @@ import type { LLMGatewayRequest } from '../src/llm/provider';
 // note leaves while the turn runs, straight to the chat; the reply leaves later, on the alarm that drains the final outbox.
 const NOTE = 'Found two hotels under budget near the station; checking reviews on a third.';
 const world = vi.hoisted(() => ({ requests: [] as LLMGatewayRequest['request'][], sends: [] as { text: string; chat?: number }[], next: 500, final: 'Here are three hotels near the station.', throttleNote: false }));
-vi.mock('../src/channels/telegram-turn', async load => {
-  const original = await load<typeof import('../src/channels/telegram-turn')>();
+vi.mock('../src/channels/owner-turn', async load => {
+  const original = await load<typeof import('../src/channels/owner-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
     if (request.response_format) return { ok: true as const, data: { model: request.model, text: '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
     world.requests.push(request);
     const first = !request.tool_turns?.length;
     return { ok: true as const, data: { model: request.model, text: first ? '' : world.final, ...(first ? { tool_calls: [{ call_id: 'note-1', name: 'send_progress_note', arguments: JSON.stringify({ text: NOTE }) }] } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
-  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
+  return { ...original, createOwnerResponder: (...args: Parameters<typeof original.createOwnerResponder>) => { args[10] = gateway; return original.createOwnerResponder(...args); } };
 });
 vi.mock('../src/channels/telegram-api', async load => { const original = await load<typeof import('../src/channels/telegram-api')>(); return { ...original, createTelegramCaller: () => async (method: string, body: { chat_id?: number; text?: string }) => {
   if (method === 'getMe') return { username: 'fixture_bot' };

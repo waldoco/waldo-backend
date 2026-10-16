@@ -12,8 +12,8 @@ const NOTE = 'Booked physio with Dr Mehta for Friday at 4.';
 const ACK = 'Noted: physio with Dr Mehta, Friday at 4.';
 const ANSWER = 'Friday at 4 with Dr Mehta.';
 const model = vi.hoisted(() => ({ requests: [] as string[], step: 0 }));
-vi.mock('../src/channels/telegram-turn', async load => {
-  const original = await load<typeof import('../src/channels/telegram-turn')>();
+vi.mock('../src/channels/owner-turn', async load => {
+  const original = await load<typeof import('../src/channels/owner-turn')>();
   // Scripted model: turn one answers; turn two searches the episodes first, then answers.
   const gateway = { async complete({ request }: LLMGatewayRequest) {
     const done = (text: string, tool_calls?: Array<{ call_id: string; name: string; arguments: string }>) => ({ ok: true as const, data: { model: request.model, text, ...(tool_calls ? { tool_calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
@@ -22,7 +22,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     const step = model.step++;
     return step === 0 ? done(ACK) : step === 1 ? done('', [{ call_id: 'search', name: 'search_episodes', arguments: JSON.stringify({ query: 'physio' }) }]) : done(ANSWER);
   } };
-  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
+  return { ...original, createOwnerResponder: (...args: Parameters<typeof original.createOwnerResponder>) => { args[10] = gateway; return original.createOwnerResponder(...args); } };
 });
 const { OwnerDO } = await import('../src/channels/owner-do');
 

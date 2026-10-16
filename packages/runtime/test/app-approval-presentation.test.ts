@@ -6,15 +6,16 @@ import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 
 const model = vi.hoisted(() => ({ requests: [] as string[] }));
-vi.mock('../src/channels/telegram-turn', async load => {
-  const original = await load<typeof import('../src/channels/telegram-turn')>();
+vi.mock('../src/channels/owner-turn', async load => {
+  const original = await load<typeof import('../src/channels/owner-turn')>();
   const gateway = { async complete(request: import('../src/llm/provider').LLMGatewayRequest) {
     model.requests.push(JSON.stringify(request));
     return { ok: true as const, data: { model: request.request.model, text: 'Noted.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
-  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
+  return { ...original, createOwnerResponder: (...args: Parameters<typeof original.createOwnerResponder>) => { args[10] = gateway; return original.createOwnerResponder(...args); } };
 });
-const { telegramTurnEnvelope } = await import('../src/channels/telegram-turn');
+const { surfaceTurnEnvelope } = await import('../src/channels/owner-runtime');
+const { SURFACES } = await import('../src/channels/surfaces/registry');
 const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '5d1f8b3a-6c2e-4a90-9b17-30c4e5f6a7b8';
@@ -36,7 +37,7 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('the approval delivery each surface tells the model', () => {
-  const delivery = (surface?: string) => telegramTurnEnvelope(ownerTyped({ updateId: 1, messageId: null, senderId: 7, chatId: 7, sentAt: null, text: 'hi' }), surface).presentation?.delivery;
+  const delivery = (surface: keyof typeof SURFACES = 'telegram') => surfaceTurnEnvelope(ownerTyped({ updateId: 1, messageId: null, senderId: 7, chatId: 7, sentAt: null, text: 'hi' }), SURFACES[surface].descriptor.presentation).presentation?.delivery;
 
   it('gives the app native approval buttons, the same as Telegram', () => {
     expect(delivery('app')).toEqual({ text: true, approval: 'native_buttons', reactions: false, attachments: false });

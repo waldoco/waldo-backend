@@ -20,7 +20,7 @@ const fakeStorage = () => {
   };
 };
 
-// Mirrors the production telegram turn wiring (channels/telegram-turn.ts): one fixture
+// Mirrors the production owner turn wiring (channels/owner-turn.ts): one fixture
 // invocation, the local trusted-brief composer fed by the tool-output ledger, one joined
 // conversation path. The model seam is a stub; the regression targets context composition.
 const harness = () => {

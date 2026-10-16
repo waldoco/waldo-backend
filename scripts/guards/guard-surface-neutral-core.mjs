@@ -2,9 +2,10 @@
 // guard-surface-neutral-core — the runtime core decides by declared capability, not by
 // which surface a turn came from. Every comparison against the surface list in
 // packages/runtime/src is counted per file and held to the committed baseline: a file
-// may only lose compares. The surface list is read from the app contract so a new
-// surface is ratcheted the day it is declared. Raising a baseline number is the
-// backend lead's merge-gate decision; lowering one is the author's duty in the same PR.
+// may only lose compares, and a turnOnSurface( call counts as one everywhere except the
+// surface adapters. The surface list is read from the app contract so a new surface is
+// ratcheted the day it is declared. Raising a baseline number is the backend lead's
+// merge-gate decision; lowering one is the author's duty in the same PR.
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -94,13 +95,18 @@ function walk(dir, files) {
   }
 }
 
-function countCompares(file, pattern) {
+// The surface adapters may ask whether a turn came in on their own surface; anywhere else that call is a surface compare.
+const ADAPTER_DIR = ['packages', 'runtime', 'src', 'channels', 'surfaces'].join('/') + '/';
+const SURFACE_CHECK_CALL = /\bturnOnSurface\(/g;
+
+function countCompares(file, pattern, path) {
   const hits = [];
+  const inAdapter = path.startsWith(ADAPTER_DIR);
   readFileSync(file, 'utf8')
     .split('\n')
     .forEach((line, index) => {
-      const matches = line.match(pattern);
-      if (matches) hits.push({ line: index + 1, text: line.trim(), count: matches.length });
+      const count = (line.match(pattern)?.length ?? 0) + (inAdapter ? 0 : line.match(SURFACE_CHECK_CALL)?.length ?? 0);
+      if (count) hits.push({ line: index + 1, text: line.trim(), count });
     });
   return hits;
 }
@@ -120,9 +126,9 @@ function main() {
   const counts = new Map(Object.keys(baseline).map((path) => [path, 0]));
   const hitsByFile = new Map();
   for (const file of files) {
-    const hits = countCompares(file, pattern);
-    if (hits.length === 0) continue;
     const path = relative(root, file).split(sep).join('/');
+    const hits = countCompares(file, pattern, path);
+    if (hits.length === 0) continue;
     counts.set(path, hits.reduce((sum, hit) => sum + hit.count, 0));
     hitsByFile.set(path, hits);
   }

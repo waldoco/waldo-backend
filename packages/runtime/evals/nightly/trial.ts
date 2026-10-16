@@ -2,7 +2,9 @@
 // the scenario's steps. Owner text goes through the reply path, a due reminder through the
 // reminder path, as the owner object's alarm drives it.
 import { WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL, type ModelName } from '@waldo/contracts';
-import { createTelegramResponder } from '../../src/channels/telegram-turn';
+import { createOwnerResponder } from '../../src/channels/owner-turn';
+import { surfaceResponder } from '../../src/channels/owner-runtime';
+import { appSurface } from '../../src/channels/surfaces/app-runtime';
 import { inboundTurn, ownerWords } from '../../src/channels/owner-inbound-turn';
 import type { TurnLogEntry } from '../../src/channels/telegram-listener';
 import type { LLMGatewayAdapter } from '../../src/llm/provider';
@@ -42,9 +44,9 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
   const world = evalWorld(scenario.world, scenario.start);
   const entries: TurnLogEntry[] = [];
   const model = deps.model ?? WALDO_CHAT_MODEL;
-  const responder = createTelegramResponder('eval-key', world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
+  const responder = surfaceResponder(createOwnerResponder('eval-key', world.conversation, world.memory, (entry) => entries.push(entry), world.clock,
     world.handlers, model, false, undefined, async () => true, metered(deps.gateway, deps.budget), undefined, undefined, undefined, undefined,
-    WALDO_AUXILIARY_MODEL, undefined, world.health, undefined, 'app');
+    WALDO_AUXILIARY_MODEL, undefined, world.health), appSurface.presentation);
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
   const transcript: { role: 'owner' | 'waldo' | 'world'; text: string }[] = [];
   let status: TrialRecord['status'] = 'ran';

@@ -16,8 +16,8 @@ vi.mock('../src/channels/telegram-api', async load => {
   const original = await load<typeof import('../src/channels/telegram-api')>();
   return { ...original, createTelegramCaller: () => async (method: string, payload: { chat_id?: number }) => method === 'sendMessage' ? { message_id: 900, chat: { id: payload.chat_id } } : true };
 });
-vi.mock('../src/channels/telegram-turn', async load => {
-  const original = await load<typeof import('../src/channels/telegram-turn')>();
+vi.mock('../src/channels/owner-turn', async load => {
+  const original = await load<typeof import('../src/channels/owner-turn')>();
   const gateway: LLMGatewayAdapter = { async complete({ request }) {
     const said = JSON.stringify(request.messages);
     const add = request.response_format?.name !== 'claim_ops' ? [] : [['Has a sister called Mira', 'my sister is called Mira'], ['Swims every Friday before work', QUOTE]]
@@ -26,9 +26,10 @@ vi.mock('../src/channels/telegram-turn', async load => {
       : request.response_format ? '{}' : 'Noted.';
     return { ok: true, data: { model: request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
-  const readers = { download: async () => new Uint8Array([1]), transcribe: async () => QUOTE };
-  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[4] = readers; args[11] = gateway; return original.createTelegramResponder(...args); } };
+  return { ...original, createOwnerResponder: (...args: Parameters<typeof original.createOwnerResponder>) => { args[10] = gateway; return original.createOwnerResponder(...args); } };
 });
+vi.mock('../src/channels/telegram-media', async load => ({ ...await load<typeof import('../src/channels/telegram-media')>(), createTelegramFileDownloader: () => async () => new Uint8Array([1]) }));
+vi.mock('../src/llm/transcriber', () => ({ selectTranscriber: () => ({ provider: 'openai', transcribe: async () => QUOTE }) }));
 const { OwnerDO } = await import('../src/channels/owner-do');
 
 it('splits an owner message into its own words and the quoted ranges, and quotes all of it when the ranges no longer fit', () => {
