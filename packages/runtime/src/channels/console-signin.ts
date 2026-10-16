@@ -113,7 +113,9 @@ const page = (body: string, status = 200) => new Response(
         if (action === location.origin + '/console/verify' && response.ok &&
           destination.origin === location.origin && !destination.search && !destination.hash &&
           (destination.pathname === '/console' || (destination.pathname === '${CONSOLE_DEVICES_PATH}' && body.get('return_to') === '${CONSOLE_DEVICES_PATH}'))) {
-          location.assign(destination.pathname);
+          // The devices page answers a navigation with the console route it moved to. fetch drops that
+          // fragment, so a Kennel sign-in navigates to the page itself and lets the browser keep it.
+          location.assign(body.get('return_to') === '${CONSOLE_DEVICES_PATH}' ? '${CONSOLE_DEVICES_PATH}' : destination.pathname);
           return;
         }
         throw new Error('Unexpected redirect');

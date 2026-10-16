@@ -28,6 +28,7 @@ import {OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,ownerControlsView,ownerCo
 import {MEMORY_CONTROL_PATH,projectMemoryControl,resolveMemoryAction} from './dashboard-memory-actions';
 import {CONTROLS_PATH,readControlsQuery,projectControls} from './dashboard-controls';
 import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,googleConnectReceipt} from './dashboard-control-actions';
+import {channelControlsAction,channelControlsQuery,channelControlsRead,channelControlView} from './dashboard-channel-controls';
 import { createScopedCuratedSkillCapability, type OwnerSkillCapability } from '../skills/curated-host';
 import { seededSkillCustody } from '../skills/curated-owner';
 import { OwnerAdmissionError, ownerMessageAdmission, type OwnerMessageAdmission } from '../identity/owner-message-admission';
@@ -632,6 +633,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     return outcome;
   }
+  // Local fences after a canonical bridge revocation: queued turns from it close, a running one stops.
+  private readonly iMessageBridgeRevoked = (bridgeDoName: string): void => {
+    new IMessageOwnerInbox(this.ctx.storage).revokeBridge(bridgeDoName);
+    if (this.activeIMessage?.bridgeDoName === bridgeDoName) this.activeAbort?.abort();
+  };
   /** Bridge DO RPC: terminal native result for a frozen reply (first terminal result wins). */
   async recordIMessageResult(input: IMessageResultReport): Promise<boolean> {
     try { return new IMessageFinalOutbox(this.ctx.storage).settle(input.replyRef, input.commandId, input.result); } catch { return false; }
@@ -1402,10 +1408,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (url.pathname === CONSOLE_IMESSAGE_PATH && request.method === 'GET') return iMessageConsolePage(this.imessageHost.env, this.ctx.storage.kv.get<string>('do_name') ?? '', session.csrf);
     if (url.pathname === CONSOLE_ACTION_PATH && request.method === 'POST') {
       const form = await request.clone().formData();
-      if (isIMessageConsoleAction(form.get('action'))) return iMessageConsoleAction(form, session.csrf, this.ctx.storage.kv.get<string>('do_name') ?? '', this.imessageHost.env, (bridgeDoName) => {
-        new IMessageOwnerInbox(this.ctx.storage).revokeBridge(bridgeDoName);
-        if (this.activeIMessage?.bridgeDoName === bridgeDoName) this.activeAbort?.abort();
-      });
+      if (isIMessageConsoleAction(form.get('action'))) return iMessageConsoleAction(form, session.csrf, this.ctx.storage.kv.get<string>('do_name') ?? '', this.imessageHost.env, this.iMessageBridgeRevoked);
       if (form.get('action') === 'device.pair' || form.get('action') === 'device.revoke' || form.get('action') === 'device.query' || form.get('action') === 'device.notify') return deviceConsoleAction(form, session.csrf, this.ctx.storage.kv.get<string>('do_name') ?? '', deviceDirectory(this.env), this.env.DEVICE_BRIDGE_DO, request.headers.get('accept') ?? '');
     }
     if (url.pathname === BROWSER_TRIAL_PATH) {
@@ -1490,6 +1493,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             if((await response.clone().json() as {receipt?:{signed_out?:boolean}}).receipt?.signed_out){const headers=new Headers(response.headers);for(const name of [CONSOLE_COOKIE,'waldo_owner'])headers.append('set-cookie',`${name}=; Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=0`);return new Response(response.body,{status:response.status,headers});}
             return response;
           }
+          const channel={imessage:this.imessageHost.env,devices:deviceDirectory(this.env),deviceBridges:this.env.DEVICE_BRIDGE_DO,owner:this.ctx.storage.kv.get<string>('do_name')??'',csrf:session.csrf,expires:session.expires,store:this.ctx.storage,sessions:()=>access.list(),onIMessageRevoked:this.iMessageBridgeRevoked};
+          const channelRead=url.pathname===CONTROLS_PATH?channelControlsQuery(url.searchParams):null;
+          if(channelRead)return channelControlsRead(channelRead,channel);
+          if(actionsRoute&&channelControlView((await request.clone().formData().catch(()=>null))?.get('view')))return channelControlsAction(await request.formData(),channel);
           const runtime=this.setup();await runtime.ready;
           if(controlsRoute){
             if(memoryControlsRoute){

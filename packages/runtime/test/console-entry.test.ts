@@ -49,8 +49,8 @@ describe('console entry across actual owner sessions', () => {
     expect(await opens('/console/invites')).toBe('/console#/invites');
     expect((await json('/console/waiting')).csrf).toBe(current.csrf);
     expect((await json('/console?m=' + encodeURIComponent('Your account is locked.')) as { notice?: unknown }).notice ?? null).toBeNull();
-    const imessage = await worker.fetch(new Request(origin + '/console/imessage', { redirect: 'manual', headers: { cookie } }), bindings);
-    expect(imessage.headers.get('location') ?? '').not.toContain('#/');
+    expect(await opens('/console/imessage')).toBe('/console#/connections/imessage');
+    expect(await opens('/console/devices')).toBe('/console#/connections/devices');
     const missingFile = await worker.fetch(new Request(origin + '/console/file?id=987654', { redirect: 'manual', headers: { cookie } }), bindings);
     expect({ status: missingFile.status, location: missingFile.headers.get('location'), type: missingFile.headers.get('content-type'), body: await missingFile.text() })
       .toEqual({ status: 502, location: null, type: 'text/plain; charset=utf-8', body: NOTICES['file.unavailable'] });
