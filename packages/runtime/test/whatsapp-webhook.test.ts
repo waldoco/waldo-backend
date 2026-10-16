@@ -146,3 +146,31 @@ describe('handleWhatsAppWebhook', () => {
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 });
+
+describe('handleWhatsAppWebhook: a send Meta refuses later for the 24-hour window', () => {
+  const statuses = (rows: object[]) => JSON.stringify({ entry: [{ changes: [{ value: { metadata: { phone_number_id: 'pn1' }, statuses: rows } }] }] });
+  const refused = (id: string, recipient: string) => ({ id, status: 'failed', recipient_id: recipient, errors: [{ code: 131047, title: 'Re-engagement message' }] });
+  const directory: OwnerDirectory = { byPresence: async (_p, subject) => subject === '15550001111' ? { doName: 'do-a', subject, timezone: null } : null, redeem: async () => null };
+  const env = (ns: DurableObjectNamespace): WhatsAppWebhookEnv => ({ OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret' });
+
+  it('goes to the recipient owner\'s Durable Object with only the refused message ids; other statuses and strangers go nowhere', async () => {
+    const { fetch, ns } = namespace();
+    const body = statuses([
+      refused('wamid.a', '15550001111'),
+      { id: 'wamid.b', status: 'delivered', recipient_id: '15550001111' },
+      { id: 'wamid.c', status: 'failed', recipient_id: '15550001111', errors: [{ code: 131026 }] },
+      refused('wamid.d', '15550009999'),
+    ]);
+    expect((await run(await post('x', body), env(ns), directory)).status).toBe(200);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith('https://telegram-owner/whatsapp-status', {
+      method: 'POST', body: JSON.stringify({ refused: ['wamid.a'] }), headers: { 'x-waldo-whatsapp-subject': '15550001111' },
+    });
+  });
+
+  it('answers 503 when the owner could not take it, so Meta delivers the callback again', async () => {
+    const { fetch, ns } = namespace();
+    fetch.mockImplementation(async () => new Response('unavailable', { status: 503 }));
+    expect((await run(await post('x', statuses([refused('wamid.a', '15550001111')])), env(ns), directory)).status).toBe(503);
+  });
+});

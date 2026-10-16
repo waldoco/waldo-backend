@@ -147,7 +147,7 @@ import { stableJson } from '../context-composer/canonical';
 import { APP_CONNECT_GUIDANCE, appApprovalLink, appCaller } from './surfaces/app';
 import { appApprovalsRequest } from './app-approvals';
 import { WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
-import { deliverHeldWhatsApp, recordWhatsAppInbound, whatsappTemplateConfig, whatsappWindowCaller } from './whatsapp-window';
+import { deliverHeldWhatsApp, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
 import { sendMessageHandler } from '../tools/live/messaging';
@@ -691,13 +691,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const found = await this.appOwnerLookup();
       return found.kind === 'admitted' ? this.appScheduledOwner(found.authority) : found;
     }
-    const subject = kv.get<string>('telegram_subject');
-    if (!subject || !/^\d+$/.test(subject) || kv.get<boolean>('telegram_unlinked') === true) return { kind: 'dormant' };
+    // A Telegram presence admits the owner when there is one; an owner whose only surface is WhatsApp is admitted by that presence.
+    const telegram = kv.get<string>('telegram_subject');
+    const provider = telegram && /^\d+$/.test(telegram) && kv.get<boolean>('telegram_unlinked') !== true ? 'telegram' : this.whatsappBound() ? 'whatsapp' : null;
+    if (!provider) return { kind: 'dormant' };
+    const subject = kv.get<string>(`${provider}_subject`)!;
     try {
-      const found = await commonOwnerAuthority(this.env).resolve('telegram', subject, doName);
+      const found = await commonOwnerAuthority(this.env).resolve(provider, subject, doName);
       if (!found) return { kind: 'dormant' };
       return { kind: 'admitted', binding: { ownerId: found.directoryOwnerId, bindingRef: found.presenceId, revision: found.admissionRevision, physicalDoId: this.ctx.id.toString() },
-        current: () => kv.get<string>('do_name') === doName && kv.get<string>('telegram_subject') === subject && kv.get<boolean>('telegram_unlinked') !== true };
+        current: () => kv.get<string>('do_name') === doName && kv.get<string>(`${provider}_subject`) === subject && kv.get<boolean>(`${provider}_unlinked`) !== true };
     } catch (error) {
       return error instanceof Error && error.message === 'common owner authority rejected' ? { kind: 'dormant' } : { kind: 'retry' };
     }
@@ -733,6 +736,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private appBound(): boolean {
     const kv = this.ctx.storage.kv, doName = kv.get<string>('do_name');
     return !!doName && kv.get<boolean>('app_unlinked') !== true && kv.get<string>('app_subject') === String(appSubjectFor(doName));
+  }
+
+  // A WhatsApp presence bound at ingress to this owner's Durable Object, on a deploy that can send WhatsApp messages.
+  private whatsappBound(): boolean {
+    const kv = this.ctx.storage.kv, doName = kv.get<string>('do_name'), subject = kv.get<string>('whatsapp_subject');
+    return !!doName && !!subject && /^\d{6,15}$/.test(subject) && kv.get<boolean>('whatsapp_unlinked') !== true
+      && !!this.env.WHATSAPP_ACCESS_TOKEN && !!this.env.WHATSAPP_PHONE_NUMBER_ID && this.env.OWNER_DO?.idFromName(doName).toString() === this.ctx.id.toString();
   }
 
   // Scheduled work for an owner with an app binding asks the directory whether the account is still admitted. A revoked or
@@ -1050,6 +1060,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return Response.json({ url: begin?.url ?? null });
     }
     if (new URL(request.url).pathname === '/whatsapp-admit' && request.method === 'POST') return this.whatsappAdmit(request, body);
+    if (new URL(request.url).pathname === '/whatsapp-status' && request.method === 'POST') return this.whatsappStatus(request, body);
     const origin = request.headers.get('x-waldo-origin');
     const prevOrigin = origin ? await this.ctx.storage.get<string>('origin') : undefined;
     if (origin) await this.ctx.storage.put('origin', origin);
@@ -1172,6 +1183,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     await this.serial(async () => {
       // Messages held outside the 24-hour window go out first, so this reply's turn sees what the owner has seen.
       try { await deliverHeldWhatsApp(this.ctx.storage.kv, this.setup('whatsapp').call, Date.now(), event => console.log(JSON.stringify(event))); } catch { console.error('whatsapp held delivery unavailable'); }
+      try { await releaseWhatsAppOutbox(this.setup('whatsapp').finalOutbox, this.outboxRoute('whatsapp'), this.setup('whatsapp').settleFinal); } catch { console.error('whatsapp outbox release unavailable'); }
       const { updates, seq } = whatsappIngressUpdates(claimed, subject, (await this.ctx.storage.get<number>('wa_seq')) ?? 0);
       // The counter is persisted before each turn, so a turn that throws can never lead the next message to reuse
       // its update_id. Every claimed message still gets its turn; the first failure is rethrown afterwards.
@@ -1242,6 +1254,22 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     });
     this.whatsappInflight.add(work);
     this.ctx.waitUntil(work);
+    return new Response('ok');
+  }
+  // Meta refused sends it had accepted because the 24-hour window had closed (the webhook passes only those). The window
+  // stays closed until the owner writes; a refused outbox record's text is held for that reply, and the owner gets one knock.
+  private async whatsappStatus(request: Request, body: string): Promise<Response> {
+    const subject = request.headers.get('x-waldo-whatsapp-subject') ?? '', { kv } = this.ctx.storage;
+    if (!/^\d{6,15}$/.test(subject) || kv.get<string>('whatsapp_subject') !== subject) return new Response('forbidden', { status: 403 });
+    let refused: unknown;
+    try { refused = (JSON.parse(body) as { refused?: unknown }).refused; } catch { return new Response('bad request', { status: 400 }); }
+    if (!Array.isArray(refused) || refused.length > 100 || !refused.every(id => typeof id === 'string' && id !== '' && id.length <= 256)) return new Response('bad request', { status: 400 });
+    const runtime = this.setup('whatsapp'), records = runtime.finalOutbox.records();
+    for (const id of refused as string[]) {
+      const record = records.find(row => row.providerMessageId === id && row.ownerSubject === subject);
+      await whatsappWindowRefused(kv, id, record?.payload.text || null, runtime.owner, template => runtime.call('sendTemplate', template),
+        whatsappTemplateConfig(this.env), Date.now(), event => console.log(JSON.stringify(event)));
+    }
     return new Response('ok');
   }
   private refreshWhatsappDue(): void {
@@ -1727,7 +1755,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       await lane('imessage', () => this.drainIMessage(alarmEnd));
       // Directory-backed owner alarms require the same physical binding as owner ingress.
       // Keep retained work and transport recovery wakes; do not boot provider work on an orphan.
-      // An owner with no Telegram link runs on the app when the directory still admits their account.
+      // An owner with no Telegram link runs on the app when the directory still admits their account, and an owner whose only
+      // surface is WhatsApp runs on WhatsApp. An owner with the app and WhatsApp keeps the app, with no WhatsApp copy.
       let channel: ChannelKind = 'telegram';
       if (consoleAuth(this.env)) {
         const doName = this.ctx.storage.kv.get<string>('do_name');
@@ -1739,8 +1768,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (appOwner?.kind === 'admitted') {
           channel = 'app'; this.scheduledAppDelivery = this.appDeliveryFor(appOwner.authority);
           this.jobOwner = Promise.resolve(this.appScheduledOwner(appOwner.authority));
-        }
-        if (!telegramBound && appOwner?.kind !== 'admitted') {
+        } else if (!telegramBound && !this.appBound() && this.whatsappBound()) channel = 'whatsapp';
+        if (!telegramBound && appOwner?.kind !== 'admitted' && channel !== 'whatsapp') {
           if (Math.min(this.ctx.storage.kv.get<number>('browser_owner_task_due_v1') ?? Infinity, this.ctx.storage.kv.get<number>(COMMON_BROWSER_DUE) ?? Infinity,
             this.ctx.storage.kv.get<number>(COMMON_BROWSER_LEASE_DUE) ?? Infinity) <= Date.now()) this.ctx.waitUntil(Promise.all([this.browserTasks.maintain(), this.ownerBrowser.maintain()]));
           await rearmSharedAlarm(this.ctx.storage, appOwner?.kind === 'retry' ? Date.now() + APP_ADMISSION_RETRY_MS : null, Date.now(), 30_000);
@@ -1779,31 +1808,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (selected === 0) { try { await lane('inbox', () => this.drainInbox(alarmEnd)); } finally { await scheduler.rearm(); } return; }
       if (selected === 1) {
         // Each record goes to the surface it is addressed to, with that surface's checks.
-        const routeFor = (surface: ChannelKind): OutboxRoute => {
-          const runtime = this.setup(surface);
-          return {
-            addressed: r => r.payload.chat_id === runtime.owner && r.ownerSubject === String(runtime.owner),
-            allowed: async r => (!r.commonExecution || r.commonExecution.settled===true) && (!(r.mailFollowup || r.calendarPrep) || runtime.retainedRecallAvailable()) && r.payload.chat_id === runtime.owner && r.ownerSubject === String(runtime.owner)
-              && (!r.bot || r.bot === this.env.TELEGRAM_BOT_TOKEN?.split(':')[0])
-              && r.doName === (this.ctx.storage.kv.get<string>('do_name') ?? '')
-              && this.ctx.storage.kv.get<boolean>(`${surface}_unlinked`) !== true
-              && (!r.mailFollowup || (loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume !== 'low' && loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).reviewEligible(r.mailFollowup, this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')))
-              && (!r.calendarPrep || await runtime.calendarPrepCurrent(r.calendarPrep))
-              && (!r.scheduleNotice || failurePauseHolds(this.ctx.storage.sql, r.scheduleNotice))
-              // Cancelling a reminder deletes its note, so a check-back queued before the cancel never goes out.
-              && (!r.reminder || this.ctx.storage.sql.exec('SELECT 1 FROM reminder_notes WHERE id = ?', r.reminder.id).toArray().length > 0)
-              && heartbeatEligible(r, this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC', Date.now()),
-            defer: async r => {
-              if(r.commonExecution&&!r.commonExecution.settled)return Date.now()+30_000;
-              if (r.scheduleNotice && isQuiet(loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity(), Date.now(), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')) return Date.now() + 10 * 60_000;
-              // Frozen source-derived outputs cannot replay retained facts while coverage is unproved.
-              // Keep bytes and transport state intact; current owner replies use a separate lane.
-              if ((r.mailFollowup || r.calendarPrep) && !runtime.retainedRecallAvailable()) return Math.min(Date.now() + 10 * 60_000, r.expiresAt ?? r.createdAt + 86400000);
-              return (r.mailFollowup || r.calendarPrep) && ((r.mailFollowup && !proactiveEnabled(this.env.MAIL_SOURCE_FOLLOWUPS, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity())) || (r.calendarPrep && !proactiveEnabled(this.env.CALENDAR_GROUNDED_PREP, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity())) || loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume === 'low' || isQuiet(loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity(), Date.now(), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')) ? Date.now() + 10 * 60_000 : null;
-            },
-            send: payload => runtime.call('sendMessage', payload),
-          };
-        };
+        const routeFor = (surface: ChannelKind): OutboxRoute => this.outboxRoute(surface);
         const routes = [routeFor(channel)];
         if (channel === 'telegram' && consoleAuth(this.env) && this.appBound()) routes.push(admittedRoute(routeFor('app'), async () => {
           const found = await this.appOwnerLookup();
@@ -1865,6 +1870,37 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       });
     });
     if (!entered) await this.rearmWithSchedule();
+  }
+
+  // The outbox route to one of the owner's surfaces: which records are addressed to it, and how each is checked, held and
+  // sent there. A WhatsApp owner's route also waits out a closed 24-hour window.
+  private outboxRoute(surface: ChannelKind): OutboxRoute {
+    const runtime = this.setup(surface);
+    const route: OutboxRoute = {
+      addressed: r => r.payload.chat_id === runtime.owner && r.ownerSubject === String(runtime.owner),
+      allowed: async r => (!r.commonExecution || r.commonExecution.settled===true) && (!(r.mailFollowup || r.calendarPrep) || runtime.retainedRecallAvailable()) && r.payload.chat_id === runtime.owner && r.ownerSubject === String(runtime.owner)
+        && (!r.bot || r.bot === this.env.TELEGRAM_BOT_TOKEN?.split(':')[0])
+        && r.doName === (this.ctx.storage.kv.get<string>('do_name') ?? '')
+        && this.ctx.storage.kv.get<boolean>(`${surface}_unlinked`) !== true
+        && (!r.mailFollowup || (loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume !== 'low' && loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).reviewEligible(r.mailFollowup, this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')))
+        && (!r.calendarPrep || await runtime.calendarPrepCurrent(r.calendarPrep))
+        && (!r.scheduleNotice || failurePauseHolds(this.ctx.storage.sql, r.scheduleNotice))
+        // Cancelling a reminder deletes its note, so a check-back queued before the cancel never goes out.
+        && (!r.reminder || this.ctx.storage.sql.exec('SELECT 1 FROM reminder_notes WHERE id = ?', r.reminder.id).toArray().length > 0)
+        && heartbeatEligible(r, this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC', Date.now()),
+      defer: async r => {
+        if(r.commonExecution&&!r.commonExecution.settled)return Date.now()+30_000;
+        if (r.scheduleNotice && isQuiet(loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity(), Date.now(), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')) return Date.now() + 10 * 60_000;
+        // Frozen source-derived outputs cannot replay retained facts while coverage is unproved.
+        // Keep bytes and transport state intact; current owner replies use a separate lane.
+        if ((r.mailFollowup || r.calendarPrep) && !runtime.retainedRecallAvailable()) return Math.min(Date.now() + 10 * 60_000, r.expiresAt ?? r.createdAt + 86400000);
+        return (r.mailFollowup || r.calendarPrep) && ((r.mailFollowup && !proactiveEnabled(this.env.MAIL_SOURCE_FOLLOWUPS, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity())) || (r.calendarPrep && !proactiveEnabled(this.env.CALENDAR_GROUNDED_PREP, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity())) || loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume === 'low' || isQuiet(loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity(), Date.now(), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')) ? Date.now() + 10 * 60_000 : null;
+      },
+      send: payload => runtime.call('sendMessage', payload),
+    };
+    if (surface !== 'whatsapp') return route;
+    return whatsappWindowRoute(route, { kv: this.ctx.storage.kv, subject: this.ctx.storage.kv.get<string>('whatsapp_subject') ?? '', template: whatsappTemplateConfig(this.env),
+      knock: template => runtime.call('sendTemplate', template), log: event => console.log(JSON.stringify(event)) });
   }
 
   // An alarm waits in the serial queue behind work a request started, which can hold it for a whole turn. It has claimed
@@ -2961,7 +2997,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'reminder' });
           return;
         }
-        if (channel === 'telegram') {
+        // WhatsApp reminders wait in the outbox too, so one held for a closed window still honours a later cancel.
+        if (channel === 'telegram' || channel === 'whatsapp') {
           await finalOutbox.enqueue({ id: `reminder:${entry.id}:${entry.occurrence_at}`, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text },
           receiptUrls: [...(turnReceiptUrls.get(trace) ?? [])],
             ownerSubject: String(owner), doName: identity.get<string>('do_name') ?? '',

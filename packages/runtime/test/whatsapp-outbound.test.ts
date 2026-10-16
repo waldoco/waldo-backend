@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { whatsappTelegramShim } from '../src/channels/whatsapp-api';
 import { createWhatsAppMediaUploader, deliverWhatsAppFile } from '../src/channels/whatsapp-api';
 import { egressGuardedCaller } from '../src/channels/egress-guard';
-import { WA_LAST_INBOUND_KEY, WHATSAPP_HELD_RETENTION_MS, deliverHeldWhatsApp, recordWhatsAppInbound, whatsappTemplateConfig, whatsappWindowCaller } from '../src/channels/whatsapp-window';
+import { WA_LAST_INBOUND_KEY, WHATSAPP_HELD, WHATSAPP_HELD_RETENTION_MS, deliverHeldWhatsApp, recordWhatsAppInbound, whatsappTemplateConfig, whatsappWindowCaller } from '../src/channels/whatsapp-window';
 import { gatedCaller } from '../src/channels/telegram-api';
 import { DOCX_MIME as DOCX } from '../src/channels/document-render';
 
@@ -149,8 +149,8 @@ describe('whatsapp 24-hour window', () => {
     const { kv, map, call, graph } = setup(clock);
     recordWhatsAppInbound(kv, [{ timestamp: String(T0 / 1000) }], T0);
     clock.now = T0 + 25 * HOUR;
-    expect(await call('sendMessage', { chat_id: 1, text: 'PRIVATE reminder one' })).toBeUndefined();
-    expect(await call('sendMessage', { chat_id: 1, text: 'PRIVATE reminder two' })).toBeUndefined();
+    expect(await call('sendMessage', { chat_id: 1, text: 'PRIVATE reminder one' })).toBe(WHATSAPP_HELD);
+    expect(await call('sendMessage', { chat_id: 1, text: 'PRIVATE reminder two' })).toBe(WHATSAPP_HELD);
     const bodies = sentBodies(graph);
     expect(bodies).toEqual([{ messaging_product: 'whatsapp', to: '15550001111', type: 'template', template: { name: 'waldo_update_ready', language: { code: 'en' } } }]);
     expect(JSON.stringify(bodies)).not.toContain('PRIVATE');
@@ -159,7 +159,7 @@ describe('whatsapp 24-hour window', () => {
 
   it('an owner with no recorded inbound is outside the window', async () => {
     const { call, graph } = setup({ now: T0 });
-    expect(await call('sendMessage', { chat_id: 1, text: 'hello' })).toBeUndefined();
+    expect(await call('sendMessage', { chat_id: 1, text: 'hello' })).toBe(WHATSAPP_HELD);
     expect(sentBodies(graph).map(body => body.type)).toEqual(['template']);
   });
 
@@ -175,7 +175,7 @@ describe('whatsapp 24-hour window', () => {
       expect(whatsappTemplateConfig(bad)).toBeNull();
   });
 
-  it('a 131047 refusal inside our window holds and knocks; any other refusal propagates and holds nothing', async () => {
+  it('a 131047 refusal inside our window holds, knocks and closes the window until the owner writes; any other refusal propagates and holds nothing', async () => {
     const clock = { now: T0 };
     let refusal = 131047;
     const graph = vi.fn(async (_url: string, init?: RequestInit) => JSON.parse(String(init?.body)).type === 'template'
@@ -183,11 +183,16 @@ describe('whatsapp 24-hour window', () => {
       : Response.json({ error: { code: refusal, message: 'refused' } }, { status: 400 }));
     const { kv, map, call } = setup(clock, graph as unknown as ReturnType<typeof graphOk>);
     recordWhatsAppInbound(kv, [{ timestamp: String(T0 / 1000) }], T0);
-    expect(await call('sendMessage', { chat_id: 1, text: 'held' })).toBeUndefined();
+    expect(await call('sendMessage', { chat_id: 1, text: 'held' })).toBe(WHATSAPP_HELD);
     expect(graph.mock.calls.map(([, init]) => JSON.parse(String(init?.body)).type)).toEqual(['text', 'template']);
+    // Meta has said the window is closed, so the next message waits without another refused send or a second knock.
+    expect(await call('sendMessage', { chat_id: 1, text: 'held too' })).toBe(WHATSAPP_HELD);
+    expect(graph).toHaveBeenCalledTimes(2);
+    clock.now = T0 + 60_000;
+    recordWhatsAppInbound(kv, [{ timestamp: String(clock.now / 1000) }], clock.now);
     refusal = 131026;
     await expect(call('sendMessage', { chat_id: 1, text: 'not held' })).rejects.toMatchObject({ code: 131026 });
-    expect([...map.keys()].filter(key => key.startsWith('wa_held:'))).toHaveLength(1);
+    expect([...map.keys()].filter(key => key.startsWith('wa_held:'))).toHaveLength(2);
   });
 
   it('a failed knock is logged and retried with the next held message; a new reply re-arms the knock', async () => {
@@ -226,7 +231,7 @@ describe('whatsapp 24-hour window', () => {
     expect(sentBodies(graph).map(body => body.text.body)).toEqual(['third']);
 
     clock.now += 25 * HOUR;
-    expect(await call('sendMessage', { chat_id: 1, text: 'too old' })).toBeUndefined();
+    expect(await call('sendMessage', { chat_id: 1, text: 'too old' })).toBe(WHATSAPP_HELD);
     graph.mockClear();
     clock.now += WHATSAPP_HELD_RETENTION_MS;
     recordWhatsAppInbound(kv, [{ timestamp: String(clock.now / 1000) }], clock.now);

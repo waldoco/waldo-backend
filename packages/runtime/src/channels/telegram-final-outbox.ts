@@ -20,6 +20,8 @@ export type FinalRecord = {
   expiresAt?: number; bot?: string;
   receiptUrls?: string[]; ownerSubject: string; doName: string; status: 'pending' | 'attempting' | 'delivered' | 'quarantined' | 'blocked';
   dueAt: number; createdAt: number; attempts: number; settled?: boolean; messageId?: number; deliveredAt?: number; reason?: string;
+  // A surface whose receipt names its message by a string id (WhatsApp's wamid) records it here instead of messageId.
+  providerMessageId?: string;
   inbox?: { id: string; runId: string; attempt: string };
   parts?: FinalPart[];
   deliveredParts?: number;
@@ -34,6 +36,14 @@ export type FinalRecord = {
   reminder?: { id: string; occurrence: number; runId: string; schedulerRunId: string | null; once: boolean };
 };
 type Kv = Pick<DurableObjectStorage['kv'], 'get' | 'put'>;
+// What a surface's acknowledgement proves was sent. 'held' is a surface that kept the text for later instead of sending it.
+export type DeliveryReceipt = Readonly<{ messageId?: number; providerMessageId?: string }>;
+export type DeliveryAck = DeliveryReceipt | 'held' | null;
+// Telegram's acknowledgement names the message and the chat it landed in, which must be the record's own.
+export const telegramReceipt = (result: unknown, chatId: number): DeliveryAck => {
+  const ack = result as { message_id?: unknown; chat?: { id?: unknown } } | undefined;
+  return Number.isSafeInteger(ack?.message_id) && (ack!.message_id as number) > 0 && ack?.chat?.id === chatId ? { messageId: ack!.message_id as number } : null;
+};
 const digest = async (payload: unknown) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(payload))))].map(x => x.toString(16).padStart(2, '0')).join('');
 const guardedPayload = (payload: FinalPayload): FinalPayload => {
   const fallback = payload.fallback_text === undefined ? undefined : redactSecretUrls(payload.fallback_text);
@@ -138,13 +148,26 @@ export class TelegramFinalOutbox {
     else await this.save(rows);
     return true;
   }
+  // The owner wrote again on a surface that kept records waiting: those records are due now. Answers how many are pending.
+  async wake(addressed: (record: FinalRecord) => boolean): Promise<number> {
+    const rows = this.records(), now = this.now();
+    let pending = 0;
+    for (const row of rows) if (row.status === 'pending' && addressed(row)) { pending += 1; row.dueAt = Math.min(row.dueAt, now); }
+    if (pending) await this.save(rows);
+    return pending;
+  }
   async drain(options: {
     allowed(record: FinalRecord): Promise<boolean>;
     // Each part goes with the record it belongs to, so a caller can send it to the surface the record is addressed to.
     send(payload: FinalPayload, record: FinalRecord): Promise<unknown>;
     defer?(record: FinalRecord): Promise<number | null>;
+    // How the surface the record went to acknowledges a part; Telegram's when absent.
+    receipt?(result: unknown, record: FinalRecord): DeliveryAck;
+    // Restricts the pass to some records; the others are left exactly as they are.
+    select?(record: FinalRecord): boolean;
     settled(record: FinalRecord): Promise<void>;
   }): Promise<void> {
+    const selected = options.select ?? (() => true);
     await this.maintain();
     const rows = this.records();
     // attempting persisted before network is an uncertainty boundary after restart.
@@ -153,10 +176,10 @@ export class TelegramFinalOutbox {
     }
     await this.save(rows);
     // Reconcile an ACK persisted before lifecycle bookkeeping without sending again.
-    for (const row of rows) if (row.status !== 'pending' && !row.settled) {
+    for (const row of rows) if (row.status !== 'pending' && !row.settled && selected(row)) {
       await options.settled(row); row.settled = true; await this.save(rows);
     }
-    const row = rows.find(r => r.status === 'pending' && r.dueAt <= this.now());
+    const row = rows.find(r => r.status === 'pending' && r.dueAt <= this.now() && selected(r));
     if (!row) return;
     if (row.expiresAt !== undefined && this.now() >= row.expiresAt) {
       row.status = 'blocked'; row.reason = 'expired';
@@ -185,7 +208,7 @@ export class TelegramFinalOutbox {
     const currentAttempt = () => this.records().find(current => current.id === row.id
       && current.status === 'attempting' && current.digest === row.digest && current.attempts === row.attempts
       && JSON.stringify(current.payload) === JSON.stringify(row.payload));
-    let fallbackInvalidated = false;
+    let fallbackInvalidated = false, held = false;
     // Records persisted before parts existed derive them from the payload on read.
     const parts = row.parts?.length ? row.parts : payloadParts(row.payload);
     for (let index = row.deliveredParts ?? 0; index < parts.length; index += 1) {
@@ -219,16 +242,22 @@ export class TelegramFinalOutbox {
       // Concurrent cancellation/forget owns the persisted record. Never overwrite
       // its disposition or restore its scrubbed bytes from this captured send.
       if (fallbackInvalidated || !currentAttempt()) return;
-      const ack = result as { message_id?: unknown; chat?: { id?: unknown } } | undefined;
-      const messageId = ack?.message_id;
       if (result === undefined) { row.status = 'blocked'; row.reason = 'egress_blocked'; break; }
-      if (!Number.isSafeInteger(messageId) || (messageId as number) <= 0 || ack?.chat?.id !== row.payload.chat_id) {
-        row.status = 'quarantined'; row.reason = 'invalid_ack'; break;
+      const receipt = options.receipt ? options.receipt(result, row) : telegramReceipt(result, row.payload.chat_id);
+      if (receipt === null) { row.status = 'quarantined'; row.reason = 'invalid_ack'; break; }
+      // A held part is in the surface's custody, not delivered: the remaining parts are handed to it in order the same way,
+      // and the record ends blocked rather than delivered.
+      if (receipt === 'held') { held = true; row.reason = 'surface_held'; }
+      else {
+        if (receipt.messageId !== undefined) row.messageId = receipt.messageId;
+        if (receipt.providerMessageId !== undefined) row.providerMessageId = receipt.providerMessageId;
       }
       // Persist each ACKed part before the next send; storage faults must propagate.
       row.deliveredParts = index + 1;
-      row.messageId = messageId as number;
-      if (index + 1 === parts.length) { row.status = 'delivered'; row.deliveredAt = this.now(); }
+      if (index + 1 === parts.length) {
+        if (held) row.status = 'blocked';
+        else { row.status = 'delivered'; row.deliveredAt = this.now(); }
+      }
       if (!(await saveCurrentRow())) return;
     }
     if (!(await saveCurrentRow())) return;
