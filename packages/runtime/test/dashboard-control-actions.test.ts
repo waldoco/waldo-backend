@@ -1,5 +1,5 @@
 import {describe,it,expect,vi} from 'vitest';
-import {controlAction,controlRevision} from '../src/channels/dashboard-control-actions';
+import {controlAction,controlRevision,RECEIPT_BOOK_KEY} from '../src/channels/dashboard-control-actions';
 import type {ConsoleView} from '../src/channels/console';
 const day={version:1,view:'day',state:'available',csrf:'csrf',data:{timezone:'UTC',cards:[],proactivity:{quiet_start:null,quiet_end:null,volume:'normal'}}};
 const form=(revision:string,action='timezone.set',id='request-0001')=>{const f=new FormData();for(const [k,v] of Object.entries({csrf:'csrf',revision,view:'day',request_id:id,action,value:'UTC'}))f.set(k,v);return f;};
@@ -92,6 +92,16 @@ describe('views that list their own actions',()=>{
   expect(body).toEqual({receipt:{state:'recorded',message:'Enter this code on your Mac host.'},duplicate:true});
   expect(JSON.stringify(body)).not.toContain(secret);
   expect(act).toHaveBeenCalledTimes(1);
+ });
+ it("writes receipts only to the caller's own book, which keeps its own duplicates",async()=>{
+  const {act,rows,deps}=listedSetup();
+  const own={...deps,book:'console:channel-control-receipts'};
+  expect((await controlAction(await post({action:'imessage.link'}),own)).status).toBe(200);
+  expect([...rows.keys()]).toEqual(['console:channel-control-receipts']);
+  expect(await (await controlAction(await post({action:'imessage.link'}),own)).json()).toMatchObject({duplicate:true});
+  expect(await (await controlAction(await post({action:'imessage.link'}),deps)).json()).toMatchObject({duplicate:false});
+  expect([...rows.keys()].sort()).toEqual([RECEIPT_BOOK_KEY,'console:channel-control-receipts'].sort());
+  expect(act).toHaveBeenCalledTimes(2);
  });
  it('drops a one-time value when its receipt is not recorded',async()=>{
   const {act,deps}=listedSetup();

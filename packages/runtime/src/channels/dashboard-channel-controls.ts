@@ -7,9 +7,11 @@ import type { DeviceBridgeDO } from '../devices/device-bridge-do';
 import { deviceControlAct, devicesControls, devicesControlsStatus, type DashboardDeviceDirectory, type DevicesControls } from '../devices/dashboard-devices';
 
 // iMessage and device setup read the owner directory and bridge objects, not the console view,
-// so their reads and actions never build it. Their actions use the one control-action path.
+// so their reads and actions never build it. Their actions use the one control-action path; the owner DO
+// runs them on their own queue, apart from turns, so their receipts keep a book of their own.
 export const CHANNEL_CONTROL_VIEWS = ['imessage', 'devices'] as const;
 export type ChannelControlView = (typeof CHANNEL_CONTROL_VIEWS)[number];
+export const CHANNEL_RECEIPT_BOOK_KEY = 'console:channel-control-receipts';
 export const channelControlView = (value: unknown): ChannelControlView | null => CHANNEL_CONTROL_VIEWS.find((view) => view === value) ?? null;
 // A read names exactly one view and nothing else.
 export const channelControlsQuery = (params: URLSearchParams): ChannelControlView | null =>
@@ -34,7 +36,7 @@ export async function channelControlsRead(view: ChannelControlView, deps: Channe
 export function channelControlsAction(form: FormData, deps: ChannelControlsDeps): Promise<Response> {
   let fresh: IMessageControls | DevicesControls | undefined;
   return controlAction(form, {
-    csrf: deps.csrf, expires: deps.expires, sessions: deps.sessions, store: deps.store,
+    csrf: deps.csrf, expires: deps.expires, sessions: deps.sessions, store: deps.store, book: CHANNEL_RECEIPT_BOOK_KEY,
     projection: async (view) => {
       const selected = channelControlView(view);
       fresh = selected === 'imessage' ? await iMessageControls(deps.imessage, deps.owner, deps.csrf) : selected === 'devices' ? await devicesControls(deps.devices, deps.owner, deps.csrf) : undefined;

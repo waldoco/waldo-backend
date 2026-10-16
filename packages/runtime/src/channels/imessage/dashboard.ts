@@ -5,7 +5,6 @@ import type { IMessageBridgeDO } from './bridge-do';
 import { iMessageBridgeName, iMessageComposition, type IMessageEnv } from './bridge-do';
 import { iMessageAction, type IMessageOutcome } from './console';
 import { iMessageDirectory, type BridgeListing } from './directory';
-import { iMessageSendUrl } from './send-url';
 
 type HostAction = 'imessage.verify' | 'imessage.activate' | 'imessage.activate_shared' | 'imessage.revoke';
 export type IMessageControls = Readonly<{ version: 1; view: 'imessage'; state: 'available'; csrf: string; data: Readonly<{
@@ -60,7 +59,7 @@ const DONE: Readonly<Record<string, string>> = {
 function receiptFor(action: string, outcome: IMessageOutcome, address: string | null): ControlReceipt | RevealingReceipt {
   switch (outcome.kind) {
     case 'link_code': return { receipt: recorded(`Text this from your iPhone to ${address ?? 'the Waldo iMessage number'} within 10 minutes. The code works once; from then on only your number reaches your Waldo.`),
-      reveal: { kind: 'link_code', value: `waldo ${outcome.code}`, ...(address ? { send_url: iMessageSendUrl(address, outcome.code) } : {}) } };
+      reveal: { kind: 'link_code', value: `waldo ${outcome.code}` } };
     case 'host_code': return { receipt: recorded(`Enter this code on ${outcome.shared ? "the shared Waldo number's Mac host" : 'your Mac host'}. It works once and expires in ${outcome.minutes} minutes.`), reveal: { kind: 'host_code', value: outcome.code } };
     case 'challenge': return { receipt: recorded("Send this exact text from the sender you entered to your Mac's Messages account, in that direct chat. Then refresh and confirm it here."), reveal: { kind: 'challenge', value: outcome.challenge } };
     case 'done': return recorded(DONE[action] ?? 'The change was recorded.');

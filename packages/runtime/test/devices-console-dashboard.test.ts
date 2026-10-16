@@ -6,7 +6,7 @@ import { newMessageId } from '../src/devices/command-store';
 import { base64url, frameSignatureBase, httpSignatureBase, sha256Hex } from '../src/devices/signing';
 import { routerSignature } from '../src/identity/owner-directory';
 import { consoleAccess } from '../src/channels/console';
-import { RECEIPT_BOOK_KEY } from '../src/channels/dashboard-control-actions';
+import { CHANNEL_RECEIPT_BOOK_KEY } from '../src/channels/dashboard-channel-controls';
 import type { DeviceBridgeDO } from '../src/devices/device-bridge-do';
 
 // Kennel pairing and device controls in the new console, through the real Worker. Every credential is fictional.
@@ -19,7 +19,8 @@ afterEach(() => vi.unstubAllGlobals());
 async function world() {
   const owner = `owner_dash_${crypto.randomUUID().slice(0, 8)}`, device = `dev_dash_${crypto.randomUUID().slice(0, 8)}`;
   const issued = new Set<string>(), used = new Set<string>();
-  const directory = { exists: false, seen: 0, mints: 0 };
+  const directory = { exists: false, seen: 0, mints: 0, stalled: 0 };
+  const gates = new Map<string, Promise<void>>();
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = new URL(String(input)).pathname.split('/').at(-1)!;
     const args = JSON.parse(String(init?.body)) as Record<string, string | number>;
@@ -29,16 +30,19 @@ async function world() {
       device_bridge_throttle: `devthrottle.${args.p_key}.${args.p_limit}.${args.p_window_seconds}`,
       redeem_device_pairing_v030: `devredeem030.${args.p_code_hash}.${args.p_pubkey}.${[...new TextEncoder().encode(String(args.p_label))].map((byte) => byte.toString(16).padStart(2, '0')).join('')}.${args.p_capabilities}.${args.p_session_consent}`,
       device_for_auth_v030: `devauth030.${args.p_device_id}`, device_touch: `devtouch.${args.p_device_id}`,
-      list_devices: `devlist.${args.p_do_name}`, revoke_device: `devrevoke.${args.p_do_name}.${args.p_device_id}`,
+      list_devices: `devlist.${args.p_do_name}`, revoke_device: `devrevoke.${args.p_do_name}.${args.p_device_id}`, delete_owner: `delown.${args.p_do_name}`,
     };
     if (!tags[path]) throw new Error(`Unexpected fictional RPC ${path}`);
     expect(args.p_sig).toBe(await routerSignature(SECRET, Number(args.p_at), tags[path]!));
+    const gate = gates.get(path);
+    if (gate) { directory.stalled++; await gate; }
     let response: unknown;
     if (path === 'console_session_touch' || path === 'device_bridge_throttle') response = true;
     else if (path === 'issue_device_pairing_code_owned') { directory.mints++; issued.add(String(args.p_code_hash)); response = args.p_do_name === owner ? OWNER_UUID : null; }
     else if (path === 'redeem_device_pairing_v030') { const fresh = issued.has(String(args.p_code_hash)) && !used.has(String(args.p_code_hash)); if (fresh) { used.add(String(args.p_code_hash)); directory.exists = true; } response = fresh ? [{ device_id: device, owner_id: owner }] : []; }
     else if (path === 'device_for_auth_v030') response = directory.exists && args.p_device_id === device ? [{ owner_id: owner, do_name: owner, contract_version: '0.3.0', pubkey: PUBKEY, capabilities: 'machine_state_query,notify_local' }] : [];
     else if (path === 'device_touch') { if (directory.exists) directory.seen++; response = directory.exists; }
+    else if (path === 'delete_owner') response = args.p_do_name === owner;
     else if (path === 'list_devices') response = directory.exists && args.p_do_name === owner ? [{ device_id: device, label: '<b>Fictional Mac</b>', capabilities: 'machine_state_query,notify_local', created_at: 'fixture', last_seen_at: directory.seen ? `seen-${directory.seen}` : null }] : [];
     else { response = args.p_do_name === owner && args.p_device_id === device && directory.exists; if (response) directory.exists = false; }
     return Response.json(response);
@@ -82,9 +86,22 @@ async function world() {
     };
     return { socket, heartbeat };
   };
-  const book = () => runInDurableObject(ownerStub, async (_i, state) => JSON.stringify(await state.storage.get(RECEIPT_BOOK_KEY) ?? null));
+  // Everything the owner DO holds: every storage key and every SQL row.
+  const stored = () => runInDurableObject(ownerStub, async (_i, state) => {
+    const tables = state.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type='table' AND name NOT GLOB '_cf_*' AND name NOT GLOB 'sqlite_*'").toArray();
+    return JSON.stringify({ keys: [...(await state.storage.list()).entries()], rows: tables.map(({ name }) => [name, state.storage.sql.exec(`SELECT * FROM "${name}"`).toArray()]) });
+  });
   const commands = () => runInDurableObject(deviceStub, async (_i, state) => state.storage.sql.exec<{ request_id: string; class: string }>('SELECT request_id,class FROM commands ORDER BY rowid').toArray());
-  return { owner, device, directory, deviceStub, read, act, redeem, connect, book, commands };
+  // Holds one fictional RPC until the returned release is called.
+  const stall = (path: string) => { let release!: () => void; gates.set(path, new Promise<void>((resolve) => { release = resolve; })); return () => { gates.delete(path); release(); }; };
+  const removeAccount = async () => {
+    const read = await call(new Request('https://bridge.test/console/dashboard/api/v1/owner?view=account', { headers: { cookie, accept: 'application/json' } }));
+    const current = await read.json() as { csrf: string; revision: string };
+    const body = new URLSearchParams({ csrf: current.csrf, revision: current.revision, view: 'account', action: 'account.delete', confirmation: 'DELETE', request_id: 'erase-request-0001' });
+    const response = await call(new Request('https://bridge.test/console/dashboard/api/v1/owner/actions', { method: 'POST', headers: { cookie, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body }));
+    return { status: response.status, body: await response.json() as { receipt?: { state: string; signed_out?: boolean } } };
+  };
+  return { owner, device, directory, ownerStub, deviceStub, read, act, redeem, connect, stored, commands, stall, removeAccount };
 }
 
 it('pairs Kennel from the new console: one copyable code, shown once, never stored, and single use', async () => {
@@ -100,7 +117,8 @@ it('pairs Kennel from the new console: one copyable code, shown once, never stor
   expect(issued.cache).toBe('private, no-store');
   expect(issued.body.reveal).toEqual({ kind: 'pairing_code', value: expect.stringMatching(new RegExp(`^wp1\\.${OWNER_UUID}\\.[A-Za-z0-9_-]{43}$`)) });
   const value = issued.body.reveal!.value, code = value.split('.').at(-1)!;
-  expect(await w.book()).not.toContain(code);
+  expect(await w.stored()).toContain(CHANNEL_RECEIPT_BOOK_KEY);
+  expect(await w.stored()).not.toContain(code);
   const replay = await w.act('device.pair', {}, { csrf: empty.csrf, revision: empty.revision, request_id: 'device-pair-once' });
   expect(replay.body).toEqual({ receipt: issued.body.receipt, duplicate: true });
   expect(w.directory.mints).toBe(1);
@@ -137,3 +155,29 @@ it('reads a paired Mac and queues only owner-chosen commands; a heartbeat betwee
   expect(await closed).toBe(1008);
   expect((await w.read()).data.devices).toEqual([]);
 });
+
+it('answers device reads and actions while a turn holds the owner queue', async () => {
+  const w = await world();
+  expect((await w.redeem((await w.act('device.pair')).body.reveal!.value.split('.').at(-1)!)).status).toBe(200);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await runInDurableObject(w.ownerStub, (instance) => { void (instance as unknown as { serial(work: () => Promise<void>): Promise<void> }).serial(() => held); });
+  try {
+    expect((await w.read()).data.devices.map((device) => device.id)).toEqual([w.device]);
+    expect((await w.act('device.revoke', { id: w.device })).body.receipt).toEqual({ state: 'recorded', message: 'Device revoked. It can no longer connect to your Waldo.' });
+  } finally { release(); }
+}, 10_000);
+
+it('erases owner storage only after an in-flight device action settles, so that action never writes it back', async () => {
+  const w = await world();
+  const release = w.stall('issue_device_pairing_code_owned');
+  const pairing = w.act('device.pair');
+  await vi.waitFor(() => expect(w.directory.stalled).toBe(1));
+  const erasing = w.removeAccount();
+  const early = await Promise.race([erasing.then(() => 'erased'), new Promise((resolve) => setTimeout(() => resolve('waiting'), 500))]);
+  release();
+  expect(early).toBe('waiting');
+  expect((await pairing).body.receipt).toMatchObject({ state: 'recorded' });
+  expect((await erasing).body.receipt).toMatchObject({ state: 'recorded', signed_out: true });
+  expect(JSON.parse(await w.stored())).toEqual({ keys: [], rows: [] });
+}, 15_000);

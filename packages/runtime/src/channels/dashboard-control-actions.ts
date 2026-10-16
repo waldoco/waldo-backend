@@ -6,21 +6,21 @@ type Projection=Readonly<{view:string;csrf:string;data:unknown}>;
 export type ControlReceipt=Readonly<{state:'recorded'|'incomplete'|'rejected'|'unconfirmed';message:string;navigation?:string; signed_out?:boolean}>;
 // A code or challenge the owner must copy goes back in that one response: the receipt book keeps
 // the receipt without it, so a replayed request never shows the value again.
-export type ControlReveal=Readonly<{kind:'link_code'|'host_code'|'challenge'|'pairing_code';value:string;send_url?:string}>;
+export type ControlReveal=Readonly<{kind:'link_code'|'host_code'|'challenge'|'pairing_code';value:string}>;
 export type RevealingReceipt=Readonly<{receipt:ControlReceipt;reveal:ControlReveal}>;
 export type StoredReceipt=Readonly<{fingerprint:string;status:number;receipt:ControlReceipt;expires:number;approval_state?:string}>;
 type Store=Readonly<{get<T>(key:string):Promise<T|undefined>;put(key:string,value:unknown):Promise<void>}>;
 export const RECEIPT_BOOK_KEY='console:control-receipts';
 // One receipt book per owner: rows live while their session does, and a session's capacity is bounded.
-export async function loadReceiptBook(store:Store,sessions:()=>Promise<readonly {csrf:string;expires:number}[]>):Promise<Record<string,StoredReceipt>>{
- const book=await store.get<Record<string,StoredReceipt>>(RECEIPT_BOOK_KEY)??{};
+export async function loadReceiptBook(store:Store,sessions:()=>Promise<readonly {csrf:string;expires:number}[]>,key=RECEIPT_BOOK_KEY):Promise<Record<string,StoredReceipt>>{
+ const book=await store.get<Record<string,StoredReceipt>>(key)??{};
  const live=new Map(await Promise.all((await sessions()).map(async session=>[await controlRevision(session.csrf),session.expires] as const)));
  for(const [id,row] of Object.entries(book)){const renewed=live.get(id.split(':')[0]!);if(renewed!==undefined&&renewed>row.expires)book[id]={...row,expires:renewed};if((book[id]?.expires??0)<Date.now())delete book[id];}
  return book;
 }
 export const receiptCapacityReached=(book:Readonly<Record<string,StoredReceipt>>,session:string)=>Object.keys(book).filter(id=>id.startsWith(session+':')).length>=100||Object.keys(book).length>=1000;
-// view() is read only for views that do not list their own actions.
-export type ControlActionDeps=Readonly<{csrf:string;expires:number;sessions():Promise<readonly {csrf:string;expires:number}[]>;projection(view:string,id?:string):Promise<Projection|null>;view?():Promise<ConsoleView>;act(action:ConsoleAction,fields:Readonly<Record<string,string>>):Promise<boolean|string|ControlReceipt|RevealingReceipt>;store:Store}>;
+// view() is read only for views that do not list their own actions. book names the caller's receipt book (default: the shared one).
+export type ControlActionDeps=Readonly<{csrf:string;expires:number;sessions():Promise<readonly {csrf:string;expires:number}[]>;projection(view:string,id?:string):Promise<Projection|null>;view?():Promise<ConsoleView>;act(action:ConsoleAction,fields:Readonly<Record<string,string>>):Promise<boolean|string|ControlReceipt|RevealingReceipt>;store:Store;book?:string}>;
 const allowed:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm','spot.dismiss','spot.forget','node.forget'],day:['timezone.set','proactivity.set','card.today','card.pin','card.unpin'],connections:['google.connect','google.disconnect','telegram.link','telegram.unlink','session.signout','session.signout.all'],waiting:['approval.approve','approval.skip','approval.undo'],files:['file.remove'],
  imessage:['imessage.link','imessage.unlink','imessage.pair','imessage.pair_shared','imessage.verify','imessage.activate','imessage.activate_shared','imessage.revoke'],devices:['device.pair','device.revoke','device.query','device.notify']};
 // Fields a view's actions carry beyond the console action. They are fingerprinted with it.
@@ -57,8 +57,8 @@ function eligible(action:ConsoleAction,view:ConsoleView):boolean {
  }
  return true;
 }
-// Caller serializes this entire operation inside the authenticated owner DO. CSRF,
-// the current read revision and existing executor eligibility remain independent gates.
+// Caller serializes this entire operation, with every other writer of the same book, inside the
+// authenticated owner DO. CSRF, the current read revision and existing executor eligibility remain independent gates.
 // A durable uncertain receipt prevents a duplicate request from re-running an effect.
 export async function controlAction(form:FormData,deps:ControlActionDeps):Promise<Response>{
  const view=String(form.get('view')??''),extra=Object.hasOwn(viewFields,view)?viewFields[view]!:[];
@@ -69,8 +69,8 @@ export async function controlAction(form:FormData,deps:ControlActionDeps):Promis
  if(!/^[A-Za-z0-9_-]{8,80}$/.test(requestId))return reply({error:'request_id_required'},400);
  const values:Record<string,string>=Object.fromEntries(extra.flatMap(k=>form.has(k)?[[k,String(form.get(k))]]:[]));
  const fingerprint=await controlRevision(extra.length?{view,action,revision:form.get('revision'),fields:values}:{view,action,revision:form.get('revision')});
- const session=await controlRevision(deps.csrf),key=`${session}:${requestId}`;
- const book=await loadReceiptBook(deps.store,deps.sessions);
+ const session=await controlRevision(deps.csrf),key=`${session}:${requestId}`,bookKey=deps.book??RECEIPT_BOOK_KEY;
+ const book=await loadReceiptBook(deps.store,deps.sessions,bookKey);
  const prior=book[key];
  if(prior)return prior.fingerprint===fingerprint?reply({receipt:prior.receipt,duplicate:true},prior.status):reply({error:'request_reused'},409);
  if(receiptCapacityReached(book,session))return reply({error:'receipt_capacity',message:'This session has reached its change limit. Sign in again after this session expires; existing receipts remain available.'},429);
@@ -80,7 +80,7 @@ export async function controlAction(form:FormData,deps:ControlActionDeps):Promis
  const rows=Object.hasOwn(listedRows,view)?listedRows[view]:undefined;
  if(rows?!listedAction(action,projection.data,rows):!deps.view||!eligible(action,await deps.view()))return reply({error:'no_longer_eligible',message:'This action is no longer available. Refresh the records.'},409);
  const pending:StoredReceipt={fingerprint,expires:deps.expires,status:503,receipt:{state:'unconfirmed',message:'The outcome is not confirmed. Refresh the records before attempting another change.'}};
- book[key]=pending;await deps.store.put(RECEIPT_BOOK_KEY,book);
+ book[key]=pending;await deps.store.put(bookKey,book);
  let receipt:ControlReceipt,status=200,reveal:ControlReveal|undefined;
  try{
   const outcome=await deps.act(action,{...values,request_id:requestId});
@@ -88,7 +88,7 @@ export async function controlAction(form:FormData,deps:ControlActionDeps):Promis
   receipt=typeof result==='object'?result:typeof result==='string'?result===action.action?{state:'recorded',message:NOTICES[result]??'The change was recorded.'}:(result==='spot.forget.incomplete'||result==='node.forget.incomplete')?{state:'incomplete',message:NOTICES[result]!}:result==='invalid'||result.endsWith('.failed')?{state:'rejected',message:NOTICES[result]??'The change could not be applied.'}:pending.receipt:result?{state:'recorded',message:NOTICES[action.action]??'The change was recorded.'}:{state:'rejected',message:'That change could not be applied. Refresh the records and try again.'};
   if(receipt.state==='rejected')status=409;else if(receipt.state==='unconfirmed')status=503;
  }catch{receipt=pending.receipt;status=503;}
- book[key]={fingerprint,status,receipt,expires:deps.expires};await deps.store.put(RECEIPT_BOOK_KEY,book);
+ book[key]={fingerprint,status,receipt,expires:deps.expires};await deps.store.put(bookKey,book);
  return reply({receipt,duplicate:false,...(reveal&&receipt.state==='recorded'?{reveal}:{})},status);
 }
 

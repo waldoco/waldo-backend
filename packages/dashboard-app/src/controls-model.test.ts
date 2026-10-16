@@ -166,7 +166,7 @@ describe('one-time values in receipts', () => {
   it('accepts each value only from its own action and in its exact shape', () => {
     expect(readActionResult({ receipt: recorded, duplicate: false, reveal: { kind: 'host_code', value: host } }, 'imessage.pair', 'https://x.test').reveal).toEqual({ kind: 'host_code', value: host });
     expect(readActionResult({ receipt: recorded, duplicate: false, reveal: { kind: 'pairing_code', value: pairing, extra: 'never-retain' } }, 'device.pair', 'https://x.test').reveal).toEqual({ kind: 'pairing_code', value: pairing });
-    expect(readActionResult({ receipt: recorded, duplicate: false, reveal: { kind: 'link_code', value: 'waldo ABCDEFGHJK', send_url: 'sms:waldo@test.invalid&body=waldo%20ABCDEFGHJK' } }, 'imessage.link', 'https://x.test').reveal?.send_url).toBe('sms:waldo@test.invalid&body=waldo%20ABCDEFGHJK');
+    expect(readActionResult({ receipt: recorded, duplicate: false, reveal: { kind: 'link_code', value: 'waldo ABCDEFGHJK', send_url: 'sms:waldo@test.invalid&body=waldo%20ABCDEFGHJK' } }, 'imessage.link', 'https://x.test').reveal).toEqual({ kind: 'link_code', value: 'waldo ABCDEFGHJK' });
     for (const [value, action] of [
       [{ receipt: recorded, duplicate: false, reveal: { kind: 'host_code', value: host } }, 'device.pair'],
       [{ receipt: recorded, duplicate: false, reveal: { kind: 'challenge', value: host } }, 'imessage.pair'],
@@ -174,9 +174,7 @@ describe('one-time values in receipts', () => {
       [{ receipt: recorded, duplicate: true, reveal: { kind: 'host_code', value: host } }, 'imessage.pair'],
       [{ receipt: { state: 'rejected', message: 'No.' }, duplicate: false, reveal: { kind: 'host_code', value: host } }, 'imessage.pair'],
       [{ receipt: recorded, duplicate: false, reveal: { kind: 'host_code', value: host } }, 'timezone.set'],
-      [{ receipt: recorded, duplicate: false, reveal: { kind: 'link_code', value: 'waldo ABCDEFGHJK', send_url: 'javascript:alert(1)//&body=waldo%20ABCDEFGHJK' } }, 'imessage.link'],
-      [{ receipt: recorded, duplicate: false, reveal: { kind: 'link_code', value: 'waldo ABCDEFGHJK', send_url: 'sms:waldo@test.invalid&body=waldo%20ZZZZZZZZZZ' } }, 'imessage.link'],
-      [{ receipt: recorded, duplicate: false, reveal: { kind: 'pairing_code', value: pairing, send_url: 'sms:waldo@test.invalid&body=waldo%20ABCDEFGHJK' } }, 'device.pair'],
+      [{ receipt: recorded, duplicate: false, reveal: { kind: 'link_code', value: 'waldo ABCDEFGHJ1' } }, 'imessage.link'],
     ] as const) expect(() => readActionResult(value, action, 'https://x.test')).toThrow('unsupported');
   });
 });

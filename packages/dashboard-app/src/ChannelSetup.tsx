@@ -20,10 +20,9 @@ export function RevealedValue({ reveal }: { reveal: ActionReveal }) {
     <p className="label">{REVEAL_LABEL[reveal.kind]}</p>
     <p className="revealed-value" ref={value}>{reveal.value}</p>
     <div className="control-actions">
-      {reveal.send_url && <a className="button-link" href={reveal.send_url}>Open Messages</a>}
       <button type="button" onClick={() => void onCopy()}>{copy === 'copied' ? 'Copied' : copy === 'selected' ? 'Selected. Press Command-C to copy' : 'Copy'}</button>
     </div>
-    <p className="meta">{reveal.send_url ? 'On your iPhone, tap Open Messages, then Send. ' : ''}Shown only here, once. Your receipts don’t keep it; get a new one if you lose it.</p>
+    <p className="meta">Shown only here, once. Your receipts don’t keep it; get a new one if you lose it.</p>
   </div>;
 }
 

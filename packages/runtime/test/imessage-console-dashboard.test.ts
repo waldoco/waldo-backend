@@ -2,7 +2,7 @@ import { env, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test'
 import { afterEach, expect, it, vi } from 'vitest';
 import worker from '../src/index';
 import { consoleAccess } from '../src/channels/console';
-import { RECEIPT_BOOK_KEY } from '../src/channels/dashboard-control-actions';
+import { CHANNEL_RECEIPT_BOOK_KEY } from '../src/channels/dashboard-channel-controls';
 import { routerSignature } from '../src/identity/owner-directory';
 import { iMessageBridgeName } from '../src/channels/imessage/bridge-do';
 import { IMessageFinalOutbox } from '../src/channels/imessage/final-outbox';
@@ -21,7 +21,7 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (input: 
 const ORIGIN = 'https://imessage-directory.fixture.invalid', SECRET = 'fictional-imessage-router-secret-0000000000', HOST_ORIGIN = 'https://imessage.fixture.invalid';
 const SUBJECT = 'owner@example.invalid', CHAT = `iMessage;-;${SUBJECT}`;
 type Read = { csrf: string; revision: string; data: { enabled: boolean; address: string | null; linked_hint: string | null; admin: boolean; actions: string[]; bridges: { id: string; kind: string; state: string; subject: string | null; chat: string | null; observed: boolean; actions: string[] }[] }; status: { bridges: { id: string; online: boolean; text_ready: boolean; sending_paused: boolean }[] } };
-type Acted = { status: number; body: { receipt?: { state: string; message: string }; duplicate?: boolean; reveal?: { kind: string; value: string; send_url?: string }; error?: string }; location: string | null; cache: string | null };
+type Acted = { status: number; body: { receipt?: { state: string; message: string }; duplicate?: boolean; reveal?: { kind: string; value: string }; error?: string }; location: string | null; cache: string | null };
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 async function world(o: { admin?: boolean } = {}) {
@@ -61,7 +61,11 @@ async function world(o: { admin?: boolean } = {}) {
   const settle = async () => { while (pending.length) await pending.shift(); };
   const bridgeStub = () => env.IMESSAGE_BRIDGE_DO!.get(env.IMESSAGE_BRIDGE_DO!.idFromName(iMessageBridgeName('test', host.bridgeId, host.accountId)));
   const pump = async (rounds = 6) => { for (let i = 0; i < rounds; i++) { await runDurableObjectAlarm(bridgeStub()); await settle(); await runDurableObjectAlarm(stub); await settle(); } };
-  const book = () => runInDurableObject(stub, async (_i, state) => JSON.stringify(await state.storage.get(RECEIPT_BOOK_KEY) ?? null));
+  // Everything the owner DO holds: every storage key and every SQL row.
+  const stored = () => runInDurableObject(stub, async (_i, state) => {
+    const tables = state.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type='table' AND name NOT GLOB '_cf_*' AND name NOT GLOB 'sqlite_*'").toArray();
+    return JSON.stringify({ keys: [...(await state.storage.list()).entries()], rows: tables.map(({ name }) => [name, state.storage.sql.exec(`SELECT * FROM "${name}"`).toArray()]) });
+  });
   const pairAndActivate = async () => {
     const code = (await act('imessage.pair')).body.reveal!.value;
     expect((await host.redeem(code)).status).toBe(200);
@@ -70,7 +74,7 @@ async function world(o: { admin?: boolean } = {}) {
     expect((await act('imessage.activate', { id: host.bridgeId })).body.receipt).toMatchObject({ state: 'recorded' });
     expect((await host.heartbeat()).status).toBe(200); expect((await host.capabilities()).status).toBe(200);
   };
-  return { name, fx, stub, call, cookie, read, act, host, pump, book, pairAndActivate };
+  return { name, fx, stub, call, cookie, read, act, host, pump, stored, pairAndActivate };
 }
 
 it('pairs and activates a Mac host from the new console: each code is shown once, never stored, and works once', async () => {
@@ -85,7 +89,8 @@ it('pairs and activates a Mac host from the new console: each code is shown once
   const code = issued.body.reveal!.value;
   expect(issued.body.reveal).toEqual({ kind: 'host_code', value: expect.stringMatching(/^wim_[a-f0-9]{48}$/) });
   expect(issued.cache).toBe('private, no-store');
-  expect(await w.book()).not.toContain(code);
+  expect(await w.stored()).toContain(CHANNEL_RECEIPT_BOOK_KEY);
+  expect(await w.stored()).not.toContain(code);
   const replay = await w.act('imessage.pair', {}, { csrf: empty.csrf, revision: empty.revision, request_id: 'imsg-pair-once' });
   expect(replay.body).toEqual({ receipt: issued.body.receipt, duplicate: true });
   expect(w.fx.invitations.size).toBe(1); // the replay minted nothing
@@ -100,7 +105,7 @@ it('pairs and activates a Mac host from the new console: each code is shown once
   const challenge = verified.body.reveal!.value;
   expect(verified.body.reveal).toEqual({ kind: 'challenge', value: expect.stringMatching(/^wic_[a-f0-9]{48}$/) });
   expect(verified.body.receipt!.message).not.toContain(SUBJECT);
-  expect(await w.book()).not.toContain(challenge);
+  expect(await w.stored()).not.toContain(challenge);
   expect((await w.host.send(w.host.message(challenge, { senderHandle: 'alias@example.invalid' }))).status).toBe(401);
   expect((await w.host.send(w.host.message(challenge))).status).toBe(200);
 
@@ -134,6 +139,29 @@ it('refuses a wrong CSRF, a stale read and a shared-number pairing from a non-op
   expect([...operator.fx.invitations.values()].map((i) => i.kind)).toEqual(['shared']);
 });
 
+it('activates the shared number for an operator only, and only for the sender its challenge recorded', async () => {
+  const op = await world({ admin: true });
+  const code = (await op.act('imessage.pair_shared')).body.reveal!.value;
+  expect((await op.host.redeem(code)).status).toBe(200);
+  const challenge = (await op.act('imessage.verify', { id: op.host.bridgeId, subject: SUBJECT, chat: CHAT })).body.reveal!.value;
+  expect((await op.host.send(op.host.message(challenge))).status).toBe(200);
+  const observed = await op.read();
+  expect(observed.data.bridges).toEqual([expect.objectContaining({ id: op.host.bridgeId, kind: 'shared', state: 'pending', observed: true, actions: ['imessage.verify', 'imessage.activate_shared', 'imessage.revoke'] })]);
+  expect((await op.act('imessage.activate', { id: op.host.bridgeId })).body).toMatchObject({ error: 'no_longer_eligible' });
+
+  // The operator role is read again at action time: once it lapses, the shared activation is neither offered nor sent.
+  op.fx.owners[0]!.admin = false;
+  expect((await op.act('imessage.activate_shared', { id: op.host.bridgeId }, { csrf: observed.csrf, revision: observed.revision })).body).toMatchObject({ error: 'stale_read' });
+  expect((await op.read()).data.bridges[0]!.actions).toEqual(['imessage.verify', 'imessage.revoke']);
+  expect((await op.act('imessage.activate_shared', { id: op.host.bridgeId })).body).toMatchObject({ error: 'no_longer_eligible' });
+  expect(op.fx.calls).not.toContain('imessage_activate_shared');
+
+  op.fx.owners[0]!.admin = true;
+  const activated = await op.act('imessage.activate_shared', { id: op.host.bridgeId, subject: 'someone-else@example.invalid', chat: 'iMessage;-;someone-else@example.invalid' });
+  expect(activated.body.receipt).toEqual({ state: 'recorded', message: 'The shared Waldo number is active. Each sender still reaches only their own Waldo.' });
+  expect([...op.fx.bridges.values()].map((bridge) => [bridge.kind, bridge.state, bridge.observed?.subject])).toEqual([['shared', 'active', SUBJECT]]);
+});
+
 it('refuses an expired host code', async () => {
   const w = await world();
   const t0 = Date.now();
@@ -144,14 +172,14 @@ it('refuses an expired host code', async () => {
   expect((await w.read()).data.bridges).toEqual([]);
 });
 
-it('issues an iMessage link code for this owner only, shown once with the one-tap Messages link', async () => {
+it('issues an iMessage link code for this owner only, shown once and never put in a link', async () => {
   const w = await world();
   const issued = await w.act('imessage.link');
   const code = /^waldo ([A-HJ-NP-Z2-9]{10})$/.exec(issued.body.reveal?.value ?? '')?.[1];
   expect(code).toBeTruthy();
-  expect(issued.body.reveal).toEqual({ kind: 'link_code', value: `waldo ${code}`, send_url: `sms:waldo@fixture.invalid&body=waldo%20${code}` });
+  expect(issued.body.reveal).toEqual({ kind: 'link_code', value: `waldo ${code}` });
   expect([...w.fx.linkCodes.values()]).toEqual([expect.objectContaining({ owner: w.name, provider: 'imessage', used: false })]);
-  expect(await w.book()).not.toContain(code!);
+  expect(await w.stored()).not.toContain(code!);
 });
 
 it('unlinks the linked handle, and only as a top-level action', async () => {

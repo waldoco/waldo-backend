@@ -49,7 +49,7 @@ export type ControlAction = 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'n
 export type ControlFields = { id?: string; value?: string; quiet_start?: string; quiet_end?: string; volume?: string; subject?: string; chat?: string; query_kind?: string; body?: string; severity?: string };
 export type ActionReceipt = { state: 'recorded' | 'incomplete' | 'rejected' | 'unconfirmed'; message: string; navigation?: string; signed_out?: boolean };
 // A code or challenge shown once with its receipt. It lives only in component state: never in a URL, history or storage.
-export type ActionReveal = { kind: 'link_code' | 'host_code' | 'challenge' | 'pairing_code'; value: string; send_url?: string };
+export type ActionReveal = { kind: 'link_code' | 'host_code' | 'challenge' | 'pairing_code'; value: string };
 export type ActionResult = { receipt: ActionReceipt; duplicate: boolean; reveal?: ActionReveal };
 export class ControlsActionError extends Error {
   constructor(readonly code: string, message: string, readonly uncertain = false) { super(message); }
@@ -219,10 +219,7 @@ function readReveal(value: unknown, action: ControlAction, fresh: boolean): Acti
   const expected = REVEALS[action];
   const unsupported = () => new ControlsActionError('receipt_unavailable', 'The code in this receipt is unsupported. Refresh the controls before trying again.', true);
   if (!fresh || !expected || !obj(value) || value.kind !== expected.kind || !string(value.value) || !expected.shape.test(value.value)) throw unsupported();
-  if (value.send_url === undefined) return { kind: expected.kind, value: value.value };
-  // The one-tap Messages link may only open Messages with this exact code; it never navigates the page.
-  if (action !== 'imessage.link' || !string(value.send_url) || !/^sms:[A-Za-z0-9@+._~!*'()%-]+&body=waldo%20[A-HJ-NP-Z2-9]{10}$/.test(value.send_url) || !value.send_url.endsWith(`&body=${encodeURIComponent(value.value)}`)) throw unsupported();
-  return { kind: expected.kind, value: value.value, send_url: value.send_url };
+  return { kind: expected.kind, value: value.value };
 }
 
 export async function submitControl(data: Pick<ControlRecord,'csrf'|'revision'> & {view:ControlsView|'memory'}, action: ControlAction, fields: ControlFields, requestId: string, origin = globalThis.location?.origin ?? ''): Promise<ActionResult> {

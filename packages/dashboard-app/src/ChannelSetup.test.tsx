@@ -44,9 +44,9 @@ describe('Mac pairing', () => {
 });
 
 describe('a code shown once', () => {
-  it('offers Open Messages only with its one-tap link', () => {
-    const link = renderToStaticMarkup(<RevealedValue reveal={{ kind: 'link_code', value: 'waldo ABCDEFGHJK', send_url: 'sms:waldo@test.invalid&body=waldo%20ABCDEFGHJK' }}/>);
-    expect(link).toContain('href="sms:waldo@test.invalid&amp;body=waldo%20ABCDEFGHJK"'); expect(link).toContain('waldo ABCDEFGHJK');
-    expect(renderToStaticMarkup(<RevealedValue reveal={{ kind: 'pairing_code', value: 'wp1.x' }}/>)).not.toContain('Open Messages');
+  it('shows the code as text to copy, never as a link', () => {
+    const shown = renderToStaticMarkup(<RevealedValue reveal={{ kind: 'link_code', value: 'waldo ABCDEFGHJK' }}/>);
+    expect(shown).toContain('waldo ABCDEFGHJK'); expect(shown).toContain('Copy');
+    expect(shown).not.toContain('<a'); expect(shown).not.toContain('href');
   });
 });

@@ -46,7 +46,7 @@ const controls = (view) => {
   return { ...base, data, ...(status ? { status } : {}) };
 };
 // Synthetic one-time values in the real formats, so the shown-once display can be checked. Nothing is minted.
-const reveals = { 'imessage.link': { kind: 'link_code', value: 'waldo ABCDEFGHJK', send_url: 'sms:waldo@example.test&body=waldo%20ABCDEFGHJK' }, 'imessage.pair': { kind: 'host_code', value: 'wim_' + '0123456789abcdef'.repeat(3) },
+const reveals = { 'imessage.link': { kind: 'link_code', value: 'waldo ABCDEFGHJK' }, 'imessage.pair': { kind: 'host_code', value: 'wim_' + '0123456789abcdef'.repeat(3) },
   'imessage.pair_shared': { kind: 'host_code', value: 'wim_' + 'fedcba9876543210'.repeat(3) }, 'imessage.verify': { kind: 'challenge', value: 'wic_' + '0123456789abcdef'.repeat(3) }, 'device.pair': { kind: 'pairing_code', value: 'wp1.00000000-0000-4000-8000-000000000000.' + 'S'.repeat(43) } };
 let adminReadFailed=false;
 // Synthetic chat: a short history, and a reply that lands about four seconds after each message.
