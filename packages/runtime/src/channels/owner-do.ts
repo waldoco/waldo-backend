@@ -146,6 +146,8 @@ import { appThreadsRequest, askThreadTitle, nameThread, recallReach, redactThrea
 import { stableJson } from '../context-composer/canonical';
 import { APP_CONNECT_GUIDANCE, appApprovalLink, appCaller } from './surfaces/app';
 import { appApprovalsRequest } from './app-approvals';
+import { WHATSAPP_LINK_CONFIRM_ACTION, whatsappLinkConfirmAction, whatsappLinkConfirmPage } from './whatsapp-link-console';
+import { WHATSAPP_LINK_PATH, whatsappLinkDirectory } from '../identity/whatsapp-link';
 import { WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
@@ -1398,11 +1400,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       } catch { return new Response('Devices unavailable.', { status: 503, headers: DEVICE_PAGE_HEADERS }); }
     }
     if (url.pathname === CONSOLE_IMESSAGE_PATH && request.method === 'GET') return iMessageConsolePage(this.imessageHost.env, this.ctx.storage.kv.get<string>('do_name') ?? '', session.csrf);
+    if (url.pathname.startsWith(`${WHATSAPP_LINK_PATH}/`) && request.method === 'GET') return whatsappLinkConfirmPage(url.pathname, this.ctx.storage.kv.get<string>('do_name') ?? '', session.csrf, whatsappLinkDirectory(this.env));
     if (url.pathname === CONSOLE_ACTION_PATH && request.method === 'POST') {
       const form = await request.clone().formData();
       if (isIMessageConsoleAction(form.get('action'))) return iMessageConsoleAction(form, session.csrf, this.ctx.storage.kv.get<string>('do_name') ?? '', this.imessageHost.env, (bridgeDoName) => {
         new IMessageOwnerInbox(this.ctx.storage).revokeBridge(bridgeDoName);
         if (this.activeIMessage?.bridgeDoName === bridgeDoName) this.activeAbort?.abort();
+      });
+      // A confirmed text-first link rebinds this owner's WhatsApp subject, so the new number is admitted and the old one is not.
+      if (form.get('action') === WHATSAPP_LINK_CONFIRM_ACTION) return whatsappLinkConfirmAction(form, session.csrf, this.ctx.storage.kv.get<string>('do_name') ?? '', whatsappLinkDirectory(this.env), subject => {
+        this.ctx.storage.kv.put('whatsapp_subject', subject); this.ctx.storage.kv.delete('whatsapp_unlinked'); this.runtimes = {};
       });
       if (form.get('action') === 'device.pair' || form.get('action') === 'device.revoke' || form.get('action') === 'device.query' || form.get('action') === 'device.notify') return deviceConsoleAction(form, session.csrf, this.ctx.storage.kv.get<string>('do_name') ?? '', deviceDirectory(this.env), this.env.DEVICE_BRIDGE_DO, request.headers.get('accept') ?? '');
     }
