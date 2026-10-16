@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
-import { CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_PATH, consoleAccess } from '../src/channels/console';
+import { CONSOLE_ACTION_PATH, CONSOLE_COOKIE, NOTICES, consoleAccess } from '../src/channels/console';
 import { GOOGLE_FINISH_PATH } from '../src/channels/google-oauth';
 import { startConsent, type ConsentFlow } from '../src/connectors/google-consent';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
@@ -216,7 +216,7 @@ it('a console disconnect removes the kept profile, phone included, and a connect
       await connect(owner, state);
       expect(await stored(), 'the scan finds the kept phone').toContain(PHONE);
       const reply = await owner.fetch(new Request(`https://owner.invalid${CONSOLE_ACTION_PATH}`, { method: 'POST', headers: { cookie: `${CONSOLE_COOKIE}=${token}`, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ csrf, action: 'google.disconnect', id: 'conn-1' }) }));
-      expect(reply.headers.get('location')).toBe(`${CONSOLE_PATH}?m=google.disconnect`);
+      expect({ status: reply.status, location: reply.headers.get('location'), body: await reply.text() }).toEqual({ status: 200, location: null, body: NOTICES['google.disconnect'] });
       expect(revoked).toEqual(['conn-1']);
       expect(await state.storage.get('google:accounts')).toEqual([]);
       expect.soft(await state.storage.get('google:profiles'), 'the disconnected account keeps no profile').toEqual({});
