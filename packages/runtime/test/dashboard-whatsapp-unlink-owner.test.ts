@@ -6,11 +6,11 @@ import {CONTROLS_PATH} from '../src/channels/dashboard-controls';
 import {CONTROL_ACTION_PATH} from '../src/channels/dashboard-control-actions';
 
 // A fake owner directory: one WhatsApp presence per owner, the shape unlink_presence and presence_hint read.
-const directory=vi.hoisted(()=>({linked:new Map<string,boolean>(),unavailable:new Set<string>(),refuse:new Set<string>(),unlinked:[] as string[]}));
+const directory=vi.hoisted(()=>({linked:new Map<string,boolean>(),unavailable:new Set<string>(),refuse:new Set<string>(),unlinked:[] as string[],asserted:0}));
 vi.mock('../src/identity/console-auth',async load=>({...await load<typeof import('../src/identity/console-auth')>(),consoleAuth:()=>({
  whatsAppHandleHint:async(doName:string)=>{if(directory.unavailable.has(doName))throw new Error('directory down');return directory.linked.get(doName)?'1111':null;},
  unlinkWhatsApp:async(doName:string)=>{directory.unlinked.push(doName);if(directory.refuse.has(doName)||!directory.linked.get(doName))return false;directory.linked.set(doName,false);return true;},
- issueLinkCode:async()=>null,assertChannelPresence:async()=>false,saveSettings:async()=>true,listSessions:async()=>[],
+ issueLinkCode:async()=>null,assertChannelPresence:async(doName:string)=>{directory.asserted++;return directory.linked.get(doName)===true;},saveSettings:async()=>true,listSessions:async()=>[],
 })}));
 
 const root='https://telegram-owner';
@@ -27,13 +27,18 @@ const open=async(name:string,subject?:string)=>{
  const unlink=async(request_id:string)=>{const {csrf,revision}=await read();return stub.fetch(root+CONTROL_ACTION_PATH,{method:'POST',headers:{...cookie,'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({csrf,revision,view:'connections',action:'whatsapp.unlink',request_id})});};
  const classic=async()=>{const {csrf}=await read();return stub.fetch(root+CONSOLE_ACTION_PATH,{method:'POST',headers:{...cookie,'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({csrf,action:'whatsapp.unlink'}),redirect:'manual'});};
  const bound=()=>runInDurableObject(stub,(_i,state)=>state.storage.kv.get<string>('whatsapp_subject'));
+ // One WhatsApp send through the owner runtime's gated caller; reports whether it reached the network.
+ const send=()=>runInDurableObject(stub,async instance=>{
+  const net=vi.spyOn(globalThis,'fetch').mockImplementation(async()=>Response.json({messages:[{id:'wamid.out'}]}));
+  try{await (instance as unknown as {setup(channel:string):{call(method:string,body:object):Promise<unknown>}}).setup('whatsapp').call('sendMessage',{chat_id:0,text:'synthetic'});return net.mock.calls.length;}finally{net.mockRestore();}
+ });
  // Admission with no messages binds the subject without running a turn.
  const admit=(sender:string)=>stub.fetch(root+'/whatsapp-admit',{method:'POST',headers:{'x-waldo-whatsapp-subject':sender},body:JSON.stringify({messages:[]})});
- return {read,unlink,classic,bound,admit};
+ return {read,unlink,classic,bound,admit,send};
 };
 const whatsapp=(data:{channels?:{channel:string;state:string}[]})=>data.channels?.find(c=>c.channel==='whatsapp');
 
-beforeEach(()=>{directory.linked.clear();directory.unavailable.clear();directory.refuse.clear();directory.unlinked.length=0;});
+beforeEach(()=>{directory.linked.clear();directory.unavailable.clear();directory.refuse.clear();directory.unlinked.length=0;directory.asserted=0;});
 
 describe('new console WhatsApp unlink',()=>{
  it('shows the link state from the directory, and unknown when the directory cannot answer',async()=>{
@@ -54,6 +59,13 @@ describe('new console WhatsApp unlink',()=>{
   expect(await b.bound()).toBe('15550002222');expect(directory.linked.get('wa-unlink-b')).toBe(true);
   expect((await a.admit('15550003333')).status).toBe(200);
   expect(await a.bound()).toBe('15550003333');
+ });
+ it('stops sends to the old number without asking the directory once the bound sender is cleared',async()=>{
+  directory.linked.set('wa-unlink-send',true);
+  const owner=await open('wa-unlink-send','15550007777');
+  expect(await owner.send()).toBe(1);expect(directory.asserted).toBe(1);
+  expect((await owner.unlink('wa-unlink-request-03')).status).toBe(200);
+  expect(await owner.send()).toBe(0);expect(directory.asserted).toBe(1);
  });
  it('refuses to unlink when WhatsApp is not linked or its state is unknown',async()=>{
   directory.linked.set('wa-refuse-unlinked',false);directory.unavailable.add('wa-refuse-unknown');
