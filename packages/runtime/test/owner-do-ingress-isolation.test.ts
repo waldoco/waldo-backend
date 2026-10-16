@@ -842,15 +842,38 @@ it('a committed final completes only the steers its own run heard',async()=>{
     const inbox=new TelegramOwnerInbox(state.storage,persistInboxWake);const binding={bot:'hermetic-test-bot-token',subject:String(subject),doName:route(subject).doName};
     await state.storage.put({telegram_subject:String(subject),do_name:binding.doName});
     await inbox.admit(binding,993361,'target');const target=(await inbox.claim('hermetic-test-bot-token:telegram:993361','target-attempt','target-run',Date.now()+150000))!;
-    // Heard by this run; sent but not yet heard; heard by another run.
-    for(const [id,run,heard] of [[993362,'target-run',true],[993363,'target-run',false],[993364,'other-run',true]] as const){
-      const child=`hermetic-test-bot-token:telegram:${id}`;await inbox.admit(binding,id,'steer',{kind:'steer',targetRun:run});await inbox.claim(child,`attempt-${id}`,'control',Date.now()+180000);
+    // Heard by this run; sent but not yet heard; heard by another run; a stop this run consumed.
+    for(const [id,run,kind,heard] of [[993362,'target-run','steer',true],[993363,'target-run','steer',false],[993364,'other-run','steer',true],[993365,'target-run','stop',true]] as const){
+      const child=`hermetic-test-bot-token:telegram:${id}`;await inbox.admit(binding,id,kind,{kind,targetRun:run});await inbox.claim(child,`attempt-${id}`,'control',Date.now()+180000);
       if(heard)await inbox.transition(child,`attempt-${id}`,'consumed');
     }
     (instance as unknown as {closeRunAtomic(run:import('../src/channels/telegram-owner-inbox').InboxRecord,reason:string,awaitingDelivery:boolean):void}).closeRunAtomic(target,'final_committed',true);
     const rows=await inbox.records();const outcome=(id:number)=>{const row=rows.find(r=>r.updateId===id)!;return [row.state,row.reason??null,row.body];};
-    await state.storage.put('telegram_owner_inbox_v1',rows.filter(row=>row.updateId<993361||row.updateId>993364));await state.storage.deleteAlarm();
-    expect([993361,993362,993363,993364].map(outcome)).toEqual([['awaiting_delivery','final_committed',''],['completed','target_final_committed',''],['claimed',null,'steer'],['consumed',null,'steer']]);
+    await state.storage.put('telegram_owner_inbox_v1',rows.filter(row=>row.updateId<993361||row.updateId>993365));await state.storage.deleteAlarm();
+    expect([993361,993362,993363,993364,993365].map(outcome)).toEqual([['awaiting_delivery','final_committed',''],['completed','target_final_committed',''],['claimed',null,'steer'],['consumed',null,'steer'],['consumed',null,'stop']]);
+  });
+});
+it('the drain never tries to quarantine a steer its run completed with the final, and still quarantines a consumed stop',async()=>{
+  const { TelegramOwnerInbox }=await import('../src/channels/telegram-owner-inbox');const { persistInboxWake }=await import('../src/scheduler/alarm-slot');const subject=81102;
+  await runInDurableObject(doStub(subject),async(instance,state)=>{
+    type InboxRecord=import('../src/channels/telegram-owner-inbox').InboxRecord;
+    const inbox=new TelegramOwnerInbox(state.storage,persistInboxWake);const binding={bot:'hermetic-test-bot-token',subject:String(subject),doName:route(subject).doName};
+    await state.storage.put({telegram_subject:String(subject),do_name:binding.doName});
+    await inbox.admit(binding,993371,JSON.stringify({update_id:993371,message:{from:{id:subject},chat:{id:subject,type:'private'},text:'target'}}));
+    const internal=instance as unknown as {activeInbox:InboxRecord|null;turn:()=>Promise<void>;drainInbox:()=>Promise<void>;closeRunAtomic(run:InboxRecord,reason:string,awaitingDelivery:boolean):void;inbox:{transition:(...args:[string,string,'awaiting_delivery'|'consumed'|'completed'|'quarantined',string?])=>Promise<boolean>}};
+    const turn=internal.turn;const transition=internal.inbox.transition.bind(internal.inbox);const quarantining:string[]=[];
+    internal.inbox.transition=async(...args)=>{if(args[2]==='quarantined')quarantining.push(args[0]);return transition(...args);};
+    // The run hears a steer, consumes a stop and commits its final. transition() would refuse the completed row, so only the attempt shows.
+    internal.turn=async()=>{
+      const target=internal.activeInbox!;
+      for(const [id,kind] of [[993372,'steer'],[993373,'stop']] as const){const child=`hermetic-test-bot-token:telegram:${id}`;await inbox.admit(binding,id,kind,{kind,targetRun:target.runId!});await inbox.claim(child,`heard-${id}`,'control',Date.now()+180000);await inbox.transition(child,`heard-${id}`,'consumed');}
+      internal.closeRunAtomic(target,'final_committed',true);
+    };
+    await internal.drainInbox();internal.turn=turn;internal.inbox.transition=transition;
+    const rows=await inbox.records();const steer=rows.find(r=>r.updateId===993372)!;const stop=rows.find(r=>r.updateId===993373)!;
+    await state.storage.put('telegram_owner_inbox_v1',rows.filter(row=>row.updateId<993371||row.updateId>993373));await state.storage.deleteAlarm();
+    expect([steer.state,steer.reason,quarantining.includes(steer.id)]).toEqual(['completed','target_final_committed',false]);
+    expect([stop.state,stop.reason]).toEqual(['quarantined','consumed_target_outcome_uncertain']);
   });
 });
 
