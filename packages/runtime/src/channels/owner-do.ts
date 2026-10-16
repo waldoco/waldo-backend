@@ -1640,7 +1640,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return new Response('Signed out. Send /console to Waldo on Telegram to sign in again.', { headers: { 'set-cookie': `${CONSOLE_COOKIE}=; Path=${CONSOLE_PATH}; Max-Age=0` } });
       }
       const done = action ? await this.serial(() => act(action)) : false;
-      // A string result is a NOTICES key (e.g. an honest partial-failure receipt); boolean keeps the old path.
+      // A string result is a NOTICES key, such as an honest partial-failure receipt.
       return typeof done === 'string' ? noticePage(done) : done && action ? resultPage(NOTICES[action.action] ?? 'The change was recorded.', true) : noticePage('invalid');
     }
     // B9: the background task list as a first-class read-only endpoint (same console session).
