@@ -147,7 +147,7 @@ import { stableJson } from '../context-composer/canonical';
 import { APP_CONNECT_GUIDANCE, appApprovalLink, appCaller } from './surfaces/app';
 import { appApprovalsRequest } from './app-approvals';
 import { WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
-import { deliverHeldWhatsApp, forgetHeldWhatsApp, whatsappHeld, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
+import { deliverHeldWhatsApp, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
 import { sendMessageHandler } from '../tools/live/messaging';
@@ -1258,6 +1258,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
   // Meta refused sends it had accepted because the 24-hour window had closed (the webhook passes only those). The window
   // stays closed until the owner writes; a refused outbox record's text is held for that reply, and the owner gets one knock.
+  // The refusals are recorded before the acknowledgement; the knock and any delivery of held messages run in the serial
+  // queue, after a reply's own delivery, so two passes never send the same held message.
   private async whatsappStatus(request: Request, body: string): Promise<Response> {
     const subject = request.headers.get('x-waldo-whatsapp-subject') ?? '', { kv } = this.ctx.storage;
     if (!/^\d{6,15}$/.test(subject) || kv.get<string>('whatsapp_subject') !== subject) return new Response('forbidden', { status: 403 });
@@ -1269,13 +1271,19 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     if (!Array.isArray(refused) || refused.length > 100 || !refused.every(valid)) return new Response('bad request', { status: 400 });
     const runtime = this.setup('whatsapp'), records = runtime.finalOutbox.records(), log = (event: object) => console.log(JSON.stringify(event));
+    let closed = false;
     for (const { id, at } of refused) {
       const record = records.find(row => row.providerMessageId === id && row.ownerSubject === subject);
-      await whatsappWindowRefused(kv, { providerMessageId: id, refusedAt: at ?? Date.now() }, record?.payload.text || null, runtime.owner,
-        template => runtime.call('sendTemplate', template), whatsappTemplateConfig(this.env), Date.now(), log);
+      // The receipt names the record's last part, so only that part is held again; earlier parts were accepted on their own ids.
+      const text = record ? (record.parts?.at(-1)?.text ?? record.payload.text) : '';
+      closed = whatsappWindowRefused(kv, { providerMessageId: id, refusedAt: at ?? Date.now() }, text || null, runtime.owner, Date.now(), log) || closed;
     }
-    // A refusal from before the owner's latest message leaves the window open, so what it held goes out now.
-    if (whatsappWindowOpen(kv, Date.now())) await deliverHeldWhatsApp(kv, runtime.call, Date.now(), log);
+    this.ctx.waitUntil(this.serial(async () => {
+      const current = this.setup('whatsapp');
+      if (closed) await whatsappKnock(kv, template => current.call('sendTemplate', template), whatsappTemplateConfig(this.env), log);
+      // A refusal from before the owner's latest message leaves the window open, so what it held goes out now.
+      await deliverHeldWhatsApp(kv, current.call, Date.now(), log);
+    }).catch(() => { console.error('whatsapp status follow-up deferred'); }));
     return new Response('ok');
   }
   private refreshWhatsappDue(): void {

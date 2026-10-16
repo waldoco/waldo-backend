@@ -169,9 +169,19 @@ describe('handleWhatsAppWebhook: a send Meta refuses later for the 24-hour windo
     });
   });
 
-  it('answers 503 when the owner could not take it, so Meta delivers the callback again', async () => {
-    const { fetch, ns } = namespace();
-    fetch.mockImplementation(async () => new Response('unavailable', { status: 503 }));
-    expect((await run(await post('x', statuses([refused('wamid.a', '15550001111')])), env(ns), directory)).status).toBe(503);
+  it('answers 503 when the owner could not take it for now, so Meta delivers the callback again', async () => {
+    for (const reply of [async () => new Response('unavailable', { status: 503 }), async () => { throw new Error('owner unreachable'); }]) {
+      const { fetch, ns } = namespace();
+      fetch.mockImplementation(reply);
+      expect((await run(await post('x', statuses([refused('wamid.a', '15550001111')])), env(ns), directory)).status).toBe(503);
+    }
+  });
+
+  it('acknowledges a definite refusal from the owner (a 4xx), which a redelivery could never change', async () => {
+    for (const status of [400, 403]) {
+      const { fetch, ns } = namespace();
+      fetch.mockImplementation(async () => new Response('refused', { status }));
+      expect((await run(await post('x', statuses([refused('wamid.a', '15550001111')])), env(ns), directory)).status).toBe(200);
+    }
   });
 });

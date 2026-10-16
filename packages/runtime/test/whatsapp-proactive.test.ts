@@ -112,37 +112,52 @@ describe('the WhatsApp outbox receipt', () => {
 });
 
 describe('Meta refusing a send later (a failed status with 131047)', () => {
-  it('closes the window until the owner writes, re-holds the text once per message id, and knocks once', async () => {
+  it('closes the window until the owner writes and re-holds the text once per message id; the caller is told to knock once', () => {
     const { kv, map } = fakeKv();
     recordWhatsAppInbound(kv, [{ timestamp: String(T0 / 1000) }], T0);
-    const knock = vi.fn(async () => ack('wamid.knock'));
     const log = vi.fn();
     expect(whatsappWindowOpen(kv, T0 + 60_000)).toBe(true);
     const late = { providerMessageId: 'wamid.late', refusedAt: T0 + 30_000 };
-    await whatsappWindowRefused(kv, late, 'Your reminder: call Sam.', 15550001111, knock, template, T0 + 60_000, log);
-    await whatsappWindowRefused(kv, late, 'Your reminder: call Sam.', 15550001111, knock, template, T0 + 61_000, log);
+    expect(whatsappWindowRefused(kv, late, 'Your reminder: call Sam.', 15550001111, T0 + 60_000, log)).toBe(true);
+    expect(whatsappWindowRefused(kv, late, 'Your reminder: call Sam.', 15550001111, T0 + 61_000, log)).toBe(false);
     expect(whatsappWindowOpen(kv, T0 + 60_000)).toBe(false);
     expect(held(map)).toEqual(['Your reminder: call Sam.']);
-    expect(knock).toHaveBeenCalledTimes(1);
     // A direct reply's text is not kept, so there is nothing to re-hold; the line says so.
-    await whatsappWindowRefused(kv, { providerMessageId: 'wamid.direct', refusedAt: T0 + 31_000 }, null, 15550001111, knock, template, T0 + 62_000, log);
+    whatsappWindowRefused(kv, { providerMessageId: 'wamid.direct', refusedAt: T0 + 31_000 }, null, 15550001111, T0 + 62_000, log);
     expect(log).toHaveBeenCalledWith(expect.objectContaining({ hop: 'whatsapp_status', code: 131047, held: false, detail: 'text_unavailable' }));
     // The owner writes again: the window reopens and what was re-held goes out.
     recordWhatsAppInbound(kv, [{ timestamp: String((T0 + 120_000) / 1000) }], T0 + 120_000);
     expect(whatsappWindowOpen(kv, T0 + 120_000)).toBe(true);
     const call = vi.fn(async () => ack('wamid.again'));
-    await deliverHeldWhatsApp(kv, call, T0 + 120_000, vi.fn());
-    expect(call).toHaveBeenCalledWith('sendMessage', { chat_id: 15550001111, text: 'Your reminder: call Sam.' });
+    return deliverHeldWhatsApp(kv, call, T0 + 120_000, vi.fn()).then(() => {
+      expect(call).toHaveBeenCalledWith('sendMessage', { chat_id: 15550001111, text: 'Your reminder: call Sam.' });
+    });
   });
 
-  it('a refusal from before the owner\'s latest message re-holds the text but leaves the window open and does not knock', async () => {
+  it('a refusal from before the owner\'s latest message re-holds the text but leaves the window open and asks for no knock', () => {
     const { kv, map } = fakeKv();
     recordWhatsAppInbound(kv, [{ timestamp: String((T0 + 120_000) / 1000) }], T0 + 120_000);
-    const knock = vi.fn(async () => ack('wamid.knock'));
-    await whatsappWindowRefused(kv, { providerMessageId: 'wamid.old', refusedAt: T0 }, 'Earlier note.', 15550001111, knock, template, T0 + 130_000, vi.fn());
+    expect(whatsappWindowRefused(kv, { providerMessageId: 'wamid.old', refusedAt: T0 }, 'Earlier note.', 15550001111, T0 + 130_000, vi.fn())).toBe(false);
     expect(whatsappWindowOpen(kv, T0 + 130_000)).toBe(true);
     expect(held(map)).toEqual(['Earlier note.']);
-    expect(knock).not.toHaveBeenCalled();
+  });
+
+  it('two overlapping deliveries of held messages send each one exactly once', async () => {
+    const { kv } = fakeKv();
+    const now = Date.now();
+    recordWhatsAppInbound(kv, [{ timestamp: String(Math.floor(now / 1000)) }], now);
+    kv.put(`${WA_HELD_PREFIX}000000000001`, { heldAt: now, body: { chat_id: 1, text: 'one' } });
+    kv.put(`${WA_HELD_PREFIX}000000000002`, { heldAt: now, body: { chat_id: 1, text: 'two' } });
+    const sent: string[] = [], waiting: (() => void)[] = [];
+    const call = async (_method: string, body: object) => {
+      sent.push((body as { text: string }).text);
+      await new Promise<void>(resolve => waiting.push(resolve));
+      return ack(`wamid.${sent.length}`);
+    };
+    const first = deliverHeldWhatsApp(kv, call, now, vi.fn()), second = deliverHeldWhatsApp(kv, call, now, vi.fn());
+    for (let step = 0; step < 10; step += 1) { waiting.shift()?.(); await new Promise(resolve => setTimeout(resolve, 0)); }
+    await Promise.all([first, second]);
+    expect(sent).toEqual(['one', 'two']);
   });
 });
 

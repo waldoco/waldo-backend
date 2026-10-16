@@ -163,7 +163,8 @@ export class TelegramFinalOutbox {
     defer?(record: FinalRecord): Promise<number | null>;
     // How the surface the record went to acknowledges a part; Telegram's when absent.
     receipt?(result: unknown, record: FinalRecord): DeliveryAck;
-    // Restricts the pass to some records; the others are left exactly as they are.
+    // Restricts which records this pass settles and sends. The restart sweep (attempting → quarantined) still covers every
+    // record: an attempt left open by a restart is uncertain whoever drains next.
     select?(record: FinalRecord): boolean;
     settled(record: FinalRecord): Promise<void>;
   }): Promise<void> {

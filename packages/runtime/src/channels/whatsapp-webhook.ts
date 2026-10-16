@@ -126,15 +126,16 @@ export const handleWhatsAppWebhook = async (
       await sendWhatsAppText(call, sender, linked ? 'Linked. This chat now talks to your Waldo.' : 'That code did not work. Get a new one from your console.');
     })().catch((error: unknown) => console.log(JSON.stringify({ hop: 'whatsapp_route', ok: false, error: String(error) }))));
   }
-  // A refusal the owner could not take answers 503 like a message, so Meta delivers it again; the owner handles each message
-  // id once.
+  // A refusal the owner could not take for now (unreachable, or a 5xx) answers 503, so Meta delivers it again; the owner
+  // handles each message id once. A definite refusal (a 4xx: a subject no longer bound, a malformed batch) is acknowledged,
+  // since redelivering it can never succeed.
   for (const [recipient, refused] of windowRefusals(payload)) {
     try {
       const route = await directory.byPresence('whatsapp', recipient);
       if (!route) continue;
       const taken = await owners.get(owners.idFromName(route.doName)).fetch('https://telegram-owner/whatsapp-status', {
         method: 'POST', body: JSON.stringify({ refused }), headers: { 'x-waldo-whatsapp-subject': route.subject } });
-      if (!taken.ok) { console.log(JSON.stringify({ hop: 'whatsapp_status', ok: false, status: taken.status })); unavailable = true; }
+      if (!taken.ok) { console.log(JSON.stringify({ hop: 'whatsapp_status', ok: false, status: taken.status })); if (taken.status >= 500) unavailable = true; }
     } catch (error) { console.log(JSON.stringify({ hop: 'whatsapp_status', ok: false, error: String(error) })); unavailable = true; }
   }
   if (deferred.length) waitUntil(Promise.all(deferred));

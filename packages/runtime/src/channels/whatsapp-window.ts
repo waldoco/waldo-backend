@@ -74,7 +74,7 @@ const holdBody = (kv: Kv, body: object, now: number): void => {
 // With no template there is no knock to mark, so a template configured later still knocks for this window.
 // The marker goes down before the send, so a second send during this one cannot knock again. Only a definite refusal
 // takes it back for a retry; a timed-out knock may have gone out, so it stays marked.
-const knockOnce = async (kv: Kv, knock: (template: WhatsAppTemplate) => Promise<unknown>, template: WhatsAppTemplate | null, log: Log): Promise<void> => {
+export const whatsappKnock = async (kv: Kv, knock: (template: WhatsAppTemplate) => Promise<unknown>, template: WhatsAppTemplate | null, log: Log): Promise<void> => {
   const opening = kv.get<number>(WA_LAST_INBOUND_KEY) ?? 0;
   if (kv.get<number>(KNOCKED_KEY) === opening) { log({ hop: 'whatsapp_window', ok: true, held: true, knocked: false }); return; }
   if (!template) { log({ hop: 'whatsapp_window', ok: false, held: true, code: 'template_unconfigured' }); return; }
@@ -119,11 +119,11 @@ export const whatsappWindowCaller = (inner: Caller, options: Readonly<{ kv: Kv; 
     }
     if (nowOnly) {
       log({ hop: 'whatsapp_window', ok: false, held: false, code: 'now_only_window_closed' });
-      await knockOnce(kv, t => inner('sendTemplate', t), template, log);
+      await whatsappKnock(kv, t => inner('sendTemplate', t), template, log);
       return undefined;
     }
     for (const part of held) holdBody(kv, part, now());
-    await knockOnce(kv, t => inner('sendTemplate', t), template, log);
+    await whatsappKnock(kv, t => inner('sendTemplate', t), template, log);
     return receipt;
   };
 };
@@ -155,7 +155,7 @@ export const whatsappWindowRoute = (route: OutboxRoute, options: Readonly<{ kv: 
       const own = await route.defer(record);
       if (own !== null && own > now()) return own;
       if (!(await route.allowed(record))) return null;
-      await knockOnce(kv, knock, template, log);
+      await whatsappKnock(kv, knock, template, log);
       return record.createdAt + WHATSAPP_HELD_RETENTION_MS;
     },
     allowed: async record => !lapsed(record) && route.allowed(record),
@@ -167,18 +167,19 @@ export const whatsappWindowRoute = (route: OutboxRoute, options: Readonly<{ kv: 
 // refusal (Meta redelivers status callbacks for days, and a late one must not close a reopened window), the window counts
 // as closed until the owner writes again, so later sends wait and knock instead of failing the same way. When Waldo still
 // holds the refused text (an outbox record) it is held, once per message id, and goes out with the next delivery of held
-// messages; a direct reply's text is gone, and the line says so.
-export const whatsappWindowRefused = async (kv: Kv, refusal: Readonly<{ providerMessageId: string; refusedAt: number }>, text: string | null, chatId: number,
-  knock: (template: WhatsAppTemplate) => Promise<unknown>, template: WhatsAppTemplate | null, now: number, log: Log): Promise<void> => {
+// messages; a direct reply's text is gone, and the line says so. Storage only, so it can run before the request is
+// acknowledged; answers whether the window closed, in which case the caller knocks (whatsappKnock) in its serial work.
+export const whatsappWindowRefused = (kv: Kv, refusal: Readonly<{ providerMessageId: string; refusedAt: number }>, text: string | null, chatId: number,
+  now: number, log: Log): boolean => {
   const marker = `${REHELD_PREFIX}${refusal.providerMessageId}`;
-  if (kv.get<number>(marker) !== undefined) return;
+  if (kv.get<number>(marker) !== undefined) return false;
   for (const [key, at] of kv.list<number>({ prefix: REHELD_PREFIX })) if (now - at >= WHATSAPP_HELD_RETENTION_MS) kv.delete(key);
   kv.put(marker, now);
   const last = kv.get<number>(WA_LAST_INBOUND_KEY) ?? 0, closes = refusal.refusedAt > last;
   if (closes) kv.put(REFUSED_KEY, last);
   if (text) holdBody(kv, { chat_id: chatId, text }, now);
   log({ hop: 'whatsapp_status', ok: false, code: WHATSAPP_REENGAGEMENT_ERROR, held: text !== null, closed: closes, ...(text ? {} : { detail: 'text_unavailable' }) });
-  if (closes) await knockOnce(kv, knock, template, log);
+  return closes;
 };
 
 // Owner forget reaches held text the way it reaches a pending outbox record: a held message carrying a forgotten literal is
@@ -215,6 +216,8 @@ export const deliverHeldWhatsApp = async (kv: Kv, call: Caller, now: number, log
   const held = [...kv.list<Held>({ prefix: WA_HELD_PREFIX })].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
   let expired = 0;
   for (const [key, record] of held) {
+    // A pass that overlapped this one may already have claimed it; it is sent once, by that pass.
+    if (kv.get<Held>(key) === undefined) continue;
     kv.delete(key);
     if (now - record.heldAt >= WHATSAPP_HELD_RETENTION_MS) { expired += 1; continue; }
     let result: unknown;

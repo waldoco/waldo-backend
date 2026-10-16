@@ -32,9 +32,10 @@ const SUBJECT = '15550001111';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 const whatsapp = { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id', WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en' };
 
-const wire = { events: [] as string[], other: [] as string[], wamid: 0 };
+// `stall` holds one text send open until the test releases it, so another request can overlap it.
+const wire = { events: [] as string[], other: [] as string[], wamid: 0, stall: null as null | { text: string; until: Promise<void> } };
 beforeEach(() => {
-  model.reminders = 0; wire.events = []; wire.other = []; wire.wamid = 0;
+  model.reminders = 0; wire.events = []; wire.other = []; wire.wamid = 0; wire.stall = null;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
@@ -45,6 +46,7 @@ beforeEach(() => {
       const body = JSON.parse(String(init?.body)) as { to: string; type: string; template?: { name: string }; text?: { body: string } };
       wire.events.push(body.type === 'template' ? `template:${body.template!.name}` : `text:${body.text!.body}`);
       wire.wamid += 1;
+      if (wire.stall && body.text?.body === wire.stall.text) await wire.stall.until;
       return Response.json({ messaging_product: 'whatsapp', contacts: [{ input: body.to, wa_id: body.to }], messages: [{ id: `wamid.out.${wire.wamid}` }] });
     }
     wire.other.push(url);
@@ -59,8 +61,11 @@ const drive = async (name: string, script: (steps: Readonly<{
   alarms(passes: number): Promise<void>;
   reply(): Promise<void>;
   cancel(): Promise<void>;
-  refuse(id: string): Promise<number>;
+  refuse(id: string, at?: number): Promise<number>;
   sendNowOnly(text: string): Promise<unknown>;
+  hold(texts: string[]): void;
+  replyStarted(): Promise<void>;
+  settled(): Promise<void>;
   held(): string[];
   ledger(): Readonly<{ runs: { outcome: string; delivery: string | null }[]; outbox: Outbox; notes: number; notices: number; scheduled: { status: string; attempts: number }[] }>;
 }>) => Promise<void>) => {
@@ -93,14 +98,28 @@ const drive = async (name: string, script: (steps: Readonly<{
           await Promise.all([...(owner as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
         },
         cancel: async () => { expect(await book.cancel(reminder.id)).toBe(true); },
+        hold: texts => texts.forEach((text, index) => state.storage.kv.put(`wa_held:${String(index + 1).padStart(12, '0')}`, { heldAt: Date.now(), body: { chat_id: Number(SUBJECT), text } })),
+        // The owner's message is admitted and its turn's work starts in the background, as after the webhook's ack.
+        replyStarted: async () => {
+          seq += 1;
+          const response = await owner.fetch(new Request('https://telegram-owner/whatsapp-admit', {
+            method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT },
+            body: JSON.stringify({ messages: [{ from: SUBJECT, id: `wamid.in.${seq}`, timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: 'hi' } }] }),
+          }));
+          expect(response.status).toBe(200);
+        },
+        settled: async () => {
+          await Promise.all([...(owner as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+          await (owner as unknown as { serial(work: () => Promise<void>): Promise<void> }).serial(async () => undefined);
+        },
         // The owner runtime's own call stack (routing, link redaction, egress gate, window layer, shim).
         sendNowOnly: async text => {
           const runtime = (owner as unknown as { setup(channel: string): { call(method: string, body: object): Promise<unknown>; owner: number } }).setup('whatsapp');
           return runtime.call('sendMessage', { chat_id: runtime.owner, text, [SEND_NOW_ONLY]: true });
         },
         held: () => [...state.storage.kv.list<{ body: { text: string } }>({ prefix: 'wa_held:' })].map(([, record]) => record.body.text),
-        refuse: async id => (await owner.fetch(new Request('https://telegram-owner/whatsapp-status', {
-          method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ refused: [{ id, at: Date.now() }] }),
+        refuse: async (id, at = Date.now()) => (await owner.fetch(new Request('https://telegram-owner/whatsapp-status', {
+          method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ refused: [{ id, at }] }),
         }))).status,
         ledger: () => ({
           runs: state.storage.sql.exec<{ outcome: string; delivery: string | null }>('SELECT outcome, delivery FROM schedule_runs WHERE schedule_id = ? ORDER BY id', reminder.id).toArray(),
@@ -181,12 +200,14 @@ describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }
   });
 
   it('a reminder Meta refuses after accepting it closes the window, knocks once, and goes out again on the reply', async () => {
-    await drive('whatsapp-only-late-refusal', async ({ alarms, reply, refuse, ledger }) => {
+    await drive('whatsapp-only-late-refusal', async ({ alarms, reply, refuse, settled, ledger }) => {
       await reply();
       await alarms(3);
       expect(wire.events).toEqual(['turn', `text:${REMINDER_TEXT}`]);
       expect(await refuse('wamid.out.1')).toBe(200);
       expect(await refuse('wamid.out.1')).toBe(200);
+      // The knock runs in the owner's serial queue, after the acknowledgement.
+      await settled();
       expect(wire.events).toEqual(['turn', `text:${REMINDER_TEXT}`, 'template:waldo_update_ready']);
       await reply();
       expect(wire.events).toEqual(['turn', `text:${REMINDER_TEXT}`, 'template:waldo_update_ready', `text:${REMINDER_TEXT}`, 'turn']);
@@ -209,6 +230,21 @@ describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }
       expect(await sendNowOnly('From bank:\nCode: 482913')).toBeUndefined();
       expect(held()).toEqual([]);
       expect(wire.events).toEqual(['template:waldo_update_ready']);
+    });
+  });
+
+  it('a status callback during the reply\'s held delivery sends each held message exactly once', async () => {
+    await drive('whatsapp-only-held-race', async ({ hold, replyStarted, refuse, settled }) => {
+      hold(['one', 'two']);
+      let release!: () => void;
+      wire.stall = { text: 'one', until: new Promise<void>(resolve => { release = resolve; }) };
+      await replyStarted();
+      // The reply's pass is waiting on the send of 'one' when Meta's status callback arrives; its refusal predates the reply.
+      expect(await refuse('wamid.unknown', 0)).toBe(200);
+      release();
+      await settled();
+      expect(wire.events.filter(event => event.startsWith('text:'))).toEqual(['text:one', 'text:two']);
+      expect(wire.events.at(-1)).toBe('turn');
     });
   });
 });
