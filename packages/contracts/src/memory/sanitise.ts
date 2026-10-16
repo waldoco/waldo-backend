@@ -181,7 +181,7 @@ export type SanitiseDenialStage = z.infer<typeof sanitiseDenialStageSchema>;
 export const sanitiseDecodeFailureSchema = z.strictObject({
   cause: z.enum(['nesting', 'budget']),
   kind: z.enum(['json', 'percent', 'base64', 'mixed']),
-  depth: z.int().min(1).max(16),
+  depth: z.int().min(1).max(8),
 });
 export type SanitiseDecodeFailure = z.infer<typeof sanitiseDecodeFailureSchema>;
 

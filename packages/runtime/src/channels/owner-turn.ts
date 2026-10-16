@@ -267,7 +267,6 @@ export const createOwnerResponder = (
         history_messages: Math.max(0, userMessages.length - 1), history_bytes: utf8Bytes(JSON.stringify(userMessages.slice(0, -1))),
         current_bytes: utf8Bytes(userMessages.at(-1)?.content ?? ''), attachments: attachments?.length ?? 0,
         ...(typeof systemPrompt === 'string' ? {} : { system_sections: systemPrompt.sections }),
-        ...(result.ok && result.scribe_withheld !== undefined ? { scribe_withheld: result.scribe_withheld } : {}),
       },
     };
     const response = result.ok ? result.response : undefined;

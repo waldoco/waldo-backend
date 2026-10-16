@@ -28,8 +28,8 @@ interface PreparedInput extends Omit<SanitiseInput, 'payload'> {
   payload: JsonValue;
 }
 
-// depth is the deepest decode layer reached; an invalid bundle says why decoding stopped short.
-type DecodeBundle = { views: string[]; depth: number } & (
+// An invalid bundle says why decoding stopped short.
+type DecodeBundle = { views: string[] } & (
   | { invalid: false }
   | { invalid: true; failure: SanitiseDecodeFailure }
 );
@@ -56,6 +56,14 @@ const MAX_PREFLIGHT_NODES = 20_000;
 // One string may be as long as the model's own context allows; the destination policy then enforces its own cap.
 const MAX_PREFLIGHT_STRING_CHARS = MODEL_CONTEXT_MAX_CHARS;
 const MAX_DECODE_PASSES = 2;
+// The most views decodedViews can generate. Each frontier node yields at most DECODE_VIEW_KINDS new views per pass
+// (all spans, JSON escapes, percent, base64), and each of those may join the next frontier, so pass p yields at most
+// DECODE_VIEW_KINDS^p views and all passes together sum(DECODE_VIEW_KINDS^p, p = 1..MAX_DECODE_PASSES) = 4 + 16 = 20.
+// Every decoder only shortens text (a JSON escape is 6 characters to 1, a percent byte 3 to at most 1, base64 4 to 3),
+// so no view is longer than the text, and the decoded total is at most MAX_DECODE_VIEWS times the text length. A
+// decoder that ever lengthened text, or a wider fan-out, would trip this cap and fail closed as decode:budget.
+const DECODE_VIEW_KINDS = 4;
+const MAX_DECODE_VIEWS = Array.from({ length: MAX_DECODE_PASSES }, (_, pass) => DECODE_VIEW_KINDS ** (pass + 1)).reduce((sum, views) => sum + views, 0);
 const REDACTION_ORDER: readonly RedactionKind[] = [
   'email',
   'phone',
@@ -315,30 +323,22 @@ function exposesNewSpan(child: EncodedSpan[], parent: EncodedSpan[]): boolean {
   return false;
 }
 
-function decodedViews(text: string, passes = MAX_DECODE_PASSES, budgetFactor = 4): DecodeBundle {
+function decodedViews(text: string): DecodeBundle {
   const views = [text];
   const known = new Set(views);
-  // Uniform 4x decode budget (live RCA 2026-09-28: brief card failed internal_context
-  // invalid_payload at 08:46 and 14:01). The old min(destination.max_chars, 4x) formula let
-  // the budget SHRINK below 4x for strings over max_chars/4, so a legal 17k+ card prompt
-  // carrying ordinary nested encodings (a redirect-wrapped URL, an encoded token) generated
-  // two full-length decode views and died on a shape false positive - while the identical
-  // content in a shorter string passed. The payload itself is already capped at
-  // destination.max_chars by applyDestinationPolicy, so total decode work stays bounded at
-  // 4x that cap either way; the recursion defense (MAX_DECODE_PASSES + canDecodeAgain) is
-  // unchanged and still denies genuinely deeper nesting. The context-composer fence scan
-  // (source-sanitisation.ts) has always used this uniform 4x form.
-  const maxDecodedChars = Math.max(text.length, 1) * budgetFactor;
+  // The budget bounds work; it is not the security boundary (MAX_DECODE_PASSES + canDecodeAgain is). It is the
+  // algorithm's own maximum, so ordinary sibling encodings cannot use it up and deny a legitimate token beside them:
+  // a fixed 4x of the text did exactly that to every day card (decode:budget:mixed:2). See MAX_DECODE_VIEWS.
+  const maxDecodedChars = Math.max(text.length, 1) * MAX_DECODE_VIEWS;
   let frontier: DecodeNode[] = [{ text, spans: encodedSpans(text) }];
   let decodedChars = 0;
-  let depth = 0;
 
   // Depth is counted per lineage: a view sits one layer below the view it was decoded from.
   // The all-spans view goes deeper while anything stays decodable. A single-kind view goes
   // deeper only when its decode exposed a span its parent did not carry (a nested encoding,
   // or characters that joined a neighbour into a new token); its parent's sibling spans are
   // already decoded together in the all-spans view, so they are not counted as nesting.
-  for (let pass = 0; pass < passes; pass += 1) {
+  for (let pass = 0; pass < MAX_DECODE_PASSES; pass += 1) {
     const next: DecodeNode[] = [];
     for (const node of frontier) {
       // A percent sequence the strict decoder rejects is not an encoding - the model cannot
@@ -355,9 +355,8 @@ function decodedViews(text: string, passes = MAX_DECODE_PASSES, budgetFactor = 4
         if (typeof value !== 'string' || value === node.text || known.has(value)) continue;
         decodedChars += value.length;
         if (value.length > maxDecodedChars || decodedChars > maxDecodedChars) {
-          return { invalid: true, views, depth, failure: { cause: 'budget', kind, depth: pass + 1 } };
+          return { invalid: true, views, failure: { cause: 'budget', kind, depth: pass + 1 } };
         }
-        depth = pass + 1;
         known.add(value);
         views.push(value);
         const spans = encodedSpans(value);
@@ -370,9 +369,9 @@ function decodedViews(text: string, passes = MAX_DECODE_PASSES, budgetFactor = 4
 
   const pending = frontier.find((node) => canDecodeAgain(node.text));
   if (pending !== undefined) {
-    return { invalid: true, views, depth, failure: { cause: 'nesting', kind: pendingKind(pending.text), depth: passes + 1 } };
+    return { invalid: true, views, failure: { cause: 'nesting', kind: pendingKind(pending.text), depth: MAX_DECODE_PASSES + 1 } };
   }
-  return { invalid: false, views, depth };
+  return { invalid: false, views };
 }
 
 // The encoding still decodable after the last pass, named in canDecodeAgain's order.
@@ -1219,117 +1218,6 @@ export function sanitise(raw: SanitiseInput): SanitiseResult {
   const instructions = inspectsInstructions(input) ? inspectInstructions(pii.payload, pii.redactions) : { payload: pii.payload, redactions: pii.redactions };
   if ('ok' in instructions) return instructions;
   return applyDestinationPolicy(input, instructions.payload, instructions.redactions);
-}
-
-export const ENCODED_SPAN_MARKER = '[encoded text withheld]';
-// A withheld unit is read deeper than the scan's own two passes before it may be dropped: what it hides must be proven
-// free of a canary, a secret and (where this taint may not carry one) a health value, never merely skipped. A unit
-// that does not finish decoding inside these bounds fails closed.
-const WITHHELD_SCAN_PASSES = 8;
-const WITHHELD_SCAN_BUDGET = WITHHELD_SCAN_PASSES * 4;
-const WITHHELD_SCAN_VARIANTS = 64;
-const WITHHELD_GREEDY_STEPS = 8;
-// Encoded spans never contain whitespace or these JSON delimiters, and decoding never removes one, so a run between
-// them is a unit no decode reaches past. Splitting on them keeps a compact JSON field's neighbours out of a withheld
-// link, and the marker, which starts and ends with a delimiter, cannot join its neighbours into a new token.
-const WITHHOLD_UNIT = /[^\s",:{}[\]]+/g;
-const WITHHELD_HEALTH_PATTERNS: readonly RegExp[] = [...RAW_SENSOR_PATTERNS, ...DERIVED_SCORE_PATTERNS, ...HEALTH_FREE_TEXT];
-
-export type WithheldText =
-  | Readonly<{ ok: true; text: string; withheld: number }>
-  | Readonly<{ ok: false; reason: 'canary_leak' | 'secret_leak' | 'health_value_leak' | 'invalid_payload' }>;
-
-// The provider's degrade for the newest message headed to the model when the decoder denies it (owner ruling: a shape
-// false positive degrades, it does not fail). It runs at any taint, since withheld bytes never reach the model, and it
-// does not decide what passes: the caller re-runs the full sanitise on the result.
-// - Picking: the units that fail on their own; then, if the text as a whole still fails (siblings sharing the decode
-//   budget), units that decode more than one layer, largest first, until it passes.
-// - Before anything is dropped, the whole message is scanned with every encoded unit replaced in place by each of its
-//   decoded views (withheld units read eight layers deep), so a pattern spanning a withheld unit and its plain
-//   neighbour (a bearer label and its token, a key header and its body) is seen whole. A canary or secret anywhere
-//   denies the whole text, and so does a health value reaching into a withheld unit at a taint that may not carry
-//   one: the rule the trim applies to content it does not send.
-export function withholdUndecodableSpans(text: string, canaryTokens: readonly string[], sourceTaint: SourceTaint): WithheldText {
-  if (!decodedViews(text).invalid) return { ok: true, text, withheld: 0 };
-  const units = Array.from(text.matchAll(WITHHOLD_UNIT), (match) => ({ start: match.index, value: match[0] }))
-    .filter((unit) => encodedSpans(unit.value).length > 0)
-    .map((unit) => ({ ...unit, decoded: decodedViews(unit.value) }));
-  type Unit = (typeof units)[number];
-  const withhold = (picked: ReadonlySet<Unit>): string => {
-    let output = '';
-    let cursor = 0;
-    for (const unit of units) {
-      if (!picked.has(unit)) continue;
-      output += text.slice(cursor, unit.start) + ENCODED_SPAN_MARKER;
-      cursor = unit.start + unit.value.length;
-    }
-    return output + text.slice(cursor);
-  };
-  const picked = new Set(units.filter((unit) => unit.decoded.invalid));
-  if (decodedViews(withhold(picked)).invalid) {
-    const nested = units
-      .filter((unit) => !picked.has(unit) && unit.decoded.depth >= 2)
-      .sort((left, right) => right.value.length - left.value.length);
-    for (const [step, unit] of nested.entries()) {
-      if (step === WITHHELD_GREEDY_STEPS) {
-        for (const rest of nested.slice(step)) picked.add(rest);
-        break;
-      }
-      picked.add(unit);
-      if (!decodedViews(withhold(picked)).invalid) break;
-    }
-  }
-  const candidate = withhold(picked);
-  if (picked.size === 0 || decodedViews(candidate).invalid) return { ok: false, reason: 'invalid_payload' };
-
-  const views = new Map<Unit, readonly string[]>();
-  for (const unit of units) {
-    if (!picked.has(unit)) {
-      views.set(unit, unit.decoded.views);
-      continue;
-    }
-    const deep = decodedViews(unit.value, WITHHELD_SCAN_PASSES, WITHHELD_SCAN_BUDGET);
-    if (deep.invalid) return { ok: false, reason: 'invalid_payload' };
-    views.set(unit, deep.views);
-  }
-  const variants = Math.max(...Array.from(views.values(), (list) => list.length));
-  if (variants > WITHHELD_SCAN_VARIANTS) return { ok: false, reason: 'invalid_payload' };
-  const canaries = canaryTokens.map((token) => token.toLowerCase());
-  const healthChecked = !ownerHealthAllowed({ destination: 'internal_context', source_taint: sourceTaint });
-  // Each variant reads every withheld unit at one depth, with the units left in place either at that depth too or as
-  // written, so a plain neighbour that only looks encoded is also seen as written.
-  for (let variant = 0; variant < variants * 2; variant += 1) {
-    const index = variant >> 1;
-    const othersAsWritten = (variant & 1) === 1;
-    let joint = '';
-    let cursor = 0;
-    const withheldRanges: Array<{ start: number; end: number }> = [];
-    for (const unit of units) {
-      const list = views.get(unit)!;
-      const view = othersAsWritten && !picked.has(unit) ? unit.value : list[Math.min(index, list.length - 1)]!;
-      joint += text.slice(cursor, unit.start);
-      if (picked.has(unit)) withheldRanges.push({ start: joint.length, end: joint.length + view.length });
-      joint += view;
-      cursor = unit.start + unit.value.length;
-    }
-    joint += text.slice(cursor);
-    const lower = joint.toLowerCase();
-    if (canaries.some((canary) => lower.includes(canary))) return { ok: false, reason: 'canary_leak' };
-    if (SECRET_PATTERNS.some((pattern) => matches(pattern, joint))) return { ok: false, reason: 'secret_leak' };
-    if (healthChecked && WITHHELD_HEALTH_PATTERNS.some((pattern) => matchReaches(pattern, joint, withheldRanges))) {
-      return { ok: false, reason: 'health_value_leak' };
-    }
-  }
-  return { ok: true, text: candidate, withheld: picked.size };
-}
-
-function matchReaches(pattern: RegExp, text: string, ranges: readonly { start: number; end: number }[]): boolean {
-  const global = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
-  for (const match of text.matchAll(global)) {
-    const end = match.index + match[0].length;
-    if (ranges.some((range) => match.index < range.end && end > range.start)) return true;
-  }
-  return false;
 }
 
 const HEALTH_MEASUREMENT_SUFFIX = /(?:datum|measurement|value|reading|amount|score|sample|quantity|duration|minutes?|mins?)$/i;

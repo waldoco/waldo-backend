@@ -26,7 +26,6 @@ import {
   EXTERNAL_ORIGIN_TOOLS,
   type GatewayConstantHeaders,
   type GatewayStep,
-  type LLMMessage,
   type LLMRequest,
   type LLMResponse,
   type LLMToolTurn,
@@ -54,7 +53,6 @@ import {
   type ResolvedSkillBudget,
   type SkillBudgetFactory,
 } from '../skills/budget';
-import { withholdUndecodableSpans } from '../scribe/sanitiser';
 import { callTimeLeftMs, MODEL_CALL_TIMEOUT_MS, PROVIDER_WAIT_MAX_MS, RATE_LIMIT_BACKOFF_MS } from './time-budget';
 
 export type LLMContextMode = 'full_context' | 'reduced_context';
@@ -222,8 +220,6 @@ export type RuntimeLLMSuccess = {
   usage: LLMUsage;
   attempts: LLMAttempt[];
   routing_logs: readonly RoutingLogEvent[];
-  // How many encoded spans the scribe withheld from the newest message so the call could run. A count only.
-  scribe_withheld?: number;
 };
 
 export type RuntimeLLMFailure = {
@@ -243,7 +239,7 @@ export type RuntimeLLMFailure = {
     destination: SanitiseDestination;
     reason: SanitiseFailureReason;
   };
-  // Which scribe stage produced a structural denial, e.g. 'decode:budget:mixed:2'. Enums and a small integer only.
+  // Which scribe stage produced a structural denial, e.g. 'decode:nesting:percent:3'. Enums and a small integer only.
   scribe_stage?: string;
   // Typed marker: the system prompt itself failed the scribe. It is never cut or dropped.
   code_detail?: 'system_prompt_rejected';
@@ -280,7 +276,7 @@ type PreLlmHookResult =
   | { ok: false; error: HookHaltError };
 
 type SanitiseRequestResult =
-  | { ok: true; request: LLMRequest; withheld: number }
+  | { ok: true; request: LLMRequest }
   | {
       ok: false;
       error: HookHaltError;
@@ -571,7 +567,6 @@ export class RuntimeLLMProvider {
         usage: { ...usage, ...addTokens(usage, spent) },
         attempts,
         routing_logs: routingLogs,
-        ...(sanitisedRequest.withheld > 0 ? { scribe_withheld: sanitisedRequest.withheld } : {}),
       };
     }
 
@@ -1397,7 +1392,7 @@ function spendCapExceeded(spend: RouteSpendState | undefined): boolean {
   );
 }
 
-// 'decode:budget:mixed:2' or 'health': the diagnostic's enums and integer joined, nothing from the payload.
+// 'decode:nesting:percent:3' or 'health': the diagnostic's enums and integer joined, nothing from the payload.
 const scribeStageLabel = ({ stage, decode }: SanitiseDenialDiagnostic): string =>
   decode === undefined ? stage : `${stage}:${decode.cause}:${decode.kind}:${decode.depth}`;
 
@@ -1430,12 +1425,11 @@ async function sanitiseRequest(
     };
   }
 
-  type SanitisedValue = { ok: true; payload: unknown } | { ok: false; error: HookHaltError };
   const sanitiseValue = async (
     payload: unknown,
     destination: 'system_prompt' | 'internal_context',
     payloadTaint?: 'external' | null,
-  ): Promise<SanitisedValue> => {
+  ): Promise<{ ok: true; payload: unknown } | { ok: false; error: HookHaltError }> => {
     // Dynamic per-model context budget (owner decision 2026-09-26): the internal_context char
     // budget derives from the REQUEST model's real context window, tighten-only against the
     // pinned wire ceiling. system_prompt keeps the pinned policy unchanged.
@@ -1521,50 +1515,26 @@ async function sanitiseRequest(
     if (used > historyChars && index < request.messages.length - 1) { first = index + 1; break; }
   }
   const history = first === 0 ? request.messages : request.messages.slice(first);
+  let messages = await sanitiseValue(history, 'internal_context');
   // Oldest-first trim: find the smallest cut that passes, so recent context survives ("that one" and "yes" keep their
   // referent). A shorter suffix never fails where a longer one passes, so the cut is found by bisection, not one
   // full re-sanitise per dropped message.
-  const trimmed = async (messages: readonly LLMMessage[]): Promise<SanitisedValue> => {
-    let result = await sanitiseValue(messages, 'internal_context');
-    if (result.ok || !softScribe(result.error)) return result;
+  if (!messages.ok && softScribe(messages.error)) {
     let low = 1;
-    let high = messages.length - 1;
+    let high = history.length - 1;
     let cut = 0;
     while (low <= high) {
       const drop = Math.floor((low + high) / 2);
-      const reduced = await sanitiseValue(messages.slice(drop), 'internal_context');
+      const reduced = await sanitiseValue(history.slice(drop), 'internal_context');
       // A hard denial (canary, secret, injection) anywhere rejects the request; only size and structure are trimmable.
-      if (!reduced.ok && !softScribe(reduced.error)) return reduced;
-      if (reduced.ok) { result = reduced; cut = drop; high = drop - 1; }
+      if (!reduced.ok && !softScribe(reduced.error)) return { ...reduced, scribeDestination: 'internal_context' };
+      if (reduced.ok) { messages = reduced; cut = drop; high = drop - 1; }
       else low = drop + 1;
     }
     // The dropped prefix is never sent, but a hard denial inside it still rejects the request, as the one-at-a-time trim did.
-    if (result.ok && cut > 0) {
-      const dropped = await sanitiseValue(messages.slice(0, cut), 'internal_context');
-      if (!dropped.ok && !softScribe(dropped.error)) return dropped;
-    }
-    return result;
-  };
-  let messages = await trimmed(history);
-  // The trim never cuts the newest message, and a day card is that one message. When it still fails soft, its
-  // encoded spans that keep the decoder failing are withheld behind a marker, and the whole history is scribed again
-  // from the start: every hard check runs on the result. A canary or secret in or across a withheld span, or health a
-  // non-owner taint may not carry, still denies. This applies at any request taint (RunLoop runs included); withheld
-  // bytes never reach the model.
-  let withheld = 0;
-  if (!messages.ok && softScribe(messages.error)) {
-    const newest = history[history.length - 1]!;
-    const degraded = withholdUndecodableSpans(newest.content, canaryTokens ?? [], sourceTaint.data);
-    if (!degraded.ok && degraded.reason !== 'invalid_payload') {
-      return { ok: false, error: new HookHaltError('scribe_sanitise', `scribe:${degraded.reason}`, 'forbidden'), scribeDestination: 'internal_context' };
-    }
-    if (degraded.ok && degraded.withheld > 0) {
-      const retried = await trimmed([...history.slice(0, -1), { ...newest, content: degraded.text }]);
-      // A hard denial on the degraded text rejects the request; a soft one keeps the original failure and its label.
-      if (retried.ok || !softScribe(retried.error)) {
-        messages = retried;
-        withheld = retried.ok ? degraded.withheld : 0;
-      }
+    if (messages.ok && cut > 0) {
+      const dropped = await sanitiseValue(history.slice(0, cut), 'internal_context');
+      if (!dropped.ok && !softScribe(dropped.error)) return { ...dropped, scribeDestination: 'internal_context' };
     }
   }
   if (!messages.ok) return { ...messages, scribeDestination: 'internal_context' };
@@ -1760,7 +1730,7 @@ async function sanitiseRequest(
     tool_turns: toolTurns?.payload,
   });
   return parsed.success
-    ? { ok: true, request: parsed.data, withheld }
+    ? { ok: true, request: parsed.data }
     : {
         ok: false,
         error: new HookHaltError('llm_provider', 'sanitised request invalid', 'transient'),

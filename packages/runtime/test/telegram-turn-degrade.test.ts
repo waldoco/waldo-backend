@@ -15,8 +15,8 @@ vi.mock('openai', () => ({
 
 const { createTelegramResponder } = await import('../src/channels/telegram-turn');
 
-// A triple-nested percent encoding still decodes after the scribe's 2-pass limit, so the scribe denies it at
-// internal_context: in history it is trimmed, as the newest message it is withheld behind a marker.
+// A triple-nested percent encoding still decodes after the scribe's 2-pass limit, so the deny is
+// correct and stays: this shape is probe-verified to fail decodedViews at internal_context.
 const POISON = 'look %252525 here';
 
 describe('poisoned history degrade', () => {
@@ -34,15 +34,10 @@ describe('poisoned history degrade', () => {
     for (const body of requests) expect(JSON.stringify(body)).not.toContain('%252525');
   });
 
-  it('the poisoned shape never reaches the model when it is the CURRENT message: it is withheld, the turn runs', async () => {
-    requests.length = 0;
+  it('the sanitizer still denies the poisoned shape when it is the CURRENT message - no bypass', async () => {
     const responder = createTelegramResponder('test-key');
-    const text = await responder.respond(ownerTyped({ updateId: 3, messageId: null, senderId: 7, chatId: 7, sentAt: null, text: POISON }), (_name, run) => run());
-    expect(text).toBe('pong');
-    expect(requests.length).toBeGreaterThan(0);
-    for (const body of requests) {
-      expect(JSON.stringify(body)).not.toContain('%252525');
-      expect(JSON.stringify(body)).toContain('look [encoded text withheld] here');
-    }
+    await expect(
+      responder.respond(ownerTyped({ updateId: 3, messageId: null, senderId: 7, chatId: 7, sentAt: null, text: POISON }), (_name, run) => run()),
+    ).rejects.toThrow('scribe_sanitise');
   });
 });

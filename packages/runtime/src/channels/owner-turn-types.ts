@@ -6,8 +6,6 @@ export type SystemSection = 'reasons' | 'behavior' | 'health' | 'clock' | 'memor
 export type ContextShape = Readonly<{
   tools_count: number; tools_bytes: number; tool_turns_bytes: number;
   history_messages: number; history_bytes: number; current_bytes: number; attachments: number;
-  // Encoded spans the scribe withheld from the newest message so the call could run.
-  scribe_withheld?: number;
   system_sections?: Readonly<Partial<Record<SystemSection, number>>>;
 }>;
 // principal: the verified owner principal, set only on an owner turn's owner_request hop. The host files that runtime's
