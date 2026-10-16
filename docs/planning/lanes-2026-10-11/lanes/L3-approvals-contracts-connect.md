@@ -1,4 +1,4 @@
-# L3: approvals, app contracts, Google connect, ledger
+# L3: approvals, app contracts, Google connect
 
 **Owner:** a new Claude session, the successor to the stopped gap-analysis lane. Repo: `waldoco/waldo-backend`, base `beta-mvp`.
 
@@ -33,10 +33,7 @@ When the gap-analysis lane stopped, three things on the iPhone path were left wi
    - **G2:** with L4, retire the app's legacy `oauth-google` path.
    - **G4:** ask the owner to confirm one OAuth client (`GOOGLE_CLIENT_ID` vs `GOOGLE_OAUTH_CLIENT_ID`).
 5. **Threads contract** (app and console only), from #998's threads slice.
-6. **Keep ledger §12 current.** This includes:
-   - the corrections C11–C13 in #1029 (fold them in, then close #1029 or merge it as a dated snapshot);
-   - the 10 Oct 19:05Z rulings: cohort 5–10 (at most 50); $25 per user per month; browser tasks from any surface;
-   - the 11 Oct rulings in [`L2-identity-router.md`](L2-identity-router.md).
+6. **Ledger corrections.** Since 11 October the ledger has its own owner, the audit lane ([`AUDIT-ledger-and-verification.md`](AUDIT-ledger-and-verification.md)). L3 no longer edits `WEBSITE_PROMISE_LEDGER_2026-10-10.md`; it posts corrections on #116 starting with "Ledger correction:". The earlier sub-items (C11–C13 from #1029, the 10 Oct 19:05Z rulings, the 11 Oct rulings) are in the ledger.
 7. **Review Instinct brief 03** (connector read depth) when its PR arrives.
 8. **Brain ADR PR `Pin4sf/waldo-brain#34`.** One revision pass when idle: it predates rulings 11, 13, 15 and 16.
 
