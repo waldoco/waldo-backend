@@ -190,11 +190,11 @@ describe('the listener hands queued files over only after the reply is out', () 
   });
 });
 
-it('the prompt says attachments are available only on a WhatsApp turn whose run scope lets the workspace open', () => {
+it('the prompt says attachments are available only where the host declared a file route and the run scope lets the workspace open', () => {
   const turn = { updateId: 1, chatId: OWNER, senderId: OWNER, messageId: 1, sentAt: null, text: 'send me the plan' } as unknown as TelegramInboundTurn;
   const runScope = { runId: 'run', attempt: '1', deadline: Date.now() + 60_000, signal: new AbortController().signal, admit() {}, commit: <T>(work: () => T) => work() } satisfies RunEffectScope;
-  const attachments = (surface: string, scoped: boolean) => telegramTurnEnvelope(scoped ? { ...turn, runScope } : turn, surface).presentation?.delivery.attachments;
-  expect(attachments('whatsapp', false)).toBe(false);
-  expect(attachments('whatsapp', true)).toBe(true);
-  expect(attachments('telegram', true)).toBe(false);
+  const attachments = (canAttach: boolean, scoped: boolean) => telegramTurnEnvelope({ ...turn, ...(canAttach ? { canAttach } : {}), ...(scoped ? { runScope } : {}) }, 'whatsapp').presentation?.delivery.attachments;
+  expect(attachments(true, false)).toBe(false);
+  expect(attachments(true, true)).toBe(true);
+  expect(attachments(false, true)).toBe(false);
 });
