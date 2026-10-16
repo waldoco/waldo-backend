@@ -13,7 +13,7 @@ export const telegramTurnEnvelope = (turn: TelegramInboundTurn, surface = 'teleg
   traceId: ownerTurnTrace(surface, turn.updateId),
   conversationRef: surfaceChatRef(surface, turn.chatId),
   surface,
-  presentation: { surface, delivery: { text: true, approval: surface === 'telegram' || surface === 'app' ? 'native_buttons' : surface === 'whatsapp' ? 'text_callback' : 'none', reactions: surface === 'telegram', attachments: false } },
+  presentation: { surface, delivery: { text: true, approval: surface === 'telegram' || surface === 'app' ? 'native_buttons' : surface === 'whatsapp' ? 'text_callback' : 'none', reactions: surface === 'telegram', attachments: surface === 'whatsapp' } },
   text: turn.text,
   parts: turn.parts,
   ...(turn.runScope ? { runScope: turn.runScope } : {}),

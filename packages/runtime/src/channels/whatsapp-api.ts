@@ -183,15 +183,15 @@ const REFUSAL_WORDS: Readonly<Record<WhatsAppFileRefusal, string>> = {
 
 // Sends one file through the owner's gated, egress-guarded caller. A file WhatsApp cannot carry is a
 // definite refusal made before any upload, so the owner gets a plain text instead, naming the file
-// and carrying the caller's fallback (normally the owner-authenticated link). Any failure after the
+// and carrying the caller's fallback (normally the owner-authenticated link), which is built only then. Any failure after the
 // upload starts propagates: the document may have gone out, so no second message is sent.
-export const deliverWhatsAppFile = async (call: Caller, chatId: number, file: WhatsAppOutboundFile, fallback: string): Promise<WhatsAppFileOutcome> => {
+export const deliverWhatsAppFile = async (call: Caller, chatId: number, file: WhatsAppOutboundFile, fallback: () => Promise<string>): Promise<WhatsAppFileOutcome> => {
   let ack: unknown;
   try {
     ack = await call('sendDocument', { chat_id: chatId, file });
   } catch (error) {
     if (!(error instanceof WhatsAppFileRefused)) throw error;
-    const sent = await call('sendMessage', { chat_id: chatId, text: `WhatsApp can't carry ${file.filename} (${REFUSAL_WORDS[error.reason]}). ${fallback}` });
+    const sent = await call('sendMessage', { chat_id: chatId, text: `WhatsApp can't carry ${file.filename} (${REFUSAL_WORDS[error.reason]}). ${await fallback()}` });
     return sent === undefined ? { status: 'blocked' } : { status: 'degraded', reason: error.reason };
   }
   if (ack === undefined) return { status: 'blocked' };
