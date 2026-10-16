@@ -2979,6 +2979,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       clearTurnReceipts: trace => { turnReceiptUrls.delete(trace); turnAttachments.clear(trace); },
       ...(attachmentRoute ? { deliverAttachments: (trace: string, runScope?: RunEffectScope) => deliverTurnAttachments(turnAttachments.take(trace), {
         trace, ownerRef: ownerRef(), effects, open: () => openWorkspace(runScope ? { runScope } : undefined), send: attachmentRoute, delivery: workspaceLinks,
+        ...(runScope ? { admit: () => runScope.admit() } : {}),
       }) } : {}),
       saveOffset: (offset) => this.ctx.storage.put(offsetKeyOf(channel), offset),
     }) : null;

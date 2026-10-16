@@ -12,7 +12,7 @@ import { deliverWhatsAppFile, whatsappOutboundKind, type WhatsAppOutboundFile } 
 import { TelegramOwnerListener, type TelegramOwnerApi } from '../src/channels/telegram-listener';
 import { TelegramPollingAdapter, type TelegramInboundTurn } from '../src/channels/telegram-polling';
 import { telegramTurnEnvelope } from '../src/channels/telegram-turn';
-import type { RunEffectScope } from '../src/channels/run-effect-scope';
+import { ClosedRunError, type RunEffectScope } from '../src/channels/run-effect-scope';
 
 const id = (n: number) => `abcdefab-cdef-4abc-8abc-${n.toString(16).padStart(12, '0')}`;
 const PDF = new TextEncoder().encode('%PDF-1.4 plan');
@@ -135,6 +135,18 @@ describe('the host sends queued files after the reply', () => {
       expect(sent).toHaveLength(1);
       const states = [...state.storage.kv.list<{ state: string }>({ prefix: 'owner:effect:' })].map(([, r]) => r.state);
       expect(states).toEqual(['rejected', 'rejected']);
+    });
+  });
+
+  it('a run that closed before the send sends nothing and records it as not applied', async () => {
+    await delivering('closed-run', async state => {
+      const { store, write } = await workspace();
+      const pdf = await write('plan.pdf', PDF, 'application/pdf');
+      const sent: Array<{ method: string }> = [];
+      await expect(deliverTurnAttachments([{ file_id: pdf.file_id, revision: 1, filename: 'plan.pdf', mime: 'application/pdf' }],
+        { ...options(state, store, whatsappLike(sent)), admit: () => { throw new ClosedRunError(); } })).rejects.toBeInstanceOf(EffectNotAppliedError);
+      expect(sent).toEqual([]);
+      expect([...state.storage.kv.list<{ state: string }>({ prefix: 'owner:effect:' })].map(([, r]) => r.state)).toEqual(['rejected']);
     });
   });
 });

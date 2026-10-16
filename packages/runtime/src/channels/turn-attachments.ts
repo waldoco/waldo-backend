@@ -38,6 +38,8 @@ export type TurnAttachmentBook = ReturnType<typeof turnAttachmentBook>;
 // and propagates, so the surface tells the owner to check rather than claiming the files went out.
 export const deliverTurnAttachments = async (attachments: readonly TurnAttachment[], deps: Readonly<{
   trace: string; ownerRef: string; effects: OwnerEffectLedger; open(): Promise<WorkspaceStore>; send: AttachmentSend; delivery?: WorkspaceDeliveryOptions;
+  // The turn's run admission: a run that closed (unlinked, rebound, past its deadline) sends nothing more.
+  admit?(): void;
 }>): Promise<void> => {
   for (const attachment of attachments) {
     const operationId = `attach:${await sha256Hex(JSON.stringify([deps.ownerRef, deps.trace, attachment.file_id, attachment.revision]))}`;
@@ -51,6 +53,7 @@ export const deliverTurnAttachments = async (attachments: readonly TurnAttachmen
           const link = await workspaceDelivery(store, attachment, deps.delivery);
           return link.url ? `Open it here: ${link.url}` : 'It is saved in your workspace.';
         };
+        deps.admit?.();
         sendStarted = true;
         const outcome = await deps.send({ bytes, mime: attachment.mime, filename: attachment.filename }, fallback);
         if (outcome.status === 'blocked') { blocked = true; throw new Error('attachment send blocked'); }
