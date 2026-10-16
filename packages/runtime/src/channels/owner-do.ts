@@ -147,7 +147,7 @@ import { stableJson } from '../context-composer/canonical';
 import { APP_CONNECT_GUIDANCE, appApprovalLink, appCaller } from './surfaces/app';
 import { appApprovalsRequest } from './app-approvals';
 import { WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
-import { deliverHeldWhatsApp, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
+import { deliverHeldWhatsApp, forgetHeldWhatsApp, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
 import { sendMessageHandler } from '../tools/live/messaging';
@@ -1263,13 +1263,19 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (!/^\d{6,15}$/.test(subject) || kv.get<string>('whatsapp_subject') !== subject) return new Response('forbidden', { status: 403 });
     let refused: unknown;
     try { refused = (JSON.parse(body) as { refused?: unknown }).refused; } catch { return new Response('bad request', { status: 400 }); }
-    if (!Array.isArray(refused) || refused.length > 100 || !refused.every(id => typeof id === 'string' && id !== '' && id.length <= 256)) return new Response('bad request', { status: 400 });
-    const runtime = this.setup('whatsapp'), records = runtime.finalOutbox.records();
-    for (const id of refused as string[]) {
+    const valid = (row: unknown): row is { id: string; at: number | null } => {
+      const { id, at } = (row ?? {}) as { id?: unknown; at?: unknown };
+      return typeof id === 'string' && id !== '' && id.length <= 256 && (at === null || (typeof at === 'number' && Number.isSafeInteger(at) && at >= 0));
+    };
+    if (!Array.isArray(refused) || refused.length > 100 || !refused.every(valid)) return new Response('bad request', { status: 400 });
+    const runtime = this.setup('whatsapp'), records = runtime.finalOutbox.records(), log = (event: object) => console.log(JSON.stringify(event));
+    for (const { id, at } of refused) {
       const record = records.find(row => row.providerMessageId === id && row.ownerSubject === subject);
-      await whatsappWindowRefused(kv, id, record?.payload.text || null, runtime.owner, template => runtime.call('sendTemplate', template),
-        whatsappTemplateConfig(this.env), Date.now(), event => console.log(JSON.stringify(event)));
+      await whatsappWindowRefused(kv, { providerMessageId: id, refusedAt: at ?? Date.now() }, record?.payload.text || null, runtime.owner,
+        template => runtime.call('sendTemplate', template), whatsappTemplateConfig(this.env), Date.now(), log);
     }
+    // A refusal from before the owner's latest message leaves the window open, so what it held goes out now.
+    if (whatsappWindowOpen(kv, Date.now())) await deliverHeldWhatsApp(kv, runtime.call, Date.now(), log);
     return new Response('ok');
   }
   private refreshWhatsappDue(): void {
@@ -2854,6 +2860,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope);
           const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
           const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
+          forgetHeldWhatsApp(this.ctx.storage.kv, texts);
           const imessage = redactIMessageEntries(this.ctx.storage, texts, FORGOTTEN, scope);
           const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope);
           if (result.remaining + mail.remaining + prep.remaining + imessage.remaining + titles.remaining) throw new Error('Memory history cleanup is incomplete');
@@ -2887,7 +2894,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         context.runScope?.admit();
         if (!auth || auth.do_name !== doName || !auth.capabilities.includes(input.class) || identity.get<string>('do_name') !== doName) return { accepted: false, reason: 'unavailable' };
         return this.env.DEVICE_BRIDGE_DO.get(this.env.DEVICE_BRIDGE_DO.idFromName(device.device_id)).enqueueCommand({ ...input, owner_id: auth.owner_id, device_id: device.device_id });
-      } }), ...loopHandlers(loops, turnId => checkBackLoops.get(turnId ?? '') ?? null), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable }))], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + titles.remaining }; }), undefined,
+      } }), ...loopHandlers(loops, turnId => checkBackLoops.get(turnId ?? '') ?? null), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable }))], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + titles.remaining }; }), undefined,
       (opt) => opt ? openLoopsPrompt(loops, clock.timezone, opt.loopsRoom) : standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
@@ -3557,6 +3564,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
               kvRemaining += (await redactConversationEntries(this.ctx.storage, result.texts, FORGOTTEN)).remaining;
               kvRemaining += redactMailFollowupEntries(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
               kvRemaining += redactCalendarPrepEntries(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
+              forgetHeldWhatsApp(this.ctx.storage.kv, result.texts);
               kvRemaining += redactThreadTitles(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
               await redactToolOutputLedger(this.ctx.storage, result.texts, FORGOTTEN);
             }
@@ -3584,6 +3592,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           await clean(() => redactToolOutputLedger(this.ctx.storage, [node.label], FORGOTTEN).then(() => undefined));
           await clean(() => redactMailFollowupEntries(this.ctx.storage.kv, [node.label], FORGOTTEN));
           await clean(() => redactCalendarPrepEntries(this.ctx.storage.kv, [node.label], FORGOTTEN));
+          await clean(() => forgetHeldWhatsApp(this.ctx.storage.kv, [node.label]));
           await clean(() => redactThreadTitles(this.ctx.storage.kv, [node.label], FORGOTTEN));
           if (remaining > 0) {
             log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: false, detail: 'node.forget retained-copy redaction incomplete' });

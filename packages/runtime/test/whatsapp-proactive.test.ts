@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { OutboxRoute } from '../src/channels/delivery-routes';
 import { TelegramFinalOutbox } from '../src/channels/telegram-final-outbox';
 import { WHATSAPP_TEXT_MAX_CHARS, WhatsAppPartialSend, whatsappTelegramShim } from '../src/channels/whatsapp-api';
-import { WHATSAPP_HELD, WA_HELD_PREFIX, deliverHeldWhatsApp, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappReceipt, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from '../src/channels/whatsapp-window';
+import { WHATSAPP_HELD, WA_HELD_PREFIX, deliverHeldWhatsApp, forgetHeldWhatsApp, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappReceipt, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from '../src/channels/whatsapp-window';
 
 const SUBJECT = '15550001111';
 const T0 = 1_700_000_000_000;
@@ -113,13 +113,14 @@ describe('Meta refusing a send later (a failed status with 131047)', () => {
     const knock = vi.fn(async () => ack('wamid.knock'));
     const log = vi.fn();
     expect(whatsappWindowOpen(kv, T0 + 60_000)).toBe(true);
-    await whatsappWindowRefused(kv, 'wamid.late', 'Your reminder: call Sam.', 15550001111, knock, template, T0 + 60_000, log);
-    await whatsappWindowRefused(kv, 'wamid.late', 'Your reminder: call Sam.', 15550001111, knock, template, T0 + 61_000, log);
+    const late = { providerMessageId: 'wamid.late', refusedAt: T0 + 30_000 };
+    await whatsappWindowRefused(kv, late, 'Your reminder: call Sam.', 15550001111, knock, template, T0 + 60_000, log);
+    await whatsappWindowRefused(kv, late, 'Your reminder: call Sam.', 15550001111, knock, template, T0 + 61_000, log);
     expect(whatsappWindowOpen(kv, T0 + 60_000)).toBe(false);
     expect(held(map)).toEqual(['Your reminder: call Sam.']);
     expect(knock).toHaveBeenCalledTimes(1);
     // A direct reply's text is not kept, so there is nothing to re-hold; the line says so.
-    await whatsappWindowRefused(kv, 'wamid.direct', null, 15550001111, knock, template, T0 + 62_000, log);
+    await whatsappWindowRefused(kv, { providerMessageId: 'wamid.direct', refusedAt: T0 + 31_000 }, null, 15550001111, knock, template, T0 + 62_000, log);
     expect(log).toHaveBeenCalledWith(expect.objectContaining({ hop: 'whatsapp_status', code: 131047, held: false, detail: 'text_unavailable' }));
     // The owner writes again: the window reopens and what was re-held goes out.
     recordWhatsAppInbound(kv, [{ timestamp: String((T0 + 120_000) / 1000) }], T0 + 120_000);
@@ -127,5 +128,60 @@ describe('Meta refusing a send later (a failed status with 131047)', () => {
     const call = vi.fn(async () => ack('wamid.again'));
     await deliverHeldWhatsApp(kv, call, T0 + 120_000, vi.fn());
     expect(call).toHaveBeenCalledWith('sendMessage', { chat_id: 15550001111, text: 'Your reminder: call Sam.' });
+  });
+
+  it('a refusal from before the owner\'s latest message re-holds the text but leaves the window open and does not knock', async () => {
+    const { kv, map } = fakeKv();
+    recordWhatsAppInbound(kv, [{ timestamp: String((T0 + 120_000) / 1000) }], T0 + 120_000);
+    const knock = vi.fn(async () => ack('wamid.knock'));
+    await whatsappWindowRefused(kv, { providerMessageId: 'wamid.old', refusedAt: T0 }, 'Earlier note.', 15550001111, knock, template, T0 + 130_000, vi.fn());
+    expect(whatsappWindowOpen(kv, T0 + 130_000)).toBe(true);
+    expect(held(map)).toEqual(['Earlier note.']);
+    expect(knock).not.toHaveBeenCalled();
+  });
+});
+
+describe('the closed window knocks only for a record the outbox would send', () => {
+  const closedRoute = (inner: Partial<OutboxRoute>) => {
+    const { kv } = fakeKv();
+    recordWhatsAppInbound(kv, [{ timestamp: String((Date.now() - 30 * 60 * 60_000) / 1000) }], Date.now() - 30 * 60 * 60_000);
+    const knock = vi.fn(async () => ack('wamid.knock'));
+    const route = whatsappWindowRoute({ addressed: () => true, allowed: async () => true, defer: async () => null, send: async () => ack('wamid.x'), ...inner },
+      { kv, subject: SUBJECT, template, knock, log: vi.fn() });
+    return { route, knock };
+  };
+  const record = () => ({ createdAt: Date.now() }) as never;
+
+  it('a record the route holds (quiet hours, low volume) waits for that hold and does not knock', async () => {
+    const until = Date.now() + 10 * 60_000;
+    const { route, knock } = closedRoute({ defer: async () => until });
+    expect(await route.defer(record())).toBe(until);
+    expect(knock).not.toHaveBeenCalled();
+  });
+
+  it('a record the route refuses (cancelled, ineligible) is not deferred and does not knock', async () => {
+    const { route, knock } = closedRoute({ allowed: async () => false });
+    expect(await route.defer(record())).toBeNull();
+    expect(await route.allowed(record())).toBe(false);
+    expect(knock).not.toHaveBeenCalled();
+  });
+
+  it('a record the route would send knocks once and waits out the retention', async () => {
+    const { route, knock } = closedRoute({});
+    expect(await route.defer(record())).toBeGreaterThan(Date.now() + 29 * 24 * 60 * 60_000);
+    expect(await route.defer(record())).toBeGreaterThan(Date.now());
+    expect(knock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('owner forget reaches held WhatsApp text', () => {
+  it('cancels a held message carrying a forgotten literal and keeps the rest', () => {
+    const { kv, map } = fakeKv();
+    const call = whatsappWindowCaller(vi.fn(), { kv, template: null, now: () => T0, log: vi.fn() });
+    return Promise.all([call('sendMessage', { chat_id: 1, text: 'Dana at Acme replied about the lease.' }), call('sendMessage', { chat_id: 1, text: 'Lunch at noon.' })]).then(() => {
+      expect(forgetHeldWhatsApp(kv, ['  acme ', ''])).toEqual({ rewritten: 1, remaining: 0 });
+      expect(held(map)).toEqual(['Lunch at noon.']);
+      expect(forgetHeldWhatsApp(kv, [])).toEqual({ rewritten: 0, remaining: 0 });
+    });
   });
 });

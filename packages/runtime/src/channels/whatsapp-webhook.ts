@@ -45,14 +45,17 @@ const bySender = (body: WaBody): { sender: string; value: WaValue }[] => {
 };
 
 // Meta can accept a send and refuse it afterwards because the 24-hour window had closed on its clock: a failed status
-// carrying 131047. Only those are kept, grouped by the recipient they were sent to; every other status is dropped.
-type WaStatus = { id?: unknown; status?: unknown; recipient_id?: unknown; errors?: { code?: unknown }[] };
-const windowRefusals = (body: WaBody): Map<string, string[]> => {
-  const out = new Map<string, string[]>();
+// carrying 131047. Only those are kept, with the time Meta refused them, grouped by the recipient they were sent to; every
+// other status is dropped.
+type WaStatus = { id?: unknown; status?: unknown; timestamp?: unknown; recipient_id?: unknown; errors?: { code?: unknown }[] };
+type WaRefusal = { id: string; at: number | null };
+const windowRefusals = (body: WaBody): Map<string, WaRefusal[]> => {
+  const out = new Map<string, WaRefusal[]>();
   for (const entry of body.entry ?? []) for (const change of entry.changes ?? []) for (const status of (Array.isArray(change.value?.statuses) ? change.value.statuses : []) as WaStatus[]) {
     if (status?.status !== 'failed' || typeof status.id !== 'string' || !status.id || typeof status.recipient_id !== 'string' || !status.recipient_id) continue;
     if (!Array.isArray(status.errors) || !status.errors.some(error => error?.code === WHATSAPP_REENGAGEMENT_ERROR)) continue;
-    out.set(status.recipient_id, [...(out.get(status.recipient_id) ?? []), status.id]);
+    const at = typeof status.timestamp === 'string' && /^\d{1,12}$/.test(status.timestamp) ? Number(status.timestamp) * 1000 : null;
+    out.set(status.recipient_id, [...(out.get(status.recipient_id) ?? []), { id: status.id, at }]);
   }
   return out;
 };

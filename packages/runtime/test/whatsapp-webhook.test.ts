@@ -149,7 +149,7 @@ describe('handleWhatsAppWebhook', () => {
 
 describe('handleWhatsAppWebhook: a send Meta refuses later for the 24-hour window', () => {
   const statuses = (rows: object[]) => JSON.stringify({ entry: [{ changes: [{ value: { metadata: { phone_number_id: 'pn1' }, statuses: rows } }] }] });
-  const refused = (id: string, recipient: string) => ({ id, status: 'failed', recipient_id: recipient, errors: [{ code: 131047, title: 'Re-engagement message' }] });
+  const refused = (id: string, recipient: string, timestamp: unknown = '1700000000') => ({ id, status: 'failed', timestamp, recipient_id: recipient, errors: [{ code: 131047, title: 'Re-engagement message' }] });
   const directory: OwnerDirectory = { byPresence: async (_p, subject) => subject === '15550001111' ? { doName: 'do-a', subject, timezone: null } : null, redeem: async () => null };
   const env = (ns: DurableObjectNamespace): WhatsAppWebhookEnv => ({ OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret' });
 
@@ -160,11 +160,12 @@ describe('handleWhatsAppWebhook: a send Meta refuses later for the 24-hour windo
       { id: 'wamid.b', status: 'delivered', recipient_id: '15550001111' },
       { id: 'wamid.c', status: 'failed', recipient_id: '15550001111', errors: [{ code: 131026 }] },
       refused('wamid.d', '15550009999'),
+      refused('wamid.e', '15550001111', 'yesterday'),
     ]);
     expect((await run(await post('x', body), env(ns), directory)).status).toBe(200);
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch).toHaveBeenCalledWith('https://telegram-owner/whatsapp-status', {
-      method: 'POST', body: JSON.stringify({ refused: ['wamid.a'] }), headers: { 'x-waldo-whatsapp-subject': '15550001111' },
+      method: 'POST', body: JSON.stringify({ refused: [{ id: 'wamid.a', at: 1_700_000_000_000 }, { id: 'wamid.e', at: null }] }), headers: { 'x-waldo-whatsapp-subject': '15550001111' },
     });
   });
 
