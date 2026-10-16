@@ -10,8 +10,8 @@ import { receivedView, renderForModel, type InboundPart } from './owner-inbound-
 import { ownerContextHandler } from '../tools/live/owner-context';
 import { searchLocation } from '../tools/live/search-location';
 import {
-  deriveContextBudgetChars, EXTERNAL_ORIGIN_TOOLS, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, SANITISE_DESTINATION_POLICIES, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_PROVIDER, OPENAI_REASONING, routingPolicySchema, WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL,
-  type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
+  COMPLEX_WORK_TOOLS, deriveContextBudgetChars, EXTERNAL_ORIGIN_TOOLS, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, SANITISE_DESTINATION_POLICIES, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, OPENAI_REASONING, routingPolicySchema, WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL, WALDO_SIMPLE_TURN_MODEL,
+  type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName, type ToolName,
 } from '@waldo/contracts';
 import type { ConversationModelMessage } from '@waldo/contracts';
 import { BUDGET_CHARS_PER_TOKEN, MODEL_CONTEXT_MAX_CHARS } from '@waldo/contracts';
@@ -31,6 +31,7 @@ import { JoinedConversationPath } from '../conversation/joined-path';
 import { COMPACTION, COMPACTION_INSTRUCTION, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, supersededCompaction, type CompactedStats } from '../conversation/compaction';
 import { numericHealthIn } from '../scribe/sanitiser';
 import { OpenAIResponsesAdapter } from '../llm/openai';
+import type { TurnTierFactory, TurnTierRoute } from '../llm/turn-tier';
 import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
 import { messagingSystemPrompt, ownerClockLine, unconnectedLine, withOwnerSkillProcedures } from '../prompt/messaging-behavior';
@@ -73,8 +74,21 @@ const newSessionCanaryTokens = (): string[] =>
 // Reasoning tokens count against a call's output cap, and OpenAI's reasoning guide asks for at least 25,000 tokens of
 // room for reasoning and output. Sol gets that room whatever effort it runs at; other models keep the 4,096 cap Luna
 // has run with.
-const OUTPUT_TOKENS: Readonly<Partial<Record<ModelName, number>>> = { [OPENAI_GPT_6_1_SOL_MODEL]: 25_000 };
+// Luna's cap covers an owner turn the router judged simple: a reply that needs more than this was not a simple turn.
+const OUTPUT_TOKENS: Readonly<Partial<Record<ModelName, number>>> = { [OPENAI_GPT_6_1_SOL_MODEL]: 25_000, [OPENAI_GPT_6_LUNA_MODEL]: 4_096 };
 const EXTERNAL_DATA_MAX_BYTES = 4096;
+
+// One item of a smaller-model round, as the chat model may replay it: a call without its item id, the round's text as a
+// plain assistant message, and nothing else.
+const unsealedItem = (item: Readonly<Record<string, unknown>>): Record<string, unknown>[] => {
+  if (item.type === 'function_call') { const { id: _sealed, ...call } = item; return [call]; }
+  if (item.type !== 'message' || !Array.isArray(item.content)) return [];
+  const text = item.content.flatMap((part: unknown) => {
+    const output = part as { type?: unknown; text?: unknown };
+    return output.type === 'output_text' && typeof output.text === 'string' ? [output.text] : [];
+  }).join('\n');
+  return text ? [{ type: 'message', role: 'assistant', content: text }] : [];
+};
 
 // Staging responder: the fixture invocation stands in for real per-user admission,
 // which the production tenancy work replaces.
@@ -88,8 +102,9 @@ export type OwnerJobHost = Readonly<{ admit(): Promise<OwnerMessageAdmission | u
 // ownerProfile: the host-framed line about who the owner is. An admitted job composes it into its owner context; a turn
 // without a composed owner context reads it directly.
 // watchStatus: the host fact about Google pushes that are not running, for the owner's own turns ('' when all run).
-export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string }>;
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string }>;
+// turnTier: the router that picks the model an owner's own turn runs on. Without one, every owner turn runs on the chat model.
+export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; turnTier?: TurnTierFactory }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; turnTier?: TurnTierFactory }>;
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 // The reply's system prompt with the byte size of each joined section, so a trace shows what fills it.
@@ -193,6 +208,7 @@ export const createOwnerResponder = (
     // Typed store provenance for the provider's retrieval receipts (owner review on #212).
     ...(offloadStore === undefined ? {} : { toolOutputStore: offloadStore }),
   };
+  const turnTier = privateOwner?.turnTier?.({ sanitise: safety.sanitise, canaryTokens: CANARIES });
   const handlers = [getContextHandler(clock), ownerContextHandler(memory), ...tools, ...(skills?.handlers ?? []), ...(offloadStore === undefined ? [] : [readToolOutputHandler(offloadStore)])];
   // A turn-only output (the owner's health values) reaches the model in this turn and nowhere else: the ledger keeps a content-free line.
   const turnOnlyOutput = new Set<string>(handlers.filter((handler) => 'turn_only_output' in handler && handler.turn_only_output === true).map((handler) => handler.name));
@@ -355,6 +371,25 @@ export const createOwnerResponder = (
     if (recalled.failed.length) log({ trace: traceId, hop: 'memory_recall', ms: 0, ok: false, code: 'recall_failed', detail: recalled.failed.join(',') });
     return recalled.text;
   };
+  // The model an owner's turn runs on, decided once before its first reply call: a turn's later rounds replay the
+  // model's own reasoning items, so the model never changes inside a turn. The router reads the owner's current message
+  // and the previous exchange, after the same held-topic filter the reply's history gets, and nothing else.
+  const routeOwnerTurn = async (trace: string, messages: readonly ConversationModelMessage[]): Promise<ModelName> => {
+    if (!turnTier) return model;
+    const visible = messages.filter((message, index) => index === messages.length - 1 || !holdsHeldTopic(message.content));
+    const earlier = visible.slice(0, -1);
+    const previousOwner = [...earlier].reverse().find(message => message.role === 'user')?.content;
+    const previousReply = [...earlier].reverse().find(message => message.role === 'assistant')?.content;
+    const started = Date.now();
+    const route: TurnTierRoute = await turnTier({ current: visible.at(-1)?.content ?? '', ...(previousOwner === undefined ? {} : { previousOwner }), ...(previousReply === undefined ? {} : { previousReply }) }, privateRunScope?.signal)
+      .catch((): TurnTierRoute => ({ tier: 'complex', reason: 'transport_error' }));
+    log({
+      trace, hop: 'turn_tier', ms: Date.now() - started, ok: true, code: route.reason,
+      detail: [`tier=${route.tier}`, `reason=${route.reason}`, ...(route.confidence === undefined ? [] : [`confidence=${route.confidence.toFixed(2)}`])].join(' '),
+      ...(route.inputTokens ? { usage: { model: OPENAI_GPT_6_LUNA_MODEL, input: route.inputTokens, output: 0, cached: 0 } } : {}),
+    });
+    return route.tier === 'simple' ? WALDO_SIMPLE_TURN_MODEL : model;
+  };
   const consumeRound = async () => {
     const added = await control.roundAsync();
     if (added === null) return null;
@@ -366,6 +401,11 @@ export const createOwnerResponder = (
     complete: async (request) => {
       await assertCurrent();
         const trace = traceId;
+      // Started beside the turn's own preparation and awaited at its first reply call; a machine turn keeps the auxiliary model.
+      const replyModel = ownerTurnActive ? routeOwnerTurn(trace, request.messages).catch(() => model) : Promise.resolve(auxiliaryModel);
+      // The calls the smaller model made before the turn moved to the chat model, by call id: a long turn's replay window
+      // slides, so positions do not identify them.
+      let escalatedFrom: ReadonlySet<string> | undefined;
       // Capture-mode probe turns run on the stripped handler set; delegation wraps that
       // same set so probe confinement applies to children too (children are read-only by
       // construction, and the strip list is not widened here).
@@ -586,15 +626,31 @@ export const createOwnerResponder = (
           };
           const browserImages = privateOwner?.skillHost?.browserAttachments?.(privateRunScope) ?? [];
           const attachments = [...(pending ?? []), ...browserImages];
-          // The reply step serves machine turns too (reminders, jobs, cards, briefs); only the owner's own turn gets the chat model.
+          // The reply step serves machine turns too (reminders, jobs, cards, briefs); only the owner's own turn is routed.
+          const routed = await replyModel;
+          // A routed turn that browses, delegates or searches the web has shown it is multi-step work: the rest of it runs on
+          // the chat model. Every call and its output replays; the smaller model's reasoning and hosted-search items do not,
+          // because they are sealed for the model that wrote them. Its calls replay without their item ids, and its text as
+          // a plain assistant message, so nothing points at the reasoning left out.
+          if (ownerTurnActive && routed !== model && escalatedFrom === undefined) {
+            const trigger = turns.find(turn => COMPLEX_WORK_TOOLS.includes(turn.call.name as ToolName))?.call.name
+              ?? (turns.some(turn => turn.prior_items?.some(item => item.type === 'web_search_call')) ? 'web_search' : undefined);
+            if (trigger !== undefined) {
+              escalatedFrom = new Set(turns.map(turn => turn.call.call_id));
+              log({ trace, hop: 'turn_tier', ms: 0, ok: true, code: 'escalated', detail: `from=${routed} to=${model} tool=${trigger}` });
+            }
+          }
+          const stepModel = escalatedFrom === undefined ? routed : model;
+          const replayed = escalatedFrom === undefined ? turns : turns.map(turn => escalatedFrom!.has(turn.call.call_id) && turn.prior_items
+            ? { ...turn, prior_items: turn.prior_items.flatMap(unsealedItem) } : turn);
           return complete(trace, 'reply',
           unboundSystem(),
           entries,
           undefined,
           attachments.length ? attachments : undefined,
           tools,
-          withholdHeldTurns(turns, output => holdsHeldTopic(output), output => narrowHeldJson(output, (value, tally) => withholdHeldItems(value, tally))),
-          ownerTurnActive ? undefined : auxiliaryModel,
+          withholdHeldTurns(replayed, output => holdsHeldTopic(output), output => narrowHeldJson(output, (value, tally) => withholdHeldItems(value, tally))),
+          stepModel,
           );
         },
         onTool: (event) => {
@@ -791,7 +847,7 @@ export const createOwnerResponder = (
         const capturedTurn = { ...turn, memoryWrites };
         const preparedContext = privateOwner?.contextHost ? await privateOwner.contextHost.prepare(capturedTurn, turn.runScope) : undefined;
         const preparedSkills = privateOwner?.skillHost ? await privateOwner.skillHost.prepare(capturedTurn, preparedContext?.invocation.verified_authority.principal_ref ?? ownerId, turn.runScope) : undefined;
-        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}), ...(privateOwner?.watchStatus ? { watchStatus: privateOwner.watchStatus } : {}) });
+        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}), ...(privateOwner?.watchStatus ? { watchStatus: privateOwner.watchStatus } : {}), ...(privateOwner?.turnTier ? { turnTier: privateOwner.turnTier } : {}) });
         control.route(scoped.control);
         scopedCompaction = scoped.compactIfDue;
         try { return await scoped.respond(capturedTurn, time); }

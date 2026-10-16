@@ -91,6 +91,16 @@ export const GENERAL_AGENT_TOOLS: readonly ToolName[] = [
   'call_mcp_tool',
 ];
 
+// Tools whose use is the model's own evidence that a turn is multi-step work: browsing, delegating to a subagent, and
+// searching the web. An owner turn the router sent to the smaller model moves to the chat model after its first call to
+// one of these (hosted web search counts too).
+export const COMPLEX_WORK_TOOLS: readonly ToolName[] = [
+  'browse_page',
+  'browse_act',
+  'delegate_task',
+  'web_search',
+];
+
 // External-origin result classification is broader than the general-agent discovery cluster:
 // calendar, communication, task, and connector reads also carry provider-controlled text, and
 // read_tool_output serves slices of stored external results (guarded before storage). Keeping

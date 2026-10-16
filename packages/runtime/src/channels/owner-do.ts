@@ -152,6 +152,7 @@ import { mcpServers, callMcpToolHandler, readMcpToolHandler, executeMcp, McpConn
 import { sendMessageHandler } from '../tools/live/messaging';
 import { createTelegramFileDownloader } from './telegram-media';
 import { selectTranscriber } from '../llm/transcriber';
+import { liveTurnTier } from '../llm/turn-tier';
 import { TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './telegram-listener';
 import { isForward, TelegramPollingAdapter } from './telegram-polling';
 import { createTelegramResponder } from './telegram-turn';
@@ -2851,7 +2852,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
       undefined, channel, channel === 'telegram' ? telegramSkillHost : channel === 'app' ? appSkillHost : undefined,
-      channel === 'app' ? {contextHost:{prepare:async (turn,scope)=>{
+      {turnTier:liveTurnTier(key),...(channel === 'app' ? {contextHost:{prepare:async (turn,scope)=>{
         const record=this.activeApp;
         if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==record.text)throw new ClosedRunError();
         // The composer runs on every tool round; one health read serves the whole turn.
@@ -2865,7 +2866,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const record=this.activeIMessage;
         if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==record.text)throw new ClosedRunError();
         return iMessageOwnerContext(this.imessageHost,record,scope,{ownerProfile:google.nameLine});
-      }},history:context=>({...canonicalOwnerConversationStore(this.ctx.storage,context),recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,null)}),ownerProfile:google.nameLine,watchStatus} : {...telegramContext,jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus},
+      }},history:context=>({...canonicalOwnerConversationStore(this.ctx.storage,context),recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,null)}),ownerProfile:google.nameLine,watchStatus} : {...telegramContext,jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus})},
     );
     // A job prompt built on the ledger: the owner's health logs reach the model as this turn's context.
     const ledgerJob = async (trace: string, said: string, toolNames?: Parameters<typeof responder.prompt>[4]) =>
