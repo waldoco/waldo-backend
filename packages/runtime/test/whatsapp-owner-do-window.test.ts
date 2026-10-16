@@ -3,7 +3,7 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
-import { WHATSAPP_HELD } from '../src/channels/whatsapp-window';
+import { whatsappHeld } from '../src/channels/whatsapp-window';
 
 vi.mock('openai', () => ({ default: class {
   responses = { create: async () => ({ id: 'fixture', output_text: '{}', output: [], usage: { input_tokens: 1, output_tokens: 1 } }) };
@@ -34,7 +34,7 @@ it('outside the window a proactive text becomes one template knock; the reply de
     try {
       expect((await admit('wamid.old', Date.now() - 30 * 60 * 60 * 1000)).status).toBe(200);
       const runtime = (instance as unknown as { setup(channel: string): { api: { sendMessage(request: object): Promise<unknown> }; owner: number } }).setup('whatsapp');
-      expect(await runtime.api.sendMessage({ chat_id: runtime.owner, text: 'Your reminder: call the bank' })).toBe(WHATSAPP_HELD);
+      expect(whatsappHeld(await runtime.api.sendMessage({ chat_id: runtime.owner, text: 'Your reminder: call the bank' }))).toBe(true);
       expect(events).toEqual(['turn', 'template:waldo_update_ready:en']);
       expect((await admit('wamid.reply', Date.now())).status).toBe(200);
       expect(events).toEqual(['turn', 'template:waldo_update_ready:en', 'text:Your reminder: call the bank', 'turn']);

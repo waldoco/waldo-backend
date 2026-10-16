@@ -62,22 +62,29 @@ export const whatsappWindowOpen = (kv: Kv, now: number): boolean => {
   return last !== undefined && kv.get<number>(REFUSED_KEY) !== last && now - last < WHATSAPP_SERVICE_WINDOW_MS - WINDOW_MARGIN_MS;
 };
 
+// Holding also drops held messages past retention, so an owner who never replies does not keep them longer.
 const holdBody = (kv: Kv, body: object, now: number): void => {
+  for (const [key, record] of [...kv.list<Held>({ prefix: WA_HELD_PREFIX })]) if (now - record.heldAt >= WHATSAPP_HELD_RETENTION_MS) kv.delete(key);
   const seq = (kv.get<number>(HELD_SEQ_KEY) ?? 0) + 1;
   kv.put(HELD_SEQ_KEY, seq);
   kv.put(`${WA_HELD_PREFIX}${String(seq).padStart(12, '0')}`, { heldAt: now, body } satisfies Held);
 };
 
 // One knock per closed window: the marker is the inbound time it answered, so the next reply re-arms it.
+// With no template there is no knock to mark, so a template configured later still knocks for this window.
+// The marker goes down before the send, so a second send during this one cannot knock again. Only a definite refusal
+// takes it back for a retry; a timed-out knock may have gone out, so it stays marked.
 const knockOnce = async (kv: Kv, knock: (template: WhatsAppTemplate) => Promise<unknown>, template: WhatsAppTemplate | null, log: Log): Promise<void> => {
   const opening = kv.get<number>(WA_LAST_INBOUND_KEY) ?? 0;
   if (kv.get<number>(KNOCKED_KEY) === opening) { log({ hop: 'whatsapp_window', ok: true, held: true, knocked: false }); return; }
-  if (!template) { kv.put(KNOCKED_KEY, opening); log({ hop: 'whatsapp_window', ok: false, held: true, code: 'template_unconfigured' }); return; }
+  if (!template) { log({ hop: 'whatsapp_window', ok: false, held: true, code: 'template_unconfigured' }); return; }
+  const previous = kv.get<number>(KNOCKED_KEY);
+  kv.put(KNOCKED_KEY, opening);
   try {
     await knock(template);
-    kv.put(KNOCKED_KEY, opening);
     log({ hop: 'whatsapp_window', ok: true, held: true, knocked: true });
   } catch (error) {
+    if (error instanceof WhatsAppApiError) { if (previous === undefined) kv.delete(KNOCKED_KEY); else kv.put(KNOCKED_KEY, previous); }
     log({ hop: 'whatsapp_window', ok: false, held: true, code: error instanceof WhatsAppApiError && error.code !== null ? error.code : 'knock_failed' });
   }
 };
@@ -187,19 +194,28 @@ export const releaseWhatsAppOutbox = async (outbox: TelegramFinalOutbox, route: 
 };
 
 // Runs when the owner's reply has reopened the window, before that reply's turn, so the turn's context
-// matches what the owner has seen. Each record is removed before its send (at most once, like the wamid
-// claim); a failed send stops the pass and leaves the later records, in order, for the next reply.
+// matches what the owner has seen. A closed window means the pass does nothing: sending would only re-hold.
+// Each record is removed before its send (at most once, like the wamid claim), and what the send answers decides:
+// - a receipt: delivered;
+// - nothing (the owner gate blocked it, e.g. the presence check failed): never sent, so the record goes back
+//   under its own key and the pass stops, keeping the order for the next reply;
+// - WHATSAPP_HELD (the window layer held it again under a new key): the pass stops, nothing is put back;
+// - a throw: the send may have gone out, so the record stays removed and the pass stops.
 export const deliverHeldWhatsApp = async (kv: Kv, call: Caller, now: number, log: Log): Promise<void> => {
+  if (!whatsappWindowOpen(kv, now)) return;
   const held = [...kv.list<Held>({ prefix: WA_HELD_PREFIX })].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
   let expired = 0;
   for (const [key, record] of held) {
     kv.delete(key);
     if (now - record.heldAt >= WHATSAPP_HELD_RETENTION_MS) { expired += 1; continue; }
-    try { await call('sendMessage', record.body); }
+    let result: unknown;
+    try { result = await call('sendMessage', record.body); }
     catch (error) {
       log({ hop: 'whatsapp_held', ok: false, code: error instanceof WhatsAppApiError && error.code !== null ? error.code : 'send_failed' });
       break;
     }
+    if (result === undefined) { kv.put(key, record); log({ hop: 'whatsapp_held', ok: false, code: 'not_sent' }); break; }
+    if (whatsappHeld(result)) { log({ hop: 'whatsapp_held', ok: false, code: 'held_again' }); break; }
   }
   if (expired) log({ hop: 'whatsapp_held', ok: true, expired });
 };
