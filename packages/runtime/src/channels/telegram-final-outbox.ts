@@ -1,4 +1,5 @@
-import { literalTextRedactor } from '@waldo/contracts';
+import { literalTextRedactor, type StandingGate } from '@waldo/contracts';
+import type { CardId } from '../prompt/day-cards';
 import type { RunEffectScope } from './run-effect-scope';
 import { TelegramRejection, TELEGRAM_MESSAGE_MAX_CHARS, sendTelegramFinal, splitTelegramText, type TelegramFinalPayload } from './telegram-api';
 import { redactSecretUrls } from './egress-guard';
@@ -35,6 +36,11 @@ export type FinalRecord = {
   calendarPrep?: CalendarPrepReceipt;
   reaction?: { message_id: number; emoji: string };
   reminder?: { id: string; occurrence: number; runId: string; schedulerRunId: string | null; once: boolean };
+  // A day card on a surface where sends can wait: once it is delivered the day plan records it sent and folds the updates
+  // written up to foldUpTo, the time the card was written.
+  dayCard?: { day: string; card: CardId; foldUpTo: number };
+  // A standing order's report: the order's run finishes when the report is delivered, or when it ends unsent.
+  standingOrder?: { runId: string; gate: StandingGate };
 };
 type Kv = Pick<DurableObjectStorage['kv'], 'get' | 'put'>;
 // What a surface's acknowledgement proves was sent. 'held' is a surface that kept the text for later instead of sending it.

@@ -139,6 +139,12 @@ export const dayWindow = (now: number, timezone: string): Readonly<{ from: numbe
   return { from: midnight, to: midnight + DAY_MS };
 };
 
+// A card waiting for the owner (WhatsApp outside its 24-hour window) is current until the owner's next card is due, which
+// covers the same day with newer facts, and never past its own day. Then it expires unsent: a reply after a quiet stretch
+// brings no burst of old cards.
+export const cardExpiry = (occurrenceAt: number, timezone: string, laterDue: readonly number[]): number =>
+  Math.min(dayWindow(occurrenceAt, timezone).to, ...laterDue.filter(due => due > occurrenceAt));
+
 export const cardWindow = (card: DayCard, now: number, timezone: string): Readonly<{ from: number; to: number }> => {
   const { from: midnight } = dayWindow(now, timezone);
   if (card.calendar === 'today') return { from: midnight, to: midnight + DAY_MS };
