@@ -185,6 +185,19 @@ describe('the host sends queued files after the reply', () => {
     });
   });
 
+  it('a link the surface holds is not a delivery: the file is recorded not applied, the turn goes on, and the next file is tried', async () => {
+    await delivering('held', async state => {
+      const { store, write } = await workspace();
+      const one = await write('one.pdf', PDF, 'application/pdf');
+      const two = await write('two.pdf', PDF, 'application/pdf');
+      const tried: string[] = [];
+      const held: AttachmentSend = async file => { tried.push(file.filename); return { status: 'held', reason: 'window_closed' }; };
+      await deliverTurnAttachments([{ file_id: one.file_id, revision: 1, filename: 'one.pdf', mime: 'application/pdf' }, { file_id: two.file_id, revision: 1, filename: 'two.pdf', mime: 'application/pdf' }], options(state, store, held));
+      expect(tried).toEqual(['one.pdf', 'two.pdf']);
+      expect([...state.storage.kv.list<{ state: string; receipt?: unknown }>({ prefix: 'owner:effect:' })].map(([, r]) => [r.state, r.receipt])).toEqual([['rejected', undefined], ['rejected', undefined]]);
+    });
+  });
+
   it('a run that closed before the send sends nothing and records it as not applied', async () => {
     await delivering('closed-run', async state => {
       const { store, write } = await workspace();

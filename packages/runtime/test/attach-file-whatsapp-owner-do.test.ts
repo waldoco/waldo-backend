@@ -104,7 +104,9 @@ it('a message answered after the 24-hour window closed: the reply is held, no by
     expect(graph.filter(call => call.type === 'upload' || call.type === 'document')).toEqual([]);
     const held = [...state.storage.kv.list<{ body: { text: string } }>({ prefix: WA_HELD_PREFIX })].map(([, record]) => record.body.text);
     expect(held).toEqual([expect.stringMatching(/^Here is the plan; the file follows\./), expect.stringMatching(/^Here is plan\.txt\. Open it here: https:\/\/waldo\.example\/console\/workspace\/file\?id=[^&]+&revision=1$/)]);
-    expect(attachEffects()).toMatchObject([{ state: 'done', receipt: { provider_id: 'held:window_closed' } }]);
+    // The file was not sent; the held link text is the window layer's custody, so the file's intent is never done.
+    expect(attachEffects()).toEqual([expect.objectContaining({ state: 'rejected' })]);
+    expect(attachEffects()[0]!.receipt).toBeUndefined();
   });
 });
 

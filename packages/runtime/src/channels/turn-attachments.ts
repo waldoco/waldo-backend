@@ -1,7 +1,7 @@
 import { ATTACH_FILE_MAX_PER_TURN } from '@waldo/contracts';
 import type { WorkspaceStore } from '@waldo/workspace';
 import { sha256Hex } from '../connectors/google';
-import type { OwnerEffectLedger } from './owner-effect-ledger';
+import { EffectNotAppliedError, type OwnerEffectLedger } from './owner-effect-ledger';
 import { workspaceDelivery, type WorkspaceDeliveryOptions } from './workspace-delivery';
 
 // A workspace file the model queued to go out with its turn's reply. Names the file only; the bytes are read at send time.
@@ -36,7 +36,8 @@ export type TurnAttachmentBook = ReturnType<typeof turnAttachmentBook>;
 // Each file is its own effect: the intent is reserved before any read or send, keyed by owner, turn and file revision.
 // WhatsApp cannot be asked whether an upload landed, so a send that started and did not finish stays unknown and is never
 // retried; a send refused before it started (blocked, or the file gone) is not applied. The first failure stops the rest
-// and propagates, so the surface tells the owner to check rather than claiming the files went out.
+// and propagates, so the surface tells the owner to check rather than claiming the files went out. A link the surface
+// holds for later is not a failure: no file went out, so the intent is not applied, and the next file is tried.
 export const deliverTurnAttachments = async (attachments: readonly TurnAttachment[], deps: Readonly<{
   trace: string; ownerRef: string; effects: OwnerEffectLedger; open(): Promise<WorkspaceStore>; send: AttachmentSend; delivery?: WorkspaceDeliveryOptions;
   // The turn's run admission: a run that closed (unlinked, rebound, past its deadline) sends nothing more.
@@ -44,8 +45,8 @@ export const deliverTurnAttachments = async (attachments: readonly TurnAttachmen
 }>): Promise<void> => {
   for (const attachment of attachments) {
     const operationId = `attach:${await sha256Hex(JSON.stringify([deps.ownerRef, deps.trace, attachment.file_id, attachment.revision]))}`;
-    let dispatched = false, sendStarted = false, blocked = false;
-    await deps.effects.execute({ operationId, owner_ref: deps.ownerRef, tool: 'attach_file', payload: { trace: deps.trace, file_id: attachment.file_id, revision: attachment.revision } }, {
+    let dispatched = false, sendStarted = false, blocked = false, held = false;
+    const done = deps.effects.execute({ operationId, owner_ref: deps.ownerRef, tool: 'attach_file', payload: { trace: deps.trace, file_id: attachment.file_id, revision: attachment.revision } }, {
       dispatch: async () => {
         dispatched = true;
         const store = await deps.open();
@@ -58,10 +59,13 @@ export const deliverTurnAttachments = async (attachments: readonly TurnAttachmen
         sendStarted = true;
         const outcome = await deps.send({ bytes, mime: attachment.mime, filename: attachment.filename }, fallback);
         if (outcome.status === 'blocked') { blocked = true; throw new Error('attachment send blocked'); }
-        return { provider_id: outcome.status === 'sent' ? outcome.providerMessageId : `${outcome.status}:${outcome.reason}`, result: outcome };
+        if (outcome.status === 'held') { held = true; throw new Error('attachment link held'); }
+        return { provider_id: outcome.status === 'sent' ? outcome.providerMessageId : `degraded:${outcome.reason}`, result: outcome };
       },
       // Only this process's own attempt can say nothing left; an attempt found on restart stays unknown.
-      reconcile: async () => ({ status: dispatched && (!sendStarted || blocked) ? 'not_applied' : 'unknown' }),
+      reconcile: async () => ({ status: dispatched && (!sendStarted || blocked || held) ? 'not_applied' : 'unknown' }),
     });
+    try { await done; }
+    catch (error) { if (!held || !(error instanceof EffectNotAppliedError)) throw error; }
   }
 };
