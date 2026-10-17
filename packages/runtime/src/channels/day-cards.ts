@@ -80,6 +80,11 @@ export const dayPlanBook = (sql: Sql) => {
         day, card,
       );
     },
+    // A card written and waiting for its surface (WhatsApp outside its window) is no longer held for quiet hours: it stays unsent
+    // until it is delivered, and the heartbeat's release does not fire it again.
+    waiting(day: string, card: CardId): void {
+      sql.exec('UPDATE day_plan SET sent = 0 WHERE day = ? AND card = ? AND sent = 2', day, card);
+    },
     heldToday(day: string): readonly CardId[] {
       return sql.exec<{ card: CardId }>('SELECT card FROM day_plan WHERE day = ? AND sent = 2 ORDER BY card', day).toArray().map((row) => row.card);
     },

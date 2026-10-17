@@ -7,6 +7,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cardExpiry, dayPlanBook } from '../src/channels/day-cards';
 import { traceBook } from '../src/channels/harness';
+import { loopBook } from '../src/channels/loops';
 import { standingOrderBook } from '../src/channels/standing-orders';
 import { updateBook } from '../src/channels/update-cards';
 import type { LLMGatewayRequest } from '../src/llm/provider';
@@ -71,10 +72,12 @@ afterEach(() => { vi.unstubAllGlobals(); });
 type Outbox = { id: string; status: string; reason?: string }[];
 type Run = { status: string; summary: string | null };
 
-// The owner last wrote 30 hours ago, so the window is closed. Today's cards are already planned, so the runtime's boot neither
-// plans nor arms them: only what a test schedules fires.
+// Unless a test says otherwise the owner last wrote 30 hours ago, so the window is closed. Today's cards are already planned,
+// so the runtime's boot neither plans nor arms them: only what a test schedules fires.
 const owned = async (name: string, script: (steps: Readonly<{
   alarms(passes: number): Promise<void>;
+  // Quiet hours from an hour ago to an hour from now, or none.
+  quiet(on: boolean): void;
   reply(): Promise<void>;
   // Runs the step with the clock moved forward, as when the owner next writes much later.
   later<T>(ms: number, step: () => Promise<T>): Promise<T>;
@@ -92,14 +95,14 @@ const owned = async (name: string, script: (steps: Readonly<{
   planned(): { sent: boolean; state?: string } | undefined;
   runs(): Run[];
   outbox(): Outbox;
-}>) => Promise<void>) => {
+}>) => Promise<void>, wrote = 30 * HOUR) => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql);
     ensureSchema(state.storage);
     traceBook(state.storage.sql);
     state.storage.kv.put('do_name', name);
     state.storage.kv.put('whatsapp_subject', SUBJECT);
-    state.storage.kv.put('wa_last_inbound_ms', Date.now() - 30 * HOUR);
+    state.storage.kv.put('wa_last_inbound_ms', Date.now() - wrote);
     const plans = dayPlanBook(state.storage.sql);
     for (const card of ['card:brief', 'card:midday', 'card:close'] as const) plans.save(today(), { card, time: null, reason: 'planned by the fixture' });
     const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
@@ -111,6 +114,10 @@ const owned = async (name: string, script: (steps: Readonly<{
         // A queued record falls due 250 ms after it is written, so each pass waits that out. The wake a pass armed is cleared
         // first, so the platform does not run this object's alarm on its own meanwhile.
         alarms: async passes => { for (let pass = 0; pass < passes; pass++) { await owner.alarm(); await state.storage.deleteAlarm(); await new Promise(resolve => setTimeout(resolve, 300)); } },
+        quiet: on => {
+          const clock = (ms: number) => new Date(ms).toISOString().slice(11, 16);
+          loopBook(state.storage.sql, { newId: () => 'fixture', now: Date.now }).setProactivity({ volume: 'normal', quiet_start: on ? clock(Date.now() - HOUR) : null, quiet_end: on ? clock(Date.now() + HOUR) : null });
+        },
         reply: async () => {
           seq += 1;
           const response = await owner.fetch(new Request('https://telegram-owner/whatsapp-admit', {
@@ -164,7 +171,7 @@ const owned = async (name: string, script: (steps: Readonly<{
 };
 
 // Each alarm pass waits out the 250 ms a queued record takes to fall due, so these run past the 5 s default.
-describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }, () => {
+describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_000 }, () => {
   it('waits a day card in the outbox with one knock, and records it sent only when the reply delivers it, once', async () => {
     await owned('wa-held-day-card', async ({ alarms, reply, card, checkIn, planned, outbox, expiry, update, folded }) => {
       const nextCard = await checkIn(10 * 60_000);
@@ -192,6 +199,35 @@ describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }
       expect(outbox()).toEqual([{ id: `day-card:${today()}:card:brief`, status: 'delivered' }]);
       await alarms(2);
       expect(wire.events.filter(event => event === `text:${CARD}`)).toHaveLength(1);
+    });
+  });
+
+  it('sends a day card and a standing-order report on the next alarm while the window is open, and records each as it goes', async () => {
+    await owned('wa-open-window-jobs', async ({ alarms, card, order, planned, runs, outbox }) => {
+      await card();
+      await order();
+      await alarms(4);
+      expect([...wire.events].sort()).toEqual([`text:${CARD}`, `text:${REPORT}`].sort());
+      expect(planned()).toMatchObject({ sent: true, state: 'sent' });
+      expect(runs()).toEqual([{ status: 'completed', summary: 'order reported' }]);
+      expect(outbox().map(record => record.status)).toEqual(['delivered', 'delivered']);
+    }, HOUR);
+  });
+
+  it('stops counting a card as held for quiet hours once it is queued after their end, so the heartbeat does not fire it again', async () => {
+    await owned('wa-held-day-card-after-quiet', async ({ alarms, card, quiet, planned, outbox }) => {
+      quiet(true);
+      await card();
+      await alarms(2);
+      expect(planned()).toMatchObject({ sent: false, state: 'held' });
+      expect(model.cards).toBe(0);
+      // Quiet hours end, and the heartbeat's release arms the card again.
+      quiet(false);
+      await card();
+      await alarms(3);
+      expect(model.cards).toBe(1);
+      expect(outbox()).toMatchObject([{ status: 'pending' }]);
+      expect(planned()).toMatchObject({ sent: false, state: 'pending' });
     });
   });
 
