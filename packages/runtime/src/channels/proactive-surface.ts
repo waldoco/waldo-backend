@@ -9,7 +9,7 @@ export type ProactiveTarget = 'app' | 'whatsapp';
 export const PROACTIVE_SURFACE_KEY = 'proactive_surface_v1';
 
 type Kv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void }>;
-const known = (value: unknown): value is ProactiveSurface => PROACTIVE_SURFACES.some(surface => surface === value);
+const known = (value: unknown): value is ProactiveSurface => (PROACTIVE_SURFACES as readonly unknown[]).includes(value);
 
 export const proactiveSurface = (kv: Pick<Kv, 'get'>): ProactiveSurface => {
   const stored = kv.get<unknown>(PROACTIVE_SURFACE_KEY);

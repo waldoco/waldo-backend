@@ -862,11 +862,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
 
   // Where this pass sends proactive work for an owner the directory admits on the app. WhatsApp counts while it is bound here
-  // and, once the owner chose to hear there, while the directory still has the presence; 'retry' when it could not say.
+  // and, when the owner's choice would send there, while the directory still has the presence; 'retry' when it could not say.
   private async proactiveTargets(auth: NonNullable<ReturnType<typeof consoleAuth>>): Promise<readonly ProactiveTarget[] | 'retry'> {
     const kv = this.ctx.storage.kv, setting = proactiveSurface(kv);
     let whatsapp = this.whatsappBound();
-    if (whatsapp && setting !== 'app') {
+    if (whatsapp && proactiveTargets(setting, { app: true, whatsapp: true }).includes('whatsapp')) {
       try { whatsapp = await auth.assertChannelPresence(kv.get<string>('do_name')!, 'whatsapp', kv.get<string>('whatsapp_subject')!); } catch { return 'retry'; }
     }
     return proactiveTargets(setting, { app: true, whatsapp });
@@ -1832,8 +1832,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       // surface is WhatsApp runs on WhatsApp. An owner with the app and WhatsApp has their proactive work go where they chose:
       // the app (the default), WhatsApp, or the app with a WhatsApp copy.
       let channel: ChannelKind = 'telegram';
-      // Set only for an owner the directory admits on the app: whether WhatsApp takes this pass's proactive work.
-      let whatsappTarget: boolean | null = null;
+      // Set only for an owner the directory admits on the app: whether WhatsApp takes this pass's proactive work, and whether
+      // it takes a copy of what the app gets.
+      let whatsappTarget: boolean | null = null, whatsappCopy = false;
       const auth = consoleAuth(this.env);
       if (auth) {
         const doName = this.ctx.storage.kv.get<string>('do_name');
@@ -1848,6 +1849,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (appOwner?.kind === 'admitted' && targets !== null && targets !== 'retry') {
           channel = targets.includes('app') ? 'app' : 'whatsapp';
           whatsappTarget = targets.includes('whatsapp');
+          whatsappCopy = whatsappTarget && targets.includes('app');
           this.scheduledAppDelivery = this.appDeliveryFor(appOwner.authority);
           this.jobOwner = Promise.resolve(this.appScheduledOwner(appOwner.authority));
         }
@@ -1896,26 +1898,22 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (selected === 1) {
         // Each record goes to the surface it is addressed to, with that surface's checks.
         const routeFor = (surface: ChannelKind): OutboxRoute => this.outboxRoute(surface);
-        const routes = [routeFor(channel)];
+        // An owner the directory admits on the app has the app's route and, while WhatsApp takes proactive work, WhatsApp's.
+        const routes = whatsappTarget === null ? [routeFor(channel)] : [routeFor('app'), ...(whatsappTarget ? [routeFor('whatsapp')] : [])];
         if (channel === 'telegram' && consoleAuth(this.env) && this.appBound()) routes.push(admittedRoute(routeFor('app'), async () => {
           const found = await this.appOwnerLookup();
           if (found.kind === 'admitted') this.scheduledAppDelivery = this.copiedToTelegram(this.appDeliveryFor(found.authority));
           return found.kind;
         }, () => Date.now() + APP_ADMISSION_RETRY_MS));
-        // An app owner's other routes: the app's records while WhatsApp takes proactive work, WhatsApp's copies while both do,
-        // and the messages left waiting for a WhatsApp number that no longer does, which go to the app.
-        let settled = settleFinal;
-        if (whatsappTarget !== null) {
-          if (channel === 'whatsapp') routes.push(routeFor('app'));
-          else if (whatsappTarget) { routes.push(routeFor('whatsapp')); settled = this.copiedFollowups(settleFinal); }
-          if (leftForWhatsApp) routes.push(this.outboxRoute('app', waitingForWhatsApp(leftForWhatsApp)));
-        }
+        // Messages left waiting for a WhatsApp number that no longer takes proactive work go to the app.
+        if (leftForWhatsApp) routes.push(this.outboxRoute('app', waitingForWhatsApp(leftForWhatsApp)));
+        const settled = whatsappCopy ? this.copiedFollowups(settleFinal) : settleFinal;
         try { await lane('transport', () => finalOutbox.drain({ ...routedDelivery(routes), settled })); } finally { await scheduler.rearm(); }
         return;
       }
       await lane('schedule', async () => {
         // While both take proactive work, each message the app shows also goes to WhatsApp as one copy.
-        if (channel === 'app' && whatsappTarget && this.scheduledAppDelivery) this.scheduledAppDelivery = this.copiedToWhatsApp(this.scheduledAppDelivery);
+        if (whatsappCopy && this.scheduledAppDelivery) this.scheduledAppDelivery = this.copiedToWhatsApp(this.scheduledAppDelivery);
         // Proactive work goes to the app, the default surface, once the owner has used it, and Telegram gets a plain copy of it;
         // Telegram keeps it only for an owner with no app binding. On a directory-backed deploy every scheduled pass runs as the
         // owner the directory admits; a refusal holds the whole pass, never falling back to Telegram or the fixture owner: a
