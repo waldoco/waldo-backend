@@ -92,6 +92,50 @@ describe('the reply to an unlinked sender', () => {
   });
 });
 
+describe('senders and callbacks that never reach an owner', () => {
+  const signed = async (value: object) => {
+    const body = JSON.stringify({ entry: [{ changes: [{ value: { metadata: { phone_number_id: 'pn1' }, ...value } }] }] });
+    return new Request('https://waldo.example/whatsapp/webhook', { method: 'POST', body, headers: { 'x-hub-signature-256': await sign(body) } });
+  };
+  const harness = async (request: Request) => {
+    const ownerFetch = vi.fn(async () => new Response('ok'));
+    const namespace = { idFromName: (name: string) => name, get: () => ({ fetch: ownerFetch }) } as unknown as DurableObjectNamespace;
+    const directory = links(async () => 'opened');
+    const throttle = vi.fn(async () => true);
+    const sent: unknown[] = [];
+    const graph = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => { sent.push(init?.body); return Response.json({ messages: [{ id: 'wamid.reply' }] }); });
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const work: Promise<unknown>[] = [];
+    try {
+      const response = await handleWhatsAppWebhook(request, { ...env, OWNER_DO: namespace }, (p) => work.push(p), unlinked, { links: directory, throttle });
+      await Promise.all(work);
+      return { response, ownerFetch, open: directory.open, throttle, sent };
+    } finally { graph.mockRestore(); }
+  };
+
+  it('status callbacks for an unbound recipient, including a 131047 refusal, are acknowledged with no reply and no link', async () => {
+    const { response, ownerFetch, open, throttle, sent } = await harness(await signed({ statuses: [
+      { id: 'wamid.a', status: 'sent', recipient_id: SENDER, timestamp: '1700000000' },
+      { id: 'wamid.b', status: 'failed', recipient_id: SENDER, timestamp: '1700000001', errors: [{ code: 131047 }] },
+    ] }));
+    expect(response.status).toBe(200);
+    expect([ownerFetch.mock.calls.length, vi.mocked(open).mock.calls.length, throttle.mock.calls.length, sent.length]).toEqual([0, 0, 0, 0]);
+  });
+
+  it('an unbound sender never reaches any owner, so no owner records an inbound or opens its 24-hour window', async () => {
+    const { response, ownerFetch, sent } = await harness(await inbound('hi waldo'));
+    expect(response.status).toBe(200);
+    expect(ownerFetch).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(1);
+  });
+
+  it('a sender with no phone number (a hidden user id only) gets nothing and reaches no owner', async () => {
+    const { response, ownerFetch, open, sent } = await harness(await signed({ messages: [{ from_user_id: 'US.hidden-1', id: 'wamid.h', timestamp: '1700000000', type: 'text', text: { body: 'hi' } }] }));
+    expect(response.status).toBe(200);
+    expect([ownerFetch.mock.calls.length, vi.mocked(open).mock.calls.length, sent.length]).toEqual([0, 0, 0]);
+  });
+});
+
 describe('the sign-in continuation', () => {
   const target = `/console/whatsapp/link/${'A'.repeat(43)}`;
   const owners = () => {
