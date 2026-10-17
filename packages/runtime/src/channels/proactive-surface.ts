@@ -30,6 +30,10 @@ export const proactiveTargets = (setting: ProactiveSurface, reachable: Readonly<
 
 // A WhatsApp copy of a message the app already has. Its id names the app delivery it copies, so each one is copied once.
 export const WHATSAPP_COPY_PREFIX = 'whatsapp-copy:';
+// How long a copy may wait for WhatsApp, from the moment the app got the message. The app keeps the message either way; a
+// copy left waiting for a closed window would otherwise wait out Meta's 30 days in the shared delivery outbox, which never
+// evicts a pending record, so a month of copies could leave no room for the owner's own messages.
+export const WHATSAPP_COPY_FRESH_MS = 24 * 60 * 60 * 1000;
 
 // Delivers to the app first, and only a message the app took is copied. A send worth delivering only now (a one-time code, a
 // short-lived link) is never queued for WhatsApp, which may hold it for days. A copy that cannot be queued is reported by its

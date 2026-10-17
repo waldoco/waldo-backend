@@ -146,7 +146,7 @@ import { APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_THREADS_PATH, APP_UPDATE_BASE, a
 import { appThreadsRequest, askThreadTitle, nameThread, recallReach, redactThreadTitles, threadChainRef, threadOfChain, threadRecord, threadRowsOfChain, threadRowsPrefix, touchThread, type AppThreadsHost } from './app-threads';
 import { stableJson } from '../context-composer/canonical';
 import { APP_CONNECT_GUIDANCE, appApprovalLink, appCaller, type ScheduledAppDelivery } from './surfaces/app';
-import { proactiveSurface, proactiveTargets, rememberWhatsAppSubject, setProactiveSurface, waitingForWhatsApp, whatsappSubjects, withWhatsAppCopy, WHATSAPP_COPY_PREFIX, type ProactiveTarget } from './proactive-surface';
+import { proactiveSurface, proactiveTargets, rememberWhatsAppSubject, setProactiveSurface, waitingForWhatsApp, whatsappSubjects, withWhatsAppCopy, WHATSAPP_COPY_FRESH_MS, WHATSAPP_COPY_PREFIX, type ProactiveTarget } from './proactive-surface';
 import { appApprovalsRequest } from './app-approvals';
 import { WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
 import { deliverHeldWhatsApp, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
@@ -878,14 +878,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const left = new Set([...whatsappSubjects(this.ctx.storage.kv)].filter(subject => subject !== current));
     return left.size ? left : null;
   }
-  // A WhatsApp copy of an app message waits in the delivery outbox, where WhatsApp's 24-hour window and the owner gate apply.
-  private queueWhatsAppCopy(id: string, text: string): Promise<void> {
+  // A WhatsApp copy of an app message waits in the delivery outbox, where WhatsApp's 24-hour window and the owner gate apply,
+  // until it is no longer fresh. `appAt` is when the app got the message, the same on every attempt to queue one copy.
+  private queueWhatsAppCopy(id: string, text: string, appAt: number): Promise<void> {
     const whatsapp = this.setup('whatsapp');
-    return whatsapp.finalOutbox.enqueue({ id, trace: id, payload: { chat_id: whatsapp.owner, text }, ownerSubject: String(whatsapp.owner), doName: this.ctx.storage.kv.get<string>('do_name') ?? '' });
+    return whatsapp.finalOutbox.enqueue({ id, trace: id, payload: { chat_id: whatsapp.owner, text }, ownerSubject: String(whatsapp.owner),
+      doName: this.ctx.storage.kv.get<string>('do_name') ?? '', expiresAt: appAt + WHATSAPP_COPY_FRESH_MS });
   }
   private copiedToWhatsApp(deliver: ScheduledAppDelivery): ScheduledAppDelivery {
     const { log } = this.setup('whatsapp');
-    return withWhatsAppCopy(deliver, (id, text) => this.queueWhatsAppCopy(id, text), code => log({ trace: `copy:${Date.now()}`, hop: 'whatsapp_copy', ms: 0, ok: false, code, detail: code }));
+    return withWhatsAppCopy(deliver, (id, text) => this.queueWhatsAppCopy(id, text, Date.now()), code => log({ trace: `copy:${Date.now()}`, hop: 'whatsapp_copy', ms: 0, ok: false, code, detail: code }));
   }
   // Settles each record and, once a follow-up (a loop's check-back or a mail follow-up) has reached the app, queues its
   // WhatsApp copy under the record's own id, so settling it again queues nothing new. Meeting prep and pause notices stay in
@@ -895,7 +897,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return async record => {
       await settle(record);
       if (record.status !== 'delivered' || !(record.heartbeat || record.mailFollowup) || record.payload.chat_id !== app.owner) return;
-      try { await this.queueWhatsAppCopy(`${WHATSAPP_COPY_PREFIX}${record.id}`, record.payload.fallback_text ?? record.payload.text); }
+      try { await this.queueWhatsAppCopy(`${WHATSAPP_COPY_PREFIX}${record.id}`, record.payload.fallback_text ?? record.payload.text, record.deliveredAt ?? record.createdAt); }
       catch { app.log({ trace: record.trace, hop: 'whatsapp_copy', ms: 0, ok: false, code: 'copy_failed', detail: 'copy_failed' }); }
     };
   }

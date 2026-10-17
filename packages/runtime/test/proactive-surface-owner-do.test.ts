@@ -17,7 +17,7 @@ import { BRIEF_SWEEP_ID } from '../src/channels/event-briefs';
 import { traceBook } from '../src/channels/harness';
 import { armHeartbeat } from '../src/channels/heartbeat';
 import { loopBook } from '../src/channels/loops';
-import { PROACTIVE_SURFACE_KEY, WHATSAPP_COPY_PREFIX } from '../src/channels/proactive-surface';
+import { PROACTIVE_SURFACE_KEY, WHATSAPP_COPY_FRESH_MS, WHATSAPP_COPY_PREFIX } from '../src/channels/proactive-surface';
 import { reminderBook } from '../src/channels/reminders';
 import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
 import { updateBook } from '../src/channels/update-cards';
@@ -163,6 +163,7 @@ const appChat = async (owner: Owner, ctx: Ctx) => {
 const said = async (owner: Owner, ctx: Ctx) => (await appChat(owner, ctx)).map(({ role, text }) => ({ role, text }));
 const outbox = (state: DurableObjectState) => state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY) ?? [];
 const copies = (state: DurableObjectState) => outbox(state).filter(record => record.id.startsWith(WHATSAPP_COPY_PREFIX));
+const copyFailures = (state: DurableObjectState) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM trace_log WHERE hop = 'whatsapp_copy'").one().n;
 const reminderRuns = (state: DurableObjectState, id: string) => state.storage.sql.exec<{ outcome: string; delivery: string | null }>('SELECT outcome, delivery FROM schedule_runs WHERE schedule_id = ? ORDER BY id', id).toArray();
 const reminderNotes = (state: DurableObjectState) => state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM reminder_notes').one().n;
 // What the console's WhatsApp unlink does once the directory stops routing the number: the bound sender is cleared.
@@ -286,7 +287,8 @@ describe('the app and WhatsApp', { timeout: 20_000 }, () => {
       expect(heartbeat.payload.chat_id).toBe(ctx.appSubject);
       await outboxPass(owner, state, ctx);
       expect(await said(owner, ctx)).toEqual([{ role: 'assistant', text: CHECK_BACK_TEXT }]);
-      expect(copies(state).map(record => record.id)).toEqual([`${WHATSAPP_COPY_PREFIX}${heartbeat.id}`]);
+      const delivered = outbox(state).find(record => record.id === heartbeat.id)!;
+      expect(copies(state).map(record => [record.id, record.expiresAt])).toEqual([[`${WHATSAPP_COPY_PREFIX}${heartbeat.id}`, delivered.deliveredAt! + WHATSAPP_COPY_FRESH_MS]]);
       // A restart that lost the settled mark settles the check-back again; its copy is the same record, queued once.
       const rows = outbox(state);
       rows.find(record => record.id === heartbeat.id)!.settled = false;
@@ -294,6 +296,7 @@ describe('the app and WhatsApp', { timeout: 20_000 }, () => {
       for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
       expect(wire.whatsapp).toEqual([`text:${CHECK_BACK_TEXT}`]);
       expect(copies(state).map(record => record.status)).toEqual(['delivered']);
+      expect(copyFailures(state)).toBe(0);
       expect(await said(owner, ctx)).toEqual([{ role: 'assistant', text: CHECK_BACK_TEXT }]);
     }, { surface: 'both' });
   });
@@ -321,6 +324,23 @@ describe('the app and WhatsApp', { timeout: 20_000 }, () => {
       expect(copies(state)).toEqual([]);
       expect(wire.whatsapp).toEqual([]);
     }, { surface: 'both' });
+  });
+
+  it('a copy left waiting for WhatsApp\'s closed window expires a day after the app message, so waiting copies cannot fill the outbox', async () => {
+    await withOwner('surface-both-copy-expires', async (owner, state, ctx) => {
+      await dueBrief(state);
+      await schedulePass(owner, state);
+      await outboxPass(owner, state, ctx);
+      expect(wire.whatsapp).toEqual(['template:waldo_update_ready']);
+      const [copy] = copies(state);
+      expect([copy!.status, copy!.expiresAt]).toEqual(['pending', AT + WHATSAPP_COPY_FRESH_MS]);
+      ctx.now = copy!.expiresAt!;
+      for (let pass = 0; pass < 2; pass += 1) await outboxPass(owner, state, ctx);
+      // Expired and settled, the copy is a terminal record the outbox evicts when it needs room; a pending one is never evicted.
+      expect(copies(state).map(record => [record.status, record.reason, record.settled])).toEqual([['blocked', 'expired', true]]);
+      expect(wire.whatsapp).toEqual(['template:waldo_update_ready']);
+      expect(await said(owner, ctx)).toEqual([{ role: 'assistant', text: CARD_TEXT }]);
+    }, { surface: 'both', window: 'closed' });
   });
 
   it('a copy waiting for WhatsApp\'s window is not moved to the app when WhatsApp is unlinked: the app keeps the one message', async () => {
