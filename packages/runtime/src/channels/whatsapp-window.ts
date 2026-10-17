@@ -184,7 +184,7 @@ export const whatsappWindowRefused = (kv: Kv, refusal: Readonly<{ providerMessag
 
 // An unlink retires the chat the owner was bound to. What was held for it, and that chat's window and knock state, go with
 // it: held records carry no recipient, the next number to link is a different chat, and the old number may be someone else's.
-export const forgetWhatsAppChat = (kv: Kv): void => {
+export const clearWhatsAppNumber = (kv: Kv): void => {
   for (const prefix of [WA_HELD_PREFIX, REHELD_PREFIX]) for (const [key] of [...kv.list({ prefix })]) kv.delete(key);
   for (const key of [WA_LAST_INBOUND_KEY, KNOCKED_KEY, REFUSED_KEY]) kv.delete(key);
 };
