@@ -110,7 +110,7 @@ export const handleWhatsAppWebhook = async (
       console.log(JSON.stringify({ hop: 'whatsapp_route', ok: false, error: String(error) })); unavailable = true; continue;
     }
     if (route) {
-      const headers: Record<string, string> = { 'x-waldo-origin': origin, 'x-waldo-whatsapp-subject': route.subject };
+      const headers: Record<string, string> = { 'x-waldo-origin': origin, 'x-waldo-whatsapp-subject': route.subject, 'x-waldo-do-name': route.doName };
       if (route.timezone) headers['x-waldo-timezone'] = route.timezone;
       try {
         const admitted = await owners.get(owners.idFromName(route.doName)).fetch('https://telegram-owner/whatsapp-admit', { method: 'POST', body: JSON.stringify(value), headers });
