@@ -91,6 +91,23 @@ describe('handleWhatsAppWebhook', () => {
     expect(forwarded.statuses).toBeUndefined();
   });
 
+  it('admission: a definite refusal (a 4xx, such as a sender the owner has not bound) is acknowledged; only a 5xx or a throw answers 503', async () => {
+    const directory: OwnerDirectory = { byPresence: async () => ({ doName: 'do-a', subject: '15550001111', timezone: null }), redeem: async () => null };
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const replies: [() => Promise<Response>, number][] = [
+      [async () => new Response('forbidden', { status: 403 }), 200], [async () => new Response('bad request', { status: 400 }), 200],
+      [async () => new Response('unavailable', { status: 503 }), 503], [async () => { throw new Error('owner unreachable'); }, 503],
+    ];
+    try {
+      for (const [reply, expected] of replies) {
+        const { fetch, ns } = namespace();
+        fetch.mockImplementation(reply);
+        expect((await run(await post('x', payload([{ from: '15550001111' }])), { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret' }, directory)).status).toBe(expected);
+      }
+      expect(log.mock.calls.map(([line]) => String(line)).filter(line => line.includes('"hop":"whatsapp_admit"'))).toHaveLength(4);
+    } finally { log.mockRestore(); }
+  });
+
   it('a multi-sender payload routes each owner only their own messages', async () => {
     const { fetch, ns } = namespace();
     const directory: OwnerDirectory = {

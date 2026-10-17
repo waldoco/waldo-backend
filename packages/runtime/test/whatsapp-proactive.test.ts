@@ -129,7 +129,7 @@ describe('Meta refusing a send later (a failed status with 131047)', () => {
     recordWhatsAppInbound(kv, [{ timestamp: String((T0 + 120_000) / 1000) }], T0 + 120_000);
     expect(whatsappWindowOpen(kv, T0 + 120_000)).toBe(true);
     const call = vi.fn(async () => ack('wamid.again'));
-    return deliverHeldWhatsApp(kv, call, T0 + 120_000, vi.fn()).then(() => {
+    return deliverHeldWhatsApp(kv, call, T0 + 120_000, vi.fn(), '15550001111').then(() => {
       expect(call).toHaveBeenCalledWith('sendMessage', { chat_id: 15550001111, text: 'Your reminder: call Sam.' });
     });
   });
@@ -154,7 +154,7 @@ describe('Meta refusing a send later (a failed status with 131047)', () => {
       await new Promise<void>(resolve => waiting.push(resolve));
       return ack(`wamid.${sent.length}`);
     };
-    const first = deliverHeldWhatsApp(kv, call, now, vi.fn()), second = deliverHeldWhatsApp(kv, call, now, vi.fn());
+    const first = deliverHeldWhatsApp(kv, call, now, vi.fn(), '1'), second = deliverHeldWhatsApp(kv, call, now, vi.fn(), '1');
     for (let step = 0; step < 10; step += 1) { waiting.shift()?.(); await new Promise(resolve => setTimeout(resolve, 0)); }
     await Promise.all([first, second]);
     expect(sent).toEqual(['one', 'two']);

@@ -222,12 +222,12 @@ describe('whatsapp 24-hour window', () => {
     let fail = 'second';
     graph.mockImplementation(async (_url: string, init?: RequestInit) => JSON.parse(String(init?.body)).text?.body === fail ? Response.json({ error: { code: 131000 } }, { status: 500 }) : Response.json({ messages: [{ id: 'wamid.h' }] }));
     const log = vi.fn();
-    await deliverHeldWhatsApp(kv, call, clock.now, log);
+    await deliverHeldWhatsApp(kv, call, clock.now, log, '1');
     expect(sentBodies(graph).map(body => body.text.body)).toEqual(['first', 'second']);
     expect([...map.keys()].filter(key => key.startsWith('wa_held:'))).toHaveLength(1);
     fail = '';
     graph.mockClear();
-    await deliverHeldWhatsApp(kv, call, clock.now, log);
+    await deliverHeldWhatsApp(kv, call, clock.now, log, '1');
     expect(sentBodies(graph).map(body => body.text.body)).toEqual(['third']);
 
     clock.now += 25 * HOUR;
@@ -235,7 +235,7 @@ describe('whatsapp 24-hour window', () => {
     graph.mockClear();
     clock.now += WHATSAPP_HELD_RETENTION_MS;
     recordWhatsAppInbound(kv, [{ timestamp: String(clock.now / 1000) }], clock.now);
-    await deliverHeldWhatsApp(kv, call, clock.now, log);
+    await deliverHeldWhatsApp(kv, call, clock.now, log, '1');
     expect(graph).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith({ hop: 'whatsapp_held', ok: true, expired: 1 });
   });
@@ -252,12 +252,12 @@ describe('whatsapp 24-hour window', () => {
     const log = vi.fn();
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const heldTexts = () => [...map].filter(([key]) => key.startsWith('wa_held:')).sort(([a], [b]) => a < b ? -1 : 1).map(([, value]) => (value as { body: { text: string } }).body.text);
-    await deliverHeldWhatsApp(kv, gated, clock.now, log);
+    await deliverHeldWhatsApp(kv, gated, clock.now, log, '1');
     expect(graph).not.toHaveBeenCalled();
     expect(heldTexts()).toEqual(['first', 'second', 'third']);
     expect(log).toHaveBeenCalledWith({ hop: 'whatsapp_held', ok: false, code: 'not_sent' });
     directory = 'up';
-    await deliverHeldWhatsApp(kv, gated, clock.now, log);
+    await deliverHeldWhatsApp(kv, gated, clock.now, log, '1');
     expect(sentBodies(graph).map(body => body.text.body)).toEqual(['first', 'second', 'third']);
     expect(heldTexts()).toEqual([]);
   });
@@ -268,7 +268,7 @@ describe('whatsapp 24-hour window', () => {
     await call('sendMessage', { chat_id: 1, text: 'waiting' });
     const before = JSON.stringify([...map].filter(([key]) => key.startsWith('wa_held:')));
     graph.mockClear();
-    await deliverHeldWhatsApp(kv, call, clock.now + HOUR, vi.fn());
+    await deliverHeldWhatsApp(kv, call, clock.now + HOUR, vi.fn(), '1');
     expect(graph).not.toHaveBeenCalled();
     expect(JSON.stringify([...map].filter(([key]) => key.startsWith('wa_held:')))).toBe(before);
   });

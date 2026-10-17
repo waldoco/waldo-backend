@@ -132,8 +132,10 @@ export const handleWhatsAppWebhook = async (
   const owners = env.OWNER_DO;
   const origin = url.origin;
   // Admission before the ack: a payload is acknowledged only after each owner's Durable Object has durably admitted it.
-  // A failed or refused admission answers 503, so Meta redelivers (its non-200 retry); the DO dedupes by wamid, so a
-  // redelivery of a payload that did land is not run twice. Link-code redemption stays deferred: it is not a message turn.
+  // An admission the owner could not take for now (unreachable, or a 5xx) answers 503, so Meta redelivers (its non-200
+  // retry); the DO dedupes by wamid, so a redelivery of a payload that did land is not run twice. A definite refusal (a 4xx:
+  // the sender is not the number this owner has bound, or a malformed batch) is acknowledged and logged, since Meta would
+  // otherwise redeliver it for 7 days and it can never succeed. Link-code redemption stays deferred: it is not a message turn.
   let unavailable = false;
   const deferred: Promise<unknown>[] = [];
   for (const { sender, value } of bySender(payload)) {
@@ -146,7 +148,7 @@ export const handleWhatsAppWebhook = async (
       if (route.timezone) headers['x-waldo-timezone'] = route.timezone;
       try {
         const admitted = await owners.get(owners.idFromName(route.doName)).fetch('https://telegram-owner/whatsapp-admit', { method: 'POST', body: JSON.stringify(value), headers });
-        if (!admitted.ok) { console.log(JSON.stringify({ hop: 'whatsapp_admit', ok: false, status: admitted.status })); unavailable = true; }
+        if (!admitted.ok) { console.log(JSON.stringify({ hop: 'whatsapp_admit', ok: false, status: admitted.status })); if (admitted.status >= 500) unavailable = true; }
       } catch (error) { console.log(JSON.stringify({ hop: 'whatsapp_admit', ok: false, error: String(error) })); unavailable = true; }
       continue;
     }
