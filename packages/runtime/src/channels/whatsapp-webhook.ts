@@ -59,6 +59,8 @@ type WaMessage = { from?: string; id?: string; type?: string };
 type WaValue = { metadata?: { phone_number_id?: string }; messages?: WaMessage[]; statuses?: unknown[] };
 type WaBody = { entry?: { changes?: { value?: WaValue }[] }[] };
 
+const DEFINITE_ADMIT_REFUSALS = new Set([400, 403, 404]);
+
 // One payload can carry several senders; each owner's DO receives only its own sender's messages.
 const bySender = (body: WaBody): { sender: string; value: WaValue }[] => {
   const out = new Map<string, { sender: string; value: WaValue }>();
@@ -133,9 +135,10 @@ export const handleWhatsAppWebhook = async (
   const origin = url.origin;
   // Admission before the ack: a payload is acknowledged only after each owner's Durable Object has durably admitted it.
   // An admission the owner could not take for now (unreachable, or a 5xx) answers 503, so Meta redelivers (its non-200
-  // retry); the DO dedupes by wamid, so a redelivery of a payload that did land is not run twice. A definite refusal (a 4xx:
-  // the sender is not the number this owner has bound, or a malformed batch) is acknowledged and logged, since Meta would
-  // otherwise redeliver it for 7 days and it can never succeed. Link-code redemption stays deferred: it is not a message turn.
+  // retry); the DO dedupes by wamid, so a redelivery of a payload that did land is not run twice. A definite refusal is
+  // acknowledged and logged, since Meta would otherwise redeliver it for 7 days: 400 (a malformed batch), 403 (the sender is
+  // not the number this owner has bound, or the name does not address it), 404 (the object is not an owner). The message
+  // is not handled. Any other answer may be temporary and answers 503. Link-code redemption stays deferred: it is not a message turn.
   let unavailable = false;
   const deferred: Promise<unknown>[] = [];
   for (const { sender, value } of bySender(payload)) {
@@ -148,7 +151,7 @@ export const handleWhatsAppWebhook = async (
       if (route.timezone) headers['x-waldo-timezone'] = route.timezone;
       try {
         const admitted = await owners.get(owners.idFromName(route.doName)).fetch('https://telegram-owner/whatsapp-admit', { method: 'POST', body: JSON.stringify(value), headers });
-        if (!admitted.ok) { console.log(JSON.stringify({ hop: 'whatsapp_admit', ok: false, status: admitted.status })); if (admitted.status >= 500) unavailable = true; }
+        if (!admitted.ok) { console.log(JSON.stringify({ hop: 'whatsapp_admit', ok: false, status: admitted.status })); if (!DEFINITE_ADMIT_REFUSALS.has(admitted.status)) unavailable = true; }
       } catch (error) { console.log(JSON.stringify({ hop: 'whatsapp_admit', ok: false, error: String(error) })); unavailable = true; }
       continue;
     }

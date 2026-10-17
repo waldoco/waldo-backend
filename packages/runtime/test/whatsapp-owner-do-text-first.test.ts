@@ -99,12 +99,19 @@ it('confirming a new number clears what was held for the old one, so nothing hel
 
       // A held-delivery pass that was already running for A can put its record back after the clear; it is dropped, not sent.
       kv.put('wa_held:000000000002', { heldAt: Date.now(), body: { chat_id: Number(OLD), text: 'restored for A only' } });
-      const admitted = await instance.fetch(new Request('https://telegram-owner/whatsapp-admit', {
+      const admitB = () => instance.fetch(new Request('https://telegram-owner/whatsapp-admit', {
         method: 'POST', headers: { 'x-waldo-whatsapp-subject': NEW },
         body: JSON.stringify({ messages: [{ from: NEW, id: 'wamid.new', timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: 'hi' } }] }),
       }));
-      expect(admitted.status).toBe(200);
-      await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+      const inflight = () => Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+      expect((await admitB()).status).toBe(200);
+      await inflight();
+      const turns = turn.mock.calls.length;
+      expect(turns).toBeGreaterThan(0);
+      // The clear leaves message dedupe alone: a redelivery of B's message starts no second turn.
+      expect((await admitB()).status).toBe(200);
+      await inflight();
+      expect(turn.mock.calls.length).toBe(turns);
       expect(sent.filter(body => body.includes('for A only'))).toEqual([]);
       expect([...kv.list({ prefix: 'wa_held:' })]).toEqual([]);
       expect(kv.get('wa_last_inbound_ms')).toBeTypeOf('number');
