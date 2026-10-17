@@ -175,7 +175,7 @@ describe('whatsapp 24-hour window', () => {
       expect(whatsappTemplateConfig(bad)).toBeNull();
   });
 
-  it('a 131047 refusal inside our window holds and knocks; any other refusal propagates and holds nothing', async () => {
+  it('a 131047 refusal inside our window holds, knocks and closes the window until the owner writes; any other refusal propagates and holds nothing', async () => {
     const clock = { now: T0 };
     let refusal = 131047;
     const graph = vi.fn(async (_url: string, init?: RequestInit) => JSON.parse(String(init?.body)).type === 'template'
@@ -185,9 +185,14 @@ describe('whatsapp 24-hour window', () => {
     recordWhatsAppInbound(kv, [{ timestamp: String(T0 / 1000) }], T0);
     expect(await call('sendMessage', { chat_id: 1, text: 'held' })).toBe(WHATSAPP_HELD);
     expect(graph.mock.calls.map(([, init]) => JSON.parse(String(init?.body)).type)).toEqual(['text', 'template']);
+    // Meta has said the window is closed, so the next message waits without another refused send or a second knock.
+    expect(await call('sendMessage', { chat_id: 1, text: 'held too' })).toBe(WHATSAPP_HELD);
+    expect(graph).toHaveBeenCalledTimes(2);
+    clock.now = T0 + 60_000;
+    recordWhatsAppInbound(kv, [{ timestamp: String(clock.now / 1000) }], clock.now);
     refusal = 131026;
     await expect(call('sendMessage', { chat_id: 1, text: 'not held' })).rejects.toMatchObject({ code: 131026 });
-    expect([...map.keys()].filter(key => key.startsWith('wa_held:'))).toHaveLength(1);
+    expect([...map.keys()].filter(key => key.startsWith('wa_held:'))).toHaveLength(2);
   });
 
   it('a failed knock is logged and retried with the next held message; a new reply re-arms the knock', async () => {

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { onlyArtifacts, quarantineArtifacts } from '../security/artifact-hygiene';
+import { splitTelegramText } from './telegram-api';
 // WhatsApp Cloud API surface (WHATSAPP_CHANNEL_SPEC W2-W4): the raw caller for the webhook's
 // link-code replies, the telegram-shaped send shim the owner DO wraps in the same
 // gatedCaller/egressGuardedCaller gate as Telegram (W3), the two-step media downloader that
@@ -10,6 +11,8 @@ export type WhatsAppCall = (body: object) => Promise<unknown>;
 // so this caller never retries and never reports a successful acknowledgement.
 export const WHATSAPP_API_TIMEOUT_MS = 15_000;
 export const WHATSAPP_GRAPH_VERSION = 'v21.0';
+// https://developers.facebook.com/docs/whatsapp/cloud-api/reference/messages , text object: "Maximum 4096 characters".
+export const WHATSAPP_TEXT_MAX_CHARS = 4096;
 // A Graph refusal with Meta's numeric error code (error.code in the JSON body), or null when the body has none.
 export class WhatsAppApiError extends Error {
   readonly code: number | null;
@@ -40,6 +43,15 @@ export const createWhatsAppCaller = (token: string, phoneNumberId: string, fetch
     }
   };
 
+// A text longer than one WhatsApp message went out in parts and a later part failed: the owner already has the first `sent`
+// parts, so the caller must not send the whole text again. `ack` is the last part that went out; `remaining` are the parts
+// that did not.
+export class WhatsAppPartialSend extends Error {
+  constructor(readonly sent: number, readonly ack: unknown, readonly remaining: readonly string[], override readonly cause: unknown) {
+    super(`whatsapp send stopped after part ${sent}`, { cause });
+  }
+}
+
 // preview_url makes WhatsApp fetch the first http(s) link with no tap from the owner, so it is opt-in per send.
 export const sendWhatsAppText = (call: WhatsAppCall, to: string, text: string, preview = false) =>
   call({ to, type: 'text', text: { body: text, ...(preview && /https?:\/\//i.test(text) ? { preview_url: true } : {}) } });
@@ -69,7 +81,14 @@ export const whatsappTelegramShim = (token: string, phoneNumberId: string, to: s
       const b = body as { text: string; fallback_text?: string; link_preview_options?: { is_disabled?: boolean }; reply_markup?: { inline_keyboard?: { text: string; callback_data?: string; url?: string }[][] } };
       const buttons = (b.reply_markup?.inline_keyboard ?? []).flat().filter((x) => x.callback_data || x.url);
       const suffix = buttons.length ? `\n\n${buttons.map((x) => x.url ? `- ${x.text}: ${x.url}` : `- ${x.text}: reply "${x.callback_data}"`).join('\n')}` : '';
-      return sendWhatsAppText(call, to, (b.fallback_text ?? b.text) + suffix, b.link_preview_options?.is_disabled !== true);
+      // A text message carries at most 4,096 characters, so a longer one goes in parts on the same split as the surface adapter.
+      const parts = splitTelegramText((b.fallback_text ?? b.text) + suffix, WHATSAPP_TEXT_MAX_CHARS);
+      let ack: unknown;
+      for (let index = 0; index < parts.length; index += 1) {
+        try { ack = await sendWhatsAppText(call, to, parts[index]!, b.link_preview_options?.is_disabled !== true); }
+        catch (error) { if (index === 0) throw error; throw new WhatsAppPartialSend(index, ack, parts.slice(index), error); }
+      }
+      return ack;
     }
     console.log(JSON.stringify({ hop: 'whatsapp_shim', ok: false, skipped: method, code: 'unsupported_surface_action' }));
     return undefined;
