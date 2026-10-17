@@ -97,9 +97,10 @@ describe('senders and callbacks that never reach an owner', () => {
     const body = JSON.stringify({ entry: [{ changes: [{ value: { metadata: { phone_number_id: 'pn1' }, ...value } }] }] });
     return new Request('https://waldo.example/whatsapp/webhook', { method: 'POST', body, headers: { 'x-hub-signature-256': await sign(body) } });
   };
-  const harness = async (request: Request) => {
-    const ownerFetch = vi.fn(async () => new Response('ok'));
-    const namespace = { idFromName: (name: string) => name, get: () => ({ fetch: ownerFetch }) } as unknown as DurableObjectNamespace;
+  const harness = async (request: Request, owners: OwnerDirectory = unlinked) => {
+    const ownerFetch = vi.fn(async (_url: string, _init: RequestInit) => new Response('ok'));
+    const idFromName = vi.fn((name: string) => name);
+    const namespace = { idFromName, get: () => ({ fetch: ownerFetch }) } as unknown as DurableObjectNamespace;
     const directory = links(async () => 'opened');
     const throttle = vi.fn(async () => true);
     const sent: unknown[] = [];
@@ -107,9 +108,9 @@ describe('senders and callbacks that never reach an owner', () => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const work: Promise<unknown>[] = [];
     try {
-      const response = await handleWhatsAppWebhook(request, { ...env, OWNER_DO: namespace }, (p) => work.push(p), unlinked, { links: directory, throttle });
+      const response = await handleWhatsAppWebhook(request, { ...env, OWNER_DO: namespace }, (p) => work.push(p), owners, { links: directory, throttle });
       await Promise.all(work);
-      return { response, ownerFetch, open: directory.open, throttle, sent };
+      return { response, ownerFetch, idFromName, open: directory.open, throttle, sent };
     } finally { graph.mockRestore(); }
   };
 
@@ -133,6 +134,23 @@ describe('senders and callbacks that never reach an owner', () => {
     const { response, ownerFetch, open, sent } = await harness(await signed({ messages: [{ from_user_id: 'US.hidden-1', id: 'wamid.h', timestamp: '1700000000', type: 'text', text: { body: 'hi' } }] }));
     expect(response.status).toBe(200);
     expect([ownerFetch.mock.calls.length, vi.mocked(open).mock.calls.length, sent.length]).toEqual([0, 0, 0]);
+  });
+
+  it('in one payload with a linked sender, only that owner is admitted and named; the unbound and hidden senders reach no owner', async () => {
+    const LINKED = '15550002222';
+    const owners: OwnerDirectory = { byPresence: async (_provider, subject) => (subject === LINKED ? { doName: 'do-bob', subject: LINKED, timezone: null } : null), redeem: vi.fn(async () => null) };
+    const { response, ownerFetch, idFromName } = await harness(await signed({ messages: [
+      { from: SENDER, id: 'wamid.u', timestamp: '1700000000', type: 'text', text: { body: 'hi' } },
+      { from_user_id: 'US.hidden-1', id: 'wamid.h', timestamp: '1700000000', type: 'text', text: { body: 'hi' } },
+      { from: LINKED, id: 'wamid.l', timestamp: '1700000000', type: 'text', text: { body: 'hi' } },
+    ] }), owners);
+    expect(response.status).toBe(200);
+    expect(idFromName.mock.calls).toEqual([['do-bob']]);
+    expect(ownerFetch).toHaveBeenCalledTimes(1);
+    const [url, init] = ownerFetch.mock.calls[0]!;
+    expect(new URL(url).pathname).toBe('/whatsapp-admit');
+    expect(new Headers(init.headers).get('x-waldo-do-name')).toBe('do-bob');
+    expect(JSON.parse(String(init.body)).messages.map((m: { id: string }) => m.id)).toEqual(['wamid.l']);
   });
 });
 
