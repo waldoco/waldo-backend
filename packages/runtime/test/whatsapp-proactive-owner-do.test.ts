@@ -66,7 +66,8 @@ type Outbox = { id: string; status: string; reason?: string; providerMessageIds?
 
 const drive = async (name: string, script: (steps: Readonly<{
   alarms(passes: number): Promise<void>;
-  reply(): Promise<void>;
+  reply(from?: string): Promise<void>;
+  windowKeys(): string[];
   cancel(): Promise<void>;
   refuse(id: string, at?: number): Promise<number>;
   unlink(): Promise<void>;
@@ -97,11 +98,11 @@ const drive = async (name: string, script: (steps: Readonly<{
         // A queued record falls due 250 ms after it is written, so each pass waits that out before the next. The wake a pass
         // armed is cleared first, so the platform does not run this object's alarm on its own instance meanwhile.
         alarms: async passes => { for (let pass = 0; pass < passes; pass++) { await owner.alarm(); await state.storage.deleteAlarm(); await new Promise(resolve => setTimeout(resolve, 300)); } },
-        reply: async () => {
+        reply: async (from = SUBJECT) => {
           seq += 1;
           const response = await owner.fetch(new Request('https://telegram-owner/whatsapp-admit', {
-            method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT },
-            body: JSON.stringify({ messages: [{ from: SUBJECT, id: `wamid.in.${seq}`, timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: 'hi' } }] }),
+            method: 'POST', headers: { 'x-waldo-whatsapp-subject': from },
+            body: JSON.stringify({ messages: [{ from, id: `wamid.in.${seq}`, timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: 'hi' } }] }),
           }));
           expect(response.status).toBe(200);
           await Promise.all([...(owner as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
@@ -133,6 +134,9 @@ const drive = async (name: string, script: (steps: Readonly<{
           const runtime = (owner as unknown as { setup(channel: string): { call(method: string, body: object): Promise<unknown>; owner: number } }).setup('whatsapp');
           return runtime.call('sendMessage', { chat_id: runtime.owner, text, [SEND_NOW_ONLY]: true });
         },
+        // Every key that holds text for, or describes the window of, the chat the DO is bound to.
+        windowKeys: () => [...state.storage.kv.list({ prefix: 'wa_' })].map(([key]) => key)
+          .filter(key => /^wa_(held:|reheld:|knocked_for$|window_refused_for$|last_inbound_ms$)/.test(key)),
         held: () => [...state.storage.kv.list<{ body: { text: string } }>({ prefix: 'wa_held:' })].map(([, record]) => record.body.text),
         // The owner unlinks WhatsApp from the new console: the real dashboard action and executor.
         // The console's controls build the Telegram runtime, which needs a bot token; it is lent for this step only, so the
@@ -330,9 +334,26 @@ describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }
       // A status callback for the old number is refused, so it neither knocks nor delivers held text.
       expect(await refuse('wamid.out.1')).toBe(403);
       expect(wire.events).toEqual([]);
-      expect(held()).toEqual(['Held before the unlink.']);
+      // What was held for the old chat was discarded with the unlink.
+      expect(held()).toEqual([]);
       expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'pending' }]);
       expect(ledger().runs).toEqual([{ outcome: 'running', delivery: 'pending' }]);
+    });
+  });
+
+  it('an unlink discards what was held for the old number, so a number linked next never receives it', async () => {
+    await drive('whatsapp-unlink-discards-held', async ({ alarms, unlink, hold, held, reply, windowKeys }) => {
+      await alarms(3);
+      hold(['Held for the old number.']);
+      expect(windowKeys()).toEqual(expect.arrayContaining(['wa_held:000000000001', 'wa_knocked_for', 'wa_last_inbound_ms']));
+      await unlink();
+      expect(held()).toEqual([]);
+      expect(windowKeys()).toEqual([]);
+      // The owner links a different number, which writes first; its turn runs and nothing held for the old number goes out.
+      wire.unlinked = false;
+      wire.events = [];
+      await reply('15550002222');
+      expect(wire.events).toEqual(['turn']);
     });
   });
 });
