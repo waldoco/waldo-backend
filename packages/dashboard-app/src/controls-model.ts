@@ -7,7 +7,10 @@ export type DayRecord = Base<'day', {
   date: string;
   cards: { id: string; name: string; defaultTime: string; time: string | null; reason: string; sent: boolean; pin: string | null }[];
   proactivity: { quiet_start: string | null; quiet_end: string | null; volume: 'low' | 'normal' | 'high' };
+  // Where Waldo's proactive messages go, and where the owner can be reached now. Absent from a Worker that does not say.
+  proactive_surface?: ProactiveSurface;
 }>;
+export type ProactiveSurface = { value: 'app' | 'whatsapp' | 'both'; app_linked: boolean; whatsapp_linked: boolean; telegram_linked: boolean };
 export type ConnectionsRecord = Base<'connections', {
   google: { connectAvailable: boolean; accounts: { id: string; email: string; calendar: boolean; mail: boolean; tasks: boolean; health: 'access_granted' | 'needs_reconnect' }[] };
   telegram: { linked: boolean; unlinkAvailable: boolean };
@@ -34,7 +37,7 @@ export type UsageRecord = Base<'usage', { rows: { model: string; calls: number; 
 export type FilesRecord = Base<'files', { storage: 'telegram_reference'; items: { id: number; kind: string; name: string; mime: string | null; size: number | null; caption: string; at: number }[] }>;
 type Records = { day: DayRecord; connections: ConnectionsRecord; waiting: WaitingRecord; activity: ActivityRecord; profile: ProfileRecord; setup: SetupRecord; usage: UsageRecord; files: FilesRecord };
 export type ControlRecord = Records[ControlsView];
-export type ControlAction = 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'node.forget' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.skip' | 'approval.undo' | 'file.remove';
+export type ControlAction = 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'node.forget' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.skip' | 'approval.undo' | 'file.remove';
 export type ControlFields = { id?: string; value?: string; quiet_start?: string; quiet_end?: string; volume?: string };
 export type ActionReceipt = { state: 'recorded' | 'incomplete' | 'rejected' | 'unconfirmed'; message: string; navigation?: string; signed_out?: boolean };
 export type ActionResult = { receipt: ActionReceipt; duplicate: boolean };
@@ -68,11 +71,14 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
   const base = { version: 1 as const, state: 'available' as const, csrf: value.csrf, revision: value.revision };
   if (expected === 'day') {
     if (!string(data.timezone) || !string(data.date) || !/^\d{4}-\d{2}-\d{2}$/.test(data.date) || !Array.isArray(data.cards) || !data.cards.every(card => obj(card) && string(card.id) && string(card.name) && clock(card.defaultTime) && optionalClock(card.time) && string(card.reason) && typeof card.sent === 'boolean' && optionalClock(card.pin)) || !obj(data.proactivity) || !optionalClock(data.proactivity.quiet_start) || !optionalClock(data.proactivity.quiet_end) || !['low', 'normal', 'high'].includes(String(data.proactivity.volume))) throw shapeError();
+    const surface = data.proactive_surface;
+    if (surface !== undefined && (!obj(surface) || !['app', 'whatsapp', 'both'].includes(String(surface.value)) || ![surface.app_linked, surface.whatsapp_linked, surface.telegram_linked].every(value => typeof value === 'boolean'))) throw shapeError();
     return { ...base, view: 'day', data: {
       timezone: data.timezone,
       date:data.date,
       cards: data.cards.map(card => ({ id: card.id, name: card.name, defaultTime: card.defaultTime, time: card.time, reason: card.reason, sent: card.sent, pin: card.pin })),
       proactivity: { quiet_start: data.proactivity.quiet_start, quiet_end: data.proactivity.quiet_end, volume: data.proactivity.volume },
+      ...(obj(surface) ? { proactive_surface: { value: surface.value, app_linked: surface.app_linked, whatsapp_linked: surface.whatsapp_linked, telegram_linked: surface.telegram_linked } } : {}),
     } } as Records[V];
   }
   if (expected === 'connections') {
