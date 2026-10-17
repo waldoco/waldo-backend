@@ -12,6 +12,9 @@ import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
+import { consoleAccess } from '../src/channels/console';
+import { CONTROLS_PATH } from '../src/channels/dashboard-controls';
+import { CONTROL_ACTION_PATH } from '../src/channels/dashboard-control-actions';
 
 const REMINDER_TEXT = 'Time to call Sam.';
 // Counts the reminder turns only; the day plan the runtime boots also calls the model.
@@ -34,14 +37,17 @@ const whatsapp = { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_P
 
 // `stall` holds one text send open until the test releases it, so another request can overlap it; `reached` says the send
 // has started and is waiting.
-const wire = { events: [] as string[], other: [] as string[], wamid: 0, stall: null as null | { text: string; until: Promise<void>; reached: () => void } };
+const wire = { events: [] as string[], other: [] as string[], wamid: 0, unlinked: false, stall: null as null | { text: string; until: Promise<void>; reached: () => void } };
 beforeEach(() => {
-  model.reminders = 0; model.reminderText = null; wire.events = []; wire.other = []; wire.wamid = 0; wire.stall = null;
+  model.reminders = 0; model.reminderText = null; wire.events = []; wire.other = []; wire.wamid = 0; wire.unlinked = false; wire.stall = null;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
     if (fn === 'common_owner_authority') return presenceAuthority(OWNER_ID, init?.body);
-    if (fn === 'assert_channel_presence') return Response.json(true);
+    // The directory's WhatsApp presence: active until the owner unlinks it from the console.
+    if (fn === 'assert_channel_presence') return Response.json(!wire.unlinked);
+    if (fn === 'presence_hint') return Response.json(!wire.unlinked && String(init?.body).includes('"p_provider":"whatsapp"') ? '1111' : null);
+    if (fn === 'unlink_presence') { wire.unlinked = true; return Response.json(true); }
     if (fn === 'health_context_read') return Response.json(null);
     if (url === 'https://graph.facebook.com/v21.0/fictional-phone-id/messages') {
       const body = JSON.parse(String(init?.body)) as { to: string; type: string; template?: { name: string }; text?: { body: string } };
@@ -63,6 +69,7 @@ const drive = async (name: string, script: (steps: Readonly<{
   reply(): Promise<void>;
   cancel(): Promise<void>;
   refuse(id: string, at?: number): Promise<number>;
+  unlink(): Promise<void>;
   sendNowOnly(text: string): Promise<unknown>;
   hold(texts: string[]): void;
   replyStarted(sentAt?: number): Promise<void>;
@@ -127,6 +134,21 @@ const drive = async (name: string, script: (steps: Readonly<{
           return runtime.call('sendMessage', { chat_id: runtime.owner, text, [SEND_NOW_ONLY]: true });
         },
         held: () => [...state.storage.kv.list<{ body: { text: string } }>({ prefix: 'wa_held:' })].map(([, record]) => record.body.text),
+        // The owner unlinks WhatsApp from the new console: the real dashboard action and executor.
+        // The console's controls build the Telegram runtime, which needs a bot token; it is lent for this step only, so the
+        // alarm passes still run as a WhatsApp-only owner.
+        unlink: async () => {
+          const settings = (owner as unknown as { env: Record<string, unknown> }).env;
+          settings.TELEGRAM_BOT_TOKEN = '123:synthetic';
+          try {
+            const cookie = { cookie: 'waldo_console=' + await consoleAccess(state.storage).grant() };
+            const read = await owner.fetch(new Request('https://telegram-owner' + CONTROLS_PATH + '?view=connections', { headers: cookie }));
+            const { csrf, revision } = await read.json() as { csrf: string; revision: string };
+            const response = await owner.fetch(new Request('https://telegram-owner' + CONTROL_ACTION_PATH, { method: 'POST', headers: { ...cookie, 'content-type': 'application/x-www-form-urlencoded' },
+              body: new URLSearchParams({ csrf, revision, view: 'connections', action: 'whatsapp.unlink', request_id: 'wa-unlink-old-chat' }) }));
+            expect(await response.json()).toMatchObject({ receipt: { state: 'recorded' } });
+          } finally { settings.TELEGRAM_BOT_TOKEN = undefined; }
+        },
         refuse: async (id, at = Date.now()) => (await owner.fetch(new Request('https://telegram-owner/whatsapp-status', {
           method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ refused: [{ id, at }] }),
         }))).status,
@@ -293,6 +315,24 @@ describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }
       wire.events = [];
       await reply();
       expect(wire.events).toEqual([...parts.map(part => `text:${part}`), 'turn']);
+    });
+  });
+
+  it('after the owner unlinks WhatsApp, nothing reaches the old chat: no held text, no queued reminder, no knock', async () => {
+    await drive('whatsapp-unlinked-old-chat', async ({ alarms, unlink, refuse, hold, held, ledger }) => {
+      await alarms(3);
+      expect(wire.events).toEqual(['template:waldo_update_ready']);
+      hold(['Held before the unlink.']);
+      await unlink();
+      wire.events = [];
+      // The alarm no longer runs as the WhatsApp owner, and the reminder waits addressed to the old number.
+      await alarms(3);
+      // A status callback for the old number is refused, so it neither knocks nor delivers held text.
+      expect(await refuse('wamid.out.1')).toBe(403);
+      expect(wire.events).toEqual([]);
+      expect(held()).toEqual(['Held before the unlink.']);
+      expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'pending' }]);
+      expect(ledger().runs).toEqual([{ outcome: 'running', delivery: 'pending' }]);
     });
   });
 });
