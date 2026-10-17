@@ -23,6 +23,8 @@ export type OwnerInboundTurn = Readonly<{
   media?: TelegramMedia;
   replyTo?: ReplyContext;
   runScope?: RunEffectScope;
+  // The host declared a route that carries files with this turn's reply.
+  canAttach?: boolean;
 }>;
 
 export const inboundTurn = (fields: Omit<OwnerInboundTurn, 'text'>): OwnerInboundTurn =>
