@@ -79,6 +79,8 @@ const owned = async (name: string, script: (steps: Readonly<{
   // Quiet hours from an hour ago to an hour from now, or none.
   quiet(on: boolean): void;
   reply(): Promise<void>;
+  // A fresh object over the same storage, as after the platform evicts it: its constructor and boot run again.
+  restart(): void;
   // Runs the step with the clock moved forward, as when the owner next writes much later.
   later<T>(ms: number, step: () => Promise<T>): Promise<T>;
   card(): Promise<void>;
@@ -106,8 +108,13 @@ const owned = async (name: string, script: (steps: Readonly<{
     const plans = dayPlanBook(state.storage.sql);
     for (const card of ['card:brief', 'card:midday', 'card:close'] as const) plans.save(today(), { card, time: null, reason: 'planned by the fixture' });
     const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
-    const owner = new OwnerDO(state, { ...env, ...directory, ...whatsapp, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
-    const turn = vi.spyOn(owner as unknown as { turn(): Promise<void> }, 'turn').mockImplementation(async () => { wire.events.push('turn'); });
+    const turns: { mockRestore(): void }[] = [];
+    const build = () => {
+      const built = new OwnerDO(state, { ...env, ...directory, ...whatsapp, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+      turns.push(vi.spyOn(built as unknown as { turn(): Promise<void> }, 'turn').mockImplementation(async () => { wire.events.push('turn'); }));
+      return built;
+    };
+    let owner = build();
     let seq = 0;
     try {
       await script({
@@ -127,6 +134,7 @@ const owned = async (name: string, script: (steps: Readonly<{
           expect(response.status).toBe(200);
           await Promise.all([...(owner as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
         },
+        restart: () => { owner = build(); },
         later: async (ms, step) => {
           const now = Date.now;
           Date.now = () => now() + ms;
@@ -166,7 +174,7 @@ const owned = async (name: string, script: (steps: Readonly<{
           return runtime.act({ action: `${kind}.forget`, id: String(id), value: '' });
         },
       });
-    } finally { await state.storage.deleteAlarm(); turn.mockRestore(); }
+    } finally { await state.storage.deleteAlarm(); for (const turn of turns) turn.mockRestore(); }
   });
 };
 
@@ -278,6 +286,28 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
       await reply();
       expect(wire.events).toEqual(['template:waldo_update_ready', `text:${REPORT}`, 'turn']);
       expect(runs()).toEqual([{ status: 'completed', summary: 'order reported' }]);
+    });
+  });
+
+  it('keeps a card and a report waiting across a restart, then delivers and records each once', async () => {
+    await owned('wa-held-restart', async ({ alarms, reply, restart, card, order, planned, runs, outbox }) => {
+      await card();
+      await order();
+      await alarms(4);
+      expect(outbox().map(record => record.status)).toEqual(['pending', 'pending']);
+
+      restart();
+      await alarms(2);
+      expect(wire.events).toEqual(['template:waldo_update_ready']);
+      expect(planned()).toMatchObject({ sent: false });
+      expect(runs()).toEqual([{ status: 'running', summary: null }]);
+
+      await reply();
+      expect(wire.events.slice(1, 3).sort()).toEqual([`text:${CARD}`, `text:${REPORT}`].sort());
+      expect(wire.events.slice(3)).toEqual(['turn']);
+      expect(planned()).toMatchObject({ sent: true, state: 'sent' });
+      expect(runs()).toEqual([{ status: 'completed', summary: 'order reported' }]);
+      expect([model.cards, model.reports]).toEqual([1, 1]);
     });
   });
 
