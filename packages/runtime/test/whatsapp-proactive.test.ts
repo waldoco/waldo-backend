@@ -6,7 +6,7 @@ import { egressGuardedCaller } from '../src/channels/egress-guard';
 import { createTelegramCaller, gatedCaller } from '../src/channels/telegram-api';
 import { TelegramFinalOutbox } from '../src/channels/telegram-final-outbox';
 import { WHATSAPP_TEXT_MAX_CHARS, WhatsAppPartialSend, whatsappTelegramShim } from '../src/channels/whatsapp-api';
-import { WHATSAPP_HELD, WA_HELD_PREFIX, deliverHeldWhatsApp, forgetHeldWhatsApp, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappReceipt, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from '../src/channels/whatsapp-window';
+import { WHATSAPP_HELD, WA_HELD_PREFIX, deliverHeldWhatsApp, forgetHeldWhatsApp, forgetWhatsAppChat, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappReceipt, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from '../src/channels/whatsapp-window';
 
 const SUBJECT = '15550001111';
 const T0 = 1_700_000_000_000;
@@ -203,6 +203,16 @@ describe('owner forget reaches held WhatsApp text', () => {
       expect(held(map)).toEqual(['Lunch at noon.']);
       expect(forgetHeldWhatsApp(kv, [])).toEqual({ rewritten: 0, remaining: 0 });
     });
+  });
+});
+
+describe('an unlink retires the bound chat', () => {
+  it('discards held and re-held text and the window, refusal and knock markers, and nothing else', () => {
+    const { kv, map } = fakeKv();
+    for (const [key, value] of Object.entries({ 'wa_held:000000000001': { heldAt: T0, body: { chat_id: 1, text: 'Held.' } }, 'wa_held:000000000002': { heldAt: T0, body: { chat_id: 1, text: 'Also held.' } },
+      'wa_reheld:wamid.out.1': true, 'wa_last_inbound_ms': T0, 'wa_knocked_for': T0, 'wa_window_refused_for': T0, 'wa_held_seq': 2, 'wa_seq': 7, 'whatsapp_subject': SUBJECT })) kv.put(key, value);
+    forgetWhatsAppChat(kv);
+    expect([...map.keys()].sort()).toEqual(['wa_held_seq', 'wa_seq', 'whatsapp_subject']);
   });
 });
 

@@ -27,7 +27,7 @@ import { taskSourceFetch } from '../tools/task-source-io';
 import {OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,ownerControlsView,ownerControlsRead,ownerControlsAction} from './dashboard-owner-controls';
 import {MEMORY_CONTROL_PATH,projectMemoryControl,resolveMemoryAction} from './dashboard-memory-actions';
 import {CONTROLS_PATH,readControlsQuery,projectControls} from './dashboard-controls';
-import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,googleConnectReceipt} from './dashboard-control-actions';
+import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,googleConnectReceipt,whatsappLinkReceipt,whatsappUnlinkReceipt} from './dashboard-control-actions';
 import { dashboardReceipt } from './dashboard-receipts';
 import { createScopedCuratedSkillCapability, type OwnerSkillCapability } from '../skills/curated-host';
 import { seededSkillCustody } from '../skills/curated-owner';
@@ -148,7 +148,7 @@ import { stableJson } from '../context-composer/canonical';
 import { APP_CONNECT_GUIDANCE, appApprovalLink, appCaller } from './surfaces/app';
 import { appApprovalsRequest } from './app-approvals';
 import { WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
-import { deliverHeldWhatsApp, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
+import { deliverHeldWhatsApp, forgetHeldWhatsApp, forgetWhatsAppChat, whatsappHeld, whatsappKnock, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
 import { sendMessageHandler } from '../tools/live/messaging';
@@ -1606,9 +1606,21 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
                 const name=this.ctx.storage.kv.get<string>('do_name'),code=name?await consoleAuth(this.env)?.issueLinkCode(name):null;
                 return code?{state:'recorded' as const,message:`Send this to the Waldo bot on Telegram within 10 minutes: /link ${code}`}:{state:'rejected' as const,message:'Linking Telegram needs account sign-in, which is not configured on this server.'};
               }
+              if(action.action==='whatsapp.link'){
+                const name=this.ctx.storage.kv.get<string>('do_name');
+                return whatsappLinkReceipt(name?await consoleAuth(this.env)?.issueProviderLinkCode?.(name,'whatsapp')??null:null);
+              }
               if(action.action==='telegram.unlink'){
                 const name=this.ctx.storage.kv.get<string>('do_name'),done=name?await consoleAuth(this.env)?.unlinkTelegram(name):false;
                 if(done)this.markUnlinked();return !!done;
+              }
+              if(action.action==='whatsapp.unlink'){
+                // The directory unlink stops routing; only then is the bound sender cleared, so a new number can bind
+                // and sends resolve no owner, and what was held for that chat is discarded with it. A refused unlink keeps
+                // the binding, since the old number still routes here.
+                const name=this.ctx.storage.kv.get<string>('do_name'),done=name?await consoleAuth(this.env)?.unlinkWhatsApp?.(name)===true:false;
+                if(done){const {kv}=this.ctx.storage;this.ctx.storage.transactionSync(()=>{kv.delete('whatsapp_subject');forgetWhatsAppChat(kv);});this.runtimes={};}
+                return whatsappUnlinkReceipt(done);
               }
               if(action.action==='session.signout'||action.action==='session.signout.all'){
                 if(action.action==='session.signout.all'){if(!await this.signOutEverywhere())return {state:'unconfirmed' as const,message:'Signing out everywhere did not finish. This browser is still signed in; try again.'};}
@@ -3568,10 +3580,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           sessionUntil: localIso(session.expires, clock.timezone).slice(0, 16).replace('T', ' '), sessionCount: (await consoleAccess(this.ctx.storage).list()).length, sessions: consoleSessionRows(await consoleAccess(this.ctx.storage).list(), session, clock.timezone), approvals: desk.pending(Date.now()), usage: traces.usageRows(), csrf: session.csrf, notice,
           google: { accounts: linked, connectAvailable: google.configured() },
           telegram: { linked: telegramLinked(identity), unlinkAvailable: consoleAuth(this.env) !== null && identity.get<string>('do_name') !== undefined },
+          // A channel's link state is present only when the directory answered; a failed read stays unknown, never unlinked.
           ...(await (async () => {
-            const name = identity.get<string>('do_name'), hint = consoleAuth(this.env)?.iMessageHandleHint;
-            if (!name || !hint) return {};
-            try { return { imessage: { linked: (await hint(name)) !== null } }; } catch { return {}; }
+            const name = identity.get<string>('do_name'), auth = consoleAuth(this.env);
+            if (!name || !auth) return {};
+            const known = async (channel: 'imessage' | 'whatsapp', hint?: (doName: string) => Promise<string | null>) => {
+              if (!hint) return undefined;
+              try { return { linked: (await hint(name)) !== null }; } catch { log({ trace: `presence:${channel}`, hop: 'presence_hint', ms: 0, ok: false, code: 'read_failed' }); return undefined; }
+            };
+            const [imessage, whatsapp] = await Promise.all([known('imessage', auth.iMessageHandleHint), known('whatsapp', auth.whatsAppHandleHint)]);
+            return { ...(imessage ? { imessage } : {}), ...(whatsapp ? { whatsapp } : {}) };
           })()),
           profile: profile(memory.claims()), spots: memory.claims(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => memory.claims(status)), forgettingSpots: memory.claims('purging'),
           holds: memory.holds().map(({ id, kind, reason, created_at }) => ({ id, kind, reason, created_at })),
