@@ -63,7 +63,10 @@ describe('the where Waldo writes control', () => {
     const whatsapp = html(surface({ value: 'whatsapp' }));
     expect(whatsapp).toContain('Meeting prep before your events isn’t sent on WhatsApp yet.');
     expect(whatsapp).toContain('Waldo holds its messages until you write again.');
-    expect(html(surface({ value: 'both' }))).toContain('Meeting prep before your events comes to the app only.');
+    const both = html(surface({ value: 'both' }));
+    expect(both).toContain('Meeting prep before your events comes to the app only.');
+    expect(both).toContain('each copy waits a day at most for your next message there; the app keeps every message.');
+    expect(both).not.toContain('holds its messages');
   });
 
   it('saves the owner\'s new choice through the day view\'s action', async () => {

@@ -35,8 +35,10 @@ function surfaceNotes({ value, app_linked, whatsapp_linked, telegram_linked }: P
   if (!whatsapp_linked) return value === 'app' ? [] : ['WhatsApp isn’t connected, so these come to the app for now.'];
   if (!app_linked && value !== 'whatsapp') return ['You haven’t written to Waldo in the app yet, so these come to WhatsApp for now.'];
   if (value === 'app') return [];
-  return [value === 'whatsapp' ? 'Meeting prep before your events isn’t sent on WhatsApp yet.' : 'Meeting prep before your events comes to the app only.',
-    'WhatsApp lets Waldo write freely for a day after your last message there. After that, Waldo holds its messages until you write again.'];
+  const window = 'WhatsApp lets Waldo write freely for a day after your last message there.';
+  return value === 'whatsapp'
+    ? ['Meeting prep before your events isn’t sent on WhatsApp yet.', `${window} After that, Waldo holds its messages until you write again.`]
+    : ['Meeting prep before your events comes to the app only.', `${window} After that, each copy waits a day at most for your next message there; the app keeps every message.`];
 }
 function ProactiveSurfaceSetting({ surface, busy, onAction }: { surface: ProactiveSurface } & ActionProps) {
   const [choice, setChoice] = useState(surface.value);
