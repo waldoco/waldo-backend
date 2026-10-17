@@ -87,6 +87,8 @@ const owned = async (name: string, script: (steps: Readonly<{
   // A calendar change no card has covered yet, and whether a card has folded it in.
   update(): void;
   folded(): number[];
+  // The owner forgets something from the console, a pattern or a spot; answers the action's result.
+  forget(kind: 'node' | 'spot', text: string): Promise<boolean | string>;
   planned(): { sent: boolean; state?: string } | undefined;
   runs(): Run[];
   outbox(): Outbox;
@@ -148,6 +150,14 @@ const owned = async (name: string, script: (steps: Readonly<{
         expiry: () => state.storage.kv.get<{ expiresAt?: number }[]>('telegram_final_outbox_v1')?.[0]?.expiresAt,
         update: () => { updateBook(state.storage.sql).record(today(), Date.now() - 60_000, [{ source: 'calendar', kind: 'added', detail: '{"title":"Lunch"}' }], null); },
         folded: () => state.storage.sql.exec<{ folded: number }>('SELECT folded FROM update_cards ORDER BY id').toArray().map(row => row.folded),
+        forget: async (kind, text) => {
+          const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+          if (kind === 'node') state.storage.sql.exec("INSERT INTO constellation_nodes(domain,label,summary,strength,status,first_seen,last_confirmed,supporting_spots) VALUES ('work',?,'synthetic',0.5,'active','now','now','[]')", text);
+          else memory.add({ kind: 'fact', text, source: 'stated', evidence: `"${text}"`, origin: 'owner' }, new Date().toISOString());
+          const id = kind === 'node' ? memory.nodes().find(row => row.label === text)!.id : memory.claims()[0]!.id;
+          const runtime = (owner as unknown as { setup(channel: string): { act(input: { action: 'node.forget' | 'spot.forget'; id: string; value: string }): Promise<boolean | string> } }).setup('whatsapp');
+          return runtime.act({ action: `${kind}.forget`, id: String(id), value: '' });
+        },
       });
     } finally { await state.storage.deleteAlarm(); turn.mockRestore(); }
   });
@@ -198,6 +208,20 @@ describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }
       // What the card covered stays for the next card.
       expect(folded()).toEqual([0]);
       expect(outbox()).toEqual([{ id: `day-card:${today()}:card:brief`, status: 'blocked', reason: 'expired' }]);
+    });
+  });
+
+  it.each(['node', 'spot'] as const)('never sends a waiting day card that carries something the owner then forgot (%s)', async kind => {
+    await owned(`wa-held-day-card-forget-${kind}`, async ({ alarms, reply, card, planned, outbox, forget }) => {
+      await card();
+      await alarms(3);
+      expect(outbox()).toMatchObject([{ status: 'pending' }]);
+
+      expect(await forget(kind, 'keep the morning clear')).toBe(true);
+      expect(outbox()).toEqual([{ id: `day-card:${today()}:card:brief`, status: 'blocked', reason: 'owner_forget' }]);
+      await reply();
+      expect(wire.events).toEqual(['template:waldo_update_ready', 'turn']);
+      expect(planned()).toMatchObject({ sent: false });
     });
   });
 
@@ -275,5 +299,29 @@ describe('a waiting day card goes stale', () => {
   });
   it('never by a card due before it', () => {
     expect(cardExpiry(at('2026-10-17T14:00:00Z'), 'UTC', [at('2026-10-17T08:00:00Z')])).toBe(at('2026-10-18T00:00:00Z'));
+  });
+});
+
+describe('owner forget reaches day cards and standing-order reports in the outbox', () => {
+  it('cancels a waiting one, scrubs a delivered one and leaves other records alone', async () => {
+    const { TelegramFinalOutbox, redactJobReportEntries, FINAL_OUTBOX_KEY } = await import('../src/channels/telegram-final-outbox');
+    const values = new Map<string, unknown>();
+    const kv = { get: <T>(key: string) => structuredClone(values.get(key)) as T | undefined, put: (key: string, value: unknown) => { values.set(key, structuredClone(value)); } };
+    const forgotten = 'the harbour fund';
+    const outbox = new TelegramFinalOutbox(kv, () => 1000);
+    const base = { trace: 'fixture', payload: { chat_id: 42, text: `Today: ${forgotten}.` }, ownerSubject: '42', doName: 'owner' };
+    await outbox.enqueue({ ...base, id: 'card', dayCard: { day: '2026-10-17', card: 'card:brief', foldUpTo: 900 } });
+    await outbox.enqueue({ ...base, id: 'report', standingOrder: { runId: 'run', gate: 'act_and_report' } });
+    await outbox.enqueue({ ...base, id: 'delivered-card', dayCard: { day: '2026-10-16', card: 'card:close', foldUpTo: 800 } });
+    await outbox.enqueue({ ...base, id: 'reply' });
+    const rows = outbox.records(); rows[2]!.status = 'delivered'; rows[2]!.settled = true; kv.put(FINAL_OUTBOX_KEY, rows);
+
+    expect(redactJobReportEntries(kv, [forgotten], '[forgotten]')).toEqual({ rewritten: 3, remaining: 0 });
+    expect(new TelegramFinalOutbox(kv).records().map(({ id, status, reason, payload }) => ({ id, status, reason, text: payload.text }))).toEqual([
+      { id: 'card', status: 'blocked', reason: 'owner_forget', text: 'Today: [forgotten].' },
+      { id: 'report', status: 'blocked', reason: 'owner_forget', text: 'Today: [forgotten].' },
+      { id: 'delivered-card', status: 'delivered', reason: undefined, text: 'Today: [forgotten].' },
+      { id: 'reply', status: 'pending', reason: undefined, text: `Today: ${forgotten}.` },
+    ]);
   });
 });

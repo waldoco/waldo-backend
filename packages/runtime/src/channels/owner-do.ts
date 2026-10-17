@@ -45,7 +45,7 @@ import { TelegramOwnerInbox, OWNER_INBOX_KEY, TELEGRAM_TURN_DEADLINE_MS, needsRe
 import { sameSecret } from './telegram-webhook';
 import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armWhatsappPendingWake, heldLane, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
 import { SEND_NOW_ONLY, admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
-import { TelegramFinalOutbox, redactMailFollowupEntries, redactCalendarPrepEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
+import { TelegramFinalOutbox, redactMailFollowupEntries, redactCalendarPrepEntries, redactJobReportEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
 import { DeliveryGateStore } from '../delivery-gate/store';
 import { ownerTurnTrace, type OwnerTurnEnvelope } from './owner-turn-envelope';
@@ -2896,10 +2896,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope);
           const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
           const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
+          const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
           forgetHeldWhatsApp(this.ctx.storage.kv, texts);
           const imessage = redactIMessageEntries(this.ctx.storage, texts, FORGOTTEN, scope);
           const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope);
-          if (result.remaining + mail.remaining + prep.remaining + imessage.remaining + titles.remaining) throw new Error('Memory history cleanup is incomplete');
+          if (result.remaining + mail.remaining + prep.remaining + reports.remaining + imessage.remaining + titles.remaining) throw new Error('Memory history cleanup is incomplete');
           const scrubEpisodes = () => {
             const redact = literalTextRedactor(texts, FORGOTTEN);
             for (const row of storage.sql.exec<{ ref: number; text: string }>('SELECT rowid AS ref, text FROM episodes').toArray()) {
@@ -2930,7 +2931,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         context.runScope?.admit();
         if (!auth || auth.do_name !== doName || !auth.capabilities.includes(input.class) || identity.get<string>('do_name') !== doName) return { accepted: false, reason: 'unavailable' };
         return this.env.DEVICE_BRIDGE_DO.get(this.env.DEVICE_BRIDGE_DO.idFromName(device.device_id)).enqueueCommand({ ...input, owner_id: auth.owner_id, device_id: device.device_id });
-      } }), ...loopHandlers(loops, turnId => checkBackLoops.get(turnId ?? '') ?? null), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable }))], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + titles.remaining }; }), undefined,
+      } }), ...loopHandlers(loops, turnId => checkBackLoops.get(turnId ?? '') ?? null), ...schedulePreferenceHandlers(schedPrefs, () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable }))], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + reports.remaining + titles.remaining }; }), undefined,
       (opt) => opt ? openLoopsPrompt(loops, clock.timezone, opt.loopsRoom) : standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
@@ -3647,6 +3648,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
               kvRemaining += (await redactConversationEntries(this.ctx.storage, result.texts, FORGOTTEN)).remaining;
               kvRemaining += redactMailFollowupEntries(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
               kvRemaining += redactCalendarPrepEntries(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
+              kvRemaining += redactJobReportEntries(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
               forgetHeldWhatsApp(this.ctx.storage.kv, result.texts);
               kvRemaining += redactThreadTitles(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
               await redactToolOutputLedger(this.ctx.storage, result.texts, FORGOTTEN);
@@ -3675,6 +3677,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           await clean(() => redactToolOutputLedger(this.ctx.storage, [node.label], FORGOTTEN).then(() => undefined));
           await clean(() => redactMailFollowupEntries(this.ctx.storage.kv, [node.label], FORGOTTEN));
           await clean(() => redactCalendarPrepEntries(this.ctx.storage.kv, [node.label], FORGOTTEN));
+          await clean(() => redactJobReportEntries(this.ctx.storage.kv, [node.label], FORGOTTEN));
           await clean(() => forgetHeldWhatsApp(this.ctx.storage.kv, [node.label]));
           await clean(() => redactThreadTitles(this.ctx.storage.kv, [node.label], FORGOTTEN));
           if (remaining > 0) {

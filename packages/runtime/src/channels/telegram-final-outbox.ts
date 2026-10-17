@@ -314,3 +314,6 @@ const redactSourceFinalEntries = (kv: Kv, texts: readonly string[], marker: stri
 };
 export const redactMailFollowupEntries = (kv: Kv, texts: readonly string[], marker: string, scope?: RunEffectScope) => redactSourceFinalEntries(kv, texts, marker, scope, row => !!row.mailFollowup);
 export const redactCalendarPrepEntries = (kv: Kv, texts: readonly string[], marker: string, scope?: RunEffectScope) => redactSourceFinalEntries(kv, texts, marker, scope, row => !!row.calendarPrep);
+// Day cards and standing-order reports are written from the calendar, mail, ledger and conversation, and they can wait here
+// for the owner (WhatsApp outside its window), so owner forget reaches them the same way.
+export const redactJobReportEntries = (kv: Kv, texts: readonly string[], marker: string, scope?: RunEffectScope) => redactSourceFinalEntries(kv, texts, marker, scope, row => !!row.dayCard || !!row.standingOrder);
