@@ -101,14 +101,17 @@ describe('the WhatsApp copy of an app message', () => {
 });
 
 describe('messages still waiting for WhatsApp', () => {
+  const reminder = { id: 'rem-1', occurrence: 1, runId: 'run-1', schedulerRunId: null, once: true };
   const record = (changed: Partial<FinalRecord> = {}): FinalRecord => ({ id: 'reminder:rem-1:1', trace: 't', payload: { chat_id: 15550001111, text: 'Call Sam.' }, digest: 'd',
-    ownerSubject: '15550001111', doName: 'owner', status: 'pending', dueAt: 0, createdAt: 0, attempts: 0, ...changed });
+    ownerSubject: '15550001111', doName: 'owner', status: 'pending', dueAt: 0, createdAt: 0, attempts: 0, reminder, ...changed });
 
-  it('are the records addressed to a WhatsApp number this owner used, except copies of app messages', () => {
+  it('are what a scheduled job queued for a WhatsApp number this owner used; a copy of an app message and a reply are not', () => {
     const waiting = waitingForWhatsApp(new Set(['15550001111', '15550002222']));
     expect(waiting(record())).toBe(true);
     expect(waiting(record({ ownerSubject: '15550002222', payload: { chat_id: 15550002222, text: 'Old number.' } }))).toBe(true);
-    expect(waiting(record({ id: `${WHATSAPP_COPY_PREFIX}scheduled-1` }))).toBe(false);
+    expect(waiting(record({ id: 'heartbeat:hb:1', reminder: undefined, heartbeat: { id: 'hb', occurrence: 1, schedulerRunId: 'r', loops: [] } }))).toBe(true);
+    expect(waiting(record({ id: `${WHATSAPP_COPY_PREFIX}scheduled-1`, reminder: undefined }))).toBe(false);
+    expect(waiting(record({ id: 'turn:wa-1', reminder: undefined, inbox: { id: 'in-1', runId: 'run-2', attempt: 'a' } }))).toBe(false);
     // Another surface's record, and one whose chat and owner disagree, are never taken for WhatsApp's.
     expect(waiting(record({ ownerSubject: '7', payload: { chat_id: 7, text: 'Telegram.' } }))).toBe(false);
     expect(waiting(record({ payload: { chat_id: 7, text: 'Mismatched.' } }))).toBe(false);

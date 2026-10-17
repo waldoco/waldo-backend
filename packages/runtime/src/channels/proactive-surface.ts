@@ -52,7 +52,9 @@ export const rememberWhatsAppSubject = (kv: Kv, subject: string): void => {
 };
 export const whatsappSubjects = (kv: Pick<Kv, 'get'>): ReadonlySet<string> => new Set(kv.get<string[]>(WHATSAPP_SUBJECTS_KEY) ?? []);
 
-// A record addressed to one of those numbers that is not a copy. When WhatsApp stops being a proactive surface it goes to the
-// app instead; a copy stays behind, since its message is in the app already.
+// What a scheduled job queued for one of those numbers: a reminder, a loop's check-back, a mail follow-up, meeting prep or a
+// pause notice. When WhatsApp stops taking proactive work it goes to the app instead. A copy of an app message stays behind,
+// since the app has it already, and so would a reply to the owner's own message, which belongs where the owner wrote.
 export const waitingForWhatsApp = (subjects: ReadonlySet<string>) => (record: FinalRecord): boolean =>
-  !record.id.startsWith(WHATSAPP_COPY_PREFIX) && subjects.has(record.ownerSubject) && record.payload.chat_id === Number(record.ownerSubject);
+  !!(record.reminder || record.heartbeat || record.mailFollowup || record.calendarPrep || record.scheduleNotice)
+  && subjects.has(record.ownerSubject) && record.payload.chat_id === Number(record.ownerSubject);
