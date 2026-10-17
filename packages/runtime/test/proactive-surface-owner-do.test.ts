@@ -235,6 +235,19 @@ describe('WhatsApp only', { timeout: 20_000 }, () => {
     }, { surface: 'whatsapp' });
   });
 
+  it('a check-back queued for the app before the owner chose WhatsApp still reaches the app, and only there', async () => {
+    await withOwner('surface-whatsapp-switched', async (owner, state, ctx) => {
+      await dueCheckBack(state);
+      await schedulePass(owner, state);
+      expect(outbox(state).map(record => [record.payload.chat_id, record.status])).toEqual([[ctx.appSubject, 'pending']]);
+      state.storage.kv.put(PROACTIVE_SURFACE_KEY, 'whatsapp');
+      for (let pass = 0; pass < 2; pass += 1) await outboxPass(owner, state, ctx);
+      expect(await said(owner, ctx)).toEqual([{ role: 'assistant', text: CHECK_BACK_TEXT }]);
+      expect(outbox(state).map(record => record.status)).toEqual(['delivered']);
+      expect(wire.whatsapp).toEqual([]);
+    });
+  });
+
   it('runs nothing while the directory cannot say whether WhatsApp is still bound, and goes to WhatsApp once it can', async () => {
     await withOwner('surface-whatsapp-outage', async (owner, state, ctx) => {
       await dueBrief(state);
