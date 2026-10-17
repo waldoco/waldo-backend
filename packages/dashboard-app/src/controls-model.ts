@@ -1,6 +1,6 @@
 import { SignInRequired } from './model';
 
-export type ControlsView = 'day' | 'connections' | 'waiting' | 'activity' | 'profile' | 'setup' | 'usage' | 'files';
+export type ControlsView = 'day' | 'connections' | 'waiting' | 'activity' | 'profile' | 'setup' | 'usage' | 'files' | 'imessage' | 'devices';
 type Base<V extends ControlsView, D> = { version: 1; view: V; state: 'available'; csrf: string; revision: string; data: D };
 export type DayRecord = Base<'day', {
   timezone: string;
@@ -32,12 +32,25 @@ export type ProfileRecord = Base<'profile', { sections: { title: string; lines: 
 export type SetupRecord = Base<'setup', { telegram_linked: boolean; google_access_granted: boolean; quiet_hours_set: boolean; imessage_linked?: boolean }>;
 export type UsageRecord = Base<'usage', { rows: { model: string; calls: number; input: number; cached: number; output: number; usd: number }[] }>;
 export type FilesRecord = Base<'files', { storage: 'telegram_reference'; items: { id: number; kind: string; name: string; mime: string | null; size: number | null; caption: string; at: number }[] }>;
-type Records = { day: DayRecord; connections: ConnectionsRecord; waiting: WaitingRecord; activity: ActivityRecord; profile: ProfileRecord; setup: SetupRecord; usage: UsageRecord; files: FilesRecord };
+const IMESSAGE_TOP = ['imessage.link', 'imessage.unlink', 'imessage.pair', 'imessage.pair_shared'] as const, IMESSAGE_ROW = ['imessage.verify', 'imessage.activate', 'imessage.activate_shared', 'imessage.revoke'] as const;
+const DEVICE_ROW = ['device.revoke', 'device.query', 'device.notify'] as const;
+// Liveness sits beside data: it is not part of the revision, so it can change between reads without blocking a decision.
+export type IMessageRecord = Base<'imessage', {
+  enabled: boolean; address: string | null; linked_hint: string | null; admin: boolean; actions: (typeof IMESSAGE_TOP)[number][];
+  bridges: { id: string; kind: 'owner' | 'shared'; state: string; subject: string | null; chat: string | null; observed: boolean; host_version: string; actions: (typeof IMESSAGE_ROW)[number][] }[];
+}> & { status: { bridges: { id: string; online: boolean; text_ready: boolean; sending_paused: boolean }[] } };
+export type DevicesRecord = Base<'devices', {
+  actions: 'device.pair'[]; devices: { id: string; label: string; capabilities: string[]; created_at: string; actions: (typeof DEVICE_ROW)[number][] }[]; query_kinds: string[]; notification_bodies: string[];
+}> & { status: { devices: { id: string; online: boolean; last_seen_at: string | null; commands: { class: string; state: string; result_state: string | null }[] }[] } };
+type Records = { day: DayRecord; connections: ConnectionsRecord; waiting: WaitingRecord; activity: ActivityRecord; profile: ProfileRecord; setup: SetupRecord; usage: UsageRecord; files: FilesRecord; imessage: IMessageRecord; devices: DevicesRecord };
 export type ControlRecord = Records[ControlsView];
-export type ControlAction = 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'node.forget' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.skip' | 'approval.undo' | 'file.remove';
-export type ControlFields = { id?: string; value?: string; quiet_start?: string; quiet_end?: string; volume?: string };
+export type ControlAction = 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'node.forget' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.skip' | 'approval.undo' | 'file.remove'
+  | (typeof IMESSAGE_TOP)[number] | (typeof IMESSAGE_ROW)[number] | 'device.pair' | (typeof DEVICE_ROW)[number];
+export type ControlFields = { id?: string; value?: string; quiet_start?: string; quiet_end?: string; volume?: string; subject?: string; chat?: string; query_kind?: string; body?: string; severity?: string };
 export type ActionReceipt = { state: 'recorded' | 'incomplete' | 'rejected' | 'unconfirmed'; message: string; navigation?: string; signed_out?: boolean };
-export type ActionResult = { receipt: ActionReceipt; duplicate: boolean };
+// A code or challenge shown once with its receipt. It lives only in component state: never in a URL, history or storage.
+export type ActionReveal = { kind: 'link_code' | 'host_code' | 'challenge' | 'pairing_code'; value: string };
+export type ActionResult = { receipt: ActionReceipt; duplicate: boolean; reveal?: ActionReveal };
 export class ControlsActionError extends Error {
   constructor(readonly code: string, message: string, readonly uncertain = false) { super(message); }
 }
@@ -51,6 +64,7 @@ const count = (v: unknown): v is number => Number.isSafeInteger(v) && Number(v) 
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0;
 const cursor = (v: unknown): v is number | null => v === null || count(v) && v > 0;
 const shapeError = () => new Error('These controls are unavailable or their read is unsupported. Refresh the records.');
+const listed = (v: unknown, known: readonly string[]): v is string[] => strings(v) && v.every(item => known.includes(item)) && new Set(v).size === v.length;
 
 function readProposalReview(value: unknown): ProposalReview | null {
   if (value === null) return null;
@@ -123,6 +137,28 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
     if (!Array.isArray(data.rows) || !data.rows.every(row => obj(row) && string(row.model) && [row.calls, row.input, row.cached, row.output].every(count) && finite(row.usd))) throw shapeError();
     return { ...base, view: 'usage', data: { rows: data.rows.map(row => ({ model: row.model, calls: row.calls, input: row.input, cached: row.cached, output: row.output, usd: row.usd })) } } as Records[V];
   }
+  if (expected === 'imessage') {
+    const status = value.status;
+    if (typeof data.enabled !== 'boolean' || !optionalString(data.address) || !optionalString(data.linked_hint) || typeof data.admin !== 'boolean' || !listed(data.actions, IMESSAGE_TOP) || !Array.isArray(data.bridges)
+      || !data.bridges.every(row => obj(row) && string(row.id) && /^imb_[0-9a-f]{32}$/.test(row.id) && ['owner', 'shared'].includes(String(row.kind)) && string(row.state) && optionalString(row.subject) && optionalString(row.chat) && typeof row.observed === 'boolean' && string(row.host_version) && listed(row.actions, IMESSAGE_ROW))
+      || !obj(status) || !Array.isArray(status.bridges) || !status.bridges.every(row => obj(row) && string(row.id) && typeof row.online === 'boolean' && typeof row.text_ready === 'boolean' && typeof row.sending_paused === 'boolean')) throw shapeError();
+    type Bridge = IMessageRecord['data']['bridges'][number];
+    return { ...base, view: 'imessage', data: {
+      enabled: data.enabled, address: data.address, linked_hint: data.linked_hint, admin: data.admin, actions: [...data.actions] as IMessageRecord['data']['actions'],
+      bridges: (data.bridges as Bridge[]).map(row => ({ id: row.id, kind: row.kind, state: row.state, subject: row.subject, chat: row.chat, observed: row.observed, host_version: row.host_version, actions: [...row.actions] })),
+    }, status: { bridges: (status.bridges as IMessageRecord['status']['bridges']).map(row => ({ id: row.id, online: row.online, text_ready: row.text_ready, sending_paused: row.sending_paused })) } } as Records[V];
+  }
+  if (expected === 'devices') {
+    const status = value.status;
+    if (!listed(data.actions, ['device.pair']) || !strings(data.query_kinds) || !strings(data.notification_bodies) || !Array.isArray(data.devices)
+      || !data.devices.every(row => obj(row) && string(row.id) && string(row.label) && strings(row.capabilities) && string(row.created_at) && listed(row.actions, DEVICE_ROW))
+      || !obj(status) || !Array.isArray(status.devices) || !status.devices.every(row => obj(row) && string(row.id) && typeof row.online === 'boolean' && optionalString(row.last_seen_at) && Array.isArray(row.commands) && row.commands.every(command => obj(command) && string(command.class) && string(command.state) && optionalString(command.result_state)))) throw shapeError();
+    type Device = DevicesRecord['data']['devices'][number];
+    return { ...base, view: 'devices', data: {
+      actions: [...data.actions] as DevicesRecord['data']['actions'], query_kinds: [...data.query_kinds], notification_bodies: [...data.notification_bodies],
+      devices: (data.devices as Device[]).map(row => ({ id: row.id, label: row.label, capabilities: [...row.capabilities], created_at: row.created_at, actions: [...row.actions] })),
+    }, status: { devices: (status.devices as DevicesRecord['status']['devices']).map(row => ({ id: row.id, online: row.online, last_seen_at: row.last_seen_at, commands: row.commands.map(command => ({ class: command.class, state: command.state, result_state: command.result_state })) })) } } as Records[V];
+  }
   if (expected === 'files') {
     if (data.storage !== 'telegram_reference' || !Array.isArray(data.items) || !data.items.every(item => obj(item) && count(item.id) && item.id > 0 && string(item.kind) && string(item.name) && optionalString(item.mime) && (item.size === null || count(item.size)) && string(item.caption) && typeof item.at === 'number' && Number.isFinite(item.at))) throw shapeError();
     return { ...base, view: 'files', data: { storage: 'telegram_reference', items: data.items.map(item => ({ id: item.id, kind: item.kind, name: item.name, mime: item.mime, size: item.size, caption: item.caption, at: item.at })) } } as Records[V];
@@ -168,7 +204,22 @@ export function readActionResult(value: unknown, action: ControlAction, origin: 
     if (action !== 'google.connect' || receipt.state !== 'recorded') throw new ControlsActionError('receipt_unavailable', 'The navigation receipt is unsupported. Refresh the controls.', true);
     receipt.navigation = allowedControlNavigation(value.receipt.navigation, origin);
   }
-  return { receipt, duplicate: value.duplicate };
+  if (value.reveal === undefined) return { receipt, duplicate: value.duplicate };
+  return { receipt, duplicate: value.duplicate, reveal: readReveal(value.reveal, action, receipt.state === 'recorded' && !value.duplicate) };
+}
+
+// Each one-time value has one action and one exact shape; anything else is refused, never shown.
+const REVEALS: Partial<Record<ControlAction, { kind: ActionReveal['kind']; shape: RegExp }>> = {
+  'imessage.link': { kind: 'link_code', shape: /^waldo [A-HJ-NP-Z2-9]{10}$/ },
+  'imessage.pair': { kind: 'host_code', shape: /^wim_[a-f0-9]{48}$/ }, 'imessage.pair_shared': { kind: 'host_code', shape: /^wim_[a-f0-9]{48}$/ },
+  'imessage.verify': { kind: 'challenge', shape: /^wic_[a-f0-9]{48}$/ },
+  'device.pair': { kind: 'pairing_code', shape: /^wp1\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[A-Za-z0-9_-]{43}$/ },
+};
+function readReveal(value: unknown, action: ControlAction, fresh: boolean): ActionReveal {
+  const expected = REVEALS[action];
+  const unsupported = () => new ControlsActionError('receipt_unavailable', 'The code in this receipt is unsupported. Refresh the controls before trying again.', true);
+  if (!fresh || !expected || !obj(value) || value.kind !== expected.kind || !string(value.value) || !expected.shape.test(value.value)) throw unsupported();
+  return { kind: expected.kind, value: value.value };
 }
 
 export async function submitControl(data: Pick<ControlRecord,'csrf'|'revision'> & {view:ControlsView|'memory'}, action: ControlAction, fields: ControlFields, requestId: string, origin = globalThis.location?.origin ?? ''): Promise<ActionResult> {

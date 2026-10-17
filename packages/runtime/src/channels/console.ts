@@ -529,6 +529,7 @@ const CLASSIC_PAGE_ROUTES: Readonly<Record<string, string>> = {
   '': '', legacy: '', waiting: 'waiting', setup: 'setup', connections: 'connections', spots: 'memory/spots',
   constellation: 'memory/constellation', day: 'day', memory: 'memory', files: 'files', usage: 'usage',
   activity: 'patrol', account: 'account', invites: 'invites',
+  imessage: 'connections/imessage', devices: 'connections/devices',
 };
 export const classicConsoleRedirect = (request: Request): Response | null => {
   if (request.method !== 'GET' && request.method !== 'HEAD') return null;
