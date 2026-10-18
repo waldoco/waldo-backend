@@ -98,7 +98,7 @@ beforeEach(() => {
       wire.whatsapp.push(body.type === 'template' ? `template:${body.template!.name}` : `text:${body.text!.body}`);
       wire.to.push(body.to);
       wire.wamid += 1;
-      return Response.json({ messaging_product: 'whatsapp', contacts: [{ input: body.to, wa_id: body.to }], messages: [{ id: `wamid.out.${wire.wamid}` }] });
+      return Response.json({ messaging_product: 'whatsapp', contacts: [{ input: body.to, wa_id: body.to.replace(/^\+/, '') }], messages: [{ id: `wamid.out.${wire.wamid}` }] });
     }
     if (/^https:\/\/api\.telegram\.org\/bot[^/]+\/sendMessage$/.test(url)) {
       const sent = JSON.parse(String(init?.body)) as { chat_id: number; text: string };
@@ -381,7 +381,7 @@ describe('the app and WhatsApp', { timeout: 20_000 }, () => {
       ctx.now = copy!.expiresAt!;
       for (let pass = 0; pass < 2; pass += 1) await outboxPass(owner, state, ctx);
       expect(copies(state).map(record => [record.payload.chat_id, record.status])).toEqual([[Number(SUBJECT), 'blocked']]);
-      expect(wire.to).toEqual([SUBJECT]);
+      expect(wire.to).toEqual([`+${SUBJECT}`]);
       expect(wire.whatsapp).toEqual(['template:waldo_update_ready']);
       expect(await said(owner, ctx)).toEqual([{ role: 'assistant', text: CARD_TEXT }]);
     }, { surface: 'both', window: 'closed' });

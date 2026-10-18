@@ -101,7 +101,7 @@ describe('whatsapp telegram shim', () => {
     const [url, init] = graph.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('https://graph.facebook.com/v26.0/pn1/messages');
     const body = JSON.parse(String(init.body));
-    expect(body.to).toBe('15550001111');
+    expect(body.to).toBe('+15550001111');
     expect(body.text.body).toBe('Send this email?\n\n- Send it: reply "a:p1"\n- Not now: reply "s:p1"');
     expect(JSON.stringify(body)).not.toContain('tok');
   });

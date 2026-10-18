@@ -274,7 +274,7 @@ describe('a send that is only worth delivering now (a one-time code, a signed li
     const graph = vi.fn(async () => Response.json(ack('wamid.code')));
     const { call } = stack(graph, Date.now());
     expect(await call('sendMessage', { chat_id: 1, text: 'Code: 482913', [SEND_NOW_ONLY]: true })).toEqual(ack('wamid.code'));
-    expect(bodiesOf(graph)).toEqual([{ messaging_product: 'whatsapp', to: SUBJECT, type: 'text', text: { body: 'Code: 482913' } }]);
+    expect(bodiesOf(graph)).toEqual([{ messaging_product: 'whatsapp', to: `+${SUBJECT}`, type: 'text', text: { body: 'Code: 482913' } }]);
   });
 
   it('a 131047 refusal inside our window is refused too, and closes the window', async () => {
