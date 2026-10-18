@@ -689,7 +689,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
           }
         });
         if (tableExists(sql, 'background_runs')) attempt('background_runs', () => {
-          for (const row of sql.exec<{ id: string; summary: string }>('SELECT id, summary FROM background_runs').toArray()) {
+          for (const row of sql.exec<{ id: string; summary: string }>('SELECT id, summary FROM background_runs WHERE summary IS NOT NULL').toArray()) {
             const summary = ci(row.summary);
             if (summary !== row.summary) { sql.exec('UPDATE background_runs SET summary = ? WHERE id = ?', summary, row.id); tally('redacted', 'background_runs'); }
           }
@@ -819,7 +819,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
           }
         });
         if (tableExists(sql, 'reminder_notes')) attempt('reminder_notes', () => add('reminder_notes', sql.exec<{ note: string }>('SELECT note FROM reminder_notes').toArray().filter(row => exact(row.note)).length));
-        if (tableExists(sql, 'background_runs')) attempt('background_runs', () => add('background_runs', sql.exec<{ summary: string }>('SELECT summary FROM background_runs').toArray().filter(row => exact(row.summary)).length));
+        if (tableExists(sql, 'background_runs')) attempt('background_runs', () => add('background_runs', sql.exec<{ summary: string }>('SELECT summary FROM background_runs WHERE summary IS NOT NULL').toArray().filter(row => exact(row.summary)).length));
         if (hasSourceLoops) attempt('loops', () => add('loops', sql.exec<{ title: string }>('SELECT l.title FROM loops l').toArray().filter(row => exact(row.title)).length));
         if (hasPlan) attempt('day_plan', () => add('day_plan', sql.exec<{ reason: string }>(`SELECT reason FROM day_plan WHERE reason LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.reason)).length));
         const jsonHits = (raw: string) => { const parsed = parsedJson(raw); return (parsed === undefined ? [raw] : stringsOf(parsed)).some(exact); };
