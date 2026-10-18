@@ -17,9 +17,9 @@ export type WhatsAppWebhookEnv = Readonly<{
   WALDO_ENVIRONMENT?: string;
 }> & OwnerDirectoryEnv;
 
-// By owner ruling for testing, staging may log everything Meta sends and answers: message text, numbers, Meta's error text.
-// No other environment does, whatever WHATSAPP_DEBUG_LOG says. Credentials stay out either way: neither the payload nor
-// Graph's answer carries one, and the outgoing request is never logged.
+// While testing, staging may log everything Meta sends and answers: message text, numbers, Meta's error text (CLAUDE.md
+// records the exception). No other environment does, whatever WHATSAPP_DEBUG_LOG says. Credentials stay out either way: the
+// payload carries none, createWhatsAppCaller masks a token Graph quotes back, and the outgoing request is never logged.
 const whatsappDebugLog = (env: WhatsAppWebhookEnv): boolean => env.WHATSAPP_DEBUG_LOG === 'true' && env.WALDO_ENVIRONMENT === 'staging';
 
 // Text-first linking for a sender with no owner: the link request and a per-sender reply throttle, both held by the
@@ -235,7 +235,7 @@ export const handleWhatsAppWebhook = async (
   const onboard = signedRpc(env);
   for (const userId of hiddenNumberSenders(payload)) {
     // The reply is the only answer such a sender can get, so it needs the token and the durable per-sender limit;
-    // without either the sender is only logged. The BSUID is never logged.
+    // without either the sender is only logged. Outside staging's debug log, the BSUID is never logged.
     if (!onboard || !env.WHATSAPP_ACCESS_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) {
       console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: true, replied: false }));
       continue;
@@ -243,7 +243,7 @@ export const handleWhatsAppWebhook = async (
     const call = createWhatsAppCaller(env.WHATSAPP_ACCESS_TOKEN, env.WHATSAPP_PHONE_NUMBER_ID);
     deferred.push((async () => {
       const senderKey = hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`whatsapp.bsuid.${userId}`)));
-      // A prefix of the hash correlates one sender's log lines; the BSUID itself is never logged.
+      // A prefix of the hash correlates one sender's log lines; outside staging's debug log, the BSUID itself is never logged.
       const sender = senderKey.slice(0, 16);
       try {
         const allowed = (await onboard('whatsapp_onboarding_allowed', `waonboard.${senderKey}`, { p_subject_hash: senderKey })) === true;

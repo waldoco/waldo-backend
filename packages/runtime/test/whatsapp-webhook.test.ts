@@ -345,4 +345,16 @@ describe('handleWhatsAppWebhook: staging debug logging', () => {
     expect(logs.map(line => JSON.parse(line)).filter(line => line.hop === 'whatsapp_link_code'))
       .toEqual([{ hop: 'whatsapp_link_code', ok: false, error: 'TypeError', detail: 'TypeError: FICTIONAL network failure' }]);
   });
+
+  it('on staging, a refusal that quotes the access token back logs Graph\'s answer without it', async () => {
+    const logs = capture();
+    const token = 'EAAG-fictional-access-token-0123456789';
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ error: { code: 190, message: `Malformed access token ${token}` } }, { status: 401 })));
+    const env = { ...debugEnv(namespace().ns, 'staging'), WHATSAPP_ACCESS_TOKEN: token, WHATSAPP_PHONE_NUMBER_ID: 'pn1' };
+    await run(await post('x', payload([{ from: '15550003333', text: 'waldo GOOD12' }])), env, unlinked);
+    const [line] = logs.map(entry => JSON.parse(entry)).filter(entry => entry.hop === 'whatsapp_link_code');
+    expect(line).toMatchObject({ hop: 'whatsapp_link_code', ok: false, status: 401, code: 190 });
+    expect(line.body).toContain('Malformed access token');
+    expect(logs.join('\n')).not.toContain(token);
+  });
 });
