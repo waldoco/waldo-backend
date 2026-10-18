@@ -66,8 +66,10 @@ async function proof(work: (h: {
 }) => Promise<void>, numericWorkspaceIdsAfter?: number, extraEnv: Record<string, string> = {}) {
   const name = `registered-workspace-${++sequence}`;
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (pool, state) => {
-    // Counts the alarms workerd delivers to its own instance of the class, the one built from the pool's env.
-    const poolAlarm = vi.spyOn(pool as OwnerDO, 'alarm');
+    // workerd delivers the real alarms this owner arms to its own instance of the class, built from the pool's env with no
+    // Telegram token. Its pass would throw at setup() and leave a whole-pass hold here that the fixture's next passes fall
+    // inside. As in a deploy, one instance runs this owner: the fixture's, whose passes the test runs. Deliveries are counted.
+    const poolAlarm = vi.spyOn(pool as OwnerDO, 'alarm').mockResolvedValue(undefined);
     const nativeUuid = crypto.randomUUID.bind(crypto);
     let workspaceIds = 0;
     // Inject at the production workspace host's newId boundary, not run ids/canaries.
