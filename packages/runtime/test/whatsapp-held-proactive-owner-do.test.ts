@@ -1,7 +1,7 @@
 // Scheduled cards and reports for an owner whose only surface is WhatsApp, through the real scheduler, final outbox and window
 // layer. While the 24-hour window is closed nothing is recorded as delivered: a day card or a standing-order report waits in
-// the outbox and is recorded only when the owner's reply delivers it, once; one that went stale meanwhile expires unsent; an
-// update card is not written at all.
+// the outbox, goes out once on the owner's reply, and is recorded only when Meta reports it reached the phone; one that went
+// stale meanwhile expires unsent; an update card is not written at all.
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -97,6 +97,8 @@ const owned = async (name: string, script: (steps: Readonly<{
   planned(): { sent: boolean; state?: string } | undefined;
   runs(): Run[];
   outbox(): Outbox;
+  // Meta reports that every message it accepted reached the owner's phone.
+  arrived(): Promise<void>;
 }>) => Promise<void>, wrote = 30 * HOUR) => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql);
@@ -173,6 +175,14 @@ const owned = async (name: string, script: (steps: Readonly<{
           const runtime = (owner as unknown as { setup(channel: string): { act(input: { action: 'node.forget' | 'spot.forget'; id: string; value: string }): Promise<boolean | string> } }).setup('whatsapp');
           return runtime.act({ action: `${kind}.forget`, id: String(id), value: '' });
         },
+        arrived: async () => {
+          const ids = (state.storage.kv.get<{ status: string; providerMessageIds?: (string | null)[] }[]>('telegram_final_outbox_v1') ?? [])
+            .filter(record => record.status === 'accepted').flatMap(record => record.providerMessageIds ?? []).filter((id): id is string => !!id);
+          const response = await owner.fetch(new Request('https://telegram-owner/whatsapp-status', {
+            method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ delivered: ids.map(id => ({ id, at: Date.now() })) }) }));
+          expect(response.status).toBe(200);
+          await (owner as unknown as { serial(work: () => Promise<void>): Promise<void> }).serial(async () => undefined);
+        },
       });
     } finally { await state.storage.deleteAlarm(); for (const turn of turns) turn.mockRestore(); }
   });
@@ -181,7 +191,7 @@ const owned = async (name: string, script: (steps: Readonly<{
 // Each alarm pass waits out the 250 ms a queued record takes to fall due, so these run past the 5 s default.
 describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_000 }, () => {
   it('waits a day card in the outbox with one knock, and records it sent only when the reply delivers it, once', async () => {
-    await owned('wa-held-day-card', async ({ alarms, reply, card, checkIn, planned, outbox, expiry, update, folded }) => {
+    await owned('wa-held-day-card', async ({ alarms, reply, arrived, card, checkIn, planned, outbox, expiry, update, folded }) => {
       const nextCard = await checkIn(10 * 60_000);
       update();
       await card();
@@ -202,6 +212,10 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
 
       await reply();
       expect(wire.events).toEqual(['template:waldo_update_ready', `text:${CARD}`, 'turn']);
+      // Meta accepted it; it is recorded once Meta reports it reached the phone.
+      expect(planned()).toMatchObject({ sent: false });
+      expect(outbox()).toEqual([{ id: `day-card:${today()}:card:brief`, status: 'accepted' }]);
+      await arrived();
       expect(planned()).toMatchObject({ sent: true, state: 'sent' });
       expect(folded()).toEqual([1]);
       expect(outbox()).toEqual([{ id: `day-card:${today()}:card:brief`, status: 'delivered' }]);
@@ -211,11 +225,14 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
   });
 
   it('sends a day card and a standing-order report on the next alarm while the window is open, and records each as it goes', async () => {
-    await owned('wa-open-window-jobs', async ({ alarms, card, order, planned, runs, outbox }) => {
+    await owned('wa-open-window-jobs', async ({ alarms, arrived, card, order, planned, runs, outbox }) => {
       await card();
       await order();
       await alarms(4);
       expect([...wire.events].sort()).toEqual([`text:${CARD}`, `text:${REPORT}`].sort());
+      expect(outbox().map(record => record.status)).toEqual(['accepted', 'accepted']);
+      expect(runs()).toEqual([{ status: 'running', summary: null }]);
+      await arrived();
       expect(planned()).toMatchObject({ sent: true, state: 'sent' });
       expect(runs()).toEqual([{ status: 'completed', summary: 'order reported' }]);
       expect(outbox().map(record => record.status)).toEqual(['delivered', 'delivered']);
@@ -270,7 +287,7 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
   });
 
   it('waits a standing-order report in the outbox and finishes the order\'s run only when the reply delivers it', async () => {
-    await owned('wa-held-order', async ({ alarms, reply, order, refireOrder, runs, outbox }) => {
+    await owned('wa-held-order', async ({ alarms, reply, arrived, order, refireOrder, runs, outbox }) => {
       await order();
       await alarms(3);
       expect(wire.events).toEqual(['template:waldo_update_ready']);
@@ -285,12 +302,14 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
 
       await reply();
       expect(wire.events).toEqual(['template:waldo_update_ready', `text:${REPORT}`, 'turn']);
+      expect(runs()).toEqual([{ status: 'running', summary: null }]);
+      await arrived();
       expect(runs()).toEqual([{ status: 'completed', summary: 'order reported' }]);
     });
   });
 
   it('keeps a card and a report waiting across a restart, then delivers and records each once', async () => {
-    await owned('wa-held-restart', async ({ alarms, reply, restart, card, order, planned, runs, outbox }) => {
+    await owned('wa-held-restart', async ({ alarms, reply, arrived, restart, card, order, planned, runs, outbox }) => {
       await card();
       await order();
       await alarms(4);
@@ -305,6 +324,7 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
       await reply();
       expect(wire.events.slice(1, 3).sort()).toEqual([`text:${CARD}`, `text:${REPORT}`].sort());
       expect(wire.events.slice(3)).toEqual(['turn']);
+      await arrived();
       expect(planned()).toMatchObject({ sent: true, state: 'sent' });
       expect(runs()).toEqual([{ status: 'completed', summary: 'order reported' }]);
       expect([model.cards, model.reports]).toEqual([1, 1]);

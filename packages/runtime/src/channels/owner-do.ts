@@ -45,7 +45,7 @@ import { TelegramOwnerInbox, OWNER_INBOX_KEY, TELEGRAM_TURN_DEADLINE_MS, needsRe
 import { sameSecret } from './telegram-webhook';
 import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armWhatsappPendingWake, heldLane, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
 import { SEND_NOW_ONLY, admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
-import { TelegramFinalOutbox, redactMailFollowupEntries, redactCalendarPrepEntries, redactJobReportEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
+import { TelegramFinalOutbox, observeSurfaceStatuses, outboxRunNotes, unconfirmedCards, redactMailFollowupEntries, redactCalendarPrepEntries, redactJobReportEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
 import { DeliveryGateStore } from '../delivery-gate/store';
 import { ownerTurnTrace, type OwnerTurnEnvelope } from './owner-turn-envelope';
@@ -1302,36 +1302,43 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     this.ctx.waitUntil(work);
     return new Response('ok');
   }
-  // Meta refused sends it had accepted because the 24-hour window had closed (the webhook passes only those). The window
-  // stays closed until the owner writes; a refused outbox record's text is held for that reply, and the owner gets one knock.
-  // The refusals are recorded before the acknowledgement; the knock and any delivery of held messages run in the serial
-  // queue, after a reply's own delivery, so two passes never send the same held message.
+  // Meta's later reports on sends it accepted: window refusals (131047), arrivals on the owner's phone (delivered, read or
+  // played) and other failures. Each is applied to the outbox record it names before the acknowledgement, in one synchronous
+  // step, with the outbox as the one writer: a record settles once every part has arrived, a window refusal sends it back to
+  // pending (and closes the window until the owner writes), and another failure ends it unsent. The knock, settling what the
+  // reports finished and sending what may go now run in the serial queue, after a reply's own delivery, so two passes never
+  // send the same message.
   private async whatsappStatus(request: Request, body: string): Promise<Response> {
     const subject = request.headers.get('x-waldo-whatsapp-subject') ?? '', { kv } = this.ctx.storage;
     if (!/^\d{6,15}$/.test(subject) || kv.get<string>('whatsapp_subject') !== subject) return new Response('forbidden', { status: 403 });
-    let refused: unknown;
-    try { refused = (JSON.parse(body) as { refused?: unknown }).refused; } catch { return new Response('bad request', { status: 400 }); }
+    let parsed: { refused?: unknown; delivered?: unknown; failed?: unknown };
+    try { parsed = JSON.parse(body) as typeof parsed; } catch { return new Response('bad request', { status: 400 }); }
     const valid = (row: unknown): row is { id: string; at: number | null } => {
       const { id, at } = (row ?? {}) as { id?: unknown; at?: unknown };
       return typeof id === 'string' && id !== '' && id.length <= 256 && (at === null || (typeof at === 'number' && Number.isSafeInteger(at) && at >= 0));
     };
-    if (!Array.isArray(refused) || refused.length > 100 || !refused.every(valid)) return new Response('bad request', { status: 400 });
-    const runtime = this.setup('whatsapp'), records = runtime.finalOutbox.records(), log = (event: object) => console.log(JSON.stringify(event));
+    const rows = (value: unknown) => value === undefined ? [] : Array.isArray(value) && value.length <= 100 && value.every(valid) ? value : null;
+    const refused = rows(parsed?.refused), delivered = rows(parsed?.delivered), failed = rows(parsed?.failed);
+    if (!refused || !delivered || !failed) return new Response('bad request', { status: 400 });
+    const runtime = this.setup('whatsapp'), log = (event: object) => console.log(JSON.stringify(event));
+    const addressed = (record: FinalRecord) => record.ownerSubject === subject && record.payload.chat_id === runtime.owner;
     let closed = false;
-    for (const { id, at } of refused) {
-      // Each part of a split record went out under its own id, so a refusal names one part, and that part is held again.
-      const record = records.find(row => row.ownerSubject === subject && row.providerMessageIds?.includes(id));
-      const part = record?.providerMessageIds?.indexOf(id) ?? -1;
-      const text = record ? (record.parts?.[part]?.text ?? (part === 0 ? record.payload.text : '')) : '';
-      closed = whatsappWindowRefused(kv, { providerMessageId: id, refusedAt: at ?? Date.now() }, text || null, runtime.owner, Date.now(), log) || closed;
-    }
+    this.ctx.storage.transactionSync(() => {
+      const records = runtime.finalOutbox.records(), now = Date.now();
+      for (const { id, at } of refused) closed = whatsappWindowRefused(kv, { providerMessageId: id, refusedAt: at ?? now }, records.some(row => addressed(row) && row.providerMessageIds?.includes(id)), now, log) || closed;
+      observeSurfaceStatuses(kv, [...refused.map(({ id }) => ({ id, kind: 'refused' as const, at: now })), ...delivered.map(({ id, at }) => ({ id, kind: 'arrived' as const, at: at ?? now })),
+        ...failed.map(({ id, at }) => ({ id, kind: 'failed' as const, at: at ?? now }))], addressed, now);
+    });
+    await rearmSharedAlarm(this.ctx.storage, null, Date.now());
     this.ctx.waitUntil(this.serial(async () => {
       const current = this.setup('whatsapp');
       // The window is checked again here: the owner may have written since the refusal, and a knock into an open window
       // would mark this window knocked, so its real closure would never knock.
       if (closed && !whatsappWindowOpen(kv, Date.now())) await whatsappKnock(kv, template => current.call('sendTemplate', template), whatsappTemplateConfig(this.env), log);
-      // A refusal from before the owner's latest message leaves the window open, so what it held goes out now.
       await deliverHeldWhatsApp(kv, current.call, Date.now(), log);
+      // Settles what the reports finished; a refusal from before the owner's latest message leaves the window open, so what it
+      // sent back goes out now.
+      await releaseWhatsAppOutbox(current.finalOutbox, this.outboxRoute('whatsapp'), current.settleFinal);
     }).catch(() => { console.error('whatsapp status follow-up deferred'); }));
     return new Response('ok');
   }
@@ -1728,7 +1735,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const limitRaw = Number(url.searchParams.get('limit') ?? '20');
       const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 50) : 20;
       const { rows: page, next } = this.setup().runs.listPage(limit, Number.isFinite(parsed) ? parsed : undefined);
-      return Response.json({ runs: page, next_before: next }, { headers: { 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });
+      const waiting = outboxRunNotes(this.setup().finalOutbox.records());
+      return Response.json({ runs: page.map(run => run.status === 'running' && waiting.has(run.id) ? { ...run, summary: waiting.get(run.id)! } : run), next_before: next }, { headers: { 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });
     }
     // Page routing: /console serves the overview; /console/<slug> serves one page. Action,
     // google, file, runs and admin paths were matched above, so only page slugs remain.
@@ -1849,6 +1857,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       await ready;
       await lane('mac', () => this.drainMacDeliveries());
       await lane('transport', () => finalOutbox.maintain());
+      // Records a surface accepted and has not yet reported on. A count that grows or an oldest that ages past hours means the
+      // reports stopped arriving. Count and an age band only: no ids, numbers or text.
+      const unconfirmed = finalOutbox.unconfirmed();
+      if (unconfirmed.oldestSince !== null) {
+        const age = Date.now() - unconfirmed.oldestSince;
+        log({ trace: 'outbox', hop: 'outbox_unconfirmed', ms: 0, ok: age < 6 * 3_600_000, detail: String(unconfirmed.count), code: age < 3_600_000 ? 'under_1h' : age < 6 * 3_600_000 ? 'under_6h' : age < 86_400_000 ? 'under_24h' : 'over_24h' });
+      }
       // Reconcile finals before quarantining recovered claims with committed payloads.
       for(const final of finalOutbox.records())if(final.commonExecution&&!final.commonExecution.settled&&!final.commonExecution.disposition) {
       }
@@ -1861,7 +1876,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       await this.inbox.recover(protectedAttempts);
       try { await this.notifyUncertainRecovery(); } catch { console.error('uncertainty notice deferred to host recovery'); }
       const dueInbox = (await this.inbox.records()).some(r => r.state === 'admitted');
-      const dueTransport = finals.some(r => r.status === 'attempting' || (r.status === 'pending' && r.dueAt <= Date.now()) || (r.status !== 'pending' && !r.settled));
+      const dueTransport = finals.some(r => r.status === 'attempting' || ((r.status === 'pending' || r.status === 'accepted') && r.dueAt <= Date.now()) || (r.status !== 'pending' && r.status !== 'accepted' && !r.settled));
       const browserDue = Math.min(this.ctx.storage.kv.get<number>('browser_owner_task_due_v1') ?? Infinity, this.ctx.storage.kv.get<number>(COMMON_BROWSER_DUE) ?? Infinity,
         this.ctx.storage.kv.get<number>(COMMON_BROWSER_LEASE_DUE) ?? Infinity);
       const readyKinds = [dueInbox, dueTransport, scheduler.hasDue(), browserDue !== undefined && browserDue !== null && browserDue <= Date.now()];
@@ -3587,6 +3602,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const settleFinal = async (record: FinalRecord): Promise<void> => {
       const delivered = record.status === 'delivered';
+      // Accepted by a surface that reports arrival later: nothing is recorded until that report, a refusal, or the lapse.
+      if (record.status === 'accepted') { log({ trace: record.trace, hop: 'outbox_delivery', ms: 0, ok: true, detail: 'accepted', code: 'awaiting_arrival' }); return; }
       if (record.inbox && record.status !== 'pending') {
         const match = (await this.inbox.records()).find(r => r.id === record.inbox!.id && r.runId === record.inbox!.runId);
         if (match) await this.inbox.transition(match.id, record.inbox.attempt, delivered ? 'completed' : 'quarantined', delivered ? 'delivery_ack' : 'delivery_uncertain');
@@ -3601,9 +3618,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace: record.trace, hop: 'day_card', ms: 0, ok: delivered, detail: `${record.dayCard.card} ${delivered ? 'delivered' : record.reason ?? record.status}` });
       }
       if (record.standingOrder && runs.byId(record.standingOrder.runId)?.status === 'running') {
-        const unsent: Readonly<Record<string, string>> = { expired: 'order ran; its report expired unsent', surface_held: 'order ran; its report waits for your next message' };
+        const unsent: Readonly<Record<string, string>> = { expired: 'order ran; its report expired unsent', surface_held: 'order ran; its report waits for your next message',
+          provider_failed: 'order ran; WhatsApp could not deliver its report', surface_unlinked: 'order ran; its WhatsApp number was unlinked before the report arrived',
+          delivery_unconfirmed: 'order report delivery unconfirmed' };
         runs.finish(record.standingOrder.runId, delivered ? 'completed' : record.status === 'quarantined' ? 'failed' : 'stopped',
-          delivered ? orderReported(record.standingOrder.gate) : record.status === 'quarantined' ? 'order report delivery unconfirmed' : unsent[record.reason ?? ''] ?? 'order ran; its report was not sent');
+          delivered ? orderReported(record.standingOrder.gate) : unsent[record.reason ?? ''] ?? (record.status === 'quarantined' ? 'order report delivery unconfirmed' : 'order ran; its report was not sent'));
       }
       if (!record.reminder && !record.dayCard && !record.standingOrder) log({ trace: record.trace, hop: 'turn', ms: 0, ok: delivered, detail: delivered ? 'delivered' : 'delivery_unconfirmed' });
       if (record.heartbeat) {
@@ -3631,6 +3650,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const linked = await google.state();
         const tracePage = traces.rowsPage(clock.timezone, 60, page?.traceBefore);
         const runPage = runs.listPage(20, page?.runsBefore);
+        const waitingNotes = outboxRunNotes(finalOutbox.records());
         const now = Date.now();
         const today = localIso(now, clock.timezone).slice(0, 10);
         const planned = new Map(plans.read(today).map((row) => [row.card, row]));
@@ -3654,15 +3674,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
               ...(row ? (row.state ? { state: row.state } : {}) : { state: 'pending' as const }) };
           }),
           ledger: await ledger(), proactivity: loops.proactivity(), schedules: schedPrefs.all(), files: files.list(), steps: traces.steps(clock.timezone), lastRequest: traces.lastRequest(clock.timezone), trace: tracePage.rows,
-          runs: runPage.rows.map((row) => ({ id: row.id, kind: row.kind, status: row.status, summary: row.summary, parent_id: row.parent_id, started: localIso(row.started_at, clock.timezone).slice(5, 16).replace('T', ' '), ended: row.ended_at === null ? null : localIso(row.ended_at, clock.timezone).slice(5, 16).replace('T', ' ') })),
+          runs: runPage.rows.map((row) => ({ id: row.id, kind: row.kind, status: row.status, summary: (row.status === 'running' ? waitingNotes.get(row.id) : undefined) ?? row.summary, parent_id: row.parent_id, started: localIso(row.started_at, clock.timezone).slice(5, 16).replace('T', ' '), ended: row.ended_at === null ? null : localIso(row.ended_at, clock.timezone).slice(5, 16).replace('T', ' ') })),
           page: { trace_before: tracePage.next, runs_before: runPage.next, trace_applied: page?.traceBefore ?? null, runs_applied: page?.runsBefore ?? null },
         };
       },
       overview: async () => {
         const now = Date.now();
         const day = localIso(now, clock.timezone).slice(0, 10);
-        return dashboardOverview({ now, timezone: clock.timezone, plans: plans.read(day), cards: DAY_CARDS,
-          approvals: desk.pending(now), run: runs.latestActivity(), trace: traces.latest(), grants: await google.state() });
+        const latest = runs.latestActivity(), waiting = outboxRunNotes(finalOutbox.records());
+        return dashboardOverview({ now, timezone: clock.timezone, plans: plans.read(day), cards: DAY_CARDS, unconfirmed: unconfirmedCards(finalOutbox.records(), day),
+          approvals: desk.pending(now), run: latest && latest.status === 'running' && waiting.has(latest.id) ? { ...latest, summary: waiting.get(latest.id)! } : latest, trace: traces.latest(), grants: await google.state() });
       },
       act: async ({ action, id, value }, assertCurrent) => {
         await assertCurrent?.();

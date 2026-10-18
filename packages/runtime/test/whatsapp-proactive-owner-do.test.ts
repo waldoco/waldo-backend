@@ -70,6 +70,8 @@ const drive = async (name: string, script: (steps: Readonly<{
   settled(): Promise<void>;
   held(): string[];
   ledger(): Readonly<{ runs: { outcome: string; delivery: string | null }[]; outbox: Outbox; notes: number; notices: number; scheduled: { status: string; attempts: number }[] }>;
+  // Meta reports that every message it accepted reached the owner's phone.
+  arrived(): Promise<void>;
 }>) => Promise<void>) => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql);
@@ -137,6 +139,14 @@ const drive = async (name: string, script: (steps: Readonly<{
           notices: (state.storage.kv.get<Outbox>('telegram_final_outbox_v1') ?? []).filter(row => row.id.startsWith('schedule-failed:')).length,
           scheduled: state.storage.sql.exec<{ status: string; attempts: number }>('SELECT status, attempts FROM schedule WHERE id = ?', reminder.id).toArray(),
         }),
+        arrived: async () => {
+          const ids = (state.storage.kv.get<Outbox>('telegram_final_outbox_v1') ?? []).filter(record => record.status === 'accepted')
+            .flatMap(record => record.providerMessageIds ?? []).filter((id): id is string => !!id);
+          const response = await owner.fetch(new Request('https://telegram-owner/whatsapp-status', {
+            method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ delivered: ids.map(id => ({ id, at: Date.now() })) }) }));
+          expect(response.status).toBe(200);
+          await (owner as unknown as { serial(work: () => Promise<void>): Promise<void> }).serial(async () => undefined);
+        },
       });
     } finally { await state.storage.deleteAlarm(); turn.mockRestore(); }
   });
@@ -145,7 +155,7 @@ const drive = async (name: string, script: (steps: Readonly<{
 // Each alarm pass waits out the 250 ms a queued record takes to fall due, so these run past the 5 s default.
 describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }, () => {
   it('holds a due reminder with one template knock, never retries or reports it, and delivers it on the reply before that turn', async () => {
-    await drive('whatsapp-only-reminder', async ({ alarms, reply, ledger }) => {
+    await drive('whatsapp-only-reminder', async ({ alarms, reply, arrived, ledger }) => {
       await alarms(3);
       expect(wire.events).toEqual(['template:waldo_update_ready']);
       expect(model.reminders).toBe(1);
@@ -162,6 +172,13 @@ describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }
 
       await reply();
       expect(wire.events).toEqual(['template:waldo_update_ready', `text:${REMINDER_TEXT}`, 'turn']);
+      // Meta accepted it; the reminder is recorded sent once Meta reports it reached the phone.
+      expect(ledger()).toMatchObject({
+        runs: [{ outcome: 'running', delivery: 'pending' }],
+        outbox: [{ id: expect.stringMatching(/^reminder:/), status: 'accepted', providerMessageIds: ['wamid.out.2'] }],
+        notes: 1,
+      });
+      await arrived();
       expect(ledger()).toMatchObject({
         runs: [{ outcome: 'ok', delivery: 'sent' }],
         outbox: [{ id: expect.stringMatching(/^reminder:/), status: 'delivered', providerMessageIds: ['wamid.out.2'] }],
@@ -195,11 +212,13 @@ describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }
   });
 
   it('sends a due reminder at once while the window is open, with an honest WhatsApp receipt', async () => {
-    await drive('whatsapp-only-open-window', async ({ alarms, reply, ledger }) => {
+    await drive('whatsapp-only-open-window', async ({ alarms, reply, arrived, ledger }) => {
       await reply();
       wire.events = [];
       await alarms(3);
       expect(wire.events).toEqual([`text:${REMINDER_TEXT}`]);
+      expect(ledger()).toMatchObject({ runs: [{ outcome: 'running', delivery: 'pending' }], outbox: [{ status: 'accepted', providerMessageIds: ['wamid.out.1'] }] });
+      await arrived();
       expect(ledger()).toMatchObject({
         runs: [{ outcome: 'ok', delivery: 'sent' }],
         outbox: [{ id: expect.stringMatching(/^reminder:/), status: 'delivered', providerMessageIds: ['wamid.out.1'] }],
@@ -280,17 +299,18 @@ describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }
     });
   });
 
-  it('a late refusal of each part of a split reminder holds every refused part, and the reply delivers them in order', async () => {
+  it('a late refusal of each part of a split reminder keeps both parts in the outbox, and the reply delivers them in order', async () => {
     const parts = ['a'.repeat(3000), 'b'.repeat(3000)];
     model.reminderText = parts.join('\n\n');
-    await drive('whatsapp-only-split-refusal', async ({ alarms, reply, refuse, settled, held }) => {
+    await drive('whatsapp-only-split-refusal', async ({ alarms, reply, refuse, settled, held, ledger }) => {
       await reply();
       await alarms(3);
       expect(wire.events.filter(event => event.startsWith('text:'))).toEqual(parts.map(part => `text:${part}`));
       expect(await refuse('wamid.out.1')).toBe(200);
       expect(await refuse('wamid.out.2')).toBe(200);
       await settled();
-      expect(held()).toEqual(parts);
+      expect(held()).toEqual([]);
+      expect(ledger().outbox).toMatchObject([{ status: 'pending', reason: 'window_refused', providerMessageIds: [null, null] }]);
       wire.events = [];
       await reply();
       expect(wire.events).toEqual([...parts.map(part => `text:${part}`), 'turn']);

@@ -116,6 +116,12 @@ describe('dashboard routing and overview boundaries', () => {
     expect(html).toContain('href="#/waiting"');
     expect(html).not.toMatch(/<button|>Approve|action="\/console\/action"/);
   });
+  it('says a Brief WhatsApp took is sent and waiting for the phone, not delivered', () => {
+    const record: OverviewV1 = { ...empty, brief: { status: 'sent_unconfirmed', at: null } };
+    const html = renderToStaticMarkup(<Dashboard data={record} route="today"/>);
+    expect(html).toContain('Sent, waiting for your phone.');
+    expect(html).not.toMatch(/Not sent yet|Sent, as recorded/);
+  });
   it('does not mistake a completed heartbeat for owner-facing activity while preserving failed attempts', () => {
     const heartbeat: OverviewV1 = { ...empty, latest_activity: { kind: 'heartbeat', status: 'completed', at: empty.as_of, summary: 'tick completed' } };
     expect(renderToStaticMarkup(<Dashboard data={heartbeat} route="today"/>)).not.toMatch(/heartbeat|tick completed/);

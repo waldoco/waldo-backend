@@ -1,12 +1,13 @@
 // Proactive WhatsApp sends below the owner DO: the shim splits long text, the window caller holds only what did not go out,
-// the outbox route accepts only an honest WhatsApp receipt, and Meta's later 131047 closes the window and re-holds the text.
+// the outbox route accepts only an honest WhatsApp receipt and leaves a refused send in the outbox's custody, and Meta's later
+// 131047 closes the window while the outbox keeps the text.
 import { describe, expect, it, vi } from 'vitest';
-import { SEND_NOW_ONLY, type OutboxRoute } from '../src/channels/delivery-routes';
+import { OUTBOX_CUSTODY, SEND_NOW_ONLY, type OutboxRoute } from '../src/channels/delivery-routes';
 import { egressGuardedCaller } from '../src/channels/egress-guard';
 import { createTelegramCaller, gatedCaller } from '../src/channels/telegram-api';
 import { TelegramFinalOutbox } from '../src/channels/telegram-final-outbox';
 import { WHATSAPP_TEXT_MAX_CHARS, WhatsAppPartialSend, whatsappTelegramShim } from '../src/channels/whatsapp-api';
-import { WHATSAPP_HELD, WA_HELD_PREFIX, deliverHeldWhatsApp, forgetHeldWhatsApp, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappReceipt, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from '../src/channels/whatsapp-window';
+import { WHATSAPP_HELD, WHATSAPP_HELD_RETENTION_MS, WHATSAPP_REFUSED, WA_HELD_PREFIX, deliverHeldWhatsApp, forgetHeldWhatsApp, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappReceipt, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from '../src/channels/whatsapp-window';
 
 const SUBJECT = '15550001111';
 const T0 = 1_700_000_000_000;
@@ -68,18 +69,43 @@ describe('the WhatsApp shim splits text over 4,096 characters', () => {
   });
 });
 
+describe('an outbox send (OUTBOX_CUSTODY) the window refuses', () => {
+  it('holds nothing, knocks once and answers WHATSAPP_REFUSED, by our clock or by Meta\'s 131047; a partial send propagates', async () => {
+    const { kv, map } = fakeKv();
+    recordWhatsAppInbound(kv, [{ timestamp: String(T0 / 1000) }], T0);
+    const graph = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.type === 'template') return Response.json(ack('wamid.knock'));
+      return body.text.body.startsWith('b') ? Response.json(ack('wamid.b')) : Response.json({ error: { code: 131047 } }, { status: 400 });
+    });
+    const call = whatsappWindowCaller(whatsappTelegramShim('tok', 'pn1', SUBJECT, graph as unknown as typeof fetch), { kv, template, now: () => T0 + 60_000, log: vi.fn() });
+    // Meta refuses it at the send although our clock had the window open: the window closes, and the owner gets one knock.
+    expect(await call('sendMessage', { chat_id: 1, text: 'Refused by Meta.', [OUTBOX_CUSTODY]: true })).toBe(WHATSAPP_REFUSED);
+    expect(whatsappWindowOpen(kv, T0 + 60_000)).toBe(false);
+    // With the window closed by our clock, the next one is refused without a send, and without another knock.
+    expect(await call('sendMessage', { chat_id: 1, text: 'Closed by our clock.', [OUTBOX_CUSTODY]: true })).toBe(WHATSAPP_REFUSED);
+    expect(held(map)).toEqual([]);
+    expect(bodiesOf(graph).map(body => body.type)).toEqual(['text', 'template']);
+    recordWhatsAppInbound(kv, [{ timestamp: String((T0 + 70_000) / 1000) }], T0 + 70_000);
+    await expect(call('sendMessage', { chat_id: 1, text: `${'b'.repeat(4090)}\n\n${'c'.repeat(10)}`, [OUTBOX_CUSTODY]: true })).rejects.toBeInstanceOf(WhatsAppPartialSend);
+    expect(held(map)).toEqual([]);
+  });
+});
+
 describe('the WhatsApp outbox receipt', () => {
-  it('is one message id sent to the owner\'s bound subject, and nothing else', () => {
-    expect(whatsappReceipt(ack('wamid.ok'), SUBJECT)).toEqual({ providerMessageId: 'wamid.ok' });
+  it('is one message id sent to the owner\'s bound subject, awaiting Meta\'s report of arrival for 30 days, and nothing else', () => {
+    expect(whatsappReceipt(ack('wamid.ok'), SUBJECT, T0)).toEqual({ providerMessageId: 'wamid.ok', arrivalBy: T0 + WHATSAPP_HELD_RETENTION_MS });
     expect(whatsappReceipt(WHATSAPP_HELD, SUBJECT)).toBe('held');
+    expect(whatsappReceipt(WHATSAPP_REFUSED, SUBJECT)).toBe('refused');
     for (const bad of [undefined, null, {}, { message_id: 5, chat: { id: 1 } }, { ...ack('wamid.x'), contacts: [{ wa_id: '15559999999' }] },
       { ...ack(''), messages: [{ id: '' }] }, { contacts: ack('a').contacts, messages: [{ id: 'a' }, { id: 'b' }] }])
       expect(whatsappReceipt(bad, SUBJECT)).toBeNull();
   });
 
-  it('through the outbox: a WhatsApp receipt delivers with its message id, a Telegram-shaped answer is quarantined, held and gate-blocked ones are blocked and kept', async () => {
+  it('through the outbox: a WhatsApp receipt waits for arrival with its message id, a Telegram-shaped answer is quarantined, a window refusal stays pending, held and gate-blocked ones are blocked and kept', async () => {
     for (const [answer, expected] of [
-      [ack('wamid.ok'), { status: 'delivered', providerMessageIds: ['wamid.ok'] }],
+      [ack('wamid.ok'), { status: 'accepted', providerMessageIds: ['wamid.ok'] }],
+      [WHATSAPP_REFUSED, { status: 'pending', reason: 'window_refused' }],
       [{ message_id: 3, chat: { id: 15550001111 } }, { status: 'quarantined', reason: 'invalid_ack' }],
       [WHATSAPP_HELD, { status: 'blocked', reason: 'surface_held' }],
       // The owner's egress gate refused the send (e.g. presence_unavailable): never delivered, never removed.
@@ -107,39 +133,36 @@ describe('the WhatsApp outbox receipt', () => {
     await outbox.enqueue({ id: 'whatsapp', trace: 't', payload: { chat_id: 15550001111, text: 'For WhatsApp.' }, ownerSubject: SUBJECT, doName: 'do' });
     const route: OutboxRoute = { addressed: r => r.ownerSubject === SUBJECT, allowed: async () => true, defer: async () => null, send: async () => ack('wamid.w') };
     await releaseWhatsAppOutbox(outbox, whatsappWindowRoute(route, { kv, subject: SUBJECT, template, knock: vi.fn(), log: vi.fn() }), async () => undefined);
-    expect(outbox.records().map(({ id, status }) => ({ id, status }))).toEqual([{ id: 'telegram', status: 'pending' }, { id: 'whatsapp', status: 'delivered' }]);
+    expect(outbox.records().map(({ id, status }) => ({ id, status }))).toEqual([{ id: 'telegram', status: 'pending' }, { id: 'whatsapp', status: 'accepted' }]);
   });
 });
 
 describe('Meta refusing a send later (a failed status with 131047)', () => {
-  it('closes the window until the owner writes and re-holds the text once per message id; the caller is told to knock once', () => {
+  it('closes the window until the owner writes, once per message id, and holds nothing: the outbox keeps the text; the caller is told to knock once', () => {
     const { kv, map } = fakeKv();
     recordWhatsAppInbound(kv, [{ timestamp: String(T0 / 1000) }], T0);
     const log = vi.fn();
     expect(whatsappWindowOpen(kv, T0 + 60_000)).toBe(true);
     const late = { providerMessageId: 'wamid.late', refusedAt: T0 + 30_000 };
-    expect(whatsappWindowRefused(kv, late, 'Your reminder: call Sam.', 15550001111, T0 + 60_000, log)).toBe(true);
-    expect(whatsappWindowRefused(kv, late, 'Your reminder: call Sam.', 15550001111, T0 + 61_000, log)).toBe(false);
+    expect(whatsappWindowRefused(kv, late, true, T0 + 60_000, log)).toBe(true);
+    expect(whatsappWindowRefused(kv, late, true, T0 + 61_000, log)).toBe(false);
     expect(whatsappWindowOpen(kv, T0 + 60_000)).toBe(false);
-    expect(held(map)).toEqual(['Your reminder: call Sam.']);
-    // A direct reply's text is not kept, so there is nothing to re-hold; the line says so.
-    whatsappWindowRefused(kv, { providerMessageId: 'wamid.direct', refusedAt: T0 + 31_000 }, null, 15550001111, T0 + 62_000, log);
-    expect(log).toHaveBeenCalledWith(expect.objectContaining({ hop: 'whatsapp_status', code: 131047, held: false, detail: 'text_unavailable' }));
-    // The owner writes again: the window reopens and what was re-held goes out.
+    expect(held(map)).toEqual([]);
+    expect(log).toHaveBeenCalledWith(expect.objectContaining({ hop: 'whatsapp_status', code: 131047, closed: true, detail: 'outbox_kept' }));
+    // A direct reply's text is not kept anywhere; the line says so.
+    whatsappWindowRefused(kv, { providerMessageId: 'wamid.direct', refusedAt: T0 + 31_000 }, false, T0 + 62_000, log);
+    expect(log).toHaveBeenCalledWith(expect.objectContaining({ hop: 'whatsapp_status', code: 131047, detail: 'text_unavailable' }));
+    // The owner writes again: the window reopens.
     recordWhatsAppInbound(kv, [{ timestamp: String((T0 + 120_000) / 1000) }], T0 + 120_000);
     expect(whatsappWindowOpen(kv, T0 + 120_000)).toBe(true);
-    const call = vi.fn(async () => ack('wamid.again'));
-    return deliverHeldWhatsApp(kv, call, T0 + 120_000, vi.fn()).then(() => {
-      expect(call).toHaveBeenCalledWith('sendMessage', { chat_id: 15550001111, text: 'Your reminder: call Sam.' });
-    });
   });
 
-  it('a refusal from before the owner\'s latest message re-holds the text but leaves the window open and asks for no knock', () => {
+  it('a refusal from before the owner\'s latest message leaves the window open and asks for no knock', () => {
     const { kv, map } = fakeKv();
     recordWhatsAppInbound(kv, [{ timestamp: String((T0 + 120_000) / 1000) }], T0 + 120_000);
-    expect(whatsappWindowRefused(kv, { providerMessageId: 'wamid.old', refusedAt: T0 }, 'Earlier note.', 15550001111, T0 + 130_000, vi.fn())).toBe(false);
+    expect(whatsappWindowRefused(kv, { providerMessageId: 'wamid.old', refusedAt: T0 }, true, T0 + 130_000, vi.fn())).toBe(false);
     expect(whatsappWindowOpen(kv, T0 + 130_000)).toBe(true);
-    expect(held(map)).toEqual(['Earlier note.']);
+    expect(held(map)).toEqual([]);
   });
 
   it('two overlapping deliveries of held messages send each one exactly once', async () => {

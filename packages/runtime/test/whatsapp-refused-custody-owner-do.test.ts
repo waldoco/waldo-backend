@@ -341,8 +341,55 @@ describe('a WhatsApp send Meta refuses for the window our check let through', { 
       await alarms(3);
       expect(runs()).toEqual([{ status: 'running', summary: null }]);
       await later(31 * 24 * HOUR, () => alarms(2));
-      expect(outbox()).toMatchObject([{ status: 'quarantined', reason: 'delivery_unconfirmed' }]);
-      expect(runs()).toEqual([{ status: 'failed', summary: 'order report delivery unconfirmed' }]);
+      expect(outbox()[0]).toMatchObject({ status: 'quarantined', reason: 'delivery_unconfirmed' });
+      expect(runs()[0]).toEqual({ status: 'failed', summary: 'order report delivery unconfirmed' });
+    });
+  });
+
+  it('a card and a report still waiting for Meta\'s report never hold back their next occurrence', async () => {
+    await owned('wa-accepted-next', async ({ alarms, later, card, order, outbox, runs }) => {
+      await card();
+      await order();
+      await alarms(4);
+      expect(outbox().map(record => record.status)).toEqual(['accepted', 'accepted']);
+      // The phone stays off. A day later the next card and the order's next run go ahead (the window has closed by then, so
+      // they wait in the outbox for the owner's next message), and the earlier two still wait for their report.
+      await later(24 * HOUR + 60_000, async () => { await card(); await alarms(4); });
+      expect(outbox().filter(record => record.id.startsWith('day-card:')).map(record => record.status)).toEqual(['accepted', 'pending']);
+      expect(outbox().filter(record => record.id.startsWith('standing-order:')).map(record => record.status)).toEqual(['accepted', 'pending']);
+      expect(runs()).toEqual([{ status: 'running', summary: null }, { status: 'running', summary: null }]);
+    });
+  });
+
+  it('a report that comes after a record has ended changes nothing, however often Meta repeats it', async () => {
+    await owned('wa-status-after-end', async ({ alarms, reply, card, status, ids, texts, planned, folded, update, outbox }) => {
+      update();
+      await card();
+      await alarms(3);
+      const [first] = ids();
+      await status('delivered', [first!]);
+      await status('delivered', [first!]);
+      expect(outbox()).toMatchObject([{ status: 'delivered' }]);
+      expect(folded()).toEqual([1]);
+      await status('failed', [first!]);
+      await status('refused', [first!]);
+      await reply();
+      expect(outbox()).toMatchObject([{ status: 'delivered' }]);
+      expect(planned()).toMatchObject({ sent: true, state: 'sent' });
+      expect(texts()).toEqual([CARD]);
+    });
+    wire.events = [];
+    await owned('wa-status-after-expiry', async ({ alarms, reply, later, card, status, ids, texts, planned, outbox }) => {
+      await card();
+      await alarms(3);
+      const [first] = ids();
+      await status('refused', [first!]);
+      await later(24 * HOUR, reply);
+      expect(outbox()).toMatchObject([{ status: 'blocked', reason: 'expired' }]);
+      await later(24 * HOUR, () => status('delivered', [first!]));
+      expect(outbox()).toMatchObject([{ status: 'blocked', reason: 'expired' }]);
+      expect(planned()).toMatchObject({ sent: false });
+      expect(texts()).toEqual([CARD]);
     });
   });
 });
