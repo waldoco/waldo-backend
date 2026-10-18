@@ -21,8 +21,10 @@ const payload = (senders: Sender[]) => JSON.stringify({ entry: [{ changes: [{ fi
   messages: senders.map((s, i) => ({ ...(s.from ? { from: s.from } : {}), from_user_id: s.userId, id: `wamid.${i}`, timestamp: '1700000000', type: 'text', text: { body: s.text ?? 'hi' } })),
 } }] }] });
 
-const harness = (throttleAllows = true, graphStatus = 200) => {
-  const doCalls: { url: string; body: string }[] = [];
+const harness = (throttleAllows = true, graphStatus = 200, routeEverySubject = false) => {
+  const doCalls: { url: string; body: string; headers: Record<string, string> }[] = [];
+  const doNames: string[] = [];
+  const doGets: string[] = [];
   const graph: Record<string, unknown>[] = [];
   const throttleKeys: string[] = [];
   const sharedThrottle: string[] = [];
@@ -33,16 +35,22 @@ const harness = (throttleAllows = true, graphStatus = 200) => {
       return Response.json(throttleAllows);
     }
     if (url.startsWith('https://graph.facebook.com/')) { graph.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-      return graphStatus === 200 ? Response.json({ messages: [{ id: 'wamid.out' }] }) : Response.json({ error: { message: `fictional rejection for ${BSUID}` } }, { status: graphStatus });
+      return graphStatus === 200 ? Response.json({ messages: [{ id: 'wamid.out' }] }) : Response.json({ error: { code: 131030, message: `fictional rejection for ${BSUID}` } }, { status: graphStatus });
     }
     return new Response('unexpected', { status: 500 });
   }));
-  const byPresence = vi.fn<OwnerDirectory['byPresence']>(async (_provider, subject) => subject === '15550001111' ? { doName: 'do-a', subject, timezone: null } : null);
+  const byPresence = vi.fn<OwnerDirectory['byPresence']>(async (_provider, subject) => routeEverySubject ? { doName: `do-${subject}`, subject, timezone: null } : subject === '15550001111' ? { doName: 'do-a', subject, timezone: null } : null);
   const redeem = vi.fn<OwnerDirectory['redeem']>(async () => null);
   const env: WhatsAppWebhookEnv = {
     WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_ACCESS_TOKEN: 'fictional-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id',
     SUPABASE_PROJECT_URL: 'https://fictional.supabase.test', SUPABASE_PUBLISHABLE_KEY: 'fictional-key', WALDO_ROUTER_HMAC_SECRET: 'fictional-secret',
-    OWNER_DO: { idFromName: (name: string) => name, get: (name: string) => ({ fetch: async (url: string, init?: RequestInit) => { doCalls.push({ url: `${name}|${url}`, body: String(init?.body) }); return new Response('ok'); } }) } as unknown as DurableObjectNamespace,
+    OWNER_DO: {
+      idFromName: (name: string) => { doNames.push(name); return name; },
+      get: (name: string) => {
+        doGets.push(name);
+        return { fetch: async (url: string, init?: RequestInit) => { doCalls.push({ url: `${name}|${url}`, body: String(init?.body), headers: { ...(init?.headers as Record<string, string>) } }); return new Response('ok'); } };
+      },
+    } as unknown as DurableObjectNamespace,
   };
   const logs: string[] = [];
   vi.spyOn(console, 'log').mockImplementation((line: unknown) => { logs.push(String(line)); });
@@ -52,7 +60,7 @@ const harness = (throttleAllows = true, graphStatus = 200) => {
     await Promise.all(deferred);
     return response;
   };
-  return { env, handle, doCalls, graph, throttleKeys, sharedThrottle, byPresence, redeem, logs };
+  return { env, handle, doCalls, doNames, doGets, graph, throttleKeys, sharedThrottle, byPresence, redeem, logs };
 };
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
@@ -128,7 +136,26 @@ it('a refused reply logs the Graph status, never the response body', async () =>
   const failure = h.logs.map(line => JSON.parse(line) as Record<string, unknown>).find(entry => entry.hop === 'whatsapp_hidden_number' && entry.ok === false);
   // A failed send is a hashed log line and still a 200: Meta is not asked to redeliver, and nothing retries.
   const senderKey = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`whatsapp.bsuid.${BSUID}`)))].map(b => b.toString(16).padStart(2, '0')).join('');
-  expect(failure).toMatchObject({ status: 400, sender: senderKey.slice(0, 16) });
+  expect(failure).toMatchObject({ status: 400, code: 131030, sender: senderKey.slice(0, 16) });
   expect(h.graph).toHaveLength(1);
   for (const line of h.logs) { expect(line).not.toContain('fictional rejection'); expect(line).not.toContain(BSUID); }
+});
+
+// The directory here resolves any subject to an owner, the worst case of a presence bound to a BSUID.
+it('a hidden-number sender never reaches an owner DO, so no owner binds a do_name from it', async () => {
+  const alone = harness(true, 200, true);
+  await alone.handle(payload([{ userId: BSUID, text: 'waldo ABCDEFGH23' }]));
+  expect(alone.doNames).toEqual([]);
+  expect(alone.doGets).toEqual([]);
+  expect(alone.doCalls).toEqual([]);
+
+  // Mixed: only the phone sender is admitted, under its own do_name, with only its own message.
+  const mixed = harness(true, 200, true);
+  await mixed.handle(payload([{ from: '15550001111', userId: 'US.99999999999999999999' }, { userId: BSUID }]));
+  expect(mixed.doNames).toEqual(['do-15550001111']);
+  expect(mixed.doCalls).toHaveLength(1);
+  expect(mixed.doCalls[0]).toMatchObject({ url: 'do-15550001111|https://telegram-owner/whatsapp-admit', headers: { 'x-waldo-do-name': 'do-15550001111', 'x-waldo-whatsapp-subject': '15550001111' } });
+  const admitted = JSON.parse(mixed.doCalls[0]!.body) as { messages: { from?: string; from_user_id?: string }[] };
+  expect(admitted.messages.map(m => m.from_user_id)).toEqual(['US.99999999999999999999']);
+  expect(mixed.doCalls[0]!.body).not.toContain(BSUID);
 });

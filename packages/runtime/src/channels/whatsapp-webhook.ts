@@ -1,5 +1,5 @@
 import { hex, ownerDirectory, signedRpc, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
-import { createWhatsAppCaller, sendWhatsAppText, whatsappForwarded } from './whatsapp-api';
+import { createWhatsAppCaller, sendWhatsAppText, WhatsAppApiError, whatsappForwarded } from './whatsapp-api';
 import { WHATSAPP_REENGAGEMENT_ERROR } from './whatsapp-window';
 
 export type WhatsAppWebhookEnv = Readonly<{
@@ -177,10 +177,10 @@ export const handleWhatsAppWebhook = async (
         if (allowed) await call({ recipient: userId, type: 'text', text: { body: WHATSAPP_HIDDEN_NUMBER_REPLY } });
         console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: true, replied: allowed, sender }));
       } catch (error) {
-        // Not retried, and the payload is still acked. The Graph status shows whether v21.0 refuses
-        // recipient; the response body is never logged.
-        const status = error instanceof Error ? /^whatsapp (\d{3}):/.exec(error.message)?.[1] : undefined;
-        console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: false, sender, error: error instanceof Error ? error.name : 'unknown', ...(status ? { status: Number(status) } : {}) }));
+        // Not retried, and the payload is still acked. The Graph status and Meta's error code show whether v21.0
+        // refuses recipient; the response body is never logged.
+        const graph = error instanceof WhatsAppApiError ? { status: error.status, code: error.code } : {};
+        console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: false, sender, error: error instanceof Error ? error.name : 'unknown', ...graph }));
       }
     })());
   }
