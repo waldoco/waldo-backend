@@ -211,13 +211,16 @@ export const clearWhatsAppNumber = (kv: Kv): void => {
   for (const key of [WA_LAST_INBOUND_KEY, KNOCKED_KEY, REFUSED_KEY]) kv.delete(key);
 };
 
-// Binds this owner's WhatsApp to a number, or unbinds it (null): a confirmed link, a reconcile at admission, an unlink.
-// Whatever belonged to another number goes first; binding the number already bound changes nothing. Storage only: callers
-// run it inside the transactionSync that decides the binding, and rebuild their runtimes after.
+// Binds this owner's WhatsApp to a number, or unbinds it (null): a confirmed link, the first admission, a reconcile at
+// admission, an unlink. Whatever belonged to another number goes first; binding the number already bound keeps its state. A
+// bound number is linked, so an older unlinked flag goes with any bind. Storage only: callers run it inside the
+// transactionSync that decides the binding, and rebuild their runtimes after.
 export const bindWhatsAppNumber = (kv: Kv, subject: string | null): void => {
-  if (subject !== null && kv.get<string>('whatsapp_subject') === subject) return;
-  clearWhatsAppNumber(kv);
-  if (subject === null) kv.delete('whatsapp_subject'); else kv.put('whatsapp_subject', subject);
+  if (subject === null || kv.get<string>('whatsapp_subject') !== subject) {
+    clearWhatsAppNumber(kv);
+    if (subject === null) kv.delete('whatsapp_subject'); else kv.put('whatsapp_subject', subject);
+  }
+  if (subject !== null) kv.delete('whatsapp_unlinked');
 };
 
 // Runs when the owner's reply has reopened the window, before that reply's turn, so the turn's context

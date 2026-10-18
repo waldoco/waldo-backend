@@ -1535,7 +1535,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (form.get('action') === WHATSAPP_LINK_CONFIRM_ACTION) return whatsappLinkConfirmAction(form, session.csrf, this.ctx.storage.kv.get<string>('do_name') ?? '', whatsappLinkDirectory(this.env), subject => {
         // A new number starts clean: nothing held for the old one may reach it.
         const { kv } = this.ctx.storage;
-        this.ctx.storage.transactionSync(() => { bindWhatsAppNumber(kv, subject); kv.delete('whatsapp_unlinked'); });
+        this.ctx.storage.transactionSync(() => bindWhatsAppNumber(kv, subject));
         this.runtimes = {};
       });
       if (form.get('action') === 'device.pair' || form.get('action') === 'device.revoke' || form.get('action') === 'device.query' || form.get('action') === 'device.notify') return deviceConsoleAction(form, session.csrf, this.ctx.storage.kv.get<string>('do_name') ?? '', deviceDirectory(this.env), this.env.DEVICE_BRIDGE_DO, request.headers.get('accept') ?? '');
