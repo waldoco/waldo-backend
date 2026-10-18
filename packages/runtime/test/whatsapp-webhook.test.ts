@@ -91,6 +91,25 @@ describe('handleWhatsAppWebhook', () => {
     expect(forwarded.statuses).toBeUndefined();
   });
 
+  it('admission: a definite refusal (400, 403 such as a sender the owner has not bound, 404) is acknowledged; anything else answers 503', async () => {
+    const directory: OwnerDirectory = { byPresence: async () => ({ doName: 'do-a', subject: '15550001111', timezone: null }), redeem: async () => null };
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const replies: [() => Promise<Response>, number][] = [
+      [async () => new Response('forbidden', { status: 403 }), 200], [async () => new Response('bad request', { status: 400 }), 200],
+      [async () => new Response('not found', { status: 404 }), 200],
+      [async () => new Response('conflict', { status: 409 }), 503], [async () => new Response('slow down', { status: 429 }), 503],
+      [async () => new Response('unavailable', { status: 503 }), 503], [async () => { throw new Error('owner unreachable'); }, 503],
+    ];
+    try {
+      for (const [reply, expected] of replies) {
+        const { fetch, ns } = namespace();
+        fetch.mockImplementation(reply);
+        expect((await run(await post('x', payload([{ from: '15550001111' }])), { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret' }, directory)).status).toBe(expected);
+      }
+      expect(log.mock.calls.map(([line]) => String(line)).filter(line => line.includes('"hop":"whatsapp_admit"'))).toHaveLength(7);
+    } finally { log.mockRestore(); }
+  });
+
   it('after an unlink the old sender wakes no DO, while another owner keeps routing', async () => {
     const { fetch, idFromName, ns } = namespace();
     // Only active presences route; unlink_presence retires the row, so the directory stops answering for that number.

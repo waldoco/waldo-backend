@@ -1,4 +1,6 @@
+import { consoleAuth } from '../identity/console-auth';
 import { hex, ownerDirectory, signedRpc, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
+import { newWhatsAppLinkToken, whatsappLinkDirectory, whatsappLinkTokenHash, whatsappLinkUrl, type WhatsAppLinkDirectory } from '../identity/whatsapp-link';
 import { createWhatsAppCaller, sendWhatsAppText, WhatsAppApiError, whatsappForwarded } from './whatsapp-api';
 import { WHATSAPP_REENGAGEMENT_ERROR } from './whatsapp-window';
 
@@ -8,7 +10,34 @@ export type WhatsAppWebhookEnv = Readonly<{
   WHATSAPP_APP_SECRET?: string;
   WHATSAPP_ACCESS_TOKEN?: string;
   WHATSAPP_PHONE_NUMBER_ID?: string;
+  // Where a sender with no Waldo account is sent (the waitlist). Unset, the reply carries no link.
+  WHATSAPP_ONBOARDING_URL?: string;
 }> & OwnerDirectoryEnv;
+
+// Text-first linking for a sender with no owner: the link request and a per-sender reply throttle, both held by the
+// directory. Absent (no directory configured), unlinked senders get no reply.
+export type WhatsAppTextFirst = Readonly<{ links: WhatsAppLinkDirectory; throttle(key: string, limit: number, windowSeconds: number): Promise<boolean> }>;
+const textFirstFromEnv = (env: WhatsAppWebhookEnv): WhatsAppTextFirst | null => {
+  const links = whatsappLinkDirectory(env), auth = consoleAuth(env);
+  return links && auth ? { links, throttle: (key, limit, windowSeconds) => auth.throttle(key, limit, windowSeconds) } : null;
+};
+// Three replies per sender per hour: a live link already answers repeat texts ('pending'), so this bounds waitlist replies
+// and links reissued after one expires. The throttle expires each row on its own window, so a shorter window used by
+// another caller does not reset this one.
+const TEXT_FIRST_REPLIES = 3;
+const TEXT_FIRST_WINDOW_SECONDS = 3600;
+
+const textFirstReply = async (sender: string, origin: string, env: WhatsAppWebhookEnv, textFirst: WhatsAppTextFirst): Promise<string | null> => {
+  const senderKey = hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`whatsapp.${sender}`)));
+  if (!(await textFirst.throttle(`walink.${senderKey}`, TEXT_FIRST_REPLIES, TEXT_FIRST_WINDOW_SECONDS))) return null;
+  const token = newWhatsAppLinkToken();
+  const opened = await textFirst.links.open(sender, await whatsappLinkTokenHash(token));
+  if (opened === 'opened') return `Tap to link this WhatsApp number to your Waldo. You'll sign in and confirm the number; the link works once, for 10 minutes: ${whatsappLinkUrl(origin, token)}`;
+  // pending: the link sent earlier still works, so the sender is not sent a second one.
+  if (opened === 'linked' || opened === 'pending') return null;
+  const waitlist = /^https:\/\/[^\s]+$/.test(env.WHATSAPP_ONBOARDING_URL ?? '') ? ` Join the waitlist: ${env.WHATSAPP_ONBOARDING_URL}` : '';
+  return `Waldo is invite-only for now.${waitlist}\n\nAlready on Waldo? Link WhatsApp from your console.`;
+};
 
 export const WHATSAPP_WEBHOOK_PATH = '/whatsapp/webhook';
 
@@ -31,6 +60,8 @@ type WaMessage = { from?: string; from_user_id?: string; id?: string; type?: str
 type WaContact = { wa_id?: string; user_id?: string; profile?: { name?: string; username?: string } };
 type WaValue = { metadata?: { phone_number_id?: string }; contacts?: WaContact[]; messages?: WaMessage[]; statuses?: unknown[] };
 type WaBody = { entry?: { changes?: { value?: WaValue }[] }[] };
+
+const DEFINITE_ADMIT_REFUSALS = new Set([400, 403, 404]);
 
 // Presences are keyed by phone digits and nothing downstream checks the shape, so only E.164 digits are a sender.
 const phoneOf = (message: WaMessage): string | null => message.from && /^\d{1,15}$/.test(message.from) ? message.from : null;
@@ -95,12 +126,14 @@ const linkCode = (body: WaBody, senderId: string): string | null => {
 // The webhook verifies Meta's signature, resolves which owner a WhatsApp sender belongs to and
 // wakes only that owner's Durable Object. A status callback reaches the owner only when Meta refused a send for the
 // 24-hour window; the rest are acknowledged and dropped.
-// A sender with no owner can only redeem a one-time link code ("waldo CODE") from the console.
+// A sender with no owner can redeem a one-time console link code ("waldo CODE"); any other message gets the
+// text-first reply: a one-tap sign-in link when one owner has this number on file, otherwise the waitlist.
 export const handleWhatsAppWebhook = async (
   request: Request,
   env: WhatsAppWebhookEnv,
   waitUntil: (work: Promise<unknown>) => void,
   directory: OwnerDirectory = ownerDirectory(env),
+  textFirst: WhatsAppTextFirst | null = textFirstFromEnv(env),
 ): Promise<Response> => {
   if (!env.OWNER_DO) return new Response('not found', { status: 404 });
   const url = new URL(request.url);
@@ -119,8 +152,12 @@ export const handleWhatsAppWebhook = async (
   const owners = env.OWNER_DO;
   const origin = url.origin;
   // Admission before the ack: a payload is acknowledged only after each owner's Durable Object has durably admitted it.
-  // A failed or refused admission answers 503, so Meta redelivers (its non-200 retry); the DO dedupes by wamid, so a
-  // redelivery of a payload that did land is not run twice. Link-code redemption stays deferred: it is not a message turn.
+  // An admission the owner could not take for now (unreachable, or a 5xx) answers 503, so Meta redelivers (its non-200
+  // retry); the DO dedupes by wamid, so a redelivery of a payload that did land is not run twice. A definite refusal is
+  // acknowledged and logged, since Meta would otherwise redeliver it for 7 days: 400 (a malformed batch), 403 (the
+  // directory no longer has the sender as this owner's number, or the name does not address it), 404 (the object is not an
+  // owner). The message is not handled. Any other answer may be temporary and answers 503. Link-code redemption stays
+  // deferred: it is not a message turn.
   let unavailable = false;
   const deferred: Promise<unknown>[] = [];
   for (const { sender, value } of bySender(payload)) {
@@ -133,12 +170,23 @@ export const handleWhatsAppWebhook = async (
       if (route.timezone) headers['x-waldo-timezone'] = route.timezone;
       try {
         const admitted = await owners.get(owners.idFromName(route.doName)).fetch('https://telegram-owner/whatsapp-admit', { method: 'POST', body: JSON.stringify(value), headers });
-        if (!admitted.ok) { console.log(JSON.stringify({ hop: 'whatsapp_admit', ok: false, status: admitted.status })); unavailable = true; }
+        if (!admitted.ok) { console.log(JSON.stringify({ hop: 'whatsapp_admit', ok: false, status: admitted.status })); if (!DEFINITE_ADMIT_REFUSALS.has(admitted.status)) unavailable = true; }
       } catch (error) { console.log(JSON.stringify({ hop: 'whatsapp_admit', ok: false, error: String(error) })); unavailable = true; }
       continue;
     }
     const code = linkCode(payload, sender);
-    if (!code || !env.WHATSAPP_ACCESS_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) continue;
+    if (!env.WHATSAPP_ACCESS_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) continue;
+    if (!code) {
+      if (!textFirst) continue;
+      // The reply goes straight to the sender: there is no owner yet, so no owner gate applies. It never asks for a
+      // link preview, and the link itself is never logged.
+      deferred.push((async () => {
+        const reply = await textFirstReply(sender, origin, env, textFirst);
+        console.log(JSON.stringify({ hop: 'whatsapp_text_first', ok: true, replied: reply !== null }));
+        if (reply) await sendWhatsAppText(createWhatsAppCaller(env.WHATSAPP_ACCESS_TOKEN!, env.WHATSAPP_PHONE_NUMBER_ID!), sender, reply);
+      })().catch((error: unknown) => console.log(JSON.stringify({ hop: 'whatsapp_text_first', ok: false, error: error instanceof Error ? error.name : 'unknown' }))));
+      continue;
+    }
     deferred.push((async () => {
       const linked = await directory.redeem('whatsapp', sender, code).catch(() => null);
       const call = createWhatsAppCaller(env.WHATSAPP_ACCESS_TOKEN!, env.WHATSAPP_PHONE_NUMBER_ID!);
