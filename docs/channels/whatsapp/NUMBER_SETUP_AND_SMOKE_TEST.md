@@ -9,103 +9,132 @@ Meta write, secret change and deploy below needs the owner's yes at the time. Ru
 
 | Piece | State |
 | --- | --- |
-| Runtime | Webhook, text-first linking, owner replies, the 24-hour window, held messages and the knock are on `beta-mvp`. A refused send or a failed delivery status logs numeric codes only (`whatsapp-webhook.ts:198`, `:205`, `:207`). |
+| Runtime | Webhook, text-first linking, owner replies, the 24-hour window, held messages and the knock are on `beta-mvp`. A refused send or a failed delivery status logs the error's name and numeric codes, never the recipient, a message id or Meta's error text (`whatsapp-webhook.ts:198`, `:205`, `:207`). |
 | Meta app "Waldo" | Published. Its callback is staging's `/whatsapp/webhook`, subscribed to the `messages` field. |
-| Meta's test number, +1 555 633 8976 | Inbound reaches staging, and Graph accepts sends. Meta then fails every delivery with 131031, an account restriction: seen at 16:39Z, 4 s after a reply was accepted. Meta's own `hello_world` never arrived either. |
-| Waldo's number, +91 92260 67544 | Verified, not registered. Registration was refused with `ACCOUNT_NOT_APPROVED`. Meta MCP reports its Messaging account as "Restricted", with outstanding issues in WhatsApp Manager. |
-| Business verification | Not verified, per Meta MCP at 16:41Z. The owner started it on 18 October. Until it passes, nothing can be delivered from this business. |
+| Meta's test number, +1 555 633 8976 | Inbound reaches staging, and Graph accepts sends. Meta then fails each delivery with 131031: seen at 16:39Z, 4 s after a reply was accepted. Meta's own `hello_world` never arrived either. Business Settings shows the number Connected, with quality High and a limit of 250 customers per 24 hours, and its Messaging account Approved (observed 16:50Z). The reason for the 131031 is not yet known. |
+| Waldo's number, +91 92260 67544 | Verified, not registered. Registration was refused with `ACCOUNT_NOT_APPROVED`. Meta MCP reports its Messaging account as "Restricted" (16:41Z). WhatsApp Manager showed both of Waldo's Messaging accounts as "Account Restricted: Before you can begin messaging, you will need to verify your business" (observed 18 October). |
+| Business verification | Not verified, per Meta MCP at 16:41Z. The owner started it on 18 October. [inference] It is the likeliest cause of the restriction on Waldo's number. Whether it also clears the test number's 131031 is unknown. |
 | Knock template | Not created. See the [template plan](REENGAGEMENT_TEMPLATE.md). |
 
-Meta's current account model splits a number's assets in two. The **WhatsApp account** owns the phone number.
-The **Messaging account** owns templates and billing; Graph calls it the "Paid Message Account" in permission
-errors. The Worker's `WHATSAPP_ACCESS_TOKEN` belongs to the system user `waldo-staging`.
+Meta's account model splits a number's assets in two
+([WhatsApp accounts and Messaging accounts](https://developers.facebook.com/documentation/business-messaging/whatsapp/whatsapp-business-accounts/),
+updated 5 August 2026):
+- The **WhatsApp account** holds the phone number.
+- The **Messaging account** holds templates, billing and the webhook subscription. Graph calls it the "Paid
+  Message Account" in permission errors.
+
+The Worker's `WHATSAPP_ACCESS_TOKEN` belongs to the system user `waldo-staging`.
 
 ## Setup chain
 
-The same chain applies to any number. Each step ends with a check you can see. A step whose check fails is
-the answer: stop there.
+Each step ends with a check you can see. A step whose check fails is the answer: stop there.
 
-1. **Verify the business** (owner, Meta Business Suite, Security Center). Until then Meta keeps every
-   Messaging account of the business restricted ("Before you can begin messaging, you will need to verify
-   your business").
-   *Check:* WhatsApp Manager's overview no longer shows "Account Restricted" for the number's Messaging account.
-   *Falsifier:* step 3 still returns `ACCOUNT_NOT_APPROVED`.
+1. **Verify the business** (owner, in Meta Business Suite's Security Center).
+   *Check:* Meta MCP `whatsapp_biz_businesses` reports the business as verified. WhatsApp Manager no longer
+   shows "Account Restricted" for the number's Messaging account.
+   Do not probe this step by retrying step 3. After 10 registration requests in 72 hours, Meta returns 133016
+   and blocks registration for the next 72 hours
+   ([Register a business phone number](https://developers.facebook.com/documentation/business-messaging/whatsapp/business-phone-numbers/registration),
+   updated 26 June 2026).
 2. **Add billing** (owner) on the number's Messaging account.
-   *Check:* WhatsApp Manager no longer shows "Missing valid payment method". Without it, sends fail with 131042.
-3. **Register the number** (Meta MCP `whatsapp_biz_register_phone_number`). Registering sets the number's
-   two-step verification PIN. The PIN is a credential: the owner chooses and keeps it, and it never goes in
-   chat, docs, tickets or logs.
-   *Check:* MCP `whatsapp_biz_phone_numbers` lists the number as linked. Unregistered, sends fail with 133010 or 131045.
-   List it through its Messaging account. On 18 October, looking the number up directly returned nothing, though it was on that account.
-4. **Subscribe the number's WhatsApp account to the Waldo app** (MCP `whatsapp_biz_subscribe_webhook`). The
-   app's callback alone delivers nothing: Meta sends an account's webhooks only to apps that account is
-   subscribed to.
+   *Check:* WhatsApp Manager no longer shows "Missing valid payment method". Without billing, sends fail with 131042.
+3. **Register the number.** With the owner's yes, an agent may call Meta MCP `whatsapp_biz_register_phone_number`
+   without a PIN. If Meta asks for a PIN, the owner registers the number themselves. Registering sets the
+   number's two-step verification PIN. That PIN is a credential: it never passes through an agent, chat, docs,
+   tickets or logs.
+   *Check:* MCP `whatsapp_biz_phone_numbers` lists the number as linked. List it through its Messaging
+   account: on 18 October, looking the number up directly returned nothing, though it was on that account. An
+   unregistered number fails sends with 133010 or 131045.
+4. **Subscribe the number's Messaging account to the Waldo app** (MCP `whatsapp_biz_subscribe_webhook`). The
+   app's callback alone delivers nothing. Meta sends webhooks only to apps subscribed to the Messaging account,
+   which holds the subscription.
    *Check:* MCP `whatsapp_biz_onboarding_status`, given the number's `phone_number_id`, reports the account
-   subscription done, and a message to the number shows `POST /whatsapp/webhook 200` in the Worker's tail.
-5. **Give the system user `waldo-staging` full access to both of the number's accounts** (owner, Business
-   Settings), the WhatsApp account and the Messaging account. The existing token picks the access up.
-   *Check:* sends stop failing with `(#10) Viewer cannot access the provided Paid Message Account`.
+   subscription done. A message to the number then shows a request to `/whatsapp/webhook` answered 200 in
+   the Worker's tail.
+5. **Give the system user `waldo-staging` full control of both of the number's accounts** (owner, in Business
+   Settings): its WhatsApp account and its Messaging account.
+   *Check:* Business Settings lists `waldo-staging` with full control on both. After step 6, a send refused
+   with code 10, "(#10) Viewer cannot access the provided Paid Message Account", means this step is incomplete.
 6. **Switch the Worker to the number** (owner sets the `WHATSAPP_PHONE_NUMBER_ID` secret). The switch is
    all-or-nothing: every send reads that one secret (`whatsapp-webhook.ts:189-229`, `owner-do.ts:2474`).
    Before switching:
-   - **Unsubscribe the old number's account.** The webhook never compares an entry's
-     `metadata.phone_number_id` with the configured number (its only mention is the type at
-     `whatsapp-webhook.ts:61`). A message to any subscribed number is answered from the configured one, so
-     a tester writing to the old number would get the answer from the new one.
+   - **Unsubscribe the old number's Messaging account.** The owner does this; the Meta MCP has no tool to
+     remove a subscription.
+     - Why: the webhook never compares an entry's `metadata.phone_number_id` with the configured number. Its
+       only mention is the type at `whatsapp-webhook.ts:61`. A message to any subscribed number is answered
+       from the configured one, so a tester writing to the old number would get the answer from the new one.
+     - Exception: if the old and new numbers share a Messaging account, don't unsubscribe it, because that
+       cuts off both. The cross-answer risk then stays until the webhook compares numbers.
    - **Have each tester write to the new number first.** An owner's window record is kept per owner, not per
-     business number (`whatsapp-window.ts:20`), and survives the switch: `bindWhatsAppNumber` (`:223`)
-     clears it only when the owner's own number changes. Meta has no window open for the new pair, so
-     Waldo's first send to a tester who has not written is refused with 131047 and held.
+     business number (`whatsapp-window.ts:20`), and survives the switch. It is cleared only when the owner's
+     own number changes or the owner unlinks (`whatsapp-window.ts:223-226`, `owner-do.ts:1731`). Meta has no
+     window open for the new pair, so Waldo's first send to a tester who has not written is refused with
+     131047 and held.
 
-   *Rollback:* set the secret back to the previous number and re-subscribe its account.
-7. **Create and configure the knock template** on the number's Messaging account, per the
-   [template plan](REENGAGEMENT_TEMPLATE.md). Until it is configured, messages outside the window are held
-   without a knock.
+   *Check:* smoke test S2 to S4 pass from the new number.
+   *Rollback:* set the secret back to the previous number and re-subscribe its Messaging account.
+7. **Create the knock template after step 5, and configure it with step 6 or after it**, per the
+   [template plan](REENGAGEMENT_TEMPLATE.md). Review can take up to 24 hours. Until the template is
+   configured, messages outside the window are held without a knock.
 
 Meta's test number delivers only to the recipients on its allow-list (error 131030, observed 18 October),
 which is managed on the app's WhatsApp API testing page in the App Dashboard.
 
 ## Smoke test
 
-Run it after the chain, from a phone that is not the business number and is not the owner's. Watch the
-Worker with `npx wrangler tail waldo-runtime-staging --format json` (from `packages/runtime`), piped through a
-filter that prints only each request's path and status and the log fields named below. Never paste raw tail
-output anywhere shared: it carries request URLs and headers, and Meta's verification request carries the
-verify token in its query string.
+**The test phone.** It must not be the business number. Its number must be on file for exactly one test
+owner account, never the owner's own, and not linked yet. A phone that is on nobody's file gets the
+waitlist text instead of a link (`whatsapp-webhook.ts:35-39`): S2 and S3 still pass, but S5 cannot.
+
+**Watching the Worker.** Use a filter that drops query strings and keeps only WhatsApp log lines. From
+`packages/runtime`:
+
+```bash
+npx wrangler tail waldo-runtime-staging --format json | jq -c 'select((.event.request.url // "") | test("/whatsapp/")) | {path: (.event.request.url | sub("\\?.*"; "") | sub("^https?://[^/]+"; "")), status: .event.response.status, hops: [.logs[]?.message[0]? | select(type == "string" and test("\"hop\":\"whatsapp_"))]}'
+```
+
+Never paste raw tail output anywhere shared. It carries request URLs and headers, and Meta's verification
+request carries the verify token in its query string (`whatsapp-webhook.ts:151-153`).
 
 | Step | Do | Pass when | Evidence |
 | --- | --- | --- | --- |
 | S1 | Run MCP `whatsapp_biz_onboarding_status` with the number's id | Every step is done | The tool result |
-| S2 | From an unlinked phone, send `hi` | `POST /whatsapp/webhook 200`, then `{"hop":"whatsapp_text_first","ok":true,"replied":true}` | Tail |
+| S2 | From the test phone, send `hi` | A `/whatsapp/webhook` request answered 200, whose hops include `{"hop":"whatsapp_text_first","ok":true,"replied":true}` | Tail |
 | S3 | Nothing; same send | No `whatsapp_text_first` line with `"ok":false` follows | Tail. On failure, the line's `status` and `code` |
 | S4 | Nothing; same send | The link message arrives, and no `whatsapp_status_failed` line appears within 10 minutes | The phone. Delivered statuses are not logged |
 | S5 | Open the link, sign in, confirm, then send `hi` | Waldo answers as that owner's Waldo | The phone |
 | S6 | The knock | As in the template plan's live test | Tail and phone |
 
-The text-first reply is limited to 3 per sender per hour, and while a sent link is still pending, further
-texts get no reply for its 10 minutes (`whatsapp-webhook.ts:24-40`). That silence also follows a link whose
-send failed, a known gap. For repeat checks from one phone, send `waldo 000000`: a code that cannot redeem,
-answered with "That code did not work", whose refused send logs `whatsapp_link_code` with the Graph status and
-code (`:201-205`).
+**Limits on repeat checks.**
+- Texts from an unlinked phone are throttled before any reply logic, at 3 per hour
+  (`whatsapp-webhook.ts:24-40`). [inference] Texts that get no reply count too.
+- While a sent link is pending, further texts get no reply for its 10 minutes. That silence also follows a
+  link whose send failed, which is a known gap.
+- For a repeat check from a phone that is still unlinked, send `waldo 000000`. It is a code that cannot
+  redeem: Waldo answers "That code did not work", and a refused send logs `whatsapp_link_code` with the
+  Graph status and code (`:201-205`).
+- A linked phone's texts go to its owner instead (`:174-187`).
 
-**Stop rule.** Graph accepted a send (no `"ok":false` line) but within 10 minutes neither the message nor a
-`whatsapp_status_failed` line arrived? Then stop sending. Check WhatsApp Manager's overview for a restriction
-or billing banner instead; more sends add nothing.
+**Stop rule.** Graph accepted a send (no `"ok":false` line), but within 10 minutes neither the message nor a
+`whatsapp_status_failed` line arrived? Stop sending. Check WhatsApp Manager's overview for a restriction or
+billing banner instead; more sends add nothing.
 
 ## Diagnosis by code
 
 Codes come from [WhatsApp error codes](https://developers.facebook.com/documentation/business-messaging/whatsapp/support/error-codes)
-(updated 18 June 2026) unless marked as observed.
+(updated 18 June 2026) unless marked as observed or cited otherwise.
 
 | Code | Meaning | Where to look |
 | --- | --- | --- |
-| `ACCOUNT_NOT_APPROVED`, on registration | Messaging account restricted (observed) | Step 1 |
-| 10, 200 to 299 | Permission missing; observed as "(#10) Viewer cannot access the provided Paid Message Account" | Step 5 |
+| `ACCOUNT_NOT_APPROVED`, on registration | The Messaging account is restricted (observed) | Step 1 |
+| 133016 | Too many registration requests: registration is blocked for 72 hours (registration page) | Step 3; wait |
+| 10, 200 to 299 | Permission missing. Observed as "(#10) Viewer cannot access the provided Paid Message Account" | Step 5 |
 | 190 | Access token expired | The owner replaces `WHATSAPP_ACCESS_TOKEN` |
 | 131030 | Recipient not on the test number's allow-list (observed; not in Meta's table) | Test-number note |
 | 131042 | Payment method problem | Step 2 |
 | 131045, 133010 | Number not registered | Step 3 |
-| 131031, 368 | Account restricted or disabled for a policy violation. Seen on 18 October as a failed status on the test number while the business was unverified | Step 1, then WhatsApp Manager's account status. If it outlasts verification, Meta Business Support |
+| 131031 | Either the account is restricted or disabled for a policy violation, or data in the request, such as a two-step PIN, does not match the account. Seen on 18 October as a failed status on the test number | At registration: the PIN in step 3. At send: step 1, WhatsApp Manager's account status, and the AI-provider terms below as a competing cause; then Meta Business Support |
+| 368 | Account restricted or disabled for a policy violation | Meta Business Support |
 | 131026 | Undeliverable: not a WhatsApp number, terms not accepted, or an old app version | The recipient's phone |
 | 131047 | Window closed | Expected: Waldo holds the message and knocks |
 | 131049, 131050 | Marketing-template limit or opt-out | The knock was categorized as marketing; see the template plan |
@@ -116,23 +145,28 @@ Codes come from [WhatsApp error codes](https://developers.facebook.com/documenta
 
 ## Rules while testing
 
-- The owner sets and holds `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN` and the
-  registration PIN. None of them goes in chat, docs, tickets or logs.
-- Logs carry codes only: never phone numbers, message ids, business-scoped user ids or message text.
+- The owner sets and holds these four. None of them goes in chat, docs, tickets or logs:
+  - `WHATSAPP_ACCESS_TOKEN`;
+  - `WHATSAPP_APP_SECRET`;
+  - `WHATSAPP_VERIFY_TOKEN`;
+  - the registration PIN.
+- Logs carry error names and codes, never phone numbers, message ids, business-scoped user ids or message
+  text.
 - Every Meta write (subscription, registration, access, template) and every secret change or deploy needs the
   owner's yes for that action.
 - Message only people who have written to the number first.
 
 ## Risks the owner has accepted
 
-- Meta's terms of 15 January 2026 allow general-purpose AI assistants on the WhatsApp Business Platform only
-  in markets where Meta is legally required to; India is not among them
+- **AI assistants.** Meta's terms of 15 January 2026 allow general-purpose AI assistants on the WhatsApp
+  Business Platform only in markets where Meta is legally required to. India is not among them
   ([AI Providers pricing](https://developers.facebook.com/documentation/business-messaging/whatsapp/pricing/ai-providers),
   updated 15 October 2026). The owner accepted this risk on 16 and 18 October.
-- Since 1 October 2026 Meta charges for service messages beyond 1,000 per business number per month
+- **Service-message charges.** Since 1 October 2026, Meta charges for service messages beyond 1,000 per
+  business number per month
   ([Pricing](https://developers.facebook.com/documentation/business-messaging/whatsapp/pricing), updated
   30 September 2026). Each Waldo reply inside the window is a service message. If Meta treats Waldo as an AI
-  provider, that page's own policy governs service messages instead.
+  provider, the AI-provider page's own policy governs service messages instead.
 
 ## Proof limits
 
@@ -140,7 +174,8 @@ Seen on 18 October:
 - inbound messages to the test number reached staging;
 - Graph accepted sends;
 - errors #10 and 131030 appeared and were cleared;
-- after the logging deploy (`74dbb957`), a reply's failed delivery status carried 131031.
+- after the logging deploy (`74dbb957`), a reply's failed delivery status carried 131031;
+- Business Settings showed the test number Connected and its Messaging account Approved.
 
 Not yet seen on any number:
 - a delivered Waldo message;
@@ -148,4 +183,4 @@ Not yet seen on any number:
 - a knock;
 - a linked owner's conversation over WhatsApp.
 
-Not yet known whether 131031 clears once the business is verified. The next smoke test answers it.
+Two things are not yet known: why the test number gets 131031, and whether verification clears it.

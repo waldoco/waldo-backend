@@ -41,15 +41,21 @@ detail to make it specific, so this risk is real.
 
 Accept the template only if it reads back APPROVED with category UTILITY. As marketing, a knock counts against
 WhatsApp's per-user marketing limits (131049), stops for anyone who has turned off marketing messages from
-Waldo (131050), and is charged at the marketing rate. If that happens, edit and resubmit the template, or
-request a category review in Business Support within 60 days.
+Waldo (131050), and is charged at the marketing rate. If that happens, you have two options. Both are
+described on the same categorization page:
+- edit the template in WhatsApp Manager and resubmit it;
+- within 60 days, request a category review. Start it in WhatsApp Manager, which sends you to Business
+  Support's Template Category Updates.
 
 ## Steps
 
 1. **Prerequisites.**
-   - The business is verified and Waldo's number is registered on its Messaging account (setup chain steps 1
-     to 5 in [the setup page](NUMBER_SETUP_AND_SMOKE_TEST.md)). Templates belong to a Messaging account, so
-     a template on the test account does not exist for Waldo's number.
+   - Steps 1 to 5 of the setup chain in [the setup page](NUMBER_SETUP_AND_SMOKE_TEST.md) are done: the
+     business is verified, and Waldo's number is registered and set up on its Messaging account.
+     Templates belong to a Messaging account, so a template on the test account does not exist for Waldo's
+     number.
+   - The template is created at that point and configured with the switch (setup step 6) or after it, as
+     setup step 7 says.
    - The opt-in wording is fixed (below).
 2. **Create** it in WhatsApp Manager under Message templates, or with Meta MCP `whatsapp_biz_create_template`.
    *Check:* MCP `whatsapp_biz_list_templates` on that account lists `waldo_update_ready`.
@@ -67,8 +73,11 @@ request a category review in Business Support within 60 days.
    1. Let 24 hours pass with no message from the test phone.
    2. Have Waldo send something after that, such as a reminder set to fire once the window has closed.
 
-   *Pass:* the tail shows `{"hop":"whatsapp_window","ok":true,"held":true,"knocked":true}` and the template
-   arrives. After a reply, the held message arrives with no `whatsapp_held` failure line.
+   *Pass:*
+   - the tail shows `{"hop":"whatsapp_window","ok":true,"held":true,"knocked":true}`;
+   - the template arrives;
+   - after a reply, the held message arrives on the phone. A reminder held in the outbox is released without a
+     `whatsapp_held` line (`whatsapp-window.ts:205`), so the phone is the evidence.
    *Falsifiers:*
    - `template_unconfigured`: the configuration is not deployed.
    - 132001: the name, language or account does not match.
