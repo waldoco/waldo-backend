@@ -215,13 +215,7 @@ export class TelegramFinalOutbox {
       await this.save(latest);
       return true;
     };
-    const markSettled = async (row: FinalRecord): Promise<void> => {
-      const latest = this.records();
-      const current = latest.find(other => other.id === row.id);
-      if (!current || current.status !== row.status) return;
-      current.settled = true; row.settled = true;
-      await this.save(latest);
-    };
+    const markSettled = (row: FinalRecord) => this.markSettled(row);
     // Reconcile an ACK persisted before lifecycle bookkeeping without sending again. An accepted record waits for its report.
     for (const row of this.records()) if (row.status !== 'pending' && row.status !== 'accepted' && !row.settled && selected(row)) {
       await options.settled(row); await markSettled(row);
@@ -331,6 +325,21 @@ export class TelegramFinalOutbox {
     if (!(await saveCurrentRow())) return;
     await options.settled(row);
     if (ended() !== 'pending' && ended() !== 'accepted') { row.settled = true; await saveCurrentRow(); }
+  }
+  private async markSettled(row: FinalRecord): Promise<void> {
+    const latest = this.records();
+    const current = latest.find(other => other.id === row.id);
+    if (!current || current.status !== row.status) return;
+    current.settled = true; row.settled = true;
+    await this.save(latest);
+  }
+  // Settles, by id, records that ended outside a drain pass (an unlink retired them). It sends nothing and sweeps nothing, so it
+  // is safe beside a pass that has a send in flight.
+  async settleEnded(ids: readonly string[], settled: (record: FinalRecord) => Promise<void>): Promise<void> {
+    for (const row of this.records()) {
+      if (!ids.includes(row.id) || row.settled || row.status === 'pending' || row.status === 'accepted' || row.status === 'attempting') continue;
+      await settled(row); await this.markSettled(row);
+    }
   }
   // Every part went out to a surface that reports arrival later: the record waits for that report, or for arrivalBy.
   private accept(row: FinalRecord): void {

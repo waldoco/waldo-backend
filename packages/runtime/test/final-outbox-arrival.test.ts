@@ -148,6 +148,30 @@ describe('the surface is unlinked or its number replaced', () => {
   });
 });
 
+describe('settling the records an unlink retired', () => {
+  it('settles only them, and leaves a send another pass has in flight alone', async () => {
+    const kv = store(), clock = { now: 1_000 };
+    await drained(kv, clock, { id: 'retired' });
+    const outbox = new TelegramFinalOutbox(kv, () => clock.now);
+    await outbox.enqueue({ ...base, id: 'live', payload: { chat_id: 7, text: 'For another surface.' }, ownerSubject: '7' });
+    clock.now += 300;
+    let release!: () => void, reached!: () => void;
+    const inFlight = new Promise<void>(resolve => { reached = resolve; });
+    const surface = accepting(clock);
+    const pass = outbox.drain({ ...surface.delivery, send: async payload => { reached(); await new Promise<void>(go => { release = go; }); return surface.delivery.send(payload); } });
+    // The owner unlinks WhatsApp while that pass waits on its send.
+    await inFlight;
+    expect(retireSurfaceRecords(kv, addressed)).toEqual(['retired']);
+    const settled = vi.fn(async () => undefined);
+    await new TelegramFinalOutbox(kv, () => clock.now).settleEnded(['retired'], settled);
+    expect(settled).toHaveBeenCalledWith(expect.objectContaining({ id: 'retired', status: 'quarantined', reason: 'surface_unlinked' }));
+    release();
+    await pass;
+    expect(rows(kv)).toEqual([{ id: 'retired', status: 'quarantined', reason: 'surface_unlinked' }, { id: 'live', status: 'accepted' }]);
+    expect(new TelegramFinalOutbox(kv).records().find(row => row.id === 'retired')!.settled).toBe(true);
+  });
+});
+
 describe('a full outbox', () => {
   it('refuses a new record with a reason and evicts none that is still waiting for its report', async () => {
     const kv = store(), clock = { now: 1_000 };

@@ -363,7 +363,8 @@ describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }
       // What was held for the old chat was discarded with the unlink, and the reminder waiting for it ended unsent with it.
       expect(held()).toEqual([]);
       expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'blocked', reason: 'surface_unlinked' }]);
-      expect(ledger().runs).toEqual([{ outcome: 'quarantined', delivery: 'failed' }]);
+      // Never sent, so it settles as work that stopped before any delivery, not as an unconfirmed one.
+      expect(ledger().runs).toEqual([{ outcome: 'ok', delivery: null }]);
     });
   });
 

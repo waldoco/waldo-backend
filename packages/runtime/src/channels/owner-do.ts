@@ -1647,7 +1647,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
                 const name=this.ctx.storage.kv.get<string>('do_name'),done=name?await consoleAuth(this.env)?.unlinkWhatsApp?.(name)===true:false;
                 if(done){const {kv}=this.ctx.storage;let retired:readonly string[]=[];this.ctx.storage.transactionSync(()=>{retired=clearWhatsAppNumber(kv);kv.delete('whatsapp_subject');});
                   // The old chat's outbox records ended in that same step. No WhatsApp pass runs for them again, so their jobs settle now.
-                  if(retired.length)await runtime.finalOutbox.drain({...routedDelivery([]),select:record=>retired.includes(record.id),settled:runtime.settleFinal}).catch(()=>{console.error('whatsapp unlink settlement deferred');});
+                  if(retired.length)await runtime.finalOutbox.settleEnded(retired,runtime.settleFinal).catch(()=>{console.error('whatsapp unlink settlement deferred');});
                   this.runtimes={};}
                 return whatsappUnlinkReceipt(done);
               }
@@ -3664,7 +3664,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (record.heartbeat.runId && runs.byId(record.heartbeat.runId)?.status === 'running') runs.finish(record.heartbeat.runId, delivered ? 'completed' : 'failed', delivered ? 'heartbeat sent' : 'heartbeat delivery unconfirmed');
       }
       if (record.reminder) {
-        const cancelled = record.status === 'blocked' && book.note(record.reminder.id) === null;
+        // Never sent: cancelled by the owner, or its WhatsApp number unlinked first. No delivery was attempted.
+        const unlinked = record.status === 'blocked' && record.reason === 'surface_unlinked';
+        const cancelled = record.status === 'blocked' && (book.note(record.reminder.id) === null || unlinked);
         if (record.reminder.schedulerRunId) {
           if (cancelled) scheduler.settleCancelled(record.reminder.schedulerRunId);
           else scheduler.settleDelivery(record.reminder.schedulerRunId, delivered);
@@ -3672,7 +3674,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (delivered) {
           if (record.reminder.once) this.ctx.storage.sql.exec('DELETE FROM reminder_notes WHERE id = ?', record.reminder.id);
           runs.finish(record.reminder.runId, 'completed', 'reminder sent');
-        } else if (cancelled) runs.finish(record.reminder.runId, 'stopped', 'reminder cancelled before delivery');
+        } else if (cancelled) runs.finish(record.reminder.runId, 'stopped', unlinked ? 'reminder not sent; its WhatsApp number was unlinked' : 'reminder cancelled before delivery');
         else runs.finish(record.reminder.runId, 'failed', 'reminder delivery unconfirmed');
       }
       // Never mark a queued or ambiguous turn resolved. Reaction itself is best effort.
