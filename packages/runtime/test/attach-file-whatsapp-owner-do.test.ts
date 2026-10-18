@@ -39,9 +39,10 @@ beforeEach(() => { model.requests = []; });
 
 type GraphCall = { type: string; text?: string; document?: { id: string; filename: string }; upload?: { type: string; filename: string; size: number } };
 type Owner = Readonly<{ state: DurableObjectState; graph: GraphCall[]; attachEffects(): Array<{ state: string; receipt?: { provider_id: string } }> }>;
-// One owner asks for the plan in a message sent `ageMs` ago, through the real admission path. unlinkOnFileRead unlinks
-// WhatsApp when the file's bytes are read after the attach was queued (the delivery step), closing the run mid-delivery.
-const whatsappOwner = (name: string, ageMs: number, check: (owner: Owner) => void, unlinkOnFileRead = false) =>
+// One owner asks for the plan in a message sent `ageMs` ago, through the real admission path. At the delivery step, when the
+// file's bytes are read after the attach was queued, 'unlink' unlinks WhatsApp, closing the run mid-delivery, and 'hold' puts
+// an earlier message in the window layer's custody, as when the window closed and reopened during the turn.
+const whatsappOwner = (name: string, ageMs: number, check: (owner: Owner) => void, onFileRead?: 'unlink' | 'hold') =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const bytes = new Map<string, Uint8Array>();
     const graph: GraphCall[] = [];
@@ -51,7 +52,11 @@ const whatsappOwner = (name: string, ageMs: number, check: (owner: Owner) => voi
       SUPABASE_PROJECT_URL: 'https://signed-metadata.invalid', SUPABASE_PUBLISHABLE_KEY: 'fictional-publishable', WALDO_ROUTER_HMAC_SECRET: 'fictional-router-secret',
       ARTIFACTS: {
         put: async (key: string, value: Uint8Array) => { bytes.set(key, value.slice()); return null; },
-        get: async (key: string) => { if (unlinkOnFileRead && outputOf('attach')) state.storage.kv.put('whatsapp_unlinked', true); const value = bytes.get(key); return value ? { arrayBuffer: async () => value.slice().buffer } : null; },
+        get: async (key: string) => {
+          if (onFileRead === 'unlink' && outputOf('attach')) state.storage.kv.put('whatsapp_unlinked', true);
+          if (onFileRead === 'hold' && outputOf('attach') && ![...state.storage.kv.list({ prefix: WA_HELD_PREFIX })].length) state.storage.kv.put(`${WA_HELD_PREFIX}000000000001`, { heldAt: Date.now(), body: { chat_id: Number(SUBJECT), text: 'An earlier message.' } }), state.storage.kv.put('wa_held_seq', 1);
+          const value = bytes.get(key); return value ? { arrayBuffer: async () => value.slice().buffer } : null;
+        },
         delete: async (key: string) => { bytes.delete(key); },
       } as unknown as R2Bucket,
     };
@@ -110,9 +115,19 @@ it('a message answered after the 24-hour window closed: the reply is held, no by
   });
 });
 
+it('inside the window, a message still held keeps the file behind it: the link is held after it and nothing leaves ahead of it', async () => {
+  await whatsappOwner('attach-file-whatsapp-behind-held', 0, ({ state, graph, attachEffects }) => {
+    expect(graph.map(call => call.type)).toEqual(['text']);
+    expect(graph[0]!.text).toMatch(/^Here is the plan; the file follows\./);
+    const held = [...state.storage.kv.list<{ body: { text: string } }>({ prefix: WA_HELD_PREFIX })].map(([, record]) => record.body.text);
+    expect(held).toEqual(['An earlier message.', expect.stringMatching(/^Here is plan\.txt\. Open it here: https:\/\/waldo\.example\/console\/workspace\/file\?id=[^&]+&revision=1$/)]);
+    expect(attachEffects()).toEqual([expect.objectContaining({ state: 'rejected' })]);
+  }, 'hold');
+});
+
 it('a run closed while the file is being read sends no bytes, records the file as not sent, and tells no unlinked sender', async () => {
   await whatsappOwner('attach-file-whatsapp-closed-run', 0, ({ graph, attachEffects }) => {
     expect(graph).toEqual([{ type: 'text', text: expect.stringMatching(/^Here is the plan; the file follows\./) }]);
     expect(attachEffects()).toMatchObject([{ state: 'rejected' }]);
-  }, true);
+  }, 'unlink');
 });
