@@ -152,7 +152,7 @@ import { appApprovalsRequest } from './app-approvals';
 import { WHATSAPP_LINK_CONFIRM_ACTION, whatsappLinkConfirmAction, whatsappLinkConfirmPage } from './whatsapp-link-console';
 import { WHATSAPP_LINK_PATH, whatsappLinkDirectory } from '../identity/whatsapp-link';
 import { WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
-import { clearWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
+import { bindWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
 import { sendMessageHandler } from '../tools/live/messaging';
@@ -1265,15 +1265,33 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // replays. Admission order is promised, not sender chronology (Meta does not order redeliveries).
   private readonly liveWhatsapp = new Set<string>();
   private readonly whatsappInflight = new Set<Promise<void>>();
+  // Whether the directory has this sender as this owner's WhatsApp number: true or false, or null when it could not answer.
+  // Without a directory there is nothing to reconcile against, so a sender other than the bound one is not this owner's.
+  private async whatsappSenderOwned(subject: string): Promise<boolean | null> {
+    const name = this.ctx.storage.kv.get<string>('do_name'), auth = consoleAuth(this.env);
+    if (!name || !auth) return false;
+    try { return await auth.assertChannelPresence(name, 'whatsapp', subject); }
+    catch (error) { console.log(JSON.stringify({ hop: 'whatsapp_reconcile', ok: false, error: error instanceof Error ? error.name : 'unknown' })); return null; }
+  }
   private async whatsappAdmit(request: Request, body: string): Promise<Response> {
     const subject = request.headers.get('x-waldo-whatsapp-subject') ?? '';
     if (!/^\d{6,15}$/.test(subject)) return new Response('forbidden', { status: 403 });
     const { kv } = this.ctx.storage;
-    const bound = kv.get<string>('whatsapp_subject');
-    if (bound !== undefined && bound !== subject) return new Response('forbidden', { status: 403 });
+    // The directory decides which number is this owner's; the bound subject is this object's copy of that answer, and it goes
+    // stale when a number is relinked without this object hearing (a console code redeemed from the new number, a confirm
+    // whose answer was lost). A sender other than the bound one is checked against the directory, outside any transaction:
+    // this owner's number now → rebound below; another owner's or nobody's → refused; no answer → 503, so Meta retries and
+    // a number that is this owner's is never refused.
+    const seen = kv.get<string>('whatsapp_subject');
+    let reconciled = false;
+    if (seen !== undefined && seen !== subject) {
+      const owned = await this.whatsappSenderOwned(subject);
+      if (owned === null) return new Response('unavailable', { status: 503 });
+      if (!owned) return new Response('forbidden', { status: 403 });
+      reconciled = true;
+    }
     let value: { messages?: { id?: string; from?: string; type?: string; text?: { body?: string }; audio?: { id?: string; mime_type?: string; voice?: boolean } }[] };
     try { value = JSON.parse(body); } catch { return new Response('bad request', { status: 400 }); }
-    if (bound === undefined) { kv.put('whatsapp_subject', subject); this.runtimes = {}; }
     // The same origin and timezone persistence the other owner paths do after the identity checks: a WhatsApp-only owner's
     // links and clock come from here. No network work (the Telegram webhook re-registration stays on the Telegram path).
     const origin = request.headers.get('x-waldo-origin'); if (origin) kv.put('origin', origin);
@@ -1282,13 +1300,26 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // The wake is armed before the record exists: a spurious alarm finds nothing, a missing one would strand a record.
     await armWhatsappPendingWake(this.ctx.storage, Date.now() + WHATSAPP_PENDING_CHECK_MS);
     let claimed: NonNullable<typeof value.messages> = [];
+    let changed = false, rebound = false;
     this.ctx.storage.transactionSync(() => {
+      // The binding is decided again here, against what was read before the awaits: the first admission binds, a reconciled
+      // one replaces the number it saw, and a binding that moved meanwhile (a confirm, an unlink, a concurrent rebind to
+      // another number) sends this one back to be checked afresh. A concurrent admission from the same number finds it
+      // already bound and clears nothing.
+      const current = kv.get<string>('whatsapp_subject');
+      if (current !== subject) {
+        if (current !== seen || (seen !== undefined && !reconciled)) { changed = true; return; }
+        bindWhatsAppNumber(kv, subject);
+        rebound = true;
+      }
       claimed = claimNewWhatsAppMessages(kv, value.messages ?? [], Date.now());
       if (!claimed.length) return;
       recordWhatsAppInbound(kv, claimed, Date.now());
       kv.put(pendingKey, { subject, admittedAt: Date.now(), ids: claimed.flatMap(m => typeof m.id === 'string' && m.id !== '' ? [m.id] : []) } satisfies WhatsappPending);
       kv.put(WHATSAPP_PENDING_DUE_KEY, Date.now() + WHATSAPP_PENDING_CHECK_MS);
     });
+    if (changed) return new Response('unavailable', { status: 503 });
+    if (rebound) this.runtimes = {};
     if (!claimed.length) return new Response('ok');
     this.liveWhatsapp.add(pendingKey);
     const work = this.runWhatsappClaimed(pendingKey, claimed, subject).catch(() => undefined).finally(() => {
@@ -1504,10 +1535,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (form.get('action') === WHATSAPP_LINK_CONFIRM_ACTION) return whatsappLinkConfirmAction(form, session.csrf, this.ctx.storage.kv.get<string>('do_name') ?? '', whatsappLinkDirectory(this.env), subject => {
         // A new number starts clean: nothing held for the old one may reach it.
         const { kv } = this.ctx.storage;
-        this.ctx.storage.transactionSync(() => {
-          if (kv.get<string>('whatsapp_subject') !== subject) clearWhatsAppNumber(kv);
-          kv.put('whatsapp_subject', subject); kv.delete('whatsapp_unlinked');
-        });
+        this.ctx.storage.transactionSync(() => { bindWhatsAppNumber(kv, subject); kv.delete('whatsapp_unlinked'); });
         this.runtimes = {};
       });
       if (form.get('action') === 'device.pair' || form.get('action') === 'device.revoke' || form.get('action') === 'device.query' || form.get('action') === 'device.notify') return deviceConsoleAction(form, session.csrf, this.ctx.storage.kv.get<string>('do_name') ?? '', deviceDirectory(this.env), this.env.DEVICE_BRIDGE_DO, request.headers.get('accept') ?? '');
@@ -1634,7 +1662,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
                 // and sends resolve no owner, and what was held for that chat is discarded with it. A refused unlink keeps
                 // the binding, since the old number still routes here.
                 const name=this.ctx.storage.kv.get<string>('do_name'),done=name?await consoleAuth(this.env)?.unlinkWhatsApp?.(name)===true:false;
-                if(done){const {kv}=this.ctx.storage;this.ctx.storage.transactionSync(()=>{clearWhatsAppNumber(kv);kv.delete('whatsapp_subject');});this.runtimes={};}
+                if(done){const {kv}=this.ctx.storage;this.ctx.storage.transactionSync(()=>bindWhatsAppNumber(kv,null));this.runtimes={};}
                 return whatsappUnlinkReceipt(done);
               }
               if(action.action==='session.signout'||action.action==='session.signout.all'){

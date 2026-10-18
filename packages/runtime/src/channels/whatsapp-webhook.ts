@@ -136,9 +136,10 @@ export const handleWhatsAppWebhook = async (
   // Admission before the ack: a payload is acknowledged only after each owner's Durable Object has durably admitted it.
   // An admission the owner could not take for now (unreachable, or a 5xx) answers 503, so Meta redelivers (its non-200
   // retry); the DO dedupes by wamid, so a redelivery of a payload that did land is not run twice. A definite refusal is
-  // acknowledged and logged, since Meta would otherwise redeliver it for 7 days: 400 (a malformed batch), 403 (the sender is
-  // not the number this owner has bound, or the name does not address it), 404 (the object is not an owner). The message
-  // is not handled. Any other answer may be temporary and answers 503. Link-code redemption stays deferred: it is not a message turn.
+  // acknowledged and logged, since Meta would otherwise redeliver it for 7 days: 400 (a malformed batch), 403 (the
+  // directory no longer has the sender as this owner's number, or the name does not address it), 404 (the object is not an
+  // owner). The message is not handled. Any other answer may be temporary and answers 503. Link-code redemption stays
+  // deferred: it is not a message turn.
   let unavailable = false;
   const deferred: Promise<unknown>[] = [];
   for (const { sender, value } of bySender(payload)) {

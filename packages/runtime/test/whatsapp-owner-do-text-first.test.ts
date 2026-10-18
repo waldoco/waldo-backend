@@ -21,9 +21,10 @@ it('a confirmed text-first link rebinds the WhatsApp subject; GET and a forged c
     const cookie = `${CONSOLE_COOKIE}=${token}`;
     const { csrf } = (await access.session(token))!;
     const rpcs: string[] = [];
-    const graph = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const graph = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const fn = String(input).split('/rpc/')[1] ?? '';
       rpcs.push(fn);
+      if (fn === 'assert_channel_presence') return Response.json((JSON.parse(String(init?.body)) as { p_subject: string }).p_subject === NEW);
       return Response.json(fn === 'presence_link_request_subject' ? NEW : fn === 'consume_presence_link_request' ? 'linked' : true);
     });
     const instance = new OwnerDO(state, {
@@ -116,5 +117,108 @@ it('confirming a new number clears what was held for the old one, so nothing hel
       expect([...kv.list({ prefix: 'wa_held:' })]).toEqual([]);
       expect(kv.get('wa_last_inbound_ms')).toBeTypeOf('number');
     } finally { await state.storage.deleteAlarm(); turn.mockRestore(); graph.mockRestore(); log.mockRestore(); }
+  });
+});
+
+// The directory is the authority for which number is this owner's; the bound subject is this object's cache of it. A message
+// from another number is reconciled against the directory at admission, so a relink the object never heard about (a console
+// code redeemed from the new number, a confirm whose response was lost) does not leave the new number refused.
+const reconcileHarness = async (name: string, presence: (subject: string) => Promise<Response>,
+  work: (ctx: { instance: OwnerDO; kv: DurableObjectState['storage']['kv']; sent: string[]; turn: ReturnType<typeof vi.fn>; admit: (subject: string, id: string) => Promise<Response> }) => Promise<void>) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    const kv = state.storage.kv, now = Date.now();
+    kv.put('do_name', `do-${name}`);
+    kv.put('whatsapp_subject', OLD);
+    kv.put('wa_last_inbound_ms', now - 60_000);
+    kv.put('wa_held:000000000001', { heldAt: now - 30_000, body: { chat_id: Number(OLD), text: 'held for A only' } });
+    kv.put('wa_knocked_for', now - 60_000);
+    const sent: string[] = [];
+    const net = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes('graph.facebook.com')) { sent.push(String(init?.body)); return Response.json({ messages: [{ id: 'wamid.out' }], contacts: [{ wa_id: NEW }] }); }
+      if (url.endsWith('/rpc/assert_channel_presence')) return presence((JSON.parse(String(init?.body)) as { p_subject: string }).p_subject);
+      return Response.json(true);
+    });
+    const instance = new OwnerDO(state, {
+      ...env, TELEGRAM_BOT_TOKEN: 'fictional-telegram-token', OPENAI_API_KEY: 'fictional-model-key',
+      WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id',
+      SUPABASE_PROJECT_URL: 'https://db.example', SUPABASE_PUBLISHABLE_KEY: 'fictional-publishable', WALDO_ROUTER_HMAC_SECRET: 'fictional-router',
+    });
+    const turn = vi.spyOn(instance as unknown as { turn(): Promise<void> }, 'turn').mockImplementation(async () => undefined);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const admit = (subject: string, id: string) => instance.fetch(new Request('https://telegram-owner/whatsapp-admit', {
+      method: 'POST', headers: { 'x-waldo-whatsapp-subject': subject },
+      body: JSON.stringify({ messages: [{ from: subject, id, timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: 'hi' } }] }),
+    }));
+    try {
+      await work({ instance, kv, sent, turn: turn as never, admit });
+      await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+    } finally { await state.storage.deleteAlarm(); turn.mockRestore(); net.mockRestore(); log.mockRestore(); }
+  });
+};
+
+it('after a console code relinks to B while the object is bound to A, B is admitted, A\'s held state is gone, and A is refused', async () => {
+  // The directory now has B as this owner's number (redeem_link_code unlinked A); the object still holds A.
+  await reconcileHarness('wa-reconcile-code', async subject => Response.json(subject === NEW), async ({ instance, kv, sent, turn, admit }) => {
+    expect((await admit(NEW, 'wamid.b1')).status).toBe(200);
+    expect(kv.get('whatsapp_subject')).toBe(NEW);
+    expect([...kv.list({ prefix: 'wa_held:' })]).toEqual([]);
+    expect(kv.get('wa_knocked_for')).toBeUndefined();
+    await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+    expect(turn).toHaveBeenCalled();
+    expect(sent.filter(body => body.includes('for A only'))).toEqual([]);
+    const before = turn.mock.calls.length;
+    expect((await admit(OLD, 'wamid.a1')).status).toBe(403);
+    expect(kv.get('whatsapp_subject')).toBe(NEW);
+    expect(kv.get('wamid:wamid.a1')).toBeUndefined();
+    expect(turn.mock.calls.length).toBe(before);
+  });
+});
+
+it('a directory that cannot answer on a mismatch gets 503, never 403, and changes nothing', async () => {
+  await reconcileHarness('wa-reconcile-down', async () => new Response('unavailable', { status: 503 }), async ({ kv, turn, admit }) => {
+    expect((await admit(NEW, 'wamid.b1')).status).toBe(503);
+    expect(kv.get('whatsapp_subject')).toBe(OLD);
+    expect([...kv.list({ prefix: 'wa_held:' })]).toHaveLength(1);
+    expect(kv.get('wamid:wamid.b1')).toBeUndefined();
+    expect(turn).not.toHaveBeenCalled();
+  });
+});
+
+it('a concurrent redelivery from the new number does not wipe the window the first admission opened', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let reads = 0;
+  // Both admissions read the directory before either rebinds.
+  await reconcileHarness('wa-reconcile-race', async subject => { reads += 1; if (reads === 2) release(); await gate; return Response.json(subject === NEW); },
+    async ({ instance, kv, turn, admit }) => {
+      // Meta redelivers the same message while the first delivery is still being admitted: the second claims nothing, so a
+      // rebind that cleared again would leave B's window closed with nothing to reopen it.
+      const [first, second] = await Promise.all([admit(NEW, 'wamid.b1'), admit(NEW, 'wamid.b1')]);
+      expect([first.status, second.status]).toEqual([200, 200]);
+      expect(reads).toBe(2);
+      expect(kv.get('whatsapp_subject')).toBe(NEW);
+      expect(kv.get('wa_last_inbound_ms')).toBeGreaterThan(Date.now() - 60_000);
+      await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+      expect(turn).toHaveBeenCalledTimes(1);
+    });
+});
+
+it('a binding that moves while the directory is read sends the admission back to be checked again, and records nothing', async () => {
+  let release!: () => void, reading!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { reading = resolve; });
+  await reconcileHarness('wa-reconcile-moved', async subject => { reading(); await gate; return Response.json(subject === NEW); }, async ({ kv, turn, admit }) => {
+    const pendingAdmit = admit(NEW, 'wamid.b1');
+    await started;
+    // A confirm (or an unlink) lands meanwhile and binds a third number.
+    kv.put('whatsapp_subject', '15550003333');
+    const inbound = kv.get('wa_last_inbound_ms');
+    release();
+    expect((await pendingAdmit).status).toBe(503);
+    expect(kv.get('whatsapp_subject')).toBe('15550003333');
+    expect(kv.get('wamid:wamid.b1')).toBeUndefined();
+    expect(kv.get('wa_last_inbound_ms')).toBe(inbound);
+    expect(turn).not.toHaveBeenCalled();
   });
 });

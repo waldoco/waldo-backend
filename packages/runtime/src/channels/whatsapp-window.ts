@@ -211,6 +211,15 @@ export const clearWhatsAppNumber = (kv: Kv): void => {
   for (const key of [WA_LAST_INBOUND_KEY, KNOCKED_KEY, REFUSED_KEY]) kv.delete(key);
 };
 
+// Binds this owner's WhatsApp to a number, or unbinds it (null): a confirmed link, a reconcile at admission, an unlink.
+// Whatever belonged to another number goes first; binding the number already bound changes nothing. Storage only: callers
+// run it inside the transactionSync that decides the binding, and rebuild their runtimes after.
+export const bindWhatsAppNumber = (kv: Kv, subject: string | null): void => {
+  if (subject !== null && kv.get<string>('whatsapp_subject') === subject) return;
+  clearWhatsAppNumber(kv);
+  if (subject === null) kv.delete('whatsapp_subject'); else kv.put('whatsapp_subject', subject);
+};
+
 // Runs when the owner's reply has reopened the window, before that reply's turn, so the turn's context
 // matches what the owner has seen. A closed window means the pass does nothing: sending would only re-hold.
 // Each record is removed before its send (at most once, like the wamid claim), and what the send answers decides:
