@@ -1,4 +1,5 @@
-import { literalTextRedactor } from '@waldo/contracts';
+import { literalTextRedactor, type StandingGate } from '@waldo/contracts';
+import type { CardId } from '../prompt/day-cards';
 import type { RunEffectScope } from './run-effect-scope';
 import { TelegramRejection, TELEGRAM_MESSAGE_MAX_CHARS, sendTelegramFinal, splitTelegramText, type TelegramFinalPayload } from './telegram-api';
 import { redactSecretUrls } from './egress-guard';
@@ -35,6 +36,11 @@ export type FinalRecord = {
   calendarPrep?: CalendarPrepReceipt;
   reaction?: { message_id: number; emoji: string };
   reminder?: { id: string; occurrence: number; runId: string; schedulerRunId: string | null; once: boolean };
+  // A day card on a surface where sends can wait: once it is delivered the day plan records it sent and folds the updates
+  // written up to foldUpTo, the time the card was written.
+  dayCard?: { day: string; card: CardId; foldUpTo: number };
+  // A standing order's report: the order's run finishes when the report is delivered, or when it ends unsent.
+  standingOrder?: { runId: string; gate: StandingGate };
 };
 type Kv = Pick<DurableObjectStorage['kv'], 'get' | 'put'>;
 // What a surface's acknowledgement proves was sent. 'held' is a surface that kept the text for later instead of sending it.
@@ -99,7 +105,10 @@ export class TelegramFinalOutbox {
       ? { ...r, payload: { chat_id: r.payload.chat_id, text: '' }, parts: [], receiptUrls: [], reason: r.status === 'quarantined' ? 'expired_ambiguous_metadata' : r.reason } : r);
     await this.save(rows);
   }
-  async enqueue(input: Omit<FinalRecord, 'digest' | 'status' | 'dueAt' | 'createdAt' | 'attempts'>): Promise<void> {
+  // `supersedes` names the waiting records the new one replaces (a newer report of the same order). In the same save, each of
+  // them that never went out (pending, no part delivered) ends blocked as superseded and settles on the next drain. A record
+  // any part of which reached the provider is never touched: it was sent.
+  async enqueue(input: Omit<FinalRecord, 'digest' | 'status' | 'dueAt' | 'createdAt' | 'attempts'>, options?: Readonly<{ supersedes?(record: FinalRecord): boolean }>): Promise<void> {
     input = { ...input, payload: guardedPayload(input.payload) };
     const hash = await digest(input);
     let rows = this.records();
@@ -114,6 +123,9 @@ export class TelegramFinalOutbox {
       const index = rows.findIndex(r => (r.status === 'delivered' || r.status === 'blocked' || r.reason === 'expired_ambiguous_metadata') && r.settled);
       if (index < 0) throw new Error('final outbox capacity');
       rows = rows.filter((_, i) => i !== index);
+    }
+    for (const row of rows) if (row.status === 'pending' && !row.deliveredParts && options?.supersedes?.(row)) {
+      row.status = 'blocked'; row.reason = 'superseded'; row.settled = false;
     }
     rows.push({ ...input, payload: { ...input.payload }, parts: payloadParts(input.payload), digest: hash, status: 'pending', dueAt: this.now() + 250, createdAt: this.now(), attempts: 0 });
     await this.save(rows);
@@ -308,3 +320,6 @@ const redactSourceFinalEntries = (kv: Kv, texts: readonly string[], marker: stri
 };
 export const redactMailFollowupEntries = (kv: Kv, texts: readonly string[], marker: string, scope?: RunEffectScope) => redactSourceFinalEntries(kv, texts, marker, scope, row => !!row.mailFollowup);
 export const redactCalendarPrepEntries = (kv: Kv, texts: readonly string[], marker: string, scope?: RunEffectScope) => redactSourceFinalEntries(kv, texts, marker, scope, row => !!row.calendarPrep);
+// Day cards and standing-order reports are written from the calendar, mail, ledger and conversation, and they can wait here
+// for the owner (WhatsApp outside its window), so owner forget reaches them the same way.
+export const redactJobReportEntries = (kv: Kv, texts: readonly string[], marker: string, scope?: RunEffectScope) => redactSourceFinalEntries(kv, texts, marker, scope, row => !!row.dayCard || !!row.standingOrder);

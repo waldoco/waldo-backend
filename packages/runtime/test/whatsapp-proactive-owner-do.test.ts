@@ -289,8 +289,9 @@ describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }
       const { reached, release } = stall('one');
       await replyStarted();
       await reached;
-      // Meta refuses a send now: the window closes and a knock is due, but the queue is busy with the reply's delivery.
-      expect(await refuse('wamid.refused.1', Date.now())).toBe(200);
+      // Meta refuses a send: the window closes and a knock is due, but the queue is busy with the reply's delivery. The refusal
+      // is a second past the admitted message, which is dated to its whole second, so it closes the window whatever the clock reads.
+      expect(await refuse('wamid.refused.1', Date.now() + 1_000)).toBe(200);
       await new Promise(resolve => setTimeout(resolve, 5));
       // The owner writes again before the knock runs, which reopens the window.
       await replyStarted(Date.now() + 1_000);

@@ -191,8 +191,13 @@ export const createWhatsAppMediaUploader = (token: string, phoneNumberId: string
 };
 
 type Caller = (method: string, body: object) => Promise<unknown>;
-// Why the owner got a link text instead of the file: WhatsApp cannot carry it, or the service window was closed.
-export type WhatsAppFileLinkReason = WhatsAppFileRefusal | 'window_closed';
+// What a held send answers instead of a provider receipt: the text is in Waldo's custody and goes out on the owner's next
+// message (whatsapp-window.ts). It is not a delivery, and no caller may read it as one.
+export const WHATSAPP_HELD = Object.freeze({ held: 'whatsapp_window' as const });
+export const whatsappHeld = (result: unknown): boolean => (result as { held?: unknown } | null | undefined)?.held === WHATSAPP_HELD.held;
+// Why the owner got a link text instead of the file: WhatsApp cannot carry it, the service window was closed, or earlier
+// messages were still held and the file must not land ahead of them.
+export type WhatsAppFileLinkReason = WhatsAppFileRefusal | 'window_closed' | 'behind_held';
 // degraded: the link text was sent. held: the window layer holds the link text until the owner's next message.
 export type WhatsAppFileOutcome =
   | Readonly<{ status: 'sent'; providerMessageId: string }>
@@ -204,7 +209,10 @@ const REFUSAL_WORDS: Readonly<Record<WhatsAppFileRefusal, string>> = {
   unsupported_type: 'this file type', too_large: 'a file this large', empty: 'an empty file', invalid_filename: 'this file name',
 };
 export const whatsappFileLinkText = (file: WhatsAppOutboundFile, reason: WhatsAppFileLinkReason, link: string): string =>
-  reason === 'window_closed' ? `Here is ${file.filename}. ${link}` : `WhatsApp can't carry ${file.filename} (${REFUSAL_WORDS[reason]}). ${link}`;
+  reason === 'window_closed' || reason === 'behind_held' ? `Here is ${file.filename}. ${link}` : `WhatsApp can't carry ${file.filename} (${REFUSAL_WORDS[reason]}). ${link}`;
+// What a link text's send answered: nothing (the owner gate blocked it), held for the owner's next message, or sent.
+export const whatsappLinkOutcome = (sent: unknown, reason: WhatsAppFileLinkReason): WhatsAppFileOutcome =>
+  sent === undefined ? { status: 'blocked' } : whatsappHeld(sent) ? { status: 'held', reason } : { status: 'degraded', reason };
 
 // Sends one file through the owner's gated, egress-guarded caller. A file WhatsApp cannot carry is a
 // definite refusal made before any upload, so the owner gets a plain text instead, naming the file
@@ -216,8 +224,7 @@ export const deliverWhatsAppFile = async (call: Caller, chatId: number, file: Wh
     ack = await call('sendDocument', { chat_id: chatId, file });
   } catch (error) {
     if (!(error instanceof WhatsAppFileRefused)) throw error;
-    const sent = await call('sendMessage', { chat_id: chatId, text: whatsappFileLinkText(file, error.reason, await fallback()) });
-    return sent === undefined ? { status: 'blocked' } : { status: 'degraded', reason: error.reason };
+    return whatsappLinkOutcome(await call('sendMessage', { chat_id: chatId, text: whatsappFileLinkText(file, error.reason, await fallback()) }), error.reason);
   }
   if (ack === undefined) return { status: 'blocked' };
   const id = (ack as { messages?: { id?: unknown }[] }).messages?.[0]?.id;
