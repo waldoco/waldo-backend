@@ -241,6 +241,23 @@ describe('handleWhatsAppWebhook: a send Meta refuses later for the 24-hour windo
     for (const leak of ['15550001111', '15550009999', 'wamid.', 'undeliverable', 'FICTIONAL-DETAIL', 'Re-engagement']) expect(logs.join('\n')).not.toContain(leak);
   });
 
+  it('logs a failed status for a recipient no owner has, though routing skips it, by its codes alone', async () => {
+    const { fetch, ns } = namespace();
+    const unlinked: OwnerDirectory = { byPresence: vi.fn(async () => null), redeem: async () => null };
+    const logs: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((line: unknown) => { logs.push(String(line)); });
+    const body = statuses([
+      { id: 'wamid.u1', status: 'failed', timestamp: '1700000000', recipient_id: '15550007777',
+        errors: [{ code: 131026, title: 'Message undeliverable', message: 'Message undeliverable to 15550007777' }] },
+      refused('wamid.u2', '15550007777'),
+    ]);
+    expect((await run(await post('x', body), env(ns), unlinked)).status).toBe(200);
+    expect(unlinked.byPresence).toHaveBeenCalledWith('whatsapp', '15550007777');
+    expect(fetch).not.toHaveBeenCalled();
+    expect(logs.map(line => JSON.parse(line))).toEqual([{ hop: 'whatsapp_status_failed', codes: [131026] }, { hop: 'whatsapp_status_failed', codes: [131047] }]);
+    for (const leak of ['15550007777', 'wamid.', 'undeliverable', 'Re-engagement']) expect(logs.join('\n')).not.toContain(leak);
+  });
+
   it('answers 503 when the owner could not take it for now, so Meta delivers the callback again', async () => {
     for (const reply of [async () => new Response('unavailable', { status: 503 }), async () => { throw new Error('owner unreachable'); }]) {
       const { fetch, ns } = namespace();
