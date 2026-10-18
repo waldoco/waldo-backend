@@ -12,13 +12,14 @@ import { appSubjectFor } from '../src/channels/app-api';
 import { consoleAccess } from '../src/channels/console';
 import { CONTROL_ACTION_PATH } from '../src/channels/dashboard-control-actions';
 import { CONTROLS_PATH } from '../src/channels/dashboard-controls';
-import { dayPlanBook } from '../src/channels/day-cards';
+import { cardDeliveries, dayPlanBook } from '../src/channels/day-cards';
 import { BRIEF_SWEEP_ID } from '../src/channels/event-briefs';
 import { traceBook } from '../src/channels/harness';
 import { armHeartbeat } from '../src/channels/heartbeat';
 import { loopBook } from '../src/channels/loops';
 import { PROACTIVE_SURFACE_KEY, WHATSAPP_COPY_FRESH_MS, WHATSAPP_COPY_PREFIX } from '../src/channels/proactive-surface';
 import { reminderBook } from '../src/channels/reminders';
+import { standingOrderBook } from '../src/channels/standing-orders';
 import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
 import { updateBook } from '../src/channels/update-cards';
 import { bindWhatsAppNumber, releaseWhatsAppOutbox } from '../src/channels/whatsapp-window';
@@ -35,6 +36,7 @@ const UPDATE_TEXT = 'Your 10:30 moved to 11:00.';
 const PREP_TEXT = 'Design review at 09:30. Bring the onboarding mocks; Pat is listed.';
 const CHECK_BACK_TEXT = 'I looked for the invoice in your sent mail and found nothing yet. Want me to draft it?';
 const REMINDER_TEXT = 'Time to call Sam.';
+const ORDER_TEXT = 'Rain after 4 pm; the forecast changed since this morning.';
 const fixture = vi.hoisted(() => ({ event: null as CalendarItem | null, changes: [] as CalendarChange[] }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
@@ -54,6 +56,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
       : content.includes('[Update check') ? UPDATE_TEXT
       : content.includes('[Scheduled card') ? CARD_TEXT
       : content.includes('[Reminder due now') ? REMINDER_TEXT
+      : content.includes('[Standing order due now') ? ORDER_TEXT
       : content.includes('[Check-back due now') ? CHECK_BACK_TEXT : 'SKIP';
     return { ok: true, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
@@ -153,6 +156,13 @@ const dueSweep = (state: DurableObjectState) => scheduler(state).schedule({ id: 
   payloadRefs: { id: BRIEF_SWEEP_ID }, occurrenceAt: Date.now() - 1000, dueAt: Date.now() - 1000, recurrence: { type: 'interval', every_ms: 10 * 60_000, phase_ms: 0 } });
 const dueReminder = (state: DurableObjectState) => reminderBook(state.storage.sql, scheduler(state), { timezone: 'UTC', now: () => new Date(Date.now() - 3_600_000) }, () => 'rem-1')
   .set({ note: 'call Sam', at: new Date(Date.now() - 30 * 60_000).toISOString().slice(0, 16), repeat: 'none' });
+// A daily order set an hour ago for half an hour ago, so its first run is due now.
+const dueOrder = (state: DurableObjectState) => standingOrderBook(state.storage.sql, scheduler(state), { timezone: 'UTC', now: () => new Date(Date.now() - 3_600_000) }, () => 'ord1')
+  .set({ scope: 'check the forecast', trigger: 'daily', at: new Date(Date.now() - 30 * 60_000).toISOString().slice(11, 16), gate: 'act_and_report', escalation: 'log_only' });
+const briefPlan = (state: DurableObjectState) => dayPlanBook(state.storage.sql).read(DAY).find(row => row.card === 'card:brief');
+const briefLinked = (state: DurableObjectState) => cardDeliveries(state.storage.kv, DAY).has('card:brief');
+const orderRuns = (state: DurableObjectState) => state.storage.sql.exec<{ status: string; summary: string | null }>(
+  "SELECT status, summary FROM background_runs WHERE kind = 'standing_order' ORDER BY started_at").toArray();
 const dueCheckBack = async (state: DurableObjectState) => {
   loopBook(state.storage.sql, { newId: () => 'loop-1', now: () => AT }).open({ title: 'Send the invoice', due: `${DAY}T08:00` });
   await armHeartbeat(scheduler(state), Date.now() - 60 * 60_000);
@@ -214,6 +224,7 @@ describe('WhatsApp only', { timeout: 20_000 }, () => {
     await withOwner('surface-whatsapp-brief', async (owner, state, ctx) => {
       await dueBrief(state);
       await schedulePass(owner, state);
+      await outboxPass(owner, state, ctx);
       expect(wire.whatsapp).toEqual([`text:${CARD_TEXT}`]);
       expect(await said(owner, ctx)).toEqual([]);
     }, { surface: 'whatsapp' });
@@ -267,6 +278,7 @@ describe('WhatsApp only', { timeout: 20_000 }, () => {
       expect(await said(owner, ctx)).toEqual([]);
       wire.presence = true;
       await schedulePass(owner, state);
+      await outboxPass(owner, state, ctx);
       expect(wire.whatsapp).toEqual([`text:${CARD_TEXT}`]);
       expect(await said(owner, ctx)).toEqual([]);
     }, { surface: 'whatsapp' });
@@ -455,6 +467,51 @@ describe('where the Brief goes, for each setting and each binding', { timeout: 2
   });
 });
 
+// Day cards and standing-order reports settle on the delivery that reaches the owner. Under both, that is the app's message:
+// the plan row and the order's run read as sent then, and the WhatsApp copy is a record of its own, delivered only when it
+// is. A card or report waiting for WhatsApp settles only when it arrives, on WhatsApp or, once WhatsApp no longer takes
+// proactive work, on the app.
+describe('day cards and standing-order reports', { timeout: 30_000 }, () => {
+  it('under both with WhatsApp\'s window closed, the app delivery settles the Brief and the order\'s run, and the copies wait', async () => {
+    await withOwner('surface-both-closed-jobs', async (owner, state, ctx) => {
+      await dueBrief(state);
+      await dueOrder(state);
+      for (let pass = 0; pass < 2; pass += 1) await schedulePass(owner, state);
+      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
+      expect((await said(owner, ctx)).map(message => message.text).sort()).toEqual([ORDER_TEXT, CARD_TEXT].sort());
+      expect(briefPlan(state)).toMatchObject({ sent: true, state: 'sent' });
+      expect(briefLinked(state)).toBe(true);
+      expect(orderRuns(state)).toEqual([{ status: 'completed', summary: 'order reported' }]);
+      expect(copies(state).map(record => [record.payload.text, record.status]).sort()).toEqual([[CARD_TEXT, 'pending'], [ORDER_TEXT, 'pending']].sort());
+      expect(outbox(state).filter(record => record.dayCard || record.standingOrder)).toEqual([]);
+      expect(wire.whatsapp).toEqual(['template:waldo_update_ready']);
+    }, { surface: 'both', window: 'closed' });
+  });
+
+  it.each([
+    ['the owner switches to the app', 'setting'],
+    ['WhatsApp is unlinked', 'unlink'],
+  ] as const)('a Brief and a report waiting for WhatsApp\'s closed window go to the app once when %s, and settle there', async (_how, change) => {
+    await withOwner(`surface-jobs-fallback-${change}`, async (owner, state, ctx) => {
+      await dueBrief(state);
+      await dueOrder(state);
+      for (let pass = 0; pass < 2; pass += 1) await schedulePass(owner, state);
+      await outboxPass(owner, state, ctx);
+      expect(wire.whatsapp).toEqual(['template:waldo_update_ready']);
+      expect(briefPlan(state)).toMatchObject({ sent: false });
+      expect(orderRuns(state)).toEqual([{ status: 'running', summary: null }]);
+      if (change === 'setting') state.storage.kv.put(PROACTIVE_SURFACE_KEY, 'app'); else unlinkWhatsApp(owner, state);
+      for (let pass = 0; pass < 4; pass += 1) await outboxPass(owner, state, ctx);
+      expect((await said(owner, ctx)).map(message => message.text).sort()).toEqual([ORDER_TEXT, CARD_TEXT].sort());
+      expect(briefPlan(state)).toMatchObject({ sent: true, state: 'sent' });
+      expect(briefLinked(state)).toBe(true);
+      expect(orderRuns(state)).toEqual([{ status: 'completed', summary: 'order reported' }]);
+      expect(outbox(state).filter(record => record.dayCard || record.standingOrder).map(record => record.status)).toEqual(['delivered', 'delivered']);
+      expect(wire.whatsapp).toEqual(['template:waldo_update_ready']);
+    }, { surface: 'whatsapp', window: 'closed' });
+  });
+});
+
 describe('owners the setting does not route', { timeout: 20_000 }, () => {
   it('an owner linked on Telegram keeps the app with its Telegram copy and gets no WhatsApp copy', async () => {
     await withOwner('surface-telegram-owner', async (owner, state, ctx) => {
@@ -472,6 +529,7 @@ describe('owners the setting does not route', { timeout: 20_000 }, () => {
     await withOwner('surface-whatsapp-only-owner', async (owner, state, ctx) => {
       await dueBrief(state);
       await schedulePass(owner, state);
+      await outboxPass(owner, state, ctx);
       expect(wire.whatsapp).toEqual([`text:${CARD_TEXT}`]);
       expect(await said(owner, ctx)).toEqual([]);
     }, { app: false });
