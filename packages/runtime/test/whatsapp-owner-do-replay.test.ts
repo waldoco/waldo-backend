@@ -41,7 +41,7 @@ describe('WhatsApp owner DO replay', () => {
       state.storage.kv.put('wamid:within-retention', now - WAMID_RETENTION_MS + 1);
       const sent: unknown[] = [];
       const graph = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
-        expect(String(input)).toBe('https://graph.facebook.com/v21.0/fictional-phone-id/messages');
+        expect(String(input)).toBe('https://graph.facebook.com/v26.0/fictional-phone-id/messages');
         expect(new Headers(init?.headers).get('authorization')).toBe('Bearer fictional-whatsapp-token');
         sent.push(JSON.parse(String(init?.body)));
         return Response.json({ messages: [{ id: `wamid.out.${sent.length}` }] });

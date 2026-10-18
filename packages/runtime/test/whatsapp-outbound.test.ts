@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createWhatsAppMediaUploader, deliverWhatsAppFile, whatsappTelegramShim } from '../src/channels/whatsapp-api';
+import { WHATSAPP_GRAPH_VERSION, createWhatsAppCaller, createWhatsAppMediaDownloader, createWhatsAppMediaUploader, deliverWhatsAppFile, whatsappTelegramShim } from '../src/channels/whatsapp-api';
 import { egressGuardedCaller } from '../src/channels/egress-guard';
 import { WA_LAST_INBOUND_KEY, WHATSAPP_HELD, WHATSAPP_HELD_RETENTION_MS, deliverHeldWhatsApp, recordWhatsAppInbound, whatsappHeld, whatsappTemplateConfig, whatsappWindowCaller } from '../src/channels/whatsapp-window';
 import { egressGate, gatedCaller } from '../src/channels/telegram-api';
@@ -7,6 +7,26 @@ import { DOCX_MIME as DOCX } from '../src/channels/document-render';
 
 const graphOk = () => vi.fn(async (_url: string, _init?: RequestInit) => Response.json({ messages: [{ id: 'wamid.out' }] }));
 const sentBodies = (graph: ReturnType<typeof graphOk>) => graph.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
+
+describe('whatsapp graph version', () => {
+  it('a send, an upload and a media lookup all call the one pinned Graph version, v26.0', async () => {
+    const graph = vi.fn(async (url: string, _init?: RequestInit) =>
+      url.endsWith('/media') ? Response.json({ id: 'media-77' })
+        : url.endsWith('/media-9') ? Response.json({ url: 'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=abc' })
+          : url.startsWith('https://lookaside.fbsbx.com/') ? new Response(new Uint8Array([1]))
+            : Response.json({ messages: [{ id: 'wamid.out' }] }));
+    const fetcher = graph as unknown as typeof fetch;
+    await createWhatsAppCaller('tok', 'pn1', fetcher)({ to: '15550001111', type: 'text', text: { body: 'hi' } });
+    await createWhatsAppMediaUploader('tok', 'pn1', fetcher)({ bytes: new TextEncoder().encode('%PDF-1.4 test'), mime: 'application/pdf', filename: 'plan.pdf' });
+    await createWhatsAppMediaDownloader('tok', fetcher)('media-9');
+    expect(WHATSAPP_GRAPH_VERSION).toBe('v26.0');
+    expect(graph.mock.calls.map(([url]) => url).filter(url => url.startsWith('https://graph.facebook.com/'))).toEqual([
+      `https://graph.facebook.com/${WHATSAPP_GRAPH_VERSION}/pn1/messages`,
+      `https://graph.facebook.com/${WHATSAPP_GRAPH_VERSION}/pn1/media`,
+      `https://graph.facebook.com/${WHATSAPP_GRAPH_VERSION}/media-9`,
+    ]);
+  });
+});
 
 describe('whatsapp link previews', () => {
   it('a text with an http(s) link asks for a preview when the caller has not disabled one', async () => {
@@ -43,7 +63,7 @@ describe('whatsapp outbound files', () => {
     const upload = createWhatsAppMediaUploader('tok', 'pn1', graph as unknown as typeof fetch);
     expect(await upload(pdf)).toBe('media-77');
     const [url, init] = graph.mock.calls[0]!;
-    expect(url).toBe('https://graph.facebook.com/v21.0/pn1/media');
+    expect(url).toBe('https://graph.facebook.com/v26.0/pn1/media');
     expect(new Headers(init?.headers).get('authorization')).toBe('Bearer tok');
     const form = init?.body as FormData;
     expect(form.get('messaging_product')).toBe('whatsapp');

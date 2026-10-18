@@ -62,12 +62,12 @@ const whatsappOwner = (name: string, ageMs: number, check: (owner: Owner) => voi
     };
     const network = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (url === 'https://graph.facebook.com/v21.0/fictional-phone-id/media') {
+      if (url === 'https://graph.facebook.com/v26.0/fictional-phone-id/media') {
         const form = init?.body as FormData, file = form.get('file') as unknown as File;
         graph.push({ type: 'upload', upload: { type: String(form.get('type')), filename: file.name, size: file.size } });
         return Response.json({ id: 'media.1' });
       }
-      if (url === 'https://graph.facebook.com/v21.0/fictional-phone-id/messages') {
+      if (url === 'https://graph.facebook.com/v26.0/fictional-phone-id/messages') {
         const body = JSON.parse(String(init?.body)) as { type: string; text?: { body: string }; document?: { id: string; filename: string } };
         graph.push({ type: body.type, ...(body.text ? { text: body.text.body } : {}), ...(body.document ? { document: body.document } : {}) });
         return Response.json({ messages: [{ id: `wamid.out.${graph.length}` }] });
