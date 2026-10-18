@@ -41,9 +41,10 @@ const today = () => new Date().toISOString().slice(0, 10);
 const CARD_ID = () => `day-card:${today()}:card:brief`;
 
 // Meta refuses a text in `refuse` at the send itself with 131047, as when its clock closed the window before ours.
-const wire = { events: [] as string[], wamid: 0, refuse: new Set<string>() };
+// `knockStall` holds the next template send open until the test releases it, so a request can land while a pass waits on it.
+const wire = { events: [] as string[], wamid: 0, refuse: new Set<string>(), knockStall: null as null | { reached: () => void; until: Promise<void> } };
 beforeEach(() => {
-  model.card = null; wire.events = []; wire.wamid = 0; wire.refuse = new Set();
+  model.card = null; wire.events = []; wire.wamid = 0; wire.refuse = new Set(); wire.knockStall = null;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
@@ -57,6 +58,7 @@ beforeEach(() => {
       }
       wire.events.push(body.type === 'template' ? `template:${body.template!.name}` : `text:${body.text!.body}`);
       wire.wamid += 1;
+      if (body.type === 'template' && wire.knockStall) { const stall = wire.knockStall; wire.knockStall = null; stall.reached(); await stall.until; }
       return Response.json({ messaging_product: 'whatsapp', contacts: [{ input: body.to, wa_id: body.to }], messages: [{ id: `wamid.out.${wire.wamid}` }] });
     }
     return new Response('unexpected', { status: 500 });
@@ -79,6 +81,9 @@ const owned = async (name: string, script: (steps: Readonly<{
   // Meta's status callbacks, as the webhook forwards them: a 131047 refusal, evidence the message reached the phone
   // (delivered, read or played), or any other failure.
   status(kind: 'refused' | 'delivered' | 'failed', ids: readonly (string | null)[], at?: number): Promise<void>;
+  // The same report, answered without waiting for the owner's queue (which a stalled pass holds).
+  report(kind: 'delivered', ids: readonly (string | null)[]): Promise<void>;
+  settled(): Promise<void>;
   // The message ids of the one record in the outbox, by part.
   ids(): (string | null)[];
   texts(): string[];
@@ -141,6 +146,13 @@ const owned = async (name: string, script: (steps: Readonly<{
           expect(response.status).toBe(200);
           await settled();
         },
+        report: async (kind, ids) => {
+          const response = await owner.fetch(new Request('https://telegram-owner/whatsapp-status', {
+            method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ [kind]: ids.map(id => ({ id, at: Date.now() })) }),
+          }));
+          expect(response.status).toBe(200);
+        },
+        settled,
         ids: () => { expect(records()).toHaveLength(1); return records()[0]!.providerMessageIds ?? []; },
         texts: () => wire.events.filter(event => event.startsWith('text:')).map(event => event.slice('text:'.length)),
         held: () => [...state.storage.kv.list<{ body: { text: string } }>({ prefix: 'wa_held:' })].map(([, record]) => record.body.text),
@@ -358,6 +370,28 @@ describe('a WhatsApp send Meta refuses for the window our check let through', { 
       expect(outbox().filter(record => record.id.startsWith('day-card:')).map(record => record.status)).toEqual(['accepted', 'pending']);
       expect(outbox().filter(record => record.id.startsWith('standing-order:')).map(record => record.status)).toEqual(['accepted', 'pending']);
       expect(runs()).toEqual([{ status: 'running', summary: null }, { status: 'running', summary: null }]);
+    });
+  });
+
+  it('an arrival that lands while an alarm pass waits on its knock is kept, and records the card', async () => {
+    await owned('wa-arrival-during-knock', async ({ alarms, later, card, order, report, settled, ids, planned, outbox }) => {
+      await card();
+      await alarms(3);
+      const [first] = ids();
+      let release!: () => void;
+      const reached = new Promise<void>(resolve => { wire.knockStall = { reached: resolve, until: new Promise<void>(go => { release = go; }) }; });
+      await later(24 * HOUR, async () => {
+        // A day on the window has closed: the order's report waits, and the pass that holds it knocks.
+        await order();
+        const passes = alarms(4);
+        await reached;
+        await report('delivered', [first!]);
+        release();
+        await passes;
+        await settled();
+      });
+      expect(outbox().find(record => record.id.startsWith('day-card:'))).toMatchObject({ status: 'delivered' });
+      expect(planned()).toMatchObject({ sent: true, state: 'sent' });
     });
   });
 

@@ -1322,23 +1322,25 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (!refused || !delivered || !failed) return new Response('bad request', { status: 400 });
     const runtime = this.setup('whatsapp'), log = (event: object) => console.log(JSON.stringify(event));
     const addressed = (record: FinalRecord) => record.ownerSubject === subject && record.payload.chat_id === runtime.owner;
-    let closed = false;
+    let closed = false, changed = 0;
     this.ctx.storage.transactionSync(() => {
       const records = runtime.finalOutbox.records(), now = Date.now();
       for (const { id, at } of refused) closed = whatsappWindowRefused(kv, { providerMessageId: id, refusedAt: at ?? now }, records.some(row => addressed(row) && row.providerMessageIds?.includes(id)), now, log) || closed;
-      observeSurfaceStatuses(kv, [...refused.map(({ id }) => ({ id, kind: 'refused' as const, at: now })), ...delivered.map(({ id, at }) => ({ id, kind: 'arrived' as const, at: at ?? now })),
+      changed = observeSurfaceStatuses(kv, [...refused.map(({ id }) => ({ id, kind: 'refused' as const, at: now })), ...delivered.map(({ id, at }) => ({ id, kind: 'arrived' as const, at: at ?? now })),
         ...failed.map(({ id, at }) => ({ id, kind: 'failed' as const, at: at ?? now }))], addressed, now);
     });
     await rearmSharedAlarm(this.ctx.storage, null, Date.now());
+    // An arrival for a direct reply, or a repeat, changes nothing: the common case needs no follow-up.
+    if (!refused.length && !changed) return new Response('ok');
     this.ctx.waitUntil(this.serial(async () => {
       const current = this.setup('whatsapp');
       // The window is checked again here: the owner may have written since the refusal, and a knock into an open window
       // would mark this window knocked, so its real closure would never knock.
       if (closed && !whatsappWindowOpen(kv, Date.now())) await whatsappKnock(kv, template => current.call('sendTemplate', template), whatsappTemplateConfig(this.env), log);
-      await deliverHeldWhatsApp(kv, current.call, Date.now(), log);
+      if (refused.length) await deliverHeldWhatsApp(kv, current.call, Date.now(), log);
       // Settles what the reports finished; a refusal from before the owner's latest message leaves the window open, so what it
       // sent back goes out now.
-      await releaseWhatsAppOutbox(current.finalOutbox, this.outboxRoute('whatsapp'), current.settleFinal);
+      if (changed) await releaseWhatsAppOutbox(current.finalOutbox, this.outboxRoute('whatsapp'), current.settleFinal);
     }).catch(() => { console.error('whatsapp status follow-up deferred'); }));
     return new Response('ok');
   }

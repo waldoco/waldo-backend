@@ -197,32 +197,52 @@ export class TelegramFinalOutbox {
   }): Promise<void> {
     const selected = options.select ?? (() => true);
     await this.maintain();
-    const rows = this.records();
+    const swept = this.records();
     // attempting persisted before network is an uncertainty boundary after restart.
-    for (const row of rows) if (row.status === 'attempting') {
+    for (const row of swept) if (row.status === 'attempting') {
       row.status = 'quarantined'; row.reason = 'restart_during_send';
     }
-    await this.save(rows);
+    await this.save(swept);
+    // The object takes other requests while this pass awaits the network (a knock in defer, a check in allowed, a settlement),
+    // and a surface's status report, owner forget or a retired number can write the outbox then. So after an await the pass
+    // writes back only the row it owns, and only if nothing changed that row meanwhile; a settled mark lands on the row as it
+    // is now, provided it still has the status that was settled.
+    const commit = async (row: FinalRecord, before: string): Promise<boolean> => {
+      const latest = this.records();
+      const index = latest.findIndex(current => current.id === row.id);
+      if (index < 0 || JSON.stringify(latest[index]) !== before) return false;
+      latest[index] = row;
+      await this.save(latest);
+      return true;
+    };
+    const markSettled = async (row: FinalRecord): Promise<void> => {
+      const latest = this.records();
+      const current = latest.find(other => other.id === row.id);
+      if (!current || current.status !== row.status) return;
+      current.settled = true; row.settled = true;
+      await this.save(latest);
+    };
     // Reconcile an ACK persisted before lifecycle bookkeeping without sending again. An accepted record waits for its report.
-    for (const row of rows) if (row.status !== 'pending' && row.status !== 'accepted' && !row.settled && selected(row)) {
-      await options.settled(row); row.settled = true; await this.save(rows);
+    for (const row of this.records()) if (row.status !== 'pending' && row.status !== 'accepted' && !row.settled && selected(row)) {
+      await options.settled(row); await markSettled(row);
     }
-    const row = rows.find(r => r.status === 'pending' && r.dueAt <= this.now() && selected(r));
+    const row = this.records().find(r => r.status === 'pending' && r.dueAt <= this.now() && selected(r));
     if (!row) return;
+    const before = JSON.stringify(row);
     if (row.expiresAt !== undefined && this.now() >= row.expiresAt) {
       row.status = 'blocked'; row.reason = 'expired';
-      await this.save(rows); await options.settled(row); row.settled = true; await this.save(rows); return;
+      await this.save(this.records().map(current => current.id === row.id ? row : current)); await options.settled(row); await markSettled(row); return;
     }
     // A quiet-hours hold keeps the frozen intent pending; it is not a rejection.
     const deferred = await options.defer?.(row);
     if (deferred !== undefined && deferred !== null && deferred > this.now()) {
-      row.dueAt = Math.min(deferred, row.expiresAt ?? Infinity); await this.save(rows); return;
+      row.dueAt = Math.min(deferred, row.expiresAt ?? Infinity); await commit(row, before); return;
     }
     let allowed = false;
     try { allowed = (row.expiresAt === undefined || this.now() < row.expiresAt) && await options.allowed(row); } catch { /* fail closed */ }
-    if (!allowed) { row.status = 'blocked'; row.reason = 'owner_binding'; await this.save(rows); await options.settled(row); row.settled = true; await this.save(rows); return; }
+    if (!allowed) { row.status = 'blocked'; row.reason = 'owner_binding'; if (!(await commit(row, before))) return; await options.settled(row); await markSettled(row); return; }
     row.status = 'attempting'; row.attempts += 1;
-    await this.save(rows);
+    if (!(await commit(row, before))) return;
     let persistedRow = JSON.stringify(row);
     const saveCurrentRow = async (): Promise<boolean> => {
       const latest = this.records();

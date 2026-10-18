@@ -108,6 +108,26 @@ describe('a record a surface accepted and reports on later', () => {
   });
 });
 
+describe('a report that lands while a drain pass waits on the network', () => {
+  // The knock in a WhatsApp route's defer, a check in allowed and a settlement can all fetch; the object takes requests then.
+  it.each(['defer', 'allowed', 'settled'] as const)('is kept, not overwritten by the pass (%s)', async step => {
+    const kv = store(), clock = { now: 1_000 };
+    await drained(kv, clock, { id: 'accepted' });
+    const outbox = new TelegramFinalOutbox(kv, () => clock.now);
+    await outbox.enqueue({ ...base, id: step === 'settled' ? 'other' : 'next' });
+    if (step === 'settled') { const rows = outbox.records(); rows[1]!.status = 'blocked'; rows[1]!.reason = 'owner_binding'; kv.put(FINAL_OUTBOX_KEY, rows); }
+    clock.now += 300;
+    const report = async () => { observeSurfaceStatuses(kv, [{ id: 'wamid.1', kind: 'arrived', at: clock.now }], addressed, clock.now); await Promise.resolve(); };
+    const surface = accepting(clock);
+    await outbox.drain({ ...surface.delivery,
+      defer: async () => { if (step === 'defer') { await report(); return clock.now + DAY; } return null; },
+      allowed: async () => { if (step === 'allowed') await report(); return step !== 'allowed'; },
+      settled: async record => { if (step === 'settled' && record.id === 'other') await report(); },
+    });
+    expect(new TelegramFinalOutbox(kv).records().find(row => row.id === 'accepted')).toMatchObject({ status: 'delivered', arrived: [true] });
+  });
+});
+
 describe('the surface is unlinked or its number replaced', () => {
   it('retires its records in one step: unsent ones blocked, sent ones unconfirmed, none sent again, later reports ignored', async () => {
     const kv = store(), clock = { now: 1_000 };
