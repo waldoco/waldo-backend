@@ -68,7 +68,7 @@ describe('handleWhatsAppWebhook', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('routes a verified message to the right owner DO with the whatsapp subject header', async () => {
+  it('routes a verified message to the right owner DO with the whatsapp subject and owner name headers', async () => {
     const { fetch, idFromName, ns } = namespace();
     const directory: OwnerDirectory = {
       byPresence: async (provider, subject) => {
@@ -83,7 +83,7 @@ describe('handleWhatsAppWebhook', () => {
     expect(idFromName).toHaveBeenCalledWith('do-a');
     expect(fetch).toHaveBeenCalledWith('https://telegram-owner/whatsapp-admit', {
       method: 'POST', body: expect.any(String),
-      headers: { 'x-waldo-origin': 'https://w.test', 'x-waldo-whatsapp-subject': '15550001111', 'x-waldo-timezone': 'Asia/Kolkata' },
+      headers: { 'x-waldo-origin': 'https://w.test', 'x-waldo-whatsapp-subject': '15550001111', 'x-waldo-do-name': 'do-a', 'x-waldo-timezone': 'Asia/Kolkata' },
     });
     // the forwarded body carries only that sender's messages, never the status callbacks
     const forwarded = JSON.parse(String(fetch.mock.calls[0]![1]!.body)) as { messages: unknown[]; statuses?: unknown[] };
