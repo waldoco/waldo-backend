@@ -28,6 +28,7 @@ import {OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,ownerControlsView,ownerCo
 import {MEMORY_CONTROL_PATH,projectMemoryControl,resolveMemoryAction} from './dashboard-memory-actions';
 import {CONTROLS_PATH,readControlsQuery,projectControls} from './dashboard-controls';
 import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,googleConnectReceipt,whatsappLinkReceipt,whatsappUnlinkReceipt} from './dashboard-control-actions';
+import {channelControlsAction,channelControlsQuery,channelControlsRead,channelControlView} from './dashboard-channel-controls';
 import { dashboardReceipt } from './dashboard-receipts';
 import { createScopedCuratedSkillCapability, type OwnerSkillCapability } from '../skills/curated-host';
 import { seededSkillCustody } from '../skills/curated-owner';
@@ -314,6 +315,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // The owner id each cached runtime was built for. The binding can change under a live cache (console-first signup builds owner 0, the Telegram link binds later).
   private runtimeOwners: Partial<Record<ChannelKind, number>> = {};
   private queue: Promise<unknown> = Promise.resolve();
+  // iMessage and device setup controls queue here, apart from turns, so a revoke never waits behind the turn it stops.
+  // Nothing on this queue may wait on serial(): owner storage erase runs inside serial() and waits for this queue.
+  private channelQueue: Promise<unknown> = Promise.resolve();
   private readonly inbox = new TelegramOwnerInbox(this.ctx.storage, persistInboxWake);
   private readonly liveAttempts = new Set<string>();
   private activeInbox: InboxRecord | null = null;
@@ -640,6 +644,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     return outcome;
   }
+  // Local fences after a canonical bridge revocation: queued turns from it close, a running one stops.
+  private readonly iMessageBridgeRevoked = (bridgeDoName: string): void => {
+    new IMessageOwnerInbox(this.ctx.storage).revokeBridge(bridgeDoName);
+    if (this.activeIMessage?.bridgeDoName === bridgeDoName) this.activeAbort?.abort();
+  };
   /** Bridge DO RPC: terminal native result for a frozen reply (first terminal result wins). */
   async recordIMessageResult(input: IMessageResultReport): Promise<boolean> {
     try { return new IMessageFinalOutbox(this.ctx.storage).settle(input.replyRef, input.commandId, input.result); } catch { return false; }
@@ -950,7 +959,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const expires=Date.parse(row.created_at)+12*60*60_000,session={token:hash,csrf:hash,expires};
           const runtime=this.setup('app');
           const host={...session,storage:this.ctx.storage,assertCurrent:current,desk:runtime.desk,
-            account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.ctx.storage.deleteAll()},
+            account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.channelSerial(()=>this.ctx.storage.deleteAll())},
             sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.created_at)+12*60*60_000})),
             view:async(page?:{traceBefore?:number;runsBefore?:number})=>{const view=await runtime.view(session,null,page);await current();const rows=await auth.listSessions(name);return {...view,sessionCount:rows.length,sessions:rows.map(row=>({signed_in:row.created_at,until:new Date(Date.parse(row.created_at)+12*60*60_000).toISOString(),current:row.session===hash}))};},
             cardsLatest:(view:ConsoleView)=>this.appCardsLatest(view,name,hash),
@@ -1527,10 +1536,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (url.pathname.startsWith(`${WHATSAPP_LINK_PATH}/`) && request.method === 'GET') return whatsappLinkConfirmPage(url.pathname, this.ctx.storage.kv.get<string>('do_name') ?? '', session.csrf, whatsappLinkDirectory(this.env));
     if (url.pathname === CONSOLE_ACTION_PATH && request.method === 'POST') {
       const form = await request.clone().formData();
-      if (isIMessageConsoleAction(form.get('action'))) return iMessageConsoleAction(form, session.csrf, this.ctx.storage.kv.get<string>('do_name') ?? '', this.imessageHost.env, (bridgeDoName) => {
-        new IMessageOwnerInbox(this.ctx.storage).revokeBridge(bridgeDoName);
-        if (this.activeIMessage?.bridgeDoName === bridgeDoName) this.activeAbort?.abort();
-      });
+      if (isIMessageConsoleAction(form.get('action'))) return iMessageConsoleAction(form, session.csrf, this.ctx.storage.kv.get<string>('do_name') ?? '', this.imessageHost.env, this.iMessageBridgeRevoked);
       // A confirmed text-first link rebinds this owner's WhatsApp subject, so the new number is admitted and the old one is not.
       if (form.get('action') === WHATSAPP_LINK_CONFIRM_ACTION) return whatsappLinkConfirmAction(form, session.csrf, this.ctx.storage.kv.get<string>('do_name') ?? '', whatsappLinkDirectory(this.env), subject => {
         // A new number starts clean: nothing held for the old one may reach it.
@@ -1606,8 +1612,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
     }
     if(controlsRoute||actionsRoute){
+      const channelRead=url.pathname===CONTROLS_PATH?channelControlsQuery(url.searchParams):null;
+      const channelAction=url.pathname===CONTROL_ACTION_PATH&&!!channelControlView((await request.clone().formData().catch(()=>null))?.get('view'));
       try{
-        return await this.serial(async()=>{
+        const work=async():Promise<Response>=>{
           const session=await access.session(sessionCookie(request));
           if(!session)return Response.json({error:'sign_in_required'},{status:401,headers:DASHBOARD_OVERVIEW_HEADERS});
           const counterKey=`console:controls-rate:${actionsRoute?'action':'read'}`,now=Date.now(),counter=this.ctx.storage.kv.get<{start:number;count:number}>(counterKey);
@@ -1615,13 +1623,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           if(current.count>=(actionsRoute?20:90))return Response.json({error:'rate_limited'},{status:429,headers:{...DASHBOARD_OVERVIEW_HEADERS,'retry-after':'60'}});
           this.ctx.storage.kv.put(counterKey,{...current,count:current.count+1});
           if(ownerControlsRoute||ownerActionsRoute){
-            const deps={owner:this.ctx.storage.kv.get<string>('do_name')??'',csrf:session.csrf,expires:session.expires,auth:consoleAuth(this.env),requestUrl:request.url,store:this.ctx.storage,sessions:()=>access.list(),purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.ctx.storage.deleteAll()};
+            const deps={owner:this.ctx.storage.kv.get<string>('do_name')??'',csrf:session.csrf,expires:session.expires,auth:consoleAuth(this.env),requestUrl:request.url,store:this.ctx.storage,sessions:()=>access.list(),purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.channelSerial(()=>this.ctx.storage.deleteAll())};
             let response:Response;
             if(ownerControlsRoute){const view=ownerControlsView(url.searchParams);if(!view)return Response.json({error:'invalid_query'},{status:400,headers:DASHBOARD_OVERVIEW_HEADERS});response=await ownerControlsRead(view,deps);}
             else {let form:FormData;try{form=await request.formData();}catch{return Response.json({error:'invalid_action'},{status:400,headers:DASHBOARD_OVERVIEW_HEADERS});}response=await ownerControlsAction(form,deps);}
             if((await response.clone().json() as {receipt?:{signed_out?:boolean}}).receipt?.signed_out){const headers=new Headers(response.headers);for(const name of [CONSOLE_COOKIE,'waldo_owner'])headers.append('set-cookie',`${name}=; Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=0`);return new Response(response.body,{status:response.status,headers});}
             return response;
           }
+          const channel={imessage:this.imessageHost.env,devices:deviceDirectory(this.env),deviceBridges:this.env.DEVICE_BRIDGE_DO,owner:this.ctx.storage.kv.get<string>('do_name')??'',csrf:session.csrf,expires:session.expires,store:this.ctx.storage,sessions:()=>access.list(),onIMessageRevoked:this.iMessageBridgeRevoked};
+          if(channelRead)return channelControlsRead(channelRead,channel);
+          if(channelAction)return channelControlsAction(await request.formData(),channel);
           const runtime=this.setup();await runtime.ready;
           if(controlsRoute){
             if(memoryControlsRoute){
@@ -1682,7 +1693,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             return new Response(result.body,{status:result.status,headers});
           }
           return result;
-        });
+        };
+        return await (channelRead||channelAction?this.channelSerial(work):this.serial(work));
       }catch{return Response.json({error:'controls_unavailable'},{status:503,headers:DASHBOARD_OVERVIEW_HEADERS});}
     }
     if (overviewRoute) {
@@ -1757,7 +1769,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const done = admin && doName ? await this.purgeOwnerFiles() && await admin.deleteOwner(doName) : false;
         if (!done) return noticePage('invalid');
         const response = new Response('Account deleted. Everything Waldo held for you is gone.', { headers: { 'set-cookie': `${CONSOLE_COOKIE}=; Path=${CONSOLE_PATH}; Max-Age=0` } });
-        await this.ctx.storage.deleteAll();
+        await this.channelSerial(() => this.ctx.storage.deleteAll());
         return response;
       }
       if (action?.action === 'session.signout' || action?.action === 'session.signout.all') {
@@ -1767,7 +1779,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return new Response('Signed out. Send /console to Waldo on Telegram to sign in again.', { headers: { 'set-cookie': `${CONSOLE_COOKIE}=; Path=${CONSOLE_PATH}; Max-Age=0` } });
       }
       const done = action ? await this.serial(() => act(action)) : false;
-      // A string result is a NOTICES key (e.g. an honest partial-failure receipt); boolean keeps the old path.
+      // A string result is a NOTICES key, such as an honest partial-failure receipt.
       return typeof done === 'string' ? noticePage(done) : done && action ? resultPage(NOTICES[action.action] ?? 'The change was recorded.', true) : noticePage('invalid');
     }
     // B9: the background task list as a first-class read-only endpoint (same console session).
@@ -2099,6 +2111,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // The alarm sets a scheduled app delivery inside its unit of work; no later unit, and no turn, inherits it.
     const run = this.queue.then(work).finally(() => { this.scheduledAppDelivery = null; this.jobOwner = null; });
     this.queue = run.catch(() => undefined);
+    return run;
+  }
+  private channelSerial<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.channelQueue.then(work);
+    this.channelQueue = run.catch(() => undefined);
     return run;
   }
 

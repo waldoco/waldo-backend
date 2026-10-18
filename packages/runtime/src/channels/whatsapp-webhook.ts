@@ -1,8 +1,8 @@
 import { consoleAuth } from '../identity/console-auth';
-import { hex, ownerDirectory, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
+import { hex, ownerDirectory, signedRpc, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { newWhatsAppLinkToken, whatsappLinkDirectory, whatsappLinkTokenHash, whatsappLinkUrl, type WhatsAppLinkDirectory } from '../identity/whatsapp-link';
 import { CONSOLE_AUTH_WINDOW_SECONDS } from './console-signin';
-import { createWhatsAppCaller, sendWhatsAppText, whatsappForwarded } from './whatsapp-api';
+import { createWhatsAppCaller, sendWhatsAppText, WhatsAppApiError, whatsappForwarded } from './whatsapp-api';
 import { WHATSAPP_REENGAGEMENT_ERROR } from './whatsapp-window';
 
 export type WhatsAppWebhookEnv = Readonly<{
@@ -55,11 +55,17 @@ const hmacSha256Hex = async (secret: string, body: string): Promise<string> => {
   return [...new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body)))].map((b) => b.toString(16).padStart(2, '0')).join('');
 };
 
-type WaMessage = { from?: string; id?: string; type?: string };
-type WaValue = { metadata?: { phone_number_id?: string }; messages?: WaMessage[]; statuses?: unknown[] };
+// from is the sender's phone number; Meta omits it when it may not share the number, for a sender with a WhatsApp
+// username. from_user_id (the business-scoped user id, BSUID) and contacts[].user_id are always present.
+type WaMessage = { from?: string; from_user_id?: string; id?: string; type?: string };
+type WaContact = { wa_id?: string; user_id?: string; profile?: { name?: string; username?: string } };
+type WaValue = { metadata?: { phone_number_id?: string }; contacts?: WaContact[]; messages?: WaMessage[]; statuses?: unknown[] };
 type WaBody = { entry?: { changes?: { value?: WaValue }[] }[] };
 
 const DEFINITE_ADMIT_REFUSALS = new Set([400, 403, 404]);
+
+// Presences are keyed by phone digits and nothing downstream checks the shape, so only E.164 digits are a sender.
+const phoneOf = (message: WaMessage): string | null => message.from && /^\d{1,15}$/.test(message.from) ? message.from : null;
 
 // One payload can carry several senders; each owner's DO receives only its own sender's messages.
 const bySender = (body: WaBody): { sender: string; value: WaValue }[] => {
@@ -67,14 +73,27 @@ const bySender = (body: WaBody): { sender: string; value: WaValue }[] => {
   for (const entry of body.entry ?? []) for (const change of entry.changes ?? []) {
     const value = change.value ?? {};
     for (const message of value.messages ?? []) {
-      if (!message.from) continue;
-      const bucket = out.get(message.from) ?? { sender: message.from, value: { metadata: value.metadata, messages: [] } };
+      const sender = phoneOf(message);
+      if (!sender) continue;
+      const bucket = out.get(sender) ?? { sender, value: { metadata: value.metadata, messages: [] } };
       (bucket.value.messages as WaMessage[]).push(message);
-      out.set(message.from, bucket);
+      out.set(sender, bucket);
     }
   }
   return [...out.values()];
 };
+
+// Owners are bound by phone number, so a sender Meta names only by BSUID cannot be routed to one yet: such a sender is
+// told so, and their messages, a "waldo CODE" included, go no further.
+const hiddenNumberSenders = (body: WaBody): string[] => {
+  const out = new Set<string>();
+  for (const entry of body.entry ?? []) for (const change of entry.changes ?? []) {
+    for (const message of change.value?.messages ?? []) if (!phoneOf(message) && message.from_user_id) out.add(message.from_user_id);
+  }
+  return [...out];
+};
+
+const WHATSAPP_HIDDEN_NUMBER_REPLY = "WhatsApp didn't share this chat's phone number, so I can't tell which Waldo account it belongs to and couldn't act on your message. Please use the Waldo app for now.";
 
 // Meta can accept a send and refuse it afterwards because the 24-hour window had closed on its clock: a failed status
 // carrying 131047. Only those are kept, with the time Meta refused them, grouped by the recipient they were sent to; every
@@ -186,6 +205,33 @@ export const handleWhatsAppWebhook = async (
         method: 'POST', body: JSON.stringify({ refused }), headers: { 'x-waldo-whatsapp-subject': route.subject } });
       if (!taken.ok) { console.log(JSON.stringify({ hop: 'whatsapp_status', ok: false, status: taken.status })); if (taken.status >= 500) unavailable = true; }
     } catch (error) { console.log(JSON.stringify({ hop: 'whatsapp_status', ok: false, error: String(error) })); unavailable = true; }
+  }
+  // At most one reply per sender per 30 days and 20 an hour overall, decided by the directory from the hash alone.
+  const onboard = signedRpc(env);
+  for (const userId of hiddenNumberSenders(payload)) {
+    // The reply is the only answer such a sender can get, so it needs the token and the durable per-sender limit;
+    // without either the sender is only logged. The BSUID is never logged.
+    if (!onboard || !env.WHATSAPP_ACCESS_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) {
+      console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: true, replied: false }));
+      continue;
+    }
+    const call = createWhatsAppCaller(env.WHATSAPP_ACCESS_TOKEN, env.WHATSAPP_PHONE_NUMBER_ID);
+    deferred.push((async () => {
+      const senderKey = hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`whatsapp.bsuid.${userId}`)));
+      // A prefix of the hash correlates one sender's log lines; the BSUID itself is never logged.
+      const sender = senderKey.slice(0, 16);
+      try {
+        const allowed = (await onboard('whatsapp_onboarding_allowed', `waonboard.${senderKey}`, { p_subject_hash: senderKey })) === true;
+        // Meta addresses a BSUID through recipient, never to.
+        if (allowed) await call({ recipient: userId, type: 'text', text: { body: WHATSAPP_HIDDEN_NUMBER_REPLY } });
+        console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: true, replied: allowed, sender }));
+      } catch (error) {
+        // Not retried, and the payload is still acked. The Graph status and Meta's error code show whether v21.0
+        // refuses recipient; the response body is never logged.
+        const graph = error instanceof WhatsAppApiError ? { status: error.status, code: error.code } : {};
+        console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: false, sender, error: error instanceof Error ? error.name : 'unknown', ...graph }));
+      }
+    })());
   }
   if (deferred.length) waitUntil(Promise.all(deferred));
   if (unavailable) return new Response('unavailable', { status: 503 });

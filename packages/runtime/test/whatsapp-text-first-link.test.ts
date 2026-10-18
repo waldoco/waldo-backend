@@ -97,20 +97,28 @@ describe('senders and callbacks that never reach an owner', () => {
     const body = JSON.stringify({ entry: [{ changes: [{ value: { metadata: { phone_number_id: 'pn1' }, ...value } }] }] });
     return new Request('https://waldo.example/whatsapp/webhook', { method: 'POST', body, headers: { 'x-hub-signature-256': await sign(body) } });
   };
+  // The Supabase settings let the hidden-number reply reach its per-sender limit (an RPC); the link directory is a fake.
+  const directoryEnv = { SUPABASE_PROJECT_URL: 'https://db.example', SUPABASE_PUBLISHABLE_KEY: 'fictional-publishable', WALDO_ROUTER_HMAC_SECRET: 'fictional-router' };
   const harness = async (request: Request, owners: OwnerDirectory = unlinked) => {
     const ownerFetch = vi.fn(async (_url: string, _init: RequestInit) => new Response('ok'));
     const idFromName = vi.fn((name: string) => name);
     const namespace = { idFromName, get: () => ({ fetch: ownerFetch }) } as unknown as DurableObjectNamespace;
     const directory = links(async () => 'opened');
     const throttle = vi.fn(async () => true);
-    const sent: unknown[] = [];
-    const graph = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => { sent.push(init?.body); return Response.json({ messages: [{ id: 'wamid.reply' }] }); });
+    const sent: { to?: string; recipient?: string; text: { body: string } }[] = [];
+    const rpcs: string[] = [];
+    const graph = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const rpc = String(input).split('/rpc/')[1];
+      if (rpc) { rpcs.push(rpc); return Response.json(true); }
+      sent.push(JSON.parse(String(init?.body)));
+      return Response.json({ messages: [{ id: 'wamid.reply' }] });
+    });
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const work: Promise<unknown>[] = [];
     try {
-      const response = await handleWhatsAppWebhook(request, { ...env, OWNER_DO: namespace }, (p) => work.push(p), owners, { links: directory, throttle });
+      const response = await handleWhatsAppWebhook(request, { ...env, ...directoryEnv, OWNER_DO: namespace }, (p) => work.push(p), owners, { links: directory, throttle });
       await Promise.all(work);
-      return { response, ownerFetch, idFromName, open: directory.open, throttle, sent };
+      return { response, ownerFetch, idFromName, open: directory.open, throttle, sent, rpcs };
     } finally { graph.mockRestore(); }
   };
 
@@ -130,10 +138,44 @@ describe('senders and callbacks that never reach an owner', () => {
     expect(sent).toHaveLength(1);
   });
 
-  it('a sender with no phone number (a hidden user id only) gets nothing and reaches no owner', async () => {
-    const { response, ownerFetch, open, sent } = await harness(await signed({ messages: [{ from_user_id: 'US.hidden-1', id: 'wamid.h', timestamp: '1700000000', type: 'text', text: { body: 'hi' } }] }));
+  it('a sender with no phone number (a hidden user id only) gets only the hidden-number reply: no link, no owner', async () => {
+    const { response, ownerFetch, open, throttle, sent } = await harness(await signed({ messages: [{ from_user_id: 'US.hidden-1', id: 'wamid.h', timestamp: '1700000000', type: 'text', text: { body: 'hi' } }] }));
     expect(response.status).toBe(200);
-    expect([ownerFetch.mock.calls.length, vi.mocked(open).mock.calls.length, sent.length]).toEqual([0, 0, 0]);
+    expect([ownerFetch.mock.calls.length, vi.mocked(open).mock.calls.length, throttle.mock.calls.length]).toEqual([0, 0, 0]);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ recipient: 'US.hidden-1', text: { body: expect.stringContaining("didn't share this chat's phone number") } });
+    expect(sent[0]!.text.body).not.toContain('/console/whatsapp/link/');
+  });
+
+  it('one payload with a linked, an unbound and a hidden sender: one answer each, of the right kind, and no cross-talk', async () => {
+    const LINKED = '15550002222';
+    const owners: OwnerDirectory = { byPresence: async (_provider, subject) => (subject === LINKED ? { doName: 'do-bob', subject: LINKED, timezone: null } : null), redeem: vi.fn(async () => null) };
+    const { response, ownerFetch, idFromName, open, throttle, sent, rpcs } = await harness(await signed({ messages: [
+      { from: LINKED, id: 'wamid.l', timestamp: '1700000000', type: 'text', text: { body: 'hi' } },
+      { from: SENDER, id: 'wamid.u', timestamp: '1700000000', type: 'text', text: { body: 'hi' } },
+      { from_user_id: 'US.hidden-1', id: 'wamid.h', timestamp: '1700000000', type: 'text', text: { body: 'hi' } },
+    ] }), owners);
+    expect(response.status).toBe(200);
+    // The linked sender is admitted to its owner and gets no reply from the webhook.
+    expect(idFromName.mock.calls).toEqual([['do-bob']]);
+    expect(ownerFetch).toHaveBeenCalledTimes(1);
+    expect(new URL(ownerFetch.mock.calls[0]![0]).pathname).toBe('/whatsapp-admit');
+    expect(JSON.parse(String(ownerFetch.mock.calls[0]![1].body)).messages.map((m: { id: string }) => m.id)).toEqual(['wamid.l']);
+    // The unbound phone sender gets exactly one text-first link; the link directory and throttle saw only that number.
+    expect(vi.mocked(open).mock.calls.map(([subject]) => subject)).toEqual([SENDER]);
+    expect(throttle).toHaveBeenCalledTimes(1);
+    const toSender = sent.filter(body => body.to === SENDER);
+    expect(toSender).toHaveLength(1);
+    expect(toSender[0]!.text.body).toContain('/console/whatsapp/link/');
+    // The hidden sender gets exactly one hidden-number reply, addressed by BSUID, and never a link.
+    const toHidden = sent.filter(body => body.recipient === 'US.hidden-1');
+    expect(toHidden).toHaveLength(1);
+    expect(toHidden[0]!.text.body).toContain("didn't share this chat's phone number");
+    expect(toHidden[0]!.text.body).not.toContain('/console/whatsapp/link/');
+    expect(rpcs).toEqual(['whatsapp_onboarding_allowed']);
+    // Nothing else was sent: no reply to the linked sender, and no second reply to anyone.
+    expect(sent).toHaveLength(2);
+    expect(sent.some(body => body.to === LINKED || body.recipient === LINKED)).toBe(false);
   });
 
   it('in one payload with a linked sender, only that owner is admitted and named; the unbound and hidden senders reach no owner', async () => {
