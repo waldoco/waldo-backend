@@ -1,6 +1,6 @@
 import { SEND_NOW_ONLY, routedDelivery, type OutboxRoute } from './delivery-routes';
 import type { DeliveryReceipt, FinalRecord, TelegramFinalOutbox } from './telegram-final-outbox';
-import { WhatsAppApiError, WhatsAppPartialSend } from './whatsapp-api';
+import { WhatsAppApiError, WhatsAppFileRefused, WhatsAppPartialSend, deliverWhatsAppFile, whatsappFileLinkText, whatsappOutboundKind, type WhatsAppFileLinkReason, type WhatsAppFileOutcome, type WhatsAppOutboundFile } from './whatsapp-api';
 
 // WhatsApp's customer service window: a business may send free-form messages only within 24 hours
 // of the user's last message; outside it, only an approved template goes through
@@ -242,4 +242,17 @@ export const deliverHeldWhatsApp = async (kv: Kv, call: Caller, now: number, log
   }
   if (expired) log({ hop: 'whatsapp_held', ok: true, expired });
   if (misaddressed) log({ hop: 'whatsapp_held', ok: false, code: 'other_number', dropped: misaddressed });
+};
+
+// File bytes leave only while the window is open and nothing is held. Outside the window a document would be refused
+// after its upload, and while a reply is held a document would land before the reply it follows. So the owner gets the
+// link text instead, sent through the window layer, which holds it in order behind anything already held.
+export const deliverWhatsAppFileInWindow = async (kv: Kv, now: number, call: Caller, chatId: number, file: WhatsAppOutboundFile, fallback: () => Promise<string>): Promise<WhatsAppFileOutcome> => {
+  let reason: WhatsAppFileLinkReason | null = null;
+  try { whatsappOutboundKind(file); } catch (error) { if (!(error instanceof WhatsAppFileRefused)) throw error; reason = error.reason; }
+  const nothingHeld = [...kv.list({ prefix: WA_HELD_PREFIX })].length === 0;
+  if (reason === null && whatsappWindowOpen(kv, now) && nothingHeld) return deliverWhatsAppFile(call, chatId, file, fallback);
+  reason ??= 'window_closed';
+  const sent = await call('sendMessage', { chat_id: chatId, text: whatsappFileLinkText(file, reason, await fallback()) });
+  return sent === undefined ? { status: 'blocked' } : whatsappHeld(sent) ? { status: 'held', reason } : { status: 'degraded', reason };
 };

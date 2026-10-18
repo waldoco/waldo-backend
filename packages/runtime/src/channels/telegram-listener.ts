@@ -33,6 +33,8 @@ export type TelegramOwnerListenerOptions = Readonly<{
   respond(turn: TelegramInboundTurn, time: TurnTimer): Promise<string>;
   queueFinal?(turn: TelegramInboundTurn, payload: TelegramFinalPayload, reaction: string): Promise<void>;
   clearTurnReceipts?(trace: string): void;
+  // Sends the files the turn queued, after its reply is out. Only for surfaces whose reply is a direct send.
+  deliverAttachments?(trace: string, runScope?: RunEffectScope): Promise<void>;
   turnTimeoutMs?: number;
   reactionTimeoutMs?: number;
   chooseReaction?(turn: TelegramInboundTurn): Promise<string | null>;
@@ -160,6 +162,7 @@ export class TelegramOwnerListener {
       // A blocked send (unlinked or rebound owner) returns no message: the turn did not reach the owner.
       const delivered = await time('send', () => sendTelegramFinal(payload => api.sendMessage(payload), { chat_id, ...(rich.text===guardedText ? {text: guardedText} : rich) }));
       if (delivered === undefined) throw new Error('telegram send blocked');
+      if (this.options.deliverAttachments) await time('attachments', () => this.options.deliverAttachments!(trace, turn.runScope));
       const chosen = telegramReaction(await choice);
       await react('resolved', chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌');
       this.options.log?.({ trace, hop: 'turn', ms: now() - started, ok: true, text: { input: turn.text, output: text } });
