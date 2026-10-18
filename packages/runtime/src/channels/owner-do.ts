@@ -1645,7 +1645,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
                 // and sends resolve no owner, and what was held for that chat is discarded with it. A refused unlink keeps
                 // the binding, since the old number still routes here.
                 const name=this.ctx.storage.kv.get<string>('do_name'),done=name?await consoleAuth(this.env)?.unlinkWhatsApp?.(name)===true:false;
-                if(done){const {kv}=this.ctx.storage;this.ctx.storage.transactionSync(()=>{clearWhatsAppNumber(kv);kv.delete('whatsapp_subject');});this.runtimes={};}
+                if(done){const {kv}=this.ctx.storage;let retired:readonly string[]=[];this.ctx.storage.transactionSync(()=>{retired=clearWhatsAppNumber(kv);kv.delete('whatsapp_subject');});
+                  // The old chat's outbox records ended in that same step. No WhatsApp pass runs for them again, so their jobs settle now.
+                  if(retired.length)await runtime.finalOutbox.drain({...routedDelivery([]),select:record=>retired.includes(record.id),settled:runtime.settleFinal}).catch(()=>{console.error('whatsapp unlink settlement deferred');});
+                  this.runtimes={};}
                 return whatsappUnlinkReceipt(done);
               }
               if(action.action==='session.signout'||action.action==='session.signout.all'){

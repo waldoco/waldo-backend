@@ -1,5 +1,5 @@
 import { OUTBOX_CUSTODY, SEND_NOW_ONLY, routedDelivery, type OutboxRoute } from './delivery-routes';
-import type { DeliveryReceipt, FinalRecord, TelegramFinalOutbox } from './telegram-final-outbox';
+import { retireSurfaceRecords, type DeliveryReceipt, type FinalRecord, type TelegramFinalOutbox } from './telegram-final-outbox';
 import { WHATSAPP_HELD, WhatsAppApiError, WhatsAppFileRefused, WhatsAppPartialSend, deliverWhatsAppFile, whatsappFileLinkText, whatsappHeld, whatsappLinkOutcome, whatsappOutboundKind, type WhatsAppFileLinkReason, type WhatsAppFileOutcome, type WhatsAppOutboundFile } from './whatsapp-api';
 
 // WhatsApp's customer service window: a business may send free-form messages only within 24 hours
@@ -198,9 +198,15 @@ export const whatsappWindowRefused = (kv: Kv, refusal: Readonly<{ providerMessag
 
 // An unlink retires the chat the owner was bound to. What was held for it, and that chat's window and knock state, go with
 // it: held records carry no recipient, the next number to link is a different chat, and the old number may be someone else's.
-export const clearWhatsAppNumber = (kv: Kv): void => {
+// The outbox's records for that chat are retired too, since Meta's reports about them no longer reach this owner: an unsent
+// one is blocked and a sent one ends unconfirmed, and neither goes to the next number. Callers run this before they change
+// the bound number, in the same transaction; answers the ids of the retired records, for the caller to settle.
+export const clearWhatsAppNumber = (kv: Kv): readonly string[] => {
+  const old = kv.get<string>('whatsapp_subject');
+  const retired = old ? retireSurfaceRecords(kv, record => record.ownerSubject === old && String(record.payload.chat_id) === old) : [];
   for (const prefix of [WA_HELD_PREFIX, REHELD_PREFIX]) for (const [key] of [...kv.list({ prefix })]) kv.delete(key);
   for (const key of [WA_LAST_INBOUND_KEY, KNOCKED_KEY, REFUSED_KEY]) kv.delete(key);
+  return retired;
 };
 
 // Owner forget reaches held text the way it reaches a pending outbox record: a held message carrying a forgotten literal is

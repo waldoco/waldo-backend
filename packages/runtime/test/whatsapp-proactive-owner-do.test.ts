@@ -70,6 +70,8 @@ const drive = async (name: string, script: (steps: Readonly<{
   windowKeys(): string[];
   cancel(): Promise<void>;
   refuse(id: string, at?: number): Promise<number>;
+  // Meta reports that a message reached the phone; answers the owner's status code.
+  arrive(id: string): Promise<number>;
   unlink(): Promise<void>;
   sendNowOnly(text: string): Promise<unknown>;
   hold(texts: string[]): void;
@@ -157,6 +159,9 @@ const drive = async (name: string, script: (steps: Readonly<{
         },
         refuse: async (id, at = Date.now()) => (await owner.fetch(new Request('https://telegram-owner/whatsapp-status', {
           method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ refused: [{ id, at }] }),
+        }))).status,
+        arrive: async id => (await owner.fetch(new Request('https://telegram-owner/whatsapp-status', {
+          method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ delivered: [{ id, at: Date.now() }] }),
         }))).status,
         ledger: () => ({
           runs: state.storage.sql.exec<{ outcome: string; delivery: string | null }>('SELECT outcome, delivery FROM schedule_runs WHERE schedule_id = ? ORDER BY id', reminder.id).toArray(),
@@ -355,10 +360,27 @@ describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }
       // A status callback for the old number is refused, so it neither knocks nor delivers held text.
       expect(await refuse('wamid.out.1')).toBe(403);
       expect(wire.events).toEqual([]);
-      // What was held for the old chat was discarded with the unlink.
+      // What was held for the old chat was discarded with the unlink, and the reminder waiting for it ended unsent with it.
       expect(held()).toEqual([]);
-      expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'pending' }]);
-      expect(ledger().runs).toEqual([{ outcome: 'running', delivery: 'pending' }]);
+      expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'blocked', reason: 'surface_unlinked' }]);
+      expect(ledger().runs).toEqual([{ outcome: 'quarantined', delivery: 'failed' }]);
+    });
+  });
+
+  it('a reminder Meta took before the unlink ends unconfirmed with it; a later report for the old number changes nothing', async () => {
+    await drive('whatsapp-unlink-accepted', async ({ alarms, reply, unlink, arrive, ledger }) => {
+      await reply();
+      await alarms(3);
+      expect(wire.events).toEqual(['turn', `text:${REMINDER_TEXT}`]);
+      expect(ledger().outbox).toMatchObject([{ status: 'accepted', providerMessageIds: ['wamid.out.1'] }]);
+      await unlink();
+      expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'quarantined', reason: 'surface_unlinked', providerMessageIds: ['wamid.out.1'] }]);
+      expect(ledger().runs).toEqual([{ outcome: 'quarantined', delivery: 'failed' }]);
+      // Meta's report of arrival comes in for the old number: it no longer routes here, and the record is already terminal.
+      expect(await arrive('wamid.out.1')).toBe(403);
+      await alarms(2);
+      expect(ledger().outbox).toMatchObject([{ status: 'quarantined', reason: 'surface_unlinked' }]);
+      expect(wire.events.filter(event => event.startsWith('text:'))).toEqual([`text:${REMINDER_TEXT}`]);
     });
   });
 

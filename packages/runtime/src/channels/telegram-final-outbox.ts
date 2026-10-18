@@ -424,17 +424,18 @@ export const observeSurfaceStatuses = (kv: StatusKv, statuses: readonly SurfaceS
 
 // The surface these records were addressed to is gone (the owner unlinked or replaced that number): its reports will never
 // reach this owner again. A record nothing went out for is blocked; one that went out, or may have, ends unconfirmed. Neither
-// is ever sent again. Storage only, so the caller runs it in the same transaction as the binding change.
-export const retireSurfaceRecords = (kv: StatusKv, addressed: (record: FinalRecord) => boolean): number => {
+// is ever sent again. Storage only, so the caller runs it in the same transaction as the binding change; answers the ids of
+// the records it retired, for the caller to settle.
+export const retireSurfaceRecords = (kv: StatusKv, addressed: (record: FinalRecord) => boolean): readonly string[] => {
   const rows = new TelegramFinalOutbox(kv).records();
-  let retired = 0;
+  const retired: string[] = [];
   for (const row of rows) {
     if (!addressed(row) || (row.status !== 'pending' && row.status !== 'accepted' && row.status !== 'attempting')) continue;
     const sent = row.status !== 'pending' || (row.providerMessageIds ?? []).some(Boolean);
     row.status = sent ? 'quarantined' : 'blocked'; row.reason = 'surface_unlinked'; row.settled = false; row.dueAt = 0;
-    retired += 1;
+    retired.push(row.id);
   }
-  if (retired) writeRows(kv, rows);
+  if (retired.length) writeRows(kv, rows);
   return retired;
 };
 

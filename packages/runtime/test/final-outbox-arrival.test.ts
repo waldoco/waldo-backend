@@ -134,7 +134,7 @@ describe('the surface is unlinked or its number replaced', () => {
     const { surface } = await drained(kv, clock, { id: 'sent' });
     await new TelegramFinalOutbox(kv, () => clock.now).enqueue({ ...base, id: 'waiting' });
     await new TelegramFinalOutbox(kv, () => clock.now).enqueue({ ...base, id: 'other', payload: { chat_id: 7, text: 'Another surface.' }, ownerSubject: '7' });
-    expect(retireSurfaceRecords(kv, addressed)).toBe(2);
+    expect(retireSurfaceRecords(kv, addressed)).toEqual(['sent', 'waiting']);
     expect(rows(kv)).toEqual([
       { id: 'sent', status: 'quarantined', reason: 'surface_unlinked' },
       { id: 'waiting', status: 'blocked', reason: 'surface_unlinked' },
