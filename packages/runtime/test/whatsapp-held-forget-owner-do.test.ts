@@ -88,10 +88,16 @@ type Steps = Readonly<{
   forget(kind: 'node' | 'spot', text: string): Promise<boolean | string>;
   remember(text: string, status?: 'purging'): void;
   outbox(): Row[];
-  // The job's background run and the scheduler's run row for the same occurrence.
+  // The job's background run and the scheduler's run row for the occurrence that ran. The heartbeat's interval sits on the
+  // clock's half hours, so a test that crosses one also records the occurrence it skipped as missed; that row is left out.
   job(kind: 'heartbeat' | 'reminder'): Readonly<{ run: { status: string; summary: string | null }[]; scheduled: { outcome: string; delivery: string | null }[] }>;
   note(id: string): string | null;
   armed(id: string): boolean;
+  cancel(id: string): Promise<void>;
+  // Claims the owner's memory still holds, by status.
+  claims(status?: 'purging'): string[];
+  // Forget topics still waiting for a verified purge.
+  heldTopics(): string[];
 }>;
 
 // Unless a test writes, the owner last wrote 30 hours ago, so the window is closed. Today's cards are already planned, so the
@@ -155,10 +161,13 @@ const owned = async (name: string, script: (steps: Steps) => Promise<void>) => {
         outbox: () => (state.storage.kv.get<Row[]>('telegram_final_outbox_v1') ?? []).map(({ id, status, reason, payload }) => ({ id, status, ...(reason ? { reason } : {}), payload: { text: payload.text } })),
         job: kind => ({
           run: state.storage.sql.exec<{ status: string; summary: string | null }>('SELECT status, summary FROM background_runs WHERE kind = ? ORDER BY started_at', kind).toArray(),
-          scheduled: state.storage.sql.exec<{ outcome: string; delivery: string | null }>("SELECT r.outcome, r.delivery FROM schedule_runs r WHERE r.schedule_id LIKE ? ORDER BY r.id", kind === 'heartbeat' ? HEARTBEAT_ID : 'reminder:%').toArray(),
+          scheduled: state.storage.sql.exec<{ outcome: string; delivery: string | null }>("SELECT r.outcome, r.delivery FROM schedule_runs r WHERE r.schedule_id LIKE ? AND r.outcome != 'missed' ORDER BY r.id", kind === 'heartbeat' ? HEARTBEAT_ID : 'reminder:%').toArray(),
         }),
         note: id => reminderBook(state.storage.sql, scheduler, { timezone: 'UTC', now: () => new Date() }, () => 'unused').note(id),
         armed: id => scheduler.lookup(id).state === 'entry',
+        cancel: async id => { expect(await reminderBook(state.storage.sql, scheduler, { timezone: 'UTC', now: () => new Date() }, () => 'unused').cancel(id)).toBe(true); },
+        claims: status => memory.claims(status).map(claim => claim.text),
+        heldTopics: () => [...memory.pendingTopics(), ...memory.incompleteTopics()],
       });
     } finally { await state.storage.deleteAlarm(); turns.mockRestore(); }
   });
@@ -195,7 +204,7 @@ describe('owner forget reaches a heartbeat check-back waiting for WhatsApp', { t
   });
 
   it('cancels it from the forget tool in the owner\'s turn', async () => {
-    await owned('wa-forget-heartbeat-tool', async ({ alarms, write, heartbeat, remember, outbox, job }) => {
+    await owned('wa-forget-heartbeat-tool', async ({ alarms, write, heartbeat, remember, outbox, job, claims, heldTopics }) => {
       remember(`Chairs the ${SECRET} committee`);
       await heartbeat();
       await alarms(3);
@@ -203,6 +212,8 @@ describe('owner forget reaches a heartbeat check-back waiting for WhatsApp', { t
 
       release.held = true;
       await write(`Please forget the ${SECRET}.`, true);
+      // The forget completed: the claim is gone and no topic waits for a purge that could not verify clean.
+      expect([claims(), heldTopics()]).toEqual([[], []]);
       expect(outbox()).toEqual([{ id: expect.stringMatching(/^heartbeat:/), status: 'blocked', reason: 'owner_forget', payload: { text: CHECK_BACK.replace(SECRET, FORGOTTEN) } }]);
       await alarms(1);
       expect(wire.events.filter(event => event.includes(SECRET) || event === `text:${CHECK_BACK}`)).toEqual([]);
@@ -211,7 +222,7 @@ describe('owner forget reaches a heartbeat check-back waiting for WhatsApp', { t
   });
 
   it('cancels it when an unfinished forget is finished at the owner\'s next turn', async () => {
-    await owned('wa-forget-heartbeat-retry', async ({ alarms, write, heartbeat, remember, outbox }) => {
+    await owned('wa-forget-heartbeat-retry', async ({ alarms, write, heartbeat, remember, outbox, claims }) => {
       await heartbeat();
       await alarms(3);
       expect(outbox()).toMatchObject([{ status: 'pending' }]);
@@ -219,6 +230,7 @@ describe('owner forget reaches a heartbeat check-back waiting for WhatsApp', { t
       remember(SECRET, 'purging');
       release.held = true;
       await write('Good morning.', true);
+      expect(claims('purging')).toEqual([]);
       expect(outbox()).toEqual([{ id: expect.stringMatching(/^heartbeat:/), status: 'blocked', reason: 'owner_forget', payload: { text: CHECK_BACK.replace(SECRET, FORGOTTEN) } }]);
       await alarms(1);
       expect(wire.events.filter(event => event.includes(SECRET))).toEqual([]);
@@ -243,6 +255,22 @@ describe('owner forget reaches a reminder waiting for WhatsApp', { timeout: 30_0
       expect(job('reminder')).toEqual({ run: [{ status: 'stopped', summary: STOPPED_REMINDER }], scheduled: [{ outcome: 'ok', delivery: null }] });
       // Its one occurrence is over, so the one-off keeps no note behind.
       expect(note(id)).toBeNull();
+    });
+  });
+
+  it('keeps a cancelled reminder\'s outcome when a later forget scrubs its message', async () => {
+    await owned('wa-forget-reminder-cancelled', async ({ alarms, write, reminder, cancel, forget, outbox, job }) => {
+      const id = await reminder('none');
+      await alarms(3);
+      await cancel(id);
+      await write('hi');
+      expect(job('reminder').run).toEqual([{ status: 'stopped', summary: 'reminder cancelled before delivery' }]);
+
+      expect(await forget('node', SECRET)).toBe(true);
+      expect(outbox()).toMatchObject([{ status: 'blocked', reason: 'owner_forget', payload: { text: REMINDER.replace(SECRET, FORGOTTEN) } }]);
+      await alarms(1);
+      expect(wire.events).toEqual(['template:waldo_update_ready', 'turn']);
+      expect(job('reminder')).toEqual({ run: [{ status: 'stopped', summary: 'reminder cancelled before delivery' }], scheduled: [{ outcome: 'ok', delivery: null }] });
     });
   });
 

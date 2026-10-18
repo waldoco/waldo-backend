@@ -3622,10 +3622,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // A one-off's only occurrence is over once it is delivered or forget cancels it, so its note goes too. A repeating
         // reminder keeps its note (forget has already scrubbed the literal from it) and fires again.
         if (record.reminder.once && (delivered || forgotten)) this.ctx.storage.sql.exec('DELETE FROM reminder_notes WHERE id = ?', record.reminder.id);
-        if (delivered) runs.finish(record.reminder.runId, 'completed', 'reminder sent');
-        else if (forgotten) runs.finish(record.reminder.runId, 'stopped', 'reminder not sent: it named something you asked me to forget');
-        else if (cancelled) runs.finish(record.reminder.runId, 'stopped', 'reminder cancelled before delivery');
-        else runs.finish(record.reminder.runId, 'failed', 'reminder delivery unconfirmed');
+        // A record forget scrubs after it ended is settled again; its run keeps the outcome it ended with.
+        if (runs.byId(record.reminder.runId)?.status === 'running') {
+          if (delivered) runs.finish(record.reminder.runId, 'completed', 'reminder sent');
+          else if (forgotten) runs.finish(record.reminder.runId, 'stopped', 'reminder not sent: it named something you asked me to forget');
+          else if (cancelled) runs.finish(record.reminder.runId, 'stopped', 'reminder cancelled before delivery');
+          else runs.finish(record.reminder.runId, 'failed', 'reminder delivery unconfirmed');
+        }
       }
       // Never mark a queued or ambiguous turn resolved. Reaction itself is best effort.
       if (delivered && record.reaction) await api.setMessageReaction({ chat_id: record.payload.chat_id,
