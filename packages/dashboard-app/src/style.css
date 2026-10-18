@@ -271,6 +271,13 @@ input:focus,select:focus { box-shadow:inset 0 0 0 1px var(--ink); }
 .control-row { display:grid; grid-template-columns:1fr auto; gap:20px; padding:16px 0; border-top:.5px solid var(--hair); align-items:center; }
 .control-receipt h2 { font-size:16px; }
 .control-receipt-message { color:var(--ink); }
+/* A code or challenge shown once with its receipt: one copyable value, never wrapped mid-word. */
+.revealed { margin:12px 0 0; }
+.revealed-value { font:600 17px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; word-break:break-all; background:var(--fill-2); border-radius:var(--r-inner); padding:14px 16px; margin:6px 0 0; user-select:all; -webkit-user-select:all; }
+.steps { margin:0 0 4px; padding-left:22px; display:grid; gap:4px; }
+.crumbs { display:flex; align-items:center; gap:8px; margin:-8px 0 16px; font-size:13.5px; color:var(--t2); }
+.crumbs a { color:var(--t2); }
+.crumbs [aria-current=page]::before { content:'/'; margin-right:8px; color:var(--t3); }
 .table-scroll { overflow-x:auto; margin:12px 0; }
 .table-scroll table { width:100%; border-collapse:collapse; font-size:13.5px; text-align:left; }
 .table-scroll th { font-weight:500; color:var(--t3); font-size:12px; white-space:nowrap; }

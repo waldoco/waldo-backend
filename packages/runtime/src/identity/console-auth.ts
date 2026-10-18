@@ -35,6 +35,9 @@ export type ConsoleAuth = Readonly<{
   unlinkIMessage?(doName: string): Promise<boolean>;
   /** The last 2-4 characters of the owner's linked iMessage handle, or null; the full handle never leaves the database. */
   iMessageHandleHint?(doName: string): Promise<string | null>;
+  unlinkWhatsApp?(doName: string): Promise<boolean>;
+  /** The last 2-4 digits of the owner's linked WhatsApp number, or null; the full number never leaves the database. */
+  whatsAppHandleHint?(doName: string): Promise<string | null>;
   // Send-time ownership re-check: true only while an active presence binds this channel subject to this owner.
   assertChannelPresence(doName: string, provider: string, subject: string): Promise<boolean>;
   deleteOwner(doName: string): Promise<boolean>;
@@ -74,6 +77,10 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
   const { SUPABASE_PROJECT_URL: base, SUPABASE_PUBLISHABLE_KEY: key, WALDO_ROUTER_HMAC_SECRET: secret } = env;
   const rpc = signedRpc(env, fetcher, now);
   if (!base || !key || !secret || !rpc) return null;
+  const presenceHint = async (doName: string, provider: 'imessage' | 'whatsapp') => {
+    const hint = await rpc('presence_hint', `presencehint.${doName}.${provider}`, { p_do_name: doName, p_provider: provider });
+    return typeof hint === 'string' && hint.length >= 2 && hint.length <= 4 ? hint : null;
+  };
   const auth = <T>(path: string, body: object, decode: (response: Response) => T | Promise<T>) => withRequestTimeout(async signal => {
     const response = await fetcher(`${base}/auth/v1/${path}`, {
       method: 'POST', headers: { apikey: key, 'content-type': 'application/json' }, body: JSON.stringify(body), signal,
@@ -171,10 +178,9 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     revokeInvite: async (doName, invite) => (await rpc('admin_revoke', `revoke.${doName}.${invite}`, { p_do_name: doName, p_invite: invite })) === true,
     unlinkTelegram: async (doName) => (await rpc('unlink_presence', `unlink.${doName}.telegram`, { p_do_name: doName, p_provider: 'telegram' })) === true,
     unlinkIMessage: async (doName) => (await rpc('unlink_presence', `unlink.${doName}.imessage`, { p_do_name: doName, p_provider: 'imessage' })) === true,
-    async iMessageHandleHint(doName) {
-      const hint = await rpc('presence_hint', `presencehint.${doName}.imessage`, { p_do_name: doName, p_provider: 'imessage' });
-      return typeof hint === 'string' && hint.length >= 2 && hint.length <= 4 ? hint : null;
-    },
+    iMessageHandleHint: (doName) => presenceHint(doName, 'imessage'),
+    unlinkWhatsApp: async (doName) => (await rpc('unlink_presence', `unlink.${doName}.whatsapp`, { p_do_name: doName, p_provider: 'whatsapp' })) === true,
+    whatsAppHandleHint: (doName) => presenceHint(doName, 'whatsapp'),
     assertChannelPresence: async (doName, provider, subject) => (await rpc('assert_channel_presence', `presence.${doName}.${provider}.${subject}`, { p_do_name: doName, p_provider: provider, p_subject: subject })) === true,
     deleteOwner: async (doName) => (await rpc('delete_owner', `delown.${doName}`, { p_do_name: doName })) === true,
     ownerCookie: (doName) => mint(doName, cookieSig),

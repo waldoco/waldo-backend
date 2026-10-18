@@ -68,7 +68,7 @@ describe('handleWhatsAppWebhook', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('routes a verified message to the right owner DO with the whatsapp subject header', async () => {
+  it('routes a verified message to the right owner DO with the whatsapp subject and owner name headers', async () => {
     const { fetch, idFromName, ns } = namespace();
     const directory: OwnerDirectory = {
       byPresence: async (provider, subject) => {
@@ -83,7 +83,7 @@ describe('handleWhatsAppWebhook', () => {
     expect(idFromName).toHaveBeenCalledWith('do-a');
     expect(fetch).toHaveBeenCalledWith('https://telegram-owner/whatsapp-admit', {
       method: 'POST', body: expect.any(String),
-      headers: { 'x-waldo-origin': 'https://w.test', 'x-waldo-whatsapp-subject': '15550001111', 'x-waldo-timezone': 'Asia/Kolkata' },
+      headers: { 'x-waldo-origin': 'https://w.test', 'x-waldo-whatsapp-subject': '15550001111', 'x-waldo-do-name': 'do-a', 'x-waldo-timezone': 'Asia/Kolkata' },
     });
     // the forwarded body carries only that sender's messages, never the status callbacks
     const forwarded = JSON.parse(String(fetch.mock.calls[0]![1]!.body)) as { messages: unknown[]; statuses?: unknown[] };
@@ -91,6 +91,36 @@ describe('handleWhatsAppWebhook', () => {
     expect(forwarded.statuses).toBeUndefined();
   });
 
+  it('admission: a definite refusal (400, 403 such as a sender the owner has not bound, 404) is acknowledged; anything else answers 503', async () => {
+    const directory: OwnerDirectory = { byPresence: async () => ({ doName: 'do-a', subject: '15550001111', timezone: null }), redeem: async () => null };
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const replies: [() => Promise<Response>, number][] = [
+      [async () => new Response('forbidden', { status: 403 }), 200], [async () => new Response('bad request', { status: 400 }), 200],
+      [async () => new Response('not found', { status: 404 }), 200],
+      [async () => new Response('conflict', { status: 409 }), 503], [async () => new Response('slow down', { status: 429 }), 503],
+      [async () => new Response('unavailable', { status: 503 }), 503], [async () => { throw new Error('owner unreachable'); }, 503],
+    ];
+    try {
+      for (const [reply, expected] of replies) {
+        const { fetch, ns } = namespace();
+        fetch.mockImplementation(reply);
+        expect((await run(await post('x', payload([{ from: '15550001111' }])), { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret' }, directory)).status).toBe(expected);
+      }
+      expect(log.mock.calls.map(([line]) => String(line)).filter(line => line.includes('"hop":"whatsapp_admit"'))).toHaveLength(7);
+    } finally { log.mockRestore(); }
+  });
+
+  it('after an unlink the old sender wakes no DO, while another owner keeps routing', async () => {
+    const { fetch, idFromName, ns } = namespace();
+    // Only active presences route; unlink_presence retires the row, so the directory stops answering for that number.
+    const active = new Map([['15550001111', 'do-a'], ['15550002222', 'do-b']]);
+    const directory: OwnerDirectory = { byPresence: async (_provider, subject) => active.has(subject) ? { doName: active.get(subject)!, subject, timezone: null } : null, redeem: async () => null };
+    const env: WhatsAppWebhookEnv = { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret' };
+    active.delete('15550001111');
+    expect((await run(await post('x', payload([{ from: '15550001111', text: 'still me?' }, { from: '15550002222' }])), env, directory)).status).toBe(200);
+    expect(idFromName.mock.calls).toEqual([['do-b']]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
   it('a multi-sender payload routes each owner only their own messages', async () => {
     const { fetch, ns } = namespace();
     const directory: OwnerDirectory = {
