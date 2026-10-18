@@ -38,8 +38,8 @@ function surfaceNotes({ value, app_linked, whatsapp_linked, telegram_linked }: P
   if (value === 'app') return [];
   const window = 'WhatsApp lets Waldo write freely for a day after your last message there.';
   return value === 'whatsapp'
-    ? ['Meeting prep before your events isn’t sent on WhatsApp yet.', `${window} After that, Waldo holds its messages until you write again.`]
-    : ['Meeting prep before your events comes to the app only.', `${window} After that, each copy waits a day at most for your next message there; the app keeps every message.`];
+    ? ['Meeting prep before your events isn’t sent on WhatsApp yet.', `${window} After that, a day card waits only until your next card is due or its day ends, update cards aren’t sent, and a standing order’s newer report replaces a waiting one. Other messages wait up to 30 days for your next message there, unless they no longer apply.`]
+    : ['Meeting prep before your events, update cards and notices about paused jobs come to the app only.', `${window} After that, each copy waits a day at most for your next message there; the app keeps every message.`];
 }
 function ProactiveSurfaceSetting({ surface, busy, onAction }: { surface: ProactiveSurface } & ActionProps) {
   const [choice, setChoice] = useState(surface.value);
