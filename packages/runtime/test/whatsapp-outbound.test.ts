@@ -28,6 +28,35 @@ describe('whatsapp graph version', () => {
   });
 });
 
+// Meta prepends the business number's country calling code to a `to` with no leading +, so the stored digits of an
+// Indian owner, sent bare from a US business number, would address +1 91….
+describe('whatsapp recipient numbers', () => {
+  it('a text, a template, a document and an image to the owner all go to the stored number in E.164, with its plus', async () => {
+    const graph = vi.fn(async (url: string, _init?: RequestInit) => url.endsWith('/media') ? Response.json({ id: 'media-77' }) : Response.json({ messages: [{ id: 'wamid.out' }] }));
+    const shim = whatsappTelegramShim('tok', 'pn1', '15550001111', graph as unknown as typeof fetch);
+    await shim('sendMessage', { chat_id: 15550001111, text: 'Your 6 pm reminder' });
+    await shim('sendTemplate', { name: 'waldo_update_ready', language: 'en' });
+    await shim('sendDocument', { chat_id: 15550001111, file: { bytes: new TextEncoder().encode('%PDF-1.4 test'), mime: 'application/pdf', filename: 'plan.pdf' } });
+    await shim('sendDocument', { chat_id: 15550001111, file: { bytes: new Uint8Array([1, 2, 3]), mime: 'image/png', filename: 'chart.png' } });
+    const sends = graph.mock.calls.filter(([url]) => url.endsWith('/messages')).map(([, init]) => JSON.parse(String(init?.body)));
+    expect(sends.map(body => [body.type, body.to])).toEqual([['text', '+15550001111'], ['template', '+15550001111'], ['document', '+15550001111'], ['image', '+15550001111']]);
+  });
+
+  it('only an all-digit to gets the plus: one that has it already is not doubled, and an empty one stays empty', async () => {
+    const graph = graphOk();
+    const call = createWhatsAppCaller('tok', 'pn1', graph as unknown as typeof fetch);
+    await call({ to: '+15550001111', type: 'text', text: { body: 'hi' } });
+    await call({ to: '', type: 'text', text: { body: 'hi' } });
+    expect(sentBodies(graph).map(body => body.to)).toEqual(['+15550001111', '']);
+  });
+
+  it('a business-scoped user id goes out in recipient exactly as given, and the send carries no to', async () => {
+    const graph = graphOk();
+    await createWhatsAppCaller('tok', 'pn1', graph as unknown as typeof fetch)({ recipient: 'US.13491208655302741918', type: 'text', text: { body: 'hi' } });
+    expect(sentBodies(graph)).toEqual([{ messaging_product: 'whatsapp', recipient: 'US.13491208655302741918', type: 'text', text: { body: 'hi' } }]);
+  });
+});
+
 describe('whatsapp link previews', () => {
   it('a text with an http(s) link asks for a preview when the caller has not disabled one', async () => {
     const graph = graphOk();
@@ -74,7 +103,7 @@ describe('whatsapp outbound files', () => {
 
     const shim = whatsappTelegramShim('tok', 'pn1', '15550001111', graph as unknown as typeof fetch);
     expect(await shim('sendDocument', { chat_id: 15550001111, file: pdf })).toEqual({ messages: [{ id: 'wamid.doc' }] });
-    expect(JSON.parse(String(graph.mock.calls[2]![1]?.body))).toEqual({ messaging_product: 'whatsapp', to: '15550001111', type: 'document', document: { id: 'media-77', filename: 'plan.pdf' } });
+    expect(JSON.parse(String(graph.mock.calls[2]![1]?.body))).toEqual({ messaging_product: 'whatsapp', to: '+15550001111', type: 'document', document: { id: 'media-77', filename: 'plan.pdf' } });
   });
 
   it('a jpeg or png goes as an image message; docx, xlsx, pptx and txt go as documents', async () => {
@@ -160,7 +189,7 @@ describe('whatsapp 24-hour window', () => {
     recordWhatsAppInbound(kv, [{ timestamp: String(T0 / 1000) }], T0);
     clock.now = T0 + 23 * HOUR;
     expect(await call('sendMessage', { chat_id: 1, text: 'Your 6 pm reminder' })).toEqual({ messages: [{ id: 'wamid.out' }] });
-    expect(sentBodies(graph)).toEqual([{ messaging_product: 'whatsapp', to: '15550001111', type: 'text', text: { body: 'Your 6 pm reminder' } }]);
+    expect(sentBodies(graph)).toEqual([{ messaging_product: 'whatsapp', to: '+15550001111', type: 'text', text: { body: 'Your 6 pm reminder' } }]);
   });
 
   it('outside the window the text is held, one approved template knocks, and a second message does not knock again', async () => {
@@ -172,7 +201,7 @@ describe('whatsapp 24-hour window', () => {
     expect(whatsappHeld(await call('sendMessage', { chat_id: 1, text: 'PRIVATE reminder two' }))).toBe(true);
     expect(whatsappHeld(undefined)).toBe(false);
     const bodies = sentBodies(graph);
-    expect(bodies).toEqual([{ messaging_product: 'whatsapp', to: '15550001111', type: 'template', template: { name: 'waldo_update_ready', language: { code: 'en' } } }]);
+    expect(bodies).toEqual([{ messaging_product: 'whatsapp', to: '+15550001111', type: 'template', template: { name: 'waldo_update_ready', language: { code: 'en' } } }]);
     expect(JSON.stringify(bodies)).not.toContain('PRIVATE');
     expect([...map.keys()].filter(key => key.startsWith('wa_held:'))).toHaveLength(2);
   });

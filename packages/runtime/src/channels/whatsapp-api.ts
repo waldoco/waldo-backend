@@ -24,6 +24,14 @@ export class WhatsAppApiError extends Error {
   }
 }
 
+// https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/send-messages/ , "WhatsApp user phone
+// number formats": a `to` without its plus gets the business number's country calling code prepended. Callers pass the
+// stored E.164 digits, so an all-digit `to` goes out with its plus. A BSUID goes in `recipient`, which is sent as given.
+const e164To = (body: object): object => {
+  const { to } = body as { to?: unknown };
+  return typeof to === 'string' && /^\d+$/.test(to) ? { ...body, to: `+${to}` } : body;
+};
+
 export const createWhatsAppCaller = (token: string, phoneNumberId: string, fetcher: typeof fetch = fetch): WhatsAppCall =>
   async (body) => {
     const controller = new AbortController();
@@ -33,7 +41,7 @@ export const createWhatsAppCaller = (token: string, phoneNumberId: string, fetch
       const response = await Promise.race([fetcher(`https://graph.facebook.com/${WHATSAPP_GRAPH_VERSION}/${phoneNumberId}/messages`, {
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ messaging_product: 'whatsapp', ...body }),
+        body: JSON.stringify({ messaging_product: 'whatsapp', ...e164To(body) }),
         signal: controller.signal,
       }),timeout]);
       if (!response.ok) throw new WhatsAppApiError(response.status, await Promise.race([response.text(),timeout]));

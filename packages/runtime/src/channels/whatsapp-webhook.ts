@@ -99,9 +99,11 @@ const WHATSAPP_HIDDEN_NUMBER_REPLY = "WhatsApp didn't share this chat's phone nu
 // other status is dropped.
 type WaStatus = { id?: unknown; status?: unknown; timestamp?: unknown; recipient_id?: unknown; errors?: { code?: unknown }[] };
 type WaRefusal = { id: string; at: number | null };
+const statusesOf = (body: WaBody): WaStatus[] => (body.entry ?? []).flatMap(entry => (entry.changes ?? []).flatMap(change =>
+  Array.isArray(change.value?.statuses) ? change.value.statuses as WaStatus[] : []));
 const windowRefusals = (body: WaBody): Map<string, WaRefusal[]> => {
   const out = new Map<string, WaRefusal[]>();
-  for (const entry of body.entry ?? []) for (const change of entry.changes ?? []) for (const status of (Array.isArray(change.value?.statuses) ? change.value.statuses : []) as WaStatus[]) {
+  for (const status of statusesOf(body)) {
     if (status?.status !== 'failed' || typeof status.id !== 'string' || !status.id || typeof status.recipient_id !== 'string' || !status.recipient_id) continue;
     if (!Array.isArray(status.errors) || !status.errors.some(error => error?.code === WHATSAPP_REENGAGEMENT_ERROR)) continue;
     const at = typeof status.timestamp === 'string' && /^\d{1,12}$/.test(status.timestamp) ? Number(status.timestamp) * 1000 : null;
@@ -109,6 +111,15 @@ const windowRefusals = (body: WaBody): Map<string, WaRefusal[]> => {
   }
   return out;
 };
+
+// A send Graph accepted and Meta then failed to deliver shows up only as a failed status. Each one is logged by its
+// numeric error codes alone, never by its recipient, message id or Meta's error text.
+const failedStatusCodes = (body: WaBody): number[][] => statusesOf(body).filter(status => status?.status === 'failed').map(status =>
+  (Array.isArray(status.errors) ? status.errors : []).map(error => error?.code).filter((code): code is number => typeof code === 'number' && Number.isSafeInteger(code)));
+
+// A failed Graph send is logged by the error's name and, for a Graph refusal, its HTTP status and Meta's error code. Never
+// by the error's message, which carries up to 200 bytes of Graph's response body.
+const sendFailure = (error: unknown) => ({ error: error instanceof Error ? error.name : 'unknown', ...(error instanceof WhatsAppApiError ? { status: error.status, code: error.code } : {}) });
 
 const linkCode = (body: WaBody, senderId: string): string | null => {
   for (const entry of body.entry ?? []) for (const change of entry.changes ?? []) {
@@ -125,7 +136,7 @@ const linkCode = (body: WaBody, senderId: string): string | null => {
 
 // The webhook verifies Meta's signature, resolves which owner a WhatsApp sender belongs to and
 // wakes only that owner's Durable Object. A status callback reaches the owner only when Meta refused a send for the
-// 24-hour window; the rest are acknowledged and dropped.
+// 24-hour window; every failed one is logged by its error codes, and the rest are acknowledged and dropped.
 // A sender with no owner can redeem a one-time console link code ("waldo CODE"); any other message gets the
 // text-first reply: a one-tap sign-in link when one owner has this number on file, otherwise the waitlist.
 export const handleWhatsAppWebhook = async (
@@ -184,15 +195,16 @@ export const handleWhatsAppWebhook = async (
         const reply = await textFirstReply(sender, origin, env, textFirst);
         console.log(JSON.stringify({ hop: 'whatsapp_text_first', ok: true, replied: reply !== null }));
         if (reply) await sendWhatsAppText(createWhatsAppCaller(env.WHATSAPP_ACCESS_TOKEN!, env.WHATSAPP_PHONE_NUMBER_ID!), sender, reply);
-      })().catch((error: unknown) => console.log(JSON.stringify({ hop: 'whatsapp_text_first', ok: false, error: error instanceof Error ? error.name : 'unknown' }))));
+      })().catch((error: unknown) => console.log(JSON.stringify({ hop: 'whatsapp_text_first', ok: false, ...sendFailure(error) }))));
       continue;
     }
     deferred.push((async () => {
       const linked = await directory.redeem('whatsapp', sender, code).catch(() => null);
       const call = createWhatsAppCaller(env.WHATSAPP_ACCESS_TOKEN!, env.WHATSAPP_PHONE_NUMBER_ID!);
       await sendWhatsAppText(call, sender, linked ? 'Linked. This chat now talks to your Waldo.' : 'That code did not work. Get a new one from your console.');
-    })().catch((error: unknown) => console.log(JSON.stringify({ hop: 'whatsapp_route', ok: false, error: String(error) }))));
+    })().catch((error: unknown) => console.log(JSON.stringify({ hop: 'whatsapp_link_code', ok: false, ...sendFailure(error) }))));
   }
+  for (const codes of failedStatusCodes(payload)) console.log(JSON.stringify({ hop: 'whatsapp_status_failed', codes }));
   // A refusal the owner could not take for now (unreachable, or a 5xx) answers 503, so Meta delivers it again; the owner
   // handles each message id once. A definite refusal (a 4xx: a subject no longer bound, a malformed batch) is acknowledged,
   // since redelivering it can never succeed.
@@ -226,9 +238,8 @@ export const handleWhatsAppWebhook = async (
         console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: true, replied: allowed, sender }));
       } catch (error) {
         // Not retried, and the payload is still acked. The Graph status and Meta's error code say why the send was
-        // refused (131062: a BSUID recipient is not supported for this message); the response body is never logged.
-        const graph = error instanceof WhatsAppApiError ? { status: error.status, code: error.code } : {};
-        console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: false, sender, error: error instanceof Error ? error.name : 'unknown', ...graph }));
+        // refused (131062: a BSUID recipient is not supported for this message).
+        console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: false, sender, ...sendFailure(error) }));
       }
     })());
   }

@@ -93,7 +93,7 @@ it.each([['bound through the WhatsApp admission', false], ['already bound by ano
     expect(outputOf('write')).toMatchObject({ ok: true });
     expect(h.manifest()?.files.map(file => file.path)).toEqual(['notes/wa.txt']);
     expect(new TextDecoder().decode([...h.bytes.values()][0])).toBe(writeArgs.text);
-    expect(h.sent.map(s => s.to)).toContain(SUBJECT);
+    expect(h.sent.map(s => s.to)).toContain(`+${SUBJECT}`);
     expect(h.sent.some(s => s.text === WHATSAPP_PARTIAL_NOTICE)).toBe(false);
   });
 });
@@ -126,8 +126,8 @@ it.each([
     paused.release();
     await h.settle();
     expect(h.manifest()?.files ?? []).toEqual([]);
-    expect(h.sent.filter(s => s.to === OTHER)).toEqual([]);
-    expect(h.sent.filter(s => s.text === WHATSAPP_PARTIAL_NOTICE)).toEqual(Array(notices).fill({ to: SUBJECT, text: WHATSAPP_PARTIAL_NOTICE }));
+    expect(h.sent.filter(s => s.to === `+${OTHER}`)).toEqual([]);
+    expect(h.sent.filter(s => s.text === WHATSAPP_PARTIAL_NOTICE)).toEqual(Array(notices).fill({ to: `+${SUBJECT}`, text: WHATSAPP_PARTIAL_NOTICE }));
     expect(h.sent.filter(s => s.text === 'Saved it.')).toEqual([]);
     expect([...h.state.storage.kv.list({ prefix: 'wa_pending:' })]).toEqual([]);
   });
@@ -149,7 +149,7 @@ it.each([
     await paused.reached;
     await close(h, async () => { paused.release(); await h.settle(); });
     expect(h.manifest()?.files ?? []).toEqual([]);
-    expect(h.sent.filter(s => s.text === WHATSAPP_PARTIAL_NOTICE)).toEqual([{ to: SUBJECT, text: WHATSAPP_PARTIAL_NOTICE }]);
+    expect(h.sent.filter(s => s.text === WHATSAPP_PARTIAL_NOTICE)).toEqual([{ to: `+${SUBJECT}`, text: WHATSAPP_PARTIAL_NOTICE }]);
     expect(h.sent.filter(s => s.text === 'Saved it.')).toEqual([]);
   });
 });
@@ -166,7 +166,7 @@ it('a WhatsApp turn cut off by eviction yields one notice and is never replayed'
     const cold = h.restart();
     const turns = vi.spyOn(cold as unknown as { turn(): Promise<void> }, 'turn');
     await cold.alarm();
-    expect(h.sent.filter(s => s.text === WHATSAPP_PARTIAL_NOTICE)).toEqual([{ to: SUBJECT, text: WHATSAPP_PARTIAL_NOTICE }]);
+    expect(h.sent.filter(s => s.text === WHATSAPP_PARTIAL_NOTICE)).toEqual([{ to: `+${SUBJECT}`, text: WHATSAPP_PARTIAL_NOTICE }]);
     expect([...h.state.storage.kv.list({ prefix: 'wa_pending:' })]).toEqual([]);
     expect((await h.admit(['wamid.evict.1'])).status).toBe(200);
     await h.settle();

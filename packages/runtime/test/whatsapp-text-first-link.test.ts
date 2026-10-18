@@ -23,10 +23,10 @@ const env = { OWNER_DO: {} as DurableObjectNamespace, WHATSAPP_APP_SECRET: SECRE
 const unlinked: OwnerDirectory = { byPresence: async () => null, redeem: vi.fn(async () => null) };
 const links = (open: WhatsAppLinkDirectory['open']): WhatsAppLinkDirectory => ({ open: vi.fn(open), subject: vi.fn(async () => null), consume: vi.fn(async () => 'rejected' as const) });
 
-const run = async (request: Request, directory: OwnerDirectory, textFirst: WhatsAppTextFirst | null) => {
+const run = async (request: Request, directory: OwnerDirectory, textFirst: WhatsAppTextFirst | null, graphReply = () => Response.json({ messages: [{ id: 'wamid.reply' }] })) => {
   const sent: { to: string; text: { body: string; preview_url?: boolean } }[] = [];
   const logs: string[] = [];
-  const graph = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => { sent.push(JSON.parse(String(init?.body))); return Response.json({ messages: [{ id: 'wamid.reply' }] }); });
+  const graph = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => { sent.push(JSON.parse(String(init?.body))); return graphReply(); });
   const log = vi.spyOn(console, 'log').mockImplementation((line: unknown) => { logs.push(String(line)); });
   const work: Promise<unknown>[] = [];
   try {
@@ -44,7 +44,7 @@ describe('the reply to an unlinked sender', () => {
     const { response, sent, logs } = await run(await inbound('hi waldo'), unlinked, { links: directory, throttle: async () => true });
     expect(response.status).toBe(200);
     expect(sent).toHaveLength(1);
-    expect(sent[0]!.to).toBe(SENDER);
+    expect(sent[0]!.to).toBe(`+${SENDER}`);
     const url = /https:\/\/waldo\.example(\/console\/whatsapp\/link\/[A-Za-z0-9_-]{43})(?=\s|$)/.exec(sent[0]!.text.body)?.[1];
     const token = whatsappLinkToken(url ?? '');
     expect(token).not.toBeNull();
@@ -89,6 +89,14 @@ describe('the reply to an unlinked sender', () => {
 
   it('without a directory an unlinked sender gets no reply at all', async () => {
     expect((await run(await inbound('hi'), unlinked, null)).sent).toEqual([]);
+  });
+
+  it('a reply Graph refuses is logged by its HTTP status and Meta code, never by the number, a message id or Graph\'s text', async () => {
+    const refusal = () => Response.json({ error: { code: 131030, message: `(#131030) Recipient ${SENDER} not in allowed list`, error_data: { details: 'FICTIONAL-DETAIL wamid.fictional' } } }, { status: 400 });
+    const { sent, logs } = await run(await inbound('hi waldo'), unlinked, { links: links(async () => 'waitlist'), throttle: async () => true }, refusal);
+    expect(sent).toHaveLength(1);
+    expect(logs.map(line => JSON.parse(line)).filter(line => line.ok === false)).toEqual([{ hop: 'whatsapp_text_first', ok: false, error: 'Error', status: 400, code: 131030 }]);
+    for (const leak of [SENDER, 'wamid.', 'FICTIONAL-DETAIL', 'allowed list']) expect(logs.join('\n')).not.toContain(leak);
   });
 });
 
@@ -164,7 +172,7 @@ describe('senders and callbacks that never reach an owner', () => {
     // The unbound phone sender gets exactly one text-first link; the link directory and throttle saw only that number.
     expect(vi.mocked(open).mock.calls.map(([subject]) => subject)).toEqual([SENDER]);
     expect(throttle).toHaveBeenCalledTimes(1);
-    const toSender = sent.filter(body => body.to === SENDER);
+    const toSender = sent.filter(body => body.to === `+${SENDER}`);
     expect(toSender).toHaveLength(1);
     expect(toSender[0]!.text.body).toContain('/console/whatsapp/link/');
     // The hidden sender gets exactly one hidden-number reply, addressed by BSUID, and never a link.
@@ -175,7 +183,7 @@ describe('senders and callbacks that never reach an owner', () => {
     expect(rpcs).toEqual(['whatsapp_onboarding_allowed']);
     // Nothing else was sent: no reply to the linked sender, and no second reply to anyone.
     expect(sent).toHaveLength(2);
-    expect(sent.some(body => body.to === LINKED || body.recipient === LINKED)).toBe(false);
+    expect(sent.some(body => body.to === `+${LINKED}` || body.recipient === LINKED)).toBe(false);
   });
 
   it('in one payload with a linked sender, only that owner is admitted and named; the unbound and hidden senders reach no owner', async () => {

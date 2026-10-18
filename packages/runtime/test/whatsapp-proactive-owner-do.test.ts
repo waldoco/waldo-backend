@@ -54,7 +54,7 @@ beforeEach(() => {
       wire.events.push(body.type === 'template' ? `template:${body.template!.name}` : `text:${body.text!.body}`);
       wire.wamid += 1;
       if (wire.stall && body.text?.body === wire.stall.text) { wire.stall.reached(); await wire.stall.until; }
-      return Response.json({ messaging_product: 'whatsapp', contacts: [{ input: body.to, wa_id: body.to }], messages: [{ id: `wamid.out.${wire.wamid}` }] });
+      return Response.json({ messaging_product: 'whatsapp', contacts: [{ input: body.to, wa_id: body.to.replace(/^\+/, '') }], messages: [{ id: `wamid.out.${wire.wamid}` }] });
     }
     wire.other.push(url);
     return new Response('unexpected', { status: 500 });
