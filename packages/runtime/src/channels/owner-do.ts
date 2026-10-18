@@ -86,7 +86,7 @@ import { HARNESS_MESSAGE_LIMIT, heldRowShapes } from '../memory/held-rows';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
-import { nextOccurrence, Scheduler } from '../scheduler/multiplexer';
+import { Scheduler } from '../scheduler/multiplexer';
 import { productionDeps } from '../seams/deps';
 import { redactConversationEntries, durableConversationStore, scrubConversationHistory } from './conversation-store';
 import { egressGuardedCaller, redactSecretUrls } from './egress-guard';
@@ -3204,6 +3204,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const run = runs.start('standing_order', entry.id);
       const trace = `${entry.id}:${entry.occurrence_at}:${entry.attempts}`;
       const started = Date.now();
+      let reportQueued = false;
       try {
         const text = (await responder.prompt(trace, owner, standingOrderFireText(order), async (hop, work) => {
           const at = Date.now();
@@ -3217,10 +3218,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           }
         })).trim();
         if (text && outboxed) {
-          // The run finishes when the report is delivered or lapses. The report is current until the order runs again.
+          // The run finishes when the report is delivered or ends unsent. A report is current until the order reports again:
+          // queuing this one supersedes an earlier report of the order still waiting, so the owner gets the latest one, and a run
+          // that fails leaves the earlier report standing. Past that, only the surface's own lapse (WhatsApp, 30 days) ends it.
           await finalOutbox.enqueue({ id: queued, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),
-            doName: identity.get<string>('do_name') ?? '', ...(entry.recurrence ? { expiresAt: nextOccurrence(entry.recurrence, entry.occurrence_at) } : {}),
-            standingOrder: { runId: run.id, gate: order.gate } });
+            doName: identity.get<string>('do_name') ?? '', standingOrder: { runId: run.id, gate: order.gate } },
+          { supersedes: record => record.standingOrder !== undefined && record.id.startsWith(`standing-order:${entry.id}:`) });
+          reportQueued = true;
           await scheduler.rearm();
           log({ trace, hop: 'delivery_pending', ms: Date.now() - started, ok: true });
         } else {
@@ -3230,6 +3234,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace, hop: 'standing_order', ms: Date.now() - started, ok: true, detail: order.gate, text: { input: order.scope, output: text } });
         log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'standing_order' });
       } catch (error) {
+        // Once its report is queued the run settles with the report, and the owner will get it, so a later failure is not the order's.
+        if (reportQueued) { log({ trace, hop: 'standing_order', ms: Date.now() - started, ok: false, error: String(error) }); throw error; }
         runs.finish(run.id, 'failed', 'order failed');
         if (order.escalation === 'message_owner') {
           await api.sendMessage({ chat_id: owner, text: 'One of your standing orders could not run just now. I will try again at its next scheduled time.' }).catch(() => undefined);
@@ -3605,18 +3611,19 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const started = Date.now();
       const now = Date.now();
       const day = localIso(entry.occurrence_at, clock.timezone).slice(0, 10);
+      // Where sends can wait, the card goes through the outbox under its day: a card already written for that day is not written
+      // again, whatever re-armed it, and it reads as waiting, not held for quiet hours (the outbox keeps its own quiet hold).
+      const queued = `day-card:${day}:${card.id}`;
+      if (outboxed && finalOutbox.records().some(record => record.id === queued)) {
+        plans.waiting(day, card.id);
+        log({ trace, hop: 'day_card', ms: 0, ok: true, detail: `${card.id} already queued` });
+        return log({ trace, hop: 'machine_turn', ms: 0, ok: true, detail: 'day_card' });
+      }
       if (quiet()) {
         // H1b: record the hold truthfully (never as sent); the heartbeat's release path
         // re-arms held cards when quiet ends and the real send marks sent then.
         plans.held(day, card.id);
         log({ trace, hop: 'day_card', ms: 0, ok: true, detail: `${card.id} held: quiet hours; releases when quiet ends` });
-        return log({ trace, hop: 'machine_turn', ms: 0, ok: true, detail: 'day_card' });
-      }
-      // Where sends can wait, the card goes through the outbox under its day: a card already written for that day is not written
-      // again, whatever re-armed it.
-      const queued = `day-card:${day}:${card.id}`;
-      if (outboxed && finalOutbox.records().some(record => record.id === queued)) {
-        log({ trace, hop: 'day_card', ms: 0, ok: true, detail: `${card.id} already queued` });
         return log({ trace, hop: 'machine_turn', ms: 0, ok: true, detail: 'day_card' });
       }
       const client = await google.client();
@@ -3671,7 +3678,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace: record.trace, hop: 'day_card', ms: 0, ok: delivered, detail: `${record.dayCard.card} ${delivered ? 'delivered' : record.reason ?? record.status}` });
       }
       if (record.standingOrder && runs.byId(record.standingOrder.runId)?.status === 'running') {
-        const unsent: Readonly<Record<string, string>> = { expired: 'order ran; its report expired unsent', surface_held: 'order ran; its report waits for your next message' };
+        const unsent: Readonly<Record<string, string>> = { expired: 'order ran; its report expired unsent', surface_held: 'order ran; its report waits for your next message', superseded: 'order ran; a newer report replaced this one' };
         runs.finish(record.standingOrder.runId, delivered ? 'completed' : record.status === 'quarantined' ? 'failed' : 'stopped',
           delivered ? orderReported(record.standingOrder.gate) : record.status === 'quarantined' ? 'order report delivery unconfirmed' : unsent[record.reason ?? ''] ?? 'order ran; its report was not sent');
       }

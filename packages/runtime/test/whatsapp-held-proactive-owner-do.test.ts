@@ -21,13 +21,16 @@ const CARD = 'The Brief\nOne call at 15:00; keep the morning clear.';
 const REPORT = 'Checked the forecast: dry all day.';
 const UPDATE = 'Lunch moved to 13:00.';
 // Counts the job turns by the prompt each one opens with; the runtime's other model calls answer 'Noted.'.
-const model = vi.hoisted(() => ({ cards: 0, reports: 0, updates: 0 }));
+// slowReportMs moves the clock on while a report turn runs, as a turn that browses for minutes does.
+// reportOnce: later runs of the order find nothing to report, so they queue nothing.
+const model = vi.hoisted(() => ({ cards: 0, reports: 0, updates: 0, slowReportMs: 0, reportOnce: false }));
+const realNow = Date.now;
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete(request: LLMGatewayRequest) {
     const asked = request.request.messages.at(-1)?.content ?? '';
     const text = asked.includes('[Scheduled card "The Brief"') ? (model.cards += 1, CARD)
-      : asked.includes('[Standing order due now') ? (model.reports += 1, REPORT)
+      : asked.includes('[Standing order due now') ? (model.reports += 1, model.slowReportMs && ((shift: number) => { const before = Date.now; Date.now = () => before() + shift; })(model.slowReportMs), model.reportOnce && model.reports > 1 ? '' : REPORT)
         : asked.includes('[Update check,') ? (model.updates += 1, UPDATE) : 'Noted.';
     return { ok: true as const, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
@@ -52,7 +55,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 
 const wire = { events: [] as string[], wamid: 0 };
 beforeEach(() => {
-  model.cards = 0; model.reports = 0; model.updates = 0; calendar.changed = false; wire.events = []; wire.wamid = 0;
+  model.cards = 0; model.reports = 0; model.updates = 0; model.slowReportMs = 0; model.reportOnce = false; Date.now = realNow; calendar.changed = false; wire.events = []; wire.wamid = 0;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
@@ -67,7 +70,7 @@ beforeEach(() => {
     return new Response('unexpected', { status: 500 });
   });
 });
-afterEach(() => { vi.unstubAllGlobals(); });
+afterEach(() => { vi.unstubAllGlobals(); Date.now = realNow; });
 
 type Outbox = { id: string; status: string; reason?: string }[];
 type Run = { status: string; summary: string | null };
@@ -86,7 +89,8 @@ const owned = async (name: string, script: (steps: Readonly<{
   card(): Promise<void>;
   // Arms the Check-in this far ahead; answers when it is due.
   checkIn(ms: number): Promise<number>;
-  order(): Promise<void>;
+  // Daily unless a cron expression is given.
+  order(cron?: string, id?: string): Promise<void>;
   refireOrder(): Promise<void>;
   expiry(): number | undefined;
   // A calendar change no card has covered yet, and whether a card has folded it in.
@@ -95,6 +99,8 @@ const owned = async (name: string, script: (steps: Readonly<{
   // The owner forgets something from the console, a pattern or a spot; answers the action's result.
   forget(kind: 'node' | 'spot', text: string): Promise<boolean | string>;
   planned(): { sent: boolean; state?: string } | undefined;
+  // Marks the Brief held for quiet hours, as a crash between queuing it and recording it waiting leaves it.
+  markHeld(): void;
   runs(): Run[];
   outbox(): Outbox;
 }>) => Promise<void>, wrote = 30 * HOUR) => {
@@ -147,10 +153,12 @@ const owned = async (name: string, script: (steps: Readonly<{
           return at;
         },
         // A daily order set an hour ago for half an hour ago, so its first run is due now.
-        order: async () => {
+        order: async (cron, id = 'ord1') => {
           const clock = { timezone: 'UTC', now: () => new Date(Date.now() - HOUR) };
           const at = new Date(Date.now() - 30 * 60_000).toISOString().slice(11, 16);
-          await standingOrderBook(state.storage.sql, scheduler, clock, () => 'ord1').set({ scope: 'check the forecast', trigger: 'daily', at, gate: 'act_and_report', escalation: 'log_only' });
+          await standingOrderBook(state.storage.sql, scheduler, clock, () => id).set(cron
+            ? { scope: 'check the forecast', trigger: 'cron', cron, gate: 'act_and_report', escalation: 'log_only' }
+            : { scope: 'check the forecast', trigger: 'daily', at, gate: 'act_and_report', escalation: 'log_only' });
         },
         // Arms the order again for the occurrence whose report is queued.
         refireOrder: async () => {
@@ -160,6 +168,7 @@ const owned = async (name: string, script: (steps: Readonly<{
           await scheduler.schedule({ id: 'order:ord1', kind: 'standing_order', payloadRefs: { order_id: 'order:ord1' }, occurrenceAt: occurrence, dueAt: occurrence, recurrence });
         },
         planned: () => dayPlanBook(state.storage.sql).read(today()).find(row => row.card === 'card:brief'),
+        markHeld: () => { dayPlanBook(state.storage.sql).held(today(), 'card:brief'); },
         runs: () => state.storage.sql.exec<Run>("SELECT status, summary FROM background_runs WHERE kind = 'standing_order' ORDER BY started_at").toArray(),
         outbox: () => (state.storage.kv.get<Outbox>('telegram_final_outbox_v1') ?? []).map(({ id, status, reason }) => ({ id, status, ...(reason ? { reason } : {}) })),
         expiry: () => state.storage.kv.get<{ expiresAt?: number }[]>('telegram_final_outbox_v1')?.[0]?.expiresAt,
@@ -289,6 +298,111 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
     });
   });
 
+  it('delivers the report of an order whose turn outlasts its period, and completes its run', async () => {
+    await owned('wa-late-order', async ({ alarms, order, runs, outbox }) => {
+      // An every-minute order whose report turn takes two minutes: the report is written after the order's next slot.
+      model.slowReportMs = 2 * 60_000;
+      await order('* * * * *');
+      await alarms(4);
+      expect(model.reports).toBeGreaterThanOrEqual(1);
+      expect(wire.events).toContain(`text:${REPORT}`);
+      expect(runs().length).toBe(model.reports);
+      expect(new Set(runs().map(run => `${run.status}: ${run.summary}`))).toEqual(new Set(['completed: order reported']));
+      expect(new Set(outbox().map(record => record.status))).toEqual(new Set(['delivered']));
+    }, HOUR);
+  });
+
+  it('replaces a report still waiting when the order reports again: the older one is never sent and its run stops', async () => {
+    await owned('wa-superseded-order', async ({ alarms, reply, later, order, runs, outbox }) => {
+      await order();
+      await alarms(3);
+      expect(runs()).toEqual([{ status: 'running', summary: null }]);
+      // The next run, a day later, with the window still closed.
+      await later(24 * HOUR + 60_000, () => alarms(4));
+      expect(model.reports).toBe(2);
+      expect(outbox().map(record => [record.status, record.reason])).toEqual([['blocked', 'superseded'], ['pending', undefined]]);
+      expect(runs()).toEqual([{ status: 'stopped', summary: 'order ran; a newer report replaced this one' }, { status: 'running', summary: null }]);
+
+      await later(24 * HOUR + 120_000, reply);
+      expect(wire.events.filter(event => event === `text:${REPORT}`)).toHaveLength(1);
+      expect(runs().map(run => run.status)).toEqual(['stopped', 'completed']);
+    });
+  });
+
+  it('lets one order\'s report replace only that order\'s waiting report', async () => {
+    await owned('wa-two-orders', async ({ alarms, order, runs, outbox }) => {
+      await order(undefined, 'ord1');
+      await order(undefined, 'ord2');
+      await alarms(5);
+      expect(model.reports).toBe(2);
+      expect(outbox().map(record => record.status)).toEqual(['pending', 'pending']);
+      expect(runs().map(run => run.status)).toEqual(['running', 'running']);
+    });
+  });
+
+  it('ends a report the owner never answers at the 30-day cap, on the alarm alone', async () => {
+    await owned('wa-order-cap', async ({ alarms, later, order, runs, outbox }) => {
+      model.reportOnce = true;
+      await order();
+      await alarms(3);
+      // A month on, the day's own cards wait too; only the report is followed here.
+      const report = () => outbox().filter(record => record.id.startsWith('standing-order:'));
+      await later(29 * 24 * HOUR, () => alarms(2));
+      expect(report()).toMatchObject([{ status: 'pending' }]);
+      await later(30 * 24 * HOUR + 60_000, () => alarms(2));
+      expect(wire.events).toEqual(['template:waldo_update_ready']);
+      expect(report()).toMatchObject([{ status: 'blocked' }]);
+      expect(report()[0]!.reason).not.toBe('expired');
+      expect(runs()[0]).toEqual({ status: 'stopped', summary: 'order ran; its report was not sent' });
+    });
+  });
+
+  it('leaves a report that was delivered alone when the order reports again', async () => {
+    await owned('wa-delivered-then-next', async ({ alarms, reply, later, order, runs, outbox }) => {
+      await order();
+      await alarms(4);
+      expect(runs()).toEqual([{ status: 'completed', summary: 'order reported' }]);
+      await later(24 * HOUR + 60_000, async () => { await reply(); await alarms(4); });
+      expect(outbox().map(record => record.status)).toEqual(['delivered', 'delivered']);
+      expect(runs()).toEqual([{ status: 'completed', summary: 'order reported' }, { status: 'completed', summary: 'order reported' }]);
+    }, HOUR);
+  });
+
+  it('keeps a queued card reading as waiting when it is re-armed into quiet hours', async () => {
+    await owned('wa-queued-card-quiet', async ({ alarms, card, quiet, planned, markHeld, outbox }) => {
+      await card();
+      await alarms(3);
+      expect(outbox()).toMatchObject([{ status: 'pending' }]);
+      markHeld();
+      quiet(true);
+      await card();
+      await alarms(2);
+      expect(model.cards).toBe(1);
+      expect(planned()).toMatchObject({ sent: false, state: 'pending' });
+    });
+  });
+
+  it('does not fail an order whose report is queued when a later step throws; the report still settles its run', async () => {
+    await owned('wa-order-queued-then-throw', async ({ alarms, reply, order, runs }) => {
+      const rearm = Scheduler.prototype.rearm;
+      let thrown = false;
+      const spy = vi.spyOn(Scheduler.prototype, 'rearm').mockImplementation(async function (this: Scheduler, ...args: Parameters<Scheduler['rearm']>) {
+        if (!thrown && model.reports === 1) { thrown = true; throw new Error('storage hiccup'); }
+        return rearm.apply(this, args);
+      });
+      try {
+        await order();
+        await alarms(3);
+      } finally { spy.mockRestore(); }
+      expect(thrown).toBe(true);
+      expect(model.reports).toBe(1);
+      expect(runs()).toEqual([{ status: 'running', summary: null }]);
+      await reply();
+      expect(wire.events.filter(event => event === `text:${REPORT}`)).toHaveLength(1);
+      expect(runs()).toEqual([{ status: 'completed', summary: 'order reported' }]);
+    });
+  });
+
   it('keeps a card and a report waiting across a restart, then delivers and records each once', async () => {
     await owned('wa-held-restart', async ({ alarms, reply, restart, card, order, planned, runs, outbox }) => {
       await card();
@@ -311,16 +425,16 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
     });
   });
 
-  it('stops the order\'s run unreported when its report expires before the owner writes', async () => {
-    await owned('wa-held-order-stale', async ({ alarms, reply, later, order, runs, outbox }) => {
+  it('keeps a waiting report current until the order reports again: a reply a day later, before any newer report, gets it', async () => {
+    await owned('wa-held-order-later-reply', async ({ alarms, reply, later, order, runs, outbox }) => {
       await order();
       await alarms(3);
       expect(runs()).toEqual([{ status: 'running', summary: null }]);
 
       await later(25 * HOUR, reply);
-      expect(wire.events).toEqual(['template:waldo_update_ready', 'turn']);
-      expect(runs()).toEqual([{ status: 'stopped', summary: 'order ran; its report expired unsent' }]);
-      expect(outbox()).toMatchObject([{ status: 'blocked', reason: 'expired' }]);
+      expect(wire.events).toEqual(['template:waldo_update_ready', `text:${REPORT}`, 'turn']);
+      expect(runs()).toEqual([{ status: 'completed', summary: 'order reported' }]);
+      expect(outbox()).toMatchObject([{ status: 'delivered' }]);
     });
   });
 
