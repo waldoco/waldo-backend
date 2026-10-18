@@ -12,7 +12,15 @@ export type WhatsAppWebhookEnv = Readonly<{
   WHATSAPP_PHONE_NUMBER_ID?: string;
   // Where a sender with no Waldo account is sent (the waitlist). Unset, the reply carries no link.
   WHATSAPP_ONBOARDING_URL?: string;
+  // 'true' logs whole signed payloads and Graph refusals while testing, on staging only (whatsappDebugLog).
+  WHATSAPP_DEBUG_LOG?: string;
+  WALDO_ENVIRONMENT?: string;
 }> & OwnerDirectoryEnv;
+
+// By owner ruling for testing, staging may log everything Meta sends and answers: message text, numbers, Meta's error text.
+// No other environment does, whatever WHATSAPP_DEBUG_LOG says. Credentials stay out either way: neither the payload nor
+// Graph's answer carries one, and the outgoing request is never logged.
+const whatsappDebugLog = (env: WhatsAppWebhookEnv): boolean => env.WHATSAPP_DEBUG_LOG === 'true' && env.WALDO_ENVIRONMENT === 'staging';
 
 // Text-first linking for a sender with no owner: the link request and a per-sender reply throttle, both held by the
 // directory. Absent (no directory configured), unlinked senders get no reply.
@@ -118,8 +126,12 @@ const failedStatusCodes = (body: WaBody): number[][] => statusesOf(body).filter(
   (Array.isArray(status.errors) ? status.errors : []).map(error => error?.code).filter((code): code is number => typeof code === 'number' && Number.isSafeInteger(code)));
 
 // A failed Graph send is logged by the error's name and, for a Graph refusal, its HTTP status and Meta's error code. Never
-// by the error's message, which carries up to 200 bytes of Graph's response body.
-const sendFailure = (error: unknown) => ({ error: error instanceof Error ? error.name : 'unknown', ...(error instanceof WhatsAppApiError ? { status: error.status, code: error.code } : {}) });
+// by the error's message, which carries up to 200 bytes of Graph's response body, except in the debug log: there a refusal
+// adds Graph's whole answer and any other failure its text.
+const sendFailure = (error: unknown, debug: boolean) => ({
+  error: error instanceof Error ? error.name : 'unknown',
+  ...(error instanceof WhatsAppApiError ? { status: error.status, code: error.code, ...(debug ? { body: error.body } : {}) } : debug ? { detail: String(error) } : {}),
+});
 
 const linkCode = (body: WaBody, senderId: string): string | null => {
   for (const entry of body.entry ?? []) for (const change of entry.changes ?? []) {
@@ -160,6 +172,8 @@ export const handleWhatsAppWebhook = async (
   const expected = `sha256=${await hmacSha256Hex(env.WHATSAPP_APP_SECRET, body)}`;
   if (!sameBytes(signature, expected)) return new Response('forbidden', { status: 403 });
   const payload = JSON.parse(body) as WaBody;
+  const debug = whatsappDebugLog(env);
+  if (debug) console.log(JSON.stringify({ hop: 'whatsapp_debug_payload', payload }));
   const owners = env.OWNER_DO;
   const origin = url.origin;
   // Admission before the ack: a payload is acknowledged only after each owner's Durable Object has durably admitted it.
@@ -195,14 +209,14 @@ export const handleWhatsAppWebhook = async (
         const reply = await textFirstReply(sender, origin, env, textFirst);
         console.log(JSON.stringify({ hop: 'whatsapp_text_first', ok: true, replied: reply !== null }));
         if (reply) await sendWhatsAppText(createWhatsAppCaller(env.WHATSAPP_ACCESS_TOKEN!, env.WHATSAPP_PHONE_NUMBER_ID!), sender, reply);
-      })().catch((error: unknown) => console.log(JSON.stringify({ hop: 'whatsapp_text_first', ok: false, ...sendFailure(error) }))));
+      })().catch((error: unknown) => console.log(JSON.stringify({ hop: 'whatsapp_text_first', ok: false, ...sendFailure(error, debug) }))));
       continue;
     }
     deferred.push((async () => {
       const linked = await directory.redeem('whatsapp', sender, code).catch(() => null);
       const call = createWhatsAppCaller(env.WHATSAPP_ACCESS_TOKEN!, env.WHATSAPP_PHONE_NUMBER_ID!);
       await sendWhatsAppText(call, sender, linked ? 'Linked. This chat now talks to your Waldo.' : 'That code did not work. Get a new one from your console.');
-    })().catch((error: unknown) => console.log(JSON.stringify({ hop: 'whatsapp_link_code', ok: false, ...sendFailure(error) }))));
+    })().catch((error: unknown) => console.log(JSON.stringify({ hop: 'whatsapp_link_code', ok: false, ...sendFailure(error, debug) }))));
   }
   for (const codes of failedStatusCodes(payload)) console.log(JSON.stringify({ hop: 'whatsapp_status_failed', codes }));
   // A refusal the owner could not take for now (unreachable, or a 5xx) answers 503, so Meta delivers it again; the owner
@@ -239,7 +253,7 @@ export const handleWhatsAppWebhook = async (
       } catch (error) {
         // Not retried, and the payload is still acked. The Graph status and Meta's error code say why the send was
         // refused (131062: a BSUID recipient is not supported for this message).
-        console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: false, sender, ...sendFailure(error) }));
+        console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: false, sender, ...sendFailure(error, debug) }));
       }
     })());
   }

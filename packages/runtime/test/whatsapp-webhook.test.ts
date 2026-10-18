@@ -274,3 +274,75 @@ describe('handleWhatsAppWebhook: a send Meta refuses later for the 24-hour windo
     }
   });
 });
+
+describe('handleWhatsAppWebhook: staging debug logging', () => {
+  const failedStatus = JSON.stringify({ entry: [{ changes: [{ value: { metadata: { phone_number_id: 'pn1' }, statuses: [
+    { id: 'wamid.d1', status: 'failed', timestamp: '1700000000', recipient_id: '15550005555',
+      errors: [{ code: 131031, title: 'FICTIONAL-TITLE', message: 'FICTIONAL-MESSAGE', error_data: { details: 'FICTIONAL-DETAIL' } }],
+      pricing: { billable: false, pricing_model: 'PMP', category: 'service' } },
+  ] } }] }] });
+  const unlinked: OwnerDirectory = { byPresence: async () => null, redeem: async () => null };
+  const debugEnv = (ns: DurableObjectNamespace, environment: string, flag = 'true'): WhatsAppWebhookEnv =>
+    ({ OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_DEBUG_LOG: flag, WALDO_ENVIRONMENT: environment });
+  const capture = () => {
+    const logs: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((line: unknown) => { logs.push(String(line)); });
+    return logs;
+  };
+
+  it('on staging, logs the whole signed payload, Meta\'s error text and pricing included, beside the codes-only line', async () => {
+    const logs = capture();
+    expect((await run(await post('x', failedStatus), debugEnv(namespace().ns, 'staging'), unlinked)).status).toBe(200);
+    expect(logs.map(line => JSON.parse(line))).toEqual([
+      { hop: 'whatsapp_debug_payload', payload: JSON.parse(failedStatus) },
+      { hop: 'whatsapp_status_failed', codes: [131031] },
+    ]);
+  });
+
+  it('never logs the payload outside staging, whatever the flag says, or on staging with the flag off', async () => {
+    const unnamed: WhatsAppWebhookEnv = { OWNER_DO: namespace().ns, WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_DEBUG_LOG: 'true' };
+    for (const env of [debugEnv(namespace().ns, 'production'), debugEnv(namespace().ns, 'preview'), unnamed, debugEnv(namespace().ns, 'staging', 'false'), debugEnv(namespace().ns, 'staging', '')]) {
+      const logs = capture();
+      await run(await post('x', failedStatus), env, unlinked);
+      expect(logs.map(line => JSON.parse(line))).toEqual([{ hop: 'whatsapp_status_failed', codes: [131031] }]);
+      for (const leak of ['15550005555', 'wamid.', 'FICTIONAL']) expect(logs.join('\n')).not.toContain(leak);
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('logs nothing for a payload whose signature fails, and never the verify token', async () => {
+    const logs = capture();
+    const env = { ...debugEnv(namespace().ns, 'staging'), WHATSAPP_VERIFY_TOKEN: 'vt-fictional' };
+    const forged = new Request('https://w.test/whatsapp/webhook', { method: 'POST', body: failedStatus, headers: { 'x-hub-signature-256': 'sha256=deadbeef' } });
+    expect((await run(forged, env)).status).toBe(403);
+    expect((await run(new Request('https://w.test/whatsapp/webhook?hub.mode=subscribe&hub.verify_token=vt-fictional&hub.challenge=c1'), env)).status).toBe(200);
+    expect(logs).toEqual([]);
+  });
+
+  it('on staging, a refused reply logs Graph\'s whole error body; in production only its numbers; never the access token', async () => {
+    const refusal = { error: { code: 131031, message: '(#131031) FICTIONAL-MESSAGE', error_data: { details: 'FICTIONAL-DETAIL' } } };
+    const cases = [
+      ['staging', { hop: 'whatsapp_link_code', ok: false, error: 'Error', status: 400, code: 131031, body: JSON.stringify(refusal) }],
+      ['production', { hop: 'whatsapp_link_code', ok: false, error: 'Error', status: 400, code: 131031 }],
+    ] as const;
+    for (const [environment, expected] of cases) {
+      const logs = capture();
+      vi.stubGlobal('fetch', vi.fn(async () => Response.json(refusal, { status: 400 })));
+      const env = { ...debugEnv(namespace().ns, environment), WHATSAPP_ACCESS_TOKEN: 'fictional-bearer-token', WHATSAPP_PHONE_NUMBER_ID: 'pn1' };
+      await run(await post('x', payload([{ from: '15550003333', text: 'waldo GOOD12' }])), env, unlinked);
+      expect(logs.map(line => JSON.parse(line)).filter(line => line.hop === 'whatsapp_link_code')).toEqual([expected]);
+      expect(logs.join('\n')).not.toContain('fictional-bearer-token');
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('on staging, a reply that fails without a Graph answer logs the error text', async () => {
+    const logs = capture();
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('FICTIONAL network failure'); }));
+    const env = { ...debugEnv(namespace().ns, 'staging'), WHATSAPP_ACCESS_TOKEN: 'fictional-bearer-token', WHATSAPP_PHONE_NUMBER_ID: 'pn1' };
+    await run(await post('x', payload([{ from: '15550003333', text: 'waldo GOOD12' }])), env, unlinked);
+    expect(logs.map(line => JSON.parse(line)).filter(line => line.hop === 'whatsapp_link_code'))
+      .toEqual([{ hop: 'whatsapp_link_code', ok: false, error: 'TypeError', detail: 'TypeError: FICTIONAL network failure' }]);
+  });
+});

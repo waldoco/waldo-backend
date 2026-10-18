@@ -16,8 +16,11 @@ export const WHATSAPP_TEXT_MAX_CHARS = 4096;
 // A Graph refusal with Meta's numeric error code (error.code in the JSON body), or null when the body has none.
 export class WhatsAppApiError extends Error {
   readonly code: number | null;
+  // Graph's answer, kept only for the webhook's staging debug log; no other path logs it.
+  readonly body: string;
   constructor(readonly status: number, body: string) {
     super(`whatsapp ${status}: ${body.slice(0, 200)}`);
+    this.body = body.slice(0, 4096);
     let code: unknown = null;
     try { code = (JSON.parse(body) as { error?: { code?: unknown } }).error?.code; } catch { /* not JSON */ }
     this.code = typeof code === 'number' && Number.isSafeInteger(code) ? code : null;
