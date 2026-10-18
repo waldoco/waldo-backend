@@ -9,7 +9,7 @@ Meta write, secret change and deploy below needs the owner's yes at the time. Ru
 
 | Piece | State |
 | --- | --- |
-| Runtime | Webhook, text-first linking, owner replies, the 24-hour window, held messages and the knock are on `beta-mvp`. A refused send or a failed delivery status logs the error's name and numeric codes, never the recipient, a message id or Meta's error text (`whatsapp-webhook.ts:212`, `:219`, `:221`). On staging only, while `WHATSAPP_DEBUG_LOG` is `"true"`, each signed webhook payload is also logged whole (`:23`, `:176`). A refused text-first, link-code or hidden-number reply then adds Graph's answer (its first 4,096 characters, with the token masked), and any other failure on those paths adds its text as `detail` (`:131-134`). Sends from the owner's Durable Object (replies, held messages, the knock) log the code only. |
+| Runtime | Webhook, text-first linking, owner replies, the 24-hour window, held messages and the knock are on `beta-mvp`. A refused webhook reply or a failed delivery status logs the error's name and numeric codes, never the recipient, a message id or Meta's error text (`whatsapp-webhook.ts:212`, `:219`, `:221`). On staging only, while `WHATSAPP_DEBUG_LOG` is `"true"`, each signed webhook payload is also logged whole (`:23`, `:176`). A refused text-first, link-code or hidden-number reply then adds Graph's answer (its first 4,096 characters, with the token masked), and any other failure on those paths adds its text as `detail` (`:131-134`). In the owner's Durable Object, the knock and held messages log `whatsapp_` lines with Meta's code (`whatsapp-window.ts:90`, `:254`). An owner's reply refused for any reason other than 131047 logs a `send` line with code `unknown` (`telegram-listener.ts:105`, `turn-failure-code.ts:15`). On staging, where trace text capture is on, that line's `error` also carries the first 200 characters of Graph's answer (`whatsapp-api.ts:21`). |
 | Meta app "Waldo" | Published. Its callback is staging's `/whatsapp/webhook`, subscribed to the `messages` field. |
 | Meta's test number, +1 555 633 8976 | Inbound reaches staging, and Graph accepts sends. Meta then fails each delivery with 131031: seen at 16:39Z, 4 s after a reply was accepted. Meta's own `hello_world` never arrived either. Business Settings shows the number Connected, with quality High and a limit of 250 customers per 24 hours, and its Messaging account Approved (observed 16:50Z). The reason for the 131031 is not yet known. |
 | Waldo's number, +91 92260 67544 | Verified, not registered. Registration was refused with `ACCOUNT_NOT_APPROVED`. Meta MCP reports its Messaging account as "Restricted" (16:41Z). WhatsApp Manager showed both of Waldo's Messaging accounts as "Account Restricted: Before you can begin messaging, you will need to verify your business" (observed 18 October). |
@@ -45,8 +45,10 @@ Each step ends with a check you can see. A step whose check fails is the answer:
    without a PIN. If Meta asks for a PIN, the owner registers the number themselves: registration is API-only
    (registration page above), so the owner calls Graph's `POST /<phone_number_id>/register` from their own
    terminal, with `messaging_product` set to `whatsapp` and a 6-digit `pin`, and keeps the PIN in their own
-   password manager. A registration made with a PIN sets that PIN as the number's two-step verification PIN.
-   That PIN is a credential: it never passes through an agent, chat, docs, tickets or logs.
+   password manager. If the number already has two-step verification, `pin` must be its current PIN, and a
+   wrong one fails with 131031 (Meta's registration page links how to change a forgotten one). Otherwise, the
+   PIN sent becomes the number's two-step verification PIN. That PIN is a credential: it never passes through
+   an agent, chat, docs, tickets or logs.
    *Check:* MCP `whatsapp_biz_phone_numbers` lists the number as linked. List it through its Messaging
    account: on 18 October, looking the number up directly returned nothing, though it was on that account. An
    unregistered number fails sends with 133010 or 131045.
@@ -95,8 +97,9 @@ waitlist text instead of a link (`whatsapp-webhook.ts:43-47`): S2 and S3 still p
 text arrives instead of the link, and S5 cannot run.
 
 **Watching the Worker.** Use this tail filter. It prints no URL. It keeps every webhook request, and every
-event that logs a `whatsapp_` line, including the owner's Durable Object: replies, held messages and the
-knock log there, often inside an alarm, which has no request at all. From `packages/runtime`:
+event that logs a `whatsapp_` line, including the owner's Durable Object, where held messages and the knock
+log, often inside an alarm, which has no request at all. An owner's refused reply logs a `send` line
+instead, which this filter does not keep. From `packages/runtime`:
 
 ```bash
 npx wrangler tail waldo-runtime-staging --format json | jq -c '{webhook: ((.event.request.url // "") | test("/whatsapp/webhook")), status: .event.response.status, hops: [.logs[]?.message[0]? | select(type == "string" and test("\"hop\":\"whatsapp_"))]} | select(.webhook or (.hops | length > 0))'
@@ -132,13 +135,14 @@ npx wrangler tail waldo-runtime-staging --format json | jq -c '[.logs[]?.message
 - For a repeat check from a phone that is still unlinked, send `waldo 000000`. It is a code that cannot
   redeem: Waldo answers "That code did not work", and a refused send logs `whatsapp_link_code` with the
   Graph status and code (`:215-219`). On 18 October, one `waldo 000000` from the owner's unlinked phone took
-  the text-first path instead. A text takes the code path only when, after trimming, its first word is
-  `waldo` in any case and a second word follows (`:136-147`). [inference] The text that arrived differed,
-  for example by a quote or a comma. On staging, the debug payload shows the literal text.
+  the text-first path instead. A text takes the code path only when the message is not marked forwarded and,
+  after trimming, its first word is `waldo` in any case and a second word follows (`:136-147`).
+  [inference] Either the text that arrived differed, for example by a quote or a comma, or the message was
+  marked forwarded. On staging, the debug payload shows both.
 - A linked phone's texts go to its owner instead (`:188-201`).
 
-**Stop rule.** Graph accepted a send (no `"ok":false` line), but within 10 minutes neither the message nor a
-`whatsapp_status_failed` line arrived? Stop sending. Check WhatsApp Manager's overview for a restriction or
+**Stop rule.** This holds for the webhook's own replies. Graph accepted a send (no `"ok":false` line), but
+within 10 minutes neither the message nor a `whatsapp_status_failed` line arrived? Stop sending. Check WhatsApp Manager's overview for a restriction or
 billing banner instead; more sends add nothing.
 
 ## Diagnosis by code
@@ -146,7 +150,9 @@ billing banner instead; more sends add nothing.
 Codes come from [WhatsApp error codes](https://developers.facebook.com/documentation/business-messaging/whatsapp/support/error-codes)
 (updated 18 June 2026) unless marked as observed or cited otherwise. On staging, read Meta's own explanation
 first: a failed status's `errors` in the status view, or the `body` of a refused text-first, link-code or
-hidden-number reply. Sends from the owner's Durable Object log the code only.
+hidden-number reply. In the owner's Durable Object, the knock and held messages log Meta's code. An owner's
+reply refused for any reason other than 131047 logs a `send` line with code `unknown`; on staging its
+`error` carries the first 200 characters of Graph's answer. The tail filter does not keep that line.
 
 | Code | Meaning | Where to look |
 | --- | --- | --- |
@@ -176,8 +182,9 @@ hidden-number reply. Sends from the owner's Durable Object log the code only.
   - the registration PIN.
 - Outside staging, logs carry error names and codes, never phone numbers, message ids, business-scoped user
   ids or message text. Staging is the exception while testing, by the owner's ruling of 18 October 2026:
-  with `WHATSAPP_DEBUG_LOG` set to `"true"`, it logs whole webhook payloads and Graph's answers to refused
-  webhook replies, which carry all four, health details a tester types included. `CLAUDE.md` records the
+  with `WHATSAPP_DEBUG_LOG` set to `"true"`, it logs whole webhook payloads, Graph's answers to refused
+  webhook replies, and the text of other failures on those paths (`detail`). Together they carry all four,
+  health details a tester types included. `CLAUDE.md` records the
   exception, which ends before production. The Worker never logs a credential.
 - Tell each tester that staging logs what they send.
 - Every Meta write (subscription, registration, access, template) and every secret change or deploy needs the
