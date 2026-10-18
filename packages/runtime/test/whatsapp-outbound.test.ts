@@ -94,17 +94,17 @@ describe('whatsapp outbound files', () => {
     const shim = whatsappTelegramShim('tok', 'pn1', '15550001111', graph as unknown as typeof fetch);
     let open = true;
     const call = egressGuardedCaller(gatedCaller(shim, () => !open), () => undefined);
-    const outcome = await deliverWhatsAppFile(call, 15550001111, { bytes: new Uint8Array(4), mime: 'text/html', filename: 'page.html' }, 'Open page.html here: https://waldo.example/console/workspace/file?id=f1&revision=1');
+    const outcome = await deliverWhatsAppFile(call, 15550001111, { bytes: new Uint8Array(4), mime: 'text/html', filename: 'page.html' }, async () => 'Open page.html here: https://waldo.example/console/workspace/file?id=f1&revision=1');
     expect(outcome).toEqual({ status: 'degraded', reason: 'unsupported_type' });
     const [body] = sentBodies(graph as unknown as ReturnType<typeof graphOk>);
     expect(body.text.body).toContain("WhatsApp can't carry page.html");
     expect(body.text.body).toContain('https://waldo.example/console/workspace/file?id=f1&revision=1');
     expect(body.text.preview_url).toBeUndefined();
 
-    expect(await deliverWhatsAppFile(call, 15550001111, pdf, 'fallback')).toEqual({ status: 'sent', providerMessageId: 'wamid.doc' });
+    expect(await deliverWhatsAppFile(call, 15550001111, pdf, async () => 'fallback')).toEqual({ status: 'sent', providerMessageId: 'wamid.doc' });
     open = false;
     graph.mockClear();
-    expect(await deliverWhatsAppFile(call, 15550001111, pdf, 'fallback')).toEqual({ status: 'blocked' });
+    expect(await deliverWhatsAppFile(call, 15550001111, pdf, async () => 'fallback')).toEqual({ status: 'blocked' });
     expect(graph).not.toHaveBeenCalled();
   });
 });
@@ -175,7 +175,7 @@ describe('whatsapp 24-hour window', () => {
       expect(whatsappTemplateConfig(bad)).toBeNull();
   });
 
-  it('a 131047 refusal inside our window holds and knocks; any other refusal propagates and holds nothing', async () => {
+  it('a 131047 refusal inside our window holds, knocks and closes the window until the owner writes; any other refusal propagates and holds nothing', async () => {
     const clock = { now: T0 };
     let refusal = 131047;
     const graph = vi.fn(async (_url: string, init?: RequestInit) => JSON.parse(String(init?.body)).type === 'template'
@@ -185,9 +185,14 @@ describe('whatsapp 24-hour window', () => {
     recordWhatsAppInbound(kv, [{ timestamp: String(T0 / 1000) }], T0);
     expect(await call('sendMessage', { chat_id: 1, text: 'held' })).toBe(WHATSAPP_HELD);
     expect(graph.mock.calls.map(([, init]) => JSON.parse(String(init?.body)).type)).toEqual(['text', 'template']);
+    // Meta has said the window is closed, so the next message waits without another refused send or a second knock.
+    expect(await call('sendMessage', { chat_id: 1, text: 'held too' })).toBe(WHATSAPP_HELD);
+    expect(graph).toHaveBeenCalledTimes(2);
+    clock.now = T0 + 60_000;
+    recordWhatsAppInbound(kv, [{ timestamp: String(clock.now / 1000) }], clock.now);
     refusal = 131026;
     await expect(call('sendMessage', { chat_id: 1, text: 'not held' })).rejects.toMatchObject({ code: 131026 });
-    expect([...map.keys()].filter(key => key.startsWith('wa_held:'))).toHaveLength(1);
+    expect([...map.keys()].filter(key => key.startsWith('wa_held:'))).toHaveLength(2);
   });
 
   it('a failed knock is logged and retried with the next held message; a new reply re-arms the knock', async () => {
