@@ -68,7 +68,7 @@ describe('handleWhatsAppWebhook', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('routes a verified message to the right owner DO with the whatsapp subject header', async () => {
+  it('routes a verified message to the right owner DO with the whatsapp subject and owner name headers', async () => {
     const { fetch, idFromName, ns } = namespace();
     const directory: OwnerDirectory = {
       byPresence: async (provider, subject) => {
@@ -83,7 +83,7 @@ describe('handleWhatsAppWebhook', () => {
     expect(idFromName).toHaveBeenCalledWith('do-a');
     expect(fetch).toHaveBeenCalledWith('https://telegram-owner/whatsapp-admit', {
       method: 'POST', body: expect.any(String),
-      headers: { 'x-waldo-origin': 'https://w.test', 'x-waldo-whatsapp-subject': '15550001111', 'x-waldo-timezone': 'Asia/Kolkata' },
+      headers: { 'x-waldo-origin': 'https://w.test', 'x-waldo-whatsapp-subject': '15550001111', 'x-waldo-do-name': 'do-a', 'x-waldo-timezone': 'Asia/Kolkata' },
     });
     // the forwarded body carries only that sender's messages, never the status callbacks
     const forwarded = JSON.parse(String(fetch.mock.calls[0]![1]!.body)) as { messages: unknown[]; statuses?: unknown[] };
@@ -91,6 +91,17 @@ describe('handleWhatsAppWebhook', () => {
     expect(forwarded.statuses).toBeUndefined();
   });
 
+  it('after an unlink the old sender wakes no DO, while another owner keeps routing', async () => {
+    const { fetch, idFromName, ns } = namespace();
+    // Only active presences route; unlink_presence retires the row, so the directory stops answering for that number.
+    const active = new Map([['15550001111', 'do-a'], ['15550002222', 'do-b']]);
+    const directory: OwnerDirectory = { byPresence: async (_provider, subject) => active.has(subject) ? { doName: active.get(subject)!, subject, timezone: null } : null, redeem: async () => null };
+    const env: WhatsAppWebhookEnv = { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret' };
+    active.delete('15550001111');
+    expect((await run(await post('x', payload([{ from: '15550001111', text: 'still me?' }, { from: '15550002222' }])), env, directory)).status).toBe(200);
+    expect(idFromName.mock.calls).toEqual([['do-b']]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
   it('a multi-sender payload routes each owner only their own messages', async () => {
     const { fetch, ns } = namespace();
     const directory: OwnerDirectory = {
@@ -144,5 +155,44 @@ describe('handleWhatsAppWebhook', () => {
     expect(redeem).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
     expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleWhatsAppWebhook: a send Meta refuses later for the 24-hour window', () => {
+  const statuses = (rows: object[]) => JSON.stringify({ entry: [{ changes: [{ value: { metadata: { phone_number_id: 'pn1' }, statuses: rows } }] }] });
+  const refused = (id: string, recipient: string, timestamp: unknown = '1700000000') => ({ id, status: 'failed', timestamp, recipient_id: recipient, errors: [{ code: 131047, title: 'Re-engagement message' }] });
+  const directory: OwnerDirectory = { byPresence: async (_p, subject) => subject === '15550001111' ? { doName: 'do-a', subject, timezone: null } : null, redeem: async () => null };
+  const env = (ns: DurableObjectNamespace): WhatsAppWebhookEnv => ({ OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret' });
+
+  it('goes to the recipient owner\'s Durable Object with only the refused message ids; other statuses and strangers go nowhere', async () => {
+    const { fetch, ns } = namespace();
+    const body = statuses([
+      refused('wamid.a', '15550001111'),
+      { id: 'wamid.b', status: 'delivered', recipient_id: '15550001111' },
+      { id: 'wamid.c', status: 'failed', recipient_id: '15550001111', errors: [{ code: 131026 }] },
+      refused('wamid.d', '15550009999'),
+      refused('wamid.e', '15550001111', 'yesterday'),
+    ]);
+    expect((await run(await post('x', body), env(ns), directory)).status).toBe(200);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith('https://telegram-owner/whatsapp-status', {
+      method: 'POST', body: JSON.stringify({ refused: [{ id: 'wamid.a', at: 1_700_000_000_000 }, { id: 'wamid.e', at: null }] }), headers: { 'x-waldo-whatsapp-subject': '15550001111' },
+    });
+  });
+
+  it('answers 503 when the owner could not take it for now, so Meta delivers the callback again', async () => {
+    for (const reply of [async () => new Response('unavailable', { status: 503 }), async () => { throw new Error('owner unreachable'); }]) {
+      const { fetch, ns } = namespace();
+      fetch.mockImplementation(reply);
+      expect((await run(await post('x', statuses([refused('wamid.a', '15550001111')])), env(ns), directory)).status).toBe(503);
+    }
+  });
+
+  it('acknowledges a definite refusal from the owner (a 4xx), which a redelivery could never change', async () => {
+    for (const status of [400, 403]) {
+      const { fetch, ns } = namespace();
+      fetch.mockImplementation(async () => new Response('refused', { status }));
+      expect((await run(await post('x', statuses([refused('wamid.a', '15550001111')])), env(ns), directory)).status).toBe(200);
+    }
   });
 });
