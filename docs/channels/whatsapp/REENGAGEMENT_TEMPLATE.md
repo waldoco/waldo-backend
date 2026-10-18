@@ -74,7 +74,8 @@ described on the same categorization page:
    2. Have Waldo send something after that, such as a reminder set to fire once the window has closed.
 
    *Pass:*
-   - the tail shows `{"hop":"whatsapp_window","ok":true,"held":true,"knocked":true}`;
+   - the setup page's tail filter shows `{"hop":"whatsapp_window","ok":true,"held":true,"knocked":true}`. The
+     owner's Durable Object logs it, often inside an alarm, so a filter on the webhook's URL misses it;
    - the template arrives, and on staging the setup page's status view shows its `pricing.category` as
      `utility`;
    - after a reply, the held message arrives on the phone. A reminder held in the outbox is released without a
@@ -88,7 +89,9 @@ described on the same categorization page:
    - it archives a template unused for 12 months
      ([Template fundamentals](https://developers.facebook.com/documentation/business-messaging/whatsapp/templates/overview),
      updated 21 May 2026);
-   - it can move a utility template to marketing, with notice by email and webhook.
+   - it can recategorize a utility template as marketing. Email and a webhook confirm the change; for a
+     business Meta has already warned, it takes effect at once, without advance notice (categorization page
+     above).
 
    The Worker reads only messages and statuses from a webhook (`whatsapp-webhook.ts:78-111`), so these
    changes reach the Messaging account's admins by email and in WhatsApp Manager, never Waldo.
