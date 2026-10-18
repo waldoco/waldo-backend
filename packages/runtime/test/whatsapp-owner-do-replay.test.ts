@@ -85,7 +85,7 @@ describe('WhatsApp owner DO replay', () => {
         await deliver(payload);
         expect(routed).toHaveBeenCalledTimes(2);
         expect(turns).toHaveBeenCalledTimes(1);
-        expect(turns).toHaveBeenNthCalledWith(1, expect.objectContaining({ update_id: WA_UPDATE_BASE + 1 }), 'whatsapp');
+        expect(turns).toHaveBeenNthCalledWith(1, expect.objectContaining({ update_id: WA_UPDATE_BASE + 1 }), 'whatsapp', false, expect.objectContaining({ runId: expect.any(String), attempt: expect.any(String) }));
         expect(sent).toEqual([{ messaging_product: 'whatsapp', to: SUBJECT, type: 'text', text: { body: 'Nothing is running right now.' } }]);
         expect(state.storage.kv.get('wamid:wamid.A')).toBe(now);
         expect(state.storage.kv.get('wamid:expired')).toBeUndefined();
@@ -94,7 +94,7 @@ describe('WhatsApp owner DO replay', () => {
 
         await deliver(body('wamid.B'));
         expect(turns).toHaveBeenCalledTimes(2);
-        expect(turns).toHaveBeenNthCalledWith(2, expect.objectContaining({ update_id: WA_UPDATE_BASE + 2 }), 'whatsapp');
+        expect(turns).toHaveBeenNthCalledWith(2, expect.objectContaining({ update_id: WA_UPDATE_BASE + 2 }), 'whatsapp', false, expect.objectContaining({ runId: expect.any(String), attempt: expect.any(String) }));
         expect(graph).toHaveBeenCalledTimes(2);
         expect(state.storage.kv.get('wamid:wamid.B')).toBe(now);
         expect(await state.storage.get('wa_seq')).toBe(2);

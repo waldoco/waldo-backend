@@ -79,6 +79,8 @@ import { consoleLinkSender, consoleLinkText, maskCredentialReply, mintConsoleLin
 import { iMessageConsoleRoute } from './imessage/console-link';
 import { consoleLinkHandler } from '../tools/live/console-link';
 import { progressNoteHandler, type ProgressNoteDeliver } from '../tools/live/progress-note';
+import { attachFileHandler } from '../tools/live/attach-file';
+import { deliverTurnAttachments, turnAttachmentBook, type AttachmentSend } from './turn-attachments';
 import { HARNESS_MESSAGE_LIMIT, heldRowShapes } from '../memory/held-rows';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
@@ -148,13 +150,13 @@ import { stableJson } from '../context-composer/canonical';
 import { APP_CONNECT_GUIDANCE, appApprovalLink, appCaller } from './surfaces/app';
 import { appApprovalsRequest } from './app-approvals';
 import { WA_UPDATE_BASE, WHATSAPP_PARTIAL_NOTICE, WHATSAPP_UNSTARTED_NOTICE, claimNewWhatsAppMessages, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
-import { deliverHeldWhatsApp, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
+import { deliverHeldWhatsApp, deliverWhatsAppFileInWindow, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
 import { sendMessageHandler } from '../tools/live/messaging';
 import { createTelegramFileDownloader } from './telegram-media';
 import { selectTranscriber } from '../llm/transcriber';
-import { TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './telegram-listener';
+import { TURN_TIMEOUT_MS, TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './telegram-listener';
 import { isForward, TelegramPollingAdapter } from './telegram-polling';
 import { createTelegramResponder } from './telegram-turn';
 import type { OwnerJobHost } from './owner-turn';
@@ -275,6 +277,8 @@ const nativeSurface = (channel: ChannelKind) => channel === 'app' || channel ===
 // outbox, which records a delivery only once one happens, and no update card is written while it would only wait.
 const SENDS_CAN_WAIT: Readonly<Partial<Record<ChannelKind, typeof whatsappWindowOpen>>> = { whatsapp: whatsappWindowOpen };
 const WHATSAPP_PENDING_PREFIX = 'wa_pending:';
+// Message ids only, never message text.
+type WhatsappPending = Readonly<{ subject: string; admittedAt: number; ids: readonly string[] }>;
 // How often an unfinished WhatsApp payload is looked at again. A cadence, not a limit on how long a turn may run.
 const WHATSAPP_PENDING_CHECK_MS = 60_000;
 
@@ -1202,7 +1206,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           failure ??= { error }; break;
         }
         started += 1;
-        try { await this.turn(update, 'whatsapp'); } catch (error) { failure ??= { error }; }
+        try { await this.whatsappTurn(update, pendingKey, subject); } catch (error) { failure ??= { error }; }
       }
       try { await this.ctx.storage.put('wa_seq', seq); } catch (error) { failure ??= { error }; }
       if (failure) {
@@ -1210,14 +1214,51 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // text, no error text). If no turn started it is safe to resend; if one started it may have had effects, so the notice says
         // to check first. A turn that already started is never replayed. Listener failures propagate here for this fixed notice.
         // Consume the pending record before the send so a cold instance recovering during this request cannot send a second notice.
-        this.liveWhatsapp.delete(pendingKey); this.ctx.storage.kv.delete(pendingKey);
-        try {
+        // A record that is already gone was taken by recovery, which has told the owner. A rebound or unlinked sender is not told.
+        const { kv } = this.ctx.storage;
+        const owned = this.ctx.storage.transactionSync(() => { const held = kv.get(pendingKey) !== undefined; kv.delete(pendingKey); return held; });
+        this.liveWhatsapp.delete(pendingKey);
+        if (owned && kv.get<string>('whatsapp_subject') === subject && kv.get<boolean>('whatsapp_unlinked') !== true) try {
           const { api, owner } = this.setup('whatsapp');
           await api.sendMessage({ chat_id: owner, text: started === 0 ? WHATSAPP_UNSTARTED_NOTICE : WHATSAPP_PARTIAL_NOTICE });
         } catch { console.error('whatsapp failure notice unavailable'); }
         throw failure.error;
       }
     });
+  }
+
+  // One WhatsApp turn under its own run scope. A commit holds only while this payload's pending record is still held (recovery
+  // deletes it), the admitted sender is still the bound, linked subject, the owner name is unchanged, and the run is neither
+  // aborted nor past its deadline. The scope is aborted when its turn ends, so a turn that outlived its race cannot commit
+  // after the next one starts, and an unlink or rebind mid-turn closes every later tool effect and the final send.
+  private async whatsappTurn(update: unknown, pendingKey: string, subject: string): Promise<void> {
+    const { kv } = this.ctx.storage;
+    const run = { runId: crypto.randomUUID(), attempt: crypto.randomUUID(), deadline: Date.now() + TURN_TIMEOUT_MS };
+    const doName = kv.get<string>('do_name');
+    const abort = new AbortController();
+    const scope: RunEffectScope = {
+      ...run, signal: abort.signal,
+      admit: () => { scope.commit(() => undefined); },
+      commit: work => this.ctx.storage.transactionSync(() => {
+        if (kv.get<WhatsappPending>(pendingKey)?.subject !== subject || kv.get<string>('whatsapp_subject') !== subject || kv.get<boolean>('whatsapp_unlinked') === true || kv.get<string>('do_name') !== doName
+          || abort.signal.aborted || Date.now() >= run.deadline) throw new ClosedRunError();
+        const result = work();
+        if (result && typeof (result as { then?: unknown }).then === 'function') throw new Error('run commit must be synchronous');
+        return result;
+      }),
+    };
+    this.activeScope = scope; this.activeAbort = abort;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const expired = new Promise<never>((_, reject) => {
+        abort.signal.addEventListener('abort', () => reject(new ClosedRunError()), { once: true });
+        timeout = setTimeout(() => abort.abort(), Math.max(0, run.deadline - Date.now()));
+      });
+      await Promise.race([this.turn(update, 'whatsapp', false, scope), expired]);
+    } finally {
+      clearTimeout(timeout); abort.abort();
+      if (this.activeScope === scope) { this.activeScope = undefined; this.activeAbort = undefined; }
+    }
   }
 
   // Durable admission (#745): the webhook acks Meta only after this returns. In one synchronous storage step it claims the
@@ -1247,7 +1288,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       claimed = claimNewWhatsAppMessages(kv, value.messages ?? [], Date.now());
       if (!claimed.length) return;
       recordWhatsAppInbound(kv, claimed, Date.now());
-      kv.put(pendingKey, { subject, admittedAt: Date.now(), ids: claimed.flatMap(m => typeof m.id === 'string' && m.id !== '' ? [m.id] : []) });
+      kv.put(pendingKey, { subject, admittedAt: Date.now(), ids: claimed.flatMap(m => typeof m.id === 'string' && m.id !== '' ? [m.id] : []) } satisfies WhatsappPending);
       kv.put(WHATSAPP_PENDING_DUE_KEY, Date.now() + WHATSAPP_PENDING_CHECK_MS);
     });
     if (!claimed.length) return new Response('ok');
@@ -1304,10 +1345,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // WhatsApp-only owner is covered, and uses the WhatsApp api directly, never the shared final outbox.
   private async recoverWhatsappPending(): Promise<void> {
     const { kv } = this.ctx.storage;
-    const dead = [...kv.list<{ subject: string }>({ prefix: WHATSAPP_PENDING_PREFIX })].filter(([key]) => !this.liveWhatsapp.has(key));
+    const dead = [...kv.list<WhatsappPending>({ prefix: WHATSAPP_PENDING_PREFIX })].filter(([key]) => !this.liveWhatsapp.has(key));
     for (const [key, record] of dead) {
       kv.delete(key);
-      if (kv.get<string>('whatsapp_subject') !== record.subject) continue;
+      if (kv.get<string>('whatsapp_subject') !== record.subject || kv.get<boolean>('whatsapp_unlinked') === true) continue;
       try { const { api, owner } = this.setup('whatsapp'); await api.sendMessage({ chat_id: owner, text: WHATSAPP_PARTIAL_NOTICE }); } catch { console.error('whatsapp recovery notice unavailable'); }
     }
     this.refreshWhatsappDue();
@@ -2149,7 +2190,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (durable) {
       const parsed = await new TelegramPollingAdapter({ getUpdates: async () => [update] }, 0).poll(0);
       for (const inbound of parsed.accepted) { scope?.admit(); await listener.handle({ ...inbound, ...(scope ? { runScope: scope } : {}) }); }
-    } else await listener.pollOnce(new TelegramPollingAdapter({ getUpdates: async () => [update] }, offset), 0);
+    } else await listener.pollOnce(new TelegramPollingAdapter({ getUpdates: async () => [update] }, offset), 0, scope);
     } finally {
       try { await this.ownerBrowser.finish(scope); await this.browserTasks.finishRun(); }
       catch {
@@ -2765,12 +2806,23 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       });
     // Watch upkeep is infrastructure, not proactive work: every runtime arms it, whatever the owner's preferences and zone state.
     const ready = Promise.all([proactiveReady, accounts().then(all => armWatchUpkeep(scheduler, watchGrants(all), Date.now()))]).then(() => undefined);
-    const workspaceTools = workspaceToolHandlers(ctx => {
+    const openWorkspace = (ctx?: Readonly<{ runScope?: RunEffectScope; assertTaskSourceCurrent?: () => Promise<void> }>) => {
       const scope = ctx?.runScope;
       if (!scope) throw new ClosedRunError();
       scope.admit();
       return workspaceOwnerHost(this.env, storage, this.ctx.id.toString(), identity.get<string>('do_name'), fetch, scope, ctx?.assertTaskSourceCurrent);
-    }, { origin: async () => await storage.get<string>('origin') ?? null, durable: Boolean(this.env.ARTIFACTS) }, effects);
+    };
+    const workspaceLinks = { origin: async () => await storage.get<string>('origin') ?? null, durable: Boolean(this.env.ARTIFACTS) };
+    const workspaceTools = workspaceToolHandlers(openWorkspace, workspaceLinks, effects);
+    // Files go out with the reply only where the reply is a direct send that can carry them. Elsewhere the model shares
+    // the owner link from the file's receipt.
+    const attachmentRoutes: Record<ChannelKind, AttachmentSend | null> = {
+      whatsapp: (file, fallback) => deliverWhatsAppFileInWindow(identity, Date.now(), routedCall, owner, file, fallback),
+      telegram: null, imessage: null, app: null,
+    };
+    const attachmentRoute = attachmentRoutes[channel];
+    const turnAttachments = turnAttachmentBook();
+    const attachTools = attachmentRoute ? [attachFileHandler({ open: openWorkspace, book: turnAttachments })] : [];
     // One skill book for every surface of this owner: the reviewed catalog, its lifecycle
     // commands and the workspace receipts reach an app turn exactly as they reach a Telegram turn. The custody key is the
     // one the owner's rows were seeded under, so a founder who linked Telegram first keeps the same skills in the app.
@@ -2887,7 +2939,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await sentOrThrow(routedCall('sendMessage', { chat_id: owner, text: `From ${from}:\n${lines.join('\n')}`, [SEND_NOW_ONLY]: true }));
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
-      }, effects), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, ...progressNoteTools, searchEpisodesHandler(episodes), ...memoryHandlers({
+      }, effects), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, ...progressNoteTools, ...attachTools, searchEpisodesHandler(episodes), ...memoryHandlers({
         sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: surfaceChatRef(channel, owner),
         hideHistory: async (texts, context) => {
           const scope = context.runScope;
@@ -2976,7 +3028,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
       respond: async (turn, time) => {
         if (turn.media) files.record(turn.media, turn.text ?? '', Date.now());
-        return responder.respond(turn, time);
+        return responder.respond(attachmentRoute ? { ...turn, canAttach: true } : turn, time);
       },
       // Freeze the reply text, stable commandId and exact target together with the turn's closure.
       ...(channel === 'imessage' ? { queueFinal: async (turn: import('./telegram-polling').TelegramInboundTurn, payload: import('./telegram-final-outbox').FinalPayload) => {
@@ -3004,7 +3056,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         turnReceiptUrls.delete(ownerTurnTrace(channel, turn.updateId));
         await scheduler.rearm();
       } } : {}),
-      clearTurnReceipts: trace => { turnReceiptUrls.delete(trace); },
+      clearTurnReceipts: trace => { turnReceiptUrls.delete(trace); turnAttachments.clear(trace); },
+      ...(attachmentRoute ? { deliverAttachments: (trace: string, runScope?: RunEffectScope) => deliverTurnAttachments(turnAttachments.take(trace), {
+        trace, ownerRef: ownerRef(), effects, open: () => openWorkspace(runScope ? { runScope } : undefined), send: attachmentRoute, delivery: workspaceLinks,
+        ...(runScope ? { admit: () => runScope.admit() } : {}),
+      }) } : {}),
       saveOffset: (offset) => this.ctx.storage.put(offsetKeyOf(channel), offset),
     }) : null;
     const fire = async (entry: ScheduleEntry) => {

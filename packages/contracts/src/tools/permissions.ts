@@ -104,6 +104,8 @@ export const toolNameSchema = z.enum([
   'search_contacts',
   // send_progress_note: a short non-blocking note to the owner's chat while their own turn keeps working.
   'send_progress_note',
+  // attach_file: queue one of the owner's workspace files to go out with this turn's reply, where the surface carries files.
+  'attach_file',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -207,6 +209,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'connect_service',
     'send_console_link',
     'send_progress_note',
+    'attach_file',
     'get_communication',
     'search_communication',
     'search_contacts',

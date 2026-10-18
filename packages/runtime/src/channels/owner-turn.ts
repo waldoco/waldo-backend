@@ -62,7 +62,7 @@ const TURN_ONLY_OUTPUT = JSON.stringify({ retained: false, reason: 'turn_only_ou
 // external-tainted privileged calls outright.
 const EXTERNAL_REACH_TOOLS = new Set(['execute_action', 'delete_message', 'restore_message']);
 export const ownerToolApproval = ({ tool }: { tool: string }): boolean => !EXTERNAL_REACH_TOOLS.has(tool);
-const OWNER_TURN_ONLY_TOOLS: ReadonlySet<string> = new Set(['raise_approval', 'send_progress_note']);
+const OWNER_TURN_ONLY_TOOLS: ReadonlySet<string> = new Set(['raise_approval', 'send_progress_note', 'attach_file']);
 
 // Session canaries are per-runtime tripwires: random 16-hex tokens derived when the owner
 // runtime (DO session) boots, checked by the scribe against every fragment bound for the
