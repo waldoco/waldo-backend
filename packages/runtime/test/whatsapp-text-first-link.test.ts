@@ -3,7 +3,7 @@
 // supabase/tests/waldo_whatsapp_text_first_link.sql.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { handleWhatsAppWebhook, type WhatsAppTextFirst } from '../src/channels/whatsapp-webhook';
-import { CONSOLE_AUTH_WINDOW_SECONDS, consoleReturnTarget, handleConsole } from '../src/channels/console-signin';
+import { consoleReturnTarget, handleConsole } from '../src/channels/console-signin';
 import { WHATSAPP_LINK_CONFIRM_ACTION, whatsappLinkConfirmAction, whatsappLinkConfirmPage } from '../src/channels/whatsapp-link-console';
 import { whatsappLinkDirectory, whatsappLinkToken, whatsappLinkTokenHash, type WhatsAppLinkDirectory } from '../src/identity/whatsapp-link';
 import type { OwnerDirectory } from '../src/identity/owner-directory';
@@ -69,13 +69,13 @@ describe('the reply to an unlinked sender', () => {
       expect((await run(await inbound('again'), unlinked, { links: links(async () => answer), throttle: async () => true })).sent).toEqual([]);
   });
 
-  it('the throttle key is a hash, never the number, on the shared 15-minute window so other callers cannot wipe it', async () => {
+  it('the throttle key is a hash, never the number, and allows three replies per sender per hour', async () => {
     const throttle = vi.fn(async () => true);
     await run(await inbound('hi'), unlinked, { links: links(async () => 'waitlist'), throttle });
     const [key, limit, windowSeconds] = throttle.mock.calls[0] as unknown as [string, number, number];
     expect(key).toMatch(/^walink\.[0-9a-f]{64}$/);
     expect(key).not.toContain(SENDER);
-    expect([limit, windowSeconds]).toEqual([1, CONSOLE_AUTH_WINDOW_SECONDS]);
+    expect([limit, windowSeconds]).toEqual([3, 3600]);
   });
 
   it('a "waldo CODE" text still redeems the console code and opens no link request', async () => {

@@ -105,13 +105,15 @@ select is(pg_temp.link_consume('do-carol', pg_temp.h('5'), '15550004444'), 'clai
 select is((select phone_verified_at from waldo.owners where do_name = 'do-carol'), null, 'a claimed confirm does not verify the phone');
 update waldo.presences set state = 'unlinked', unlinked_at = now() where subject = '15550004444';
 
--- The webhook's per-sender reply throttle (one per 15 minutes) holds across a sign-in attempt, which runs the shared
--- cleanup on the same 900 s window.
+-- The webhook's per-sender reply throttle (three per hour) holds across a sign-in attempt, which runs the shared cleanup
+-- with a 900 s window.
 create function pg_temp.throttle(k text, lim integer, win integer) returns boolean language sql as $$
   select waldo.console_auth_throttle(k, lim, win, pg_temp.at(), pg_temp.rsig('throttle.' || k || '.' || lim || '.' || win)) $$;
-select is(pg_temp.throttle('walink.' || repeat('7', 64), 1, 900), true, 'the first reply to a sender is allowed');
-select is(pg_temp.throttle('send:someone@test.invalid', 5, 900), true, 'a sign-in attempt runs the shared cleanup');
-select is(pg_temp.throttle('walink.' || repeat('7', 64), 1, 900), false, 'the sender is still throttled after it');
+select is(pg_temp.throttle('walink.' || repeat('7', 64), 3, 3600), true, 'the first reply to a sender is allowed');
+select is(pg_temp.throttle('walink.' || repeat('7', 64), 3, 3600), true, 'the second reply is allowed');
+select is(pg_temp.throttle('send:someone@test.invalid', 5, 900), true, 'a sign-in attempt runs the shared cleanup on a 900 s window');
+select is(pg_temp.throttle('walink.' || repeat('7', 64), 3, 3600), true, 'the third reply is allowed: the 900 s cleanup kept the count');
+select is(pg_temp.throttle('walink.' || repeat('7', 64), 3, 3600), false, 'a fourth reply within the hour is refused');
 
 -- Table access.
 select is((select has_table_privilege('anon', 'waldo.presence_link_requests', 'select')), false, 'anon cannot read link requests directly');

@@ -1,7 +1,6 @@
 import { consoleAuth } from '../identity/console-auth';
 import { hex, ownerDirectory, signedRpc, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { newWhatsAppLinkToken, whatsappLinkDirectory, whatsappLinkTokenHash, whatsappLinkUrl, type WhatsAppLinkDirectory } from '../identity/whatsapp-link';
-import { CONSOLE_AUTH_WINDOW_SECONDS } from './console-signin';
 import { createWhatsAppCaller, sendWhatsAppText, WhatsAppApiError, whatsappForwarded } from './whatsapp-api';
 import { WHATSAPP_REENGAGEMENT_ERROR } from './whatsapp-window';
 
@@ -22,11 +21,11 @@ const textFirstFromEnv = (env: WhatsAppWebhookEnv): WhatsAppTextFirst | null => 
   const links = whatsappLinkDirectory(env), auth = consoleAuth(env);
   return links && auth ? { links, throttle: (key, limit, windowSeconds) => auth.throttle(key, limit, windowSeconds) } : null;
 };
-// One reply per sender per 15 minutes: a live link already answers repeat texts ('pending'), so this bounds waitlist
-// replies. The window must be the console auth window: console_auth_throttle drops every row two buckets behind the
-// caller's own window, so a counter on any longer window is wiped by the next sign-in attempt.
-const TEXT_FIRST_REPLIES = 1;
-const TEXT_FIRST_WINDOW_SECONDS = CONSOLE_AUTH_WINDOW_SECONDS;
+// Three replies per sender per hour: a live link already answers repeat texts ('pending'), so this bounds waitlist replies
+// and links reissued after one expires. The throttle expires each row on its own window, so a shorter window used by
+// another caller does not reset this one.
+const TEXT_FIRST_REPLIES = 3;
+const TEXT_FIRST_WINDOW_SECONDS = 3600;
 
 const textFirstReply = async (sender: string, origin: string, env: WhatsAppWebhookEnv, textFirst: WhatsAppTextFirst): Promise<string | null> => {
   const senderKey = hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`whatsapp.${sender}`)));
