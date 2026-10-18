@@ -8,7 +8,7 @@ import type { CommandSummary, CommandInput } from './command-store';
 import { identifier, commandPayload } from './wire';
 import { CONSOLE_DEVICES_PATH, KENNEL_PAIRING_CODE_PREFIX, PAIRING_MINT_ATTEMPTS, NOTIFICATION_BODY_CHOICES, NOTIFICATION_TITLE } from './contract';
 const escape = (value: string): string => value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
-type ConsoleDirectory = Pick<ReturnType<typeof deviceDirectory>, 'issuePairingCode' | 'revokeDevice'> & Partial<Pick<ReturnType<typeof deviceDirectory>, 'listDevices' | 'deviceForAuth' | 'issueOwnedPairingCode'>>;
+export type ConsoleDirectory = Pick<ReturnType<typeof deviceDirectory>, 'issuePairingCode' | 'revokeDevice'> & Partial<Pick<ReturnType<typeof deviceDirectory>, 'listDevices' | 'deviceForAuth' | 'issueOwnedPairingCode'>>;
 // Self-contained console styling (dashboard tokens): nonce-gated, no external fonts or scripts.
 const STYLE = `:root{--canvas:#f4f3f0;--card:#fff;--ink:#1a1a1a;--muted:#6b6862;--line:#e4e1db;--action:#2388ff;--good:#1f8a4c;--focus:#5267af;color-scheme:light}
 *{box-sizing:border-box}body{margin:0;background:var(--canvas);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif}
@@ -54,43 +54,56 @@ export function renderPairingCode(value: string, nonce: string): string {
   return shell('Your pairing code', nonce, `<a href="${CONSOLE_DEVICES_PATH}">Back to devices</a><h1>Your pairing code</h1><section><p class="muted">Paste this into Kennel: Settings, then Connect to Waldo.</p><p class="code" id="code">${escape(value)}</p><div class="row"><button class="primary" id="copy" type="button">Copy code</button><span class="muted">Expires in 10 minutes. Single use.</span></div></section>`, script);
 }
 export const DEVICE_PAGE_HEADERS = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' };
-export async function deviceConsoleAction(form: FormData, csrf: string, owner: string, directory: ConsoleDirectory, namespace?: DurableObjectNamespace<DeviceBridgeDO>, accept = ''): Promise<Response> {
-  // A per-request owner session and CSRF are the sole authority for pairing/revocation.
-  if (!owner || form.get('csrf') !== csrf) return new Response('invalid', { status: 403 });
+/** What one device action did. failed is a definite refusal; unknown is a thrown call whose effect may have landed. */
+export type DeviceOutcome = { kind: 'pairing_code'; value: string } | { kind: 'code'; code: string } | { kind: 'done' } | { kind: 'invalid' } | { kind: 'failed' } | { kind: 'unknown' };
+export type DeviceActionInput = Readonly<{ id?: unknown; request_id?: unknown; query_kind?: unknown; notification_id?: unknown; title?: unknown; body?: unknown; severity?: unknown }>;
+// One owner device action. The caller has already proved the owner's console session and CSRF.
+// owned asks for the one copyable Kennel code; scripted clients keep the plain 43-char code.
+export async function deviceAction(owner: string, directory: ConsoleDirectory, namespace: DurableObjectNamespace<DeviceBridgeDO> | undefined, action: unknown, input: DeviceActionInput, owned: boolean): Promise<DeviceOutcome> {
   try {
-    if (form.get('action') === 'device.pair') {
-      // A browser gets the copyable Kennel code; scripted clients keep the plain 43-char code.
-      if (accept.includes('text/html') && directory.issueOwnedPairingCode) {
+    if (action === 'device.pair') {
+      if (owned && directory.issueOwnedPairingCode) {
         for (let attempt = 0; attempt < PAIRING_MINT_ATTEMPTS; attempt++) {
           const code = mintPairingCode();
           const ownerId = await directory.issueOwnedPairingCode(owner, await devicePairingCodeHash(code));
-          if (ownerId) { const nonce = crypto.randomUUID(); return new Response(renderPairingCode(`${KENNEL_PAIRING_CODE_PREFIX}.${ownerId}.${code}`, nonce), { headers: devicePageHeaders(nonce) }); }
+          if (ownerId) return { kind: 'pairing_code', value: `${KENNEL_PAIRING_CODE_PREFIX}.${ownerId}.${code}` };
         }
-        return new Response('Unable to complete device request.', { status: 400 });
+        return { kind: 'failed' };
       }
       for (let attempt = 0; attempt < PAIRING_MINT_ATTEMPTS; attempt++) {
         const code = mintPairingCode();
-        if (await directory.issuePairingCode(owner, await devicePairingCodeHash(code))) return new Response(`${code}\nExpires in 10 minutes. Single use.`, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } });
+        if (await directory.issuePairingCode(owner, await devicePairingCodeHash(code))) return { kind: 'code', code };
       }
-    } else if (form.get('action') === 'device.query' || form.get('action') === 'device.notify') {
-      const device = form.get('id'), request = form.get('request_id'), kind = form.get('action') === 'device.query' ? 'machine_state_query' : 'notify_local';
-      const payload = kind === 'machine_state_query' ? { query_id: request, query_kind: form.get('query_kind') } : { notification_id: form.get('notification_id'), title: form.get('title'), body: form.get('body'), severity: form.get('severity') };
+    } else if (action === 'device.query' || action === 'device.notify') {
+      const device = input.id, request = input.request_id, kind = action === 'device.query' ? 'machine_state_query' : 'notify_local';
+      const payload = kind === 'machine_state_query' ? { query_id: request, query_kind: input.query_kind } : { notification_id: input.notification_id, title: input.title, body: input.body, severity: input.severity };
       // Only explicitly owner-selected neutral presets issue; chat/model output supplies no permission.
-      if (!identifier(device) || !identifier(request) || !commandPayload(kind, payload) || !directory.listDevices || !directory.deviceForAuth || !namespace) return new Response('invalid', { status: 400 });
-      if (kind === 'notify_local' && !notificationScope(payload as NotifyPayload)) return new Response('invalid', { status: 400 });
-      if (!(await directory.listDevices(owner)).some((entry) => entry.device_id === device)) return new Response('invalid', { status: 400 });
+      if (!identifier(device) || !identifier(request) || !commandPayload(kind, payload) || !directory.listDevices || !directory.deviceForAuth || !namespace) return { kind: 'invalid' };
+      if (kind === 'notify_local' && !notificationScope(payload as NotifyPayload)) return { kind: 'invalid' };
+      if (!(await directory.listDevices(owner)).some((entry) => entry.device_id === device)) return { kind: 'invalid' };
       const auth = await directory.deviceForAuth(device);
-      if (!auth || !auth.capabilities.includes(kind)) return new Response('invalid', { status: 400 });
+      if (!auth || !auth.capabilities.includes(kind)) return { kind: 'invalid' };
       const result = await namespace.get(namespace.idFromName(device)).enqueueCommand({ owner_id: auth.owner_id, device_id: device, request_id: request, class: kind, payload } as CommandInput);
-      if (result.accepted) return new Response(null, { status: 303, headers: { location: '/console/devices' } });
-    } else if (form.get('action') === 'device.revoke') {
-      const device = form.get('id');
+      if (result.accepted) return { kind: 'done' };
+    } else if (action === 'device.revoke') {
+      const device = input.id;
       if (identifier(device) && await directory.revokeDevice(owner, device)) {
         try { if (!namespace) throw new Error('infrastructure_unavailable'); await namespace.get(namespace.idFromName(device)).revoke(); }
         catch { deviceDiagnostic('infrastructure_unavailable'); }
-        return new Response(null, { status: 303, headers: { location: '/console/devices' } });
+        return { kind: 'done' };
       }
     }
-  } catch { deviceDiagnostic('infrastructure_unavailable'); }
+  } catch { deviceDiagnostic('infrastructure_unavailable'); return { kind: 'unknown' }; }
+  return { kind: 'failed' };
+}
+export async function deviceConsoleAction(form: FormData, csrf: string, owner: string, directory: ConsoleDirectory, namespace?: DurableObjectNamespace<DeviceBridgeDO>, accept = ''): Promise<Response> {
+  // A per-request owner session and CSRF are the sole authority for pairing/revocation.
+  if (!owner || form.get('csrf') !== csrf) return new Response('invalid', { status: 403 });
+  const input = Object.fromEntries(['id', 'request_id', 'query_kind', 'notification_id', 'title', 'body', 'severity'].map((key) => [key, form.get(key)]));
+  const outcome = await deviceAction(owner, directory, namespace, form.get('action'), input, accept.includes('text/html'));
+  if (outcome.kind === 'pairing_code') { const nonce = crypto.randomUUID(); return new Response(renderPairingCode(outcome.value, nonce), { headers: devicePageHeaders(nonce) }); }
+  if (outcome.kind === 'code') return new Response(`${outcome.code}\nExpires in 10 minutes. Single use.`, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } });
+  if (outcome.kind === 'done') return new Response(null, { status: 303, headers: { location: '/console/devices' } });
+  if (outcome.kind === 'invalid') return new Response('invalid', { status: 400 });
   return new Response('Unable to complete device request.', { status: 400 });
 }
