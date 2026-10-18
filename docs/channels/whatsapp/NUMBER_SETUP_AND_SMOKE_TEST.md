@@ -3,13 +3,13 @@
 This page is the order of operations for putting a WhatsApp number in front of Waldo, and the checks that
 prove each step: Meta's side, the Worker's configuration, then a smoke test. It authorizes nothing. Every
 Meta write, secret change and deploy below needs the owner's yes at the time. Runtime claims cite source at
-`74dbb957`; Meta claims cite the guide page and its "Updated" date, read on 18 October 2026.
+`f86af4fd`; Meta claims cite the guide page and its "Updated" date, read on 18 October 2026.
 
 ## What is true on 18 October 2026
 
 | Piece | State |
 | --- | --- |
-| Runtime | Webhook, text-first linking, owner replies, the 24-hour window, held messages and the knock are on `beta-mvp`. A refused send or a failed delivery status logs the error's name and numeric codes, never the recipient, a message id or Meta's error text (`whatsapp-webhook.ts:198`, `:205`, `:207`). |
+| Runtime | Webhook, text-first linking, owner replies, the 24-hour window, held messages and the knock are on `beta-mvp`. A refused send or a failed delivery status logs the error's name and numeric codes, never the recipient, a message id or Meta's error text (`whatsapp-webhook.ts:212`, `:219`, `:221`). On staging only, while `WHATSAPP_DEBUG_LOG` is `"true"`, each signed webhook payload is also logged whole, and a refused send adds Graph's whole answer (`:23`, `:131-134`, `:176`). |
 | Meta app "Waldo" | Published. Its callback is staging's `/whatsapp/webhook`, subscribed to the `messages` field. |
 | Meta's test number, +1 555 633 8976 | Inbound reaches staging, and Graph accepts sends. Meta then fails each delivery with 131031: seen at 16:39Z, 4 s after a reply was accepted. Meta's own `hello_world` never arrived either. Business Settings shows the number Connected, with quality High and a limit of 250 customers per 24 hours, and its Messaging account Approved (observed 16:50Z). The reason for the 131031 is not yet known. |
 | Waldo's number, +91 92260 67544 | Verified, not registered. Registration was refused with `ACCOUNT_NOT_APPROVED`. Meta MCP reports its Messaging account as "Restricted" (16:41Z). WhatsApp Manager showed both of Waldo's Messaging accounts as "Account Restricted: Before you can begin messaging, you will need to verify your business" (observed 18 October). |
@@ -56,12 +56,12 @@ Each step ends with a check you can see. A step whose check fails is the answer:
    *Check:* Business Settings lists `waldo-staging` with full control on both. After step 6, a send refused
    with code 10, "(#10) Viewer cannot access the provided Paid Message Account", means this step is incomplete.
 6. **Switch the Worker to the number** (owner sets the `WHATSAPP_PHONE_NUMBER_ID` secret). The switch is
-   all-or-nothing: every send reads that one secret (`whatsapp-webhook.ts:189-229`, `owner-do.ts:2474`).
+   all-or-nothing: every send reads that one secret (`whatsapp-webhook.ts:203-243`, `owner-do.ts:2474`).
    Before switching:
    - **Unsubscribe the old number's Messaging account.** The owner does this; the Meta MCP has no tool to
      remove a subscription.
      - Why: the webhook never compares an entry's `metadata.phone_number_id` with the configured number. Its
-       only mention is the type at `whatsapp-webhook.ts:61`. A message to any subscribed number is answered
+       only mention is the type at `whatsapp-webhook.ts:69`. A message to any subscribed number is answered
        from the configured one, so a tester writing to the old number would get the answer from the new one.
      - Exception: if the old and new numbers share a Messaging account, don't unsubscribe it, because that
        cuts off both. The cross-answer risk then stays until the webhook compares numbers.
@@ -84,7 +84,7 @@ which is managed on the app's WhatsApp API testing page in the App Dashboard.
 
 **The test phone.** It must not be the business number. Its number must be on file for exactly one test
 owner account, never the owner's own, and not linked yet. A phone that is on nobody's file gets the
-waitlist text instead of a link (`whatsapp-webhook.ts:35-39`): S2 and S3 still pass, but S5 cannot.
+waitlist text instead of a link (`whatsapp-webhook.ts:43-47`): S2 and S3 still pass, but S5 cannot.
 
 **Watching the Worker.** Use a filter that drops query strings and keeps only WhatsApp log lines. From
 `packages/runtime`:
@@ -94,26 +94,36 @@ npx wrangler tail waldo-runtime-staging --format json | jq -c 'select((.event.re
 ```
 
 Never paste raw tail output anywhere shared. It carries request URLs and headers, and Meta's verification
-request carries the verify token in its query string (`whatsapp-webhook.ts:151-153`).
+request carries the verify token in its query string (`whatsapp-webhook.ts:163-165`). While staging's debug
+log is on, the filtered output above also carries testers' numbers and message text, in its
+`whatsapp_debug_payload` lines.
+
+**Reading a failed delivery.** On staging, the status view keeps only each status's `status`, `errors` and
+`pricing` from the debug payloads. A failed status's `errors` carry Meta's `title`, `message` and
+`error_data.details` for its code, and `pricing.category` shows how Meta billed the message:
+
+```bash
+npx wrangler tail waldo-runtime-staging --format json | jq -c 'select((.event.request.url // "") | test("/whatsapp/")) | [.logs[]?.message[0]? | select(type == "string" and test("\"hop\":\"whatsapp_debug_payload\"")) | (try fromjson) | .payload.entry[]?.changes[]?.value.statuses[]? | {status, errors, pricing}] | select(length > 0)'
+```
 
 | Step | Do | Pass when | Evidence |
 | --- | --- | --- | --- |
 | S1 | Run MCP `whatsapp_biz_onboarding_status` with the number's id | Every step is done | The tool result |
 | S2 | From the test phone, send `hi` | A `/whatsapp/webhook` request answered 200, whose hops include `{"hop":"whatsapp_text_first","ok":true,"replied":true}` | Tail |
-| S3 | Nothing; same send | No `whatsapp_text_first` line with `"ok":false` follows | Tail. On failure, the line's `status` and `code` |
-| S4 | Nothing; same send | The link message arrives, and no `whatsapp_status_failed` line appears within 10 minutes | The phone. Delivered statuses are not logged |
+| S3 | Nothing; same send | No `whatsapp_text_first` line with `"ok":false` follows | Tail. On failure, the line's `status` and `code`, and on staging its `body`: Graph's whole answer |
+| S4 | Nothing; same send | The link message arrives, and no `whatsapp_status_failed` line appears within 10 minutes | The phone. On staging, the status view also shows `sent`, then `delivered` |
 | S5 | Open the link, sign in, confirm, then send `hi` | Waldo answers as that owner's Waldo | The phone |
 | S6 | The knock | As in the template plan's live test | Tail and phone |
 
 **Limits on repeat checks.**
 - Texts from an unlinked phone are throttled before any reply logic, at 3 per hour
-  (`whatsapp-webhook.ts:24-40`). [inference] Texts that get no reply count too.
+  (`whatsapp-webhook.ts:32-48`). [inference] Texts that get no reply count too.
 - While a sent link is pending, further texts get no reply for its 10 minutes. That silence also follows a
   link whose send failed, which is a known gap.
 - For a repeat check from a phone that is still unlinked, send `waldo 000000`. It is a code that cannot
   redeem: Waldo answers "That code did not work", and a refused send logs `whatsapp_link_code` with the
-  Graph status and code (`:201-205`).
-- A linked phone's texts go to its owner instead (`:174-187`).
+  Graph status and code (`:215-219`).
+- A linked phone's texts go to its owner instead (`:188-201`).
 
 **Stop rule.** Graph accepted a send (no `"ok":false` line), but within 10 minutes neither the message nor a
 `whatsapp_status_failed` line arrived? Stop sending. Check WhatsApp Manager's overview for a restriction or
@@ -122,7 +132,8 @@ billing banner instead; more sends add nothing.
 ## Diagnosis by code
 
 Codes come from [WhatsApp error codes](https://developers.facebook.com/documentation/business-messaging/whatsapp/support/error-codes)
-(updated 18 June 2026) unless marked as observed or cited otherwise.
+(updated 18 June 2026) unless marked as observed or cited otherwise. On staging, read Meta's own explanation
+first: a refused send's `body`, or a failed status's `errors` in the status view.
 
 | Code | Meaning | Where to look |
 | --- | --- | --- |
@@ -133,7 +144,7 @@ Codes come from [WhatsApp error codes](https://developers.facebook.com/documenta
 | 131030 | Recipient not on the test number's allow-list (observed; not in Meta's table) | Test-number note |
 | 131042 | Payment method problem | Step 2 |
 | 131045, 133010 | Number not registered | Step 3 |
-| 131031 | Either the account is restricted or disabled for a policy violation, or data in the request, such as a two-step PIN, does not match the account. Seen on 18 October as a failed status on the test number | At registration: the PIN in step 3. At send: step 1, WhatsApp Manager's account status, and the AI-provider terms below as a competing cause; then Meta Business Support |
+| 131031 | Either the account is restricted or disabled for a policy violation, or data in the request, such as a two-step PIN, does not match the account. Seen on 18 October as a failed status on the test number | On staging, the failed status's `error_data.details` first. At registration: the PIN in step 3. At send: step 1, WhatsApp Manager's account status, and the AI-provider terms below as a competing cause; then Meta Business Support |
 | 368 | Account restricted or disabled for a policy violation | Meta Business Support |
 | 131026 | Undeliverable: not a WhatsApp number, terms not accepted, or an old app version | The recipient's phone |
 | 131047 | Window closed | Expected: Waldo holds the message and knocks |
@@ -150,8 +161,12 @@ Codes come from [WhatsApp error codes](https://developers.facebook.com/documenta
   - `WHATSAPP_APP_SECRET`;
   - `WHATSAPP_VERIFY_TOKEN`;
   - the registration PIN.
-- Logs carry error names and codes, never phone numbers, message ids, business-scoped user ids or message
-  text.
+- Outside staging, logs carry error names and codes, never phone numbers, message ids, business-scoped user
+  ids or message text. Staging is the exception while testing, by the owner's ruling of 18 October 2026:
+  with `WHATSAPP_DEBUG_LOG` set to `"true"`, it logs whole webhook payloads and Graph's answers, which carry
+  all four, health details a tester types included. `CLAUDE.md` records the exception, which ends before
+  production. Credentials are never logged anywhere.
+- Tell each tester that staging logs what they send.
 - Every Meta write (subscription, registration, access, template) and every secret change or deploy needs the
   owner's yes for that action.
 - Message only people who have written to the number first.
@@ -183,4 +198,7 @@ Not yet seen on any number:
 - a knock;
 - a linked owner's conversation over WhatsApp.
 
-Two things are not yet known: why the test number gets 131031, and whether verification clears it.
+Two things are not yet known: why the test number gets 131031, and whether verification clears it. The
+debug log has been live on staging since 17:43Z (`f86af4fd`, Worker version `315fbc02`); no Meta webhook has
+reached it yet, so its first `whatsapp_debug_payload` line is still to be seen. The next failed message should
+show Meta's explanation.

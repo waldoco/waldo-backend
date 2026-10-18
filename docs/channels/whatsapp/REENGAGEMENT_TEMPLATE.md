@@ -4,11 +4,11 @@ Outside WhatsApp's 24-hour customer service window, only an approved template re
 holds the real message, sends one template (the knock) per closed window, and delivers what it held once the
 owner replies (`whatsapp-window.ts:5-10`, `:74-92`, `:241`). This page plans that template. Creating it is a
 Meta write, and configuring and deploying it are changes; each needs the owner's yes. Runtime claims cite
-source at `74dbb957`; Meta claims cite the guide page and its "Updated" date, read on 18 October 2026.
+source at `f86af4fd`; Meta claims cite the guide page and its "Updated" date, read on 18 October 2026.
 
 ## What the runtime sends
 
-- **A name and a language, nothing else** (`whatsapp-api.ts:78-80`). The body has to be static text: a
+- **A name and a language, nothing else** (`whatsapp-api.ts:95-97`). The body has to be static text: a
   template with a variable fails with 132000 because no parameter values are sent. Keep it to a body and an
   optional footer, without media or buttons, since a reply in the chat is all the owner needs to do. A
   static body also means no message content, and so no health detail, ever travels in a knock.
@@ -75,13 +75,14 @@ described on the same categorization page:
 
    *Pass:*
    - the tail shows `{"hop":"whatsapp_window","ok":true,"held":true,"knocked":true}`;
-   - the template arrives;
+   - the template arrives, and on staging the setup page's status view shows its `pricing.category` as
+     `utility`;
    - after a reply, the held message arrives on the phone. A reminder held in the outbox is released without a
      `whatsapp_held` line (`whatsapp-window.ts:205`), so the phone is the evidence.
    *Falsifiers:*
    - `template_unconfigured`: the configuration is not deployed.
    - 132001: the name, language or account does not match.
-   - 131049 or 131050: the template is marketing.
+   - 131049 or 131050, or `pricing.category` `marketing`: the template is marketing.
 6. **Keep watching.** Meta can change an approved template after approval:
    - it pauses a low-quality template (132015), and disables one paused too often (132016);
    - it archives a template unused for 12 months
@@ -89,7 +90,7 @@ described on the same categorization page:
      updated 21 May 2026);
    - it can move a utility template to marketing, with notice by email and webhook.
 
-   The Worker reads only messages and statuses from a webhook (`whatsapp-webhook.ts:70-103`), so these
+   The Worker reads only messages and statuses from a webhook (`whatsapp-webhook.ts:78-111`), so these
    changes reach the Messaging account's admins by email and in WhatsApp Manager, never Waldo.
 
 ## Opt-in comes first
