@@ -62,11 +62,12 @@ describe('the where Waldo writes control', () => {
     expect(html(surface({ value: 'both', telegram_linked: true }))).toContain('While Telegram is linked');
     const whatsapp = html(surface({ value: 'whatsapp' }));
     expect(whatsapp).toContain('Meeting prep before your events isn’t sent on WhatsApp yet.');
-    expect(whatsapp).toContain('Waldo holds its messages until you write again.');
+    expect(whatsapp).toContain('a day card waits only until your next card is due or its day ends, update cards aren’t sent, and a standing order’s newer report replaces a waiting one.');
+    expect(whatsapp).toContain('Other messages wait up to 30 days for your next message there, unless they no longer apply.');
     const both = html(surface({ value: 'both' }));
-    expect(both).toContain('Meeting prep before your events comes to the app only.');
+    expect(both).toContain('Meeting prep before your events, update cards and notices about paused jobs come to the app only.');
     expect(both).toContain('each copy waits a day at most for your next message there; the app keeps every message.');
-    expect(both).not.toContain('holds its messages');
+    expect(both).not.toContain('30 days');
   });
 
   it('saves the owner\'s new choice through the day view\'s action', async () => {
