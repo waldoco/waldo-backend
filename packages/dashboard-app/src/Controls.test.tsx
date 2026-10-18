@@ -46,6 +46,8 @@ describe('modern account controls', () => {
     expect(html).toContain('WhatsApp'); expect(html).toContain('Get a WhatsApp link code'); expect(html).not.toContain('/console/legacy');
     expect(html).toContain('Sign out of this browser'); expect(html).toContain('Sign out everywhere');
     expect(html).not.toContain('/console/connections');
+    expect(html).toContain('href="#/connections/imessage"'); expect(html).toContain('href="#/connections/devices"');
+    expect(html).not.toContain('/console/imessage'); expect(html).not.toContain('/console/devices');
     const multiple = renderToStaticMarkup(<ConnectionsControls record={{ ...connections, data: { ...connections.data, telegram: { linked: true, unlinkAvailable: true }, sessions: { count: 2, until: connections.data.sessions.until, items: [{ signed_in: '2026-10-02 06:00', until: '2026-10-02 18:00', current: false }, { signed_in: '2026-10-01 19:30', until: '2026-10-02 07:30', current: true }] } } }} busy={false} onAction={noop}/>);
     expect(multiple).toContain('Unlink Telegram'); expect(multiple).toContain('Sign out everywhere');
     expect(multiple).toContain('Signed in 2026-10-02 06:00'); expect(multiple).toContain('Signed in 2026-10-01 19:30'); expect(multiple).toContain('This browser');
@@ -72,6 +74,11 @@ describe('receipt and read recovery', () => {
     const html = renderToStaticMarkup(<ControlReceipt result={{ receipt: { state: 'unconfirmed', message: '<script>outcome unknown</script>' }, duplicate: true }} onCheck={noop} onRefresh={noop} busy={false}/>);
     expect(html).toContain('Outcome unconfirmed'); expect(html).toContain('Check this request'); expect(html).toContain('did not run again');
     expect(html).toContain('&lt;script&gt;'); expect(html).not.toContain('Receipt recorded');
+    const code = 'wim_' + 'ab'.repeat(24);
+    const revealed = renderToStaticMarkup(<ControlReceipt result={{ receipt: { state: 'recorded', message: 'Enter this code on your Mac host.' }, duplicate: false, reveal: { kind: 'host_code', value: code } }} onRefresh={noop} busy={false}/>);
+    expect(revealed).toContain(code); expect(revealed).toContain('Copy'); expect(revealed).toContain('Shown only here, once'); expect(revealed).not.toContain('Open Messages');
+    const replayed = renderToStaticMarkup(<ControlReceipt result={{ receipt: { state: 'recorded', message: 'Enter this code on your Mac host.' }, duplicate: true }} onRefresh={noop} busy={false}/>);
+    expect(replayed).toContain('not shown again'); expect(replayed).not.toContain('wim_');
     const signedOut = renderToStaticMarkup(<ControlReceipt result={{ receipt: { state: 'recorded', message: 'Signed out', signed_out: true }, duplicate: false }} onRefresh={noop} busy={false}/>);
     expect(signedOut).toContain('Sign in again'); expect(signedOut).not.toContain('Refresh controls');
   });

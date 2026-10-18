@@ -1,5 +1,5 @@
 import {describe,it,expect,vi} from 'vitest';
-import {controlAction,controlRevision,whatsappLinkReceipt} from '../src/channels/dashboard-control-actions';
+import {controlAction,controlRevision,RECEIPT_BOOK_KEY,whatsappLinkReceipt} from '../src/channels/dashboard-control-actions';
 import type {ConsoleView} from '../src/channels/console';
 const day={version:1,view:'day',state:'available',csrf:'csrf',data:{timezone:'UTC',cards:[],proactivity:{quiet_start:null,quiet_end:null,volume:'normal'}}};
 const form=(revision:string,action='timezone.set',id='request-0001')=>{const f=new FormData();for(const [k,v] of Object.entries({csrf:'csrf',revision,view:'day',request_id:id,action,value:'UTC'}))f.set(k,v);return f;};
@@ -47,5 +47,70 @@ describe('calendar approval from the dashboard', () => {
   expect(act).not.toHaveBeenCalled();
   expect((await controlAction(await approve(revision,'p-plain'),deps)).status).toBe(200);
   expect(act).toHaveBeenCalledTimes(1);
+ });
+});
+
+describe('views that list their own actions',()=>{
+ const imessage={version:1,view:'imessage',state:'available',csrf:'csrf',data:{actions:['imessage.link'],bridges:[{id:'imb_listed',actions:['imessage.revoke','imessage.verify']}]}};
+ const listedSetup=()=>{const rows=new Map<string,unknown>();const act=vi.fn(async():Promise<unknown>=>true);const view=vi.fn(async()=>({cards:[]} as unknown as ConsoleView));
+  return {act,view,rows,deps:{csrf:'csrf',expires:Date.now()+43200000,sessions:async()=>[{csrf:'csrf',expires:Date.now()+43200000}],projection:async()=>imessage,view,act:act as never,store:{get:async<T>(k:string)=>rows.get(k) as T|undefined,put:async(k:string,v:unknown)=>{rows.set(k,v);}}}};};
+ const post=async(fields:Record<string,string>)=>{const f=new FormData();for(const [k,v] of Object.entries({csrf:'csrf',revision:await controlRevision(imessage),view:'imessage',request_id:'listed-0001',...fields}))f.set(k,v);return f;};
+ it('takes eligibility from the fresh read and never builds the console view',async()=>{
+  const {act,view,deps}=listedSetup();
+  expect((await controlAction(await post({action:'imessage.link'}),deps)).status).toBe(200);
+  for(const [action,id] of [['imessage.pair',''],['imessage.revoke','imb_unlisted'],['imessage.link','imb_listed'],['imessage.activate','imb_listed']] as const){
+   const refused=await controlAction(await post({action,id,request_id:`refused-${action.replace('.','_')}-${id||'top'}`}),deps);
+   expect({action,id,status:refused.status,body:await refused.json()}).toMatchObject({action,id,status:409,body:{error:'no_longer_eligible'}});
+  }
+  expect((await controlAction(await post({action:'imessage.revoke',id:'imb_listed',request_id:'listed-0002'}),deps)).status).toBe(200);
+  expect(act).toHaveBeenCalledTimes(2);expect(view).not.toHaveBeenCalled();
+ });
+ it("accepts a view's own fields only on that view and hands them to the executor",async()=>{
+  const {act,deps}=listedSetup();
+  expect((await controlAction(await post({action:'imessage.verify',id:'imb_listed',query_kind:'session_status'}),deps)).status).toBe(400);
+  const day=form(await controlRevision({version:1,view:'day',state:'available',csrf:'csrf',data:{}}));day.set('subject','owner@example.invalid');
+  expect((await controlAction(day,deps)).status).toBe(400);
+  expect(act).not.toHaveBeenCalled();
+  expect((await controlAction(await post({action:'imessage.verify',id:'imb_listed',subject:'owner@example.invalid',chat:'iMessage;-;owner@example.invalid'}),deps)).status).toBe(200);
+  expect(act).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({action:'imessage.verify',id:'imb_listed'}),{subject:'owner@example.invalid',chat:'iMessage;-;owner@example.invalid',request_id:'listed-0001'});
+ });
+ it("fingerprints a view's own fields, so a reused request id with a different sender is refused",async()=>{
+  const {act,deps}=listedSetup();
+  const verify=(subject:string)=>post({action:'imessage.verify',id:'imb_listed',subject,chat:`iMessage;-;${subject}`});
+  expect((await controlAction(await verify('a@example.invalid'),deps)).status).toBe(200);
+  expect(await (await controlAction(await verify('a@example.invalid'),deps)).json()).toMatchObject({duplicate:true});
+  const reused=await controlAction(await verify('b@example.invalid'),deps);
+  expect(reused.status).toBe(409);expect(await reused.json()).toMatchObject({error:'request_reused'});
+  expect(act).toHaveBeenCalledTimes(1);
+ });
+ it('returns a one-time value in that response only and never writes it to the receipt book',async()=>{
+  const {act,rows,deps}=listedSetup();
+  const secret='wim_'+'a1'.repeat(24);
+  act.mockResolvedValueOnce({receipt:{state:'recorded',message:'Enter this code on your Mac host.'},reveal:{kind:'host_code',value:secret}});
+  const first=await controlAction(await post({action:'imessage.link'}),deps);
+  expect(await first.json()).toEqual({receipt:{state:'recorded',message:'Enter this code on your Mac host.'},duplicate:false,reveal:{kind:'host_code',value:secret}});
+  expect(JSON.stringify([...rows.values()])).not.toContain(secret);
+  const replay=await controlAction(await post({action:'imessage.link'}),deps);
+  const body=await replay.json();
+  expect(body).toEqual({receipt:{state:'recorded',message:'Enter this code on your Mac host.'},duplicate:true});
+  expect(JSON.stringify(body)).not.toContain(secret);
+  expect(act).toHaveBeenCalledTimes(1);
+ });
+ it("writes receipts only to the caller's own book, which keeps its own duplicates",async()=>{
+  const {act,rows,deps}=listedSetup();
+  const own={...deps,book:'console:channel-control-receipts'};
+  expect((await controlAction(await post({action:'imessage.link'}),own)).status).toBe(200);
+  expect([...rows.keys()]).toEqual(['console:channel-control-receipts']);
+  expect(await (await controlAction(await post({action:'imessage.link'}),own)).json()).toMatchObject({duplicate:true});
+  expect(await (await controlAction(await post({action:'imessage.link'}),deps)).json()).toMatchObject({duplicate:false});
+  expect([...rows.keys()].sort()).toEqual([RECEIPT_BOOK_KEY,'console:channel-control-receipts'].sort());
+  expect(act).toHaveBeenCalledTimes(2);
+ });
+ it('drops a one-time value when its receipt is not recorded',async()=>{
+  const {act,deps}=listedSetup();
+  act.mockResolvedValueOnce({receipt:{state:'rejected',message:'Not applied.'},reveal:{kind:'host_code',value:'wim_'+'b2'.repeat(24)}});
+  const refused=await controlAction(await post({action:'imessage.link'}),deps);
+  expect(refused.status).toBe(409);
+  expect(await refused.json()).toEqual({receipt:{state:'rejected',message:'Not applied.'},duplicate:false});
  });
 });
