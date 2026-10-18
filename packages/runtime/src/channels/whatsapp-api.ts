@@ -16,13 +16,30 @@ export const WHATSAPP_TEXT_MAX_CHARS = 4096;
 // A Graph refusal with Meta's numeric error code (error.code in the JSON body), or null when the body has none.
 export class WhatsAppApiError extends Error {
   readonly code: number | null;
+  readonly #body: string;
   constructor(readonly status: number, body: string) {
     super(`whatsapp ${status}: ${body.slice(0, 200)}`);
+    this.#body = body.slice(0, 4096);
     let code: unknown = null;
     try { code = (JSON.parse(body) as { error?: { code?: unknown } }).error?.code; } catch { /* not JSON */ }
     this.code = typeof code === 'number' && Number.isSafeInteger(code) ? code : null;
   }
+
+  // Graph's answer (its first 4096 characters), read only by the webhook's staging debug log. A getter over a private
+  // field, so serializing the error never carries it.
+  get body(): string { return this.#body; }
 }
+
+// Graph can quote the token it was sent back in an auth refusal ("Malformed access token ..."), so every form of the token,
+// as stored and trimmed of whitespace and quotes, is masked before Graph's answer becomes an error. A form shorter than 8
+// characters is no real token and is left alone, so it cannot garble the answer.
+const maskToken = (text: string, token: string): string => {
+  let masked = text;
+  for (const form of new Set([token, token.trim(), token.trim().replace(/^["']+|["']+$/g, '')])) {
+    if (form.length >= 8) masked = masked.split(form).join('[token]');
+  }
+  return masked;
+};
 
 // https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/send-messages/ , "WhatsApp user phone
 // number formats": a `to` without its plus gets the business number's country calling code prepended. Callers pass the
@@ -44,7 +61,7 @@ export const createWhatsAppCaller = (token: string, phoneNumberId: string, fetch
         body: JSON.stringify({ messaging_product: 'whatsapp', ...e164To(body) }),
         signal: controller.signal,
       }),timeout]);
-      if (!response.ok) throw new WhatsAppApiError(response.status, await Promise.race([response.text(),timeout]));
+      if (!response.ok) throw new WhatsAppApiError(response.status, maskToken(await Promise.race([response.text(),timeout]), token));
       return await Promise.race([response.json(),timeout]);
     } finally {
       clearTimeout(timer!);

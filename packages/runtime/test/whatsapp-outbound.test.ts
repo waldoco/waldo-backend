@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { WHATSAPP_GRAPH_VERSION, createWhatsAppCaller, createWhatsAppMediaDownloader, createWhatsAppMediaUploader, deliverWhatsAppFile, whatsappTelegramShim } from '../src/channels/whatsapp-api';
+import { WHATSAPP_GRAPH_VERSION, WhatsAppApiError, createWhatsAppCaller, createWhatsAppMediaDownloader, createWhatsAppMediaUploader, deliverWhatsAppFile, whatsappTelegramShim } from '../src/channels/whatsapp-api';
 import { egressGuardedCaller } from '../src/channels/egress-guard';
 import { WA_LAST_INBOUND_KEY, WHATSAPP_HELD, WHATSAPP_HELD_RETENTION_MS, deliverHeldWhatsApp, recordWhatsAppInbound, whatsappHeld, whatsappTemplateConfig, whatsappWindowCaller } from '../src/channels/whatsapp-window';
 import { egressGate, gatedCaller } from '../src/channels/telegram-api';
@@ -7,6 +7,30 @@ import { DOCX_MIME as DOCX } from '../src/channels/document-render';
 
 const graphOk = () => vi.fn(async (_url: string, _init?: RequestInit) => Response.json({ messages: [{ id: 'wamid.out' }] }));
 const sentBodies = (graph: ReturnType<typeof graphOk>) => graph.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
+
+describe('whatsapp graph refusals', () => {
+  it('never carry the access token, even when Graph quotes it back, stray quotes and whitespace included', async () => {
+    const secret = 'EAAG-fictional-access-token-0123456789';
+    for (const token of [secret, ` "${secret}"\n`]) {
+      const echo = vi.fn(async () => Response.json({ error: { code: 190, type: 'OAuthException', message: `Malformed access token ${token}` } }, { status: 401 }));
+      const refusal = await createWhatsAppCaller(token, 'pn1', echo as unknown as typeof fetch)({ to: '15550001111', type: 'text', text: { body: 'hi' } })
+        .then(() => null, (error: unknown) => error);
+      expect(refusal).toBeInstanceOf(WhatsAppApiError);
+      const { body, message, code, status } = refusal as WhatsAppApiError;
+      expect({ code, status }).toEqual({ code: 190, status: 401 });
+      expect(body).toContain('Malformed access token');
+      for (const text of [body, message, JSON.stringify(refusal)]) expect(text).not.toContain(secret);
+    }
+  });
+
+  it('keep Graph\'s answer out of the serialized error', async () => {
+    const refused = vi.fn(async () => Response.json({ error: { code: 131031, message: 'FICTIONAL-DETAIL' } }, { status: 400 }));
+    const refusal = await createWhatsAppCaller('EAAG-fictional-access-token-0123456789', 'pn1', refused as unknown as typeof fetch)({ to: '15550001111', type: 'text', text: { body: 'hi' } })
+      .then(() => null, (error: unknown) => error);
+    expect((refusal as WhatsAppApiError).body).toContain('FICTIONAL-DETAIL');
+    expect(JSON.stringify(refusal)).not.toContain('FICTIONAL-DETAIL');
+  });
+});
 
 describe('whatsapp graph version', () => {
   it('a send, an upload and a media lookup all call the one pinned Graph version, v26.0', async () => {
