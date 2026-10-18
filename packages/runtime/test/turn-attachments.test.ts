@@ -10,7 +10,7 @@ import { deliverTurnAttachments, turnAttachmentBook, type AttachmentSend } from 
 import { EffectNotAppliedError, EffectUnknownError, ownerEffectLedger } from '../src/channels/owner-effect-ledger';
 import { deliverWhatsAppFile, whatsappOutboundKind, type WhatsAppOutboundFile } from '../src/channels/whatsapp-api';
 import { TelegramOwnerListener, type TelegramOwnerApi } from '../src/channels/telegram-listener';
-import { WA_HELD_PREFIX, WA_LAST_INBOUND_KEY, WHATSAPP_HELD, deliverWhatsAppFileInWindow } from '../src/channels/whatsapp-window';
+import { WA_HELD_PREFIX, WA_LAST_INBOUND_KEY, WHATSAPP_HELD, deliverWhatsAppFileInWindow, whatsappWindowCaller } from '../src/channels/whatsapp-window';
 import { TelegramPollingAdapter, type TelegramInboundTurn } from '../src/channels/telegram-polling';
 import { telegramTurnEnvelope } from '../src/channels/telegram-turn';
 import { ClosedRunError, type RunEffectScope } from '../src/channels/run-effect-scope';
@@ -82,7 +82,7 @@ const whatsappLike = (sent: Array<{ method: string; file?: WhatsAppOutboundFile;
 describe('a WhatsApp file and the 24-hour window', () => {
   const kvWith = (lastInbound: number | undefined, held = false) => {
     const map = new Map<string, unknown>(lastInbound === undefined ? [] : [[WA_LAST_INBOUND_KEY, lastInbound]]);
-    if (held) map.set(`${WA_HELD_PREFIX}000000000001`, { heldAt: 0, body: { text: 'the reply' } });
+    if (held) map.set(`${WA_HELD_PREFIX}000000000001`, { heldAt: Date.now(), body: { text: 'the reply' } });
     return { get: <T>(key: string) => map.get(key) as T | undefined, put: (key: string, value: unknown) => { map.set(key, value); }, delete: (key: string) => map.delete(key),
       list: <T>({ prefix }: { prefix: string }) => [...map].filter(([key]) => key.startsWith(prefix)) as [string, T][] };
   };
@@ -99,10 +99,29 @@ describe('a WhatsApp file and the 24-hour window', () => {
     expect(calls).toEqual([{ method: 'sendMessage', text: 'Here is plan.pdf. Open it here: https://waldo.example/f' }]);
   });
 
-  it('inside the window, a reply already held keeps the file behind it too', async () => {
-    const { calls, call } = recording(() => WHATSAPP_HELD);
-    expect(await deliverWhatsAppFileInWindow(kvWith(now, true), now, call, 15550001111, pdf, async () => 'Open it here: https://waldo.example/f')).toEqual({ status: 'held', reason: 'window_closed' });
-    expect(calls.map(c => c.method)).toEqual(['sendMessage']);
+  it('inside the window, a reply already held keeps the file behind it too: the window layer holds the link after it', async () => {
+    const kv = kvWith(now, true);
+    kv.put('wa_held_seq', 1);
+    const provider = recording(() => ({ messages: [{ id: 'wamid.out' }] }));
+    const call = whatsappWindowCaller(provider.call, { kv, template: { name: 'waldo_update_ready', language: 'en' }, now: () => now, log: () => undefined });
+    expect(await deliverWhatsAppFileInWindow(kv, now, call, 15550001111, pdf, async () => 'Open it here: https://waldo.example/f')).toEqual({ status: 'held', reason: 'behind_held' });
+    expect(provider.calls).toEqual([]);
+    expect(kv.list<{ body: { text: string } }>({ prefix: WA_HELD_PREFIX }).map(([, record]) => record.body.text)).toEqual(['the reply', 'Here is plan.pdf. Open it here: https://waldo.example/f']);
+  });
+
+  it('inside the window with nothing held, a link for a type WhatsApp cannot carry goes out now', async () => {
+    const kv = kvWith(now);
+    const provider = recording(() => ({ messages: [{ id: 'wamid.out' }] }));
+    const call = whatsappWindowCaller(provider.call, { kv, template: { name: 'waldo_update_ready', language: 'en' }, now: () => now, log: () => undefined });
+    const md: WhatsAppOutboundFile = { bytes: PDF, mime: 'text/markdown', filename: 'plan.md' };
+    expect(await deliverWhatsAppFileInWindow(kv, now, call, 15550001111, md, async () => 'link')).toEqual({ status: 'degraded', reason: 'unsupported_type' });
+    expect(provider.calls.map(c => c.method)).toEqual(['sendMessage']);
+  });
+
+  it('a held link after a refused document is held, never read as delivered', async () => {
+    const md: WhatsAppOutboundFile = { bytes: PDF, mime: 'text/markdown', filename: 'plan.md' };
+    const call = async (method: string) => { if (method === 'sendDocument') whatsappOutboundKind(md); return WHATSAPP_HELD; };
+    expect(await deliverWhatsAppFile(call, 15550001111, md, async () => 'link')).toEqual({ status: 'held', reason: 'unsupported_type' });
   });
 
   it('inside the window with nothing held the document goes out', async () => {
@@ -165,6 +184,20 @@ describe('the host sends queued files after the reply', () => {
       await expect(deliverTurnAttachments(attachment, options(state, store, lost))).rejects.toBeInstanceOf(EffectUnknownError);
       await expect(deliverTurnAttachments(attachment, options(state, store, lost))).rejects.toBeInstanceOf(EffectUnknownError);
       expect(sends).toBe(1);
+    });
+  });
+
+  it('a link that could not be built sent nothing, so the file is recorded not applied rather than unknown', async () => {
+    await delivering('link-failed', async state => {
+      const { store, write } = await workspace();
+      const md = await write('plan.md', PDF, 'text/markdown');
+      // The link rechecks the file before presenting it; here that second read finds it gone.
+      let reads = 0;
+      const gone: WorkspaceStore = Object.create(store);
+      gone.export = async (...args) => { reads += 1; if (reads > 1) throw new Error('file gone'); return store.export(...args); };
+      const linkOnly: AttachmentSend = async (_file, fallback) => ({ status: 'degraded', reason: (await fallback()) && 'unsupported_type' });
+      await expect(deliverTurnAttachments([{ file_id: md.file_id, revision: 1, filename: 'plan.md', mime: 'text/markdown' }], { ...options(state, store, linkOnly), open: async () => gone }))
+        .rejects.toBeInstanceOf(EffectNotAppliedError);
     });
   });
 

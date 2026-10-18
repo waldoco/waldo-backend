@@ -1,6 +1,6 @@
 import { SEND_NOW_ONLY, routedDelivery, type OutboxRoute } from './delivery-routes';
 import type { DeliveryReceipt, FinalRecord, TelegramFinalOutbox } from './telegram-final-outbox';
-import { WhatsAppApiError, WhatsAppFileRefused, WhatsAppPartialSend, deliverWhatsAppFile, whatsappFileLinkText, whatsappOutboundKind, type WhatsAppFileLinkReason, type WhatsAppFileOutcome, type WhatsAppOutboundFile } from './whatsapp-api';
+import { WHATSAPP_HELD, WhatsAppApiError, WhatsAppFileRefused, WhatsAppPartialSend, deliverWhatsAppFile, whatsappFileLinkText, whatsappHeld, whatsappLinkOutcome, whatsappOutboundKind, type WhatsAppFileLinkReason, type WhatsAppFileOutcome, type WhatsAppOutboundFile } from './whatsapp-api';
 
 // WhatsApp's customer service window: a business may send free-form messages only within 24 hours
 // of the user's last message; outside it, only an approved template goes through
@@ -29,10 +29,11 @@ export const WA_HELD_PREFIX = 'wa_held:';
 type Kv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void; delete(key: string): unknown; list<T>(options: { prefix: string }): Iterable<[string, T]> }>;
 type Caller = (method: string, body: object) => Promise<unknown>;
 type Held = Readonly<{ heldAt: number; body: object }>;
-// What a held send answers instead of a provider receipt: the text is in Waldo's custody and goes out on the owner's next
-// message. It is not a delivery, and no caller may read it as one.
-export const WHATSAPP_HELD = Object.freeze({ held: 'whatsapp_window' as const });
-export const whatsappHeld = (result: unknown): boolean => (result as { held?: unknown } | null | undefined)?.held === WHATSAPP_HELD.held;
+export { WHATSAPP_HELD, whatsappHeld };
+// Marks a send that must not overtake held messages: while anything is held it is held after them, even with the window
+// open. A symbol key, so it never reaches a provider's JSON body.
+export const SEND_BEHIND_HELD: unique symbol = Symbol('whatsapp.behind_held');
+const anyHeld = (kv: Kv): boolean => [...kv.list({ prefix: WA_HELD_PREFIX })].length > 0;
 export type WhatsAppTemplate = Readonly<{ name: string; language: string }>;
 type Log = (event: Readonly<Record<string, string | number | boolean>>) => void;
 
@@ -95,16 +96,19 @@ const reengagement = (error: unknown): boolean => error instanceof WhatsAppApiEr
 // passed the same ownership check and link redaction as any other send. A held message answers WHATSAPP_HELD.
 // A long text the shim split goes out part by part; when the window refuses a later part, only the parts not yet
 // sent are held, and the receipt of the last part that went out is returned. A SEND_NOW_ONLY send is never held: outside
-// the window it answers nothing (not sent), and the owner still gets the knock, so a reply lets Waldo offer it afresh.
+// the window it answers nothing (not sent), and the owner still gets the knock, so a reply lets Waldo offer it afresh. A
+// SEND_BEHIND_HELD send is held after what is already held, even inside the window, and answers WHATSAPP_HELD.
 export const whatsappWindowCaller = (inner: Caller, options: Readonly<{ kv: Kv; template: WhatsAppTemplate | null; now?: () => number; log: Log }>): Caller => {
   const { kv, template, log } = options;
   const now = options.now ?? Date.now;
   return async (method, body) => {
     if (method !== 'sendMessage') return inner(method, body);
     const nowOnly = (body as { [SEND_NOW_ONLY]?: unknown })[SEND_NOW_ONLY] === true;
-    let held: readonly object[] = [body];
+    const { [SEND_BEHIND_HELD]: behindFlag, ...plain } = body as { [SEND_BEHIND_HELD]?: unknown };
+    const behind = behindFlag === true && anyHeld(kv);
+    let held: readonly object[] = [plain];
     let receipt: unknown = WHATSAPP_HELD;
-    if (whatsappWindowOpen(kv, now())) {
+    if (!behind && whatsappWindowOpen(kv, now())) {
       try { return await inner(method, body); }
       catch (error) {
         if (nowOnly && error instanceof WhatsAppPartialSend) throw error;
@@ -123,7 +127,8 @@ export const whatsappWindowCaller = (inner: Caller, options: Readonly<{ kv: Kv; 
       return undefined;
     }
     for (const part of held) holdBody(kv, part, now());
-    await whatsappKnock(kv, t => inner('sendTemplate', t), template, log);
+    // Held behind earlier messages in an open window, there is nothing to knock for: the next delivery of held messages sends it.
+    if (!whatsappWindowOpen(kv, now())) await whatsappKnock(kv, t => inner('sendTemplate', t), template, log);
     return receipt;
   };
 };
@@ -234,13 +239,13 @@ export const deliverHeldWhatsApp = async (kv: Kv, call: Caller, now: number, log
 
 // File bytes leave only while the window is open and nothing is held. Outside the window a document would be refused
 // after its upload, and while a reply is held a document would land before the reply it follows. So the owner gets the
-// link text instead, sent through the window layer, which holds it in order behind anything already held.
+// link text instead, sent through the window layer marked SEND_BEHIND_HELD: outside the window, or while anything is held,
+// the layer holds it after what it already holds, so it goes out in order on the next delivery of held messages.
 export const deliverWhatsAppFileInWindow = async (kv: Kv, now: number, call: Caller, chatId: number, file: WhatsAppOutboundFile, fallback: () => Promise<string>): Promise<WhatsAppFileOutcome> => {
   let reason: WhatsAppFileLinkReason | null = null;
   try { whatsappOutboundKind(file); } catch (error) { if (!(error instanceof WhatsAppFileRefused)) throw error; reason = error.reason; }
-  const nothingHeld = [...kv.list({ prefix: WA_HELD_PREFIX })].length === 0;
-  if (reason === null && whatsappWindowOpen(kv, now) && nothingHeld) return deliverWhatsAppFile(call, chatId, file, fallback);
-  reason ??= 'window_closed';
-  const sent = await call('sendMessage', { chat_id: chatId, text: whatsappFileLinkText(file, reason, await fallback()) });
-  return sent === undefined ? { status: 'blocked' } : whatsappHeld(sent) ? { status: 'held', reason } : { status: 'degraded', reason };
+  const open = whatsappWindowOpen(kv, now);
+  if (reason === null && open && !anyHeld(kv)) return deliverWhatsAppFile(call, chatId, file, fallback);
+  reason ??= open ? 'behind_held' : 'window_closed';
+  return whatsappLinkOutcome(await call('sendMessage', { chat_id: chatId, text: whatsappFileLinkText(file, reason, await fallback()), [SEND_BEHIND_HELD]: true }), reason);
 };

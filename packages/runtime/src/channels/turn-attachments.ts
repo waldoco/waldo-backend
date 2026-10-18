@@ -37,7 +37,8 @@ export type TurnAttachmentBook = ReturnType<typeof turnAttachmentBook>;
 // WhatsApp cannot be asked whether an upload landed, so a send that started and did not finish stays unknown and is never
 // retried; a send refused before it started (blocked, or the file gone) is not applied. The first failure stops the rest
 // and propagates, so the surface tells the owner to check rather than claiming the files went out. A link the surface
-// holds for later is not a failure: no file went out, so the intent is not applied, and the next file is tried.
+// holds for later is not a failure: no file went out, so the intent is not applied, and the next file is tried. The link is
+// built only once nothing has gone out for this file, so a link that could not be built is not applied either.
 export const deliverTurnAttachments = async (attachments: readonly TurnAttachment[], deps: Readonly<{
   trace: string; ownerRef: string; effects: OwnerEffectLedger; open(): Promise<WorkspaceStore>; send: AttachmentSend; delivery?: WorkspaceDeliveryOptions;
   // The turn's run admission: a run that closed (unlinked, rebound, past its deadline) sends nothing more.
@@ -45,25 +46,27 @@ export const deliverTurnAttachments = async (attachments: readonly TurnAttachmen
 }>): Promise<void> => {
   for (const attachment of attachments) {
     const operationId = `attach:${await sha256Hex(JSON.stringify([deps.ownerRef, deps.trace, attachment.file_id, attachment.revision]))}`;
-    let dispatched = false, sendStarted = false, blocked = false, held = false;
+    let dispatched = false, sendStarted = false, blocked = false, held = false, linkFailed = false;
     const done = deps.effects.execute({ operationId, owner_ref: deps.ownerRef, tool: 'attach_file', payload: { trace: deps.trace, file_id: attachment.file_id, revision: attachment.revision } }, {
       dispatch: async () => {
         dispatched = true;
         const store = await deps.open();
         const { bytes } = await store.export(attachment.file_id, attachment.revision);
         const fallback = async () => {
-          const link = await workspaceDelivery(store, attachment, deps.delivery);
-          return link.url ? `Open it here: ${link.url}` : 'It is saved in your workspace.';
+          try {
+            const link = await workspaceDelivery(store, attachment, deps.delivery);
+            return link.url ? `Open it here: ${link.url}` : 'It is saved in your workspace.';
+          } catch (error) { linkFailed = true; throw error; }
         };
         deps.admit?.();
         sendStarted = true;
         const outcome = await deps.send({ bytes, mime: attachment.mime, filename: attachment.filename }, fallback);
-        if (outcome.status === 'blocked') { blocked = true; throw new Error('attachment send blocked'); }
-        if (outcome.status === 'held') { held = true; throw new Error('attachment link held'); }
+        if (outcome.status === 'blocked') { blocked = true; throw new EffectNotAppliedError(); }
+        if (outcome.status === 'held') { held = true; throw new EffectNotAppliedError(); }
         return { provider_id: outcome.status === 'sent' ? outcome.providerMessageId : `degraded:${outcome.reason}`, result: outcome };
       },
       // Only this process's own attempt can say nothing left; an attempt found on restart stays unknown.
-      reconcile: async () => ({ status: dispatched && (!sendStarted || blocked || held) ? 'not_applied' : 'unknown' }),
+      reconcile: async () => ({ status: dispatched && (!sendStarted || blocked || held || linkFailed) ? 'not_applied' : 'unknown' }),
     });
     try { await done; }
     catch (error) { if (!held || !(error instanceof EffectNotAppliedError)) throw error; }
