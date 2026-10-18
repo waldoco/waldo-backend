@@ -109,7 +109,7 @@ beforeEach(() => {
     return Response.json(true);
   });
 });
-afterEach(() => { vi.unstubAllGlobals(); });
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 type Owner = Readonly<{ setup(channel: string): { ready: Promise<unknown> }; fetch(request: Request): Promise<Response>; alarm(): Promise<void> }>;
 type Ctx = { now: number; name: string; appSubject: number };
@@ -319,6 +319,20 @@ describe('the app and WhatsApp', { timeout: 20_000 }, () => {
       expect(copies(state).map(record => record.status)).toEqual(['delivered']);
       expect(copyFailures(state)).toBe(0);
       expect(await said(owner, ctx)).toEqual([{ role: 'assistant', text: CHECK_BACK_TEXT }]);
+    }, { surface: 'both' });
+  });
+
+  it('a check-back the app could not write gets no WhatsApp copy', async () => {
+    await withOwner('surface-both-check-back-failed', async (owner, state, ctx) => {
+      await dueCheckBack(state);
+      await schedulePass(owner, state);
+      const heartbeat = outbox(state).find(record => record.heartbeat)!;
+      vi.spyOn(OwnerDO.prototype as unknown as { appAssistantRow(): Promise<unknown> }, 'appAssistantRow').mockRejectedValueOnce(new Error('transcript write failed'));
+      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
+      expect(outbox(state).find(record => record.id === heartbeat.id)).toMatchObject({ status: 'quarantined', reason: 'send_unknown', settled: true });
+      expect(copies(state)).toEqual([]);
+      expect(wire.whatsapp).toEqual([]);
+      expect(await said(owner, ctx)).toEqual([]);
     }, { surface: 'both' });
   });
 
