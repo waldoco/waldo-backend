@@ -396,6 +396,33 @@ describe('falling back to the app', { timeout: 20_000 }, () => {
   });
 });
 
+// The rule: the default sends to the app when the owner has an app binding, and otherwise to the owner's only bound surface;
+// an explicit choice overrides the default; a chosen surface that is not bound falls back to the one that is, so nothing is
+// lost. An owner with neither surface gets nothing.
+describe('where the Brief goes, for each setting and each binding', { timeout: 20_000 }, () => {
+  const bindings = { both: { app: true, whatsapp: true }, app: { app: true, whatsapp: false }, whatsapp: { app: false, whatsapp: true }, neither: { app: false, whatsapp: false } } as const;
+  const cases: readonly (readonly [keyof typeof bindings, string | undefined, readonly string[], readonly string[]])[] = [
+    ['both', undefined, [CARD_TEXT], []],
+    ['both', 'app', [CARD_TEXT], []],
+    ['both', 'whatsapp', [], [`text:${CARD_TEXT}`]],
+    ['both', 'both', [CARD_TEXT], [`text:${CARD_TEXT}`]],
+    ...([undefined, 'app', 'whatsapp', 'both'] as const).flatMap(setting => [
+      ['app', setting, [CARD_TEXT], []] as const,
+      ['whatsapp', setting, [], [`text:${CARD_TEXT}`]] as const,
+      ['neither', setting, [], []] as const,
+    ]),
+  ];
+  it.each(cases)('bound on %s, setting %s: the app chat gets %j and WhatsApp %j', async (binding, setting, app, whatsapp) => {
+    await withOwner(`surface-table-${binding}-${setting ?? 'default'}`, async (owner, state, ctx) => {
+      await dueBrief(state);
+      await schedulePass(owner, state);
+      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
+      expect((await said(owner, ctx)).map(message => message.text)).toEqual(app);
+      expect(wire.whatsapp).toEqual(whatsapp);
+    }, { ...bindings[binding], surface: setting });
+  });
+});
+
 describe('owners the setting does not route', { timeout: 20_000 }, () => {
   it('an owner linked on Telegram keeps the app with its Telegram copy and gets no WhatsApp copy', async () => {
     await withOwner('surface-telegram-owner', async (owner, state, ctx) => {
