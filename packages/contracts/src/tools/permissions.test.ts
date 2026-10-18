@@ -118,6 +118,7 @@ describe('toolName', () => {
       'use_mac',
       'search_contacts',
       'send_progress_note',
+      'attach_file',
     ]);
   });
 
@@ -242,6 +243,7 @@ describe('TOOL_PERMISSIONS', () => {
         'connect_service',
         'send_console_link',
         'send_progress_note',
+        'attach_file',
         'get_communication',
         'search_communication',
         'search_contacts',
