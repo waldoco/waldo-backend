@@ -21,6 +21,9 @@ import { PROACTIVE_SURFACE_KEY, WHATSAPP_COPY_FRESH_MS, WHATSAPP_COPY_PREFIX } f
 import { reminderBook } from '../src/channels/reminders';
 import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
 import { updateBook } from '../src/channels/update-cards';
+import { bindWhatsAppNumber, releaseWhatsAppOutbox } from '../src/channels/whatsapp-window';
+import type { OutboxRoute } from '../src/channels/delivery-routes';
+import type { TelegramFinalOutbox } from '../src/channels/telegram-final-outbox';
 import { claimStore } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
@@ -60,17 +63,18 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '5b6c7d8e-9f0a-4b1c-8d2e-3f4a5b6c7d8e';
 const SUBJECT = '15550001111';
+const NEW_SUBJECT = '15550002222';
 const HASH = 'a'.repeat(64);
 const AT = Date.parse('2026-10-03T09:00:00Z');
 const DAY = '2026-10-03';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 const whatsapp = { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id', WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en' };
 // presence: the directory's answer for the WhatsApp presence, or 'outage' when it cannot be reached.
-const wire = { presence: true as boolean | 'outage', whatsapp: [] as string[], telegram: [] as string[], wamid: 0 };
+const wire = { presence: true as boolean | 'outage', whatsapp: [] as string[], to: [] as string[], telegram: [] as string[], wamid: 0 };
 
 beforeEach(() => {
   fixture.event = null; fixture.changes = [];
-  wire.presence = true; wire.whatsapp = []; wire.telegram = []; wire.wamid = 0;
+  wire.presence = true; wire.whatsapp = []; wire.to = []; wire.telegram = []; wire.wamid = 0;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
@@ -89,6 +93,7 @@ beforeEach(() => {
     if (/^https:\/\/graph\.facebook\.com\/v[\d.]+\/fictional-phone-id\/messages$/.test(url)) {
       const body = JSON.parse(String(init?.body)) as { to: string; type: string; template?: { name: string }; text?: { body: string } };
       wire.whatsapp.push(body.type === 'template' ? `template:${body.template!.name}` : `text:${body.text!.body}`);
+      wire.to.push(body.to);
       wire.wamid += 1;
       return Response.json({ messaging_product: 'whatsapp', contacts: [{ input: body.to, wa_id: body.to }], messages: [{ id: `wamid.out.${wire.wamid}` }] });
     }
@@ -120,7 +125,7 @@ const withOwner = async (name: string, run: (owner: Owner, state: DurableObjectS
       const { kv } = state.storage;
       kv.put('do_name', name);
       if (app) kv.put('app_subject', String(ctx.appSubject));
-      if (bound) kv.put('whatsapp_subject', SUBJECT);
+      if (bound) bindWhatsAppNumber(kv, SUBJECT);
       if (telegram) kv.put('telegram_subject', '7');
       kv.put('timezone', 'UTC'); kv.put('timezone_confirmed', true);
       kv.put('wa_last_inbound_ms', AT - (window === 'open' ? 60 : 30 * 60) * 60_000);
@@ -166,8 +171,12 @@ const copies = (state: DurableObjectState) => outbox(state).filter(record => rec
 const copyFailures = (state: DurableObjectState) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM trace_log WHERE hop = 'whatsapp_copy'").one().n;
 const reminderRuns = (state: DurableObjectState, id: string) => state.storage.sql.exec<{ outcome: string; delivery: string | null }>('SELECT outcome, delivery FROM schedule_runs WHERE schedule_id = ? ORDER BY id', id).toArray();
 const reminderNotes = (state: DurableObjectState) => state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM reminder_notes').one().n;
-// What the console's WhatsApp unlink does once the directory stops routing the number: the bound sender is cleared.
-const unlinkWhatsApp = (owner: Owner, state: DurableObjectState) => { state.storage.kv.delete('whatsapp_subject'); (owner as unknown as { runtimes: object }).runtimes = {}; };
+// What the console's WhatsApp unlink and a confirmed relink do: bindWhatsAppNumber, the one writer of the bound number, clears
+// what belonged to the old one, and the runtimes are rebuilt.
+const rebindWhatsApp = (owner: Owner, state: DurableObjectState, subject: string | null) => {
+  state.storage.transactionSync(() => bindWhatsAppNumber(state.storage.kv, subject)); (owner as unknown as { runtimes: object }).runtimes = {};
+};
+const unlinkWhatsApp = (owner: Owner, state: DurableObjectState) => rebindWhatsApp(owner, state, null);
 
 // Each outbox pass waits for a record that falls due 250 ms after it is queued, so these run past the 5 s default.
 describe('the app only, the default', { timeout: 20_000 }, () => {
@@ -343,6 +352,29 @@ describe('the app and WhatsApp', { timeout: 20_000 }, () => {
     }, { surface: 'both', window: 'closed' });
   });
 
+  it('a copy left for a number the owner replaced never reaches the new number, and the app keeps the one message', async () => {
+    await withOwner('surface-both-rebind', async (owner, state, ctx) => {
+      await dueBrief(state);
+      await schedulePass(owner, state);
+      await outboxPass(owner, state, ctx);
+      expect(wire.whatsapp).toEqual(['template:waldo_update_ready']);
+      const [copy] = copies(state);
+      // The owner links a new number and writes from it: its window opens, and the reply path first releases what waits for
+      // WhatsApp, as runWhatsappClaimed does.
+      rebindWhatsApp(owner, state, NEW_SUBJECT);
+      state.storage.kv.put('wa_last_inbound_ms', ctx.now);
+      const internal = owner as unknown as { setup(channel: 'whatsapp'): { finalOutbox: TelegramFinalOutbox; settleFinal(record: FinalRecord): Promise<void> }; outboxRoute(surface: 'whatsapp'): OutboxRoute };
+      await releaseWhatsAppOutbox(internal.setup('whatsapp').finalOutbox, internal.outboxRoute('whatsapp'), internal.setup('whatsapp').settleFinal);
+      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
+      ctx.now = copy!.expiresAt!;
+      for (let pass = 0; pass < 2; pass += 1) await outboxPass(owner, state, ctx);
+      expect(copies(state).map(record => [record.payload.chat_id, record.status])).toEqual([[Number(SUBJECT), 'blocked']]);
+      expect(wire.to).toEqual([SUBJECT]);
+      expect(wire.whatsapp).toEqual(['template:waldo_update_ready']);
+      expect(await said(owner, ctx)).toEqual([{ role: 'assistant', text: CARD_TEXT }]);
+    }, { surface: 'both', window: 'closed' });
+  });
+
   it('a copy waiting for WhatsApp\'s window is not moved to the app when WhatsApp is unlinked: the app keeps the one message', async () => {
     await withOwner('surface-both-unlink', async (owner, state, ctx) => {
       await dueBrief(state);
@@ -455,7 +487,7 @@ describe('the console control', () => {
     const token = await runInDurableObject(stub, (instance, state) => {
       Object.assign((instance as unknown as { env: Record<string, unknown> }).env, { TELEGRAM_BOT_TOKEN: '123:synthetic', OPENAI_API_KEY: 'synthetic-key', ...whatsapp });
       state.storage.kv.put('do_name', name);
-      state.storage.kv.put('whatsapp_subject', SUBJECT);
+      bindWhatsAppNumber(state.storage.kv, SUBJECT);
       return consoleAccess(state.storage).grant();
     });
     await run(stub, token);
