@@ -225,8 +225,8 @@ export const handleWhatsAppWebhook = async (
         if (allowed) await call({ recipient: userId, type: 'text', text: { body: WHATSAPP_HIDDEN_NUMBER_REPLY } });
         console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: true, replied: allowed, sender }));
       } catch (error) {
-        // Not retried, and the payload is still acked. The Graph status and Meta's error code show whether v21.0
-        // refuses recipient; the response body is never logged.
+        // Not retried, and the payload is still acked. The Graph status and Meta's error code say why the send was
+        // refused (131062: a BSUID recipient is not supported for this message); the response body is never logged.
         const graph = error instanceof WhatsAppApiError ? { status: error.status, code: error.code } : {};
         console.log(JSON.stringify({ hop: 'whatsapp_hidden_number', ok: false, sender, error: error instanceof Error ? error.name : 'unknown', ...graph }));
       }

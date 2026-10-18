@@ -52,7 +52,7 @@ async function harness(work: (h: Harness) => Promise<void>) {
     };
     const network = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (url === 'https://graph.facebook.com/v21.0/fictional-phone-id/messages') {
+      if (url === 'https://graph.facebook.com/v26.0/fictional-phone-id/messages') {
         const body = JSON.parse(String(init?.body)) as { to: string; text?: { body?: string } };
         sent.push({ to: body.to, ...(body.text?.body === undefined ? {} : { text: body.text.body }) });
         return Response.json({ messages: [{ id: `wamid.out.${sent.length}` }] });

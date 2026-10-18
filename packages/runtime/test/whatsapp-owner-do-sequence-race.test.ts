@@ -24,7 +24,7 @@ it('allocates distinct update_ids for overlapping different wamids (known wa_seq
     const secondQueued = deferred();
     const sent: unknown[] = [];
     const graph = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
-      expect(String(input)).toBe('https://graph.facebook.com/v21.0/fictional-phone-id/messages');
+      expect(String(input)).toBe('https://graph.facebook.com/v26.0/fictional-phone-id/messages');
       sent.push(JSON.parse(String(init?.body)));
       firstSend.resolve();
       await releaseSend.promise;
