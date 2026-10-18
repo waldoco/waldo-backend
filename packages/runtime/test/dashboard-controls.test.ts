@@ -54,6 +54,15 @@ describe('narrow controls read projection', () => {
     for (const result of [linked, unlinked]) expect(appControlConnectionsDataV1Schema.safeParse(result.data).success).toBe(true);
   });
 
+  it('lists WhatsApp beside iMessage only when its link state is known; absent is unknown, never unlinked', () => {
+    const both = projectControls({ ...SAMPLE_CONSOLE_VIEW, imessage: { linked: false }, whatsapp: { linked: true } }, 'connections');
+    const onlyWhatsapp = projectControls({ ...SAMPLE_CONSOLE_VIEW, imessage: undefined, whatsapp: { linked: false } }, 'connections');
+    expect(both.data.channels).toEqual([{ channel: 'imessage', state: 'unlinked', masked_label: null }, { channel: 'whatsapp', state: 'linked', masked_label: 'Your WhatsApp' }]);
+    expect(onlyWhatsapp.data.channels).toEqual([{ channel: 'whatsapp', state: 'unlinked', masked_label: null }]);
+    expect('channels' in projectControls({ ...SAMPLE_CONSOLE_VIEW, imessage: undefined, whatsapp: undefined }, 'connections').data).toBe(false);
+    for (const result of [both, onlyWhatsapp]) expect(appControlConnectionsDataV1Schema.safeParse(result.data).success).toBe(true);
+  });
+
   it('lists console sessions without credentials beside the count', () => {
     const sessions = [{ signed_in: '2026-10-06 03:30', until: '2026-10-06 15:30', current: false }, { signed_in: '2026-10-05 15:30', until: '2026-10-06 03:30', current: true }];
     const result = projectControls({ ...SAMPLE_CONSOLE_VIEW, sessionCount: 2, sessions }, 'connections');
