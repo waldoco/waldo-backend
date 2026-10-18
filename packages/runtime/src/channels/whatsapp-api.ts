@@ -10,7 +10,7 @@ export type WhatsAppCall = (body: object) => Promise<unknown>;
 // Match the existing Telegram transport bound. A timed-out POST is uncertain,
 // so this caller never retries and never reports a successful acknowledgement.
 export const WHATSAPP_API_TIMEOUT_MS = 15_000;
-export const WHATSAPP_GRAPH_VERSION = 'v21.0';
+export const WHATSAPP_GRAPH_VERSION = 'v26.0';
 // https://developers.facebook.com/docs/whatsapp/cloud-api/reference/messages , text object: "Maximum 4096 characters".
 export const WHATSAPP_TEXT_MAX_CHARS = 4096;
 // A Graph refusal with Meta's numeric error code (error.code in the JSON body), or null when the body has none.
