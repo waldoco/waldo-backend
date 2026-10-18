@@ -110,6 +110,17 @@ describe('handleWhatsAppWebhook', () => {
     } finally { log.mockRestore(); }
   });
 
+  it('after an unlink the old sender wakes no DO, while another owner keeps routing', async () => {
+    const { fetch, idFromName, ns } = namespace();
+    // Only active presences route; unlink_presence retires the row, so the directory stops answering for that number.
+    const active = new Map([['15550001111', 'do-a'], ['15550002222', 'do-b']]);
+    const directory: OwnerDirectory = { byPresence: async (_provider, subject) => active.has(subject) ? { doName: active.get(subject)!, subject, timezone: null } : null, redeem: async () => null };
+    const env: WhatsAppWebhookEnv = { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret' };
+    active.delete('15550001111');
+    expect((await run(await post('x', payload([{ from: '15550001111', text: 'still me?' }, { from: '15550002222' }])), env, directory)).status).toBe(200);
+    expect(idFromName.mock.calls).toEqual([['do-b']]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
   it('a multi-sender payload routes each owner only their own messages', async () => {
     const { fetch, ns } = namespace();
     const directory: OwnerDirectory = {
