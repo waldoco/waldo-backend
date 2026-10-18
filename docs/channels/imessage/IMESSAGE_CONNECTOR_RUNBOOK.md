@@ -20,12 +20,14 @@ reply handoff 10 min) is a **proposal**, not provider capacity and not a live de
 
 ## Owner setup (console)
 
-1. `/console/imessage` -> **Pair a Mac host**: one-use invitation (`wim_…`), shown once, no-store.
+1. Console **Connections -> iMessage** (`/console/imessage` opens it) -> **Pair a Mac host**: one-use
+   invitation (`wim_…`), shown once in that reply only (`private, no-store`); receipts never keep it.
 2. The host calls `/pair/redeem` and receives its credential once. The bridge is *pending*: it may send
    heartbeats, capabilities and the setup challenge only.
-3. **Set exact sender**: enter the Apple sender and its `iMessage;-;…` direct chat. A one-use challenge
-   (`wic_…`) is shown. Send it from that sender to the Mac's Messages account.
-4. When the page shows the observation, **Confirm**. Activation creates the canonical presence/binding.
+3. **Get a challenge**: enter the Apple sender and its `iMessage;-;…` direct chat. A one-use challenge
+   (`wic_…`) is shown once. Send it from that sender to the Mac's Messages account.
+4. When the host row shows the observation (press **Refresh**), **Confirm**. Activation uses the sender the
+   challenge recorded and creates the canonical presence/binding.
 
 ## Safe status
 

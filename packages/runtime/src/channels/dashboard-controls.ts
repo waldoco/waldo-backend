@@ -46,9 +46,12 @@ const projections = {
     },
     telegram: { linked: view.telegram.linked, unlinkAvailable: view.telegram.unlinkAvailable },
     sessions: { until: view.sessionUntil, count: view.sessionCount, items: view.sessions.map((row) => ({ signed_in: row.signed_in, until: row.until, current: row.current })) },
-    // iMessage link state, only when the directory answered. This view holds no part of the handle, so a linked
-    // number is labelled without one rather than with an invented mask.
-    ...(view.imessage ? { channels: [{ channel: 'imessage' as const, state: view.imessage.linked ? 'linked' as const : 'unlinked' as const, masked_label: view.imessage.linked ? 'Your iPhone' : null }] } : {}),
+    // Link state per channel, only when the directory answered. This view holds no part of the number, so a linked
+    // channel is labelled without one rather than with an invented mask.
+    ...(view.imessage || view.whatsapp ? { channels: [
+      ...(view.imessage ? [{ channel: 'imessage' as const, state: view.imessage.linked ? 'linked' as const : 'unlinked' as const, masked_label: view.imessage.linked ? 'Your iPhone' : null }] : []),
+      ...(view.whatsapp ? [{ channel: 'whatsapp' as const, state: view.whatsapp.linked ? 'linked' as const : 'unlinked' as const, masked_label: view.whatsapp.linked ? 'Your WhatsApp' : null }] : []),
+    ] } : {}),
   }),
   waiting: (view: ConsoleView) => ({
     // Proposal times are instants; the console draws them in this owner zone when it can read it.

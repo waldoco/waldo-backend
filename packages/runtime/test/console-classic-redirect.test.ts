@@ -15,6 +15,8 @@ describe('classic console pages open the new console',()=>{
   expect(location('/console/legacy')).toBe('/console');
   expect(location('/console/invites')).toBe('/console#/invites');
   expect(location('/console/')).toBe('/console');
+  expect(location('/console/imessage')).toBe('/console#/connections/imessage');
+  expect(location('/console/devices')).toBe('/console#/connections/devices');
   expect(open('/console/waiting')?.status).toBe(303);
  });
  it('drops a notice instead of showing URL text on the console',()=>{
@@ -26,11 +28,12 @@ describe('classic console pages open the new console',()=>{
  it('keeps /console/admin standalone, because the dashboard admin error states link to it as the fallback',()=>{
   expect(open('/console/admin')).toBeNull();
  });
- it('leaves JSON reads, form posts, sign-in links, the plain root and standalone pages alone',()=>{
+ it('leaves JSON reads, form posts, sign-in links and the plain root alone',()=>{
   expect(open('/console/waiting',{headers:{accept:'application/json'}})).toBeNull();
   expect(open('/console/admin',{headers:{accept:'application/json'}})).toBeNull();
   expect(open('/console/action',{method:'POST'})).toBeNull();
   expect(open('/console/waiting',{method:'POST'})).toBeNull();
-  for(const path of ['/console','/console?t=ticket','/console/imessage','/console/devices','/console/signin','/console/file?id=1','/console/workspace','/console/unknown','/console/constructor','/console/__proto__'])expect(open(path)).toBeNull();
+  expect(open('/console/devices',{method:'POST'})).toBeNull();
+  for(const path of ['/console','/console?t=ticket','/console/signin','/console/file?id=1','/console/workspace','/console/unknown','/console/constructor','/console/__proto__'])expect(open(path)).toBeNull();
  });
 });
