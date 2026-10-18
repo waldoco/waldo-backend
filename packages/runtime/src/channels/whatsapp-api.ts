@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { onlyArtifacts, quarantineArtifacts } from '../security/artifact-hygiene';
+import { splitTelegramText } from './telegram-api';
 // WhatsApp Cloud API surface (WHATSAPP_CHANNEL_SPEC W2-W4): the raw caller for the webhook's
 // link-code replies, the telegram-shaped send shim the owner DO wraps in the same
 // gatedCaller/egressGuardedCaller gate as Telegram (W3), the two-step media downloader that
@@ -10,6 +11,19 @@ export type WhatsAppCall = (body: object) => Promise<unknown>;
 // so this caller never retries and never reports a successful acknowledgement.
 export const WHATSAPP_API_TIMEOUT_MS = 15_000;
 export const WHATSAPP_GRAPH_VERSION = 'v21.0';
+// https://developers.facebook.com/docs/whatsapp/cloud-api/reference/messages , text object: "Maximum 4096 characters".
+export const WHATSAPP_TEXT_MAX_CHARS = 4096;
+// A Graph refusal with Meta's numeric error code (error.code in the JSON body), or null when the body has none.
+export class WhatsAppApiError extends Error {
+  readonly code: number | null;
+  constructor(readonly status: number, body: string) {
+    super(`whatsapp ${status}: ${body.slice(0, 200)}`);
+    let code: unknown = null;
+    try { code = (JSON.parse(body) as { error?: { code?: unknown } }).error?.code; } catch { /* not JSON */ }
+    this.code = typeof code === 'number' && Number.isSafeInteger(code) ? code : null;
+  }
+}
+
 export const createWhatsAppCaller = (token: string, phoneNumberId: string, fetcher: typeof fetch = fetch): WhatsAppCall =>
   async (body) => {
     const controller = new AbortController();
@@ -22,29 +36,59 @@ export const createWhatsAppCaller = (token: string, phoneNumberId: string, fetch
         body: JSON.stringify({ messaging_product: 'whatsapp', ...body }),
         signal: controller.signal,
       }),timeout]);
-      if (!response.ok) throw new Error(`whatsapp ${response.status}: ${(await Promise.race([response.text(),timeout])).slice(0, 200)}`);
+      if (!response.ok) throw new WhatsAppApiError(response.status, await Promise.race([response.text(),timeout]));
       return await Promise.race([response.json(),timeout]);
     } finally {
       clearTimeout(timer!);
     }
   };
 
-export const sendWhatsAppText = (call: WhatsAppCall, to: string, text: string) =>
-  call({ to, type: 'text', text: { body: text } });
+// A text longer than one WhatsApp message went out in parts and a later part failed: the owner already has the first `sent`
+// parts, so the caller must not send the whole text again. `ack` is the last part that went out; `remaining` are the parts
+// that did not.
+export class WhatsAppPartialSend extends Error {
+  constructor(readonly sent: number, readonly ack: unknown, readonly remaining: readonly string[], override readonly cause: unknown) {
+    super(`whatsapp send stopped after part ${sent}`, { cause });
+  }
+}
+
+// preview_url makes WhatsApp fetch the first http(s) link with no tap from the owner, so it is opt-in per send.
+export const sendWhatsAppText = (call: WhatsAppCall, to: string, text: string, preview = false) =>
+  call({ to, type: 'text', text: { body: text, ...(preview && /https?:\/\//i.test(text) ? { preview_url: true } : {}) } });
 
 // Telegram-shaped compatibility caller. WhatsApp currently uses explicit text
-// instructions for approvals and exact URL text for link buttons. Unsupported
-// Telegram operations return no receipt, never a fabricated successful result.
+// instructions for approvals and exact URL text for link buttons. sendDocument
+// uploads the file and sends it by media id (deliverWhatsAppFile is its caller).
+// Unsupported Telegram operations return no receipt, never a fabricated successful result.
 export type TelegramShimCall = (method: string, body: object) => Promise<unknown>;
 
 export const whatsappTelegramShim = (token: string, phoneNumberId: string, to: string, fetcher: typeof fetch = fetch): TelegramShimCall => {
   const call = createWhatsAppCaller(token, phoneNumberId, fetcher);
+  const upload = createWhatsAppMediaUploader(token, phoneNumberId, fetcher);
   return async (method, body) => {
+    // An approved template with no variables: agent text never rides in a template.
+    if (method === 'sendTemplate') {
+      const { name, language } = body as { name: string; language: string };
+      return call({ to, type: 'template', template: { name, language: { code: language } } });
+    }
+    if (method === 'sendDocument') {
+      const { file } = body as { file: WhatsAppOutboundFile };
+      const kind = whatsappOutboundKind(file);
+      const id = await upload(file);
+      return call({ to, type: kind, [kind]: kind === 'document' ? { id, filename: file.filename } : { id } });
+    }
     if (method === 'sendMessage') {
-      const b = body as { text: string; fallback_text?: string; reply_markup?: { inline_keyboard?: { text: string; callback_data?: string; url?: string }[][] } };
+      const b = body as { text: string; fallback_text?: string; link_preview_options?: { is_disabled?: boolean }; reply_markup?: { inline_keyboard?: { text: string; callback_data?: string; url?: string }[][] } };
       const buttons = (b.reply_markup?.inline_keyboard ?? []).flat().filter((x) => x.callback_data || x.url);
       const suffix = buttons.length ? `\n\n${buttons.map((x) => x.url ? `- ${x.text}: ${x.url}` : `- ${x.text}: reply "${x.callback_data}"`).join('\n')}` : '';
-      return sendWhatsAppText(call, to, (b.fallback_text ?? b.text) + suffix);
+      // A text message carries at most 4,096 characters, so a longer one goes in parts on the same split as the surface adapter.
+      const parts = splitTelegramText((b.fallback_text ?? b.text) + suffix, WHATSAPP_TEXT_MAX_CHARS);
+      let ack: unknown;
+      for (let index = 0; index < parts.length; index += 1) {
+        try { ack = await sendWhatsAppText(call, to, parts[index]!, b.link_preview_options?.is_disabled !== true); }
+        catch (error) { if (index === 0) throw error; throw new WhatsAppPartialSend(index, ack, parts.slice(index), error); }
+      }
+      return ack;
     }
     console.log(JSON.stringify({ hop: 'whatsapp_shim', ok: false, skipped: method, code: 'unsupported_surface_action' }));
     return undefined;
@@ -76,6 +120,109 @@ export const createWhatsAppMediaDownloader = (token: string, fetcher: typeof fet
   const bytes = new Uint8Array(await file.arrayBuffer());
   if (bytes.length > WHATSAPP_MEDIA_DOWNLOAD_LIMIT_BYTES) throw new Error('whatsapp media exceeds download limit');
   return bytes;
+};
+
+// Outbound files: a file reaches a WhatsApp chat as a media id, so the bytes are uploaded first
+// (POST /{phone-number-id}/media, multipart) and the message then names that id. Uploaded media
+// persists for 30 days on Meta's side.
+export type WhatsAppOutboundFile = Readonly<{ bytes: Uint8Array; mime: string; filename: string }>;
+export type WhatsAppFileRefusal = 'unsupported_type' | 'too_large' | 'empty' | 'invalid_filename';
+export class WhatsAppFileRefused extends Error {
+  constructor(readonly reason: WhatsAppFileRefusal) { super(`whatsapp file refused: ${reason}`); }
+}
+
+const MB = 1024 * 1024;
+// Meta's supported outbound types and per-type caps
+// (https://developers.facebook.com/docs/whatsapp/cloud-api/reference/media , "Supported media types").
+// Every cap is also held to the existing 20 MB media ceiling. Images must be JPEG or PNG; WebP is
+// sticker-only and is left out. A type missing here is refused, never guessed.
+const OUTBOUND: Readonly<Record<string, Readonly<{ kind: 'image' | 'document' | 'audio' | 'video'; maxBytes: number }>>> = {
+  'image/jpeg': { kind: 'image', maxBytes: 5 * MB },
+  'image/png': { kind: 'image', maxBytes: 5 * MB },
+  'application/pdf': { kind: 'document', maxBytes: 100 * MB },
+  'text/plain': { kind: 'document', maxBytes: 100 * MB },
+  'application/msword': { kind: 'document', maxBytes: 100 * MB },
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': { kind: 'document', maxBytes: 100 * MB },
+  'application/vnd.ms-excel': { kind: 'document', maxBytes: 100 * MB },
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': { kind: 'document', maxBytes: 100 * MB },
+  'application/vnd.ms-powerpoint': { kind: 'document', maxBytes: 100 * MB },
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': { kind: 'document', maxBytes: 100 * MB },
+  'audio/aac': { kind: 'audio', maxBytes: 16 * MB },
+  'audio/amr': { kind: 'audio', maxBytes: 16 * MB },
+  'audio/mpeg': { kind: 'audio', maxBytes: 16 * MB },
+  'audio/mp4': { kind: 'audio', maxBytes: 16 * MB },
+  'video/mp4': { kind: 'video', maxBytes: 16 * MB },
+  'video/3gpp': { kind: 'video', maxBytes: 16 * MB },
+};
+
+export const whatsappOutboundKind = (file: WhatsAppOutboundFile): 'image' | 'document' | 'audio' | 'video' => {
+  const rule = OUTBOUND[file.mime.toLowerCase()];
+  if (!rule) throw new WhatsAppFileRefused('unsupported_type');
+  if (!file.filename.trim() || file.filename.length > 240 || /[\u0000-\u001f\\/]/.test(file.filename)) throw new WhatsAppFileRefused('invalid_filename');
+  if (file.bytes.byteLength === 0) throw new WhatsAppFileRefused('empty');
+  if (file.bytes.byteLength > Math.min(rule.maxBytes, WHATSAPP_MEDIA_DOWNLOAD_LIMIT_BYTES)) throw new WhatsAppFileRefused('too_large');
+  return rule.kind;
+};
+
+export type WhatsAppMediaUploader = (file: WhatsAppOutboundFile) => Promise<string>;
+
+// The bound grows with the payload: the 15 s message bound would cut off a large upload mid-body.
+const uploadTimeoutMs = (bytes: number) => WHATSAPP_API_TIMEOUT_MS + Math.ceil(bytes / (512 * 1024)) * 1000;
+
+export const createWhatsAppMediaUploader = (token: string, phoneNumberId: string, fetcher: typeof fetch = fetch): WhatsAppMediaUploader => async (file) => {
+  whatsappOutboundKind(file);
+  const form = new FormData();
+  form.set('messaging_product', 'whatsapp');
+  form.set('type', file.mime);
+  form.set('file', new File([file.bytes], file.filename, { type: file.mime }));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), uploadTimeoutMs(file.bytes.byteLength));
+  try {
+    const response = await fetcher(`https://graph.facebook.com/${WHATSAPP_GRAPH_VERSION}/${encodeURIComponent(phoneNumberId)}/media`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}` }, body: form, signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`whatsapp media upload ${response.status}`);
+    const { id } = await response.json() as { id?: unknown };
+    if (typeof id !== 'string' || !id.trim()) throw new Error('whatsapp media upload returned no id');
+    return id;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+type Caller = (method: string, body: object) => Promise<unknown>;
+// Why the owner got a link text instead of the file: WhatsApp cannot carry it, or the service window was closed.
+export type WhatsAppFileLinkReason = WhatsAppFileRefusal | 'window_closed';
+// degraded: the link text was sent. held: the window layer holds the link text until the owner's next message.
+export type WhatsAppFileOutcome =
+  | Readonly<{ status: 'sent'; providerMessageId: string }>
+  | Readonly<{ status: 'degraded'; reason: WhatsAppFileLinkReason }>
+  | Readonly<{ status: 'held'; reason: WhatsAppFileLinkReason }>
+  | Readonly<{ status: 'blocked' }>;
+
+const REFUSAL_WORDS: Readonly<Record<WhatsAppFileRefusal, string>> = {
+  unsupported_type: 'this file type', too_large: 'a file this large', empty: 'an empty file', invalid_filename: 'this file name',
+};
+export const whatsappFileLinkText = (file: WhatsAppOutboundFile, reason: WhatsAppFileLinkReason, link: string): string =>
+  reason === 'window_closed' ? `Here is ${file.filename}. ${link}` : `WhatsApp can't carry ${file.filename} (${REFUSAL_WORDS[reason]}). ${link}`;
+
+// Sends one file through the owner's gated, egress-guarded caller. A file WhatsApp cannot carry is a
+// definite refusal made before any upload, so the owner gets a plain text instead, naming the file
+// and carrying the caller's fallback (normally the owner-authenticated link), which is built only then. Any failure after the
+// upload starts propagates: the document may have gone out, so no second message is sent.
+export const deliverWhatsAppFile = async (call: Caller, chatId: number, file: WhatsAppOutboundFile, fallback: () => Promise<string>): Promise<WhatsAppFileOutcome> => {
+  let ack: unknown;
+  try {
+    ack = await call('sendDocument', { chat_id: chatId, file });
+  } catch (error) {
+    if (!(error instanceof WhatsAppFileRefused)) throw error;
+    const sent = await call('sendMessage', { chat_id: chatId, text: whatsappFileLinkText(file, error.reason, await fallback()) });
+    return sent === undefined ? { status: 'blocked' } : { status: 'degraded', reason: error.reason };
+  }
+  if (ack === undefined) return { status: 'blocked' };
+  const id = (ack as { messages?: { id?: unknown }[] }).messages?.[0]?.id;
+  if (typeof id !== 'string' || !id) throw new Error('invalid WhatsApp acknowledgement');
+  return { status: 'sent', providerMessageId: id };
 };
 
 export const WA_UPDATE_BASE = 9_000_000_000_000;

@@ -71,6 +71,8 @@ it('a payload cut off by an eviction gets exactly one WhatsApp notice, is not re
     // What a previous instance left behind: the wamid claim and the pending record, with no run in this instance.
     state.storage.kv.put('wamid:wamid.evicted.A', Date.now());
     state.storage.kv.put('wa_pending:evicted', { subject: SUBJECT, admittedAt: Date.now(), ids: ['wamid.evicted.A'] });
+    // Admission records the owner's inbound time in the same step, which keeps the 24-hour window open for this notice.
+    state.storage.kv.put('wa_last_inbound_ms', Date.now());
     await instance.alarm();
     expect(bodies.filter(body => body.includes(WHATSAPP_PARTIAL_NOTICE))).toHaveLength(1);
     expect(urls.every(url => url.startsWith('https://graph.facebook.com/'))).toBe(true);
