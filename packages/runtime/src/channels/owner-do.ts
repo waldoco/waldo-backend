@@ -85,6 +85,7 @@ import { deliverTurnAttachments, turnAttachmentBook, type AttachmentSend } from 
 import { HARNESS_MESSAGE_LIMIT, heldRowShapes } from '../memory/held-rows';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
+import { costRollup, costRollupEnabled } from '../observability/cost-rollup';
 import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
 import { Scheduler } from '../scheduler/multiplexer';
 import { productionDeps } from '../seams/deps';
@@ -2419,6 +2420,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const deps = productionDeps();
     const traces = traceBook(this.ctx.storage.sql);
     const captureText = resolveCaptureText(this.env);
+    const costs = costRollupEnabled(this.env) ? costRollup({
+      kv: identity, call: signedRpc(this.env), doName: identity.get<string>('do_name') ?? null, newId: () => crypto.randomUUID(),
+      onError: (error) => {
+        const failed: TurnLogEntry = gateTraceEntry({ trace: `cost:${channel}`, hop: 'cost_ledger', ms: 0, ok: false, error: String(error), code: 'sync_failed' }, captureText);
+        console.log(JSON.stringify(failed));
+        traces.record(failed, deps.now());
+      },
+    }) : null;
     const turnReceiptUrls = new Map<string, Set<string>>();
     const log = (entry: TurnLogEntry) => {
       if (entry.principal !== undefined) { const { principal, ...rest } = entry; tracePrincipal = principal; entry = rest; }
@@ -2436,6 +2445,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         identity.get<string>('do_name') ?? '', String(owner)), captureText);
       traces.record(enriched, deps.now());
       console.log(JSON.stringify({ ...enriched, text: undefined }));
+      if (costs?.record(enriched, deps.now())) this.ctx.waitUntil(costs.flush());
       if (exportTurn) this.ctx.waitUntil(exportTurn(enriched).catch((error: unknown) => {
         const note = String(error);
         const failed: TurnLogEntry = gateTraceEntry({ trace: enriched.trace, hop: 'otlp_export', ms: 0, ok: false, error: note, code: 'export_failed', owner: enriched.owner,

@@ -31,7 +31,8 @@ export type SpendPosture = Readonly<{
 
 const utcDay = (at: number): string => new Date(at).toISOString().slice(0, 10);
 
-// Schema for the owner DO migration that is still to be written. costLedger never creates it.
+// The durable per-owner, per-day ledger is Supabase's waldo.cost_ledger_daily, fed by observability/cost-rollup.ts.
+// This DO-local table is a separate, still unapplied schema for the spend ceiling; costLedger never creates it.
 export const COST_LEDGER_DDL = [`CREATE TABLE cost_ledger (
     id INTEGER PRIMARY KEY AUTOINCREMENT, day TEXT NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN (${COST_KINDS.map((kind) => `'${kind}'`).join(',')})),
