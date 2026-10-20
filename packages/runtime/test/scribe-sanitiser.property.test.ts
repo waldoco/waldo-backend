@@ -490,4 +490,35 @@ describe('Scribe sanitiser properties', () => {
       { numRuns: RUNS },
     );
   });
+
+  // Core build plan H-3: a plain derived-score word with a bare number is ordinary text on a read into the owner's turn,
+  // and stays health at every memory and egress destination; a score suffix, a % or a unit keeps it health on a read too.
+  it('lets plain-word numbers through an external read and keeps them out of memory and sends', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom('Form', 'form', 'Load', 'load', 'Recovery', 'recovery'),
+        fc.integer({ min: 0, max: 999 }),
+        fc.constantFrom(' ', ': ', ', ', ' = '),
+        fc.constantFrom(' trucks', ' days', ' pages', ' for FY 2025-26', ' is attached.', ''),
+        fc.integer({ min: 0, max: 4 }),
+        (word, value, separator, tail, depth) => {
+          const text = `Re: ${word}${separator}${value}${tail}`;
+          const read = inspectExternal(wrapAtDepth({ snippet: text }, depth));
+          expect(read).toMatchObject({ ok: true });
+          if (read.ok) {
+            expect(JSON.stringify(read.payload)).toContain(JSON.stringify(text).slice(1, -1));
+            expect(read.redactions).not.toContainEqual(expect.objectContaining({ kind: 'health_value' }));
+          }
+          for (const destination of ['memory_block', 'send_message', 'draft_email'] as const) {
+            expect(sanitise({ payload: `${word} ${value}`, destination, canary_tokens: CANARIES, source_taint: null })).toMatchObject({ ok: false, check: 'health_value' });
+          }
+          for (const scored of [`${word} score ${value}`, `${word}${separator}${value}%`, `${word}${separator}${value} bpm`]) {
+            const result = inspectExternal({ snippet: scored });
+            if (result.ok) expect(JSON.stringify(result.payload)).toContain('[health value withheld]');
+          }
+        },
+      ),
+      { numRuns: RUNS },
+    );
+  });
 });
