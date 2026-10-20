@@ -97,11 +97,21 @@ it('a side job answered by Haiku returns its answer', async () => {
 });
 
 it('the owner gateway fails a step without its provider key as auth_failed, before any network call', async () => {
-  const route = ownerRoutePolicy(OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_SOL_MODEL).routes[0]!;
+  const route = ownerRoutePolicy(OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_SOL_MODEL, { openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic' }).routes[0]!;
   const step = route.fallback[0]!;
   const request = {
     request: { model: step.model, system: 'Be concise.', messages: [{ role: 'user' as const, content: 'hello' }], max_tokens: 32, temperature: 0.2 },
     route, step, context: 'reduced_context' as const, fallback_step: 'gateway_chain' as const, headers: { 'cf-aig-collect-log-payload': 'false' as const },
   };
   await expect(ownerModelGateway({ openaiApiKey: 'fixture-openai' }).complete(request)).resolves.toMatchObject({ ok: false, code: 'auth_failed' });
+});
+
+it('with no second-provider key deployed the route has no fallback step, so a failing turn asks only OpenAI, as before', async () => {
+  const { gateway, models } = scriptedProviders({});
+  const args: Parameters<typeof createOwnerResponder> = [{ openaiApiKey: 'fixture-openai' }];
+  args[5] = [getContextHandler({ timezone: 'Asia/Kolkata', now: () => new Date('2026-10-20T08:20:00Z') })]; args[10] = gateway;
+  await expect(createOwnerResponder(...args).respond(ownerTyped({ traceId: 'no-key-1', conversationRef: 'telegram-1', surface: 'telegram', text: 'what is on today', memoryWrites: false }), time)).rejects.toThrow(/live model failed/);
+  expect(models()).toEqual([OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_SOL_MODEL]);
+  // A malformed key counts as no key: the adapter would refuse it without a call.
+  expect(ownerRoutePolicy(OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_SOL_MODEL, { openaiApiKey: 'k', anthropicApiKey: 'bad key' }).routes[0]!.fallback).toEqual([]);
 });
