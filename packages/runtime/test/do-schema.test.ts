@@ -24,13 +24,13 @@ import {
   provisionDoSchema,
   type DoMigration,
 } from '../src/do-schema';
-import type { RuntimeProbeDO } from '../src/index';
+import type { TestStorageDO } from './support/worker-entry';
 
 let seq = 0;
-function freshStub(): DurableObjectStub<RuntimeProbeDO> {
+function freshStub(): DurableObjectStub<TestStorageDO> {
   seq += 1;
-  const id = env.RUNTIME_DO.idFromName(`do-schema-${seq}`);
-  return env.RUNTIME_DO.get(id);
+  const id = env.TEST_STORAGE_DO.idFromName(`do-schema-${seq}`);
+  return env.TEST_STORAGE_DO.get(id);
 }
 
 type TableColumn = {

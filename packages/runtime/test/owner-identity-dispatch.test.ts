@@ -4,7 +4,7 @@ import { createScopedCuratedSkillCapability } from '../src/skills/curated-host';
 import { CURATED_PREPARATION_SKILL } from '../src/skills/curated-owner';
 
 it('owner identity is checked once per effect dispatch; other calls only check the run scope', async () => {
-  const stub = env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('owner-identity-dispatch'));
+  const stub = env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('owner-identity-dispatch'));
   await runInDurableObject(stub, async (_, state) => {
     const owner = 'prn_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
     const scope = { runId: 'run', attempt: 'attempt', deadline: Date.now() + 60000, signal: new AbortController().signal, admit() {}, commit<T>(work: () => T) { return work(); } };

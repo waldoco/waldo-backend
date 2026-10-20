@@ -33,7 +33,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
 });
 const { OwnerDO } = await import('../src/channels/owner-do');
 it.each(['normal', 'forget-coverage'])('actual default owner mail followup: %s', async mode => {
-  await runInDurableObject(env.TRACER_DO.get(env.TRACER_DO.idFromName(`mail-follow-up-owner-${mode}`)), async (_instance, state) => {
+  await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`mail-follow-up-owner-${mode}`)), async (_instance, state) => {
     const originalNow = Date.now;
     let now = Date.parse('2026-10-03T06:59:00Z');
     Date.now = () => now;

@@ -18,7 +18,7 @@ const checkedBack = async (loops: readonly { title: string }[]) => `Checked ${lo
 let seq = 0;
 const freshStub = (): Parameters<typeof runInDurableObject>[0] => {
   seq += 1;
-  const ns = (env as never as { TRACER_DO: { idFromName(n: string): unknown; get(i: unknown): never } }).TRACER_DO;
+  const ns = (env as never as { TEST_STORAGE_DO: { idFromName(n: string): unknown; get(i: unknown): never } }).TEST_STORAGE_DO;
   return ns.get(ns.idFromName(`unreadable-row-${seq}`));
 };
 const MINUTE = 60_000;

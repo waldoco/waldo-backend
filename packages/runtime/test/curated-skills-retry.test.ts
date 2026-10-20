@@ -9,7 +9,7 @@ import type { LLMGatewayAdapter } from '../src/llm/provider';
 
 for(const kind of ['physical_retry'] as const){
  it(`revocation prevents stale procedure egress during ${kind}`,async()=>{
-  const stub=env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName(`curated-${kind}`));
+  const stub=env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`curated-${kind}`));
   await runInDurableObject(stub,async(_,state)=>{
    const owner=localTrustedBriefScheduleInput().admission.verified_authority.principal_ref;
    const trace=`curated-${kind}`;const name=CURATED_PREPARATION_SKILL.name;const body=CURATED_PREPARATION_SKILL.body_markdown;
