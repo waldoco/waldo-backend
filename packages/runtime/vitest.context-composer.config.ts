@@ -6,7 +6,6 @@ export default defineConfig({
     include: [
       'test/context-composer.test.ts',
       'test/context-composer-sqlite.test.ts',
-      'test/recall-gateway.test.ts',
     ],
     fileParallelism: false,
   },

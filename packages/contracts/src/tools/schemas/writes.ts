@@ -2,29 +2,11 @@ import { z } from 'zod';
 import { channelNameSchema } from '../../adapters/channel';
 import { docProviderSchema } from '../../adapters/doc';
 import { iso8601Schema } from '../../core/error';
-import { hallTypeSchema } from '../../memory/hall';
-import { MEMORY_BLOCK_CONTENT_MAX } from '../../memory/sanitise';
 import { idempotencyKeySchema } from '../../runtime/outbox';
 
 // Mutating tool arg surface (ADR-0021; execute_code per ADR-0023). These schemas are the
 // PreToolUse validation seam for the write tools: strictObject makes an unknown arg a parse
 // failure, and every external mutation is autonomy-gated (ADR-0018) before any adapter call.
-
-// The facts hall is not agent-writable. Derived from the hall vocabulary's single owner, so
-// a new hall surfaces here (admitted or deliberately excluded) at review time, not by drift.
-export const memoryWriteHallSchema = hallTypeSchema.exclude(['facts']);
-export type MemoryWriteHall = z.infer<typeof memoryWriteHallSchema>;
-
-// update_memory stages through the Scribe inbox (ADR-0006), never memory_blocks direct.
-// Single-write-path decision (owner, 2026-09-27, docs/planning/MEMORY_WRITE_PATH_DECISION_2026-09-27.md):
-// chat-surface memory writes flow exclusively through the post-reply claim_ops settle; this tool
-// stays dreaming_mode-only.
-export const updateMemoryArgsSchema = z.strictObject({
-  hall: memoryWriteHallSchema,
-  content: z.string().min(1).max(MEMORY_BLOCK_CONTENT_MAX),
-  tags: z.array(z.string().min(1)).max(10).optional(),
-});
-export type UpdateMemoryArgs = z.infer<typeof updateMemoryArgsSchema>;
 
 export const proposeActionArgsSchema = z.strictObject({
   action_type: z.string().min(1).max(100),

@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import {
   acceptTrustedInvocation,
+  recallResultSchema,
   skillRowSchema,
   type SkillRow,
 } from '@waldo/contracts';
@@ -15,12 +16,10 @@ import {
 import {
   HeadlessLocalOwnerBindingResolver,
   SqliteSystemSkillRepository,
-  SqliteTemporalRecallGateway,
 } from '../src/context-composer/sqlite';
 import { provisionDoSchema } from '../src/do-schema';
 import type { RuntimeProbeDO } from '../src/index';
 import type { ResolvedSkillBudget } from '../src/skills/budget';
-import { createTestOnlyTrustedLocalRecallGateway } from './support/test-only-trusted-local-recall';
 
 const SNAPSHOT_AT = Date.parse('2026-07-15T12:00:00.000Z');
 const PRINCIPAL_A = 'prn_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -157,43 +156,7 @@ function seedSkill(sql: SqlStorage, row: SkillRow): void {
   );
 }
 
-function seedMemory(
-  sql: SqlStorage,
-  values: Readonly<{ id: string; user_id: string; content: string; valid_from: string; valid_to?: string | null }>,
-): void {
-  sql.exec(
-    `INSERT INTO memory_blocks (
-      id, user_id, hall_type, content, confidence, created_at, valid_from, valid_to,
-      source_trust
-    ) VALUES (?, ?, 'preferences', ?, 0.9, ?, ?, ?, 'user_stated')`,
-    values.id,
-    values.user_id,
-    values.content,
-    values.valid_from,
-    values.valid_from,
-    values.valid_to ?? null,
-  );
-}
-
-function seedEpisode(
-  sql: SqlStorage,
-  values: Readonly<{ id: string; user_id: string; summary: string; occurred_at: string }>,
-): void {
-  sql.exec(
-    `INSERT INTO episodes (id, user_id, occurred_at, summary, source, source_ref, created_at)
-     VALUES (?, ?, ?, ?, 'headless_local', NULL, ?)`,
-    values.id,
-    values.user_id,
-    values.occurred_at,
-    values.summary,
-    values.occurred_at,
-  );
-}
-
-function dependencies(
-  sql: SqlStorage,
-  useProductionRecall = false,
-): ContextComposerDependencies {
+function dependencies(sql: SqlStorage): ContextComposerDependencies {
   return {
     staged_inputs: {
       async resolve(request) {
@@ -260,17 +223,24 @@ function dependencies(
       },
     },
     skill_budget: exactTestSkillBudget,
-    recall: useProductionRecall
-      ? SqliteTemporalRecallGateway.create(sql, REVISION.recall)
-      : createTestOnlyTrustedLocalRecallGateway(sql, REVISION.recall),
+    // Owner recall is not wired through this composer (as in the owner turn); it answers unavailable.
+    recall: {
+      async recall(request) {
+        return {
+          principal_ref: request.owner.principal_ref,
+          tenant_ref: request.owner.tenant_ref,
+          snapshot: attestation(request, REVISION.recall),
+          status: 'failed',
+          result: recallResultSchema.parse({ memory_hits: [], episode_hits: [], evolution_hits: [], query_used: 'Owner temporal recall unavailable', duration_ms: 0 }),
+          source: null,
+          capability: 'owner_bound_local_temporal_snapshot',
+        };
+      },
+    },
   };
 }
 
 describe('ContextComposer current-DO SQLite adapters', () => {
-  it('does not expose a production factory that can promote unproven legacy memory taint', () => {
-    expect('forHeadlessTest' in SqliteTemporalRecallGateway).toBe(false);
-  });
-
   it('rejects one legacy local user id bound to multiple trusted authorities', () => {
     expect(
       () =>
@@ -313,7 +283,7 @@ describe('ContextComposer current-DO SQLite adapters', () => {
     expect('prompt' in result.composition).toBe(false);
   });
 
-  it('reads active system skills and point-in-time owner-bound memory without cross-owner leakage or fabricated episode ranks', async () => {
+  it('reads active, identity-locked system skills only', async () => {
     const runtime = runtimeStub();
     const result = await runInDurableObject(runtime, (_instance, state) => {
       provisionDoSchema(state.storage);
@@ -328,85 +298,14 @@ describe('ContextComposer current-DO SQLite adapters', () => {
           identity_locked: false,
         }),
       );
-      seedMemory(sql, {
-        id: 'memory-a-old',
-        user_id: OWNER_A,
-        content: 'Owner A earlier memory.',
-        valid_from: '2026-07-14T08:00:00.000Z',
-      });
-      seedMemory(sql, {
-        id: 'memory-a-new',
-        user_id: OWNER_A,
-        content: 'Owner A latest memory.',
-        valid_from: '2026-07-14T09:00:00.000Z',
-      });
-      seedMemory(sql, {
-        // 11:59Z: lexicographically after the 12:00Z snapshot but instant-eligible.
-        id: 'memory-a-offset-eligible',
-        user_id: OWNER_A,
-        content: 'Owner A offset-shaped eligible memory.',
-        valid_from: '2026-07-15T17:29:00+05:30',
-      });
-      seedMemory(sql, {
-        // 12:01Z: must remain absent despite the same offset representation.
-        id: 'memory-a-offset-future',
-        user_id: OWNER_A,
-        content: 'Owner A offset-shaped future memory must remain absent.',
-        valid_from: '2026-07-15T17:31:00+05:30',
-      });
-      seedMemory(sql, {
-        id: 'memory-a-superseded',
-        user_id: OWNER_A,
-        content: 'Superseded owner A memory must remain absent.',
-        valid_from: '2026-07-10T09:00:00.000Z',
-        valid_to: '2026-07-14T10:00:00.000Z',
-      });
-      seedMemory(sql, {
-        id: 'memory-b',
-        user_id: OWNER_B,
-        content: 'Foreign owner B memory must remain absent.',
-        valid_from: '2026-07-14T11:00:00.000Z',
-      });
-      seedEpisode(sql, {
-        id: 'episode-a',
-        user_id: OWNER_A,
-        summary: 'Owner A local episode.',
-        occurred_at: '2026-07-14T12:00:00.000Z',
-      });
-      seedEpisode(sql, {
-        id: 'episode-b',
-        user_id: OWNER_B,
-        summary: 'Foreign owner B episode must remain absent.',
-        occurred_at: '2026-07-14T12:00:00.000Z',
-      });
-
       return createContextComposer(dependencies(sql)).compose(envelope(PRINCIPAL_A), RUNTIME_INPUTS);
     });
 
     expect(result.ok, result.ok ? undefined : result.failure.code).toBe(true);
     if (!result.ok) return;
     expect(result.evidence.skills.selected).toEqual(['sqlite-afternoon-plan']);
-    expect(result.evidence.recall.status).toBe('partial');
-    expect(result.prompt).toContain('Owner A offset-shaped eligible memory.');
-    expect(result.prompt).toContain('Owner A latest memory.');
-    expect(result.prompt).toContain('Owner A earlier memory.');
-    expect(result.prompt.indexOf('Owner A offset-shaped eligible memory.')).toBeLessThan(
-      result.prompt.indexOf('Owner A latest memory.'),
-    );
-    expect(result.prompt.indexOf('Owner A latest memory.')).toBeLessThan(
-      result.prompt.indexOf('Owner A earlier memory.'),
-    );
-    for (const absent of [
-      'Foreign owner B memory must remain absent.',
-      'Owner A local episode.',
-      'Foreign owner B episode must remain absent.',
-      'Superseded owner A memory must remain absent.',
-      'Owner A offset-shaped future memory must remain absent.',
-      'foreign-user-skill',
-    ]) {
-      expect(result.prompt).not.toContain(absent);
-      expect(JSON.stringify(result)).not.toContain(absent);
-    }
+    expect(result.prompt).not.toContain('foreign-user-skill');
+    expect(JSON.stringify(result)).not.toContain('foreign-user-skill');
   });
 
   it('fails closed rather than silently truncating an oversized active system-skill snapshot', async () => {
@@ -439,7 +338,7 @@ describe('ContextComposer current-DO SQLite adapters', () => {
         'x'.repeat(2_401),
         'sqlite-afternoon-plan',
       );
-      return createContextComposer(dependencies(sql, true)).compose(envelope(PRINCIPAL_A), RUNTIME_INPUTS);
+      return createContextComposer(dependencies(sql)).compose(envelope(PRINCIPAL_A), RUNTIME_INPUTS);
     });
     expect(oversizedBody).toEqual({ ok: false, failure: { code: 'skill_snapshot_invalid' } });
 
@@ -453,12 +352,12 @@ describe('ContextComposer current-DO SQLite adapters', () => {
         JSON.stringify(Array.from({ length: 512 }, () => 'get_tasks')),
         'sqlite-afternoon-plan',
       );
-      return createContextComposer(dependencies(sql, true)).compose(envelope(PRINCIPAL_A), RUNTIME_INPUTS);
+      return createContextComposer(dependencies(sql)).compose(envelope(PRINCIPAL_A), RUNTIME_INPUTS);
     });
     expect(oversizedJson).toEqual({ ok: false, failure: { code: 'skill_snapshot_invalid' } });
   });
 
-  it('halts NUL-bearing oversized SQLite text before a skill or memory row is materialised', async () => {
+  it('halts NUL-bearing oversized SQLite text before a skill row is materialised', async () => {
     const skillRuntime = runtimeStub();
     const unsafeSkill = await runInDurableObject(skillRuntime, (_instance, state) => {
       provisionDoSchema(state.storage);
@@ -473,49 +372,6 @@ describe('ContextComposer current-DO SQLite adapters', () => {
     });
     expect(unsafeSkill).toEqual({ ok: false, failure: { code: 'skill_snapshot_invalid' } });
     expect('prompt' in unsafeSkill).toBe(false);
-
-    const memoryRuntime = runtimeStub();
-    const unsafeMemory = await runInDurableObject(memoryRuntime, (_instance, state) => {
-      provisionDoSchema(state.storage);
-      const sql = state.storage.sql;
-      seedSkill(sql, systemSkill());
-      seedMemory(sql, {
-        id: 'nul-prefixed-memory',
-        user_id: OWNER_A,
-        content: 'safe placeholder',
-        valid_from: '2026-07-14T09:00:00.000Z',
-      });
-      sql.exec(
-        'UPDATE memory_blocks SET content = ? WHERE id = ?',
-        `x\0${'m'.repeat(2_001)}`,
-        'nul-prefixed-memory',
-      );
-      return createContextComposer(dependencies(sql, true)).compose(envelope(PRINCIPAL_A), RUNTIME_INPUTS);
-    });
-    expect(unsafeMemory).toEqual({ ok: false, failure: { code: 'recall_integrity' } });
-    expect('prompt' in unsafeMemory).toBe(false);
-
-    const validToRuntime = runtimeStub();
-    const unsafeValidTo = await runInDurableObject(validToRuntime, (_instance, state) => {
-      provisionDoSchema(state.storage);
-      const sql = state.storage.sql;
-      seedSkill(sql, systemSkill());
-      seedMemory(sql, {
-        id: 'nul-bearing-valid-to',
-        user_id: OWNER_A,
-        content: 'safe placeholder',
-        valid_from: '2026-07-14T09:00:00.000Z',
-        valid_to: '9999-12-31T00:00:00.000Z',
-      });
-      sql.exec(
-        'UPDATE memory_blocks SET valid_to = ? WHERE id = ?',
-        `9999-12-31T00:00:00.000Z\0${'v'.repeat(100)}`,
-        'nul-bearing-valid-to',
-      );
-      return createContextComposer(dependencies(sql, true)).compose(envelope(PRINCIPAL_A), RUNTIME_INPUTS);
-    });
-    expect(unsafeValidTo).toEqual({ ok: false, failure: { code: 'recall_integrity' } });
-    expect('prompt' in unsafeValidTo).toBe(false);
   });
 
   it('fails closed for an active system row whose identity lock is corrupt', async () => {
@@ -529,25 +385,6 @@ describe('ContextComposer current-DO SQLite adapters', () => {
     });
 
     expect(result).toEqual({ ok: false, failure: { code: 'skill_snapshot_invalid' } });
-    expect('prompt' in result).toBe(false);
-  });
-
-  it('halts before an oversized eligible SQLite memory row can reach recall parsing', async () => {
-    const runtime = runtimeStub();
-    const result = await runInDurableObject(runtime, (_instance, state) => {
-      provisionDoSchema(state.storage);
-      const sql = state.storage.sql;
-      seedSkill(sql, systemSkill());
-      seedMemory(sql, {
-        id: 'oversized-memory',
-        user_id: OWNER_A,
-        content: 'm'.repeat(2_001),
-        valid_from: '2026-07-14T09:00:00.000Z',
-      });
-      return createContextComposer(dependencies(sql)).compose(envelope(PRINCIPAL_A), RUNTIME_INPUTS);
-    });
-
-    expect(result).toEqual({ ok: false, failure: { code: 'recall_integrity' } });
     expect('prompt' in result).toBe(false);
   });
 
@@ -583,12 +420,6 @@ describe('ContextComposer current-DO SQLite adapters', () => {
       provisionDoSchema(state.storage);
       const sql = state.storage.sql;
       seedSkill(sql, systemSkill());
-      seedMemory(sql, {
-        id: 'frozen-memory',
-        user_id: OWNER_A,
-        content: 'Original frozen owner memory.',
-        valid_from: '2026-07-14T09:00:00.000Z',
-      });
       const deps = dependencies(sql);
       const first = await createContextComposer(deps).compose(envelope(PRINCIPAL_A), RUNTIME_INPUTS);
       if (!first.ok) throw new Error(`initial frozen capture failed: ${first.failure.code}`);
@@ -601,11 +432,6 @@ describe('ContextComposer current-DO SQLite adapters', () => {
         'UPDATE skills SET body_markdown = ? WHERE name = ?',
         'Mutated skill text must not enter an already-captured snapshot.',
         'sqlite-afternoon-plan',
-      );
-      sql.exec(
-        'UPDATE memory_blocks SET content = ? WHERE id = ?',
-        'Mutated memory text must not enter an already-captured snapshot.',
-        'frozen-memory',
       );
       const replay = await createContextComposer(deps).compose(
         envelope(PRINCIPAL_A),
@@ -638,7 +464,7 @@ describe('ContextComposer current-DO SQLite adapters', () => {
       provisionDoSchema(state.storage);
       const sql = state.storage.sql;
       seedSkill(sql, systemSkill());
-      const composer = createContextComposer(dependencies(sql, true));
+      const composer = createContextComposer(dependencies(sql));
       const composed = [];
       for (let index = 1; index <= 65; index += 1) {
         composed.push(await composer.compose(envelope(PRINCIPAL_A), {
@@ -654,58 +480,4 @@ describe('ContextComposer current-DO SQLite adapters', () => {
       expect(result.ok, result.ok ? undefined : result.failure.code).toBe(true);
     }
   });
-
-  it('keeps unproven legacy local memory out of the prompt through the production adapter', async () => {
-    const runtime = runtimeStub();
-    const result = await runInDurableObject(runtime, (_instance, state) => {
-      provisionDoSchema(state.storage);
-      const sql = state.storage.sql;
-      seedSkill(sql, systemSkill());
-      seedMemory(sql, {
-        id: 'memory-unproven',
-        user_id: OWNER_A,
-        content: 'Unproven legacy memory must not be admitted.',
-        valid_from: '2026-07-14T09:00:00.000Z',
-      });
-      return createContextComposer(dependencies(sql, true)).compose(envelope(PRINCIPAL_A), RUNTIME_INPUTS);
-    });
-
-    expect(result.ok, result.ok ? undefined : result.failure.code).toBe(true);
-    if (!result.ok) return;
-    expect(result.evidence.recall.status).toBe('partial');
-    expect(result.prompt).toContain('No relevant memory or history surfaced for this context.');
-    expect(JSON.stringify(result)).not.toContain('Unproven legacy memory must not be admitted.');
-  });
-
-  it('partitions the bounded legacy owner mapping and recall query by tenant as well as principal', async () => {
-    const runtime = runtimeStub();
-    const result = await runInDurableObject(runtime, (_instance, state) => {
-      provisionDoSchema(state.storage);
-      const sql = state.storage.sql;
-      seedSkill(sql, systemSkill());
-      seedMemory(sql, {
-        id: 'memory-principal-b-tenant-a',
-        user_id: OWNER_B,
-        content: 'Same principal in tenant A must remain absent.',
-        valid_from: '2026-07-14T09:00:00.000Z',
-      });
-      seedMemory(sql, {
-        id: 'memory-principal-b-tenant-b',
-        user_id: OWNER_B_TENANT_B,
-        content: 'Tenant B principal-scoped local memory.',
-        valid_from: '2026-07-14T10:00:00.000Z',
-      });
-      return createContextComposer(dependencies(sql)).compose(
-        envelope(PRINCIPAL_B, TENANT_B),
-        RUNTIME_INPUTS,
-      );
-    });
-
-    expect(result.ok, result.ok ? undefined : result.failure.code).toBe(true);
-    if (!result.ok) return;
-    expect(result.checkpoint).toMatchObject({ principal_ref: PRINCIPAL_B, tenant_ref: TENANT_B });
-    expect(result.prompt).toContain('Tenant B principal-scoped local memory.');
-    expect(JSON.stringify(result)).not.toContain('Same principal in tenant A must remain absent.');
-  });
-
 });

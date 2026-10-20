@@ -24,7 +24,6 @@ export const toolNameSchema = z.enum([
   'query_availability',
   'read_owner_context',
   'read_memory',
-  'update_memory',
   'remember',
   'forget_memory',
   'search_episodes',
@@ -281,7 +280,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'skills_disable',
     'skills_load',
   ],
-  dreaming_mode: ['read_memory', 'update_memory', 'search_episodes'],
+  dreaming_mode: ['read_memory', 'search_episodes'],
   // Always carries send_message — a Spot is never silent (ADR-0042).
   pre_activity_spot: [
     'get_crs',

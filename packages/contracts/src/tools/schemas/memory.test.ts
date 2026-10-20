@@ -18,6 +18,5 @@ describe('owner memory tool contracts', () => {
       expect(EXTERNAL_ORIGIN_TOOLS).not.toContain(tool);
       expect(PRIVILEGED_ACTION_TOOLS).not.toContain(tool);
     }
-    expect(PRIVILEGED_ACTION_TOOLS).not.toContain('update_memory');
   });
 });
