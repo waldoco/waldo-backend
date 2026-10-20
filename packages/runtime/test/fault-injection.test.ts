@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL,
   ANTHROPIC_CLAUDE_OPUS_5_5_MODEL,
@@ -11,6 +11,7 @@ import { createOwnerResponder } from '../src/channels/owner-turn';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { MODEL_UNREACHABLE_REPLY } from '../src/llm/owner-routes';
 import { InMemoryCircuitBreaker, type LLMGatewayAdapter } from '../src/llm/provider';
+import { RATE_LIMIT_BACKOFF_MS } from '../src/llm/time-budget';
 import { getContextHandler } from '../src/tools/live/get-context';
 import { faultInjectedProviders, type ProviderEvent } from './helpers/fault-injection';
 import { ownerTyped } from './helpers/owner-typed';
@@ -21,8 +22,10 @@ import { ownerTyped } from './helpers/owner-typed';
 const time = async <T,>(_hop: string, work: () => Promise<T>) => work();
 const answered: ProviderEvent = { text: 'Here is your day.' };
 
-const owner = (gateway: LLMGatewayAdapter, options: Readonly<{ floorReply?: boolean; health?: InMemoryCircuitBreaker; log?: (entry: TurnLogEntry) => void }> = {}) => {
-  const args: Parameters<typeof createOwnerResponder> = [{ openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic', floorReply: options.floorReply ?? true, ...(options.health ? { health: options.health } : {}) }];
+// `anthropicKey: null` is today's deployment: no second-provider key.
+const owner = (gateway: LLMGatewayAdapter, options: Readonly<{ floorReply?: boolean; health?: InMemoryCircuitBreaker; log?: (entry: TurnLogEntry) => void; anthropicKey?: string | null }> = {}) => {
+  const anthropicKey = options.anthropicKey === undefined ? 'fixture-anthropic' : options.anthropicKey;
+  const args: Parameters<typeof createOwnerResponder> = [{ openaiApiKey: 'fixture-openai', ...(anthropicKey === null ? {} : { anthropicApiKey: anthropicKey }), floorReply: options.floorReply ?? true, ...(options.health ? { health: options.health } : {}) }];
   args[3] = options.log ?? (() => undefined);
   args[5] = [getContextHandler({ timezone: 'Asia/Kolkata', now: () => new Date('2026-10-20T08:20:00Z') })];
   args[10] = gateway;
@@ -62,6 +65,33 @@ describe('an owner turn while the primary is failing', () => {
     expect(calls.filter((call) => call.provider === OPENAI_PROVIDER)).toHaveLength(3);
     expect(calls.filter((call) => call.provider === ANTHROPIC_PROVIDER)).toHaveLength(4);
     expect(breakers).toEqual([OPENAI_PROVIDER]);
+  });
+});
+
+describe('an OpenAI 429 asking for a 20 s wait', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  const limited: ProviderEvent[] = [{ fault: 'rate_limited', retryAfterS: 20 }, answered];
+
+  it('with no Anthropic key deployed, is waited out and OpenAI asked again, as on beta-mvp', async () => {
+    vi.useFakeTimers();
+    const { gateway, calls } = faultInjectedProviders({ [OPENAI_PROVIDER]: limited, [ANTHROPIC_PROVIDER]: [answered] });
+    let settled = false;
+    const reply = ask(owner(gateway, { anthropicKey: null, floorReply: false })).finally(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(19_000);
+    expect(settled).toBe(false);
+    expect(calls.map((call) => call.provider)).toEqual([OPENAI_PROVIDER]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(reply).resolves.toBe('Here is your day.');
+    expect(calls.map((call) => call.model)).toEqual([OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_SOL_MODEL]);
+  });
+
+  it('with an Anthropic key, is not waited out: Opus answers at once', async () => {
+    vi.useFakeTimers();
+    const { gateway, calls } = faultInjectedProviders({ [OPENAI_PROVIDER]: limited, [ANTHROPIC_PROVIDER]: [answered] });
+    const reply = ask(owner(gateway));
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_BACKOFF_MS);
+    await expect(reply).resolves.toBe('Here is your day.');
+    expect(calls.map((call) => call.model)).toEqual([OPENAI_GPT_6_1_SOL_MODEL, ANTHROPIC_CLAUDE_OPUS_5_5_MODEL]);
   });
 });
 
