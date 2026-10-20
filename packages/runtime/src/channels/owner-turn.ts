@@ -300,7 +300,7 @@ export const createOwnerResponder = (
     return Object.entries(value).flatMap(([key, child]) => [key, ...structuredStrings(child, depth + 1)]);
   };
   const removedTopics = new Set<string>();
-  const heldTopics = () => [...removedTopics, ...forgettingState?.claims('purging').flatMap(claim => [claim.text, claim.evidence]) ?? [], ...forgettingState?.pendingTopics() ?? [], ...forgettingState?.incompleteTopics() ?? []];
+  const heldTopics = () => [...removedTopics, ...forgettingState?.claims('purging').flatMap(claim => [claim.text, claim.evidence]) ?? [], ...forgettingState?.pendingTopics() ?? []];
   const holdsAnyHeldTopic = (): boolean => heldTopics().length > 0;
   const holdsIn = (held: readonly string[]) => (...values: readonly (string | null | undefined)[]): boolean =>
     values.some(value => typeof value === 'string' && held.some(topic => carriesTopic(value, topic) || hidesTopic(value, topic)));
@@ -867,8 +867,6 @@ export const createOwnerResponder = (
       const asOwner = await asOwnerJob(trace, job => job.consolidate(trace, day, sides));
       if (asOwner !== undefined) return asOwner;
       if (!memory) return { done: true, detail: 'no memory' };
-      if (memory.incompleteTopics().length) return { done: false, detail: 'historical memory consolidation deferred: forgetting coverage incomplete' };
-
       const raw = await ask(trace, 'nightly_memory', NIGHTLY_MEMORY_INSTRUCTION, nightlyInput(promptMemory()!, day), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
       // The nightly pass is where the pinned blocks are curated.
@@ -888,7 +886,6 @@ export const createOwnerResponder = (
       const asOwner = await asOwnerJob(trace, job => job.promote(trace));
       if (asOwner !== undefined) return asOwner;
       if (!memory || memory.claims().length === 0) return 'no claims';
-      if (memory.incompleteTopics().length) return 'historical memory promotion deferred: forgetting coverage incomplete';
       const raw = await ask(trace, 'constellation', PROMOTION_INSTRUCTION, promotionInput(memory), { name: 'promotion', schema: PROMOTION_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
       return applyPromotion(memory, raw, new Date().toISOString(), (receipt) => log({

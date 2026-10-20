@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { claimStore } from '../src/memory/claims';
 import { memoryHandlers, type MemoryToolContext } from '../src/tools/live/memory';
+import { holdTopic } from './helpers/pending-topic';
 const OWNER = 'owner:1';
 const CHAT = 'telegram-1';
 const setup = () => {
@@ -104,7 +105,7 @@ describe('live owner memory', () => {
     const s = setup();
     await s.call('remember', { kind: 'fact', text: 'Coffee', evidence_quote: 'Coffee' }, s.ctx('Coffee'));
     await s.call('remember', { kind: 'fact', text: 'Tea', evidence_quote: 'Tea' }, s.ctx('Tea'));
-    s.store.beginTopicCoverage('Coffee', '2026-10-08T09:00:00Z');
+    holdTopic(s.sql, 'Coffee', '2026-10-08T09:00:00Z');
     expect(await s.call('read_memory', {}, s.ctx('read'))).toMatchObject({ ok: true, data: { claims: [expect.objectContaining({ text: 'Tea' })] } });
   });
   it('forgets an exact UTF-16 Hindi source span without touching a different span in the same turn', async () => {
@@ -118,25 +119,14 @@ describe('live owner memory', () => {
     expect(s.store.claims().map(c => c.id)).toEqual([2]);
     expect(await s.call('forget_memory', { source: { message_ref: 'tg-1', start: 0, end: 999 }, scope_note: 'bad span' }, forget)).toMatchObject({ ok: false });
   });
-  it('keeps an unfinished legacy forget out of recall, and a later forget_memory on the topic finishes it', async () => {
+  it('keeps an unsettled forget out of recall, and a later forget_memory on the topic finishes it', async () => {
     const s = setup();
     s.store.add({ kind: 'preference', text: 'Prefers oolong tea', source: 'stated', evidence: 'oolong', origin: 'owner', source_ref: 'owner, tg-1' }, '2026-10-08T08:00:00Z');
-    s.sql.exec('INSERT INTO topic_purge_pending (fingerprint, topic, created_at, coverage_incomplete) VALUES (?, ?, ?, 1)', 'legacy-fp', 'oolong', '2026-10-07T08:00:00Z');
-    expect(s.store.incompleteTopics()).toEqual(['oolong']);
+    holdTopic(s.sql, 'oolong', '2026-10-07T08:00:00Z');
+    expect(s.store.pendingTopics()).toEqual(['oolong']);
     const read = await s.call('read_memory', { query: 'tea' }, s.ctx('what tea do I like'));
     expect(JSON.stringify(read)).not.toContain('oolong');
     expect(await s.call('forget_memory', { topic: 'oolong', scope_note: 'oolong' }, s.ctx('forget oolong'))).toMatchObject({ ok: true });
-    expect(s.store.incompleteTopics()).toEqual([]);
     expect(s.store.pendingTopics()).toEqual([]);
-  });
-  it('a topic whose source coverage is unproven stays recorded after a forget that could not verify it, and the owner is not told it will be retried', async () => {
-    const s = setup();
-    s.store.add({ kind: 'preference', text: 'Prefers oolong tea', source: 'stated', evidence: 'oolong', origin: 'owner', source_ref: 'owner, tg-1' }, '2026-10-08T08:00:00Z');
-    s.store.beginTopicCoverage('oolong', '2026-10-08T08:00:00Z');
-    expect(s.store.incompleteTopics()).toEqual(['oolong']);
-    const result = await s.call('forget_memory', { topic: 'oolong', scope_note: 'oolong' }, s.ctx('forget oolong'));
-    expect(result).toMatchObject({ ok: false });
-    expect(JSON.stringify(result)).not.toContain('retried on the next turn');
-    expect(s.store.incompleteTopics()).toEqual(['oolong']);
   });
 });

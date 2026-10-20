@@ -4,6 +4,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { claimStore, ground, turnMemoryPrompt } from '../src/memory/claims';
 import { memoryHandlers } from '../src/tools/live/memory';
 import { createOwnerResponder } from '../src/channels/owner-turn';
+import { holdTopic } from './helpers/pending-topic';
 const seen = vi.hoisted(() => ({ inputs: [] as string[], outputs: [] as unknown[][] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
   seen.inputs.push(JSON.stringify(body));
@@ -11,6 +12,8 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (body: u
 } }; } }));
 beforeEach(() => { seen.inputs.length = 0; seen.outputs.length = 0; });
 const timer = <T>(_name: string, work: () => Promise<T>) => work();
+// The conversation window still carries the topic, so the forget stays pending (held) across the turn.
+const unsettledHistory = async () => ({ rewritten: 0, remaining: 1 });
 it('I prefer AI can be remembered by the main model without a writer call', async () => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('memory-loop-tools')), async (_i, state) => {
     const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
@@ -28,7 +31,7 @@ it('a pending coffee forget does not remove unrelated history, profile or orders
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('memory-loop-held')), async (_i, state) => {
     const memory = claimStore(state.storage.sql);
     memory.add({ kind: 'fact', text: 'Works in AI', evidence: 'AI', source: 'stated', origin: 'owner', source_ref: 'owner, tg-old' }, '2026-10-08T00:00:00Z');
-    memory.beginTopicCoverage('coffee', '2026-10-08T00:00:00Z');
+    holdTopic(state.storage.sql, 'coffee', '2026-10-08T00:00:00Z');
     const responder = createOwnerResponder('fixture', undefined, memory, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, () => 'Keep replies short');
     await responder.respond(ownerTyped({ traceId: 'tg-before', conversationRef: 'owner', surface: 'telegram', text: 'My project is Orbit' }), timer);
     await responder.respond(ownerTyped({ traceId: 'tg-after', conversationRef: 'owner', surface: 'telegram', text: 'What is on my calendar?', memoryWrites: false }), timer);
@@ -84,21 +87,22 @@ it('read-time filtering drops held episode rows and aliases but keeps unrelated 
     memory.add({ kind: 'fact', text: 'Coffee meeting is private', evidence: 'coffee', source: 'stated', origin: 'owner', source_ref: 'owner, tg-one' }, '2026-10-08T00:00:00Z');
     memory.add({ kind: 'fact', text: 'Unrelated amber meeting', evidence: 'amber', source: 'stated', origin: 'owner', source_ref: 'owner, tg-two' }, '2026-10-08T00:00:00Z');
     memory.add({ kind: 'preference', text: 'Opaque preference', evidence: 'opaque', aliases: ['coffee'], source: 'stated', origin: 'owner', source_ref: 'owner, tg-three' }, '2026-10-08T00:00:00Z');
-    memory.beginTopicCoverage('coffee', '2026-10-08T00:00:00Z');
+    holdTopic(state.storage.sql, 'coffee', '2026-10-08T00:00:00Z');
     const episodes = episodeIndex(state.storage.sql);
     episodes.add('held', 'owner', 'coffee meeting', 1);
     episodes.add('clean', 'owner', 'amber meeting', 2);
     seen.outputs.push([{ type: 'function_call', call_id: 'episodes', name: 'search_episodes', arguments: JSON.stringify({ query: 'meeting', limit: 10 }) }], []);
     const tools = [searchEpisodesHandler(episodes), ...memoryHandlers({ sql: state.storage.sql, store: memory, conversationRef: 'owner', hideHistory: async () => undefined })];
-    const responder = createOwnerResponder('fixture', undefined, memory, undefined, undefined, tools);
+    const responder = createOwnerResponder('fixture', undefined, memory, undefined, undefined, tools, undefined, undefined, undefined, undefined, undefined, unsettledHistory);
     await responder.respond(ownerTyped({ traceId: 'tg-ask', conversationRef: 'owner', surface: 'telegram', text: 'Read meeting context', memoryWrites: false }), timer);
     expect(seen.inputs.at(-1)).toContain('amber');
-    expect(seen.inputs.at(-1)).not.toContain('coffee meeting');
-    expect(seen.inputs.at(-1)).not.toContain('Opaque preference');
+    // The literal purge has already blanked the topic in SQL (the alias included); the held conversation window keeps
+    // the read-time filter on, and nothing that names the topic reaches the model.
+    expect(seen.inputs.at(-1)).not.toMatch(/coffee/i);
     seen.outputs.push([{ type: 'function_call', call_id: 'memory', name: 'read_memory', arguments: JSON.stringify({ limit: 10 }) }], []);
     await responder.respond(ownerTyped({ traceId: 'tg-read', conversationRef: 'owner', surface: 'telegram', text: 'What do you remember?', memoryWrites: false }), timer);
     expect(seen.inputs.at(-1)).toContain('Unrelated amber meeting');
-    expect(seen.inputs.at(-1)).not.toContain('Opaque preference');
+    expect(seen.inputs.at(-1)).not.toMatch(/coffee/i);
   });
 });
 // A search hit is re-read from its stored row while a topic is held; a re-read that fails drops that hit alone.
@@ -108,7 +112,7 @@ it('a held-topic re-read that fails drops only that hit, says one was withheld, 
     const { searchEpisodesHandler } = await import('../src/tools/live/search-episodes');
     const memory = claimStore(state.storage.sql);
     memory.add({ kind: 'fact', text: 'Coffee meeting is private', evidence: 'coffee', source: 'stated', origin: 'owner', source_ref: 'owner, tg-one' }, '2026-10-08T00:00:00Z');
-    memory.beginTopicCoverage('coffee', '2026-10-08T00:00:00Z');
+    holdTopic(state.storage.sql, 'coffee', '2026-10-08T00:00:00Z');
     const episodes = episodeIndex(state.storage.sql);
     episodes.add('amber', 'owner', 'amber meeting', 1);
     episodes.add('beige', 'owner', 'beige meeting', 2);
@@ -119,7 +123,7 @@ it('a held-topic re-read that fails drops only that hit, says one was withheld, 
     } };
     const logs: unknown[] = [];
     seen.outputs.push([{ type: 'function_call', call_id: 'episodes', name: 'search_episodes', arguments: JSON.stringify({ query: 'meeting', limit: 10 }) }], []);
-    const responder = createOwnerResponder('fixture', undefined, memory, entry => logs.push(entry), undefined, [flaky]);
+    const responder = createOwnerResponder('fixture', undefined, memory, entry => logs.push(entry), undefined, [flaky], undefined, undefined, undefined, undefined, undefined, unsettledHistory);
     await responder.respond(ownerTyped({ traceId: 'tg-ask', conversationRef: 'owner', surface: 'telegram', text: 'Read meeting context', memoryWrites: false }), timer);
     expect(seen.inputs.at(-1)).toContain('amber');
     expect(seen.inputs.at(-1)).not.toContain('beige');

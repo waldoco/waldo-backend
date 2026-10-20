@@ -10,7 +10,7 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (body: u
 const { createOwnerResponder } = await import('../src/channels/owner-turn');
 const { loopHandlers } = await import('../src/channels/loops');
 const { rememberArgsSchema } = await import('@waldo/contracts');
-const memory = { incompleteTopics: () => [], pendingTopics: () => [], claims: () => [], allClaims: () => [], recall: () => [], nodes: () => [], edges: () => [], barriers: () => [], beginSettle: () => {}, endSettle: () => {}, settle: () => {}, sweepInterruptedSettles: () => 0 };
+const memory = { pendingTopics: () => [], claims: () => [], allClaims: () => [], recall: () => [], nodes: () => [], edges: () => [], barriers: () => [], beginSettle: () => {}, endSettle: () => {}, settle: () => {}, sweepInterruptedSettles: () => 0 };
 const loopBook = { close: () => true, open: () => ({}), list: () => [], closed: () => [], proactivity: () => ({}), setProactivity: () => ({}) };
 const tool = (name: string, args: unknown) => [{ type: 'function_call', call_id: name, name, arguments: JSON.stringify(args) }];
 // Narrow handler fake tests transport/order/receipts. Real grounding/store handlers are exercised in memory-health-owner-turn.
