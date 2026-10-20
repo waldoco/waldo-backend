@@ -91,6 +91,7 @@ declare global {
       GOOGLE_CLIENT_SECRET?: string;
       WALDO_OWNER_TELEGRAM_ID?: string;
       OPENAI_API_KEY?: string;
+      ANTHROPIC_API_KEY?: string;
       WALDO_ENV?: string;
       WALDO_RELEASE?: string;
     }

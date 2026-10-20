@@ -390,6 +390,23 @@ describe('OpenAIResponsesAdapter reasoning passback', () => {
   });
 });
 
+describe('OpenAIResponsesAdapter after another provider ran a round', () => {
+  it('drops the other provider output items and rebuilds the round from its call record', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async (body: Record<string, unknown>) => { bodies.push(body); return { id: 'r', status: 'completed', output_text: 'ok', output: [], usage: { input_tokens: 1, output_tokens: 1 } }; }) });
+    const request = gatewayRequest();
+    request.request.tool_turns = [{
+      call: { call_id: 'c1', name: 'get_context', arguments: '{}' }, output: '{"ok":true}',
+      prior_items: [{ type: 'thinking', provider: 'anthropic', block: { type: 'thinking', thinking: '', signature: 's' } }, { type: 'tool_use', provider: 'anthropic', block: { type: 'tool_use', id: 'c1', name: 'get_context', input: {} } }],
+    }];
+    await expect(adapter.complete(request)).resolves.toMatchObject({ ok: true });
+    expect((bodies[0]!.input as unknown[]).slice(1)).toEqual([
+      { type: 'function_call', call_id: 'c1', name: 'get_context', arguments: '{}' },
+      { type: 'function_call_output', call_id: 'c1', output: '{"ok":true}' },
+    ]);
+  });
+});
+
 describe('OpenAIResponsesAdapter hosted web search', () => {
   const searching = (replies: unknown[]) => {
     const bodies: Array<Record<string, unknown>> = [];

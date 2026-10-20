@@ -504,11 +504,12 @@ describe('background decisions: one resend, and the breaker counts only what was
   });
 
   it('opens the shared breaker on the third failed request in a row, after a success cleared the count', async () => {
-    const { sent, decide } = decisions([miss, answer, miss, miss, miss, answer]);
+    const { sent, decide } = decisions([miss, answer, miss, miss, miss, miss, miss, answer]);
     expect((await decide('a')).value).toBe('{"kind":"no_op","text":""}');
     expect((await decide('b')).error).toBeInstanceOf(Error);
     expect((await decide('c')).error).toBeInstanceOf(Error);
-    // a's answer clears its miss; b's two misses and c's first make three, so c's resend is never sent.
-    expect(sent.map((entry) => entry.decision)).toEqual(['a', 'a', 'b', 'b', 'c']);
+    // a's answer clears its miss; b's two OpenAI misses and c's first make three, so c's OpenAI resend is never sent.
+    // Each decision still reaches the second provider, whose breaker counts its own misses.
+    expect(sent.map((entry) => `${entry.decision}:${entry.request.step.provider}`)).toEqual(['a:openai', 'a:openai', 'b:openai', 'b:openai', 'b:anthropic', 'c:openai', 'c:anthropic']);
   });
 });

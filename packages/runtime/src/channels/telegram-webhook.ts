@@ -22,6 +22,7 @@ export type TelegramWebhookEnv = Readonly<{
   WALDO_OWNER_DO_NAMESPACE?: string;
   WALDO_RELEASE?: string;
   OPENAI_API_KEY?: string;
+  ANTHROPIC_API_KEY?: string;
   SMALLEST_AI_API_KEY?: string;
   BRAVE_SEARCH_API_KEY?: string;
   // A5 artifact bodies; absent in tests/local, bound in wrangler (r2_buckets).
