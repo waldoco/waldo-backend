@@ -3,7 +3,9 @@ import {
   ESCALATION_RULES,
   FALLBACK_LADDER,
   GATEWAY_CONSTANT_HEADERS,
+  OPENAI_PROVIDER,
   PROVIDER_OF,
+  providerSchema,
   ROSTER,
   ROUTING_TABLE,
   SKILL_PROMPT_SERIALIZER_REVISION,
@@ -127,6 +129,15 @@ export type TrustedGatewayExecution =
     }>;
 
 export type SpentTokens = Readonly<Pick<LLMResponse, 'input_tokens' | 'output_tokens' | 'cache_read_input_tokens'>>;
+
+// Replayed output items are provider-specific: OpenAI's reasoning items and Anthropic's content blocks mean nothing to the
+// other provider. OpenAI Responses items carry no mark; every other adapter stamps its items with this key, and each adapter
+// replays only its own, rebuilding the other provider's rounds from the tool-call records a turn keeps for every call.
+export const OUTPUT_ITEM_PROVIDER = 'provider' as const;
+export function outputItemProvider(item: Readonly<Record<string, unknown>>): Provider {
+  const marked = providerSchema.safeParse(item[OUTPUT_ITEM_PROVIDER]);
+  return marked.success ? marked.data : OPENAI_PROVIDER;
+}
 
 // What the model provider said about trying a failed request again: the wait it asked for, and whether it allows
 // another try at all.
