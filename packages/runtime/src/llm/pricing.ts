@@ -1,4 +1,4 @@
-import { OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
+import { OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_LUNA_MODEL, type TurnModelUsage } from '@waldo/contracts';
 
 // USD per 1M tokens, standard tier. The one place model prices live; update from
 // https://developers.openai.com/api/docs/pricing when OpenAI changes them (checked 2026-09-23).
@@ -15,8 +15,7 @@ const PRICES: Readonly<Record<string, Readonly<{ input: number; cachedInput: num
 // content tokens bill at model rates; this assumes they arrive in the call's reported input tokens.
 const WEB_SEARCH_USD_PER_CALL = 10 / 1_000;
 
-// web_searches: hosted web search calls the model ran inside this call.
-export type ModelUsage = Readonly<{ model: string; input: number; output: number; cached: number; web_searches?: number }>;
+export type ModelUsage = TurnModelUsage;
 export type ModelCost = Readonly<{ input: number; output: number; web_search?: number; total: number }>;
 
 export const modelCost = ({ model, input, output, cached, web_searches = 0 }: ModelUsage): ModelCost | null => {
