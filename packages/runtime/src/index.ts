@@ -24,11 +24,9 @@ import type { GatewaySecretBinding } from './llm/gateway';
 // The entry exports only Durable Object classes and the default handler. `wrangler dev --local`
 // rejects constants or arrays exported from the Worker entry, so helpers are imported from their
 // own modules, never re-exported here (pinned by test/worker-entry-exports.test.ts).
-export { RunLoopDO, RuntimeProbeDO, TracerDO } from './retired-durable-objects';
 export { DeviceBridgeDO } from './devices/device-bridge-do';
 export { IMessageBridgeDO } from './channels/imessage/bridge-do';
 export { OwnerDO } from './channels/owner-do';
-import type { RunLoopDO, RuntimeProbeDO, TracerDO } from './retired-durable-objects';
 import type { IMessageBridgeDO } from './channels/imessage/bridge-do';
 import { handleIMessageHost, isIMessageHostPath } from './channels/imessage/http';
 
@@ -38,8 +36,6 @@ declare global {
   namespace Cloudflare {
     interface Env {
       ASSETS?: Fetcher;
-      RUNTIME_DO: DurableObjectNamespace<RuntimeProbeDO>;
-      RUN_LOOP_DO: DurableObjectNamespace<RunLoopDO>;
       AI_GATEWAY_ID?: string;
       AI_GATEWAY_API_TOKEN?: GatewaySecretBinding;
       CLOUDFLARE_ACCOUNT_ID?: string;
@@ -49,7 +45,6 @@ declare global {
       SUPABASE_PROJECT_URL?: string;
       SUPABASE_PUBLISHABLE_KEY?: string;
       WALDO_ROUTER_HMAC_SECRET?: string;
-      TRACER_DO: DurableObjectNamespace<TracerDO>;
       OWNER_DO?: DurableObjectNamespace;
       DEVICE_BRIDGE_DO?: DurableObjectNamespace<DeviceBridgeDO>;
       IMESSAGE_BRIDGE_DO?: DurableObjectNamespace<IMessageBridgeDO>;
