@@ -1,5 +1,5 @@
 import { guardArtifactLinks, receiptUrl } from './artifact-link-guard';
-import { LLM_TOOL_TURNS_MAX, toolNameSchema, toolParameters, type ConnectIntent, type LLMTool, type LLMToolCall, type LLMToolTurn } from '@waldo/contracts';
+import { LLM_TOOL_TURNS_MAX, toolError, toolNameSchema, toolParameters, type ConnectIntent, type LLMTool, type LLMToolCall, type LLMToolTurn, type ToolError } from '@waldo/contracts';
 import { dispatchTool, type DispatchToolOptions, type ToolDispatcherContext } from '../tools/dispatcher';
 import { CONNECT_BUTTON_SENT, CONNECT_BUTTON_UNSENT } from '../tools/live/connect-text';
 import { ClosedRunError } from '../channels/run-effect-scope';
@@ -29,7 +29,7 @@ export type ToolLoopStep = (
 ) => Promise<Readonly<{ text: string; tool_calls?: readonly LLMToolCall[]; output_items?: readonly Record<string, unknown>[] }>>;
 
 // taint is the turn's once this result landed: external when this result, an earlier one, or the turn's own context was.
-export type ToolLoopEvent = Readonly<{ call: LLMToolCall; ok: boolean; ms: number; output: string; error?: string; code?: string; reason?: string; guard?: string; taint: 'external' | null }>;
+export type ToolLoopEvent = Readonly<{ call: LLMToolCall; ok: boolean; ms: number; output: string; error?: string; error_code?: string; retryable?: boolean; code?: string; reason?: string; guard?: string; taint: 'external' | null }>;
 
 export const toolDefinitions = (handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']): LLMTool[] =>
   handlers.map((handler) => ({
@@ -194,12 +194,12 @@ export async function runToolLoop(input: Readonly<{
       // Replaying them performs no I/O; transient reads may retry within the budget.
       let result = previous
         ? previous.ok
-          ? { ok: false, error: 'Same call already made this turn; use its result.', code: 'repeat_refusal' as const }
+          ? refusal(toolError('repeat_refusal'), 'repeat_refusal')
           : previous
         : !offer
-          ? { ok: false, error: 'Tool handler unavailable.', code: 'not_found' as const, reason: 'handler_unavailable' }
+          ? refusal(toolError('tools_withdrawn'), 'not_found', 'handler_unavailable')
           : !runs
-            ? { ok: false, error: BROWSING_UNAVAILABLE, code: 'auth_failed' as const, reason: 'withheld_this_turn' }
+            ? refusal(toolError('browsing_withheld', BROWSING_UNAVAILABLE), 'auth_failed', 'withheld_this_turn')
             : await dispatch(call, input);
       if (runs) {
         dispatched += 1;
@@ -223,10 +223,9 @@ export async function runToolLoop(input: Readonly<{
         }
         result = { ...result, error: `${result.error} ${outcome}` };
       }
-      // Only a typed adapter failure explicitly classified transient permits recovery.
+      // The error shape alone decides recovery: only a typed adapter failure classified transient is retryable.
       // Validation, hook halts and unexpected handler throws are not evidence of retryability.
-      const retryableRead = !result.ok && result.code === 'transient'
-        && 'reason' in result && result.reason === 'tool_result_error';
+      const retryableRead = !result.ok && result.retryable === true;
       if (mutation || !retryableRead) {
         // Keep the successful retained anchor through a loop refusal; a later real
         // action may unlock it. Settled provider failures still replace the anchor.
@@ -279,13 +278,15 @@ export async function runToolLoop(input: Readonly<{
       // The typed code/reason ride the span as their own fields so a failed hop stays
       // diagnosable from the trace or tail even when the capture switch gates free-form error
       // text off; error keeps the human-facing message for capture-on.
-      const typed = result.ok ? undefined : (result as { code?: string; reason?: string; guard?: string });
+      const typed = result.ok ? undefined : (result as { code?: string; reason?: string; guard?: string; error_code?: string; retryable?: boolean });
       const failure = result.ok ? undefined : result.error ?? (typed?.code ? `${typed.code}${typed.reason ? `:${typed.reason}` : ''}` : undefined);
       input.onTool?.({
         call, ok: result.ok, ms: Date.now() - started, output,
         taint: (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint === 'external' ? 'external' : null,
         ...(failure ? { error: failure } : {}),
         ...(typed?.code ? { code: typed.code } : {}),
+        ...(typed?.error_code ? { error_code: typed.error_code } : {}),
+        ...(typed?.retryable !== undefined ? { retryable: typed.retryable } : {}),
         ...(typed?.reason ? { reason: typed.reason } : {}),
         ...(typed?.guard ? { guard: typed.guard } : {}),
       });
@@ -297,17 +298,23 @@ export async function runToolLoop(input: Readonly<{
   }
 }
 
+type LoopToolResult = Readonly<{ ok: boolean; data?: unknown; error?: string; error_code?: string; fix?: string; retryable?: boolean; code?: string; reason?: string; guard?: string; source_taint?: 'external' | null; connect?: ConnectIntent }>;
+
+// A refusal the loop makes itself, in the dispatcher's error shape; code and reason keep their telemetry vocabulary.
+const refusal = (error: ToolError, code: string, reason?: string): LoopToolResult =>
+  ({ ok: false, error: error.cause, error_code: error.code, fix: error.fix, retryable: error.retryable, code, ...(reason ? { reason } : {}) });
+
 async function dispatch(
   call: LLMToolCall,
   input: Readonly<{ handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']; ctx: ToolDispatcherContext; offload?: ToolOutputStore }>,
-): Promise<Readonly<{ ok: boolean; data?: unknown; error?: string; code?: string; reason?: string; guard?: string; source_taint?: 'external' | null; connect?: ConnectIntent }>> {
+): Promise<LoopToolResult> {
   const name = toolNameSchema.safeParse(call.name);
-  if (!name.success) return { ok: false, error: `Unknown tool ${call.name}.` };
+  if (!name.success) return refusal(toolError('unknown_tool', `Unknown tool ${call.name}.`), 'invalid_args', 'unknown_tool');
   let args: unknown;
   try {
     args = JSON.parse(call.arguments || '{}');
   } catch {
-    return { ok: false, error: 'Arguments were not valid JSON.' };
+    return refusal(toolError('invalid_json_args'), 'invalid_args', 'invalid_args');
   }
   const result = await dispatchTool({ id: call.call_id, name: name.data, args }, input.ctx, { handlers: input.handlers, ...(input.offload === undefined ? {} : { offload: input.offload }) });
   // The untrusted marker crosses the model boundary on BOTH arms: a successful external result
@@ -320,6 +327,9 @@ async function dispatch(
   return {
     ok: false,
     error: result.error,
+    error_code: result.error_code,
+    fix: result.fix,
+    retryable: result.retryable,
     ...(typed.code ? { code: typed.code } : {}),
     ...(typed.reason ? { reason: typed.reason } : {}),
     // Enum-only guard stage:reason - the trace-visible diagnostic when capture is off.

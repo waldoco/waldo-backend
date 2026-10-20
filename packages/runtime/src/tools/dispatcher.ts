@@ -10,11 +10,14 @@ import {
   connectIntentSchema,
   sourceTaintSchema,
   trustedToolEffectReceiptUnavailableSchema,
+  toolError,
   toolNameSchema,
   triggerTypeSchema,
   waldoCardSchema,
   type ConnectIntent,
   type ErrorCode,
+  type ToolError,
+  type ToolErrorCode,
   type HookPayload,
   type HookEvent,
   type SessionState,
@@ -77,7 +80,13 @@ export type DispatchToolResult = (
       ok: false;
       call_id: string;
       tool: ToolName | null;
+      // The one error shape (contracts ToolError): error is the cause sentence, error_code the
+      // stable machine code, fix what the model can do, retryable whether the same call may run
+      // again. code and reason stay as the coarse ErrorCode and dispatch stage for telemetry.
       error: string;
+      error_code: ToolErrorCode;
+      fix: string;
+      retryable: boolean;
       code: ErrorCode;
       reason: ToolDispatchErrorReason;
       source_taint?: 'external';
@@ -168,7 +177,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
 ): Promise<DispatchToolResult> {
   const tool = toolNameSchema.safeParse(call.name);
   if (!tool.success) {
-    return failDispatch(call.id, null, 'unknown tool', 'invalid_args', 'unknown_tool');
+    return failDispatch(call.id, null, toolError('unknown_tool'), 'invalid_args', 'unknown_tool');
   }
 
   if (
@@ -178,7 +187,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return failDispatch(
       call.id,
       tool.data,
-      'tool authentication failed',
+      toolError('unauthenticated'),
       'auth_failed',
       'hook_halt',
     );
@@ -188,7 +197,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return failDispatch(
       call.id,
       tool.data,
-      'tool outside trigger ACL',
+      toolError('acl_denied'),
       'forbidden',
       'acl_denied',
     );
@@ -199,7 +208,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return failDispatch(
       call.id,
       tool.data,
-      'tool handler unavailable',
+      toolError('handler_unavailable'),
       'not_found',
       'handler_unavailable',
     );
@@ -209,7 +218,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return failDispatch(
       call.id,
       tool.data,
-      'tool handler ACL drift',
+      toolError('handler_acl_drift'),
       'transient',
       'handler_acl_drift',
     );
@@ -231,7 +240,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
       return failDispatch(
         call.id,
         tool.data,
-        'tool args failed validation',
+        toolError('invalid_args'),
         'transient',
         'invalid_args',
       );
@@ -251,7 +260,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return failDispatch(
       call.id,
       tool.data,
-      'tool args failed schema validation',
+      toolError('invalid_args'),
       'invalid_args',
       'invalid_args',
     );
@@ -268,7 +277,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
       return failDispatch(
         call.id,
         tool.data,
-        'tool effect receipt unavailable',
+        toolError('effect_receipt_unavailable'),
         'transient',
         'effect_receipt_unavailable',
       );
@@ -296,7 +305,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     // Preserve that original cause and leave the durable intent for reconciliation; collapsing it
     // into a normal tool failure would falsely make the effect look settled.
     if (trustedEffect !== undefined) throw error;
-    return failDispatch(call.id, tool.data, 'tool handler failed', 'transient', 'handler_failed');
+    return failDispatch(call.id, tool.data, toolError('handler_failed'), 'transient', 'handler_failed');
   }
 
   ctx.runScope?.admit();
@@ -307,7 +316,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return failDispatch(
       call.id,
       tool.data,
-      'tool effect receipt unavailable',
+      toolError('effect_receipt_unavailable'),
       'transient',
       'effect_receipt_unavailable',
     );
@@ -319,7 +328,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return withTrustedEffect(failDispatch(
       call.id,
       tool.data,
-      'tool handler returned invalid result',
+      toolError('invalid_handler_result'),
       'transient',
       'invalid_handler_result',
     ), settledTrustedEffect);
@@ -357,7 +366,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
       return withTrustedEffect(failDispatch(
         call.id,
         tool.data,
-        'tool result failed validation',
+        toolError('invalid_tool_result'),
         'transient',
         'invalid_tool_result',
       ), settledTrustedEffect);
@@ -377,7 +386,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return withTrustedEffect(failDispatch(
       call.id,
       tool.data,
-      'tool result failed validation',
+      toolError('invalid_tool_result'),
       'transient',
       'invalid_tool_result',
     ), settledTrustedEffect);
@@ -389,7 +398,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
       return withTrustedEffect(failDispatch(
         call.id,
         tool.data,
-        'tool returned oversized error',
+        toolError(finalResult.code, 'The tool failed and its error text was too large to show.'),
         finalResult.code,
         'tool_result_error',
       ), settledTrustedEffect);
@@ -398,7 +407,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return withTrustedEffect(failDispatch(
       call.id,
       tool.data,
-      error,
+      toolError(finalResult.code, error),
       finalResult.code,
       'tool_result_error',
       finalResult.source_taint,
@@ -411,7 +420,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return withTrustedEffect(failDispatch(
       call.id,
       tool.data,
-      'tool result failed validation',
+      toolError('invalid_tool_result'),
       'transient',
       'invalid_tool_result',
     ), settledTrustedEffect);
@@ -434,7 +443,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return withTrustedEffect(failDispatch(
       call.id,
       tool.data,
-      'tool result exceeded bound',
+      toolError('result_oversize'),
       'oversize',
       'result_oversize',
     ), settledTrustedEffect);
@@ -479,23 +488,23 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
 ): Promise<DispatchToolResult> {
   const tool = toolNameSchema.safeParse(input.tool);
   if (!tool.success) {
-    return failDispatch(input.callRef, null, 'unknown tool', 'invalid_args', 'unknown_tool');
+    return failDispatch(input.callRef, null, toolError('unknown_tool'), 'invalid_args', 'unknown_tool');
   }
   if (
     typeof input.ctx.authenticatedUserId !== 'string' ||
     input.ctx.authenticatedUserId.trim().length === 0
   ) {
-    return failDispatch(input.callRef, tool.data, 'tool authentication failed', 'auth_failed', 'hook_halt');
+    return failDispatch(input.callRef, tool.data, toolError('unauthenticated'), 'auth_failed', 'hook_halt');
   }
   if (!sessionToolAllowed(input.ctx.session, tool.data)) {
-    return failDispatch(input.callRef, tool.data, 'tool outside trigger ACL', 'forbidden', 'acl_denied');
+    return failDispatch(input.callRef, tool.data, toolError('acl_denied'), 'forbidden', 'acl_denied');
   }
   const handler = input.handlers.find((candidate) => candidate.name === tool.data);
   if (handler === undefined) {
     return failDispatch(
       input.callRef,
       tool.data,
-      'tool handler unavailable',
+      toolError('handler_unavailable'),
       'not_found',
       'handler_unavailable',
     );
@@ -504,7 +513,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     return failDispatch(
       input.callRef,
       tool.data,
-      'tool handler ACL drift',
+      toolError('handler_acl_drift'),
       'transient',
       'handler_acl_drift',
     );
@@ -517,7 +526,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     return failDispatch(
       input.callRef,
       tool.data,
-      'tool effect receipt unavailable',
+      toolError('effect_receipt_unavailable'),
       'transient',
       'effect_receipt_unavailable',
     );
@@ -531,7 +540,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     return failDispatch(
       input.callRef,
       tool.data,
-      'tool effect receipt unavailable',
+      toolError('effect_receipt_unavailable'),
       'transient',
       'effect_receipt_unavailable',
     );
@@ -541,7 +550,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     return withTrustedEffect(failDispatch(
       input.callRef,
       tool.data,
-      'tool handler returned invalid result',
+      toolError('invalid_handler_result'),
       'transient',
       'invalid_handler_result',
     ), input.effect);
@@ -565,7 +574,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
       return withTrustedEffect(failDispatch(
         input.callRef,
         tool.data,
-        'tool result failed validation',
+        toolError('invalid_tool_result'),
         'transient',
         'invalid_tool_result',
       ), input.effect);
@@ -581,7 +590,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     return withTrustedEffect(failDispatch(
       input.callRef,
       tool.data,
-      'tool result failed validation',
+      toolError('invalid_tool_result'),
       'transient',
       'invalid_tool_result',
     ), input.effect);
@@ -592,7 +601,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
       return withTrustedEffect(failDispatch(
         input.callRef,
         tool.data,
-        'tool returned oversized error',
+        toolError(finalResult.code, 'The tool failed and its error text was too large to show.'),
         finalResult.code,
         'tool_result_error',
       ), input.effect);
@@ -600,7 +609,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     return withTrustedEffect(failDispatch(
       input.callRef,
       tool.data,
-      error,
+      toolError(finalResult.code, error),
       finalResult.code,
       'tool_result_error',
       finalResult.source_taint,
@@ -611,7 +620,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     return withTrustedEffect(failDispatch(
       input.callRef,
       tool.data,
-      'tool result failed validation',
+      toolError('invalid_tool_result'),
       'transient',
       'invalid_tool_result',
     ), input.effect);
@@ -620,7 +629,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     return withTrustedEffect(failDispatch(
       input.callRef,
       tool.data,
-      'tool result exceeded bound',
+      toolError('result_oversize'),
       'oversize',
       'result_oversize',
     ), input.effect);
@@ -842,9 +851,9 @@ async function runTerminalHooks<Ctx extends ToolDispatcherContext>(
 
 function hookFailure(callId: string, tool: ToolName, error: unknown): DispatchToolResult {
   if (error instanceof HookHaltError) {
-    return failDispatch(callId, tool, error.clientMessage, error.code, reasonFromHook(error.hook));
+    return failDispatch(callId, tool, error.toolError, error.code, reasonFromHook(error.hook));
   }
-  return failDispatch(callId, tool, 'tool hook failed', 'transient', 'hook_halt');
+  return failDispatch(callId, tool, toolError('hook_failed'), 'transient', 'hook_halt');
 }
 
 function failParse(error: string, repaired: false): FailedToolCallParse<false>;
@@ -883,7 +892,7 @@ const offloadResult = (
         tool,
         // Typed enums only - the denied stage/reason stay provable from the trace without any
         // provider content (live QA could not name the exact check before this).
-        `tool result failed the offload guard: ${guarded.check}:${guarded.reason}`,
+        toolError('sanitise_denied', `tool result failed the offload guard: ${guarded.check}:${guarded.reason}`),
         guarded.reason === 'oversize' ? 'oversize' : 'forbidden',
         'sanitise_denied',
         undefined,
@@ -921,20 +930,21 @@ const boundedError = (callId: string, error: string, ctx: ToolDispatcherContext,
 function failDispatch(
   callId: string,
   tool: ToolName | null,
-  error: string,
+  error: ToolError,
   code: ErrorCode,
   reason: ToolDispatchErrorReason,
   sourceTaint?: SourceTaint,
   connect?: ConnectIntent,
   guard?: GuardDiagnostic,
 ): DispatchToolResult {
+  const shaped = { error: error.cause, error_code: error.code, fix: error.fix, retryable: error.retryable };
   const extra = {
     ...(connect === undefined ? {} : { connect }),
     ...(guard === undefined ? {} : { guard }),
   };
   return sourceTaint === 'external'
-    ? { ok: false, call_id: callId, tool, error, code, reason, source_taint: 'external', ...extra }
-    : { ok: false, call_id: callId, tool, error, code, reason, ...extra };
+    ? { ok: false, call_id: callId, tool, ...shaped, code, reason, source_taint: 'external', ...extra }
+    : { ok: false, call_id: callId, tool, ...shaped, code, reason, ...extra };
 }
 
 function withTrustedEffect(

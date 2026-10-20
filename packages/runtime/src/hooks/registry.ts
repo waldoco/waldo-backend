@@ -11,11 +11,13 @@ import type {
   SanitiseResult,
   SessionState,
   SourceTaint,
+  ToolError,
   ToolName,
   TriggerType,
 } from '@waldo/contracts';
 import {
   DEFAULT_HOOK_TIMEOUT_MS,
+  toolError,
   POST_TOOL_USE_PRIORITIES,
   PRE_TOOL_USE_PRIORITIES,
   PRIVILEGED_ACTION_TOOLS,
@@ -567,7 +569,26 @@ export type RunHooksOptions<Ctx> = {
   commitContext?: boolean;
 };
 
+// The typed error a halt hands the model. invalid_args echoes the model's own argument detail,
+// which is its recovery path; every other halt maps to a fixed catalogue entry, so an ACL,
+// sanitiser or approval reason never reaches the model, only a code and a fix it can act on.
+const hookToolError = (hook: string, reason: string, code: ErrorCode): ToolError => {
+  if (reason === TAINT_NEEDS_APPROVAL_REASON) return toolError('taint_needs_approval');
+  if (reason === 'external-tainted privileged action blocked') return toolError('taint_blocked');
+  if (reason === 'privileged action lacks approval') return toolError('approval_denied');
+  if (reason === 'approval check unavailable' || reason === 'approval check failed') return toolError('approval_check_unavailable');
+  if (reason === 'unknown tool') return toolError('unknown_tool');
+  if (hook === 'egress_allowlist_check') return toolError('egress_denied');
+  if (hook === 'acl_check' && code === 'forbidden') return toolError('acl_denied');
+  if (reason.startsWith('scribe:') || reason === 'canary token leaked') return toolError('sanitise_denied');
+  if (code === 'invalid_args') return toolError('invalid_args', reason);
+  if (code === 'auth_failed') return toolError('unauthenticated');
+  if (code === 'rate_limited') return toolError('rate_limited');
+  return toolError(code === 'transient' ? 'hook_failed' : 'hook_denied');
+};
+
 export class HookHaltError extends Error {
+  readonly toolError: ToolError;
   readonly clientMessage: string;
   readonly onErrorPayload: HookPayload;
 
@@ -580,10 +601,8 @@ export class HookHaltError extends Error {
   ) {
     super(`hook ${hook} halted: ${reason}`);
     this.name = 'HookHaltError';
-    // invalid_args carries model-authored arg details the model needs to recover; every other
-    // halt (acl, sanitise, ...) stays opaque so security reasons never reach the model. An egress denial
-    // only says the address cannot be opened, so the model can pick another source instead of stalling.
-    this.clientMessage = code === 'invalid_args' ? reason : hook === 'egress_allowlist_check' ? 'That address cannot be opened. Try another source.' : reason === TAINT_NEEDS_APPROVAL_REASON ? 'This uses content from an email or web page, so it needs the owner\'s approval first. Propose it with propose_action instead of doing it directly.' : 'hook halted';
+    this.toolError = hookToolError(hook, reason, code);
+    this.clientMessage = this.toolError.cause;
     this.onErrorPayload = {
       event: 'OnError',
       error: this.clientMessage,
