@@ -451,7 +451,8 @@ export class RuntimeLLMProvider {
     let spent: SpentTokens = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0 };
     let lastDetail: string | undefined;
 
-    for (const plan of attemptPlan(effectiveRoute, spendCapped)) {
+    const plans = attemptPlan(effectiveRoute, spendCapped);
+    for (const [index, plan] of plans.entries()) {
       input.runScope?.admit();
       if (settledModels.has(modelKey(plan.step))) continue;
       const wait = resendWaits.get(modelKey(plan.step));
@@ -552,7 +553,10 @@ export class RuntimeLLMProvider {
           return invalidResponseFailure(plan.fallback_step, attempts, routingLogs, undefined, gatewayResult.error);
         }
         const resendWait = resendWaitMs(gatewayResult, callTimeLeftMs(input.runScope));
-        if (resendWait === null) settledModels.add(modelKey(plan.step));
+        // While another provider is still ahead in the route, a model gets its short backoff resend but no longer wait:
+        // during a 429 storm the owner gets the next provider's answer instead of sitting out the first one's retry-after.
+        const otherProviderAhead = plans.slice(index + 1).some((later) => later.step.provider !== plan.step.provider);
+        if (resendWait === null || (resendWait > RATE_LIMIT_BACKOFF_MS && otherProviderAhead)) settledModels.add(modelKey(plan.step));
         else if (resendWait > 0) resendWaits.set(modelKey(plan.step), resendWait);
         continue;
       }
