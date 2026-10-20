@@ -47,6 +47,8 @@ describe('live owner memory', () => {
     expect(await s.call('remember', { kind: 'preference', text: 'Prefers coffee', evidence_quote: 'coffee', replaces_id: 1 }, s.ctx('coffee'))).toMatchObject({ ok: true, data: { id: 2, status: 'corrected' } });
     expect(s.store.allClaims().find(c => c.id === 1)?.status).toBe('superseded');
     for (const id of [1, 999]) expect(await s.call('remember', { kind: 'preference', text: 'Chai', evidence_quote: 'chai', replaces_id: id }, s.ctx('chai'))).toMatchObject({ ok: false });
+    // The id as the model reads it in a pinned or recalled line.
+    expect(await s.call('remember', { kind: 'preference', text: 'Prefers chai', evidence_quote: 'chai', replaces_id: 'c2' }, s.ctx('chai'))).toMatchObject({ ok: true, data: { id: 3, status: 'corrected' } });
   });
   it('reads short terms, stopwords and safely quoted FTS without old recall gates', async () => {
     const s = setup();
