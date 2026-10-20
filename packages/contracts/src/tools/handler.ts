@@ -212,6 +212,11 @@ export interface ToolHandler<Args, Result, Ctx> {
   // turn_only_output marks a result that may hold the owner's health values: it reaches the model in the turn that
   // asked and nowhere else. The cross-turn tool ledger and the unfinished-turn flush record a content-free line for it.
   turn_only_output?: true;
+  // proposal_only marks a handler that never performs its effect: it only raises the owner's approval card, which
+  // carries the exact effect and performs it on Do it. The taint gate admits such a call with external arguments
+  // (core build plan H-2), because that card is the human confirm ADR-0049 requires. The dispatcher reads it per call
+  // from the handler it routes to, so a tool name alone never earns it.
+  proposal_only?: true;
   // Absent means always eligible (connect_service must stay offered so an owner can connect).
   eligible?(): ToolEligibility | Promise<ToolEligibility>;
   handle(args: Args, ctx: Ctx): Promise<ToolResult<Result>>;

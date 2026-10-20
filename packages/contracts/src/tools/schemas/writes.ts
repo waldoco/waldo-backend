@@ -26,11 +26,13 @@ export const updateMemoryArgsSchema = z.strictObject({
 });
 export type UpdateMemoryArgs = z.infer<typeof updateMemoryArgsSchema>;
 
+// The owner-confirm route for a privileged action whose arguments came from external content (ADR-0049): the
+// intended tool and its exact arguments are frozen on a card, and on approval the dispatcher replays that one call.
+// The tool name is checked against the tool union by the handler, which also validates args against that tool's schema.
 export const proposeActionArgsSchema = z.strictObject({
-  action_type: z.string().min(1).max(100),
-  description: z.string().min(1).max(1_000),
+  tool: z.string().min(1).max(64),
+  args: z.record(z.string(), z.unknown()),
   reasoning: z.string().min(1).max(500),
-  urgency: z.enum(['low', 'medium', 'high']).default('medium'),
 });
 export type ProposeActionArgs = z.infer<typeof proposeActionArgsSchema>;
 

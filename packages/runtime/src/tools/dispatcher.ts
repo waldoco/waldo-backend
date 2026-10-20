@@ -38,6 +38,7 @@ import {
   type HookRuntimeContext,
 } from '../hooks/registry';
 import { guardForOffload } from '../scribe/sanitiser';
+import { sha256Hex, stableJson } from '../context-composer/canonical';
 import type { ToolOutputStore } from '../conversation/tool-output-store';
 
 export type RuntimeToolCall = {
@@ -150,6 +151,12 @@ const DEFAULT_MAX_RESULT_JSON_CHARS = 16_384;
 // store outputs, else cut, so the model always sees a bounded head.
 export const MAX_TOOL_ERROR_CHARS = 2_000;
 
+// The identity of a tool call's arguments: sha256 over canonical JSON, so a proposal and its replay agree on the
+// bytes whatever key order the model used. null when the arguments cannot be canonicalised (never a plain JSON object).
+export const argumentDigest = async (args: unknown): Promise<string | null> => {
+  try { return await sha256Hex(stableJson(args)); } catch { return null; }
+};
+
 export async function parseToolCalls(
   raw: unknown,
   options: ParseToolCallsOptions = {},
@@ -224,6 +231,19 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     );
   }
 
+  // An approval token names one frozen call. A call that is not that call fails closed here, before any hook
+  // could read the token and admit it.
+  if (ctx.approvedTaintedAction !== undefined && (ctx.approvedTaintedAction.tool !== tool.data || await argumentDigest(call.args) !== ctx.approvedTaintedAction.args_digest)) {
+    return failDispatch(call.id, tool.data, toolError('approval_denied', 'The approval covers a different tool call.'), 'forbidden', 'approval_denied');
+  }
+
+  // The card-only marker is the handler's own declaration, carried to the hooks for this call alone; a context that
+  // arrives already carrying one was not built here and fails closed.
+  if (ctx.proposalOnlyCall !== undefined) {
+    return failDispatch(call.id, tool.data, toolError('approval_denied'), 'forbidden', 'approval_denied');
+  }
+  const hookCtx: Ctx = handler.proposal_only === true ? { ...ctx, proposalOnlyCall: tool.data } : ctx;
+
   let preToolPayload: Extract<HookPayload, { event: 'PreToolUse' }> = {
     event: 'PreToolUse',
     tool: tool.data,
@@ -233,7 +253,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     const nextPayload = await runTerminalHooks(
       'PreToolUse',
       preToolPayload,
-      ctx,
+      hookCtx,
       options.extraHooks,
     );
     if (nextPayload.event !== 'PreToolUse' || nextPayload.tool !== tool.data) {

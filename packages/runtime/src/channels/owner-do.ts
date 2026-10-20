@@ -158,6 +158,10 @@ import { bindWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, f
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
 import { sendMessageHandler } from '../tools/live/messaging';
+import { approvalReplayContext, proposeActionHandler, taintedActionReplay } from '../tools/live/propose-action';
+import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
+import { sanitise } from '../scribe/sanitiser';
+import { ownerToolApproval } from './owner-turn';
 import { createTelegramFileDownloader } from './telegram-media';
 import { selectTranscriber } from '../llm/transcriber';
 import { TURN_TIMEOUT_MS, TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './telegram-listener';
@@ -2819,6 +2823,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // A decision's effect follows the proposal's destination, not the surface that decided. Other
     // surfaces resolve lazily at decision time; the app is never a send destination.
     const destination = (name: string) => name === channel && channel !== 'app' ? { call: routedCall, owner } : name === 'telegram' || name === 'whatsapp' ? this.setup(name) : null;
+    // The owner-turn tool set, captured where the responder is built: an approved tainted action replays through it.
+    let replayHandlers: DispatchToolOptions<ToolDispatcherContext>['handlers'] = [];
     const desk = approvalDesk(storage.sql, {
       effects, googleTasks: () => googleTasks, currentRunRef, appReplyRef: () => this.activeApp?.id, ownerRef, ownerRefAliases,
       // iMessage is plain text and can never approve: its turns use the app's desk rules, so cards show only in the app.
@@ -2849,6 +2855,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (!providerId) throw new Error('message provider receipt unavailable');
         return { provider_id: String(providerId) };
       },
+      // An approved tainted action (propose_action) replays its frozen call once through the dispatcher, with this
+      // owner's own tool set, approval line, sanitiser and egress allowlist.
+      replayTaintedAction: (proposal, approvalRef) => taintedActionReplay({ handlers: () => replayHandlers, context: () => approvalReplayContext({ authenticatedUserId: ownerRef(), hasApproval: ownerToolApproval, sanitise, egressAllowlist: parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST) }) })(proposal, approvalRef),
       // Approved MCP calls run post-approval, outside any turn. The result is external content:
       // the owner gets a bounded line, and it never re-enters model context.
       mcpCall: async (proposal,intent) => {
@@ -3074,7 +3083,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       gmail: gmailPushBook(identity).miss(), calendar: calendarPushBook(identity).miss(), timezone: clock.timezone });
     const responder = createTelegramResponder(
       key, { ...indexedConversationStore(kv, episodes, () => Date.now()), recalls: (entryId: string) => recallReach(identity, identity.get<string>('owner_principal_ref'), null)(entryId) }, memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...workspaceTools, ...reminderHandlers(book), ...healthLogHandlers(healthLogs), getHealthHandler(healthRead, clock), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
+      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, replayHandlers = [...workspaceTools, ...reminderHandlers(book), ...healthLogHandlers(healthLogs), getHealthHandler(healthRead, clock), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
         // Owner-ruled OTP parity (September 27, 2026): the extracted artifact goes to the owner
         // as a direct message - fixed copy, no model involvement, and the send is never logged
         // with the artifact text (kinds + sender only; the code itself touches no store).
@@ -3113,7 +3122,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (!ownerKey) throw new ClosedRunError();
         browserSources.capture(payload, ownerKey);
         const id = await desk.proposeBrowserSubmit(payload); await context.assertTaskSourceCurrent(); return id;
-      }, placement: id => desk.placement(id), stopAdmission: async context => { await this.ownerBrowser.current(context)(); this.ownerBrowser.stop(); await this.browserTasks.revoke(); } }), () => this.browserTasks.principal)), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), useMacHandler({ request: async (input, context) => {
+      }, placement: id => desk.placement(id), stopAdmission: async context => { await this.ownerBrowser.current(context)(); this.ownerBrowser.stop(); await this.browserTasks.revoke(); } }), () => this.browserTasks.principal)), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), readMcpToolHandler(this.env.WALDO_MCP_SERVERS, mcpGoogleAuth, this.env.MCP_READ_INTENTS === '1'), sendMessageHandler(desk), proposeActionHandler(desk, { replayable: tool => replayHandlers.some(handler => handler.name === tool), raisesOwnCard: tool => replayHandlers.some(handler => handler.name === tool && handler.proposal_only === true) }), useMacHandler({ request: async (input, context) => {
         // A Mac is reached only from an owner-initiated turn of this exact owner DO, through that
         // owner's single paired device that declared the requested class. Identity is re-read after
         // every await so an unlink or rebind mid-turn cannot redirect the request.
