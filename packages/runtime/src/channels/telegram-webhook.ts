@@ -5,7 +5,6 @@ import {linkCodeHash} from '../identity/owner-directory';
 
 export type TelegramWebhookEnv = Readonly<{
   OWNER_DO?: DurableObjectNamespace;
-  RUN_LOOP_DO?: DurableObjectNamespace<import('../run-loop/do').RunLoopDO>;
   // Held off until connected common-task execution and recovery acceptance.
   COMMON_BROWSER_REGISTRATION?: string;
   COMMON_OWNER_TASKS?: string;

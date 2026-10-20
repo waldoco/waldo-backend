@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildSessionState, getContextArgsSchema, sendMessageArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type LLMTool, type LLMToolTurn } from '@waldo/contracts';
 import { capToolOutput, runToolLoop, TOOL_OUTPUT_LIMIT, WARN_WINDOW_ROUNDS } from '../src/conversation/tool-loop';
 import { googleHandlers } from '../src/tools/live/google';
-import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
+import { resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
 import { getContextHandler } from '../src/tools/live/get-context';
 import { webSearchHandler } from '../src/tools/live/web-search';
 

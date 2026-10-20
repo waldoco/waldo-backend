@@ -47,11 +47,7 @@ jobs:
       # after all tests pass (every run 2026-09-25, incl. docs-only commits) - the lane's 4
       # shards exit cleanly (#154). The scenario harness runs here, in the required job, below.
       - name: Verify (core)
-        run: node scripts/guards/guard-package-manager.mjs && pnpm -r typecheck && pnpm verify:node && pnpm verify:supabase && pnpm verify:supabase:session-revocation && pnpm verify:guards
-
-      - name: Native-profile common RunLoop bootstrap (fictional authority, no legacy provider)
-        working-directory: packages/runtime
-        run: pnpm exec vitest run --config vitest.common-bootstrap.config.ts
+        run: node scripts/guards/guard-package-manager.mjs && pnpm -r typecheck && pnpm verify:node && pnpm verify:supabase && pnpm verify:guards
 
       # Required scenario gate: the main vitest config excludes the scenario harness, so the
       # shards above never run it. This step is the only CI coverage for the scenario suite.

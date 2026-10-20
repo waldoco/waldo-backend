@@ -4,7 +4,7 @@ import { expect,it } from 'vitest';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import { createScopedCuratedSkillCapability } from '../src/skills/curated-host';
 import { CuratedOwnerSkills,CURATED_PREPARATION_SKILL } from '../src/skills/curated-owner';
-import { localTrustedBriefScheduleInput } from '../src/run-loop/adapters';
+import { localTrustedBriefScheduleInput } from '../src/llm/run-loop-adapters';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
 
 for(const kind of ['physical_retry'] as const){

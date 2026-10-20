@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildSessionState, type LLMTool, type LLMToolCall } from '@waldo/contracts';
 import { BROWSING_UNAVAILABLE, runToolLoop, type ToolLoopEvent } from '../src/conversation/tool-loop';
 import { OPEN_PUBLIC } from '../src/hooks/egress-policy';
-import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
+import { resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
 import { getContextHandler } from '../src/tools/live/get-context';
 import { browseActHandler, browsePageHandler } from '../src/tools/live/browser';
 import { webSearchHandler } from '../src/tools/live/web-search';

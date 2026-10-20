@@ -9,7 +9,7 @@ import {
   localTrustedBriefScheduleInput,
   localTrustedBriefTurnSnapshot,
   resolveRunLoopAdapters,
-} from '../src/run-loop/adapters';
+} from '../src/llm/run-loop-adapters';
 import { JoinedConversationPath } from '../src/conversation/joined-path';
 const fixture = localTrustedBriefScheduleInput();
 const accepted = acceptTrustedInvocation(fixture.admission);

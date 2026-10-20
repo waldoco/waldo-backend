@@ -21,7 +21,7 @@ import type { LoopEventLike } from '../src/hooks/claim-hook';
 import { evaluateTurnClaims, receiptsFromLoopEvents } from '../src/hooks/claim-hook';
 import { receiptLine } from '../src/hooks/receipt-line';
 import { sanitise } from '../src/scribe/sanitiser';
-import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
+import { resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
 const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' });
