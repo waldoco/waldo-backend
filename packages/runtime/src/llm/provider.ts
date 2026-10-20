@@ -164,6 +164,24 @@ export function routedGateway(adapters: Readonly<Partial<Record<Provider, LLMGat
   };
 }
 
+// The misses that say something about the provider rather than the request: an oversize or malformed request fails
+// the same way on a healthy provider, so it must not open the breaker for the owner's other turns.
+const PROVIDER_HEALTH_CODES: ReadonlySet<ErrorCode> = new Set<ErrorCode>(['transient', 'rate_limited', 'auth_failed', 'forbidden']);
+
+// The same breaker, telling its caller when a recorded failure opens a provider. The breaker may be shared across turns,
+// so the caller learns of the opening on the call that caused it and can log it under that call's trace.
+export function observedBreaker(breaker: CircuitBreaker, onOpen: (provider: Provider) => void): CircuitBreaker {
+  return {
+    isOpen: (provider) => breaker.isOpen(provider),
+    recordSuccess: (provider) => breaker.recordSuccess(provider),
+    recordFailure: (provider) => {
+      const wasOpen = breaker.isOpen(provider);
+      breaker.recordFailure(provider);
+      if (!wasOpen && breaker.isOpen(provider)) onOpen(provider);
+    },
+  };
+}
+
 export type RouteSpendState = {
   spent_cents_today: number;
   cap_cents: number | null;
@@ -520,7 +538,7 @@ export class RuntimeLLMProvider {
 
       if (!gatewayResult.ok) {
         lastDetail = gatewayResult.error;
-        this.circuitBreaker.recordFailure(plan.step.provider);
+        if (PROVIDER_HEALTH_CODES.has(gatewayResult.code)) this.circuitBreaker.recordFailure(plan.step.provider);
         attempts.push({
           outcome: 'failure',
           model: plan.step.model,
