@@ -1,5 +1,5 @@
 // The owner's own calls on the labelled replies, and the agreement between the voice judge and them. The shipped set
-// (voice-labels-v0.jsonl) is Claude's draft: agreement with it says how the judge compares with Claude's reading, not
+// (voice-labels-v0.jsonl) is a set of drafts: agreement with it says how the judge compares with the draft labels, not
 // with the owner's. An owner label is a person's call on the same reply, kept in its own file keyed by the draft's id,
 // so the draft file never changes and the owner can label blind, without the draft's call in front of them. No such
 // file ships: every row in it must be a person's.
@@ -79,12 +79,12 @@ export const labellingSheet = (drafts: readonly VoiceLabel[]): string => [
 ].join('\n');
 
 // The judge's verdicts scored twice, and never blended: against the owner's calls (the figure that matters) and against
-// Claude's drafts (a check that the judge reads the six tests as Claude does). `enough` says whether the owner set is
+// the draft labels (a check that the judge reads the six tests as the drafter did). `enough` says whether the owner set is
 // big enough to trust the kappa; blind counts the calls made on the sheet, apart from drafts signed in place.
 export const agreementReport = (drafts: readonly VoiceLabel[], decisions: readonly OwnerLabel[], verdicts: readonly LabelledVerdict[]) => {
   const owner = ownerLabelled(drafts, decisions);
   return {
     against_owner: { owner_labels: owner.length, blind: decisions.length, enough: owner.length >= OWNER_LABELS_NEEDED, ...voiceAgreement(owner, verdicts) },
-    against_claude_drafts: voiceAgreement(drafts, verdicts),
+    against_drafts: voiceAgreement(drafts, verdicts),
   };
 };

@@ -94,7 +94,7 @@ describe('judge agreement against owner labels', () => {
   it('reports no kappa against the owner until a person has labelled something, and still reports the drafts apart', () => {
     const report = agreementReport(drafts, [], verdictsLike(drafts, new Set()));
     expect(report.against_owner).toMatchObject({ owner_labels: 0, blind: 0, enough: false, kappa: null });
-    expect(report.against_claude_drafts).toMatchObject({ labels: drafts.length, kappa: 1 });
+    expect(report.against_drafts).toMatchObject({ labels: drafts.length, kappa: 1 });
   });
 
   it('computes kappa from the owner\'s calls alone: a judge that matches the drafts can still disagree with the owner', () => {
@@ -103,7 +103,7 @@ describe('judge agreement against owner labels', () => {
       ...((index % 2 === 0 ? label.label === 'pass' : label.label === 'fail') ? { failed_tests: label.failed_tests ?? ['kind'] } : {}),
     })).join('\n'), drafts);
     const report = agreementReport(drafts, decisions, verdictsLike(drafts, new Set()));
-    expect(report.against_claude_drafts.kappa).toBe(1);
+    expect(report.against_drafts.kappa).toBe(1);
     expect(report.against_owner.owner_labels).toBe(drafts.length);
     expect(report.against_owner.blind).toBe(drafts.length);
     expect(report.against_owner.kappa!).toBeLessThan(0.5);

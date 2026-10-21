@@ -7,7 +7,7 @@
 //                                judge shape, so the two can be compared on the same labels.
 // A live run spends money: it runs only when the owner has approved the spend and set the key.
 // The verdicts are scored against the owner's labels (voice-owner-labels.jsonl, written from the sheet that
-// `pnpm eval:voice-labelling-sheet` prints) and, apart, against Claude's drafts; until the owner has labelled, the owner
+// `pnpm eval:voice-labelling-sheet` prints) and, apart, against the draft labels; until the owner has labelled, the owner
 // figure is empty rather than borrowed from the drafts.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { callBudget } from './budget';
