@@ -17,7 +17,7 @@ const SECRET = 'router-secret-fixture-0000000000';
 const OWNER_ID = '4a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
 const NOW = Date.parse('2026-10-21T03:30:00Z'); // 09:00 in Kolkata
 const LEAKS = ['47.3', '37.9', '61.4', '52.6'];
-const REVIEW: CalendarItem = { id: 'gcal-review-1', title: 'Quarterly board review', status: 'confirmed', start: '2026-10-21T14:00:00+05:30', end: '2026-10-21T15:30:00+05:30', all_day: false, description: null, etag: 'r1' };
+const REVIEW: CalendarItem = { id: 'gcal-review-1', title: 'Quarterly board review', status: 'confirmed', start: '2026-10-21T14:00:00+05:30', end: '2026-10-21T15:30:00+05:30', all_day: false, etag: 'r1' };
 const ROW = {
   context: {
     id: 'ctx-1', day: '2026-10-21', compiled_at: '2026-10-21T03:00:00Z', basis: [{ source: 'whoop', consent_epoch: 1 }], confidence: 0.8, freshness: 'fresh', drivers: [], tags: [],
