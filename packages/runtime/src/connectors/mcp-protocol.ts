@@ -162,4 +162,3 @@ export const mcpRequest = async (fetcher: typeof fetch, endpoint: McpEndpoint, m
   if (legacyShape) return { result: resultOf(await legacy(fetcher, endpoint, method, params, limits)), era: 'legacy' };
   return { result: resultOf(sent), era: 'modern' };
 };
-
