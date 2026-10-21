@@ -34,10 +34,10 @@ const respond = (status: number, body = '', headers: Record<string, string> = {}
 
 describe('guardedFetch', () => {
   it('follows a GET redirect only to another public host, re-checking each hop', async () => {
-    const fetcher = vi.fn(async (url: RequestInfo | URL) => String(url).includes('first') ? respond(302, '', { location: 'https://second.example.com/doc' }) : respond(200, '{"ok":true}'));
+    const fetcher = vi.fn(async (url: RequestInfo | URL, _init?: RequestInit) => String(url).includes('first') ? respond(302, '', { location: 'https://second.example.com/doc' }) : respond(200, '{"ok":true}'));
     const out = await guardedFetch(fetcher as typeof fetch, 'https://first.example.com/doc', {}, { redirects: 2, maxBytes: 1000, timeoutMs: 1000 });
     expect(out).toMatchObject({ status: 200, text: '{"ok":true}', url: 'https://second.example.com/doc' });
-    expect(fetcher.mock.calls.map(([, init]) => (init as RequestInit).redirect)).toEqual(['manual', 'manual']);
+    expect(fetcher.mock.calls.map(([, init]) => init?.redirect)).toEqual(['manual', 'manual']);
   });
   it('refuses a redirect into the metadata address (SSRF by redirect)', async () => {
     const fetcher = vi.fn(async () => respond(307, '', { location: 'https://169.254.169.254/latest/meta-data/iam' }));

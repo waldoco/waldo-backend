@@ -67,6 +67,7 @@ const expectedMigrations = [
   '20261017100000_waldo_console_auth_throttle_window.sql',
   '20261017120000_waldo_whatsapp_text_first_link.sql',
   '20261020120000_waldo_cost_ledger.sql',
+  '20261021120000_waldo_mcp_connections.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);
