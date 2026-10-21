@@ -118,7 +118,7 @@ export type SurfacePresentation = Readonly<{
 // The function list names the callable tools each round and narrows when a round withholds some, so the prompt does not
 // repeat it; only an empty set is said, because an absent function list says nothing.
 // With tool search on, a provider may show the model only the core tools, so the categories it can load are named here.
-export const TOOL_SEARCH_LINE = "Tools you need less often load through tool search when a task calls for them: calendar changes and Google Tasks, sending mail and contacts, acting on web pages and Drive, memory upkeep and past conversations, health logs, reminders and follow-ups, settings and standing orders, skills, workspace files, artifacts, and actions that reach beyond this chat. Search for the one you need rather than saying you can't do it.";
+export const TOOL_SEARCH_LINE = "Less-used tools load through tool search: calendar changes and Google Tasks, sending mail and contacts, web page actions and Drive, memory upkeep and past conversations, health logs, reminders, settings and standing orders, skills, workspace files, artifacts, and actions beyond this chat. Search for the one you need before saying you can't do something.";
 
 export function messagingSystemPrompt(tools: readonly string[], presentation?: SurfacePresentation, toolSearch = false): string {
   const tail = [...(tools.length > 0 && toolSearch ? [TOOL_SEARCH_LINE] : []), ...(tools.length === 0 ? ['Tools available in this chat: none.'] : [])];

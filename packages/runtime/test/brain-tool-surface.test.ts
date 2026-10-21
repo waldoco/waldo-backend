@@ -11,6 +11,8 @@ import { claimStore } from '../src/memory/claims';
 import { MESSAGING_BEHAVIOR, TOOL_SEARCH_LINE } from '../src/prompt/messaging-behavior';
 import { BRAIN_NAMESPACES, TOOL_RECORDS, brainTools } from '../src/tools/records';
 import { ensureSchema } from '../src/tracer/schema';
+import { toolDefinitions } from '../src/conversation/tool-loop';
+import { browseActHandler, browsePageHandler } from '../src/tools/live/browser';
 
 // The brain's tool surface on a real owner turn: an app message to an owner with every Google feature connected, so the
 // tool list is the production one. The scripted model records the request; both adapters then build their wire bodies
@@ -153,18 +155,29 @@ describe('the brain tool surface', () => {
     expect(anthropic[0]).toEqual({ type: 'tool_search_tool_bm25_20251119', name: 'tool_search_tool_bm25' });
     expect(anthropic.some((tool) => tool.strict !== undefined)).toBe(false);
 
+    // This owner has no browser binding, so browse_page (core) and browse_act (web) are not offered; a production owner
+    // with browsing has both. They are added here with their own definitions so the figure covers that owner too.
+    const browse = brainTools(toolDefinitions([browsePageHandler(undefined, undefined, undefined), browseActHandler(undefined, undefined, undefined)]), true).tools!;
+    const withBrowse = { ...request, tools: [...request.tools!, ...browse], tool_search: { namespaces: { ...request.tool_search!.namespaces, web: BRAIN_NAMESPACES.web } } };
+    const openAIBrowse = (await openAIBody(withBrowse)).tools as WireTool[];
+    const anthropicBrowse = (await anthropicBody(withBrowse)).tools as WireTool[];
+    expect(openAIBrowse.filter((tool) => tool.type === 'function').map((tool) => tool.name)).toContain('browse_page');
     const report = {
       tools: request.tools!.length,
       before_bytes: bytes(off.tools), before_tokens_est: Math.round(bytes(off.tools) / BYTES_PER_TOKEN_EST),
       openai_visible_bytes: bytes(openAIVisible(openAI)), openai_visible_tokens_est: Math.round(bytes(openAIVisible(openAI)) / BYTES_PER_TOKEN_EST),
       openai_calendar_loaded_tokens_est: Math.round((bytes(openAIVisible(openAI)) + bytes(namespaces.find((namespace) => namespace.name === 'calendar')!.tools)) / BYTES_PER_TOKEN_EST),
       anthropic_visible_bytes: bytes(anthropicVisible(anthropic)), anthropic_visible_tokens_est: Math.round(bytes(anthropicVisible(anthropic)) / BYTES_PER_TOKEN_EST),
-      core: functions.map((tool) => tool.name), namespaces: Object.fromEntries(namespaces.map((namespace) => [namespace.name, namespace.tools!.map((tool) => tool.name)])),
+      browsing_openai_visible_bytes: bytes(openAIVisible(openAIBrowse)), browsing_openai_visible_tokens_est: Math.round(bytes(openAIVisible(openAIBrowse)) / BYTES_PER_TOKEN_EST),
+      browsing_anthropic_visible_bytes: bytes(anthropicVisible(anthropicBrowse)), browsing_anthropic_visible_tokens_est: Math.round(bytes(anthropicVisible(anthropicBrowse)) / BYTES_PER_TOKEN_EST),
+      core_bytes: Object.fromEntries(openAIBrowse.filter((tool) => tool.type === 'function').map((tool) => [tool.name, bytes(tool)])), namespaces: Object.fromEntries(namespaces.map((namespace) => [namespace.name, namespace.tools!.map((tool) => tool.name)])),
       strict: strict.filter((tool) => tool.strict === true).length, non_strict: strict.filter((tool) => tool.strict !== true).map((tool) => tool.name),
     };
     console.log(`BRAIN_TOOL_SURFACE ${JSON.stringify(report)}`);
     expect(report.openai_visible_tokens_est).toBeLessThan(4_000);
     expect(report.anthropic_visible_tokens_est).toBeLessThan(4_000);
+    expect(report.browsing_openai_visible_tokens_est).toBeLessThan(4_000);
+    expect(report.browsing_anthropic_visible_tokens_est).toBeLessThan(4_000);
     expect(report.before_tokens_est).toBeGreaterThan(report.openai_visible_tokens_est * 2);
   });
 

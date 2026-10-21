@@ -1,8 +1,10 @@
 // OpenAI strict function calling (Structured Outputs, "Supported schemas"): every object lists all its properties as
 // required and sets additionalProperties false, an optional field becomes a union with null, the root is an object,
 // and only a documented subset of JSON Schema is accepted; a schema outside it is a request error. A tool whose schema
-// cannot be shown to sit inside that subset is sent non-strict. The tool's own schema still validates every call after
-// it arrives, so a constraint stripped here (pattern, an unlisted format, a default) is still enforced.
+// cannot be shown to sit inside that subset is sent non-strict. A pattern is dropped although the subset allows one:
+// zod writes it in JavaScript regex syntax, the provider compiles only a subset of regex, and a pattern it cannot compile
+// fails the whole request. The tool's own schema still validates every call after it arrives, so a constraint dropped
+// here (a pattern, an unlisted format, a default) is still enforced.
 type Json = Record<string, unknown>;
 
 const KEPT = new Set([

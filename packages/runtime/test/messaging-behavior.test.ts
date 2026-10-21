@@ -1,7 +1,7 @@
 // Prompt contract checks: what the model is told, on each surface. They cannot show what a live model does with it;
 // the everyday-errands eval judges that after deploy.
 import { describe, expect, it } from 'vitest';
-import { MESSAGING_BEHAVIOR, messagingSystemPrompt, ownerClockLine, surfacePresentationPrompt, VOICE, VOICE_VERSION, WALDO_VOCABULARY, type SurfacePresentation } from '../src/prompt/messaging-behavior';
+import { MESSAGING_BEHAVIOR, messagingSystemPrompt, ownerClockLine, surfacePresentationPrompt, TOOL_SEARCH_LINE, VOICE, VOICE_VERSION, WALDO_VOCABULARY, type SurfacePresentation } from '../src/prompt/messaging-behavior';
 import { sanitise, sanitiseVerifyOnly } from '../src/scribe/sanitiser';
 
 const presentation = (surface: string, approval: SurfacePresentation['delivery']['approval']): SurfacePresentation =>
@@ -207,6 +207,17 @@ describe('the rules that pulled against each other are gone', () => {
   // 2,500 bytes), to 18,803. Rule pruning against the eval gate is where the next cuts come from.
   it('keeps every delivered behaviour text under 18,900 bytes', () => {
     expect(Math.max(...prompts().map(([, prompt]) => bytes(prompt)))).toBeLessThanOrEqual(18_900);
+  });
+
+  // With tool search on, one line names what the deferred namespaces hold; it replaces about 40 KB of tool definitions
+  // sent every round, and is the only text on-mode adds.
+  it('adds only the tool-search line with tool search on', () => {
+    for (const [surface, prompt] of prompts()) {
+      const on = messagingSystemPrompt(HOTEL_TURN_TOOLS, SURFACES.find((item) => item.surface === surface), true);
+      expect(bytes(on) - bytes(prompt), surface).toBe(bytes(TOOL_SEARCH_LINE) + 2);
+      expect(bytes(on), surface).toBeLessThanOrEqual(18_900 + bytes(TOOL_SEARCH_LINE) + 2);
+    }
+    expect(bytes(TOOL_SEARCH_LINE)).toBeLessThanOrEqual(400);
   });
 
   it.each(prompts())('%s: passes the system-prompt sanitiser unchanged', (_surface, prompt) => {

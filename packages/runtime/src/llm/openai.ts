@@ -149,8 +149,9 @@ function functionTools(request: LLMGatewayRequest['request']): OpenAI.Responses.
   };
   const namespaces = new Map<string, unknown[]>();
   const core: unknown[] = [];
+  const called = calledWithoutLoading(request);
   for (const tool of tools) {
-    if (tool.defer_loading && tool.namespace && request.tool_search.namespaces[tool.namespace]) {
+    if (tool.defer_loading && tool.namespace && request.tool_search.namespaces[tool.namespace] && !called.has(tool.name)) {
       const members = namespaces.get(tool.namespace) ?? [];
       members.push(strictFunction(tool, true));
       namespaces.set(tool.namespace, members);
@@ -162,6 +163,30 @@ function functionTools(request: LLMGatewayRequest['request']): OpenAI.Responses.
     ...[...namespaces].map(([name, members]) => ({ type: 'namespace', name, description: request.tool_search!.namespaces[name], tools: members })),
     ...(namespaces.size ? [{ type: 'tool_search' }] : []),
   ] as unknown as OpenAI.Responses.Tool[];
+}
+
+// A deferred function the replayed history calls without the search output that loaded it goes up front: a round
+// another provider ran is rebuilt from its call record with no namespace, and a trimmed history can drop the round whose
+// search loaded it. Only then does the list change; a turn on this provider alone replays its searches.
+function calledWithoutLoading(request: LLMGatewayRequest['request']): Set<string> {
+  const loaded = new Set<string>();
+  const called = new Set<string>();
+  const rebuilt = new Set<string>();
+  const replayed = new Set<string>();
+  for (const turn of request.tool_turns ?? []) {
+    for (const item of (turn.prior_items ?? []).filter((prior) => outputItemProvider(prior) === OPENAI_PROVIDER)) {
+      if (item.type === 'function_call' && typeof item.call_id === 'string') replayed.add(item.call_id);
+      if (item.type !== 'tool_search_output' || !Array.isArray(item.tools)) continue;
+      for (const found of item.tools as Array<{ type?: unknown; name?: unknown }>) {
+        if (typeof found.name !== 'string') continue;
+        if (found.type === 'namespace') for (const tool of request.tools ?? []) { if (tool.namespace === found.name) loaded.add(tool.name); }
+        else loaded.add(found.name);
+      }
+    }
+    called.add(turn.call.name);
+    if (!replayed.has(turn.call.call_id)) rebuilt.add(turn.call.name);
+  }
+  return new Set([...called].filter((name) => rebuilt.has(name) || !loaded.has(name)));
 }
 
 // The original parameters of each function sent strict, so a call's strict nulls can be turned back into absent fields.

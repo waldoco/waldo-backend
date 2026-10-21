@@ -495,7 +495,7 @@ describe('OpenAIResponsesAdapter tool search', () => {
     expect(sent.tools).toEqual([
       { type: 'function', name: 'get_context', description: 'Current time', parameters: { type: 'object', properties: {}, required: [], additionalProperties: false }, strict: true },
       { type: 'namespace', name: 'calendar', description: 'Calendar changes and free time.', tools: [
-        // The pattern is outside the strict subset and is dropped; the tool's own schema still checks it on dispatch.
+        // The pattern is dropped (JavaScript regex syntax the provider may not compile); the tool's own schema checks it on dispatch.
         { type: 'function', name: 'query_availability', description: 'Free and busy time', strict: true, defer_loading: true, parameters: {
           type: 'object', properties: { day: { type: 'string', format: 'date' }, note: { anyOf: [{ type: 'string' }, { type: 'null' }] } }, required: ['day', 'note'], additionalProperties: false } },
         // A free-form record cannot be strict, so it goes as it is.
@@ -534,5 +534,16 @@ describe('OpenAIResponsesAdapter tool search', () => {
     expect((bodies[0]!.input as unknown[]).slice(1)).toEqual([search, loaded, call, { type: 'function_call_output', call_id: 'c1', output: '{"free":true}' }]);
     const { namespace: _namespace, ...plainCall } = call;
     expect((bodies[1]!.input as unknown[]).slice(1)).toEqual([plainCall, { type: 'function_call_output', call_id: 'c1', output: '{"free":true}' }]);
+  });
+
+  it('sends a deferred function up front when a round another provider ran called it, so its rebuilt call has a definition', async () => {
+    let sent: { tools?: Array<{ type: string; name?: string; tools?: Array<{ name: string }> }>; input?: unknown[] } = {};
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async (body: typeof sent) => { sent = body; return { id: 'r', output_text: 'ok', output: [], usage: { input_tokens: 1, output_tokens: 1 } }; }) });
+    const base = searchRequest();
+    const block = { type: 'tool_use', id: 'c1', name: 'query_availability', input: { day: '2030-11-04' } };
+    await adapter.complete({ ...base, request: { ...base.request, tool_turns: [{ call: { call_id: 'c1', name: 'query_availability', arguments: '{"day":"2030-11-04"}' }, output: 'free', prior_items: [{ type: 'tool_use', provider: 'anthropic', block }] }] } });
+    expect(sent.tools!.filter((tool) => tool.type === 'function').map((tool) => tool.name)).toEqual(['get_context', 'query_availability']);
+    expect(sent.tools!.find((tool) => tool.type === 'namespace')!.tools!.map((tool) => tool.name)).toEqual(['free_form']);
+    expect(sent.input!.slice(1)).toEqual([{ type: 'function_call', call_id: 'c1', name: 'query_availability', arguments: '{"day":"2030-11-04"}' }, { type: 'function_call_output', call_id: 'c1', output: 'free' }]);
   });
 });

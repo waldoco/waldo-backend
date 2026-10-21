@@ -225,4 +225,25 @@ describe('AnthropicMessagesAdapter tool search', () => {
     expect(result).toMatchObject({ ok: true, data: { tool_calls: [{ call_id: 'c1', name: 'query_availability', arguments: '{"day":"2030-11-04"}' }] } });
     if (result.ok) expect(result.data.tool_calls).toHaveLength(1);
   });
+
+  it('sends a deferred tool up front when the history calls it without the search that loaded it', async () => {
+    const { bodies, adapter } = recording([reply([{ type: 'text', text: 'Done.' }])]);
+    const base = gatewayRequest();
+    const deferred = (body: Record<string, unknown>) => (body.tools as Array<{ name: string; defer_loading?: boolean }>).find((tool) => tool.name === 'query_availability')!.defer_loading;
+    // OpenAI ran the round: its search items cannot be replayed here, so the call is rebuilt as plain tool_use.
+    const openAIRound = [{ call: turns[0]!.call, output: 'free', prior_items: [
+      { type: 'tool_search_call', id: 'ts_1', execution: 'server', status: 'completed', arguments: { query: 'free time' } },
+      { type: 'tool_search_output', id: 'tso_1', execution: 'server', status: 'completed', tools: [{ type: 'namespace', name: 'calendar' }] },
+      { type: 'function_call', call_id: 'c1', name: 'query_availability', namespace: 'calendar', arguments: '{"day":"2030-11-04"}' },
+    ] }];
+    // A trimmed history kept the call but dropped the round whose search loaded it.
+    const trimmed = [{ ...turns[0]!, prior_items: [{ type: 'tool_use', provider: ANTHROPIC_PROVIDER, block: use }] }];
+    await adapter.complete({ ...base, request: { ...base.request, tools, tool_search, tool_turns: openAIRound } });
+    await adapter.complete({ ...base, request: { ...base.request, tools, tool_search, tool_turns: trimmed } });
+    await adapter.complete({ ...base, request: { ...base.request, tools, tool_search, tool_turns: turns } });
+    expect(deferred(bodies[0]!)).toBeUndefined();
+    expect((bodies[0]!.messages as unknown[]).slice(1, 2)).toEqual([{ role: 'assistant', content: [use] }]);
+    expect(deferred(bodies[1]!)).toBeUndefined();
+    expect(deferred(bodies[2]!)).toBe(true);
+  });
 });

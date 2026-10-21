@@ -205,6 +205,28 @@ function toolInput(args: string): Record<string, unknown> {
   }
 }
 
+// A deferred tool the replayed history calls without the search result that loaded it goes up front: a round another
+// provider ran is rebuilt as plain tool_use, and a trimmed history can drop the round whose search loaded it. Only then
+// does the list change; a turn on this provider alone replays its searches.
+function calledWithoutLoading(request: LLMRequest): Set<string> {
+  const loaded = new Set<string>();
+  const called = new Set<string>();
+  const rebuilt = new Set<string>();
+  for (const round of toolRounds(request.tool_turns ?? [])) {
+    const blocks = round.prior.flatMap((item) => outputItemProvider(item) === ANTHROPIC_PROVIDER && item.block ? [item.block as { type?: unknown; id?: unknown; content?: { tool_references?: Array<{ tool_name?: unknown }> } }] : []);
+    for (const block of blocks) {
+      if (block.type !== 'tool_search_tool_result') continue;
+      for (const reference of block.content?.tool_references ?? []) if (typeof reference.tool_name === 'string') loaded.add(reference.tool_name);
+    }
+    const replayed = new Set(blocks.flatMap((block) => block.type === 'tool_use' && typeof block.id === 'string' ? [block.id] : []));
+    for (const turn of round.turns) {
+      called.add(turn.call.name);
+      if (!replayed.has(turn.call.call_id)) rebuilt.add(turn.call.name);
+    }
+  }
+  return new Set([...called].filter((name) => rebuilt.has(name) || !loaded.has(name)));
+}
+
 // A request that replays tool blocks must define their tools. When the turn has withdrawn them for its closing round,
 // the replayed names are declared with an empty schema and the model is told not to call them.
 // With tool search on (the tool search tool guide), deferred tools carry defer_loading and stay out of the prompt until
@@ -213,9 +235,10 @@ function toolInput(args: string): Record<string, unknown> {
 // tool list exceeds.
 function toolsParams(request: LLMRequest): Pick<Anthropic.MessageCreateParams, 'tools' | 'tool_choice'> {
   if (request.tools) {
+    const called = request.tool_search ? calledWithoutLoading(request) : new Set<string>();
     const tools = request.tools.map((tool): Anthropic.Tool => ({
       name: tool.name, description: tool.description, input_schema: { ...tool.parameters, type: 'object' },
-      ...(request.tool_search && tool.defer_loading ? { defer_loading: true } : {}),
+      ...(request.tool_search && tool.defer_loading && !called.has(tool.name) ? { defer_loading: true } : {}),
     }));
     if (!request.tool_search || !request.tools.some((tool) => tool.defer_loading)) return { tools };
     // The installed SDK types the search tool and defer_loading only on the beta surface; the Messages API takes them.
