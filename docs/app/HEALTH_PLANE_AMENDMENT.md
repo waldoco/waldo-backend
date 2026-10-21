@@ -24,7 +24,7 @@ Status: owner-ruled scope, not yet implemented. Applies to ADR-0081, ADR-0024 an
 - Provider requests set `store: false`.
 
 ## Retention and access (recommendation the owner approved in scope, "90 d raw / 24 mo aggregate")
-- Raw readings: 90 days in owner-only tables. Daily aggregates and scores: while the account is active, at most 24 months. All deleted on withdrawal or account delete.
+- Raw readings: 90 days in owner-only tables. Daily aggregates and scores: while the account is active, at most 24 months. All deleted when storage consent is withdrawn or the account is deleted. Withdrawing model use alone stops Waldo using health in conversation and deletes nothing (owner ruling, 10 October).
 - Encrypted at rest and in transit; row-level security per owner; writes only from the ingest route with service credentials; agent reads through the signed owner-scoped RPC; raw reads leave count-only receipts.
 - No health values in analytics, traces or error text.
 
@@ -35,3 +35,11 @@ Design: `docs/app/HEALTH_INGEST_DESIGN_2026-10-10.md`. Contract: `packages/contr
 - **HRV.** RMSSD is canonical. SDNN is accepted only as a labelled fallback with its own baseline and lower confidence, never blended.
 - **Time.** Every upload carries an IANA zone and each reading its UTC offset. A day holding two zones is allowed and flagged. The owner-settings timezone stays the agent's default.
 - **Zone vocabulary.** The stored row keeps `low|moderate|good|high|unknown` for every pillar, mapped by `packages/contracts/src/health/zone-bridge.ts`, direction by meaning (the heavier the day, the higher the stored word). Reads for the app use the meaning-bearing words.
+
+## Addendum: the Brief's sleep chip (owner ruling of 13 October 2026)
+Ruling: a chip on a Brief card may show last night's raw sleep duration (#1103 comments 6140376774 and 6140220362, item 6). ADR-0081's matrix keeps raw and normalised sleep duration out of the morning Brief DTO. This is the one exception, for one field at one destination.
+- **Where it shows.** Only as the label of a `sleep` ref on a card's `latest` in the app's day view (`GET /app/v1/controls?view=day`). It shows for the owner's own authenticated session only.
+- **Where it comes from.** It is filled when that view is read, from the Supabase health plane, through the signed `health_series_read`. The read covers one local day and `sleep_duration`, time asleep only. The owner's health storage consent covers it. Model-use consent is not needed, only because no model reads it.
+- **When it is gone.** The chip is left out entirely, never shown empty or as zero, in three cases: there is no reading, storage consent is withdrawn, or the health connection is lost (the read fails or reports the owner not linked).
+- **What never holds it on this path.** The card text on any surface, including the Telegram copy and push text. The model's input and output for the card, the card delivery record, Durable Object storage, R2, memory, traces, logs and metrics. On this path the number leaves the health plane only into that one response. Other paths keep their own rules: ruling 2's model context, the bounded read tool and the staging trace exception.
+- **Proof before it ships.** Tests show that the stored card text and the delivery record never hold the duration. They show the label is absent without storage consent or without a reading, and that the Telegram copy carries no number. Before the chip is emitted, ADR-0081's matrix change and its destination fixtures land in waldo-brain.

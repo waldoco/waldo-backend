@@ -6,7 +6,7 @@ import { CONNECT_RATE_KEY_PREFIX } from './contract';
 import { deviceDirectory } from './device-directory';
 import { httpSigningFields } from './redeem-route';
 import { httpSignatureBase, sha256Hex, verifyEd25519 } from './signing';
-export type DeviceBridgeEnv = OwnerDirectoryEnv & { DEVICE_BRIDGE_DO?: DurableObjectNamespace<DeviceBridgeDO>; RESPONSIBILITY_RATE_LIMITER?: RateLimit };
+export type DeviceBridgeEnv = OwnerDirectoryEnv & { DEVICE_BRIDGE_DO?: DurableObjectNamespace<DeviceBridgeDO>; OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit };
 export async function handleDeviceConnect(request: Request, env: DeviceBridgeEnv): Promise<Response> {
   const device = request.headers.get('x-waldo-device-id');
   if (request.method !== 'GET' || !identifier(device) || !env.DEVICE_BRIDGE_DO) return genericReject();

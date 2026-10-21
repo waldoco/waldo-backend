@@ -3,15 +3,29 @@ import { literalTextRedactor, redactConversationEntry, type ConversationEntry, t
 import { redactSecretUrls } from './egress-guard';
 import { hidesTopic } from '../memory/forget-guard';
 import { asciiLiteralIncludes, forgetSourceBatch, type ForgetSource, type ForgetBatch } from '../memory/selective-forget';
+import { supersededCompaction } from '../conversation/compaction';
+import { shapeFault, turnLinkedEntries } from '../conversation/canonical-owner-store';
 
 export type ConversationStore = Readonly<{
   load(): Promise<Readonly<{ entries: readonly ConversationEntry[]; leafId: string | null }>>;
   save(entries: readonly ConversationEntry[], leafId: string, scope?: RunEffectScope): Promise<void>;
   persistOwnerInput?(entry: ConversationEntry, scope: RunEffectScope): Promise<void>;
+  // An owner message as received (`text`) and its quoted ranges, for the index to keep the owner's own words apart from
+  // what they quote and from what was stored with the message.
+  noteQuoteRanges?(entryId: string, text: string, ranges: readonly Readonly<{ start: number; end: number }>[]): void;
+  // The receipt line of what an owner turn that did not finish already did, for the reply that says it did not finish.
+  noteUnfinished?(receiptLine: string, scope: RunEffectScope): void;
+  // Whether per-turn recall may bring this past message into this chain's turn; without it, every indexed message.
+  recalls?(entryId: string): boolean;
   forgetSources?(topic: string): Promise<{ sources: ForgetSource[]; incomplete: boolean }>;
   forgetSourceBatch?(topic: string): Promise<ForgetBatch>;
   forgetSourceBatchCurrent?(topic: string): ForgetBatch | null;
   forgetSourcesCurrent?(topic: string): { sources: ForgetSource[]; incomplete: boolean } | null;
+  // A compaction row and the row it supersedes, written as one unit that never moves the chain's leaf.
+  appendCompaction?(row: ConversationEntry, supersededId: string | null, scope?: RunEffectScope): Promise<void>;
+  // When this chain last tried to compact, success or failure; one bounded value with no content.
+  compactionAttempt?(chainRef: string): Promise<number | null>;
+  noteCompactionAttempt?(chainRef: string, at: number, scope?: RunEffectScope): Promise<void>;
 }>;
 
 type KeyValueStorage = Pick<DurableObjectStorage, 'get' | 'list' | 'put'> & { kv?: Pick<DurableObjectStorage['kv'], 'put'> & Partial<Pick<DurableObjectStorage['kv'], 'list'>> };
@@ -84,12 +98,15 @@ export const scrubConversationHistory = async (storage: KeyValueStorage): Promis
 // entry (owner-canonical-history.ts). load() requires row and witness to be identical, so both are rewritten together.
 const CANONICAL_PREFIX = 'canonical-owner-v1:';
 type Witness = { entry: ConversationEntry } & Record<string, unknown>;
-// Row kind from the key structure, not substring luck: canonical-owner-v1:<principal>:<tenant>:(conv|witness):<rest>.
-const canonicalKind = (key: string): 'conv' | 'witness' | null => {
+// Row kind and chain from the key structure, not substring luck:
+// canonical-owner-v1:<principal>:<tenant>:[thread:<thread id>:](conv|witness):<rest>. A row's witness lives in its own chain.
+const canonicalRow = (key: string): Readonly<{ chain: string; kind: 'conv' | 'witness' }> | null => {
   if (!key.startsWith(CANONICAL_PREFIX)) return null;
-  const kind = key.slice(CANONICAL_PREFIX.length).split(':')[2];
-  return kind === 'conv' || kind === 'witness' ? kind : null;
+  const parts = key.slice(CANONICAL_PREFIX.length).split(':');
+  const at = parts[2] === 'thread' ? 4 : 2, kind = parts[at];
+  return kind === 'conv' || kind === 'witness' ? { chain: `${CANONICAL_PREFIX}${parts.slice(0, at).join(':')}:`, kind } : null;
 };
+const canonicalKind = (key: string): 'conv' | 'witness' | null => canonicalRow(key)?.kind ?? null;
 type ExpectedForgetOwner = Readonly<{ principal_ref: string; tenant_ref: string }>;
 export const conversationForgetSources = async (storage: KeyValueStorage, topic: string, expected?: ExpectedForgetOwner) =>
   conversationSourcesFromRows(await storage.list<ConversationEntry>({ prefix: 'conv:' }), await storage.list<ConversationEntry | Witness>({ prefix: CANONICAL_PREFIX }), topic, expected);
@@ -114,7 +131,7 @@ const conversationSourcesFromRows = (legacy: Map<string, ConversationEntry>, can
   const verified = (key: string, entry: ConversationEntry) => {
     if (!expected || !expectedPrefix) return true;
     if (!key.startsWith(expectedPrefix) || entry.ownerId !== expected.principal_ref) return false;
-    const witness = canonical.get(`${expectedPrefix}witness:${entry.id}`) as Witness | undefined;
+    const witness = canonical.get(`${canonicalRow(key)!.chain}witness:${entry.id}`) as Witness | undefined;
     if (!witness || witness.lineage !== 'canonical_v1' || witness.principal_ref !== expected.principal_ref || witness.tenant_ref !== expected.tenant_ref || JSON.stringify(witness.entry) !== JSON.stringify(entry)) return false;
     return JSON.stringify(ownEntries.get(entry.id)) === JSON.stringify(entry);
   };
@@ -135,6 +152,29 @@ const conversationSourcesFromRows = (legacy: Map<string, ConversationEntry>, can
   return { sources, incomplete };
 };
 const entryText = (entry: ConversationEntry): string => `${entry.modelPayload}\n${entry.appPayload}\n${entry.modelProjection.mode === 'replace' ? entry.modelProjection.payload : ''}`.toLowerCase();
+
+// The original rows a compaction row covers: the chain from to_id back to from_id, inclusive, by the parent links a turn
+// reads, which are the links the span was cut from. A walk that never reaches from_id has not seen the whole span: null.
+const coveredRows = (linked: ReadonlyMap<string, ConversationEntry>, covers: NonNullable<ConversationEntry['covers']>): readonly ConversationEntry[] | null => {
+  const seen = new Set<string>(), rows: ConversationEntry[] = [];
+  for (let current = linked.get(covers.to_id); current && !seen.has(current.id); current = current.parentId === null ? undefined : linked.get(current.parentId)) {
+    seen.add(current.id); rows.push(current);
+    if (current.id === covers.from_id) return rows;
+  }
+  return null;
+};
+// Each canonical chain's conv rows in stored order, keyed by the chain's prefix.
+const canonicalChains = (canonical: ReadonlyMap<string, ConversationEntry | Witness>): ReadonlyMap<string, readonly Readonly<{ key: string; entry: ConversationEntry }>[]> => {
+  const chains = new Map<string, { key: string; entry: ConversationEntry }[]>();
+  for (const [key, value] of canonical) {
+    const row = canonicalRow(key);
+    if (row?.kind !== 'conv') continue;
+    const rows = chains.get(row.chain) ?? [];
+    rows.push({ key, entry: value as ConversationEntry });
+    chains.set(row.chain, rows);
+  }
+  return chains;
+};
 
 export const redactConversationEntries = async (
   storage: KeyValueStorage,
@@ -165,6 +205,29 @@ export const redactConversationEntries = async (
       if (JSON.stringify(next) !== JSON.stringify(witness.entry)) writes[key] = { ...witness, entry: next };
     }
   }
+  const hit = (entry: ConversationEntry): boolean => needles.some((needle) => entryText(entry).includes(needle.toLowerCase()) || [entry.modelPayload, entry.appPayload, ...(entry.modelProjection.mode === 'replace' ? [entry.modelProjection.payload] : [])].some(text => conversationHides(text, needle)));
+  // A compaction row paraphrases its span, which a literal rewrite cannot reach. When the topic sits in any original row of
+  // the span, or in the summary itself, or the span cannot be walked to its first row, the row is superseded to the marker
+  // and omitted, with its witness in the same unit and its covers kept; the hit test reads the rows as stored before this
+  // rewrite. A superseded summary stays as it is.
+  for (const [chain, rows] of canonicalChains(canonical)) {
+    const left = new Map<string, string | null>(), loaded: ConversationEntry[] = [];
+    for (const { entry } of rows) {
+      if (shapeFault(entry) === null) loaded.push(entry);
+      else left.set(entry.id, typeof entry.parentId === 'string' ? entry.parentId : null);
+    }
+    const linked = new Map(turnLinkedEntries(loaded, left).map((entry) => [entry.id, entry]));
+    for (const { key, entry } of rows) {
+      if (entry.role !== 'compaction' || !entry.covers || entry.modelProjection.mode === 'omit') continue;
+      const span = coveredRows(linked, entry.covers);
+      if (!hit(entry) && span !== null && !span.some(hit)) continue;
+      const next = supersededCompaction(entry);
+      writes[key] = next; rewritten += 1;
+      const witnessKey = `${chain}witness:${entry.id}`;
+      const witness = canonical.get(witnessKey) as Witness | undefined;
+      if (witness?.entry) writes[witnessKey] = { ...witness, entry: next };
+    }
+  }
   if (Object.keys(writes).length > 0) {
     if (scope) { if (!storage.kv) throw new Error('fenced redaction store unavailable'); scope.commit(() => { for (const [key, value] of Object.entries(writes)) storage.kv!.put(key, value); }); }
     else {
@@ -177,7 +240,7 @@ export const redactConversationEntries = async (
         if (taken.has(key)) continue;
         const unit = [key];
         if (canonicalKind(key) === 'conv') {
-          const witnessKey = `${key.split(':').slice(0, 3).join(':')}:witness:${(value as ConversationEntry).id}`;
+          const witnessKey = `${canonicalRow(key)!.chain}witness:${(value as ConversationEntry).id}`;
           if (witnessKey in writes) unit.push(witnessKey);
         }
         for (const k of unit) taken.add(k);
@@ -192,7 +255,6 @@ export const redactConversationEntries = async (
       await flush();
     }
   }
-  const hit = (entry: ConversationEntry): boolean => needles.some((needle) => entryText(entry).includes(needle.toLowerCase()) || [entry.modelPayload, entry.appPayload, ...(entry.modelProjection.mode === 'replace' ? [entry.modelProjection.payload] : [])].some(text => conversationHides(text, needle)));
   const afterLegacy = rewritten > 0 ? await storage.list<ConversationEntry>({ prefix: 'conv:' }) : legacy;
   const afterCanonical = Object.keys(writes).length > 0 ? await storage.list<ConversationEntry | Witness>({ prefix: CANONICAL_PREFIX }) : canonical;
   let remaining = 0;

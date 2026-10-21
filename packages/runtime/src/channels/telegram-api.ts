@@ -1,5 +1,6 @@
 import type { TelegramOwnerApi } from './telegram-listener';
 import { redactSecretUrls } from './egress-guard';
+import { plainTelegram } from './rich-format';
 
 // Every Bot API call is bounded: a hung response (the API applied the change but the
 // connection never completed) must reject, or a single wedged egress stalls the whole turn.
@@ -55,8 +56,8 @@ export const splitTelegramText = (text: string, limit: number = TELEGRAM_MESSAGE
   return parts;
 };
 
-// Only generated finals carry a frozen fallback. Definite entity rejection means
-// the rich send was not applied; transport uncertainty never permits a second send.
+// Only generated finals carry a frozen fallback, the Markdown source. Definite entity rejection means
+// the rich send was not applied, so its plain rendering goes instead; transport uncertainty never permits a second send.
 export const sendTelegramFinal = async (send: TelegramOwnerApi['sendMessage'], payload: TelegramFinalPayload,
   allowed: () => Promise<boolean> = async () => true): Promise<unknown> => {
   const { fallback_text, ...request } = payload;
@@ -65,7 +66,7 @@ export const sendTelegramFinal = async (send: TelegramOwnerApi['sendMessage'], p
     if (!(error instanceof TelegramRejection) || error.errorCode !== 400 || payload.parse_mode !== 'HTML'
       || fallback_text === undefined || !error.message.includes("can't parse entities")) throw error;
     if (!(await allowed())) return undefined;
-    return send({ chat_id: payload.chat_id, text: redactSecretUrls(fallback_text).text });
+    return send({ chat_id: payload.chat_id, text: plainTelegram(redactSecretUrls(fallback_text).text) });
   }
 };
 
@@ -89,25 +90,31 @@ export const createTelegramCaller = (token: string, fetcher: typeof fetch = fetc
   };
 
 // Once the owner unlinks Telegram, nothing more goes out to that chat, including queued reminders and cards.
-export const gatedCaller = (call: ReturnType<typeof createTelegramCaller>, blocked: () => boolean | Promise<boolean>): ReturnType<typeof createTelegramCaller> =>
+// A gate answers false to send, or says why it blocked (true when it has no reason to give). The reason is a fixed
+// word, so a trace can tell an unbound owner from an unlinked or rebound one without carrying any identifier.
+export type EgressBlock = 'owner_unbound' | 'unlinked' | 'presence_inactive' | 'presence_unavailable';
+export const gatedCaller = (call: ReturnType<typeof createTelegramCaller>, blocked: () => boolean | EgressBlock | Promise<boolean | EgressBlock>): ReturnType<typeof createTelegramCaller> =>
   async (method, body) => {
-    if (!(await blocked())) return call(method, body);
-    console.log(JSON.stringify({ hop: 'telegram_send', ok: false, skipped: 'blocked', method }));
+    const why = await blocked();
+    if (!why) return call(method, body);
+    console.log(JSON.stringify({ hop: 'telegram_send', ok: false, skipped: 'blocked', method, ...(why === true ? {} : { reason: why }) }));
     return undefined;
   };
 
 // Send-time ownership: the local flag blocks immediately, and when a DB directory is wired the
 // presence check makes the database authoritative for every outbound - a rebound channel blocks
 // the old owner's sends no matter what its DO remembers. The check fails closed: an error
-// blocks the send rather than risking a cross-owner leak.
-export const egressGate = (localBlocked: () => boolean, recheck?: () => Promise<boolean>) =>
-  async (): Promise<boolean> => {
-    if (localBlocked()) return true;
+// blocks the send rather than risking a cross-owner leak. presence_inactive covers a directory that
+// answered no and a DO with no do_name or subject to ask about; presence_unavailable is an error.
+export const egressGate = (localBlocked: () => boolean | EgressBlock, recheck?: () => Promise<boolean>) =>
+  async (): Promise<boolean | EgressBlock> => {
+    const local = localBlocked();
+    if (local) return local;
     if (!recheck) return false;
     try {
-      return !(await recheck());
+      return (await recheck()) ? false : 'presence_inactive';
     } catch {
-      return true;
+      return 'presence_unavailable';
     }
   };
 

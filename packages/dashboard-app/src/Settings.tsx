@@ -19,6 +19,5 @@ export function SettingsHead({ selected, isAdmin = false }: { selected: Settings
 export function SettingsPanel({ section, isAdmin = false }: { section: SettingsSection; isAdmin?: boolean }) {
   return <><SettingsHead selected={settingsTab(section)} isAdmin={isAdmin}/>
     {section==='sessions'?<ControlsPanel key="sessions" view="connections" embedded section="sessions"/>:section === 'account' ? <><OwnerControlsPanel view="account" embedded/><ControlsPanel key="sessions" view="connections" embedded section="sessions"/></>
-      : <ControlsPanel key={section} view={section} embedded/>}
-    <p className="caption"><a href="/console/legacy">Open the classic console <span aria-hidden="true">↗</span></a></p></>;
+      : <ControlsPanel key={section} view={section} embedded/>}</>;
 }

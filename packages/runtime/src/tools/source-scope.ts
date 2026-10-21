@@ -17,10 +17,14 @@ const SCOPES: readonly SourceScope[] = ['none', 'pasted_only'];
 //         metadata, and writers/proposals that read nothing back.
 // delegate_task is allow here because the guard must be applied to the child's handlers too (see wiring).
 export const SOURCE_SCOPE_CLASS: Readonly<Record<ToolName, 'deny' | 'allow'>> = {
-  get_crs: 'deny', get_health: 'deny', query_calendar: 'deny', get_communication: 'deny', search_communication: 'deny',
+  use_mac: 'deny',
+  send_console_link: 'allow',
+  send_progress_note: 'allow',
+  attach_file: 'allow',
+  get_crs: 'deny', get_health: 'deny', query_calendar: 'deny', get_communication: 'deny', search_communication: 'deny', search_contacts: 'deny',
   read_thread: 'deny', get_tasks: 'deny', get_master_metrics: 'deny', get_context: 'allow', query_availability: 'deny',
   remember: 'allow', forget_memory: 'allow',
-  read_owner_context: 'deny', read_memory: 'deny', update_memory: 'allow', search_episodes: 'deny', propose_action: 'allow',
+  read_owner_context: 'deny', read_memory: 'deny', search_episodes: 'deny', propose_action: 'allow',
   execute_action: 'allow', send_message: 'allow', web_search: 'deny', read_document: 'deny', list_artifacts: 'deny',
   read_artifact: 'deny', call_mcp_tool: 'deny', read_mcp_tool: 'deny', read_drive: 'deny', write_task: 'allow', update_task: 'allow',
   draft_document: 'allow', create_artifact: 'allow', revise_artifact: 'allow', export_artifact: 'allow', draft_email: 'allow',
@@ -28,7 +32,7 @@ export const SOURCE_SCOPE_CLASS: Readonly<Record<ToolName, 'deny' | 'allow'>> = 
   create_thread: 'allow', delete_message: 'allow', restore_message: 'allow', archive_thread: 'allow', update_thread_topics: 'allow',
   search_tools: 'allow', set_reminder: 'allow', list_reminders: 'allow', cancel_reminder: 'allow', propose_calendar_change: 'allow',
   propose_google_task_change: 'deny',
-  open_loop: 'allow', close_loop: 'allow', track_responsibility: 'allow', update_todo: 'allow', list_responsibilities: 'allow', close_responsibility: 'allow', set_proactivity: 'allow', set_schedule_preference: 'allow', read_tool_output: 'deny', connect_service: 'allow',
+  open_loop: 'allow', close_loop: 'allow', raise_approval: 'allow', track_responsibility: 'allow', update_todo: 'allow', list_responsibilities: 'allow', close_responsibility: 'allow', set_proactivity: 'allow', set_schedule_preference: 'allow', read_tool_output: 'deny', connect_service: 'allow',
   browse_page: 'deny', browse_act: 'deny', delegate_task: 'allow', log_meal: 'allow', log_workout: 'allow', list_health_logs: 'deny',
   set_standing_order: 'allow', list_standing_orders: 'allow', cancel_standing_order: 'allow', workspace_list: 'deny',
   workspace_read: 'deny', workspace_search: 'deny', workspace_write: 'allow', workspace_render: 'allow', skills_list: 'allow', skills_install: 'allow',

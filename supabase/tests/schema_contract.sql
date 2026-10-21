@@ -158,7 +158,7 @@ select is_empty(
   $$with expected(table_name, privilege_type) as (values
       ('users', 'SELECT'), ('users', 'INSERT'), ('users', 'UPDATE'), ('users', 'DELETE'),
       ('user_consents', 'SELECT'), ('user_consents', 'INSERT'),
-      ('health_context_daily', 'SELECT'), ('health_context_daily', 'INSERT'), ('health_context_daily', 'UPDATE'),
+      ('health_context_daily', 'SELECT'),
       ('health_daily', 'SELECT'), ('health_daily', 'INSERT'), ('health_daily', 'UPDATE'), ('health_daily', 'DELETE'),
       ('crs_scores', 'SELECT'), ('crs_scores', 'INSERT'), ('crs_scores', 'UPDATE'), ('crs_scores', 'DELETE'),
       ('user_baselines', 'SELECT'), ('user_baselines', 'INSERT'), ('user_baselines', 'UPDATE'), ('user_baselines', 'DELETE'),

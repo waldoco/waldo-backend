@@ -42,6 +42,10 @@ const fakeScheduler = () => {
       return { id: input.id, due_at: input.dueAt };
     },
     read: (id: string) => armed.find((row) => row.id === id),
+    lookup(id: string) {
+      const entry = armed.find((row) => row.id === id);
+      return entry ? { state: 'entry' as const, entry } : { state: 'absent' as const };
+    },
     async cancel(id: string) {
       cancelled.push(id);
       const at = armed.findIndex((row) => row.id === id);

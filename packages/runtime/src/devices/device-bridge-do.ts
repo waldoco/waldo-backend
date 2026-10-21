@@ -1,3 +1,5 @@
+import type { MacDelivery } from './mac-delivery';
+import type { OwnerDO } from '../channels/owner-do';
 import { DeviceCommandStore, type CommandInput, type CommandSummary, type EnqueueResult } from './command-store';
 import { DurableObject } from 'cloudflare:workers';
 import { armAlarm } from '../scheduler/alarm-slot';
@@ -9,7 +11,7 @@ import { deviceDirectory, type DeviceAuth } from './device-directory';
 import { deviceDiagnostic, genericReject } from './generic-reject';
 import { httpSigningFields } from './redeem-route';
 import { frameSignatureBase, httpSignatureBase, sha256Hex, verifyEd25519 } from './signing';
-import { ackFrame, resultFrame, connectDeclaration, heartbeatFrame, identifier, record } from './wire';
+import { sessionEventFrame, ackFrame, resultFrame, connectDeclaration, heartbeatFrame, identifier, record } from './wire';
 type Binding = DeviceAuth & { device_id: string; declared_capabilities: string[]; last_heartbeat_at: number | null; generation: string; outbox_depth?: number | null; frames?: FrameWindow; principal_checked_at?: number };
 export class DeviceBridgeDO extends DurableObject<DeviceBridgeEnv> {
   constructor(ctx: DurableObjectState, env: DeviceBridgeEnv) {
@@ -37,10 +39,12 @@ export class DeviceBridgeDO extends DurableObject<DeviceBridgeEnv> {
     });
   }
   private async rearm(): Promise<void> {
+    const commands=new DeviceCommandStore(this.ctx.storage);
     const next = this.ctx.storage.sql.exec('SELECT min(expires_at) AS next FROM nonces').one().next;
     const revokedAt = this.ctx.storage.sql.exec("SELECT value FROM meta WHERE key='revoked'").toArray()[0]?.value;
     const due = revokedAt ? Number(revokedAt) + CLOCK_SKEW_SECONDS : next === null ? null : Number(next);
-    if (due !== null) await armAlarm(this.ctx.storage, (due + 1) * 1000);
+    const bounds=[due===null?null:(due+1)*1000,commands.nextExpiry(),commands.deliveryDue()].filter((v):v is number=>v!==null);
+    if(bounds.length) await armAlarm(this.ctx.storage,Math.max(Math.min(...bounds),Date.now()+250));
   }
   override async fetch(request: Request): Promise<Response> {
     try {
@@ -70,7 +74,7 @@ export class DeviceBridgeDO extends DurableObject<DeviceBridgeEnv> {
       if (this.revoked() || socket.readyState !== WebSocket.OPEN || typeof data !== 'string') throw new Error('invalid_shape');
       const bytes = new TextEncoder().encode(data);
       if (bytes.length > FRAME_BYTES) throw new Error('invalid_shape');
-      const parsed = parseStrictJson(bytes, true), frame = heartbeatFrame(parsed) ?? ackFrame(parsed) ?? resultFrame(parsed);
+      const parsed = parseStrictJson(bytes, true), frame = heartbeatFrame(parsed) ?? ackFrame(parsed) ?? resultFrame(parsed) ?? sessionEventFrame(parsed);
       const binding = socket.deserializeAttachment() as Binding;
       const nowSeconds = Math.floor(Date.now() / 1000), budget = binding ? admitFrame(binding.frames, nowSeconds) : null;
       if (binding && !budget) { deviceDiagnostic('invalid_shape'); socket.close(1008); return; }
@@ -99,7 +103,8 @@ export class DeviceBridgeDO extends DurableObject<DeviceBridgeEnv> {
         const commands = new DeviceCommandStore(this.ctx.storage);
         if (frame.type === 'ack') commands.acceptAck(frame);
         if (frame.type === 'result') receipt = commands.acceptResult(frame, fingerprint, Math.floor(Date.now() / 1000));
-        if (previous === undefined) this.ctx.storage.sql.exec('INSERT INTO frames(message_id,fingerprint,type,command_id,revision,idempotency_key,created_at) VALUES(?,?,?,?,?,?,?)', frame.message_id, fingerprint, frame.type, frame.type === 'heartbeat' ? null : frame.command_id, frame.type === 'heartbeat' ? null : frame.revision, frame.type === 'heartbeat' ? null : frame.idempotency_key, Math.floor(Date.now() / 1000));
+        if (frame.type === 'session_event') { if(!binding.declared_capabilities.some(c=>c==='session_query'||c==='session_control'))throw new Error('invalid_shape');receipt=commands.acceptEvent(frame,Math.floor(Date.now()/1000)); }
+        if (previous === undefined) this.ctx.storage.sql.exec('INSERT INTO frames(message_id,fingerprint,type,command_id,revision,idempotency_key,created_at) VALUES(?,?,?,?,?,?,?)', frame.message_id, fingerprint, frame.type, (frame.type === 'heartbeat' || frame.type === 'session_event') ? null : frame.command_id, (frame.type === 'heartbeat' || frame.type === 'session_event') ? null : frame.revision, (frame.type === 'heartbeat' || frame.type === 'session_event') ? null : frame.idempotency_key, Math.floor(Date.now() / 1000));
         return true;
       });
       if (!admitted) { deviceDiagnostic('idempotency_conflict'); socket.close(1008); return; }
@@ -114,6 +119,7 @@ export class DeviceBridgeDO extends DurableObject<DeviceBridgeEnv> {
         binding.outbox_depth = null; socket.serializeAttachment(binding);
         socket.send(canonicalJson(receipt));
       }
+      await this.flushDeliveries();
       await this.rearm();
     } catch (error) {
       const code = error instanceof Error && ['unknown_message', 'idempotency_conflict'].includes(error.message) ? error.message as 'unknown_message' | 'idempotency_conflict' : 'invalid_shape';
@@ -130,6 +136,7 @@ export class DeviceBridgeDO extends DurableObject<DeviceBridgeEnv> {
       const binding = socket.deserializeAttachment() as Binding | null;
       if (binding) this.deliver(socket, binding);
     }
+    await this.rearm();
     return result;
   }
   private deliver(socket: WebSocket, binding: Binding): void {
@@ -179,10 +186,26 @@ export class DeviceBridgeDO extends DurableObject<DeviceBridgeEnv> {
     });
     return { online, last_heartbeat_at: last === undefined ? null : Number(last) };
   }
+  private async flushDeliveries(): Promise<void> {
+    if(!this.env.OWNER_DO || this.revoked())return;
+    const commands=new DeviceCommandStore(this.ctx.storage);
+    for(const row of commands.deliveries()) {
+      const delivery=JSON.parse(row.body) as MacDelivery;
+      try {
+        const auth=await deviceDirectory(this.env).deviceForAuth(delivery.device_id);
+        if(!auth || auth.owner_id!==delivery.owner_id || this.revoked())continue;
+        // Keep fetch-only namespace interfaces stable; type RPC at the owner binding seam.
+        const owner=this.env.OWNER_DO.get(this.env.OWNER_DO.idFromName(auth.do_name)) as unknown as DurableObjectStub<OwnerDO>;
+        if(await owner.admitMacDelivery(delivery))commands.delivered(row.id);
+      }catch{deviceDiagnostic('infrastructure_unavailable');}
+    }
+  }
   override async alarm(): Promise<void> {
     const now = Math.floor(Date.now() / 1000);
     const revokedAt = this.ctx.storage.sql.exec("SELECT value FROM meta WHERE key='revoked'").toArray()[0]?.value;
     if (revokedAt !== undefined && now > Number(revokedAt) + CLOCK_SKEW_SECONDS) { await this.ctx.storage.deleteAll(); return; }
+    const commands=new DeviceCommandStore(this.ctx.storage);commands.pending(now);
+    await this.flushDeliveries();
     this.ctx.storage.sql.exec('DELETE FROM nonces WHERE expires_at < ?', now);
     await this.rearm();
   }

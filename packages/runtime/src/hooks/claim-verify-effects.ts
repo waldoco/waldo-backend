@@ -4,7 +4,14 @@ import type { ToolName } from '@waldo/contracts';
 // effect (a read, a lookup, or a proposal that changes nothing). Typed over every tool name, so
 // adding a tool without deciding its effect fails the build, and the test checks the same list.
 export const TOOL_CLAIM_EFFECT: Readonly<Record<ToolName, string | null>> = {
-  get_crs: null, get_health: null, query_calendar: null, get_communication: null, search_communication: null,
+  use_mac: 'mac_action_requested',
+  // Its not-sent outcomes are ok results too, so a done label would claim a send that never happened.
+  send_console_link: null,
+  // A note says what the turn is doing, never that something is done; the effect claims stay with the tools that act.
+  send_progress_note: null,
+  // Queued is not sent: the file leaves after the reply is written, so no done-claim can rest on this receipt.
+  attach_file: null,
+  get_crs: null, get_health: null, query_calendar: null, get_communication: null, search_communication: null, search_contacts: null,
   read_thread: null, get_tasks: null, get_master_metrics: null, get_context: null, query_availability: null,
   read_owner_context: null, read_memory: null, search_episodes: null, propose_action: null, web_search: null,
   read_document: null, list_artifacts: null, read_artifact: null, read_mcp_tool: null, read_drive: null,
@@ -18,13 +25,13 @@ export const TOOL_CLAIM_EFFECT: Readonly<Record<ToolName, string | null>> = {
   send_message: 'message_send_proposed', send_email: 'email_send_proposed', propose_calendar_change: 'calendar_change_proposed', propose_google_task_change: 'google_task_change_proposed',
   draft_email: 'email_drafted', create_artifact: 'artifact_created', revise_artifact: 'artifact_revised', export_artifact: 'artifact_exported',
   browse_act: 'browser_acted', workspace_write: 'workspace_file_written', workspace_render: 'workspace_document_rendered', set_reminder: 'reminder_set', cancel_reminder: 'reminder_cancelled',
-  open_loop: 'loop_opened', close_loop: 'loop_closed', track_responsibility: 'responsibility_tracked', update_todo: 'todo_updated', list_responsibilities: null, close_responsibility: 'responsibility_closed', set_proactivity: 'proactivity_set', set_schedule_preference: 'schedule_preference_set', log_meal: 'meal_logged', log_workout: 'workout_logged',
+  open_loop: 'loop_opened', close_loop: 'loop_closed', raise_approval: null, track_responsibility: 'responsibility_tracked', update_todo: 'todo_updated', list_responsibilities: null, close_responsibility: 'responsibility_closed', set_proactivity: 'proactivity_set', set_schedule_preference: 'schedule_preference_set', log_meal: 'meal_logged', log_workout: 'workout_logged',
   set_standing_order: 'standing_order_set', cancel_standing_order: 'standing_order_cancelled',
   // null on purpose. call_mcp_tool proposes a card on the owner channel and executes directly elsewhere, so no single
   // effect holds. delegate_task runs a read-only subagent. The rest have no live handler in this tree
   // (memory writes go through the memory path), so their effect is unverified: give each a label when its handler ships.
   remember: 'memory_stored', forget_memory: 'memory_forgotten',
-  call_mcp_tool: null, delegate_task: null, update_memory: null, execute_action: null, write_task: null, update_task: null,
+  call_mcp_tool: null, delegate_task: null, execute_action: null, write_task: null, update_task: null,
   draft_document: null, write_sheet_cell: null, execute_code: null, create_thread: null, delete_message: null, restore_message: null,
   archive_thread: null, update_thread_topics: null,
 };

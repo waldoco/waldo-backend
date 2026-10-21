@@ -5,6 +5,7 @@ import { COMMON_BROWSER_MONTH_CEILING_MICROUSD, commonStagingRegistration } from
 import { cloudflareBrowserProviderReadiness } from './browser-public-read-configuration';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 import {ownerPublicBrowserAccounting} from './owner-public-browser-spend';
+import { localOwnerBinding } from '../identity/owner-binding';
 
 type Status = 'registered' | 'expired' | 'conflict' | 'exhausted' | 'unregistered' | 'unverifiable';
 // Numbers describe retained reservations, never vendor reconciliation or approval.
@@ -31,9 +32,8 @@ export function commonBrowserAllowanceDiagnostic(options: Readonly<{
   externalPriorUse: 'unknown' as const,
  };
  try {
-  if(env.WALDO_ENVIRONMENT !== 'staging' || storage.kv.get('do_name') !== owner.doName
-   || storage.kv.get('telegram_subject') !== owner.subject || storage.kv.get('telegram_unlinked') === true
-   || env.TELEGRAM_OWNER_DO?.idFromName(owner.doName).toString() !== options.actualDoId) return result;
+  const binding = localOwnerBinding(storage.kv, env.OWNER_DO, options.actualDoId);
+  if(env.WALDO_ENVIRONMENT !== 'staging' || binding?.doName !== owner.doName || binding.subject !== owner.subject) return result;
   result.providerReady = cloudflareBrowserProviderReadiness(env);
   const ownerId = `prn_${owner.directoryOwnerId.toLowerCase().replaceAll('-', '')}`;
   const ledgers = [...storage.kv.list<any>({prefix:'common-spend:'})];

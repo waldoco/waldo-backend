@@ -2,14 +2,17 @@
 
 ## Start here
 
-0. [What is built](CURRENT_SYSTEM.md): current state at a pinned SHA, with [messaging behavior](behavior/MESSAGING_BEHAVIOR.md), [production architecture](architecture/PRODUCTION_ARCHITECTURE.md) and [adoption direction](planning/ADOPTION_DIRECTION.md). Operations: [dev loop](ops/DEV_LOOP.md), [observability](ops/OBSERVABILITY.md), [teardown](ops/TEARDOWN.md).
+0. [What is built](CURRENT_SYSTEM.md): current state at a pinned SHA, with [messaging behavior](behavior/MESSAGING_BEHAVIOR.md), [production architecture](architecture/PRODUCTION_ARCHITECTURE.md) and [adoption direction](planning/ADOPTION_DIRECTION.md). Operations: [dev loop](ops/DEV_LOOP.md), [observability](ops/OBSERVABILITY.md), [staging deploy gate](ops/STAGING_DEPLOY_GATE.md), [teardown](ops/TEARDOWN.md).
 1. [Worker packet](planning/waldo-agent-mvp/README.md): selected MVP decisions, read order and source index.
 2. [Canonical product architecture and build plan](planning/WALDO_PERSONAL_AGENT_PRODUCT_ARCHITECTURE_AND_BUILD_PLAN_2026-09-18.md): one release definition, stack, ownership, slices and acceptance criteria; finalized 21 September 2026.
 3. [Worker guide](planning/waldo-agent-mvp/WORKER_GUIDE.md) and [first S0 assignment](planning/waldo-agent-mvp/FIRST_WORKER_ASSIGNMENT.md): libraries, role-specific reading, context/tool/harness engineering, verification and completion evidence.
 4. [Next session](foundation/NEXT-SESSION-PLAN.md), [ledger](foundation/EXECUTION-LEDGER.md), [#116](https://github.com/Pin4sf/waldo-backend/issues/116), [onboarding](foundation/CONTRIBUTOR-ONBOARDING.md), [operating workflow](foundation/AGENT-OPERATING-WORKFLOW.md), and [verification pipeline](foundation/LOCAL-DEV-TESTING-PIPELINE.md): bounded delivery workflow.
 
+- [Lanes and delegation (October 11)](planning/lanes-2026-10-11/README.md): who builds what toward the website promises (lanes L1–L4, browser, Instinct briefs), the owner rulings of 11 October, and the consolidate-first PR order.
 - [Trace lookup (September 29)](architecture/OBSERVABILITY_LOOKUP_2026-09-29.md): Activity trace keys, privacy-safe reason codes, console request correlation and receipt caveats.
 - [New developer map (September 28)](architecture/NEW_DEVELOPER_GUIDE_2026-09-28.md): current owner routing, turn, tool, memory, dashboard, health and verification paths. This supersedes old capability assumptions in dated source maps; it is not a release receipt.
+
+- Rename (12 October 2026): the per-owner Durable Object is `OwnerDO` in `packages/runtime/src/channels/owner-do.ts`, bound as `OWNER_DO` (wrangler migration v6 renames the class; storage is unchanged). Older documents below still say `TelegramOwnerDO`, `TELEGRAM_OWNER_DO` and `telegram-owner-do.ts`; read them as the same object.
 
 ## Supporting references
 

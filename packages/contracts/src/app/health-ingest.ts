@@ -14,9 +14,11 @@ export const HEALTH_AGGREGATE_RETENTION_MONTHS_V1 = 24;
 
 export const healthSourceV1Schema = z.enum(['apple', 'samsung', 'health_connect']);
 // Purposes are separate grants, requested together on one consent screen: storage_compute (store and compute the
-// owner's health data) and model_processing (let Waldo use it when it talks to the owner). The backend enforces each
-// independently, so an owner who grants only storage gets an explicit consent_required for model use. Withdrawing
-// either purpose withdraws both for the source.
+// owner's health data and show the owner their scores) and model_processing (let Waldo use it when it talks to the
+// owner). Model use needs both, so granting model_processing without a live storage grant is consent_required, and an
+// owner who grants only storage gets consent_required for model use. Withdrawing model_processing stops model use only
+// and deletes nothing. Withdrawing storage_compute withdraws both for the source and purges its data. Re-granting
+// storage never restores model use.
 export const healthPurposeV1Schema = z.enum(['storage_compute', 'model_processing']);
 export const healthRequestIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,96}$/);
 export const healthDayV1Schema = z.iso.date();
@@ -175,16 +177,30 @@ export const healthScoreUnavailableReasonV1Schema = z.enum([
   'missing_resting_signal', 'stale_inputs', 'conflicting_inputs', 'intraday_inputs_unavailable', 'calendar_demand_unavailable',
 ]);
 const scoreUnavailable = z.strictObject({ state: z.literal('unavailable'), reason: healthScoreUnavailableReasonV1Schema });
+const algorithmVersion = z.string().regex(/^[a-z][a-z0-9-]*(?:\.[a-z0-9-]+)*\.v[0-9]+$/).max(64);
+const activation = z.enum(['candidate_unaccepted', 'accepted']);
 const scoreAvailable = <Zone extends z.ZodType>(zone: Zone) => z.strictObject({
   state: z.literal('available'),
   score: z.number().finite().min(0).max(100),
-  zone,
-  algorithm_version: z.string().regex(/^[a-z][a-z0-9-]*(?:\.[a-z0-9-]+)*\.v[0-9]+$/).max(64),
-  activation: z.enum(['candidate_unaccepted', 'accepted']),
+  // Null while this algorithm version has no ratified zone bands; the app shows the score without a zone word.
+  zone: zone.nullable(),
+  algorithm_version: algorithmVersion,
+  activation,
   confidence: z.number().finite().min(0).max(1).nullable(),
   hrv_method: hrvMethodV1.nullable(),
 });
 const pillar = <Zone extends z.ZodType>(zone: Zone) => z.union([scoreUnavailable, scoreAvailable(zone)]);
+// Sleep debt over the last 14 nights. A window with a missing night is partial and gives no figure. debt_minutes weighs
+// recent nights more (the last night 1, the oldest 0.5) and earns nothing back for extra sleep, so it is not a count of
+// minutes missed; 14 whole nights of 1,440 minutes bound it.
+export const healthSleepDebtV1Schema = z.union([
+  scoreUnavailable,
+  z.strictObject({ state: z.literal('partial'), confidence: z.number().finite().min(0).max(1), algorithm_version: algorithmVersion, activation }),
+  z.strictObject({
+    state: z.literal('available'), debt_minutes: z.number().finite().min(0).max(20_160), need_basis: z.enum(['owner_confirmed', 'own_average']),
+    algorithm_version: algorithmVersion, activation,
+  }),
+]);
 export const healthScoresQueryV1Schema = z.strictObject({ day: healthDayV1Schema.optional() });
 // compiled_at is the row's own compile time on the backend, never the read time and never a device clock.
 export const healthScoresV1Schema = z.strictObject({
@@ -195,7 +211,16 @@ export const healthScoresV1Schema = z.strictObject({
   recovery: pillar(healthRecoveryZoneV1Schema),
   form: pillar(healthFormZoneV1Schema),
   weight: pillar(healthWeightZoneV1Schema),
+  // Absent when the row was not computed with it, never a stand-in for zero debt.
+  sleep_debt: healthSleepDebtV1Schema.optional(),
 });
+// No row to show for the day: a 200 with the reason, never a zero score.
+export const healthScoresUnavailableV1Schema = z.strictObject({
+  state: z.literal('unavailable'),
+  day: healthDayV1Schema.nullable(),
+  reason: healthScoreUnavailableReasonV1Schema.extract(['not_linked', 'consent_required', 'consent_withdrawn', 'no_readings']),
+});
+export const healthScoresResponseV1Schema = z.union([healthScoresV1Schema, healthScoresUnavailableV1Schema]);
 
 // The runtime may attach a short message; a client acts on `error` only.
 export const healthApiErrorV1Schema = z.strictObject({
@@ -208,9 +233,10 @@ export const appHealthRoutesV1 = [
   { method: 'POST', path: '/app/v1/health/consents', request: healthConsentGrantV1Schema, response: healthConsentChangeV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: HEALTH_INGEST_MAX_REQUEST_BYTES_V1 },
   { method: 'POST', path: '/app/v1/health/consents/withdraw', request: healthConsentWithdrawV1Schema, response: healthConsentChangeV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: HEALTH_INGEST_MAX_REQUEST_BYTES_V1 },
   { method: 'POST', path: '/app/v1/health/ingest', request: healthIngestV1Schema, response: healthIngestReceiptV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: HEALTH_INGEST_MAX_REQUEST_BYTES_V1 },
-  { method: 'GET', path: '/app/v1/health/scores', query: healthScoresQueryV1Schema, response: healthScoresV1Schema, authenticated: true, success_status: 200 },
+  { method: 'GET', path: '/app/v1/health/scores', query: healthScoresQueryV1Schema, response: healthScoresResponseV1Schema, authenticated: true, success_status: 200 },
 ] as const;
 
 export type HealthIngestV1 = z.infer<typeof healthIngestV1Schema>;
 export type HealthSampleV1 = z.infer<typeof healthSampleV1Schema>;
 export type HealthScoresV1 = z.infer<typeof healthScoresV1Schema>;
+export type HealthScoresResponseV1 = z.infer<typeof healthScoresResponseV1Schema>;

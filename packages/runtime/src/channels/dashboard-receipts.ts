@@ -9,7 +9,7 @@ type Outcome = 'applied' | 'incomplete' | 'failed';
 const OUTCOME: Readonly<Record<string, Outcome>> = {
   'spot.forget.incomplete': 'incomplete',
   'node.forget.incomplete': 'incomplete',
-  'google.connect.failed': 'failed', 'file.unavailable': 'failed', invalid: 'failed',
+  'google.connect.failed': 'failed', 'card.unreadable.failed': 'failed', 'file.unavailable': 'failed', invalid: 'failed',
 };
 
 export const dashboardReceipt = (key: string | null) => {

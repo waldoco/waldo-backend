@@ -1,51 +1,113 @@
 import { expect, it, vi } from 'vitest';
-import { browsePageArgsSchema } from '@waldo/contracts';
+import { browsePageArgsSchema, buildSessionState } from '@waldo/contracts';
 import { browsePageHandler } from '../src/tools/live/browser';
-import { cloudflarePublicRead } from '../src/channels/cloudflare-public-read';
+import { PublicReadRefusal, cloudflarePublicRead } from '../src/channels/cloudflare-public-read';
+import { runToolLoop } from '../src/conversation/tool-loop';
+import { sanitise } from '../src/scribe/sanitiser';
 
-const args = { url: 'https://example.com/menu', instruction: 'Find vegetarian options', provider: 'cloudflare_playwright' };
+const args = { url: 'https://example.com/menu', instruction: 'Find vegetarian options' };
 const context = { authenticatedUserId: 'owner-a', egressAllowlist: ['*'], assertTaskSourceCurrent: async () => {} } as never;
+type FakeFrame = { parentFrame(): FakeFrame | null };
 const fake = () => {
   const calls: string[] = []; let active = true;
-  const page = { mainFrame: () => 'main-frame', setDefaultTimeout() {}, goto: async () => { calls.push('navigate'); return { status: () => 200 }; }, url: () => args.url, title: async () => 'Menu', locator: () => ({ innerText: async () => 'Vegetarian pasta — £12' }) };
-  let routed: ((route: any) => Promise<void>) | undefined;
-  const browser = { newContext: async (options: unknown) => { expect(options).toEqual({ serviceWorkers: 'block' }); return { route: async (_pattern: string, callback: (route: any) => Promise<void>) => { routed = callback; }, newPage: async () => page, close: async () => { calls.push('context.close'); } }; }, newBrowserCDPSession: async () => ({ send: async (method: string) => { calls.push(method); active = false; } }), close: async () => { calls.push('disconnect'); } };
-  const sdk = { acquire: async () => { calls.push('acquire'); return { sessionId: 'private-id' }; }, endpointURLString: () => 'https://fake.host/v1/devtools/browser/private-id', connect: async () => { calls.push('connect'); return browser; }, sessions: async () => active ? [{ sessionId: 'private-id' }] : [] };
-  return { calls, page, sdk, browser, route: async (url: string, method = 'GET', status = 200, location?: string) => {
-    const events: string[] = [];
-    await routed!({ request: () => ({ url: () => url, method: () => method, isNavigationRequest: () => Boolean(location), frame: () => 'main-frame' }), abort: async () => { events.push('abort'); }, fetch: async (options: unknown) => { expect(options).toEqual({ maxRedirects: 0, timeout: 10000 }); events.push('fetch'); return { status: () => status, headers: () => location ? { location } : {} }; }, fulfill: async () => { events.push('fulfill'); } });
+  const mainFrame: FakeFrame = { parentFrame: () => null }, listeners: Record<string, ((request: unknown) => void)[]> = {};
+  const page = { mainFrame: () => mainFrame, setDefaultTimeout() {}, on: (event: string, listener: (request: unknown) => void) => { (listeners[event] ??= []).push(listener); }, goto: async (..._input: unknown[]): Promise<{ status(): number }> => { calls.push('navigate'); return { status: () => 200 }; }, waitForLoadState: async (_state?: string): Promise<void> => {}, evaluate: async (_script?: unknown): Promise<void> => { calls.push('scroll'); }, url: () => args.url, title: async () => 'Menu', locator: () => ({ innerText: async () => 'Vegetarian pasta — £12' }) };
+  let routed: ((route: any) => Promise<void>) | undefined, socketRouted: ((socket: { close(): void }) => void) | undefined;
+  const privateContext = { serviceWorkers: () => [] as unknown[], addInitScript: async () => { calls.push('init-script'); }, routeWebSocket: async (_pattern: string, handler: (socket: { close(): void }) => void) => { socketRouted = handler; }, route: async (_pattern: string, callback: (route: any) => Promise<void>) => { routed = callback; }, newPage: async () => page, close: async () => { calls.push('context.close'); } };
+  const browser = { newContext: async (options: unknown) => { expect(options).toEqual({ serviceWorkers: 'block' }); return privateContext; }, newBrowserCDPSession: async () => ({ send: async (method: string) => { calls.push(method); active = false; } }), close: async () => { calls.push('disconnect'); } };
+  const sdk = { acquire: async (..._input: unknown[]) => { calls.push('acquire'); return { sessionId: 'private-id' }; }, endpointURLString: () => 'https://fake.host/v1/devtools/browser/private-id', connect: async () => { calls.push('connect'); return browser; }, sessions: async () => active ? [{ sessionId: 'private-id' }] : [] };
+  const emit = (event: string, request: unknown) => { for (const listener of listeners[event] ?? []) listener(request); };
+  return { calls, page, sdk, browser, privateContext, mainFrame, emit, socket: () => socketRouted, route: async (url: string, method = 'GET', status = 200, location?: string, request: Readonly<{ type?: string; navigation?: boolean; frame?: FakeFrame }> = {}) => {
+    const events: string[] = [], navigation = request.navigation ?? Boolean(location);
+    await routed!({ request: () => ({ url: () => url, method: () => method, resourceType: () => request.type ?? (navigation ? 'document' : 'fetch'), isNavigationRequest: () => navigation, frame: () => request.frame ?? mainFrame }), abort: async () => { events.push('abort'); }, fetch: async (options: unknown) => { expect(options).toEqual({ maxRedirects: 0, timeout: 10000 }); events.push('fetch'); return { status: () => status, headers: () => location ? { location } : {} }; }, fulfill: async () => { events.push('fulfill'); } });
     return events;
-  } }; 
+  } };
 };
-it('explicit Cloudflare browse_page returns real page text through the existing handler and physically terminates its session', async () => {
+it('on a host without Browserbase keys, browse_page returns real page text through Cloudflare and physically terminates its session', async () => {
   const f = fake(); let paid = 0;
   const read = cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never });
-  const handler = browsePageHandler('bb-key', 'project', undefined, (async () => { paid++; throw Error('paid fallback'); }) as typeof fetch, { defaultProvider: 'cloudflare_playwright', cloudflare: read, allowBrowserbase: true });
+  const handler = browsePageHandler(undefined, undefined, undefined, (async () => { paid++; throw Error('paid fallback'); }) as typeof fetch, { cloudflare: read, allowBrowserbase: true });
   const result = await handler.handle(browsePageArgsSchema.parse(args), context);
   expect(result).toMatchObject({ ok: true, data: { url: args.url, provider: 'cloudflare_playwright', data: { title: 'Menu', text: 'Vegetarian pasta — £12' } }, source_taint: 'external' });
   expect(JSON.stringify(result)).not.toContain('private-id'); expect(paid).toBe(0);
-  expect(f.calls).toEqual(['acquire', 'connect', 'navigate', 'context.close', 'Browser.close', 'disconnect']);
+  expect(f.calls).toEqual(['acquire', 'connect', 'init-script', 'navigate', 'scroll', 'context.close', 'Browser.close', 'disconnect']);
 });
-it('does not fall back to paid Browserbase when Cloudflare is unconfigured', async () => {
+it('a configured Cloudflare reader serves the read even when Browserbase keys are configured, never paying Browserbase', async () => {
+  let paid = 0, cloudflare = 0;
+  const handler = browsePageHandler('bb', 'project', undefined, (async () => { paid++; throw Error('paid'); }) as typeof fetch, { cloudflare: (async () => { cloudflare++; return { ok: true }; }) as never, allowBrowserbase: true });
+  await handler.handle(browsePageArgsSchema.parse(args), context);
+  await handler.handle(browsePageArgsSchema.parse({ ...args, provider: 'browserbase_stagehand_http_v3' }), context);
+  expect(paid).toBe(0); expect(cloudflare).toBe(2);
+});
+it('refuses a read with neither Browserbase keys nor a Cloudflare reader, without any paid call', async () => {
   let paid = 0;
-  const handler = browsePageHandler('bb', 'project', undefined, (async () => { paid++; throw Error('paid'); }) as typeof fetch);
+  const handler = browsePageHandler(undefined, undefined, undefined, (async () => { paid++; throw Error('paid'); }) as typeof fetch);
   expect(await handler.handle(browsePageArgsSchema.parse(args), context)).toMatchObject({ ok: false, code: 'auth_failed' });
   expect(paid).toBe(0);
 });
-it.each([403, 429, 500])('HTTP %s page failures do not return challenge/error text as useful content', async status => {
-  const f = fake(); f.page.goto = async () => ({ status: () => status });
+it.each([429, 500, 503])('HTTP %s page failures stay transient and do not return error text as useful content', async status => {
+  const f = fake(); f.page.goto = async () => ({ status: () => status, headers: () => ({}) }) as never;
   expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context)).toMatchObject({ ok: false, code: 'transient', error: `The page did not load (HTTP ${status}).` });
   expect(f.calls).toContain('Browser.close');
 });
+it('a navigation with no response stays transient', async () => {
+  const f = fake(); f.page.goto = async () => null as never;
+  expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context)).toMatchObject({ ok: false, code: 'transient', error: 'The page did not load.' });
+});
+it.each([401, 403, 451])('HTTP %s is a typed refusal that names the status and says retrying the same address will not help', async status => {
+  const f = fake(); f.page.goto = async () => ({ status: () => status, headers: () => ({}) }) as never;
+  const result = await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context);
+  expect(result).toMatchObject({ ok: false, code: 'rejected', source_taint: 'external' });
+  if (result.ok) return;
+  expect(result.error).toContain(`HTTP ${status}`); expect(result.error).toContain('will not help');
+  expect(result.error).toContain('retain_session:true'); expect(result.error).toContain('owner_login');
+  expect(result.error).not.toMatch(/example\.com|private-id|Vegetarian/);
+  expect(f.calls).toContain('Browser.close');
+});
+it.each([404, 410])('HTTP %s is not_found', async status => {
+  const f = fake(); f.page.goto = async () => ({ status: () => status, headers: () => ({}) }) as never;
+  expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context)).toMatchObject({ ok: false, code: 'not_found', error: expect.stringContaining(`HTTP ${status}`) });
+  expect(f.calls).toContain('Browser.close');
+});
+it('in the tool loop, a refused address is not fetched again this turn while a different address still is', async () => {
+  const f = fake(); let last = args.url;
+  f.page.goto = async (...input: unknown[]) => { last = input[0] as string; f.calls.push('navigate'); return { status: () => last === args.url ? 403 : 200, headers: () => ({}) }; };
+  f.page.url = () => last;
+  const handler = browsePageHandler(undefined, undefined, undefined, (async () => { throw Error('paid fallback'); }) as typeof fetch, { cloudflare: cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never }), allowBrowserbase: false });
+  const canaries = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
+  const ctx = { authenticatedUserId: 'owner-a', egressAllowlist: ['*'], assertTaskSourceCurrent: async () => {}, trigger: 'user_message' as const, canaryTokens: canaries, sourceTaint: null, toolArgSourceTaint: null, sanitise, session: buildSessionState({ trigger: 'user_message', canary_tokens: canaries, started_at: 0 }) };
+  const calls = [args, args, { ...args, url: 'https://example.com/other' }].map(call => JSON.stringify(call));
+  const outputs: string[] = []; let step = 0;
+  await runToolLoop({ handlers: [handler as never], ctx, maxSteps: 5, onTool: event => outputs.push(event.output), step: async tools => tools && step < calls.length ? { text: '', tool_calls: [{ call_id: `call-${step}`, name: 'browse_page', arguments: calls[step++]! }] } : { text: 'Done' } });
+  expect(outputs).toHaveLength(3);
+  expect(JSON.parse(outputs[0]!)).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining('HTTP 403') });
+  expect(outputs[1]).toContain('[repeat: cached failure');
+  expect(JSON.parse(outputs[1]!.split('\n')[0]!)).toEqual(JSON.parse(outputs[0]!));
+  expect(JSON.parse(outputs[2]!.split('\n')[0]!)).toMatchObject({ ok: true });
+  expect(f.calls.filter(call => call === 'acquire')).toHaveLength(2);
+});
+it.each([403, 503])('a Cloudflare challenge (HTTP %s) is a typed refusal naming the handoff route, not a page failure', async status => {
+  const f = fake(); f.page.goto = async () => ({ status: () => status, headers: () => ({ 'cf-mitigated': 'challenge' }) }) as never;
+  const result = await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context);
+  expect(result).toMatchObject({ ok: false, code: 'rejected' });
+  if (result.ok) return;
+  expect(result.error).toContain('verification_challenge'); expect(result.error).toContain('owner_login');
+  expect(f.calls).toContain('Browser.close');
+});
 it('returns typed empty-page and timeout failures while terminating the owned session', async () => {
-  for (const mode of ['empty', 'timeout']) {
-    const f = fake();
-    if (mode === 'empty') f.page.locator = () => ({ innerText: async () => '  ' });
-    else f.page.goto = async () => { throw Error('TimeoutError with secret raw diagnostic'); };
-    const result = await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context);
-    expect(result).toMatchObject({ ok: false, code: mode === 'empty' ? 'not_found' : 'transient' });
-    expect(JSON.stringify(result)).not.toContain('secret'); expect(f.calls).toContain('Browser.close');
-  }
+  vi.useFakeTimers();
+  try {
+    for (const mode of ['empty', 'timeout']) {
+      const f = fake();
+      if (mode === 'empty') f.page.locator = () => ({ innerText: async () => '  ' });
+      else f.page.goto = async () => { throw Error('TimeoutError with secret raw diagnostic'); };
+      const read = cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context);
+      await vi.advanceTimersByTimeAsync(3000);
+      const result = await read;
+      expect(result).toMatchObject({ ok: false, code: mode === 'empty' ? 'not_found' : mode === 'http' ? 'rejected' : 'transient' });
+      expect(JSON.stringify(result)).not.toContain('secret'); expect(f.calls).toContain('Browser.close');
+    }
+  } finally { vi.useRealTimers(); }
 });
 it('denies missing/currently revoked source and private egress before allocating', async () => {
   const f = fake(), read = cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never });
@@ -99,24 +161,128 @@ it('the actual pinned SDK connects the wrapped binding to the exact acquired ID,
   expect(JSON.stringify(evidence.result)).not.toContain('secret');
 });
 
-it('trusted provider policy cannot be overridden by a model provider argument', async () => {
+it('a host that does not allow Browserbase never pays for it, keys or not', async () => {
   let paid = 0;
-  const handler = browsePageHandler('bb-key', 'project', undefined, (async () => { paid++; throw Error('paid'); }) as typeof fetch, { defaultProvider: 'cloudflare_playwright', allowBrowserbase: false });
-  expect(await handler.handle({ ...args, provider: 'browserbase_stagehand_http_v3' } as never, context)).toMatchObject({ ok: false, code: 'rejected' });
-  expect(await handler.handle({ url: args.url, instruction: args.instruction }, context)).toMatchObject({ ok: false, code: 'auth_failed' });
+  const handler = browsePageHandler('bb-key', 'project', undefined, (async () => { paid++; throw Error('paid'); }) as typeof fetch, { allowBrowserbase: false });
+  expect(await handler.handle({ url: args.url, instruction: args.instruction }, context)).toMatchObject({ ok: false, code: 'rejected' });
   expect(paid).toBe(0);
 });
 
-it('exercises subresource routing: private/foreign/credential/port requests and all redirects are denied before following', async () => {
+it('sub-resources load from any host and with any method that passes egress; private, credential, port, redirect and unread media requests are still refused', async () => {
   const f = fake(); const initial = f.page.goto;
   f.page.goto = async () => {
     expect(await f.route('https://example.com/style.css')).toEqual(['fetch', 'fulfill']);
-    for (const url of ['https://example.com:8443/data', 'http://169.254.169.254/', 'https://other.example/data', 'https://user:pass@example.com/data']) expect(await f.route(url)).toEqual(['abort']);
-    expect(await f.route('https://example.com/post', 'POST')).toEqual(['abort']);
-    expect(await f.route('https://example.com/redirect', 'GET', 302)).toEqual(['fetch', 'abort']);
+    expect(await f.route('https://cdn.other.example/app.js', 'GET', 200, undefined, { type: 'script' })).toEqual(['fetch', 'fulfill']);
+    expect(await f.route('https://api.other.example/graphql', 'POST', 200, undefined, { type: 'xhr' })).toEqual(['fetch', 'fulfill']);
+    expect(await f.route('https://example.com/post', 'POST')).toEqual(['fetch', 'fulfill']);
+    for (const url of ['https://example.com:8443/data', 'http://169.254.169.254/', 'http://10.0.0.5/app.js', 'http://localhost/app.js', 'https://user:pass@cdn.other.example/data']) expect(await f.route(url, 'GET', 200, undefined, { type: 'script' })).toEqual(['abort']);
+    expect(await f.route('https://cdn.other.example/redirect', 'GET', 302)).toEqual(['fetch', 'abort']);
+    for (const type of ['image', 'media', 'font']) expect(await f.route('https://cdn.other.example/asset', 'GET', 200, undefined, { type })).toEqual(['abort']);
     return initial();
   };
   expect((await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context)).ok).toBe(true);
+});
+it('acquires the provider session without a host guardrail, so cross-host sub-resources reach the per-request egress check, with recording off', async () => {
+  const f = fake(), acquired: unknown[] = []; const acquire = f.sdk.acquire;
+  f.sdk.acquire = async (...input: unknown[]) => { acquired.push(input[1]); return acquire(); };
+  expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context)).toMatchObject({ ok: true });
+  expect(acquired).toEqual([{ recording: false, keep_alive: 10000 }]);
+});
+it('top-level navigation, a popup\'s included, stays on the requested host while a cross-host frame is a sub-resource', async () => {
+  const f = fake(); const initial = f.page.goto;
+  f.page.goto = async () => {
+    const popup: FakeFrame = { parentFrame: () => null }, frame: FakeFrame = { parentFrame: () => f.mainFrame };
+    expect(await f.route('https://example.com/next', 'GET', 200, undefined, { navigation: true })).toEqual(['fetch', 'fulfill']);
+    expect(await f.route('https://other.example/next', 'GET', 200, undefined, { navigation: true })).toEqual(['abort']);
+    expect(await f.route('https://other.example/next', 'GET', 200, undefined, { navigation: true, frame: popup })).toEqual(['abort']);
+    expect(await f.route('https://example.com/search', 'POST', 200, undefined, { navigation: true })).toEqual(['abort']);
+    expect(await f.route('https://widgets.other.example/embed', 'GET', 200, undefined, { navigation: true, frame })).toEqual(['fetch', 'fulfill']);
+    return initial();
+  };
+  expect((await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context)).ok).toBe(true);
+});
+it('closes every WebSocket and locks service workers before the page opens', async () => {
+  const f = fake();
+  expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context)).toMatchObject({ ok: true });
+  const close = vi.fn(); f.socket()!({ close }); expect(close).toHaveBeenCalledOnce();
+  expect(f.calls.indexOf('init-script')).toBeLessThan(f.calls.indexOf('navigate'));
+  const g = fake(); g.privateContext.serviceWorkers = () => [{}];
+  expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => g.sdk as never })(args as never, context)).toMatchObject({ ok: false });
+  expect(g.calls).not.toContain('navigate'); expect(g.calls).toContain('Browser.close');
+});
+it('navigation gets more than ten seconds, still inside the run deadline', async () => {
+  for (const [deadline, expected] of [[Infinity, 20000], [Date.now() + 8000, 8000]] as const) {
+    const f = fake(), options: unknown[] = [];
+    f.page.goto = async (...input: unknown[]) => { options.push(input[1]); return { status: () => 200 }; };
+    expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, { ...context as object, runScope: { deadline, admit() {} } } as never)).toMatchObject({ ok: true });
+    expect(options).toHaveLength(1);
+    const { waitUntil, timeout } = options[0] as { waitUntil: string; timeout: number };
+    expect(waitUntil).toBe('domcontentloaded'); expect(timeout).toBeGreaterThan(expected - 100); expect(timeout).toBeLessThanOrEqual(expected);
+  }
+});
+it('reads only after requests in flight have finished and the network has been quiet for 500 ms', async () => {
+  vi.useFakeTimers();
+  try {
+    const f = fake(), startedAt = Date.now(); let readAt: number | undefined;
+    const script = { resourceType: () => 'script' }, socket = { resourceType: () => 'websocket' };
+    f.page.goto = async () => { f.emit('request', script); f.emit('request', socket); setTimeout(() => f.emit('requestfinished', script), 1000); return { status: () => 200 }; };
+    f.page.locator = () => ({ innerText: async () => { readAt = Date.now() - startedAt; return 'Rendered by script'; } });
+    const read = cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context);
+    await vi.advanceTimersByTimeAsync(1499); expect(readAt).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(501);
+    expect(await read).toMatchObject({ ok: true, data: { data: { text: 'Rendered by script' } } });
+    expect(readAt).toBeGreaterThanOrEqual(1500); expect(readAt).toBeLessThan(2000);
+    expect(f.calls.filter(call => call === 'scroll')).toHaveLength(1);
+  } finally { vi.useRealTimers(); }
+});
+it('a request that never finishes stops holding the read after 2 s', async () => {
+  vi.useFakeTimers();
+  try {
+    const f = fake(), startedAt = Date.now(); let readAt: number | undefined;
+    f.page.goto = async () => { f.emit('request', { resourceType: () => 'fetch' }); return { status: () => 200 }; };
+    f.page.locator = () => ({ innerText: async () => { readAt = Date.now() - startedAt; return 'Vegetarian pasta — £12'; } });
+    const read = cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context);
+    await vi.advanceTimersByTimeAsync(2100);
+    expect(await read).toMatchObject({ ok: true });
+    expect(readAt).toBeGreaterThanOrEqual(2000); expect(readAt).toBeLessThan(2100);
+  } finally { vi.useRealTimers(); }
+});
+it('every settle wait is bounded: a load that never fires, endless requests and a failing scroll still end in a read', async () => {
+  vi.useFakeTimers();
+  try {
+    for (const [nearDeadline, budget] of [[false, 12000], [true, 3000]] as const) {
+      const f = fake(), startedAt = Date.now(); let readAt: number | undefined, ticker: ReturnType<typeof setInterval> | undefined;
+      f.page.waitForLoadState = () => new Promise<void>(() => {});
+      f.page.evaluate = async () => { f.calls.push('scroll'); throw Error('page script failed'); };
+      f.page.goto = async () => { ticker = setInterval(() => f.emit('request', { resourceType: () => 'xhr' }), 100); return { status: () => 200 }; };
+      f.page.locator = () => ({ innerText: async () => { readAt = Date.now() - startedAt; return 'Vegetarian pasta — £12'; } });
+      const read = cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, { ...context as object, runScope: { deadline: nearDeadline ? Date.now() + 8000 : Infinity, admit() {} } } as never);
+      await vi.advanceTimersByTimeAsync(budget + 200);
+      clearInterval(ticker);
+      expect(await read).toMatchObject({ ok: true });
+      expect(readAt).toBeGreaterThanOrEqual(budget - 200); expect(readAt).toBeLessThanOrEqual(budget + 200);
+    }
+  } finally { vi.useRealTimers(); }
+});
+it('a settle wait that throws synchronously still ends in a read', async () => {
+  const f = fake();
+  f.page.waitForLoadState = () => { throw Error('load state unavailable'); };
+  f.page.evaluate = () => { throw Error('page script unavailable'); };
+  expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context)).toMatchObject({ ok: true, data: { data: { text: 'Vegetarian pasta — £12' } } });
+});
+it('a body that is still empty after the waits is read once more about 3 s later before it counts as empty', async () => {
+  vi.useFakeTimers();
+  try {
+    for (const later of ['Rendered later', '']) {
+      const f = fake(); let reads = 0;
+      f.page.locator = () => ({ innerText: async () => reads++ ? later : '' });
+      const read = cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never })(args as never, context);
+      await vi.advanceTimersByTimeAsync(2999); expect(reads).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await read).toMatchObject(later ? { ok: true, data: { data: { text: later } } } : { ok: false, code: 'not_found' });
+      expect(reads).toBe(2);
+    }
+  } finally { vi.useRealTimers(); }
 });
 it('honors the canonical run deadline during hanging allocation without creating a second session', async () => {
   const f = fake(); f.sdk.acquire = async () => { f.calls.push('acquire'); return new Promise(() => {}); };
@@ -131,9 +297,9 @@ it('isolates concurrent owners into distinct private sessions and never restores
   for (const f of [a,b]) expect(f.calls.filter(x => x === 'acquire')).toHaveLength(1);
 });
 
-it("ordinary source configuration preserves today's Browserbase default with no Cloudflare activation or fixture dependency", async () => {
+it('ordinary source configuration allows no Browserbase and activates no Cloudflare reader without registered provider code', async () => {
   const { browserPublicReadConfiguration } = await import('../src/channels/browser-public-read-configuration');
-  for (const environment of ['staging', 'production']) expect(browserPublicReadConfiguration({ WALDO_ENVIRONMENT: environment, BROWSER: {} as never })).toEqual({ defaultProvider: 'browserbase_stagehand_http_v3', allowBrowserbase: true, cloudflare: undefined });
+  for (const environment of ['staging', 'production']) expect(browserPublicReadConfiguration({ WALDO_ENVIRONMENT: environment, BROWSER: {} as never })).toEqual({ allowBrowserbase: false, cloudflare: undefined });
 });
 
 it('follows vetted same-host top-level redirects in the same private session without following prohibited ports', async () => {
@@ -250,13 +416,13 @@ it.each(['http', 'empty', 'thrown'] as const)('preserves the original safe %s fa
   try {
     const f = fake(), settle = vi.fn();
     f.sdk.sessions = async () => [{ sessionId: 'private-id' }];
-    if (mode === 'http') f.page.goto = async () => ({ status: () => 403 });
+    if (mode === 'http') f.page.goto = async () => ({ status: () => 403, headers: () => ({}) }) as never;
     if (mode === 'empty') f.page.locator = () => ({ innerText: async () => '' });
     if (mode === 'thrown') f.page.goto = async () => { throw Error('secret-provider https://private.example/private-id'); };
     const read = cloudflarePublicRead({ binding: {} as never, loadSdk: async () => f.sdk as never, reserveAllocation: async () => ({ settle }) })(args as never, context);
-    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(mode === 'empty' ? 4000 : 1000);
     const result = await read;
-    expect(result).toMatchObject({ ok: false, code: mode === 'empty' ? 'not_found' : 'transient' });
+    expect(result).toMatchObject({ ok: false, code: mode === 'empty' ? 'not_found' : mode === 'http' ? 'rejected' : 'transient' });
     expect(result).toMatchObject({ error: expect.stringContaining(mode === 'http' ? 'HTTP 403' : mode === 'empty' ? 'no readable content' : 'browser read failed') });
     expect(result).toMatchObject({ error: expect.stringContaining(`Read stage: ${mode === 'empty' ? 'content' : 'navigation'}.`) });
     expect(result).toMatchObject({ error: expect.stringContaining('cleanup is unconfirmed') });
@@ -349,4 +515,13 @@ it.each(['cleanup', 'settlement'] as const)('reports successful extraction safel
     expect(JSON.stringify(result)).not.toMatch(/Menu|Vegetarian|https:|private-id|private storage/);
     expect(settle).toHaveBeenCalledTimes(mode === 'cleanup' ? 0 : 1);
   } finally { vi.useRealTimers(); }
+});
+
+it('only a typed reservation refusal is reported as rejected; any other reservation failure stays transient, and neither allocates', async () => {
+  const refused = fake(), failed = fake();
+  expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => refused.sdk as never, reserveAllocation: async () => { throw new PublicReadRefusal('No browser was started. Retrying will not help.'); } })(args as never, context))
+    .toEqual({ ok: false, code: 'rejected', error: 'No browser was started. Retrying will not help.', source_taint: 'external' });
+  expect(await cloudflarePublicRead({ binding: {} as never, loadSdk: async () => failed.sdk as never, reserveAllocation: async () => { throw Error('private ledger detail'); } })(args as never, context))
+    .toEqual({ ok: false, code: 'transient', error: 'The Cloudflare browser read failed or its source permission changed.', source_taint: 'external' });
+  expect(refused.calls).toEqual([]); expect(failed.calls).toEqual([]);
 });

@@ -1,10 +1,29 @@
 import { z } from 'zod';
 import {
   replyApprovalPartV1Schema, replyChartSeriesPartV1Schema, replyFilePartV1Schema, replyQuickRepliesPartV1Schema,
-  replyVisibilityV1Schema, replyVoicePartV1Schema,
+  replyReceiptPartV1Schema, replyVisibilityV1Schema, replyVoicePartV1Schema,
 } from './parts';
 
 export const APP_AGENT_VERSION = 'app.v1' as const;
+// The contract revisions an app build reads, as `name=revision` pairs, e.g. `approvals=2`. Installed builds parse
+// strictly and drop what they cannot read, so a response grows past a contract's first revision only for a request
+// that names a later one. No header, a value that does not parse or a contract it leaves out reads revision 1.
+// Names this backend does not know are kept, so a newer build can declare them.
+export const APP_CONTRACT_HEADER = 'x-waldo-app-contract' as const;
+const contractPair = /^([a-z][a-z0-9_]{0,31})=([1-9][0-9]{0,3})$/;
+export const appContractHeaderV1Schema = z.string().max(512).transform((value, ctx) => {
+  const revisions: Record<string, number> = {};
+  for (const pair of value.split(',')) {
+    const match = contractPair.exec(pair);
+    if (!match || Object.hasOwn(revisions, match[1]!)) { ctx.addIssue({ code: 'custom', message: 'expected distinct name=revision pairs' }); return z.NEVER; }
+    revisions[match[1]!] = Number(match[2]);
+  }
+  return revisions;
+});
+export const appContractRevision = (header: string | null | undefined, contract: string): number => {
+  const parsed = appContractHeaderV1Schema.safeParse(header);
+  return parsed.success && Object.hasOwn(parsed.data, contract) ? parsed.data[contract]! : 1;
+};
 export const APP_SEND_MAX_WIRE_BYTES = 32768;
 export const appJsonWireBytes = (value: unknown): number => {
   const serialized = JSON.stringify(value);
@@ -14,9 +33,12 @@ export const appJsonWireBytes = (value: unknown): number => {
   return bytes;
 };
 export const appSendWireFits = (value: unknown): boolean => appJsonWireBytes(value) <= APP_SEND_MAX_WIRE_BYTES;
-export const appCodeRequestSchema = z.strictObject({ email: z.email().max(254) });
+// The console invite code (runtime identity/invite-code.ts). Sign-in admits a new member only
+// by its hash, so both the code request and the verify carry it; the app upper-cases first.
+const invite = z.string().regex(/^[A-HJ-NP-Z2-9]{20}$/);
+export const appCodeRequestSchema = z.strictObject({ email: z.email().max(254), invite: invite.optional() });
 export const appCodeResultSchema = z.strictObject({ ok: z.literal(true) });
-export const appVerifyRequestV1Schema = z.strictObject({ email: z.email().max(254), code: z.string().regex(/^\d{4,10}$/) });
+export const appVerifyRequestV1Schema = z.strictObject({ email: z.email().max(254), code: z.string().regex(/^\d{4,10}$/), invite: invite.optional() });
 export const appSessionV1Schema = z.strictObject({
   state: z.literal('active'), session_ref: z.string().regex(/^sess_[a-f0-9]{64}$/),
   account_ref: z.string().regex(/^acct_[a-f0-9]{64}$/), surface: z.literal('app'),
@@ -27,8 +49,9 @@ export const appVerifyResultV1Schema = z.union([
   z.strictObject({ state: z.literal('needs_invite') }),
 ]);
 export const appSignoutResultV1Schema = z.strictObject({ result: z.enum(['revoked', 'already_gone']) });
+export const appClientMessageIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/);
 export const appSendRequestV1Schema = z.strictObject({
-  client_message_id: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/), text: z.string().trim().min(1).max(4000),
+  client_message_id: appClientMessageIdV1Schema, text: z.string().trim().min(1).max(4000),
 });
 export const appSendResultV1Schema = z.strictObject({
   accepted: z.literal(true), message_id: z.string().min(1),
@@ -40,25 +63,48 @@ export const appMessagePartV1Schema = z.union([
   z.strictObject({ type: z.literal('operation'), operation_id: z.string(), state: z.enum(['admitted', 'running', 'completed', 'interrupted', 'revoked']), message: z.string() }),
   z.strictObject({ type: z.literal('artifact'), artifact_id: z.string(), revision: z.int().positive(), title: z.string(), download_path: z.string() }),
   replyApprovalPartV1Schema, replyQuickRepliesPartV1Schema, replyChartSeriesPartV1Schema, replyFilePartV1Schema, replyVoicePartV1Schema,
+  replyReceiptPartV1Schema,
 ]);
+// `text` is never empty when `parts` holds anything other than a text part, so a reader that draws only `text`
+// always shows the message. `created_at` is epoch ms when the row was stored; rows stored before the time
+// was kept have none, and no time is ever invented for them.
 export const appMessageV1Schema = z.strictObject({
   id: z.string(), role: z.enum(['user', 'assistant']), text: z.string(), parts: z.array(appMessagePartV1Schema),
   channel: z.string(), parent_id: z.string().nullable(), visibility: replyVisibilityV1Schema.optional(),
+  created_at: z.int().nonnegative().optional(),
 });
+// The history row `id`, URL-encoded in a path.
+export const appMessageIdV1Schema = z.string().min(1).max(256);
+// Only assistant messages can be rated; any other id is not found. A rating changes style and which messages
+// arrive, never what is true or what Waldo may do. null clears it. Repeating a request_id returns its first result.
+export const appRatingRequestV1Schema = z.strictObject({ request_id: z.string().regex(/^[A-Za-z0-9_-]{8,80}$/), rating: z.enum(['up', 'down']).nullable() });
+export const appRatingResultV1Schema = z.strictObject({ request_id: appRatingRequestV1Schema.shape.request_id, message_id: appMessageIdV1Schema, rating: appRatingRequestV1Schema.shape.rating });
 export const appHistoryResultV1Schema = z.strictObject({ messages: z.array(appMessageV1Schema), next_cursor: z.string().nullable() });
 // Codes name the non-generic failures a client can act on. The generic error stays code-free, so a
 // pre-authentication answer cannot say whether an address is invited.
 export const appErrorCodeV1Schema = z.enum(['client_message_id_reused', 'inbox_full', 'request_reused', 'stale_read', 'no_longer_eligible', 'receipt_capacity']);
 export const appProblemV1Schema = z.strictObject({ error: z.string(), code: appErrorCodeV1Schema.optional(), message: z.string().max(1000).optional() })
   .refine(problem => problem.error !== 'unavailable' || problem.code === undefined, { error: 'the generic error carries no code', path: ['code'] });
+// "Connect iMessage": a one-time code the owner sends from their own iPhone to the Waldo iMessage address, which
+// links that number to their own Waldo. send_url opens Messages with the text filled in. 503 where the shared
+// Waldo number is not configured.
+export const appIMessageLinkCodeV1Schema = z.strictObject({
+  code: z.string().regex(/^[A-HJ-NP-Z2-9]{10}$/), text: z.string().regex(/^waldo [A-HJ-NP-Z2-9]{10}$/),
+  address: z.string().min(3).max(320), send_url: z.string().startsWith('sms:').max(512), expires_in_seconds: z.literal(600),
+});
 export const appCoreRoutesV1 = [
   { method: 'POST', path: '/app/v1/auth/code', request: appCodeRequestSchema, response: appCodeResultSchema, authenticated: false, success_status: 200 },
   { method: 'POST', path: '/app/v1/auth/verify', request: appVerifyRequestV1Schema, response: appVerifyResultV1Schema, authenticated: false, success_status: 200 },
   { method: 'GET', path: '/app/v1/session', response: appSessionV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/auth/signout', response: appSignoutResultV1Schema, authenticated: true, success_status: 200 },
+  { method: 'POST', path: '/app/v1/channels/imessage/link-code', response: appIMessageLinkCodeV1Schema, authenticated: true, success_status: 200 },
   { method:'GET', path:'/app/v1/chat/main/messages/{client_message_id}',response:appMessageReceiptV1Schema,authenticated:true,success_status:200 },
   { method: 'GET', path: '/app/v1/chat/main', response: appHistoryResultV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/chat/main/messages', request: appSendRequestV1Schema, response: appSendResultV1Schema, authenticated: true, success_status: 202, max_request_bytes: APP_SEND_MAX_WIRE_BYTES },
+  // Stops that turn. A turn that already closed returns its recorded receipt; an effect dispatched before the
+  // stop leaves effects_unconfirmed true. A Worker without this route answers 404.
+  { method: 'POST', path: '/app/v1/chat/main/messages/{client_message_id}/cancel', response: appMessageReceiptV1Schema, authenticated: true, success_status: 200 },
+  { method: 'PUT', path: '/app/v1/chat/main/messages/{message_id}/rating', request: appRatingRequestV1Schema, response: appRatingResultV1Schema, authenticated: true, success_status: 200 },
 ] as const;
 
 export type AppSessionV1 = z.infer<typeof appSessionV1Schema>;

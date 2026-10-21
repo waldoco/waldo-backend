@@ -12,6 +12,8 @@ create extension if not exists "uuid-ossp" with schema extensions;
 create schema auth;
 create table auth.users (id uuid primary key default gen_random_uuid(), email text, email_confirmed_at timestamptz);
 create table auth.sessions (id uuid primary key default gen_random_uuid(), user_id uuid references auth.users(id), created_at timestamptz default now(), updated_at timestamptz, not_after timestamptz, refreshed_at timestamptz);
+-- Real GoTrue keeps refresh tokens by user id as text, with no foreign key to auth.users.
+create table auth.refresh_tokens (id bigserial primary key, token varchar, user_id varchar, revoked boolean default false);
 create or replace function auth.jwt() returns jsonb language sql stable as $$ select coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb $$;
 create or replace function auth.uid() returns uuid language sql stable as $$ select nullif(coalesce(nullif(current_setting('request.jwt.claim.sub', true), ''), nullif(auth.jwt() ->> 'sub', '')), '')::uuid $$;
 

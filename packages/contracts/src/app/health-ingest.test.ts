@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   appHealthRoutesV1, HEALTH_CONSENT_VERSION_V1, healthApiErrorV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema,
   healthConsentListV1Schema, healthConsentWithdrawV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthSampleV1Schema,
-  healthScoresQueryV1Schema, healthScoresV1Schema,
+  healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema,
 } from './health-ingest';
 
 const grant = { request_id: 'health-consent-001', source: 'apple', purpose: 'storage_compute', version: HEALTH_CONSENT_VERSION_V1, expected_epoch: 0, age_attested_18_plus: true };
@@ -138,6 +138,34 @@ describe('health scores read', () => {
   });
   it('bounds the score, the confidence and the HRV method', () => {
     rejected(healthScoresV1Schema, [{ ...scores, recovery: { ...scores.recovery, score: 101 } }, { ...scores, recovery: { ...scores.recovery, score: -1 } }, { ...scores, recovery: { ...scores.recovery, confidence: 1.5 } }, { ...scores, recovery: { ...scores.recovery, hrv_method: 'pnn50' } }, { ...scores, freshness: 'old' }]);
+  });
+  it('shows a score without a zone word while its bands are not ratified', () => {
+    expect(healthScoresV1Schema.safeParse({ ...scores, recovery: { ...scores.recovery, zone: null } }).success).toBe(true);
+    rejected(healthScoresV1Schema, [{ ...scores, recovery: { ...scores.recovery, zone: 'unknown' } }, { ...scores, recovery: { ...scores.recovery, zone: undefined } }]);
+  });
+  it('carries sleep debt in its own states, so a missing night or a missing key never reads as zero', () => {
+    const version = { algorithm_version: 'sleep-debt.candidate.v1', activation: 'candidate_unaccepted' };
+    const debt = { state: 'available', debt_minutes: 630, need_basis: 'own_average', ...version };
+    for (const sleep_debt of [{ state: 'unavailable', reason: 'missing_sleep' }, { state: 'partial', confidence: 0.6, ...version }, debt, { ...debt, debt_minutes: 0, need_basis: 'owner_confirmed' }]) {
+      expect(healthScoresV1Schema.safeParse({ ...scores, sleep_debt }).success, JSON.stringify(sleep_debt)).toBe(true);
+    }
+    expect(healthScoresResponseV1Schema.safeParse({ ...scores, sleep_debt: debt }).success).toBe(true);
+    rejected(healthScoresV1Schema, [
+      { ...scores, sleep_debt: null }, { ...scores, sleep_debt: { state: 'unavailable' } }, { ...scores, sleep_debt: { state: 'unavailable', reason: 'made_up' } },
+      { ...scores, sleep_debt: { state: 'partial', confidence: 0.6, debt_minutes: 630, ...version } }, { ...scores, sleep_debt: { state: 'partial', confidence: 1.5, ...version } },
+      { ...scores, sleep_debt: { ...debt, need_basis: undefined } }, { ...scores, sleep_debt: { ...debt, need_basis: 'guessed' } }, { ...scores, sleep_debt: { ...debt, zone: 'heavy' } },
+      { ...scores, sleep_debt: { ...debt, debt_minutes: -1 } }, { ...scores, sleep_debt: { ...debt, debt_minutes: 20_161 } }, { ...scores, sleep_debt: { ...debt, debt_minutes: null } },
+      { ...scores, sleep_debt: { ...debt, algorithm_version: 'sleep debt' } }, { ...scores, sleep_debt: { ...debt, activation: 'live' } },
+    ]);
+  });
+  it('answers a day with no row as unavailable with a reason, not as an error or a zero', () => {
+    for (const reason of ['not_linked', 'consent_required', 'consent_withdrawn', 'no_readings']) expect(healthScoresResponseV1Schema.safeParse({ state: 'unavailable', day: '2026-10-10', reason }).success).toBe(true);
+    expect(healthScoresResponseV1Schema.safeParse({ state: 'unavailable', day: null, reason: 'not_linked' }).success).toBe(true);
+    expect(healthScoresResponseV1Schema.safeParse(scores).success).toBe(true);
+    rejected(healthScoresResponseV1Schema, [
+      { state: 'unavailable', day: '2026-10-10' }, { state: 'unavailable', day: '2026-10-10', reason: 'baseline_immature' },
+      { state: 'unavailable', day: '2026-10-10', reason: 'no_readings', recovery: scores.recovery }, { state: 'available', day: '2026-10-10', reason: 'no_readings' },
+    ]);
   });
   it('takes an optional local day, nothing else', () => {
     expect(healthScoresQueryV1Schema.safeParse({}).success).toBe(true);
