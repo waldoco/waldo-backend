@@ -47,23 +47,44 @@ jobs:
       # after all tests pass (every run 2026-09-25, incl. docs-only commits) - the lane's 4
       # shards exit cleanly (#154). The scenario harness runs here, in the required job, below.
       - name: Verify (core)
-        run: node scripts/guards/guard-package-manager.mjs && pnpm -r typecheck && pnpm verify:node && pnpm verify:supabase && pnpm verify:supabase:session-revocation && pnpm verify:guards
+        run: node scripts/guards/guard-package-manager.mjs && pnpm -r typecheck && pnpm verify:node && pnpm verify:supabase && pnpm verify:guards
 
       # Required scenario gate: the main vitest config excludes the scenario harness, so the
       # shards above never run it. This step is the only CI coverage for the scenario suite.
       - name: Runtime scenarios
         working-directory: packages/runtime
         run: npx vitest run --config vitest.scenarios.config.ts
+      # Fictional bot/model bindings live only here; the ordinary DO tests rely on their absence.
+      - name: Hermetic owner ingress
+        working-directory: packages/runtime
+        run: npx vitest run --config vitest.owner-ingress.config.ts
+      - name: Hermetic device bridge
+        working-directory: packages/runtime
+        run: pnpm exec vitest run --config vitest.devices.config.ts
+      # The main config excludes these files, and test:owner-ingress was their only runner.
+      - name: Telegram link routing
+        working-directory: packages/runtime
+        run: npx vitest run --config vitest.link-routing.config.ts
+      - name: iMessage bridge
+        working-directory: packages/runtime
+        run: npx vitest run --config vitest.imessage.config.ts
+      - name: Mac result recovery
+        working-directory: packages/runtime
+        run: npx vitest run --config vitest.mac-closeout.config.ts
+      # live-memory.test.ts needs node:sqlite, so the workers-pool config excludes it; this step is its only CI run.
+      - name: Live owner memory handlers
+        working-directory: packages/runtime
+        run: npx vitest run --config vitest.memory-b1.config.ts
+      - name: Console ticket tenant routing
+        working-directory: packages/runtime
+        run: npx vitest run --config vitest.console-ticket.config.ts
 
   # Matches the in-lane gate exactly: 4 shards, each a small process that exits cleanly.
   # Falsifier for coverage: the shard totals must sum to the full runtime test count.
   verify-runtime:
     name: Runtime tests (shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
-    # Owner decision 2026-09-25: the workerd teardown crash (#154) must not block merges while
-    # the hunt continues. Suites still RUN in full on every push - logs and counts are the
-    # evidence; in-lane 4-shard gates remain the green signal. Remove this when #154 lands.
-    continue-on-error: true
+    # All shards remain diagnostic on failure, but a failed shard must fail CI.
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -85,6 +106,9 @@ jobs:
 
       - name: Install (frozen lockfile, release-age policy active)
         run: pnpm install --frozen-lockfile
+
+      - name: Build dashboard assets for Worker-backed tests
+        run: pnpm --filter @waldo/dashboard-app build && pnpm --filter @waldo/dashboard-app verify:assets
 
       - name: Runtime tests
         working-directory: packages/runtime
@@ -111,6 +135,7 @@ jobs:
 
       - name: Verify canonical migration ordering
         run: |
+          node --test scripts/canonical-history-versions.test.mjs
           node scripts/verify-supabase-migrations.mjs
           supabase migration list --local
           supabase db query --local --file supabase/fixtures/assert-canonical-migration-history.sql

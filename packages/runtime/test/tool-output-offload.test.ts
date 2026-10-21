@@ -1,8 +1,8 @@
 import { buildSessionState, getContextArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
 import { capToolOutput, runToolLoop, TOOL_OUTPUT_LIMIT } from '../src/conversation/tool-loop';
-import { inMemoryToolOutputStore } from '../src/conversation/tool-output-store';
-import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
+import { MAX_STORED_ITEM_CHARS, inMemoryToolOutputStore } from '../src/conversation/tool-output-store';
+import { resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
 import { readToolOutputHandler } from '../src/tools/read-tool-output';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
@@ -10,7 +10,7 @@ const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' });
 const ctx = {
   authenticatedUserId: 'owner-1', trigger: 'user_message' as const, canaryTokens: CANARIES,
   sourceTaint: null, toolArgSourceTaint: null,
-  sanitise: adapters.safety.sanitise, medicalGate: adapters.safety.medicalGate,
+  sanitise: adapters.safety.sanitise,
   session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: 0 }),
 };
 
@@ -63,4 +63,17 @@ describe('tool output offload', () => {
     expect(seenOutput).toContain('to-1');
     expect(seenOutput.length).toBeLessThan(TOOL_OUTPUT_LIMIT + 500);
   });
+  it('clears every retained payload and metadata without reusing ids or retaining aggregate budget', () => {
+    const store = inMemoryToolOutputStore();
+    const retired = [];
+    for (let index = 0; index < 7; index++) retired.push(store.put('x'.repeat(MAX_STORED_ITEM_CHARS + 1), { call_id: `old-${index}` }));
+    store.clear();
+    for (const row of retired) { expect(store.stat(row.id)).toBeNull(); expect(store.read(row.id, 0, 1)).toBeNull(); }
+    const fresh = store.put('y'.repeat(MAX_STORED_ITEM_CHARS), { call_id: 'fresh' });
+    store.put('z'.repeat(MAX_STORED_ITEM_CHARS));
+    expect(fresh.id).toBe('to-8');
+    expect(store.stat(fresh.id)).toMatchObject({ call_id: 'fresh', original_chars: MAX_STORED_ITEM_CHARS, stored_chars: MAX_STORED_ITEM_CHARS });
+    expect(store.read(fresh.id, 0, 1)?.text).toBe('y');
+  });
+
 });

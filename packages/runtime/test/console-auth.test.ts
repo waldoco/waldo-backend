@@ -34,11 +34,29 @@ describe('consoleAuth', () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
     const [url, init] = fetcher.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://db.test/rest/v1/rpc/signin_allowed');
-    expect(JSON.parse(String(init.body))).toMatchObject({ p_email: 'stranger@example.com', p_sig: await routerSignature('router', 1_790_000_000, 'signin.stranger@example.com') });
+    expect(JSON.parse(String(init.body))).toMatchObject({ p_email: 'stranger@example.com', p_sig: await routerSignature('router', 1_790_000_000, 'signin.stranger@example.com.') });
 
     const allowed = vi.fn().mockResolvedValueOnce(json(true)).mockResolvedValueOnce(json({}));
     await consoleAuth(env, allowed as unknown as typeof fetch, now)!.sendCode('owner@example.com');
     expect((allowed.mock.calls[1] as [string])[0]).toBe('https://db.test/auth/v1/otp');
+  });
+
+  it('binds an invite code hash to the OTP gate and existing-owner resolution without provisioning from collected phone or sending raw code to the directory', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(json(true)).mockResolvedValueOnce(json({}))
+      .mockResolvedValueOnce(json({ user: { id: 'u-1', email: 'invited@example.com' } }))
+      .mockResolvedValueOnce(json('owner-1'));
+    const auth = consoleAuth(env, fetcher as unknown as typeof fetch, now)!;
+    const code = 'ABCDEFGHJKLMNPQRSTUV';
+    expect(await auth.sendCode('Invited@Example.com', code)).toBe(true);
+    expect(await auth.verify('Invited@Example.com', '123456', '+14155550100', code)).toBe('owner-1');
+    const gate = JSON.parse(String((fetcher.mock.calls[0] as [string, RequestInit])[1].body));
+    const bound = JSON.parse(String((fetcher.mock.calls[3] as [string, RequestInit])[1].body));
+    expect(gate.p_code_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(bound.p_code_hash).toBe(gate.p_code_hash);
+    expect(bound.p_phone).toBe('');
+    expect(gate.p_sig).toBe(await routerSignature('router', 1_790_000_000, `signin.invited@example.com.${gate.p_code_hash}`));
+    expect(bound.p_sig).toBe(await routerSignature('router', 1_790_000_000, `owner.u-1.invited@example.com..${gate.p_code_hash}`));
+    expect(JSON.stringify(fetcher.mock.calls)).not.toContain(code);
   });
 
   it('maps a verified code to the owner Durable Object', async () => {
@@ -72,6 +90,23 @@ describe('consoleAuth', () => {
     expect(await consoleAuth({ ...env, WALDO_ROUTER_HMAC_SECRET: 'other' })!.readOwnerCookie(withCookie(cookie!))).toBeNull();
   });
 
+  it('the app credential is its own artifact: same kind of server session, never a console cookie', async () => {
+    const fetcher = vi.fn(async () => json(true));
+    const auth = consoleAuth(env, fetcher as unknown as typeof fetch, now)!;
+    const app = (await auth.ownerAppCredential('do-a'))!;
+    const cookie = (await auth.ownerCookie('do-a'))!;
+    expect(app.split('.')).toHaveLength(3);
+    expect(await auth.readAppCredential(app)).toBe('do-a');
+    expect(await auth.readOwnerCookie(withCookie(app))).toBeNull();
+    expect(await auth.readAppCredential(cookie)).toBeNull();
+    expect(await auth.readAppCredential(app.replace('do-a', 'do-b'))).toBeNull();
+    expect(await auth.readAppCredential('')).toBeNull();
+    expect(await auth.readAppCredential('%E0%A4%A.session.sig')).toBeNull();
+    expect(await consoleAuth({ ...env, WALDO_ROUTER_HMAC_SECRET: 'other' })!.readAppCredential(app)).toBeNull();
+    const dead = vi.fn(async (input: RequestInfo) => json(!String(input).includes('console_session_touch')));
+    expect(await consoleAuth(env, dead as unknown as typeof fetch, now)!.readAppCredential(app)).toBeNull();
+  });
+
   it('a killed session invalidates its cookie and sign-in fails when the session cannot open', async () => {
     const alive = vi.fn(async () => json(true));
     const auth = consoleAuth(env, alive as unknown as typeof fetch, now)!;
@@ -97,4 +132,25 @@ describe('consoleAuth', () => {
     expect(JSON.parse(String(init.body))).toMatchObject({ p_do_name: 'do-a', p_timezone: 'Asia/Kolkata', p_quiet_start: '22:00', p_quiet_end: '', p_volume: 'low', p_sig: await routerSignature('router', 1_790_000_000, 'settings.do-a.Asia/Kolkata.22:00..low') });
     expect(await auth.saveSettings('do-a', { timezone: 'Mars/Olympus', quiet_start: null, quiet_end: null, volume: 'normal' })).toBe(false);
   });
+});
+
+it('legacy signup cannot send an unverified phone to the atomic owner creation path', async () => {
+  const fetcher = vi.fn().mockResolvedValueOnce(json({ user: { id: 'new-auth', email: 'new@example.com' } })).mockResolvedValueOnce(json(null));
+  expect(await consoleAuth(env, fetcher as typeof fetch, now)!.verify('new@example.com', '123456', '+14155550100', 'ABCDEFGHJKLMNPQRSTUV')).toBeNull();
+  const payload = JSON.parse(String(fetcher.mock.calls[1]?.[1].body));
+  expect(payload.p_phone).toBe('');
+  expect(fetcher).toHaveBeenCalledTimes(2);
+});
+
+
+it('malformed signed session inventory cannot prove absence or revocation', async () => {
+  const row={session:'a'.repeat(64),created_at:new Date().toISOString(),last_seen_at:new Date().toISOString()};
+  for(const invalid of [null,{},[{}],[{...row,session:'short'}],[{...row,created_at:'invalid'}],[{...row,extra:true}],[row,row]]) {
+    const auth=consoleAuth(env,vi.fn().mockResolvedValue(json(invalid)) as unknown as typeof fetch,now)!;
+    await expect(auth.listSessions('owner')).rejects.toThrow('session inventory unavailable');
+  }
+  const auth=consoleAuth(env,vi.fn().mockResolvedValue(json('true')) as unknown as typeof fetch,now)!;
+  await expect(auth.revokeSession('owner',row.session)).rejects.toThrow('session revocation unavailable');
+  const signout=consoleAuth(env,vi.fn(async()=>json('2')) as unknown as typeof fetch,now)!;
+  await expect(signout.signOutAll('owner')).rejects.toThrow('session revocation unavailable');
 });

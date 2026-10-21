@@ -1,0 +1,9 @@
+# Trace lookup for new developers
+
+At beta-mvp, use `/console/activity` on the owner's console first. Each row gives a trace key (`tg-<update>` for a Telegram turn, a schedule occurrence for a machine turn), a hop, success, elapsed time, and safe detail. A successful model turn is not a provider receipt. Check the `send` hop and the channel's actual message; a pending proposal is not an effect.
+
+Filter the Worker structured logs on the Activity trace key, then filter Langfuse by `langfuse.trace.metadata.trace_key` and release. Langfuse is optional: a missing trace can mean unconfigured OTLP, export failure (`otlp_export` hop), or ingestion lag. `wrangler.jsonc` enables logs but disables invocation URLs. Do not enable raw capture just to debug: production forcibly turns it off. Use typed codes and synthetic turns.
+
+Memory's `constellation_evidence` hop is a single-node admission or hold, with a typed reason (`same_day`, `too_few_claims`, `untrusted_or_missing`), source-kind class and count of 1; it carries no claim ID or content. The nightly machine turn carries the same trace key. A health read emits `health_context` success code `present` or `absent`; an RPC/validation failure emits `read_failed` (not a successful hop). `absent` proves the signed read returned without a derived row, not that the iOS app supplied current health data.
+
+Console email sign-in/verify and directory routing are separate HTTP requests, not one turn. Each response has `x-waldo-trace: console-<random UUID>`; find that key in Worker logs to see fixed code only. Do not put email, phone, OTP, cookie, URL, provider payload, or free-form exception into those logs. A ticket/session passthrough has its own request ID, while the owner DO's Activity has its own action trace. There is no cross-request session trace yet. OTP send acceptance and cookie creation are not proof of email delivery or sign-in on a second device; test the whole flow with synthetic owners.

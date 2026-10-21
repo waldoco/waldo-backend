@@ -1,0 +1,191 @@
+name: deploy-staging
+
+# DRAFT - NOT ENABLED. Owner decision 2026-09-26: deploys (wrangler) and supabase migrations
+# run through the Mac lane until he explicitly approves the first automated run. This workflow
+# therefore has NO push trigger yet: it runs only when he triggers it by hand
+# (workflow_dispatch). Enabling auto-deploy = adding the commented `push` block below, and
+# that edit ships only with his go-ahead.
+#
+# on:
+#   push:
+#     branches:
+#       - beta-mvp
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Read-only inspection, reviewed migration apply, Worker deployment, or read-only deploy gate
+        required: true
+        type: choice
+        default: deploy
+        options:
+          - preflight
+          - migration-apply
+          - deploy
+          - gate
+      expected_source_sha:
+        description: Exact reviewed 40-character source SHA (preflight requires this; gate compares the deployed release to it when set)
+        required: false
+        type: string
+      reviewed_pending_sha256:
+        description: SHA256 of exact pending byte manifest from reviewed preflight (apply only)
+        required: false
+        type: string
+      run_migrations:
+        description: 'Legacy input must remain false; use migration-apply separately'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  migration-preflight:
+    if: inputs.operation == 'preflight'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: staging
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+      - name: Boundary tests
+        run: node --test scripts/staging-migration-preflight.test.mjs
+      - name: Read pinned staging migration history (GET only)
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          SUPABASE_PROJECT_ID: togdshayyxycitzckpqv
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: node scripts/staging-migration-preflight.mjs
+      - name: Print sanitized receipt
+        run: cat staging-migration-preflight.json
+  migration-apply:
+    if: inputs.operation == 'migration-apply'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: staging
+    concurrency:
+      group: staging-migration-apply
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@008330803749db0355799c700092d9a85fd074e9
+        with:
+          version: 10.34.4
+      - name: Boundary tests
+        run: node --test scripts/staging-migration-preflight.test.mjs scripts/staging-migration-apply.test.mjs
+      - name: Apply exact reviewed pending bytes to pinned staging only
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          REVIEWED_PENDING_SHA256: ${{ inputs.reviewed_pending_sha256 }}
+          SUPABASE_PROJECT_ID: togdshayyxycitzckpqv
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: node scripts/staging-migration-apply.mjs
+  deploy:
+    if: inputs.operation == 'deploy'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@008330803749db0355799c700092d9a85fd074e9 # v6.0.9
+        with:
+          version: 10.34.4
+
+      - name: Install (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify gates stay green on the exact head being deployed
+        run: pnpm -r typecheck
+
+      - name: Reject legacy combined migration/deploy path
+        if: inputs.run_migrations
+        run: |
+          echo 'Use the separate reviewed migration-apply operation; deploy performs no SQL writes.'
+          exit 1
+
+      - name: Deploy worker to staging (release-stamped to the checked-out SHA)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        # scripts/deploy-runtime.sh stamps WALDO_RELEASE from the checkout SHA so /healthz and
+        # traces name the exact code deployed (Codex #271 review: bare wrangler leaves it
+        # "unreleased"). The script exists on the dispatched ref (beta-mvp), not on main.
+        run: scripts/deploy-runtime.sh --env staging
+
+      - name: Read-only deploy gate on the SHA just deployed
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: node scripts/staging-gate.mjs --expect-sha "$GITHUB_SHA"
+  # What is deployed, is it healthy, how to roll back: reads and refusal-path probes only, no
+  # deploy, rollback or write. See docs/ops/STAGING_DEPLOY_GATE.md.
+  gate:
+    if: inputs.operation == 'gate'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: staging
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@008330803749db0355799c700092d9a85fd074e9 # v6.0.9
+        with:
+          version: 10.34.4
+      - name: Install (frozen lockfile, for the pinned wrangler)
+        run: pnpm install --frozen-lockfile
+      - name: Gate logic tests
+        run: node --test scripts/staging-gate.test.mjs scripts/staging-rollback.test.mjs
+      - name: Staging gate
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "$EXPECTED_SOURCE_SHA" ]; then node scripts/staging-gate.mjs --expect-sha "$EXPECTED_SOURCE_SHA"; else node scripts/staging-gate.mjs; fi
+
+# Required repo secrets (staging scope only; production stays Mac-lane until he says so):
+#   CLOUDFLARE_API_TOKEN      - Workers:Edit on the staging worker only
+#   CLOUDFLARE_ACCOUNT_ID
+#   SUPABASE_ACCESS_TOKEN     - Supabase CLI auth
+#   SUPABASE_DB_PASSWORD      - staging project db password
+#   SUPABASE_STAGING_PROJECT_ID
+# First-run checklist (owner, before the manual trigger):
+#   1. Secrets above are set on the repo (staging-scoped token, not account-wide).
+#   2. The staging wrangler environment exists in packages/runtime/wrangler.toml.
+#   3. He has said the word on the first run. Then - and only then - trigger
+#      Actions -> deploy-staging -> Run workflow on beta-mvp with
+#      operation=deploy and run_migrations=false.
+
+# Read-only recipe (explicit ref and operation are required):
+#   gh workflow run deploy-staging.yml --repo waldoco/waldo-backend --ref beta-mvp \
+#     -f operation=preflight -f expected_source_sha=<reviewed40charSHA> \
+#     -f run_migrations=false
+# Do not omit --ref: default main still contains the old deploy-capable workflow.
+# Preflight never runs the deploy job, regardless of run_migrations input.
+# Reviewed apply recipe: only after source review, exact-head CI and fresh read-only
+# preflight packet review. This recipe is not owner authorization for SQL effects.
+#   gh workflow run deploy-staging.yml --repo waldoco/waldo-backend --ref beta-mvp \
+#     -f operation=migration-apply -f expected_source_sha=<reviewed40charSHA> \
+#     -f reviewed_pending_sha256=<packetPendingManifestSha256> -f run_migrations=false
+# Application and Worker promotion are distinct operations. No hosted run yet.

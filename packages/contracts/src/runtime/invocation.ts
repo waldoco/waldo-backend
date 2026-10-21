@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { briefVariantSchema, triggerTypeSchema } from '../core/trigger';
+import { briefVariantSchema, triggerTypeSchema, type TriggerType } from '../core/trigger';
 import { sourceTaintSchema } from '../memory/sanitise';
 import {
   EXTERNAL_ORIGIN_TOOLS,
@@ -7,7 +7,8 @@ import {
   taintGateBlocksDirectExecution,
 } from '../tools/handler';
 import { TOOL_PERMISSIONS, toolNameSchema } from '../tools/permissions';
-import { runtimeRunRecordSchema, runtimeToolDispatchFailureReasonSchema } from './run';
+import { runtimeContextSourceKindSchema, runtimeRunRecordSchema, runtimeToolDispatchFailureReasonSchema } from './run';
+import { scheduleKindSchema } from './schedule';
 
 const opaqueRef = (prefix: string) =>
   z.string().regex(new RegExp(`^${prefix}_[a-f0-9]{32}$`), {
@@ -62,6 +63,19 @@ export const invocationInputReferenceSchema = z.strictObject({
 });
 export type InvocationInputReference = z.infer<typeof invocationInputReferenceSchema>;
 
+// The jobs the owner's own Durable Object runs through the owner responder: the schedule kinds it runs, and the report
+// of a result the owner's paired device sent back, which no schedule entry carries.
+const SCHEDULED_OWNER_JOBS = scheduleKindSchema.extract(['brief', 'pre_activity_spot', 'dreaming', 'reminder', 'heartbeat', 'standing_order']).options;
+export const ownerJobSchema = z.enum([...SCHEDULED_OWNER_JOBS, 'device_followup']);
+export type OwnerJob = z.infer<typeof ownerJobSchema>;
+
+// A reminder, heartbeat, standing-order fire or device follow-up reaches out to the owner without an owner message, which
+// is what the intervention trigger names; the other jobs keep the trigger their schedule kind already carries.
+const OWNER_JOB_TRIGGER: Readonly<Record<OwnerJob, TriggerType>> = {
+  brief: 'brief', pre_activity_spot: 'pre_activity_spot', dreaming: 'dreaming_mode',
+  reminder: 'intervention', heartbeat: 'intervention', standing_order: 'intervention', device_followup: 'intervention',
+};
+
 export const invocationIntentSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('respond_to_user') }),
   z.strictObject({ kind: z.literal('assemble_brief'), variant: briefVariantSchema }),
@@ -75,6 +89,7 @@ export const invocationIntentSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('intervene') }),
   z.strictObject({ kind: z.literal('dream') }),
   z.strictObject({ kind: z.literal('prepare_pre_activity') }),
+  z.strictObject({ kind: z.literal('run_owner_job'), job: ownerJobSchema }),
 ]);
 export type InvocationIntent = z.infer<typeof invocationIntentSchema>;
 
@@ -95,6 +110,7 @@ function admissionSourceAllowsIntent(
   source: TrustedInvocationAdmissionSource,
   intent: InvocationIntent,
 ): boolean {
+  if (intent.kind === 'run_owner_job') return source === 'trusted_scheduler';
   return (source === 'authenticated_ingress') === (intent.kind === 'respond_to_user');
 }
 
@@ -160,19 +176,13 @@ export type InvocationOutputDisposition = z.infer<typeof invocationOutputDisposi
 
 export const runtimeContextSourceSchema = z.strictObject({
   source_ref: opaqueRef('src'),
-  source_kind: z.enum([
-    'invocation_input',
-    'recall',
-    'skill',
-    'derived_health_view',
-    'connector_snapshot',
-    'workspace_snapshot',
-    'tool_result',
-    'runtime_metadata',
-  ]),
+  source_kind: runtimeContextSourceKindSchema,
   scope: z.enum(['invocation', 'principal', 'tenant', 'thread', 'system']),
   source_taint: sourceTaintSchema,
   produced_at: z.int().nonnegative(),
+  // context_version 3 only. A recorded outcome of the host's ancestry check (same principal_ref and
+  // tenant_ref as the invocation), never an authority: a label cannot admit a source by itself.
+  lineage: z.enum(['canonical_v1', 'legacy_preserved']).optional(),
 });
 export type RuntimeContextSource = z.infer<typeof runtimeContextSourceSchema>;
 
@@ -181,7 +191,7 @@ const isExternalOriginContextSource = (source: RuntimeContextSource): boolean =>
 
 export const runtimeContextCheckpointSchema = z
   .strictObject({
-    context_version: z.literal(2),
+    context_version: z.union([z.literal(2), z.literal(3)]),
     context_ref: opaqueRef('ctx'),
     principal_ref: opaqueRef('prn'),
     tenant_ref: opaqueRef('ten'),
@@ -192,6 +202,15 @@ export const runtimeContextCheckpointSchema = z
     sources: z.array(runtimeContextSourceSchema).min(1).max(32),
   })
   .superRefine((checkpoint, context) => {
+    if (checkpoint.context_version === 2 && checkpoint.sources.some((source) => source.lineage !== undefined)) {
+      context.addIssue({ code: 'custom', path: ['sources'], message: 'lineage labels require context version 3' });
+    }
+    if (checkpoint.context_version === 3 && checkpoint.sources.some((source) => source.lineage === undefined)) {
+      context.addIssue({ code: 'custom', path: ['sources'], message: 'context version 3 requires a lineage label on every source' });
+    }
+    if (checkpoint.context_version === 3 && checkpoint.sources.some((source) => source.lineage === 'legacy_preserved')) {
+      context.addIssue({ code: 'custom', path: ['sources'], message: 'legacy preserved history cannot enter canonical context' });
+    }
     const refs = checkpoint.sources.map((source) => source.source_ref);
     if (new Set(refs).size !== refs.length) {
       context.addIssue({
@@ -568,6 +587,8 @@ function runtimeBindingForIntent(intent: InvocationIntent): RuntimeInvocationBin
       return { trigger: 'dreaming_mode', variant: null, governor_resolution: 'from_trigger' };
     case 'prepare_pre_activity':
       return { trigger: 'pre_activity_spot', variant: null, governor_resolution: 'from_trigger' };
+    case 'run_owner_job':
+      return { trigger: OWNER_JOB_TRIGGER[intent.job], variant: null, governor_resolution: 'from_trigger' };
   }
 }
 

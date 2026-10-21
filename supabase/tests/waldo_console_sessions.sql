@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(10);
+select plan(12);
 delete from vault.secrets where name = 'waldo_router_hmac';
 select vault.create_secret('test-router-secret', 'waldo_router_hmac');
 create function pg_temp.at() returns bigint language sql as $$ select extract(epoch from now())::bigint $$;
@@ -17,7 +17,11 @@ select is((select count(*)::int from waldo.console_sessions where session_hash =
 select is(waldo.console_session_touch('do-a', 'hash1', pg_temp.at(), pg_temp.sig('consolesess.touch.do-a.hash1')), true, 'a live session validates');
 select is(waldo.console_session_touch('do-a', 'nope', pg_temp.at(), pg_temp.sig('consolesess.touch.do-a.nope')), false, 'an unknown session does not validate');
 
-select is((select count(*)::int from waldo.console_session_list('do-a', pg_temp.at(), pg_temp.sig('consolesess.list.do-a'))), 1, 'the session list shows the open session');
+select is(jsonb_array_length(waldo.console_session_list('do-a', pg_temp.at(), pg_temp.sig('consolesess.list.do-a'))), 1, 'the session list shows the open session');
+
+update waldo.console_sessions set created_at = now() - interval '12 hours 1 second' where session_hash = 'hash1';
+select is(waldo.console_session_touch('do-a', 'hash1', pg_temp.at(), pg_temp.sig('consolesess.touch.do-a.hash1')), false, 'an expired server-side session rejects even a correctly signed cookie');
+select is(jsonb_array_length(waldo.console_session_list('do-a', pg_temp.at(), pg_temp.sig('consolesess.list.do-a'))), 0, 'an expired session is absent from the active list');
 
 select is(waldo.console_signout_all('do-a', pg_temp.at(), pg_temp.sig('consolesess.signout.do-a')), 1, 'sign-out-everywhere drops every session');
 select is(waldo.console_session_touch('do-a', 'hash1', pg_temp.at(), pg_temp.sig('consolesess.touch.do-a.hash1')), false, 'a signed-out session no longer validates');

@@ -1,11 +1,7 @@
-import { createRuntimeTemporalRecallGateway, RecallSecurityHalt } from '../recall/gateway';
 import { InFlightSnapshotRegistry } from './lifecycle';
 import { ContextSourceRejectedError } from './faults';
 import type {
   ContextSnapshotAttestation,
-  ContextRecallGateway,
-  ContextRecallRequest,
-  ContextRecallSnapshot,
   LocalOwnerBinding,
   LocalOwnerBindingResolver,
   SystemSkillRepository,
@@ -22,12 +18,8 @@ const MAX_SQLITE_SKILL_BODY_CHARS = 2_400;
 const MAX_SQLITE_SKILL_JSON_CHARS = 4_096;
 const MAX_SQLITE_METADATA_CHARS = 256;
 const MAX_SQLITE_TIMESTAMP_CHARS = 64;
-const MAX_SQLITE_MEMORY_ID_CHARS = 256;
-const MAX_SQLITE_MEMORY_CONTENT_CHARS = 2_000;
 const MAX_UTF8_BYTES_PER_CHAR = 4;
 const REVISION_REF = /^rev_[a-f0-9]{32}$/;
-
-type LocalSourceTaint = 'external' | null;
 
 type StoredSkillRow = Readonly<{
   name: string;
@@ -51,16 +43,6 @@ type StoredSkillRow = Readonly<{
   archived_at: string | null;
 }>;
 
-type StoredMemoryRow = Readonly<{
-  id: string;
-  hall_type: string;
-  content: string;
-  confidence: number;
-  created_at: string;
-  valid_from: string;
-  source_trust: string;
-}>;
-
 export type HeadlessLocalOwnerBinding = Readonly<{
   principal_ref: string;
   tenant_ref: string;
@@ -69,8 +51,7 @@ export type HeadlessLocalOwnerBinding = Readonly<{
 
 // The current DO schema has only legacy `user_id` rows. This intentionally bounded local/headless
 // resolver proves the exact principal+tenant mapping before SQLite ever receives a local user id;
-// it is not a production identity directory and does not attest any memory-row taint. Production
-// recall still excludes unproven legacy rows through SqliteTemporalRecallGateway.create().
+// it is not a production identity directory and does not attest any memory-row taint.
 export class HeadlessLocalOwnerBindingResolver implements LocalOwnerBindingResolver {
   readonly #bindings = new Map<string, HeadlessLocalOwnerBinding>();
   readonly #localUserRefs = new Set<string>();
@@ -212,162 +193,6 @@ export class SqliteSystemSkillRepository implements SystemSkillRepository {
   }
 }
 
-// Current SQLite has no FTS/BM25/RRF, episode FTS, evolution, union-read, or retained row taint.
-// It delegates key/config/query/hint/Scribe admission to an explicit temporal partial gateway.
-// Legacy rows are excluded from prompt material until a retained source-taint proof exists,
-// rather than being reinterpreted as trusted local data.
-export class SqliteTemporalRecallGateway implements ContextRecallGateway {
-  readonly #snapshots = new InFlightSnapshotRegistry<ContextRecallSnapshot>();
-
-  static create(
-    sql: SqlStorage,
-    revisionSeedRef: string,
-  ): ContextRecallGateway {
-    return new SqliteTemporalRecallGateway(sql, revisionSeedRef);
-  }
-
-  private constructor(
-    private readonly sql: SqlStorage,
-    private readonly revisionSeedRef: string,
-  ) {
-    if (!REVISION_REF.test(revisionSeedRef)) throw new Error('invalid SQLite recall revision seed');
-  }
-
-  async recall(request: ContextRecallRequest): Promise<ContextRecallSnapshot> {
-    return this.#snapshots.capture(stableSnapshotKey(request), () => this.capture(request));
-  }
-
-  private async capture(request: ContextRecallRequest): Promise<ContextRecallSnapshot> {
-    let aggregateTaint: LocalSourceTaint = null;
-    let sourceRevision: string | undefined;
-    const temporal = createRuntimeTemporalRecallGateway({
-      reads: {
-        retrieveTemporal: async (args) => {
-          const memory = await this.readMemory(request, args.halls, args.as_of, args.limit);
-          aggregateTaint = memory.source_taint;
-          sourceRevision = memory.revision_ref;
-          return memory.rows;
-        },
-      },
-      now: () => request.snapshot_at,
-    });
-    const outcome = await temporal(
-      {
-        recallKey: request.recall_key,
-        zone: request.zone,
-        canaryTokens: request.canary_tokens,
-      },
-      request.hint,
-    );
-    const snapshot = attestationFor(
-      request,
-      sourceRevision ?? await contentRevision(this.revisionSeedRef, 'sqlite-temporal-empty', request, {
-        status: outcome.status,
-        recall_key: request.recall_key,
-        hint: request.hint ?? null,
-      }),
-    );
-    if (outcome.status === 'failed' || outcome.status === 'skipped') {
-      const result = Object.freeze({
-        principal_ref: request.owner.principal_ref,
-        tenant_ref: request.owner.tenant_ref,
-        snapshot,
-        status: outcome.status,
-        result: outcome.result,
-        source: null,
-        capability: 'owner_bound_local_temporal_snapshot',
-      });
-      return result;
-    }
-    const result = Object.freeze({
-      principal_ref: request.owner.principal_ref,
-      tenant_ref: request.owner.tenant_ref,
-      snapshot,
-      status: 'partial',
-      result: outcome.result,
-      source: Object.freeze({
-        source_key: `sqlite-temporal-recall:${request.snapshot_ref}`,
-        source_kind: 'recall',
-        scope: 'principal',
-        source_taint: aggregateTaint,
-        produced_at: request.snapshot_at,
-      }),
-      capability: 'owner_bound_local_temporal_snapshot',
-    });
-    return result;
-  }
-
-  private async readMemory(
-    request: ContextRecallRequest,
-    halls: readonly string[],
-    asOf: string,
-    limit: number,
-  ): Promise<Readonly<{ rows: readonly unknown[]; source_taint: LocalSourceTaint; revision_ref: string }>> {
-    const hallPlaceholders = halls.map(() => '?').join(', ');
-    const temporalArguments = [
-      request.owner.local_user_ref,
-      ...halls,
-      asOf,
-      asOf,
-      asOf,
-    ];
-    const oversized = this.sql
-      .exec<{ unsafe: number }>(
-        `SELECT 1 AS unsafe
-           FROM memory_blocks
-          WHERE user_id = ?
-            AND hall_type IN (${hallPlaceholders})
-            AND unixepoch(created_at) <= unixepoch(?)
-            AND unixepoch(valid_from) <= unixepoch(?)
-            AND (valid_to IS NULL OR unixepoch(valid_to) > unixepoch(?))
-            AND source_trust IN ('user_stated', 'memory_committed')
-            AND (
-              ${unsafeText('id', MAX_SQLITE_MEMORY_ID_CHARS)}
-              OR ${unsafeText('hall_type', MAX_SQLITE_METADATA_CHARS)}
-              OR ${unsafeText('content', MAX_SQLITE_MEMORY_CONTENT_CHARS)}
-              OR ${unsafeText('created_at', MAX_SQLITE_TIMESTAMP_CHARS)}
-              OR ${unsafeText('valid_from', MAX_SQLITE_TIMESTAMP_CHARS)}
-              OR (valid_to IS NOT NULL AND ${unsafeText('valid_to', MAX_SQLITE_TIMESTAMP_CHARS)})
-              OR ${unsafeText('source_trust', MAX_SQLITE_METADATA_CHARS)}
-            )
-          LIMIT 1`,
-        ...temporalArguments,
-      )
-      .toArray();
-    if (oversized.length > 0) throw new RecallSecurityHalt('memory');
-    const rows = this.sql
-      .exec<StoredMemoryRow>(
-        `SELECT id, hall_type, content, confidence, created_at, valid_from, source_trust
-           FROM memory_blocks
-          WHERE user_id = ?
-            AND hall_type IN (${hallPlaceholders})
-            -- ISO-8601 text permits offsets, so temporal eligibility must use instants rather
-            -- than lexical string order. Malformed timestamps yield NULL and fail closed.
-            AND unixepoch(created_at) <= unixepoch(?)
-            AND unixepoch(valid_from) <= unixepoch(?)
-            AND (valid_to IS NULL OR unixepoch(valid_to) > unixepoch(?))
-            AND source_trust IN ('user_stated', 'memory_committed')
-          ORDER BY unixepoch(valid_from) DESC, id ASC
-          LIMIT ?`,
-        ...temporalArguments,
-        limit,
-      )
-      .toArray();
-    // Current legacy DO rows do not retain source taint. Production must not reinterpret a
-    // local row as trusted merely because it is local; leave every row out until a retained-taint
-    // source adapter proves their origin.
-    const envelopes: readonly unknown[] = Object.freeze([]);
-    return Object.freeze({
-      rows: Object.freeze(envelopes),
-      source_taint: null,
-      revision_ref: await contentRevision(this.revisionSeedRef, 'sqlite-temporal-memory', request, {
-        rows,
-        admitted: envelopes,
-      }),
-    });
-  }
-}
-
 function toSkillRow(row: StoredSkillRow): unknown {
   return {
     name: row.name,
@@ -437,19 +262,6 @@ function attestationFor(
 
 function snapshotKey(request: Readonly<{ snapshot_ref: string; snapshot_at: number }>): string {
   return `${request.snapshot_ref}:${request.snapshot_at}`;
-}
-
-function stableSnapshotKey(request: ContextRecallRequest): string {
-  return JSON.stringify([
-    request.snapshot_ref,
-    request.snapshot_at,
-    request.owner.tenant_ref,
-    request.owner.principal_ref,
-    request.owner.local_user_ref,
-    request.recall_key ?? null,
-    request.zone ?? null,
-    request.hint ?? null,
-  ]);
 }
 
 async function contentRevision(

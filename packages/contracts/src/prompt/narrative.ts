@@ -8,9 +8,11 @@ import { formZoneSchema, loadZoneSchema, recoveryZoneSchema } from '../health/cr
 // wall's schema half; the egress overlay that swaps numeric scores for these words is
 // ADR-0024 — ADR-0011 supplies only the vocabulary.
 export const narrativeContextSchema = z.strictObject({
-  zone: formZoneSchema,
+  // Present when the Form view is the body-state source; Recovery-only stages omit it.
+  zone: formZoneSchema.optional(),
   recovery_descriptor: recoveryZoneSchema,
-  load_descriptor: loadZoneSchema,
+  // Absent until the day's demand is computed; a Recovery-first day carries Recovery alone.
+  load_descriptor: loadZoneSchema.optional(),
   day_summary: z.string().max(2000),
   active_goals: z.array(z.string().min(1)).default([]),
   upcoming_high_stakes: z.array(z.string().min(1)).default([]),

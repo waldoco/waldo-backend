@@ -10,7 +10,7 @@ const envWith = (rpcResult: unknown, doReply: { url?: string | null } = { url: '
     SUPABASE_PROJECT_URL: 'https://proj.example',
     SUPABASE_PUBLISHABLE_KEY: 'pk',
     WALDO_ROUTER_HMAC_SECRET: 'router-secret',
-    TELEGRAM_OWNER_DO: {
+    OWNER_DO: {
       idFromName: (name: string) => name,
       get: () => ({
         fetch: async (input: string, init?: RequestInit) => {

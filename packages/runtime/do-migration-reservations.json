@@ -11,23 +11,47 @@
     },
     {
       "version": 3,
-      "name": "responsibility-domain-v0-2"
+      "name": "responsibility-domain-v0-2",
+      "retired": true
     },
     {
       "version": 4,
-      "name": "responsibility-canonical-authority-v0-1"
+      "name": "responsibility-canonical-authority-v0-1",
+      "retired": true
     },
     {
       "version": 5,
-      "name": "responsibility-planning-harness-v0-3"
+      "name": "responsibility-planning-harness-v0-3",
+      "retired": true
     },
     {
       "version": 6,
-      "name": "responsibility-execution-writer-v0-4"
+      "name": "responsibility-execution-writer-v0-4",
+      "retired": true
     },
     {
       "version": 7,
-      "name": "responsibility-judgment-authority-v0-5"
+      "name": "responsibility-judgment-authority-v0-5",
+      "retired": true
+    },
+    {
+      "version": 8,
+      "name": "schedule-runs-v0-1"
+    },
+    {
+      "version": 9,
+      "name": "common-message-custody",
+      "retired": true
+    },
+    {
+      "version": 10,
+      "name": "common-execution-workunit",
+      "retired": true
+    },
+    {
+      "version": 11,
+      "name": "common-execution-continuation",
+      "retired": true
     }
   ]
 }

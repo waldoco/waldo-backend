@@ -8,6 +8,7 @@
 //    (durable_objects, ratelimits, migrations, ...) plus its own ai/vectorize.
 //    The 2026-09-25 deploy shipped staging with ONLY ai+vectorize and healthz 404'd.
 import { readFileSync } from 'node:fs';
+import { parseJsonc } from '../jsonc.mjs';
 
 const path = process.env.WRANGLER_CONFIG_PATH ?? 'packages/runtime/wrangler.jsonc';
 const raw = readFileSync(path, 'utf8');
@@ -17,12 +18,11 @@ for (const key of ['"ai"', '"vectorize"']) {
 }
 
 // comment/trailing-comma-tolerant parse for the structural checks
-const text = raw.replace(/\/\/[^\n]*/g, '').replace(/,(\s*[}\]])/g, '$1');
-const cfg = JSON.parse(text);
+const cfg = parseJsonc(raw);
 const staging = cfg?.env?.staging;
-// Even custom log metadata can include request URLs. OAuth callback code/state must have
-// query redaction pinned for every deploy. The remaining /c/<ticket> path cannot be
-// redacted by that setting, so automatic traces stay off until #205's cutover and proof.
+// Fetch invocation logs persist the full URL, including /c/<ticket> and OAuth callback
+// code/state. Automatic traces also include url.full/url.path. Until #205 removes those
+// credentials from URLs and proves query redaction, retain only structured custom logs.
 for (const [name, node] of [['top level', cfg], ['env.staging', staging]]) {
   const observability = node?.observability;
   if (observability?.enabled !== true || observability.logs?.enabled !== true) {
@@ -42,7 +42,7 @@ if (!staging || staging.name !== 'waldo-runtime-staging') {
   bad.push('env.staging missing or name != waldo-runtime-staging');
 } else {
   const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-  for (const key of ['durable_objects', 'ratelimits', 'migrations', 'kv_namespaces', 'r2_buckets', 'd1_databases', 'queues', 'services']) {
+  for (const key of ['assets', 'durable_objects', 'ratelimits', 'migrations', 'kv_namespaces', 'r2_buckets', 'd1_databases', 'queues', 'services']) {
     if (cfg[key] !== undefined && !eq(cfg[key], staging[key])) {
       bad.push(`env.staging does not mirror top-level "${key}"`);
     }
@@ -70,6 +70,11 @@ if (!hasLimiter(cfg)) bad.push('top-level ratelimits missing RESPONSIBILITY_RATE
 for (const [envName, envCfg] of Object.entries(cfg?.env ?? {})) {
   if (!hasLimiter(envCfg)) bad.push(`env.${envName} missing RESPONSIBILITY_RATE_LIMITER (console signup fails closed without it)`);
 }
+
+// 4. Staging browses through Cloudflare Browser Rendering, bound as BROWSER, by owner ruling; the S0 network-block
+//    test no longer gates it. Production binds no browser: a binding there would ship on the next promote.
+if (JSON.stringify(staging?.browser) !== JSON.stringify({ binding: 'BROWSER' })) bad.push('env.staging must bind Cloudflare Browser Rendering as BROWSER');
+if (cfg.browser !== undefined) bad.push('the top-level (production) config must not bind a browser');
 
 if (bad.length) {
   process.stderr.write(`guard-wrangler-local-bindings: ${bad.join('; ')}\n`);

@@ -2,7 +2,10 @@ import {
   derivedHealthDestinationViewSchema,
   narrativeContextSchema,
   type CanaryTokens,
+  type DerivedHealthDestinationView,
   type NarrativeContext,
+  type RuntimeContextSourceKind,
+  type SanitiseFailureReason,
   type TrustedInvocationEnvelope,
 } from '@waldo/contracts';
 import { prepareWithScribe } from '../scribe/prepare';
@@ -33,9 +36,9 @@ import type {
   StagedInputResolver,
 } from './types';
 
-const MAX_INPUT_CHARS = 2_000;
-const MAX_INPUT_TOTAL_CHARS = 6_000;
-const MAX_CONTEXT_FRAGMENT_CHARS = 2_000;
+const MAX_INPUT_CHARS = 4_000;
+const MAX_INPUT_TOTAL_CHARS = 12_000;
+const MAX_CONTEXT_FRAGMENT_CHARS = 4_000;
 const MAX_WORKSPACE_FRAGMENTS = 4;
 const MAX_TOOL_OUTPUT_FRAGMENTS = 6;
 
@@ -99,7 +102,7 @@ export async function loadStagedInputs(
       stableJson({ input_ref: actual.input_ref, content_digest: actual.content_digest }),
       snapshot.revision_ref,
     );
-    texts.push(preparePromptSourceText(actual.text, actual.source.source_taint, inputs.canary_tokens));
+    texts.push(preparePromptSourceText(actual.text, actual.source.source_taint, inputs.canary_tokens, 'staged_input'));
   }
   return Object.freeze(texts);
 }
@@ -286,6 +289,15 @@ export async function loadLocalOwnerBinding(
   });
 }
 
+function viewMatchesNarrative(
+  view: DerivedHealthDestinationView,
+  narrative: NarrativeContext,
+): boolean {
+  return view.algorithm_version === 'form.safte-fast.v1'
+    ? narrative.zone === view.form_zone
+    : narrative.recovery_descriptor === view.recovery_zone;
+}
+
 export function prepareHealth(
   health: ContextHealthMaterial | null,
   canaries: CanaryTokens,
@@ -300,7 +312,7 @@ export function prepareHealth(
     !view.success ||
     !narrative.success ||
     !view.data.destination_eligibility.includes('trigger_prompt') ||
-    narrative.data.zone !== view.data.form_zone ||
+    !viewMatchesNarrative(view.data, narrative.data) ||
     !Number.isSafeInteger(Date.parse(narrative.data.compiled_at)) ||
     Date.parse(narrative.data.compiled_at) > snapshotAt ||
     !isBoundedNarrative(narrative.data)
@@ -327,13 +339,13 @@ export function prepareHealth(
     null,
     canaries,
   );
-  if (!preparedView.ok) throw new FailClosed('sanitisation_failed');
+  if (!preparedView.ok) throw new FailClosed(`sanitisation_failed:${preparedView.reason}:narrative`);
   const preparedNarrative = {
     ...narrative.data,
-    day_summary: preparePromptSourceText(narrative.data.day_summary, null, canaries),
-    active_goals: narrative.data.active_goals.map((item) => preparePromptSourceText(item, null, canaries)),
+    day_summary: preparePromptSourceText(narrative.data.day_summary, null, canaries, 'narrative'),
+    active_goals: narrative.data.active_goals.map((item) => preparePromptSourceText(item, null, canaries, 'narrative')),
     upcoming_high_stakes: narrative.data.upcoming_high_stakes.map((item) =>
-      preparePromptSourceText(item, null, canaries),
+      preparePromptSourceText(item, null, canaries, 'narrative'),
     ),
   };
   return Object.freeze({
@@ -360,7 +372,17 @@ function prepareMandatoryFragment(
     throw new FailClosed('mandatory_context_missing');
   }
   const source = snapshotContextSource(record.source, 'provenance_invalid');
-  const prepared = preparePromptSourceText(record.text, source.source_taint, inputs.canary_tokens);
+  let prepared: string;
+  try {
+    prepared = preparePromptSourceText(record.text, source.source_taint, inputs.canary_tokens, 'material');
+  } catch (error) {
+    if (error instanceof FailClosed && /^sanitisation_failed:[a-z_]+:material$/.test(error.message)) {
+      throw new FailClosed(
+        `${error.message}:${source.source_kind}` as `sanitisation_failed:${SanitiseFailureReason}:material:${RuntimeContextSourceKind}`,
+      );
+    }
+    throw error;
+  }
   if (!allowScribeRewrite && prepared !== record.text) {
     throw new FailClosed('sanitisation_failed');
   }

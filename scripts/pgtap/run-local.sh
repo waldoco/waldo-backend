@@ -4,6 +4,8 @@
 # lane before they ship. Fresh cluster every run = tests prove the repo, never machine
 # state. Bootstraps PGDG debs into $HOME/pg15 on first run (no root needed).
 set -u
+# pgTAP provenance assertions use canonical UTC serialization, independent of host timezone.
+export TZ=UTC
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PGBASE="$HOME/pg15/usr/lib/postgresql/15"
 DEBS="$HOME/debs"

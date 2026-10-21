@@ -1,6 +1,7 @@
 // Private orchestration implementation; the public ContextComposer seam is re-exported by index.ts.
 import {
   TOOL_PERMISSIONS,
+  wrapSkills,
   runtimeContextCheckpointSchema,
   trustedInvocationEnvelopeSchema,
   type SkillExclusion,
@@ -13,7 +14,7 @@ import type {
   ContextCompositionPhase,
 } from './types';
 import { CONTEXT_LAYERS } from './types';
-import { assembleReasonsPrompt, renderProviderPrompt } from './prompt';
+import { assembleReasonsPrompt, renderHealth, renderProviderPrompt } from './prompt';
 import { snapshotData, validateRuntimeInputs } from './admission';
 import { loadSystemSkills } from './skills';
 import {
@@ -44,6 +45,8 @@ export function createContextComposer(deps: ContextComposerDependencies): Contex
     compose: async (trustedInvocation, runtimeOwnedInputs) => {
       let replayLease: FrozenSnapshotReplayLease | undefined;
       let phase: ContextCompositionPhase = 'admission';
+      let phaseStarted = Date.now();
+      const enter = (next: ContextCompositionPhase) => { const at = Date.now(); try { deps.phase_observer?.(next, at - phaseStarted); } catch { /* observation never changes composition */ } phaseStarted = at; phase = next; };
       try {
         let invocationValue: unknown;
         try {
@@ -57,13 +60,13 @@ export function createContextComposer(deps: ContextComposerDependencies): Contex
         replayLease = replayGuard.begin(invocation.data, inputs);
         const provenance = new ProvenanceCollector(invocation.data, inputs);
 
-        phase = 'staged_inputs';
+        enter('staged_inputs');
         const stagedInputs = await loadStagedInputs(deps.staged_inputs, invocation.data, inputs, provenance);
-        phase = 'materials';
+        enter('materials');
         const materials = await loadRuntimeContextMaterials(deps.materials, invocation.data, inputs, provenance);
-        phase = 'owner_binding';
+        enter('owner_binding');
         const owner = await loadLocalOwnerBinding(deps.owner_binding, invocation.data, inputs, provenance);
-        phase = 'skills';
+        enter('skills');
         const skills = await loadSystemSkills(
           deps.system_skills,
           deps.system_skill_state,
@@ -72,7 +75,7 @@ export function createContextComposer(deps: ContextComposerDependencies): Contex
           inputs,
           provenance,
         );
-        phase = 'health';
+        enter('health');
         const health = prepareHealth(
           materials.health,
           inputs.canary_tokens,
@@ -81,25 +84,25 @@ export function createContextComposer(deps: ContextComposerDependencies): Contex
           inputs.snapshot_at,
         );
         const recallKey = recallKeyFor(invocation.data.runtime_binding.trigger, invocation.data.runtime_binding.variant);
-        phase = 'recall';
+        enter('recall');
         const recall = await loadRecall(
           deps.recall,
           owner,
           recallKey,
-          health?.view.form_zone,
+          health?.view.algorithm_version === 'form.safte-fast.v1' ? health.view.form_zone : undefined,
           skills.selected[0]?.trigger_condition,
           inputs,
           provenance,
         );
 
-        phase = 'rendering';
+        enter('rendering');
         const rendered = await renderProviderPrompt(
           assembleReasonsPrompt(invocation.data, stagedInputs, materials, skills.selected, recall, health),
           inputs.canary_tokens,
         );
         if (!rendered.ok) throw new FailClosed(rendered.failure);
         const prompt = rendered.prompt;
-        phase = 'provenance';
+        enter('provenance');
         const checkpoint = await provenance.checkpoint(rendered.identity);
         const checkedCheckpoint = runtimeContextCheckpointSchema.safeParse(checkpoint);
         if (!checkedCheckpoint.success) throw new FailClosed('provenance_invalid');
@@ -137,6 +140,8 @@ export function createContextComposer(deps: ContextComposerDependencies): Contex
         return Object.freeze({
           ok: true as const,
           prompt,
+          ...(skills.selected.length ? { skillPrompt: wrapSkills(skills.selected) } : {}),
+          healthPrompt: renderHealth(health),
           checkpoint: checkedCheckpoint.data,
           evidence,
         });

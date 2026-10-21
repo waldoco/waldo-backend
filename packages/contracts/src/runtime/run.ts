@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { briefVariantSchema, triggerTypeSchema } from '../core/trigger';
 import { formZoneSchema } from '../health/crs';
 import {
+  sanitisationFailureSourceSchema,
   sanitiseFailureReasonSchema,
   sourceTaintSchema,
 } from '../memory/sanitise';
@@ -110,22 +111,46 @@ export type RuntimeProviderFailureReason = z.infer<typeof runtimeProviderFailure
 
 // ContextComposer keeps a content-free failure vocabulary at its public seam. The RunLoop carries
 // that vocabulary forward rather than serialising an adapter exception, source text, or prompt.
-export const runtimeContextFailureReasonSchema = z.enum([
-  'invalid_trusted_invocation',
-  'invalid_runtime_inputs',
-  'input_integrity',
-  'materials_unavailable',
-  'identity_mismatch',
-  'owner_binding_mismatch',
-  'skill_snapshot_invalid',
-  'skill_row_invalid',
-  'skill_content_oversize',
-  'mandatory_context_missing',
-  'health_context_invalid',
-  'recall_integrity',
-  'sanitisation_failed',
-  'provenance_invalid',
-  'assembly_failed',
+// Source kinds for context fragments; defined here (not invocation.ts) because invocation
+// already imports run.ts and the failure vocabulary below needs it without a cycle.
+export const runtimeContextSourceKindSchema = z.enum([
+  'invocation_input',
+  'recall',
+  'skill',
+  'derived_health_view',
+  'connector_snapshot',
+  'workspace_snapshot',
+  'tool_result',
+  'runtime_metadata',
+]);
+export type RuntimeContextSourceKind = z.infer<typeof runtimeContextSourceKindSchema>;
+
+export const runtimeContextFailureReasonSchema = z.union([
+  z.enum([
+    'invalid_trusted_invocation',
+    'invalid_runtime_inputs',
+    'input_integrity',
+    'materials_unavailable',
+    'identity_mismatch',
+    'owner_binding_mismatch',
+    'skill_snapshot_invalid',
+    'skill_row_invalid',
+    'skill_content_oversize',
+    'mandatory_context_missing',
+    'health_context_invalid',
+    'recall_integrity',
+    'provenance_invalid',
+    'assembly_failed',
+  ]),
+  // Bare form stays for the fence-closer and byte-identity guards, which have no scribe
+  // reason; the template form carries the scribe's typed deny reason (still content-free -
+  // the reason vocabulary names the guard, never the payload). 2026-09-27 P0: an untyped
+  // 'sanitisation_failed' hid which guard killed every staging conversation turn.
+  z.literal('sanitisation_failed'),
+  z.templateLiteral(['sanitisation_failed:', sanitiseFailureReasonSchema]),
+  z.templateLiteral(['sanitisation_failed:', sanitiseFailureReasonSchema, ':', sanitisationFailureSourceSchema]),
+  // Mandatory-material failures append the fragment's source kind so the trace names the store.
+  z.templateLiteral(['sanitisation_failed:', sanitiseFailureReasonSchema, ':material:', runtimeContextSourceKindSchema]),
 ]);
 export type RuntimeContextFailureReason = z.infer<typeof runtimeContextFailureReasonSchema>;
 

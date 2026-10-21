@@ -2,9 +2,9 @@
   "name": "waldo-runtime",
   "main": "src/index.ts",
   "compatibility_date": "2026-06-16",
-  // Custom log metadata can include request URLs too. Strip OAuth query strings at the
-  // platform boundary; keep automatic traces off until /c/<ticket> path links are retired
-  // and the redaction is proven with a synthetic canary (issue #205).
+  // Invocation logs include full request URLs. Keep structured console hop logs, but do not
+  // persist automatic URLs while connect tickets live in /c/<ticket> and OAuth callbacks
+  // carry code/state in the query. Enable traces only after issue #205's privacy gate.
   "observability": {
     "enabled": true,
     "redact_query_string": true,
@@ -14,15 +14,30 @@
   // Trace identity. WALDO_ENVIRONMENT must name the deploy target so Langfuse can split
   // staging from production; WALDO_RELEASE is the fallback only - the deploy wrapper
   // (scripts/deploy-runtime.sh) restamps it with the git SHA on every deploy.
-  "vars": { "WALDO_ENVIRONMENT": "production", "WALDO_RELEASE": "unreleased" },
+  // WALDO_OWNER_TELEGRAM_ID top level stays empty: production sets its own owner routing fresh
+  // (never copied from staging); empty string keeps the single-owner fallback disabled there.
+  // WALDO_EGRESS_ALLOWLIST: browse-tool egress host list. Empty in production = fail-closed;
+  // staging opens the public web with "*" (private and internal addresses stay blocked; "-host" entries add a deny list). guard-wrangler-local-bindings requires the key in both.
+  "vars": { "WALDO_ENVIRONMENT": "production", "WALDO_OWNER_DO_NAMESPACE": "", "WALDO_RELEASE": "unreleased", "WALDO_OWNER_TELEGRAM_ID": "", "CALENDAR_GROUNDED_PREP": "0", "DRIVE_READS": "0", "MAIL_SOURCE_FOLLOWUPS": "0", "MCP_READ_INTENTS": "0", "WALDO_MCP_SERVERS": "[]", "LANGFUSE_CAPTURE_TEXT": "false", "WALDO_EGRESS_ALLOWLIST": "", "IMESSAGE_CONNECTOR_ENABLED": "0", "IMESSAGE_CONNECTOR_POLICY": "", "IMESSAGE_ONBOARDING_URL": "", "IMESSAGE_WALDO_ADDRESS": "", "WHATSAPP_REENGAGE_TEMPLATE": "", "WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE": "", "WHATSAPP_ONBOARDING_URL": "", "WHATSAPP_DEBUG_LOG": "false" },
+  "assets": { "directory": "../dashboard-app/dist", "binding": "ASSETS", "run_worker_first": true },
   "durable_objects": {
     "bindings": [
       { "name": "RUNTIME_DO", "class_name": "RuntimeProbeDO" },
       { "name": "RUN_LOOP_DO", "class_name": "RunLoopDO" },
       { "name": "TRACER_DO", "class_name": "TracerDO" },
-      { "name": "TELEGRAM_OWNER_DO", "class_name": "TelegramOwnerDO" }
+      { "name": "OWNER_DO", "class_name": "OwnerDO" },
+      { "name": "DEVICE_BRIDGE_DO", "class_name": "DeviceBridgeDO" },
+      { "name": "IMESSAGE_BRIDGE_DO", "class_name": "IMessageBridgeDO" }
     ]
   },
+  // A5 artifact bodies (metadata lives in the owner DO; DO namespaces are per-worker, so
+  // staging/prod metadata never mixes - only the body bucket is shared, keyed by random
+  // artifact ids). guard-wrangler-local-bindings requires env.staging to mirror this block
+  // exactly. wrangler creates the bucket on the next Mac-lane deploy; a missing binding
+  // degrades to in-memory bodies, never a crash.
+  "r2_buckets": [
+    { "binding": "ARTIFACTS", "bucket_name": "waldo-artifacts" }
+  ],
   "ratelimits": [
     {
       "name": "RESPONSIBILITY_RATE_LIMITER",
@@ -30,27 +45,66 @@
       "simple": { "limit": 120, "period": 60 }
     }
   ],
+  // Fail-closed PR infrastructure preview: isolated DOs, no external storage/provider secrets.
+  // Preview vars/bindings are not inherited. Assets and migrations stay top-level.
+  "previews": {
+    "vars": { "WALDO_ENVIRONMENT": "preview", "WALDO_OWNER_DO_NAMESPACE": "", "WALDO_RELEASE": "unreleased", "WALDO_OWNER_TELEGRAM_ID": "", "LANGFUSE_CAPTURE_TEXT": "false", "WALDO_EGRESS_ALLOWLIST": "" },
+    "observability": {
+      "enabled": true,
+      "redact_query_string": true,
+      "logs": { "enabled": true, "invocation_logs": false },
+      "traces": { "enabled": false }
+    },
+    "durable_objects": {
+      "bindings": [
+        { "name": "RUNTIME_DO", "class_name": "RuntimeProbeDO" },
+        { "name": "RUN_LOOP_DO", "class_name": "RunLoopDO" },
+        { "name": "TRACER_DO", "class_name": "TracerDO" },
+        { "name": "OWNER_DO", "class_name": "OwnerDO" },
+      { "name": "DEVICE_BRIDGE_DO", "class_name": "DeviceBridgeDO" },
+      { "name": "IMESSAGE_BRIDGE_DO", "class_name": "IMessageBridgeDO" }
+      ]
+    },
+    "ratelimits": [
+      { "name": "RESPONSIBILITY_RATE_LIMITER", "namespace_id": "1002", "simple": { "limit": 120, "period": 60 } }
+    ]
+  },
   "env": {
     // Bindings, vars and secrets are NON-INHERITABLE in wrangler environments:
     // env.staging must carry the complete binding set, not just its additions.
     // guard-wrangler-local-bindings.mjs asserts this block mirrors the top level.
     "staging": {
       "name": "waldo-runtime-staging",
+      "main": "src/staging-browser.ts",
+      // A Telegram owner turn is one alarm invocation of up to 14 minutes, and each tool round re-sanitises and serialises
+      // the whole request (about 0.1 s of CPU at 60k tokens), so 150 rounds can pass the 30 s default.
+      "limits": { "cpu_ms": 300000 },
+      // Daily health retention sweep (waldo.health_retention_sweep). Staging only: the top-level (production) config has no trigger.
+      "triggers": { "crons": ["17 3 * * *"] },
+      "compatibility_flags": ["nodejs_compat"],
+      // Cloudflare Browser Rendering serves staging browsing, by owner ruling. Production binds no browser; guard-wrangler-local-bindings.mjs enforces both.
+      "browser": { "binding": "BROWSER" },
       "observability": {
         "enabled": true,
         "redact_query_string": true,
         "logs": { "enabled": true, "invocation_logs": false },
         "traces": { "enabled": false }
       },
-      "vars": { "WALDO_ENVIRONMENT": "staging", "WALDO_RELEASE": "unreleased" },
+      "vars": { "WALDO_ENVIRONMENT": "staging", "WALDO_OWNER_DO_NAMESPACE": "5fe34e5daa754791b45bd80638402ac6", "WALDO_RELEASE": "unreleased", "WALDO_OWNER_TELEGRAM_ID": "5458446350", "CALENDAR_GROUNDED_PREP": "1", "MAIL_SOURCE_FOLLOWUPS": "1", "DRIVE_READS": "1", "MCP_READ_INTENTS": "1", "WALDO_MCP_SERVERS": "[{\"name\":\"gmail\",\"url\":\"https://gmailmcp.googleapis.com/mcp/v1\",\"auth\":\"google\"},{\"name\":\"calendar\",\"url\":\"https://calendarmcp.googleapis.com/mcp/v1\",\"auth\":\"google\"},{\"name\":\"drive\",\"url\":\"https://drivemcp.googleapis.com/mcp/v1\",\"auth\":\"google\"}]", "LANGFUSE_CAPTURE_TEXT": "true", "WALDO_EGRESS_ALLOWLIST": "*", "IMESSAGE_CONNECTOR_ENABLED": "1", "IMESSAGE_CONNECTOR_POLICY": "{\"signatureMaxAgeMs\":60000,\"heartbeatMaxAgeMs\":90000,\"capabilityMaxAgeMs\":90000,\"maxRequestBytes\":131072,\"maxRetainedBytes\":16777216,\"maxRecords\":4096,\"pullMaxWaitMs\":0,\"deliveryDeadlineMs\":30000,\"mutationDeadlineMs\":90000,\"commitmentMaxAgeMs\":45000,\"setupLifetimeMs\":600000,\"replyHandoffMaxAgeMs\":600000,\"source\":\"staging-2026-10-13-owner-review\"}", "IMESSAGE_ONBOARDING_URL": "https://www.heywaldo.in/waitlist", "IMESSAGE_WALDO_ADDRESS": "woof@heywaldo.in", "WHATSAPP_REENGAGE_TEMPLATE": "", "WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE": "", "WHATSAPP_ONBOARDING_URL": "https://www.heywaldo.in/waitlist", "WHATSAPP_DEBUG_LOG": "true" },
+      "assets": { "directory": "../dashboard-app/dist", "binding": "ASSETS", "run_worker_first": true },
       "durable_objects": {
         "bindings": [
           { "name": "RUNTIME_DO", "class_name": "RuntimeProbeDO" },
           { "name": "RUN_LOOP_DO", "class_name": "RunLoopDO" },
           { "name": "TRACER_DO", "class_name": "TracerDO" },
-          { "name": "TELEGRAM_OWNER_DO", "class_name": "TelegramOwnerDO" }
+          { "name": "OWNER_DO", "class_name": "OwnerDO" },
+      { "name": "DEVICE_BRIDGE_DO", "class_name": "DeviceBridgeDO" },
+      { "name": "IMESSAGE_BRIDGE_DO", "class_name": "IMessageBridgeDO" }
         ]
       },
+      "r2_buckets": [
+        { "binding": "ARTIFACTS", "bucket_name": "waldo-artifacts" }
+      ],
       "ratelimits": [
         {
           "name": "RESPONSIBILITY_RATE_LIMITER",
@@ -62,7 +116,10 @@
         { "tag": "v1", "new_sqlite_classes": ["RuntimeProbeDO"] },
         { "tag": "v2", "new_sqlite_classes": ["TracerDO"] },
         { "tag": "v3", "new_sqlite_classes": ["RunLoopDO"] },
-        { "tag": "v4", "new_sqlite_classes": ["TelegramOwnerDO"] }
+        { "tag": "v4", "new_sqlite_classes": ["TelegramOwnerDO"] },
+        { "tag": "v5", "new_sqlite_classes": ["DeviceBridgeDO"] },
+        { "tag": "v6", "renamed_classes": [{ "from": "TelegramOwnerDO", "to": "OwnerDO" }] },
+        { "tag": "v7", "new_sqlite_classes": ["IMessageBridgeDO"] }
       ],
       "ai": { "binding": "AI" },
       "vectorize": [
@@ -74,6 +131,9 @@
     { "tag": "v1", "new_sqlite_classes": ["RuntimeProbeDO"] },
     { "tag": "v2", "new_sqlite_classes": ["TracerDO"] },
     { "tag": "v3", "new_sqlite_classes": ["RunLoopDO"] },
-    { "tag": "v4", "new_sqlite_classes": ["TelegramOwnerDO"] }
+    { "tag": "v4", "new_sqlite_classes": ["TelegramOwnerDO"] },
+    { "tag": "v5", "new_sqlite_classes": ["DeviceBridgeDO"] },
+    { "tag": "v6", "renamed_classes": [{ "from": "TelegramOwnerDO", "to": "OwnerDO" }] },
+    { "tag": "v7", "new_sqlite_classes": ["IMessageBridgeDO"] }
   ]
 }
