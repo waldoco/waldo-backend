@@ -74,13 +74,12 @@ describe('multi-part asks', () => {
     expect(await failed('x21-three-part-ask', parts('reminder'))).toEqual(['one reminder at 18:00 today']);
   });
 
-  it('fails the same effect raised twice', async () => {
-    const twice: ScriptRule[] = [{ match: /design review to 4pm/, rounds: [
-      { toolCalls: [{ name: 'set_reminder', arguments: { note: 'Pack', at: '2026-09-24T18:00', repeat: 'none' } }] },
-      { toolCalls: [{ name: 'set_reminder', arguments: { note: 'Pack', at: '2026-09-24T18:00', repeat: 'none' } }] },
-      { text: 'Done.' },
-    ] }];
-    expect(await failed('x21-three-part-ask', twice)).toContain('no effect happens twice');
+  it('fails the same effect recorded twice, ignoring ids that differ between runs, and passes distinct effects', async () => {
+    const held = await run('x21-three-part-ask', [say(/design review to 4pm/, 'Done.')]);
+    const draft = (messageId: string, body = 'Deck Friday.') => ({ kind: 'mail.draft', payload: { to: ['priya@northwind.example'], body, messageId } });
+    const rule = STATE_INVARIANTS[0]!;
+    expect(rule.holds({ ...held, effects: [draft('m1'), draft('m2')] })).toBe(false);
+    expect(rule.holds({ ...held, effects: [draft('m1'), draft('m2', 'Deck Monday.')] })).toBe(true);
   });
 });
 

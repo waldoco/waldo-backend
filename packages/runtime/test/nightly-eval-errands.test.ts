@@ -24,7 +24,7 @@ describe('errands parity set', () => {
       if (entry.run === 'nightly') { expect(entry.scenario?.id).toBe(entry.id); expect(entry.scenario?.receipts?.length).toBeGreaterThan(0); expect(entry.why).toBeUndefined(); }
       else { expect(entry.scenario).toBeUndefined(); expect(entry.why?.trim()).toBeTruthy(); }
     }
-    expect(ERRAND_SCENARIOS).toHaveLength(13);
+    expect(ERRAND_SCENARIOS).toHaveLength(15);
     expect(NIGHTLY_SCENARIOS.filter((scenario) => scenario.id.startsWith('x'))).toEqual(ERRAND_SCENARIOS);
   });
 
