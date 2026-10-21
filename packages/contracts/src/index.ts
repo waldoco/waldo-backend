@@ -71,6 +71,7 @@ export * from './runtime/management-workspace';
 export * from './runtime/reply-parts';
 export * from './runtime/surface-capabilities';
 export * from './telemetry/engagement';
+export * from './telemetry/turn-event';
 export * from './public/dto';
 export * from './public/morning-brief';
 export * from './testing/evidence';

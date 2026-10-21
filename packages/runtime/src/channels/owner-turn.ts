@@ -92,6 +92,8 @@ export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost;
 type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string }>;
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
+// Tool definitions are JSON: about four UTF-8 bytes per token on current tokenizers, close enough to compare rounds.
+const BYTES_PER_TOKEN_EST = 4;
 // The reply's system prompt with the byte size of each joined section, so a trace shows what fills it.
 type SystemPrompt = Readonly<{ text: string; sections: Readonly<Partial<Record<SystemSection, number>>> }>;
 
@@ -262,7 +264,7 @@ export const createOwnerResponder = (
     const shape = {
       system_bytes: utf8Bytes(system), request_bytes: utf8Bytes(input),
       context: {
-        tools_count: tools?.length ?? 0, tools_bytes: tools?.length ? utf8Bytes(JSON.stringify(tools)) : 0,
+        tools_count: tools?.length ?? 0, tools_bytes: tools?.length ? utf8Bytes(JSON.stringify(tools)) : 0, tools_tokens_est: tools?.length ? Math.ceil(utf8Bytes(JSON.stringify(tools)) / BYTES_PER_TOKEN_EST) : 0,
         tool_turns_bytes: turns?.length ? utf8Bytes(JSON.stringify(turns)) : 0,
         history_messages: Math.max(0, userMessages.length - 1), history_bytes: utf8Bytes(JSON.stringify(userMessages.slice(0, -1))),
         current_bytes: utf8Bytes(userMessages.at(-1)?.content ?? ''), attachments: attachments?.length ?? 0,
@@ -271,9 +273,12 @@ export const createOwnerResponder = (
     };
     const response = result.ok ? result.response : undefined;
     const metadataOnly = transientDecision || purpose.startsWith('memory') || purpose.startsWith('task_source') || purpose === 'compaction';
-    if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by, result.scribe?.reason, result.scribe_stage, result.detail].filter(Boolean).join(':'), shape, ...(metadataOnly ? {} : { text: { input } }) });
+    // The provider that answered, and whether the ladder moved off the first provider/model to get there (a same-model retry is not a fallback).
+    const served = result.attempts.at(-1);
+    const routing = served ? { provider: served.provider, fallback_fired: new Set(result.attempts.map((attempt) => `${attempt.provider}/${attempt.model}`)).size > 1 } : {};
+    if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by, result.scribe?.reason, result.scribe_stage, result.detail].filter(Boolean).join(':'), error_code: result.code, shape, ...routing, ...(metadataOnly ? {} : { text: { input } }) });
     else log({
-      trace, hop: `llm_${purpose}`, ms: result.usage.latency_ms, ok: true,
+      trace, hop: `llm_${purpose}`, ms: result.usage.latency_ms, ok: true, ...routing,
       usage: { model: result.usage.model, input: result.usage.input_tokens, output: result.usage.output_tokens, cached: result.usage.cache_read_input_tokens,
         web_searches: response!.output_items?.filter((item) => item.type === 'web_search_call').length ?? 0 },
       shape,
@@ -602,7 +607,7 @@ export const createOwnerResponder = (
           const receipt = event.call.name === 'remember' && event.ok ? JSON.parse(event.output) as { data?: { status?: string } } : undefined;
           if (receipt?.data?.status !== 'duplicate') turnToolEvents.push({ seq: turnToolEvents.length + 1, call: { name: event.call.name, args: parseToolArgs(event.call.arguments, event.call.name) }, ok: event.ok, at: Date.now(), ...(event.code ? { code: event.code } : {}) });
           privateRunScope?.admit();
-          log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: event.call.arguments, output: event.output } });
+          log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':'), error_code: event.code } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: event.call.arguments, output: event.output } });
           privateRunScope?.admit();
           pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: event.taint, origin: ownerTurnActive && !probeGuard?.stripLiveTools ? 'owner' : 'machine', summary: turnOnlyOutput.has(event.call.name) ? TURN_ONLY_OUTPUT : event.output, ...(thread ? { thread } : {}) });
         },
