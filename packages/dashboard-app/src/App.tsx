@@ -9,7 +9,8 @@ import {WorkspacePanel} from './Workspace';
 import {OwnerControlsPanel} from './OwnerControls';
 import {ControlsPanel} from './Controls';
 import { MemoryPanel } from './Memory';
-import { ChatLink, ChatPanel } from './Chat';
+import { ChatLink } from './Chat';
+import { ChatWorkspace, isThreadRoute } from './ChatThreads';
 import { TasksPanel } from './Tasks';
 import { AdminPanel, type AdminState } from './Admin';
 import { fetchAdmin } from './admin-model';
@@ -20,7 +21,7 @@ import { fetchOverview, SignInRequired } from './model';
 import { nextLiveDelay, sameRecord, shouldPoll } from './live';
 import './style.css';
 
-export type Route = 'not-found' | 'today' | 'chat' | 'overview' | 'waiting' | 'tasks' | 'patrol' | 'memory' | 'memory/spots' | 'memory/constellation' | 'memory/profile' | 'connections' | 'day' | 'admin' | 'files' | 'usage' | 'setup' | 'invites' | 'account' | 'files/workspace' | 'settings' | 'settings/not-found' | `settings/${SettingsSection}`;
+export type Route = 'not-found' | 'today' | 'chat' | `chat/${string}` | 'overview' | 'waiting' | 'tasks' | 'patrol' | 'memory' | 'memory/spots' | 'memory/constellation' | 'memory/profile' | 'connections' | 'connections/imessage' | 'connections/devices' | 'day' | 'admin' | 'files' | 'usage' | 'setup' | 'invites' | 'account' | 'files/workspace' | 'settings' | 'settings/not-found' | `settings/${SettingsSection}`;
 const routes = [
   { key: 'today', label: 'Today' }, { key: 'chat', label: 'Chat' }, { key: 'waiting', label: 'Waiting' }, { key: 'tasks', label: 'Tasks' },
   { key: 'memory', label: 'Memory' }, { key: 'patrol', label: 'Patrol' },
@@ -31,9 +32,10 @@ export const resolveRoute = (raw: string): Route => {
   if(memory.kind==='valid-memory'){const d=memory.destination;return d.kind==='profile'?'memory/profile':d.kind==='explore'?'memory/constellation':`memory/${d.view}`;}
   const value = raw.split('?')[0] ?? '';
   if(value.startsWith('settings/')&&!['day','sessions','usage','account','setup'].includes(value.slice(9)))return 'settings/not-found';
-  if(['settings','settings/day','settings/sessions','settings/usage','settings/account','settings/setup','day','connections'].includes(value))return value as Route;
+  if(['settings','settings/day','settings/sessions','settings/usage','settings/account','settings/setup','day','connections','connections/imessage','connections/devices'].includes(value))return value as Route;
   if (value === 'admin' || value==='files'||value==='usage'||value==='setup'||value==='invites'||value==='account'||value==='files/workspace') return value;
   if (value === 'memory/spots' || value === 'memory/constellation' || value === 'memory/profile') return value;
+  if(isThreadRoute(value))return value as Route;
   if(value===''||value==='overview')return 'today';
   return routes.find((r) => r.key === value)?.key ?? 'not-found';
 };
@@ -51,11 +53,11 @@ const ownerActivity = (data: OverviewV1) => data.latest_activity?.kind === 'hear
 // The time-of-day word carries the one serif accent on the page.
 const Greeting = ({ text }: { text: string }) => { const match = /^(Good )(\w+)(\.)$/.exec(text); return match ? <>{match[1]}<em>{match[2]}</em>{match[3]}</> : <>{text}</>; };
 
-export const isSettingsRoute = (route: Route) => route === 'admin' || ['connections', 'files', 'files/workspace', 'invites', 'day', 'usage', 'account', 'setup', 'settings'].includes(route) || route.startsWith('settings/');
+export const isSettingsRoute = (route: Route) => route === 'admin' || ['connections', 'connections/imessage', 'connections/devices', 'files', 'files/workspace', 'invites', 'day', 'usage', 'account', 'setup', 'settings'].includes(route) || route.startsWith('settings/');
 
 const shortcut: Record<string, string> = { today: 'T', chat: 'C', waiting: 'W', tasks: 'K', memory: 'M', patrol: 'P' };
 export function DashboardNavigation({ route, onNavigate,waitingCount }: { route: Route;waitingCount?:number; onNavigate?: () => void }) {
-  const selected = route.startsWith('memory') ? 'memory' : route === 'overview' ? 'today' : route;
+  const selected = route.startsWith('memory') ? 'memory' : route.startsWith('chat') ? 'chat' : route === 'overview' ? 'today' : route;
   const nav = useRef<HTMLElement>(null);
   // One white pill slides to the chosen page; it follows the link as its icon opens.
   useLayoutEffect(() => {
@@ -80,6 +82,7 @@ export function Dashboard({ data, route, now = new Date(), isAdmin = false }: { 
   if(route==='not-found')return <section className="tile notice" role="status"><h1>Page not found</h1><p>This console page doesn’t exist.</p><a className="button-link" href="#/today">Back to Today</a></section>;
   if(route==='settings/not-found')return <><SettingsHead selected="day" isAdmin={isAdmin}/><section className="tile notice" role="status"><h2>Settings page not found</h2><p>This settings page doesn’t exist.</p><a className="button-link" href="#/settings">Open Settings</a></section></>;
   if(route==='connections')return <><SettingsHead selected="connections" isAdmin={isAdmin}/><ControlsPanel key={route} view="connections" section="connections" embedded/></>;
+  if(route==='connections/imessage'||route==='connections/devices'){const view=route==='connections/imessage'?'imessage':'devices';return <><SettingsHead selected="connections" isAdmin={isAdmin}/><nav className="crumbs" aria-label="Breadcrumb"><a href="#/connections">Connections</a><span aria-current="page">{view==='imessage'?'iMessage':'Devices'}</span></nav><ControlsPanel key={route} view={view} embedded/></>;}
   if(route==='files'||route==='files/workspace')return <><SettingsHead selected="files" isAdmin={isAdmin}/><nav className="segmented small" aria-label="File storage views"><a href="#/files" aria-current={route==='files'?'page':undefined}>Telegram references</a><a href="#/files/workspace" aria-current={route==='files/workspace'?'page':undefined}>Private workspace</a></nav>{route==='files/workspace'?<WorkspacePanel/>:<ControlsPanel key="files" view="files" embedded/>}</>;
   if(route==='tasks')return <TasksPanel zone={data.timezone}/>;
   if(route==='waiting'||route==='patrol')return <ControlsPanel key={route} view={route==='patrol'?'activity':'waiting'}/>;
@@ -212,12 +215,12 @@ export function App() {
     <header className="topbar"><div className="topbar-inner">
       <a className="brand" href="#/today" aria-label="Waldo dashboard home"><WaldoMark/><span aria-hidden="true">Waldo</span></a>
       <DashboardNavigation route={route} waitingCount={ready?.waiting.count}/>
-      <div className="topbar-actions"><ChatLink current={route === 'chat'}/><a className="settings-link" href="#/settings" aria-label="Settings" aria-current={isSettingsRoute(route) ? 'page' : undefined}><Icon name="settings"/></a></div>
+      <div className="topbar-actions"><ChatLink current={route.startsWith('chat')}/><a className="settings-link" href="#/settings" aria-label="Settings" aria-current={isSettingsRoute(route) ? 'page' : undefined}><Icon name="settings"/></a></div>
     </div></header>
-    <main id="main" tabIndex={-1} className={route === 'chat' ? 'chat-main' : undefined}>{route === 'chat' ? <ChatPanel zone={ready?.timezone}/> : route === 'admin' ? <><SettingsHead selected="admin" isAdmin={isAdmin}/><AdminPanel state={adminState} onRefresh={refreshAdmin}/></>
+    <main id="main" tabIndex={-1} className={route.startsWith('chat') ? 'chat-main' : undefined}>{route.startsWith('chat') ? <ChatWorkspace thread={route === 'chat' ? null : route.slice(5)} zone={ready?.timezone}/> : route === 'admin' ? <><SettingsHead selected="admin" isAdmin={isAdmin}/><AdminPanel state={adminState} onRefresh={refreshAdmin}/></>
       : state.kind !== 'ready' ? <DashboardFeedback state={state} onRetry={() => setRetry((n) => n + 1)}/>
       : <div className="route" key={route.split('/')[0]}><Dashboard data={state.data} route={route} now={now} isAdmin={isAdmin}/></div>}</main>
-    {route !== 'chat' && <footer><p><a href="/console/legacy">Classic console</a> · <a href="/console/imessage">iMessage</a> · <a href="#/connections">Connections</a> · <a href="#/files">Files</a> · <a href="#/invites">Invites</a></p>
+    {!route.startsWith('chat') && <footer><p><a href="#/connections/imessage">iMessage</a> · <a href="#/connections/devices">Devices</a> · <a href="#/connections">Connections</a> · <a href="#/files">Files</a> · <a href="#/invites">Invites</a></p>
       {ready && <p><span title={`${exactTime(ready.as_of, ready.timezone)} · ${ready.timezone}`}>Updated {relativeTime(ready.as_of, now)}</span><span className="live-status" role="status" aria-live="polite">{livePaused ? ' · Live updates paused, retrying' : ' · Live'}</span><button type="button" className="refresh" aria-busy={refreshing} disabled={refreshing} onClick={() => setRetry((n) => n + 1)}><Icon name="retry"/>Refresh records</button></p>}
       <p>Recorded activity can include attempts and failures. Check the result before treating work as done.</p>
     </footer>}

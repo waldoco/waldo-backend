@@ -5,14 +5,15 @@ import {
   renderBlock,
   renderRecall,
   renderSkill,
+  type CanaryTokens,
   type ChannelPersona,
   type ConflictPair,
   type DominanceAuthority,
   type NarrativeContext,
   type PromptBuilder,
   type PromptBuilderDeps,
+  type RecallKey,
 } from '@waldo/contracts';
-import type { RuntimeRecallContext } from '../recall/gateway';
 import type { RuntimeSkillLoadContext } from '../skills/loader';
 
 export type RuntimePromptWorkspace = Readonly<{
@@ -34,6 +35,12 @@ export type RuntimePromptCanvas = Readonly<{
 
 // This attempt context composes selection and recall inputs with pre-formed canvas values.
 // Hydration stays outside this module.
+type RuntimeRecallContext = Readonly<{
+  recallKey: RecallKey | undefined;
+  zone: NarrativeContext['zone'] | undefined;
+  canaryTokens: CanaryTokens;
+}>;
+
 export type RuntimePromptContext = RuntimeSkillLoadContext &
   RuntimeRecallContext &
   Readonly<{

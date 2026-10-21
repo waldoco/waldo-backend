@@ -103,8 +103,9 @@ export const ownerEffectLedger = (storage: DurableObjectStorage, now: () => numb
         update(intent.operationId, 'attempting');
         let receipt: EffectReceipt;
         try { receipt = await adapter.dispatch(); }
-        catch {
-          console.error('owner_effect_dispatch_unknown');
+        catch (error) {
+          // A dispatch that knows it sent nothing says so; anything else may have gone out.
+          console.error(error instanceof EffectNotAppliedError ? 'owner_effect_dispatch_not_applied' : 'owner_effect_dispatch_unknown');
           return await readback(intent.operationId, adapter.reconcile);
         }
         // A persistence failure after I/O deliberately leaves an attempting intent.

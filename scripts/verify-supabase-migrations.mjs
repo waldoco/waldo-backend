@@ -63,6 +63,10 @@ const expectedMigrations = [
   '20261014060000_waldo_admin_invite_uncapped.sql',
   '20261014120000_waldo_imessage_shared_bridge.sql',
   '20261014130000_waldo_device_pairing_owner.sql',
+  '20261017090000_waldo_whatsapp_onboarding_replies.sql',
+  '20261017100000_waldo_console_auth_throttle_window.sql',
+  '20261017120000_waldo_whatsapp_text_first_link.sql',
+  '20261020120000_waldo_cost_ledger.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);

@@ -6,7 +6,7 @@ import {
   PROVIDER_OF,
   type ModelName,
 } from '@waldo/contracts';
-import type { LLMGatewayAdapter, LLMGatewayRequest, LLMGatewayResult, ProviderRetryAdvice } from './provider';
+import { outputItemProvider, type LLMGatewayAdapter, type LLMGatewayRequest, type LLMGatewayResult, type ProviderRetryAdvice } from './provider';
 import { callTimeLeftMs, MODEL_CALL_TIMEOUT_MS } from './time-budget';
 
 export type OpenAIResponsesClient = Pick<OpenAI, 'responses'>;
@@ -152,10 +152,11 @@ function responsesInput(request: LLMGatewayRequest['request']): OpenAI.Responses
     ...(lastUser === -1 && files.length ? [{ role: 'user' as const, content: files }] : []),
     ...(() => {
       // The model's own output items ride on the first call of a round and already hold every parallel call in it;
-      // a call is replayed from its record only when no earlier item carries its call_id.
+      // a call is replayed from its record only when no earlier item carries its call_id. A round another provider ran
+      // left items this API cannot read, so only OpenAI's own are replayed and that round is rebuilt from its records.
       const replayed = new Set<string>();
       return (request.tool_turns ?? []).flatMap((turn): OpenAI.Responses.ResponseInputItem[] => {
-        const prior = (turn.prior_items ?? []) as unknown as OpenAI.Responses.ResponseInputItem[];
+        const prior = (turn.prior_items ?? []).filter((item) => outputItemProvider(item) === OPENAI_PROVIDER) as unknown as OpenAI.Responses.ResponseInputItem[];
         for (const item of prior) {
           const record = item as { type?: string; call_id?: string };
           if (record.type === 'function_call' && record.call_id) replayed.add(record.call_id);

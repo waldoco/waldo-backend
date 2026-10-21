@@ -7,7 +7,7 @@ import {
 import {
   localTrustedBriefScheduleInput,
   resolveRunLoopAdapters,
-} from '../run-loop/adapters';
+} from '../llm/run-loop-adapters';
 import { OpenAIResponsesAdapter, type OpenAIResponseMetadata } from '../llm/openai';
 import { RuntimeLLMProvider } from '../llm/provider';
 import type { ContextLayer } from '../context-composer/types';

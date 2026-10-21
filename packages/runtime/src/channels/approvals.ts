@@ -3,6 +3,7 @@ import type { ProxyIntent } from '../connectors/proxy-intent';
 import { ProxyIntentError } from '../connectors/proxy-intent';
 import { googleTaskProposalSchema, proposeGoogleTaskChangeArgsSchema, type BrowserTaskContinuation, type ProposeCalendarChangeArgs, type ProposeGoogleTaskChangeArgs } from '@waldo/contracts';
 import { GoogleError, sendRefused, sentCheck, sha256Hex, type GoogleClient, type SentEvidence } from '../connectors/google';
+import { stableJson } from '../context-composer/canonical';
 import { describeGoogleTaskChange, googleTaskExact, reviewGoogleTaskChange, type GoogleTaskApprovalAdapter, type GoogleTaskProposal } from './google-task-approvals';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { BrowserSubmitOutcome } from '../tools/live/browser';
@@ -75,6 +76,12 @@ export type MessageSendProposal = Readonly<{ operation_ref?: string; channel: st
 // call_mcp_tool proposals: server + tool + args replayed on approval. The result is external
 // content - reported to the owner bounded, never re-entered into model context.
 export type McpCallProposal = Readonly<{ operation_ref?: string; server: string; tool: string; args: Record<string, unknown> }>;
+// A privileged tool call whose arguments came from external content (ADR-0049), frozen for the owner's approval: the
+// tool, its validated arguments and their digest. On approval the host replays exactly that call once.
+export type TaintedActionProposal = Readonly<{ operation_ref?: string; tool: string; args: Record<string, unknown>; args_digest: string; reasoning: string; source: 'external' }>;
+// What the replay could honestly establish: done means the handler ran and returned ok; rejected means the dispatcher
+// refused before the handler ran; failed means the tool reported its own typed failure; uncertain is everything else.
+export type TaintedActionOutcome = Readonly<{ status: 'done' | 'rejected' | 'failed' | 'uncertain'; message: string }>;
 
 export type ApprovalDecision = Readonly<{ toast: string; message: string }>;
 // a approve, s skip, e edit, u undo, d defer ("Not now": the row stays open and keeps its cards).
@@ -109,6 +116,7 @@ export type ApprovalDesk = Readonly<{
   proposeSendEmail(payload: EmailSendProposal): Promise<string>;
   proposeSendMessage(payload: MessageSendProposal): Promise<string>;
   proposeMcpCall(payload: McpCallProposal): Promise<string>;
+  proposeTaintedAction(payload: TaintedActionProposal): Promise<string>;
   record(kind: string, summary: string, payload: unknown): void;
   callback(query: CallbackQuery, trace: string): Promise<void>;
   decide(id: string, action: DeskAction, trace: string, via?: ApprovalVia): Promise<ApprovalDecision>;
@@ -127,6 +135,7 @@ const CARDS: Readonly<Record<string, Readonly<{ title: string; approve: string; 
   calendar_change: { title: 'Calendar change?', approve: 'Do it', modify: true }, google_task_change: { title: 'Google task change?', approve: 'Do it', modify: true },
   email_send: { title: 'Send this email?', approve: 'Send it', modify: true }, message_send: { title: 'Send this message?', approve: 'Send it', modify: true },
   browser_submit: { title: 'Approve this browser action?', approve: 'Do it', modify: false }, mcp_call: { title: 'Run this MCP tool?', approve: 'Do it', modify: false },
+  tainted_action: { title: 'Run this action?', approve: 'Do it', modify: false },
 };
 const PROPOSAL_KINDS = Object.keys(CARDS);
 // Telegram's buttons. Not now puts the approval off and is offered once; Don't do this skips it.
@@ -176,11 +185,13 @@ const describeBrowser = (p: BrowserSubmitProposal) => {
   return `${p.action.description} on ${maskedUrl(p.url)}${p.request ? ` via ${p.request.method} ${maskedUrl(p.request.url)}` : ''}${binding ? ` (${binding})` : ''}`;
 };
 const describeMcp = (p: McpCallProposal) => `Run ${p.tool} on the ${p.server} MCP server`;
+const describeTaintedAction = (p: TaintedActionProposal) => `Run ${p.tool}: ${p.reasoning.length > 120 ? `${p.reasoning.slice(0, 117)}...` : p.reasoning}`;
+const TAINTED_ACTION_WHY = 'It uses content from an email or web page, so it needs your approval before it runs.';
 // Browser and MCP summaries are rebuilt from the payload, so a row stored before masking renders
 // masked too. A payload that no longer parses shows the card title, never the stored summary.
 const summaryOf = (entry: LedgerRow) => {
-  if (entry.kind !== 'browser_submit' && entry.kind !== 'mcp_call') return entry.summary;
-  try { return entry.kind === 'browser_submit' ? describeBrowser(JSON.parse(entry.payload_json)) : describeMcp(JSON.parse(entry.payload_json)); }
+  if (entry.kind !== 'browser_submit' && entry.kind !== 'mcp_call' && entry.kind !== 'tainted_action') return entry.summary;
+  try { return entry.kind === 'browser_submit' ? describeBrowser(JSON.parse(entry.payload_json)) : entry.kind === 'mcp_call' ? describeMcp(JSON.parse(entry.payload_json)) : describeTaintedAction(JSON.parse(entry.payload_json)); }
   catch { return CARDS[entry.kind]!.title; }
 };
 // The full review a card shows for each kind, rebuilt from the frozen payload.
@@ -189,6 +200,7 @@ const reviewText = (entry: LedgerRow): string => {
   if (entry.kind === 'email_send') return `Send this email?${p.earlier_unknown_at ? ` An identical email from ${p.earlier_unknown_at} may already have gone out; check Gmail's Sent folder before sending it again.\n` : ' '}${reviewEmail(p)}`;
   if (entry.kind === 'message_send') return `Send this message on ${p.channel}?\n\n${reviewMessage(p)}`;
   if (entry.kind === 'mcp_call') return `Run this MCP tool? ${describeMcp(p)}\n\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}`;
+  if (entry.kind === 'tainted_action') return `Run this action? ${describeTaintedAction(p)}\n\n${TAINTED_ACTION_WHY}\n\nTool: ${p.tool}\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}`;
   if (entry.kind === 'browser_submit') return `Approve this browser action? ${describeBrowser(p)}`;
   if (entry.kind === 'google_task_change') return reviewGoogleTaskChange(googleTaskProposalSchema.parse(p));
   // A calendar change states the change itself, so the same text reads true before the owner decides and after it is done.
@@ -207,6 +219,7 @@ const exactFor = (entry: LedgerRow): AppApprovalV1['exact'] => {
   if (entry.kind === 'message_send') return { recipients: { to: [p.channel], cc: [], bcc: [] } };
   if (entry.kind === 'browser_submit') return { scope: pageOf(p.url) };
   if (entry.kind === 'mcp_call') return { scope: `${p.tool} on the ${p.server} server` };
+  if (entry.kind === 'tainted_action') return { scope: `${p.tool} from external content` };
   if (entry.kind === 'google_task_change') return { task: googleTaskExact(googleTaskProposalSchema.parse(p)) };
   const guestCount = p.action === 'create' ? p.attendees?.length ?? 0 : p.seen_guests ?? 0;
   const first = { action: p.action, title: p.title ?? null, start: p.start ?? null, end: p.end ?? null };
@@ -253,6 +266,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   sendMessage?: (proposal: MessageSendProposal) => Promise<void | Readonly<{ provider_id: string }>>;
   // Returns a bounded owner-facing outcome line (the result is external content).
   mcpCall?: (proposal: McpCallProposal, intent: ProxyIntent) => Promise<string | EffectReceipt>;
+  // Replays an approved tainted action once through the dispatcher; the outcome says only what the replay established.
+  replayTaintedAction?: (proposal: TaintedActionProposal, approvalRef: string) => Promise<TaintedActionOutcome>;
   googleTasks?: () => GoogleTaskApprovalAdapter;
   // Host-derived correlation of a proposal with the run that raised it; it never grants execution authority.
   currentRunRef?: () => string | undefined;
@@ -415,6 +430,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (entry.kind === 'email_send') return describeEmail(JSON.parse(entry.payload_json) as EmailSendProposal);
     if (entry.kind === 'message_send') return describeMessage(JSON.parse(entry.payload_json) as MessageSendProposal);
     if (entry.kind === 'mcp_call') return describeMcp(JSON.parse(entry.payload_json) as McpCallProposal);
+    if (entry.kind === 'tainted_action') return describeTaintedAction(JSON.parse(entry.payload_json) as TaintedActionProposal);
     if (entry.kind === 'google_task_change') return describeGoogleTaskChange(googleTaskProposalSchema.parse(JSON.parse(entry.payload_json)));
     return describe(JSON.parse(entry.payload_json) as Stored);
   };
@@ -753,6 +769,41 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             out = { toast: 'Outcome unknown', message: 'The message outcome is unknown. Check the channel before retrying; nothing was sent again.' };
           }
         }
+      } else if (entry.kind === 'tainted_action') {
+        const tp = JSON.parse(entry.payload_json) as TaintedActionProposal;
+        if (action === 'u') {
+          out = { toast: "Can't be undone", message: 'An approved action cannot be undone from here. Nothing was reversed.' };
+        } else if (!deps.replayTaintedAction) {
+          out = { toast: 'Not available', message: 'This action cannot be run from here. Nothing was done.' };
+        } else if (!entry.proposal_digest || await sha256Hex(stableJson(tp.args)) !== entry.proposal_digest || tp.args_digest !== entry.proposal_digest) {
+          setStatus(id, 'failed');
+          out = { toast: 'Action changed', message: `The stored action no longer matches what you approved, so nothing ran: ${describeTaintedAction(tp)}. Ask me again and I'll propose it afresh.` };
+        } else {
+          if (!recovering) {
+            const lost = claimOpen(id);
+            if (lost) return lost;
+          }
+          let outcome: TaintedActionOutcome | undefined;
+          try {
+            const receipt = await effect(`${operationRef}:apply`, tp.tool, tp, async () => {
+              outcome = await deps.replayTaintedAction!(tp, id);
+              if (outcome.status === 'rejected' || outcome.status === 'failed') throw new EffectNotAppliedError();
+              if (outcome.status !== 'done') throw new EffectUnknownError();
+              return { provider_id: `${operationRef}:apply`, result: outcome.message };
+            }, async () => outcome?.status === 'rejected' || outcome?.status === 'failed' ? { status: 'not_applied' } : { status: 'unknown' });
+            setStatus(id, 'done');
+            out = { toast: 'Done', message: `Done: ${describeTaintedAction(tp)}. ${String(receipt.result)}` };
+          } catch (error) {
+            if (outcome?.status === 'rejected' || outcome?.status === 'failed') {
+              setStatus(id, outcome.status);
+              out = { toast: outcome.status === 'rejected' ? 'Not done' : 'That failed', message: `Nothing was done: ${outcome.message}` };
+            } else {
+              deps.log({ trace, hop: 'tainted_action_unknown', ms: 0, ok: false, error: String(error) });
+              setStatus(id, 'uncertain');
+              out = { toast: 'Outcome unknown', message: 'The outcome of that action is unknown. Check the result before retrying; nothing was run again.' };
+            }
+          }
+        }
       } else if (entry.kind === 'mcp_call') {
         const cp = JSON.parse(entry.payload_json) as McpCallProposal;
         if (action === 'u') {
@@ -990,6 +1041,16 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const id = `p${deps.newId()}`;
       const summary = describeMcp(payload);
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'mcp_call', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
+      bindOrigin(id, originRunRef);
+      await present(id);
+      return id;
+    },
+    async proposeTaintedAction(payload) {
+      // The row's digest is recomputed from the stored arguments at approval, so a changed payload never runs.
+      if (await sha256Hex(stableJson(payload.args)) !== payload.args_digest) throw new Error('tainted action digest mismatch');
+      const originRunRef = deps.currentRunRef?.();
+      const id = `p${deps.newId()}`;
+      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at, proposal_digest) VALUES (?, 'tainted_action', 'card_unconfirmed', ?, ?, NULL, ?, NULL, ?)", id, describeTaintedAction(payload), JSON.stringify(payload), deps.now(), payload.args_digest);
       bindOrigin(id, originRunRef);
       await present(id);
       return id;

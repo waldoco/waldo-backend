@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
-import { ALARM_FAILED_LANE_KEY, ALARM_LANES, ALARM_RETRY_DUE_KEY, armAlarm, COMMON_EXECUTION_DUE_KEY, rearmSharedAlarm, WAKE_DUE_KEYS } from '../src/scheduler/alarm-slot';
+import { ALARM_FAILED_LANE_KEY, ALARM_LANES, ALARM_RETRY_DUE_KEY, armAlarm, rearmSharedAlarm, WAKE_DUE_KEYS } from '../src/scheduler/alarm-slot';
 import { COMMON_BROWSER_LEASE_DUE } from '../src/channels/owner-browser-runtime';
 
 // The owner object's one alarm is the earliest of its lanes' persisted wakes and the schedule's next entry.
@@ -31,10 +31,10 @@ it('every listed lane\'s wake alone arms the alarm at its time; the schedule\'s 
   });
 });
 
-it('every listed wake but the handler\'s retry belongs to exactly one lane; the run-loop object\'s execution wake belongs to none', () => {
+it('every listed wake but the handler\'s retry belongs to exactly one lane', () => {
   const lanes = new Map<string, string[]>();
   for (const [lane, keys] of Object.entries(ALARM_LANES)) for (const key of keys) lanes.set(key, [...lanes.get(key) ?? [], lane]);
-  for (const key of WAKE_DUE_KEYS) expect(lanes.get(key) ?? [], key).toHaveLength(key === ALARM_RETRY_DUE_KEY || key === COMMON_EXECUTION_DUE_KEY ? 0 : 1);
+  for (const key of WAKE_DUE_KEYS) expect(lanes.get(key) ?? [], key).toHaveLength(key === ALARM_RETRY_DUE_KEY ? 0 : 1);
   expect([...lanes.keys()].filter(key => !(WAKE_DUE_KEYS as readonly string[]).includes(key))).toEqual([]);
 });
 

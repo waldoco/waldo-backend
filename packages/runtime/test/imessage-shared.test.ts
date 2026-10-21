@@ -63,8 +63,8 @@ async function world() {
       for (const [k, v] of Object.entries(fields)) form.set(k, v);
       return call(new Request(`${HOST_ORIGIN}/console/action`, { method: 'POST', body: form, headers: { cookie }, redirect: 'manual' }));
     };
-    const page = () => call(new Request(`${HOST_ORIGIN}/console/imessage`, { headers: { cookie } }));
-    return { stub, action, page, name };
+    const controls = async () => (await call(new Request(`${HOST_ORIGIN}/console/dashboard/api/v1/controls?view=imessage`, { headers: { cookie, accept: 'application/json' } }))).json() as Promise<{ data: { actions: string[]; linked_hint: string | null } }>;
+    return { stub, action, controls, name };
   };
   const [op, alice, bob] = [await consoleFor(owners[0]!.do_name), await consoleFor(owners[1]!.do_name), await consoleFor(owners[2]!.do_name)];
   const host = new SimulatedHost(call, HOST_ORIGIN);
@@ -189,9 +189,9 @@ it('a group or a chat that is not the sender\'s own direct chat never routes, ev
 
 it('the console shows link codes to every owner and the shared-number controls only to the operator', async () => {
   const w = await world();
-  const opPage = await (await w.op.page()).text(), alicePage = await (await w.alice.page()).text();
-  expect(opPage).toContain('imessage.pair_shared'); expect(alicePage).not.toContain('imessage.pair_shared');
-  expect(alicePage).toContain('imessage.link');
+  const opRead = await w.op.controls(), aliceRead = await w.alice.controls();
+  expect(opRead.data.actions).toContain('imessage.pair_shared'); expect(aliceRead.data.actions).not.toContain('imessage.pair_shared');
+  expect(aliceRead.data.actions).toContain('imessage.link');
   expect(await (await w.alice.action('imessage.pair_shared')).text()).toContain('Unable'); // the database refuses a non-admin
   const code = await w.linkCode(w.alice);
   expect([...w.fx.linkCodes.values()].filter((c) => c.provider === 'imessage' && c.owner === w.alice.name && !c.used)).toHaveLength(1);
@@ -224,12 +224,12 @@ it('linking through the shared number replaces the owner\'s own per-owner Mac br
 it('an owner sees their linked handle masked and unlinks it: a queued reply ends authority_changed and later texts are unknown', async () => {
   const w = await world();
   await w.sharedLive();
-  expect(await (await w.alice.page()).text()).not.toContain('imessage.unlink'); // nothing linked yet
+  expect((await w.alice.controls()).data.actions).not.toContain('imessage.unlink'); // nothing linked yet
   expect(await w.linkVia(w.alice, ALICE)).toMatchObject({ text: LINK_REPLIES.redeemed });
-  const page = await (await w.alice.page()).text();
-  expect(page).toContain(`Linked: •••${ALICE.slice(-4)}`);
-  expect(page).not.toContain(ALICE); // only the last characters of the handle ever reach the console
-  expect(page).toContain('imessage.unlink');
+  const read = await w.alice.controls();
+  expect(read.data.linked_hint).toBe(ALICE.slice(-4));
+  expect(JSON.stringify(read)).not.toContain(ALICE); // only the last characters of the handle ever reach the console
+  expect(read.data.actions).toContain('imessage.unlink');
   const t0 = Date.now();
   vi.useFakeTimers({ toFake: ['Date'], now: t0 });
   try {
@@ -242,7 +242,7 @@ it('an owner sees their linked handle masked and unlinks it: a queued reply ends
     expect(await (await w.bob.action('imessage.unlink')).text()).toContain('Unable');
     expect(await (await w.alice.action('imessage.unlink')).status).toBe(303);
     expect([...w.fx.presences.values()].filter((p) => p.subject === ALICE && p.active)).toEqual([]);
-    expect(await (await w.alice.page()).text()).not.toContain('Linked: ');
+    expect((await w.alice.controls()).data.linked_hint).toBeNull();
     // The host is back after the outbox's retry delay; the frozen reply is rechecked against the sender's authority and never sent.
     vi.setSystemTime(t0 + 97_000);
     expect((await w.host.heartbeat()).status).toBe(200); expect((await w.host.capabilities()).status).toBe(200);
@@ -317,7 +317,7 @@ it('a forged unlink form naming another owner only ever unlinks the signed-in ow
   expect(forged.status).toBe(303);
   const live = [...w.fx.presences.values()].filter((p) => p.active).map((p) => [p.subject, p.owner]);
   expect(live).toEqual([[ALICE, w.alice.name]]); // the owner is the console's own DO, never form input
-  expect(await (await w.alice.page()).text()).toContain(`Linked: •••${ALICE.slice(-4)}`);
+  expect((await w.alice.controls()).data.linked_hint).toBe(ALICE.slice(-4));
   expect((await w.host.send(w.host.message('Alice is still linked', { senderHandle: ALICE }))).status).toBe(200);
   await w.pump();
   expect(await w.deliverNext()).toMatchObject({ chatGuid: `iMessage;-;${ALICE}`, ownerId: w.owners[1]!.owner_id });

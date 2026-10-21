@@ -31,8 +31,9 @@ export function heartbeatFrame(value: unknown): Heartbeat | null {
   return value as Heartbeat;
 }
 
-export type QueryKind = 'session_status' | 'attempt_status' | 'worktree_watch';
-export const queryKind = (value: unknown): value is QueryKind => value === 'session_status' || value === 'attempt_status' || value === 'worktree_watch';
+export const QUERY_KINDS = ['session_status', 'attempt_status', 'worktree_watch'] as const;
+export type QueryKind = typeof QUERY_KINDS[number];
+export const queryKind = (value: unknown): value is QueryKind => QUERY_KINDS.includes(value as QueryKind);
 export type QueryPayload = { query_id: string; query_kind: QueryKind };
 export type NotifyPayload = { notification_id: string; title: string; body: string; severity: 'info' | 'warning' | 'error' };
 export function commandPayload(kind: unknown, value: unknown): value is QueryPayload | NotifyPayload | MacPayload {

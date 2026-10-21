@@ -55,6 +55,34 @@ export const canonicalHistoryFault = (error: unknown): string | null => error in
 export const skippedRowLines = (hop: string, skipped: CanonicalSkipped) => Object.entries(skipped.checks).map(([check, tally]) =>
   ({ hop, ok: true, code: 'history_rows_skipped', check, count: tally!.count, unwitnessed: tally!.unwitnessed, orphans: skipped.orphans, leaf: skipped.leaf }));
 
+// The nearest loaded row above a left-out one. A loop among left-out rows, or a parent that is not loaded, ends at no parent.
+const nearestLoaded = (id: string, left: ReadonlyMap<string, string | null>, loaded: ReadonlySet<string>): string | null => {
+  const walked = new Set<string>();
+  let current: string | null = id;
+  while (current !== null && left.has(current)) {
+    if (walked.has(current)) return null;
+    walked.add(current); current = left.get(current) ?? null;
+  }
+  return current !== null && loaded.has(current) ? current : null;
+};
+
+// The parent each row hangs on for a turn, the one relation a turn and anything that walks its spans read. `entries` are the
+// loaded rows of one store in stored order and `left` maps each left-out row to its stored parent. A row whose parent was
+// left out hangs on the nearest loaded row above it. One store holds every chain of this owner (the app chat and each
+// iMessage chat), and an older build could hang a row under another chain's row; that row hangs on the last earlier row of
+// its own chain instead. A row whose parent is unchanged comes back as the same object.
+export const turnLinkedEntries = (entries: readonly ConversationEntry[], left: ReadonlyMap<string, string | null>): readonly ConversationEntry[] => {
+  const byId = new Map(entries.map(entry => [entry.id, entry]));
+  const ids = new Set(byId.keys());
+  const chainLeaves = new Map<string, string>();
+  return entries.map(entry => {
+    let parentId = entry.parentId !== null && left.has(entry.parentId) ? nearestLoaded(entry.parentId, left, ids) : entry.parentId;
+    if (parentId !== null && byId.get(parentId)?.chatId !== entry.chatId) parentId = chainLeaves.get(entry.chatId) ?? null;
+    if (entry.role !== 'compaction') chainLeaves.set(entry.chatId, entry.id);
+    return parentId === entry.parentId ? entry : { ...entry, parentId };
+  });
+};
+
 // A thread's history is its own chain under the owner's prefix (thread:<thread id>:); main's is the prefix itself.
 export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage, context: Pick<OwnerContextCapability, 'invocation' | 'assertCurrent'>, onSkipped?: (skipped: CanonicalSkipped) => void, thread?: string): ConversationStore & Readonly<{ readForDisplay(): Promise<CanonicalHistoryRead> }> {
   const principal = context.invocation.verified_authority.principal_ref;
@@ -103,27 +131,14 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
     const storedLeaf = (await storage.get<string>(`${prefix}leaf`)) ?? null;
     if (storedLeaf !== null && !ids.has(storedLeaf) && !left.has(storedLeaf)) throw new Error('canonical history leaf mismatch');
     await context.assertCurrent();
-    // The nearest loaded row above a left-out one. A loop among left-out rows, or a parent that is not loaded, ends at no parent.
-    const above = (id: string): string | null => {
-      const walked = new Set<string>();
-      let current: string | null = id;
-      while (current !== null && left.has(current)) {
-        if (walked.has(current)) return null;
-        walked.add(current); current = left.get(current) ?? null;
-      }
-      return current !== null && ids.has(current) ? current : null;
-    };
     const orphaned = (entry: ConversationEntry) => entry.parentId !== null && left.has(entry.parentId);
+    // Re-linked in memory only; the page shows each row with its stored parent.
+    const loaded = relink ? turnLinkedEntries(entries, left) : entries;
     const moved = new Map<string, Readonly<{ stored: ConversationEntry; loaded: ConversationEntry }>>();
-    const loaded = relink ? entries.map(entry => {
-      if (!orphaned(entry)) return entry;
-      const linked = { ...entry, parentId: above(entry.parentId!) };
-      moved.set(entry.id, { stored: entry, loaded: linked });
-      return linked;
-    }) : entries;
+    loaded.forEach((entry, index) => { if (entry !== entries[index]) moved.set(entry.id, { stored: entries[index]!, loaded: entry }); });
     leftOut = new Set(left.keys()); relinked = moved;
     const skipped = { checks, orphans: entries.filter(orphaned).length, leaf: storedLeaf !== null && left.has(storedLeaf) };
-    return { entries: loaded, leafId: storedLeaf !== null && left.has(storedLeaf) ? above(storedLeaf) : storedLeaf, skipped };
+    return { entries: loaded, leafId: storedLeaf !== null && left.has(storedLeaf) ? nearestLoaded(storedLeaf, left, ids) : storedLeaf, skipped };
   };
   const asStored = (entry: ConversationEntry) => {
     const moved = relinked.get(entry.id);

@@ -18,7 +18,7 @@ describe('turn memory prompt provenance', () => {
       return turnMemoryPrompt(store, 'Which tea blend do I like?');
     });
     // The profile lists only owner-grounded, owner-stated claims and labels each with its verification status.
-    expect(prompt).toContain('- [owner-grounded] Favourite tea blend is jasmine');
+    expect(prompt).toContain('- [c1 · owner-grounded] Favourite tea blend is jasmine');
     expect(prompt).not.toContain('oolong');
     expect(prompt).not.toContain('hostile-tea');
     expect(prompt).not.toContain('old-assam');

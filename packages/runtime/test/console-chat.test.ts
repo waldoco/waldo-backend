@@ -28,6 +28,8 @@ const call = (path: string, init: { method?: string; body?: unknown; headers?: R
   });
 };
 const send = { client_message_id: 'console-0001', text: 'What is on my calendar tomorrow?' };
+const THREAD = 'thr_0b9e7f2a-1c3d-4e5f-8a9b-0c1d2e3f4a5b';
+const OPERATION = '7d4c2b1a-0e9f-4a8b-9c7d-6e5f4a3b2c1d';
 
 describe('console chat', () => {
   it('leaves every other path to the caller', async () => {
@@ -72,11 +74,53 @@ describe('console chat', () => {
 
   it('refuses unknown paths, odd client ids and the wrong method', async () => {
     const { env, forwards } = setup();
-    for (const path of [`${CONSOLE_CHAT_PATH}/threads`, `${CONSOLE_CHAT_PATH}/messages/short`, `${CONSOLE_CHAT_PATH}/messages/console-0001/rating`, `${CONSOLE_CHAT_PATH}/messages/console-0001/cancel/x`]) {
+    for (const path of [`${CONSOLE_CHAT_PATH}/folders`, `${CONSOLE_CHAT_PATH}/threads/thr_not-a-uuid`, `${CONSOLE_CHAT_PATH}/threads/${THREAD}/pin`, `${CONSOLE_CHAT_PATH}/threads/operations/x`, `${CONSOLE_CHAT_PATH}/messages/short`, `${CONSOLE_CHAT_PATH}/messages/console-0001/rating`, `${CONSOLE_CHAT_PATH}/messages/console-0001/cancel/x`]) {
       expect((await handleConsoleChat(call(path), env, fakeAuth()))!.status).toBe(404);
     }
     expect((await handleConsoleChat(call(CONSOLE_CHAT_PATH, { method: 'POST', body: send }), env, fakeAuth()))!.status).toBe(405);
     expect((await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/messages`), env, fakeAuth()))!.status).toBe(405);
+    expect(forwards).toHaveLength(0);
+  });
+
+  it('reaches every thread route the app has, one to one, on the app budgets', async () => {
+    const { env, forwards, keys } = setup();
+    const calls: [string, string, unknown?][] = [
+      ['GET', `${CONSOLE_CHAT_PATH}/threads?state=archived&owner=x`],
+      ['POST', `${CONSOLE_CHAT_PATH}/threads`, { operation_id: OPERATION, title: 'Goa trip' }],
+      ['GET', `${CONSOLE_CHAT_PATH}/threads/operations/${OPERATION}`],
+      ['GET', `${CONSOLE_CHAT_PATH}/threads/${THREAD}?cursor=before%3Aapp-3&limit=30`],
+      ['POST', `${CONSOLE_CHAT_PATH}/threads/${THREAD}/rename`, { operation_id: OPERATION, expected_title_revision: 1, title: 'Goa' }],
+      ['POST', `${CONSOLE_CHAT_PATH}/threads/${THREAD}/archive`, { operation_id: OPERATION, expected_revision: 2, archived: true }],
+      ['POST', `${CONSOLE_CHAT_PATH}/threads/${THREAD}/delete`, { operation_id: OPERATION, expected_revision: 3 }],
+      ['POST', `${CONSOLE_CHAT_PATH}/threads/${THREAD}/messages`, { ...send, expected_revision: 1 }],
+      ['GET', `${CONSOLE_CHAT_PATH}/threads/${THREAD}/messages/console-0001`],
+      ['POST', `${CONSOLE_CHAT_PATH}/threads/${THREAD}/messages/console-0001/cancel`],
+    ];
+    for (const [method, path, body] of calls) expect((await handleConsoleChat(call(path, { method, ...(body === undefined ? {} : { body }) }), env, fakeAuth()))!.status, path).toBe(202);
+    expect(forwards.map(request => `${request.method} ${new URL(request.url).pathname}${new URL(request.url).search}`)).toEqual([
+      'GET /app/v1/threads?state=archived',
+      'POST /app/v1/threads',
+      `GET /app/v1/threads/operations/${OPERATION}`,
+      `GET /app/v1/threads/${THREAD}?cursor=before%3Aapp-3&limit=30`,
+      `POST /app/v1/threads/${THREAD}/rename`,
+      `POST /app/v1/threads/${THREAD}/archive`,
+      `POST /app/v1/threads/${THREAD}/delete`,
+      `POST /app/v1/threads/${THREAD}/messages`,
+      `GET /app/v1/threads/${THREAD}/messages/console-0001`,
+      `POST /app/v1/threads/${THREAD}/messages/console-0001/cancel`,
+    ]);
+    expect(keys).toEqual(['app-read:owner-1', 'app-chat-send:owner-1', 'app-read:owner-1', 'app-read:owner-1', 'app-chat-send:owner-1', 'app-chat-send:owner-1', 'app-chat-send:owner-1', 'app-chat-send:owner-1', 'app-read:owner-1', 'app-read:owner-1']);
+    expect(JSON.parse(await forwards[7]!.text())).toEqual({ ...send, expected_revision: 1 });
+  });
+
+  it('checks each thread write against its app schema before the owner object sees it', async () => {
+    const { env, forwards } = setup();
+    const status = async (path: string, body: unknown) => (await handleConsoleChat(call(path, { method: 'POST', body }), env, fakeAuth()))!.status;
+    expect(await status(`${CONSOLE_CHAT_PATH}/threads/${THREAD}/messages`, send)).toBe(400);
+    expect(await status(`${CONSOLE_CHAT_PATH}/threads/${THREAD}/rename`, { operation_id: OPERATION, expected_title_revision: 1, title: '' })).toBe(400);
+    expect(await status(`${CONSOLE_CHAT_PATH}/threads/${THREAD}/delete`, { operation_id: 'not-a-uuid', expected_revision: 1 })).toBe(400);
+    expect(await status(`${CONSOLE_CHAT_PATH}/threads`, { operation_id: OPERATION, owner: 'someone-else' })).toBe(400);
+    expect((await handleConsoleChat(call(`${CONSOLE_CHAT_PATH}/threads/${THREAD}/rename`), env, fakeAuth()))!.status).toBe(405);
     expect(forwards).toHaveLength(0);
   });
 
