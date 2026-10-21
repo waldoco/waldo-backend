@@ -5,7 +5,7 @@ import { CONNECT_BUTTON_SENT, CONNECT_BUTTON_UNSENT } from '../tools/live/connec
 import { ClosedRunError } from '../channels/run-effect-scope';
 import { FINAL_ANSWER_RESERVE_MS, MODEL_CALL_TIMEOUT_MS, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
 import type { RunEffectScope } from '../channels/run-effect-scope';
-import type { ToolOutputStore } from './tool-output-store';
+import type { StoredPut, ToolOutputStore } from './tool-output-store';
 
 
 export const TOOL_OUTPUT_LIMIT = 16_000;
@@ -86,8 +86,17 @@ const TIME_UP_NOTE = `\n[budget: turn time is up - no more tool calls; ${CLOSING
 // (the call stays, its result becomes a short note), down to half of it at once, so a long turn stays inside the model's
 // input and the cleared prefix stays byte-stable for the rounds after. The newest round is never cleared.
 export const TOOL_RESULTS_KEEP_CHARS = 160_000;
-export const clearedToolResult = (name: string): string =>
-  `[cleared: this ${name.replaceAll('_', ' ')} result from earlier in this turn is no longer shown, to keep the turn within its context; run it again if you still need it]`;
+// A cleared result stays one call away: the note keeps whether it worked and any receipt link, and names the stored
+// copy read_tool_output reads back. Without a store, a read can run again; a browse or a write cannot be repeated.
+export type ClearedResult = Readonly<{ ok: boolean; receipt: string | null; stored?: StoredPut; repeatable: boolean }>;
+export const clearedToolResult = (name: string, result: ClearedResult): string => {
+  const head = `[cleared: this ${name.replaceAll('_', ' ')} result from earlier in this turn (${result.ok ? 'it succeeded' : 'it failed'}) is no longer shown, to keep the turn within its context.`;
+  const receipt = result.receipt ? ` Its link: ${result.receipt}.` : '';
+  const back = result.stored
+    ? ` Its full output is stored as ${result.stored.id}${result.stored.truncated ? ` (first ${result.stored.stored_chars} of ${result.stored.original_chars} characters)` : ''}; call read_tool_output with this id to read it again.`
+    : result.repeatable ? ' Run it again if you still need it.' : ' Do not repeat the call; answer from what you know of it.';
+  return `${head}${receipt}${back}]`;
+};
 
 // Set once by the first loop of a turn, from the run it serves, and shared with its child loops through the budget.
 const turnDeadline = (budget: { deadline?: number } | undefined, scope: RunEffectScope | undefined): number => {
@@ -153,14 +162,19 @@ export async function runToolLoop(input: Readonly<{
   };
   // Results cleared so far, oldest first; clearing only moves forward, so what was sent stays as it was sent.
   let cleared = 0;
+  // Per turn entry: the whole result as it came back, and what its cleared note needs.
+  const results: Readonly<{ full: string; ok: boolean; receipt: string | null; key: string; repeatable: boolean }>[] = [];
   const clearOldResults = () => {
     const newest = roundStarts.at(-1) ?? 0;
     let total = turns.slice(cleared).reduce((sum, turn) => sum + turn.output.length, 0);
     if (total <= TOOL_RESULTS_KEEP_CHARS) return;
     while (cleared < newest && total > TOOL_RESULTS_KEEP_CHARS / 2) {
-      const turn = turns[cleared]!;
+      const turn = turns[cleared]!, result = results[cleared]!;
       total -= turn.output.length;
-      turns[cleared] = { ...turn, output: clearedToolResult(turn.call.name) };
+      const stored = input.offload?.put(result.full, { call_id: turn.call.call_id });
+      turns[cleared] = { ...turn, output: clearedToolResult(turn.call.name, { ok: result.ok, receipt: result.receipt, repeatable: result.repeatable, ...(stored ? { stored } : {}) }) };
+      // A cleared read that can repeat runs for real next time, instead of answering from a result the model no longer sees.
+      if (result.repeatable && seen.get(result.key)?.ok) seen.delete(result.key);
       cleared += 1;
     }
   };
@@ -331,6 +345,7 @@ export async function runToolLoop(input: Readonly<{
         : '';
       const output = capToolOutput(JSON.stringify(result), input.offload, call.call_id) + replayNote + browsingNote + budgetNote;
       turns.push({ call, output, ...(firstCall && response.output_items?.length ? { prior_items: [...response.output_items] } : {}) });
+      results.push({ full: JSON.stringify(result), ok: result.ok, receipt, key, repeatable: !mutation && !BROWSE_TOOLS.has(call.name) });
       firstCall = false;
       // The typed code/reason ride the span as their own fields so a failed hop stays
       // diagnosable from the trace or tail even when the capture switch gates free-form error

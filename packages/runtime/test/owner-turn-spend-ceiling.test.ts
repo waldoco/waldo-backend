@@ -19,7 +19,7 @@ import { getContextHandler } from '../src/tools/live/get-context';
 import { ownerTyped } from './helpers/owner-typed';
 
 // Past the owner's monthly ceiling a turn degrades instead of stopping: the provider clamps every call of the turn to the
-// auxiliary route (Luna, then Haiku), paid tools are refused before they run with budget_exhausted, machine turns such as the Brief still go out,
+// auxiliary route (Luna, then Haiku), paid tools are refused before they run with spend_ceiling_reached, machine turns such as the Brief still go out,
 // and a turn keeps the route it started on even when the ceiling is crossed mid-turn.
 
 const time = async <T,>(_hop: string, work: () => Promise<T>) => work();
@@ -128,12 +128,12 @@ it('past the ceiling a paid tool is refused before it runs, in the one refusal s
   const shown = over.requests.at(-1)!.request.tool_turns!.at(-1)!.output;
   const output = JSON.parse(shown.slice(shown.indexOf('{')).split('\n[')[0]!) as Record<string, unknown>;
   const refusal = spendHold(clock.now());
-  expect(output).toMatchObject({ ok: false, error_code: 'budget_exhausted', error: refusal.cause, fix: refusal.fix, retryable: false, reason: 'held' });
+  expect(output).toMatchObject({ ok: false, error_code: 'spend_ceiling_reached', error: refusal.cause, fix: refusal.fix, retryable: false, reason: 'held' });
   expect(refusal.fix).toContain('web_search and the other read tools still work');
   expect(refusal.fix).toContain('The ceiling resets on 2026-11-01 (UTC).');
   // the hold reached nothing external, so the turn stays untainted
   expect(over.requests.at(-1)!.request.tools?.map((tool) => tool.name)).not.toContain('propose_action');
-  expect(holds).toEqual([expect.objectContaining({ code: 'budget_exhausted:browse_page', error_code: 'budget_exhausted', ok: false })]);
+  expect(holds).toEqual([expect.objectContaining({ code: 'spend_ceiling_reached:browse_page', error_code: 'spend_ceiling_reached', ok: false })]);
   // the row survives the privacy gate with capture off
   expect(rows).toEqual([expect.objectContaining({ kind: 'turn', model: 'held:browse_page', calls: 1, usd: 0 })]);
   // the same call under the ceiling reaches the handler: the hold is the ceiling, not the fixture

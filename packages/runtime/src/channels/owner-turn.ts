@@ -68,7 +68,7 @@ export const PAID_RUNG_TOOLS: ReadonlySet<string> = new Set(['browse_page', 'bro
 // The refusal a held paid tool returns: what still works comes from the catalogue, the reset day from the clock.
 export const spendHold = (now: Date): ToolError => {
   const reset = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString().slice(0, 10);
-  return { ...toolError('budget_exhausted'), fix: `${TOOL_ERRORS.budget_exhausted.fix} The ceiling resets on ${reset} (UTC).` };
+  return { ...toolError('spend_ceiling_reached'), fix: `${TOOL_ERRORS.spend_ceiling_reached.fix} The ceiling resets on ${reset} (UTC).` };
 };
 
 // Session canaries are per-runtime tripwires: random 16-hex tokens derived when the owner
@@ -209,7 +209,7 @@ export const createOwnerResponder = (
     heldTool: (tool: string) => {
       if (!turnCapped() || !PAID_RUNG_TOOLS.has(tool)) return null;
       // The cost ledger counts each hold as a held:<tool> row, so the alpha shows how often the ceiling bites.
-      log({ trace: traceId, hop: 'spend_hold', ms: 0, ok: false, code: `budget_exhausted:${tool}`, error_code: 'budget_exhausted' });
+      log({ trace: traceId, hop: 'spend_hold', ms: 0, ok: false, code: `spend_ceiling_reached:${tool}`, error_code: 'spend_ceiling_reached' });
       return spendHold(clock.now());
     },
     sanitise: adapters.safety.sanitise,

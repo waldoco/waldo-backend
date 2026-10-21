@@ -17,15 +17,15 @@ describe('toolError', () => {
   });
 });
 
-describe('budget_exhausted', () => {
+describe('spend_ceiling_reached', () => {
   it('is a host-stage tool refusal in the one refusal shape, not retryable', () => {
-    expect(toolErrorSchema.safeParse(toolError('budget_exhausted')).success).toBe(true);
-    expect(toolError('budget_exhausted')).toMatchObject({ code: 'budget_exhausted', retryable: false });
+    expect(toolErrorSchema.safeParse(toolError('spend_ceiling_reached')).success).toBe(true);
+    expect(toolError('spend_ceiling_reached')).toMatchObject({ code: 'spend_ceiling_reached', retryable: false });
   });
 
   it('is not an adapter ErrorCode, so a handler cannot return it, and the refusal shape still rejects a missing fix', () => {
-    expect(errorCodeSchema.safeParse('budget_exhausted').success).toBe(false);
-    const { fix: _fix, ...withoutFix } = toolError('budget_exhausted');
+    expect(errorCodeSchema.safeParse('spend_ceiling_reached').success).toBe(false);
+    const { fix: _fix, ...withoutFix } = toolError('spend_ceiling_reached');
     expect(toolErrorSchema.safeParse(withoutFix).success).toBe(false);
   });
 });

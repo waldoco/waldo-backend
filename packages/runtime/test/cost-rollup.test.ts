@@ -44,10 +44,10 @@ describe('costRollupDelta', () => {
   });
 
   it('counts a spend-ceiling hold as one call on held:<tool>, costing nothing, and ignores a malformed hold', () => {
-    expect(costRollupDelta({ trace: 't', hop: 'spend_hold', ms: 0, ok: false, code: 'budget_exhausted:browse_act' }, DAY))
+    expect(costRollupDelta({ trace: 't', hop: 'spend_hold', ms: 0, ok: false, code: 'spend_ceiling_reached:browse_act' }, DAY))
       .toEqual({ day: '2026-10-20', kind: 'turn', model: 'held:browse_act', calls: 1, input: 0, output: 0, cached: 0, web_searches: 0, browser_ms: 0, sandbox_ms: 0, broker_calls: 0, usd: 0 });
-    expect(costRollupDelta({ trace: 't', hop: 'spend_hold', ms: 0, ok: false, code: 'budget_exhausted' }, DAY)).toBeNull();
-    expect(costRollupDelta({ trace: 't', hop: 'spend_hold', ms: 0, ok: false, code: 'budget_exhausted:Browse Page' }, DAY)).toBeNull();
+    expect(costRollupDelta({ trace: 't', hop: 'spend_hold', ms: 0, ok: false, code: 'spend_ceiling_reached' }, DAY)).toBeNull();
+    expect(costRollupDelta({ trace: 't', hop: 'spend_hold', ms: 0, ok: false, code: 'spend_ceiling_reached:Browse Page' }, DAY)).toBeNull();
   });
 
   it('defaults the kind to turn and ignores hops that cost nothing', () => {

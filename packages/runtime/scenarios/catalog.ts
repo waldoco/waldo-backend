@@ -433,8 +433,8 @@ export const SCENARIOS: readonly Scenario[] = [
     ],
     assert: {
       mustCall: ['browse_page', 'web_search'],
-      hops: [{ hop: 'spend_hold', ok: false, note: /budget_exhausted:browse_page/ }, { hop: 'tool_browse_page', ok: false }, { hop: 'tool_web_search', ok: true }],
-      modelInput: [{ turn: 1, mustContain: ['budget_exhausted', 'web_search and the other read tools still work', 'The ceiling resets on'], mustNotContain: ['fixture page'] }],
+      hops: [{ hop: 'spend_hold', ok: false, note: /spend_ceiling_reached:browse_page/ }, { hop: 'tool_browse_page', ok: false }, { hop: 'tool_web_search', ok: true }],
+      modelInput: [{ turn: 1, mustContain: ['spend_ceiling_reached', 'web_search and the other read tools still work', 'The ceiling resets on'], mustNotContain: ['fixture page'] }],
       replies: [/Next step:/],
     },
   },

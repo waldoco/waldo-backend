@@ -64,7 +64,7 @@ Status tags used below: LOCAL (reproduced or tested on a developer machine), PUS
 
 ## Not fixed yet
 
-- Every turn loaded all stored conversation rows (rows-read cost). Canonical owner history now reads newest first in pages of 128 and stops once the rows read hold the turn's window (on a 5,000-row chain: 256 rows, 2 lists and 3 gets instead of 5,000 rows, 1 list and 5,001 gets); the per-object legacy store still loads every row. [IN REVIEW, branch claude/bounded-history-load]
+- Every turn loaded all stored conversation rows (rows-read cost). Canonical owner history was changed to read newest first in pages of 128 and stop once the rows read held the turn's window (on a 5,000-row chain: 256 rows, 2 lists and 3 gets instead of 5,000 rows, 1 list and 5,001 gets); the per-object legacy store still loads every row. [MERGED in #1351 (from #1248); not yet deployed]
 - The sanitised history is re-scanned each tool round within a turn; a within-turn cache was suggested, a cross-turn cache was advised against. [NOT STARTED]
 - About 35K tokens of raw history per turn (about 7 s gateway time, 10 s delivery); a token-sized window plus retrieval is the design direction, to be done behind regression scenarios for older content. [NOT STARTED]
 - Sanitiser check order inside the sanitiser itself (size before content) outside this destination. [NOT STARTED]

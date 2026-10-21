@@ -35,7 +35,7 @@ export const costRollupDelta = (entry: TurnLogEntry, at: number): CostRollupRow 
   const day = new Date(at).toISOString().slice(0, 10);
   // A paid tool the spend ceiling held: one call on model held:<tool>, costing nothing.
   if (entry.hop === 'spend_hold') {
-    const tool = entry.code?.match(/^budget_exhausted:([a-z_]+)$/)?.[1];
+    const tool = entry.code?.match(/^spend_ceiling_reached:([a-z_]+)$/)?.[1];
     return tool ? { day, kind: entry.cost_kind ?? 'turn', model: `held:${tool}`, calls: 1, input: 0, output: 0, cached: 0, web_searches: 0, browser_ms: 0, sandbox_ms: 0, broker_calls: 0, usd: 0 } : null;
   }
   const { usage } = entry;
