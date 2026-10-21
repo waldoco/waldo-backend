@@ -2,7 +2,7 @@ import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import {commonRuntimeReadiness} from '../src/channels/common-runtime-readiness';
 import {commonStagingRegistration} from '../src/channels/common-staging-registration';
 const proof=vi.hoisted(()=>({owner:'10000000-0000-0000-0000-000000000001',custody:'a'.repeat(64),present:true,checks:0,revokeAt:0,providerReady:true}));
-vi.mock('../src/identity/common-owner-authority',()=>({commonOwnerAuthority:()=>({resolve:async()=>proof.present?{directoryOwnerId:proof.owner,custodyDigest:proof.custody}:null,assertCurrent:async()=>{if(++proof.checks===proof.revokeAt)throw Error('authority revoked');}})}));
+vi.mock('../src/identity/common-owner-authority',()=>({commonOwnerAuthority:()=>({resolve:async()=>proof.present&&++proof.checks!==proof.revokeAt?{directoryOwnerId:proof.owner,custodyDigest:proof.custody}:null})}));
 vi.mock('../src/identity/owner-directory',()=>({signedRpc:()=>undefined}));
 vi.mock('../src/channels/browser-public-read-configuration',()=>({cloudflareBrowserProviderReadiness:()=>proof.providerReady}));
 beforeEach(()=>{proof.present=true;proof.checks=0;proof.revokeAt=0;proof.providerReady=true;});
@@ -10,7 +10,7 @@ afterEach(()=>vi.restoreAllMocks());
 function fixture(){
  const now=Date.now(),rows=new Map<string,any>([['do_name','PRIVATE_NAME'],['telegram_subject','1']]);
  const raw={policy:{ref:'PRIVATE_REF',doName:'PRIVATE_NAME',subject:'1',directoryOwnerId:proof.owner,createdAt:now-20000,expiresAt:now-1000,allowedOrigins:['*'],maxAllocations:2,maxReservedBrowserMs:40000,lifetimeMs:10000,maxScreenshotBytes:1024},billing:{cloudflareAccountId:'a'.repeat(32),conservativeWorstCase:true},spend:{limitMicrousd:10000000,maxCalls:100,validUntil:now-1000}};
- const env={WALDO_ENVIRONMENT:'staging',COMMON_BROWSER_REGISTRATION:JSON.stringify(raw),BROWSER:{fetch:vi.fn(()=>{throw Error('provider forbidden');})},TELEGRAM_OWNER_DO:{idFromName:()=>({toString:()=> 'PRIVATE_PHYSICAL'})}} as any;
+ const env={WALDO_ENVIRONMENT:'staging',COMMON_BROWSER_REGISTRATION:JSON.stringify(raw),BROWSER:{fetch:vi.fn(()=>{throw Error('provider forbidden');})},OWNER_DO:{idFromName:()=>({toString:()=> 'PRIVATE_PHYSICAL'})}} as any;
  const writes=vi.fn(()=>{throw Error('storage writes forbidden');});
  const storage={kv:{get:(key:string)=>rows.get(key),list:({prefix}:{prefix:string})=>[...rows].filter(([key])=>key.startsWith(prefix)),put:writes},transactionSync:writes} as unknown as DurableObjectStorage;
  const registered=commonStagingRegistration(env)!;
@@ -65,7 +65,7 @@ it('retained allocation exhaustion is reported without resetting or dispatching'
  expect((await f.read()).browser).toMatchObject({status:'exhausted',retainedAllocations:2,remainingRegisteredAllocations:0});expect(f.writes).not.toHaveBeenCalled();
 });
 it.each(['directory_unlinked','physical_unlinked','final_revocation'])('%s suppresses browser allowance before publication',async kind=>{
- const f=fixture();if(kind==='directory_unlinked')proof.present=false;if(kind==='physical_unlinked')f.rows.set('telegram_unlinked',true);if(kind==='final_revocation')proof.revokeAt=2;
+ const f=fixture();if(kind==='directory_unlinked')proof.present=false;if(kind==='physical_unlinked')f.rows.set('telegram_unlinked',true);if(kind==='final_revocation')proof.revokeAt=3;
  expect((await f.read()).browser).toBeUndefined();expect(f.writes).not.toHaveBeenCalled();expect(f.env.BROWSER.fetch).not.toHaveBeenCalled();
 });
 it('current automatic pin is checked against current owner and deployment without renewing it',async()=>{

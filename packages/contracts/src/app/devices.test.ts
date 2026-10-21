@@ -16,6 +16,18 @@ it('registers a new installation at epoch 0 and revokes only a registered epoch'
   expect(appDeviceRevokeV1Schema.safeParse({ operation_id: 'revoke-00001', installation_id, expected_device_epoch: 0 }).success).toBe(false);
 });
 
+it('takes an Expo push token under its own provider, and each provider only in its own token form', () => {
+  const expo = { ...register, provider: 'expo', environment: 'production', token: 'ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]' };
+  expect(appDeviceRegisterV1Schema.safeParse(expo).success).toBe(true);
+  expect(appDeviceRegisterV1Schema.safeParse({ ...expo, token: 'ExpoPushToken[xxxxxxxxxxxxxxxxxxxxxx]' }).success).toBe(true);
+  for (const invalid of [
+    { ...expo, token: 'a'.repeat(64) }, { ...expo, token: 'ExponentPushToken[short]' }, { ...expo, token: 'ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx] ' },
+    { ...expo, token: `ExponentPushToken[${'x'.repeat(129)}]` }, { ...register, token: 'ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]' },
+    { ...register, provider: 'fcm', token: 'ExpoPushToken[xxxxxxxxxxxxxxxxxxxxxx]' },
+  ]) expect(appDeviceRegisterV1Schema.safeParse(invalid).success).toBe(false);
+  expect(appDevicesResultV1Schema.safeParse({ devices: [{ ...device, provider: 'expo' }] }).success).toBe(true);
+});
+
 it('never returns a token, and lists devices with their epoch', () => {
   expect(appDevicesResultV1Schema.safeParse({ devices: [device, { ...device, state: 'revoked', device_epoch: 2 }] }).success).toBe(true);
   expect(appDeviceMutationResultV1Schema.safeParse({ device, result: 'already_recorded' }).success).toBe(true);

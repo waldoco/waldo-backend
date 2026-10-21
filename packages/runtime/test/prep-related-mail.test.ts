@@ -130,7 +130,7 @@ describe('the prep prompt', () => {
 
 describe('the grounded sweep', () => {
   it('hands the related mail to the prep decision and stores none of it', async () => {
-    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('prep-related-mail')), async (_instance, state) => {
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('prep-related-mail')), async (_instance, state) => {
       const now = Date.now(), start = new Date(now + 20 * 60_000).toISOString(), end = new Date(now + 50 * 60_000).toISOString();
       const upcoming: CalendarItem = { ...event, start, end };
       const client = { ...mailClient({ t1: [message('m1', 'Agenda: budget review.')] }, [item('a', 't1')]),
@@ -228,7 +228,7 @@ describe('the grounded sweep around the mail read', () => {
   type Sweep = Parameters<ReturnType<typeof eventBriefs>['groundedSweep']>[0];
   const sweep = async (name: string, shape: (upcoming: CalendarItem) => CalendarItem, client: Partial<GoogleClient>, overrides: Partial<Sweep> = {}) => {
     let result!: { queued: number | Error; prompts: string[]; enqueued: number; stored: number };
-    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
       const now = Date.now();
       const upcoming = shape({ ...event, start: new Date(now + 20 * 60_000).toISOString(), end: new Date(now + 50 * 60_000).toISOString() });
       const prompts: string[] = [];

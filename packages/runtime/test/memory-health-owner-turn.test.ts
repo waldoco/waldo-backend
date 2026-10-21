@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi } from 'vitest';
 const seen = vi.hoisted(() => ({ inputs: [] as string[], outputs: [] as unknown[][] }));
@@ -12,12 +13,12 @@ beforeEach(() => { seen.inputs = []; seen.outputs = []; });
 const SAID = 'my HbA1c was 9.1 last week';
 const tool = (name: string, args: unknown) => [{ type: 'function_call', call_id: name, name, arguments: JSON.stringify(args) }];
 const session = (name: string, work: (store: ReturnType<typeof claimStore>, turn: (text: string) => Promise<string>) => Promise<void>) =>
-  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_i, state) => {
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_i, state) => {
     const store = claimStore(state.storage.sql, fn => state.storage.transactionSync(fn));
     const tools = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', hideHistory: async () => undefined });
     const responder = createOwnerResponder('fixture', undefined, store, undefined, undefined, tools);
     let id = 0;
-    await work(store, text => responder.respond({ traceId: `tg-${++id}`, conversationRef: 'owner', surface: 'telegram', text }, (_n, fn) => fn()));
+    await work(store, text => responder.respond(ownerTyped({ traceId: `tg-${++id}`, conversationRef: 'owner', surface: 'telegram', text }), (_n, fn) => fn()));
   });
 
 it('the main model remembers a grounded lab value, returns a receipt and explicitly recalls it on the next turn', async () => {

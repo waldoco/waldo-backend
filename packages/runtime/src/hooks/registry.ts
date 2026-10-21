@@ -11,11 +11,13 @@ import type {
   SanitiseResult,
   SessionState,
   SourceTaint,
+  ToolError,
   ToolName,
   TriggerType,
 } from '@waldo/contracts';
 import {
   DEFAULT_HOOK_TIMEOUT_MS,
+  toolError,
   POST_TOOL_USE_PRIORITIES,
   PRE_TOOL_USE_PRIORITIES,
   PRIVILEGED_ACTION_TOOLS,
@@ -33,6 +35,7 @@ import {
   getCommunicationArgsSchema,
   readThreadArgsSchema,
   searchCommunicationArgsSchema,
+  searchContactsArgsSchema,
   listArtifactsArgsSchema,
   readArtifactArgsSchema,
   skillsListArgsSchema, skillsVersionArgsSchema,
@@ -56,6 +59,9 @@ import {
   proposeActionArgsSchema,
   proposeScheduleArgsSchema,
   connectServiceArgsSchema,
+  sendConsoleLinkArgsSchema,
+  sendProgressNoteArgsSchema,
+  attachFileArgsSchema,
   queryCalendarArgsSchema,
   readDocumentArgsSchema,
   readToolOutputArgsSchema,
@@ -66,6 +72,7 @@ import {
   searchEpisodesArgsSchema,
   searchToolsArgsSchema,
   sendMessageArgsSchema,
+  useMacArgsSchema,
   browseActArgsSchema, delegateTaskArgsSchema,
   browsePageArgsSchema,
   cancelReminderArgsSchema,
@@ -94,7 +101,6 @@ import {
   taintGateBlocksDirectExecution,
   toolNameSchema,
   triggerTypeSchema,
-  updateMemoryArgsSchema,
   rememberArgsSchema,
   forgetMemoryArgsSchema,
   updateTaskArgsSchema,
@@ -138,6 +144,11 @@ export type HookRuntimeContext = {
   }) => MaybePromise<boolean>;
   sourceTaint: SourceTaint;
   toolArgSourceTaint: SourceTaint;
+  // An owner-approved tainted action (the propose_action card): the dispatcher verifies the call's tool and argument
+  // digest against it before any hook runs, so the autonomy gate may admit exactly that call despite the taint.
+  approvedTaintedAction?: Readonly<{ tool: ToolName; args_digest: string }>;
+  // Set by the dispatcher for one call whose handler declares proposal_only: the call only raises the owner's card.
+  proposalOnlyCall?: ToolName;
   egressAllowlist?: readonly string[];
   sanitise?: (input: SanitiseInput) => MaybePromise<SanitiseResult>;
   // Typed store provenance from the dispatcher/store boundary (owner review on #212): the
@@ -158,12 +169,17 @@ const halt = (reason: string, code: ErrorCode): HookResult => ({
 });
 
 export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object.freeze({
+  use_mac: useMacArgsSchema,
   get_crs: getCrsArgsSchema,
   get_health: getHealthArgsSchema,
   connect_service: connectServiceArgsSchema,
+  send_console_link: sendConsoleLinkArgsSchema,
+  send_progress_note: sendProgressNoteArgsSchema,
+  attach_file: attachFileArgsSchema,
   query_calendar: queryCalendarArgsSchema,
   get_communication: getCommunicationArgsSchema,
   search_communication: searchCommunicationArgsSchema,
+  search_contacts: searchContactsArgsSchema,
   read_thread: readThreadArgsSchema,
   create_artifact: createArtifactArgsSchema,
   revise_artifact: reviseArtifactArgsSchema,
@@ -185,7 +201,6 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   query_availability: queryAvailabilityArgsSchema,
   read_owner_context: readOwnerContextArgsSchema,
   read_memory: readMemoryArgsSchema,
-  update_memory: updateMemoryArgsSchema,
   remember: rememberArgsSchema,
   forget_memory: forgetMemoryArgsSchema,
   search_episodes: searchEpisodesArgsSchema,
@@ -393,6 +408,9 @@ export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
     // Redaction would corrupt them (the 2026-09-25 halt - [REDACTED_EMAIL] fails zod), so they
     // are checked (hard denies still halt fail-closed) but never rewritten.
     if (destination === 'draft_email') return checkExecutableArgs(payload.args, ctx, destination, sourceTaint.data);
+    // The frozen call inside a proposal is executable too: it is checked here and again, at its own tool's
+    // destination, when the approved call replays through this hook.
+    if (tool.data === 'propose_action') return checkExecutableArgs(payload.args, ctx, destination, sourceTaint.data);
     if (tool.data === 'workspace_write') {
       // Private writes are executable data, including initial text and full replacements.
       // Preserve ordinary contact fields exactly; mandatory substitutions still refuse.
@@ -410,9 +428,9 @@ export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
   },
 };
 
-// Tools with an owner-approval path: a call carrying external content is routed to a proposal
-// the owner approves, instead of being refused. Tools without one stay a hard block.
-const TAINT_APPROVAL_TOOLS: readonly ToolName[] = ['send_message', 'draft_document', 'write_task', 'update_task'];
+// Every external-tainted privileged call is pointed at propose_action: the owner's approval replays exactly that call
+// with the token the dispatcher verified. The proposal handler refuses what the host could never replay (use_mac, a
+// tool outside its handler set), so no dead card reaches the owner.
 export const TAINT_NEEDS_APPROVAL_REASON = 'external-tainted privileged action needs owner approval; propose it for approval with propose_action';
 
 export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
@@ -438,13 +456,14 @@ export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
       return halt('tool argument taint invalid', 'invalid_args');
     }
 
-    if (taintGateBlocksDirectExecution(tool.data, sourceTaint.data)) {
-      // Shadow log (7 days, then delete with the shadow code): old verdict was always a hard block.
-      console.warn(JSON.stringify({ hop: 'send_guard_shadow', ms: 0, ok: true, detail: JSON.stringify({ tool: tool.data, old: 'block', new: TAINT_APPROVAL_TOOLS.includes(tool.data) ? 'propose' : 'block', taint: sourceTaint.data }) }));
-      return TAINT_APPROVAL_TOOLS.includes(tool.data)
-        ? halt(TAINT_NEEDS_APPROVAL_REASON, 'forbidden')
-        : halt('external-tainted privileged action blocked', 'forbidden');
+    // Two calls pass with tainted arguments: the owner-approved replay of a frozen call, and a call whose handler only
+    // raises the owner's card. Neither executes anything the owner has not seen.
+    if (taintGateBlocksDirectExecution(tool.data, sourceTaint.data) && ctx.approvedTaintedAction?.tool !== tool.data && ctx.proposalOnlyCall !== tool.data) {
+      return halt(TAINT_NEEDS_APPROVAL_REASON, 'forbidden');
     }
+
+    // This admits a request only; native Mac custody authorizes each effect.
+    if (tool.data === 'use_mac') return ok();
 
     if (ctx.hasApproval === undefined) {
       return halt('approval check unavailable', 'forbidden');
@@ -554,7 +573,25 @@ export type RunHooksOptions<Ctx> = {
   commitContext?: boolean;
 };
 
+// The typed error a halt hands the model. invalid_args echoes the model's own argument detail,
+// which is its recovery path; every other halt maps to a fixed catalogue entry, so an ACL,
+// sanitiser or approval reason never reaches the model, only a code and a fix it can act on.
+const hookToolError = (hook: string, reason: string, code: ErrorCode): ToolError => {
+  if (reason === TAINT_NEEDS_APPROVAL_REASON) return toolError('taint_needs_approval');
+  if (reason === 'privileged action lacks approval') return toolError('approval_denied');
+  if (reason === 'approval check unavailable' || reason === 'approval check failed') return toolError('approval_check_unavailable');
+  if (reason === 'unknown tool') return toolError('unknown_tool');
+  if (hook === 'egress_allowlist_check') return toolError('egress_denied');
+  if (hook === 'acl_check' && code === 'forbidden') return toolError('acl_denied');
+  if (reason.startsWith('scribe:') || reason === 'canary token leaked') return toolError('sanitise_denied');
+  if (code === 'invalid_args') return toolError('invalid_args', reason);
+  if (code === 'auth_failed') return toolError('unauthenticated');
+  if (code === 'rate_limited') return toolError('rate_limited');
+  return toolError(code === 'transient' ? 'hook_failed' : 'hook_denied');
+};
+
 export class HookHaltError extends Error {
+  readonly toolError: ToolError;
   readonly clientMessage: string;
   readonly onErrorPayload: HookPayload;
 
@@ -562,13 +599,13 @@ export class HookHaltError extends Error {
     readonly hook: string,
     readonly reason: string,
     readonly code: ErrorCode,
+    // A content-free diagnostic for traces (the scribe's denial stage); never part of the reason.
+    readonly detail?: string,
   ) {
     super(`hook ${hook} halted: ${reason}`);
     this.name = 'HookHaltError';
-    // invalid_args carries model-authored arg details the model needs to recover; every other
-    // halt (acl, sanitise, ...) stays opaque so security reasons never reach the model. An egress denial
-    // only says the address cannot be opened, so the model can pick another source instead of stalling.
-    this.clientMessage = code === 'invalid_args' ? reason : hook === 'egress_allowlist_check' ? 'That address cannot be opened. Try another source.' : reason === TAINT_NEEDS_APPROVAL_REASON ? 'This uses content from an email or web page, so it needs the owner\'s approval first. Propose it with propose_action instead of doing it directly.' : 'hook halted';
+    this.toolError = hookToolError(hook, reason, code);
+    this.clientMessage = this.toolError.cause;
     this.onErrorPayload = {
       event: 'OnError',
       error: this.clientMessage,
@@ -671,6 +708,11 @@ function commitHookContext<Ctx>(target: Ctx, source: Ctx): void {
 
 function cloneHookValue<T>(value: T, seen = new WeakMap<object, unknown>()): T {
   if (value === null || typeof value !== 'object') {
+    return value;
+  }
+  // A copy of a platform AbortSignal keeps its prototype but is not one: workerd rejects it in AbortSignal.any and
+  // fetch, and it never sees the run's abort. Hooks cannot change a signal, so the run's own signal is shared.
+  if (value instanceof AbortSignal) {
     return value;
   }
 
@@ -894,8 +936,6 @@ function postToolUseDestination(tool: string): SanitiseDestination {
 
 function preToolUseDestination(tool: ToolName): SanitiseDestination {
   switch (tool) {
-    case 'update_memory':
-      return 'memory_block';
     case 'draft_document':
       return 'draft_document';
     case 'draft_email':

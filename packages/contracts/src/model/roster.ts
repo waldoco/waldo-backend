@@ -1,29 +1,50 @@
 import { z } from 'zod';
 
 export const OPENAI_GPT_6_LUNA_MODEL = 'gpt-6-luna' as const;
+export const OPENAI_GPT_6_1_SOL_MODEL = 'gpt-6.1-sol' as const;
 export const WORKERS_AI_GEMMA_4_26B_MODEL = '@cf/google/gemma-4-26b-a4b-it' as const;
-export const ANTHROPIC_CLAUDE_SONNET_4_6_MODEL = 'claude-sonnet-4-6' as const;
-export const ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL = 'claude-haiku-4-5' as const;
+export const ANTHROPIC_CLAUDE_OPUS_5_5_MODEL = 'claude-opus-5-5' as const;
+export const ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL = 'claude-haiku-5-5' as const;
 export const OPENAI_PROVIDER = 'openai' as const;
+export const ANTHROPIC_PROVIDER = 'anthropic' as const;
 
 // The only internal model IDs Waldo routes to. Workers AI keeps the documented @cf/<vendor>
-// prefix; Anthropic values are stable internal aliases. The phantom `gemma-4-9b` and
-// superseded `gemma-4-27b` are intentionally absent — the PreLLMCall hook rejects any ID
-// outside this set.
+// prefix; Anthropic values are the Claude API's undated aliases (Anthropic's models doc,
+// checked 2026-10-20). The phantom `gemma-4-9b` and superseded `gemma-4-27b` are
+// intentionally absent — the PreLLMCall hook rejects any ID outside this set.
 export const modelNameSchema = z.enum([
   WORKERS_AI_GEMMA_4_26B_MODEL,
-  ANTHROPIC_CLAUDE_SONNET_4_6_MODEL,
-  ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL,
+  ANTHROPIC_CLAUDE_OPUS_5_5_MODEL,
+  ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL,
   OPENAI_GPT_6_LUNA_MODEL,
+  OPENAI_GPT_6_1_SOL_MODEL,
 ]);
 export type ModelName = z.infer<typeof modelNameSchema>;
 
-// The model Waldo chats, remembers and reacts with. Swapping models is this one line when the
-// target is already in the roster with an OpenAI provider; a new model also needs its roster
-// entry above, PROVIDER_OF below and a price in packages/runtime/src/llm/pricing.ts.
-// GPT-6 Luna pin (owner grant 2026-09-27, WhatsApp 11:56pm): newer OpenAI model at any
-// reasoning effort, ceiling GPT-6 Luna, nothing beyond.
-export const WALDO_CHAT_MODEL: ModelName = OPENAI_GPT_6_LUNA_MODEL;
+// The owner's own conversation turns, on the app, iMessage and Telegram, and the delegate tasks they spawn.
+export const WALDO_CHAT_MODEL: ModelName = OPENAI_GPT_6_1_SOL_MODEL;
+// Every call that is not an owner's conversation turn: reaction choice, thread titles, memory extraction and
+// consolidation, conversation compaction, reminder, day-card, brief and heartbeat wording, and background decisions.
+// Not ROSTER.auxiliary below, which is the run loop's classifier role.
+// A model swap is a pin change here; a new model also needs its roster entry, PROVIDER_OF, OPENAI_REASONING, a
+// context spec and a price in packages/runtime/src/llm/pricing.ts.
+export const WALDO_AUXILIARY_MODEL: ModelName = OPENAI_GPT_6_LUNA_MODEL;
+// The second provider's models, reached only when the OpenAI step above fails: the current Claude Opus for the owner's
+// own turns, the current Claude Haiku for everything else. Same pin discipline as the two models above.
+export const WALDO_CHAT_FALLBACK_MODEL: ModelName = ANTHROPIC_CLAUDE_OPUS_5_5_MODEL;
+export const WALDO_AUXILIARY_FALLBACK_MODEL: ModelName = ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL;
+
+// The reasoning efforts Waldo asks for. Every OpenAI roster model accepts both; Sol accepts no none or minimal.
+export const reasoningEffortSchema = z.enum(['low', 'medium']);
+export type ReasoningEffort = z.infer<typeof reasoningEffortSchema>;
+
+// Per OpenAI model: the efforts its OpenAI model page lists, and the effort Waldo asks for. The effort follows the
+// model rather than the call, so a Luna call stays at low wherever it runs.
+export type OpenAIReasoning = Readonly<{ accepts: readonly string[]; effort: ReasoningEffort }>;
+export const OPENAI_REASONING: Readonly<Partial<Record<ModelName, OpenAIReasoning>>> = {
+  [OPENAI_GPT_6_LUNA_MODEL]: { accepts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'], effort: 'low' },
+  [OPENAI_GPT_6_1_SOL_MODEL]: { accepts: ['low', 'medium', 'high', 'xhigh', 'max'], effort: 'medium' },
+};
 
 // Speech-to-text for owner voice notes. Not chat routes, so they stay outside modelNameSchema.
 // Recommended default is ElevenLabs Scribe v2 (docs/planning/STT_SELECTION.md); smallest.ai Pulse and
@@ -32,21 +53,23 @@ export const ELEVENLABS_TRANSCRIBE_MODEL = 'scribe_v2' as const;
 export const SMALLEST_TRANSCRIBE_MODEL = 'pulse' as const;
 export const WALDO_TRANSCRIBE_MODEL = 'gpt-4o-mini-transcribe' as const;
 
-export const providerSchema = z.enum(['workers_ai', 'anthropic', OPENAI_PROVIDER]);
+export const providerSchema = z.enum(['workers_ai', ANTHROPIC_PROVIDER, OPENAI_PROVIDER]);
 export type Provider = z.infer<typeof providerSchema>;
 
 export const PROVIDER_OF: Readonly<Record<ModelName, Provider>> = {
   [WORKERS_AI_GEMMA_4_26B_MODEL]: 'workers_ai',
-  [ANTHROPIC_CLAUDE_SONNET_4_6_MODEL]: 'anthropic',
-  [ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL]: 'anthropic',
+  [ANTHROPIC_CLAUDE_OPUS_5_5_MODEL]: ANTHROPIC_PROVIDER,
+  [ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL]: ANTHROPIC_PROVIDER,
   [OPENAI_GPT_6_LUNA_MODEL]: OPENAI_PROVIDER,
+  [OPENAI_GPT_6_1_SOL_MODEL]: OPENAI_PROVIDER,
 };
 
 // The documented request ID and exact response identities accepted at the Cloudflare
 // chat-completions seam. This stays roster-owned so a provider wire-ID change is a pinned model
 // decision, not a string transformation hidden in an adapter (ADR-0069 §1). Response identities
-// remain an allowlist: the Haiku date-stamped alias is sourced from Cloudflare's raw model-page
-// response and is compatibility evidence, not a family/version prefix rule.
+// remain an allowlist. The Claude rows follow the gateway's documented `anthropic/<id with dots>`
+// request shape; a date-stamped response alias is added only once Cloudflare's raw model-page
+// response shows one for that model.
 export type CloudflareChatCompletionsModelIdentity = Readonly<{
   request: string;
   response: readonly string[];
@@ -59,13 +82,13 @@ export const CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS: Readonly<
     request: '@cf/google/gemma-4-26b-a4b-it',
     response: ['@cf/google/gemma-4-26b-a4b-it'],
   },
-  'claude-sonnet-4-6': {
-    request: 'anthropic/claude-sonnet-4.6',
-    response: ['claude-sonnet-4-6'],
+  'claude-opus-5-5': {
+    request: 'anthropic/claude-opus-5.5',
+    response: ['claude-opus-5-5'],
   },
-  'claude-haiku-4-5': {
-    request: 'anthropic/claude-haiku-4.5',
-    response: ['claude-haiku-4-5', 'claude-haiku-4-5-20251001'],
+  'claude-haiku-5-5': {
+    request: 'anthropic/claude-haiku-5.5',
+    response: ['claude-haiku-5-5'],
   },
 };
 
@@ -84,10 +107,10 @@ export type RosterRole = z.infer<typeof rosterRoleSchema>;
 // a pin change here plus the ADR-0069 re-run ritual, never a code change at call sites.
 export const ROSTER: Readonly<Record<RosterRole, ModelName>> = {
   primary: '@cf/google/gemma-4-26b-a4b-it',
-  reasoning: 'claude-sonnet-4-6',
-  fallback: 'claude-haiku-4-5',
+  reasoning: 'claude-opus-5-5',
+  fallback: 'claude-haiku-5-5',
   auxiliary: '@cf/google/gemma-4-26b-a4b-it',
-  harness_judge: 'claude-haiku-4-5',
+  harness_judge: 'claude-haiku-5-5',
 };
 
 // Durable protocol records pin a roster-owned reference, never duplicate the resolved model ID.

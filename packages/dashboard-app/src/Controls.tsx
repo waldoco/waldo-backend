@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { SignInRequired } from './model';
-import { fetchControls, submitControl, ControlsActionError, type ActionResult, type ActivityCursors, type ConnectionsRecord, type ControlAction, type ControlFields, type ControlRecord, type ControlsView, type DayRecord } from './controls-model';
+import { fetchControls, submitControl, ControlsActionError, type ActionResult, type ActivityCursors, type ConnectionsRecord, type ControlAction, type ControlFields, type ControlRecord, type ControlsView, type DayRecord, type ProactiveSurface } from './controls-model';
 import { Icon, Logo, type IconName } from './icons';
 import { Patch } from '@lucasmarkes/hairline/react';
 import { DayRail, localMinutes, minutesLabel, type RailMark } from './Infographics';
 import { ActivityControls, FilesControls, ProfileControls, SetupControls, UsageControls, WaitingControls } from './Panels';
+import { DevicesControls, IMessageControls, RevealedValue } from './ChannelSetup';
 
 type ActionProps = { busy: boolean; onAction: (action: ControlAction, fields?: ControlFields) => void };
 export type ControlsState = { kind: 'loading' } | { kind: 'ready'; data: ControlRecord } | { kind: 'error'; message: string; signedOut: boolean };
@@ -26,6 +27,29 @@ function CardTiming({ card, busy, onAction }: { card: DayRecord['data']['cards']
     {card.sent && <p className="meta">This records a send, not verified delivery. Timing edits are unavailable for an already sent card.</p>}
     </div>
   </details>;
+}
+
+const SURFACES: Readonly<Record<ProactiveSurface['value'], string>> = { app: 'The app only', whatsapp: 'WhatsApp only', both: 'The app and WhatsApp' };
+// Each note says what the choice does today, given where the owner can be reached.
+function surfaceNotes({ value, app_linked, whatsapp_linked, telegram_linked }: ProactiveSurface): string[] {
+  if (telegram_linked) return ['While Telegram is linked, Waldo keeps writing to you as it does now. This choice applies once Telegram is unlinked.'];
+  if (!whatsapp_linked) return value === 'app' ? [] : ['WhatsApp isn’t connected, so these come to the app for now.'];
+  if (!app_linked && value !== 'whatsapp') return ['You haven’t written to Waldo in the app yet, so these come to WhatsApp for now.'];
+  if (value === 'app') return [];
+  const window = 'WhatsApp lets Waldo write freely for a day after your last message there.';
+  return value === 'whatsapp'
+    ? ['Meeting prep before your events isn’t sent on WhatsApp yet.', `${window} After that, a day card waits only until your next card is due or its day ends, update cards aren’t sent, and a standing order’s newer report replaces a waiting one. Other messages wait up to 30 days for your next message there, unless they no longer apply.`]
+    : ['Meeting prep before your events, update cards and notices about paused jobs come to the app only.', `${window} After that, each copy waits a day at most for your next message there; the app keeps every message.`];
+}
+function ProactiveSurfaceSetting({ surface, busy, onAction }: { surface: ProactiveSurface } & ActionProps) {
+  const [choice, setChoice] = useState(surface.value);
+  return <details name="day-settings" className="disclosure"><summary><Icon name="bell"/><span className="label key">Where Waldo writes</span><span className="value">{SURFACES[surface.value]}</span></summary><div className="disclosure-body"><p>Your Brief and other day cards, reminders, follow-ups and update cards. Replies always come where you wrote.</p>
+    {surfaceNotes(surface).map(note => <p key={note} className="meta">{note}</p>)}
+    <form className="control-form" onSubmit={event => { event.preventDefault(); onAction('proactive_surface.set', { value: choice }); }}>
+      <label>Send them to<select value={choice} disabled={busy} onChange={event => setChoice(event.target.value as typeof choice)}>{(Object.keys(SURFACES) as ProactiveSurface['value'][]).map(value => <option key={value} value={value}>{SURFACES[value]}</option>)}</select></label>
+      <button className="primary" disabled={busy}>Save where Waldo writes</button>
+    </form>
+  </div></details>;
 }
 
 export function DayControls({ record, busy, onAction }: { record: DayRecord } & ActionProps) {
@@ -60,6 +84,7 @@ export function DayControls({ record, busy, onAction }: { record: DayRecord } & 
         <label>Volume<select value={volume} disabled={busy} onChange={event => setVolume(event.target.value as typeof volume)}><option value="low">Low: only the three day cards</option><option value="normal">Normal: plus updates that change your day</option><option value="high">High: plus smaller useful updates</option></select></label><button className="primary" disabled={busy}>Save quiet hours &amp; volume</button>
       </form>
     </div></details>
+    {record.data.proactive_surface && <ProactiveSurfaceSetting surface={record.data.proactive_surface} busy={busy} onAction={onAction}/>}
     </div>
     <p className="caption">These cards run in chat. Their content and verified Close results aren’t shown here.</p>
   </>;
@@ -67,6 +92,9 @@ export function DayControls({ record, busy, onAction }: { record: DayRecord } & 
 
 export function ConnectionsControls({ record, busy, onAction, section }: { record: ConnectionsRecord; section?: 'connections'|'sessions' } & ActionProps) {
   const { google, telegram, sessions } = record.data;
+  // Absent means the directory did not answer for that channel; that reads as unknown, never as unlinked.
+  const imessage = record.data.channels?.find(item => item.channel === 'imessage');
+  const whatsapp = record.data.channels?.find(item => item.channel === 'whatsapp');
   return <>
     {section!=='sessions'&&<section className="tile reveal" style={{ '--i': 0 } as React.CSSProperties} aria-labelledby="tree-title">
       <div className="chart-head"><h2 id="tree-title">Connected to Waldo</h2><span className="legend"><i className="line"/>Access saved<i className="line dashed"/>Needs you</span></div>
@@ -90,7 +118,20 @@ export function ConnectionsControls({ record, busy, onAction, section }: { recor
         <p className="tree-group label">Chat</p>
         <ul><li className={`branch${telegram.linked ? '' : ' broken'}`}><details name="connections" className="disclosure"><summary><span className="marks"><Logo name="telegram"/></span><span className="value">Telegram</span><span className={`access-label${telegram.linked ? '' : ' reconnect'}`}>{telegram.linked ? 'Linked' : 'Unlinked'}</span></summary>
           <div className="disclosure-body"><p>Chat, cards and reminders arrive in your Telegram DM. Instructions appear here once you ask to link.</p>
-            <div className="control-actions"><button disabled={busy} onClick={() => onAction('telegram.link')}>Link a Telegram account</button>{telegram.linked && telegram.unlinkAvailable && <button disabled={busy} onClick={() => { if (window.confirm('Unlink Telegram? Waldo stops messaging it. Sign in with your email to link again.')) onAction('telegram.unlink'); }}>Unlink Telegram</button>}</div></div></details></li></ul>
+            <div className="control-actions"><button disabled={busy} onClick={() => onAction('telegram.link')}>Link a Telegram account</button>{telegram.linked && telegram.unlinkAvailable && <button disabled={busy} onClick={() => { if (window.confirm('Unlink Telegram? Waldo stops messaging it. Sign in with your email to link again.')) onAction('telegram.unlink'); }}>Unlink Telegram</button>}</div></div></details></li>
+          <li className={`branch${imessage?.state === 'linked' ? '' : ' broken'}`}><details name="connections" className="disclosure"><summary><span className="marks"><Icon name="chat"/></span><span className="value">iMessage</span><span className={`access-label${imessage?.state === 'linked' ? '' : imessage ? ' reconnect' : ''}`}>{imessage?.state === 'linked' ? 'Linked' : imessage?.state === 'blocked' ? 'Blocked' : imessage?.state === 'pending' ? 'Pending' : imessage ? 'Not linked' : 'Status unknown'}</span></summary>
+            <div className="disclosure-body"><p>Text Waldo from your own iPhone. It’s the same Waldo and memory as here. Link your number by texting Waldo a one-time code.</p>
+              <div className="control-actions"><a className="quiet-link" href="#/connections/imessage">{imessage?.state === 'linked' ? 'Manage iMessage' : 'Set up iMessage'}</a></div></div></details></li>
+          <li className={`branch${whatsapp?.state === 'linked' ? '' : ' broken'}`}><details name="connections" className="disclosure"><summary><span className="marks"><Icon name="chat"/></span><span className="value">WhatsApp</span><span className={`access-label${whatsapp?.state === 'linked' ? '' : whatsapp ? ' reconnect' : ''}`}>{whatsapp?.state === 'linked' ? 'Linked' : whatsapp ? 'Not linked' : 'Status unknown'}</span></summary>
+            <div className="disclosure-body"><p>Chat with your Waldo on WhatsApp. It’s the same Waldo and memory as here. Get a one-time code, then send it from your WhatsApp to the Waldo number.</p>
+              <div className="control-actions"><button disabled={busy} onClick={() => onAction('whatsapp.link')}>Get a WhatsApp link code</button>{whatsapp?.state === 'linked' && <button disabled={busy} onClick={() => { if (window.confirm('Unlink WhatsApp? Messages from that number stop reaching your Waldo, and Waldo stops messaging it. Get a new code to link again.')) onAction('whatsapp.unlink'); }}>Unlink WhatsApp</button>}</div></div></details></li>
+          <li className="branch"><details name="connections" className="disclosure"><summary><span className="marks"><Icon name="chat"/></span><span className="value">This console</span><span className="access-label">Signed in</span></summary>
+            <div className="disclosure-body"><p>Chat with Waldo right here. It’s the same conversation as the Waldo app.</p>
+              <div className="control-actions"><a className="quiet-link" href="#/chat">Open chat</a></div></div></details></li></ul>
+        <p className="tree-group label">Devices</p>
+        <ul><li className="branch"><details name="connections" className="disclosure"><summary><span className="marks"><Icon name="settings"/></span><span className="value">Your Mac</span></summary>
+          <div className="disclosure-body"><p>Pair Kennel on your Mac so Waldo can check on it and send it notifications you choose.</p>
+            <div className="control-actions"><a className="quiet-link" href="#/connections/devices">Manage devices</a></div></div></details></li></ul>
       </div><Patch className="figure" label="A patch panel of ports, an interactive illustration. Decorative."/></div>
       <div className="control-actions">{google.connectAvailable ? <button className="primary" disabled={busy} onClick={() => onAction('google.connect', { value: 'calendar' })}>{google.accounts.length ? 'Add Google account' : 'Connect Google'}</button> : <p className="meta">Google connection is unavailable on this server.</p>}</div>
       <p className="meta">Google asks for its usual scopes together and lets you pick the account. Mail sends still need your exact approval in chat.</p>
@@ -113,7 +154,7 @@ export function ControlReceipt({ result, onCheck, onRefresh, busy }: { result: A
   return <section className={`panel control-receipt ${receipt.state}`} role={receipt.state === 'recorded' ? 'status' : 'alert'}>
     <span className="receipt-mark" aria-hidden="true">{receipt.state === 'recorded' ? <svg viewBox="0 0 24 24"><path d="m6 12.5 4 4 8-9"/></svg> : <Icon name="warning"/>}</span>
     <h2>{receipt.signed_out ? 'Signed out.' : receipt.state === 'recorded' ? 'Receipt recorded.' : receipt.state === 'incomplete' ? 'Change incomplete.' : receipt.state === 'rejected' ? 'Change not applied.' : 'Outcome unconfirmed.'}</h2>
-    <p className="control-receipt-message">{receipt.message}</p>{result.duplicate && <p className="muted">This is the recorded receipt for the same request. It did not run again.</p>}
+    <p className="control-receipt-message">{receipt.message}</p>{result.reveal && <RevealedValue reveal={result.reveal}/>}{result.duplicate && <p className="muted">This is the recorded receipt for the same request. It did not run again. Any code it issued is not shown again.</p>}
     {receipt.navigation && <a className="button-link" href={receipt.navigation}>Continue to Google</a>}
     {receipt.signed_out ? <a href="/console/signin">Sign in again</a> : <div className="control-actions">{onCheck && <button disabled={busy} onClick={onCheck}>Check this request</button>}<button disabled={busy} onClick={onRefresh}>Refresh controls</button></div>}
   </section>;
@@ -129,6 +170,8 @@ const headings: Record<ControlsView, { title: string; description: string }> = {
   setup: { title: 'Setup.', description: 'What’s saved so far, and what’s left.' },
   usage: { title: 'Usage.', description: 'Model calls and their recorded cost estimates.' },
   files: { title: 'Files.', description: 'What you’ve sent Waldo.' },
+  imessage: { title: 'iMessage.', description: 'Text your Waldo from your own iPhone.' },
+  devices: { title: 'Devices.', description: 'The Macs paired with your Waldo through Kennel.' },
 };
 export function ControlsPanel({ view, embedded=false, section }: { view: ControlsView; embedded?:boolean; section?: 'connections'|'sessions' }) {
   const [state, setState] = useState<ControlsState>({ kind: 'loading' });
@@ -180,7 +223,9 @@ export function ControlsPanel({ view, embedded=false, section }: { view: Control
           : state.data.view === 'profile' ? <ProfileControls record={state.data}/>
             : state.data.view === 'setup' ? <SetupControls record={state.data}/>
               : state.data.view === 'usage' ? <UsageControls record={state.data}/>
-                : <FilesControls record={state.data} busy={disabled} onAction={act}/> : null;
+                : state.data.view === 'imessage' ? <IMessageControls record={state.data} busy={disabled} onAction={act}/>
+                  : state.data.view === 'devices' ? <DevicesControls record={state.data} busy={disabled} onAction={act}/>
+                    : <FilesControls record={state.data} busy={disabled} onAction={act}/> : null;
   return <>
     {!embedded&&<div className="page-heading"><h1>{heading.title}</h1><p>{heading.description}</p></div>}
     <div className="tools"><button className="quiet" disabled={busy} onClick={refresh}>Refresh</button></div>

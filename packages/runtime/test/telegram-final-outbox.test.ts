@@ -12,6 +12,27 @@ const fixture = () => {
   return { kv, outbox, input, settled, advance: () => { now += 31000; }, now: () => now };
 };
 describe('frozen Telegram final outbox', () => {
+  it('supersedes only waiting records that never went out, in the same save as the record that replaces them', async () => {
+    const f = fixture();
+    const report = (id: string) => ({ ...f.input, id, standingOrder: { runId: `bg:${id}`, gate: 'act_and_report' as const } });
+    await f.outbox.enqueue(report('standing-order:o:1'));
+    await f.outbox.enqueue(report('standing-order:o:2'));
+    await f.outbox.enqueue(report('standing-order:other:1'));
+    await f.outbox.enqueue(report('standing-order:o:uncertain'));
+    // standing-order:o:2 had one part reach the provider before a retryable refusal of the next; the uncertain one may have gone out.
+    const rows = f.outbox.records();
+    rows[1] = { ...rows[1]!, deliveredParts: 1, attempts: 1 };
+    rows[3] = { ...rows[3]!, status: 'quarantined', reason: 'send_unknown', attempts: 1, settled: true };
+    f.kv.put(FINAL_OUTBOX_KEY, rows);
+    await f.outbox.enqueue(report('standing-order:o:3'), { supersedes: record => record.id.startsWith('standing-order:o:') });
+    expect(f.outbox.records().map(record => [record.id, record.status, record.reason, record.settled])).toEqual([
+      ['standing-order:o:1', 'blocked', 'superseded', false],
+      ['standing-order:o:2', 'pending', undefined, undefined],
+      ['standing-order:other:1', 'pending', undefined, undefined],
+      ['standing-order:o:uncertain', 'quarantined', 'send_unknown', true],
+      ['standing-order:o:3', 'pending', undefined, undefined],
+    ]);
+  });
   it('expires before quiet deferral and clamps a future hold to expiry for every receipt kind', async () => {
     for (const receipt of [{}, { mailFollowup: { loopId: 'l', due: '2026-10-03T10:00', sourceRef: 'mail:t', timezone: 'UTC', messageId: 'm' } }, { heartbeat: { id: 'h', occurrence: 1, schedulerRunId: 'r', loops: [] } }]) {
       const f = fixture();

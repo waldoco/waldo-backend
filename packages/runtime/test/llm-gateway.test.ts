@@ -325,4 +325,38 @@ describe('CloudflareAIGatewayAdapter', () => {
     await expect(adapter.complete(request())).resolves.toMatchObject({ ok: true });
     expect(signal).toBeInstanceOf(AbortSignal);
   });
+
+  // A transport that behaves like fetch: an aborted signal rejects, before or during the request.
+  const stoppable = () => {
+    const seen: AbortSignal[] = [];
+    let started!: () => void;
+    const fetching = new Promise<void>((resolve) => { started = resolve; });
+    const fetch = (_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal as AbortSignal;
+      seen.push(signal);
+      const abort = () => reject(new DOMException('The operation was aborted.', 'AbortError'));
+      if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true });
+      started();
+    });
+    const adapter = new CloudflareAIGatewayAdapter({ accountId: 'account-123', gatewayId: 'waldo-staging', credential: credential(), timeoutMs: 60_000, fetch } as never);
+    return { adapter, seen, fetching };
+  };
+  const stoppedRun = (stop: AbortController) => ({ runId: 'run-1', attempt: 'attempt-1', deadline: Date.now() + 60_000, signal: stop.signal, admit: () => undefined, commit: <T,>(work: () => T) => work() });
+
+  it('aborts the in-flight fetch when the run it serves is stopped', async () => {
+    const stop = new AbortController(), { adapter, seen, fetching } = stoppable();
+    const pending = adapter.complete({ ...request(), runScope: stoppedRun(stop) });
+    await fetching;
+    expect(seen[0]!.aborted).toBe(false);
+    stop.abort();
+    await expect(pending).resolves.toEqual({ ok: false, code: 'transient', error: 'gateway_fetch_failed' });
+    expect(seen[0]!.aborted).toBe(true);
+  });
+
+  it('a run stopped before its fetch starts sends it already aborted', async () => {
+    const stop = new AbortController(), { adapter, seen } = stoppable();
+    stop.abort();
+    await expect(adapter.complete({ ...request(), runScope: stoppedRun(stop) })).resolves.toEqual({ ok: false, code: 'transient', error: 'gateway_fetch_failed' });
+    expect(seen[0]!.aborted).toBe(true);
+  });
 });

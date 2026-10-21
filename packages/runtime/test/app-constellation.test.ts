@@ -19,7 +19,7 @@ const data = (body: Record<string, unknown>) => {
   return parsed.data;
 };
 const owner = async (seed: (sql: SqlStorage) => void, run: (storage: DurableObjectStorage, doId: string) => Promise<void>) => {
-  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`app-constellation-${crypto.randomUUID()}`));
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`app-constellation-${crypto.randomUUID()}`));
   await runInDurableObject(stub, async (_instance, state) => { seed(state.storage.sql); await run(state.storage, state.id.toString()); });
 };
 const graph = (sql: SqlStorage) => {

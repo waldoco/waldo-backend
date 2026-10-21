@@ -6,7 +6,7 @@ import { sha256Hex, type GoogleClient } from '../src/connectors/google';
 import { ownerEffectLedger, ownerEffectOperationRef } from '../src/channels/owner-effect-ledger';
 
 it('approved send persists intent, blocks concurrent callbacks, and stores provider receipt', async () => {
-  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('effect-approved-send'));
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('effect-approved-send'));
   await runInDurableObject(stub, async (_instance, state) => {
     let release!: () => void;
     const wait = new Promise<void>(resolve => { release = resolve; });
@@ -30,7 +30,7 @@ it('approved send persists intent, blocks concurrent callbacks, and stores provi
 });
 
 it('restarted approved email reconciles an attempting intent without another send', async () => {
-  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('effect-approved-crash'));
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('effect-approved-crash'));
   await runInDurableObject(stub, async (_instance, state) => {
     const effects = ownerEffectLedger(state.storage, () => 1000);
     let sends = 0;
@@ -45,7 +45,7 @@ it('restarted approved email reconciles an attempting intent without another sen
 });
 
 it('confirmed send binds the host turn/call identity, not a model operation id', async () => {
-  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('effect-operation-ref'));
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('effect-operation-ref'));
   await runInDurableObject(stub, async (_instance, state) => {
     const effects = ownerEffectLedger(state.storage, () => 1000);
     const ref = await ownerEffectOperationRef({ authenticatedUserId: 'owner', turnId: 'turn', toolCallId: 'call' });
@@ -64,7 +64,7 @@ it('confirmed send binds the host turn/call identity, not a model operation id',
 
 // A different Message-ID counts only for the Gmail id the send returned (Gmail can rewrite it); on another message it never does.
 it.each(['missing SENT', 'wrong Message-ID on another message', 'wrong thread', 'legacy search hit'] as const)('approved send remains uncertain with %s evidence and replay never resends', async fault => {
-  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`effect-send-evidence-${fault}`));
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`effect-send-evidence-${fault}`));
   await runInDurableObject(stub, async (_instance, state) => {
     const effects = ownerEffectLedger(state.storage, () => 1000);
     let sends = 0;

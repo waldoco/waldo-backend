@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { toContextHealthMaterial, type HealthContextRow } from '../src/channels/health-context';
@@ -52,13 +53,13 @@ const expectAbsent = (instructions: string) => {
 const responderWith = (health: boolean, log?: (entry: TurnLogEntry) => void) =>
   createOwnerResponder('fixture', undefined, undefined, log, undefined, [], undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, async () => health ? readNow() : null);
 const inOwner = <T,>(name: string, work: () => Promise<T>) =>
-  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), work);
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), work);
 const lastInstructions = () => seen.bodies.at(-1)?.instructions ?? '';
 
 it('a messaging owner turn tells the model the shared health context, in its own measured section', async () => {
   const logs: TurnLogEntry[] = [];
   await inOwner('health-reply-with', async () => {
-    await responderWith(true, entry => logs.push(entry)).respond({ traceId: 'tg-health-1', conversationRef: 'owner', surface: 'telegram', text: 'how am I doing today?' }, (_name, work) => work());
+    await responderWith(true, entry => logs.push(entry)).respond(ownerTyped({ traceId: 'tg-health-1', conversationRef: 'owner', surface: 'telegram', text: 'how am I doing today?' }), (_name, work) => work());
   });
   expectHealth(lastInstructions());
   const shape = logs.find(entry => entry.hop === 'llm_reply')!.shape!;
@@ -70,7 +71,7 @@ it('a messaging owner turn tells the model the shared health context, in its own
 
 it('a messaging owner turn without shared health says so once', async () => {
   await inOwner('health-reply-without', async () => {
-    await responderWith(false).respond({ traceId: 'tg-health-2', conversationRef: 'owner', surface: 'telegram', text: 'how am I doing today?' }, (_name, work) => work());
+    await responderWith(false).respond(ownerTyped({ traceId: 'tg-health-2', conversationRef: 'owner', surface: 'telegram', text: 'how am I doing today?' }), (_name, work) => work());
   });
   expectAbsent(lastInstructions());
 });
@@ -79,7 +80,7 @@ it('a Recovery-first row reaches the model with Load stated as unavailable', asy
   const recoveryOnly: HealthContextRow = { context: { ...row.context!, form: null, weight: null }, previous: null };
   await inOwner('health-recovery-only', async () => {
     const responder = createOwnerResponder('fixture', undefined, undefined, undefined, undefined, [], undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, async () => toContextHealthMaterial(recoveryOnly, clock));
-    await responder.respond({ traceId: 'tg-health-3', conversationRef: 'owner', surface: 'telegram', text: 'how am I doing today?' }, (_name, work) => work());
+    await responder.respond(ownerTyped({ traceId: 'tg-health-3', conversationRef: 'owner', surface: 'telegram', text: 'how am I doing today?' }), (_name, work) => work());
   });
   const told = lastInstructions();
   expect(count(told, 'Recovery zone: solid.')).toBe(1);
@@ -96,7 +97,7 @@ it('a scheduled prompt such as the Brief tells the model the shared health conte
 });
 
 const owner = '10000000-0000-0000-0000-000000000001';
-const scope = (): RunEffectScope => ({ runId: 'run-one', attempt: 'attempt-one', deadline: Date.now() + 30_000, signal: new AbortController().signal, admit: vi.fn(), commit: work => work() });
+const scope = (): RunEffectScope => ({ runId: 'run-one', attempt: 'attempt-one', deadline: Date.now() + 15 * 60_000, signal: new AbortController().signal, admit: vi.fn(), commit: work => work() });
 const appContext = async (health: boolean, text: string) => {
   const admission = await ownerMessageAdmission({
     lookup: async () => ({ owner_id: owner, do_name: 'owner-demo', state_version: 0, admission_revision: '1', presence_id: '20000000-0000-0000-0000-000000000001', provider: 'telegram', subject: '1001' }),
@@ -114,7 +115,7 @@ it('an app owner turn tells the model the shared health context once, with no ab
   const runScope = scope();
   await inOwner('health-app-with', async () => {
     const responder = createOwnerResponder('fixture', undefined, undefined, undefined, undefined, [], undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, [], runScope, undefined, { context });
-    await responder.respond({ traceId: 'app-health-1', conversationRef: context.conversationRef, surface: 'app', text }, (_name, work) => work());
+    await responder.respond(ownerTyped({ traceId: 'app-health-1', conversationRef: context.conversationRef, surface: 'app', text }), (_name, work) => work());
   });
   expectHealth(lastInstructions());
 });

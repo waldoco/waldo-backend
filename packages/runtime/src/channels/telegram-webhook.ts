@@ -4,8 +4,7 @@ import { OWNER_TRACE_HEADER } from '../observability/owner-trace-identity';
 import {linkCodeHash} from '../identity/owner-directory';
 
 export type TelegramWebhookEnv = Readonly<{
-  TELEGRAM_OWNER_DO?: DurableObjectNamespace;
-  RUN_LOOP_DO?: DurableObjectNamespace<import('../run-loop/do').RunLoopDO>;
+  OWNER_DO?: DurableObjectNamespace;
   // Held off until connected common-task execution and recovery acceptance.
   COMMON_BROWSER_REGISTRATION?: string;
   COMMON_OWNER_TASKS?: string;
@@ -18,10 +17,13 @@ export type TelegramWebhookEnv = Readonly<{
   LANGFUSE_SECRET_KEY?: string;
   LANGFUSE_BASE_URL?: string;
   LANGFUSE_CAPTURE_TEXT?: string;
+  // 'on' sends per-day spend to waldo.cost_ledger_daily after each turn; anything else keeps it off.
+  WALDO_COST_LEDGER_SYNC?: string;
   WALDO_ENVIRONMENT?: string;
   WALDO_OWNER_DO_NAMESPACE?: string;
   WALDO_RELEASE?: string;
   OPENAI_API_KEY?: string;
+  ANTHROPIC_API_KEY?: string;
   SMALLEST_AI_API_KEY?: string;
   BRAVE_SEARCH_API_KEY?: string;
   // A5 artifact bodies; absent in tests/local, bound in wrangler (r2_buckets).
@@ -40,6 +42,9 @@ export type TelegramWebhookEnv = Readonly<{
   WHATSAPP_APP_SECRET?: string;
   WHATSAPP_ACCESS_TOKEN?: string;
   WHATSAPP_PHONE_NUMBER_ID?: string;
+  // The approved re-engagement template (WhatsApp Manager) sent when the 24-hour window is closed; unset holds without knocking.
+  WHATSAPP_REENGAGE_TEMPLATE?: string;
+  WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string;
   WALDO_MCP_SERVERS?: string;
   MCP_READ_INTENTS?: string;
   DRIVE_READS?: string;
@@ -86,7 +91,7 @@ const handle = async (
   directory: OwnerDirectory = ownerDirectory(env),
 ): Promise<Response> => {
   const secret = env.TELEGRAM_WEBHOOK_SECRET;
-  if (request.method !== 'POST' || !secret || !env.TELEGRAM_OWNER_DO) {
+  if (request.method !== 'POST' || !secret || !env.OWNER_DO) {
     return outcome(request.method !== 'POST' ? 'not_post' : 'not_configured', new Response('not found', { status: 404 }));
   }
   if (!sameSecret(request.headers.get('x-telegram-bot-api-secret-token') ?? '', secret)) {
@@ -98,7 +103,7 @@ const handle = async (
   if (!update || typeof update !== 'object') return outcome('ignored_shape', new Response('ok'));
   const subject = sender(update);
   if (!subject) return outcome('no_sender', new Response('ok'));
-  const owners = env.TELEGRAM_OWNER_DO;
+  const owners = env.OWNER_DO;
   const origin = new URL(request.url).origin;
   const coded = parseCodedSetup(update);
   if (coded) {
