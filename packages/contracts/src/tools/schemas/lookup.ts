@@ -7,7 +7,8 @@ import { APP_FINDING_TEXT_MAX_V1, appFindingCategoryV1Schema } from '../../app/o
 export const recordOwnerFindingArgsSchema = z.strictObject({
   category: appFindingCategoryV1Schema,
   text: z.string().trim().min(1).max(APP_FINDING_TEXT_MAX_V1),
-  source_url: z.url({ protocol: /^https?$/ }).max(2048),
+  // A page address, not a destination: the dispatcher accepts only a page this run's search or browse returned.
+  source_url: z.string().regex(/^https?:\/\/[^\s]+$/).max(2048),
   // Long enough to identify one passage: forgetting the finding hides this exact text across chat history.
   evidence_quote: z.string().trim().min(12).max(500),
   anchor: z.string().trim().min(3).max(254),
