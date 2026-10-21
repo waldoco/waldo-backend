@@ -9,6 +9,7 @@ export type TelegramWebhookEnv = Readonly<{
   COMMON_BROWSER_REGISTRATION?: string;
   COMMON_OWNER_TASKS?: string;
   DEVICE_BRIDGE_DO?: DurableObjectNamespace<import('../devices/device-bridge-do').DeviceBridgeDO>;
+  TASK_WORKER_DO?: DurableObjectNamespace<import('../tasks/worker-do').TaskWorkerDO>;
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
   WALDO_OWNER_TELEGRAM_ID?: string;

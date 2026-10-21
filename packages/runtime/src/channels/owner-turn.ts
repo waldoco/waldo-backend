@@ -201,6 +201,15 @@ export const createOwnerResponder = (
   const turnOnlyOutput = new Set<string>(handlers.filter((handler) => 'turn_only_output' in handler && handler.turn_only_output === true).map((handler) => handler.name));
   const recentOwnerTurns = new Map<string, import('../tools/live/memory').MemoryOwnerTurn>();
   let activeOwnerTurn: OwnerTurnEnvelope | undefined;
+  let ownerTurnStartedAt = 0;
+  // The owner's reply when every provider failed: a promise the host keeps (its retry job, written before this text goes
+  // out), else the plain line.
+  const floorText = (floor: NonNullable<OwnerModelAccess['floorReply']>): string => {
+    if (typeof floor !== 'object' || !activeOwnerTurn) return MODEL_UNREACHABLE_REPLY;
+    const turn = activeOwnerTurn;
+    return floor.promise({ traceId: turn.traceId, conversationRef: turn.conversationRef, surface: turn.surface, text: turn.text,
+      ...(turn.messageRef ? { messageRef: turn.messageRef.id } : {}), receivedAt: ownerTurnStartedAt });
+  };
   // Memory checks a span against the text the model read, so it gets that text and the spans the owner did not write.
   const memoryView = (parts: readonly InboundPart[]) => { const shown = renderForModel(parts); return { text: shown.text, sourceQuoteRanges: shown.foreignRanges }; };
   const memoryContext = () => activeOwnerTurn ? { ownerInitiated:true, memoryTurn: {
@@ -258,7 +267,7 @@ export const createOwnerResponder = (
         };
       },
       // Only the owner's own reply has a floor line; a side job that exhausts its route fails to its caller.
-      ...(access.floorReply && ownerTurnActive && purpose === 'reply' ? { renderTemplate: () => MODEL_UNREACHABLE_REPLY } : {}),
+      ...(access.floorReply && ownerTurnActive && purpose === 'reply' ? { renderTemplate: () => floorText(access.floorReply!) } : {}),
     }, safety);
     await assertCurrent();
     privateRunScope?.admit();
@@ -816,6 +825,7 @@ export const createOwnerResponder = (
       try {
         pending = ownerTurnAttachments(turn);
         activeOwnerTurn = { ...turn, memoryWrites };
+        ownerTurnStartedAt = Date.now();
         turnReplyContext = await quoteContext(turn.replyTo);
         turnReplyOwnAuthored = turn.replyTo?.provenance !== undefined && turn.replyTo.provenance.author !== 'other' && !turn.replyTo.provenance.forwarded;
         const received = receivedView(turn.parts);

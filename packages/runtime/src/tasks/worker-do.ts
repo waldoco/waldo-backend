@@ -18,7 +18,6 @@ export type OwnerTaskRpc = Readonly<{
   taskCheckpoint(ticket: TaskTicket, seq: number, turns: readonly LLMToolTurn[], events: readonly TurnLogEntry[], spend: TaskSpend): Promise<'ok' | 'stale' | 'fenced'>;
   taskReport(ticket: TaskTicket, outcome: TaskOutcome, events: readonly TurnLogEntry[], spend: TaskSpend): Promise<'accepted' | 'duplicate' | 'fenced' | 'deferred' | 'parked'>;
 }>;
-export type TaskWorkerEnv = TelegramWebhookEnv & Readonly<{ TASK_WORKER_DO?: DurableObjectNamespace<TaskWorkerDO> }>;
 type Held = Readonly<{ owner: string; ticket: TaskTicket }>;
 
 const HELD_KEY = 'task_worker_ticket_v1';
@@ -27,7 +26,7 @@ export const TASK_ALARM_SLICE_MS = 10 * 60_000;
 
 export const taskWorkerName = (ownerDoId: string, ticket: TaskTicket): string => `job:${ownerDoId}:${ticket.jobId}:${ticket.attempt}`;
 
-export class TaskWorkerDO extends DurableObject<TaskWorkerEnv> {
+export class TaskWorkerDO extends DurableObject<TelegramWebhookEnv> {
   // Idempotent: a second start of the same attempt changes nothing; the alarm runs it once.
   async start(input: Held): Promise<void> {
     if (!this.ctx.storage.kv.get<Held>(HELD_KEY)) this.ctx.storage.kv.put(HELD_KEY, input);

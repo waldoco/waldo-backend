@@ -21,7 +21,7 @@ export type TaskHostDeps = Readonly<{
   now(): number;
   // The owner's tool handlers on the surface the job started from, and the dispatch context they run under.
   handlers(surface: string): Handlers;
-  context(): Readonly<Pick<ToolDispatcherContext, 'authenticatedUserId' | 'sanitise' | 'egressAllowlist'>>;
+  context(surface: string): Readonly<Pick<ToolDispatcherContext, 'authenticatedUserId' | 'sanitise' | 'egressAllowlist'>>;
   // Browser calls run in the brain's serial lane with the job's scope as the active run, because the owner's browser host
   // serves one active scope at a time.
   serialBrowser<T>(scope: RunEffectScope, work: () => Promise<T>): Promise<T>;
@@ -89,7 +89,7 @@ export const taskHost = (deps: TaskHostDeps) => {
         jobId: row.id, profile: row.profile, brief: taskBrief(row), tools: toolDefinitions(handlers),
         mutations: handlers.filter((handler) => handler.mutates_state || handler.autonomy_gated).map((handler) => handler.name),
         turns: jobCheckpoint(row).turns, seq: row.checkpoint_seq, deadlineAt: row.deadline_at, roundsUsed: row.rounds,
-        ownerRef: deps.context().authenticatedUserId,
+        ownerRef: deps.context(row.surface).authenticatedUserId,
       };
     },
     // One worker tool call, run by the brain with the job's own scope. The profile's allowlist is enforced here, not trusted
@@ -107,7 +107,7 @@ export const taskHost = (deps: TaskHostDeps) => {
       } else {
         const handlers = await profileHandlers(row);
         const ctx: ToolDispatcherContext = {
-          ...deps.context(), trigger: 'user_message', canaryTokens: [...canaries], sourceTaint: null, toolArgSourceTaint: 'external',
+          ...deps.context(row.surface), trigger: 'user_message', canaryTokens: [...canaries], sourceTaint: null, toolArgSourceTaint: 'external',
           hasApproval: () => false, runScope: scope, turnId: traceOf(ticket), toolCallId: call.call_id,
           session: buildSessionState({ trigger: 'user_message', canary_tokens: [...canaries], started_at: started }),
         };

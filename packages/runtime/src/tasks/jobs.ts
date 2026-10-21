@@ -212,9 +212,10 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     due: (): readonly JobRow[] => sql.exec<JobRow>(
       "SELECT * FROM task_jobs WHERE status IN ('queued', 'reported') AND due_at <= ? ORDER BY due_at, created_at", deps.now(),
     ).toArray(),
-    // An apply that could not run (no model to write the report) waits like a deferred attempt.
+    // An apply that could not run (no model to write the report) waits like a deferred attempt. updated_at keeps the time
+    // the job was reported, which bounds how long its apply is retried.
     postpone(id: string, dueAt: number): boolean {
-      return sql.exec("UPDATE task_jobs SET due_at = ?, deferrals = deferrals + 1, updated_at = ? WHERE id = ? AND status = 'reported'", dueAt, deps.now(), id).rowsWritten > 0;
+      return sql.exec("UPDATE task_jobs SET due_at = ?, deferrals = deferrals + 1 WHERE id = ? AND status = 'reported'", dueAt, id).rowsWritten > 0;
     },
     // The next moment the brain has something to do: a queued job's due time, a running attempt's lease end, or now for a report.
     nextDue(): number | null {

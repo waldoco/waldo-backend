@@ -15,11 +15,14 @@ import { routedGateway, type CircuitBreaker, type LLMGatewayAdapter } from './pr
 
 // What the owner responder needs to reach the model providers: the OpenAI key alone (callers that predate the second
 // provider), or every provider's key. Credentials stay here and in the adapters; they never reach a prompt, a trace or a store.
-// `floorReply` lets the owner's own turn answer with MODEL_UNREACHABLE_REPLY once every provider has failed. It stays off
-// until a failed turn's message is actually kept and answered later; until then a failed turn ends the way it always did.
+// `floorReply` lets the owner's own turn answer once every provider has failed. As a promise, it keeps the message for a
+// later answer and returns the reply that says by when (the brain's retry job); `true` answers MODEL_UNREACHABLE_REPLY, for
+// a host that keeps and answers failed messages itself. Off, a failed turn ends the way it always did.
 // `health` is the owner's provider breaker, kept by the owner's Durable Object so misses count across turns and channels;
 // without it each responder starts with every provider closed.
-export type OwnerModelAccess = Readonly<{ openaiApiKey: string; anthropicApiKey?: string; floorReply?: boolean; health?: CircuitBreaker }>;
+export type FloorTurn = Readonly<{ traceId: string; conversationRef: string; surface: string; text: string; messageRef?: string; receivedAt: number }>;
+export type FloorPromise = Readonly<{ promise(turn: FloorTurn): string }>;
+export type OwnerModelAccess = Readonly<{ openaiApiKey: string; anthropicApiKey?: string; floorReply?: boolean | FloorPromise; health?: CircuitBreaker }>;
 
 export const ownerModelAccess = (access: string | OwnerModelAccess): OwnerModelAccess =>
   typeof access === 'string' ? { openaiApiKey: access } : access;

@@ -1,3 +1,4 @@
+import type { ToolName } from '@waldo/contracts';
 import { ClosedRunError } from '../channels/run-effect-scope';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { checkBackReply } from '../channels/check-back';
@@ -18,11 +19,14 @@ export type JobsLaneDeps = Readonly<{
   startWorker(ticket: TaskTicket): Promise<void>;
   // A machine turn on the owner's chain (responder.prompt): the job's text, the tools it may use, a check that the job is
   // still the one being applied, and the taint of what it carries.
-  turn(trace: string, text: string, current: () => Promise<void>, sourceTaint: 'external' | null, toolNames?: readonly string[]): Promise<string>;
+  turn(job: 'task_report' | 'retry_turn', trace: string, text: string, current: () => Promise<void>, sourceTaint: 'external' | null, toolNames?: readonly ToolName[]): Promise<string>;
   // The owner tools an apply turn may use: everything but starting or cancelling tasks, so a result cannot start more work.
-  applyTools(): readonly string[];
-  // Delivery through the final outbox under a key: the same key and text are delivered once, however often they are queued.
-  enqueue(id: string, trace: string, text: string): Promise<void>;
+  applyTools(): readonly ToolName[];
+  // Delivery through the final outbox under a key, with `commit` (the job's own write) in the same transaction as the
+  // queued record, so a message is queued exactly when its job moves on. A key already queued only runs `commit`.
+  deliver(id: string, trace: string, text: string, commit: () => void): Promise<void>;
+  // Whether this alarm still has time for a model turn; work left over waits for the next pass.
+  room(): boolean;
   // Topics the owner asked to forget whose purge has not finished.
   heldTopics(): readonly string[];
 }>;
@@ -81,27 +85,32 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
   }
 
   const topics = deps.heldTopics();
-  const settle = (row: JobRow) => {
-    if (!book.settle(row.id)) return;
+  let settled: JobRow[] = [];
+  const settle = (row: JobRow) => { if (book.settle(row.id)) settled.push(row); };
+  const logSettled = () => {
+    for (const row of settled) {
     const after = book.get(row.id)!;
     hop(after, after.status === 'parked' ? 'task_parked_notice' : 'task_applied', {
       ms: deps.now() - after.created_at, ...(after.outcome ? { outcome: TURN_OUTCOME[after.outcome] } : {}),
       ...(after.park_reason ? { code: after.park_reason } : {}), detail: `rounds=${after.rounds}:cost_usd=${after.cost_usd.toFixed(4)}:attempts=${after.attempt}`,
     });
+    }
+    settled = [];
   };
 
   const apply = async (row: JobRow) => {
     const current = async () => { if (book.get(row.id)?.status !== 'reported') throw new ClosedRunError(); };
     if (row.kind === 'retry_turn') {
       // A parked retry owes the owner its notice; an answered one (lost before it settled) already queued its answer.
-      if (row.park_reason) await deps.enqueue(`retry:${row.id}`, `retry:${row.id}`, retryParkedNotice(retryBrief(row), deps.timezone));
-      settle(row);
+      if (row.park_reason) await deps.deliver(`retry:${row.id}`, `retry:${row.id}`, retryParkedNotice(retryBrief(row), deps.timezone), () => settle(row));
+      else settle(row);
+      logSettled();
       return;
     }
     const trace = `task:${row.id}:apply`;
     let reply: string | null;
     try {
-      reply = checkBackReply(await deps.turn(trace, row.park_reason ? parkedApplyText(row) : resultApplyText(row), current, row.taint, deps.applyTools()));
+      reply = checkBackReply(await deps.turn('task_report', trace, row.park_reason ? parkedApplyText(row) : resultApplyText(row), current, row.taint, deps.applyTools()));
     } catch (error) {
       if (error instanceof ClosedRunError) return;
       if (deps.now() - row.updated_at < APPLY_RETRY_MS && book.postpone(row.id, deps.now() + deferDelay(row.deferrals))) {
@@ -111,8 +120,9 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
       reply = fixedReport(row);
     }
     if (book.get(row.id)?.status !== 'reported') return;
-    if (reply !== null) await deps.enqueue(`task:${row.id}`, trace, reply);
-    settle(row);
+    if (reply !== null) await deps.deliver(`task:${row.id}`, trace, reply, () => settle(row));
+    else settle(row);
+    logSettled();
   };
 
   const retry = async (row: JobRow) => {
@@ -122,7 +132,7 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     const current = async () => { if (book.get(row.id)?.lease_token !== ticket.token) throw new ClosedRunError(); };
     let reply: string | null;
     try {
-      reply = checkBackReply(await deps.turn(`retry:${row.id}`, retryTurnText(brief, deps.timezone), current, null));
+      reply = checkBackReply(await deps.turn('retry_turn', `retry:${row.id}`, retryTurnText(brief, deps.timezone), current, null));
     } catch (error) {
       if (error instanceof ClosedRunError) return;
       const last = deps.now() >= brief.promised_by;
@@ -132,16 +142,24 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
       if (last) await apply(book.get(row.id)!);
       return;
     }
-    if (reply !== null) await deps.enqueue(`retry:${row.id}`, `retry:${row.id}`, reply);
-    if (book.report(ticket, { status: 'done', summary: reply === null ? 'No answer was needed any more.' : 'Answered the owner\'s message.', findings: [], proposals: [], left: [] }, NO_SPEND) === 'accepted') settle(book.get(row.id)!);
+    const answered = () => {
+      if (book.report(ticket, { status: 'done', summary: reply === null ? 'No answer was needed any more.' : 'Answered the owner\'s message.', findings: [], proposals: [], left: [] }, NO_SPEND) === 'accepted') settle(book.get(row.id)!);
+    };
+    if (reply !== null) await deps.deliver(`retry:${row.id}`, `retry:${row.id}`, reply, answered);
+    else answered();
     hop(row, 'retry_turn_answered', { ms: deps.now() - brief.said_at, outcome: reply === null ? 'dropped' : 'answered' });
+    logSettled();
   };
 
+  let leftOver = false;
   for (const row of book.due()) {
     if (topics.length && heldTopicIn(row, topics)) {
       if (book.cancel(row.id, 'forgotten')) { deps.host.fence(row.id); hop(row, 'task_cancelled', { code: 'forgotten' }); }
       continue;
     }
+    // A task's report and a retried message each take a model turn; a parked retry's notice and a worker start do not.
+    const needsTurn = row.kind === 'retry_turn' ? row.status !== 'reported' : row.status === 'reported';
+    if (needsTurn && !deps.room()) { leftOver = true; continue; }
     if (row.status === 'reported') { await apply(row); continue; }
     if (row.kind === 'retry_turn') { await retry(row); continue; }
     const ticket = book.startAttempt(row.id);
@@ -160,12 +178,11 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     const due = noteDue(row);
     if (due === null) continue;
     if (due > deps.now()) { nextNote = Math.min(nextNote ?? due, due); continue; }
-    await deps.enqueue(`task:${row.id}:note:${row.notes_sent + 1}`, `task:${row.id}`, progressNote(row));
-    book.noteSent(row.id);
+    await deps.deliver(`task:${row.id}:note:${row.notes_sent + 1}`, `task:${row.id}`, progressNote(row), () => book.noteSent(row.id));
     nextNote = Math.min(nextNote ?? Infinity, deps.now() + TASK_NOTE_EVERY_MS);
     hop(row, 'task_progress_note', { detail: `note=${row.notes_sent + 1}` });
   }
   book.trim();
-  const next = book.nextDue();
+  const next = leftOver ? deps.now() : book.nextDue();
   return next === null ? nextNote : nextNote === null ? next : Math.min(next, nextNote);
 }
