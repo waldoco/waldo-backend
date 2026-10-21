@@ -74,9 +74,9 @@ describe('nightly eval suite', () => {
 });
 
 describe('nightly eval catalogue', () => {
-  it('has the twenty research tasks, the owner\'s two and the three errand failures, each with a pain and a rubric', () => {
-    expect(SCENARIOS).toHaveLength(25);
-    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(25);
+  it('has the twenty research tasks, the owner\'s two, the three errand failures and the look-up, each with a pain and a rubric', () => {
+    expect(SCENARIOS).toHaveLength(26);
+    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(26);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('t'))).toHaveLength(20);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('e'))).toHaveLength(3);
     expect(new Set(SCENARIOS.map((scenario) => scenario.pain))).toEqual(new Set(['context', 'follow_through', 'judgment']));
@@ -97,6 +97,19 @@ describe('nightly eval catalogue', () => {
     const answer = await availability.handle({ date_range: { from: '2026-09-25T12:00:00+05:30', to: '2026-09-25T18:00:00+05:30' }, calendar_ids: ['primary', 'family@group.calendar.example'], duration_minutes: 60, work_windows: [] } as never, undefined as never);
     expect(answer).toMatchObject({ ok: true, data: { free_windows: [], unavailable_calendar_ids: ['family@group.calendar.example'] } });
     expect(JSON.stringify(errand.steps)).toContain('family@group.calendar.example');
+  });
+
+  it('seeds the look-up with the owner\'s site, a namesake and a sensitive page, and keeps only what the owner\'s site shows', async () => {
+    const lookup = SCENARIOS.find((scenario) => scenario.id === 'k1-owner-lookup')!;
+    const world = evalWorld(lookup.world, lookup.start);
+    const tool = (name: string) => world.handlers.find((handler) => handler.name === name)!;
+    const context = { turnId: 'k1-turn', authenticatedUserId: 'eval-owner', memoryTurn: { ownerId: 'eval-owner', conversationRef: 'app-1', current: { message_ref: 'm1', text: (lookup.steps[0] as { say: string }).say }, recent: [] } } as never;
+    expect(await tool('web_search').handle({ query: 'Asha Menon', limit: 5 } as never, context)).toMatchObject({ ok: true, source_taint: 'external' });
+    const record = (args: object) => tool('record_owner_finding').handle({ category: 'work', anchor: 'ashamenon.example', ...args } as never, context);
+    expect(await record({ text: 'Dentist in Kochi', source_url: 'https://smiles.example/dr-asha-menon', evidence_quote: 'a dentist in Kochi' })).toMatchObject({ ok: false });
+    expect(await record({ text: 'Product manager at Northwind', source_url: 'https://ashamenon.example/about', evidence_quote: 'a product manager at Northwind' })).toMatchObject({ ok: true });
+    expect(world.finalState()).toMatchObject({ findings: [{ text: 'Product manager at Northwind', source: 'https://ashamenon.example/about', state: 'unconfirmed' }] });
+    expect(lookup.rubric.must_not.join(' ')).toContain('religion or politics');
   });
 
   it('fires the owner\'s check-back at its time and recalls across a day', () => {

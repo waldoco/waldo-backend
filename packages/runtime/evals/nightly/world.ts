@@ -16,6 +16,9 @@ import { connectServiceHandler, googleHandlers, type EffectDesk, type GoogleAcce
 import { memoryHandlers } from '../../src/tools/live/memory';
 import { searchEpisodesHandler } from '../../src/tools/live/search-episodes';
 import { claimStore } from '../../src/memory/claims';
+import { consentLedger, CURRENT_CONSENT_VERSION } from '../../src/onboarding/consent-ledger';
+import { findingStore, observedPages, observeReads, ownerLookupHandlers } from '../../src/onboarding/findings';
+import { webSearchHandler } from '../../src/tools/live/web-search';
 import type { GoogleClient, MailItem, ThreadMessage } from '../../src/connectors/google';
 import type { OwnerClock } from '../../src/tools/live/get-context';
 
@@ -27,7 +30,9 @@ export const CHAT_REF = 'app-1';
 export type SeedEvent = Readonly<{ id: string; title: string; start: string; end: string; all_day?: boolean }>;
 export type SeedMail = Readonly<{ id: string; thread_id: string; from: string; to: readonly string[]; subject: string; body: string; at: string }>;
 export type SeedWeb = Readonly<{ title: string; url: string; snippet: string }>;
-export type WorldSeed = Readonly<{ events?: readonly SeedEvent[]; mail?: readonly SeedMail[]; web?: readonly SeedWeb[] }>;
+// lookup: the owner look-up skill runs over the seeded pages through the production search handler, with the owner's
+// look-up consent granted or not.
+export type WorldSeed = Readonly<{ events?: readonly SeedEvent[]; mail?: readonly SeedMail[]; web?: readonly SeedWeb[]; lookup?: Readonly<{ consent: boolean }> }>;
 export type Effect = Readonly<{ kind: string; payload: unknown }>;
 
 const sqlite = (): SqlStorage => {
@@ -167,10 +172,14 @@ export const evalWorld = (seed: WorldSeed, start: string) => {
     autonomy_gated: false,
     handle: async (_args: WebSearchArgs) => ({ ok: true as const, data: { results: seed.web ?? [] }, source_taint: 'external' as const }),
   };
+  const consent = consentLedger(sql), pages = observedPages(), findings = findingStore(sql, memory, consent);
+  if (seed.lookup?.consent) consent.grant('owner_lookup', CURRENT_CONSENT_VERSION.owner_lookup, now());
+  const searchEngine = (async () => Response.json({ web: { results: (seed.web ?? []).map((page) => ({ title: page.title, url: page.url, description: page.snippet })) } })) as unknown as typeof fetch;
+  const search = seed.lookup ? [observeReads(webSearchHandler('eval-search-key', searchEngine), pages), ...ownerLookupHandlers({ store: findings, pages, claims: memory, now })] : [web];
   const handlers = [
     ...googleHandlers(google, desk, clock), connectServiceHandler(google), ...reminderHandlers(reminderBook), ...standingOrderHandlers(standingOrders),
     ...loopHandlers(loops), ...memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async () => undefined }),
-    searchEpisodesHandler(episodes), web,
+    searchEpisodesHandler(episodes), ...search,
   ];
 
   // Synthetic zone-level context only, as the owner object's health book supplies it.
@@ -203,6 +212,7 @@ export const evalWorld = (seed: WorldSeed, start: string) => {
       standing_orders: orders.map(({ id: _id, created_at: _created, ...order }) => order),
       open_loops: loops.list().map((loop) => ({ title: loop.title, due: loop.due })),
       memory: memory.claims().map((claim) => ({ kind: claim.kind, text: claim.text, status: claim.status })),
+      ...(seed.lookup ? { findings: findings.page(50).items.map(({ category, text, source, state }) => ({ category, text, source: source.url, state })) } : {}),
     }),
   };
 };
