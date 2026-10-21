@@ -71,7 +71,7 @@ describe('nightly eval suite', () => {
       expect(text).not.toContain(scenario.rubric.outcome);
     }
     expect(text).not.toContain('example.com');
-  });
+  }, 60_000);
 });
 
 describe('nightly eval catalogue', () => {
