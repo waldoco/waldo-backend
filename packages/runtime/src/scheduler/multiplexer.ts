@@ -11,7 +11,7 @@ import {
   type ScheduleRecurrence,
 } from '@waldo/contracts';
 import type { Deps } from '../seams/deps';
-import { FINAL_OUTBOX_KEY, type FinalRecord } from '../channels/telegram-final-outbox';
+import { FINAL_OUTBOX_KEY, standingOrderFinalId, type FinalRecord } from '../channels/telegram-final-outbox';
 import { rearmSharedAlarm } from './alarm-slot';
 
 const MAX_MISSED_CHAIN = 64;
@@ -283,8 +283,12 @@ export class Scheduler {
   }
 
   private hasCommittedFinal(entry: ScheduleEntry): boolean {
-    if (entry.kind !== 'reminder' && entry.kind !== 'heartbeat') return false;
+    if (entry.kind !== 'reminder' && entry.kind !== 'heartbeat' && entry.kind !== 'standing_order') return false;
     const finals = this.storage.kv.get<readonly FinalRecord[]>(FINAL_OUTBOX_KEY) ?? [];
+    if (entry.kind === 'standing_order') {
+      const queued = standingOrderFinalId(entry.id, entry.occurrence_at);
+      return finals.some(record => record.standingOrder !== undefined && record.id === queued);
+    }
     return finals.some(record => {
       const receipt = entry.kind === 'reminder' ? record.reminder : record.heartbeat;
       return receipt?.id === entry.id && receipt.occurrence === entry.occurrence_at;

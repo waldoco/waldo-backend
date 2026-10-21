@@ -33,6 +33,25 @@ describe('frozen Telegram final outbox', () => {
       ['standing-order:o:3', 'pending', undefined, undefined],
     ]);
   });
+  it('never supersedes a record whose send is in flight, one the surface accepted, or one whose later part the surface took', async () => {
+    const f = fixture();
+    const report = (id: string) => ({ ...f.input, id, standingOrder: { runId: `bg:${id}`, gate: 'act_and_report' as const } });
+    for (const id of ['standing-order:o:waiting', 'standing-order:o:attempting', 'standing-order:o:accepted', 'standing-order:o:tail']) await f.outbox.enqueue(report(id));
+    const rows = f.outbox.records();
+    rows[1] = { ...rows[1]!, status: 'attempting', attempts: 1 };
+    rows[2] = { ...rows[2]!, status: 'accepted', attempts: 1, deliveredParts: 1, providerMessageIds: ['wamid.accepted'] };
+    // The head was refused and goes again, but the tail is already on the owner's phone.
+    rows[3] = { ...rows[3]!, status: 'pending', reason: 'window_refused', attempts: 1, deliveredParts: 0, providerMessageIds: [null, 'wamid.tail'] };
+    f.kv.put(FINAL_OUTBOX_KEY, rows);
+    await f.outbox.enqueue(report('standing-order:o:next'), { supersedes: record => record.id.startsWith('standing-order:o:') });
+    expect(f.outbox.records().map(record => [record.id, record.status, record.reason])).toEqual([
+      ['standing-order:o:waiting', 'blocked', 'superseded'],
+      ['standing-order:o:attempting', 'attempting', undefined],
+      ['standing-order:o:accepted', 'accepted', undefined],
+      ['standing-order:o:tail', 'pending', 'window_refused'],
+      ['standing-order:o:next', 'pending', undefined],
+    ]);
+  });
   it('expires before quiet deferral and clamps a future hold to expiry for every receipt kind', async () => {
     for (const receipt of [{}, { mailFollowup: { loopId: 'l', due: '2026-10-03T10:00', sourceRef: 'mail:t', timezone: 'UTC', messageId: 'm' } }, { heartbeat: { id: 'h', occurrence: 1, schedulerRunId: 'r', loops: [] } }]) {
       const f = fixture();

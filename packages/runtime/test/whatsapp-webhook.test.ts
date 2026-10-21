@@ -203,19 +203,28 @@ describe('handleWhatsAppWebhook: a send Meta refuses later for the 24-hour windo
   const directory: OwnerDirectory = { byPresence: async (_p, subject) => subject === '15550001111' ? { doName: 'do-a', subject, timezone: null } : null, redeem: async () => null };
   const env = (ns: DurableObjectNamespace): WhatsAppWebhookEnv => ({ OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret' });
 
-  it('goes to the recipient owner\'s Durable Object with only the refused message ids; other statuses and strangers go nowhere', async () => {
+  it('goes to the recipient owner\'s Durable Object: window refusals, arrivals on the phone and other failures, by message id; strangers go nowhere', async () => {
     const { fetch, ns } = namespace();
     const body = statuses([
       refused('wamid.a', '15550001111'),
-      { id: 'wamid.b', status: 'delivered', recipient_id: '15550001111' },
-      { id: 'wamid.c', status: 'failed', recipient_id: '15550001111', errors: [{ code: 131026 }] },
+      { id: 'wamid.b', status: 'delivered', timestamp: '1700000001', recipient_id: '15550001111' },
+      { id: 'wamid.c', status: 'failed', timestamp: '1700000002', recipient_id: '15550001111', errors: [{ code: 131026 }] },
       refused('wamid.d', '15550009999'),
       refused('wamid.e', '15550001111', 'yesterday'),
+      // Meta skips delivered when a message is read at once, and a voice note reports played.
+      { id: 'wamid.f', status: 'read', timestamp: '1700000003', recipient_id: '15550001111' },
+      { id: 'wamid.g', status: 'played', timestamp: '1700000004', recipient_id: '15550001111' },
+      // Sent says only that Meta's servers sent it: a refusal can still follow, so it is not evidence.
+      { id: 'wamid.h', status: 'sent', timestamp: '1700000005', recipient_id: '15550001111' },
     ]);
     expect((await run(await post('x', body), env(ns), directory)).status).toBe(200);
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch).toHaveBeenCalledWith('https://telegram-owner/whatsapp-status', {
-      method: 'POST', body: JSON.stringify({ refused: [{ id: 'wamid.a', at: 1_700_000_000_000 }, { id: 'wamid.e', at: null }] }), headers: { 'x-waldo-whatsapp-subject': '15550001111' },
+      method: 'POST', headers: { 'x-waldo-whatsapp-subject': '15550001111' }, body: JSON.stringify({
+        refused: [{ id: 'wamid.a', at: 1_700_000_000_000 }, { id: 'wamid.e', at: null }],
+        delivered: [{ id: 'wamid.b', at: 1_700_000_001_000 }, { id: 'wamid.f', at: 1_700_000_003_000 }, { id: 'wamid.g', at: 1_700_000_004_000 }],
+        failed: [{ id: 'wamid.c', at: 1_700_000_002_000 }],
+      }),
     });
   });
 

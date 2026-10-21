@@ -216,6 +216,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 ### Dashboard admin receipts
 - A successful HTTP status is not a readable action receipt. A truncated JSON receipt or lost response must say the outcome is unavailable, require a read before retry, and explain that a one-time invite code cannot be recovered. `Admin.test.tsx` tests both transport loss and malformed successful receipts.
 - Malformed action bodies fail with a structured invalid-action response before any signed RPC. `dashboard-admin.test.ts` tests malformed multipart alongside session, CSRF and cross-owner rejection.
+- An invite revoke receipt has no code: keep creation-only copy/send instructions out of it. `dashboard-admin.test.ts` pins the revoke no-email message/no-code shape while retaining the creation copy assertion.
 
 ### Derived health migration ACLs
 - Restoring historical health DDL preserves its bytes; normalize Supabase default table/function ACLs in a new additive migration. The exact schema matrix must still deny anon access and client writes, and the real migrated-table tests must prove owner isolation, rejected-write zero delta, and trigger operation without direct helper EXECUTE.
