@@ -2,7 +2,7 @@ import { appControlsRequest } from './app-controls';
 import { consoleLog, consoleTrace } from '../observability/console-correlation';
 import { APP_TURN_DEADLINE_MS, AppInbox, type AppInboxRecord } from './app-inbox';
 import { iMessageComposition, type IMessageEnv, type IMessageResultReport, type IMessageTurnHandoff } from './imessage/bridge-do';
-import { IMessageFinalOutbox } from './imessage/final-outbox';
+import { IMessageFinalOutbox, targetOf } from './imessage/final-outbox';
 import { redactIMessageEntries } from './imessage/forget';
 import { CONSOLE_IMESSAGE_PATH, iMessageConsoleAction, iMessageConsolePage, isIMessageConsoleAction } from './imessage/console';
 import { IMESSAGE_TURN_DEADLINE_MS, IMessageOwnerInbox, type IMessageInboxRecord } from './imessage/owner-inbox';
@@ -699,6 +699,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
   // Set only inside the alarm's unit of work while an app-only owner's scheduled jobs run (see serial()).
   private scheduledAppDelivery: ScheduledAppDelivery | null = null;
+  // The iMessage counterpart: a scheduled pass that sends proactive work to iMessage freezes it into the iMessage outbox.
+  private scheduledIMessageDelivery: ScheduledAppDelivery | null = null;
   // The scheduled job running now, and the owner the directory admitted for this unit of work (both cleared by serial()).
   private ownerJob: Readonly<{ job: OwnerJob; occurrenceKey: string; occurredAt: number }> | null = null;
   private jobOwner: Promise<ScheduledOwner> | null = null;
@@ -883,6 +885,35 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
 
   // For an owner on both surfaces, a scheduled message is written to the app, then Telegram gets a plain copy.
+  // iMessage takes proactive work while the composition is deployed and the owner's latest iMessage still stands; the bridge
+  // re-checks that sender's authority before each send.
+  private imessageBound(): boolean {
+    return iMessageComposition(this.imessageHost.env) !== null && new IMessageOwnerInbox(this.ctx.storage).latest() !== null;
+  }
+  // Freezes a message Waldo starts into the iMessage outbox, to the sender the owner last wrote from, and hands it to the
+  // bridge. The receipt is the frozen record: the outbox owns its retries and its one terminal result, as for a reply.
+  private iMessageDelivery(): ScheduledAppDelivery {
+    return async (text) => {
+      const latest = new IMessageOwnerInbox(this.ctx.storage).latest();
+      if (!latest) throw new Error('imessage_unbound');
+      const id = crypto.randomUUID();
+      const commandId = `wpc_${(await sha256Hex(id)).slice(0, 40)}`;
+      const frozen = new IMessageFinalOutbox(this.ctx.storage).freezeProactive(id, commandId, targetOf(latest), redactSecretUrls(text).text);
+      this.ctx.waitUntil(drainIMessageOutbox(this.imessageHost, iMessageComposition(this.imessageHost.env)?.policy.replyHandoffMaxAgeMs ?? 0)
+        .then(() => rearmSharedAlarm(this.ctx.storage, null, Date.now())).catch(() => { console.error('imessage outbox drain deferred'); }));
+      return frozen.replyRef;
+    };
+  }
+  // An iMessage copy of what the app took, as WhatsApp's copy is; a send worth delivering only now is not copied.
+  private copiedToIMessage(deliver: ScheduledAppDelivery): ScheduledAppDelivery {
+    const copy = this.iMessageDelivery();
+    return async (text, send) => {
+      const row = await deliver(text, send);
+      if (send?.nowOnly) return row;
+      try { await copy(text); } catch { console.error(JSON.stringify({ hop: 'imessage_copy', ok: false, code: 'copy_failed' })); }
+      return row;
+    };
+  }
   private copiedToTelegram(deliver: (text: string) => Promise<string>): (text: string) => Promise<string> {
     const telegram = this.setup('telegram');
     return withPlainCopy(deliver, text => telegram.call('sendMessage', { chat_id: telegram.owner, text }),
@@ -897,7 +928,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (whatsapp && proactiveTargets(setting, { app: true, whatsapp: true }).includes('whatsapp')) {
       try { whatsapp = await auth.assertChannelPresence(kv.get<string>('do_name')!, 'whatsapp', kv.get<string>('whatsapp_subject')!); } catch { return 'retry'; }
     }
-    return proactiveTargets(setting, { app: true, whatsapp });
+    return proactiveTargets(setting, { app: true, whatsapp, imessage: this.imessageBound() });
   }
   // The WhatsApp numbers whose waiting messages go to the app: each one this owner bound, except the one taking proactive
   // work now. Null when there is none.
@@ -935,7 +966,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const projection = projectControls(source, view);
     if (view !== 'day') return projection;
     const kv = this.ctx.storage.kv;
-    return { ...projection, data: { ...projection.data, proactive_surface: { value: proactiveSurface(kv), app_linked: this.appBound(), whatsapp_linked: this.whatsappBound(), telegram_linked: telegramLinked(kv) } } };
+    return { ...projection, data: { ...projection.data, proactive_surface: { value: proactiveSurface(kv), app_linked: this.appBound(), whatsapp_linked: this.whatsappBound(), imessage_linked: this.imessageBound(), telegram_linked: telegramLinked(kv) } } };
   }
 
   private async appAdmission(name: string, hash: string, text: string, occurrence: string, occurredAt: number, scope: RunEffectScope) {
@@ -1953,7 +1984,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       let channel: ChannelKind = 'telegram';
       // Set only for an owner the directory admits on the app: whether WhatsApp takes this pass's proactive work, and whether
       // it takes a copy of what the app gets.
-      let whatsappTarget: boolean | null = null, whatsappCopy = false;
+      let whatsappTarget: boolean | null = null, whatsappCopy = false, imessageTarget = false, imessageCopy = false;
       const auth = consoleAuth(this.env);
       if (auth) {
         const doName = this.ctx.storage.kv.get<string>('do_name');
@@ -1966,10 +1997,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // A directory that cannot say whether WhatsApp is still bound holds the pass, as an outage of the app lookup does.
         const targets = appOwner?.kind === 'admitted' ? await this.proactiveTargets(auth) : null;
         if (appOwner?.kind === 'admitted' && targets !== null && targets !== 'retry') {
-          channel = targets.includes('app') ? 'app' : 'whatsapp';
+          channel = targets.includes('app') ? 'app' : targets.includes('whatsapp') ? 'whatsapp' : 'imessage';
           whatsappTarget = targets.includes('whatsapp');
           whatsappCopy = whatsappTarget && targets.includes('app');
+          imessageTarget = channel === 'imessage';
+          imessageCopy = targets.includes('imessage') && targets.includes('app');
           this.scheduledAppDelivery = this.appDeliveryFor(appOwner.authority);
+          if (imessageTarget) this.scheduledIMessageDelivery = this.iMessageDelivery();
           this.jobOwner = Promise.resolve(this.appScheduledOwner(appOwner.authority));
         }
         const whatsappOnly = !telegramBound && appOwner?.kind !== 'admitted' && !this.appBound() && this.whatsappBound();
@@ -2031,6 +2065,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       await lane('schedule', async () => {
         // While both take proactive work, each message the app shows also goes to WhatsApp as one copy.
         if (whatsappCopy && this.scheduledAppDelivery) this.scheduledAppDelivery = this.copiedToWhatsApp(this.scheduledAppDelivery);
+        if (imessageCopy && this.scheduledAppDelivery) this.scheduledAppDelivery = this.copiedToIMessage(this.scheduledAppDelivery);
         // Proactive work goes to the app, the default surface, once the owner has used it, and Telegram gets a plain copy of it;
         // Telegram keeps it only for an owner with no app binding. On a directory-backed deploy every scheduled pass runs as the
         // owner the directory admits; a refusal holds the whole pass, never falling back to Telegram or the fixture owner: a
@@ -2189,7 +2224,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
 
   private serial<T>(work: () => Promise<T>): Promise<T> {
     // The alarm sets a scheduled app delivery inside its unit of work; no later unit, and no turn, inherits it.
-    const run = this.queue.then(work).finally(() => { this.scheduledAppDelivery = null; this.jobOwner = null; });
+    const run = this.queue.then(work).finally(() => { this.scheduledAppDelivery = null; this.scheduledIMessageDelivery = null; this.jobOwner = null; });
     this.queue = run.catch(() => undefined);
     return run;
   }
@@ -2480,7 +2515,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const baseCall = channel === 'app'
       ? appCaller(() => this.scheduledAppDelivery)
       : channel === 'imessage'
-        ? appCaller()
+        ? appCaller(() => this.scheduledIMessageDelivery)
       : channel === 'whatsapp'
         ? whatsappWindowCaller(whatsappTelegramShim(this.env.WHATSAPP_ACCESS_TOKEN!, this.env.WHATSAPP_PHONE_NUMBER_ID!, identity.get<string>('whatsapp_subject') ?? ''),
           { kv: identity, template: whatsappTemplateConfig(this.env), log: event => console.log(JSON.stringify(event)) })

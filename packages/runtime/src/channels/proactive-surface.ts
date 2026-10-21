@@ -2,11 +2,15 @@ import type { AppSend, ScheduledAppDelivery } from './surfaces/app';
 import type { OutboxRoute } from './delivery-routes';
 import { telegramReceipt, type FinalRecord } from './telegram-final-outbox';
 
-// Where Waldo's proactive messages go for an owner reachable on the app and on WhatsApp: the day cards (the Brief among them),
-// reminders, follow-ups and update cards. The owner chooses in the console; the app is the default.
-export const PROACTIVE_SURFACES = ['app', 'whatsapp', 'both'] as const;
+// Where Waldo's proactive messages go for an owner reachable on the app and on a chat surface: the day cards (the Brief among
+// them), reminders, follow-ups and update cards. The owner chooses in the console; the app is the default. Each chat surface
+// has the same two choices: instead of the app (whatsapp, imessage) or with the app (both, app_imessage).
+export const PROACTIVE_SURFACES = ['app', 'whatsapp', 'both', 'imessage', 'app_imessage'] as const;
 export type ProactiveSurface = (typeof PROACTIVE_SURFACES)[number];
-export type ProactiveTarget = 'app' | 'whatsapp';
+export type ProactiveTarget = 'app' | 'whatsapp' | 'imessage';
+const WANTED: Readonly<Record<ProactiveSurface, readonly ProactiveTarget[]>> = {
+  app: ['app'], whatsapp: ['whatsapp'], both: ['app', 'whatsapp'], imessage: ['imessage'], app_imessage: ['app', 'imessage'],
+};
 export const PROACTIVE_SURFACE_KEY = 'proactive_surface_v1';
 
 type Kv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void }>;
@@ -22,12 +26,14 @@ export const setProactiveSurface = (kv: Kv, value: string): boolean => {
   return true;
 };
 
-// The setting chooses between the surfaces the owner can be reached on now. With only one of them, that one is used whatever
-// the setting says: a WhatsApp that is unlinked or no longer bound falls back to the app, and an owner who has not used the
-// app yet keeps WhatsApp.
-export const proactiveTargets = (setting: ProactiveSurface, reachable: Readonly<{ app: boolean; whatsapp: boolean }>): readonly ProactiveTarget[] =>
-  reachable.app && reachable.whatsapp ? (setting === 'both' ? ['app', 'whatsapp'] : [setting])
-    : reachable.app ? ['app'] : reachable.whatsapp ? ['whatsapp'] : [];
+// The setting chooses among the surfaces the owner can be reached on now. When none it names is reachable, the first
+// reachable one is used, the app first: a chat surface that is unlinked or no longer bound falls back to the app, and an
+// owner who has not used the app yet keeps WhatsApp.
+export const proactiveTargets = (setting: ProactiveSurface, reachable: Readonly<{ app: boolean; whatsapp: boolean; imessage?: boolean }>): readonly ProactiveTarget[] => {
+  const can = (target: ProactiveTarget) => reachable[target] === true;
+  const wanted = WANTED[setting].filter(can);
+  return wanted.length ? wanted : (['app', 'whatsapp', 'imessage'] as const).filter(can).slice(0, 1);
+};
 
 // A WhatsApp copy of a message the app already has. Its id names the app delivery it copies, so each one is copied once.
 export const WHATSAPP_COPY_PREFIX = 'whatsapp-copy:';

@@ -21,6 +21,11 @@ export type IMessageOutboxRecord = {
   result?: IMessageResult; conflicts?: number;
 };
 
+// Where a message goes: the bridge, the owner object, the sender and the exact binding the bridge must still hold.
+export type IMessageProactiveTarget = Readonly<{ bridgeDoName: string; ownerDoName: string; subject: string; revision: string; bindingDigest: string }>;
+export const targetOf = (record: IMessageInboxRecord): IMessageProactiveTarget =>
+  ({ bridgeDoName: record.bridgeDoName, ownerDoName: record.ownerDoName, subject: record.binding.subject, revision: record.revision, bindingDigest: record.bindingDigest });
+
 export class IMessageFinalOutbox {
   constructor(private readonly storage: DurableObjectStorage, private readonly now = Date.now) {}
   records(): IMessageOutboxRecord[] { return [...this.storage.kv.list<IMessageOutboxRecord>({ prefix: PREFIX })].map(([, r]) => r).sort((a, b) => a.frozenAt - b.frozenAt); }
@@ -31,10 +36,23 @@ export class IMessageFinalOutbox {
    * for the same inbound message is its own record, under its own commandId, so the reply still sends after it.
    */
   freeze(record: IMessageInboxRecord, text: string, kind: 'reply' | 'console' = 'reply'): IMessageOutboxRecord {
-    const replyRef = `${kind}:${record.id}`, prior = this.get(replyRef);
+    return this.put(`${kind}:${record.id}`, { ...targetOf(record), commandId: record.commandId }, text);
+  }
+
+  /**
+   * A message Waldo starts (a reminder, a day card, a follow-up), to the sender the owner last wrote from. Its id is the
+   * scheduled delivery's own, so a retried delivery freezes the same record and command; the bridge re-checks that sender's
+   * authority before it sends, exactly as for a reply.
+   */
+  freezeProactive(id: string, commandId: string, target: IMessageProactiveTarget, text: string): IMessageOutboxRecord {
+    return this.put(`proactive:${id}`, { ...target, commandId }, text);
+  }
+
+  private put(replyRef: string, target: IMessageProactiveTarget & Readonly<{ commandId: string }>, text: string): IMessageOutboxRecord {
+    const prior = this.get(replyRef);
     if (prior) {
       // A settled record no longer holds its text; its stable commandId is the identity check.
-      if (prior.commandId !== record.commandId || (prior.state !== 'settled' && prior.text !== text)) throw new Error('imessage_reply_conflict');
+      if (prior.commandId !== target.commandId || (prior.state !== 'settled' && prior.text !== text)) throw new Error('imessage_reply_conflict');
       return prior;
     }
     const rows = this.records();
@@ -43,8 +61,8 @@ export class IMessageFinalOutbox {
       if (!evict) throw new Error('imessage_outbox_capacity');
       this.storage.kv.delete(PREFIX + evict.replyRef);
     }
-    const row: IMessageOutboxRecord = { replyRef, commandId: record.commandId, text, bridgeDoName: record.bridgeDoName, ownerDoName: record.ownerDoName, subject: record.binding.subject,
-      revision: record.revision, bindingDigest: record.bindingDigest, frozenAt: this.now(), state: 'frozen', nextAttemptAt: this.now(), attempts: 0 };
+    const row: IMessageOutboxRecord = { replyRef, commandId: target.commandId, text, bridgeDoName: target.bridgeDoName, ownerDoName: target.ownerDoName, subject: target.subject,
+      revision: target.revision, bindingDigest: target.bindingDigest, frozenAt: this.now(), state: 'frozen', nextAttemptAt: this.now(), attempts: 0 };
     this.storage.kv.put(PREFIX + replyRef, row);
     this.storage.kv.put(IMESSAGE_OUTBOX_DUE_KEY, this.dueAt());
     return row;

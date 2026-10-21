@@ -18,14 +18,14 @@ describe('the owner\'s proactive surface setting', () => {
     expect(proactiveSurface(kv)).toBe('app');
   });
 
-  it('stores each of its three values and refuses anything else without changing the stored one', () => {
+  it('stores each of its five values and refuses anything else without changing the stored one', () => {
     const kv = memoryKv();
-    for (const value of ['whatsapp', 'both', 'app'] as const) {
+    for (const value of ['whatsapp', 'both', 'imessage', 'app_imessage', 'app'] as const) {
       expect(setProactiveSurface(kv, value)).toBe(true);
       expect(proactiveSurface(kv)).toBe(value);
     }
     setProactiveSurface(kv, 'both');
-    for (const value of ['telegram', 'imessage', 'APP', ' app', '', 'app|both']) expect(setProactiveSurface(kv, value)).toBe(false);
+    for (const value of ['telegram', 'iMessage', 'APP', ' app', '', 'app|both']) expect(setProactiveSurface(kv, value)).toBe(false);
     expect(kv.map.get(PROACTIVE_SURFACE_KEY)).toBe('both');
   });
 });
@@ -48,6 +48,23 @@ describe('where proactive work goes', () => {
   ];
   it.each(table)('setting %s, app reachable %s, WhatsApp reachable %s: %j', (setting, app, whatsapp, targets) => {
     expect(proactiveTargets(setting, { app, whatsapp })).toEqual(targets);
+    // An iMessage that is not reachable changes nothing for the app and WhatsApp choices.
+    expect(proactiveTargets(setting, { app, whatsapp, imessage: false })).toEqual(targets);
+  });
+
+  // iMessage has the same two choices as WhatsApp, instead of the app or with it, and the same fallback to the app.
+  const imessage: readonly (readonly [ProactiveSurface, boolean, boolean, readonly string[]])[] = [
+    ['imessage', true, true, ['imessage']],
+    ['imessage', true, false, ['app']],
+    ['imessage', false, true, ['imessage']],
+    ['app_imessage', true, true, ['app', 'imessage']],
+    ['app_imessage', true, false, ['app']],
+    ['app_imessage', false, true, ['imessage']],
+    ['app', false, true, ['imessage']],
+    ['app_imessage', false, false, []],
+  ];
+  it.each(imessage)('setting %s, app reachable %s, iMessage reachable %s: %j', (setting, app, reachable, targets) => {
+    expect(proactiveTargets(setting, { app, whatsapp: false, imessage: reachable })).toEqual(targets);
   });
 });
 

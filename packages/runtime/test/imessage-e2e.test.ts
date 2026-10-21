@@ -12,6 +12,11 @@ import { gmailPushBook } from '../src/channels/gmail-push';
 import { PROPOSED_LOCAL_TEST_POLICY } from '../src/channels/imessage/policy';
 import { fixtureDirectory, type FixtureOwner } from './helpers/imessage-fixture-directory';
 import { SimulatedHost } from './helpers/imessage-sim-host';
+import { appSubjectFor } from '../src/channels/app-api';
+import { PROACTIVE_SURFACE_KEY } from '../src/channels/proactive-surface';
+import { reminderBook } from '../src/channels/reminders';
+import { Scheduler } from '../src/scheduler/multiplexer';
+import { productionDeps } from '../src/seams/deps';
 
 // Scripted model: every non-structured responses.create call is one owner turn.
 const proof = vi.hoisted(() => ({ turns: [] as string[], systems: [] as string[], reply: 'Scripted owner reply.', hold: null as null | (() => Promise<void>), outputs: [] as any[][] }));
@@ -588,4 +593,43 @@ it('an iMessage owner turn carries the host fact about a Gmail watch that failed
   expect(proof.turns[0]!.split('New emails are not pushed to Waldo').length - 1).toBe(1);
   for (const sent of [proof.systems[0]!, proof.turns[0]!]) expect(sent).not.toContain('mail-owner@example.invalid');
   expect(forbiddenEgress).toEqual([]);
+});
+
+// Proactive work reaches iMessage like a reply does: an owner admitted on the app who chose iMessage gets a due reminder
+// there, frozen into the iMessage outbox and handed to their bridge. With the app and iMessage both chosen, the app keeps
+// it and iMessage gets one copy.
+it.each(['imessage', 'app_imessage'] as const)('a due reminder reaches iMessage for an owner whose proactive surface is %s', async (surface) => {
+  const w = await world();
+  await w.pairAndActivate();
+  expect((await w.host.send(w.host.message('Morning'))).status).toBe(200);
+  await w.pump();
+  const answered = await w.host.pull();
+  await w.host.postResult(answered.delivery!, await w.host.execute(answered.delivery!));
+  await w.pump(2);
+  const directory = vi.mocked(globalThis.fetch).getMockImplementation()!;
+  vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url.endsWith('/rpc/owner_runtime_authority')) return Response.json({ owner_id: '10000000-0000-4000-8000-000000000001', auth_user_id: '10000000-0000-4000-8000-000000000001', do_name: w.ownerName, state_version: 1, admission_revision: '5' });
+    if (url.endsWith('/rpc/health_log_recent')) return Response.json([]);
+    return directory(input, init);
+  });
+  const REMINDER = 'Time to call Sam, as you asked.';
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    state.storage.kv.put('app_subject', String(appSubjectFor(w.ownerName)));
+    state.storage.kv.put('timezone', 'UTC'); state.storage.kv.put('timezone_confirmed', true);
+    state.storage.kv.put(PROACTIVE_SURFACE_KEY, surface);
+    state.storage.sql.exec('DELETE FROM schedule');
+    const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
+    await reminderBook(state.storage.sql, scheduler, { timezone: 'UTC', now: () => new Date(Date.now() - 3_600_000) }, () => 'rem-1')
+      .set({ note: 'call Sam', at: new Date(Date.now() - 30 * 60_000).toISOString().slice(0, 16), repeat: 'none' });
+    state.storage.kv.put('owner_alarm_last_v1', 1);
+  });
+  proof.reply = REMINDER;
+  try { await w.pump(); } finally { proof.reply = 'Scripted owner reply.'; }
+  const { delivery } = await w.host.pull();
+  expect(delivery, 'the reminder reached the bridge').not.toBeNull();
+  expect(JSON.parse(delivery!.body)).toMatchObject({ operation: 'send', text: REMINDER, binding: { subject: SUBJECT, chatGuid: CHAT } });
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    expect(new IMessageFinalOutbox(state.storage).records().filter((row) => row.replyRef.startsWith('proactive:'))).toHaveLength(1);
+  });
 });

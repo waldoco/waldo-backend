@@ -29,10 +29,11 @@ function CardTiming({ card, busy, onAction }: { card: DayRecord['data']['cards']
   </details>;
 }
 
-const SURFACES: Readonly<Record<ProactiveSurface['value'], string>> = { app: 'The app only', whatsapp: 'WhatsApp only', both: 'The app and WhatsApp' };
+const SURFACES: Readonly<Record<ProactiveSurface['value'], string>> = { app: 'The app only', whatsapp: 'WhatsApp only', both: 'The app and WhatsApp', imessage: 'iMessage only', app_imessage: 'The app and iMessage' };
 // Each note says what the choice does today, given where the owner can be reached.
-function surfaceNotes({ value, app_linked, whatsapp_linked, telegram_linked }: ProactiveSurface): string[] {
+function surfaceNotes({ value, app_linked, whatsapp_linked, imessage_linked, telegram_linked }: ProactiveSurface): string[] {
   if (telegram_linked) return ['While Telegram is linked, Waldo keeps writing to you as it does now. This choice applies once Telegram is unlinked.'];
+  if (value === 'imessage' || value === 'app_imessage') return imessage_linked === true ? ['Approval cards still come to the app.'] : ['Write to Waldo on iMessage first, so it knows where to reach you. Until then these come to the app.'];
   if (!whatsapp_linked) return value === 'app' ? [] : ['WhatsApp isn’t connected, so these come to the app for now.'];
   if (!app_linked && value !== 'whatsapp') return ['You haven’t written to Waldo in the app yet, so these come to WhatsApp for now.'];
   if (value === 'app') return [];
