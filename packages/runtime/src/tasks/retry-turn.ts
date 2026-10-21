@@ -36,7 +36,7 @@ export const promiseRetry = (book: JobBook, turn: FloorTurn, timezone: string, n
   const brief: RetryBrief = { message_ref: turn.messageRef ?? turn.traceId, text, conversation_ref: turn.conversationRef, said_at: turn.receivedAt, promised_by: promised };
   const { job } = book.create({
     kind: 'retry_turn', profile: null, idempotencyKey: `retry:${turn.traceId}`, origin: turn.traceId, surface: turn.surface,
-    brief, dueAt: now + RETRY_FIRST_TRY_MS, deadlineAt: promised,
+    brief, taint: turn.taint, dueAt: now + RETRY_FIRST_TRY_MS, deadlineAt: promised,
   });
   return floorReplyText((JSON.parse(job.brief_json) as RetryBrief).promised_by, timezone);
 };

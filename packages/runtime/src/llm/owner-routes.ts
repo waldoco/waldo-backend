@@ -20,7 +20,9 @@ import { routedGateway, type CircuitBreaker, type LLMGatewayAdapter } from './pr
 // a host that keeps and answers failed messages itself. Off, a failed turn ends the way it always did.
 // `health` is the owner's provider breaker, kept by the owner's Durable Object so misses count across turns and channels;
 // without it each responder starts with every provider closed.
-export type FloorTurn = Readonly<{ traceId: string; conversationRef: string; surface: string; text: string; messageRef?: string; receivedAt: number }>;
+// `text` is the message as the model read it, with any words someone else wrote in their labelled blocks; `taint` is
+// 'external' when the turn carried such words, so a retry of it runs under the same taint.
+export type FloorTurn = Readonly<{ traceId: string; conversationRef: string; surface: string; text: string; taint: 'external' | null; messageRef?: string; receivedAt: number }>;
 export type FloorPromise = Readonly<{ promise(turn: FloorTurn): string }>;
 export type OwnerModelAccess = Readonly<{ openaiApiKey: string; anthropicApiKey?: string; floorReply?: boolean | FloorPromise; health?: CircuitBreaker }>;
 

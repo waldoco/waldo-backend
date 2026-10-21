@@ -227,7 +227,10 @@ export const createOwnerResponder = (
   const floorText = (floor: NonNullable<OwnerModelAccess['floorReply']>): string => {
     if (typeof floor !== 'object' || !activeOwnerTurn) return MODEL_UNREACHABLE_REPLY;
     const turn = activeOwnerTurn;
-    return floor.promise({ traceId: turn.traceId, conversationRef: turn.conversationRef, surface: turn.surface, text: turn.text,
+    // The same view and taint the live turn ran under: others' words stay in their labelled blocks, and a reply to someone
+    // else's message keeps its tool arguments tainted.
+    return floor.promise({ traceId: turn.traceId, conversationRef: turn.conversationRef, surface: turn.surface, text: renderForModel(turn.parts).text,
+      taint: turnReplyContext && !turnReplyOwnAuthored ? 'external' : null,
       ...(turn.messageRef ? { messageRef: turn.messageRef.id } : {}), receivedAt: ownerTurnStartedAt });
   };
   // Memory checks a span against the text the model read, so it gets that text and the spans the owner did not write.

@@ -115,7 +115,7 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     const current = async () => { if (book.get(row.id)?.lease_token !== ticket.token) throw new ClosedRunError(); };
     let reply: string | null;
     try {
-      reply = checkBackReply(await deps.turn('retry_turn', `retry:${row.id}`, retryTurnText(brief, deps.timezone), current, null));
+      reply = checkBackReply(await deps.turn('retry_turn', `retry:${row.id}`, retryTurnText(brief, deps.timezone), current, row.taint));
     } catch (error) {
       if (error instanceof ClosedRunError) return;
       const last = deps.now() >= brief.promised_by;

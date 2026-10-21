@@ -52,6 +52,8 @@ export const TASK_SETTLED_KEPT = 200;
 export type CreateJob = Readonly<{
   kind: JobKind; profile: TaskProfile | null; idempotencyKey: string; origin: string; surface: string;
   brief: TaskBrief | RetryBrief; dueAt: number; deadlineAt: number;
+  // A job born tainted: a retried turn whose original carried someone else's words.
+  taint?: 'external' | null;
 }>;
 export type Fenced = 'fenced';
 
@@ -84,10 +86,10 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
       // guards against the row changing under the job, not against an adversary, and it is synchronous.
       const briefJson = JSON.stringify(input.brief);
       sql.exec(
-        `INSERT INTO task_jobs (id, kind, profile, idempotency_key, origin, surface, brief_json, brief_digest, status, due_at, deadline_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`,
+        `INSERT INTO task_jobs (id, kind, profile, idempotency_key, origin, surface, brief_json, brief_digest, status, taint, due_at, deadline_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
         id, input.kind, input.profile, input.idempotencyKey, input.origin, input.surface, briefJson, md5Hex(briefJson),
-        input.dueAt, input.deadlineAt, now, now,
+        input.taint ?? null, input.dueAt, input.deadlineAt, now, now,
       );
       return { job: get(id)!, created: true };
     },

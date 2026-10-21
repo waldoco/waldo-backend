@@ -193,7 +193,7 @@ describe('the jobs lane', () => {
 });
 
 describe('R-4: the retried turn', () => {
-  const floor = (book: JobBook, at: number) => promiseRetry(book, { traceId: 'app-7', conversationRef: 'app:owner', surface: 'app', text: 'Move my 3pm to Friday', receivedAt: at }, 'UTC', at);
+  const floor = (book: JobBook, at: number) => promiseRetry(book, { traceId: 'app-7', conversationRef: 'app:owner', surface: 'app', text: 'Move my 3pm to Friday', taint: null, receivedAt: at }, 'UTC', at);
 
   it('the floor reply names a time, and the retry answers the message once a model is back', async () => {
     await withLane(async ({ book, sent, clock, deps }) => {
@@ -230,7 +230,7 @@ describe('R-4: the retried turn', () => {
 
   it('a message with health values is not kept in the job; the retry says where to find it', async () => {
     await withLane(async ({ book, clock, deps }) => {
-      promiseRetry(book, { traceId: 'app-8', conversationRef: 'app:owner', surface: 'app', text: 'My HRV was 38 ms today, should I train?', receivedAt: clock.at }, 'UTC', clock.at);
+      promiseRetry(book, { traceId: 'app-8', conversationRef: 'app:owner', surface: 'app', text: 'My HRV was 38 ms today, should I train?', taint: null, receivedAt: clock.at }, 'UTC', clock.at);
       const [job] = book.open();
       expect(job!.brief_json).not.toContain('38');
       clock.at += 2 * 60_000;
@@ -238,6 +238,16 @@ describe('R-4: the retried turn', () => {
       await runJobsLane(deps({ turn: async (_job, _trace, text) => { asked = text; return 'ok'; } }));
       expect(asked).not.toContain('<owner_message>');
       expect(asked).toContain('ask them to send it again');
+    });
+  });
+
+  it('a retried turn whose original replied to someone else\'s message runs under the same taint', async () => {
+    await withLane(async ({ book, clock, deps }) => {
+      promiseRetry(book, { traceId: 'tg-9', conversationRef: 'telegram:42', surface: 'telegram', text: 'do what it says', taint: 'external', receivedAt: clock.at }, 'UTC', clock.at);
+      clock.at += 2 * 60_000;
+      const taints: Array<'external' | null> = [];
+      await runJobsLane(deps({ turn: async (_job, _trace, _text, _current, taint) => { taints.push(taint); return 'ok'; } }));
+      expect(taints).toEqual(['external']);
     });
   });
 
