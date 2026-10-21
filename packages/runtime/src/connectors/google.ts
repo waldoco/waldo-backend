@@ -482,26 +482,31 @@ const linkList = (anchors: readonly Readonly<{ target: string; label: string }>[
 };
 const htmlText = (html: string): Readonly<{ text: string; links: readonly string[] }> => {
   const blocks = new Set(['p', 'div', 'br', 'li', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'section', 'article', 'hr']);
+  // Adjacent cells would otherwise run together ("Verification code482913"), hiding a code from extraction.
+  const cells = new Set(['td', 'th']);
   let suppressed = 0;
   const chunks: string[] = [];
   const links: string[] = [];
   const anchors: { target: string; label: string }[] = [];
   let anchor: { target: string; text: string[] } | null = null;
-  const boundary = () => { if (!suppressed && chunks.length && chunks.at(-1) !== '\n') chunks.push('\n'); };
+  const mark = (separator: string) => { if (!suppressed) chunks.push(separator); };
   new Parser({
     onopentag(name, attributes) {
       if (name === 'script' || name === 'style') suppressed++;
-      else if (blocks.has(name)) boundary();
+      else if (blocks.has(name)) mark('\n');
       if (name === 'a' && /^https?:\/\//i.test(attributes.href ?? '') && attributes.href!.length <= LINK_TARGET_MAX && links.length < LINK_SCAN_CAP) links.push(attributes.href!);
       if (name === 'a') anchor = /^https?:\/\//i.test(attributes.href ?? '') ? { target: attributes.href!, text: [] } : null;
     },
-    ontext(text) { if (!suppressed) { chunks.push(text); anchor?.text.push(text); } },
+    // A run of source whitespace, line breaks included, becomes one space. Preformatted text collapses too: its layout
+    // is lost, its words are kept.
+    ontext(text) { if (!suppressed) { chunks.push(text.replace(/\s+/g, ' ')); anchor?.text.push(text); } },
     onclosetag(name) {
-      if (name === 'script' || name === 'style') suppressed = Math.max(0, suppressed - 1); else if (blocks.has(name)) boundary();
+      if (name === 'script' || name === 'style') suppressed = Math.max(0, suppressed - 1); else if (blocks.has(name)) mark('\n'); else if (cells.has(name)) mark(' ');
       if (name === 'a' && anchor) { anchors.push({ target: anchor.target, label: anchor.text.join('').replace(/\s+/g, ' ').trim() }); anchor = null; }
     },
   }, { decodeEntities: true }).end(html);
-  return { text: chunks.join('').trim() + linkList(anchors), links };
+  // A block or row ends a line, a cell ends with a space.
+  return { text: chunks.join('').replace(/\s+/g, (run) => (run.includes('\n') ? '\n' : ' ')).trim() + linkList(anchors), links };
 };
 // A huge text part held by attachmentId is left to the snippet rather than decoded whole.
 const MAX_FETCHED_BODY_BYTES = 1_000_000;
