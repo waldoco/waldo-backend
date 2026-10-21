@@ -29,5 +29,6 @@ describe('MCP OAuth routes', () => {
     expect(mcpConnectReceipt({ kind: 'failed', reason: 'egress_host' })).toEqual({ state: 'rejected', message: 'That address points at a private or internal network, which Waldo does not reach.' });
     expect(mcpDisconnectReceipt({ ok: true, provider: 'unsupported' }).message).toContain('did not confirm it revoked access');
     expect(mcpDisconnectReceipt({ ok: false, provider: 'failed' }).state).toBe('rejected');
+    expect(mcpDisconnectReceipt({ ok: false, provider: 'not_needed' })).toEqual({ state: 'rejected', message: 'That server is no longer connected. Refresh the records.' });
   });
 });

@@ -1,7 +1,7 @@
 import { EffectNotAppliedError, EffectUnknownError, type OwnerEffectLedger, type EffectReceipt, type EffectReadback } from './owner-effect-ledger';
 import type { ProxyIntent } from '../connectors/proxy-intent';
 import { ProxyIntentError } from '../connectors/proxy-intent';
-import { McpRefusal } from '../connectors/mcp-connections';
+import { McpRefusal, McpToolFailed } from '../connectors/mcp-connections';
 import { googleTaskProposalSchema, proposeGoogleTaskChangeArgsSchema, type BrowserTaskContinuation, type ProposeCalendarChangeArgs, type ProposeGoogleTaskChangeArgs } from '@waldo/contracts';
 import { GoogleError, sendRefused, sentCheck, sha256Hex, type GoogleClient, type SentEvidence } from '../connectors/google';
 import { stableJson } from '../context-composer/canonical';
@@ -84,6 +84,7 @@ export type McpCallProposal = Readonly<{
   answers?: Readonly<{ handle: string; responses: Readonly<Record<string, unknown>> }>;
   questions?: readonly Readonly<{ id: string; message: string }>[];
 }>;
+const isToolError = (value: unknown): value is { tool_error: string } => typeof value === 'object' && value !== null && typeof (value as { tool_error?: unknown }).tool_error === 'string';
 // The frozen identity of an MCP card: everything that decides what runs.
 const mcpDigest = (p: McpCallProposal) => sha256Hex(stableJson({ server: p.server, tool: p.tool, args: p.args, connection: p.connection ?? null, tool_digest: p.tool_digest ?? null, answers: p.answers ?? null }));
 // A privileged tool call whose arguments came from external content (ADR-0049), frozen for the owner's approval: the
@@ -830,14 +831,24 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           }
           // A refusal that proves nothing ran (the server was never reached, or it answered with an auth
           // challenge, a rate limit or a question) settles as not done; any other failure stays unknown.
-          let notRun: McpRefusal | undefined;
+          let notRun: McpRefusal | undefined, toolFailed: McpToolFailed | undefined;
           try {
             const receipt = await effect(`${operationRef}:apply`, 'call_mcp_tool', cp, async () => {
               let result: string | EffectReceipt;
               try { result = await deps.mcpCall!(cp, { id: `approval:${id}:apply` }); }
-              catch (error) { if (error instanceof McpRefusal && error.notApplied) notRun = error; throw error; }
+              catch (error) {
+                // The tool answered with its own error: the call completed, so the ledger records that answer.
+                if (error instanceof McpToolFailed) { toolFailed = error; return { provider_id: `${operationRef}:apply`, result: { tool_error: error.message } }; }
+                if (error instanceof McpRefusal && error.notApplied) notRun = error;
+                throw error;
+              }
               if (typeof result !== 'string') return result; if (deps.effects) throw new EffectUnknownError(); return { provider_id: `${operationRef}:apply`, result };
             }, async () => (notRun ? { status: 'not_applied' } : { status: 'unknown' }));
+            const failure = toolFailed?.message ?? (isToolError(receipt.result) ? receipt.result.tool_error : undefined);
+            if (failure !== undefined) {
+              setStatus(id, 'failed');
+              return { toast: 'That failed', message: `${describeMcp(cp)} ran and failed: ${failure}` };
+            }
             const outcome = String(receipt.result);
             setStatus(id, 'done');
             out = { toast: 'Done', message: `Done: ${describeMcp(cp)}. ${outcome}` };

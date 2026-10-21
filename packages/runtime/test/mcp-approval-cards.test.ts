@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { approvalDesk, type McpCallProposal } from '../src/channels/approvals';
 import { ownerEffectLedger } from '../src/channels/owner-effect-ledger';
 import { approvalControlReceipt } from '../src/channels/dashboard-control-actions';
-import { McpRefusal } from '../src/connectors/mcp-connections';
+import { McpRefusal, McpToolFailed } from '../src/connectors/mcp-connections';
 
 const OWNER_CARD: McpCallProposal = {
   server: 'tracker', tool: 'create_issue', args: { title: 'Follow up' }, connection: '00000000-0000-4000-8000-000000000001', tool_digest: 'a'.repeat(64),
@@ -51,6 +51,16 @@ describe('MCP approval cards for owner-connected servers', () => {
   }));
 
   for (const withEffects of [false, true]) {
+    it(`reports "That failed" when the tool ran and returned an error (${withEffects ? 'with' : 'without'} the effect ledger)`, async () => {
+      await rig(`tool-failed-${withEffects}`, async () => { throw new McpToolFailed("tracker's create_issue ran and reported an error: Title is required."); }, withEffects)(async ({ desk, sql, ran }) => {
+        const id = await desk.proposeMcpCall(OWNER_CARD);
+        expect(await desk.decide(id, 'a', 't')).toEqual({ toast: 'That failed', message: "Run create_issue on the tracker MCP server ran and failed: tracker's create_issue ran and reported an error: Title is required." });
+        expect(sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status).toBe('failed');
+        expect((await desk.decide(id, 'a', 't')).toast).toBe('Already handled.');
+        expect(ran).toHaveLength(1);
+      });
+    });
+
     it(`reports "nothing ran" only when the refusal proves it, and an unknown outcome otherwise (${withEffects ? 'with' : 'without'} the effect ledger)`, async () => {
       await rig(`not-run-${withEffects}`, async () => { throw new McpRefusal('auth_failed', 'The sign-in for tracker is no longer valid.', true); }, withEffects)(async ({ desk, sql }) => {
         const id = await desk.proposeMcpCall(OWNER_CARD);

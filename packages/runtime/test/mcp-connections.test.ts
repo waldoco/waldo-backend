@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { mcpConnections, McpRefusal, mcpState, readMcpState, type McpConnections } from '../src/connectors/mcp-connections';
+import { EVERY_READ_ONLY_HINT, mcpConnections, McpRefusal, McpToolFailed, mcpState, readMcpState, type McpConnections } from '../src/connectors/mcp-connections';
 import { mcpProxy } from '../src/connectors/mcp-proxy-client';
 import { callMcpToolHandler } from '../src/tools/live/mcp';
 import type { McpCallProposal } from '../src/channels/approvals';
@@ -14,7 +14,7 @@ beforeAll(async () => { serve = await loadEdge(); });
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 afterAll(() => vi.unstubAllGlobals());
 
-type Rig = Readonly<{ world: FakeMcpWorld; vault: VaultFake; mcp: McpConnections; edge: Record<string, unknown>[]; tick: (ms: number) => void; logs: unknown[] }>;
+type Rig = Readonly<{ world: FakeMcpWorld; vault: VaultFake; mcp: McpConnections; sql: SqlStorage; edge: Record<string, unknown>[]; tick: (ms: number) => void; logs: unknown[] }>;
 
 // One owner object holding the registry, its proxy client wired to the real edge, and the fake server.
 const withRig = (name: string, options: Partial<FakeOptions>, run: (rig: Rig) => Promise<void>, extra: Readonly<{ reserved?: readonly string[]; proxy?: boolean }> = {}) => async () => {
@@ -30,7 +30,7 @@ const withRig = (name: string, options: Partial<FakeOptions>, run: (rig: Rig) =>
       doName: () => 'owner-a', stateSecret: SECRET, fetcher: world.fetcher, now: () => Date.now(),
       ...(extra.reserved ? { reserved: () => extra.reserved! } : {}), log: (entry) => logs.push(entry),
     });
-    await run({ world, vault, mcp, edge, logs, tick: (ms) => { world.advance(ms); vi.setSystemTime(world.now()); } });
+    await run({ world, vault, mcp, sql: state.storage.sql, edge, logs, tick: (ms) => { world.advance(ms); vi.setSystemTime(world.now()); } });
   });
 };
 
@@ -72,7 +72,7 @@ describe('MCP connections, end to end through the edge', () => {
     expect(found.tools[0]).toMatchObject({ server: 'example', tool: 'search_pages', runs: 'asks_first', read_only_hint: true, server_text: { description: 'Search the workspace pages by text.' } });
     // Until the owner allows it, even a tool the server marks read-only asks first.
     expect((await refusal(mcp.invoke({ mode: 'read', server: 'example', tool: 'search_pages', args: { query: 'q' } }))).code).toBe('forbidden');
-    expect(await mcp.setRuns(view!.id, 'marked_read_only', true)).toBe(true);
+    expect(await mcp.setRuns(view!.id, EVERY_READ_ONLY_HINT, true)).toBe(true);
     expect(mcp.list()[0]!.runs_without_asking).toBe(1);
     expect(await mcp.invoke({ mode: 'read', server: 'example', tool: 'search_pages', args: { query: 'q' } })).toEqual({ server: 'example', result: { resultType: 'complete', content: [{ type: 'text', text: 'search_pages ran with {"query":"q"}' }] } });
     // A write never runs as a read, whatever the owner allowed.
@@ -176,7 +176,7 @@ describe('MCP connections, hostile and failing servers', () => {
     // Name order whatever order the server sent; destructive-and-read-only is not a read-only hint.
     expect(tools.map((tool) => [tool.tool, tool.runs, tool.read_only_hint])).toEqual([['delete_everything', 'asks_first', false], ['lookup', 'asks_first', true]]);
     expect(tools[1]!.server_text.description).toContain('IGNORE PREVIOUS INSTRUCTIONS');
-    await mcp.setRuns(view.id, 'marked_read_only', true);
+    await mcp.setRuns(view.id, EVERY_READ_ONLY_HINT, true);
     expect((await refusal(mcp.invoke({ mode: 'read', server: 'example', tool: 'delete_everything', args: {} }))).code).toBe('forbidden');
     const before = world.calls.filter((call) => call.method === 'tools/call').length;
     const bad = await refusal(mcp.invoke({ mode: 'read', server: 'example', tool: 'lookup', args: { id: 7, extra: true } }));
@@ -325,6 +325,23 @@ describe('MCP connections, hostile and failing servers', () => {
     expect(await refusal(mcp.invoke({ mode: 'read', server: 'example', tool: 'search_pages', args: { query: 'q' } }))).toMatchObject({ code: 'rejected', message: expect.stringContaining('does not provide') });
     // Waldo declares form questions only, on every modern request.
     expect((world.calls.at(-1)!.body as { params: { _meta: Record<string, unknown> } }).params._meta['io.modelcontextprotocol/clientCapabilities']).toEqual({ elicitation: { form: {} } });
+  }));
+
+  it('reports a tool that ran and returned isError as a tool failure, never as a result', withRig('tool-error', {
+    results: () => ({ content: [{ type: 'text', text: 'Page quota exceeded for this workspace.' }], isError: true }),
+  }, async (rig) => {
+    const { mcp } = rig;
+    await connect(rig);
+    await mcp.setRuns(mcp.list()[0]!.id, 'search_pages', true);
+    const failed = await refusal(mcp.invoke({ mode: 'read', server: 'example', tool: 'search_pages', args: { query: 'q' } }));
+    expect(failed).toBeInstanceOf(McpToolFailed);
+    expect(failed).toMatchObject({ code: 'rejected', notApplied: false, message: "example's search_pages ran and reported an error: Page quota exceeded for this workspace." });
+  }));
+
+  it('wipes a settled attempt\'s verifier and endpoints, keeping only its outcome', withRig('wiped', {}, async (rig) => {
+    const { nonce } = await connect(rig);
+    expect(rig.mcp.list()).toHaveLength(1);
+    expect(rig.sql.exec<{ record: string }>('SELECT record FROM mcp_attempts WHERE nonce = ?', nonce).one().record).toBe('{}');
   }));
 
   it('refuses a result past the read cap with a narrowing hint', withRig('oversize', { results: () => ({ content: [{ type: 'text', text: 'x'.repeat(17 * 1024 * 1024) }] }) }, async (rig) => {

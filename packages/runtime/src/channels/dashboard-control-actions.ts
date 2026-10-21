@@ -57,7 +57,7 @@ export const mcpConnectReceipt=(result:Readonly<{kind:string;path?:string;name?:
  return {state:'rejected',message:MCP_CONNECT_FAILURES[result.reason??'']??'That server could not be connected. Check the address and try again.'};
 };
 export const mcpDisconnectReceipt=(result:Readonly<{ok:boolean;provider:string}>):ControlReceipt=>!result.ok
- ?{state:'rejected',message:'The server was not disconnected because Waldo could not reach its sign-in service. Try again.'}
+ ?{state:'rejected',message:result.provider==='not_needed'?'That server is no longer connected. Refresh the records.':'The server was not disconnected because Waldo could not reach its sign-in service. Try again.'}
  :{state:'recorded',message:result.provider==='revoked'?'Disconnected, and the server revoked Waldo\'s access.':result.provider==='failed'||result.provider==='unsupported'?'Disconnected and forgotten by Waldo. The server did not confirm it revoked access; remove Waldo in that service\'s settings to be sure.':'Disconnected.'};
 export const whatsappLinkReceipt=(code:string|null):ControlReceipt=>code
  ?{state:'recorded',message:`Send this to the Waldo WhatsApp number within 10 minutes: waldo ${code}`}

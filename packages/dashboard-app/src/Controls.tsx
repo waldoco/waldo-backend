@@ -169,7 +169,7 @@ function McpServers({ servers, busy, onAction }: { servers: ConnectionsRecord['d
             <button disabled={busy} onClick={() => onAction('mcp.runs', { id: server.id, value: `${tool.tool}|${tool.runs === 'without_asking' ? 'off' : 'on'}` })}>{tool.runs === 'without_asking' ? 'Ask me first' : 'Run without asking'}</button></li>)}</ul>
           {!server.tool_list.length && <p className="empty-line">No tools returned yet.</p>}
           <div className="control-actions">
-            {server.marked_read_only > 0 && <button disabled={busy} onClick={() => { if (window.confirm(`Let the ${server.marked_read_only} tools ${server.name} labels read-only run without asking? The label is the server's claim; Waldo cannot check it.`)) onAction('mcp.runs', { id: server.id, value: 'marked_read_only|on' }); }}>Let tools labelled read-only run without asking</button>}
+            {server.marked_read_only > 0 && <button disabled={busy} onClick={() => { if (window.confirm(`Let the ${server.marked_read_only} tools ${server.name} labels read-only run without asking? The label is the server's claim; Waldo cannot check it.`)) onAction('mcp.runs', { id: server.id, value: '*read_only_hint|on' }); }}>Let tools labelled read-only run without asking</button>}
             {needs && <button className="primary" disabled={busy} onClick={() => onAction('mcp.connect', { value: server.server_url })}>Reconnect {server.name}</button>}
             <button disabled={busy} onClick={() => { if (window.confirm(`Disconnect ${server.name}? Waldo asks the server to revoke its access and forgets it.`)) onAction('mcp.disconnect', { id: server.id }); }}>Disconnect {server.name}</button>
           </div>

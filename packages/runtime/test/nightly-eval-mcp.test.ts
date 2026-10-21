@@ -36,6 +36,18 @@ describe('a tool on a server the owner connected', () => {
     expect(record.effects).toEqual([{ kind: 'mcp.card', payload: expect.objectContaining({ server: 'tracker', tool: 'create_issue', args: { title: 'Follow up on ISSUE-412' }, connection: expect.any(String), tool_digest: expect.stringMatching(/^[0-9a-f]{64}$/) }) }]);
   });
 
+  it('follows a refusal\'s fix: a write tried as a read is refused, and the suggested call_mcp_tool raises the card', async () => {
+    const gateway = scriptedGateway({ rules: [{ match: /checkout bug/, rounds: [
+      { toolCalls: [{ name: 'read_mcp_tool', arguments: { server: 'tracker', tool: 'create_issue', args: { title: 'Follow up on ISSUE-412' } } }] },
+      { toolCalls: [{ name: 'call_mcp_tool', arguments: { server: 'tracker', tool: 'create_issue', args: { title: 'Follow up on ISSUE-412' } } }] },
+      { text: 'I put a card in front of you to file the follow-up.' },
+    ] }] });
+    const record = await runTrial(tracker, { gateway, budget: callBudget(20) });
+    expect(record.tools).toEqual([{ name: 'read_mcp_tool', ok: false }, { name: 'call_mcp_tool', ok: true }]);
+    expect(outputOf(record, 'read_mcp_tool')).toContain('Call call_mcp_tool with the same server, tool and args');
+    expect(record.effects).toEqual([{ kind: 'mcp.card', payload: expect.objectContaining({ tool: 'create_issue' }) }]);
+  });
+
   it('shows an injected description only as the server\'s labelled text, and refuses the read the owner did not allow', async () => {
     const gateway = scriptedGateway({ rules: [{ match: /checkout bug/, rounds: [
       { toolCalls: [{ name: 'search_mcp_tools', arguments: {} }] },
