@@ -49,18 +49,23 @@ export const appConsentWithdrawV1Schema = z.strictObject({ request_id: requestId
 export const appConsentChangeV1Schema = z.strictObject({ consent: appConsentStateV1Schema, replayed: z.boolean(), findings_erased: count });
 
 // First run. Three questions at most, each skippable: name, brief_time and priority are the only steps that ask the owner
-// anything. google and health are connections the owner may decline; first_look is Waldo's first piece of work. A step is
-// pending until the owner answers, connects or skips it.
-export const appOnboardingStepV1Schema = z.enum(['agreements', 'name', 'google', 'health', 'first_look', 'brief_time', 'priority']);
+// anything. google and health are connections the owner may decline; channel is a choice among fixed surfaces, with the app
+// the default when it is skipped; first_look is Waldo's first piece of work. A step is pending until the owner answers,
+// connects or skips it.
+export const appOnboardingStepV1Schema = z.enum(['agreements', 'name', 'google', 'health', 'first_look', 'brief_time', 'priority', 'channel']);
 export const appOnboardingStepStateV1Schema = z.enum(['pending', 'done', 'skipped']);
-export const APP_ONBOARDING_SKIPPABLE_V1 = ['name', 'google', 'health', 'brief_time', 'priority'] as const;
+export const APP_ONBOARDING_SKIPPABLE_V1 = ['name', 'google', 'health', 'brief_time', 'priority', 'channel'] as const;
+// Where Waldo's proactive messages go: the Brief, reminders and follow-ups. This is the console's own setting (app by default).
+// Choosing whatsapp or both before WhatsApp is linked is safe: delivery falls back to the app until the number is linked.
+export const appProactiveSurfaceV1Schema = z.enum(['app', 'whatsapp', 'both']);
 const steps = z.strictObject({
   agreements: appOnboardingStepStateV1Schema, name: appOnboardingStepStateV1Schema, google: appOnboardingStepStateV1Schema,
   health: appOnboardingStepStateV1Schema, first_look: appOnboardingStepStateV1Schema, brief_time: appOnboardingStepStateV1Schema,
-  priority: appOnboardingStepStateV1Schema,
+  priority: appOnboardingStepStateV1Schema, channel: appOnboardingStepStateV1Schema,
 }).refine(value => value.agreements !== 'skipped' && value.first_look !== 'skipped', 'agreements and first_look cannot be skipped');
 // first_look.message_id is the main-chat client message id of the first-look request; the app reads its receipt and the reply
 // through the chat routes. brief.time is null until the owner sets it; the first Brief goes out only once the zone is confirmed.
+// channel.surface is the live proactive-surface setting, so the app reads it rather than guessing the default.
 export const appOnboardingV1Schema = z.strictObject({
   version: z.literal(1),
   state: z.enum(['not_started', 'in_progress', 'completed']),
@@ -70,6 +75,7 @@ export const appOnboardingV1Schema = z.strictObject({
   steps,
   first_look: z.strictObject({ message_id: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/).nullable() }),
   brief: z.strictObject({ time: clock.nullable(), timezone_confirmed: z.boolean() }),
+  channel: z.strictObject({ surface: appProactiveSurfaceV1Schema }),
   revision,
 }).superRefine((run, ctx) => {
   if ((run.state === 'not_started') !== (run.run_id === null) || (run.run_id === null) !== (run.started_at === null)) ctx.addIssue({ code: 'custom', path: ['run_id'], message: 'a run id and start time exist exactly once started' });
@@ -88,6 +94,7 @@ export const appOnboardingActionV1Schema = z.discriminatedUnion('action', [
   action('first_look.request', {}),
   action('brief_time.set', { time: clock, timezone }),
   action('priority.set', { text: z.string().trim().min(1).max(500) }),
+  action('channel.set', { surface: appProactiveSurfaceV1Schema }),
   action('skip', { step: z.enum(APP_ONBOARDING_SKIPPABLE_V1) }),
   action('complete', {}),
 ]);
@@ -153,6 +160,7 @@ export type AppConsentStateV1 = z.infer<typeof appConsentStateV1Schema>;
 export type AppOnboardingV1 = z.infer<typeof appOnboardingV1Schema>;
 export type AppOnboardingActionV1 = z.infer<typeof appOnboardingActionV1Schema>;
 export type AppOnboardingStepV1 = z.infer<typeof appOnboardingStepV1Schema>;
+export type AppProactiveSurfaceV1 = z.infer<typeof appProactiveSurfaceV1Schema>;
 export type AppFindingV1 = z.infer<typeof appFindingV1Schema>;
 export type AppFindingCategoryV1 = z.infer<typeof appFindingCategoryV1Schema>;
 export type AppFindingActionV1 = z.infer<typeof appFindingActionV1Schema>;

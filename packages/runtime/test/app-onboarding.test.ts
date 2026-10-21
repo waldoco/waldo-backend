@@ -89,6 +89,26 @@ describe('first run', () => {
       { action: 'timezone.set', id: '', value: 'Asia/Kolkata' }, { action: 'card.pin', id: 'card:brief', value: '07:30' },
       { action: 'proactivity.set', id: '', value: '22:00|07:30|normal' }]);
   }));
+  it('seeds the console proactive-surface setting from the channel step, and leaves the app default when skipped', () => owner(async ({ storage, act }) => {
+    await act({ action: 'start' }); await act(agree);
+    expect((await run(await act({ action: 'start' }))).channel).toEqual({ surface: 'app' });
+    const chosen = await run(await act({ action: 'channel.set', surface: 'both' }));
+    expect(chosen).toMatchObject({ steps: { channel: 'done' }, channel: { surface: 'both' } });
+    // The same key the console writes, so the console shows it and delivery follows it.
+    expect(storage.kv.get('proactive_surface_v1')).toBe('both');
+    expect((await act({ action: 'channel.set', surface: 'telegram' })).status).toBe(400);
+    expect(storage.kv.get('proactive_surface_v1')).toBe('both');
+  }));
+  it('keeps the app as the proactive surface when the channel step is skipped', () => owner(async ({ storage, act }) => {
+    await act({ action: 'start' }); await act(agree);
+    expect(await run(await act({ action: 'skip', step: 'channel' }))).toMatchObject({ steps: { channel: 'skipped' }, channel: { surface: 'app' } });
+    expect(storage.kv.get('proactive_surface_v1')).toBeUndefined();
+  }));
+  it('refuses the channel step before the agreements', () => owner(async ({ storage, act }) => {
+    await act({ action: 'start' });
+    expect(await (await act({ action: 'channel.set', surface: 'whatsapp' })).json()).toEqual({ error: 'agreements_required' });
+    expect(storage.kv.get('proactive_surface_v1')).toBeUndefined();
+  }));
   it('runs one first look per run, however often it is asked', () => owner(async ({ calls, act }) => {
     await act({ action: 'start' }); await act(agree);
     const first = await run(await act({ action: 'first_look.request' }));
@@ -100,7 +120,7 @@ describe('first run', () => {
   it('finishes once: what was left unanswered is skipped, and a restart finds the finished run', () => owner(async ({ send, act }) => {
     await act({ action: 'start' }); await act(agree); await act({ action: 'name.set', name: 'Sam' });
     const done = await run(await act({ action: 'complete' }));
-    expect(done).toMatchObject({ state: 'completed', steps: { agreements: 'done', name: 'done', google: 'skipped', health: 'skipped', brief_time: 'skipped', priority: 'skipped', first_look: 'pending' } });
+    expect(done).toMatchObject({ state: 'completed', steps: { agreements: 'done', name: 'done', google: 'skipped', health: 'skipped', brief_time: 'skipped', priority: 'skipped', channel: 'skipped', first_look: 'pending' }, channel: { surface: 'app' } });
     expect(await (await act({ action: 'name.set', name: 'Other' })).json()).toEqual({ error: 'completed' });
     expect((await run(await act({ action: 'start' }))).state).toBe('completed');
     expect(appOnboardingV1Schema.parse(await (await send('/app/v1/onboarding')).json()).run_id).toBe(done.run_id);

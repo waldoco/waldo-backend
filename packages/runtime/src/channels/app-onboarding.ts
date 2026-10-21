@@ -14,6 +14,7 @@ import { bodyDigest, requestBook, type RequestBook } from '../onboarding/request
 import { redactConversationEntries } from './conversation-store';
 import { loopBook } from './loops';
 import { md5Hex } from './md5';
+import { proactiveSurface, setProactiveSurface } from './proactive-surface';
 
 export const APP_ONBOARDING_PATHS: readonly string[] = ['/app/v1/onboarding', '/app/v1/onboarding/actions', '/app/v1/consents', '/app/v1/consents/withdraw', '/app/v1/findings', '/app/v1/findings/actions'];
 
@@ -128,6 +129,8 @@ export const ownerOnboardingHost = (deps: OwnerOnboardingDeps): AppOnboardingHos
     googleConnected: async () => (storage.kv.get<unknown[]>('google:accounts') ?? []).length > 0,
     healthConnected,
     timezoneConfirmed: () => storage.kv.get<boolean>('timezone_confirmed') === true,
+    proactiveSurface: () => proactiveSurface(storage.kv),
+    setProactiveSurface: surface => setProactiveSurface(storage.kv, surface),
     async setBriefTime(time, timezone) {
       if (await deps.act({ action: 'timezone.set', id: '', value: timezone }) !== true) return false;
       if (await deps.act({ action: 'card.pin', id: 'card:brief', value: time }) !== true) return false;

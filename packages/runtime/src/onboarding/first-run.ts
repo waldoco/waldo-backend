@@ -1,6 +1,6 @@
 import {
   APP_ONBOARDING_SKIPPABLE_V1, appOnboardingStepV1Schema, appOnboardingV1Schema,
-  type AppOnboardingActionV1, type AppOnboardingStepV1, type AppOnboardingV1,
+  type AppOnboardingActionV1, type AppOnboardingStepV1, type AppProactiveSurfaceV1, type AppOnboardingV1,
 } from '../../../contracts/src/app/onboarding';
 import type { ClaimStore } from '../memory/claims';
 import type { ConsentLedger } from './consent-ledger';
@@ -19,6 +19,9 @@ export type FirstRunHost = Readonly<{
   // Whether the health plane holds a live storage consent for any source; 'unavailable' when it cannot be read.
   healthConnected(): Promise<boolean | 'unavailable'>;
   timezoneConfirmed(): boolean;
+  // The owner's proactive-surface setting (the console's own): read it for the view, write it for the channel step.
+  proactiveSurface(): AppProactiveSurfaceV1;
+  setProactiveSurface(surface: AppProactiveSurfaceV1): boolean;
   // Sets the owner's zone, pins The Brief at time and makes quiet hours end when it arrives.
   setBriefTime(time: string, timezone: string): Promise<boolean>;
   // Admits one main-chat message under clientId; repeating the id returns the first admission.
@@ -69,6 +72,7 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, f
       steps: { ...base, google },
       first_look: { message_id: run?.first_look_id ?? null },
       brief: { time: run?.brief_time ?? null, timezone_confirmed: host.timezoneConfirmed() },
+      channel: { surface: host.proactiveSurface() },
     };
     return appOnboardingV1Schema.parse({ ...body, revision: await bodyDigest(body) });
   };
@@ -115,6 +119,10 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, f
       case 'brief_time.set':
         if (!(await host.setBriefTime(action.time, action.timezone))) return 'unavailable';
         write({ steps: { ...steps(row()!), brief_time: 'done' }, brief_time: action.time });
+        return null;
+      case 'channel.set':
+        if (!host.setProactiveSurface(action.surface)) return 'unavailable';
+        step(row()!, 'channel', 'done');
         return null;
       case 'first_look.request': {
         // One first look per run: the client id comes from the run, so a repeat or a second device gets the same message.

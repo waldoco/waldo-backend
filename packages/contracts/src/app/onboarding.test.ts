@@ -37,10 +37,10 @@ describe('consent ledger', () => {
 });
 
 describe('first run', () => {
-  const steps = { agreements: 'pending', name: 'pending', google: 'pending', health: 'pending', first_look: 'pending', brief_time: 'pending', priority: 'pending' };
-  const fresh = { version: 1, state: 'not_started', run_id: null, started_at: null, completed_at: null, steps, first_look: { message_id: null }, brief: { time: null, timezone_confirmed: false }, revision: REVISION };
+  const steps = { agreements: 'pending', name: 'pending', google: 'pending', health: 'pending', first_look: 'pending', brief_time: 'pending', priority: 'pending', channel: 'pending' };
+  const fresh = { version: 1, state: 'not_started', run_id: null, started_at: null, completed_at: null, steps, first_look: { message_id: null }, brief: { time: null, timezone_confirmed: false }, channel: { surface: 'app' }, revision: REVISION };
   const run = { ...fresh, state: 'in_progress', run_id: `onb_${'b'.repeat(32)}`, started_at: 1_000 };
-  const done = { ...run, state: 'completed', completed_at: 9_000, steps: { ...steps, agreements: 'done', name: 'skipped', google: 'skipped', health: 'skipped', first_look: 'done', brief_time: 'done', priority: 'skipped' }, first_look: { message_id: 'onboarding-first-look-1' }, brief: { time: '07:30', timezone_confirmed: true } };
+  const done = { ...run, state: 'completed', completed_at: 9_000, steps: { ...steps, agreements: 'done', name: 'skipped', google: 'skipped', health: 'skipped', first_look: 'done', brief_time: 'done', priority: 'skipped', channel: 'done' }, first_look: { message_id: 'onboarding-first-look-1' }, brief: { time: '07:30', timezone_confirmed: true }, channel: { surface: 'both' } };
   it('reads a run before start, in progress and completed', () => {
     accepted(appOnboardingV1Schema, [fresh, run, done]);
     rejected(appOnboardingV1Schema, [
@@ -48,17 +48,17 @@ describe('first run', () => {
       { ...done, steps: { ...done.steps, agreements: 'pending' } }, { ...run, steps: { ...steps, agreements: 'skipped' } }, { ...run, steps: { ...steps, first_look: 'skipped' } },
       { ...run, steps: { ...steps, first_look: 'done' } }, { ...run, first_look: { message_id: 'onboarding-first-look-1' } },
       { ...run, steps: { ...steps, mood_quiz: 'pending' } }, { ...run, brief: { time: '7:30', timezone_confirmed: false } }, { ...run, brief: { time: '24:00', timezone_confirmed: false } },
-      { ...run, run_id: 'onb_short' }, { ...run, revision: 'nope' }, { ...run, version: 2 },
+      { ...run, channel: { surface: 'telegram' } }, { ...run, channel: undefined }, { ...run, steps: { ...steps, channel: undefined } }, { ...run, run_id: 'onb_short' }, { ...run, revision: 'nope' }, { ...run, version: 2 },
     ]);
   });
-  it('takes exactly three question answers, the agreements and connection outcomes, and nothing else', () => {
+  it('takes exactly three question answers, the agreements, connection outcomes and a surface choice, and nothing else', () => {
     const r = { request_id: 'onboarding-0001' };
     accepted(appOnboardingActionV1Schema, [
       { ...r, action: 'start' },
       { ...r, action: 'agreements.accept', terms_version: 1, notice_version: 1, age_attested_18_plus: true, owner_lookup: false },
       { ...r, action: 'name.set', name: 'Sam' }, { ...r, action: 'brief_time.set', time: '07:30', timezone: 'Asia/Kolkata' },
-      { ...r, action: 'priority.set', text: 'Ship the board deck' }, { ...r, action: 'health.connected' }, { ...r, action: 'first_look.request' },
-      ...['name', 'google', 'health', 'brief_time', 'priority'].map(step => ({ ...r, action: 'skip', step })), { ...r, action: 'complete' },
+      { ...r, action: 'priority.set', text: 'Ship the board deck' }, ...['app', 'whatsapp', 'both'].map(surface => ({ ...r, action: 'channel.set', surface })), { ...r, action: 'health.connected' }, { ...r, action: 'first_look.request' },
+      ...['name', 'google', 'health', 'brief_time', 'priority', 'channel'].map(step => ({ ...r, action: 'skip', step })), { ...r, action: 'complete' },
     ]);
     rejected(appOnboardingActionV1Schema, [
       { ...r, action: 'agreements.accept', terms_version: 1, notice_version: 1, age_attested_18_plus: false, owner_lookup: true },
@@ -66,7 +66,7 @@ describe('first run', () => {
       { ...r, action: 'name.set', name: '   ' }, { ...r, action: 'name.set', name: 'x'.repeat(81) },
       { ...r, action: 'brief_time.set', time: '7:30', timezone: 'Asia/Kolkata' }, { ...r, action: 'brief_time.set', time: '07:30' }, { ...r, action: 'brief_time.set', time: '07:30', timezone: '../etc' },
       { ...r, action: 'priority.set', text: '' }, { ...r, action: 'skip', step: 'agreements' }, { ...r, action: 'skip', step: 'first_look' },
-      { ...r, action: 'mood.set', value: 'tired' }, { ...r, action: 'start', owner_id: 'forged' }, { action: 'start' }, { ...r, action: 'name.set', name: 'Sam', extra: true },
+      { ...r, action: 'channel.set', surface: 'telegram' }, { ...r, action: 'channel.set' }, { ...r, action: 'channel.set', surface: 'app', extra: true }, { ...r, action: 'mood.set', value: 'tired' }, { ...r, action: 'start', owner_id: 'forged' }, { action: 'start' }, { ...r, action: 'name.set', name: 'Sam', extra: true },
     ]);
   });
   it('answers with the run and whether the request was replayed', () => {
