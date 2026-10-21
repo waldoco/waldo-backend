@@ -93,6 +93,21 @@ describe('app health routes: signed database calls', () => {
     expect(call!.body).toMatchObject({ p_do_name: 'owner-1', p_payload: '{}' });
     expect(call!.body.p_sig).toBe(await routerSignature(SECRET, call!.body.p_at as number, `health.consent_list.owner-1.${md5Hex('{}')}`));
   });
+  it('shows a provider\'s consent rows only to a build that names health revision 2', async () => {
+    const whoopRow = { ...consent, source: 'whoop', purpose: 'provider_terms' };
+    rpcResult = { consents: [consent, whoopRow] };
+    const older = await get('/app/v1/health/consents');
+    expect(await older.json()).toEqual({ consents: [consent] });
+    const asked = (header: string) => handleApp(new Request('https://w.test/app/v1/health/consents', { headers: headers({ 'x-waldo-app-contract': header }) }), env(), auth) as Promise<Response>;
+    expect(await (await asked('health=2')).json()).toEqual({ consents: [consent, whoopRow] });
+    expect(await (await asked('health=1')).json()).toEqual({ consents: [consent] });
+    expect(await (await asked('approvals=2')).json()).toEqual({ consents: [consent] });
+  });
+  it('refuses an app upload that claims a provider\'s name, and never calls the database', async () => {
+    const whoop = { ...batch, request_id: 'health-upload-w1', source: 'whoop' };
+    const response = await post('/app/v1/health/ingest', whoop, { 'idempotency-key': whoop.request_id });
+    expect([response.status, await response.json(), rpcs]).toEqual([400, { error: 'invalid_request' }, []]);
+  });
   it('sends the validated body, re-serialized, and never an owner from the client', async () => {
     rpcResult = change;
     const response = await post('/app/v1/health/consents', grant, { 'idempotency-key': grant.request_id });

@@ -57,7 +57,7 @@ export const getHealthResultSchema = z.discriminatedUnion('state', [
     signals: z.array(z.strictObject({
       signal: healthReadSignalSchema,
       unit: healthReadUnitSchema,
-      source: z.enum(['apple', 'samsung', 'health_connect']),
+      source: z.enum(['apple', 'samsung', 'health_connect', 'whoop']),
       method: z.enum(['asleep', 'rmssd', 'sdnn']).nullable(),
       days: z.array(z.strictObject({ day: healthReadDaySchema, value: z.number().nullable() })).optional(),
       // Null when no asked day has a value: nothing is invented.

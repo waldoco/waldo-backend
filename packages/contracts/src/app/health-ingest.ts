@@ -12,14 +12,23 @@ export const HEALTH_INGEST_MAX_CHANGES_V1 = 128;
 export const HEALTH_RAW_RETENTION_DAYS_V1 = 90;
 export const HEALTH_AGGREGATE_RETENTION_MONTHS_V1 = 24;
 
-export const healthSourceV1Schema = z.enum(['apple', 'samsung', 'health_connect']);
+// Device sources arrive from the app's uploads. A provider source is a cloud API Waldo syncs for the owner, so it never
+// arrives through the app's ingest route; its consent rows and requests are health contract revision 2, and an older build
+// never sees them (it parses the consent list strictly).
+export const HEALTH_PROVIDER_SOURCES_V1 = ['whoop'] as const;
+export const HEALTH_PROVIDER_REVISION_V1 = 2;
+export const healthSourceV1Schema = z.enum(['apple', 'samsung', 'health_connect', ...HEALTH_PROVIDER_SOURCES_V1]);
+export const isHealthProviderSourceV1 = (source: string): boolean => (HEALTH_PROVIDER_SOURCES_V1 as readonly string[]).includes(source);
 // Purposes are separate grants, requested together on one consent screen: storage_compute (store and compute the
 // owner's health data and show the owner their scores) and model_processing (let Waldo use it when it talks to the
 // owner). Model use needs both, so granting model_processing without a live storage grant is consent_required, and an
 // owner who grants only storage gets consent_required for model use. Withdrawing model_processing stops model use only
 // and deletes nothing. Withdrawing storage_compute withdraws both for the source and purges its data. Re-granting
 // storage never restores model use.
-export const healthPurposeV1Schema = z.enum(['storage_compute', 'model_processing']);
+// provider_terms is the owner's express authorization, named in the consent copy, for a provider to have its data stored and
+// used with AI. It exists for provider sources only; storage can be granted only while it is live, and withdrawing it
+// withdraws the source and removes what it stored.
+export const healthPurposeV1Schema = z.enum(['storage_compute', 'model_processing', 'provider_terms']);
 export const healthRequestIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,96}$/);
 export const healthDayV1Schema = z.iso.date();
 export const healthInstantV1Schema = z.iso.datetime({ offset: true });
@@ -55,6 +64,9 @@ export const healthConsentStateV1Schema = z.strictObject({
   deletion_state: z.enum(['not_required', 'completed']),
 });
 export const healthConsentListV1Schema = z.strictObject({ consents: z.array(healthConsentStateV1Schema).max(12) });
+// What a client at an older health revision may be shown: no provider rows, since it cannot parse them.
+export const healthConsentListAtRevisionV1 = <Row extends { source: string }>(consents: readonly Row[], revision: number): Row[] =>
+  revision >= HEALTH_PROVIDER_REVISION_V1 ? [...consents] : consents.filter(row => !isHealthProviderSourceV1(row.source));
 export const healthConsentChangeV1Schema = z.strictObject({ consent: healthConsentStateV1Schema, replayed: z.boolean(), deletion_routed: z.boolean() });
 
 // The permission API is not the physiological producer: keep the observed read origin and

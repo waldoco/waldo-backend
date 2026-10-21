@@ -1,6 +1,7 @@
 import { fromRowZone } from '@waldo/contracts';
+import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import {
-  HEALTH_INGEST_MAX_REQUEST_BYTES_V1,
+  HEALTH_INGEST_MAX_REQUEST_BYTES_V1, healthConsentListAtRevisionV1, isHealthProviderSourceV1,
   healthApiErrorV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema, healthConsentListV1Schema, healthConsentWithdrawV1Schema,
   healthIngestReceiptV1Schema, healthIngestV1Schema, healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresUnavailableV1Schema,
 } from '../../../contracts/src/app/health-ingest';
@@ -38,7 +39,7 @@ const refuse = (error: ErrorCode, status: number = STATUS[error]) => reply({ err
 // Zone names are validated by the contract, but the platform's zone database is the authority on what exists.
 const knownZone = (zone: string): boolean => { try { new Intl.DateTimeFormat('en-US', { timeZone: zone }); return true; } catch { return false; } };
 
-const invoke = async (rpc: Rpc | null, doName: string, operation: string, payload: string): Promise<unknown> => {
+export const invokeHealth = async (rpc: Rpc | null, doName: string, operation: string, payload: string): Promise<unknown> => {
   if (!rpc) return null;
   try { return await rpc(`health_${operation}`, `health.${operation}.${doName}.${md5Hex(payload)}`, { p_do_name: doName, p_payload: payload }); } catch { return null; }
 };
@@ -108,7 +109,7 @@ const scores = async (input: AppHealthInput): Promise<Response> => {
     console.error('app health scores reason');
     return refuse('unavailable');
   };
-  const result = asObject(await invoke(rpc, doName, 'scores_read', JSON.stringify(query.data)));
+  const result = asObject(await invokeHealth(rpc, doName, 'scores_read', JSON.stringify(query.data)));
   if (result?.error === 'not_linked') return nothing('not_linked');
   const failed = failure(result);
   if (failed) return failed;
@@ -132,8 +133,8 @@ const recompute = ({ rpc, doName, defer, compute, readDemand, notifyZoneChange }
   const receipt = healthIngestReceiptV1Schema.safeParse(result);
   if (!defer || !compute || !receipt.success || receipt.data.replayed || receipt.data.accepted + receipt.data.deleted === 0) return;
   defer(produceHealthScores({
-    readSeries: range => invoke(rpc, doName, 'series_read', JSON.stringify(range)),
-    writeContext: payload => invoke(rpc, doName, 'context_write', payload),
+    readSeries: range => invokeHealth(rpc, doName, 'series_read', JSON.stringify(range)),
+    writeContext: payload => invokeHealth(rpc, doName, 'context_write', payload),
     compute,
     ...(readDemand ? { readDemand } : {}),
     ...(notifyZoneChange ? { onZoneChange: notifyZoneChange } : {}),
@@ -148,7 +149,13 @@ export const handleAppHealth = async (input: AppHealthInput): Promise<Response> 
     '/consents/withdraw': ['consent_withdraw', healthConsentWithdrawV1Schema, healthConsentChangeV1Schema],
     '/ingest': ['ingest', healthIngestV1Schema, healthIngestReceiptV1Schema],
   };
-  if (route === '/consents' && request.method === 'GET') return settle(await invoke(rpc, doName, 'consent_list', '{}'), healthConsentListV1Schema);
+  if (route === '/consents' && request.method === 'GET') {
+    // A build that does not name health revision 2 parses the list strictly and cannot read a provider's rows, so it is shown none.
+    const listed = await invokeHealth(rpc, doName, 'consent_list', '{}');
+    const rows = asObject(listed)?.consents;
+    const revision = appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'health');
+    return settle(Array.isArray(rows) ? { consents: healthConsentListAtRevisionV1(rows.filter((row): row is { source: string } => typeof asObject(row)?.source === 'string'), revision) } : listed, healthConsentListV1Schema);
+  }
   if (route === '/scores') return request.method === 'GET' ? scores(input) : refuse('unavailable', 405);
   const write = writes[route];
   if (!write) return refuse('unavailable', 404);
@@ -157,7 +164,9 @@ export const handleAppHealth = async (input: AppHealthInput): Promise<Response> 
   const body = await readJson(request, requestSchema, readBody);
   if ('response' in body) return body.response;
   if (operation === 'ingest' && !knownZone((body.data as { timezone: string }).timezone)) return refuse('invalid_request');
-  const result = await invoke(rpc, doName, operation, JSON.stringify(body.data));
+  // A provider's readings come from Waldo's own sync of that provider, never from an app upload that claims its name.
+  if (operation === 'ingest' && isHealthProviderSourceV1((body.data as { source: string }).source)) return refuse('invalid_request');
+  const result = await invokeHealth(rpc, doName, operation, JSON.stringify(body.data));
   if (operation === 'ingest') recompute(input, result, (body.data as { timezone: string }).timezone);
   return settle(result, responseSchema);
 };

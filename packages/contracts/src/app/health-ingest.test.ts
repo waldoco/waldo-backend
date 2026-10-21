@@ -18,9 +18,9 @@ describe('health consent', () => {
     rejected(healthConsentGrantV1Schema, [{ ...grant, source: '*' }, { ...grant, source: 'oura' }, { ...grant, purpose: 'all' }, { ...grant, version: String(HEALTH_CONSENT_VERSION_V1) }, { ...grant, version: HEALTH_CONSENT_VERSION_V1 - 1 }, { ...grant, age_attested_18_plus: false }, { ...grant, owner_id: 'other-owner' }, { ...grant, expected_epoch: -1 }, { ...grant, request_id: 'short' }]);
     expect(healthConsentWithdrawV1Schema.safeParse({ request_id: 'withdraw-health-1', source: 'samsung', purpose: 'model_processing', expected_epoch: 1 }).success).toBe(true);
   });
-  it('takes every source the app can read, and no server-side vendor', () => {
-    for (const source of ['apple', 'samsung', 'health_connect']) expect(healthConsentGrantV1Schema.safeParse({ ...grant, source }).success, source).toBe(true);
-    rejected(healthConsentGrantV1Schema, [{ ...grant, source: 'garmin' }, { ...grant, source: 'whoop' }]);
+  it('takes every source the app can read and the one provider the backend syncs, and no other vendor', () => {
+    for (const source of ['apple', 'samsung', 'health_connect', 'whoop']) expect(healthConsentGrantV1Schema.safeParse({ ...grant, source }).success, source).toBe(true);
+    rejected(healthConsentGrantV1Schema, [{ ...grant, source: 'garmin' }, { ...grant, source: 'oura' }]);
   });
   it('carries the copy version that names intraday window summaries', () => {
     expect(HEALTH_CONSENT_VERSION_V1).toBe(2);
