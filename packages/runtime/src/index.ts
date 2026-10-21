@@ -24,13 +24,11 @@ import type { GatewaySecretBinding } from './llm/gateway';
 // The entry exports only Durable Object classes and the default handler. `wrangler dev --local`
 // rejects constants or arrays exported from the Worker entry, so helpers are imported from their
 // own modules, never re-exported here (pinned by test/worker-entry-exports.test.ts).
-export { RunLoopDO, RuntimeProbeDO } from './retired-durable-objects';
+export { RunLoopDO, RuntimeProbeDO, TracerDO } from './retired-durable-objects';
 export { DeviceBridgeDO } from './devices/device-bridge-do';
 export { IMessageBridgeDO } from './channels/imessage/bridge-do';
 export { OwnerDO } from './channels/owner-do';
-export { TracerDO } from './tracer/tracer-do';
-import type { RunLoopDO, RuntimeProbeDO } from './retired-durable-objects';
-import type { TracerDO } from './tracer/tracer-do';
+import type { RunLoopDO, RuntimeProbeDO, TracerDO } from './retired-durable-objects';
 import type { IMessageBridgeDO } from './channels/imessage/bridge-do';
 import { handleIMessageHost, isIMessageHostPath } from './channels/imessage/http';
 

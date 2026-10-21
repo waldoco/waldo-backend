@@ -18,7 +18,7 @@ import {
   SqliteTemporalRecallGateway,
 } from '../src/context-composer/sqlite';
 import { provisionDoSchema } from '../src/do-schema';
-import type { RuntimeProbeDO } from '../src/index';
+import type { TestStorageDO } from './support/worker-entry';
 import type { ResolvedSkillBudget } from '../src/skills/budget';
 import { createTestOnlyTrustedLocalRecallGateway } from './support/test-only-trusted-local-recall';
 
@@ -71,9 +71,9 @@ function source(source_key: string, overrides: Partial<ContextSource> = {}): Con
   };
 }
 
-function runtimeStub(): DurableObjectStub<RuntimeProbeDO> {
+function runtimeStub(): DurableObjectStub<TestStorageDO> {
   sequence += 1;
-  return env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName(`context-composer-sqlite-${sequence}`));
+  return env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`context-composer-sqlite-${sequence}`));
 }
 
 function envelope(principal_ref: string, tenant_ref = TENANT) {
