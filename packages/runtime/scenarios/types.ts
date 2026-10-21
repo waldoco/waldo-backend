@@ -59,6 +59,10 @@ export type Scenario = Readonly<{
     // The google client resolves to null: every google tool returns the not_connected auth
     // failure and the connect offer seam fires.
     googleNotConnected?: boolean;
+    // The owner's spend so far this month, read against MONTHLY_SPEND_CEILING_USD at each turn's start.
+    spentUsd?: number;
+    // Offer a browse_page fixture whose page reads 'fixture page'.
+    browse?: boolean;
   }>;
   assert?: Readonly<{
     mustCall?: readonly string[];
