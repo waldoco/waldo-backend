@@ -18,7 +18,7 @@ How the build meets it:
 
 - Storage in the health plane and use by the AI model are authorized by the owner, expressly, through a consent purpose of their own,
   `provider_terms` on source `whoop`, separate from `storage_compute`. The database refuses a WHOOP reading, and refuses a
-  `storage_compute` grant for WHOOP, while that authorization is not live. Withdrawing it withdraws the source and purges what it stored.
+  `storage_compute` grant for WHOOP, while that authorization is not live. Withdrawing it withdraws the source and purges what it stored (see below for what it leaves).
 - WHOOP data is never used to create, develop, test, train, fine-tune or improve any model, prompt or eval. The tests, fakes and
   eval cases for WHOOP use synthetic values only (`packages/runtime/test/fixtures/whoop-synthetic.ts`). No recording of a real
   account is committed, and none may be used for a model or prompt change.
@@ -61,7 +61,10 @@ Owner decision for Oura (pick one):
 - Webhook: `POST /events/whoop`, signature `X-WHOOP-Signature` = base64(HMAC-SHA256(timestamp + raw body, client secret)), checked against the
   raw body; deduped on `trace_id`. WHOOP can miss a webhook, so the daily sync reconciles.
 - Disconnect: `POST /app/v1/health/providers/disconnect` revokes at WHOOP (`DELETE /v2/user/access`), removes the saved access, cancels
-  the sync entry. Withdrawing the `provider_terms` authorization does the same and purges the stored readings.
+  the sync entry.
+- Withdrawing the `provider_terms` authorization is a separate act in the health plane: the database then refuses new WHOOP readings
+  and purges the stored ones, and the owner object's next sync reads `consent_required` and only re-checks daily. It does not revoke
+  at WHOOP or remove the saved token; the owner disconnects for that. Having withdrawal disconnect as well is a follow-up.
 - Every reading goes through the same `waldo.health_ingest` the app uses. The producer ranks one source per day and keeps a
   baseline per source and per HRV method; WHOOP's `hrv_rmssd_milli` is RMSSD.
 
