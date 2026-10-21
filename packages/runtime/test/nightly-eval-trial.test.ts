@@ -35,10 +35,10 @@ describe('nightly eval trial', () => {
     expect(run.status).toBe('ran');
     expect(run.transcript).toEqual([
       { role: 'owner', text: 'Remind me at 5 to call the bank.' },
-      { role: 'waldo', text: 'Set for 5pm.\n\nDone: reminder set' },
+      { role: 'waldo', surface: 'chat', text: 'Set for 5pm.\n\nDone: reminder set' },
       { role: 'world', text: 'The time is now 2026-09-24T17:00 (Asia/Kolkata).' },
       { role: 'world', text: 'The reminder "call the bank" fires.' },
-      { role: 'waldo', text: 'Time to call the bank.' },
+      { role: 'waldo', surface: 'notification', text: 'Time to call the bank.' },
     ]);
     expect(run.tools).toEqual([{ name: 'set_reminder', ok: true }]);
     expect(run.effects).toEqual([{ kind: 'reminder.set', payload: { note: 'call the bank', at: '2026-09-24T17:00', repeat: 'none' } }]);

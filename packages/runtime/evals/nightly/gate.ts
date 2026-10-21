@@ -12,12 +12,12 @@ export type GateThresholds = Readonly<{
 }>;
 export type GateResult = Readonly<{ ok: boolean; failures: readonly string[] }>;
 
-// Set from the M0 recorded baseline (beta-mvp b3fe8891): 22 scenarios, 3 blocked, no harness errors.
-// A PR that adds, removes or unblocks a scenario moves these numbers in the same diff. Live mode has no pass-rate
-// floor until a live baseline is recorded.
+// Set from the M0 recorded baseline (beta-mvp b3fe8891): 22 scenarios, 3 blocked, no harness errors; raised to 36 by
+// the fourteen voice and safety scenarios, none blocked. A PR that adds, removes or unblocks a scenario moves these
+// numbers in the same diff. Live mode has no pass-rate floor until a live baseline is recorded.
 export const NIGHTLY_THRESHOLDS: Readonly<Record<'recorded' | 'live', GateThresholds>> = {
-  recorded: { min_scenarios: 22, max_blocked: 3, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null },
-  live: { min_scenarios: 22, max_blocked: 3, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null },
+  recorded: { min_scenarios: 36, max_blocked: 3, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null },
+  live: { min_scenarios: 36, max_blocked: 3, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null },
 };
 
 export const SCORECARD_MARKER = '<!-- waldo-eval-scorecard -->';
@@ -41,6 +41,18 @@ export const gateScorecard = (card: Scorecard, limits: GateThresholds): GateResu
   return { ok: failures.length === 0, failures };
 };
 
+// How many graded trials the voice judge and the receipt checks failed, when anything was graded.
+const checkLines = (card: Scorecard): string[] => {
+  if (card.overall.graded === 0) return [];
+  const total = (key: 'voice_failed' | 'receipt_failed') => card.scenarios.reduce((sum, row) => sum + (row[key] ?? 0), 0);
+  const has = (key: 'voice_failed' | 'receipt_failed') => card.scenarios.some((row) => row[key] !== undefined);
+  const lines = [
+    ...(has('voice_failed') ? [`Voice judge: ${total('voice_failed')} graded trials failed the six tests.`] : []),
+    ...(has('receipt_failed') ? [`Receipts: ${total('receipt_failed')} graded trials failed a receipt check.`] : []),
+  ];
+  return lines.length ? [...lines, ''] : [];
+};
+
 export const scorecardMarkdown = (card: Scorecard, gate: GateResult, mode: 'recorded' | 'live'): string => {
   const shown = (value: number | null) => (value === null ? '-' : rate(value));
   const lines = [
@@ -58,6 +70,7 @@ export const scorecardMarkdown = (card: Scorecard, gate: GateResult, mode: 'reco
     ...[['overall', card.overall] as const, ...Object.entries(card.pains)].map(([scope, rates]) =>
       `| ${scope} | ${rates.scenarios} | ${rates.graded} | ${shown(rates.pass_rate)} | ${shown(rates.pass_k_rate)} |`),
     '',
+    ...checkLines(card),
     '<details><summary>Scenarios</summary>',
     '',
     '| Scenario | Pain | Status | Passed | Failed | Ungraded |',
