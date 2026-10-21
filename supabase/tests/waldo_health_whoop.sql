@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(25);
+select plan(30);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -66,6 +66,20 @@ update waldo.connections set status='revoked',revoked_at=now() where provider='w
 select is((select count(*)::int from pg_temp.route('whoop','10129')),0,'a revoked connection no longer routes');
 select lives_ok($$insert into waldo.connections(owner_id,provider,account,secret_id) values ('b3000000-0000-0000-0000-0000000000b3','whoop','10129',gen_random_uuid())$$,'and its account can be linked again');
 select throws_ok($$select waldo.health_provider_route('whoop','10129',extract(epoch from now())::bigint,'0000')$$,'42501',null,'an unsigned route call is refused');
+
+-- The attempt a WHOOP callback has to match is a connect session: single use, and only the hash of the state is stored.
+create function pg_temp.sess(op text,message text,hash text) returns jsonb language plpgsql as $$
+declare a bigint:=extract(epoch from now())::bigint; r jsonb;
+begin
+  if op='issue' then return to_jsonb(waldo.connect_session_issue('whoop-owner-a','whoop','app',hash,a,pg_temp.sig('connsess.issue.whoop-owner-a.whoop.app.'||hash,a)));
+  elsif op='resolve' then return waldo.connect_session_resolve(hash,a,pg_temp.sig('connsess.resolve.'||hash,a));
+  else return to_jsonb(waldo.connect_session_complete(hash,a,pg_temp.sig('connsess.complete.'||hash,a))); end if;
+end $$;
+select isnt(pg_temp.sess('issue','', repeat('a',64)),'null'::jsonb,'a WHOOP attempt can be issued');
+select is(pg_temp.sess('resolve','',repeat('a',64))->>'do_name','whoop-owner-a','and the callback state resolves to the owner who started it');
+select is(pg_temp.sess('resolve','',repeat('b',64)),null,'a state nobody started resolves to nothing');
+select is(pg_temp.sess('complete','',repeat('a',64)),'true'::jsonb,'a linked attempt completes once');
+select is(pg_temp.sess('resolve','',repeat('a',64))->>'status','completed','and a reloaded callback sees it completed');
 
 select * from finish();
 rollback;

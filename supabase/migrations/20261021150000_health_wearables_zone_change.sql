@@ -392,3 +392,8 @@ begin
 end $$;
 revoke all on function waldo.health_provider_route(text, text, bigint, text) from public;
 grant execute on function waldo.health_provider_route(text, text, bigint, text) to anon;
+
+-- A WHOOP connection starts from the app, so the attempt a callback must match is a connect session like Google's:
+-- single use, thirty minutes, only the hash of the state stored.
+alter table waldo.connect_sessions drop constraint connect_sessions_provider_check;
+alter table waldo.connect_sessions add constraint connect_sessions_provider_check check (provider in ('google','whoop'));

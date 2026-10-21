@@ -16,7 +16,8 @@ const BACKFILL_DAYS = 30;
 const WINDOW_DAYS = 7;
 const RECONCILE_DAYS = 3;
 const DAY_MS = 86_400_000;
-const SYNC_EVERY_MS = DAY_MS;
+export const WHOOP_SYNC_EVERY_MS = DAY_MS;
+const SYNC_EVERY_MS = WHOOP_SYNC_EVERY_MS;
 const RETRY_MS = 15 * 60_000;
 const PAGE_LIMIT = 20;
 const BATCH_MAX = 128;
@@ -29,7 +30,8 @@ type Rpc = (fn: string, message: string, args: Record<string, string | number>) 
 type Kv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void; delete(key: string): boolean; list<T>(options: { prefix: string }): Iterable<[string, T]> }>;
 export type WhoopLog = Readonly<{ hop: 'whoop'; ok: boolean; code: string }>;
 export type WhoopOwnerDeps = Readonly<{
-  doName: string;
+  // Read when used: the owner object learns its own name after it is built.
+  doName(): string;
   rpc: Rpc | null;
   client: WhoopClient | null;
   kv: Kv;
@@ -69,12 +71,13 @@ const sha256 = async (text: string) => hex(await crypto.subtle.digest('SHA-256',
 const record = (value: unknown): Record<string, unknown> | null => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null);
 
 export const whoopOwner = (deps: WhoopOwnerDeps) => {
-  const { doName, kv, client } = deps;
+  const { kv, client } = deps;
+  const doName = () => deps.doName();
   const connection = (): Conn | null => kv.get<Conn>('whoop:conn') ?? null;
   const cursor = (): Cursor => ({ ...FRESH, ...(kv.get<Cursor>('whoop:cursor') ?? {}) });
   const rpc = async (fn: string, message: string, args: Record<string, string | number>): Promise<unknown> => {
     if (!deps.rpc) throw new Failed('no database');
-    return deps.rpc(fn, message, { p_do_name: doName, ...args });
+    return deps.rpc(fn, message, { p_do_name: doName(), ...args });
   };
 
   // ---- Tokens: one refresh at a time, saved before use ----
@@ -90,19 +93,19 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
   };
   const store = async (account: string, tokens: WhoopTokens): Promise<string> => {
     const secret = secretJson(tokens);
-    const id = await rpc('connection_store', `connstore.${doName}.${SOURCE}.${account}.${WHOOP_SCOPES}.${await sha256(secret)}`, { p_provider: SOURCE, p_account: account, p_scopes: WHOOP_SCOPES, p_secret: secret });
+    const id = await rpc('connection_store', `connstore.${doName()}.${SOURCE}.${account}.${WHOOP_SCOPES}.${await sha256(secret)}`, { p_provider: SOURCE, p_account: account, p_scopes: WHOOP_SCOPES, p_secret: secret });
     if (typeof id !== 'string') throw new Failed('token not saved');
     return id;
   };
   const markFailing = async (conn: Conn, reason: string): Promise<void> => {
     cache = null;
-    try { await rpc('connection_health', `connhealth.${doName}.${conn.id}.${reason}`, { p_connection: conn.id, p_error: reason }); } catch { /* the sync stops either way */ }
+    try { await rpc('connection_health', `connhealth.${doName()}.${conn.id}.${reason}`, { p_connection: conn.id, p_error: reason }); } catch { /* the sync stops either way */ }
   };
   const tokensFor = async (conn: Conn, force = false): Promise<WhoopTokens> => {
     if (!force && cache?.id === conn.id && cache.tokens.expiresAt - 60_000 > deps.now()) return cache.tokens;
     if (refreshing) return refreshing;
     const work = (async (): Promise<WhoopTokens> => {
-      const current = parseSecret(await rpc('connection_secret', `connsecret.${doName}.${conn.id}`, { p_connection: conn.id }));
+      const current = parseSecret(await rpc('connection_secret', `connsecret.${doName()}.${conn.id}`, { p_connection: conn.id }));
       if (!current) { cache = null; throw new NeedsReconnect('no saved access'); }
       if (!force && current.expiresAt - 60_000 > deps.now()) { cache = { id: conn.id, tokens: current }; return current; }
       let fresh: WhoopTokens;
@@ -140,7 +143,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
 
   // ---- Consent: the database's answer, read before each sync ----
   const consents = async (): Promise<Readonly<{ terms: boolean; storage: boolean; epoch: number }> | null> => {
-    const answer = record(await invokeHealth(deps.rpc, doName, 'consent_list', '{}'));
+    const answer = record(await invokeHealth(deps.rpc, doName(), 'consent_list', '{}'));
     const rows = Array.isArray(answer?.consents) ? answer!.consents.map(record) : null;
     if (!rows) return null;
     const live = (purpose: string) => rows.find(row => row?.source === SOURCE && row.purpose === purpose && row.status === 'granted');
@@ -161,7 +164,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
       const batchDeletions = slice.flatMap(change => 'deletion' in change ? [change.deletion] : []);
       // The same changes always make the same request id, so a retry is a replay the database answers, never a second write.
       const id = `whoop-${md5Hex(slice.map(change => 'sample' in change ? `${change.sample.sample_id}@${change.sample.revision}` : `${change.deletion.sample_id}@${change.deletion.revision}x`).sort().join('|'))}`;
-      const send = (consentEpoch: number) => invokeHealth(deps.rpc, doName, 'ingest', JSON.stringify({
+      const send = (consentEpoch: number) => invokeHealth(deps.rpc, doName(), 'ingest', JSON.stringify({
         request_id: id, source: SOURCE, consent_epoch: consentEpoch, timezone: deps.timezone(), anchor_before: null, anchor_after: `whoop:${id}`, samples: batchSamples, deletions: batchDeletions,
       }));
       let answer = record(await send(epoch));
@@ -215,7 +218,9 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
 
   const finish = async (result: SyncResult, code: string, next: number | null): Promise<SyncResult> => {
     deps.log({ hop: 'whoop', ok: result === 'synced' || result === 'idle', code });
+    // The entry is a daily interval, so the scheduler keeps it armed after this run; a sooner `next` is a retry, and no `next` ends it.
     if (next !== null) await deps.arm(next);
+    else await deps.disarm();
     return result;
   };
 
@@ -294,7 +299,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
       if (!consent) return { error: 'unavailable' };
       if (!consent.terms || !consent.storage) return { error: 'consent_required' };
       const state = newState(), hash = await sha256(state);
-      const session = await rpc('connect_session_issue', `connsess.issue.${doName}.${SOURCE}.${CHANNEL}.${hash}`, { p_provider: SOURCE, p_channel: CHANNEL, p_ticket_hash: hash });
+      const session = await rpc('connect_session_issue', `connsess.issue.${doName()}.${SOURCE}.${CHANNEL}.${hash}`, { p_provider: SOURCE, p_channel: CHANNEL, p_ticket_hash: hash });
       if (typeof session !== 'string') return { error: 'unavailable' };
       return { authorize_url: client.authorizeUrl(state), expires_at: deps.now() + ATTEMPT_TTL_MS };
     } catch { return { error: 'unavailable' }; }
@@ -307,7 +312,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
       const account = await client.profile(tokens.access);
       const previous = connection();
       // One WHOOP account per owner: a different account replaces the old connection, whose saved access is dropped.
-      if (previous && previous.account !== account) await rpc('connection_revoke', `connrevoke.${doName}.${previous.id}`, { p_connection: previous.id }).catch(() => undefined);
+      if (previous && previous.account !== account) await rpc('connection_revoke', `connrevoke.${doName()}.${previous.id}`, { p_connection: previous.id }).catch(() => undefined);
       let id: string;
       try { id = await store(account, tokens); }
       catch (error) { return error instanceof OwnerDirectoryError && error.sqlState === '23505' ? 'already_linked' : 'failed'; }
@@ -329,7 +334,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
     const conn = connection();
     if (!conn) return { provider: 'whoop', state: 'not_connected', last_sync_at };
     try {
-      const listed = await rpc('connection_list', `connlist.${doName}`, {});
+      const listed = await rpc('connection_list', `connlist.${doName()}`, {});
       const row = Array.isArray(listed) ? listed.map(record).find(item => item?.id === conn.id) : null;
       if (!row) return { provider: 'whoop', state: 'not_connected', last_sync_at };
       if (row.status === 'failing') return { provider: 'whoop', state: 'needs_reconnect', last_sync_at };
@@ -345,7 +350,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
     let revoked = false;
     if (conn && client) {
       try { revoked = await withAccess(access => client.revoke(access)); } catch { revoked = false; }
-      try { await rpc('connection_revoke', `connrevoke.${doName}.${conn.id}`, { p_connection: conn.id }); } catch { /* the next call to the provider fails closed on a missing secret */ }
+      try { await rpc('connection_revoke', `connrevoke.${doName()}.${conn.id}`, { p_connection: conn.id }); } catch { /* the next call to the provider fails closed on a missing secret */ }
     }
     cache = null;
     for (const key of ['whoop:conn', 'whoop:cursor']) kv.delete(key);

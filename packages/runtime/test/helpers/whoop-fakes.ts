@@ -140,7 +140,7 @@ export const harness = (over: { world?: World; plane?: Plane; clock?: { now: num
   const logs: WhoopLog[] = [], armed: number[] = [], produced = { count: 0 }, disarmed = { count: 0 };
   const doName = over.doName ?? 'owner-w';
   const owner = whoopOwner({
-    doName, rpc: planeRpc(plane, doName), client: over.configured === false ? null : whoopClient(CONFIG, whoopFetch(world, clock), () => clock.now), now: () => clock.now, timezone: () => 'Europe/Berlin',
+    doName: () => doName, rpc: planeRpc(plane, doName), client: over.configured === false ? null : whoopClient(CONFIG, whoopFetch(world, clock), () => clock.now), now: () => clock.now, timezone: () => 'Europe/Berlin',
     kv: { get: <T>(key: string) => kv.get(key) as T | undefined, put: (key, value) => { kv.set(key, value); }, delete: key => kv.delete(key), list: <T>({ prefix }: { prefix: string }) => [...kv].filter(([key]) => key.startsWith(prefix)) as [string, T][] },
     produce: over.produce ?? (async () => { produced.count += 1; }), arm: async at => { armed.push(at); }, disarm: async () => { disarmed.count += 1; }, log: line => { logs.push(line); },
   });

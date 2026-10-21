@@ -12,6 +12,13 @@ import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/ap
 import { calendarDemand, demandCode, type DemandAnswer, type DemandRequest } from '../health/calendar-demand';
 import { CALENDAR_DEMAND_PATH, verifiedDemandRequest } from '../health/calendar-demand-route';
 import { HEALTH_ZONE_CHANGE_PATH, verifiedZoneChange } from '../health/zone-change-route';
+import { dispatchProviderCall, HEALTH_PROVIDER_PATH, verifiedProviderCall } from '../health/providers/provider-route';
+import { whoopClient } from '../health/providers/whoop-client';
+import { whoopOwner, WHOOP_SYNC_EVERY_MS, WHOOP_SYNC_ID, type WhoopOwner } from '../health/providers/whoop-owner';
+import { whoopConfig } from '../health/providers/whoop-routes';
+import { produceHealthScores } from '../health/producer';
+import { computeDailyScores } from '../health/scores';
+import { invokeHealth } from './app-health';
 import { comingItemsFrom, healthCardBudget, healthTriggerBook, healthTriggerDueAt, runHealthTrigger, HEALTH_TRIGGER_FORMAT, HEALTH_TRIGGER_ID } from '../health/trigger';
 import { ownerJobAdmission, surfaceOwnerAdmission, type SurfaceOwnerBinding } from '../identity/surface-owner-admission';
 import { localOwnerBinding, ownerBindingCurrent, verifyOwnerBinding } from '../identity/owner-binding';
@@ -990,6 +997,28 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     await this.setup('app').healthChanged(day);
     return Response.json({ok:true},{headers});
   }
+  // Worker-to-DO only: a cloud wearable's connect, callback, status, disconnect and webhook hint. Verified like the zone notice.
+  private async healthProvider(request: Request): Promise<Response> {
+    const headers={'cache-control':'no-store'};
+    const call=await verifiedProviderCall(request,this.env.WALDO_ROUTER_HMAC_SECRET,name=>this.env.OWNER_DO?.idFromName(name).toString()===this.ctx.id.toString()&&this.ctx.storage.kv.get<string>('do_name')===name);
+    if(!call)return Response.json({error:'unavailable'},{status:403,headers});
+    try{const answer=await dispatchProviderCall(this.providerOwner(),call.op,call.body);return Response.json(answer.json,{status:answer.status,headers});}
+    catch{return Response.json({error:'unavailable'},{status:503,headers});}
+  }
+  // One WHOOP owner per object, so its token refresh stays single-file across every runtime the object builds.
+  private whoop?: WhoopOwner;
+  private providerOwner(): WhoopOwner {
+    const config=whoopConfig(this.env);
+    return this.whoop??=whoopOwner({
+      doName:()=>this.ctx.storage.kv.get<string>('do_name')??'',rpc:signedRpc(this.env),client:config?whoopClient(config,fetch,Date.now):null,kv:this.ctx.storage.kv,now:Date.now,
+      timezone:()=>this.setup('app').timezone,
+      produce:()=>{const app=this.setup('app'),rpc=signedRpc(this.env),doName=this.ctx.storage.kv.get<string>('do_name')??'';
+        return produceHealthScores({readSeries:range=>invokeHealth(rpc,doName,'series_read',JSON.stringify(range)),writeContext:payload=>invokeHealth(rpc,doName,'context_write',payload),compute:computeDailyScores,readDemand:range=>app.calendarDemand(range),onZoneChange:app.healthChanged},{now:Date.now(),timezone:app.timezone});},
+      arm:async at=>{await this.setup('app').scheduler.schedule({id:WHOOP_SYNC_ID,kind:'provider_sync',occurrenceAt:at,dueAt:at,payloadRefs:{id:WHOOP_SYNC_ID},recurrence:{type:'interval',every_ms:WHOOP_SYNC_EVERY_MS,phase_ms:at%WHOOP_SYNC_EVERY_MS}});},
+      disarm:async()=>{await this.setup('app').scheduler.cancelReadable(WHOOP_SYNC_ID);},
+      log:line=>this.setup('app').log({trace:`whoop:${Date.now()}`,hop:line.hop,ms:0,ok:line.ok,code:line.code}),
+    });
+  }
   private async appRoute(request: Request): Promise<Response> {
     const path=new URL(request.url).pathname,name=request.headers.get('x-waldo-do-name')??'',hash=request.headers.get('x-waldo-app-session-hash')??'';
     const fail=(status=403)=>Response.json({error:'unavailable'},{status,headers:{'cache-control':'no-store'}});
@@ -1123,6 +1152,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if(path===APP_SESSION_FENCE_PATH)return this.appSessionFence(request);
     if(path===CALENDAR_DEMAND_PATH)return this.calendarDemand(request);
     if(path===HEALTH_ZONE_CHANGE_PATH)return this.healthZoneChange(request);
+    if(path===HEALTH_PROVIDER_PATH)return this.healthProvider(request);
     if(path.startsWith('/app/v1/'))return this.appRoute(request);
     if(path==='/enqueue-link')return this.enqueueLink(request);
     if(this.ctx.storage.kv.get(LINK_MODE))return new Response('not found',{status:404});
@@ -2069,7 +2099,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
         // Watch upkeep reaches no responder, so it runs beside the owner jobs, not as one.
         const jobs = { ...Object.fromEntries(Object.entries(executors).map(([kind, run]) =>
-          [kind, (entry: ScheduleEntry) => this.asOwnerJob(kind as OwnerJob, `${entry.id}:${entry.occurrence_at}`, () => run(entry))])) as typeof executors, watch_upkeep: watches };
+          [kind, (entry: ScheduleEntry) => this.asOwnerJob(kind as OwnerJob, `${entry.id}:${entry.occurrence_at}`, () => run(entry))])) as typeof executors, watch_upkeep: watches, provider_sync: async () => { await this.providerOwner().sync(); } };
         const started = Date.now();
         let fired: readonly ScheduleEntry[];
         try {
