@@ -8,6 +8,10 @@
 export class McpAuthError extends Error {
   constructor(public readonly status: number, message: string) { super(message); this.name = 'McpAuthError'; }
 }
+// Any other non-OK HTTP reply. The status lets a caller tell a missing server (404) from an outage.
+export class McpHttpError extends Error {
+  constructor(public readonly status: number, message: string) { super(message); this.name = 'McpHttpError'; }
+}
 import { mcpErrorDiagnostic, type McpErrorDiagnostic } from './mcp-error-diagnostic.ts';
 export class McpToolError extends Error {
   constructor(message: string, public readonly diagnostic?: McpErrorDiagnostic) { super(message); }
@@ -42,7 +46,7 @@ export const callMcpTransport = async (server: McpTransportServer, tool: string,
     clientInfo: { name: 'waldo', version: 'mvp' },
   }, null);
   if (init.response.status === 401 || init.response.status === 403) throw new McpAuthError(init.response.status, `mcp initialize ${init.response.status}`);
-  if (!init.response.ok) throw new Error(`mcp initialize ${init.response.status}`);
+  if (!init.response.ok) throw new McpHttpError(init.response.status, `mcp initialize ${init.response.status}`);
   // Version negotiation (spec: server answers with the version it will use; revisions are
   // date-stamped, latest seen 2025-11-25). We speak the tools/call core unchanged across
   // revisions, so adopt whatever the server returns and carry it through for transparency.
@@ -53,7 +57,7 @@ export const callMcpTransport = async (server: McpTransportServer, tool: string,
   if (!notified.response.ok && notified.response.status !== 202) throw new Error(`mcp initialized ${notified.response.status}`);
   const called = await rpc('tools/call', { name: tool, arguments: args }, session);
   if (called.response.status === 401 || called.response.status === 403) throw new McpAuthError(called.response.status, `mcp tools/call ${called.response.status}`);
-  if (!called.response.ok) throw new Error(`mcp tools/call ${called.response.status}`);
+  if (!called.response.ok) throw new McpHttpError(called.response.status, `mcp tools/call ${called.response.status}`);
   const parsed = JSON.parse(extractPayload(await called.response.text())) as { result?: { content?: unknown; isError?: boolean }; error?: { message?: string } };
   if (parsed.error) throw new Error(`mcp error: ${parsed.error.message ?? 'unknown'}`);
   const result = parsed.result ?? {};

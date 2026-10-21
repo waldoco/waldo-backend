@@ -57,7 +57,7 @@ it('reserves one allocation including failed-close time and does not replenish i
 it('builds the concrete driver from a signed canonical binding and rejects the legacy route projection', async () => {
   const f = await fixture();
   f.rows.set('do_name', f.binding.do_name); f.rows.set('telegram_subject', f.binding.subject);
-  const env = { WALDO_ENVIRONMENT: 'staging', WALDO_OWNER_DO_NAMESPACE: 'namespace', SUPABASE_PROJECT_URL: 'https://database.example', SUPABASE_PUBLISHABLE_KEY: 'public-test-key', WALDO_ROUTER_HMAC_SECRET: 'test-secret', TELEGRAM_OWNER_DO: { idFromName: () => ({ toString: () => 'physical' }) } as unknown as DurableObjectNamespace, BROWSER: { fetch: vi.fn(() => { throw Error('provider must not allocate'); }) } as unknown as import('@cloudflare/playwright').BrowserWorker };
+  const env = { WALDO_ENVIRONMENT: 'staging', WALDO_OWNER_DO_NAMESPACE: 'namespace', SUPABASE_PROJECT_URL: 'https://database.example', SUPABASE_PUBLISHABLE_KEY: 'public-test-key', WALDO_ROUTER_HMAC_SECRET: 'test-secret', OWNER_DO: { idFromName: () => ({ toString: () => 'physical' }) } as unknown as DurableObjectNamespace, BROWSER: { fetch: vi.fn(() => { throw Error('provider must not allocate'); }) } as unknown as import('@cloudflare/playwright').BrowserWorker };
   const calls: { url: string; body: Record<string, unknown> }[] = [];
   let response: unknown = f.binding;
   const fetcher: typeof fetch = async (url, init) => { calls.push({ url: String(url), body: JSON.parse(String(init?.body)) }); return Response.json(response); };
@@ -96,7 +96,7 @@ it('builds the concrete driver from a signed canonical binding and rejects the l
 it('retains a failed allocation reservation and does not attempt a second provider launch', async () => {
   const f = await fixture(); f.rows.set('do_name', f.binding.do_name); f.rows.set('telegram_subject', f.binding.subject);
   const provider = vi.fn(() => { throw Error('provider must not run'); });
-  const env = { WALDO_ENVIRONMENT: 'staging', WALDO_OWNER_DO_NAMESPACE: 'namespace', SUPABASE_PROJECT_URL: 'https://database.example', SUPABASE_PUBLISHABLE_KEY: 'public-test-key', WALDO_ROUTER_HMAC_SECRET: 'test-secret', TELEGRAM_OWNER_DO: { idFromName: () => ({ toString: () => 'physical' }) } as unknown as DurableObjectNamespace, BROWSER: { fetch: provider } as unknown as import('@cloudflare/playwright').BrowserWorker };
+  const env = { WALDO_ENVIRONMENT: 'staging', WALDO_OWNER_DO_NAMESPACE: 'namespace', SUPABASE_PROJECT_URL: 'https://database.example', SUPABASE_PUBLISHABLE_KEY: 'public-test-key', WALDO_ROUTER_HMAC_SECRET: 'test-secret', OWNER_DO: { idFromName: () => ({ toString: () => 'physical' }) } as unknown as DurableObjectNamespace, BROWSER: { fetch: provider } as unknown as import('@cloudflare/playwright').BrowserWorker };
   const fetcher: typeof fetch = async url => String(url).includes('/rpc/') ? Response.json(f.binding) : new Response('fixture unavailable', { status: 503 });
   const options = { env, storage: f.storage, actualDoId: 'physical', now: f.now, fetcher, loadSdk: async () => { throw Error('SDK must not load during preparation'); }, policy: { enabled: true, doName: f.binding.do_name, fixtureOrigin: f.manifest.origin } };
   await expect((await browserProductionConfiguration(options))!.driver.start(60000)).rejects.toThrow('session unavailable');
@@ -147,7 +147,7 @@ it('uses the explicit SDK loader only for an authorized provider allocation', as
   const browser = {} as import('@cloudflare/playwright').BrowserWorker;
   const acquire = vi.fn(async () => ({ sessionId: 'retained-session' }));
   const loadSdk = vi.fn(async () => ({ acquire }) as never);
-  const env = { WALDO_ENVIRONMENT: 'staging', WALDO_OWNER_DO_NAMESPACE: 'namespace', SUPABASE_PROJECT_URL: 'https://database.example', SUPABASE_PUBLISHABLE_KEY: 'public-test-key', WALDO_ROUTER_HMAC_SECRET: 'test-secret', TELEGRAM_OWNER_DO: { idFromName: () => ({ toString: () => 'physical' }) } as unknown as DurableObjectNamespace, BROWSER: browser };
+  const env = { WALDO_ENVIRONMENT: 'staging', WALDO_OWNER_DO_NAMESPACE: 'namespace', SUPABASE_PROJECT_URL: 'https://database.example', SUPABASE_PUBLISHABLE_KEY: 'public-test-key', WALDO_ROUTER_HMAC_SECRET: 'test-secret', OWNER_DO: { idFromName: () => ({ toString: () => 'physical' }) } as unknown as DurableObjectNamespace, BROWSER: browser };
   const fetcher: typeof fetch = async url => String(url).includes('/rpc/') ? Response.json(f.binding) : new Response(null, { status: 404 });
   const config = await browserProductionConfiguration({ env, storage: f.storage, actualDoId: 'physical', now: f.now, fetcher, loadSdk,
     policy: { enabled: true, doName: f.binding.do_name, fixtureOrigin: f.manifest.origin } });

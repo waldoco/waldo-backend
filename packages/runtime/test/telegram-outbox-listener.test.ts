@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { TelegramOwnerListener } from '../src/channels/telegram-listener';
 import { TelegramFinalOutbox } from '../src/channels/telegram-final-outbox';
@@ -13,7 +14,7 @@ it.each([60_000, 120_000])('queues final after %sms response with old request bu
     saveOffset: async () => undefined,
     queueFinal: async (turn, payload) => outbox.enqueue({ id: `turn:${turn.updateId}`, trace: 'tg-1', payload, ownerSubject: '7', doName: 'owner-7' }),
   });
-  const pending = listener.handle({ updateId: 1, senderId: 7, chatId: 7, messageId: 2, sentAt: null, text: 'slow' });
+  const pending = listener.handle(ownerTyped({ updateId: 1, senderId: 7, chatId: 7, messageId: 2, sentAt: null, text: 'slow' }));
   await vi.advanceTimersByTimeAsync(delay + 1); expect(await pending).toBe('queued');
   expect(outbox.records()[0]?.status).toBe('pending'); expect(requestSend).not.toHaveBeenCalled(); // no progress message; the final goes through the outbox
   await vi.advanceTimersByTimeAsync(300);
@@ -28,7 +29,7 @@ it('180s responder deadline is not cancellation proof, and does not enqueue late
     respond: async () => { await new Promise(r => setTimeout(r, 180000)); lateWork = true; return 'late'; },
     queueFinal, saveOffset: async () => undefined,
   });
-  const pending = listener.handle({ updateId: 1, senderId: 7, chatId: 7, messageId: null, sentAt: null, text: 'slow' });
+  const pending = listener.handle(ownerTyped({ updateId: 1, senderId: 7, chatId: 7, messageId: null, sentAt: null, text: 'slow' }));
   await vi.advanceTimersByTimeAsync(150001); expect(await pending).toBe('failed');
   await vi.advanceTimersByTimeAsync(30000); expect(lateWork).toBe(true); expect(queueFinal).not.toHaveBeenCalled();
 });

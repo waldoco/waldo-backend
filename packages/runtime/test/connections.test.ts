@@ -34,10 +34,15 @@ describe('google proxy', () => {
       expect(error).toMatchObject({ status: 403, reason: expected });
     }
   });
+  it('asks the proxy for calendar details on every call, so a new proxy maps them only for a Worker that reads them', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ data: { events: [], next_page_token: null, fetched_count: 0, account: { connection_id: 'c-1', email: null }, observed_at: '2026-10-03T04:00:00.000Z' } })));
+    await proxyOf(fetcher).client('do-a', 'c-1').calendarPage!('primary', '2026-10-03T04:00:00Z', '2026-10-03T06:00:00Z', 10, false);
+    expect(JSON.parse(String(sent(fetcher)[1].body))).toMatchObject({ method: 'calendarPage', args: ['primary', '2026-10-03T04:00:00Z', '2026-10-03T06:00:00Z', 10, false], calendar_details: true });
+  });
   it('drops an omitted trailing optional arg instead of sending null across the wire', async () => {
     const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ data: { message_id: 'm1' } })));
     await proxyOf(fetcher).client('do-a', 'c-1', undefined, {id:'approval:fixture'}).sendRaw('raw-mime');
-    expect(JSON.parse(String(sent(fetcher)[1].body))).toEqual({ do_name: 'do-a', op: 'call', connection: 'c-1', method: 'sendRaw', args: ['raw-mime'], intent_id:'approval:fixture' });
+    expect(JSON.parse(String(sent(fetcher)[1].body))).toEqual({ do_name: 'do-a', op: 'call', connection: 'c-1', method: 'sendRaw', args: ['raw-mime'], calendar_details: true, intent_id:'approval:fixture' });
   });
 
 
@@ -71,7 +76,7 @@ describe('google proxy', () => {
     const [url, init] = sent(fetcher);
     expect(url).toBe('https://db.test/functions/v1/connector-proxy');
     const raw = String(init.body);
-    expect(JSON.parse(raw)).toEqual({ do_name: 'do-a', op: 'call', connection: 'c-1', method: 'events', args: ['a', 'b', 5, false] });
+    expect(JSON.parse(raw)).toEqual({ do_name: 'do-a', op: 'call', connection: 'c-1', method: 'events', args: ['a', 'b', 5, false], calendar_details: true });
     const hash = hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw)));
     expect((init.headers as Record<string, string>)['x-waldo-sig']).toBe(await routerSignature('router', at, `proxy.${hash}`));
   });

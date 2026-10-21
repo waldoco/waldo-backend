@@ -3,8 +3,6 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
-import { Journal } from '../src/tracer/journal';
-import { Outbox } from '../src/tracer/outbox';
 
 // KNOWN GAP (docs/planning/FORGET_COVERAGE_AUDIT_2026-10-02.md): claimStore.purge verifies and
 // redacts claims, episodes, backups, spots, core files, cards, day plan and constellation nodes.
@@ -18,7 +16,7 @@ const AT = '2026-10-02T00:00:00Z';
 let seq = 0;
 
 const withStorage = <T>(fn: (storage: DurableObjectStorage) => T) =>
-  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`forget-tracer-${seq++}`)), (_i, state) => fn(state.storage));
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`forget-tracer-${seq++}`)), (_i, state) => fn(state.storage));
 
 const survivors = (sql: SqlStorage) => {
   const n = (table: string, column: string) => sql.exec<{ n: number }>(`SELECT count(*) AS n FROM ${table} WHERE ${column} LIKE ?`, `%${MARKER}%`).one().n;
@@ -88,14 +86,14 @@ describe('forget coverage - tracer and scheduler stores', () => {
       sql.exec(`INSERT INTO held_candidates (user_id, event_id, push_class, candidate_json, hold_until) VALUES ('u', 'e1', 'c', ?, 1)`, payload);
       sql.exec(`INSERT INTO schedule (id, kind, occurrence_at, due_at, recurrence_json, payload_json, status, created_at, updated_at) VALUES ('oneshot', 'reminder', 1, 1, NULL, ?, 'armed', 1, 1), ('recurring', 'reminder', 1, 1, '{"every":"day"}', ?, 'armed', 1, 1)`, payload, payload);
       const result = store.purge([claimId], AT);
-      const deps = { now: () => 2 } as unknown as ConstructorParameters<typeof Journal>[1];
-      const resume = new Journal(sql, deps).findOpenRun();
-      const rows = new Outbox(sql, deps);
+      // The runs a resume would pick up: any journal row not yet terminal.
+      const resume = sql.exec<{ run_id: string }>("SELECT run_id FROM journal WHERE state NOT IN ('DONE', 'FAILED') LIMIT 1").toArray()[0] ?? null;
+      const outboxRows = (run: string) => sql.exec<{ status: string; payload: string }>('SELECT status, payload FROM outbox WHERE run_id = ?', run).toArray();
       return {
         result,
         resume,
         states: Object.fromEntries(sql.exec<{ run_id: string; state: string }>('SELECT run_id, state FROM journal').toArray().map((r) => [r.run_id, r.state])),
-        outbox: Object.fromEntries(['rg', 'rs', 'ra'].map((run) => [run, rows.readRows(run).map((r) => ({ status: r.status, payload: r.payload }))])),
+        outbox: Object.fromEntries(['rg', 'rs', 'ra'].map((run) => [run, outboxRows(run).map((r) => ({ status: r.status, payload: r.payload }))])),
         held: sql.exec<{ n: number }>('SELECT count(*) AS n FROM held_candidates').one().n,
         schedule: sql.exec<{ id: string; payload_json: string }>('SELECT id, payload_json FROM schedule ORDER BY id').toArray(),
       };

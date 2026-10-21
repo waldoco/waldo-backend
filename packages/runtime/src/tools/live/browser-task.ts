@@ -1,6 +1,6 @@
 import { browserTaskContinuationSchema, browseActArgsSchema, type BrowseActArgs, type ToolHandler } from '@waldo/contracts';
 import type { ToolDispatcherContext } from '../dispatcher';
-import type { BrowserSubmitProposal } from '../../channels/approvals';
+import { proposalStatus, type BrowserSubmitProposal, type CardPlacement } from '../../channels/approvals';
 import type { browserTaskContinuity } from '../../channels/browser-task-continuity';
 import type { BrowserSubmitOutcome } from './browser';
 
@@ -12,6 +12,7 @@ export function browserTaskHandler(options: Readonly<{
   legacy: ToolHandler<BrowseActArgs, unknown, ToolDispatcherContext>;
   host(context: ToolDispatcherContext): Promise<BrowserTaskHost | null>;
   propose(payload: BrowserSubmitProposal, context: ToolDispatcherContext): Promise<string>;
+  placement?(proposalId: string): CardPlacement;
   // Fence canonical independent admission before waiting for task cleanup mutex.
   stopAdmission?(context: ToolDispatcherContext, host: BrowserTaskHost): Promise<void>;
 }>): ToolHandler<BrowseActArgs, unknown, ToolDispatcherContext> {
@@ -58,7 +59,7 @@ export function browserTaskHandler(options: Readonly<{
         let proposalId: string;
         proposalId = await options.propose(payload, context); await source!();
         unpublishedNativeHost = undefined;
-        return { ok: true, data: { url: prepared.url, stopped: 'approval_pending', proposal_id: proposalId, binding: prepared.binding }, source_taint: 'external' };
+        return { ok: true, data: { url: prepared.url, stopped: 'approval_pending', status: proposalStatus(options.placement?.(proposalId), 'awaiting owner approval', 'Nothing was submitted.'), proposal_id: proposalId, binding: prepared.binding }, source_taint: 'external' };
       } catch {
         if (unpublishedNativeHost) { try { await unpublishedNativeHost.cancel(context.authenticatedUserId); } catch { /* Cleanup remains fenced and unresolved. */ } }
         return rejected('The browser task could not be observed or updated. Inspect its current state before trying again.');

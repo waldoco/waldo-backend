@@ -1,5 +1,5 @@
-export const CONTRACT_VERSION = '0.2.3';
-export const CAPABILITIES = ['machine_state_query', 'notify_local'] as const;
+export const CONTRACT_VERSION = '0.3.0';
+export const CAPABILITIES = ['machine_state_query', 'notify_local', 'shell_exec', 'session_query', 'session_control'] as const;
 export type Capability = typeof CAPABILITIES[number];
 export const REDEEM_BYTES = 2048;
 export const FRAME_BYTES = 8192;
@@ -7,6 +7,10 @@ export const CLOCK_SKEW_SECONDS = 300;
 export const ONLINE_SECONDS = 90;
 export const PAIRING_SECONDS = 600;
 export const CONSOLE_DEVICES_PATH = '/console/devices';
+// The console shows one copyable code for Kennel: `wp1.<owner UUID>.<43-char pairing code>`.
+// Kennel binds to the owner before redeeming; redeem still receives only the 43-char code and
+// returns the same owner_id, which Kennel verifies.
+export const KENNEL_PAIRING_CODE_PREFIX = 'wp1';
 export const LABEL_BYTES = 120;
 export const IDENTIFIER_BYTES = 128;
 export const OUTBOX_DEPTH_MAX = 1_000_000;
@@ -32,3 +36,7 @@ export const NOTIFY_BODY_BYTES = 1024;
 export const NOTIFY_ISSUE_LIMITS = [{ limit: 5, seconds: 60 }, { limit: 20, seconds: 3600 }] as const;
 export const NOTIFICATION_TITLE = 'Waldo status';
 export const NOTIFICATION_BODY_CHOICES = ['Your Mac is connected.', 'Your Mac needs attention.', 'Status update'] as const;
+
+export const MAC_APPROVAL_TTL_SECONDS = 900;
+export const MAC_DEFAULT_TIMEOUT_SECONDS = 120;
+export const MAC_MAX_TIMEOUT_SECONDS = 600;

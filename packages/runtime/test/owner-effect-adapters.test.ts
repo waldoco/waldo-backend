@@ -8,7 +8,7 @@ import { workspaceToolHandlers } from '../src/tools/live/workspace';
 import type { GoogleClient } from '../src/connectors/google';
 
 it.each(['exact marker', 'missing marker', 'wrong marker'] as const)('calendar response loss reads back a stable event id before replay: %s', async evidence => {
-  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`effect-calendar-readback-${evidence}`));
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`effect-calendar-readback-${evidence}`));
   await runInDurableObject(stub, async (_instance, state) => {
     const effects = ownerEffectLedger(state.storage, () => 1000);
     let sends = 0; let eventId = ''; let marker = '';
@@ -25,7 +25,7 @@ it.each(['exact marker', 'missing marker', 'wrong marker'] as const)('calendar r
 });
 
 it('draft response loss reconciles by host Message-ID and reuses the receipt', async () => {
-  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('effect-draft-readback'));
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('effect-draft-readback'));
   await runInDurableObject(stub, async (_instance, state) => {
     const effects = ownerEffectLedger(state.storage, () => 1000);
     let sends = 0; let messageId = '';
@@ -40,7 +40,7 @@ it('draft response loss reconciles by host Message-ID and reuses the receipt', a
 });
 
 it('workspace response loss reconciles the exact revision without another write', async () => {
-  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('effect-workspace-readback'));
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('effect-workspace-readback'));
   await runInDurableObject(stub, async (_instance, state) => {
     const effects = ownerEffectLedger(state.storage, () => 1000);
     let writes = 0; let operation = '';
@@ -56,7 +56,7 @@ it('workspace response loss reconciles the exact revision without another write'
 });
 
 it('browser commits reserve intent and only settle a host-checked provider receipt', async () => {
-  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('effect-browser-readback'));
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('effect-browser-readback'));
   await runInDurableObject(stub, async (_instance, state) => {
     const effects = ownerEffectLedger(state.storage, () => 1000);
     const desk = approvalDesk(state.storage.sql, { owner: 42, call: async () => ({}), google: async () => null, newId: () => 'one', now: () => 1000, timezone: 'UTC', log: () => {}, effects,

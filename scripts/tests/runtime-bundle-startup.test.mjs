@@ -5,11 +5,12 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+import { parseJsonc } from '../jsonc.mjs';
 
 test('the default production Worker bundle starts without browser activation or Node compatibility', { timeout: 120000 }, async () => {
   const runtime = resolve('packages/runtime');
   const { Miniflare } = createRequire(resolve(realpathSync(resolve(runtime, 'node_modules/@cloudflare/vitest-pool-workers')), 'package.json'))('miniflare');
-  const config = JSON.parse(readFileSync(resolve(runtime, 'wrangler.jsonc'), 'utf8').replace(/\/\/[^\n]*/g, ''));
+  const config = parseJsonc(readFileSync(resolve(runtime, 'wrangler.jsonc'), 'utf8'));
   const ordinary = config;
   const dir = mkdtempSync(resolve(tmpdir(), 'waldo-bundle-startup-'));
   let worker;

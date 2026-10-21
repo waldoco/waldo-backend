@@ -3,7 +3,7 @@ import {runInDurableObject} from 'cloudflare:test';
 import {expect,it} from 'vitest';
 import {eventAdmission} from '../src/channels/event-admission';
 it('durable event admission survives reconstruction, binds raw digest and never reclaims unknown notifications',async()=>{
- const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('event-admission-custody'));
+ const stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName('event-admission-custody'));
  await runInDurableObject(stub,async(_instance,state)=>{
   const inbox=eventAdmission(state.storage);
   expect(inbox.admit('github','id:one','a','fixture')).toBe('admitted');
@@ -16,7 +16,7 @@ it('durable event admission survives reconstruction, binds raw digest and never 
  });
 });
 it('actual owner event entry acknowledges durable admission, prevents duplicate notification and preserves unknown after loss, and records a refused send as not sent',async()=>{
- const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('event-admission-entry'));
+ const stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName('event-admission-entry'));
  await runInDurableObject(stub,async(instance,state)=>{
   const entry=instance as unknown as {recordEvent(r:Request,b:string):Promise<Response>;setup():unknown};
   const setup=entry.setup;let sends=0;let lose=false;let skipped=false;const finished:{status:string;summary:string}[]=[];

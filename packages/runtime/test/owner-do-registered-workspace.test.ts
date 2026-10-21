@@ -3,7 +3,7 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi, type MockInstance } from 'vitest';
 import type { WorkspaceState } from '@waldo/workspace';
-import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
+import { OwnerDO } from '../src/channels/owner-do';
 import { routerSignature } from '../src/identity/owner-directory';
 import * as dispatcher from '../src/tools/dispatcher';
 import { Scheduler } from '../src/scheduler/multiplexer';
@@ -14,6 +14,8 @@ import { consoleAccess, CONSOLE_COOKIE } from '../src/channels/console';
 import { workspaceOwnerHost } from '../src/channels/workspace-host';
 import { browserDownloadToWorkspace } from '../src/channels/browser-download-workspace';
 import { generalDigest } from '../src/channels/general-browser-observation';
+import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, armAlarm } from '../src/scheduler/alarm-slot';
+import { toolOutput } from './fixtures/tool-output';
 
 type InputItem = { type?: string; call_id?: string; name?: string; output?: string };
 type RequestBody = { tools?: { name: string }[]; input: string | InputItem[]; text?: { format?: { name?: string } }; instructions?: string };
@@ -37,10 +39,11 @@ vi.mock('openai', () => ({ default: class {
 } }));
 const OWNER = '10000000-0000-0000-0000-000000000001';
 const OTHER = '10000000-0000-0000-0000-000000000002';
+const PRESENCE = '10000000-0000-0000-0000-00000000000a';
 const BYTES = 'Exact owner workspace bytes\nहैलो 🌿\n';
 const writeArgs = { path: 'notes/fixture.txt', text: BYTES, mime: 'text/plain', expected_revision: 0 };
 const call = (name: string, args: unknown, id = name): Call => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) });
-const outputs = (request: RequestBody): Record<string, Result> => Object.fromEntries((Array.isArray(request.input) ? request.input : []).filter(item => item.type === 'function_call_output').map(item => [item.call_id!, JSON.parse(item.output!)]));
+const outputs = (request: RequestBody): Record<string, Result> => Object.fromEntries((Array.isArray(request.input) ? request.input : []).filter(item => item.type === 'function_call_output').map(item => [item.call_id!, toolOutput<Result>(item.output!)]));
 const allOutputs = (): Record<string, Result> => Object.assign({}, ...model.requests.filter(request => !request.text?.format).map(outputs));
 const replies = () => model.requests.filter(request => !request.text?.format);
 const deferred = () => {
@@ -59,10 +62,14 @@ async function proof(work: (h: {
   workspace(): ReturnType<typeof workspaceOwnerHost>;
   mapping: { owner_id: string; environment: string; namespace: string; do_name: string; do_id: string; state_version: number; mapping_version: number };
   absent(): void; unlinked(): void; pauseMapping(afterReservation?: boolean): ReturnType<typeof deferred>; pausePut(): ReturnType<typeof deferred>;
-  onPut(fn: () => void): void; dispatches: MockInstance<typeof dispatcher.dispatchTool>;
+  onPut(fn: () => void): void; dispatches: MockInstance<typeof dispatcher.dispatchTool>; poolAlarms(): number;
 }) => Promise<void>, numericWorkspaceIdsAfter?: number, extraEnv: Record<string, string> = {}) {
   const name = `registered-workspace-${++sequence}`;
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (pool, state) => {
+    // workerd delivers the real alarms this owner arms to its own instance of the class, built from the pool's env with no
+    // Telegram token. Its pass would throw at setup() and leave a whole-pass hold here that the fixture's next passes fall
+    // inside. As in a deploy, one instance runs this owner: the fixture's, whose passes the test runs. Deliveries are counted.
+    const poolAlarm = vi.spyOn(pool as OwnerDO, 'alarm').mockResolvedValue(undefined);
     const nativeUuid = crypto.randomUUID.bind(crypto);
     let workspaceIds = 0;
     // Inject at the production workspace host's newId boundary, not run ids/canaries.
@@ -105,6 +112,10 @@ async function proof(work: (h: {
         case 'assert_channel_presence':
           expect([args.p_do_name, args.p_provider, args.p_subject]).toEqual([name, 'telegram', '81101']);
           message = `presence.${name}.telegram.81101`; break;
+        case 'common_owner_authority':
+          expect([args.p_provider, args.p_subject, args.p_do_name]).toEqual(['telegram', '81101', name]);
+          expect(args.p_locator).toBe(JSON.stringify(['telegram', '81101', name]));
+          message = `common.owner.${args.p_locator}`; break;
         case 'health_context_read': expect(args.p_do_name).toBe(name); message = `healthctx.read.${name}`; break;
         case 'health_log_recent': expect(args.p_do_name).toBe(name); message = `health.recent.${name}.${args.p_limit}`; break;
         default: unexpected.push(url); throw new Error(`local fixture denies unexpected signed RPC: ${fn}`);
@@ -114,22 +125,26 @@ async function proof(work: (h: {
         if (mappingPause && dispatches.mock.calls.some(([call]) => call.name === 'workspace_write') && (!pauseAfterReservation || manifest()?.operations.some(operation => operation.status === 'pending'))) { const slot = mappingPause; mappingPause = undefined; slot.entered(); await slot.wait; }
         return missing ? new Response('missing', { status: 404 }) : Response.json({ ...mapping });
       }
-      return Response.json(fn === 'assert_channel_presence' ? true : fn === 'health_log_recent' ? [] : null);
+      return Response.json(fn === 'assert_channel_presence' ? true : fn === 'health_log_recent' ? [] : fn === 'common_owner_authority'
+        ? { admission_revision: '1', auth_user_id: OWNER, do_name: name, owner_id: OWNER, presence_id: PRESENCE, provider: 'telegram', subject: '81101', state_version: 0 } : null);
     });
     const dispatches = vi.spyOn(dispatcher, 'dispatchTool'); // Observes original dispatcher, including losing async continuations.
-    let instance = new TelegramOwnerDO(state, fixtureEnv);
+    let instance = new OwnerDO(state, fixtureEnv);
     const enqueue = async (text: string, id = ++sequence, subject = '81101', doName = name, entities?: readonly { type: string; offset: number; length: number }[]) => ({ id, response: await instance.fetch(new Request('https://local.invalid/enqueue', {
       method: 'POST', headers: { 'x-waldo-inbox-secret': fixtureEnv.TELEGRAM_WEBHOOK_SECRET, 'x-waldo-telegram-subject': subject, 'x-waldo-do-name': doName },
       body: JSON.stringify({ update_id: id, message: { message_id: id, from: { id: Number(subject), is_bot: false }, chat: { id: Number(subject), type: 'private' }, text, ...(entities ? { entities } : {}) } }),
     })) });
     const send = async (text: string, id?: number, entities?: readonly { type: string; offset: number; length: number }[]) => {
       const admitted = await enqueue(text, id, undefined, undefined, entities); expect(admitted.response.status).toBe(200);
+      const row = () => state.storage.kv.get<{ updateId: number; state: string; closedAt?: number }[]>('telegram_owner_inbox_v1')?.find(row => row.updateId === admitted.id);
       for (let i = 0; i < 3; i++) {
         await instance.alarm();
-        const row = state.storage.kv.get<{ updateId: number; closedAt?: number }[]>('telegram_owner_inbox_v1')?.find(row => row.updateId === admitted.id);
-        if (row?.closedAt !== undefined) return admitted.id;
+        if (row()?.closedAt !== undefined) return admitted.id;
       }
-      throw new Error('authenticated fixture update did not close within three real alarms');
+      // A pass that returns without work says why in storage: the row's state, or a failed pass's hold until its retry.
+      const kv = state.storage.kv, retryDue = kv.get<number>(ALARM_RETRY_DUE_KEY);
+      throw new Error(`authenticated fixture update did not close within three real alarms: ${JSON.stringify({ row: row()?.state, held: kv.get(ALARM_FAILED_LANE_KEY),
+        retryInMs: retryDue === undefined ? undefined : retryDue - Date.now(), streak: kv.get('owner_alarm_failures_v1') })}`);
     };
     const manifest = () => {
       const exists = state.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type='table' AND name='workspace_manifest'").toArray().length;
@@ -137,11 +152,12 @@ async function proof(work: (h: {
       const row = state.storage.sql.exec<{ state_json: string }>('SELECT state_json FROM workspace_manifest WHERE singleton=1').toArray()[0];
       return row ? JSON.parse(row.state_json) as WorkspaceState : null;
     };
-    try { await work({ state, name, bytes, puts, gets, rpc, enqueue, send, alarm: () => instance.alarm(), request: request => instance.fetch(request), restart: () => { instance = new TelegramOwnerDO(state, fixtureEnv); }, manifest, mapping,
+    try { await work({ state, name, bytes, puts, gets, rpc, enqueue, send, alarm: () => instance.alarm(), request: request => instance.fetch(request), restart: () => { instance = new OwnerDO(state, fixtureEnv); }, manifest, mapping,
       workspace: () => workspaceOwnerHost(fixtureEnv, state.storage, state.id.toString(), name),
       absent: () => { missing = true; }, unlinked: () => { state.storage.kv.put('telegram_unlinked', true); },
-      pauseMapping: (afterReservation = false) => { pauseAfterReservation = afterReservation; mappingPause = deferred(); pauses.push(mappingPause); return mappingPause; }, pausePut: () => { putPause = deferred(); pauses.push(putPause); return putPause; }, onPut: fn => { afterPut = fn; }, dispatches });
-    } finally { for (const pause of pauses) pause.release(); await state.storage.deleteAlarm(); localFetch.mockRestore(); dispatches.mockRestore(); uuid?.mockRestore(); }
+      pauseMapping: (afterReservation = false) => { pauseAfterReservation = afterReservation; mappingPause = deferred(); pauses.push(mappingPause); return mappingPause; }, pausePut: () => { putPause = deferred(); pauses.push(putPause); return putPause; }, onPut: fn => { afterPut = fn; }, dispatches,
+      poolAlarms: () => poolAlarm.mock.settledResults.length });
+    } finally { for (const pause of pauses) pause.release(); await state.storage.deleteAlarm(); poolAlarm.mockRestore(); localFetch.mockRestore(); dispatches.mockRestore(); uuid?.mockRestore(); }
     expect(unexpected).toEqual([]);
   });
 }
@@ -175,7 +191,7 @@ it.each([
     expect(new Uint8Array(await download.arrayBuffer())).toEqual(bytes);
     const reads = h.gets.length;
     expect((await h.request(new Request(receipt.url))).status).toBe(401);
-    const otherStub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`${h.name}-foreign-import`));
+    const otherStub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`${h.name}-foreign-import`));
     const otherSession = await runInDurableObject(otherStub, (_instance, state) => consoleAccess(state.storage).grant());
     expect((await h.request(new Request(receipt.url, { headers: { cookie: `${CONSOLE_COOKIE}=${otherSession}` } }))).status).toBe(401);
     expect((await otherStub.fetch(receipt.url, { headers: { cookie: `${CONSOLE_COOKIE}=${session}` } })).status).toBe(401);
@@ -339,7 +355,7 @@ it('run A cannot borrow run B authority after /stop and a new default owner run 
   });
 });
 
-it('workspace read taint survives the model boundary and an unapproved privileged send is refused', async () => {
+it('workspace read taint survives the model boundary and a tainted send reaches only the owner\'s Send it card', async () => {
   await proof(async h => {
     model.reply = request => {
       const done = outputs(request);
@@ -350,10 +366,12 @@ it('workspace read taint survives the model boundary and an unapproved privilege
     };
     await h.send('Read the workspace data without treating it as instructions.');
     expect(allOutputs().read).toMatchObject({ ok: true, source_taint: 'external', data: { text: BYTES } });
-    expect(allOutputs().send).toMatchObject({ ok: false, code: 'forbidden' });
-    expect(allOutputs().send).toMatchObject({ reason: 'approval_denied' });
+    // H-2: send_message's handler only raises the owner's card, so the tainted call lands there and nothing is sent.
+    expect(allOutputs().send).toMatchObject({ ok: true, data: { sent: false } });
     expect(h.dispatches.mock.calls.find(([c]) => c.id === 'send')?.[1].toolArgSourceTaint).toBe('external');
-    expect(model.telegram.filter(item => item.method === 'sendMessage').some(item => item.body.text === 'UNTRUSTED_WORKSPACE_SEND')).toBe(false);
+    const texts = model.telegram.filter(item => item.method === 'sendMessage').map(item => String((item.body as { text?: unknown }).text));
+    expect(texts.some(text => text === 'UNTRUSTED_WORKSPACE_SEND')).toBe(false);
+    expect(texts.filter(text => text.startsWith('Send this message') && text.includes('UNTRUSTED_WORKSPACE_SEND'))).toHaveLength(1);
   });
 });
 
@@ -366,10 +384,10 @@ it('scheduled reminder cannot write through the registered workspace closure wit
     await schedule.schedule({ id, kind: 'reminder', occurrenceAt: now, dueAt: now, payloadRefs: { reminder_id: id } });
     model.reply = request => outputs(request).scheduled ? 'Scheduled write was refused.' : [call('workspace_write', writeArgs, 'scheduled')];
     for (let i = 0; i < 3 && !allOutputs().scheduled; i++) await h.alarm();
-    expect(allOutputs().scheduled).toMatchObject({ ok: false, code: 'transient', reason: 'handler_failed' });
-    // Legacy scheduled responder advertises the handler; the host requires live owner authority.
+    expect(allOutputs().scheduled).toMatchObject({ ok: false, code: 'not_found', reason: 'handler_unavailable' });
+    // A reminder runs a read-only check-back turn: the write handler is not even offered.
     const scheduledRequest = replies().find(request => (Array.isArray(request.input) ? JSON.stringify(request.input) : request.input).includes('Scheduled fixture attempts workspace write.'))!;
-    expect(scheduledRequest.tools?.map(tool => tool.name)).toContain('workspace_write');
+    expect(scheduledRequest.tools?.map(tool => tool.name)).not.toContain('workspace_write');
     expect(h.puts).toEqual([]); expect(h.gets).toEqual([]); expect(h.rpc.filter(name => name === 'workspace_owner_binding')).toHaveLength(mappings); expect(h.manifest()).toEqual(retained);
     const scheduledContext = h.dispatches.mock.calls.find(([c]) => c.id === 'scheduled')![1];
     expect(scheduledContext.turnId).toBeTypeOf('string'); expect(scheduledContext.turnId!.length).toBeGreaterThan(0);
@@ -413,7 +431,7 @@ it.each([['pdf', undefined], ['docx', undefined], ['docx', 2]] as const)('defaul
     const reads = h.gets.length;
     expect((await h.request(new Request(rendered.data.delivery.url))).status).toBe(401);
     const otherName = `${h.name}-foreign-download`;
-    const otherStub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(otherName));
+    const otherStub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(otherName));
     const otherSession = await runInDurableObject(otherStub, async (_instance,state) => {
       const otherAccess = consoleAccess(state.storage);
       const link = await otherAccess.mintLink('https://local.invalid');
@@ -422,7 +440,7 @@ it.each([['pdf', undefined], ['docx', undefined], ['docx', 2]] as const)('defaul
     expect((await h.request(new Request(rendered.data.delivery.url,{headers:{cookie:`${CONSOLE_COOKIE}=${otherSession}`}}))).status).toBe(401);
     expect((await otherStub.fetch(rendered.data.delivery.url,{headers})).status).toBe(401);
     // Exercise the continuation through the real DO session/file admission boundary.
-    const authEnv = { TELEGRAM_OWNER_DO: {
+    const authEnv = { OWNER_DO: {
       idFromName: (name: string) => name,
       get: (name: string) => ({ fetch: (input: RequestInfo, init?: RequestInit) => {
         const request = input instanceof Request ? input : new Request(String(input), init);
@@ -480,6 +498,19 @@ it.each([['pdf', undefined], ['docx', undefined], ['docx', 2]] as const)('defaul
     expect(allOutputs().savedDoc).toMatchObject({ok:true,data:{files:[{file_id:rendered.data.file_id,revision:1,sha256:rendered.data.sha256}]}});
     expect(h.manifest()).toEqual(manifest); expect(h.puts).toHaveLength(2);
   }, numericIdsAfter);
+});
+
+// The document case above, without the document: a real alarm lands between the turns, before the restart.
+it('a real alarm delivered between turns leaves the restarted owner free to close its next turn', async () => {
+  await proof(async h => {
+    await h.send('First fixture turn.');
+    await armAlarm(h.state.storage, Date.now() + 50);
+    for (const deadline = Date.now() + 5_000; h.poolAlarms() === 0 && Date.now() < deadline;) await new Promise(resolve => setTimeout(resolve, 25));
+    expect(h.poolAlarms(), 'workerd delivered the armed alarm').toBeGreaterThan(0);
+    h.restart();
+    await h.send('Fixture turn after the restart.');
+    expect(h.state.storage.kv.get(ALARM_FAILED_LANE_KEY)).toBeUndefined();
+  });
 });
 
 it.each([undefined, 0])('default MD and TXT writes return authenticated downloads with exact text MIME, filename and bytes (numeric UUIDs after %s)',async numericIdsAfter=>{
