@@ -2,7 +2,7 @@ export type OverviewV1 = Readonly<{
   version: 1;
   as_of: string;
   timezone: string;
-  brief: Readonly<{ status: 'sent_recorded' | 'not_sent' | 'not_scheduled'; at: string | null }>;
+  brief: Readonly<{ status: 'sent_recorded' | 'sent_unconfirmed' | 'not_sent' | 'not_scheduled'; at: string | null }>;
   waiting: Readonly<{ count: number; first: Readonly<{ id: string; summary: string }> | null }>;
   next_card: Readonly<{ id: string; label: string; scheduled_at: string }> | null;
   latest_activity: Readonly<{ kind: string; status: string; at: string; summary: string | null }> | null;
@@ -15,7 +15,7 @@ const optional = (value: unknown): value is string | null => value === null || s
 const time = (value: unknown): value is string => string(value) && !Number.isNaN(Date.parse(value));
 export const readOverview = (value: unknown): OverviewV1 => {
   if (!object(value) || value.version !== 1 || !time(value.as_of) || !string(value.timezone) || !object(value.brief) ||
-      !['sent_recorded', 'not_sent', 'not_scheduled'].includes(String(value.brief.status)) || !optional(value.brief.at) ||
+      !['sent_recorded', 'sent_unconfirmed', 'not_sent', 'not_scheduled'].includes(String(value.brief.status)) || !optional(value.brief.at) ||
       !object(value.waiting) || !Number.isSafeInteger(value.waiting.count) || (value.waiting.count as number) < 0 ||
       (value.waiting.first !== null && (!object(value.waiting.first) || !string(value.waiting.first.id) || !string(value.waiting.first.summary))) ||
       (value.next_card !== null && (!object(value.next_card) || !string(value.next_card.id) || !string(value.next_card.label) || !time(value.next_card.scheduled_at))) ||

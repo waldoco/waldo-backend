@@ -20,6 +20,8 @@ type Trace = Readonly<{ at: number; hop: string; ok: boolean }>;
 // CSRF, memory, other private data and a paginated (not newest) activity slice.
 export const dashboardOverview = (input: Readonly<{
   now: number; timezone: string; plans: readonly Plan[]; cards: readonly Card[];
+  // Cards that went out and wait for the surface's report that they arrived (WhatsApp): sent, not yet recorded.
+  unconfirmed?: ReadonlySet<string>;
   approvals: readonly ApprovalItem[]; run: BackgroundRun | null; trace: Trace | null;
   grants: readonly Grant[];
 }>) => {
@@ -29,7 +31,7 @@ export const dashboardOverview = (input: Readonly<{
   const waiting = input.approvals.filter((item) => ['open', 'review_only', 'unconfirmed'].includes(item.state));
   const next = input.cards.flatMap((card) => {
     const row = planned.get(card.id);
-    if (!row || row.sent || row.time === null) return [];
+    if (!row || row.sent || row.time === null || input.unconfirmed?.has(card.id)) return [];
     const at = localToEpoch(`${localIso(now, timezone).slice(0, 10)}T${row.time}`, timezone);
     return at > now ? [{ id: card.id, label: card.name, scheduled_at: new Date(at).toISOString(), epoch: at }] : [];
   }).sort((a, b) => a.epoch - b.epoch)[0];
@@ -42,7 +44,7 @@ export const dashboardOverview = (input: Readonly<{
   return {
     version: 1 as const,
     as_of: new Date(now).toISOString(), timezone,
-    brief: { status: brief?.sent ? 'sent_recorded' as const : !brief || brief.time === null ? 'not_scheduled' as const : 'not_sent' as const, at: null },
+    brief: { status: brief?.sent ? 'sent_recorded' as const : input.unconfirmed?.has('card:brief') ? 'sent_unconfirmed' as const : !brief || brief.time === null ? 'not_scheduled' as const : 'not_sent' as const, at: null },
     waiting: { count: waiting.length, first: waiting[0] ? { id: waiting[0].id, summary: waiting[0].summary } : null },
     next_card: next ? { id: next.id, label: next.label, scheduled_at: next.scheduled_at } : null,
     latest_activity: activity,
