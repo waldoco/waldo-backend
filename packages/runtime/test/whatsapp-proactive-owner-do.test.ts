@@ -386,14 +386,15 @@ describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }
   });
 
   it('a reminder Meta took before the owner\'s number changed ends unconfirmed with the change, and its run settles then', async () => {
-    await drive('whatsapp-rebind-accepted', async ({ alarms, reply, ledger }) => {
+    await drive('whatsapp-rebind-accepted', async ({ alarms, reply, settled, ledger }) => {
       await reply();
       await alarms(3);
       expect(ledger().outbox).toMatchObject([{ status: 'accepted', providerMessageIds: ['wamid.out.1'] }]);
       // A different number the directory has as this owner's writes: admission rebinds to it, retiring the old chat's records.
       await reply('15550002222');
-      expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'quarantined', reason: 'surface_unlinked', providerMessageIds: ['wamid.out.1'] }]);
-      // Settled with the rebind itself, before any alarm pass.
+      expect(ledger().outbox).toMatchObject([{ id: expect.stringMatching(/^reminder:/), status: 'quarantined', reason: 'surface_unlinked', providerMessageIds: ['wamid.out.1'] }]);
+      // Settled after the ack, in the serial work the rebind queued, before any alarm pass.
+      await settled();
       expect(ledger().runs).toEqual([{ outcome: 'quarantined', delivery: 'failed' }]);
     });
   });

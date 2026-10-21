@@ -1400,7 +1400,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       kv.put(WHATSAPP_PENDING_DUE_KEY, Date.now() + WHATSAPP_PENDING_CHECK_MS);
     });
     if (changed) return new Response('unavailable', { status: 503 });
-    if (rebound) { await this.settleRetiredWhatsApp(retired, 'whatsapp'); this.runtimes = {}; }
+    // Settling boots the runtime, so it waits until after the ack, in the serial queue ahead of this message's turn.
+    if (rebound) { this.runtimes = {}; if (retired.length) this.ctx.waitUntil(this.serial(() => this.settleRetiredWhatsApp(retired, 'whatsapp'))); }
     if (!claimed.length) return new Response('ok');
     this.liveWhatsapp.add(pendingKey);
     const work = this.runWhatsappClaimed(pendingKey, claimed, subject).catch(() => undefined).finally(() => {
