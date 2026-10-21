@@ -47,14 +47,25 @@ export type WorldSeed = Readonly<{
 }>;
 export type Effect = Readonly<{ kind: string; payload: unknown }>;
 
-const sqlite = (): SqlStorage => {
+// node:sqlite behind the Durable Object's SqlStorage shape, with the same rowsWritten count and a transactionSync that
+// commits unless the work throws. The claim store's corrections refuse to run without both, as they do in the DO.
+const sqlite = (): Readonly<{ sql: SqlStorage; transactionSync: <T>(work: () => T) => T }> => {
   const db = new DatabaseSync(':memory:');
-  return {
+  const sql = {
     exec(query: string, ...bindings: unknown[]) {
-      const rows = db.prepare(query).all(...bindings.map((value) => (value === undefined ? null : typeof value === 'boolean' ? Number(value) : value)) as never[]) as Record<string, unknown>[];
-      return { toArray: () => rows, one: () => { if (!rows[0]) throw new Error('no rows'); return rows[0]; }, [Symbol.iterator]: () => rows[Symbol.iterator](), columnNames: [], rowsRead: rows.length, rowsWritten: 0, raw: () => rows.map(Object.values)[Symbol.iterator](), next: () => ({ done: true, value: undefined }) };
+      const statement = db.prepare(query);
+      const values = bindings.map((value) => (value === undefined ? null : typeof value === 'boolean' ? Number(value) : value)) as never[];
+      const writes = /^\s*(insert|update|delete|replace)\b/i.test(query) && !/\breturning\b/i.test(query);
+      const changed = writes ? Number(statement.run(...values).changes) : 0;
+      const rows = writes ? [] : statement.all(...values) as Record<string, unknown>[];
+      return { toArray: () => rows, one: () => { if (!rows[0]) throw new Error('no rows'); return rows[0]; }, [Symbol.iterator]: () => rows[Symbol.iterator](), columnNames: [], rowsRead: rows.length, rowsWritten: writes ? changed : rows.length, raw: () => rows.map(Object.values)[Symbol.iterator](), next: () => ({ done: true, value: undefined }) };
     },
   } as unknown as SqlStorage;
+  const transactionSync = <T>(work: () => T): T => {
+    db.exec('BEGIN');
+    try { const result = work(); db.exec('COMMIT'); return result; } catch (error) { db.exec('ROLLBACK'); throw error; }
+  };
+  return { sql, transactionSync };
 };
 
 const keyValueStorage = () => {
@@ -217,8 +228,8 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     },
   };
 
-  const sql = sqlite();
-  const claims = claimStore(sql);
+  const { sql, transactionSync } = sqlite();
+  const claims = claimStore(sql, transactionSync);
   for (const seeded of seed.memory ?? []) {
     claims.add({ kind: seeded.kind, text: seeded.text, source: 'stated', evidence: 'The owner said so.', origin: 'owner', source_ref: `seed:${seeded.id}` }, start, seeded.id);
     if (seeded.pinned) claims.pin(seeded.id, seeded.pinned, seeded.id);

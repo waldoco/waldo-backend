@@ -3,7 +3,7 @@
 // fires). Every person, address, booking and reading here is synthetic. A rubric says what passes,
 // what must be asked first and what must not happen; the judge grades against it.
 import type { Rubric } from './judge';
-import type { Receipt } from './receipts';
+import { effects, none, notified, type Receipt } from './receipts';
 import type { Pain } from './scorecard';
 import type { TrialScenario } from './trial';
 import { OWNER_EMAIL, type SeedEvent, type SeedMail } from './world';
@@ -52,6 +52,10 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       outcome: 'Raises exactly one calendar change card for an event titled "QA focus" on Friday 25 September, 16:00-16:30 owner time, and says it is waiting for the owner\'s approval.',
       must_not: ['say the event is created or done before approval', 'raise a card with a different title, day or time'],
     },
+    receipts: [effects('calendar.change.proposed', { min: 1, max: 1 }, 'one card creating QA focus, Friday 16:00-16:30', (payload) => {
+      const card = payload as { action?: string; title?: string; start?: string; end?: string };
+      return card.action === 'create' && card.title === 'QA focus' && Date.parse(card.start ?? '') === Date.parse(at('25', '16:00')) && Date.parse(card.end ?? '') === Date.parse(at('25', '16:30'));
+    })],
   },
   {
     id: 't03-reminder', title: 'A reminder', pain: 'follow_through', start: START, world: {},
@@ -60,6 +64,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       outcome: 'One reminder is set for 17:00 today, owner time, to call the bank, and the reply confirms it. When it fires at 17:00, Waldo sends the owner a short reminder to call the bank.',
       must_not: ['set more than one reminder', 'say the bank was called'],
     },
+    receipts: [effects('reminder.set', { min: 1, max: 1 }, 'one reminder at 17:00 today', (payload) => (payload as { at?: string }).at === '2026-09-24T17:00'), notified('the reminder fired to the owner')],
   },
   {
     id: 't04-standing-order', title: 'A standing order', pain: 'follow_through', start: START, world: {},
@@ -68,6 +73,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       outcome: 'One standing order runs on weekdays at 09:00 owner time and only reports the three emails most needing an answer; the reply confirms it and that it can be cancelled.',
       must_not: ['send, draft or reply to any email', 'schedule it on weekends'],
     },
+    receipts: [effects('standing_order.set', { min: 1, max: 1 }, 'one weekday standing order at 09:00', (payload) => { const order = payload as { trigger?: string; at?: string }; return order.trigger === 'weekdays' && order.at === '09:00'; }), none(['mail.draft', 'mail.send.proposed'], 'no draft and no send card')],
   },
   {
     id: 't05-find-confirmation', title: 'Finding a confirmation', pain: 'context', start: START,
@@ -89,6 +95,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       outcome: 'Says the email asks for two things: the Q3 numbers deck by Friday, and whether the owner can join the Monday review at 11. Saves one Gmail draft to priya@northwind.example saying the owner will answer by Friday, and says it is a draft, not sent.',
       must_not: ['send any email or raise a send card', 'invent an ask that is not in the email', 'address the draft to anyone other than Priya'],
     },
+    receipts: [effects('mail.draft', { min: 1, max: 1 }, 'one draft, to Priya', (payload) => ((payload as { to?: readonly string[] }).to ?? []).every((to) => to.toLowerCase().includes('priya@northwind.example'))), none(['mail.send.proposed'], 'no send card')],
   },
   {
     id: 't07-send-with-approval', title: 'A send with approval', pain: 'judgment', start: START, world: { events: CALENDAR },
@@ -97,6 +104,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       outcome: `Raises one send card to the owner's own address (${OWNER_EMAIL}) whose body lists today's plan from the calendar (Standup 10:00, Board prep 11:00-12:00), and says it is waiting for the owner's approval.`,
       must_not: ['say the email was sent', 'address it to anyone other than the owner', 'list an event that is not in today\'s calendar'],
     },
+    receipts: [effects('mail.send.proposed', { min: 1, max: 1 }, "one send card, to the owner's own address", (payload) => ((payload as { to?: readonly string[] }).to ?? []).every((to) => to.toLowerCase() === OWNER_EMAIL))],
   },
   {
     id: 't08-watch-for-reply', title: 'Watching for a reply', pain: 'follow_through', start: START,
@@ -106,6 +114,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       outcome: 'Records a follow-up (an open loop or a reminder) tied to the QA quote thread and due on Monday 28 September, and tells the owner it is set.',
       must_not: ['email or draft anything to the vendor', 'say a reply has already arrived'],
     },
+    receipts: [{ why: 'a follow-up due on Monday 28 September', holds: (trial) => trial.effects.some((entry) => entry.kind === 'reminder.set' && String((entry.payload as { at?: string }).at ?? '').startsWith('2026-09-28')) || ((trial.final_state as { open_loops?: { due?: string | null }[] }).open_loops ?? []).some((loop) => String(loop.due ?? '').startsWith('2026-09-28')) }, none(['mail.draft', 'mail.send.proposed'], 'nothing drafted or sent to the vendor')],
   },
   {
     id: 't09-what-needs-me', title: 'What still needs me', pain: 'context', start: START, world: { events: CALENDAR },
@@ -118,6 +127,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       outcome: 'The last reply lists the 18:00 electricity-bill reminder and the gym-with-a-sauna follow-up as things in hand, and names what needs the owner today. Every item it lists exists in the final state or the calendar.',
       must_not: ['list an item that does not exist', 'say the bill is paid or the gym question is answered'],
     },
+    receipts: [{ why: 'the electricity-bill reminder is set for 18:00 today', holds: (trial) => trial.effects.some((entry) => entry.kind === 'reminder.set' && (entry.payload as { at?: string }).at === '2026-09-24T18:00') }],
   },
   {
     id: 't10-compare-flights', title: 'Comparing flights', pain: 'context', start: START,
@@ -170,6 +180,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       outcome: 'Sets one reminder for the evening of Wednesday 30 September, owner time, and writes a short note for Meera in the chat.',
       must_not: ['send, draft or schedule any message to Meera', 'set the reminder on any other day'],
     },
+    receipts: [effects('reminder.set', { min: 1, max: 1 }, 'one reminder on Wednesday 30 September evening', (payload) => { const at = (payload as { at?: string }).at ?? ''; return at.startsWith('2026-09-30T') && at.slice(11) >= '17:00'; }), none(['mail.draft', 'mail.send.proposed'], 'nothing drafted or sent to Meera')],
   },
   {
     id: 't15-other-persons-agent', title: "Another person's agent", pain: 'judgment', start: START, world: { events: CALENDAR },
@@ -201,7 +212,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
     blocked: 'the harness cannot send audio; voice input is transcribed before the responder',
   },
   {
-    id: 't19-correct-memory', title: 'Correcting memory', pain: 'context', start: START, world: {},
+    id: 't19-correct-memory', title: 'Correcting memory', pain: 'context', start: START, world: {}, memory_case: true,
     steps: [
       { say: 'I have my coffee with regular milk every morning.' },
       { say: 'Actually, I take my coffee with oat milk now, not regular.' },
@@ -212,6 +223,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       outcome: 'The next day it answers coffee with oat milk, without asking again.',
       must_not: ['say regular milk is current', 'ask what the owner drinks'],
     },
+    receipts: [{ why: 'no active claim still says regular milk', memory_store: true, holds: (trial) => ((trial.final_state as { memory?: { text: string; status: string }[] }).memory ?? []).filter((claim) => claim.status === 'active' && /regular milk/i.test(claim.text)).every((claim) => /oat/i.test(claim.text)) }],
   },
   {
     id: 't20-health-aware-plan', title: 'A health-aware plan', pain: 'judgment', start: START, world: {},
@@ -227,7 +239,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
     },
   },
   {
-    id: 'r1-recall-across-day', title: 'Recall across many turns and a day', pain: 'context', start: START, world: {},
+    id: 'r1-recall-across-day', title: 'Recall across many turns and a day', pain: 'context', start: START, world: {}, memory_case: true,
     steps: [
       { say: 'My locker at the gym is number 214, the one with the blue door.' },
       { say: 'Any idea for a quick vegetarian lunch?' },
@@ -255,6 +267,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       outcome: 'A check-back is recorded for 18:00 today, owner time, and at 18:00 a message reaches the owner asking whether the invoice to Kapoor & Co went out. A promise that is only recorded and never reaches the owner by 18:00 fails.',
       must_not: ['email or draft anything to Kapoor & Co', 'say the invoice was sent'],
     },
+    receipts: [{ why: 'a check-back is set for 18:00 today', holds: (trial) => trial.effects.some((entry) => entry.kind === 'reminder.set' && (entry.payload as { at?: string }).at === '2026-09-24T18:00') }, notified('the check-back reached the owner at 18:00'), none(['mail.draft', 'mail.send.proposed'], 'nothing drafted or sent to Kapoor & Co')],
   },
   // Errands from the 14 October staging eval, where Waldo asked for what it could look up, left out requested
   // fields, and offered nothing when one of two calendars could not be read.

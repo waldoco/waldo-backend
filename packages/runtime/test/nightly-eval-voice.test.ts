@@ -13,6 +13,7 @@ import { liveVoiceJudge, VOICE_ANCHORS, VOICE_TESTS, voicePacket, type VoiceJudg
 import { labelInput, loadVoiceLabels, parseVoiceLabels, voiceAgreement, type LabelledVerdict, type VoiceLabel } from '../evals/nightly/voice-labels';
 import { VOICE_SCENARIOS } from '../evals/nightly/voice-scenarios';
 import { ERRAND_SCENARIOS } from '../evals/nightly/errands';
+import { STATE_MEMORY_SCENARIOS } from '../evals/nightly/state-memory-scenarios';
 import { evalWorld } from '../evals/nightly/world';
 
 const scenario = (id: string) => NIGHTLY_SCENARIOS.find((entry) => entry.id === id)!;
@@ -77,7 +78,7 @@ describe('voice judge', () => {
   it('treats a refused or truncated grade as a judge error', async () => {
     for (const stop_reason of ['refusal', 'max_tokens']) {
       const fetcher = async () => new Response(JSON.stringify({ stop_reason, content: [{ type: 'text', text: allMet() }], usage: { input_tokens: 1, output_tokens: 1 } }));
-      expect((await liveVoiceJudge({ apiKey: 'k', model: 'm', budget: callBudget(5), fetcher })(voiceInput)).outcome).toBe('judge_error');
+      expect((await liveVoiceJudge({ apiKey: 'k', model: 'm', budget: callBudget(10), fetcher })(voiceInput)).outcome).toBe('judge_error');
     }
   });
 
@@ -87,7 +88,7 @@ describe('voice judge', () => {
     for (const text of [partial, undecided, 'no json here']) {
       expect((await liveVoiceJudge({ apiKey: 'k', model: 'm', budget: callBudget(10), fetcher: async () => anthropic(text) })(voiceInput)).outcome).toBe('judge_error');
     }
-    expect((await liveVoiceJudge({ apiKey: 'k', model: 'm', budget: callBudget(5), fetcher: async () => anthropic(allMet(), 500) })(voiceInput)).outcome).toBe('judge_error');
+    expect((await liveVoiceJudge({ apiKey: 'k', model: 'm', budget: callBudget(10), fetcher: async () => anthropic(allMet(), 500) })(voiceInput)).outcome).toBe('judge_error');
     const spent = callBudget(1);
     spent.take('candidate');
     let called = false;
@@ -218,7 +219,7 @@ describe('the nightly catalogue', () => {
     expect(VOICE_SCENARIOS).toHaveLength(14);
     expect(new Set(NIGHTLY_SCENARIOS.map((entry) => entry.id)).size).toBe(NIGHTLY_SCENARIOS.length);
     // The floor is the 22-scenario M0 baseline plus these sets, so it holds whether or not other scenarios land beside them.
-    expect(NIGHTLY_THRESHOLDS.recorded.min_scenarios).toBe(22 + VOICE_SCENARIOS.length + ERRAND_SCENARIOS.length);
+    expect(NIGHTLY_THRESHOLDS.recorded.min_scenarios).toBe(22 + VOICE_SCENARIOS.length + ERRAND_SCENARIOS.length + STATE_MEMORY_SCENARIOS.length);
     expect(NIGHTLY_THRESHOLDS.live.min_scenarios).toBe(NIGHTLY_THRESHOLDS.recorded.min_scenarios);
     expect(NIGHTLY_SCENARIOS.length).toBeGreaterThanOrEqual(NIGHTLY_THRESHOLDS.recorded.min_scenarios);
     for (const entry of VOICE_SCENARIOS) {

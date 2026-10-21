@@ -1,10 +1,11 @@
 // Runs the catalogue: k trials per scenario, each judged once, against one call budget. A graded trial passes
-// only when the outcome judge, the voice judge (for a scenario with a voice rubric) and every receipt agree.
+// only when the outcome judge, the voice judge (for a scenario with a voice rubric), the state invariants every trial
+// is held to and the scenario's own receipts agree.
 import type { ModelName } from '@waldo/contracts';
 import type { LLMGatewayAdapter } from '../../src/llm/provider';
 import type { CallBudget } from './budget';
 import type { Judge, Verdict } from './judge';
-import { failedReceipts } from './receipts';
+import { failedReceipts, STATE_INVARIANTS } from './receipts';
 import type { NightlyScenario } from './scenarios';
 import { scorecard, type ScenarioTrials, type TrialOutcome } from './scorecard';
 import { runTrial, type TrialRecord } from './trial';
@@ -45,7 +46,7 @@ export const runNightly = async (scenarios: readonly NightlyScenario[], run: Nig
       const verdict = await run.judge({ scenario: scenario.id, rubric: scenario.rubric, transcript: record.transcript, tools: record.tools, effects: record.effects, final_state: record.final_state });
       let outcome: TrialOutcome = verdict.outcome;
       let voice: VoiceVerdict | undefined;
-      const receipts = graded(outcome) ? failedReceipts(scenario.receipts ?? [], record, run.memory) : [];
+      const receipts = graded(outcome) ? failedReceipts([...STATE_INVARIANTS, ...(scenario.receipts ?? [])], record, run.memory) : [];
       if (receipts.length) { receiptFailed += 1; outcome = 'fail'; }
       if (graded(verdict.outcome) && scenario.rubric.voice && run.voiceJudge) {
         voice = await run.voiceJudge({ voice: scenario.rubric.voice, transcript: record.transcript, tools: record.tools, effects: record.effects });
@@ -57,7 +58,7 @@ export const runNightly = async (scenarios: readonly NightlyScenario[], run: Nig
     }
     results.push({
       id: scenario.id, pain: scenario.pain, outcomes, ...(errors.length ? { harness_errors: errors } : {}),
-      ...(scenario.rubric.voice ? { voice_failed: voiceFailed } : {}), ...(scenario.receipts?.length ? { receipt_failed: receiptFailed } : {}),
+      ...(scenario.rubric.voice ? { voice_failed: voiceFailed } : {}), receipt_failed: receiptFailed,
     });
   }
   return scorecard(results, { candidate: run.candidate, judge: run.judgeModel, trials: run.trials, usage: run.budget.usage() });

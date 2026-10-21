@@ -34,3 +34,31 @@ export const notificationsOmit = (renderings: readonly string[], why: string): R
 
 // At least one notification reached the owner.
 export const notified = (why: string): Receipt => ({ why, holds: (trial) => trial.transcript.some((turn) => turn.role === 'waldo' && turn.surface === 'notification') });
+
+// Identifiers a payload carries for the provider or the ledger: two otherwise identical effects differ in these.
+const VOLATILE = new Set(['messageId', 'message_id', 'digest', 'raw', 'operation_ref', 'dedupe_key', 'earlier_unknown_at']);
+const canonical = (value: unknown): string => {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>).filter(([key]) => !VOLATILE.has(key)).sort(([a], [b]) => (a < b ? -1 : 1)).map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+};
+
+// Held on every graded trial, whatever its scenario: the same effect twice (the same draft, card, reminder or order,
+// identifiers aside) is a state defect a retry or a lost receipt leaves behind, and a judge reading replies misses it.
+export const STATE_INVARIANTS: readonly Receipt[] = [{
+  why: 'no effect happens twice',
+  holds: (trial) => {
+    const seen = trial.effects.map((entry) => `${entry.kind}:${canonical(entry.payload)}`);
+    return new Set(seen).size === seen.length;
+  },
+}];
+// The forced failure happened: a call of one of these tools failed, and a later call of one of them succeeded.
+export const recovered = (tools: readonly string[], why: string): Receipt => ({
+  why,
+  holds: (trial) => {
+    const first = trial.tools.findIndex((tool) => tools.includes(tool.name) && !tool.ok);
+    return first !== -1 && trial.tools.slice(first + 1).some((tool) => tools.includes(tool.name) && tool.ok);
+  },
+});

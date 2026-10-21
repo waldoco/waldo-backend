@@ -24,11 +24,13 @@ export const judgeDimensions = async (
   const asks = mode === 'joint'
     ? [{ keys: dimensions.map((entry) => entry.key), system: `${preamble}\n\nJudge each of these dimensions:\n${dimensions.map((entry) => `- ${entry.key}: ${entry.definition}`).join('\n')}\n${UNKNOWN}\nAnswer with JSON only: ${shape(dimensions.map((entry) => entry.key))}.` }]
     : dimensions.map((entry) => ({ keys: [entry.key], system: `${preamble}\n\nJudge one dimension only, and nothing else about the trial:\n- ${entry.key}: ${entry.definition}\n${UNKNOWN}\nAnswer with JSON only: ${shape([entry.key])}.` }));
+  // A trial's split calls are independent, so they run together: wall time stays near one call's, not six.
+  const texts = await Promise.all(asks.map((ask) => askJudgeModel(config, ask.system, packet)));
+  if (texts.includes('budget_exhausted')) return { status: 'budget_exhausted' };
   const results: Record<string, DimensionResult> = {};
-  for (const ask of asks) {
-    const text = await askJudgeModel(config, ask.system, packet);
-    if (text === 'budget_exhausted') return { status: 'budget_exhausted' };
-    if (text === null) return { status: 'judge_error' };
+  for (const [index, ask] of asks.entries()) {
+    const text = texts[index];
+    if (typeof text !== 'string') return { status: 'judge_error' };
     const parsed = z.object(Object.fromEntries(ask.keys.map((key) => [key, result]))).safeParse(jsonIn(text));
     if (!parsed.success) return { status: 'judge_error' };
     Object.assign(results, parsed.data);
