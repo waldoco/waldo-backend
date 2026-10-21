@@ -19,10 +19,10 @@ export type BrowserErrandEngine = Readonly<{
     | Readonly<{ kind: 'review'; sessionRef: string; runRef: string; url: string; facts: Facts }>
     | Readonly<{ kind: 'blocked'; reason: BrowserErrandBlocked; sessionRef: string | null; runRef: string | null }>
     | Readonly<{ kind: 'failed'; sessionRef: string | null; runRef: string | null }>>;
-  // Performs only the approved final action in the held browser. 'hold_lost' means the engine knows no run started.
+  // Performs only the approved final action in the held browser. 'not_started' means the engine knows no run started.
   // A throw means the outcome is unknown.
   submit(input: Readonly<{ sessionRef: string; submitKey: string; profileRef: string | null; finalAction: string; facts: Facts }>): Promise<
-    Readonly<{ status: 'started'; runRef: string }> | Readonly<{ status: 'hold_lost' }>>;
+    Readonly<{ status: 'started'; runRef: string }> | Readonly<{ status: 'not_started' }>>;
   // Looks for a submit run the errand started but never recorded, ignoring the runs it already knows.
   findSubmit(input: Readonly<{ sessionRef: string; knownRunRefs: readonly string[] }>): Promise<
     Readonly<{ status: 'found'; runRef: string }> | Readonly<{ status: 'absent' }> | Readonly<{ status: 'unknown' }>>;
@@ -320,9 +320,9 @@ export function browserErrand(options: Readonly<{
         let started: Awaited<ReturnType<BrowserErrandEngine['submit']>>;
         try { started = await options.engine.submit({ sessionRef: record.custody.sessionRef, submitKey: intent.submit!.key, profileRef: record.custody.profileRef, finalAction: record.finalAction, facts: record.review.facts }); }
         catch { return readback(intent); }
-        if (started.status === 'hold_lost') {
+        if (started.status === 'not_started') {
           await save({ ...intent, phase: 'ready', review: null, proposalId: null, approvalExpiresAt: null, holdExpiresAt: null, submit: null, custody: { ...intent.custody, sessionRef: null, prepareRunRef: null } });
-          return rejected('The browser closed before the final step, so nothing was submitted. Ask me to prepare it again and approve the new review.');
+          return rejected('The final step could not start, so nothing was submitted. Ask me to prepare it again and approve the new review.');
         }
         return readback(await save({ ...intent, phase: 'submitted', custody: { ...intent.custody, submitRunRef: started.runRef } }));
       });

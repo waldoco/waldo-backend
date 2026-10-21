@@ -192,7 +192,7 @@ describe('browser errand seam', () => {
   });
 
   it('a held browser that closed before the final step asks for a fresh review, never a blind submit', async () => {
-    const h = harness({ submit: async () => ({ status: 'hold_lost' }) }); const errand = h.make();
+    const h = harness({ submit: async () => ({ status: 'not_started' }) }); const errand = h.make();
     const proposal = await prepared(errand);
     expect(await errand.submit('owner-a', proposal, 'approval-1')).toMatchObject({ status: 'rejected', message: expect.stringContaining('prepare it again') });
     expect(h.row()).toMatchObject({ phase: 'ready', proposalId: null });
