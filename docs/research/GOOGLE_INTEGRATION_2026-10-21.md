@@ -5,7 +5,7 @@ How Waldo's Google integration compares with Google's current documentation and 
 **Method.**
 - Google pages were read on 21 Oct 2026 in a browser. Every fact below names its page and that page's "last updated" date; source list at the end.
 - The Cloud console was read without changing anything (the Data Access page's second page was viewed; nothing was saved).
-- Code was read at `f1bd5d09`, the tip of `wave1/integration`.
+- Code was read at `f1bd5d09`, the tip of `wave1/integration`. None of the cited files changed in `beta-mvp` `30ed5a02`, so every file:line holds there too.
 
 Nothing here was deployed, and no Google setting was changed.
 
