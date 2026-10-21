@@ -97,6 +97,9 @@ const owned = async (name: string, script: (steps: Readonly<{
   update(): void;
   folded(): number[];
   // The owner forgets something from the console, a pattern or a spot; answers the action's result.
+  // The Midday card falls due now, as a card that is queued and then armed again later does.
+  midday(): Promise<void>;
+  expiryOf(card: string): number | undefined;
   forget(kind: 'node' | 'spot', text: string): Promise<boolean | string>;
   planned(): { sent: boolean; state?: string } | undefined;
   // Marks the Brief held for quiet hours, as a crash between queuing it and recording it waiting leaves it.
@@ -169,6 +172,8 @@ const owned = async (name: string, script: (steps: Readonly<{
           const { recurrence } = scheduler.read('order:ord1')!;
           await scheduler.schedule({ id: 'order:ord1', kind: 'standing_order', payloadRefs: { order_id: 'order:ord1' }, occurrenceAt: occurrence, dueAt: occurrence, recurrence });
         },
+        midday: async () => { await scheduler.schedule({ id: 'card:midday', kind: 'brief', payloadRefs: { id: 'card:midday' }, occurrenceAt: Date.now() - 120_000, dueAt: Date.now() - 120_000, recurrence: null }); },
+        expiryOf: card => (state.storage.kv.get<{ id: string; expiresAt?: number }[]>('telegram_final_outbox_v1') ?? []).find(record => record.id === `day-card:${today()}:${card}`)?.expiresAt,
         planned: () => dayPlanBook(state.storage.sql).read(today()).find(row => row.card === 'card:brief'),
         markHeld: () => { dayPlanBook(state.storage.sql).held(today(), 'card:brief'); },
         runs: () => state.storage.sql.exec<Run>("SELECT status, summary FROM background_runs WHERE kind = 'standing_order' ORDER BY started_at").toArray(),
@@ -230,6 +235,19 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
       expect(outbox()).toEqual([{ id: `day-card:${today()}:card:brief`, status: 'delivered' }]);
       await alarms(2);
       expect(wire.events.filter(event => event === `text:${CARD}`)).toHaveLength(1);
+    });
+  });
+
+  it('leaves a card that is already queued out of the next-card bound, so arming it again never shortens another card', async () => {
+    await owned('wa-queued-card-rearmed', async ({ alarms, midday, card, checkIn, expiryOf }) => {
+      await midday();
+      await alarms(1);
+      expect(expiryOf('card:midday')).toBeDefined();
+      // The queued Midday card is armed again for later today (a pin, a retry or a crash leaves it so); it will write nothing.
+      await checkIn(10 * 60_000);
+      await card();
+      await alarms(3);
+      expect(expiryOf('card:brief')).toBe(Date.parse(`${today()}T00:00:00Z`) + 24 * HOUR);
     });
   });
 

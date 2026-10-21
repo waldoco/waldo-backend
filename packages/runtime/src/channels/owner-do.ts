@@ -3765,9 +3765,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const skipped = !text || isSkip(text);
         if (!skipped && outboxed) {
           // The day plan records the card sent, and folds the updates it covered, only once it is delivered (settleFinal).
+          // A card already in the outbox for today writes nothing when it fires again, so it does not bound this card.
+          const queuedIds = new Set(finalOutbox.records().map(record => record.id));
           const laterDue = DAY_CARDS.flatMap(other => {
             const found = scheduler.lookup(other.id);
-            return other.id !== card.id && found.state === 'entry' && found.entry.status === 'armed' ? [found.entry.due_at] : [];
+            return other.id !== card.id && found.state === 'entry' && found.entry.status === 'armed' && !queuedIds.has(`day-card:${day}:${other.id}`) ? [found.entry.due_at] : [];
           });
           await finalOutbox.enqueue({ id: queued, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),
             doName: identity.get<string>('do_name') ?? '', expiresAt: cardExpiry(entry.occurrence_at, clock.timezone, laterDue), dayCard: { day, card: card.id, foldUpTo: now } });
