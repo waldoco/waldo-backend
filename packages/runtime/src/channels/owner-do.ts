@@ -2304,6 +2304,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     await runtime.finalOutbox.enqueueFenced({id:`device-${rowId}`,trace,payload:{chat_id:runtime.owner,text},ownerSubject:subject,doName,bot:this.env.TELEGRAM_BOT_TOKEN?.split(':')[0]},work=>this.ctx.storage.transactionSync(()=>{work();inbox.finish(rowId);}));
   }
 
+  // Google grant bookkeeping (health, reauth notices, probe stamps) reads then writes across awaits, and Google calls run
+  // concurrently (owner turns, task workers, parallel reads), so each read-then-write runs one at a time on this chain.
+  // Nothing on it calls Google.
+  private googleChain: Promise<unknown> = Promise.resolve();
+  private googleBooks<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.googleChain.then(work);
+    this.googleChain = run.catch(() => undefined);
+    return run;
+  }
   private serial<T>(work: () => Promise<T>): Promise<T> {
     // The alarm sets a scheduled app delivery inside its unit of work; no later unit, and no turn, inherits it.
     const run = this.queue.then(work).finally(() => { this.scheduledAppDelivery = null; this.jobOwner = null; });
@@ -2713,8 +2722,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const accounts = async () => (await storage.get<GoogleAccount[]>('google:accounts')) ?? [];
     const googleProfiles = async () => (await storage.get<Record<string, GoogleProfileFact>>('google:profiles')) ?? {};
     const health = async () => (await storage.get<Record<string, string>>('google:health')) ?? {};
+    const googleBooks = <T,>(work: () => Promise<T>) => this.googleBooks(work);
     const noteHealth = (id: string, error: string) => {
-      this.ctx.waitUntil((async () => {
+      this.ctx.waitUntil(googleBooks(async () => {
         const [all, noticed] = [await health(), (await storage.get<Record<string, number>>('google:reauth-noticed')) ?? {}];
         const { [id]: _, ...rest } = all;
         await storage.put('google:health', error ? { ...rest, [id]: error } : rest);
@@ -2732,7 +2742,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const sent = url !== null && (await deliverConnectLink(url, 'reconnect', account?.email));
         log({ trace: `google:${Date.now()}`, hop: 'google_reauth_notice', ms: 0, ok: sent, ...(sent ? {} : { error: url === null ? 'no link minted' : 'send failed' }) });
         if (sent) await storage.put('google:reauth-noticed', { ...(await storage.get<Record<string, number>>('google:reauth-noticed')) ?? {}, [id]: Date.now() });
-      })());
+      }));
     };
     const env = this.env;
     const consentDeps = {
@@ -2800,11 +2810,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const app = await googleApp();
         if (!app) {if(intent)throw new ProxyIntentError('intent_unavailable');return null;}
         await google.migrate();
-        const [all, failing, doName] = [await accounts(), await health(), vaultOwner()];
-        // Circuit breaker: a grant recorded as failing (invalid_grant) is skipped until its probe window elapses, then tried once.
-        const probes = (await storage.get<Record<string, number>>('google:probes')) ?? {};
-        const circuit = googleCircuit({ failing, probes, now: Date.now(), ids: all.map((account) => account.id) });
-        if (circuit.probe.length) await storage.put('google:probes', { ...probes, ...Object.fromEntries(circuit.probe.map((id) => [id, Date.now()])) });
+        const [all, doName] = [await accounts(), vaultOwner()];
+        // Circuit breaker: a grant recorded as failing (invalid_grant) is skipped until its probe window elapses, then tried
+        // once. Read and stamped in one step, so two calls at once cannot both probe it.
+        const { failing, circuit } = await googleBooks(async () => {
+          const failing = await health(), probes = (await storage.get<Record<string, number>>('google:probes')) ?? {};
+          const circuit = googleCircuit({ failing, probes, now: Date.now(), ids: all.map((account) => account.id) });
+          if (circuit.probe.length) await storage.put('google:probes', { ...probes, ...Object.fromEntries(circuit.probe.map((id) => [id, Date.now()])) });
+          return { failing, circuit };
+        });
         const fit = all.filter((account) => circuit.usable.includes(account.id) && googleHas(account.scopes, feature) && (!selectedAccount || account.email.toLowerCase() === selectedAccount.toLowerCase())).map(account=>({...account,rail:account.refresh_token?'local' as const:'proxy' as const}));
         const account = pinProxyIntentRoute(storage.sql,intent,`google:${feature}`,fit,fit.find((candidate) => !failing[candidate.id]) ?? fit[0]);
         if (!account) { if (circuit.skipped.length) log({ trace: `google:${Date.now()}`, hop: 'google_circuit_open', ms: 0, ok: false, detail: `${circuit.skipped.length} account(s) need reconnect; next probe within 6h` }); return null; }
