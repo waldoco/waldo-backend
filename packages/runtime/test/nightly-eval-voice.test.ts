@@ -190,7 +190,7 @@ describe('the voice world', () => {
 });
 
 describe('the nightly catalogue', () => {
-  it('holds the research tasks, the owner\'s two and the fourteen voice and safety scenarios, at the gate\'s floor', () => {
+  it('holds the research tasks, the owner\'s two, the voice and safety set and the runnable errands, at the gate\'s floor', () => {
     expect(VOICE_SCENARIOS).toHaveLength(14);
     expect(new Set(NIGHTLY_SCENARIOS.map((entry) => entry.id)).size).toBe(NIGHTLY_SCENARIOS.length);
     expect(NIGHTLY_SCENARIOS.length).toBe(NIGHTLY_THRESHOLDS.recorded.min_scenarios);
