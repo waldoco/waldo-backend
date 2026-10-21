@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
-import { claimStore, textFingerprint } from '../src/memory/claims';
+import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 
 // A forget hides the current owner message where it carries the forgotten text, as stored before the model ran. The turn
@@ -113,7 +113,10 @@ it('a forget whose cleanup cannot be verified completes the turn and hands the m
   const name = 'app-forget-incomplete';
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const owner = await ownerFor(name, state);
-    state.storage.sql.exec('INSERT INTO topic_purge_pending (fingerprint, topic, created_at, coverage_incomplete) VALUES (?, ?, ?, 1)', textFingerprint('zebra stripes'), 'zebra stripes', new Date().toISOString());
+    // A derived row the purge cannot prove clean: JSON that is not canonical is never rewritten, so the readback still finds the topic.
+    state.storage.sql.exec('CREATE TABLE IF NOT EXISTS patrol_log (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, observed_at TEXT NOT NULL, entry_type TEXT NOT NULL, summary TEXT NOT NULL, source_ref TEXT, created_at TEXT NOT NULL)');
+    const at = new Date().toISOString();
+    state.storage.sql.exec('INSERT INTO patrol_log (id, user_id, observed_at, entry_type, summary, created_at) VALUES (?, ?, ?, ?, ?, ?)', 'patrol-1', OWNER_ID, at, 'note', '{ "note": "zebra stripes" }', at);
     expect(await turn(owner, state, name, 'Forget zebra stripes', { name: 'forget_memory', args: { topic: 'zebra stripes', scope_note: 'zebras' } })).toBe('completed');
     const receipt = receiptOf('forget_memory');
     expect(receipt).toContain('"ok":false');
