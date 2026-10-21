@@ -18,12 +18,24 @@ export type CompactionSettings = typeof COMPACTION;
 export const COMPACTION_SUPERSEDED_MARKER = '[superseded summary]';
 // One compaction per chain and span: the row's id carries the last row it covers.
 export const compactionId = (toId: string): string => `${toId}-compaction`;
+// The summary has fixed sections, so what the owner asked for survives each re-compaction in the same place instead of
+// thinning out of free prose. Headings carry no numbers: the numeric health floor rejects a numbered list.
 export const COMPACTION_INSTRUCTION = [
   'Summarise the earlier part of this conversation between the owner and Waldo for Waldo\'s own later use. The conversation is in the owner\'s language; write in it.',
-  'Keep: what the owner asked for and decided, with the owner\'s latest correction superseding any earlier statement; open items and promises Waldo made; facts the owner stated that Waldo should still know, each marked as stated by the owner.',
+  'Write these sections, in this order, each a heading line followed by plain bullets, and leave a section with no bullets out:',
+  'Owner instructions: every standing instruction or preference the owner gave that still applies, in the owner\'s own words where short. A later correction replaces the earlier one; never drop an instruction the owner did not take back.',
+  'Decisions: what the owner decided or approved.',
+  'Open items: what is still to do, and every promise Waldo made that is not yet kept.',
+  'Facts: facts the owner stated that Waldo should still know, each marked as stated by the owner.',
   'Leave out: tool mechanics, greetings, and anything already superseded. Health: only the owner\'s own qualitative statements, never a number, score or measurement.',
-  'Write plain bullets. Never number steps or items. If a summary of earlier messages is already present, carry what still matters from it.',
+  'Never number steps or items. If a summary of earlier messages is already present, carry every section of it forward with what still matters.',
 ].join('\n');
+
+// A span about to leave the model's window, handed to the memory flush before its summary replaces it. The flush may
+// keep what the owner said as memory; it writes nothing to the chain. A flush that throws defers the compaction, so no
+// span leaves the window before its flush has run.
+export type CompactionSpan = Readonly<{ conversationRef: string; covers: ConversationCovers; messages: readonly ConversationModelMessage[] }>;
+export type CompactionFlush = (span: CompactionSpan) => Promise<void>;
 
 export type CompactedStats = ConversationWindowStats & Readonly<{ compacted: 0 | 1 }>;
 
@@ -77,7 +89,7 @@ export type CompactionPlan = Readonly<{ input: readonly ConversationModelMessage
 
 // What the next compaction covers: every row on the chain older than a verbatim tail of whole rounds at or under the tail
 // fraction of the budget, so the tail starts with an owner message. The call's input is the live summary first, then the
-// newest span rows that fit the input budget; rows older than those stay dropped, counted as `gap`, and `covers` names the
+// span rows that fit the input budget, in chain order; rows that do not fit are counted as `gap`, and `covers` names the
 // first original row the summary carries, through the previous summary when there is one.
 export const compactionPlan = (tree: ConversationTree, leafId: string, live: ConversationEntry | null, settings: CompactionSettings = COMPACTION, inputBudgetTokens: number = settings.budgetTokens): CompactionPlan | null => {
   const path = tree.path(leafId);
@@ -96,19 +108,27 @@ export const compactionPlan = (tree: ConversationTree, leafId: string, live: Con
   const span = rows.slice(0, tailStart);
   if (!span.length) return null;
   const summary = live ? compactionMessage(live, summaryText(live)) : null;
-  let used = summary ? estimateMessageTokens(summary) : 0, from = span.length;
-  for (let index = span.length - 1; index >= 0; index -= 1) {
-    const cost = span[index]!.message ? estimateMessageTokens(span[index]!.message!) : 0;
-    if (used + cost > inputBudgetTokens) break;
-    used += cost; from = index;
+  // When the span outgrows the input budget, the owner's own messages go in first, newest first, and Waldo's replies fill
+  // what room is left: a reply can be read again from the transcript the owner sees, an instruction the summary never saw is lost.
+  const isOwnerRow = (entry: ConversationEntry) => entry.role === 'user' && entry.inputOrigin === 'owner';
+  const kept = new Set<number>();
+  let used = summary ? estimateMessageTokens(summary) : 0;
+  for (const owner of [true, false]) {
+    for (let index = span.length - 1; index >= 0; index -= 1) {
+      const row = span[index]!;
+      if (!row.message || isOwnerRow(row.entry) !== owner) continue;
+      const cost = estimateMessageTokens(row.message);
+      if (used + cost > inputBudgetTokens) break;
+      used += cost; kept.add(index);
+    }
   }
-  const fitted = span.slice(from);
-  const carried = fitted.filter((row) => row.message !== null);
+  const carried = span.filter((row, index) => kept.has(index));
   if (!carried.length) return null;
+  const first = Math.min(...kept);
   return {
     input: [...(summary ? [summary] : []), ...carried.map((row) => row.message!)],
-    covers: { from_id: live ? live.covers!.from_id : fitted[0]!.entry.id, to_id: span[span.length - 1]!.entry.id, rows: (live?.covers?.rows ?? 0) + carried.length },
-    gap: from,
+    covers: { from_id: live ? live.covers!.from_id : span[first]!.entry.id, to_id: span[span.length - 1]!.entry.id, rows: (live?.covers?.rows ?? 0) + carried.length },
+    gap: span.filter((row) => row.message !== null).length - carried.length,
     toEntry: span[span.length - 1]!.entry,
   };
 };
