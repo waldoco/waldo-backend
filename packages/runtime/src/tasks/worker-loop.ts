@@ -17,6 +17,9 @@ import type { TaskBrief, TaskTicket } from './jobs';
 export type TaskClaim = Readonly<{
   jobId: string; profile: TaskProfile; brief: TaskBrief; tools: readonly LLMTool[]; mutations: readonly string[];
   turns: readonly LLMToolTurn[]; seq: number; deadlineAt: number; roundsUsed: number; ownerRef: string;
+  // The owner's month spend against their ceiling, read when the attempt claims. Past it a worker runs on the cheap route,
+  // the way an owner turn does; an object with no ceiling sends none.
+  spend?: Readonly<{ spentUsd: number; ceilingUsd: number }>;
 }>;
 export type TaskSpend = Readonly<{ rounds: number; costUsd: number }>;
 // What the attempt ended with. unavailable: no model provider answered, which is not the task's failure and not a crash.
@@ -167,6 +170,7 @@ export const taskModel = (access: OwnerModelAccess, gateway?: LLMGatewayAdapter)
     const result = await new RuntimeLLMProvider({ gateway: gateway ?? ownerModelGateway(access), circuitBreaker: health }).complete({
       trigger: 'user_message',
       policy: ownerRoutePolicy(model, WALDO_CHAT_MODEL, access),
+      ...(claim.spend ? { spend: { spent_cents: Math.floor(claim.spend.spentUsd * 100), cap_cents: Math.round(claim.spend.ceilingUsd * 100), clamp: ownerRoutePolicy(WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL, access) } } : {}),
       renderRequest: ({ step }) => {
         const effort = OPENAI_REASONING[step.model]?.effort;
         return {

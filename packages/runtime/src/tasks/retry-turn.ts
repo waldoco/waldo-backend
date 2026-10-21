@@ -10,6 +10,8 @@ import type { JobBook, RetryBrief } from './jobs';
 // How long the floor reply promises. Provider incidents mostly clear within minutes; half an hour covers most of them
 // without leaving the owner waiting longer than they would wait for a person.
 export const RETRY_WINDOW_MS = 30 * 60_000;
+// The first retry waits a little: an outage that just failed every provider rarely clears within seconds.
+export const RETRY_FIRST_TRY_MS = 2 * 60_000;
 
 
 // The owner's local wall-clock time, as the floor reply and the notice say it.
@@ -43,7 +45,7 @@ export const promiseRetry = (book: JobBook, turn: FloorTurn, timezone: string, n
   const brief: RetryBrief = { message_ref: turn.messageRef ?? turn.traceId, text, conversation_ref: turn.conversationRef, said_at: turn.receivedAt, promised_by: promised };
   const { job } = book.create({
     kind: 'retry_turn', profile: null, idempotencyKey: `retry:${turn.traceId}`, origin: turn.traceId, surface: turn.surface,
-    brief, dueAt: now + 2 * 60_000, deadlineAt: promised,
+    brief, dueAt: now + RETRY_FIRST_TRY_MS, deadlineAt: promised,
   });
   return floorReplyText((JSON.parse(job.brief_json) as RetryBrief).promised_by, timezone);
 };

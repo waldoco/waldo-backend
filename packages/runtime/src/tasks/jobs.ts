@@ -1,7 +1,6 @@
-import { literalTextRedactor, type LLMToolTurn, type TaskProfile, type TaskResult } from '@waldo/contracts';
+import { type LLMToolTurn, type TaskProfile, type TaskResult } from '@waldo/contracts';
 import { TASK_JOBS_TABLE_SCHEMA } from '../do-schema';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
-import { FORGOTTEN } from '../memory/claims';
 import { md5Hex } from '../channels/md5';
 
 // The job book: the owner object's record of every task it handed to a worker and every turn it retries itself. The owner
@@ -43,6 +42,10 @@ export const TASK_LEASE_MS = 120_000;
 export const TASK_MAX_CRASHES = 3;
 // A job may wait hours, such as for a live-view login, but never forever.
 export const TASK_DEADLINE_MS = 6 * 60 * 60_000;
+// Task workers one owner runs at once. Each makes model calls back to back, so more at once multiplies the owner's spend per
+// minute and draws on the same provider rate limits as their chat. A job past this waits in the queue, never refused, and
+// starts when a running one reports.
+export const TASK_MAX_RUNNING = 3;
 // Settled rows kept for the console and audit; older ones are dropped, newest kept.
 export const TASK_SETTLED_KEPT = 200;
 
@@ -208,6 +211,7 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     },
     open: (): readonly JobRow[] => sql.exec<JobRow>(`SELECT * FROM task_jobs WHERE status IN (${placeholders(OPEN)}) ORDER BY created_at`, ...OPEN).toArray(),
     running: (): readonly JobRow[] => sql.exec<JobRow>("SELECT * FROM task_jobs WHERE status = 'running' ORDER BY created_at").toArray(),
+    runningTasks: (): number => sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM task_jobs WHERE status = 'running' AND kind = 'task'").toArray()[0]?.n ?? 0,
     // Work the brain owes now: queued attempts whose time came, and reported jobs not yet applied.
     due: (): readonly JobRow[] => sql.exec<JobRow>(
       "SELECT * FROM task_jobs WHERE status IN ('queued', 'reported') AND due_at <= ? ORDER BY due_at, created_at", deps.now(),
@@ -218,32 +222,24 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
       return sql.exec("UPDATE task_jobs SET due_at = ?, deferrals = deferrals + 1 WHERE id = ? AND status = 'reported'", dueAt, id).rowsWritten > 0;
     },
     // The next moment the brain has something to do: a queued job's due time, a running attempt's lease end, or now for a report.
-    nextDue(): number | null {
+    // While every task slot is taken, a queued task waits for a report rather than its due time.
+    nextDue(slotsFull = false): number | null {
       const row = sql.exec<{ next: number | null }>(
         `SELECT MIN(CASE status WHEN 'running' THEN lease_until ELSE due_at END) AS next
-         FROM task_jobs WHERE status IN (${placeholders(OPEN)})`, ...OPEN,
+         FROM task_jobs WHERE status IN (${placeholders(OPEN)}) AND NOT (? AND status = 'queued' AND kind = 'task')`, ...OPEN, slotsFull ? 1 : 0,
       ).toArray()[0];
       return row?.next ?? null;
     },
-    // Owner forget: open jobs whose brief, progress or result carries a forgotten text are cancelled (their worker holds a
-    // copy), and the text is redacted from every row on decoded JSON leaves, the same way the memory purge does it.
-    forget(texts: readonly string[]): Readonly<{ cancelled: readonly string[]; redacted: number }> {
+    // Owner forget: open jobs whose brief, progress or result carries a forgotten text are cancelled, since their worker
+    // holds a copy. The text itself is redacted from every row by the memory purge, which lists this table among its
+    // literal-redacted stores and reads it back.
+    forget(texts: readonly string[]): readonly string[] {
       const topics = [...new Set(texts.map(text => text.trim()).filter(Boolean))];
-      if (!topics.length) return { cancelled: [], redacted: 0 };
+      if (!topics.length) return [];
       const holds = (value: string | null) => value !== null && topics.some(topic => carriesTopic(value, topic) || hidesTopic(value, topic));
-      const redact = literalTextRedactor(topics, FORGOTTEN);
-      const cancelled: string[] = [];
-      let redacted = 0;
-      for (const row of sql.exec<Pick<JobRow, 'id' | 'status' | 'brief_json' | 'checkpoint_json' | 'result_json'>>('SELECT id, status, brief_json, checkpoint_json, result_json FROM task_jobs').toArray()) {
-        if (![row.brief_json, row.checkpoint_json, row.result_json].some(holds)) continue;
-        if (OPEN.includes(row.status) && this.cancel(row.id, 'forgotten')) cancelled.push(row.id);
-        const next = (value: string | null) => value === null ? null : JSON.stringify(JSON.parse(value), (_key, leaf: unknown) => typeof leaf === 'string' ? redact(leaf) : leaf);
-        const brief = next(row.brief_json)!;
-        sql.exec('UPDATE task_jobs SET brief_json = ?, brief_digest = ?, checkpoint_json = ?, result_json = ?, updated_at = ? WHERE id = ?',
-          brief, md5Hex(brief), next(get(row.id)!.checkpoint_json), next(row.result_json), deps.now(), row.id);
-        redacted += 1;
-      }
-      return { cancelled, redacted };
+      return sql.exec<Pick<JobRow, 'id' | 'brief_json' | 'checkpoint_json' | 'result_json'>>(
+        `SELECT id, brief_json, checkpoint_json, result_json FROM task_jobs WHERE status IN (${placeholders(OPEN)})`, ...OPEN,
+      ).toArray().filter(row => [row.brief_json, row.checkpoint_json, row.result_json].some(holds) && this.cancel(row.id, 'forgotten')).map(row => row.id);
     },
     // TTL sweep: settled rows past the newest TASK_SETTLED_KEPT are dropped.
     trim(): number {

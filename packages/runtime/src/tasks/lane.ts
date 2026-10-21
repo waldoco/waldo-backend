@@ -3,7 +3,7 @@ import { ClosedRunError } from '../channels/run-effect-scope';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { checkBackReply } from '../channels/check-back';
 import { deferDelay, heldTopicIn, noteDue, TASK_NOTE_EVERY_MS, TURN_OUTCOME, type TaskHost } from './brain';
-import { jobCheckpoint, jobResult, retryBrief, taskBrief, type JobBook, type JobRow, type TaskTicket } from './jobs';
+import { jobCheckpoint, jobResult, retryBrief, taskBrief, TASK_MAX_RUNNING, type JobBook, type JobRow, type TaskTicket } from './jobs';
 import { retryParkedNotice, retryTurnText } from './retry-turn';
 
 // The jobs lane: the brain's single retry owner, run inside the owner's alarm pass with the runtime of the surface that
@@ -151,7 +151,7 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     logSettled();
   };
 
-  let leftOver = false;
+  let leftOver = false, slotsFull = false;
   for (const row of book.due()) {
     if (topics.length && heldTopicIn(row, topics)) {
       if (book.cancel(row.id, 'forgotten')) { deps.host.fence(row.id); hop(row, 'task_cancelled', { code: 'forgotten' }); }
@@ -162,6 +162,7 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     if (needsTurn && !deps.room()) { leftOver = true; continue; }
     if (row.status === 'reported') { await apply(row); continue; }
     if (row.kind === 'retry_turn') { await retry(row); continue; }
+    if (book.runningTasks() >= TASK_MAX_RUNNING) { slotsFull = true; continue; }
     const ticket = book.startAttempt(row.id);
     if (!ticket) continue;
     try {
@@ -183,6 +184,6 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     hop(row, 'task_progress_note', { detail: `note=${row.notes_sent + 1}` });
   }
   book.trim();
-  const next = leftOver ? deps.now() : book.nextDue();
+  const next = leftOver ? deps.now() : book.nextDue(slotsFull);
   return next === null ? nextNote : nextNote === null ? next : Math.min(next, nextNote);
 }

@@ -1,6 +1,7 @@
 import { buildSessionState, toolError, type LLMToolCall, type LLMToolTurn, type TaskResult, type TurnOutcome } from '@waldo/contracts';
 import { ClosedRunError, type RunEffectScope } from '../channels/run-effect-scope';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
+import { PAID_RUNG_TOOLS, spendHold } from '../channels/owner-turn';
 import { dispatchLoopTool, toolDefinitions, type LoopToolResult } from '../conversation/tool-loop';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
@@ -27,6 +28,8 @@ export type TaskHostDeps = Readonly<{
   serialBrowser<T>(scope: RunEffectScope, work: () => Promise<T>): Promise<T>;
   releaseBrowser(scope: RunEffectScope): void;
   log(entry: TurnLogEntry): void;
+  // The owner's month spend against their ceiling, when this object keeps one.
+  spend?(): Readonly<{ spentUsd: number; ceilingUsd: number }> | undefined;
   // Arms the jobs lane's wake.
   wake(due: number): Promise<void>;
 }>;
@@ -85,11 +88,13 @@ export const taskHost = (deps: TaskHostDeps) => {
       }
       scopeFor(ticket, row);
       const handlers = await profileHandlers(row);
+      const spend = deps.spend?.();
       return {
         jobId: row.id, profile: row.profile, brief: taskBrief(row), tools: toolDefinitions(handlers),
         mutations: handlers.filter((handler) => handler.mutates_state || handler.autonomy_gated).map((handler) => handler.name),
         turns: jobCheckpoint(row).turns, seq: row.checkpoint_seq, deadlineAt: row.deadline_at, roundsUsed: row.rounds,
         ownerRef: deps.context(row.surface).authenticatedUserId,
+        ...(spend ? { spend } : {}),
       };
     },
     // One worker tool call, run by the brain with the job's own scope. The profile's allowlist is enforced here, not trusted
@@ -101,9 +106,15 @@ export const taskHost = (deps: TaskHostDeps) => {
       const allowed = row.profile !== null && TASK_PROFILE_SPECS[row.profile].tools.includes(call.name as never);
       const scope = scopeFor(ticket, row);
       let result: LoopToolResult;
+      const spend = deps.spend?.();
       if (!allowed) {
         const error = toolError('acl_denied', `${call.name} is not a tool this task can use.`);
         result = { ok: false, error: error.cause, error_code: error.code, fix: error.fix, retryable: false, code: 'rejected' };
+      } else if (spend && spend.spentUsd >= spend.ceilingUsd && PAID_RUNG_TOOLS.has(call.name)) {
+        // Past the ceiling a worker's paid tools are held, as an owner turn's are; the cost ledger counts the hold.
+        deps.log({ trace: traceOf(ticket), hop: 'spend_hold', ms: 0, ok: false, code: `spend_ceiling_reached:${call.name}`, error_code: 'spend_ceiling_reached', cost_kind: 'worker', job_id: row.id, job_profile: row.profile! });
+        const held = spendHold(new Date(deps.now()));
+        result = { ok: false, error: held.cause, error_code: held.code, fix: held.fix, retryable: false, code: 'rejected' };
       } else {
         const handlers = await profileHandlers(row);
         const ctx: ToolDispatcherContext = {

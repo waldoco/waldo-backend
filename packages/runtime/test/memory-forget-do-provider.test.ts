@@ -1,3 +1,4 @@
+import { jobBook } from '../src/tasks/jobs';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { TelegramOwnerInbox } from '../src/channels/telegram-owner-inbox';
@@ -799,7 +800,8 @@ it.each(['', '\0'])('ROUND4 empty separator collateral %j',async gap=>{
  const after=JSON.parse(sql.exec<{changes:string}>('SELECT changes FROM update_cards').one().changes);console.log('ROUND4-SPACE',JSON.stringify({gap,after}));
  state.storage.deleteAlarm();expect(store.forgetSources(topic,true).incomplete).toBe(false);expect(after[0]).toBe(items[0]);expect(after[4]).toBe(items[4]);
  });
-});import { loopBook } from '../src/channels/loops';
+});
+import { loopBook } from '../src/channels/loops';
 const realOf = (state: DurableObjectState) => (topic: string) => claimStore(state.storage.sql).forgetSources(topic, true);
 const T8 = 'the secret code word that I told you about earlier today is ZEBRA-COBALT';
 const sp = T8.indexOf(' about');
@@ -842,6 +844,12 @@ positiveStore('reminder_notes', 'POSNOTE769', (sql, text) => { sql.exec('CREATE 
 positiveStore('thread_topic_index', 'POSTOPIC769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS thread_topic_index (user_id TEXT NOT NULL, topic TEXT NOT NULL, thread_id TEXT NOT NULL, last_user_message_at TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, PRIMARY KEY (user_id, topic, thread_id))'); sql.exec('INSERT INTO thread_topic_index (user_id, topic, thread_id, last_user_message_at, is_active, updated_at) VALUES (?,?,?,?,?,?)', 'u', text, 't1', 't', 1, 't'); }, sql => JSON.stringify(sql.exec('SELECT topic FROM thread_topic_index').toArray()));
 positiveStore('memory_blocks', 'POSBLOCK769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS memory_blocks (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, hall_type TEXT NOT NULL, content TEXT NOT NULL, decision_log TEXT NOT NULL DEFAULT \'[]\', confidence REAL NOT NULL, created_at TEXT NOT NULL, valid_from TEXT NOT NULL, source_trust TEXT NOT NULL)'); sql.exec('INSERT INTO memory_blocks (id, user_id, hall_type, content, decision_log, confidence, created_at, valid_from, source_trust) VALUES (?,?,?,?,?,?,?,?,?)', 'pos-769-block', 'u', 'facts', text, '[]', 0.9, 't', 't', 'user_stated'); }, sql => JSON.stringify(sql.exec('SELECT content, decision_log FROM memory_blocks').toArray()));
 positiveStore('memory_inbox', 'POSINBOX769', (sql, text) => { sql.exec('CREATE TABLE IF NOT EXISTS memory_inbox (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, operation TEXT NOT NULL, hall TEXT NOT NULL, claim TEXT NOT NULL, content TEXT NOT NULL, proposed_pattern_id TEXT NOT NULL, observed_at TEXT NOT NULL, source_trust TEXT NOT NULL, rationale TEXT NOT NULL, source TEXT NOT NULL)'); sql.exec('INSERT INTO memory_inbox (id, user_id, operation, hall, claim, content, proposed_pattern_id, observed_at, source_trust, rationale, source) VALUES (?,?,?,?,?,?,?,?,?,?,?)', 'pos-769-inbox', 'u', 'ADD', 'facts', text, text, 'p', 't', 'user_stated', 'r', 's'); }, sql => JSON.stringify(sql.exec('SELECT claim, content FROM memory_inbox').toArray()));
+
+positiveStore('task_jobs', 'POSTASK769', (sql, text) => {
+  const book = jobBook(sql, { now: () => Date.now(), newId: () => 'a1b2c3d4e5f6', newToken: () => 'token' });
+  const brief = { title: 'Read the backlog', goal: text, context: text, done_when: 'summarised', effort: 'standard' as const, timezone: 'UTC', started_at: Date.now() };
+  book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'pos-769-task', origin: 'turn', surface: 'telegram', brief, dueAt: Date.now() + 3_600_000, deadlineAt: Date.now() + 7_200_000 });
+}, sql => JSON.stringify(sql.exec('SELECT status, brief_json, checkpoint_json, result_json FROM task_jobs').toArray()));
 
 // Full-store scan: after a successful forget and a DO eviction, no table or text column in the owner DO SQLite holds the forgotten text.
 // An exemption must name why the table cannot hold owner text; there is no skip.

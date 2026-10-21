@@ -178,12 +178,12 @@ import { gmailPushBook } from './gmail-push';
 import { armWatchUpkeep, endWatchUpkeep, watchGrants, watchStatusLine, watchUpkeep, WATCH_UPKEEP_ID } from './watch-upkeep';
 import { gmailPush } from '../connectors/google-push';
 import type { TelegramWebhookEnv } from './telegram-webhook';
-import type { LLMToolCall, LLMToolTurn } from '@waldo/contracts';
+import type { LLMToolCall, LLMToolTurn, ToolName } from '@waldo/contracts';
 import { jobBook, type JobBook, type TaskTicket } from '../tasks/jobs';
 import { taskHost, type TaskHost } from '../tasks/brain';
 import { runJobsLane } from '../tasks/lane';
 import { runningTasksLine, taskToolHandlers } from '../tasks/tools';
-import { promiseRetry } from '../tasks/retry-turn';
+import { promiseRetry, RETRY_FIRST_TRY_MS } from '../tasks/retry-turn';
 import { taskWorkerName, type OwnerTaskRpc } from '../tasks/worker-do';
 import type { TaskOutcome, TaskSpend } from '../tasks/worker-loop';
 import type { LoopToolResult } from '../conversation/tool-loop';
@@ -246,6 +246,8 @@ type OwnerRuntime = Readonly<{
   // The owner-turn tool set and the dispatch context a background task's tool calls run under.
   toolHandlers(): DispatchToolOptions<ToolDispatcherContext>['handlers'];
   taskContext(): Readonly<Pick<ToolDispatcherContext, 'authenticatedUserId' | 'sanitise' | 'egressAllowlist'>>;
+  // The month's spend against the owner's ceiling, while the cost ledger counts the month.
+  monthSpend(): Readonly<{ spentUsd: number; ceilingUsd: number }> | undefined;
 }>;
 
 const LATE_FIRE_MS = 5 * 60_000;
@@ -370,14 +372,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }),
       releaseBrowser: scope => { self.ctx.waitUntil(self.ownerBrowser.finish(scope).catch(() => undefined)); },
       log: entry => self.taskLog(entry),
+      spend: () => { try { return self.setup(self.taskChannel()).monthSpend(); } catch { return undefined; } },
       wake: due => armTaskJobsWake(self.ctx.storage, due),
     });
   })();
 
   // Task telemetry goes to the trace book of the surface that takes this owner's proactive work; an object with no runtime
   // to log through keeps the outcome fields only, never a tool's input or output.
+  private taskChannel(): ChannelKind {
+    return this.appBound() ? 'app' : this.whatsappBound() && !this.ctx.storage.kv.get<string>('telegram_subject') ? 'whatsapp' : 'telegram';
+  }
   private taskLog(entry: TurnLogEntry): void {
-    try { this.setup(this.appBound() ? 'app' : this.whatsappBound() && !this.ctx.storage.kv.get<string>('telegram_subject') ? 'whatsapp' : 'telegram').log(entry); }
+    try { this.setup(this.taskChannel()).log(entry); }
     catch { console.log(JSON.stringify({ hop: entry.hop, ok: entry.ok, ...(entry.code ? { code: entry.code } : {}), ...(entry.job_id ? { job_id: entry.job_id } : {}) })); }
   }
 
@@ -2041,6 +2047,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const leftForWhatsApp = whatsappTarget === null ? null : this.leftForWhatsApp(whatsappTarget);
       if (leftForWhatsApp) await finalOutbox.wake(waitingForWhatsApp(leftForWhatsApp));
       await lane('mac', () => this.drainMacDeliveries());
+      await lane('jobs', () => this.drainJobs(channel, alarmEnd));
       await lane('transport', () => finalOutbox.maintain());
       const finals = finalOutbox.records();
       const protectedAttempts = new Set(this.liveAttempts);
@@ -2224,6 +2231,55 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
     }
     await rearmSharedAlarm(this.ctx.storage,null,Date.now());
+  }
+  // The jobs lane, when its wake is due: task workers started and restarted, their reports told to the owner once, retried
+  // turns answered, progress notes sent. It runs as the owner the directory admits, on the surface that takes their
+  // proactive work, and leaves its next due time on the wake. The wake is cleared first, so a worker that reports while the
+  // lane runs keeps the wake it sets.
+  private async drainJobs(channel: ChannelKind, alarmEnd?: number): Promise<void> {
+    const storage = this.ctx.storage, due = await storage.get<number | null>(TASK_JOBS_DUE_KEY);
+    if (due === undefined || due === null || due > Date.now()) return;
+    await storage.put(TASK_JOBS_DUE_KEY, null);
+    let runtime = this.setup(channel);
+    const previous = this.scheduledAppDelivery;
+    let next: number | null = null;
+    try {
+      if (consoleAuth(this.env)) {
+        const owner = await this.scheduledOwner();
+        // An owner the directory no longer admits runs no jobs; a directory outage asks again soon. A later report or task
+        // arms the wake again.
+        if (owner.kind !== 'admitted') { next = owner.kind === 'retry' ? Date.now() + APP_ADMISSION_RETRY_MS : null; return; }
+        if (channel === 'telegram' && owner.authority) {
+          this.scheduledAppDelivery = this.copiedToTelegram(this.appDeliveryFor(owner.authority));
+          runtime = this.setup('app');
+          await runtime.ready;
+        }
+      }
+      const kv = storage.kv, jobs = this.jobs();
+      next = await runJobsLane({
+        book: jobs, host: this.tasks, now: Date.now, timezone: runtime.timezone, log: runtime.log,
+        startWorker: async ticket => {
+          const workers = this.env.TASK_WORKER_DO;
+          if (!workers) throw new Error('task workers are not configured');
+          await workers.get(workers.idFromName(taskWorkerName(this.ctx.id.toString(), ticket))).start({ owner: this.ctx.id.toString(), ticket });
+        },
+        turn: (job, trace, text, current, sourceTaint, toolNames) => this.asOwnerJob(job, trace, () =>
+          runtime.macFollowup(trace, runtime.owner, text, async (_hop, work) => work(), toolNames, current, undefined, undefined, sourceTaint ?? undefined)),
+        applyTools: () => runtime.toolHandlers().map(handler => handler.name as ToolName).filter(name => name !== 'start_task' && name !== 'cancel_task'),
+        deliver: async (id, trace, text, commit) => {
+          if (runtime.finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }
+          await runtime.finalOutbox.enqueueFenced({ id, trace, payload: { chat_id: runtime.owner, text: redactSecretUrls(text).text }, ownerSubject: String(runtime.owner),
+            doName: kv.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] }, work => storage.transactionSync(() => { work(); commit(); }));
+        },
+        room: () => alarmEnd === undefined || alarmEnd - Date.now() >= ALARM_JOB_MIN_MS,
+        heldTopics: () => claimStore(storage.sql).pendingTopics(),
+      });
+    } finally {
+      this.scheduledAppDelivery = previous;
+      const armed = await storage.get<number | null>(TASK_JOBS_DUE_KEY);
+      const wake = [armed, next].filter((value): value is number => typeof value === 'number');
+      await storage.put(TASK_JOBS_DUE_KEY, wake.length ? Math.min(...wake) : null);
+    }
   }
   private async deliverMacRow(rowId: string, delivery: MacDelivery, current: () => Promise<void>, runtime: OwnerRuntime, inbox: ReturnType<typeof macInbox>): Promise<void> {
     await current();
@@ -3142,11 +3198,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // Past the owner's monthly ceiling a turn degrades: the owner's own turns run on the auxiliary model and paid tools are held.
     // The month total lives beside the cost ledger's deltas, so there is no ceiling while the ledger is off.
     const spend = costs ? () => ({ spentUsd: costs.monthSpendUsd(deps.now()), ceilingUsd: MONTHLY_SPEND_CEILING_USD }) : undefined;
+    // When every provider fails on the owner's own message, the reply promises a time and the retry job written with it keeps
+    // the promise (tasks/retry-turn.ts): the row commits before the text goes out.
+    const retryFloor = { promise: (turn: Parameters<typeof promiseRetry>[1]) => {
+      const reply = promiseRetry(this.jobs(), turn, clock.timezone, Date.now());
+      this.ctx.waitUntil(armTaskJobsWake(storage, Date.now() + RETRY_FIRST_TRY_MS));
+      return reply;
+    } };
     // Built from the watch books on each owner turn: a push that is not running, and what fixes it.
     const watchStatus = () => watchStatusLine({ accounts: identity.get<GoogleAccount[]>('google:accounts') ?? [],
       gmail: gmailPushBook(identity).miss(), calendar: calendarPushBook(identity).miss(), timezone: clock.timezone });
     const responder = createTelegramResponder(
-      { openaiApiKey: key, ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), health: this.providerHealth }, { ...indexedConversationStore(kv, episodes, () => Date.now()), recalls: (entryId: string) => recallReach(identity, identity.get<string>('owner_principal_ref'), null)(entryId) }, memory, log,
+      { openaiApiKey: key, ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), health: this.providerHealth, floorReply: retryFloor }, { ...indexedConversationStore(kv, episodes, () => Date.now()), recalls: (entryId: string) => recallReach(identity, identity.get<string>('owner_principal_ref'), null)(entryId) }, memory, log,
       { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, replayHandlers = [...workspaceTools, ...reminderHandlers(book), ...healthLogHandlers(healthLogs), getHealthHandler(healthRead, clock), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
         // Owner-ruled OTP parity (September 27, 2026): the extracted artifact goes to the owner
         // as a direct message - fixed copy, no model involvement, and the send is never logged
@@ -3167,8 +3230,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
           const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
           forgetHeldWhatsApp(this.ctx.storage.kv, texts);
-          // A task holding a forgotten text is cancelled, its worker fenced, and the text redacted from every job row.
-          for (const id of this.jobs().forget(texts).cancelled) this.tasks.fence(id);
+          // A task holding a forgotten text is cancelled and its worker fenced; the purge then redacts the job rows.
+          for (const id of this.jobs().forget(texts)) this.tasks.fence(id);
           const imessage = redactIMessageEntries(this.ctx.storage, texts, FORGOTTEN, scope);
           const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope);
           if (result.remaining + mail.remaining + prep.remaining + reports.remaining + imessage.remaining + titles.remaining) throw new Error('Memory history cleanup is incomplete');
@@ -3856,6 +3919,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const runtime: OwnerRuntime = { macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
+      monthSpend: () => spend?.(),
       taskContext: () => { const egress = parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST); return { authenticatedUserId: ownerRef(), sanitise, ...(egress ? { egressAllowlist: egress } : {}) }; },
       view: async (session, notice, page) => {
         const linked = await google.state();

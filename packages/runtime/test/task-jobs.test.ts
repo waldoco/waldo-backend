@@ -152,7 +152,7 @@ describe('task job book', () => {
     });
   });
 
-  it('owner forget mid-job: open jobs carrying the text are cancelled and every row is redacted on decoded leaves', async () => {
+  it('owner forget mid-job: open jobs carrying the text are cancelled, others keep running, settled rows wait for the purge', async () => {
     await withBook((book) => {
       const carrying = book.create(job('k1', { brief: { ...brief, context: 'Asha said "the Lisbon trip" is off.' } })).job;
       const other = book.create(job('k2')).job;
@@ -160,12 +160,11 @@ describe('task job book', () => {
       const ticket = book.startAttempt(finished.id)!;
       book.report(ticket, { ...result, findings: [{ text: 'Mail about the lisbon trip.' }] }, spend);
       book.settle(finished.id);
-      const outcome = book.forget(['Lisbon trip']);
-      expect(outcome).toEqual({ cancelled: [carrying.id], redacted: 2 });
-      expect(book.get(carrying.id)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten' });
+      expect(book.forget(['Lisbon trip'])).toEqual([carrying.id]);
+      expect(book.get(carrying.id)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten', lease_token: null });
       expect(book.get(other.id)!.status).toBe('queued');
-      for (const id of [carrying.id, finished.id]) expect(JSON.stringify(book.get(id))).not.toMatch(/lisbon trip/i);
-      expect(JSON.parse(book.get(carrying.id)!.brief_json).context).toBe('Asha said "the [forgotten]" is off.');
+      expect(book.get(finished.id)!.status).toBe('applied');
+      expect(book.forget(['  '])).toEqual([]);
     });
   });
 
