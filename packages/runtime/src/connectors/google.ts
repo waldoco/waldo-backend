@@ -1,4 +1,5 @@
 import { Parser } from 'htmlparser2';
+import { extractArtifacts } from '../security/artifact-hygiene.ts';
 // Google connector for the owner's own accounts: OAuth offline grants, Calendar reads and Gmail.
 // Consent asks once for the combined set (owner ruling 2026-09-24 13:31, reversing W3's per-feature asks):
 // calendar + mail + tasks in a single dialog. Scope is not permission: each tool still gates its own effects.
@@ -230,8 +231,20 @@ export type CalendarChange = Omit<CalendarItem, 'status'> & Readonly<{ status: s
 export type MailItem = Readonly<{ id: string; thread_id: string; from: string; subject: string; snippet: string; at: string }>;
 // A1: a thread-read message carries the decoded body; the list projection (MailItem) stays
 // snippet-only so 'what is new' scans never pull bodies into a turn.
+// body_source says what the body was read from; 'snippet' means only Gmail's preview rendered.
+// artifact_scan carries HTML link targets for the verification-artifact relay only and is never shown.
+// fullBodies is opt-in: it fetches parts Gmail holds by attachmentId and returns HTML link targets as
+// artifact_scan, so a caller that only needs headers pays no extra fetches and a caller that does not strip
+// artifact_scan never receives it. bodyChunks, with fullBodies, also returns the whole body (up to
+// FULL_BODY_MAX) with body_full_chars and attachment metadata, for a caller that prepares the whole body
+// before showing it in chunks. A caller that does not ask keeps the 32,000-character body and no attachment
+// names, so a Worker and a connector-proxy deploy in either order. messageId reads that one message.
+export type ThreadRead = Readonly<{ fullBodies?: boolean; bodyChunks?: boolean; messageId?: string }>;
+export type AttachmentMeta = Readonly<{ filename: string; mime_type: string; size: number }>;
 // to, cc and reply_to are bare addresses (no display names), so a reply or reply-all addresses exactly who is on the thread.
-export type ThreadMessage = Readonly<{ id: string; from: string; subject: string; at: string; body: string; message_id?: string; references?: readonly string[]; to?: readonly string[]; cc?: readonly string[]; reply_to?: readonly string[]; recipients_capped?: true }>;
+// body_full_chars is set only when the whole body was longer than FULL_BODY_MAX and was cut there.
+export type ThreadMessage = Readonly<{ id: string; from: string; subject: string; at: string; body: string; message_id?: string; references?: readonly string[]; to?: readonly string[]; cc?: readonly string[]; reply_to?: readonly string[]; recipients_capped?: true; body_source?: 'plain' | 'html' | 'snippet' | 'none'; artifact_scan?: string;
+  body_full_chars?: number; attachments?: readonly AttachmentMeta[] }>;
 
 // RFC 5322 address-list header to its addresses. Commas inside quotes, comments or angle brackets don't split; a
 // backslash escapes the next character in a quote or comment; comments and a group's name ("Team:") are dropped;
@@ -416,7 +429,7 @@ export type GoogleClient = Readonly<{
   newMail(since: number, limit: number): Promise<readonly MailItem[]>;
   searchMail(query: string, limit: number): Promise<readonly MailItem[]>;
   readThread(threadId: string, limit: number): Promise<readonly ThreadMessage[]>;
-  threadPage?(threadId: string, limit: number, cursor?: string): Promise<Readonly<{messages: readonly ThreadMessage[]; cursor: string | null}>>;
+  threadPage?(threadId: string, limit: number, cursor?: string, read?: ThreadRead): Promise<Readonly<{messages: readonly ThreadMessage[]; cursor: string | null}>>;
   searchContacts?(query: string, limit: number): Promise<readonly ContactMatch[]>;
   tasks(status: TaskStatusFilter, limit: number): Promise<readonly TaskItem[]>;
 }>;
@@ -433,32 +446,96 @@ const b64urlDecode = (data: string): string => {
 };
 
 // Thread bodies enter model context only through the E1 verification-artifact quarantine
-// (tools/live/google.ts); this cap is the second wall - a huge body never floods a turn.
+// (tools/live/google.ts). BODY_CAP bounds callers that do not opt in to full bodies; read_thread opts in,
+// takes up to FULL_BODY_MAX, and shows it in chunks after preparing the whole body.
 const BODY_CAP = 32_000;
-type GmailPayload = Readonly<{ mimeType?: string; body?: { data?: string }; parts?: GmailPayload[]; headers?: { name: string; value: string }[] }>;
+const FULL_BODY_MAX = 200_000;
+const ATTACHMENT_LIST_CAP = 50;
+type GmailPayload = Readonly<{ mimeType?: string; filename?: string; body?: { data?: string; attachmentId?: string; size?: number }; parts?: GmailPayload[]; headers?: { name: string; value: string }[] }>;
 type GmailFullMessage = Readonly<{ id?: string; threadId?: string; snippet?: string; internalDate?: string; payload?: GmailPayload }>;
-const htmlText = (html: string): string => {
+const LINK_SCAN_CAP = 100;
+// Artifact extraction backtracks across an unbroken run, so its cost grows with the square of a link's
+// length. A longer target is left out of the scan, which feeds only the relay; the Links list below has
+// its own, tighter bound.
+const LINK_TARGET_MAX = 2_048;
+// Rendering keeps an anchor's text and drops its target, so the targets a reader could follow are listed
+// after the body. These are parsing bounds; which link matters is the model's call. Mail, image-only and
+// over-long links are left out, and so are verification artifacts, which go only to the relay.
+const LINK_LIST_MAX = 20;
+const LINK_LIST_CHARS = 2_000;
+const LINK_LISTED_TARGET_MAX = 300;
+const LINK_LABEL_MAX = 100;
+const linkList = (anchors: readonly Readonly<{ target: string; label: string }>[]): string => {
+  const listed: string[] = [];
+  const seen = new Set<string>();
+  let chars = 0;
+  for (const { target, label } of anchors) {
+    if (!label || target.length > LINK_LISTED_TARGET_MAX || seen.has(target) || extractArtifacts(target).artifacts.length) continue;
+    const text = label.slice(0, LINK_LABEL_MAX).trim();
+    const line = text === target ? `- ${target}` : `- ${text}: ${target}`;
+    if (listed.length === LINK_LIST_MAX || chars + line.length + 1 > LINK_LIST_CHARS) break;
+    listed.push(line);
+    seen.add(target);
+    chars += line.length + 1;
+  }
+  return listed.length ? `\n\nLinks:\n${listed.join('\n')}` : '';
+};
+const htmlText = (html: string): Readonly<{ text: string; links: readonly string[] }> => {
   const blocks = new Set(['p', 'div', 'br', 'li', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'section', 'article', 'hr']);
   // Adjacent cells would otherwise run together ("Verification code482913"), hiding a code from extraction.
   const cells = new Set(['td', 'th']);
   let suppressed = 0;
   const chunks: string[] = [];
+  const links: string[] = [];
+  const anchors: { target: string; label: string }[] = [];
+  let anchor: { target: string; text: string[] } | null = null;
   const boundary = () => { if (!suppressed && chunks.length && chunks.at(-1) !== '\n') chunks.push('\n'); };
   const cellEnd = () => { if (!suppressed && chunks.length && !/\s$/.test(chunks.at(-1)!)) chunks.push(' '); };
   new Parser({
-    onopentag(name) { if (name === 'script' || name === 'style') suppressed++; else if (blocks.has(name)) boundary(); },
-    ontext(text) { if (!suppressed) chunks.push(text); },
-    onclosetag(name) { if (name === 'script' || name === 'style') suppressed = Math.max(0, suppressed - 1); else if (blocks.has(name)) boundary(); else if (cells.has(name)) cellEnd(); },
+    onopentag(name, attributes) {
+      if (name === 'script' || name === 'style') suppressed++;
+      else if (blocks.has(name)) boundary();
+      if (name === 'a' && /^https?:\/\//i.test(attributes.href ?? '') && attributes.href!.length <= LINK_TARGET_MAX && links.length < LINK_SCAN_CAP) links.push(attributes.href!);
+      if (name === 'a') anchor = /^https?:\/\//i.test(attributes.href ?? '') ? { target: attributes.href!, text: [] } : null;
+    },
+    ontext(text) { if (!suppressed) { chunks.push(text); anchor?.text.push(text); } },
+    onclosetag(name) {
+      if (name === 'script' || name === 'style') suppressed = Math.max(0, suppressed - 1); else if (blocks.has(name)) boundary(); else if (cells.has(name)) cellEnd();
+      if (name === 'a' && anchor) { anchors.push({ target: anchor.target, label: anchor.text.join('').replace(/\s+/g, ' ').trim() }); anchor = null; }
+    },
   }, { decodeEntities: true }).end(html);
-  return chunks.join('').replace(/ \n/g, '\n').trim();
+  return { text: chunks.join('').replace(/ \n/g, '\n').trim() + linkList(anchors), links };
 };
-const threadBody = (payload: GmailPayload | undefined): string => {
-  const partText = (part: GmailPayload, mime: string): string => {
-    if (part.mimeType === mime && part.body?.data) return b64urlDecode(part.body.data);
-    for (const child of part.parts ?? []) { const text = partText(child, mime); if (text.trim()) return text; }
-    return '';
+// A huge text part held by attachmentId is left to the snippet rather than decoded whole.
+const MAX_FETCHED_BODY_BYTES = 1_000_000;
+const attachedFile = (part: GmailPayload) => Boolean(part.filename) || (part.headers ?? []).some(h => h.name.toLowerCase() === 'content-disposition' && /^\s*attachment\b/i.test(h.value));
+type RenderedBody = Readonly<{ text: string; source: 'plain' | 'html'; links: readonly string[] }>;
+const mailAttachmentsOf = (payload: GmailPayload): AttachmentMeta[] => {
+  const found: AttachmentMeta[] = [];
+  const walk = (part: GmailPayload) => {
+    if (part.filename && found.length < ATTACHMENT_LIST_CAP) found.push({ filename: part.filename.slice(0, 255), mime_type: (part.mimeType ?? 'application/octet-stream').slice(0, 255), size: Number.isSafeInteger(part.body?.size) ? part.body!.size! : 0 });
+    part.parts?.forEach(walk);
   };
-  return (payload ? partText(payload, 'text/plain').trim() || htmlText(partText(payload, 'text/html')) : '').trim().slice(0, BODY_CAP);
+  walk(payload);
+  return found;
+};
+// RFC 2046 5.1.4: alternatives run from least to most faithful, so the last one that renders is the body.
+// Any other multipart takes its first part that renders; attached files are never the body.
+const renderedBody = async (part: GmailPayload, data: (part: GmailPayload) => Promise<string | null>): Promise<RenderedBody | null> => {
+  if (attachedFile(part)) return null;
+  if (part.mimeType === 'text/plain' || part.mimeType === 'text/html') {
+    const raw = await data(part);
+    if (raw === null) return null;
+    const html = part.mimeType === 'text/html';
+    const rendered = html ? htmlText(raw) : { text: raw.trim(), links: [] };
+    return rendered.text ? { ...rendered, source: html ? 'html' : 'plain' } : null;
+  }
+  const children = part.parts ?? [];
+  for (const child of part.mimeType === 'multipart/alternative' ? [...children].reverse() : children) {
+    const body = await renderedBody(child, data);
+    if (body) return body;
+  }
+  return null;
 };
 
 // Single-shot access-token mint for callers that need a raw bearer (Google-auth MCP servers on
@@ -655,7 +732,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
     const header = (name: string) => message.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
     return { id, thread_id: message.threadId ?? '', from: header('From'), subject: header('Subject'), snippet: message.snippet ?? '', at: new Date(Number(message.internalDate ?? 0)).toISOString() };
   }));
-  const threadPage = async (threadId: string, limit: number, cursor?: string): Promise<Readonly<{messages:readonly ThreadMessage[];cursor:string|null}>> => {
+  const threadPage = async (threadId: string, limit: number, cursor?: string, read?: ThreadRead): Promise<Readonly<{messages:readonly ThreadMessage[];cursor:string|null}>> => {
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20) throw new Error('invalid thread page limit');
       const json = await call(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=full`) as { id?:string; messages?: GmailFullMessage[] };
       if (!json || !Array.isArray(json.messages) || (json.id !== undefined && json.id !== threadId) || json.messages.some(m => !m || typeof m.id !== 'string' || !m.id || m.threadId !== undefined && m.threadId !== threadId)) throw new Error('invalid Gmail thread response');
@@ -669,15 +746,42 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
           offset = decoded.offset;
         } catch { throw new Error('invalid thread cursor or thread changed; read the first page again'); }
       }
-      const messages = json.messages.slice(offset, offset + limit).map(message => {
+      const partData = (messageId: string) => async (part: GmailPayload): Promise<string | null> => {
+        if (part.body?.data) return b64urlDecode(part.body.data);
+        const attachment = part.body?.attachmentId;
+        if (!read?.fullBodies || !attachment || (part.body?.size ?? 0) > MAX_FETCHED_BODY_BYTES) return null;
+        try {
+          const { data } = await call(`${GMAIL}/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachment)}`) as { data?: unknown };
+          return typeof data === 'string' ? b64urlDecode(data) : null;
+        } catch (error) {
+          // A refused part falls back like an empty one; body_source then says only the snippet was read.
+          if (error instanceof GoogleError) return null;
+          throw error;
+        }
+      };
+      const chosen = read?.messageId === undefined ? json.messages.slice(offset, offset + limit) : json.messages.filter(message => message.id === read.messageId);
+      if (read?.messageId !== undefined && chosen.length === 0) throw new Error('unknown message in thread');
+      const messages = await Promise.all(chosen.map(async message => {
         const header = (name: string) => message.payload?.headers?.find(h => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
         const messageIds = message.payload?.headers?.filter(h => h.name.toLowerCase() === 'message-id') ?? [];
         const messageId = messageIds.length === 1 ? messageIds[0]!.value.trim() : '';
         const references = (message.payload?.headers?.filter(h => h.name.toLowerCase() === 'references').map(h => h.value).join(' ') ?? '').trim().split(/\s+/).filter(Boolean);
+        const rendered = message.payload ? await renderedBody(message.payload, partData(message.id!)) : null;
+        const snippet = message.snippet ?? '';
+        const chunked = read?.fullBodies === true && read.bodyChunks === true;
+        const cap = chunked ? FULL_BODY_MAX : BODY_CAP;
+        const attachments = chunked && message.payload ? mailAttachmentsOf(message.payload) : [];
+        const body: Pick<ThreadMessage, 'body' | 'body_source' | 'artifact_scan' | 'body_full_chars' | 'attachments'> = {
+          ...(rendered
+            ? { body: rendered.text.slice(0, cap), body_source: rendered.source, ...(read?.fullBodies && rendered.links.length ? { artifact_scan: rendered.links.join('\n') } : {}), ...(chunked && rendered.text.length > cap ? { body_full_chars: rendered.text.length } : {}) }
+            : { body: snippet.slice(0, cap), body_source: snippet.trim() ? 'snippet' : 'none' }),
+          ...(attachments.length ? { attachments } : {}),
+        };
         const [to, cc, replyTo] = ['To', 'Cc', 'Reply-To'].map((name) => addressList(header(name)));
         const capped = [to!, cc!, replyTo!].some((list) => list.length > MAX_RECIPIENTS);
-        return { ...(validMessageId(messageId) ? {message_id:messageId} : {}), ...(references.length ? {references} : {}), to: to!.slice(0, MAX_RECIPIENTS), cc: cc!.slice(0, MAX_RECIPIENTS), ...(replyTo!.length ? { reply_to: replyTo!.slice(0, MAX_RECIPIENTS) } : {}), ...(capped ? { recipients_capped: true as const } : {}), id: message.id ?? '', from: header('From'), subject: header('Subject'), at: new Date(Number(message.internalDate ?? 0)).toISOString(), body: threadBody(message.payload) || (message.snippet ?? '').slice(0, BODY_CAP) };
-      });
+        return { ...(validMessageId(messageId) ? {message_id:messageId} : {}), ...(references.length ? {references} : {}), to: to!.slice(0, MAX_RECIPIENTS), cc: cc!.slice(0, MAX_RECIPIENTS), ...(replyTo!.length ? { reply_to: replyTo!.slice(0, MAX_RECIPIENTS) } : {}), ...(capped ? { recipients_capped: true as const } : {}), id: message.id ?? '', from: header('From'), subject: header('Subject'), at: new Date(Number(message.internalDate ?? 0)).toISOString(), ...body };
+      }));
+      if (read?.messageId !== undefined) return {messages, cursor: null};
       const next = offset + messages.length;
       return {messages, cursor: next < ids.length ? b64url(new TextEncoder().encode(JSON.stringify({binding,offset:next}))) : null};
   };
