@@ -2757,7 +2757,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return null;
       },
       configured: () => Boolean(clientId && clientSecret && stateSecret),
-      // Every call starts a fresh single-use attempt (state nonce + PKCE verifier) valid for 15 minutes.
+      // Every call starts a fresh single-use attempt (state nonce + PKCE verifier) whose lifetime is CONSENT_TTL_MS (google-consent.ts).
       async begin(): Promise<Readonly<{ url: string; nonce: string }> | null> {
         const app = await googleApp();
         return app && stateSecret ? startConsent(consentDeps, app, stateSecret, stateOwner(), { surface: 'telegram' }) : null;
@@ -3793,7 +3793,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
     };
     const settleFinal = async (record: FinalRecord): Promise<void> => {
-      const delivered = record.status === 'delivered';
+      // Forget ended the record only when its own status says so: forget that reached a record already sent leaves it to arrive.
+      const delivered = record.status === 'delivered', forgetCancelled = record.status === 'blocked' && record.reason === 'owner_forget';
       // Accepted by a surface that reports arrival later: nothing is recorded until that report, a refusal, or the lapse.
       if (record.status === 'accepted') { log({ trace: record.trace, hop: 'outbox_delivery', ms: 0, ok: true, detail: 'accepted', code: 'awaiting_arrival' }); return; }
       if (record.inbox && record.status !== 'pending') {
@@ -3820,21 +3821,30 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (!record.reminder && !record.dayCard && !record.standingOrder) log({ trace: record.trace, hop: 'turn', ms: 0, ok: delivered, detail: delivered ? 'delivered' : 'delivery_unconfirmed' });
       if (record.heartbeat) {
         settleHeartbeat(record, this.ctx.storage.sql, scheduler);
-        if (record.heartbeat.runId && runs.byId(record.heartbeat.runId)?.status === 'running') runs.finish(record.heartbeat.runId, delivered ? 'completed' : 'failed', delivered ? 'heartbeat sent' : 'heartbeat delivery unconfirmed');
+        if (record.heartbeat.runId && runs.byId(record.heartbeat.runId)?.status === 'running') {
+          if (forgetCancelled) runs.finish(record.heartbeat.runId, 'stopped', 'heartbeat not sent: it named something you asked me to forget');
+          else runs.finish(record.heartbeat.runId, delivered ? 'completed' : 'failed', delivered ? 'heartbeat sent' : 'heartbeat delivery unconfirmed');
+        }
       }
       if (record.reminder) {
-        // Never sent: cancelled by the owner, or its WhatsApp number unlinked first. No delivery was attempted.
+        // Never sent: ended by forget, cancelled by the owner, or its WhatsApp number unlinked first. No delivery was attempted.
         const unlinked = record.status === 'blocked' && record.reason === 'surface_unlinked';
-        const cancelled = record.status === 'blocked' && (book.note(record.reminder.id) === null || unlinked);
+        const cancelled = record.status === 'blocked' && (forgetCancelled || unlinked || book.note(record.reminder.id) === null);
         if (record.reminder.schedulerRunId) {
           if (cancelled) scheduler.settleCancelled(record.reminder.schedulerRunId);
           else scheduler.settleDelivery(record.reminder.schedulerRunId, delivered);
         }
-        if (delivered) {
-          if (record.reminder.once) this.ctx.storage.sql.exec('DELETE FROM reminder_notes WHERE id = ?', record.reminder.id);
-          runs.finish(record.reminder.runId, 'completed', 'reminder sent');
-        } else if (cancelled) runs.finish(record.reminder.runId, 'stopped', unlinked ? 'reminder not sent; its WhatsApp number was unlinked' : 'reminder cancelled before delivery');
-        else runs.finish(record.reminder.runId, 'failed', record.status === 'blocked' && record.reason === 'lapsed' ? 'reminder not sent; your WhatsApp window stayed closed for 30 days' : 'reminder delivery unconfirmed');
+        // A one-off's only occurrence is over once it is delivered or forget cancels it, so its note goes too. A repeating
+        // reminder keeps its note and fires again.
+        if (record.reminder.once && (delivered || forgetCancelled)) this.ctx.storage.sql.exec('DELETE FROM reminder_notes WHERE id = ?', record.reminder.id);
+        // A record forget scrubs after it ended is settled again; its run keeps the outcome it ended with.
+        if (runs.byId(record.reminder.runId)?.status === 'running') {
+          if (delivered) runs.finish(record.reminder.runId, 'completed', 'reminder sent');
+          else if (forgetCancelled) runs.finish(record.reminder.runId, 'stopped', 'reminder not sent: it named something you asked me to forget');
+          else if (unlinked) runs.finish(record.reminder.runId, 'stopped', 'reminder not sent; its WhatsApp number was unlinked');
+          else if (cancelled) runs.finish(record.reminder.runId, 'stopped', 'reminder cancelled before delivery');
+          else runs.finish(record.reminder.runId, 'failed', record.status === 'blocked' && record.reason === 'lapsed' ? 'reminder not sent; your WhatsApp window stayed closed for 30 days' : 'reminder delivery unconfirmed');
+        }
       }
       // Never mark a queued or ambiguous turn resolved. Reaction itself is best effort.
       if (delivered && record.reaction) await api.setMessageReaction({ chat_id: record.payload.chat_id,
