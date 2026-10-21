@@ -172,9 +172,9 @@ export interface ChannelAdapter {
 }
 
 // Gate 2 (ADR-0067): per-update-type shape with length bounds; the schema IS the gate.
-// strictObject makes forwards (forward_origin), edits, and unknown update types
-// unrecognized keys; the literals make bot senders and group chats unparseable. Bound
-// values are defensive ceilings pending ADR-0067's platform re-verification pass.
+// strictObject makes edits and unknown update types unrecognized keys; the literals make
+// bot senders and group chats unparseable. Bound values are defensive ceilings pending
+// ADR-0067's platform re-verification pass.
 const telegramProfileName = z.string().min(1).max(256).optional();
 
 const telegramSenderSchema = z.strictObject({
@@ -198,8 +198,8 @@ const telegramPrivateChatSchema = z.strictObject({
 // Entities are decorative markup around the text. The runtime reads the text only, so
 // unknown entity types (text_link, custom_emoji, blockquote, whatever clients add next)
 // and their payload keys are tolerated - a markup drift must never sink a readable text
-// message into the unsupported path. The message gate below stays strict: forwards and
-// unknown top-level content still get the honest static reply.
+// message into the unsupported path. The message gate below stays strict: unknown
+// top-level content still gets the honest static reply.
 const telegramTextEntitySchema = z.looseObject({
   type: z.string().min(1).max(64),
   offset: z.int().nonnegative(),
@@ -216,8 +216,12 @@ const telegramFileSchema = z.looseObject({
   file_size: z.int().positive().optional(),
 });
 
+// The legacy forward fields the Bot API server still sends beside forward_origin
+// (tdlib/telegram-bot-api Client.cpp). They are accepted only beside it and never read.
+const LEGACY_FORWARD_KEYS = ['forward_from', 'forward_from_chat', 'forward_from_message_id', 'forward_signature', 'forward_sender_name', 'forward_date'] as const;
+
 // A message is text, a photo, a document, a voice note or an audio file; media may carry a caption.
-// Video, stickers and forwards stay unparseable and get the honest static reply.
+// A forward is any of these with its origin. Video and stickers stay unparseable and get the honest static reply.
 export const telegramMessageUpdateSchema = z.strictObject({
   update_id: z.int().positive(),
   message: z.strictObject({
@@ -241,15 +245,26 @@ export const telegramMessageUpdateSchema = z.strictObject({
     }).optional(),
     quote: z.looseObject({}).optional(),
     link_preview_options: z.looseObject({}).optional(),
+    // Bot API MessageOrigin. The runtime reads only that the message is a forward.
+    forward_origin: z.looseObject({ type: z.enum(['user', 'hidden_user', 'chat', 'channel']), date: z.int().positive() }).optional(),
+    forward_from: z.looseObject({ id: z.int().positive(), is_bot: z.boolean() }).optional(),
+    forward_from_chat: z.looseObject({ id: z.int(), type: z.enum(['private', 'group', 'supergroup', 'channel']) }).optional(),
+    forward_from_message_id: z.int().positive().optional(),
+    forward_signature: z.string().min(1).max(256).optional(),
+    forward_sender_name: z.string().min(1).max(256).optional(),
+    forward_date: z.int().positive().optional(),
   }).refine(
     (m) => [m.text, m.photo, m.document, m.voice, m.audio].filter((part) => part !== undefined).length === 1 && (m.caption === undefined || m.text === undefined),
     'exactly one of text, photo, document, voice or audio',
+  ).refine(
+    (m) => m.forward_origin !== undefined || LEGACY_FORWARD_KEYS.every((key) => m[key] === undefined),
+    'legacy forward fields only beside forward_origin',
   ),
 });
 export type TelegramMessageUpdate = z.infer<typeof telegramMessageUpdateSchema>;
 
-// Owner-shaped private messages that fail the gate above (media, forwards, unsupported
-// formatting). Only identifiers are read, so the listener can answer honestly instead of
+// Owner-shaped private messages that fail the gate above (video, stickers, other unsupported
+// content). Only identifiers are read, so the listener can answer honestly instead of
 // going silent; the content is never parsed.
 export const telegramUnsupportedMessageSchema = z.looseObject({
   update_id: z.int().positive(),

@@ -7,7 +7,7 @@ import type { ConsoleAuth } from '../src/identity/console-auth';
 
 const browser = async (target = '') => {
   const response = await handleConsole(new Request('https://fixture.test/console/signin'),
-    { TELEGRAM_OWNER_DO: {} as DurableObjectNamespace }, {} as ConsoleAuth);
+    { OWNER_DO: {} as DurableObjectNamespace }, {} as ConsoleAuth);
   const script = (await response!.text()).match(/<script>([\s\S]*?)<\/script>/)![1]!;
   const events: Record<string, (event?: any) => Promise<void> | void> = {};
   const history: unknown[] = [];
@@ -146,6 +146,29 @@ it('navigates only for the existing successful verification redirect', async () 
   const send = b.submit(); b.reply(0, 'code'); await send.settled;
   const verify = b.submit(); b.reply(1, 'code', { redirected: true, url: 'https://fixture.test/console' }); await verify.settled;
   expect(b.navigations).toEqual(['/console']);
+});
+
+it('continues to the devices page only when that was the requested continuation', async () => {
+  const b = await browser('/console/devices');
+  const send = b.submit(); b.reply(0, 'code'); await send.settled;
+  const verify = b.submit(); b.reply(1, 'code', { redirected: true, url: 'https://fixture.test/console/devices' }); await verify.settled;
+  expect(b.navigations).toEqual(['/console/devices']);
+});
+
+it('keeps the devices continuation when the devices page sends the browser on to its console route', async () => {
+  const b = await browser('/console/devices');
+  const send = b.submit(); b.reply(0, 'code'); await send.settled;
+  // fetch follows verify -> /console/devices -> /console#/connections/devices and reports the URL without its fragment.
+  const verify = b.submit(); b.reply(1, 'code', { redirected: true, url: 'https://fixture.test/console' }); await verify.settled;
+  expect(b.navigations).toEqual(['/console/devices']);
+});
+
+it('refuses a devices redirect nobody asked for', async () => {
+  const b = await browser();
+  const send = b.submit(); b.reply(0, 'code'); await send.settled;
+  const verify = b.submit(); b.reply(1, 'code', { redirected: true, url: 'https://fixture.test/console/devices' }); await verify.settled;
+  expect(b.navigations).toEqual([]);
+  expect(b.ui().status.textContent).toContain('may have completed');
 });
 
 it('handles a fetch/CSP failure with preserved details and no automatic native retry', async () => {

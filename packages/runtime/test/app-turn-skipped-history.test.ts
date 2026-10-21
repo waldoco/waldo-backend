@@ -20,7 +20,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
-const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '7c2e9a14-3b5d-4f60-8a71-92b3c4d5e6f7';
 const ownerHex = OWNER_ID.replaceAll('-', '');
@@ -61,17 +61,17 @@ const history = (rows: readonly Row[], leaf: string, options: Readonly<{ unwitne
   return stored;
 };
 
-type Owner = InstanceType<typeof TelegramOwnerDO>;
+type Owner = InstanceType<typeof OwnerDO>;
 type Shown = readonly Readonly<{ id: string; role: string; text: string; parent_id: string | null }>[];
 const headers = (name: string) => ({ 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' });
 const withOwner = <T>(name: string, stored: Readonly<Record<string, unknown>>, work: (owner: Owner, state: DurableObjectState, lines: () => readonly Record<string, unknown>[]) => Promise<T>) =>
-  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql);
     ensureSchema(state.storage);
     state.storage.kv.put('do_name', name);
     for (const [key, value] of Object.entries(stored)) state.storage.kv.put(key, value);
     const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     const lines = () => logged.mock.calls.map(([line]) => String(line)).filter(line => line.startsWith('{"hop":"app_')).map(line => JSON.parse(line) as Record<string, unknown>);
     try { return await work(owner, state, lines); } finally { logged.mockRestore(); await state.storage.deleteAlarm(); }
   });
@@ -98,6 +98,23 @@ describe('an app turn over a history that holds a row failing the entry shape', 
       expect(turn.outcome).toBe('completed');
       expect(links(await shown(owner, name))).toEqual([['u1', null], ['u1-reply', 'u1'], [turn.id, 'u1-reply'], [`${turn.id}-reply`, turn.id]]);
       expect(lines()).toEqual([]);
+    });
+  });
+
+  // Every chain of an owner shares one store. An older build hung a scheduled app row under the last iMessage row.
+  it('a row stored under another chain\'s row loads on its own chain, and the next turn answers', async () => {
+    const name = 'turn-cross-chain';
+    const IM = JSON.stringify(['imessage', 'imb_fixture', 'ima_fixture', 'iMessage;-;friend@example.com']);
+    const im = (entry: Row): Row => ({ ...entry, chatId: IM, surface: 'imessage' });
+    const rows = [user('u1', 'First question.', null), reply('u1-reply', 'First answer.', 'u1'),
+      im(user('i1', 'Texted question.', null)), im(reply('i1-reply', 'Texted answer.', 'i1')), reply('s1', 'Scheduled note.', 'i1-reply')];
+    await withOwner(name, history(rows, 's1'), async (owner, state) => {
+      const store = canonicalOwnerConversationStore(state.storage, { invocation: { verified_authority: { principal_ref: PRINCIPAL, tenant_ref: TENANT } }, assertCurrent: async () => undefined } as never);
+      expect((await store.load()).entries.map(entry => [entry.id, entry.parentId])).toEqual([['u1', null], ['u1-reply', 'u1'], ['i1', null], ['i1-reply', 'i1'], ['s1', 'u1-reply']]);
+      const turn = await send(owner, state, name, 'client-cross-0001', 'Next question.');
+      expect(turn.outcome).toBe('completed');
+      expect(state.storage.kv.get<Row>(`${PREFIX}conv:0000000004`)).toEqual(rows[4]);
+      expect(model.requests.at(-1)).toContain('Scheduled note.');
     });
   });
 
@@ -270,8 +287,8 @@ describe('an app turn over a history that holds a row failing the entry shape', 
     const rows = [user('u1', 'First question.', null), reply('u1-reply', 'First answer.', 'u1'), stray as Row];
     await withOwner(name, history(rows, 'u1-reply', { unwitnessed: [FIRST_TURN] }), async (owner, state, lines) => {
       expect((await send(owner, state, name, 'client-reuse-0001', 'Next question.')).outcome).toBe('interrupted');
-      expect(state.storage.kv.get(`${PREFIX}count`)).toBe(3);
-      expect(links(await shown(owner, name))).toEqual([['u1', null], ['u1-reply', 'u1']]);
+      expect(state.storage.kv.get(`${PREFIX}count`)).toBe(4);
+      expect(links(await shown(owner, name))).toEqual([['u1', null], ['u1-reply', 'u1'], [`${FIRST_TURN}-did-not-finish`, 'u1-reply']]);
       expect(lines().filter(line => line.hop === 'app_turn')).toEqual([{ hop: 'app_turn', ok: false, code: 'history_conflict' }]);
     });
   });

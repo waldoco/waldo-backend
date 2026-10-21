@@ -7,6 +7,7 @@ import { dayPlanBook } from '../src/channels/day-cards';
 import { BRIEF_SWEEP_ID } from '../src/channels/event-briefs';
 import { updateBook } from '../src/channels/update-cards';
 import { Scheduler } from '../src/scheduler/multiplexer';
+import { presenceAuthority } from './helpers/directory-presence';
 
 const UPDATE_TEXT = 'Synthetic update text.';
 const fixture = vi.hoisted(() => ({ changes: [] as CalendarChange[], requests: [] as string[], sent: [] as string[] }));
@@ -37,7 +38,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
-const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO } = await import('../src/channels/owner-do');
 
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 afterEach(() => { vi.unstubAllGlobals(); });
@@ -51,21 +52,22 @@ const storedText = (state: DurableObjectState) => {
 
 it('an update card is written with the owner\'s health logs, no stored copy of its prompt carries their numbers, and /ledger still shows them', async () => {
   const name = 'update-card-health-strip';
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const originalNow = Date.now;
     const at = Date.parse('2026-10-03T08:05:00Z');
     Date.now = () => at;
-    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
       const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
       if (fn === 'health_log_recent') return Response.json([
         { id: 1, kind: 'meal', logged_at: new Date(at - 3_600_000).toISOString(), payload: { description: 'oat bowl', calories_estimate: 640 } },
         { id: 2, kind: 'workout', logged_at: new Date(at - 3_600_000).toISOString(), payload: { type: 'run', duration_minutes: 37 } },
       ]);
       if (fn === 'health_context_read') return Response.json(null);
+      if (fn === 'common_owner_authority') return presenceAuthority('5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d', init?.body);
       return Response.json(true);
     });
     try {
-      const owner = new TelegramOwnerDO(state, { ...env, ...directory, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' });
+      const owner = new OwnerDO(state, { ...env, ...directory, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' });
       state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
       await state.storage.put('origin', 'https://fixture.invalid');
       await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);

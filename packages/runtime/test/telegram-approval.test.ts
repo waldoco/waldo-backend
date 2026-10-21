@@ -4,7 +4,7 @@ import { telegramOwnerApproval } from '../src/channels/telegram-turn';
 
 describe('telegramOwnerApproval', () => {
   it('passes first-party privileged tools (owner state only)', () => {
-    for (const tool of ['update_memory', 'write_task', 'update_task', 'draft_document', 'propose_schedule', 'write_sheet_cell', 'update_thread_topics', 'archive_thread']) {
+    for (const tool of ['write_task', 'update_task', 'draft_document', 'propose_schedule', 'write_sheet_cell', 'update_thread_topics', 'archive_thread']) {
       expect(telegramOwnerApproval({ tool })).toBe(true);
     }
   });

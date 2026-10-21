@@ -164,6 +164,33 @@ export const sanitiseFailureReasonSchema = z.enum([
 ]);
 export type SanitiseFailureReason = z.infer<typeof sanitiseFailureReasonSchema>;
 
+// Which sanitiser stage produced an invalid_payload denial. Diagnostic only, never a reason: hard/soft
+// handling keys on `reason`. A decode failure inside the secret or health scan reports `decode`, the stage
+// that actually failed, with the view kind, the decode layer and whether nesting or the decode budget ran out.
+// Content-free by construction: enums and a small integer.
+export const sanitiseDenialStageSchema = z.enum([
+  'prepare',
+  'decode',
+  'health',
+  'external_health',
+  'pii',
+  'policy',
+]);
+export type SanitiseDenialStage = z.infer<typeof sanitiseDenialStageSchema>;
+
+export const sanitiseDecodeFailureSchema = z.strictObject({
+  cause: z.enum(['nesting', 'budget']),
+  kind: z.enum(['json', 'percent', 'base64', 'mixed']),
+  depth: z.int().min(1).max(8),
+});
+export type SanitiseDecodeFailure = z.infer<typeof sanitiseDecodeFailureSchema>;
+
+export const sanitiseDenialDiagnosticSchema = z.strictObject({
+  stage: sanitiseDenialStageSchema,
+  decode: sanitiseDecodeFailureSchema.optional(),
+});
+export type SanitiseDenialDiagnostic = z.infer<typeof sanitiseDenialDiagnosticSchema>;
+
 // Which composer layer rejected the fragment - the reason names the guard, this names where
 // the poisoned bytes entered, so a typed failure points at one store. Content-free like the
 // reason vocabulary (2026-09-27 P0: canary_leak with no source hid the fragment for hours).
@@ -227,6 +254,7 @@ export const sanitiseResultSchema = z.discriminatedUnion('ok', [
     ok: z.literal(false),
     check: sanitiseCheckSchema,
     reason: sanitiseFailureReasonSchema,
+    diagnostic: sanitiseDenialDiagnosticSchema.optional(),
   }),
 ]);
 export type SanitiseResult = z.infer<typeof sanitiseResultSchema>;
@@ -335,7 +363,13 @@ export const DERIVED_SCORE_PATTERNS: readonly RegExp[] = [
 export const rawSensorActionSchema = z.enum(['reject']);
 export type RawSensorAction = z.infer<typeof rawSensorActionSchema>;
 
-export const derivedScoreActionSchema = z.enum(['reject']);
+// reject_scored_on_external_read (core build plan H-3): form, recovery and load are also ordinary words ("Form 16",
+// "load 3 trucks", "recovery 2 days"). Where external content - the owner's own mail, calendar or a page - is read into
+// his turn, one of these words with a bare number is not a derived score; with "score", a unit or a % it still is, and
+// crs, the sensor families and structured health are unchanged. Every persistence and egress destination keeps 'reject'.
+export const derivedScoreActionSchema = z.enum(['reject', 'reject_scored_on_external_read']);
+// The derived-score words that are also ordinary English. crs is Waldo's own name and is never spared.
+export const PLAIN_WORD_DERIVED_SCORES = ['form', 'recovery', 'load'] as const;
 export type DerivedScoreAction = z.infer<typeof derivedScoreActionSchema>;
 
 export const healthRuleSchema = z.strictObject({
@@ -349,7 +383,7 @@ export type HealthRule = z.infer<typeof healthRuleSchema>;
 export const HEALTH_DESTINATION_RULES: Readonly<Record<SanitiseDestination, HealthRule>> = {
   memory_block: { raw_sensor: 'reject', derived_score: 'reject' },
   system_prompt: { raw_sensor: 'reject', derived_score: 'reject' },
-  internal_context: { raw_sensor: 'reject', derived_score: 'reject' },
+  internal_context: { raw_sensor: 'reject', derived_score: 'reject_scored_on_external_read' },
   draft_document: { raw_sensor: 'reject', derived_score: 'reject' },
   draft_email: { raw_sensor: 'reject', derived_score: 'reject' },
   send_message: { raw_sensor: 'reject', derived_score: 'reject' },

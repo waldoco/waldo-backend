@@ -1,4 +1,5 @@
-import type { ApprovalItem, ApprovalReview } from './approvals';
+import { calendarInviteDetails, type ApprovalItem, type ApprovalReview } from './approvals';
+import type { CardLatest, CardState } from './day-cards';
 import { SCHEDULE_KINDS } from '@waldo/contracts';
 import { SCHEDULE_LABELS, type SchedulePreferences } from './schedule-preferences';
 import type { Claim, ConstellationEdge, ConstellationNode, profile } from '../memory/claims';
@@ -103,7 +104,7 @@ export const signInPage = (token: string): Response => new Response(
 export const sessionCookie = (request: Request): string | null =>
   (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim().split('=')).find(([name]) => name === CONSOLE_COOKIE)?.[1] ?? null;
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set'] as const;
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
 
 // The trace detail for a console action. The form id is free-form text (parseConsoleAction
@@ -130,6 +131,7 @@ export const parseConsoleAction = (form: FormData, csrf: string): ConsoleAction 
 export const NOTICES: Readonly<Record<string, string>> = {
   'spot.dismiss': 'Spot dismissed. Waldo will stop using it.',
   'proactivity.set': 'Saved. Waldo will reach out on your new settings.',
+  'proactive_surface.set': 'Saved. Waldo sends its next messages there.',
   'schedule.set': 'Saved. That scheduled behavior is updated.',
   'schedule.reset': 'Reset. Every scheduled behavior is back to its default (on).',
   'invite.create': 'Invite saved. Send the code to the intended person yourself; Waldo did not email anyone.',
@@ -154,7 +156,9 @@ export const NOTICES: Readonly<Record<string, string>> = {
   invalid: 'That change could not be applied.',
 };
 
-export type ConsoleCard = Readonly<{ id: string; name: string; defaultTime: string; time: string | null; reason: string; sent: boolean; pin: string | null }>;
+// latest is the Main chat row today's card was delivered to; only the app's day view reads it.
+export type ConsoleCard = Readonly<{ id: string; name: string; defaultTime: string; time: string | null; reason: string; sent: boolean; pin: string | null;
+  latest?: CardLatest | null; state?: CardState }>;
 
 export type ConsoleView = Readonly<{
   release: string;
@@ -171,6 +175,10 @@ export type ConsoleView = Readonly<{
   notice: string | null;
   google: Readonly<{ accounts: readonly Readonly<{ id: string; email: string; error: string | null; calendar: boolean; mail: boolean; tasks: boolean }>[]; connectAvailable: boolean }>;
   telegram: Readonly<{ linked: boolean; unlinkAvailable: boolean }>;
+  /** Whether this owner has an active iMessage link (their own handle, via "waldo CODE"). Absent = unknown. */
+  imessage?: Readonly<{ linked: boolean }>;
+  /** Whether this owner has an active WhatsApp link. Absent = unknown. */
+  whatsapp?: Readonly<{ linked: boolean }>;
   profile: ReturnType<typeof profile>;
   barriers: number;
   spots: readonly Claim[];
@@ -231,6 +239,8 @@ const connectors = (view: ConsoleView) => {
       google.accounts.length ? '' : status(false, 'Not connected'),
       google.connectAvailable ? form(csrf, 'google.connect', google.accounts.length ? 'Add account' : 'Connect Google', { value: 'calendar' }, { tone: google.accounts.length ? 'quiet' : 'primary' }) : '<span class="note">OAuth app keys are not set on this server yet</span>'),
     row('Telegram', 'Your owner DM. Chat, cards and reminders arrive here, and it is how you sign in to this console.', status(telegram.linked, telegram.linked ? 'Connected' : 'Unlinked'), telegramAction),
+    row('iMessage', 'Text Waldo from your own iPhone. Only you reach your Waldo: link your number with a one-time code.', view.imessage ? status(view.imessage.linked, view.imessage.linked ? 'Connected' : 'Not linked') : '', `<a class="btn quiet" href="/console/imessage">${view.imessage?.linked ? 'Manage' : 'Set up'}</a>`),
+    row('WhatsApp', 'Chat with your Waldo on WhatsApp after linking your number with a one-time code.', '', form(csrf, 'whatsapp.link', 'Get a WhatsApp link code', {}, {})),
     row('Console session', `Signed in until ${esc(view.sessionUntil)} on ${view.sessionCount} ${view.sessionCount === 1 ? 'browser' : 'browsers'}. Send /console on Telegram for a fresh link.`, status(true, 'Active'),
       form(csrf, 'session.signout', 'Sign out') + form(csrf, 'session.signout.all', 'Sign out everywhere', {}, { tone: 'danger', confirm: 'Sign out of every browser and the app?' })),
     row('WhatsApp', 'The channel route exists, but this page cannot verify a linked WhatsApp number or live delivery. Ask Waldo in chat before relying on it.', chip('Status unknown here', 'provisional'), ''),
@@ -265,7 +275,7 @@ const serviceStatus = (view: ConsoleView) => {
 // Open email/message send proposals the console may only dismiss (approve stays in chat).
 export const consoleMayDismiss = (item: ApprovalItem): boolean =>
   (item.state === 'open' || item.state === 'review_only') && !(consoleMayApprove(item) && item.review?.kind === item.kind) && (item.kind === 'email_send' || item.kind === 'message_send');
-export const consoleMayApprove = (item: ApprovalItem | undefined): boolean => Boolean(item && item.state === 'open' && item.kind === 'calendar_change' && item.review?.kind === 'calendar_change');
+export const consoleMayApprove = (item: ApprovalItem | undefined): boolean => Boolean(item && item.state === 'open' && item.kind === 'calendar_change' && item.review?.kind === 'calendar_change' && !calendarInviteDetails(item.review));
 
 const APPROVAL_LABELS: Readonly<Record<string, string>> = {
   calendar_change: 'Calendar adjustment', email_send: 'Email send', message_send: 'Message send',
@@ -279,7 +289,11 @@ const reviewDetails = (review: ApprovalReview): string => {
     const task = args.changes?.title ?? before?.title;
     return `<div class="approval-review"><div>Account: ${esc(review.account)}</div><div>List: ${esc(list.title)}</div><div>Action: ${esc(args.action)}</div>${task ? `<div>Task: ${esc(task)}</div>` : ''}${args.changes?.notes ? `<pre>${esc(args.changes.notes)}</pre>` : ''}${args.changes?.due_date ? `<div>Due: ${esc(args.changes.due_date)}</div>` : ''}<div>Reason: ${esc(args.reason)}</div></div>`;
   }
-  return `<div class="approval-review"><div>Action: ${esc(review.action)}</div>${review.title ? `<div>Event: ${esc(review.title)}</div>` : ''}${review.event_id ? `<div>Event ID: ${esc(review.event_id)}</div>` : ''}${review.start ? `<div>Start: ${esc(review.start)}</div>` : ''}${review.end ? `<div>End: ${esc(review.end)}</div>` : ''}<div>Reason: ${esc(review.reason)}</div></div>`;
+  return `<div class="approval-review"><div>Action: ${esc(review.action)}</div>${review.title ? `<div>Event: ${esc(review.title)}</div>` : ''}${review.event_id ? `<div>Event ID: ${esc(review.event_id)}</div>` : ''}${review.start ? `<div>Start: ${esc(review.start)}</div>` : ''}${review.end ? `<div>End: ${esc(review.end)}</div>` : ''}`
+    + `${review.calendar_id && review.calendar_id !== 'primary' ? `<div>Calendar: ${esc(review.calendar_id)}</div>` : ''}${review.attendees?.length ? `<div>Guests: ${esc(review.attendees.join(', '))}</div>` : ''}`
+    + `${review.send_updates ? `<div>${review.send_updates === 'all' ? 'Google emails the guests' : 'Google does not email the guests'}</div>` : ''}${review.location ? `<div>Place: ${esc(review.location)}</div>` : ''}`
+    + `${review.add_meet_link ? '<div>With a Meet link</div>' : ''}${review.description ? `<div>Notes on the event:</div><pre>${esc(review.description)}</pre>` : ''}`
+    + `<div>Reason: ${esc(review.reason)}</div>${calendarInviteDetails(review) ? '<div>Approve it in chat or the Waldo app, where the full invite is shown.</div>' : ''}</div>`;
 };
 const approvals = (view: ConsoleView) => {
   if (view.approvals.length === 0) return empty('Nothing waiting on you. When Waldo proposes a change, it appears here and in your chat.');
@@ -362,9 +376,10 @@ const retired = (view: ConsoleView) => view.retiredSpots.length === 0 ? '' : `<d
 const forgetting = (view: ConsoleView) => view.forgettingSpots.length === 0 ? '' : `<div class="forgetting"><h3>Forget in progress (${view.forgettingSpots.length})</h3><div class="sub">These removals could not finish: part of memory storage still holds the text. Retry completes the removal.</div>${view.forgettingSpots.map((spot) => `<div class="row spot"><div class="main"><div class="line">${esc(spot.text)}</div></div>${chip('Removal incomplete', 'danger')}<div class="act">${form(view.csrf, 'spot.forget', 'Retry forget', { id: String(spot.id) }, { tone: 'danger', confirm: 'Retry forgetting this spot?' })}</div></div>`).join('')}</div>`;
 
 const cards = (view: ConsoleView) => [...view.cards].sort((a, b) => (a.time ?? a.defaultTime).localeCompare(b.time ?? b.defaultTime)).map((card) => {
-  const when = card.time ?? 'Skipped today';
+  const when = card.time ?? 'Not scheduled today';
+  const status = card.state === 'skipped' ? chip('Skipped') : card.state === 'held' ? chip('Held for quiet hours') : card.state === 'sent' ? chip('Sent', 'good') : card.sent ? chip('Done') : chip('Upcoming');
   const controls = card.sent ? '' : `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="id" value="${esc(card.id)}"><input type="time" name="value" value="${esc(card.time ?? card.defaultTime)}" required><button class="btn quiet" name="action" value="card.today">Set for today</button><button class="btn quiet" name="action" value="card.pin">Always at this time</button></form>`;
-  return `<div class="row card"><div class="time">${esc(when)}</div><div class="main"><div class="line"><b>${esc(card.name)}</b> ${card.sent ? chip('Sent', 'good') : chip('Upcoming')} ${card.pin ? chip(`Pinned ${card.pin}`, 'good') : ''}</div><div class="sub">${esc(card.reason)}</div>${controls}${card.pin ? form(view.csrf, 'card.unpin', 'Clear pin', { id: card.id }) : ''}</div></div>`;
+  return `<div class="row card"><div class="time">${esc(when)}</div><div class="main"><div class="line"><b>${esc(card.name)}</b> ${status} ${card.pin ? chip(`Pinned ${card.pin}`, 'good') : ''}</div><div class="sub">${esc(card.reason)}</div>${controls}${card.pin ? form(view.csrf, 'card.unpin', 'Clear pin', { id: card.id }) : ''}</div></div>`;
 }).join('');
 
 const VOLUMES: readonly (readonly [string, string])[] = [['low', 'Low: only the three day cards'], ['normal', 'Normal: plus updates that change your day'], ['high', 'High: plus smaller useful updates']];
@@ -423,10 +438,11 @@ const overview = (view: ConsoleView) => {
   const currentTime = view.now.split(' ')[1] ?? '';
   const nextCard = [...view.cards].filter((card) => !card.sent && card.time !== null && card.time >= currentTime).sort((a, b) => (a.time ?? '').localeCompare(b.time ?? ''))[0];
   const brief = view.cards.find((card) => card.id === 'card:brief');
-  const briefState = brief?.sent ? 'Sent today' : brief?.time === null ? 'Not scheduled today' : 'Not sent yet';
+  const briefSkipped = brief?.state === 'skipped';
+  const briefState = briefSkipped ? 'Skipped today' : brief?.sent ? 'Sent today' : brief?.time === null ? 'Not scheduled today' : 'Not sent yet';
   const google = view.google.accounts.some((account) => !account.error);
   return `<div class="overview-top"><div><div class="eyebrow">Your Waldo · ${esc(view.now)} ${esc(view.timezone)}</div><h1>${greeting}<br><em>Here is where things stand.</em></h1><p>What needs you, what ran, and what comes next. No guesswork.</p></div><div class="overview-status">${chip(waiting.length ? `${waiting.length} waiting on you` : 'Nothing waiting on you', waiting.length ? 'provisional' : 'good')}<span>${google ? 'Google access saved. Live reads still need a real check.' : 'Google is not connected.'}</span></div></div>
-<div class="overview-grid"><div class="overview-feature"><div class="eyebrow">The Brief · ${esc(briefState)}</div><h3>${brief?.sent ? 'The Brief is marked sent.' : 'No Brief to read here yet.'}</h3><p>${brief?.sent ? 'Waldo recorded a send. This does not confirm delivery or show the message text; open your chat to check it.' : 'Waldo has not recorded a sent Brief for today. This page will not make one up.'}</p><a href="${CONSOLE_PATH}/day" class="text-link">See the day cards →</a></div>
+<div class="overview-grid"><div class="overview-feature"><div class="eyebrow">The Brief · ${esc(briefState)}</div><h3>${briefSkipped ? 'Waldo skipped the Brief today.' : brief?.sent ? 'The Brief is marked sent.' : 'No Brief to read here yet.'}</h3><p>${briefSkipped ? 'The Brief came due and Waldo had nothing worth sending, so no message went out.' : brief?.sent ? 'Waldo recorded a send. This does not confirm delivery or show the message text; open your chat to check it.' : 'Waldo has not recorded a sent Brief for today. This page will not make one up.'}</p><a href="${CONSOLE_PATH}/day" class="text-link">See the day cards →</a></div>
 <div class="overview-side"><div class="eyebrow">The Handoff</div><h3>${waiting.length ? `${waiting.length} ${waiting.length === 1 ? 'decision' : 'decisions'} waiting.` : 'Nothing needs your approval.'}</h3><p>${waiting.length ? esc(waiting[0]!.summary) : 'If Waldo proposes a change, review its exact details before anything happens.'}</p><a href="${CONSOLE_PATH}/waiting" class="text-link">${waiting.length ? 'Review the proposal' : 'See approvals'} →</a></div>
 <div class="overview-side"><div class="eyebrow">Next on the day</div><h3>${nextCard ? `${esc(nextCard.time!)} · ${esc(nextCard.name)}` : 'No more cards scheduled ahead.'}</h3><p>${nextCard ? esc(nextCard.reason) : 'There is no future card recorded in today’s plan.'}</p><a href="${CONSOLE_PATH}/day" class="text-link">See the plan →</a></div></div>
 <div class="overview-foot"><div><div class="eyebrow">The Patrol · latest recorded movement</div>${lastMovement}</div><a href="${CONSOLE_PATH}/activity" class="text-link">All activity →</a></div>`;
@@ -509,6 +525,26 @@ export const CONSOLE_PAGES = [
   { slug: 'account', title: 'Account' },
 ] as const;
 
+// The classic pages now live in the dashboard app: an HTML visit opens the matching
+// dashboard route. JSON reads and form posts keep their handlers. A ?m notice is dropped,
+// never carried, so a crafted link cannot put its own words on the console.
+const CLASSIC_PAGE_ROUTES: Readonly<Record<string, string>> = {
+  '': '', legacy: '', waiting: 'waiting', setup: 'setup', connections: 'connections', spots: 'memory/spots',
+  constellation: 'memory/constellation', day: 'day', memory: 'memory', files: 'files', usage: 'usage',
+  activity: 'patrol', account: 'account', invites: 'invites',
+  imessage: 'connections/imessage', devices: 'connections/devices',
+};
+export const classicConsoleRedirect = (request: Request): Response | null => {
+  if (request.method !== 'GET' && request.method !== 'HEAD') return null;
+  if ((request.headers.get('accept') ?? '').includes('application/json')) return null;
+  const url = new URL(request.url);
+  const slug = url.pathname === CONSOLE_PATH ? (url.searchParams.has('m') ? 'legacy' : null)
+    : url.pathname.startsWith(`${CONSOLE_PATH}/`) ? url.pathname.slice(CONSOLE_PATH.length + 1) : null;
+  if (slug === null || !Object.hasOwn(CLASSIC_PAGE_ROUTES, slug)) return null;
+  const route = CLASSIC_PAGE_ROUTES[slug];
+  return new Response(null, { status: 303, headers: { location: route ? `${CONSOLE_PATH}#/${route}` : CONSOLE_PATH, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } });
+};
+
 export const renderConsole = (view: ConsoleView, page: string = '', banner = ''): string => {
   const sentToday = view.cards.filter((card) => card.sent).length;
   const seen = view.steps.filter((step) => step.state === 'ok').length;
@@ -532,7 +568,7 @@ export const renderConsole = (view: ConsoleView, page: string = '', banner = '')
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Waldo console</title>
 ${FONTS}<style>${STYLE}</style></head><body><div class="wrap">
 ${banner}<header><div class="brand">Waldo<small>Console</small></div><div class="env">Staging · ${esc(view.release)} · ${esc(view.now)} ${esc(view.timezone)}</div></header>
-<nav>${nav}<a href="${CONSOLE_PATH}/invites">Invites</a><a href="${CONSOLE_PATH}/devices">Devices</a></nav>
+<nav>${nav}<a href="${CONSOLE_PATH}/invites">Invites</a><a href="${CONSOLE_PATH}/devices">Devices</a><a href="${CONSOLE_PATH}/imessage">iMessage</a></nav>
 ${view.notice ? `<div class="notice">${esc(view.notice)}</div>` : ''}
 ${pages[page] ?? pages['']}
 <footer>Only you can open this page. Links come from your Telegram DM and expire after 10 minutes; a session lasts 12 hours.</footer>

@@ -1,4 +1,5 @@
-import { literalTextRedactor } from '@waldo/contracts';
+import { literalTextRedactor, type StandingGate } from '@waldo/contracts';
+import type { CardId } from '../prompt/day-cards';
 import type { RunEffectScope } from './run-effect-scope';
 import { TelegramRejection, TELEGRAM_MESSAGE_MAX_CHARS, sendTelegramFinal, splitTelegramText, type TelegramFinalPayload } from './telegram-api';
 import { redactSecretUrls } from './egress-guard';
@@ -12,7 +13,7 @@ export type FinalPayload = TelegramFinalPayload;
 // One sendable sendMessage unit of a frozen final. Computed at enqueue and stored on the
 // record so redelivery resumes per part instead of resending the whole message.
 export type FinalPart = Readonly<{ text: string; fallback_text?: string }>;
-export type HeartbeatReceipt = { id: string; occurrence: number; schedulerRunId: string; runId?: string; loops: { id: string; due: string }[] };
+export type HeartbeatReceipt = { id: string; occurrence: number; schedulerRunId: string; runId?: string; loops: { id: string; due: string; status?: string }[] };
 export type MailFollowupReceipt = { loopId: string; due: string; sourceRef: string; timezone: string; messageId: string };
 export type CalendarPrepReceipt = { connectionId: string; calendarId: 'primary'; eventId: string; occurrence: string; start: string; revision: string | null; sourceDigest: string; timezone: string };
 export type FinalRecord = {
@@ -20,18 +21,34 @@ export type FinalRecord = {
   expiresAt?: number; bot?: string;
   receiptUrls?: string[]; ownerSubject: string; doName: string; status: 'pending' | 'attempting' | 'delivered' | 'quarantined' | 'blocked';
   dueAt: number; createdAt: number; attempts: number; settled?: boolean; messageId?: number; deliveredAt?: number; reason?: string;
+  // A surface whose receipt names its message by a string id (WhatsApp's wamid) records each part's id here, by part
+  // index (null for a part that was held instead of sent), instead of messageId.
+  providerMessageIds?: (string | null)[];
   inbox?: { id: string; runId: string; attempt: string };
   parts?: FinalPart[];
   deliveredParts?: number;
-  // Host-owned frozen settlement intent, committed with the physical final.
-  commonExecution?: { request: Omit<import('../identity/common-execution-request').CommonExecutionRequest,'signature'>; settled?: boolean; disposition?:'indeterminate' };
   heartbeat?: HeartbeatReceipt;
+  // A paused job's notice, naming the pause: the route holds it through quiet hours and drops it once that pause is lifted.
+  scheduleNotice?: { scheduleId: string; until: number };
   mailFollowup?: MailFollowupReceipt;
   calendarPrep?: CalendarPrepReceipt;
   reaction?: { message_id: number; emoji: string };
   reminder?: { id: string; occurrence: number; runId: string; schedulerRunId: string | null; once: boolean };
+  // A day card on a surface where sends can wait: once it is delivered the day plan records it sent and folds the updates
+  // written up to foldUpTo, the time the card was written.
+  dayCard?: { day: string; card: CardId; foldUpTo: number };
+  // A standing order's report: the order's run finishes when the report is delivered, or when it ends unsent.
+  standingOrder?: { runId: string; gate: StandingGate };
 };
 type Kv = Pick<DurableObjectStorage['kv'], 'get' | 'put'>;
+// What a surface's acknowledgement proves was sent. 'held' is a surface that kept the text for later instead of sending it.
+export type DeliveryReceipt = Readonly<{ messageId?: number; providerMessageId?: string }>;
+export type DeliveryAck = DeliveryReceipt | 'held' | null;
+// Telegram's acknowledgement names the message and the chat it landed in, which must be the record's own.
+export const telegramReceipt = (result: unknown, chatId: number): DeliveryAck => {
+  const ack = result as { message_id?: unknown; chat?: { id?: unknown } } | undefined;
+  return Number.isSafeInteger(ack?.message_id) && (ack!.message_id as number) > 0 && ack?.chat?.id === chatId ? { messageId: ack!.message_id as number } : null;
+};
 const digest = async (payload: unknown) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(payload))))].map(x => x.toString(16).padStart(2, '0')).join('');
 const guardedPayload = (payload: FinalPayload): FinalPayload => {
   const fallback = payload.fallback_text === undefined ? undefined : redactSecretUrls(payload.fallback_text);
@@ -86,7 +103,10 @@ export class TelegramFinalOutbox {
       ? { ...r, payload: { chat_id: r.payload.chat_id, text: '' }, parts: [], receiptUrls: [], reason: r.status === 'quarantined' ? 'expired_ambiguous_metadata' : r.reason } : r);
     await this.save(rows);
   }
-  async enqueue(input: Omit<FinalRecord, 'digest' | 'status' | 'dueAt' | 'createdAt' | 'attempts'>): Promise<void> {
+  // `supersedes` names the waiting records the new one replaces (a newer report of the same order). In the same save, each of
+  // them that never went out (pending, no part delivered) ends blocked as superseded and settles on the next drain. A record
+  // any part of which reached the provider is never touched: it was sent.
+  async enqueue(input: Omit<FinalRecord, 'digest' | 'status' | 'dueAt' | 'createdAt' | 'attempts'>, options?: Readonly<{ supersedes?(record: FinalRecord): boolean }>): Promise<void> {
     input = { ...input, payload: guardedPayload(input.payload) };
     const hash = await digest(input);
     let rows = this.records();
@@ -101,6 +121,9 @@ export class TelegramFinalOutbox {
       const index = rows.findIndex(r => (r.status === 'delivered' || r.status === 'blocked' || r.reason === 'expired_ambiguous_metadata') && r.settled);
       if (index < 0) throw new Error('final outbox capacity');
       rows = rows.filter((_, i) => i !== index);
+    }
+    for (const row of rows) if (row.status === 'pending' && !row.deliveredParts && options?.supersedes?.(row)) {
+      row.status = 'blocked'; row.reason = 'superseded'; row.settled = false;
     }
     rows.push({ ...input, payload: { ...input.payload }, parts: payloadParts(input.payload), digest: hash, status: 'pending', dueAt: this.now() + 250, createdAt: this.now(), attempts: 0 });
     await this.save(rows);
@@ -136,13 +159,27 @@ export class TelegramFinalOutbox {
     else await this.save(rows);
     return true;
   }
+  // The owner wrote again on a surface that kept records waiting: those records are due now. Answers how many are pending.
+  async wake(addressed: (record: FinalRecord) => boolean): Promise<number> {
+    const rows = this.records(), now = this.now();
+    let pending = 0;
+    for (const row of rows) if (row.status === 'pending' && addressed(row)) { pending += 1; row.dueAt = Math.min(row.dueAt, now); }
+    if (pending) await this.save(rows);
+    return pending;
+  }
   async drain(options: {
     allowed(record: FinalRecord): Promise<boolean>;
     // Each part goes with the record it belongs to, so a caller can send it to the surface the record is addressed to.
     send(payload: FinalPayload, record: FinalRecord): Promise<unknown>;
     defer?(record: FinalRecord): Promise<number | null>;
+    // How the surface the record went to acknowledges a part; Telegram's when absent.
+    receipt?(result: unknown, record: FinalRecord): DeliveryAck;
+    // Restricts which records this pass settles and sends. The restart sweep (attempting → quarantined) still covers every
+    // record: an attempt left open by a restart is uncertain whoever drains next.
+    select?(record: FinalRecord): boolean;
     settled(record: FinalRecord): Promise<void>;
   }): Promise<void> {
+    const selected = options.select ?? (() => true);
     await this.maintain();
     const rows = this.records();
     // attempting persisted before network is an uncertainty boundary after restart.
@@ -151,10 +188,10 @@ export class TelegramFinalOutbox {
     }
     await this.save(rows);
     // Reconcile an ACK persisted before lifecycle bookkeeping without sending again.
-    for (const row of rows) if (row.status !== 'pending' && !row.settled) {
+    for (const row of rows) if (row.status !== 'pending' && !row.settled && selected(row)) {
       await options.settled(row); row.settled = true; await this.save(rows);
     }
-    const row = rows.find(r => r.status === 'pending' && r.dueAt <= this.now());
+    const row = rows.find(r => r.status === 'pending' && r.dueAt <= this.now() && selected(r));
     if (!row) return;
     if (row.expiresAt !== undefined && this.now() >= row.expiresAt) {
       row.status = 'blocked'; row.reason = 'expired';
@@ -183,7 +220,7 @@ export class TelegramFinalOutbox {
     const currentAttempt = () => this.records().find(current => current.id === row.id
       && current.status === 'attempting' && current.digest === row.digest && current.attempts === row.attempts
       && JSON.stringify(current.payload) === JSON.stringify(row.payload));
-    let fallbackInvalidated = false;
+    let fallbackInvalidated = false, held = false;
     // Records persisted before parts existed derive them from the payload on read.
     const parts = row.parts?.length ? row.parts : payloadParts(row.payload);
     for (let index = row.deliveredParts ?? 0; index < parts.length; index += 1) {
@@ -217,16 +254,27 @@ export class TelegramFinalOutbox {
       // Concurrent cancellation/forget owns the persisted record. Never overwrite
       // its disposition or restore its scrubbed bytes from this captured send.
       if (fallbackInvalidated || !currentAttempt()) return;
-      const ack = result as { message_id?: unknown; chat?: { id?: unknown } } | undefined;
-      const messageId = ack?.message_id;
       if (result === undefined) { row.status = 'blocked'; row.reason = 'egress_blocked'; break; }
-      if (!Number.isSafeInteger(messageId) || (messageId as number) <= 0 || ack?.chat?.id !== row.payload.chat_id) {
-        row.status = 'quarantined'; row.reason = 'invalid_ack'; break;
+      const receipt = options.receipt ? options.receipt(result, row) : telegramReceipt(result, row.payload.chat_id);
+      if (receipt === null) { row.status = 'quarantined'; row.reason = 'invalid_ack'; break; }
+      // A held part is in the surface's custody, not delivered: the remaining parts are handed to it in order the same way,
+      // and the record ends blocked rather than delivered.
+      if (receipt === 'held') { held = true; row.reason = 'surface_held'; }
+      else {
+        if (receipt.messageId !== undefined) row.messageId = receipt.messageId;
+        if (receipt.providerMessageId !== undefined) {
+          const ids = [...(row.providerMessageIds ?? [])];
+          while (ids.length < index) ids.push(null);
+          ids[index] = receipt.providerMessageId;
+          row.providerMessageIds = ids;
+        }
       }
       // Persist each ACKed part before the next send; storage faults must propagate.
       row.deliveredParts = index + 1;
-      row.messageId = messageId as number;
-      if (index + 1 === parts.length) { row.status = 'delivered'; row.deliveredAt = this.now(); }
+      if (index + 1 === parts.length) {
+        if (held) row.status = 'blocked';
+        else { row.status = 'delivered'; row.deliveredAt = this.now(); }
+      }
       if (!(await saveCurrentRow())) return;
     }
     if (!(await saveCurrentRow())) return;
@@ -270,3 +318,6 @@ const redactSourceFinalEntries = (kv: Kv, texts: readonly string[], marker: stri
 };
 export const redactMailFollowupEntries = (kv: Kv, texts: readonly string[], marker: string, scope?: RunEffectScope) => redactSourceFinalEntries(kv, texts, marker, scope, row => !!row.mailFollowup);
 export const redactCalendarPrepEntries = (kv: Kv, texts: readonly string[], marker: string, scope?: RunEffectScope) => redactSourceFinalEntries(kv, texts, marker, scope, row => !!row.calendarPrep);
+// Day cards and standing-order reports are written from the calendar, mail, ledger and conversation, and they can wait here
+// for the owner (WhatsApp outside its window), so owner forget reaches them the same way.
+export const redactJobReportEntries = (kv: Kv, texts: readonly string[], marker: string, scope?: RunEffectScope) => redactSourceFinalEntries(kv, texts, marker, scope, row => !!row.dayCard || !!row.standingOrder);

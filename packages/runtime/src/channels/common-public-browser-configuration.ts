@@ -1,7 +1,7 @@
 import {commonSpendCalls,commonSpendReservation,type CommonSpendPolicy,type CommonSpendQuote} from './common-spend-reservation';
 import type {LLMGatewayAdapter} from '../llm/provider';
 import type {BrowserWorker} from '@cloudflare/playwright';
-import {commonOwnerAuthority} from '../identity/common-owner-authority';
+import {localOwnerBinding,verifyOwnerBinding} from '../identity/owner-binding';
 import type {CommonBrowserConfiguration,CommonBrowserGrant} from './common-browser-host';
 import type {CloudflareBrowserSdkLoader} from './public-fixture-browser';
 import type {TelegramWebhookEnv} from './telegram-webhook';
@@ -20,6 +20,8 @@ export function configureCommonPublicBrowser(policy:CommonPublicReadPolicy,loadS
  if(registration)throw Error('common public browser already configured');
  registration=Object.freeze({policy:freezePolicy(policy),loadSdk,spend:spend?freezeSpend(spend):undefined});
 }
+// Whether this Worker registered common public browser provider code; eligibility reads it, admission does not.
+export const commonPublicBrowserConfigured=():boolean=>registration!==undefined;
 const freezeSpend=(spend:CommonBrowserSpendRegistration):CommonBrowserSpendRegistration=>{
  if(!Number.isSafeInteger(spend.allocationMicrousd)||spend.allocationMicrousd<1||spend.quote('browser',null)!==0)throw Error('common allocation price registration invalid');
  return Object.freeze({policy:Object.freeze({...spend.policy}),quote:spend.quote,allocationMicrousd:spend.allocationMicrousd,countModel:spend.countModel});
@@ -43,24 +45,26 @@ export function assertCommonPublicBrowserUsage(retained:Usage,policy:CommonPubli
 export function commonPublicBrowserConfiguration(options:Readonly<{env:TelegramWebhookEnv;storage:DurableObjectStorage;actualDoId:string;policy?:CommonPublicReadPolicy;loadSdk?:CloudflareBrowserSdkLoader;spend?:CommonBrowserSpendRegistration;cleanupOnly?:boolean;now?:()=>number}>):(CommonBrowserConfiguration & Readonly<{ownerId:string;lifetimeMs:number;expiresAt:number}>)|undefined{
  const {env,storage,actualDoId}=options,selected=options.policy?{policy:options.policy,loadSdk:options.loadSdk,spend:options.spend}:registration;
  if(env.WALDO_ENVIRONMENT!=='staging'||!env.BROWSER||!selected?.loadSdk||!selected.spend)return undefined;
- const policy=freezePolicy(selected.policy),now=options.now??Date.now,directory=commonOwnerAuthority(env);
+ const policy=freezePolicy(selected.policy),now=options.now??Date.now;
+ // The policy names the owner binding it was registered for, Telegram presence or app; only that binding holds it.
+ const held=()=>{const binding=localOwnerBinding(storage.kv,env.OWNER_DO,actualDoId);return binding&&binding.doName===policy.doName&&binding.subject===policy.subject?binding:undefined;};
  // This registration belongs to one physical owner. Selecting it on another
  // owner would also install its model spend gate and break unrelated chat.
- if(env.TELEGRAM_OWNER_DO?.idFromName(policy.doName).toString()!==actualDoId)return undefined;
- if(!options.cleanupOnly&&(storage.kv.get('do_name')!==policy.doName||storage.kv.get('telegram_subject')!==policy.subject))return undefined;
+ if(env.OWNER_DO?.idFromName(policy.doName).toString()!==actualDoId)return undefined;
+ if(!options.cleanupOnly&&!held())return undefined;
  const spend=freezeSpend(selected.spend);
  if(spend.policy.ownerId!==`prn_${policy.directoryOwnerId.toLowerCase().replaceAll('-','')}`||spend.policy.validUntil>policy.expiresAt)throw Error('common browser spend policy rejected');
  const ledger=commonSpendReservation(storage,spend.policy,now,()=>physical(),additional=>assertOwnerPublicBrowserCapacity(storage,spend.policy.ownerId,spend.policy.limitMicrousd,additional));
  const calls=commonSpendCalls(ledger,(kind,request)=>{const bound=spend.quote(kind,request);if(kind==='browser'&&bound!==0)throw Error('common browser allocation price changed');return bound;},{countModel:spend.countModel?material=>spend.countModel!(material):undefined});
  const key=`common-public-browser-usage:${policy.ref}`;
- const physical=()=>{const at=now();if(!Number.isSafeInteger(at)||at<policy.createdAt||at>=policy.expiresAt||storage.kv.get('do_name')!==policy.doName||storage.kv.get('telegram_subject')!==policy.subject||storage.kv.get('telegram_unlinked')===true||env.TELEGRAM_OWNER_DO?.idFromName(policy.doName).toString()!==actualDoId)throw Error('common public browser policy unavailable');};
+ const physical=()=>{const at=now();if(!Number.isSafeInteger(at)||at<policy.createdAt||at>=policy.expiresAt||!held())throw Error('common public browser policy unavailable');};
  const read=():Usage=>{
   const retained=storage.kv.get<Usage>(key);
   if(!retained)return {policy,allocationMicrousd:spend.allocationMicrousd,allocations:0,reservedBrowserMs:0,taskGrants:[]};
   assertCommonPublicBrowserUsage(retained,policy,spend.allocationMicrousd);
   return retained;
  };
- const owner=async()=>{physical();const row=await directory.resolve('telegram',policy.subject,policy.doName);physical();if(!row||row.directoryOwnerId!==policy.directoryOwnerId.toLowerCase())throw Error('common public browser owner unavailable');return {ownerId:`prn_${row.directoryOwnerId.replaceAll('-','')}`,custodyDigest:row.custodyDigest};};
+ const owner=async()=>{physical();const row=await verifyOwnerBinding(env,held()!,actualDoId,env.OWNER_DO);physical();if(!row||row.directoryOwnerId!==policy.directoryOwnerId.toLowerCase())throw Error('common public browser owner unavailable');return {ownerId:`prn_${row.directoryOwnerId.replaceAll('-','')}`,custodyDigest:row.custodyDigest};};
  const verify=async(grant:CommonBrowserGrant)=>{const current=await owner();if(current.ownerId!==grant.ownerId)throw Error('common public browser owner changed');const row=read();if(row.custodyDigest!==current.custodyDigest)throw Error('common public browser authority changed');if(!row.taskGrants.some(retained=>JSON.stringify(retained)===JSON.stringify(grant)))throw Error('common public browser grant changed');};
  return {
   ownsGrant:grant=>grant.ref===policy.ref,

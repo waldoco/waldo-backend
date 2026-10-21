@@ -22,6 +22,8 @@ export type OwnerMessageAdmission = Readonly<{
   invocation: TrustedInvocationEnvelope;
   snapshot: Readonly<{ snapshot_ref: string; snapshot_at: number }>;
   assertCurrent(): Promise<void>;
+  // Reads authority now, never from a recent match: the check before an effect or a published reply.
+  assertFresh(): Promise<void>;
   readInput(): Promise<ResolvedInvocationInput>;
 }>;
 
@@ -107,5 +109,6 @@ export async function ownerMessageAdmission(options: Options): Promise<OwnerMess
     const current = await resolve();
     if (Object.keys(initial).some(key => current[key as keyof PresenceBinding] !== initial[key as keyof PresenceBinding])) throw new OwnerAdmissionError('rejected');
   };
-  return Object.freeze({ invocation, snapshot, assertCurrent, readInput: async () => { await assertCurrent(); return input; } });
+  // This admission keeps no recent match, so every check already reads.
+  return Object.freeze({ invocation, snapshot, assertCurrent, assertFresh: assertCurrent, readInput: async () => { await assertCurrent(); return input; } });
 }

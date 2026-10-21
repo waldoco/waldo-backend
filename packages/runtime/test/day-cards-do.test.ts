@@ -1,5 +1,5 @@
 import { sanitise } from '../src/scribe/sanitiser';
-import { deriveContextBudgetChars, SANITISE_DESTINATION_POLICIES, WALDO_CHAT_MODEL } from '@waldo/contracts';
+import { deriveContextBudgetChars, SANITISE_DESTINATION_POLICIES, WALDO_AUXILIARY_MODEL } from '@waldo/contracts';
 import { claimStore } from '../src/memory/claims';
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
@@ -30,7 +30,7 @@ describe('scheduled day cards', () => {
     const ledger = lines('ledger', 4000);
     const updates = lines('update', 4000);
     const prompt = await composeDayCard(cardFor('card:close')!, now, tz, { google, connectable: false, ledger, today: lines('today', 100), updates });
-    const limit = deriveContextBudgetChars(WALDO_CHAT_MODEL, SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
+    const limit = deriveContextBudgetChars(WALDO_AUXILIARY_MODEL, SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
     expect(JSON.stringify([{ role: 'user', content: prompt }]).length).toBeLessThanOrEqual(limit / 2);
     expect(prompt).toContain('Investor call');
     expect(prompt).toContain('The Close');
@@ -90,7 +90,7 @@ describe('scheduled day cards', () => {
   });
 
   it('seeds default times once a day, then applies a plan without touching sent or past cards', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('day-cards'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('day-cards'));
     await runInDurableObject(stub, async (_instance, state) => {
       ensureSchema(state.storage);
       const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
@@ -111,9 +111,9 @@ describe('scheduled day cards', () => {
       expect(scheduler.read('card:midday')).toBeNull();
       expect(scheduler.read('card:close')?.due_at).toBe(Date.parse('2026-09-23T16:45:00Z'));
       expect(book.read('2026-09-23')).toEqual([
-        { card: 'card:brief', time: '08:00', reason: 'default time', sent: true },
-        { card: 'card:close', time: '22:15', reason: 'winds down at 23:15', sent: false },
-        { card: 'card:midday', time: '15:00', reason: 'already past', sent: false },
+        { card: 'card:brief', time: '08:00', reason: 'default time', sent: true, state: 'sent' },
+        { card: 'card:close', time: '22:15', reason: 'winds down at 23:15', sent: false, state: 'pending' },
+        { card: 'card:midday', time: '15:00', reason: 'already past', sent: false, state: 'pending' },
       ]);
       await applyDayPlan(scheduler, book, tz, now, [{ card: 'card:close', time: null, reason: 'owner asked for no close tonight' }]);
       expect(scheduler.read('card:close')).toBeNull();
@@ -125,11 +125,11 @@ describe('scheduled day cards', () => {
 
 
 describe('day-plan memory budget', () => {
-  const limit = deriveContextBudgetChars(WALDO_CHAT_MODEL, SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
+  const limit = deriveContextBudgetChars(WALDO_AUXILIARY_MODEL, SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
   const wireSize = (content: string) => JSON.stringify([{ role: 'user', content }]).length;
   const input = dayPlanInput({ localNow: '2026-10-04T08:00', calendar: 'No events.', cards: DAY_CARDS, proactivity: 'Quiet hours 23:00-07:00' });
   const withMemory = (name: string, work: (store: ReturnType<typeof claimStore>) => void) =>
-    runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), (_i, state) => work(claimStore(state.storage.sql)));
+    runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), (_i, state) => work(claimStore(state.storage.sql)));
   const add = (store: ReturnType<typeof claimStore>, text: string, evidence = text) =>
     store.add({ kind: 'routine', text, source: 'stated', evidence, origin: 'owner', source_ref: 'owner, synthetic-day-plan' }, '2026-10-04T00:00:00Z');
 
@@ -141,7 +141,7 @@ describe('day-plan memory budget', () => {
       expect(sanitise({ payload: [{ role: 'user', content }], destination: 'internal_context', source_taint: null, canary_tokens: ['1111111111111111', '2222222222222222', '3333333333333333'], max_chars_override: limit }).ok).toBe(true);
       expect(content.endsWith(input)).toBe(true);
       expect(content).toContain('Routine 2499:');
-      const shown = content.split('\n').filter(line => line.startsWith('- [owner-grounded]')).length;
+      const shown = content.split('\n').filter(line => /^- \[c\d+ · owner-grounded\]/.test(line)).length;
       expect(content).toContain(`(${2_500 - shown} older owner facts are not shown here;`);
       expect(content).not.toContain('Routine 0:');
     });
@@ -171,9 +171,10 @@ describe('day-plan memory budget', () => {
 
   it('does not impose a fact-count cap when all facts fit', async () => {
     await withMemory('day-plan-no-count-cap', (store) => {
-      for (let i = 0; i < 250; i++) add(store, `Routine ${i}`);
+      // 100 short facts, each line led by its claim id, fill most of the uncurated profile's two block budgets (1,500 + 2,500 characters).
+      for (let i = 0; i < 100; i++) add(store, `Routine ${i}`);
       const content = composeDayPlanInput(input, store);
-      for (let i = 0; i < 250; i++) expect(content).toContain(`- [owner-grounded] Routine ${i}\n`);
+      for (let i = 0; i < 100; i++) expect(content).toContain(`- [c${i + 1} · owner-grounded] Routine ${i}\n`);
       expect(content).not.toContain('older owner facts are not shown here');
       expect(wireSize(content)).toBeLessThanOrEqual(limit);
     });

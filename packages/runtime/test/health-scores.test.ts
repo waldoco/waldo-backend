@@ -157,6 +157,25 @@ describe('health scores: Form', () => {
   it('passes a Recovery failure through as its own reason', () => {
     expect(computeDailyScores(input(replaceTarget({ sleep: null }))).form).toEqual({ state: 'unavailable', reason: 'missing_sleep' });
   });
+  it('leaves out daylight and movement when the hours carry heart rate but no reading for them, instead of scoring them as usual', () => {
+    const heartRateOnly = (record: DayRecord): DayRecord => ({ ...record, hourly: record.hourly.map(bucket => ({ ...bucket, daylightMinutes: null, movementMinutes: null })) });
+    const f = computeDailyScores(input(week().map(heartRateOnly))).form;
+    expect(f.state).toBe('available');
+    if (f.state !== 'available') return;
+    expect(f.used.signals).not.toContain('daylight');
+    expect(f.used.signals).not.toContain('movement');
+    expect(f.coverage).toBeLessThan(1);
+  });
+  it('counts an hour the phone left out as none on a day that carries the reading, as the phone sends only hours that hold some', () => {
+    const daylightIn = (record: DayRecord, hours: number): DayRecord => ({ ...record, hourly: record.hourly.map((bucket, i) => (i < hours ? bucket : { ...bucket, daylightMinutes: null })) });
+    const history = week().slice(1).map(record => daylightIn(record, 3));
+    const usual = computeDailyScores(input([daylightIn(day(0), 3), ...history])).form;
+    const less = computeDailyScores(input([daylightIn(day(0), 1), ...history])).form;
+    if (usual.state !== 'available' || less.state !== 'available') throw new Error('expected available');
+    expect(usual.used.signals).toContain('daylight');
+    expect(less.used.signals).toContain('daylight');
+    expect(less.score).toBeLessThan(usual.score);
+  });
 });
 
 describe('health scores: Weight', () => {

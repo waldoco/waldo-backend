@@ -7,8 +7,12 @@ import { MEMORY_GRAPH_PATH } from './memory-graph';
 import { consoleLog, consoleTrace, withConsoleTrace } from '../observability/console-correlation';
 import { consoleAuth, OWNER_COOKIE, type ConsoleAuth } from '../identity/console-auth';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
-import { CONSOLE_COOKIE, CONSOLE_PATH } from './console';
+import { CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_PATH } from './console';
+import { CONSOLE_DEVICES_PATH } from '../devices/contract';
+import { WHATSAPP_LINK_TARGET, whatsappLinkToken } from '../identity/whatsapp-link';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
+import { clearOwnerCookie, consoleSignoutKind, prepareConsoleSignout, signedOut } from './console-signout';
+import { fenceSession, ownerSessionHash } from './session-fence';
 
 export const CONSOLE_SIGNIN_PATH = `${CONSOLE_PATH}/signin`;
 export const CONSOLE_VERIFY_PATH = `${CONSOLE_PATH}/verify`;
@@ -21,7 +25,7 @@ export const CONSOLE_OTP_VERIFY_LIMIT = 10;
 export const CONSOLE_AUTH_IP_LIMIT = 30;
 export const CONSOLE_AUTH_WINDOW_SECONDS = 15 * 60;
 
-type ConsoleEnv = OwnerDirectoryEnv & Readonly<{ TELEGRAM_OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
+type ConsoleEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
 
 const DOWNLOAD_RETURN_PATTERN = /^\/console\/workspace\/file\?id=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})&revision=([1-9]\d*)$/;
 // A continuation is a read-only file locator, never an arbitrary redirect or grant.
@@ -31,6 +35,13 @@ export const downloadReturnTarget = (values: readonly unknown[]): string | null 
   const match = DOWNLOAD_RETURN_PATTERN.exec(raw);
   return match && Number.isSafeInteger(Number(match[2])) ? raw : null;
 };
+// Seamless Mac pairing: Kennel opens /console/devices; a signed-out owner returns there after
+// sign-in. Exactly that path, never an arbitrary redirect. A WhatsApp link confirm page returns the
+// same way: it is read-only, and binding still takes the confirm on that page.
+const redirectReturnTarget = (values: readonly unknown[]): string | null =>
+  values.length !== 1 || typeof values[0] !== 'string' ? null : values[0] === CONSOLE_DEVICES_PATH || whatsappLinkToken(values[0]) ? values[0] : null;
+export const consoleReturnTarget = (values: readonly unknown[]): string | null =>
+  redirectReturnTarget(values) ?? downloadReturnTarget(values);
 const returnField = (target: string | null) => target ? `<input type="hidden" name="return_to" value="${esc(target)}">` : '';
 const esc = (value: string) => value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
 const page = (body: string, status = 200) => new Response(
@@ -104,8 +115,12 @@ const page = (body: string, status = 200) => new Response(
       const destination = new URL(response.url);
       if (response.redirected) {
         if (action === location.origin + '/console/verify' && response.ok &&
-          destination.origin === location.origin && destination.pathname === '/console' && !destination.search && !destination.hash) {
-          location.assign('/console');
+          destination.origin === location.origin && !destination.search && !destination.hash &&
+          (destination.pathname === '/console' || (destination.pathname === '${CONSOLE_DEVICES_PATH}' && body.get('return_to') === '${CONSOLE_DEVICES_PATH}') ||
+            (destination.pathname === body.get('return_to') && new RegExp(${JSON.stringify(WHATSAPP_LINK_TARGET.source)}).test(destination.pathname)))) {
+          // The devices page answers a navigation with the console route it moved to. fetch drops that
+          // fragment, so a Kennel sign-in navigates to the page itself and lets the browser keep it.
+          location.assign(body.get('return_to') === '${CONSOLE_DEVICES_PATH}' ? '${CONSOLE_DEVICES_PATH}' : destination.pathname);
           return;
         }
         throw new Error('Unexpected redirect');
@@ -167,7 +182,7 @@ export const normalizePhone = (raw: string): string | null => {
 };
 
 type SigninDetails = Readonly<{ email: string; phone: string; invite: string }>;
-const signinEmailForm = (note = '', details: SigninDetails = { email: '', phone: '', invite: '' }, target: string | null = null) => page(`${target ? `<p>Already signed in on this browser? <a href="${esc(target)}">Continue to download</a>. Otherwise, sign in below to open your file.</p>` : ''}<form method="post" action="${CONSOLE_SIGNIN_PATH}" data-pending="Requesting an email code…">${returnField(target)}<h1>Sign in to Waldo</h1><p><a href="/console/signup">New member? Open your invite signup</a></p>${note ? `<p role="alert">${esc(note)}</p>` : ''}<label for="signin-email">Email address</label><input id="signin-email" name="email" value="${esc(details.email)}" type="email" autocomplete="email" required placeholder="you@example.com"><label for="signin-invite">Invite code (optional for existing members)</label><input id="signin-invite" name="invite" value="${esc(details.invite)}" autocomplete="off" placeholder="Invite code (new members)"><label for="signin-phone">Phone with country code (optional, contact only, unverified)</label><input id="signin-phone" name="phone" value="${esc(details.phone)}" type="tel" autocomplete="tel" placeholder="Phone, e.g. +91 98765 43210"><button>Email me a code</button></form>`);
+const signinEmailForm = (note = '', details: SigninDetails = { email: '', phone: '', invite: '' }, target: string | null = null) => page(`${target === CONSOLE_DEVICES_PATH ? `<p>Sign in to pair your Mac with Waldo. Already signed in on this browser? <a href="${CONSOLE_DEVICES_PATH}">Continue to your devices</a>.</p>` : target && whatsappLinkToken(target) ? `<p>Sign in to link your WhatsApp number to Waldo. You will confirm the number on the next page.</p>` : target ? `<p>Already signed in on this browser? <a href="${esc(target)}">Continue to download</a>. Otherwise, sign in below to open your file.</p>` : ''}<form method="post" action="${CONSOLE_SIGNIN_PATH}" data-pending="Requesting an email code…">${returnField(target)}<h1>Sign in to Waldo</h1><p><a href="/console/signup">New member? Open your invite signup</a></p>${note ? `<p role="alert">${esc(note)}</p>` : ''}<label for="signin-email">Email address</label><input id="signin-email" name="email" value="${esc(details.email)}" type="email" autocomplete="email" required placeholder="you@example.com"><label for="signin-invite">Invite code (optional for existing members)</label><input id="signin-invite" name="invite" value="${esc(details.invite)}" autocomplete="off" placeholder="Invite code (new members)"><label for="signin-phone">Phone with country code (optional, contact only, unverified)</label><input id="signin-phone" name="phone" value="${esc(details.phone)}" type="tel" autocomplete="tel" placeholder="Phone, e.g. +91 98765 43210"><button>Email me a code</button></form>`);
 // Retry forms retain entered fields; sign-in resolves existing owners only.
 const signinCodeForm = (email: string, phone: string, invite: string, note = '', target: string | null = null) => page(`<form method="post" action="${CONSOLE_VERIFY_PATH}" data-pending="Checking your code…">${returnField(target)}<p role="status">${note ? esc(note) : `If ${esc(email)} has access, an email code was requested. Delivery is not confirmed here.`}</p><input type="hidden" name="email" value="${esc(email)}"><input type="hidden" name="phone" value="${esc(phone)}"><input type="hidden" name="invite" value="${esc(invite)}"><label for="signin-code">Email sign-in code</label><input id="signin-code" name="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="Code"><button>Sign in</button></form><form method="post" action="${CONSOLE_SIGNIN_PATH}" data-pending="Opening your details…">${returnField(target)}<input type="hidden" name="intent" value="edit"><input type="hidden" name="email" value="${esc(email)}"><input type="hidden" name="phone" value="${esc(phone)}"><input type="hidden" name="invite" value="${esc(invite)}"><button>Request another email code / edit details</button></form>`);
 
@@ -175,21 +190,21 @@ const signinCodeForm = (email: string, phone: string, invite: string, note = '',
 // Returns null when Supabase is not configured; the caller keeps the Telegram one-time link sign-in.
 export const handleConsole = async (request: Request, env: ConsoleEnv, auth: ConsoleAuth | null = consoleAuth(env), requestTrace: string = consoleTrace()): Promise<Response | null> => {
   if (new URL(request.url).pathname === CONSOLE_SIGNUP_PATH || new URL(request.url).pathname.startsWith(`${CONSOLE_SIGNUP_PATH}/`)) return withConsoleTrace(await handleSignup(request, env, auth, undefined, requestTrace), requestTrace);
-  const owners = env.TELEGRAM_OWNER_DO;
+  const owners = env.OWNER_DO;
   if (!auth || !owners) return null;
   const url = new URL(request.url);
   const trace = requestTrace;
   const event = (hop: string, ok: boolean, code: string) => consoleLog(trace, hop, ok, code);
   const finish = (response: Response) => withConsoleTrace(response, trace);
-  const resume = request.method === 'GET' ? downloadReturnTarget([url.pathname + url.search]) : null;
+  const resume = request.method === 'GET' ? consoleReturnTarget([url.pathname + url.search]) : null;
   const signin = () => new Response(null, { status: 303, headers: { location: resume ? `${CONSOLE_SIGNIN_PATH}?return_to=${encodeURIComponent(resume)}` : CONSOLE_SIGNIN_PATH } });
-  let target = downloadReturnTarget(url.searchParams.getAll('return_to'));
+  let target = consoleReturnTarget(url.searchParams.getAll('return_to'));
   const emailForm = (note = '', details?: SigninDetails) => signinEmailForm(note, details, target);
   const codeForm = (email: string, phone: string, invite: string, note = '') => signinCodeForm(email, phone, invite, note, target);
   if (url.pathname === CONSOLE_SIGNIN_PATH && request.method === 'GET') return finish(emailForm());
   if (url.pathname === CONSOLE_SIGNIN_PATH && request.method === 'POST') {
     const form = await request.formData();
-    target = downloadReturnTarget(form.getAll('return_to'));
+    target = consoleReturnTarget(form.getAll('return_to'));
     const email = String(form.get('email') ?? '').trim().toLowerCase();
     const rawPhone = String(form.get('phone') ?? '');
     const phone = rawPhone.trim() === '' ? '' : normalizePhone(rawPhone);
@@ -234,7 +249,7 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
   }
   if (url.pathname === CONSOLE_VERIFY_PATH && request.method === 'POST') {
     const form = await request.formData();
-    target = downloadReturnTarget(form.getAll('return_to'));
+    target = consoleReturnTarget(form.getAll('return_to'));
     const email = String(form.get('email') ?? '');
     const rawPhone = String(form.get('phone') ?? '');
     const phone = rawPhone.trim() === '' ? '' : normalizePhone(rawPhone);
@@ -289,8 +304,8 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
       return finish(codeForm(email, phone, invite, 'Sign-in is having trouble. Try again in a moment.'));
     }
     const cookie = `Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=43200`;
-    const terminal = target ? page(`<h1>Signed in</h1><p>Your file still requires access from the account you signed in with.</p><a id="signin-download" href="${esc(target)}">Download your file</a><p><a href="${CONSOLE_PATH}">Open your console</a></p>`) : null;
-    const headers = new Headers(terminal?.headers ?? { location: CONSOLE_PATH });
+    const terminal = target && !redirectReturnTarget([target]) ? page(`<h1>Signed in</h1><p>Your file still requires access from the account you signed in with.</p><a id="signin-download" href="${esc(target)}">Download your file</a><p><a href="${CONSOLE_PATH}">Open your console</a></p>`) : null;
+    const headers = new Headers(terminal?.headers ?? { location: target ?? CONSOLE_PATH });
     headers.append('set-cookie', `${CONSOLE_COOKIE}=${await grant.text()}; ${cookie}`);
     headers.append('set-cookie', `${OWNER_COOKIE}=${ownerCookieValue}; ${cookie}`);
     event('console_verify', true, 'signed_in');
@@ -301,11 +316,16 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
   if (url.pathname === `${CONSOLE_PATH}/signout-all` && request.method === 'POST') {
     const doName = await auth.readOwnerCookie(request);
     if (doName) {
+      // The sessions about to be revoked, so their console and app turns can be stopped after; at least this browser's.
+      let hashes: readonly string[];
+      try { hashes = (await auth.listSessions(doName)).map(row => row.session); }
+      catch { const own = await ownerSessionHash(request); hashes = own ? [own] : []; }
       try { await auth.signOutAll(doName); }
       catch {
         event('console_route', false, 'signout_all_unconfirmed');
         return finish(new Response('Signing out everywhere did not finish. This browser is still signed in; go back and try again.', { status: 503, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } }));
       }
+      await Promise.all(hashes.map(hash => fenceSession(env, owners, doName, hash)));
     }
     const headers = new Headers({ location: CONSOLE_SIGNIN_PATH });
     const clear = `Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=0`;
@@ -341,6 +361,18 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
     if ([DASHBOARD_OVERVIEW_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH].includes(url.pathname)||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json')) return finish(new Response('unauthorized', { status: 401, headers: DASHBOARD_OVERVIEW_HEADERS }));
     return finish(signin());
   }
+  const signout = await consoleSignoutKind(request, url);
+  let fenceAfter: readonly string[] = [];
+  if (signout) {
+    try { fenceAfter = await prepareConsoleSignout(signout, request, auth, env, owners, doName); }
+    catch {
+      event('console_route', false, 'signout_unconfirmed');
+      const message = 'Signing out did not finish. This browser is still signed in; go back and try again.';
+      return finish(url.pathname === CONSOLE_ACTION_PATH
+        ? new Response(message, { status: 503, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } })
+        : Response.json({ error: 'unavailable' }, { status: 503, headers: DASHBOARD_OVERVIEW_HEADERS }));
+    }
+  }
   const forwarded = new Request(request);
   forwarded.headers.set('x-waldo-do-name', doName);
   let response: Response;
@@ -349,7 +381,12 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
     if ([DASHBOARD_OVERVIEW_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH].includes(url.pathname)||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json')) return finish(new Response('overview unavailable', { status: 503, headers: DASHBOARD_OVERVIEW_HEADERS }));
     throw error;
   }
-  event('console_route', response.ok, response.ok ? 'forwarded' : 'forward_failed');
+  const routed = response.ok || (response.status >= 300 && response.status < 400);
+  event('console_route', routed, routed ? 'forwarded' : 'forward_failed');
+  if (signout && signedOut(response)) {
+    await Promise.all(fenceAfter.map(hash => fenceSession(env, owners, doName, hash)));
+    response = clearOwnerCookie(response);
+  }
   if (resume && response.status === 401) return finish(signin());
   if ([DASHBOARD_OVERVIEW_PATH,MEMORY_GRAPH_PATH,CONTROLS_PATH,CONTROL_ACTION_PATH,MEMORY_CONTROL_PATH,OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH].includes(url.pathname)||(url.pathname.startsWith('/console/workspace')&&request.headers.get('accept')==='application/json')) {
     const headers = new Headers(response.headers);

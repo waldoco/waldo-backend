@@ -18,7 +18,7 @@ export const workspaceMetadata = (storage: Pick<DurableObjectStorage, 'sql' | 't
   },
 });
 
-export type WorkspaceEnv = OwnerDirectoryEnv & Readonly<{ WALDO_ENVIRONMENT?: string; WALDO_OWNER_DO_NAMESPACE?: string; TELEGRAM_OWNER_DO?: DurableObjectNamespace; ARTIFACTS?: R2Bucket }>;
+export type WorkspaceEnv = OwnerDirectoryEnv & Readonly<{ WALDO_ENVIRONMENT?: string; WALDO_OWNER_DO_NAMESPACE?: string; OWNER_DO?: DurableObjectNamespace; ARTIFACTS?: R2Bucket }>;
 type MappingRow = { owner_id: string; environment: string; namespace: string; do_name: string; do_id: string; state_version: number; mapping_version: number };
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const rowBinding = (value: unknown): OwnerBinding | null => {
@@ -56,7 +56,7 @@ export const workspaceOwnerHost = async (
       ]);
     } finally { if(timer!==undefined)clearTimeout(timer); }
   });
-  const { WALDO_ENVIRONMENT: environment, WALDO_OWNER_DO_NAMESPACE: namespace, TELEGRAM_OWNER_DO: owners } = env;
+  const { WALDO_ENVIRONMENT: environment, WALDO_OWNER_DO_NAMESPACE: namespace, OWNER_DO: owners } = env;
   if (!call || !environment || !namespace || !/^[a-zA-Z0-9_-]{1,120}$/.test(environment) || !/^[a-zA-Z0-9_-]{1,240}$/.test(namespace) || !owners || !doName || owners.idFromName(doName).toString() !== actualDoId || !env.ARTIFACTS) throw new WorkspaceError('unavailable');
   const args = { p_environment: environment, p_namespace: namespace, p_do_name: doName, p_do_id: actualDoId, p_locator: JSON.stringify([environment, namespace, doName, actualDoId]) };
   // Hash the complete locator tuple to avoid delimiter ambiguity in the signed RPC.

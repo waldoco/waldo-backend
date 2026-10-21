@@ -20,7 +20,7 @@ export async function handleDeviceRedeem(request: Request, env: OwnerDirectoryEn
     while (true) { const { done, value } = await reader.read(); if (done) break; size += value.length; if (size > REDEEM_BYTES) { await reader.cancel(); return genericReject(); } chunks.push(value); }
     const raw = new Uint8Array(size); let offset = 0; for (const chunk of chunks) { raw.set(chunk, offset); offset += chunk.length; }
     const body = redeemBody(parseStrictJson(raw));
-    if (!body) return genericReject();
+    if (!body || body.contract_version!==CONTRACT_VERSION) return genericReject();
     const directory = deviceDirectory(env, fetcher), digest = await devicePairingCodeHash(body.code);
     if (!await directory.throttle(request.headers.get('cf-connecting-ip') ?? 'local', digest)) return genericReject();
     const fields = httpSigningFields(request);

@@ -39,7 +39,6 @@ Runner environment: `TELEGRAM_BOT_TOKEN`, `WALDO_OWNER_TELEGRAM_ID`, `OPENAI_API
 |---|---|---|
 | Local S1 chat CLI and explicit OpenAI S2 route | `runtime/src/cli/local-chat.ts` | `d39bc52`, `a6dbf1f` |
 | Layered context observability | `runtime/src/context-composer` | `50b1c76` |
-| Correctable memory recall: correction, forget, provenance, aggregate-only health summaries | `runtime/src/recall/correctable.ts` | `952b3bd` |
 | Joined Conversation Path: owner-bound composer, model, append-only tree, publication record | `runtime/src/conversation/joined-path.ts` | `acfa34e` |
 
 ## Contracts

@@ -129,3 +129,52 @@ describe('revision-bound owner control actions', () => {
     expect(() => readActionResult({ receipt: { state: 'unconfirmed', message: 'Unknown', navigation: ticket }, duplicate: false }, 'google.connect', 'https://w.test')).toThrow();
   });
 });
+
+describe('iMessage and device setup reads', () => {
+  const bridge = { id: 'imb_' + '0'.repeat(32), kind: 'owner', state: 'pending', subject: 'owner@test.invalid', chat: 'iMessage;-;owner@test.invalid', observed: true, host_version: 'host-1', actions: ['imessage.verify', 'imessage.activate', 'imessage.revoke'] };
+  const imessage = { ...day, view: 'imessage', data: { enabled: true, address: 'waldo@test.invalid', linked_hint: '1234', admin: false, actions: ['imessage.link', 'imessage.unlink', 'imessage.pair'], bridges: [bridge] }, status: { bridges: [{ id: bridge.id, online: true, text_ready: false, sending_paused: false }] } };
+  const device = { id: 'dev_fixture', label: '<b>Mac</b>', capabilities: ['machine_state_query'], created_at: '2026-10-16', actions: ['device.revoke', 'device.query'] };
+  const devices = { ...day, view: 'devices', data: { actions: ['device.pair'], devices: [device], query_kinds: ['session_status'], notification_bodies: ['Your Mac is connected.'] }, status: { devices: [{ id: device.id, online: false, last_seen_at: null, commands: [{ class: 'machine_state_query', state: 'queued', result_state: null }] }] } };
+  it('keeps only the listed fields and actions, and liveness beside the data', () => {
+    const parsed = readControls({ ...imessage, data: { ...imessage.data, bridges: [{ ...bridge, wrapped_credential: 'never-retain' }] }, status: { bridges: [{ ...imessage.status.bridges[0], quarantine: 'never-retain' }] } }, 'imessage');
+    expect(parsed).toEqual(imessage); expect(JSON.stringify(parsed)).not.toContain('never-retain');
+    expect(readControls({ ...devices, data: { ...devices.data, devices: [{ ...device, pubkey: 'never-retain' }] } }, 'devices')).toEqual(devices);
+    for (const value of [
+      { ...imessage, status: undefined }, { ...imessage, data: { ...imessage.data, actions: ['imessage.link', 'invite.create'] } }, { ...imessage, data: { ...imessage.data, actions: ['imessage.link', 'imessage.link'] } },
+      { ...imessage, data: { ...imessage.data, bridges: [{ ...bridge, id: '../other' }] } }, { ...imessage, data: { ...imessage.data, bridges: [{ ...bridge, actions: ['imessage.link'] }] } }, { ...imessage, data: { ...imessage.data, enabled: 'true' } },
+    ]) expect(() => readControls(value, 'imessage')).toThrow('unsupported');
+    for (const value of [{ ...devices, data: { ...devices.data, actions: ['device.revoke'] } }, { ...devices, data: { ...devices.data, devices: [{ ...device, actions: ['device.pair'] }] } }, { ...devices, status: { devices: [{ ...devices.status.devices[0], online: 'yes' }] } }])
+      expect(() => readControls(value, 'devices')).toThrow('unsupported');
+  });
+  it('reads each view from the fixed controls route', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(Response.json(imessage)).mockResolvedValueOnce(Response.json(devices)); vi.stubGlobal('fetch', fetcher);
+    expect((await fetchControls('imessage')).data.linked_hint).toBe('1234');
+    expect((await fetchControls('devices')).data.devices[0]?.label).toBe('<b>Mac</b>');
+    expect(fetcher.mock.calls.map(call => call[0])).toEqual(['/console/dashboard/api/v1/controls?view=imessage', '/console/dashboard/api/v1/controls?view=devices']);
+  });
+  it('sends a view’s own fields with the action', async () => {
+    const fetcher = vi.fn(async () => Response.json({ receipt: { state: 'recorded', message: 'Send this exact text.' }, duplicate: false, reveal: { kind: 'challenge', value: 'wic_' + '1'.repeat(48) } })); vi.stubGlobal('fetch', fetcher);
+    const result = await submitControl(readControls(imessage, 'imessage'), 'imessage.verify', { id: bridge.id, subject: 'owner@test.invalid', chat: 'iMessage;-;owner@test.invalid' }, 'verify-request-1');
+    expect(result.reveal).toEqual({ kind: 'challenge', value: 'wic_' + '1'.repeat(48) });
+    expect(Object.fromEntries(((fetcher.mock.calls[0] as unknown as [string, RequestInit])[1].body as FormData).entries())).toEqual({ csrf: day.csrf, revision: day.revision, view: 'imessage', request_id: 'verify-request-1', action: 'imessage.verify', id: bridge.id, subject: 'owner@test.invalid', chat: 'iMessage;-;owner@test.invalid' });
+  });
+});
+
+describe('one-time values in receipts', () => {
+  const recorded = { state: 'recorded', message: 'Shown once.' };
+  const host = 'wim_' + 'ab'.repeat(24), pairing = 'wp1.e2e00000-0000-4000-8000-0000000000aa.' + 'A'.repeat(43);
+  it('accepts each value only from its own action and in its exact shape', () => {
+    expect(readActionResult({ receipt: recorded, duplicate: false, reveal: { kind: 'host_code', value: host } }, 'imessage.pair', 'https://x.test').reveal).toEqual({ kind: 'host_code', value: host });
+    expect(readActionResult({ receipt: recorded, duplicate: false, reveal: { kind: 'pairing_code', value: pairing, extra: 'never-retain' } }, 'device.pair', 'https://x.test').reveal).toEqual({ kind: 'pairing_code', value: pairing });
+    expect(readActionResult({ receipt: recorded, duplicate: false, reveal: { kind: 'link_code', value: 'waldo ABCDEFGHJK', send_url: 'sms:waldo@test.invalid&body=waldo%20ABCDEFGHJK' } }, 'imessage.link', 'https://x.test').reveal).toEqual({ kind: 'link_code', value: 'waldo ABCDEFGHJK' });
+    for (const [value, action] of [
+      [{ receipt: recorded, duplicate: false, reveal: { kind: 'host_code', value: host } }, 'device.pair'],
+      [{ receipt: recorded, duplicate: false, reveal: { kind: 'challenge', value: host } }, 'imessage.pair'],
+      [{ receipt: recorded, duplicate: false, reveal: { kind: 'host_code', value: host + '<script>' } }, 'imessage.pair'],
+      [{ receipt: recorded, duplicate: true, reveal: { kind: 'host_code', value: host } }, 'imessage.pair'],
+      [{ receipt: { state: 'rejected', message: 'No.' }, duplicate: false, reveal: { kind: 'host_code', value: host } }, 'imessage.pair'],
+      [{ receipt: recorded, duplicate: false, reveal: { kind: 'host_code', value: host } }, 'timezone.set'],
+      [{ receipt: recorded, duplicate: false, reveal: { kind: 'link_code', value: 'waldo ABCDEFGHJ1' } }, 'imessage.link'],
+    ] as const) expect(() => readActionResult(value, action, 'https://x.test')).toThrow('unsupported');
+  });
+});
