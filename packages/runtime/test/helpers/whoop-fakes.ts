@@ -74,18 +74,18 @@ export const whoopFetch = (world: World, clock: { now: number }): typeof fetch =
 
 export type Stored = { revision: number; payload: Record<string, unknown> };
 export type Plane = {
-  samples: Map<string, Stored>; requests: Map<string, { digest: string; response: unknown }>; ingests: number; consent: 'granted' | 'withdrawn' | 'none'; epoch: number;
+  samples: Map<string, Stored>; requests: Map<string, { digest: string; response: unknown }>; ingests: number; consent: 'granted' | 'withdrawn' | 'none'; model: 'granted' | 'withdrawn' | 'none'; epoch: number;
   vault: Map<string, string>; connections: Map<string, { id: string; account: string; owner: string; status: string }>; sessions: string[]; health: string[]; secretReads: number;
   failStore: boolean; events: string[]; claimedBy: Map<string, string>;
 };
-export const newPlane = (): Plane => ({ samples: new Map(), requests: new Map(), ingests: 0, consent: 'granted', epoch: 1, vault: new Map(), connections: new Map(), sessions: [], health: [], secretReads: 0, failStore: false, events: [], claimedBy: new Map() });
+export const newPlane = (): Plane => ({ samples: new Map(), requests: new Map(), ingests: 0, consent: 'granted', model: 'granted', epoch: 1, vault: new Map(), connections: new Map(), sessions: [], health: [], secretReads: 0, failStore: false, events: [], claimedBy: new Map() });
 
 // The database's own rules, in the parts a sync depends on.
 export const planeRpc = (plane: Plane, doName = 'owner-w') => async (fn: string, _message: string, args: Record<string, string | number>): Promise<unknown> => {
+  // `consent` is the storage grant and `model` the model-use grant; the database refuses readings on storage alone.
   if (fn === 'health_consent_list') {
-    if (plane.consent === 'none') return { consents: [] };
-    const status = plane.consent;
-    return { consents: ['provider_terms', 'storage_compute', 'model_processing'].map(purpose => ({ consent_class: 'health_processing', source: 'whoop', purpose, version: 2, status, epoch: plane.epoch, granted_at: '2026-10-01T00:00:00.000Z', withdrawn_at: null, deletion_state: 'not_required' })) };
+    const rows = [['storage_compute', plane.consent], ['model_processing', plane.model]] as const;
+    return { consents: rows.filter(([, status]) => status !== 'none').map(([purpose, status]) => ({ consent_class: 'health_processing', source: 'whoop', purpose, version: 2, status, epoch: plane.epoch, granted_at: '2026-10-01T00:00:00.000Z', withdrawn_at: null, deletion_state: 'not_required' })) };
   }
   if (fn === 'health_ingest') {
     const text = String(args.p_payload), body = JSON.parse(text);

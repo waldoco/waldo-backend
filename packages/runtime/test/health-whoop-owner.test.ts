@@ -7,7 +7,7 @@ const LEAKS = ['47.318', '430', '93.5'];
 const signals = (plane: { samples: Map<string, { payload: Record<string, unknown> }> }) => [...plane.samples.values()].map(s => s.payload.signal as string);
 
 describe('WHOOP connect and callback', () => {
-  it('starts only with the owner\'s express authorization and storage consent live, and sends an eight-character state, hashed', async () => {
+  it('starts with both of the owner\'s WHOOP grants live, and sends an eight-character state, hashed', async () => {
     const h = harness();
     const url = (await h.owner.connect() as { authorize_url: string }).authorize_url;
     const query = new URL(url).searchParams;
@@ -20,13 +20,30 @@ describe('WHOOP connect and callback', () => {
     expect(url).not.toContain('client-secret-fixture');
   });
 
-  it('refuses to start without the authorization, without storage, with consent withdrawn, or unconfigured', async () => {
-    for (const consent of ['none', 'withdrawn'] as const) {
-      const plane = newPlane(); plane.consent = consent;
-      expect(await harness({ plane }).owner.connect(), consent).toEqual({ error: 'consent_required' });
-      expect(plane.sessions).toEqual([]);
-    }
+  // WHOOP's express authorization is the two grants for the whoop source. The answer names the missing one so the app can send
+  // the owner to exactly that consent.
+  const grantCases = [
+    { storage: 'none', model: 'granted', missing: ['storage_compute'] },
+    { storage: 'granted', model: 'none', missing: ['model_processing'] },
+    { storage: 'none', model: 'none', missing: ['storage_compute', 'model_processing'] },
+    { storage: 'withdrawn', model: 'granted', missing: ['storage_compute'] },
+    { storage: 'granted', model: 'withdrawn', missing: ['model_processing'] },
+  ] as const;
+  it.each(grantCases)('refuses to start with storage $storage and model use $model, and names what is missing', async ({ storage, model, missing }) => {
+    const h = harness();
+    h.plane.consent = storage; h.plane.model = model;
+    expect(await h.owner.connect()).toEqual({ error: 'consent_required', missing });
+    expect(h.plane.sessions).toEqual([]);
+    expect(h.world.calls).toEqual([]);
+  });
+  it('refuses to start when WHOOP is not configured', async () => {
     expect(await harness({ configured: false }).owner.connect()).toEqual({ error: 'not_configured' });
+  });
+  it.each(grantCases)('does not trade the callback code for tokens with storage $storage and model use $model', async ({ storage, model }) => {
+    const h = harness();
+    h.plane.consent = storage; h.plane.model = model;
+    expect(await h.owner.exchange({ code: 'good-code', denied: false })).toBe('consent_required');
+    expect([h.world.calls, h.plane.vault.size, h.kv.size, h.armed.length]).toEqual([[], 0, 0, 0]);
   });
 
   it('saves the tokens in the vault, never in the object, remembers the account and arms a sync at once', async () => {
@@ -272,7 +289,7 @@ describe('WHOOP webhooks as hints', () => {
 });
 
 describe('WHOOP consent', () => {
-  it('stops and stores nothing once the owner\'s consent is withdrawn, and says so in the status', async () => {
+  it('stops and stores nothing once the owner\'s storage consent is withdrawn, and says so in the status', async () => {
     const h = await connected({}, 3);
     h.plane.consent = 'withdrawn';
     expect(await h.owner.sync()).toBe('consent_required');
@@ -280,6 +297,19 @@ describe('WHOOP consent', () => {
     expect(h.produced.count).toBe(0);
     expect((await h.owner.status()).state).toBe('consent_required');
     expect(await h.owner.hint({ type: 'sleep.updated', id: night(0).sleep.id as string, trace: 'trace-eeee-0001' })).toBe('consent_required');
+  });
+
+  it('stops the same way when only model use is withdrawn, since WHOOP data may be stored only for AI use the owner allowed', async () => {
+    const h = await connected({}, 3);
+    h.plane.model = 'withdrawn';
+    const before = h.world.calls.length;
+    expect(await h.owner.sync()).toBe('consent_required');
+    expect([h.plane.ingests, h.produced.count, h.world.calls.length]).toEqual([0, 0, before]);
+    expect((await h.owner.status()).state).toBe('consent_required');
+    expect(await h.owner.hint({ type: 'sleep.updated', id: night(0).sleep.id as string, trace: 'trace-eeee-0002' })).toBe('consent_required');
+    h.plane.model = 'granted';
+    expect(await h.owner.sync()).toBe('synced');
+    expect(h.plane.ingests).toBeGreaterThan(0);
   });
 
   it('follows a changed consent epoch once, and a withdrawal that lands mid-batch stops the run', async () => {

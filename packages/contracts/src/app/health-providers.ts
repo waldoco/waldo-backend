@@ -1,10 +1,10 @@
 import { z } from 'zod';
-import { HEALTH_PROVIDER_SOURCES_V1, healthInstantV1Schema, healthRequestIdV1Schema } from './health-ingest';
+import { HEALTH_PROVIDER_SOURCES_V1, healthInstantV1Schema, healthPurposeV1Schema, healthRequestIdV1Schema } from './health-ingest';
 
 // Cloud wearables Waldo syncs for the owner (health contract revision 2). The app starts a connection, opens the returned
 // address in a browser session, and the provider sends the owner back to Waldo's own callback; no token ever reaches the
-// app. The owner's express authorization for storage and AI use (the provider_terms consent) must be live before a
-// connection starts, so the app grants the provider's consents first. Self-contained: it imports only zod and siblings.
+// app. The owner's express authorization for storage and AI use (the provider's storage_compute and model_processing
+// consents) must both be live before a connection starts, so the app grants them first. Self-contained: it imports only zod and siblings.
 export const healthProviderV1Schema = z.enum(HEALTH_PROVIDER_SOURCES_V1);
 // connected: syncing. needs_reconnect: the provider no longer accepts the saved access, so the owner connects again.
 // consent_required: connected, but the owner's consent is not live (it was withdrawn), so nothing is stored.
@@ -33,9 +33,11 @@ export const healthProviderDisconnectResultV1Schema = z.strictObject({
   state: z.literal('not_connected'),
   revoked_at_provider: z.boolean(),
 });
+// With consent_required, missing names the provider's grants that are not live, so the app sends the owner to exactly those.
 export const healthProviderErrorV1Schema = z.strictObject({
   error: z.enum(['invalid_request', 'not_linked', 'consent_required', 'already_linked', 'not_configured', 'unavailable']),
   message: z.string().max(1000).optional(),
+  missing: z.array(healthPurposeV1Schema).min(1).max(2).optional(),
 });
 
 export const appHealthProviderRoutesV1 = [

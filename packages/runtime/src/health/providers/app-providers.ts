@@ -1,7 +1,7 @@
 import { appContractRevision, APP_CONTRACT_HEADER } from '../../../../contracts/src/app/core';
 import {
   healthProviderConnectResultV1Schema, healthProviderConnectV1Schema, healthProviderDisconnectResultV1Schema, healthProviderDisconnectV1Schema,
-  healthProviderListV1Schema, type healthProviderErrorV1Schema,
+  healthProviderErrorV1Schema, healthProviderListV1Schema,
 } from '../../../../contracts/src/app/health-providers';
 import { HEALTH_PROVIDER_REVISION_V1 } from '../../../../contracts/src/app/health-ingest';
 import { callOwnerProvider } from './provider-route';
@@ -14,7 +14,7 @@ type ErrorCode = ReturnType<typeof healthProviderErrorV1Schema.parse>['error'];
 export const APP_PROVIDERS_PATH = '/app/v1/health/providers';
 const MAX_BODY = 1_024;
 const reply = (body: object, status = 200) => Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
-const refuse = (error: ErrorCode, status: number) => reply({ error }, status);
+const refuse = (error: ErrorCode, status: number, missing?: readonly string[]) => reply(missing ? { error, missing } : { error }, status);
 
 const readJson = async <T>(request: Request, schema: ZodType<T>): Promise<T | null> => {
   if (!(request.headers.get('content-type') ?? '').toLowerCase().startsWith('application/json')) return null;
@@ -40,7 +40,11 @@ export const handleAppHealthProviders = async (input: Readonly<{ request: Reques
     if (!answer) return refuse('unavailable', 503);
     if (answer.status !== 200) {
       const code = answer.json.error;
-      return code === 'consent_required' ? refuse('consent_required', 403) : code === 'not_configured' ? refuse('not_configured', 503) : refuse('unavailable', 503);
+      if (code === 'consent_required') {
+        const named = healthProviderErrorV1Schema.safeParse({ error: code, missing: answer.json.missing });
+        return refuse('consent_required', 403, named.success ? named.data.missing : undefined);
+      }
+      return code === 'not_configured' ? refuse('not_configured', 503) : refuse('unavailable', 503);
     }
     const parsed = schema.safeParse(answer.json);
     if (parsed.success) return reply(parsed.data as object);

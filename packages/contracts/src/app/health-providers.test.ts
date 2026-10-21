@@ -48,16 +48,17 @@ describe('health providers: connect and disconnect', () => {
 });
 
 describe('health providers: consent at revision 2', () => {
-  const grant = { request_id: 'health-consent-w01', source: 'whoop', purpose: 'provider_terms', version: 2, expected_epoch: 0, age_attested_18_plus: true };
+  const grant = { request_id: 'health-consent-w01', source: 'whoop', purpose: 'storage_compute', version: 2, expected_epoch: 0, age_attested_18_plus: true };
 
-  it('takes the express authorization for the provider and for no device source in the contract', () => {
-    expect(healthPurposeV1Schema.safeParse('provider_terms').success).toBe(true);
-    expect(healthConsentGrantV1Schema.safeParse(grant).success).toBe(true);
-    rejected(healthPurposeV1Schema, ['provider', 'terms', 'all']);
+  it('takes the provider\'s express authorization as the two purposes every source has, and no third', () => {
+    expect(healthPurposeV1Schema.options).toEqual(['storage_compute', 'model_processing']);
+    for (const purpose of ['storage_compute', 'model_processing']) expect(healthConsentGrantV1Schema.safeParse({ ...grant, purpose }).success, purpose).toBe(true);
+    rejected(healthPurposeV1Schema, ['provider_terms', 'provider', 'all']);
+    rejected(healthConsentGrantV1Schema, [{ ...grant, purpose: 'provider_terms' }]);
   });
 
   it('shows an older build no provider rows, since it parses the list strictly', () => {
-    const rows = [{ source: 'apple', purpose: 'storage_compute' }, { source: 'whoop', purpose: 'provider_terms' }, { source: 'whoop', purpose: 'storage_compute' }];
+    const rows = [{ source: 'apple', purpose: 'storage_compute' }, { source: 'whoop', purpose: 'model_processing' }, { source: 'whoop', purpose: 'storage_compute' }];
     expect(healthConsentListAtRevisionV1(rows, 1)).toEqual([rows[0]]);
     expect(healthConsentListAtRevisionV1(rows, 2)).toEqual(rows);
     expect([isHealthProviderSourceV1('whoop'), isHealthProviderSourceV1('apple'), isHealthProviderSourceV1('oura')]).toEqual([true, false, false]);

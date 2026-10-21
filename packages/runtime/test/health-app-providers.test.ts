@@ -43,6 +43,10 @@ describe('the app provider routes', () => {
   it('names the reason a connection cannot start, in closed codes', async () => {
     const refused = (error: string, status: number) => () => Response.json({ error }, { status });
     expect((await run('POST', '/connect', { body: connect, answer: refused('consent_required', 403) })).json).toEqual({ error: 'consent_required' });
+    const missing = (list: unknown) => () => Response.json({ error: 'consent_required', missing: list }, { status: 403 });
+    expect((await run('POST', '/connect', { body: connect, answer: missing(['model_processing']) })).json).toEqual({ error: 'consent_required', missing: ['model_processing'] });
+    expect((await run('POST', '/connect', { body: connect, answer: missing(['storage_compute', 'model_processing']) })).json).toEqual({ error: 'consent_required', missing: ['storage_compute', 'model_processing'] });
+    expect((await run('POST', '/connect', { body: connect, answer: missing(['provider_terms', 'a token']) })).json).toEqual({ error: 'consent_required' });
     expect((await run('POST', '/connect', { body: connect, answer: refused('not_configured', 503) })).json).toEqual({ error: 'not_configured' });
     const odd = await run('POST', '/connect', { body: connect, answer: refused('something internal with detail', 500) });
     expect([odd.response.status, odd.json]).toEqual([503, { error: 'unavailable' }]);

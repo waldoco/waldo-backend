@@ -16,9 +16,13 @@ Quoted from the vendors' own pages, read on 21 October 2026. Vendors can change 
 
 How the build meets it:
 
-- Storage in the health plane and use by the AI model are authorized by the owner, expressly, through a consent purpose of their own,
-  `provider_terms` on source `whoop`, separate from `storage_compute`. The database refuses a WHOOP reading, and refuses a
-  `storage_compute` grant for WHOOP, while that authorization is not live. Withdrawing it withdraws the source and purges what it stored (see below for what it leaves).
+- Storage in the health plane and use by the AI model are authorized by the owner, expressly, through the two grants every source
+  has, for source `whoop`: `storage_compute` (Waldo stores the data) and `model_processing` (AI models process it to plan the owner's
+  day). Both must be live before a connection starts, before the callback code is traded for tokens, and before every sync or
+  webhook fetch. The notice version recorded on the grants is WHOOP-specific copy saying exactly that; the copy is the onboarding
+  lane's, and the backend records the version it is given. The database refuses a WHOOP reading while `storage_compute` is not
+  live. Withdrawing `storage_compute` withdraws the source and purges what it stored (see below for what it leaves); withdrawing
+  `model_processing` stops sync and model use and deletes nothing.
 - WHOOP data is never used to create, develop, test, train, fine-tune or improve any model, prompt or eval. The tests, fakes and
   eval cases for WHOOP use synthetic values only (`packages/runtime/test/fixtures/whoop-synthetic.ts`). No recording of a real
   account is committed, and none may be used for a model or prompt change.
@@ -62,9 +66,12 @@ Owner decision for Oura (pick one):
   raw body; deduped on `trace_id`. WHOOP can miss a webhook, so the daily sync reconciles.
 - Disconnect: `POST /app/v1/health/providers/disconnect` revokes at WHOOP (`DELETE /v2/user/access`), removes the saved access, cancels
   the sync entry.
-- Withdrawing the `provider_terms` authorization is a separate act in the health plane: the database then refuses new WHOOP readings
-  and purges the stored ones, and the owner object's next sync reads `consent_required` and only re-checks daily. It does not revoke
-  at WHOOP or remove the saved token; the owner disconnects for that. Having withdrawal disconnect as well is a follow-up.
+- Withdrawing a grant is a separate act in the health plane. Withdrawing `storage_compute`: the database refuses new WHOOP readings and
+  purges the stored ones. Withdrawing either grant: the owner object's next sync reads `consent_required` and only re-checks daily.
+  Neither revokes at WHOOP or removes the saved token; the owner disconnects for that. Having withdrawal disconnect as well is a follow-up.
+- A connect request that finds a grant missing answers `consent_required` with `missing` naming the grants that are not live
+  (`storage_compute`, `model_processing`), so the app sends the owner to exactly those. A callback that finds one missing shows a page
+  saying so and leaves the code unused.
 - Every reading goes through the same `waldo.health_ingest` the app uses. The producer ranks one source per day and keeps a
   baseline per source and per HRV method; WHOOP's `hrv_rmssd_milli` is RMSSD.
 
@@ -76,5 +83,5 @@ Owner decision for Oura (pick one):
 3. Set Worker secrets `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET` and `WHOOP_REDIRECT_URI` (the redirect URL above, exactly). Without all three
    the routes answer `not_configured` and nothing is sent to WHOOP.
 4. Apply migration `20261021150000_health_wearables_zone_change.sql` to the health plane before the deploy that reads it.
-5. Decide the terms question above and the consent wording with the onboarding lane; the purpose name is `provider_terms`.
+5. Decide the terms question above and the WHOOP-specific consent wording with the onboarding lane; the grants are `storage_compute` and `model_processing` on source `whoop`.
 6. One bundled deploy, then connect a WHOOP account on an owner account through the app.

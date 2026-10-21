@@ -26,6 +26,7 @@ const PAGES = {
   linked: { status: 200, title: 'WHOOP is connected', body: 'Waldo can now read your WHOOP sleep, recovery and workouts. Your first days arrive in a few minutes. You can close this tab.' },
   denied: { status: 400, title: 'WHOOP was not connected', body: 'Access was not granted. You can connect WHOOP from Waldo whenever you want to try again.' },
   expired: { status: 410, title: 'This link has expired', body: 'Connect links last 30 minutes. Start the connection again from Waldo.' },
+  consent_required: { status: 403, title: 'WHOOP was not connected', body: 'Waldo needs your consent to store your WHOOP data and use it with AI to plan your day. Give both in Waldo, then connect again.' },
   invalid: { status: 400, title: 'This link is not valid', body: 'It may have been copied incompletely. Start the connection again from Waldo.' },
   already_linked: { status: 409, title: 'That WHOOP account is already connected', body: 'It is connected to another Waldo. Disconnect it there first, or use a different WHOOP account.' },
   failed: { status: 502, title: 'WHOOP could not be connected', body: 'WHOOP approved access but saving it failed. Start the connection again from Waldo.' },
@@ -72,7 +73,7 @@ export const handleWhoopCallback = async (request: Request, env: WhoopRoutesEnv)
   const outcome = answer?.json.outcome;
   if (outcome === 'linked') { await call('connect_session_complete', `connsess.complete.${hash}`, { p_ticket_hash: hash }).catch(() => undefined); log('linked', true); return whoopPage('linked'); }
   log(typeof outcome === 'string' ? outcome : 'owner_unreachable');
-  return whoopPage(outcome === 'denied' || outcome === 'already_linked' ? outcome : 'failed');
+  return whoopPage(outcome === 'denied' || outcome === 'already_linked' || outcome === 'consent_required' ? outcome : 'failed');
 };
 
 const constantTimeEqual = (a: string, b: string): boolean => {

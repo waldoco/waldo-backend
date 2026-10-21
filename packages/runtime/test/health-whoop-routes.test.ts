@@ -62,8 +62,8 @@ describe('the provider route between the Worker and an owner object', () => {
     expect(await dispatchProviderCall(h.owner, 'exchange', { code: 'good-code' })).toEqual({ status: 200, json: { outcome: 'linked' } });
     expect(await dispatchProviderCall(h.owner, 'hint', { type: 'sleep.updated', id: 'x' })).toEqual({ status: 400, json: { error: 'invalid_request' } });
     expect(await dispatchProviderCall(h.owner, 'disconnect', {})).toEqual({ status: 200, json: { provider: 'whoop', state: 'not_connected', revoked_at_provider: true } });
-    const noConsent = newPlane(); noConsent.consent = 'none';
-    expect(await dispatchProviderCall(harness({ plane: noConsent }).owner, 'connect', {})).toEqual({ status: 403, json: { error: 'consent_required' } });
+    const noModel = newPlane(); noModel.model = 'none';
+    expect(await dispatchProviderCall(harness({ plane: noModel }).owner, 'connect', {})).toEqual({ status: 403, json: { error: 'consent_required', missing: ['model_processing'] } });
     expect(await dispatchProviderCall(harness({ configured: false }).owner, 'connect', {})).toEqual({ status: 503, json: { error: 'not_configured' } });
   });
 });
@@ -180,6 +180,14 @@ describe('the WHOOP callback', () => {
     expect(response.headers.get('cache-control')).toBe('no-store');
     expect(response.headers.get('referrer-policy')).toBe('no-referrer');
     expect(response.headers.get('content-security-policy')).toContain("default-src 'none'");
+  });
+
+  it('tells the owner to give both consents when the owner object left the code unused for want of them, and does not complete the attempt', async () => {
+    sessionAnswer = { status: 'ok', do_name: 'owner-a', provider: 'whoop' };
+    const { response, html } = await callback('code=auth-code-1&state=AbCd1234', { answer: Response.json({ outcome: 'consent_required' }) });
+    expect(response.status).toBe(403);
+    expect(html).toContain('consent to store your WHOOP data and use it with AI');
+    expect(rpcs.map(r => r.fn)).toEqual(['connect_session_resolve']);
   });
 
   it('shows what happened and exchanges nothing for a bad, unknown, expired or spent attempt, or a denial', async () => {

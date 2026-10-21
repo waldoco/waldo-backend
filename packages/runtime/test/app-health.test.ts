@@ -94,7 +94,7 @@ describe('app health routes: signed database calls', () => {
     expect(call!.body.p_sig).toBe(await routerSignature(SECRET, call!.body.p_at as number, `health.consent_list.owner-1.${md5Hex('{}')}`));
   });
   it('shows a provider\'s consent rows only to a build that names health revision 2', async () => {
-    const whoopRow = { ...consent, source: 'whoop', purpose: 'provider_terms' };
+    const whoopRow = { ...consent, source: 'whoop' };
     rpcResult = { consents: [consent, whoopRow] };
     const older = await get('/app/v1/health/consents');
     expect(await older.json()).toEqual({ consents: [consent] });

@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(30);
+select plan(32);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -32,14 +32,13 @@ insert into waldo.owners(id,auth_user_id,do_name,email) values
  ('a3000000-0000-0000-0000-0000000000a3','a1000000-0000-0000-0000-0000000000a1','whoop-owner-a','whoop-a@example.invalid'),
  ('b3000000-0000-0000-0000-0000000000b3','b1000000-0000-0000-0000-0000000000b1','whoop-owner-b','whoop-b@example.invalid');
 
--- WHOOP storage needs the express authorization first. The authorization belongs to WHOOP alone.
-select is(pg_temp.h('consent_grant','whoop-owner-a',pg_temp.grant_body('grant-w-store-0','whoop','storage_compute'))->>'error','consent_required','WHOOP storage is refused without the express authorization');
-select is(pg_temp.h('consent_grant','whoop-owner-a',pg_temp.grant_body('grant-w-model-0','whoop','model_processing'))->>'error','consent_required','and so is model use');
-select is(pg_temp.h('consent_grant','whoop-owner-a',pg_temp.grant_body('grant-a-terms-0','apple','provider_terms'))->>'error','invalid_request','the authorization is not a purpose for a device source');
+-- WHOOP's express authorization is the two grants every source has: storage, then model use on top of it. No third purpose exists.
+select is(pg_temp.h('consent_grant','whoop-owner-a',pg_temp.grant_body('grant-w-model-0','whoop','model_processing'))->>'error','consent_required','WHOOP model use is refused while storage is not granted');
+select is(pg_temp.h('consent_grant','whoop-owner-a',pg_temp.grant_body('grant-w-terms-0','whoop','provider_terms'))->>'error','invalid_request','a provider-terms purpose does not exist for WHOOP');
+select is(pg_temp.h('consent_grant','whoop-owner-a',pg_temp.grant_body('grant-a-terms-0','apple','provider_terms'))->>'error','invalid_request','nor for a device source');
 select is(pg_temp.h('consent_grant','whoop-owner-a',pg_temp.grant_body('grant-g-store-0','garmin','storage_compute'))->>'error','invalid_request','a source that is still unknown is refused');
 select is(pg_temp.h('consent_grant','whoop-owner-a',pg_temp.grant_body('grant-o-store-0','oura','storage_compute'))->>'error','invalid_request','Oura is not a source yet');
-select is(pg_temp.h('consent_grant','whoop-owner-a',pg_temp.grant_body('grant-w-terms-1','whoop','provider_terms'))->'consent'->>'status','granted','the express authorization is granted on its own');
-select is(pg_temp.h('consent_grant','whoop-owner-a',pg_temp.grant_body('grant-w-store-1','whoop','storage_compute'))->'consent'->>'status','granted','then storage');
+select is(pg_temp.h('consent_grant','whoop-owner-a',pg_temp.grant_body('grant-w-store-1','whoop','storage_compute'))->'consent'->>'status','granted','WHOOP storage is granted with nothing else first');
 select is(pg_temp.h('consent_grant','whoop-owner-a',pg_temp.grant_body('grant-w-model-1','whoop','model_processing'))->'consent'->>'status','granted','then model use');
 select is(pg_temp.h('consent_grant','whoop-owner-a',pg_temp.grant_body('grant-w-store-1','whoop','storage_compute'))->>'replayed','true','a replayed grant answers the same way');
 
@@ -47,13 +46,16 @@ select is(pg_temp.h('consent_grant','whoop-owner-a',pg_temp.grant_body('grant-w-
 select is(pg_temp.h('ingest','whoop-owner-a',pg_temp.batch('ingest-w-000001',1,jsonb_build_array(pg_temp.sleep('whoop:sleep-1',420)),'whoop'))->>'accepted','1','a WHOOP reading is stored');
 select is(pg_temp.n('whoop-owner-a','whoop'),1,'under source whoop');
 select is(pg_temp.h('ingest','whoop-owner-a',pg_temp.batch('ingest-w-000002',1,jsonb_build_array(pg_temp.sleep('oura:sleep-1',420)),'oura'))->>'error','invalid_request','an Oura batch is refused');
-select is(pg_temp.h('ingest','whoop-owner-b',pg_temp.batch('ingest-w-000003',1,jsonb_build_array(pg_temp.sleep('whoop:sleep-9',420)),'whoop'))->>'error','consent_required','an owner who never authorized WHOOP stores nothing');
+select is(pg_temp.h('ingest','whoop-owner-b',pg_temp.batch('ingest-w-000003',1,jsonb_build_array(pg_temp.sleep('whoop:sleep-9',420)),'whoop'))->>'error','consent_required','an owner who never granted WHOOP storage stores nothing');
 
--- Withdrawing the express authorization withdraws the source and removes what it stored.
-select is(pg_temp.h('consent_withdraw','whoop-owner-a',jsonb_build_object('request_id','withdraw-w-terms','source','whoop','purpose','provider_terms','expected_epoch',1))->>'deletion_routed','true','withdrawing the authorization routes deletion');
+-- Withdrawing model use stops model use only; withdrawing storage withdraws the source, removes what it stored and does not restore model use.
+select is(pg_temp.h('consent_withdraw','whoop-owner-a',jsonb_build_object('request_id','withdraw-w-model','source','whoop','purpose','model_processing','expected_epoch',1))->>'deletion_routed','false','withdrawing model use deletes nothing');
+select is(pg_temp.n('whoop-owner-a','whoop'),1,'the stored WHOOP readings stay');
+select is(pg_temp.h('consent_withdraw','whoop-owner-a',jsonb_build_object('request_id','withdraw-w-store','source','whoop','purpose','storage_compute','expected_epoch',1))->>'deletion_routed','true','withdrawing storage routes deletion');
 select is(pg_temp.n('whoop-owner-a','whoop'),0,'the stored WHOOP readings are gone');
 select is(pg_temp.h('ingest','whoop-owner-a',pg_temp.batch('ingest-w-000004',2,jsonb_build_array(pg_temp.sleep('whoop:sleep-2',400)),'whoop'))->>'error','consent_withdrawn','and a later upload is refused');
-select is(pg_temp.h('consent_grant','whoop-owner-a',pg_temp.grant_body('grant-w-store-2','whoop','storage_compute',2))->>'error','consent_required','storage cannot be granted again without a fresh authorization');
+select is(pg_temp.h('consent_grant','whoop-owner-a',pg_temp.grant_body('grant-w-store-2','whoop','storage_compute',2))->'consent'->>'status','granted','storage can be granted again with a fresh grant');
+select is((select count(*)::int from waldo.health_consents c join waldo.owners o on o.id=c.owner_id where o.do_name='whoop-owner-a' and c.source='whoop' and c.purpose='model_processing' and c.withdrawn_at is null),0,'which does not restore model use');
 
 -- A provider account resolves to one owner, and only a live WHOOP connection routes.
 insert into waldo.connections(owner_id,provider,account,secret_id) values ('a3000000-0000-0000-0000-0000000000a3','whoop','10129',gen_random_uuid());

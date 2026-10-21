@@ -50,7 +50,8 @@ export const dispatchProviderCall = async (owner: WhoopOwner, op: ProviderOp, bo
   if (op === 'connect') {
     const result = await owner.connect();
     if (!('error' in result)) return { status: 200, json: { provider: 'whoop', ...result } };
-    return { status: result.error === 'consent_required' ? 403 : 503, json: { error: result.error } };
+    if (result.error === 'consent_required') return { status: 403, json: { error: result.error, missing: result.missing } };
+    return { status: 503, json: { error: result.error } };
   }
   if (op === 'exchange') return { status: 200, json: { outcome: await owner.exchange({ code: text(body.code, 2_048), denied: body.denied === true }) } };
   if (op === 'status') return { status: 200, json: { providers: [await owner.status()] } };

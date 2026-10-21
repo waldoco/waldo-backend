@@ -25,10 +25,9 @@ export const isHealthProviderSourceV1 = (source: string): boolean => (HEALTH_PRO
 // owner who grants only storage gets consent_required for model use. Withdrawing model_processing stops model use only
 // and deletes nothing. Withdrawing storage_compute withdraws both for the source and purges its data. Re-granting
 // storage never restores model use.
-// provider_terms is the owner's express authorization, named in the consent copy, for a provider to have its data stored and
-// used with AI. It exists for provider sources only; storage can be granted only while it is live, and withdrawing it
-// withdraws the source and removes what it stored.
-export const healthPurposeV1Schema = z.enum(['storage_compute', 'model_processing', 'provider_terms']);
+// A provider source adds no purpose. Its express authorization to store the data and use it with AI is these same two
+// grants for that source, recorded against copy that says so; a connection needs both.
+export const healthPurposeV1Schema = z.enum(['storage_compute', 'model_processing']);
 export const healthRequestIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,96}$/);
 export const healthDayV1Schema = z.iso.date();
 export const healthInstantV1Schema = z.iso.datetime({ offset: true });

@@ -44,8 +44,10 @@ export type WhoopOwnerDeps = Readonly<{
   log(line: WhoopLog): void;
 }>;
 
-export type ConnectResult = Readonly<{ authorize_url: string; expires_at: number }> | Readonly<{ error: 'not_configured' | 'consent_required' | 'unavailable' }>;
-export type ExchangeResult = 'linked' | 'denied' | 'already_linked' | 'failed';
+export type GrantPurpose = 'storage_compute' | 'model_processing';
+// consent_required names the grants that are not live, so the owner is sent to exactly those.
+export type ConnectResult = Readonly<{ authorize_url: string; expires_at: number }> | Readonly<{ error: 'not_configured' | 'unavailable' }> | Readonly<{ error: 'consent_required'; missing: readonly GrantPurpose[] }>;
+export type ExchangeResult = 'linked' | 'denied' | 'already_linked' | 'consent_required' | 'failed';
 export type ProviderState = 'not_connected' | 'connected' | 'needs_reconnect' | 'consent_required';
 export type SyncResult = 'idle' | 'synced' | 'needs_reconnect' | 'consent_required' | 'rate_limited' | 'failed';
 export type HintResult = 'handled' | 'duplicate' | 'ignored' | 'needs_reconnect' | 'consent_required' | 'rate_limited' | 'failed';
@@ -141,15 +143,18 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
     }
   };
 
-  // ---- Consent: the database's answer, read before each sync ----
-  const consents = async (): Promise<Readonly<{ terms: boolean; storage: boolean; epoch: number }> | null> => {
+  // ---- Consent: the database's answer, read before each connect and sync ----
+  // WHOOP's express authorization for storing its data and using it with AI is the owner's two grants for this source.
+  // Both must be live to connect and to sync; the database separately refuses readings without storage.
+  const consents = async (): Promise<Readonly<{ storage: boolean; model: boolean; epoch: number }> | null> => {
     const answer = record(await invokeHealth(deps.rpc, doName(), 'consent_list', '{}'));
     const rows = Array.isArray(answer?.consents) ? answer!.consents.map(record) : null;
     if (!rows) return null;
     const live = (purpose: string) => rows.find(row => row?.source === SOURCE && row.purpose === purpose && row.status === 'granted');
     const storage = live('storage_compute');
-    return { terms: Boolean(live('provider_terms')), storage: Boolean(storage), epoch: typeof storage?.epoch === 'number' ? storage.epoch : 0 };
+    return { storage: Boolean(storage), model: Boolean(live('model_processing')), epoch: typeof storage?.epoch === 'number' ? storage.epoch : 0 };
   };
+  const missingGrants = (grants: Readonly<{ storage: boolean; model: boolean }>): GrantPurpose[] => [...(grants.storage ? [] : ['storage_compute' as const]), ...(grants.model ? [] : ['model_processing' as const])];
 
   // ---- Ingest: the app's own signed write, in batches the contract accepts ----
   type Staged = Readonly<{ samples: readonly HealthSampleV1[]; deletions: readonly WhoopDeletion[] }>;
@@ -233,7 +238,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
     try {
       const consent = await consents();
       if (!consent) return await finish('failed', 'consent_unreadable', started + RETRY_MS);
-      if (!consent.terms || !consent.storage) return await finish('consent_required', 'consent_required', started + SYNC_EVERY_MS);
+      if (missingGrants(consent).length > 0) return await finish('consent_required', 'consent_required', started + SYNC_EVERY_MS);
       const windows: [number, number][] = [];
       if (progress.backfilled) windows.push([started - RECONCILE_DAYS * DAY_MS, started]);
       else for (let from = progress.next_from ?? started - BACKFILL_DAYS * DAY_MS; from < started; from += WINDOW_DAYS * DAY_MS) windows.push([from, Math.min(from + WINDOW_DAYS * DAY_MS, started)]);
@@ -266,7 +271,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
     try {
       const consent = await consents();
       if (!consent) return 'failed';
-      if (!consent.terms || !consent.storage) return 'consent_required';
+      if (missingGrants(consent).length > 0) return 'consent_required';
       if (action === 'deleted') changed = await ingest({ samples: [], deletions: whoopDeletions(kind, input.id, Math.floor(deps.now() / 1000)) }, consent.epoch);
       else if (kind === 'workout') {
         const workout: WhoopWorkout | null = await withAccess(access => client!.workout(access, input.id));
@@ -297,7 +302,8 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
     try {
       const consent = await consents();
       if (!consent) return { error: 'unavailable' };
-      if (!consent.terms || !consent.storage) return { error: 'consent_required' };
+      const missing = missingGrants(consent);
+      if (missing.length > 0) return { error: 'consent_required', missing };
       const state = newState(), hash = await sha256(state);
       const session = await rpc('connect_session_issue', `connsess.issue.${doName()}.${SOURCE}.${CHANNEL}.${hash}`, { p_provider: SOURCE, p_channel: CHANNEL, p_ticket_hash: hash });
       if (typeof session !== 'string') return { error: 'unavailable' };
@@ -308,6 +314,10 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
   const exchange = async (input: Readonly<{ code: string | null; denied: boolean }>): Promise<ExchangeResult> => {
     if (!client || input.denied || !input.code) return input.denied || !input.code ? 'denied' : 'failed';
     try {
+      // The grants can be withdrawn between starting a connection and returning from WHOOP; the code is then left unused.
+      const grants = await consents();
+      if (!grants) return 'failed';
+      if (missingGrants(grants).length > 0) return 'consent_required';
       const tokens = await client.exchange(input.code);
       const account = await client.profile(tokens.access);
       const previous = connection();
@@ -339,7 +349,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
       if (!row) return { provider: 'whoop', state: 'not_connected', last_sync_at };
       if (row.status === 'failing') return { provider: 'whoop', state: 'needs_reconnect', last_sync_at };
       const consent = await consents();
-      return { provider: 'whoop', state: consent && consent.terms && consent.storage ? 'connected' : 'consent_required', last_sync_at };
+      return { provider: 'whoop', state: consent && missingGrants(consent).length === 0 ? 'connected' : 'consent_required', last_sync_at };
     } catch { return { provider: 'whoop', state: 'connected', last_sync_at }; }
   };
 

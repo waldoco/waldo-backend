@@ -150,19 +150,17 @@ begin
 end $$;
 
 -- WHOOP is a cloud source on the same health plane: the app-side grant and withdraw functions and the ingest function take
--- it, and a provider's express-authorization grant is its own purpose. Tables first.
-alter table waldo.health_consents drop constraint health_consents_source_check, drop constraint health_consents_purpose_check;
-alter table waldo.health_consents add constraint health_consents_source_check check (source in ('apple','samsung','health_connect','whoop')),
-  add constraint health_consents_purpose_check check (purpose in ('storage_compute','model_processing','provider_terms'));
-alter table waldo.health_scopes drop constraint health_scopes_source_check, drop constraint health_scopes_purpose_check;
-alter table waldo.health_scopes add constraint health_scopes_source_check check (source in ('apple','samsung','health_connect','whoop')),
-  add constraint health_scopes_purpose_check check (purpose in ('storage_compute','model_processing','provider_terms'));
+-- it. Its express authorization for storage and AI use is the same two grants every source has, so no purpose is added.
+-- Tables first.
+alter table waldo.health_consents drop constraint health_consents_source_check;
+alter table waldo.health_consents add constraint health_consents_source_check check (source in ('apple','samsung','health_connect','whoop'));
+alter table waldo.health_scopes drop constraint health_scopes_source_check;
+alter table waldo.health_scopes add constraint health_scopes_source_check check (source in ('apple','samsung','health_connect','whoop'));
 alter table waldo.health_samples drop constraint health_samples_source_check;
 alter table waldo.health_samples add constraint health_samples_source_check check (source in ('apple','samsung','health_connect','whoop'));
 
 -- Each function below is re-created whole from its last definition (consent grant and withdraw: 20261011000000; ingest:
--- 20261011020000). The source list gains whoop and the purpose list gains provider_terms; grant adds the rule that
--- WHOOP storage needs a live provider_terms grant. Signatures and grants are unchanged.
+-- 20261011020000). Only the source list gains whoop. Signatures and grants are unchanged.
 create or replace function waldo.health_consent_grant(p_do_name text, p_payload text, p_at bigint, p_sig text) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare
@@ -180,8 +178,7 @@ begin
   if jsonb_typeof(v_body) is distinct from 'object' then return '{"error":"invalid_request"}'; end if;
   v_id := v_body->>'request_id'; v_source := v_body->>'source'; v_purpose := v_body->>'purpose';
   if v_id is null or v_id !~ '^[A-Za-z0-9_-]{8,96}$' or v_source is null or v_source not in ('apple','samsung','health_connect','whoop')
-    or v_purpose is null or v_purpose not in ('storage_compute','model_processing','provider_terms')
-    or (v_purpose = 'provider_terms' and v_source <> 'whoop')
+    or v_purpose is null or v_purpose not in ('storage_compute','model_processing')
     or v_body->>'version' is distinct from '2' or v_body->>'age_attested_18_plus' is distinct from 'true'
     or (v_body->>'expected_epoch') is null or (v_body->>'expected_epoch') !~ '^[0-9]{1,9}$' then return '{"error":"invalid_request"}'; end if;
   select * into v_scope from waldo.health_scopes where owner_id = v_owner and source = v_source and purpose = v_purpose for update;
@@ -196,10 +193,6 @@ begin
   -- Model use sits on top of storage: it can be granted only while the same source holds live storage consent.
   if v_purpose = 'model_processing' and not exists (select 1 from waldo.health_scopes s join waldo.health_consents c on c.id = s.consent_id
     where s.owner_id = v_owner and s.source = v_source and s.purpose = 'storage_compute' and c.withdrawn_at is null) then return '{"error":"consent_required"}'; end if;
-  -- WHOOP's terms need the owner's express authorization for storing the data and using it with AI. That is its own grant,
-  -- named in the consent copy, and storage can be granted only while it is live. Withdrawing it withdraws the source.
-  if v_purpose = 'storage_compute' and v_source = 'whoop' and not exists (select 1 from waldo.health_scopes s join waldo.health_consents c on c.id = s.consent_id
-    where s.owner_id = v_owner and s.source = 'whoop' and s.purpose = 'provider_terms' and c.withdrawn_at is null) then return '{"error":"consent_required"}'; end if;
   if (v_body->>'expected_epoch')::integer <> v_epoch
     or exists (select 1 from waldo.health_consents c where c.owner_id = v_owner and c.source = v_source and c.purpose = v_purpose and c.withdrawn_at is null) then return '{"error":"epoch_conflict"}'; end if;
   insert into waldo.health_consents(owner_id, source, purpose, version, age_attested_18_plus) values (v_owner, v_source, v_purpose, 2, true) returning * into v_consent;
@@ -226,8 +219,7 @@ begin
   if jsonb_typeof(v_body) is distinct from 'object' then return '{"error":"invalid_request"}'; end if;
   v_id := v_body->>'request_id'; v_source := v_body->>'source'; v_purpose := v_body->>'purpose';
   if v_id is null or v_id !~ '^[A-Za-z0-9_-]{8,96}$' or v_source is null or v_source not in ('apple','samsung','health_connect','whoop')
-    or v_purpose is null or v_purpose not in ('storage_compute','model_processing','provider_terms')
-    or (v_purpose = 'provider_terms' and v_source <> 'whoop')
+    or v_purpose is null or v_purpose not in ('storage_compute','model_processing')
     or (v_body->>'expected_epoch') is null or (v_body->>'expected_epoch') !~ '^[0-9]{1,9}$' then return '{"error":"invalid_request"}'; end if;
   select * into v_prior from waldo.health_requests where owner_id = v_owner and request_id = v_id;
   if found then
