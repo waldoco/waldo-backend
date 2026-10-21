@@ -3,7 +3,7 @@ import { OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
 import { md5Hex } from '../src/channels/md5';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { modelCost } from '../src/llm/pricing';
-import { COST_ROLLUP_KEY, COST_ROLLUP_MAX_ATTEMPTS, costRollup, costRollupDelta, costRollupEnabled } from '../src/observability/cost-rollup';
+import { COST_MONTH_KEY, COST_ROLLUP_KEY, COST_ROLLUP_MAX_ATTEMPTS, costRollup, costRollupDelta, costRollupEnabled } from '../src/observability/cost-rollup';
 
 const DAY = Date.UTC(2026, 9, 20, 10);
 const llm = (over: Partial<TurnLogEntry> = {}): TurnLogEntry => ({
@@ -160,7 +160,7 @@ describe('costRollup write-behind', () => {
     expect(kv.get(COST_ROLLUP_KEY)).toBeUndefined();
   });
 
-  it('does nothing without a signed rail or a DO name', async () => {
+  it('sends nothing without a signed rail or a DO name, and still counts the month', async () => {
     const kv = memoryKv();
     const unlinked = costRollup({ kv, call: null, doName: 'do-a', newId: ids() });
     unlinked.record(llm(), DAY);
@@ -168,6 +168,51 @@ describe('costRollup write-behind', () => {
     const nameless = costRollup({ kv, call: recorder().call, doName: null, newId: ids() });
     nameless.record(llm(), DAY);
     await nameless.flush();
-    expect(kv.rows.size).toBe(0);
+    expect(kv.get(COST_ROLLUP_KEY)).toBeUndefined();
+    expect([...kv.rows.keys()]).toEqual([COST_MONTH_KEY]);
+    expect(unlinked.monthSpendUsd(DAY)).toBeCloseTo(2 * modelCost(llm().usage!)!.total, 12);
+  });
+});
+
+describe('costRollup month total', () => {
+  const usd = modelCost(llm().usage!)!.total;
+
+  it('adds every priced delta in the UTC month, whether or not it has been sent', async () => {
+    const kv = memoryKv();
+    const rollup = costRollup({ kv, call: recorder().call, doName: 'do-a', newId: ids() });
+    rollup.record(llm(), DAY);
+    rollup.record(llm({ cost_kind: 'background' }), DAY + 1000);
+    expect(rollup.monthSpendUsd(DAY)).toBeCloseTo(2 * usd, 12);
+    await rollup.flush();
+    expect(kv.get(COST_ROLLUP_KEY)).toBeUndefined();
+    expect(rollup.monthSpendUsd(DAY)).toBeCloseTo(2 * usd, 12);
+  });
+
+  it('starts again at zero in a new UTC month, and reads zero before anything is recorded', () => {
+    const kv = memoryKv();
+    const rollup = costRollup({ kv, call: recorder().call, doName: 'do-a', newId: ids() });
+    expect(rollup.monthSpendUsd(DAY)).toBe(0);
+    rollup.record(llm(), DAY);
+    const nextMonth = Date.UTC(2026, 10, 1, 0, 0, 1);
+    expect(rollup.monthSpendUsd(nextMonth)).toBe(0);
+    rollup.record(llm(), nextMonth);
+    expect(rollup.monthSpendUsd(nextMonth)).toBeCloseTo(usd, 12);
+  });
+
+  it('ignores hops that cost nothing and unpriced models', () => {
+    const kv = memoryKv();
+    const rollup = costRollup({ kv, call: recorder().call, doName: 'do-a', newId: ids() });
+    rollup.record({ trace: 't', hop: 'send', ms: 1, ok: true }, DAY);
+    rollup.record(llm({ usage: { model: 'unknown-model', input: 10, output: 5, cached: 0 } }), DAY);
+    expect(kv.get(COST_MONTH_KEY)).toBeUndefined();
+  });
+
+  it('is shared by the channel runtimes of one DO', () => {
+    const kv = memoryKv();
+    const telegram = costRollup({ kv, call: recorder().call, doName: 'do-a', newId: ids() });
+    const app = costRollup({ kv, call: recorder().call, doName: 'do-a', newId: ids() });
+    telegram.record(llm(), DAY);
+    app.record(llm(), DAY);
+    expect(app.monthSpendUsd(DAY)).toBeCloseTo(2 * usd, 12);
   });
 });

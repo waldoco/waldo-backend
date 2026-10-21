@@ -19,6 +19,8 @@ export type TelegramWebhookEnv = Readonly<{
   LANGFUSE_CAPTURE_TEXT?: string;
   // 'on' sends per-day spend to waldo.cost_ledger_daily after each turn; anything else keeps it off.
   WALDO_COST_LEDGER_SYNC?: string;
+  // Monthly USD ceiling per owner, counted from the cost ledger; unset, empty or not a positive number means no ceiling.
+  WALDO_MONTHLY_SPEND_CEILING_USD?: string;
   WALDO_ENVIRONMENT?: string;
   WALDO_OWNER_DO_NAMESPACE?: string;
   WALDO_RELEASE?: string;

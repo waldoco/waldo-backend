@@ -19,6 +19,11 @@ type SignedCall = (fn: string, message: string, args: Record<string, string | nu
 type Pending = { open: CostRollupRow[]; sending?: { id: string; rows: CostRollupRow[]; attempts: number } };
 
 export const COST_ROLLUP_KEY = 'cost_rollup_pending';
+// This owner's spend in the current UTC month, kept beside the deltas so a turn can read it without a database call.
+// It counts every delta recorded while the ledger is on, sent or not.
+export const COST_MONTH_KEY = 'cost_month_usd';
+type MonthSpend = { month: string; usd: number };
+const utcMonth = (at: number) => new Date(at).toISOString().slice(0, 7);
 export const COST_ROLLUP_MAX_ATTEMPTS = 20;
 
 // One flush in flight per DO storage, shared by every channel runtime the DO builds over it.
@@ -93,12 +98,19 @@ export const costRollup = ({ kv, call, doName, newId, onError }: Readonly<{
     }
   };
 
+  const addToMonth = (usd: number, at: number) => {
+    if (usd <= 0) return;
+    const month = utcMonth(at), current = kv.get<MonthSpend>(COST_MONTH_KEY);
+    kv.put<MonthSpend>(COST_MONTH_KEY, { month, usd: (current?.month === month ? current.usd : 0) + usd });
+  };
+
   return {
     record(entry: TurnLogEntry, at: number): boolean {
-      if (!linked) return false;
       const delta = costRollupDelta(entry, at);
       if (!delta) return false;
       try {
+        addToMonth(delta.usd, at);
+        if (!linked) return false;
         const pending = read();
         write({ ...pending, open: merge(pending.open, delta) });
         return true;
@@ -106,6 +118,11 @@ export const costRollup = ({ kv, call, doName, newId, onError }: Readonly<{
         onError?.(error);
         return false;
       }
+    },
+    // USD recorded this UTC month. A month with nothing recorded reads 0.
+    monthSpendUsd(at: number): number {
+      const current = kv.get<MonthSpend>(COST_MONTH_KEY);
+      return current?.month === utcMonth(at) ? current.usd : 0;
     },
     flush(): Promise<void> {
       if (!linked) return Promise.resolve();

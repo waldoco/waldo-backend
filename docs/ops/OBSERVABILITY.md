@@ -84,6 +84,8 @@ The owner's Durable Object is the only writer. `packages/runtime/src/observabili
 
 It is off unless the Worker var `WALDO_COST_LEDGER_SYNC=on`. No hosted config sets it; turn it on per environment once the migration has been applied there.
 
+The same KV keeps the owner's spend for the current UTC month (`cost_month_usd`), counted from every delta recorded while the ledger is on, whether or not it has reached Supabase yet. With the Worker var `WALDO_MONTHLY_SPEND_CEILING_USD` set to a positive number, a turn that starts at or past that ceiling degrades rather than stops: the owner's own turns (and their delegated children) run on the auxiliary model with its fallback, and `browse_page`, `browse_act` and `execute_code` answer with a refusal the model passes on to the owner. Background and machine turns already run on the auxiliary model and keep running. Unset, empty or not a positive number means no ceiling; with the ledger off there is no month total and so no ceiling. The total counts model USD only (browser and sandbox time are priced at 0) and starts at 0 in each DO storage, so the month the ceiling is first set undercounts.
+
 Spend per owner per day for the last 30 days (service role):
 
 ```sql
