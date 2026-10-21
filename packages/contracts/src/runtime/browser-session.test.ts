@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { BrowserSessionBoundary, browserCommandSchema, type BrowserSession } from './browser-session';
+import { browserSessionSchema, BrowserSessionBoundary, browserCommandSchema, type BrowserSession } from './browser-session';
 
 const session = (overrides: Partial<BrowserSession> = {}): BrowserSession => ({
   id: 'browser-1', ownerId: 'owner-a', provider: 'browserbase_stagehand_http_v3',
@@ -60,4 +60,8 @@ describe('BrowserSessionBoundary', () => {
     await expect(unknown.boundary.dispatch('owner-a', command)).rejects.toThrow('outcome indeterminate');
     expect(unknown.executor.issue).not.toHaveBeenCalled();
   });
+});
+
+it('represents an isolated public Cloudflare session with its own provider identity', () => {
+  expect(browserSessionSchema.safeParse(session({ provider: 'cloudflare_playwright' } as never)).success).toBe(true);
 });

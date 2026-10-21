@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(11);
+select plan(15);
 delete from vault.secrets where name = 'waldo_router_hmac';
 select vault.create_secret('test-router-secret', 'waldo_router_hmac');
 create function pg_temp.at() returns bigint language sql as $$ select extract(epoch from now())::bigint $$;
@@ -16,6 +16,10 @@ select is(waldo.proxy_secret('do-b', (select id from c)), null, 'another owner n
 select is(waldo.proxy_store('do-a', 'google', 'work@x.test', 'calendar gmail.send', 'rt-2'), (select id from c), 'reconnecting the same account updates it in place');
 select is(waldo.proxy_health('do-a', (select id from c), 'invalid_grant'), true, 'a refresh failure is recorded');
 select is(waldo.connection_list('do-a', pg_temp.at(), pg_temp.sig('connlist.do-a'))->0->>'status', 'failing', 'the health row shows it failing');
+select is(waldo.connection_list('do-a', pg_temp.at(), pg_temp.sig('connlist.do-a'))->0->>'last_error', 'invalid_grant', 'the failing row carries the provider error');
+select is(waldo.proxy_health('do-a', (select id from c), ''), true, 'a successful read on the grant is recorded');
+select is(waldo.connection_list('do-a', pg_temp.at(), pg_temp.sig('connlist.do-a'))->0->>'status', 'active', 'the row recovers once a read succeeds');
+select is(waldo.connection_list('do-a', pg_temp.at(), pg_temp.sig('connlist.do-a'))->0->>'last_error', null, 'recovery clears the recorded error');
 select is(waldo.connection_revoke('do-a', (select id from c), pg_temp.at(), pg_temp.sig('connrevoke.do-a.' || (select id from c))), true, 'the owner revokes the connection');
 select is((select count(*)::int from vault.secrets s join waldo.connections c2 on c2.secret_id = s.id), 0, 'revoking deletes the Vault secret');
 select * from finish();

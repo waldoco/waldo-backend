@@ -7,7 +7,7 @@ import {
 import {
   localTrustedBriefScheduleInput,
   resolveRunLoopAdapters,
-} from '../run-loop/adapters';
+} from '../llm/run-loop-adapters';
 import { OpenAIResponsesAdapter, type OpenAIResponseMetadata } from '../llm/openai';
 import { RuntimeLLMProvider } from '../llm/provider';
 import type { ContextLayer } from '../context-composer/types';
@@ -162,7 +162,6 @@ async function runOpenAIChat(
     sourceTaint: null,
     toolArgSourceTaint: null,
     sanitise: safety.sanitise,
-    medicalGate: safety.medicalGate,
   });
   if (!result.ok) {
     return Object.freeze({

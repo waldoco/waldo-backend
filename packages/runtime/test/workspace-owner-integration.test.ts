@@ -3,7 +3,7 @@ import { workspaceMetadata, workspaceOwnerHost } from '../src/channels/workspace
 
 const owner = '10000000-0000-0000-0000-000000000001';
 const binding = { owner_id: owner, environment: 'test', namespace: 'namespace-fixture', do_name: 'workspace-owner', do_id: 'opaque-id', state_version: 0, mapping_version: 1 };
-const config = { SUPABASE_PROJECT_URL: 'https://db.invalid', SUPABASE_PUBLISHABLE_KEY: 'fixture', WALDO_ROUTER_HMAC_SECRET: 'fictional-router', WALDO_ENVIRONMENT: 'test', WALDO_OWNER_DO_NAMESPACE: 'namespace-fixture', TELEGRAM_OWNER_DO: { idFromName: () => ({ toString: () => 'opaque-id' }) } as unknown as DurableObjectNamespace, ARTIFACTS: { put: vi.fn(), get: vi.fn(), delete: vi.fn() } as unknown as R2Bucket };
+const config = { SUPABASE_PROJECT_URL: 'https://db.invalid', SUPABASE_PUBLISHABLE_KEY: 'fixture', WALDO_ROUTER_HMAC_SECRET: 'fictional-router', WALDO_ENVIRONMENT: 'test', WALDO_OWNER_DO_NAMESPACE: 'namespace-fixture', OWNER_DO: { idFromName: () => ({ toString: () => 'opaque-id' }) } as unknown as DurableObjectNamespace, ARTIFACTS: { put: vi.fn(), get: vi.fn(), delete: vi.fn() } as unknown as R2Bucket };
 const storageFixture = () => {
   let json: string | undefined;
   const sql = { exec: vi.fn((query: string, value?: string) => {
@@ -72,7 +72,7 @@ it('untrue or missing content length does not bypass observed stream ceiling', a
 
 import { env, evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import { consoleAccess, CONSOLE_COOKIE } from '../src/channels/console';
-const ownerNamespace = (env as unknown as { TELEGRAM_OWNER_DO: DurableObjectNamespace }).TELEGRAM_OWNER_DO;
+const ownerNamespace = (env as unknown as { OWNER_DO: DurableObjectNamespace }).OWNER_DO;
 it('real owner DO SQLite metadata survives eviction and transaction rollback', async () => {
   const id=ownerNamespace.idFromName(`workspace-sql-${crypto.randomUUID()}`);const stub=ownerNamespace.get(id);
   await runInDurableObject(stub, (_instance,state)=>{
@@ -141,9 +141,9 @@ it('full-quota committed multipart replay returns original receipt; changed byte
  await runInDurableObject(stub,async(_instance,state)=>{
   const mapping={...binding,do_id:id.toString()};const bodies=new Map<string,Uint8Array>();let puts=0;
   const bucket={put:async(k:string,b:Uint8Array)=>{puts++;bodies.set(k,b.slice());},get:async(k:string)=>{const b=bodies.get(k);return b?{arrayBuffer:async()=>b.slice().buffer}:null;},delete:async()=>{}} as unknown as R2Bucket;
-  const cfg={...config,TELEGRAM_OWNER_DO:ownerNamespace,ARTIFACTS:bucket};
+  const cfg={...config,OWNER_DO:ownerNamespace,ARTIFACTS:bucket};
   // Directory doName must derive exactly the real stub id.
-  const realCfg={...cfg,TELEGRAM_OWNER_DO:{idFromName:()=>id} as unknown as DurableObjectNamespace};
+  const realCfg={...cfg,OWNER_DO:{idFromName:()=>id} as unknown as DurableObjectNamespace};
   const open=()=>workspaceOwnerHost(realCfg,state.storage,id.toString(),'workspace-owner',vi.fn(async()=>Response.json(mapping)));
   const op=crypto.randomUUID();
   const send=async(operation:string,data:number,path='one.bin')=>{
@@ -167,4 +167,28 @@ it('hung directory response body is cancelled by the5second deadline',async()=>{
   const result=expect(workspaceOwnerHost(config,storageFixture(),'opaque-id','workspace-owner',vi.fn(async()=>new Response(stream)))).rejects.toThrow('workspace_unavailable');
   await vi.advanceTimersByTimeAsync(5_001);await result;expect(cancel).toHaveBeenCalledOnce();expect(vi.getTimerCount()).toBe(0);
  }finally{vi.useRealTimers();}
+});
+
+it('recent receipt projection survives real owner SQLite eviction and rejects revoked or foreign mapping',async()=>{
+ const name=`workspace-receipt-${crypto.randomUUID()}`;const id=ownerNamespace.idFromName(name);const stub=ownerNamespace.get(id);
+ const objects=new Map<string,Uint8Array>();
+ const bucket={put:vi.fn(async(key:string,bytes:Uint8Array)=>{objects.set(key,bytes.slice());}),get:vi.fn(async(key:string)=>{const bytes=objects.get(key);return bytes?{arrayBuffer:async()=>bytes.slice().buffer}:null;}),delete:vi.fn(async(key:string)=>{objects.delete(key);})};
+ const mapped={...binding,do_name:name,do_id:id.toString()};let current:unknown=mapped;
+ const fetcher=vi.fn(async()=>Response.json(current));
+ const configured={...config,OWNER_DO:ownerNamespace,ARTIFACTS:bucket as unknown as R2Bucket};
+ let receipt:{file_id:string;revision:number}|undefined;
+ await runInDurableObject(stub,async(_instance,state)=>{
+  const store=await workspaceOwnerHost(configured,state.storage,id.toString(),name,fetcher);
+  receipt=await store.write({path:'drafts/current.md',bytes:new TextEncoder().encode('Retained draft body'),mime:'text/markdown',expected_revision:0,provenance:'agent_generated',operation_id:crypto.randomUUID()});
+ });
+ await evictDurableObject(stub);
+ await runInDurableObject(stub,async(_instance,state)=>{
+  const store=await workspaceOwnerHost(configured,state.storage,id.toString(),name,fetcher);
+  expect(await store.recentWrites()).toEqual([expect.objectContaining({backend:'workspace',path:'drafts/current.md',file_id:receipt!.file_id,revision:1})]);
+  expect(bucket.get).not.toHaveBeenCalled();
+  current=null;await expect(store.recentWrites()).rejects.toThrow('workspace_rejected');
+  current={...mapped,owner_id:'10000000-0000-0000-0000-000000000099'};
+  await expect(store.recentWrites()).rejects.toThrow('workspace_rejected');
+  current={...mapped,state_version:1};await expect(store.recentWrites()).rejects.toThrow('workspace_rejected');
+ });
 });

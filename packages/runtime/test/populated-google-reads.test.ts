@@ -17,6 +17,8 @@ const ctx = (trigger: TriggerType): ToolDispatcherContext => ({
   sanitise,
 });
 
+// Mail timestamps are within the fixed clock rolling-24h window so these tests exercise
+// populated offload and canary handling, rather than an empty filtered page.
 // Synthetic but realistic populated payloads: no real owner data, just the shape live APIs return.
 const populatedEvents = Array.from({ length: 25 }, (_, i) => ({
   id: `evt-${i}`,
@@ -33,7 +35,7 @@ const populatedMail = Array.from({ length: 10 }, (_, i) => ({
   from: `Sender ${i} <sender${i}@example.com>`,
   subject: `Invoice #${1000 + i} for September`,
   snippet: `Hi, attaching the September invoice. Please review the line items at https://billing.example.com/i/${1000 + i} and confirm. `.repeat(30),
-  at: `2026-09-24T0${i}:15:00Z`,
+  at: `2026-09-25T0${i}:15:00Z`,
 }));
 
 const googleWith = (events: unknown[], messages: unknown[]): GoogleAccess =>
@@ -95,7 +97,7 @@ describe('Canary-guard false positives on provider id shapes (live failure tg-90
     from: `Sender ${i} <sender${i}@example.com>`,
     subject: `Update ${i}`,
     snippet: `Body text. `.repeat(60),
-    at: `2026-09-24T0${i}:15:00Z`,
+    at: `2026-09-25T0${i}:15:00Z`,
   }));
 
   it('populated calendar with 16-digit etags passes the offload guard and stores', async () => {
@@ -251,12 +253,12 @@ describe('Fix targets', () => {
 
   it('ADVERSARIAL: a secret near a read boundary is redacted before storage; no chunk ever serves it raw', async () => {
     // Pad so the address lands within a few chars of the 4000-char head/read boundary.
-    const secret = 'victim@example.com';
+    const secret = '4111 1111 1111 1111';
     const events = [
       {
         ...populatedEvents[0]!,
         id: 'evt-boundary',
-        description: `${'x'.repeat(3_800)}${secret}${'y'.repeat(20_000)}`,
+        description: `${'x'.repeat(3_800)} ${secret} ${'y'.repeat(20_000)}`,
       },
     ];
     const [calendar] = googleHandlers(googleWith(events, []), desk, clock);
@@ -295,7 +297,7 @@ describe('Fix targets', () => {
     }
     expect(dispatched).toBeGreaterThan(0);
     expect(combined).not.toContain(secret);
-    expect(combined).toContain('[REDACTED_EMAIL]');
+    expect(combined).toContain('[REDACTED_CREDIT_CARD]');
     expect(data.head).not.toContain(secret);
   });
 

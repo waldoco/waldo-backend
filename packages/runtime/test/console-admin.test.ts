@@ -12,8 +12,8 @@ describe('console admin', () => {
     const html = renderAdmin({
       owners: [{ email: '<b>x</b>@test', state: 'active', created_at: '2026-09-24T01:00:00Z', presences: ['telegram'] }],
       invites: [
-        { id: 'i-open', email: 'open@test', created_at: '2026-09-24T01:00:00Z', expires_at: '2026-10-08T01:00:00Z', used_at: null, revoked_at: null },
-        { id: 'i-used', email: 'used@test', created_at: '2026-09-24T01:00:00Z', expires_at: '2026-10-08T01:00:00Z', used_at: '2026-09-24T02:00:00Z', revoked_at: null },
+        { id: 'i-open', email: 'open@test', created_at: '2026-09-24T01:00:00Z', expires_at: new Date(Date.now() + 30 * 86_400_000).toISOString(), used_at: null, revoked_at: null },
+        { id: 'i-used', email: 'used@test', created_at: '2026-09-24T01:00:00Z', expires_at: new Date(Date.now() + 30 * 86_400_000).toISOString(), used_at: '2026-09-24T02:00:00Z', revoked_at: null },
       ],
     }, 'csrf-1');
     expect(html).not.toContain('<b>x</b>');

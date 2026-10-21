@@ -11,7 +11,7 @@ import { GoogleError } from '../src/connectors/google';
 const clock = { timezone: 'Asia/Calcutta', now: () => new Date('2026-09-24T10:00:00Z') };
 const desk = { propose: async () => 'proposal:1', proposeSendEmail: async () => 'proposal:1', record: () => undefined };
 
-const TIER2_HANDLERS = ['query_calendar', 'get_communication', 'search_communication', 'read_thread', 'draft_email', 'send_email', 'get_tasks'];
+const TIER2_HANDLERS = ['query_availability', 'query_calendar', 'get_communication', 'search_communication', 'read_thread', 'draft_email', 'send_email', 'get_tasks', 'search_contacts'];
 
 describe('tier-2 connector contract', () => {
   it('pins which google handlers are tier-2 (update this list with any new connector tool)', () => {
@@ -35,7 +35,7 @@ describe('tier-2 connector contract', () => {
   it('a 403 scope rejection maps to auth_failed with a scope_missing intent, not a generic error', async () => {
     const google: GoogleAccess = {
       client: async () => ({
-        events: async () => { throw new GoogleError(403, 'insufficient authentication scopes'); },
+        events: async () => { throw new GoogleError(403, 'insufficient authentication scopes', 'ACCESS_TOKEN_SCOPE_INSUFFICIENT'); },
       }) as never,
     };
     const query = googleHandlers(google, desk, clock).find((h) => h.name === 'query_calendar')!;

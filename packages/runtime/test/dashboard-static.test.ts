@@ -9,7 +9,8 @@ describe('dashboard static adapter', () => {
   it('gates the index through the exact same owner-scoped API session and never fetches assets for unsigned owners', async () => {
     const asset = assets(); const verify = auth(401);
     const response = await serveDashboard(url('/console/dashboard'), asset, verify);
-    expect(response?.status).toBe(401);
+    expect(response?.status).toBe(303);
+    expect(response?.headers.get('location')).toBe('/console/signin');
     expect(response?.headers.get('cache-control')).toBe('private, no-store');
     expect(response?.headers.get('x-frame-options')).toBe('DENY');
     expect(response?.headers.get('referrer-policy')).toBe('no-referrer');
@@ -17,6 +18,18 @@ describe('dashboard static adapter', () => {
     expect(new URL((verify.mock.calls[0] as unknown as [Request])[0].url).pathname).toBe(DASHBOARD_OVERVIEW_PATH);
     const unavailable = await serveDashboard(url('/console/dashboard/'), assets(), auth(503));
     expect(unavailable?.status).toBe(503);
+  });
+  it('serves the new root and authenticates HEAD via GET without stealing ticket, notice, JSON or POST routes', async () => {
+    for (const method of ['GET', 'HEAD']) {
+      const verify = auth();
+      expect((await serveDashboard(url('/console', method), assets(), verify))?.status).toBe(200);
+      expect((verify.mock.calls[0] as unknown as [Request])[0].method).toBe('GET');
+    }
+    for (const path of ['/console?t=one-use', '/console?m=invalid', '/console/legacy', '/console/waiting']) {
+      expect(await serveDashboard(url(path), assets(), auth())).toBeNull();
+    }
+    expect(await serveDashboard(url('/console', 'POST'), assets(), auth())).toBeNull();
+    expect(await serveDashboard(new Request(root + '/console', { headers: { accept: 'application/json' } }), assets(), auth())).toBeNull();
   });
   it('serves only the authenticated shell HTML, with no-store and anti-framing headers', async () => {
     const asset = assets(); const verify = auth();
@@ -44,4 +57,12 @@ describe('dashboard static adapter', () => {
     expect((await serveDashboard(url('/console/dashboard/assets/index-CRNlKF7e.js'), assets(404), auth()))?.status).toBe(404);
     expect((await serveDashboard(url('/console/dashboard'), undefined, auth()))?.status).toBe(503);
   });
+});
+it('logs content-free owner verification failure while keeping the shell fail-closed',async()=>{
+ const sink=vi.spyOn(console,'error').mockImplementation(()=>{});const asset=assets();
+ try{
+  const response=await serveDashboard(url('/console'),asset,async()=>{throw new Error('private-cookie-and-email-canary');});
+  expect(response?.status).toBe(503);expect(response?.headers.get('cache-control')).toBe('private, no-store');expect(asset.fetch).not.toHaveBeenCalled();
+  expect(sink).toHaveBeenCalledOnce();expect(JSON.stringify(sink.mock.calls)).toContain('owner_verification_failed');expect(JSON.stringify(sink.mock.calls)).not.toContain('private-cookie');
+ }finally{sink.mockRestore();}
 });

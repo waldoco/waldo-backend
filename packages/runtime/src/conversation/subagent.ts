@@ -1,5 +1,9 @@
 import { delegateTaskArgsSchema, type DelegateTaskArgs, type LLMToolTurn, type ToolHandler, type ToolName } from '@waldo/contracts';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
+import { TOOL_CLAIM_EFFECT } from '../hooks/claim-verify-effects';
+import type { LoopEventLike } from '../hooks/claim-hook';
+import { TOOL_REPLAY_CLASS } from '../hooks/tool-replay-class';
+import type { ResponsibilityBook } from '../channels/responsibilities';
 import { runToolLoop, type LoopExit, type ToolLoopEvent, type ToolLoopStep } from './tool-loop';
 
 // Subagent orchestration v1 (spec waldo-subagent-orchestration-spec-2026-09-26). Flat by
@@ -7,11 +11,12 @@ import { runToolLoop, type LoopExit, type ToolLoopEvent, type ToolLoopStep } fro
 // structural, not a counter. Turn-scoped only until the P2 heartbeat lands: a child runs inside
 // the parent's turn and hands back before the turn ends.
 
-// Budget: 10-round slice per child, max 3 spawns per turn, and every child round draws down the
-// PARENT turn's shared budget object - so Waldo's 25-round turn cap is absolute across parent and
-// children (a child can never dispatch past it), and 10 remains the per-child slice ceiling.
-export const SUBAGENT_MAX_ROUNDS = 10;
-export const SUBAGENT_MAX_SPAWNS_PER_TURN = 3;
+// Budget: a child may use this share of the rounds its parent has left when it starts, at least one, and at most 5
+// spawns per turn. Every foreground child round draws down the PARENT turn's shared budget object, so the turn cap is
+// absolute across parent and children, and the parent keeps rounds to use the report. A background child is given its
+// own budget by whoever starts it.
+export const SUBAGENT_ROUND_SHARE = 0.6;
+export const SUBAGENT_MAX_SPAWNS_PER_TURN = 5;
 
 // The child tool set: reads and research only. No sends, no writes, no delegation, no
 // gated/privileged tools - so the autonomy gate can never fire inside a child and a child can
@@ -24,6 +29,32 @@ export const CHILD_TOOL_NAMES: readonly ToolName[] = [
   'search_episodes',
   'web_search',
 ];
+
+// What a task may ask a child to use: read tools whose handlers only read. Browsing keeps an
+// unresolved taint boundary, delegation keeps depth flat, and the rest of the table is effects.
+const NOT_FOR_CHILDREN: readonly ToolName[] = ['delegate_task', 'browse_page', 'read_tool_output'];
+export const CHILD_READ_TOOLS: readonly ToolName[] = (Object.keys(TOOL_REPLAY_CLASS) as ToolName[])
+  .filter((name) => TOOL_REPLAY_CLASS[name].replay === 'safe_read' && !NOT_FOR_CHILDREN.includes(name));
+
+// Effects a child task performs belong in the parent's typed receipts: the reply may claim only
+// receipted effects. Today the child set is read-only, so none exist. A child tool with a
+// claimable effect is refused unless the parent supplies onReceipt, so an effect can never run unreceipted.
+export const assertChildEffectsReceivable = (names: readonly string[], parentReceives: boolean): void => {
+  const effectTools = names.filter((name) => TOOL_CLAIM_EFFECT[name as ToolName] != null);
+  if (effectTools.length > 0 && !parentReceives) throw new Error(`Child task holds effect tool(s) ${effectTools.join(', ')} but the parent has no receipt path`);
+};
+
+// The parent-receipt form of one child tool event: null for a tool with no claimable effect.
+export const childReceiptEvent = (event: ToolLoopEvent, seq: number): LoopEventLike | null => {
+  if (TOOL_CLAIM_EFFECT[event.call.name as ToolName] == null) return null;
+  let args: unknown;
+  try { args = JSON.parse(event.call.arguments); } catch (error) {
+    // Match the parent receipt parser: malformed args keep a failed call diagnosable,
+    // but cannot supply a file ref. Never recover one from partial JSON.
+    console.warn(JSON.stringify({ hop: 'receipt_args_parse', ms: 0, ok: false, error: `${event.call.name}: ${error instanceof Error ? error.name : 'ParseError'} len=${event.call.arguments.length}` }));
+  }
+  return { seq, call: { name: event.call.name, args }, ok: event.ok, ...(event.code ? { code: event.code } : {}), delegated: true };
+};
 
 export const SUBAGENT_SYSTEM_PROMPT = [
   'You are a subagent of Waldo, spawned for one bounded subtask. Complete the task with the read-only tools you have, then answer with a compact report of what you found or did.',
@@ -38,11 +69,12 @@ export type SubagentResult =
 // 'stopped' is the owner-stop classification: distinct from a failure-streak withdrawal, and
 // never reported as a success - the parent receives a failed receipt naming the stop.
 export type ChildExit = LoopExit | 'stopped';
-export type SubagentSpawner = (task: string) => Promise<Readonly<{ exit: ChildExit; text: string }>>;
+export type ChildOptions = Readonly<{ tools?: readonly ToolName[] }>;
+export type SubagentSpawner = (task: string, options?: ChildOptions) => Promise<Readonly<{ exit: ChildExit; text: string }>>;
 
 // The handler is built per turn: the spawn counter resets every turn, and the spawner closure
 // carries the turn's LLM step. The child hands the parent a truthful status: completed -> ok
-// with the summary; budget_exhausted/withdrawn -> a failed round with the reason, so repeated
+// with the summary; budget_exhausted/time_exhausted/withdrawn -> a failed round with the reason, so repeated
 // failing spawns trip the parent's existing failure streak instead of silently counting as
 // progress (spec section 5). Handler error codes are the closed contracts union; 'rejected'
 // carries both cases and the text keeps the truthful classification.
@@ -51,13 +83,17 @@ export type ChildLoopInput = Readonly<{
   handlers: readonly { name: string }[];
   ctx: ToolDispatcherContext;
   // The turn's control: round() returns steering text, or null when the owner stopped the turn.
-  controlRound: () => string | null;
+  controlRound: () => string | null | Promise<string | null>;
   // The turn's LLM step, pre-bound with trace/purpose/system prompt by the channel.
   complete: (content: string, tools: readonly unknown[] | undefined, turns: readonly LLMToolTurn[]) => ReturnType<ToolLoopStep>;
-  // The parent turn's shared round budget; the child's rounds decrement it too.
-  budget: { remaining: number };
+  // The parent turn's shared round budget and deadline; the child's rounds decrement it and spend the same time.
+  budget: { remaining: number; deadline?: number };
   // Trace/ledger sink shared with the parent turn; child hops are tagged subagent_tool_*.
   onTool: (event: ToolLoopEvent) => void;
+  // Read tools this child may use; defaults to CHILD_TOOL_NAMES.
+  toolNames?: readonly ToolName[];
+  // Parent receipt sink for child effect calls (seq is 0; the parent assigns its own numbering).
+  onReceipt?: (event: LoopEventLike) => void;
 }>;
 
 // The child spawner (spec section 4): a nested tool loop on the read-only subset with its own
@@ -65,16 +101,18 @@ export type ChildLoopInput = Readonly<{
 // child rounds, not only at handback. Steering text is appended to the child task; a stop ends
 // the child immediately with a truthful stopped note.
 export const runChildLoop = async (task: string, input: ChildLoopInput): Promise<Readonly<{ exit: ChildExit; text: string }>> => {
+  const allowed: readonly string[] = input.toolNames ?? CHILD_TOOL_NAMES;
+  assertChildEffectsReceivable(input.handlers.map((handler) => handler.name).filter((name) => allowed.includes(name)), input.onReceipt !== undefined);
   let exit: LoopExit = 'completed';
   let stopped = false;
   const text = await runToolLoop({
-    handlers: input.handlers.filter((handler) => (CHILD_TOOL_NAMES as readonly string[]).includes(handler.name)) as never,
-    maxSteps: SUBAGENT_MAX_ROUNDS,
+    handlers: input.handlers.filter((handler) => allowed.includes(handler.name)) as never,
+    maxSteps: Math.max(1, Math.floor(input.budget.remaining * SUBAGENT_ROUND_SHARE)),
     budget: input.budget,
     ctx: input.ctx,
     onSettle: (settled) => { exit = settled; },
     step: async (tools, turns) => {
-      const added = input.controlRound();
+      const added = await input.controlRound();
       if (added === null) {
         stopped = true;
         return { text: 'Stopped by the owner mid-task.' };
@@ -82,7 +120,11 @@ export const runChildLoop = async (task: string, input: ChildLoopInput): Promise
       const content = added ? `${task}\n\nOwner mid-task steering: ${added}` : task;
       return input.complete(content, tools, turns);
     },
-    onTool: input.onTool,
+    onTool: (event) => {
+      input.onTool(event);
+      const receipt = childReceiptEvent(event, 0);
+      if (receipt) input.onReceipt?.(receipt);
+    },
   });
   return { exit: stopped ? 'stopped' : exit, text };
 };
@@ -96,41 +138,53 @@ export const withDelegation = <H>(
   ownerTurn: boolean,
 ): readonly H[] => (ownerTurn ? [...handlers, delegate] : handlers);
 
+export type BackgroundStart = (job: Readonly<{ task: string; itemId: string; revision: number; tools?: readonly ToolName[] }>) => Promise<boolean>;
+export type DelegationDeps = Readonly<{ book?: ResponsibilityBook; startBackground?: BackgroundStart; newWorkerId?: () => string }>;
+
+const refusal = (error: string) => ({ ok: false as const, error, code: 'rejected' as const, source_taint: 'external' as const });
+
 export const delegateTaskHandler = (
   spawn: SubagentSpawner,
+  deps: DelegationDeps = {},
 ): ToolHandler<DelegateTaskArgs, unknown, ToolDispatcherContext> => {
   let spawns = 0;
   return {
     name: 'delegate_task',
     description:
-      'Spawn a subagent for a self-contained research or reading subtask. It runs with read-only tools and reports back; children run one at a time. Use it to isolate long lookups; keep owner-facing replies in this conversation.',
+      'Spawn a subagent for a self-contained research or reading subtask. It runs with read-only tools and reports back; several can run in one turn. Pass item_id to attach the task to a todo step, tools to widen its read tools, background to let it finish after this turn. Use it to isolate long lookups; keep owner-facing replies for yourself.',
     schema: delegateTaskArgsSchema,
     trigger_allowlist: ['user_message'],
     autonomy_gated: false,
     async handle(args) {
       spawns += 1;
-      if (spawns > SUBAGENT_MAX_SPAWNS_PER_TURN) {
-        return {
-          ok: false as const,
-          error: `Subagent limit for this turn reached (${SUBAGENT_MAX_SPAWNS_PER_TURN}); answer with what you have.`,
-          code: 'rejected' as const,
-          // delegate_task is in EXTERNAL_ORIGIN_TOOLS, so every result arm carries the stamp,
-          // including this harness-originated refusal - the dispatcher's taint gate is uniform.
-          source_taint: 'external' as const,
-        };
+      if (spawns > SUBAGENT_MAX_SPAWNS_PER_TURN) return refusal(`Subagent limit for this turn reached (${SUBAGENT_MAX_SPAWNS_PER_TURN}); answer with what you have.`);
+      const requested = args.tools ?? [];
+      const unknown = requested.filter((name) => !(CHILD_READ_TOOLS as readonly string[]).includes(name));
+      if (unknown.length > 0) return refusal(`Children cannot use: ${unknown.join(', ')}. Effects stay with you.`);
+      const tools = args.tools ? [...new Set([...CHILD_TOOL_NAMES, ...(requested as ToolName[])])] : undefined;
+      let started: Readonly<{ revision: number }> | null = null;
+      if (args.item_id) {
+        if (!deps.book) return refusal('No todo is open for this turn.');
+        started = deps.book.start(args.item_id, `worker:${deps.newWorkerId?.() ?? args.item_id}`);
+        if (!started) return refusal('That step is finished, missing or waiting on another step.');
       }
-      const { exit, text } = await spawn(args.task);
-      if (exit === 'completed') {
-        return { ok: true as const, data: { status: 'completed' as const, summary: text }, source_taint: 'external' as const };
+      if (args.background) {
+        if (!started || !deps.startBackground) return refusal('Background work needs a todo step (item_id) and is not available here.');
+        const running = await deps.startBackground({ task: args.task, itemId: args.item_id!, revision: started.revision, ...(tools ? { tools } : {}) });
+        if (!running) {
+          deps.book!.finishWorker(args.item_id!, started.revision, { status: 'failed', result: 'Background worker did not start.' });
+          return refusal('The background worker could not be started.');
+        }
+        return { ok: true as const, data: { status: 'started' as const, item_id: args.item_id }, source_taint: 'external' as const };
       }
+      const { exit, text } = await spawn(args.task, tools ? { tools } : undefined);
+      const done = exit === 'completed';
+      const written = started ? deps.book!.finishWorker(args.item_id!, started.revision, { status: done ? 'done' : 'failed', result: text }) : 'applied';
+      if (written === 'superseded') return refusal('The owner changed this step while the subagent ran; its result was kept aside and not applied.');
+      if (done) return { ok: true as const, data: { status: 'completed' as const, summary: text }, source_taint: 'external' as const };
       // Every non-completed exit is a failed round with its truthful classification; an owner
-      // stop is never a success receipt.
-      return {
-        ok: false as const,
-        error: `Subagent ${exit === 'stopped' ? 'was stopped by the owner mid-task' : exit === 'budget_exhausted' ? 'ran out of its round budget' : 'had its tools withdrawn after repeated failures'}. Partial answer: ${text.slice(0, 500)}`,
-        code: 'rejected' as const,
-        source_taint: 'external' as const,
-      };
+      // stop is never a success receipt. The partial rides whole: the dispatcher bounds a long one.
+      return refusal(`Subagent ${exit === 'stopped' ? 'was stopped by the owner mid-task' : exit === 'budget_exhausted' ? 'ran out of its round budget' : exit === 'time_exhausted' ? "ran out of the turn's time" : 'had its tools withdrawn after repeated failures'}. Partial answer: ${text}`);
     },
   };
 };

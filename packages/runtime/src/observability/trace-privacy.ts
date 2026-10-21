@@ -1,4 +1,8 @@
-import { sanitiseCheckSchema, sanitiseFailureReasonSchema } from '@waldo/contracts';
+import { z } from 'zod';
+import {
+  executionRungSchema, providerSchema, rungBlockedReasonSchema, sanitiseCheckSchema, sanitiseFailureReasonSchema,
+  turnErrorCodeSchema, turnIdentifierSchema, turnOutcomeSchema,
+} from '@waldo/contracts';
 import type { TurnLogEntry } from '../channels/telegram-listener';
 
 // The sink boundary validates the guard diagnostic itself: only a finite check:reason enum
@@ -18,7 +22,7 @@ const validGuard = (guard: unknown): string | undefined =>
 const SAFE_DETAIL_HOPS = new Set([
   'stop', 'steer', 'connect_offer', 'google_token_migrated', 'memory_backup',
   'egress_scrub', 'egress_redacted', 'oauth_exchange', 'oauth_callback', 'google_linked',
-  'day_plan', 'nightly_memory', 'brief_sweep', 'day_card', 'update_card', 'console_action',
+  'day_plan', 'nightly_memory', 'brief_sweep', 'day_card', 'update_card', 'console_action', 'console_link',
 ]);
 
 // These receipts are strictly enum/count-only, even if a caller supplies a free-form
@@ -32,8 +36,34 @@ const HEALTH_READ = /^(?:present|absent|read_failed)$/;
 // `code` is what a failure leaves behind. Turn text is unaffected here; each sink already
 // handles it (the trace table never stores it, console JSON strips it, OTLP gates it on the
 // same switch).
+// The verified signup email is personal data: it follows the same switch as free-form text (off in production,
+// and wherever capture is off), while owner_id stays. The identity label then says the email is not emitted.
+const withholdEmail = (entry: TurnLogEntry): TurnLogEntry => entry.owner_email === undefined ? entry
+  : { ...entry, owner_email: 'unknown', owner_identity: entry.owner_identity === 'verified' ? 'email_unavailable' : entry.owner_identity };
+
 export const gateTraceEntry = (entry: TurnLogEntry, captureText: boolean): TurnLogEntry => {
   if (captureText) return entry;
+  return gateWithoutCapture(withholdEmail(typedFieldsOnly(entry)));
+};
+
+// The v9 fields are closed vocabularies, identifiers and numbers by contract. The gate re-validates each one here
+// so a producer that writes prose into, say, error_code or job_id loses that field before any sink sees it.
+const TYPED_FIELDS = {
+  rung: executionRungSchema, blocked_reason: rungBlockedReasonSchema, outcome: turnOutcomeSchema, provider: providerSchema,
+  error_code: turnErrorCodeSchema, job_id: turnIdentifierSchema, job_profile: turnIdentifierSchema,
+  tools_called: z.number().int().min(0), parallel_batches: z.number().int().min(0),
+  browser_ms: z.number().finite().min(0), sandbox_ms: z.number().finite().min(0), ttft_ms: z.number().finite().min(0),
+  fallback_fired: z.boolean(),
+} as const;
+const typedFieldsOnly = (entry: TurnLogEntry): TurnLogEntry => {
+  const copy: Record<string, unknown> = { ...entry };
+  for (const [field, schema] of Object.entries(TYPED_FIELDS)) {
+    if (copy[field] !== undefined && !schema.safeParse(copy[field]).success) delete copy[field];
+  }
+  return copy as TurnLogEntry;
+};
+
+const gateWithoutCapture = (entry: TurnLogEntry): TurnLogEntry => {
   if (entry.hop === 'constellation_evidence' || entry.hop === 'health_context') {
     const detail = entry.hop === 'constellation_evidence'
       ? (typeof entry.detail === 'string' && MEMORY_EVIDENCE.test(entry.detail) ? entry.detail : undefined)

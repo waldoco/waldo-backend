@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildSessionState,
   delegateTaskArgsSchema,
   getCrsArgsSchema,
   triggerTypeSchema,
   webSearchArgsSchema,
+  workspaceWriteArgsSchema,
+  type WorkspaceWriteArgs,
   type DelegateTaskArgs,
   type LLMTool,
   type ToolHandler,
@@ -12,18 +14,21 @@ import {
   type TriggerType,
   type WebSearchArgs,
 } from '@waldo/contracts';
-import { runToolLoop, type LoopExit } from '../src/conversation/tool-loop';
-import { CHILD_TOOL_NAMES, delegateTaskHandler, runChildLoop, SUBAGENT_MAX_ROUNDS, SUBAGENT_MAX_SPAWNS_PER_TURN, SUBAGENT_SYSTEM_PROMPT, withDelegation } from '../src/conversation/subagent';
+import { runToolLoop, type LoopExit, type ToolLoopEvent } from '../src/conversation/tool-loop';
+import { assertChildEffectsReceivable, childReceiptEvent, CHILD_TOOL_NAMES, delegateTaskHandler, runChildLoop, SUBAGENT_MAX_SPAWNS_PER_TURN, SUBAGENT_SYSTEM_PROMPT, withDelegation } from '../src/conversation/subagent';
 import { dispatchTool, type ToolDispatcherContext } from '../src/tools/dispatcher';
+import type { LoopEventLike } from '../src/hooks/claim-hook';
+import { evaluateTurnClaims, receiptsFromLoopEvents } from '../src/hooks/claim-hook';
+import { receiptLine } from '../src/hooks/receipt-line';
 import { sanitise } from '../src/scribe/sanitiser';
-import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
+import { resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
 const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' });
 const ctx = {
   authenticatedUserId: 'owner-1', trigger: 'user_message' as const, canaryTokens: CANARIES,
   sourceTaint: null, toolArgSourceTaint: null,
-  sanitise: adapters.safety.sanitise, medicalGate: adapters.safety.medicalGate,
+  sanitise: adapters.safety.sanitise,
   session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: 0 }),
 };
 
@@ -45,7 +50,7 @@ describe('delegate_task (subagent orchestration v1)', () => {
       let exit: LoopExit = 'completed';
       const text = await runToolLoop({
         handlers: [stubRead('web_search'), stubRead('read_memory')],
-        ctx, maxSteps: SUBAGENT_MAX_ROUNDS,
+        ctx, maxSteps: 15,
         onSettle: (settled) => { exit = settled; },
         step: async (tools, turns) => {
           childToolSets.push(tools?.map((tool: LLMTool) => tool.name));
@@ -77,12 +82,12 @@ describe('delegate_task (subagent orchestration v1)', () => {
     expect(handback).toMatchObject({ ok: true, data: { status: 'completed', summary: 'found stuff about: research cursor pagination' } });
   });
 
-  it('refuses a fourth spawn in one turn (owner-delegated max 3) as a normal failed round', async () => {
+  it('refuses a spawn past the per-turn cap as a normal failed round', async () => {
     const delegate = delegateTaskHandler(async () => ({ exit: 'completed' as const, text: 'done' }));
     const outputs: string[] = [];
     let n = 0;
     await runToolLoop({
-      handlers: [delegate], ctx, maxSteps: 10,
+      handlers: [delegate], ctx, maxSteps: 25,
       onTool: (event) => outputs.push(event.output),
       step: async (tools) => {
         n += 1;
@@ -115,6 +120,24 @@ describe('delegate_task (subagent orchestration v1)', () => {
     expect(result.error).toContain('ran out of its round budget');
     expect(result.error).toContain('partial findings');
   });
+
+  it("a child stopped by the turn's time hands back a failed round that says so", async () => {
+    const delegate = delegateTaskHandler(async () => ({ exit: 'time_exhausted' as const, text: 'partial findings' }));
+    const outputs: string[] = [];
+    let n = 0;
+    await runToolLoop({
+      handlers: [delegate], ctx, maxSteps: 5,
+      onTool: (event) => outputs.push(event.output),
+      step: async (tools) => {
+        n += 1;
+        return tools && n === 1 ? { text: '', tool_calls: [{ call_id: 'd1', name: 'delegate_task', arguments: '{"task":"long task"}' }] } : { text: 'closed.' };
+      },
+    });
+    const result = JSON.parse(outputs[0]!);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("ran out of the turn's time");
+    expect(result.error).toContain('partial findings');
+  });
 });
 
 describe('runToolLoop exit classification', () => {
@@ -138,14 +161,14 @@ describe('runToolLoop exit classification', () => {
     expect(exit).toBe('budget_exhausted');
   });
 
-  it('settles withdrawn when the failure streak withdraws the tools', async () => {
+  it('settles budget_exhausted after failed rounds consume the hard budget', async () => {
     let exit: LoopExit | undefined;
     await runToolLoop({
       handlers: [stubRead('web_search')], ctx, maxSteps: 25,
       onSettle: (settled) => { exit = settled; },
       step: async (tools) => (tools ? { text: '', tool_calls: [{ call_id: `x${Math.random()}`, name: 'launch_rocket', arguments: `{"n":${Math.random()}}` }] } : { text: 'gave up.' }),
     });
-    expect(exit).toBe('withdrawn');
+    expect(exit).toBe('budget_exhausted');
   });
 });
 
@@ -321,8 +344,8 @@ describe('Codex #224 holds (regressions)', () => {
     expect(budget.remaining).toBe(0);
   });
 
-  it('child loop observes the shared budget: 2 remaining rounds cap a 10-round slice', async () => {
-    const budget = { remaining: 2 };
+  it('child loop draws down the shared budget and leaves the parent rounds for its report', async () => {
+    const budget = { remaining: 5 };
     let offered = 0;
     const result = await runChildLoop('research topic', {
       handlers: [stubRead('web_search')],
@@ -336,8 +359,129 @@ describe('Codex #224 holds (regressions)', () => {
         return { text: '', tool_calls: [{ call_id: `k${offered}`, name: 'web_search', arguments: `{"q":"q${offered}"}` }] };
       },
     });
-    expect(offered).toBe(2);
-    expect(budget.remaining).toBe(0);
+    expect(offered).toBe(3);
+    expect(budget.remaining).toBe(2);
     expect(result.exit).toBe('budget_exhausted');
+  });
+});
+
+describe('delegated effects are receipted (slice 9, S2b finding 3)', () => {
+  const event = (name: string, ok: boolean, args: string, code?: string): ToolLoopEvent => ({ call: { call_id: 'c', name, arguments: args }, ok, ms: 1, output: '', taint: null, ...(code ? { code } : {}) });
+
+  it('turns a child effect call into a delegated typed event for the parent; reads give none', () => {
+    expect(childReceiptEvent(event('web_search', true, '{}'), 1)).toBeNull();
+    const write = childReceiptEvent(event('workspace_write', true, '{"path":"notes.md"}'), 4)!;
+    expect(write).toEqual({ seq: 4, call: { name: 'workspace_write', args: { path: 'notes.md' } }, ok: true, delegated: true });
+    expect(receiptsFromLoopEvents([write])).toMatchObject([{ effect: 'workspace_file_written', ref: 'notes.md', state: 'accepted', delegated: true }]);
+    expect(receiptLine([write])).toBe('Done: workspace file written notes.md (via task)');
+  });
+
+  it('a failed child effect is a failed receipt, so the reply cannot claim it', () => {
+    const failed = childReceiptEvent(event('set_reminder', false, '{}', 'rejected'), 1)!;
+    expect(evaluateTurnClaims([{ seq: 2, effect: 'reminder_set' }], [failed])).toEqual([{ claim_seq: 2, effect: 'reminder_set', reason: 'receipt_failed' }]);
+  });
+
+  it('refuses a child that holds an effect tool when the parent cannot receive its receipts', () => {
+    expect(() => assertChildEffectsReceivable(['web_search', 'workspace_write'], false)).toThrow(/effect tool.*workspace_write/);
+    expect(() => assertChildEffectsReceivable(['workspace_write'], true)).not.toThrow();
+    expect(() => assertChildEffectsReceivable(CHILD_TOOL_NAMES, false)).not.toThrow();
+  });
+});
+
+// Exercise future effect-tool admission through the real child loop without changing today's
+// read-only production list. Restore the list even if dispatch or an assertion fails.
+describe('runChildLoop delegated effect receipts', () => {
+  const withEffectTool = async (run: () => Promise<void>) => {
+    const names = CHILD_TOOL_NAMES as ToolName[];
+    const original = [...names];
+    names.push('workspace_write');
+    try { await run(); } finally { names.splice(0, names.length, ...original); }
+  };
+  const writeArgs: WorkspaceWriteArgs = { path: 'notes.md', text: 'note', mime: 'text/markdown', expected_revision: 0 };
+  const writeHandler = (handle = vi.fn(async () => ({ ok: true as const, data: {}, source_taint: null }))) => ({
+    name: 'workspace_write' as const,
+    description: 'test workspace write',
+    schema: workspaceWriteArgsSchema,
+    trigger_allowlist: ['user_message'] as const,
+    autonomy_gated: false,
+    handle,
+  });
+
+  it('refuses an admitted effect tool before completion or dispatch when no receipt sink exists', async () => {
+    await withEffectTool(async () => {
+      const handler = writeHandler();
+      const complete = vi.fn(async () => ({ text: 'must not run' }));
+      const onTool = vi.fn();
+      const budget = { remaining: 3 };
+      await expect(runChildLoop('write a note', {
+        handlers: [handler], ctx: { ...ctx }, budget, controlRound: () => '', complete, onTool,
+      })).rejects.toThrow('Child task holds effect tool(s) workspace_write but the parent has no receipt path');
+      expect(complete).not.toHaveBeenCalled();
+      expect(handler.handle).not.toHaveBeenCalled();
+      expect(onTool).not.toHaveBeenCalled();
+      expect(budget.remaining).toBe(3);
+    });
+  });
+
+  it.each([
+    { label: 'accepted', args: JSON.stringify(writeArgs), parsedArgs: writeArgs, ok: true, ref: 'notes.md', calls: 1, code: undefined },
+    { label: 'schema-rejected', args: JSON.stringify({ path: 'notes.md' }), parsedArgs: { path: 'notes.md' }, ok: false, ref: 'notes.md', calls: 0, code: 'invalid_args' },
+    { label: 'malformed JSON', args: '{"path":"notes.md"', parsedArgs: undefined, ok: false, ref: undefined, calls: 0, code: 'invalid_args' },
+  ])('forwards exactly one delegated receipt for a $label call through real dispatch', async ({ args, parsedArgs, ok, ref, calls, code }) => {
+    await withEffectTool(async () => {
+      const handler = writeHandler();
+      const onTool = vi.fn();
+      const onReceipt = vi.fn();
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const result = await runChildLoop('write a note', {
+          handlers: [handler, stubRead('read_memory')], ctx: { ...ctx }, budget: { remaining: 5 },
+          controlRound: () => '', onTool, onReceipt,
+          complete: async (_content, tools, turns) => {
+            expect(tools?.map(tool => (tool as LLMTool).name)).toContain('workspace_write');
+            return turns.length === 0
+              ? { text: '', tool_calls: [
+                { call_id: 'read', name: 'read_memory', arguments: '{}' },
+                { call_id: 'write', name: 'workspace_write', arguments: args },
+              ] }
+              : { text: 'child report' };
+          },
+        });
+        expect(result).toEqual({ exit: 'completed', text: 'child report' });
+        expect(handler.handle).toHaveBeenCalledTimes(calls);
+        expect(onTool).toHaveBeenCalledTimes(2);
+        expect(onReceipt).toHaveBeenCalledTimes(1);
+        const receipt = onReceipt.mock.calls[0]![0] as LoopEventLike;
+        expect(receipt).toEqual({
+          seq: 0, call: { name: 'workspace_write', args: parsedArgs },
+          ok, delegated: true, ...(code ? { code } : {}),
+        });
+        const [typed] = receiptsFromLoopEvents([receipt]);
+        expect(typed).toEqual({ seq: 0, tool: 'workspace_write', effect: 'workspace_file_written', ok, state: ok ? 'accepted' : 'failed', delegated: true, ...(ref === undefined ? {} : { ref }) });
+        expect(evaluateTurnClaims([{ seq: 1, effect: 'workspace_file_written' }], [receipt])).toEqual(ok ? [] : [{ claim_seq: 1, effect: 'workspace_file_written', reason: 'receipt_failed' }]);
+        if (parsedArgs === undefined) {
+          expect(warn).toHaveBeenCalledTimes(1);
+          expect(JSON.parse(warn.mock.calls[0]![0] as string)).toEqual({
+            hop: 'receipt_args_parse', ms: 0, ok: false,
+            error: expect.stringMatching(/^workspace_write: SyntaxError len=\d+$/),
+          });
+          const diagnostic = JSON.parse(warn.mock.calls[0]![0] as string) as { error: string };
+          expect(diagnostic.error.length).toBeLessThanOrEqual('workspace_write: '.length + 120);
+        } else expect(warn).not.toHaveBeenCalled();
+      } finally { warn.mockRestore(); }
+    });
+  });
+
+  it('the parse diagnostic never carries any of the argument text', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      for (const secret of ['secret-token xyz', 'hunter2 pw', `{"file_id": "secret-token-in-json" `]) {
+        childReceiptEvent({ call: { name: 'workspace_write', arguments: secret }, ok: false } as never, 0);
+      }
+      expect(warn).toHaveBeenCalledTimes(3);
+      const logged = warn.mock.calls.map(call => String(call[0])).join('\n');
+      for (const leak of ['secret-token', 'hunter2', 'xyz', 'secret-token-in-json']) expect(logged).not.toContain(leak);
+      expect(logged).toContain('len=16');
+    } finally { warn.mockRestore(); }
   });
 });

@@ -3,7 +3,7 @@ import { sameSecret } from './telegram-webhook';
 
 // Staging-only synthetic turn trigger: lets the probe harness run one real owner turn on
 // waldo-runtime-staging without the Telegram webhook secret and without touching the update-id
-// dedupe offset. The DO side (telegram-owner-do.ts) builds the synthetic update.
+// dedupe offset. The DO side (owner-do.ts) builds the synthetic update.
 export const PROBE_TURN_PATH = '/probe/turn';
 export const PROBE_TURN_DO_URL = 'https://telegram-owner/probe-turn';
 const PROBE_TOKEN_HEADER = 'x-waldo-probe-token';
@@ -35,13 +35,17 @@ const MAX_PROBE_TEXT = 4_000;
 export type ProbeGuard = { suppressMemory: boolean; stripLiveTools: boolean };
 
 // Live provider surfaces a synthetic probe must never reach in capture mode: Google reads and
-// writes (private data), the browser tools (arbitrary external effects), the MCP bridge, and
-// the connect flow. Kept: get_context, web_search (synthetic queries, our own API), memory and
+// writes (private data), the browser tools (arbitrary external effects), the MCP bridge, the
+// connect flow, and the console link (a capture probe hands its sends to the probe caller).
+// Kept: get_context, web_search (synthetic queries, our own API), memory and
 // episode reads of the staging DO, reminders/loops.
 export const PROBE_STRIPPED_TOOLS: readonly string[] = [
   'query_calendar',
+  'query_availability',
+  'read_owner_context',
   'get_communication',
   'search_communication',
+  'search_contacts',
   'read_thread',
   'get_tasks',
   'propose_calendar_change',
@@ -50,7 +54,9 @@ export const PROBE_STRIPPED_TOOLS: readonly string[] = [
   'browse_page',
   'browse_act',
   'call_mcp_tool',
+  'read_mcp_tool',
   'connect_service',
+  'send_console_link',
 ];
 
 // DO-side rate limit for the probe endpoint (Codex hold: the route had none). Per-minute
@@ -63,7 +69,7 @@ export type ProbeTurnEnv = Readonly<{
   WALDO_PROBE_TOKEN?: string;
   WALDO_OWNER_TELEGRAM_ID?: string;
   WALDO_OWNER_TIMEZONE?: string;
-  TELEGRAM_OWNER_DO?: DurableObjectNamespace;
+  OWNER_DO?: DurableObjectNamespace;
 }> & OwnerDirectoryEnv;
 
 export const handleProbeTurn = async (
@@ -73,7 +79,7 @@ export const handleProbeTurn = async (
 ): Promise<Response> => {
   // Hidden outside staging: same 404 shape the worker gives unknown paths.
   if ((env.WALDO_ENVIRONMENT ?? 'development') !== 'staging') return new Response('not found', { status: 404 });
-  if (request.method !== 'POST' || !env.WALDO_PROBE_TOKEN || !env.TELEGRAM_OWNER_DO) {
+  if (request.method !== 'POST' || !env.WALDO_PROBE_TOKEN || !env.OWNER_DO) {
     return new Response('not found', { status: 404 });
   }
   if (!sameSecret(request.headers.get(PROBE_TOKEN_HEADER) ?? '', env.WALDO_PROBE_TOKEN)) {
@@ -95,7 +101,8 @@ export const handleProbeTurn = async (
   const subject = env.WALDO_OWNER_TELEGRAM_ID;
   if (!subject) return new Response('owner unavailable', { status: 503 });
   const route = await directory.byPresence('telegram', subject).catch(() => null);
-  const doName = route?.doName ?? subject;
+  if (!route) return new Response('owner unavailable', { status: 503 });
+  const doName = route.doName;
   const headers: Record<string, string> = {
     'content-type': 'application/json',
     'x-waldo-origin': new URL(request.url).origin,
@@ -103,6 +110,6 @@ export const handleProbeTurn = async (
   };
   const timezone = route?.timezone ?? env.WALDO_OWNER_TIMEZONE;
   if (timezone) headers['x-waldo-timezone'] = timezone;
-  return env.TELEGRAM_OWNER_DO.get(env.TELEGRAM_OWNER_DO.idFromName(doName))
+  return env.OWNER_DO.get(env.OWNER_DO.idFromName(doName))
     .fetch(PROBE_TURN_DO_URL, { method: 'POST', body: JSON.stringify({ text: text.trim(), live }), headers });
 };

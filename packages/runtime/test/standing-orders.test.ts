@@ -14,7 +14,7 @@ const fakeSql = () => {
         rows.set(id, { id, scope, trigger, at, gate, escalation, created_at });
         return { toArray: () => [] };
       }
-      if (query.startsWith('SELECT * FROM standing_orders WHERE id')) {
+      if (query.startsWith('SELECT * FROM standing_orders WHERE id') || query.startsWith('SELECT id FROM standing_orders WHERE id')) {
         const row = rows.get(args[0] as string);
         return { toArray: () => (row ? [row] : []) };
       }
@@ -22,8 +22,9 @@ const fakeSql = () => {
         return { toArray: () => [...rows.values()].sort((a, b) => a.created_at - b.created_at) };
       }
       if (query.startsWith('DELETE FROM standing_orders')) {
-        const had = rows.delete(args[0] as string);
-        return { toArray: () => (had ? [{ id: args[0] }] : []) };
+        // Faithful to SQLite: a DELETE without RETURNING yields no rows whether or not it removed one.
+        rows.delete(args[0] as string);
+        return { toArray: () => [] };
       }
       throw new Error(`unexpected query: ${query}`);
     },
@@ -41,8 +42,14 @@ const fakeScheduler = () => {
       return { id: input.id, due_at: input.dueAt };
     },
     read: (id: string) => armed.find((row) => row.id === id),
+    lookup(id: string) {
+      const entry = armed.find((row) => row.id === id);
+      return entry ? { state: 'entry' as const, entry } : { state: 'absent' as const };
+    },
     async cancel(id: string) {
       cancelled.push(id);
+      const at = armed.findIndex((row) => row.id === id);
+      if (at >= 0) armed.splice(at, 1); // persists like the real Scheduler: a cancelled entry is gone
     },
   };
 };
@@ -149,5 +156,66 @@ describe('standing order tools', () => {
 
   it('returns a readable error for a daily order without a time', async () => {
     expect(await set!.handle({ scope: 'x', trigger: 'daily', gate: 'act_and_report', escalation: 'message_owner' } as never)).toMatchObject({ ok: false, code: 'invalid_args', error: 'a daily standing order needs its local HH:MM time' });
+  });
+
+  it('E3: cancelling an every-turn order the scheduler does not know still reports it removed; an unknown id reports false', async () => {
+    const sql = fakeSql();
+    const scheduler = fakeScheduler();
+    const book = standingOrderBook(sql as never, scheduler as never, clock, () => 'every1');
+    await book.set({ scope: 'Keep replies short', trigger: 'every_turn', gate: 'act_and_report', escalation: 'message_owner' });
+    expect(await book.cancel('order:every1')).toBe(true);
+    expect(book.byId('order:every1')).toBeNull();
+    expect(await book.cancel('order:every1')).toBe(false);
+  });
+
+  it('E4: a failed scheduler arm leaves no active daily order behind and the failure still surfaces', async () => {
+    const sql = fakeSql();
+    const scheduler = { ...fakeScheduler(), async schedule() { throw new Error('scheduler unavailable'); } };
+    const book = standingOrderBook(sql as never, scheduler as never, clock, () => 'daily1');
+    await expect(book.set({ scope: 'Summarize my day', trigger: 'daily', at: '21:00', gate: 'act_and_report', escalation: 'message_owner' })).rejects.toThrow('scheduler unavailable');
+    expect(book.list()).toHaveLength(0);
+  });
+
+  it('E4: a scheduler that stored the armed row and then failed to re-arm is cancelled too, so no orphan recurring schedule remains', async () => {
+    const sql = fakeSql();
+    const base = fakeScheduler();
+    const scheduler = {
+      ...base,
+      async schedule(input: { id: string; kind: string; dueAt: number; occurrenceAt: number; recurrence?: unknown }) {
+        await base.schedule(input); // row stored first, as the real Scheduler does
+        throw new Error('alarm registration rejected');
+      },
+    };
+    const book = standingOrderBook(sql as never, scheduler as never, clock, () => 'daily2');
+    await expect(book.set({ scope: 'Summarize my day', trigger: 'daily', at: '21:00', gate: 'act_and_report', escalation: 'message_owner' })).rejects.toThrow('alarm registration rejected');
+    expect(book.list()).toHaveLength(0);
+    expect(base.cancelled).toEqual(['order:daily2']);
+    expect(base.armed).toHaveLength(0); // no orphan recurring schedule is left armed
+  });
+
+  it('cancel removes the order row even when the scheduler cancel then fails, and the failure still surfaces', async () => {
+    const sql = fakeSql();
+    const base = fakeScheduler();
+    const book = standingOrderBook(sql as never, base as never, clock, () => 'daily3');
+    await book.set({ scope: 'Summarize my day', trigger: 'daily', at: '21:00', gate: 'act_and_report', escalation: 'message_owner' });
+    const failing = { ...base, async cancel() { throw new Error('rearm rejected'); } };
+    const failingBook = standingOrderBook(sql as never, failing as never, clock, () => 'unused');
+    await expect(failingBook.cancel('order:daily3')).rejects.toThrow('rearm rejected');
+    expect(failingBook.byId('order:daily3')).toBeNull();
+  });
+});
+
+describe('standing order recurrence', () => {
+  it.each(['weekdays', 'weekly', 'cron'] as const)('schedules and persists %s without new DO columns', async (trigger) => {
+    const sql = fakeSql();
+    const scheduler = fakeScheduler();
+    const book = standingOrderBook(sql as never, scheduler as never, { timezone: 'America/New_York', now: () => new Date('2026-03-07T15:00:00Z') }, () => trigger);
+    const order = await book.set({ scope: 'Review', trigger, at: '09:00', gate: 'confirm_first', escalation: 'message_owner', ...(trigger === 'cron' ? { cron: '0 9 * * 1-5' } : {}) } as never);
+    const expected = trigger === 'weekly' ? '2026-03-14T13:00:00Z' : '2026-03-09T13:00:00Z';
+    expect(scheduler.armed[0]?.dueAt).toBe(Date.parse(expected));
+    expect(book.list()[0]?.trigger).toBe(trigger);
+    expect(book.byId(order.id)?.trigger).toBe(trigger);
+    if (trigger === 'cron') expect(book.list()[0]).toMatchObject({ cron: '0 9 * * 1-5' });
+    expect(standingOrdersPrompt(book)).toContain(`runs ${trigger}`);
   });
 });

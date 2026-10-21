@@ -22,8 +22,9 @@ export type ScriptRule = Readonly<{
 type ScriptedGatewayOptions = Readonly<{
   rules: readonly ScriptRule[];
   // claim_ops replies for the post-turn memory writer. Defaults to a no-op so scenarios that do
-  // not care about memory admission stay quiet.
-  claimOps?: string;
+  // not care about memory admission stay quiet. A function gets the zero-based index of the
+  // claim_ops call, which is one per owner turn while the pre-reply writer exists.
+  claimOps?: string | ((turnIndex: number) => string);
   // Reply text when no rule matches a reply request. Loud by default so a missing rule fails the
   // scenario instead of silently passing.
   unmatchedText?: string;
@@ -43,18 +44,31 @@ const response = (model: ModelName, text: string, toolCalls?: LLMResponse['tool_
   },
 });
 
-export const scriptedGateway = (options: ScriptedGatewayOptions): LLMGatewayAdapter => {
+const NO_CLAIM_OPS = '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}';
+
+export type ScriptedGateway = LLMGatewayAdapter & Readonly<{
+  // Every request the gateway received, in order, including claim_ops calls.
+  requests(): readonly LLMGatewayRequest[];
+}>;
+
+export const scriptedGateway = (options: ScriptedGatewayOptions): ScriptedGateway => {
   const model = options.model ?? WALDO_CHAT_MODEL;
   const queues = new Map<ScriptRule, ScriptedRound[]>();
+  const received: LLMGatewayRequest[] = [];
   let round = 0;
+  let claimOpsCalls = 0;
   return {
+    requests: () => received,
     async complete(input: LLMGatewayRequest): Promise<AdapterResult<LLMResponse>> {
+      received.push(input);
       const request = input.request;
       // Echo the requested model: the provider rejects a response whose model differs from the
       // route's (invalid_response), so the stub answers as whichever model the caller routed to.
       const as = request.model;
       if (request.response_format?.name === 'claim_ops') {
-        return response(as, options.claimOps ?? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}');
+        const turnIndex = claimOpsCalls++;
+        const ops = options.claimOps;
+        return response(as, typeof ops === 'function' ? ops(turnIndex) : ops ?? NO_CLAIM_OPS);
       }
       const said = request.messages[request.messages.length - 1]?.content ?? '';
       // The responder packs conversation history into the same user message, so an earlier

@@ -121,7 +121,7 @@ export class IsolatedSourceWorld {
     let store = this.providerCalendar.get(owner);
     if (!store) { store = new Map(); this.providerCalendar.set(owner, store); }
     const id = `fixture-event-${effect.idempotency_key}`;
-    if (!store.has(id)) store.set(id, { owner_id: owner, id, ...copy(input), all_day: false, etag: effect.idempotency_key });
+    if (!store.has(id)) store.set(id, { owner_id: owner, ...copy(input), id, all_day: false, etag: effect.idempotency_key });
     return copy(store.get(id)!);
   }
   providerCalendarReadback(owner: string): readonly SourceRow[] {

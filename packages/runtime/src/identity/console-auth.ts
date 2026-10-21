@@ -1,3 +1,4 @@
+import { withRequestTimeout } from './request-timeout';
 import { hex, linkCodeHash, routerSignature, signedRpc, type OwnerDirectoryEnv } from './owner-directory';
 
 export const OWNER_COOKIE = 'waldo_owner';
@@ -17,8 +18,13 @@ export type ConsoleAuth = Readonly<{
   // Strict fixed-window auth throttle kept in the owner directory: global and durable, unlike
   // the per-location binding layer, which only expresses 10s/60s periods.
   throttle(key: string, limit: number, windowSeconds: number): Promise<boolean>;
+  // Console sign-in: resolves an existing member only; new console members use the signup flow.
   verify(email: string, code: string, phone?: string, inviteCode?: string): Promise<string | null>;
+  // App sign-in: resolves an existing member, otherwise joins with the exact recipient-bound invite.
+  verifyOrJoin(email: string, code: string, inviteCode: string): Promise<string | null>;
   issueLinkCode(doName: string): Promise<string | null>;
+  /** A one-time code for one provider: the sender texts "waldo CODE" (WhatsApp, iMessage) or /link CODE (Telegram). */
+  issueProviderLinkCode?(doName: string, provider: 'telegram' | 'whatsapp' | 'imessage'): Promise<string | null>;
   saveSettings(doName: string, settings: OwnerSettings): Promise<boolean>;
   adminOverview(doName: string): Promise<AdminOverview | null>;
   invite(doName: string, email: string, code: string): Promise<boolean>;
@@ -26,6 +32,12 @@ export type ConsoleAuth = Readonly<{
   memberInvites(doName: string): Promise<readonly Readonly<{ email: string | null; created_at: string; expires_at: string | null; used_at: string | null; revoked_at: string | null }>[]>;
   revokeInvite(doName: string, invite: string): Promise<boolean>;
   unlinkTelegram(doName: string): Promise<boolean>;
+  unlinkIMessage?(doName: string): Promise<boolean>;
+  /** The last 2-4 characters of the owner's linked iMessage handle, or null; the full handle never leaves the database. */
+  iMessageHandleHint?(doName: string): Promise<string | null>;
+  unlinkWhatsApp?(doName: string): Promise<boolean>;
+  /** The last 2-4 digits of the owner's linked WhatsApp number, or null; the full number never leaves the database. */
+  whatsAppHandleHint?(doName: string): Promise<string | null>;
   // Send-time ownership re-check: true only while an active presence binds this channel subject to this owner.
   assertChannelPresence(doName: string, provider: string, subject: string): Promise<boolean>;
   deleteOwner(doName: string): Promise<boolean>;
@@ -34,6 +46,10 @@ export type ConsoleAuth = Readonly<{
   // opened (storage down) so sign-in fails loudly instead of issuing an unverifiable cookie.
   ownerCookie(doName: string): Promise<string | null>;
   readOwnerCookie(request: Request): Promise<string | null>;
+  // The mobile app's bearer: the same kind of server-side session, signed under its own context so it is never
+  // accepted as a console cookie, and a console cookie is never accepted as an app bearer.
+  ownerAppCredential(doName: string): Promise<string | null>;
+  readAppCredential(credential: string): Promise<string | null>;
   listSessions(doName: string): Promise<readonly ConsoleSession[]>;
   revokeSession(doName: string, sessionHash: string): Promise<boolean>;
   signOutAll(doName: string): Promise<number>;
@@ -61,10 +77,61 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
   const { SUPABASE_PROJECT_URL: base, SUPABASE_PUBLISHABLE_KEY: key, WALDO_ROUTER_HMAC_SECRET: secret } = env;
   const rpc = signedRpc(env, fetcher, now);
   if (!base || !key || !secret || !rpc) return null;
-  const auth = (path: string, body: object) => fetcher(`${base}/auth/v1/${path}`, {
-    method: 'POST', headers: { apikey: key, 'content-type': 'application/json' }, body: JSON.stringify(body),
+  const presenceHint = async (doName: string, provider: 'imessage' | 'whatsapp') => {
+    const hint = await rpc('presence_hint', `presencehint.${doName}.${provider}`, { p_do_name: doName, p_provider: provider });
+    return typeof hint === 'string' && hint.length >= 2 && hint.length <= 4 ? hint : null;
+  };
+  const auth = <T>(path: string, body: object, decode: (response: Response) => T | Promise<T>) => withRequestTimeout(async signal => {
+    const response = await fetcher(`${base}/auth/v1/${path}`, {
+      method: 'POST', headers: { apikey: key, 'content-type': 'application/json' }, body: JSON.stringify(body), signal,
+    });
+    return decode(response);
   });
   const cookieSig = (doName: string, sessionId: string) => routerSignature(secret, 0, `cookie.${doName}.${sessionId}`);
+  const appSig = (doName: string, sessionId: string) => routerSignature(secret, 0, `appbearer.${doName}.${sessionId}`);
+  const mint = async (doName: string, sign: (doName: string, sessionId: string) => Promise<string>): Promise<string | null> => {
+    const sessionId = newSessionId();
+    const sessionHash = await linkCodeHash(sessionId);
+    const opened = await rpc('console_session_open', `consolesess.open.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
+    if (opened !== true) return null;
+    return `${encodeURIComponent(doName)}.${sessionId}.${await sign(doName, sessionId)}`;
+  };
+  // A malformed artifact is simply not valid: it never throws, so a bad value cannot read as an outage.
+  const readSigned = async (raw: string | null | undefined, sign: (doName: string, sessionId: string) => Promise<string>): Promise<string | null> => {
+    const sigDot = raw?.lastIndexOf('.') ?? -1;
+    if (!raw || sigDot < 1) return null;
+    const sessionDot = raw.lastIndexOf('.', sigDot - 1);
+    if (sessionDot < 1) return null;
+    let doName: string;
+    try { doName = decodeURIComponent(raw.slice(0, sessionDot)); } catch { return null; }
+    const sessionId = raw.slice(sessionDot + 1, sigDot);
+    const expected = new TextEncoder().encode(await sign(doName, sessionId));
+    const given = new TextEncoder().encode(raw.slice(sigDot + 1));
+    let diff = expected.length ^ given.length;
+    for (let i = 0; i < expected.length; i += 1) diff |= expected[i]! ^ (given[i] ?? 0);
+    if (diff !== 0) return null;
+    const sessionHash = await linkCodeHash(sessionId);
+    const live = await rpc('console_session_touch', `consolesess.touch.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
+    return live === true ? doName : null;
+  };
+  const resolveOwner = async (email: string, code: string, inviteCode: string, join: boolean) => {
+    const address = email.trim().toLowerCase();
+    const user = await auth('verify', { type: 'email', email: address, token: code.trim() }, async response => {
+      if (!response.ok) return null;
+      const { user } = (await response.json()) as { user?: { id?: string; email?: string } };
+      return user;
+    });
+    if (!user?.id || user.email?.toLowerCase() !== address) return null;
+    // An existing member resolves first, so an invite they also hold is never spent. Empty phone makes
+    // owner_for_auth refuse new provisioning; only the join path admits a new member, through
+    // signup_owner_for_auth, which rechecks the confirmed Auth email and spends the exact invite atomically.
+    const phoneE164 = '';
+    const codeHash = inviteCode ? await linkCodeHash(inviteCode) : '';
+    const owner = (await rpc('owner_for_auth', `owner.${user.id}.${address}.${phoneE164}.${codeHash}`, { p_auth_user: user.id, p_email: address, p_phone: phoneE164, p_code_hash: codeHash })) as string | null;
+    if (owner || !join || !codeHash) return owner;
+    const joined = await rpc('signup_owner_for_auth', `signup.owner.${user.id}.${address}.${phoneE164}.${codeHash}`, { p_auth_user: user.id, p_email: address, p_phone: phoneE164, p_code_hash: codeHash });
+    return typeof joined === 'string' && joined.length > 0 ? joined : null;
+  };
   return {
     async throttle(key, limit, windowSeconds) {
       return (await rpc('console_auth_throttle', `throttle.${key}.${limit}.${windowSeconds}`, { p_key: key, p_limit: limit, p_window_seconds: windowSeconds })) === true;
@@ -74,26 +141,23 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       const address = email.trim().toLowerCase();
       const codeHash = code ? await linkCodeHash(code) : '';
       if (!(await rpc('signin_allowed', `signin.${address}.${codeHash}`, { p_email: address, p_code_hash: codeHash }))) return false;
-      const response = await auth('otp', { email: address, create_user: true });
-      if (!response.ok) throw new Error(`otp send ${response.status}`);
-      return true;
+      // Supabase may create an Auth identity here; this does not create a Waldo owner.
+      return auth('otp', { email: address, create_user: true }, response => {
+        if (!response.ok) throw new Error(`otp send ${response.status}`);
+        return true;
+      });
     },
-    async verify(email, code, phone, inviteCode = '') {
-      const address = email.trim().toLowerCase();
-      const response = await auth('verify', { type: 'email', email: address, token: code.trim() });
-      if (!response.ok) return null;
-      const { user } = (await response.json()) as { user?: { id?: string; email?: string } };
-      if (!user?.id || user.email?.toLowerCase() !== address) return null;
-      // The phone is part of the signed canonical data: it lands on the owner row, so an
-      // unsigned phone swap would be a tampered write the RPC must refuse.
-      const phoneE164 = (phone ?? '').trim();
-      const codeHash = inviteCode ? await linkCodeHash(inviteCode) : '';
-      return (await rpc('owner_for_auth', `owner.${user.id}.${address}.${phoneE164}.${codeHash}`, { p_auth_user: user.id, p_email: address, p_phone: phoneE164, p_code_hash: codeHash })) as string | null;
-    },
+    verify: (email, code, _phone, inviteCode = '') => resolveOwner(email, code, inviteCode, false),
+    verifyOrJoin: (email, code, inviteCode) => resolveOwner(email, code, inviteCode, true),
     async issueLinkCode(doName) {
       const code = newLinkCode();
       const hash = await linkCodeHash(code);
       return (await rpc('issue_link_code', `link.${doName}.${hash}`, { p_do_name: doName, p_code_hash: hash })) ? code : null;
+    },
+    async issueProviderLinkCode(doName, provider) {
+      const code = newLinkCode();
+      const hash = await linkCodeHash(code);
+      return (await rpc('issue_provider_link_code', `link.${provider}.${doName}.${hash}`, { p_do_name: doName, p_provider: provider, p_code_hash: hash })) ? code : null;
     },
     async saveSettings(doName, { timezone, quiet_start: start, quiet_end: end, volume }) {
       const message = `settings.${doName}.${timezone}.${start ?? ''}.${end ?? ''}.${volume}`;
@@ -113,42 +177,44 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     memberInvites: async (doName) => (await rpc('member_invites', `memberinvites.${doName}`, { p_do_name: doName })) as AdminOverview['invites'],
     revokeInvite: async (doName, invite) => (await rpc('admin_revoke', `revoke.${doName}.${invite}`, { p_do_name: doName, p_invite: invite })) === true,
     unlinkTelegram: async (doName) => (await rpc('unlink_presence', `unlink.${doName}.telegram`, { p_do_name: doName, p_provider: 'telegram' })) === true,
+    unlinkIMessage: async (doName) => (await rpc('unlink_presence', `unlink.${doName}.imessage`, { p_do_name: doName, p_provider: 'imessage' })) === true,
+    iMessageHandleHint: (doName) => presenceHint(doName, 'imessage'),
+    unlinkWhatsApp: async (doName) => (await rpc('unlink_presence', `unlink.${doName}.whatsapp`, { p_do_name: doName, p_provider: 'whatsapp' })) === true,
+    whatsAppHandleHint: (doName) => presenceHint(doName, 'whatsapp'),
     assertChannelPresence: async (doName, provider, subject) => (await rpc('assert_channel_presence', `presence.${doName}.${provider}.${subject}`, { p_do_name: doName, p_provider: provider, p_subject: subject })) === true,
     deleteOwner: async (doName) => (await rpc('delete_owner', `delown.${doName}`, { p_do_name: doName })) === true,
-    async ownerCookie(doName) {
-      const sessionId = newSessionId();
-      const sessionHash = await linkCodeHash(sessionId);
-      const opened = await rpc('console_session_open', `consolesess.open.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
-      if (opened !== true) return null;
-      return `${encodeURIComponent(doName)}.${sessionId}.${await cookieSig(doName, sessionId)}`;
-    },
-    async readOwnerCookie(request) {
-      const raw = (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${OWNER_COOKIE}=`))?.slice(OWNER_COOKIE.length + 1);
-      const sigDot = raw?.lastIndexOf('.') ?? -1;
-      if (!raw || sigDot < 1) return null;
-      const sessionDot = raw.lastIndexOf('.', sigDot - 1);
-      if (sessionDot < 1) return null;
-      const doName = decodeURIComponent(raw.slice(0, sessionDot));
-      const sessionId = raw.slice(sessionDot + 1, sigDot);
-      const expected = new TextEncoder().encode(await cookieSig(doName, sessionId));
-      const given = new TextEncoder().encode(raw.slice(sigDot + 1));
-      let diff = expected.length ^ given.length;
-      for (let i = 0; i < expected.length; i += 1) diff |= expected[i]! ^ (given[i] ?? 0);
-      if (diff !== 0) return null;
-      const sessionHash = await linkCodeHash(sessionId);
-      const live = await rpc('console_session_touch', `consolesess.touch.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
-      return live === true ? doName : null;
-    },
+    ownerCookie: (doName) => mint(doName, cookieSig),
+    readOwnerCookie: (request) => readSigned(
+      (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${OWNER_COOKIE}=`))?.slice(OWNER_COOKIE.length + 1),
+      cookieSig,
+    ),
+    ownerAppCredential: (doName) => mint(doName, appSig),
+    readAppCredential: (credential) => readSigned(credential, appSig),
     async listSessions(doName) {
       const rows = await rpc('console_session_list', `consolesess.list.${doName}`, { p_do_name: doName });
-      return Array.isArray(rows) ? (rows as ConsoleSession[]) : [];
+      // An invalid authority response cannot prove that a session is absent.
+      if (!Array.isArray(rows)) throw new Error('session inventory unavailable');
+      const seen = new Set<string>();
+      return rows.map((raw: unknown) => {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('session inventory unavailable');
+        const row = raw as Record<string, unknown>;
+        if (Object.keys(row).sort().join(',') !== 'created_at,last_seen_at,session'
+          || typeof row.session !== 'string' || !/^[a-f0-9]{64}$/.test(row.session) || seen.has(row.session)
+          || typeof row.created_at !== 'string' || !Number.isFinite(Date.parse(row.created_at))
+          || typeof row.last_seen_at !== 'string' || !Number.isFinite(Date.parse(row.last_seen_at))) throw new Error('session inventory unavailable');
+        seen.add(row.session);
+        return { session: row.session, created_at: row.created_at, last_seen_at: row.last_seen_at };
+      });
     },
     async revokeSession(doName, sessionHash) {
-      return (await rpc('console_session_revoke', `consolesess.revoke.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash })) === true;
+      const revoked = await rpc('console_session_revoke', `consolesess.revoke.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
+      if (typeof revoked !== 'boolean') throw new Error('session revocation unavailable');
+      return revoked;
     },
     async signOutAll(doName) {
       const count = await rpc('console_signout_all', `consolesess.signout.${doName}`, { p_do_name: doName });
-      return typeof count === 'number' ? count : 0;
+      if (typeof count !== 'number') throw new Error('session revocation unavailable');
+      return count;
     },
   };
 };

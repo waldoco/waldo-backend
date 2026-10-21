@@ -1,0 +1,95 @@
+import { describe, expect, it, vi } from 'vitest';
+import { TelegramOwnerInbox, OWNER_INBOX_KEY } from '../src/channels/telegram-owner-inbox';
+const fixture = () => {
+  const data = new Map<string, unknown>(); let now = 1000; let fail = false;
+  const txn = { get: async <T>(k: string) => structuredClone(data.get(k)) as T, put: async (k: string | Record<string, unknown>, v?: unknown) => { if (typeof k === 'string') data.set(k, structuredClone(v)); else for (const [key,value] of Object.entries(k)) data.set(key, structuredClone(value)); } } as DurableObjectTransaction;
+  let queue = Promise.resolve();
+  const storage = { get: txn.get, transaction: <T>(work: (t: DurableObjectTransaction) => Promise<T>) => { const run = queue.then(async () => { const before = new Map(data); try { return await work(txn); } catch (e) { data.clear(); for (const [k,v] of before) data.set(k,v); throw e; } }); queue = run.then(() => undefined, () => undefined); return run; } } as DurableObjectStorage;
+  const persist = vi.fn(async (t: DurableObjectTransaction, rows: unknown, due: number | null) => { await t.put(OWNER_INBOX_KEY, rows); if (fail) throw new Error('alarm commit failed'); await t.put('due', due); });
+  const inbox = new TelegramOwnerInbox(storage, persist, () => now);
+  const binding = { bot: '7', subject: '42', doName: 'owner42' };
+  return { data, storage, persist, inbox, binding, fail: () => { fail = true; }, advance: () => { now += 26 * 3600000; } };
+};
+describe('supported-owner durable inbox', () => {
+  it('persists immutable identity per update across duplicates, email changes and recovery', async () => {
+    const f = fixture();
+    const first = { owner_id: '10000000-0000-0000-0000-00000000000a', owner_email: 'old@test.invalid' };
+    const changed = { ...first, owner_email: 'new@test.invalid' };
+    await f.inbox.admit({ ...f.binding, traceIdentity: first }, 1, 'first');
+    expect(await f.inbox.admit({ ...f.binding, traceIdentity: changed }, 1, 'first')).toBe('duplicate');
+    await f.inbox.admit({ ...f.binding, traceIdentity: changed }, 2, 'second');
+    await f.inbox.recover(new Set());
+    const recreated = new TelegramOwnerInbox(f.storage, f.persist);
+    expect((await recreated.records()).map(row => row.traceIdentity)).toEqual([first, changed]);
+  });
+  it('admits high then low ID concurrently in admission order, dedupes callbacks without highwater', async () => {
+    const f = fixture(); await Promise.all([f.inbox.admit(f.binding, 100, 'high'), f.inbox.admit(f.binding, 2, 'callback')]);
+    expect((await f.inbox.records()).map(r => r.updateId)).toEqual([100, 2]);
+    expect(await f.inbox.admit(f.binding, 2, 'callback')).toBe('duplicate');
+    expect(await f.inbox.admit(f.binding, 2, 'changed')).toBe('conflict');
+  });
+  it('does not ACK admission when atomic wake commit fails', async () => {
+    const f = fixture(); f.fail(); await expect(f.inbox.admit(f.binding, 1, 'x')).rejects.toThrow('alarm commit'); expect(await f.inbox.records()).toEqual([]);
+  });
+  it('duplicate wins over capacity and active records are never evicted', async () => {
+    const f = fixture(); await f.inbox.admit(f.binding, 1, 'x'); const row = (await f.inbox.records())[0]!;
+    f.data.set(OWNER_INBOX_KEY, Array.from({ length: 512 }, (_, i) => ({ ...row, id: `7:telegram:${i + 1}`, updateId: i + 1 })));
+    expect(await f.inbox.admit(f.binding, 1, 'x')).toBe('duplicate'); expect(await f.inbox.admit(f.binding, 999, 'x')).toBe('capacity'); f.advance(); expect(await f.inbox.admit(f.binding, 999, 'x')).toBe('capacity');
+  });
+  it('recovers only prior invocation uncertainty, not a live attempt; consumed control never replays', async () => {
+    const f = fixture(); await f.inbox.admit(f.binding, 1, 'x'); await f.inbox.admit(f.binding, 2, 'steer', { kind: 'steer', targetRun: 'run1' });
+    await f.inbox.claim('7:telegram:1', 'live', 'run1', 2000); await f.inbox.claim('7:telegram:2', 'dead', 'run2', 2000);
+    await f.inbox.transition('7:telegram:2', 'dead', 'consumed'); await f.inbox.recover(new Set(['live']));
+    expect((await f.inbox.records()).map(r => r.state)).toEqual(['claimed', 'quarantined']);
+    expect(await f.inbox.claim('7:telegram:2', 'retry', 'run3', 3000)).toBeNull();
+  });
+  it('retains terminal tombstones through delivery window and scrubs body', async () => {
+    const f = fixture(); await f.inbox.admit(f.binding, 1, 'secret'); await f.inbox.claim('7:telegram:1', 'a', 'r', 2000); await f.inbox.transition('7:telegram:1', 'a', 'completed');
+    expect((await f.inbox.records())[0]?.body).toBe(''); expect(await f.inbox.admit(f.binding, 1, 'secret')).toBe('duplicate'); f.advance(); await f.inbox.recover(new Set()); expect(await f.inbox.records()).toEqual([]);
+  });
+});
+
+it('atomically refuses a conflicting owner before admitting a body', async () => {
+  const f = fixture(); await f.inbox.admit(f.binding, 1, 'first');
+  await expect(f.inbox.admit({ ...f.binding, subject:'99' }, 2, 'wrong')).rejects.toThrow('owner binding conflict');
+  expect(await f.inbox.records()).toHaveLength(1); expect(f.data.get('telegram_subject')).toBe('42');
+});
+it('retains uncertain records past expiry rather than evicting for capacity', async () => {
+  const f = fixture(); await f.inbox.admit(f.binding, 1, 'possible effects'); await f.inbox.claim('7:telegram:1','a','r',2000); await f.inbox.transition('7:telegram:1','a','quarantined'); f.advance(); await f.inbox.recover(new Set());
+  expect((await f.inbox.records())[0]?.state).toBe('quarantined'); expect(await f.inbox.admit(f.binding,1,'possible effects')).toBe('duplicate');
+});
+it('awaiting transport scrubs raw body and never rearms an expired execution deadline', async()=>{
+  const f=fixture();await f.inbox.admit(f.binding,1,'raw input');await f.inbox.claim('7:telegram:1','a','r',1100);await f.inbox.transition('7:telegram:1','a','awaiting_delivery');
+  expect((await f.inbox.records())[0]?.body).toBe('');expect(f.data.get('due')).toBeNull();f.advance();await f.inbox.recover(new Set());expect(f.data.get('due')).toBeNull();expect((await f.inbox.records())[0]?.state).toBe('awaiting_delivery');
+});
+
+describe('never-consumed steering fallback', () => {
+ it('returns a claimed steer to the same FIFO admission and wake without weakening dedup', async () => {
+  const f=fixture();await f.inbox.admit(f.binding,2,'second',{kind:'steer',targetRun:'parent'});
+  await f.inbox.admit(f.binding,1,'third');const before=(await f.inbox.records())[0]!;
+  await f.inbox.claim(before.id,'child-attempt','child-run',2000);
+  expect(await f.inbox.returnUnconsumedSteer(before.id,'child-attempt')).toBe(true);
+  const after=(await f.inbox.records())[0]!;
+  const {control:_control,...ordinary}=before;expect(after).toEqual({...ordinary,state:'admitted'});expect(f.data.get('due')).toBe(1250);
+  expect((await f.inbox.records()).map(row=>row.updateId)).toEqual([2,1]);
+  expect(await f.inbox.admit(f.binding,2,'second')).toBe('duplicate');
+  expect(await f.inbox.admit(f.binding,2,'changed')).toBe('conflict');
+  const claimed=await f.inbox.claim(before.id,'ordinary','ordinary-run',3000);expect(claimed?.body).toBe('second');expect(claimed?.control).toBeUndefined();
+ });
+ it('recovers never-consumed steering after restart but never replays consumed children or stop controls', async()=>{
+  const f=fixture();for(const id of [1,2,3])await f.inbox.admit(f.binding,id,`body${id}`,{kind:id===3?'stop':'steer',targetRun:'parent'});
+  for(const id of [1,2,3])await f.inbox.claim(`7:telegram:${id}`,`attempt${id}`,`run${id}`,2000);
+  await f.inbox.transition('7:telegram:2','attempt2','consumed');await f.inbox.recover(new Set());
+  const rows=await f.inbox.records();expect(rows[0]).toMatchObject({state:'admitted',body:'body1'});expect(rows[0]!.control).toBeUndefined();
+  expect(rows.slice(1).map(row=>[row.state,row.body])).toEqual([['quarantined',''],['quarantined','']]);
+  expect(await f.inbox.returnUnconsumedSteer('7:telegram:2','attempt2')).toBe(false);
+ });
+ it('makes late admitted steering ordinary, fences stale attempts, and rolls back failed atomic wake',async()=>{
+  const f=fixture();await f.inbox.admit(f.binding,1,'late',{kind:'steer',targetRun:'dead'});const row=(await f.inbox.records())[0]!;
+  expect(await f.inbox.returnUnconsumedSteer(row.id)).toBe(true);
+  await f.inbox.admit(f.binding,2,'claimed',{kind:'steer',targetRun:'dead'});await f.inbox.claim('7:telegram:2','current','run',2000);
+  expect(await f.inbox.returnUnconsumedSteer('7:telegram:2','stale')).toBe(false);
+  f.fail();await expect(f.inbox.returnUnconsumedSteer('7:telegram:2','current')).rejects.toThrow('alarm commit');
+  expect((await f.inbox.records())[1]).toMatchObject({state:'claimed',attempt:'current',body:'claimed',control:{kind:'steer'}});
+ });
+});

@@ -28,6 +28,15 @@ export const reviseArtifactArgsSchema = z.strictObject({
 });
 export type ReviseArtifactArgs = z.infer<typeof reviseArtifactArgsSchema>;
 
+// Export an existing artifact at a stated revision. format is a free string on purpose: an
+// unsupported value is a typed receipt from the handler, never a schema error or a renamed file.
+export const exportArtifactArgsSchema = z.strictObject({
+  artifact_id: z.string().min(1),
+  expected_revision: z.int().positive(),
+  format: z.string().min(1).max(20),
+});
+export type ExportArtifactArgs = z.infer<typeof exportArtifactArgsSchema>;
+
 // Metadata only - bodies never ride the list.
 export const listArtifactsArgsSchema = z.strictObject({
   kind: artifactKindSchema.optional(),

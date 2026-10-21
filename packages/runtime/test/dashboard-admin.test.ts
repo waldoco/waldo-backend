@@ -16,8 +16,13 @@ describe('dashboard admin existing handlers', () => {
     const fetcher=vi.fn(async(_input: RequestInfo | URL, _init?: RequestInit)=>json(true));
     const response=await adminAction(request('invite.create'), 'csrf', consoleAuth(env,fetcher as typeof fetch,()=>1790000000000)!, 'owner');
     expect(response.status).toBe(200);
-    const receipt=await response.json() as {code:string;message:string};
+    const receipt=await response.json() as {code:string;message:string;link:string};
     expect(receipt.code).toMatch(/^[A-Z2-9]+$/);
+    const link = new URL(receipt.link);
+    expect(link.pathname).toBe('/console/signup');
+    expect(link.search).toBe('');
+    expect(new URLSearchParams(link.hash.slice(1)).get('invite')).toBe(receipt.code);
+    expect(new URLSearchParams(link.hash.slice(1)).get('email')).toBe('new@test.invalid');
     expect(receipt.message).toContain('Copy it now and send it yourself. Waldo did not email anyone.');
     const args=JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body));
     expect(args.p_code_hash).toMatch(/^[a-f0-9]{64}$/); expect(args.p_code_hash).not.toBe(receipt.code);
@@ -44,8 +49,8 @@ describe('actual owner DO admin route',()=>{
  it('keeps session isolation, JSON dispatch and CSRF ahead of signed writes',async()=>{
   const {env:bindings}=await import('cloudflare:workers');const {runInDurableObject}=await import('cloudflare:test');
   const {consoleAccess}=await import('../src/channels/console');
-  const stub=bindings.TELEGRAM_OWNER_DO!.get(bindings.TELEGRAM_OWNER_DO!.idFromName('admin-json-test'));
-  const other=bindings.TELEGRAM_OWNER_DO!.get(bindings.TELEGRAM_OWNER_DO!.idFromName('admin-json-other'));
+  const stub=bindings.OWNER_DO!.get(bindings.OWNER_DO!.idFromName('admin-json-test'));
+  const other=bindings.OWNER_DO!.get(bindings.OWNER_DO!.idFromName('admin-json-other'));
   const token=await runInDurableObject(stub,(_instance,state)=>consoleAccess(state.storage).grant());
   const cookie=`waldo_console=${token}`;
   expect((await other.fetch('https://w.test/console/admin',{headers:{cookie,accept:'application/json'}})).status).toBe(401);

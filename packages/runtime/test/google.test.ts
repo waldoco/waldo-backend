@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { b64url, buildMime, consentState, exchangeGoogleCode, googleClient, googleConsentUrl, readConsentState, sha256Hex } from '../src/connectors/google';
+import { GoogleError, b64url, buildMime, consentState, exchangeGoogleCode, googleClient, googleConsentUrl, readConsentState, sha256Hex } from '../src/connectors/google';
 import { connectServiceHandler, googleHandlers, type GoogleAccess } from '../src/tools/live/google';
 
 const app = { clientId: 'cid', clientSecret: 'csecret', redirectUri: 'https://w.example/oauth/google/callback' };
@@ -9,13 +9,14 @@ const fakeFetch = (calls: { url: string; init?: RequestInit }[]) => (async (inpu
   const url = String(input);
   calls.push({ url, init });
   if (url.startsWith('https://oauth2.googleapis.com/token')) return Response.json({ access_token: 'at' });
-  if (url.includes('/calendar/v3/')) return Response.json({ items: [
+  if (url.includes('/calendar/v3/')) return Response.json({ kind:'calendar#events', items: [
     { id: 'e1', summary: 'Gym', description: '  Leg day  ', start: { dateTime: '2026-09-23T18:00:00+05:30' }, end: { dateTime: '2026-09-23T19:00:00+05:30' } },
     { id: 'e2', status: 'cancelled', start: { date: '2026-09-23' }, end: { date: '2026-09-24' } },
     { id: 'e3', summary: 'Declined sync', attendees: [{ self: true, responseStatus: 'declined' }, {}], start: { dateTime: '2026-09-23T20:00:00+05:30' }, end: { dateTime: '2026-09-23T20:30:00+05:30' } },
   ] });
   if (url.includes('/gmail/v1/users/me/drafts')) return Response.json({ id: 'd1', message: { id: 'm1', threadId: 't1' } });
-  if (url.includes('tasks.googleapis.com/tasks/v1/lists/@default/tasks')) return Response.json({ items: [
+  if (url.includes('tasks.googleapis.com/tasks/v1/users/@me/lists')) return Response.json({ kind: 'tasks#taskLists', items: [{ id: '@default', title: 'Tasks' }] });
+  if (url.includes('tasks.googleapis.com/tasks/v1/lists/%40default/tasks') || url.includes('tasks.googleapis.com/tasks/v1/lists/@default/tasks')) return Response.json({ kind: 'tasks#tasks', items: [
     { id: 't1', title: 'Buy stamps', status: 'needsAction', updated: '2026-09-23T06:00:00Z' },
     { id: 't2', title: 'Pay rent', status: 'needsAction', due: '2026-09-30T00:00:00Z', updated: '2026-09-22T06:00:00Z' },
     { id: 't3', title: 'Renew license', status: 'completed', updated: '2026-09-21T06:00:00Z' },
@@ -43,14 +44,24 @@ describe('google oauth state', () => {
     expect(url.searchParams.get('prompt')).toBe('consent select_account');
     const scopes = url.searchParams.get('scope')!.split(' ');
     expect(scopes).toEqual([
-      'openid', 'email',
+      'openid', 'email', 'profile',
       'https://www.googleapis.com/auth/calendar.events',
+      'https://www.googleapis.com/auth/calendar.events.freebusy',
+      'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
       'https://www.googleapis.com/auth/gmail.readonly',
       'https://www.googleapis.com/auth/gmail.send',
       'https://www.googleapis.com/auth/gmail.compose',
       'https://www.googleapis.com/auth/tasks',
+      'https://www.googleapis.com/auth/drive.readonly',
+      'https://www.googleapis.com/auth/documents.readonly',
+      'https://www.googleapis.com/auth/spreadsheets.readonly',
+      'https://www.googleapis.com/auth/presentations.readonly',
+      'https://www.googleapis.com/auth/contacts.readonly',
+      'https://www.googleapis.com/auth/contacts.other.readonly',
+      'https://www.googleapis.com/auth/user.phonenumbers.read',
     ]);
-    expect(scopes.join(' ')).not.toMatch(/drive|documents|spreadsheets|presentations|contacts|gmail\.modify/);
+    // Read-only Workspace and contacts set only: no write or file scope.
+    expect(scopes.join(' ')).not.toMatch(/drive\.file|auth\/drive |auth\/documents |auth\/spreadsheets |auth\/presentations |auth\/contacts( |$)|gmail\.modify/);
     expect(url.searchParams.get('redirect_uri')).toBe(app.redirectUri);
   });
 });
@@ -113,11 +124,11 @@ describe('google tools', () => {
 
   it('reports a typed connect intent when Google is not connected, and never hands the model a URL', async () => {
     const google: GoogleAccess = { client: async () => null };
-    const [query] = googleHandlers(google, proposals, clock);
+    const query = googleHandlers(google, proposals, clock).find(h=>h.name==='query_calendar');
     const result = await query!.handle({ include_declined: false, limit: 20 } as never);
     expect(result).toMatchObject({
       ok: false, code: 'auth_failed',
-      error: expect.stringContaining('connect button'),
+      error: 'Google (calendar) is not connected.',
       connect: { status: 'auth_required', service: 'google', reason: 'not_connected', feature: 'calendar' },
     });
     expect(JSON.stringify(result)).not.toMatch(/https?:|state=|accounts\.google/);
@@ -143,7 +154,7 @@ describe('google tools', () => {
         newMail: async (since: number, limit: number) => {
           seen.push(since);
           expect(limit).toBe(10);
-          return [{ id: 'm1', from: 'a@b.c', subject: 'hi', snippet: 'snip', at: '2026-09-24T10:00:00.000Z' }];
+          return [{ id: 'm1', from: 'a@b.c', subject: 'hi', snippet: 'snip', at: '2026-09-23T07:00:00.000Z' }];
         },
         draft: async () => ({}),
       } as never),
@@ -155,7 +166,36 @@ describe('google tools', () => {
     const data = result.data as { since: string; messages: unknown[] };
     expect(data.messages).toHaveLength(1);
     expect(Date.parse(data.since)).toBe(seen[0]);
-    expect(Date.now() - seen[0]!).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000 - 5000);
+    expect(clock.now().getTime() - seen[0]!).toBe(24 * 60 * 60 * 1000);
+  });
+
+  it('get_communication falls back to the unpaged read when the connector proxy predates mailPage (404 unknown operation), and says so', async () => {
+    const google: GoogleAccess = {
+      client: async () => ({
+        events: async () => [],
+        mailPage: async () => { throw new GoogleError(404, 'unknown operation'); },
+        newMail: async () => [{ id: 'm1', from: 'a@b.c', subject: 'hi', snippet: 'snip', at: '2026-09-23T07:00:00.000Z' }],
+        draft: async () => ({}),
+      } as never),
+    };
+    const comms = googleHandlers(google, proposals, clock).find((h) => h.name === 'get_communication')!;
+    const result = await comms.handle({} as never);
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    const data = result.data as { messages: unknown[]; query: unknown; query_note: string; coverage: { pagination: string; complete: boolean; degraded: string } };
+    expect(data.messages).toHaveLength(1);
+    expect(data.coverage.degraded).toBe('proxy_without_mailPage');
+    expect(data.query).toBeNull();
+    expect(data.query_note).toBe('legacy_since_filter_no_gmail_query');
+    expect(data.coverage.pagination).toBe('unknown_not_returned_by_adapter');
+    expect(data.coverage.complete).toBe(false);
+  });
+
+  it('get_communication still surfaces other mailPage errors and cursor requests without a fallback', async () => {
+    const mk = (err: Error): GoogleAccess => ({ client: async () => ({ events: async () => [], mailPage: async () => { throw err; }, newMail: async () => [], draft: async () => ({}) } as never) });
+    const run = (g: GoogleAccess, args: object) => googleHandlers(g, proposals, clock).find((h) => h.name === 'get_communication')!.handle(args as never);
+    expect(await run(mk(new GoogleError(500, 'boom')), {})).toMatchObject({ ok: false });
+    expect(await run(mk(new GoogleError(404, 'unknown operation')), { page_token: 'x' })).toMatchObject({ ok: false });
   });
 
   it('E1: verification artifacts in mail are quarantined before the result reaches model context; ordinary mail flows', async () => {
@@ -163,9 +203,9 @@ describe('google tools', () => {
       client: async () => ({
         events: async () => [],
         newMail: async () => [
-          { id: 'm-otp', from: 'google-no-reply@accounts.google.com', subject: '123456 is your Google verification code', snippet: 'Enter 123456 to continue', at: '2026-09-25T09:00:00.000Z' },
-          { id: 'm-reset', from: 'no-reply@example.com', subject: 'Reset your password', snippet: 'Open https://app.example.com/auth/v1/verify?token=pkce_LIVESECRET&type=recovery to choose a new one', at: '2026-09-25T09:01:00.000Z' },
-          { id: 'm-receipt', from: 'receipts@amazon.com', subject: 'Your receipt from Amazon #112-3948572-1849561', snippet: 'Order total $12.34, arriving Thursday', at: '2026-09-25T09:02:00.000Z' },
+          { id: 'm-otp', from: 'google-no-reply@accounts.google.com', subject: '123456 is your Google verification code', snippet: 'Enter 123456 to continue', at: '2026-09-23T07:00:00.000Z' },
+          { id: 'm-reset', from: 'no-reply@example.com', subject: 'Reset your password', snippet: 'Open https://app.example.com/auth/v1/verify?token=pkce_LIVESECRET&type=recovery to choose a new one', at: '2026-09-23T07:01:00.000Z' },
+          { id: 'm-receipt', from: 'receipts@amazon.com', subject: 'Your receipt from Amazon #112-3948572-1849561', snippet: 'Order total $12.34, arriving Thursday', at: '2026-09-23T07:02:00.000Z' },
         ],
         draft: async () => ({}),
       } as never),
@@ -200,10 +240,10 @@ describe('google tools', () => {
     expect(JSON.stringify(result)).not.toMatch(/https?:/);
   });
 
-  it('propose a calendar change without applying it', async () => {
+  it('requires a connected calendar account before preparing a proposal', async () => {
     const google: GoogleAccess = { client: async () => null };
     const propose = googleHandlers(google, proposals, clock).find((h) => h.name === 'propose_calendar_change')!;
-    expect(await propose.handle({ action: 'cancel', event_id: 'e1', reason: 'double booked' } as never)).toMatchObject({ ok: true, data: { proposal_id: 'proposal:1', applied: false } });
+    expect(await propose.handle({ action: 'cancel', event_id: 'e1', reason: 'double booked' } as never)).toMatchObject({ ok: false, code: 'auth_failed' });
   });
 });
 
@@ -228,6 +268,7 @@ describe('gmail send rail bytes', () => {
       if (url.startsWith('https://oauth2.googleapis.com/token')) return Response.json({ access_token: 'at' });
       if (url.includes('/messages/send')) return Response.json({ id: 'sent1', threadId: 't1' });
       if (url.includes('/messages?')) return Response.json({ messages: [{ id: 'sent1' }] });
+      if (url.includes('/messages/sent1?')) return Response.json({id:'sent1',threadId:'t1',labelIds:['SENT'],payload:{headers:[{name:'Message-ID',value:'<m1@waldo-send>'}]}});
       return new Response('{}', { status: 404 });
     }) as typeof fetch;
     const client = googleClient(app, { refresh_token: 'rt' }, f);
@@ -235,7 +276,7 @@ describe('gmail send rail bytes', () => {
     expect(await client.sendRaw(raw, 't1')).toEqual({ message_id: 'sent1', thread_id: 't1' });
     const sendCall = calls.find((c) => c.url.includes('/messages/send'))!;
     expect(JSON.parse(String(sendCall.init!.body))).toEqual({ raw: 'xJ7', threadId: 't1' });
-    expect(await client.findSentByMessageId('<m1@waldo-send>')).toBe(true);
+    expect(await client.findSentByMessageId('<m1@waldo-send>', 't1')).toEqual({ message_id: 'sent1', thread_id:'t1', rfc822_message_id:'<m1@waldo-send>', label_ids:['SENT'] });
     // Regression: the approved bytes are base64url MIME (google 400 'Base64 decoding failed'
     // when unencoded MIME text crosses messages/send). The tool binds exactly these bytes.
     const wire = b64url(new TextEncoder().encode(buildMime({ to: ['a@x.test'], subject: 'Hi', body: 'b', messageId: '<m2@waldo-send>' })));
@@ -340,20 +381,20 @@ describe('gmail search + thread read (A1)', () => {
     expect(listUrl).toContain(`before:${Math.floor(Date.parse('2026-09-30T00:00:00Z') / 1000)}`);
   });
 
-  it('readThread decodes the text/plain body, falls back to the snippet, and caps at 4000 chars', async () => {
+  it('readThread decodes the text/plain body, falls back to the snippet, and caps at 32,000 chars', async () => {
     const client = googleClient(app, { refresh_token: 'rt' }, mailFetcher([]));
     const messages = await client.readThread('t1', 10);
     expect(messages).toHaveLength(2);
     expect(messages[0]!.body).toBe('Thursday works, 7pm.');
     expect(messages[0]!.from).toBe('sam@example.com');
-    const big = 'x'.repeat(5000);
+    const big = 'x'.repeat(33000);
     const fetcher = (async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.startsWith('https://oauth2.googleapis.com/token')) return Response.json({ access_token: 'at' });
       return Response.json({ messages: [{ id: 'm1', internalDate: '1759140000000', payload: { mimeType: 'text/plain', headers: [], body: { data: b64(big) } } }] });
     }) as typeof fetch;
     const [message] = await googleClient(app, { refresh_token: 'rt' }, fetcher).readThread('t1', 10);
-    expect(message!.body).toHaveLength(4000);
+    expect(message!.body).toHaveLength(32000);
   });
 
   it('read_thread quarantines a body carrying an OTP - the raw code never reaches the model', async () => {
@@ -365,7 +406,7 @@ describe('gmail search + thread read (A1)', () => {
     expect(messages[0]!.body).toBe('Thursday works, 7pm.');
     expect(messages[1]!.quarantined).toEqual(['otp']);
     expect(messages[1]!.body).toContain('[quarantined: otp artifact');
-    expect(messages[1]!.subject).toContain('[quarantined: otp artifact');
+    expect(messages[1]!.subject).toBe('Sign in');
     expect(JSON.stringify(messages)).not.toContain('123456');
   });
 
@@ -405,6 +446,67 @@ describe('gmail search + thread read (A1)', () => {
       const result = await handlers.find((h) => h.name === name)!.handle(args as never);
       expect(result).toMatchObject({ ok: false, code: 'auth_failed', source_taint: 'external', connect: { status: 'auth_required', service: 'google', reason: 'not_connected', feature: 'mail' } });
       expect(JSON.stringify(result)).not.toContain('http');
+    }
+  });
+});
+describe('Gmail provider pages',()=>{
+ it('preserves opaque cursor and estimate, fetches metadata, and encodes bounded q',async()=>{
+  const urls:string[]=[];
+  const fetcher=(async(input:RequestInfo|URL)=>{const url=String(input);urls.push(url);
+   if(url.includes('oauth2.googleapis.com'))return Response.json({access_token:'unit-token'});
+   if(url.includes('/messages?'))return Response.json({messages:[{id:'m1'}],nextPageToken:'next+/=',resultSizeEstimate:9});
+   return Response.json({threadId:'t1',snippet:'Notice',internalDate:'1790726401000',payload:{headers:[{name:'From',value:'notice@example.invalid'},{name:'Subject',value:'Notice'}]}});
+  }) as typeof fetch;
+  const page=await googleClient(app,{refresh_token:'unit-refresh'},fetcher).mailPage('in:inbox after:1790726400 before:1790812800',20,'first+/=');
+  const request=new URL(urls.find(u=>u.includes('/messages?'))!);expect(request.searchParams.get('pageToken')).toBe('first+/=');expect(request.searchParams.get('q')).toContain('before:1790812800');
+  expect(page).toMatchObject({next_page_token:'next+/=',result_size_estimate:9,messages:[{id:'m1',thread_id:'t1',from:'notice@example.invalid'}]});
+ });
+ it('rejects malformed page metadata rather than silently claiming last page',async()=>{
+  for(const bad of [{nextPageToken:0},{nextPageToken:''},{resultSizeEstimate:-1},{messages:[{id:''}]}]){
+   const fetcher=(async(input:RequestInfo|URL)=>String(input).includes('oauth2.googleapis.com')?Response.json({access_token:'unit-token'}):Response.json(bad)) as typeof fetch;
+   await expect(googleClient(app,{refresh_token:'unit-refresh'},fetcher).mailPage('in:inbox',10)).rejects.toThrow('invalid Gmail page response');
+  }
+ });
+});
+it('rejects array provider page instead of an empty complete query',async()=>{
+ const fetcher=(async(input:RequestInfo|URL)=>String(input).includes('oauth2.googleapis.com')?Response.json({access_token:'unit-token'}):Response.json([])) as typeof fetch;
+ await expect(googleClient(app,{refresh_token:'unit-refresh'},fetcher).mailPage('in:inbox',10)).rejects.toThrow('invalid Gmail page response');
+});
+
+
+describe('Calendar mutation notification compatibility', () => {
+  it.each([
+    ['create', undefined], ['create', 'operation-marker'],
+    ['move', undefined], ['move', 'operation-marker'],
+    ['cancel', undefined], ['cancel', 'operation-marker'],
+  ] as const)('%s with marker=%s preserves provider notification defaults and version fences', async (action, marker) => {
+    const calls: { url: URL; init: RequestInit }[] = [];
+    const start = '2026-10-11T10:00:00Z', end = '2026-10-11T11:00:00Z';
+    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'oauth2.googleapis.com') return Response.json({ access_token: 'synthetic' });
+      calls.push({ url, init: init! });
+      if (init?.method === 'DELETE') return new Response(null, { status: 204 });
+      return Response.json({ id: 'stable-event', summary: 'Synthetic meeting', start: { dateTime: start }, end: { dateTime: end }, etag: 'v2' });
+    }) as typeof fetch;
+    const client = googleClient(app, { refresh_token: 'synthetic' }, fetcher);
+    if (action === 'create') await client.createEvent({ id: 'stable-event', title: 'Synthetic meeting', start, end, operationMarker: marker });
+    else if (action === 'move') await client.moveEvent('stable-event', start, end, 'v1', marker);
+    else await client.cancelEvent('stable-event', 'v1', marker);
+    expect(calls).toHaveLength(1);
+    const { url, init } = calls[0]!;
+    expect(url.searchParams.has('sendUpdates')).toBe(false);
+    expect(url.searchParams.has('sendNotifications')).toBe(false);
+    expect(url.pathname).toBe(`/calendar/v3/calendars/primary/events${action === 'create' ? '' : '/stable-event'}`);
+    expect(init.method).toBe(action === 'create' ? 'POST' : action === 'cancel' && !marker ? 'DELETE' : 'PATCH');
+    expect(new Headers(init.headers).get('if-match')).toBe(action === 'create' ? null : 'v1');
+    if (init.method === 'DELETE') expect(init.body).toBeUndefined();
+    else {
+      const body = JSON.parse(String(init.body));
+      expect(body.extendedProperties?.private?.waldoOperation).toBe(marker);
+      if (action === 'create') expect(body.id).toBe('stable-event');
+      if (action === 'cancel') expect(body).toEqual({ status: 'cancelled', extendedProperties: { private: { waldoOperation: marker } } });
+      else expect(body).toMatchObject({ start: { dateTime: start, date: null }, end: { dateTime: end, date: null } });
     }
   });
 });

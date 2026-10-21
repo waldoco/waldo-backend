@@ -62,7 +62,7 @@ describe('artifact book (A5)', () => {
     expect(stale).toEqual({ status: 'conflict', current_revision: 1 });
     expect((await store.read(meta.id, 0, 8000))!.text).toBe(createArgs.body_markdown);
     const ok = await store.revise({ artifact_id: meta.id, expected_revision: 1, body_markdown: '# v2' }, 'tool:revise_artifact');
-    expect(ok).toMatchObject({ status: 'ok', meta: { revision: 2, r2_key: `artifacts/${meta.id}/r2` } });
+    expect(ok).toMatchObject({ status: 'ok', meta: { revision: 2, r2_key: expect.stringMatching(new RegExp(`^artifacts/${meta.id}/r2/`)) } });
     expect((await store.read(meta.id, 0, 8000))!.text).toBe('# v2');
     expect(store.byId(meta.id)!.byte_size).toBe(4);
   });
@@ -92,8 +92,24 @@ describe('artifact handlers (A5)', () => {
 
   it('create returns a taint-null mutation ack with the id and revision', async () => {
     const result = await byName('create_artifact').handle(createArgs as never);
-    expect(result).toMatchObject({ ok: true, data: { artifact_id: 'art:abc123', revision: 1 }, source_taint: null });
+    expect(result).toMatchObject({ ok: true, data: { artifact_id: 'art:abc123', revision: 1, delivery: { status: 'saved_internal', url: null, audience: 'unverified' } }, source_taint: null });
     expect(JSON.stringify(result)).not.toContain('Early flight');
+  });
+
+  it('keeps internal storage distinct from publication for create and revise', async () => {
+    const store = book();
+    const hs = artifactHandlers(store);
+    const create = hs.find(h => h.name === 'create_artifact')!;
+    const revise = hs.find(h => h.name === 'revise_artifact')!;
+    const created = await create.handle(createArgs as never);
+    const revised = await revise.handle({artifact_id:'art:abc123',expected_revision:1,body_markdown:'updated'} as never);
+    for (const result of [created,revised]) {
+      expect(result).toMatchObject({ok:true,data:{delivery:{status:'saved_internal',url:null,audience:'unverified'}}});
+      expect(JSON.stringify(result)).not.toContain('https://');
+    }
+    expect(create.description).toContain('Never build a URL');
+    expect(create.description).toContain('delivery is unavailable');
+    expect((await store.read('art:abc123',0,100))!.text).toBe('updated');
   });
 
   it('read stamps every result external and never leaks a body on the failure arm', async () => {
@@ -208,5 +224,19 @@ describe('R2 owner artifact bodies', () => {
       expect(() => r2ArtifactBodies(shared.binding, owner as string)).toThrow('Artifact owner scope is required');
     }
     expect(shared.calls).toEqual([]);
+  });
+
+  it('read_artifact: an evicted body is a typed body_unavailable failure, distinct from an unknown id', async () => {
+    const sql = fakeSql();
+    await artifactBook(sql as never, inMemoryArtifactBodies(), clock, () => 'abc123').create(createArgs, 'tool:create_artifact');
+    const lost = artifactHandlers(artifactBook(sql as never, inMemoryArtifactBodies(), clock, () => 'abc123'));
+    const read = lost.find((h) => h.name === 'read_artifact')!;
+    const evicted = await read.handle({ artifact_id: 'art:abc123', offset: 0, length: 100 } as never);
+    expect(evicted).toMatchObject({ ok: false, code: 'rejected', source_taint: 'external' });
+    expect((evicted as { error: string }).error).toMatch(/^body_unavailable:/);
+    expect((evicted as { error: string }).error).toContain('exists');
+    const unknown = await read.handle({ artifact_id: 'art:nope', offset: 0, length: 100 } as never);
+    expect(unknown).toMatchObject({ ok: false, code: 'not_found' });
+    expect((unknown as { error: string }).error).not.toMatch(/^body_unavailable/);
   });
 });

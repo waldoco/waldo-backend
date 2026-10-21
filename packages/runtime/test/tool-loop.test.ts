@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { buildSessionState, getContextArgsSchema, sendMessageArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type LLMTool, type LLMToolTurn } from '@waldo/contracts';
-import { capToolOutput, NO_PROGRESS_LIMIT, runToolLoop, TOOL_OUTPUT_LIMIT, WARN_WINDOW_ROUNDS } from '../src/conversation/tool-loop';
+import { buildSessionState, getContextArgsSchema, sendMessageArgsSchema, TOOL_ERRORS, TOOL_PERMISSIONS, triggerTypeSchema, type LLMTool, type LLMToolTurn } from '@waldo/contracts';
+import { capToolOutput, runToolLoop, TOOL_OUTPUT_LIMIT, WARN_WINDOW_ROUNDS } from '../src/conversation/tool-loop';
 import { googleHandlers } from '../src/tools/live/google';
-import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
+import { resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
 import { getContextHandler } from '../src/tools/live/get-context';
 import { webSearchHandler } from '../src/tools/live/web-search';
 
@@ -11,7 +11,7 @@ const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' });
 const ctx = {
   authenticatedUserId: 'owner-1', trigger: 'user_message' as const, canaryTokens: CANARIES,
   sourceTaint: null, toolArgSourceTaint: null,
-  sanitise: adapters.safety.sanitise, medicalGate: adapters.safety.medicalGate,
+  sanitise: adapters.safety.sanitise,
   session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: 0 }),
 };
 const handlers = [getContextHandler({ timezone: 'Asia/Kolkata', now: () => new Date('2026-09-23T08:20:00Z') })];
@@ -47,11 +47,11 @@ describe('runToolLoop', () => {
     expect(JSON.parse(outputs[1]!)).toMatchObject({ ok: false });
   });
 
-  it('withdraws tools after three rounds in a row where every call failed', async () => {
+  it('keeps tools offered after failed rounds until the hard budget ends', async () => {
     const offered: boolean[] = [];
     let n = 0;
     const text = await runToolLoop({
-      handlers, ctx, maxSteps: 25,
+      handlers, ctx, maxSteps: 5,
       step: async (tools) => {
         offered.push(tools !== undefined);
         n += 1;
@@ -59,7 +59,7 @@ describe('runToolLoop', () => {
       },
     });
     expect(text).toBe('Could not do that.');
-    expect(offered).toEqual([true, true, true, false]);
+    expect(offered).toEqual([true, true, true, true, true, false]);
   });
 
   it('reports an unknown tool to the model instead of throwing', async () => {
@@ -69,7 +69,7 @@ describe('runToolLoop', () => {
       onTool: (event) => outputs.push(event.output),
       step: async (tools) => (tools ? { text: '', tool_calls: [{ call_id: 'x', name: 'launch_rocket', arguments: '{}' }] } : { text: 'ok' }),
     });
-    expect(JSON.parse(outputs[0]!)).toEqual({ ok: false, error: 'Unknown tool launch_rocket.' });
+    expect(JSON.parse(outputs[0]!)).toEqual({ ok: false, error: 'Unknown tool launch_rocket.', error_code: 'unknown_tool', fix: TOOL_ERRORS.unknown_tool.fix, retryable: false, code: 'invalid_args', reason: 'unknown_tool' });
   });
 
   it('caps an oversized tool result and says how much was cut', () => {
@@ -86,7 +86,7 @@ describe('external taint through the model boundary', () => {
     const seen: (readonly LLMToolTurn[])[] = [];
     const web = webSearchHandler('test-key', async () => Response.json({ web: { results: [{ title: 'T', url: 'https://x.test', description: 'D' }] } }));
     const text = await runToolLoop({
-      handlers: [...handlers, web], ctx, maxSteps: 4,
+      handlers: [...handlers, web], ctx, maxSteps: 10,
       step: async (_tools, turns) => {
         seen.push(turns);
         if (turns.length === 0) return { text: '', tool_calls: [{ call_id: 'c1', name: 'web_search', arguments: '{"query":"q"}' }] };
@@ -109,8 +109,8 @@ describe('reasoning passback', () => {
   it('threads response output items into the next round first turn', async () => {
     const seenTurns: Array<readonly unknown[]> = [];
     const text = await runToolLoop({
-      handlers: [],
-      ctx: {} as never,
+      handlers,
+      ctx,
       maxSteps: 3,
       step: async (_tools, turns) => {
         seenTurns.push(turns);
@@ -150,6 +150,45 @@ describe('runToolLoop connect intents', () => {
     expect(offered).toEqual(['google:not_connected:calendar']);
   });
 
+  it.each([
+    ['a delivered button', async (): Promise<boolean | string> => true, 'A connect button is in the chat'],
+    ['the host\'s own words', async (): Promise<boolean | string> => 'Connect it from settings.', 'Connect it from settings.'],
+    ['an offer that was not sent', async (): Promise<boolean | string> => false, 'No connect button was sent.'],
+    ['an offer that threw', async (): Promise<boolean | string> => { throw new Error('send failed'); }, 'No connect button was sent.'],
+  ] as const)('the model reads what the missing grant is, then what happened to the offer: %s', async (_case, onConnect, outcome) => {
+    const seen: string[] = [];
+    await runToolLoop({
+      handlers: [failing as never], ctx, maxSteps: 3,
+      onConnect,
+      step: async (tools, turns) => {
+        seen.push(JSON.stringify(turns ?? []));
+        return tools ? { text: '', tool_calls: [{ call_id: `c${seen.length}`, name: 'query_calendar', arguments: `{"limit":${seen.length}}` }] } : { text: 'done' };
+      },
+    });
+    const outputs = (JSON.parse(seen.at(-1)!) as { output: string }[]).map(turn => turn.output);
+    expect(outputs.length).toBeGreaterThan(1);
+    for (const output of outputs) {
+      expect(output.split('Google (calendar) is not connected.').length - 1).toBe(1);
+      expect(output.split(outcome).length - 1).toBe(1);
+      if (outcome !== 'A connect button is in the chat') expect(output).not.toContain('connect button is in the chat');
+    }
+  });
+
+  it('a repeated identical failing call does not hear the offer twice', async () => {
+    const seen: string[] = [];
+    await runToolLoop({
+      handlers: [failing as never], ctx, maxSteps: 3,
+      onConnect: async () => true,
+      step: async (tools, turns) => {
+        seen.push(JSON.stringify(turns ?? []));
+        return tools ? { text: '', tool_calls: [{ call_id: `c${seen.length}`, name: 'query_calendar', arguments: '{}' }] } : { text: 'done' };
+      },
+    });
+    const outputs = (JSON.parse(seen.at(-1)!) as { output: string }[]).map(turn => turn.output);
+    expect(outputs.length).toBeGreaterThan(1);
+    for (const output of outputs) expect(output.split('A connect button is in the chat').length - 1).toBe(1);
+  });
+
   it('a throwing offerConnect never breaks the turn', async () => {
     const text = await runToolLoop({
       handlers: [failing as never], ctx, maxSteps: 2,
@@ -171,7 +210,7 @@ describe('runToolLoop connect intents', () => {
   });
 });
 
-describe('warn-first budget notice and semantic no-progress', () => {
+describe('warn-first budget notice and distinct read identities', () => {
   const okFetcher = async (): Promise<Response> =>
     Response.json({ web: { results: [{ title: 'T', url: 'https://x.test', description: 'D' }] } });
 
@@ -190,13 +229,14 @@ describe('warn-first budget notice and semantic no-progress', () => {
     });
     expect(text).toBe('wrapped up.');
     expect(seenAt[1]![0]).not.toContain('[budget:');
-    expect(seenAt.some((turns) => turns.some((o) => o.includes('[budget: 4 tool rounds left this turn - start wrapping up')))).toBe(true);
-    expect(seenAt.some((turns) => turns.some((o) => o.includes('[budget: 2 tool rounds left this turn - wrap up and answer now')))).toBe(true);
+    expect(seenAt.some((turns) => turns.some((o) => o.includes('[budget: 3 tool rounds left')))).toBe(false);
+    expect(seenAt.some((turns) => turns.some((o) => o.includes('[budget: 2 tool rounds left this turn - finish the step you are on')))).toBe(true);
+    expect(seenAt.some((turns) => turns.some((o) => o.includes('[budget: 1 tool round left this turn')))).toBe(true);
     const lastDelivered = seenAt[seenAt.length - 1]!;
     expect(lastDelivered[lastDelivered.length - 1]).toContain('[budget: tool budget exhausted this turn');
   });
 
-  it('refuses a call whose stabilized (tool, args, result) triple repeats NO_PROGRESS_LIMIT times, pre-dispatch', async () => {
+  it('dispatches distinct cursor searches through the full hard budget', async () => {
     let fetched = 0;
     const volatileFetcher = async (): Promise<Response> => {
       fetched += 1;
@@ -214,13 +254,12 @@ describe('warn-first budget notice and semantic no-progress', () => {
       },
     });
     expect(text).toBe('stopped.');
-    expect(fetched).toBe(NO_PROGRESS_LIMIT);
-    expect(outputs[outputs.length - 1]).toContain('No progress');
+    expect(fetched).toBe(25);
+    expect(outputs.every((output) => !output.includes('no_progress'))).toBe(true);
   });
 
   it('never blocks distinct long natural-language queries that return identical empty results', async () => {
-    // Long pure-alphabetic words are ordinary search terms, not volatile tokens; stabilization
-    // must preserve them, so three different queries with the same empty outcome stay callable.
+    // Empty outcomes do not establish that distinct searches are useless.
     let fetched = 0;
     const web = webSearchHandler('test-key', async (): Promise<Response> => { fetched += 1; return Response.json({ web: { results: [] } }); });
     const queries = [
@@ -246,7 +285,7 @@ describe('warn-first budget notice and semantic no-progress', () => {
     expect(outputs.every((o) => !o.includes('No progress'))).toBe(true);
   });
 
-  it('does not flag calls whose small-integer args genuinely differ (pagination survives stabilization)', async () => {
+  it('dispatches distinct page searches', async () => {
     let fetched = 0;
     const web = webSearchHandler('test-key', async (): Promise<Response> => { fetched += 1; return okFetcher(); });
     let n = 0;
@@ -262,8 +301,8 @@ describe('warn-first budget notice and semantic no-progress', () => {
   });
 });
 
-describe('refusals never feed the failure streak', () => {
-  it('refusal-only rounds neither withdraw tools nor reset a genuine failure streak', async () => {
+describe('refusals preserve remaining tool availability', () => {
+  it('keeps tools available across refusal and failed rounds', async () => {
     let n = 0;
     const offered: boolean[] = [];
     const text = await runToolLoop({
@@ -272,9 +311,7 @@ describe('refusals never feed the failure streak', () => {
         offered.push(tools !== undefined);
         n += 1;
         if (!tools) return { text: 'closed.' };
-        // rounds 1-2: same identical call (2nd is refused); round 3: unknown tool (genuine
-        // failure); rounds 4-5: refusals again. If refusals fed the streak, tools would be
-        // withdrawn by round 4-5.
+        // Mix exact refusals with a failed tool call; resources remain available.
         if (n <= 2) return { text: '', tool_calls: [call] };
         if (n === 3) return { text: '', tool_calls: [{ call_id: 'x3', name: 'launch_rocket', arguments: '{"limit":1}' }] };
         if (n <= 6) return { text: '', tool_calls: [call] };
@@ -282,15 +319,13 @@ describe('refusals never feed the failure streak', () => {
       },
     });
     expect(text).toBe('closed.');
-    // Tools were still offered after two refusal rounds + one genuine failure + three more
-    // refusal rounds: the streak only reached 1, never FAILED_ROUNDS_LIMIT, so the loop never
-    // withdrew tools before the model chose to close.
+    // The model can close while the hard budget still has rounds available.
     expect(offered).toEqual([true, true, true, true, true, true, true]);
   });
 });
 
-describe('mutation-resets-streak (Hermes progress evidence)', () => {
-  it('a successful mutation clears no-progress tracking, so a repeated read is a new experiment', async () => {
+describe('mutation read epochs and replay protection', () => {
+  it('distinct read targets remain callable across a successful mutation', async () => {
     let searched = 0;
     const web = webSearchHandler('test-key', async (): Promise<Response> => {
       searched += 1;
@@ -319,10 +354,7 @@ describe('mutation-resets-streak (Hermes progress evidence)', () => {
       step: async (tools) => {
         n += 1;
         if (!tools) return { text: 'done.' };
-        // 3 searches differing only in a volatile cursor token: exact-dup never fires, but the
-        // stabilized triple repeats, so the pair is blocked after the 3rd result. Then a
-        // successful mutation lands - new state, new experiment - and the SAME search must
-        // dispatch again instead of refusing.
+        // Distinct cursors remain distinct before and after the state mutation.
         if (n <= 3) return { text: '', tool_calls: [{ call_id: `s${n}`, name: 'web_search', arguments: `{"query":"status cursor-token-${n}-abcdefgh"}` }] };
         if (n === 4) return { text: '', tool_calls: [{ call_id: 'm1', name: 'get_context', arguments: '{}' }] };
         if (n === 5) return { text: '', tool_calls: [{ call_id: 's4', name: 'web_search', arguments: '{"query":"status cursor-token-9-abcdefgh"}' }] };
@@ -444,7 +476,7 @@ describe('mutation-resets-streak (Hermes progress evidence)', () => {
     expect(outputs[1]).toContain('Same call already made this turn');
   });
 
-  it('without an intervening mutation the 4th repeat is refused (control)', async () => {
+  it('distinct cursor reads remain callable without a mutation', async () => {
     let searched = 0;
     const web = webSearchHandler('test-key', async (): Promise<Response> => {
       searched += 1;
@@ -460,8 +492,8 @@ describe('mutation-resets-streak (Hermes progress evidence)', () => {
         return tools && n <= 4 ? { text: '', tool_calls: [{ call_id: `s${n}`, name: 'web_search', arguments: `{"query":"status cursor-token-${n}-abcdefgh"}` }] } : { text: 'done.' };
       },
     });
-    expect(searched).toBe(3);
-    expect(outputs[outputs.length - 1]).toContain('No progress');
+    expect(searched).toBe(4);
+    expect(outputs.every((output) => !output.includes('no_progress'))).toBe(true);
   });
 });
 describe('turn taint accumulation (Codex #224 hold)', () => {
@@ -502,6 +534,39 @@ describe('turn taint accumulation (Codex #224 hold)', () => {
     // distinguishing evidence is hasApproval: true yet zero dispatches after the tainted read.
     expect(outputs[1]).toContain('"code":"forbidden"');
     expect(outputs[1]).toContain('approval_denied');
+  });
+
+  // A hosted search runs inside the model's own call, so its results arrive with the response, not as a tool result.
+  it('a privileged call in the same round as a hosted web search is halted by the taint gate', async () => {
+    let sent = 0;
+    const send = {
+      name: 'send_message' as const,
+      description: 'Queue a message.',
+      schema: sendMessageArgsSchema,
+      trigger_allowlist: triggerTypeSchema.options.filter((t) => TOOL_PERMISSIONS[t].includes('send_message')),
+      autonomy_gated: true,
+      handle: async () => { sent += 1; return { ok: true as const, data: { queued: true }, source_taint: null }; },
+    };
+    const taintCtx = { ...ctx, toolArgSourceTaint: null, hasApproval: () => true, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
+    const call = { call_id: 'm1', name: 'send_message', arguments: '{"channel":"telegram","content":"hi","idempotency_key":"' + 'd'.repeat(64) + '"}' };
+    const outputs: string[] = [];
+    let n = 0;
+    const text = await runToolLoop({
+      handlers: [send as never], ctx: taintCtx, maxSteps: 25,
+      onTool: (e) => outputs.push(e.output),
+      step: async (tools) => {
+        n += 1;
+        if (!tools || n > 1) return { text: 'done.' };
+        return { text: '', tool_calls: [call], output_items: [
+          { type: 'web_search_call', id: 'ws_1', status: 'completed', action: { type: 'search', query: 'quiet hotels near the venue' } },
+          { type: 'function_call', id: 'fc_1', ...call },
+        ] };
+      },
+    });
+    expect(text).toBe('done.');
+    expect(taintCtx.toolArgSourceTaint).toBe('external');
+    expect(sent).toBe(0);
+    expect(outputs[0]).toContain('approval_denied');
   });
 
   it('a privileged call before any external content still dispatches (control)', async () => {

@@ -1,5 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { errorCodeSchema, iso8601Schema } from './error';
+import { TOOL_ERRORS, errorCodeSchema, iso8601Schema, toolError, toolErrorCodeSchema, toolErrorSchema } from './error';
+
+describe('toolError', () => {
+  it('admits every adapter ErrorCode, so a tool result needs no translation', () => {
+    for (const code of errorCodeSchema.options) expect(toolErrorCodeSchema.options).toContain(code);
+  });
+
+  it('has one catalogue entry per code and produces a valid ToolError', () => {
+    expect(Object.keys(TOOL_ERRORS).sort()).toEqual([...toolErrorCodeSchema.options].sort());
+    for (const code of toolErrorCodeSchema.options) expect(toolErrorSchema.safeParse(toolError(code)).success, code).toBe(true);
+  });
+
+  it('overrides only the cause; the fix and retryability stay the catalogue\'s', () => {
+    expect(toolError('transient', 'provider timed out')).toEqual({ code: 'transient', cause: 'provider timed out', fix: TOOL_ERRORS.transient.fix, retryable: true });
+    expect(toolError('invalid_args').cause).toBe(TOOL_ERRORS.invalid_args.cause);
+  });
+});
 
 describe('errorCode', () => {
   it('is exactly the eight canonical codes, in order', () => {

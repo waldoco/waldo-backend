@@ -41,6 +41,80 @@ describe('model cost', () => {
 });
 
 describe('otlpTurnExporter', () => {
+  it('exports concurrent owners on roots and children without changing channel labels or forwarding baggage', async () => {
+    const first = capture(); const second = capture();
+    const identityA = { owner_id: '10000000-0000-0000-0000-00000000000a', owner_email: 'a@test.invalid' };
+    const identityB = { owner_id: '10000000-0000-0000-0000-00000000000b', owner_email: 'b@test.invalid' };
+    const logA = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: { authorization: 'fixture-auth' } }, { ...context, captureText: true }, first.send);
+    const logB = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, { ...context, captureText: true, userId: 'telegram:2', sessionId: 'telegram-dm:2' }, second.send);
+    await Promise.all([
+      logA({ trace: 'tg-101', hop: 'llm_reply', ms: 1, ok: true, ...identityA }),
+      logB({ trace: 'tg-102', hop: 'llm_reply', ms: 1, ok: true, ...identityB }),
+    ]);
+    await Promise.all([
+      logB({ trace: 'tg-102', hop: 'turn', ms: 2, ok: true, ...identityB }),
+      logA({ trace: 'tg-101', hop: 'turn', ms: 2, ok: true, ...identityA }),
+    ]);
+    await logA({ trace: 'tg-101', hop: 'memory', ms: 1, ok: true, ...identityA });
+    for (const [sink, identity, label] of [[first, identityA, '1'], [second, identityB, '2']] as const) {
+      for (const call of sink.calls) for (const span of call.body.resourceSpans[0].scopeSpans[0].spans) {
+        expect(attrs(span)).toMatchObject({
+          'langfuse.user.id': `telegram:${label}`, 'langfuse.session.id': `telegram-dm:${label}`,
+          'langfuse.trace.metadata.owner_id': identity.owner_id, 'langfuse.trace.metadata.owner_email': identity.owner_email,
+          'langfuse.observation.metadata.owner_id': identity.owner_id, 'langfuse.observation.metadata.owner_email': identity.owner_email,
+          'langfuse.trace.metadata.owner_attribution': 'canonical_owner_supplied',
+          'langfuse.trace.metadata.trace_key': label === '1' ? 'tg-101' : 'tg-102',
+        });
+      }
+      expect(Object.keys(sink.calls[0]!.headers)).not.toContain('baggage');
+      expect(Object.keys(sink.calls[0]!.headers)).not.toContain('x-waldo-owner-trace');
+    }
+    expect(JSON.stringify(first.calls)).not.toContain(identityB.owner_email);
+    expect(JSON.stringify(second.calls)).not.toContain(identityA.owner_email);
+  });
+
+  it('files a trace under the user id current when it is written, so hops buffered before the owner resolved carry it too', async () => {
+    const { send, spans } = capture();
+    let principal: string | undefined;
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, { ...context, userId: () => principal ?? 'telegram:1' }, send);
+    await log({ trace: 'tg-105', hop: 'pickup', ms: 1, ok: true });
+    principal = `prn_${'a'.repeat(32)}`;
+    await log({ trace: 'tg-105', hop: 'turn', ms: 2, ok: true });
+    expect(spans(0).map((span) => attrs(span)['langfuse.user.id'])).toEqual([principal, principal]);
+    await expect(otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, { ...context, userId: () => ' ' }, send)({ trace: 'tg-106', hop: 'turn', ms: 1, ok: true })).rejects.toThrow('otlp_context_invalid');
+  });
+
+  it('keeps owner_id but withholds the verified email when text capture is off', async () => {
+    const { send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send);
+    await log({ trace: 'tg-103', hop: 'turn', ms: 1, ok: true, owner_id: '10000000-0000-0000-0000-00000000000c', owner_email: 'c@test.invalid', owner_identity: 'verified' });
+    expect(attrs(spans(0)[0]!)).toMatchObject({
+      'langfuse.trace.metadata.owner_id': '10000000-0000-0000-0000-00000000000c', 'langfuse.trace.metadata.owner_email': 'unknown',
+    });
+    expect(JSON.stringify(spans(0))).not.toContain('c@test.invalid');
+  });
+
+  it('marks missing canonical identity unknown instead of deriving email from turn input', async () => {
+    const { send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send);
+    await log({ trace: 'tg-unknown', hop: 'turn', ms: 1, ok: true, text: { input: 'My email is guess@test.invalid; token=DO_NOT_EXPORT' } });
+    expect(attrs(spans(0)[0]!)).toMatchObject({
+      'langfuse.trace.metadata.owner_id': 'unknown', 'langfuse.trace.metadata.owner_email': 'unknown',
+      'langfuse.trace.metadata.owner_identity': 'unknown', 'langfuse.trace.metadata.owner_attribution': 'canonical_owner_not_supplied',
+    });
+    expect(JSON.stringify(spans(0))).not.toMatch(/guess@test.invalid|DO_NOT_EXPORT/);
+  });
+  it('keeps an exponent-shaped release stamp a string at every outbound identity field', async () => {
+    const { calls, send, spans } = capture();
+    const release = '66854e71';
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, { ...context, release }, send);
+    await log({ trace: 'synthetic-release-shape', hop: 'turn', ms: 1, ok: true });
+    const body = calls[0]!.body as Body & { resourceSpans: [{ resource: { attributes: Attr[] } }] };
+    expect(body.resourceSpans[0].resource.attributes.find(a => a.key === 'service.version')?.value).toEqual({ stringValue: release });
+    expect(attrs(spans(0)[0]!)).toMatchObject({ 'langfuse.release': release, 'langfuse.version': release });
+    expect(JSON.stringify(body)).toContain('"stringValue":"66854e71"');
+    expect(JSON.stringify(body)).not.toContain('6.6854e+75');
+  });
   it('labels mixed price coverage as a partial estimate instead of a complete zero-priced total', async () => {
     const { send, spans } = capture();
     const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send);
@@ -58,6 +132,20 @@ describe('otlpTurnExporter', () => {
     expect(attrs(known!)['langfuse.observation.metadata.cost_kind']).toBe('estimate');
     expect(attrs(known!)['langfuse.observation.metadata.price_source']).toBeDefined();
     expect(attrs(unknown!)['langfuse.observation.cost_details']).toBeUndefined();
+  });
+  it('counts hosted web search calls and their cost in the turn estimate, numbers only', async () => {
+    const { send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send);
+    const usage = { model: OPENAI_GPT_6_LUNA_MODEL, input: 100, cached: 10, output: 20 };
+    await log({ trace: 'tg-search', hop: 'llm_reply', ms: 1, ok: true, usage: { ...usage, web_searches: 2 } });
+    await log({ trace: 'tg-search', hop: 'llm_reply', ms: 1, ok: true, usage });
+    await log({ trace: 'tg-search', hop: 'turn', ms: 2, ok: true });
+    const [root, searched] = spans(0);
+    const tokens = modelCost(usage)!.total;
+    expect(attrs(root!)['langfuse.trace.metadata.hosted_web_search_calls']).toBe('2');
+    expect(Number(attrs(root!)['langfuse.trace.metadata.hosted_web_search_usd'])).toBeCloseTo(0.02, 8);
+    expect(Number(attrs(root!)['langfuse.trace.metadata.estimated_cost_usd'])).toBeCloseTo(2 * tokens + 0.02, 8);
+    expect(JSON.parse(String(attrs(searched!)['langfuse.observation.cost_details'])).web_search).toBeCloseTo(0.02, 12);
   });
   it('enforces the existing production privacy policy at serialization even if captureText is mis-set', async () => {
     const { calls, send } = capture();
@@ -177,7 +265,7 @@ describe('otlpTurnExporter', () => {
       'langfuse.trace.name': 'telegram.turn', 'langfuse.user.id': 'telegram:1', 'langfuse.session.id': 'telegram-dm:1',
       'langfuse.environment': 'staging', 'langfuse.release': 'abc1234',
       'langfuse.trace.tags': ['channel:telegram', 'feature:reactions', 'feature:reply'],
-      'langfuse.trace.metadata.schema_version': '4', 'langfuse.trace.metadata.trace_key': 'tg-4', 'langfuse.trace.metadata.outcome': 'answered',
+      'langfuse.trace.metadata.schema_version': '9', 'langfuse.trace.metadata.trace_key': 'tg-4', 'langfuse.trace.metadata.outcome': 'answered',
     });
     expect(attrs(receipt!)).toMatchObject({ 'langfuse.observation.metadata.hop': 'receipt', 'langfuse.observation.metadata.feature': 'reactions', 'langfuse.observation.type': 'tool' });
     expect(hopFeature('brand_new_hop')).toBe('other');
@@ -210,16 +298,46 @@ describe('otlpTurnExporter', () => {
     expect(attrs(off.spans(0)[0]!)['langfuse.trace.input']).toBeUndefined();
   });
 
+  it('exports what fills a model call\'s context as numeric metadata on its generation', async () => {
+    const { send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
+    await log({ trace: 'tg-ctx', hop: 'llm_reply', ms: 5, ok: true,
+      usage: { model: OPENAI_GPT_6_LUNA_MODEL, input: 100, output: 10, cached: 0 },
+      shape: { system_bytes: 40, request_bytes: 90, context: {
+        tools_count: 3, tools_bytes: 1200, tool_turns_bytes: 0, history_messages: 2, history_bytes: 30, current_bytes: 12, attachments: 0,
+        system_sections: { behavior: 20, clock: 8, memory: 8 } } } });
+    await log({ trace: 'tg-ctx', hop: 'turn', ms: 10, ok: true });
+    const generation = spans(0).find((span) => span.name === 'llm_reply')!;
+    expect(attrs(generation)).toMatchObject({
+      'langfuse.observation.metadata.context_system_bytes': '40',
+      'langfuse.observation.metadata.context_tools_count': '3',
+      'langfuse.observation.metadata.context_tools_bytes': '1200',
+      'langfuse.observation.metadata.context_history_messages': '2',
+      'langfuse.observation.metadata.context_history_bytes': '30',
+      'langfuse.observation.metadata.context_current_bytes': '12',
+      'langfuse.observation.metadata.context_system_behavior_bytes': '20',
+      'langfuse.observation.metadata.context_system_memory_bytes': '8',
+    });
+  });
+
+  it('keeps every hop of one long turn that exceeds the outstanding-export budget', async () => {
+    const { calls, send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
+    for (let i = 0; i < 120; i++) await log({ trace: 'tg-long', hop: 'tool', ms: 3, ok: true });
+    await log({ trace: 'tg-long', hop: 'turn', ms: 10, ok: true });
+    expect(spans(calls.length - 1)).toHaveLength(121);
+  });
+
   it('reports overflow, retains new work and bounds abandoned traces', async () => {
     const { calls, send, spans } = capture();
     const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
-    for (let i = 0; i < 50; i++) await log({ trace: `tg-${i}`, hop: 'memory', ms: 3, ok: true });
-    await expect(log({ trace: 'tg-50', hop: 'memory', ms: 3, ok: true })).rejects.toThrow('otlp_buffer_evicted');
+    for (let i = 0; i < 1000; i++) await log({ trace: `tg-${i}`, hop: 'memory', ms: 3, ok: true });
+    await expect(log({ trace: 'tg-1000', hop: 'memory', ms: 3, ok: true })).rejects.toThrow('otlp_buffer_evicted');
     await log({ trace: 'tg-0', hop: 'turn', ms: 10, ok: true });
     expect(spans(calls.length - 1)).toHaveLength(1);
-    // tg-50 was retained even though its admission reported the eviction.
+    // tg-1000 was retained even though its admission reported the eviction.
 
-    await log({ trace: 'tg-50', hop: 'turn', ms: 10, ok: true });
+    await log({ trace: 'tg-1000', hop: 'turn', ms: 10, ok: true });
     expect(spans(calls.length - 1)).toHaveLength(2);
   });
 
@@ -234,5 +352,53 @@ describe('otlpTurnExporter', () => {
     expect(memory.parentSpanId).toBe(root.spanId);
     expect(memory.status).toEqual({ code: 2, message: 'failed' });
     expect(attrs(memory)['langfuse.trace.tags']).toEqual(['channel:telegram', 'feature:memory']);
+  });
+
+  it('exports the v9 turn fields as numbers and enums on the root and the generation, never as text', async () => {
+    const { send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
+    const shape = { system_bytes: 40, request_bytes: 90, context: { tools_count: 12, tools_bytes: 8000, tools_tokens_est: 2000, tool_turns_bytes: 0, history_messages: 2, history_bytes: 30, current_bytes: 12, attachments: 0 } };
+    await log({ trace: 'tg-v9', hop: 'llm_reply', ms: 5, ok: true, usage: { model: OPENAI_GPT_6_LUNA_MODEL, input: 1000, output: 10, cached: 750 }, shape, provider: 'openai', fallback_fired: false, ttft_ms: 310, parallel_batches: 1 });
+    await log({ trace: 'tg-v9', hop: 'tool_search_mail', ms: 50, ok: true, rung: 'connector' });
+    await log({ trace: 'tg-v9', hop: 'tool_draft_email', ms: 5, ok: false, error: 'provider said PRIVATE_CANARY', error_code: 'rate_limited', rung: 'email', blocked_reason: 'approval_required' });
+    await log({ trace: 'tg-v9', hop: 'llm_reply', ms: 5, ok: true, usage: { model: OPENAI_GPT_6_LUNA_MODEL, input: 1000, output: 10, cached: 250 }, shape, provider: 'anthropic', fallback_fired: true, ttft_ms: 900, parallel_batches: 1 });
+    await log({ trace: 'tg-v9', hop: 'turn', ms: 100, ok: true, outcome: 'answered', job_id: 'job_01', job_profile: 'reader', sandbox_ms: 0 });
+    const [root, first, searched, drafted] = spans(0);
+    expect(attrs(root!)).toMatchObject({
+      'langfuse.trace.metadata.schema_version': '9',
+      'langfuse.trace.metadata.outcome': 'answered',
+      'langfuse.trace.metadata.tools_offered': '12', 'langfuse.trace.metadata.tools_bytes': '8000', 'langfuse.trace.metadata.tools_tokens_est': '2000',
+      'langfuse.trace.metadata.tools_called': '2', 'langfuse.trace.metadata.tools_failed': '1', 'langfuse.trace.metadata.tools_called_names': ['draft_email', 'search_mail'],
+      'langfuse.trace.metadata.parallel_batches': '2',
+      'langfuse.trace.metadata.cached_share': '0.5000',
+      'langfuse.trace.metadata.ttft_ms': '310',
+      'langfuse.trace.metadata.provider': 'mixed', 'langfuse.trace.metadata.fallback_fired': 'true',
+      'langfuse.trace.metadata.rungs': ['connector', 'email'], 'langfuse.trace.metadata.blocked_reason': 'approval_required',
+      'langfuse.trace.metadata.error_code': 'rate_limited',
+      'langfuse.trace.metadata.job_id': 'job_01', 'langfuse.trace.metadata.job_profile': 'reader',
+      'langfuse.trace.metadata.sandbox_ms': '0',
+    });
+    expect(attrs(root!)['langfuse.trace.metadata.browser_ms']).toBeUndefined();
+    expect(attrs(first!)).toMatchObject({
+      'langfuse.observation.metadata.provider': 'openai', 'langfuse.observation.metadata.fallback_fired': 'false',
+      'langfuse.observation.metadata.ttft_ms': '310', 'langfuse.observation.metadata.cached_share': '0.7500',
+      'langfuse.observation.metadata.context_tools_tokens_est': '2000',
+    });
+    expect(attrs(searched!)['langfuse.observation.metadata.rung']).toBe('connector');
+    expect(attrs(drafted!)).toMatchObject({ 'langfuse.observation.metadata.rung': 'email', 'langfuse.observation.metadata.blocked_reason': 'approval_required', 'langfuse.observation.metadata.error_code': 'rate_limited' });
+    expect(JSON.stringify(spans(0))).not.toContain('PRIVATE_CANARY');
+  });
+
+  it('derives the outcome class when the root carries none and leaves absent v9 fields out', async () => {
+    const { send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
+    await log({ trace: 'tg-v9-plain', hop: 'turn', ms: 10, ok: false });
+    const root = attrs(spans(0)[0]!);
+    expect(root['langfuse.trace.metadata.outcome']).toBe('failed');
+    expect(root['langfuse.trace.metadata.tools_called']).toBe('0');
+    expect(root['langfuse.trace.metadata.parallel_batches']).toBe('0');
+    for (const key of ['cached_share', 'ttft_ms', 'provider', 'fallback_fired', 'rungs', 'blocked_reason', 'error_code', 'job_id', 'job_profile', 'browser_ms', 'sandbox_ms', 'tools_offered']) {
+      expect(root[`langfuse.trace.metadata.${key}`]).toBeUndefined();
+    }
   });
 });

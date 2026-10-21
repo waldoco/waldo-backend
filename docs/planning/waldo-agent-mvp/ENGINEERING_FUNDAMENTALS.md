@@ -1,5 +1,13 @@
 # Engineering fundamentals (standing owner directive, 2026-09-24)
 
+### Incomplete forget recovery and request retention
+
+- [ ] Retry one owner-local incomplete topic per memory record from durable custody. Retained forget commands remain inert quoted sources and require exact reviewed instruction spans; never exempt a row by a model label or erase only its bare marker. Include every unsaved main/steered request and shared retention projection in both supplied and fresh coverage snapshots, and reject settlement while any projection still contains the topic. Preserve coverage suppliers through episode-index wrappers. Prove restart, partial/mismatched selection, interruption and steering through the actual registered two-argument owner DO, with unchanged unrelated claim provenance and honest host receipts.
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| A retained forget command kept topic coverage incomplete forever; a successful scrub could also settle before an unsaved request reintroduced the topic; the episode wrapper omitted current conversation coverage | memory-forget-do-provider.test.ts authenticated queue/alarm remember → interrupted forget → restart → ordinary retry; mixed request, mismatched/partial coverage and concurrent steering controls | Existing exact ASCII clause proof, owner-local custody and blanket recall hold remain intact; model clause quality, semantic associations and private canonical ordinary retry are separate limits |
+
 The owner wants senior product-engineer rigor on every slice, so a bug class shows up in our tests before it shows up in his hands. This file is the checklist. It applies at build time and at review time.
 
 ## How it is applied
@@ -13,11 +21,26 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 
 ## Checklist
 
+- [ ] Admission caps and historical ledger formats are separate: reject test ceilings above the approved $10 without invalidating v1 $20 records, dropping actual lower retained ceilings, stranding already-funded exact-session cleanup, or mutating prior charges/counters during reads or denials.
+
+- [ ] Adapter-normalized owner messages pass the actual shared parser, including authenticated sender fields; direct command and mocked-turn success cannot establish ordinary text ingress.
+- [ ] A post-issue final-send failure reaches the channel admission uncertainty path, never an unconditional retry notice or answered receipt. Cover the actual DO/listener boundary, retained message dedup and no responder replay.
+- [ ] Transport deadlines race response-body parsing as well as fetch even if the body ignores abort; no late parsing may turn timeout into acknowledged delivery.
+
+- [ ] Topic forgetting selects bounded exact source clauses before marker destruction; mixed-topic facts survive, fresh-source changes keep coverage incomplete, and literal retry cannot settle unproved coverage
+- [ ] Canonical forget-only cleanup is owner-bound and never admits legacy claim writes; incomplete recall preserves current input, live tools, security materials and ACL limits
+
+- [ ] Scheduled meeting decisions stay transient until a current source and verified delivery justify publication; reject stale decision caches and do not treat unsent/no-op JSON as Waldo conversation or nightly evidence
+- [ ] Preserve curated owner skill revocation checks on every physical retry while transient background decisions neither load nor inherit earlier selected/revoked owner procedures
+- [ ] Forget source-derived prep metadata as well as payload text; hash dedup/cooldown keys and cancel metadata-only unsent matches
+- [ ] Evaluate finite expiry before quiet deferral and clamp held wakes to expiry; pass one trusted owner timezone through every daily counter read/write without silently rebucketing legacy aggregates
+
 ### Tokens, auth and sessions
 - A one-time token is spent only by a deliberate user action (a POST from our own page), never by a GET. Link previews, scanners and prefetchers issue GETs.
 - Every URL we send in chat has previews turned off unless the preview is the point.
 - Tokens have an expiry, a single use, and are compared in full. Minting a new one invalidates the old one on purpose, and the tests say so.
 - Cookies: HttpOnly, Secure, a narrow Path, and a SameSite value that works for the actual navigation (Strict cookies are dropped on cross-site redirects).
+- Private download sign-in preserves only a canonical read-only file/revision target across expiry, OTP retry and edit. Resume through an explicit same-origin link with unchanged owner/session checks; test malicious targets, account switches, terminal history and absence of binary fetches.
 - Every state-changing request checks CSRF and the owner identity. Callback data from buttons is checked against the owner before it acts.
 - Secrets never reach the repo, chat, logs or traces.
 
@@ -27,6 +50,8 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - A refusal precedes any one-use consumption: validate first, then spend the invite, token or code. An error branch re-rendering a form puts the error in the note, never in a data field.
 
 ### Idempotency and retries
+- Multi-part channel finals commit attempting evidence before every physical part, persist ACKs outside transport catches, and quarantine uncertain restart state without resending acknowledged or ambiguous parts. Cover first/final ACK persistence faults and middle-part response loss in a three-part final.
+- Sign-in retries retain escaped email/contact/invite details only in form responses, never OTP values in restored pages or storage. Test send refusals, edit-before-resend, repeated submits, history restoration and explicit stop-waiting recovery; interrupted requests may already have completed.
 - Every webhook, callback, scheduled fire and migration can run twice without a second effect. Store the offset or the key before or atomically with the effect.
 - Every button press is safe when pressed twice or late ("Already handled", "expired").
 - Retries have a bound and a backoff. A failed step logs and leaves state that the next run can resume.
@@ -34,9 +59,11 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - An OAuth callback settles its attempt once. The state is a single-use nonce with its PKCE verifier stored server-side; a reloaded callback replays the settled outcome and never re-exchanges the single-use code. Every outcome renders a page; none throws.
 
 ### Concurrency and ordering
+- Workspace tool invocations carry their captured owner-run scope through mapping and body awaits. Reserve and publish metadata inside that scope’s synchronous commit fence; closure before reservation leaves nothing, while closure after body admission retains pending custody/orphan bytes without a ready revision. Test direct metadata closure and rollback as well as mapping/body interruption through the default owner constructor, actual registered tool dispatcher and authenticated inbox; await losing handler continuations after /stop.
 - Writes that belong to one turn settle before the next turn reads them.
 - Anything that reads and then writes shared state runs inside the DO's serial queue or one transaction.
 - External writes use a version check (etag / If-Match) so we never overwrite a change the owner made meanwhile.
+- Calendar Undo retains the applied write response etag across desk recreation, compares a fresh read, and uses that exact version for conditional PATCH/DELETE. Test unchanged create/move, later edits, read/write races, missing/legacy versions, repeated callbacks and provider failures; never promote a newer owner version into Undo permission.
 
 ### Time
 - All user-facing times are in the owner's timezone. Tests cover midnight crossings, quiet hours across midnight and DST-free zones like IST.
@@ -45,6 +72,11 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - A snapshot or attestation timestamp used as a provenance bound is the truthful as-of time of the requesting turn. A frozen fixture time silently poisons every later real-time artifact; replay two sequential turns with a persisted time-stamped artifact to catch it.
 
 ### Data and migrations
+- Canonical-history static checks count only executable literal array entries, never SQL comments or quoted lookalike declarations; line/block/nested comments, malformed arrays and actual verifier rejection have adversarial tests. The database assertion remains the final execution gate.
+- Forget inventories distinguish message text from personal-derived authority metadata. A no-text hash/ID row is not automatically non-personal or eligible for a content-forget exemption; unresolved retention stays KNOWN_GAP without erasing essential routing authority.
+- Owner correction evidence recognizes matched straight and typographic double quotes; require every substantive quoted span to ground in owner text and retain shared/agent rejection.
+- Capped ledger summaries are display data with provenance on their outer entry; redact exact and JSON-escaped text without applying typed tool-protocol validation to an intentionally truncated display.
+- Owner forget suppresses known exact forgotten data before the current provider call, including already-loaded history, replacement projections, pending/captured tool text, ephemeral offload caches and cached publication replay. Partial cleanup stays pending; unsafe or over-budget transient context blocks provider and replay without changing trusted safeguards. Test normal DO, steering, eviction and dirty-store recovery.
 - Every migration takes a backup first, is idempotent, and leaves the old data in place until a later cleanup.
 - Schema changes on existing Durable Object storage are additive (new table, `ADD COLUMN`) and tolerate the column already existing.
 - Invariants are enforced in the database where possible (primary keys, CHECK, UNIQUE), not only in code.
@@ -76,11 +108,15 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - Signed or secret-bearing URLs never pass through model-visible text. They travel in structured channels only (Telegram URL buttons, direct sends). Tool results must not contain them.
 - Verification artifacts (OTP codes, password-reset and magic-link URLs) are quarantined deterministically at communication ingress (gmail read, whatsapp inbound) before model context, so persistence and traces never carry them; the item stays owner-inspectable in the source app (E1, src/security/artifact-hygiene.ts).
 - An owner Durable Object never borrows the deploy owner's Telegram identity; when Telegram is unlinked, sends drop (logged) instead of rerouting.
+- Signup completion has its own attempt bucket (OTP send/contact saves cannot exhaust it), and console grant fetch/body decoding is time-bounded.
+- Signup completion retries keep verified progress across uncertain admission or session/grant failures, resolve the same canonical owner without replaying OTP, and never turn optional contact into phone proof.
 - Signup self-provisions: one owner per auth user and per email (unique guards, conflict-safe create), settings in the same transaction, never admin, phone stored unverified until the WhatsApp pairing proves it (#156).
 - The rule covers every path that can mint the link, not only the connect tool: tool failure branches (not connected, missing scope) and prompts built for scheduled cards too.
 - A percent sequence the strict decoder rejects is plain text, not a pending decode layer: scan it raw, never deny the payload for it. Fail-closed stays for encodings that DO decode (nested/base64/oversize) - those are real obfuscation (#152).
 
 ### Observability
+- Redacted provider failures must retain a closed operational diagnosis when supplied as structured Google RPC ErrorInfo: status, known reason and exact service only. Unknown/free-text errors remain unknown; never retain provider messages, file metadata, project/token fields or arbitrary URLs to make debugging easier.
+- Non-retaining connector reads must reject unsupported read-marked requests before the effect ledger. Provider error content is external data: response errors, health telemetry and logs use closed codes, never opaque provider messages; signed-read repeats are independent observations, not durable result replay. Cover private error canaries, current owner/connection/scopes, and zero ledger writes.
 - Before enabling automatic invocation logs or traces, prove with synthetic canaries that every persisted request URL excludes one-time tickets, OAuth codes/state and other credentials. Query redaction does not protect a secret in a URL path; custom hop logs remain available when invocation logs are disabled (#205).
 - A fallback that keeps the user surface green (e.g. single-owner routing) masks a broken integration; verify the integration path directly (edge logs, probes), not the fallback.
 - Every hop logs trace id, duration, ok/failed and a short detail. The E2E checklist names the hops that prove each step.
@@ -104,10 +140,19 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - A property test with async runtime work per run silently rides vitest's 5s default timeout; a contended CI runner crosses it while the same file finishes in seconds in-lane. Give every async runtime property an explicit timeout.
 - An env var the code reads but wrangler never sets fails silently to its fallback forever. Every env read with a fallback needs a guard that the var is actually pinned in every deployable environment, and environment-identity vars must differ per environment (staging traces must never land as production).
 
+- Worker ticket-console forwarding overwrites caller routing headers with the directory-resolved owner before any DO state is touched; an invalid session cannot plant an owner identity.
+- Console entry changes preserve ticket redemption, JSON clients and notice-bearing action receipts; shell HEAD authenticates through a GET read and unauthenticated navigation reaches sign-in without exposing assets.
+
 ## Bug log
 
 | Date | Bug | Class | Test added | Checklist line |
 |---|---|---|---|---|
+| 2026-10-07 | WhatsApp normalized ordinary text omitted required is_bot:false and silently dropped before the shared listener; direct /stop and mocked turn tests masked it | Ingress adapter integration | whatsapp-ingress.test.ts actual parser acceptance and whatsapp-owner-do-failure-visible.test.ts actual DO/listener path | Normalized messages pass the actual parser, not just direct commands |
+| 2026-10-07 | WhatsApp uncertain final send attempted retry wording and resolved failed, bypassing the outer check-first notice; JSON body could remain hung after abort | Delivery uncertainty / deadlines, pre-existing | telegram-listener.test.ts final-send RED; whatsapp-owner-do-failure-visible.test.ts one check-first notice plus retained wamid/no responder replay; whatsapp-presentation.test.ts stalled JSON RED | Post-issue failure reaches admission uncertainty, body parsing races the same deadline |
+| 2026-10-07 | Proposed diagnostic helper disagreed with admitted defaults and exempt tools; owner-turn refusal described held mail as absent when readiness denied it | Diagnostic correctness | task-source-missing.test.ts new-API default/exception/connector/workspace coverage; sealed owner-do-ingress-isolation.test.ts pending and held-mail narrowing wording RED, settled missing-mail and unready default-read controls | Diagnostics follow unchanged admission, distinguish unsettled scope from absent membership, and never imply ordinary task text approves a pending decision |
+| 2026-10-05 | Calendar Undo discarded applied etags and overwrote/deleted later owner edits; a delayed duplicate error could downgrade confirmed Undo | Concurrency | approvals.test.ts actual worker desk create/move preservation RED, conditional-race/versionless/repeated/provider-failure matrix and late duplicate uncertainty RED | Calendar Undo retains the applied response etag and never promotes a newer version into permission; confirmed Undo receipts survive duplicate errors |
+| 2026-10-01 | Dashboard shell returned plain-text 401 before React could expose login recovery; HEAD used a method the overview read rejects | Routing / authentication | dashboard-static.test.ts and dashboard-static-worker.test.ts: fixed signin redirect, root/alias/HEAD, legacy and ticket/JSON/receipt exclusions | Console entry preserves protected routes and receipts; HEAD uses GET auth |
+| 2026-10-03 | Existing conversational publication cached stale meeting decisions and indexed undelivered JSON; payload-only forgetting left source codes in metadata; quiet deferral preceded expiry | Calendar preparation / final delivery | Default-DO cancelled-history, changed-source retry, metadata-only forget, quiet-expiry and owner-local delivery regressions | Transient structured decisions, hashed derived keys, literal metadata cleanup and expiry-before-deferral |
 | 2026-09-30 | Owner-local artifact metadata used shared R2 body keys based on short IDs; two owners with the same ID overwrote and read each other | Trust boundaries | artifacts.test.ts: same-ID shared bucket create/revise/restart, missing namespace, percent/slash namespace collision, no legacy fallback | Shared object-storage keys include immutable owner scope |
 | 2026-09-30 | Browser binding extraction failures became empty approvals; old-key-only lowercase comparison missed additional facts and case-sensitive recipient drift | Trust boundaries | browse-act.test.ts: failed/empty/malformed extraction and old approvals, added/removed facts, exact recipient case, key-order success; original source fails 6/32 tests | Browser approvals need valid nonempty evidence and exact complete-set comparison |
 | 2026-09-26 | Forget deleted the claim row but left the forgotten text live in five stores: the episodes FTS index (search_episodes could resurface it), memory_backups payloads, the frozen legacy spots and core_file_revisions tables, and constellation nodes kept quoting it and referencing its id in supporting_spots; the console forget path added a re-admission barrier while the model-facing path did not. Found by the forget-coverage audit: red-first survivor scan showed {episodes:1, backups:1, spots:1, revisions:1, nodes:1} after a forget | Memory / trust boundaries | forget-coverage.test.ts: marker planted in all six stores, forgotten through the real applyClaimOps path, fresh-state scan asserts zero everywhere, node stops quoting the claim and drops its id, barrier blocks re-admission, absent legacy tables skip cleanly, result reports purged vs purge-incomplete:<stores> | Deletes that the owner asked for are real across every store, proven by a fresh-state re-scan |
@@ -170,6 +215,424 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 ### Dashboard admin receipts
 - A successful HTTP status is not a readable action receipt. A truncated JSON receipt or lost response must say the outcome is unavailable, require a read before retry, and explain that a one-time invite code cannot be recovered. `Admin.test.tsx` tests both transport loss and malformed successful receipts.
 - Malformed action bodies fail with a structured invalid-action response before any signed RPC. `dashboard-admin.test.ts` tests malformed multipart alongside session, CSRF and cross-owner rejection.
-
-- Admin titles must wrap at word boundaries at 320px; inspect actual font pixels rather than relying only on document overflow. The admin-only small-viewport size preserves desktop typography.
 - An invite revoke receipt has no code: keep creation-only copy/send instructions out of it. `dashboard-admin.test.ts` pins the revoke no-email message/no-code shape while retaining the creation copy assertion.
+
+### Derived health migration ACLs
+- Restoring historical health DDL preserves its bytes; normalize Supabase default table/function ACLs in a new additive migration. The exact schema matrix must still deny anon access and client writes, and the real migrated-table tests must prove owner isolation, rejected-write zero delta, and trigger operation without direct helper EXECUTE.
+- A health writer's table grant is not consent authority. Verify the companion app's authenticated versus service-role paths and disclose consent/schema conflicts without adding client writes or rewriting legal audit records to accommodate them.
+- Exercise additive hardening with existing synthetic rows and compare row/schema preservation. Supabase CLI runs pgTAP in a container: assemble the actual migration between transaction fixtures rather than assuming a host-only SQL include is accessible there.
+- The plain PostgreSQL shim must preserve Supabase role semantics, including trusted service BYPASSRLS. Keep explicit role-attribute assertions and owner/anon isolation tests so test fidelity cannot become an RLS exemption.
+
+| 2026-10-01 | Runtime shard failures were hidden by job-level continue-on-error, so an aggregate green badge did not prove tests passed | Gates | Remove the soft-failure override; guard-ci-failure and fixture tests reject decoded truthy or dynamic overrides at job and step level, including escaped YAML keys and aliases | CI: a failing verification must fail its workflow |
+| 2026-10-01 | WhatsApp shared the responder but persisted conversation entries as surface telegram and telegram-prefixed chat IDs; core conversation/memory code depended on transport update IDs and media parsing | Channel boundaries | OwnerTurnEnvelope supplies trace/conversation/surface and loaded media; owner-turn owns the model/memory loop, Telegram adapter preserves legacy IDs and WA adapter labels its real surface; six regression tests cover core/adapter identity and approval parity | Channels: adapters carry transport details, core stores the real admitted surface |
+
+- Communication reads must expose the actual date range, category/account scope and pagination limits. Empty or filtered sampled pages are not complete inbox evidence.
+
+- A newly preferred provider page method must have a concrete isolated read mapping; a rejection-only stub breaks real-DO fixture source coverage. Query/cursor mapping must preserve owner/selection and expose no body bytes.
+
+### Telegram durable admission regression (1 October 2026)
+- Webhook success follows atomic owner inbox record plus alarm commit, not background invocation start. Test record/alarm rollback in actual Workers storage.
+- Dedupe uses bot/channel/update identity plus content digest. Never use a high-water offset to exclude already admitted lower IDs or callbacks.
+- The narrow inbox route verifies private sender/chat and immutable owner host before binding or effects. Concurrent first binding is checked inside admission transaction.
+- Claim before effects. Resume only unclaimed work; retain uncertain tombstones and quarantine recovered claims. Final delivery must settle its matching run, never adjacent work.
+- Recovered ordinary claims and closed failures without a final retain a notice wake until one authenticated, fenced uncertainty status is committed. Test actual DO eviction after a write and after closure, committed-final reconciliation, enqueue failure, repeated recovery, owner rebinding and mismatched persisted notice IDs; never replay the quarantined request or treat an ambiguous status send as delivered.
+- Delayed interruption statuses identify the original admission date/time and owner timezone without quoting request content. Permanent binding, malformed-record or frozen-notice identity failures retain a terminal blocked disposition and remove only that notice's retry wake; outbox-capacity failures remain retryable, and later valid owner requests still run.
+- Control notes target one current run. Persist consumption before model exposure; a consumed or stopped note never replays as an independent later turn. Three due classes each get service within three alarms.
+
+### iMessage protocol scaffold
+- Reject empty outbound content, formatting outside text and path-bearing filenames at the versioned schema. Synthetic adversarial tests must reject these before native transport; local database evidence never means recipient delivery.
+- At admitted plural-media seams, reject singleton/array ambiguity and let the existing model schema reject excess files before memory/model effects; never silently drop or reorder attachments. Keep source references separate from loaded bytes and test the mocked model boundary.
+- Recheck durable command identity/digest/state inside the journal transaction after any awaited capability probe; test delayed concurrent identical and conflicting requests so one immutable command never executes twice.
+- Gate sticker files separately from ordinary files, and carry a trusted explicit audience discriminator instead of guessing opaque GUIDs. Group bindings remain rejected until owner membership/audience policy exists.
+- Relay ACK/cursor follows atomic storage commit; SQLite write-fault tests must show zero event/nonce/cursor delta. Timeout/crash quarantine survives reopen and late callbacks, while independent account/read lanes remain available.
+- Copy/freeze the validated owner route before awaited media work; an adapter retaining its returned object must not redirect final admission. Test route mutation during content loading.
+- Reject identical and conflicting duplicate opaque attachment references before directory/media work. Validate loaded bytes independently of the content adapter's mutable input.
+- Disposable SQL runners must wait for final TCP readiness, initialize Auth with its owning migration role, preserve existing provider verification fixtures and assert zero owned resources after cleanup. Candidate rollback/catalog/role proof is distinct from baseline CI and activation authority.
+
+### Invite signup and pending proof
+- Collected phone never means verified phone. New signup must not consume an invite, provision an owner or grant console access before the approved email-and-phone proof contract. Test both the invite route and legacy signin bypass, plus the canonical empty-phone refusal.
+- Fragment entry handles initial navigation AND hashchange, clears secrets before other navigation, and restarts explicitly when a previous signed continuation exists. Restart clears the old cookie; desktop/mobile rendered checks exercise same-document second links.
+- Browser POST Origin depends on Referrer-Policy. Test real form navigation with CSP and headers: fragment custody plus same-origin referrers retains the Origin check without third-party disclosure. Synthetic Chrome caught Origin:null under no-referrer; GET/HEAD tests also pin same-origin policy.
+- Seal the email/invite-hash draft before throttles or provider attempts. First-send failure, throttle, resend failure and refresh retain bounded retry context; failure copy never claims a code was sent. Never retain raw invite or Supabase tokens in continuation state. Operational failures log only a content-free category.
+
+| Date | Bug found | Surface | Adversarial proof | Checklist change |
+| --- | --- | --- | --- | --- |
+| 2026-10-01 | Existing signup passed unverified phone to provisioning and granted console after email alone | Signup proof | console-auth.test.ts legacy empty-phone regression; console-signup-auth/test pending no provisioning; waldo_invite_chain.sql empty-phone no delta | Both proof requirements gate new-owner completion |
+| 2026-10-01 | Chrome form POST under no-referrer supplied Origin:null; direct Request tests missed it | Browser headers | Synthetic Chrome POST reached OTP after same-origin fix; console-signup.test.ts policy and cross-origin rejection | Verify browser Origin and fragment custody together |
+| 2026-10-01 | Signed continuation swallowed second invite/restart and hash-only navigation did not rerun entry | Retry/refresh | Synthetic Chrome second link, refresh and fragment clearing; console-signup.test.ts restart cookie clear/hashchange contract | Explicit reset and same-document fragment handling |
+| 2026-10-01 | First-send/provider/throttle error lost cleared invite context and could imply code delivery | Retry/failure | console-signup.test.ts send failure to refresh/resend and four throttle/error paths | Retain signed draft before attempts; unknown delivery remains unknown |
+- Inline TypeScript styles use semantic font shorthand; CSS font-weight declarations can collide with the raw-health guard's weight assignment detector. Run the unmodified health/architecture guards before publication; never weaken them for UI styles.
+
+### Invite signup review corrections (#499)
+
+- [ ] Bound Auth and signed directory requests across both fetch and required response decoding; abort alone is not a deadline when an adapter ignores it. Losing work may finish remotely, but callers cannot advance into owner/session effects after timeout.
+- [ ] Test canonical `signin_allowed` as access eligibility, not invite validity: active members remain admitted independently of arbitrary/expired/revoked/used invite text; unverified new signup still cannot create a Waldo owner, consume or open a session.
+- [ ] Distinguish Supabase Auth identity creation (`create_user:true`) from Waldo owner provisioning. Describe signup progress as a readable signed 15-minute bearer cookie with no device binding, encryption or server revocation; restart only clears this browser.
+- [ ] Associate visible legacy labels and inspect desktop/mobile, keyboard order/focus, error and progress states using synthetic data; these checks are not full accessibility certification.
+
+| 2026-10-02 | Dashboard gateway migration exposed stale Memory reviews, session queue revocation, and unknown-response retry loss | Auth, revision, recovery | dashboard-memory-actions content revision; queued-session owner test; durable exact request receipts and Memory attempt retention | Review current content and revalidate authority immediately before serialized effects; refresh cannot invent a new uncertain request |
+| 2026-10-02 | A new partial node-removal notice defaulted to an applied dashboard receipt | Dashboard receipt | dashboard-receipts.test.ts explicit node incomplete plus all failure-like notice keys | Every partial-removal notice maps to incomplete across sibling receipt projections |
+| 2026-10-02 | Memory list/detail navigation lost the originating cursor; permissive routing ignored unsupported selectors | Memory navigation | destinations.test.ts strict parser/builder; Memory component origin links and invalid-selector recovery | Persist read position in bounded typed URLs; unsupported selectors never launch actions |
+| 2026-10-02 | Unbounded wire selectors crashed destination rendering, mismatched reads could show a different target, and error recovery discarded cross-view list context | Memory decoder/navigation | Three regressions fail against 5e04209; selector bounds and exact-target wire tests plus mounted 404 origin recovery pass with fixes | Validate all returned selectors and read target before display; preserve originating list on failure as well as success |
+| 2026-10-02 | Valid maximum Unicode selectors exceeded the raw fragment cap after percent encoding | Memory destination | destinations.test.ts maximum ID plus expansion and return cursors round trip | Derive encoded fragment cap from selector bounds, including worst-case encoding expansion |
+| 2026-10-02 | Console resend GET and send refusals lost email/contact/invite details; submit locking could strand an interrupted request | Console retries | console-signin.test.ts field retention/escaping and effect-free edit; console-signin-browser.test.ts submit lock, OTP clearing, stop-waiting recovery; synthetic Chrome fixture | Preserve retry context separately from OTP, and provide explicit recovery for uncertain navigation |
+
+- [ ] Retry POSTs must not become document-history entries: keep phase-only history, preserve details only in the running page, clear OTP before transport/restoration, and invalidate late results on cancellation or navigation. Test request counters across Back/Forward/refresh and verify the existing success cookies/303 through browser fetch. No-JavaScript native POST fallback remains an explicit limitation.
+
+| 2026-10-02 | Native console retry POST history prompted resubmission on Back/Forward; stopping a fetch needed protection against late content/redirects | Console retry navigation | console-signin-browser.test.ts same-origin async submission, phase-only history, cancellation/generation, unexpected redirects and uncertain errors; synthetic Chrome send/verify counters and existing cookie/303 success | No POST document history with script enabled; late results never revive cancelled work |
+
+- [ ] Back-edit-Forward must retain the outstanding code's original email/phone/invite; unsent details belong only to the details phase. A newly requested code replaces that phase's recipient context.
+
+| 2026-10-02 | Broadcasting Back edits to cached code form retargeted an outstanding code without requesting another | Console history recipient | Distinct A/B email/phone/invite edit-before-Forward regression and native Chrome; each phase retains its own details | Unsent edits never retarget an existing code |
+
+- [ ] Rate-ceiling integration tests must preserve all real authenticated admissions and exact persisted counts without multiplying RPC transport overhead by the ceiling. Keep per-session boundary calls and overflow rejection; verify failed admission leaves authority and rate state unchanged.
+
+| 2026-10-02 | Owner-global rate test timed out after 239 sequential projection RPCs; controlled per-call latency reproduced the baseline failure | Rate-limit test transport | responsibility-public-do.test.ts batches real signed admissions inside the DO, retains each session RPC and overflow RPC, asserts owner240/session60 counts and unchanged rejection state | Test security behavior rather than cumulative transport latency; retain the five-second timeout |
+
+### Owner admission custody epochs
+
+- [ ] Preserve an admission epoch across same-row presence unlink/reactivation and locator away/back; state_version alone cannot detect these ABA changes.
+- [ ] Lock affected owners in UUID order with NO KEY UPDATE for non-key epoch writes; presence transfers already hold destination FK KEY SHARE. Exercise opposing transfers and concurrent owner-state updates.
+- [ ] Reject direct caller epoch edits and unrelated unprivileged nested triggers, while existing service-role custody writes allocate privately.
+
+| Date | Bug found | Surface | Adversarial proof | Checklist change |
+| --- | --- | --- | --- | --- |
+| 2026-10-02 | State-only and presence-ID receipts miss same-row unlink/reactivation and locator ABA | Owner admission custody | waldo_owner_admission_revision.sql persisted receipt regressions | Require custody epoch for currentness |
+| 2026-10-02 | FOR UPDATE owner locking deadlocked opposing presence transfers against destination FK KEY SHARE | Owner revision preparation | prove-local.mjs concurrent transfers/lifecycle; preserved red receipt, then 100 monotonic epochs | Use compatible non-key locks in deterministic UUID order |
+
+### Owner admission integration gates
+- An admitted composer result must reach the actual provider system prompt. Its tool availability statement and model/dispatcher handlers must agree on current grants. An explicitly labelled trigger ACL ceiling may be broader than the current function list; it grants no callable tools. Preserve canonical composed bytes and their digest at delivery. A helper/composer-only pass cannot prove this provider boundary.
+- Fresh canonical history has its own namespace and row lineage. Legacy memory, standing orders and tool ledgers remain excluded until owner-bound suppliers and canonical forget/redaction are reviewed together.
+
+| Date | Bug found | Surface | Adversarial proof | Checklist change |
+| --- | --- | --- | --- | --- |
+| 2026-10-02 | Existing responder discards composed system; private composer renders trigger ACL before host grants | Canonical owner turn integration, Core-gated | Actual DO reply exists, then unique admitted-material provider assertion fails; evidence/owner-turn/material-delivery-red.log | Require provider-system delivery and rendered/evidence/dispatch ACL agreement |
+
+| 2026-10-02 | A ceiling was incorrectly treated as a current-tool grant, causing an unnecessary Core renderer blocker | Local owner-turn material follow-up | Existing ceiling wording inspected at 1d938b63; actual DO material assertion red then green through public compose result | Verify precise producer wording before requesting reserved ownership; deliver canonical request.system unchanged |
+
+| 2026-10-02 | A new currentness await delayed capture of host memoryWrites, permitting caller mutation before use | Owner responder | Existing opt-out mutation regression red, then green with scoped sibling case | Capture host controls synchronously and carry them into scoped continuation |
+| 2026-10-02 | Canonical pgTAP required a seed only the private upgrade runner created | Owner revision test portability | Exact CI test1 returned NULL; canonical column assertion and separate mandatory preseed backfill proof | Canonical tests must not depend on private runner fixtures; keep upgrade proof explicit and non-vacuous |
+
+| 2026-10-02 | Legacy hermetic ingress fixtures expected provider effects without supplying current owner authority | Authenticated owner ingress tests |22 focused cases reproduced12 failures, then explicit synthetic constructor hosts restored existing effect checks with canonical owner cache/history assertions | Positive fixtures supply exact private authority; retain missing-host/revocation rejection and never add runtime fallback |
+
+- [ ] Private canonical-preparation construction must select the mode separately from supplier availability. Test the actual deployed two-argument constructor through authenticated inbox text, photo, document and voice to a fenced final; explicit canonical construction without a supplier still rejects without model fallback. Keep currentness, history, reaction and final-publication requirements in the same mode.
+
+| 2026-10-02 | Private canonical prepare was installed for normal deployed owner DOs and quarantined ordinary text/media before reply | Owner DO construction | owner-do-deployed-mode.test.ts red on exact 49ce for four content types; explicit canonical missing-host/currentness/revocation tests retained | Test both deployed construction and explicit private canonical rejection |
+
+| 2026-10-02 | A single alarm served a prior outbox while a corrupt-history continuation stayed admitted, making its rejection assertion premature | Canonical owner fixture | Ready-outbox ordering reproduced red; at most three real alarms require the exact update's closed outcome, quarantine, unchanged history and no new reply | Drive the real scheduling boundary to a bounded observed result; never replace rejection assertions or sleep until lucky |
+### Heartbeat delivery receipts
+- Scheduled nudges commit frozen outbox intent before transport. A resolved send is not delivery proof: undefined or wrong-chat ACK must leave cooldown untouched. Test attempted-send restart quarantine, definite-rejection same-byte retries and ACK-before-bookkeeping replay.
+- An older crashed schedule attempt stays as audit evidence, but a later successful or terminal-delivery attempt of the same occurrence must not suppress future occurrences. An unresolved older occurrence still blocks overlap. Select the latest attempt numerically across 9→10; ACK-bookkeeping replay preserves the first background completion time, and enqueue-commit crashes leave delivery pending.
+
+| 2026-10-02 | Heartbeat discarded blocked Telegram sends and started cooldown; send-before-cooldown crashes could duplicate nudges; stale crashed attempts could suppress later ticks | Heartbeat / scheduler | heartbeat-outbox.test.ts frozen intent, ACK truth, fresh eligibility, transport/receipt crashes and same-byte429; schedule-runs.test.ts recovered occurrence liveness and unresolved controls | Commit intent before I/O, settle from ACK, preserve audit without wedging future ticks |
+
+| 2026-10-02 | Workspace mapping stayed valid after owner-turn closure, so a delayed tool could publish a ready file before dispatcher refusal | Workspace host / owner-run fence | workspace-turn-fence.test.ts closes mapping and R2 awaits, proves pending orphan custody without ready publication, and checks scoped metadata closure/rollback | Capture invocation scope; admit actual I/O and atomically fence every metadata transaction |
+
+| 2026-10-02 | Workspace adapters were absent from the normal owner tool list, and post-open admission alone did not carry invocation authority into host I/O | Default owner workspace registration | owner-do-registered-workspace.test.ts advertised/called/returned exact bytes, same-call retry/restart, signed mapping isolation, /stop during mapping/reservation/body, stopped A resumes during B, taint and missing-scope scheduled refusal; workspace-open-context.test.ts exact context forwarding | Register the actual host-backed handlers and capture invocation scope before async I/O; prove the default constructor rather than a private host override |
+| 2026-10-02 | Owner forget redacted durable history but the already-restored conversation tree still sent forgotten text to the same-turn provider; replacement projections and escaped pending tool copies were sibling retained paths | Owner memory/privacy | memory-forget-do-provider.test.ts exercises the real normal owner DO plus same-turn, reused/fresh partial cleanup, steering, projection eviction, trusted-safeguard collision and cached replay; conversation-entry.test.ts covers literal/escaped redaction | Forget is enforced at retained data and publication boundaries before use; incomplete stores never become a completed receipt |
+
+| 2026-10-02 | Independent local review found forgotten text still retained beyond the offload head on a reused responder; cache readback could send it again after settled forget | Owner memory/privacy | memory-forget-do-provider.test.ts proves cache invalidation and post-forget oversized-tool eviction; tool-output-offload.test.ts verifies cleared payload/length/provenance/budget with monotonically increasing IDs | Re-derivable caches are retained stores too; invalidate before future reads, preserve identifier provenance, and route fictional-binding regressions through the required isolated CI/local pool |
+
+### Migration executor configuration
+- [ ] Distinguish verified CLI outputs from execution inputs before excluding anything from configuration drift checks. Exclude only the regular `.temp/cli-latest` upgrade-hint file; retain project-ref, pooler URL, configuration, migrations and unknown-file checks, plus symlink/directory rejection.
+- [ ] Non-interactive migration children use the supplied environment credentials with `SUPABASE_NO_KEYRING=1`; never modify Keychain permissions or persist replacement credentials to avoid prompts.
+
+| Date | Bug found | Surface | Adversarial proof | Checklist change |
+| --- | --- | --- | --- | --- |
+| 2026-10-02 | Supabase dry-run added only `.temp/cli-latest`, causing the reviewed executor to reject benign output as configuration drift; sanitized child environment also omitted the supported no-keyring control | Migration apply helper | Real-filesystem fake CLI reproduces cache addition, retains rejection of target/config/migration/unknown-file drift, and checks process-local keyring disablement with unchanged supplied credentials | Trace pinned CLI producers/consumers; narrowly separate output cache from effective inputs |
+
+Pinned CLI evidence: [upgrade-hint producer/consumer](https://github.com/supabase/cli/blob/v2.109.1/apps/cli-go/cmd/root.go#L242-L268), [process-scoped keyring control](https://github.com/supabase/cli/blob/v2.109.1/apps/cli/src/legacy/auth/legacy-credentials.layer.ts#L326-L335). Source and synthetic executor checks do not prove hosted migration application.
+| 2026-10-02 | Non-retaining MCP read bypass exposed provider error content to response-error logs; unsupported read flags could silently fall back to retained effect receipts | Connector reads / observability | connector-proxy-entry.test.ts signed metadata read, registry mismatch zero hops, current owner/grant checks, provider-error canaries and unchanged effect replay | Explicit read registry; no retaining fallback; closed failure codes and log allowlist |
+
+| 2026-10-02 | Live Drive metadata tools/call returned isError after grant admission, but privacy-safe rejection collapsed provider reason and registry rejection into one code | MCP read diagnostics | Existing v9 log and proxy_access200 establish provider-stage failure; connector-proxy-entry fixture preserves SERVICE_DISABLED/status/service with private canaries absent; mcp-error-diagnostic tests reject free text/unknown fields | Preserve structured closed operational diagnostics without retaining provider content |
+| 2026-10-02 | A live synthetic correction used typographic quotation marks; the quote extractor fell back to the entire Owner-prefixed citation, so grounded correction was silently rejected | Owner memory/provenance | claims.test.ts exact live payload red, ASCII-only control green, paired quote and shared/Waldo/mixed/mismatched negatives; normal-DO provider/eviction proof | Citation punctuation must not change grounded owner authority; recognize paired formats while preserving all provenance and correction gates |
+
+| 2026-10-02 | Forget failed after SQL purge because a capped read-owner-context ledger display was validated as whole tool-result JSON; legacy unwrapped displays could also retain text | Owner memory/privacy | tool-output-ledger.test.ts raw-capped, escaped and legacy summary red proofs; normal-DO exact forget receipt, ledger cleanup and eviction | Sanitize at the actual data boundary while retaining outer provenance and strict provider protocol validation |
+
+### Stable metadata read transports
+- [ ] Metadata adapters fix endpoint, GET verb, field mask and one-page limits in server code; reject content flags and unknown arguments before credential refresh. Project provider output again, require an existing read scope, and prove owner/revocation checks plus zero result-ledger calls through the actual signed Edge entry.
+- [ ] Preserve safe HTTP error meaning even when a provider returns non-JSON, an empty body or an oversized body. A generic 403 is access denial; offer new consent only when stored scopes or recognized structured provider evidence identifies missing scope.
+
+| 2026-10-02 | Drive MCP returned an opaque tools/call rejection for an authorized metadata read, preventing a working capability despite an existing read grant | Drive metadata transport | drive-rest.test.ts fixed GET/fields/page cap, literal search, unknown/content args, projected output and safe provider errors; drive-rest-edge.test.ts actual signed Edge owner/scope/revocation and zero-ledger proofs | Expose the stable REST metadata transport explicitly; avoid unannounced fallbacks or provider-text disclosure |
+
+### Pending forget cleanup consumers
+- [ ] A topic-only forget has a cleanup lifecycle even when no claim ID survives. Capture verified topic settlement arguments; independently reread every conversation and retained ledger row before settling either topics or IDs. A clean callback receipt or clean six-fragment display is not full-store verification.
+- [ ] Before fresh/reused responder history and dynamic ledger fragments reach composition, rehydrate pending owner-local cleanup targets, retry durable cleanup and suppress those bytes transiently. Keep pending receipts on cleanup/readback failure; preserve fixed safeguards and provenance, and retain no permanent plaintext blacklist or payload-bearing cleanup logs.
+
+| 2026-10-02 | Zero-ID topic forgets could lose consumer settlement/retry semantics; fresh responders could replay topic text and a conversation-only receipt could hide a retained ledger survivor | Owner memory/privacy | memory-forget-do-provider.test.ts topic-only KV failure/recreation/recovery, false-clean receipt, independent conversation/ledger readback failures and trusted safeguard regressions; tool-output-ledger.test.ts escaped rows outside staged ring | Settle source-last only after all retained stores independently verify clean; transiently suppress durable pending targets at actual composition boundaries |
+
+- [ ] Apply ledger forget redaction to the raw summary before adding a tool display prefix. Valid JSON uses decoded literal matching; ambiguous malformed Unicode-escaped display text is neutralized during active cleanup instead of guessed, while tool provenance and authority remain unchanged.
+
+- [ ] An admitted steering message needs its own durable outcome. If never consumed, return only that exact child to its original FIFO admission; if consumed, never replay effects, and the child takes its target run's outcome. The final commit that answers it completes it in the same transaction; only a target run that ends without a committed final publishes a deduplicated fixed uncertainty notice. Model exposure follows successful durable consumption, and notice publication failure retains a durable wake.
+
+| 2026-10-02 | Final-round steering was ACKed but ignored/quarantined with its body erased and no child outcome | Owner inbox/delivery | normal-DO concurrent final-round and refused steering RED/GREEN, late-target FIFO/dedup, consumed/missing transition fences, restart and outbox-capacity notice recovery | Reuse the existing durable inbox and fenced final outbox; preserve never-consumed message identity, prohibit consumed replay, and retain publication intent until enqueue |
+| 2026-10-14 | A steer the running turn heard and answered in its committed final still told the owner it was used by a run whose outcome is uncertain: a consumed child had no success state, so the drain's notice pass and recovery's sweep both read it as uncertain | Owner inbox/delivery | owner-do-ingress-isolation.test.ts real steered turn to a delivered final, live and with storage cut at the final commit then evicted; target-throw and recovered-control tests keep the uncertain path | The child completes with the final commit, not at delivery; a parent that later ends delivery_uncertain sends no notice of its own, and neither does its child |
+
+### Bounded document rendering
+- [ ] PDF line wrapping bounds font-measurement work for long unbroken tokens as well as ordinary words. Cover geometry and the maximum admitted source length in workerd; rendering must not turn a bounded owner input into quadratic CPU work.
+
+| 2026-10-03 | PDF wrapping measured 42,529 font widths for a 2,000-character unbroken token | Workspace document export | artifact-export.test.ts long-token measurement/geometry regression and workspace-render.test.ts maximum 32,000-character token in workerd | Binary-search wrapping keeps bounded inputs within bounded rendering work; retain real-byte and authenticated-download acceptance |
+
+### Curated skill authority and revocation
+- [ ] Hook snapshots may clone scope objects. Verify captured admit/commit authority and exact owner/update/run/attempt identity rather than object equality; valid cloned snapshots must work while forged scopes fail.
+- [ ] Recheck enabled reviewed-procedure identity and current owner/run authority at every physical provider call, including reduced-context retry and medical recursion. Disable suppresses captured instructions before any subsequent call; bodies never enter tool results or retained conversation history.
+- [ ] Bound every stored skill text/scalar field in SQL before JavaScript materialization, using UTF-8 BLOB byte lengths. Preserve invalid-row presence so rejected oversized or NUL-tail rows cannot be treated as missing and reactivated by ON CONFLICT.
+
+| 2026-10-03 | Hook-cloned scope identity rejected valid owner skill lifecycle tools | Curated skill authority | curated-skills-owner-do.test.ts actual dispatcher install/disable and curated-skills-tools.test.ts forged-scope rejection | Captured authority closures and pinned run identity govern mutations, not scope object equality |
+| 2026-10-03 | Captured procedure instructions survived disable during reduced-context retry and medical recursion | Curated skill revocation | curated-skills-retry.test.ts physical provider-boundary disable regressions | Check revocation for each physical provider request, including recursive paths |
+| 2026-10-03 | Oversized and NUL-tail stored skill fields were materialized before rejection | Curated skill storage | curated-skills.test.ts actual-SQL byte-bound and rejected-row-presence regressions | Project bounded fields before JavaScript and retain rejected presence; never reactivate hostile rows as absent |
+| 2026-10-03 | A Telegram document link redirected to sign-in and lost its file target although direct navigation downloaded the retained PDF | Console private downloads | console-signin.test.ts target validation/retry/expiry, console-owner-routing.test.ts ticket expiry, console-signin-browser.test.ts terminal/history/no binary fetch, owner-do-registered-workspace.test.ts expired/revoked/foreign account and exact PDF/DOCX bytes | Preserve Strict cookies and download intent; resume with an explicit same-origin link after existing authentication admission |
+
+### Calendar counter timezone adoption
+- [ ] Timezone adoption retains every aggregate row and lifetime/event cooldown. Missing provenance means legacy UTC. Before changing the existing marker, require valid retained dates and class/subkind sends strictly before both old and new civil days; current budget-only/subkind-only, future or malformed state holds. Cover safe later adoption, DST and negative offsets through the actual owner DO, with the Calendar flag absent and zero unchanged.
+
+| Date | Bug found | Surface | Adversarial proof | Checklist change |
+| --- | --- | --- | --- | --- |
+| 2026-10-03 | Historical daily rows permanently blocked initial Calendar activation; later timezone changes ignored budget/subkind rows | Owner DO Calendar counter marker | calendar-prep-owner-do.test.ts historical adoption RED, boundary/sibling/malformed/finite-transition matrix and exact retained-row/lifetime/cooldown assertions | Adopt only after both civil days have advanced; preserve SQL state and default-off behavior |
+| 2026-10-03 | Future send timestamps later in the current civil day were reported as ordinary rollover holds | Owner DO Calendar counter marker | calendar-prep-owner-do.test.ts same-day future class/subkind send regressions | Compare send instants with now before civil-day checks; future instants require inspection |
+
+### Unbound owner alarm admission
+- [ ] Directory-backed scheduled work requires the persisted canonical owner name to match the physical DO and a linked Telegram subject before runtime setup. Retain schedule/data and inbox/outbox/link recovery wakes with bounded backoff; canonical restoration resumes dispatch. Missing/failed directory routes never select a legacy subject DO, while no-directory deploy-owner routing remains supported.
+
+| 2026-10-03 | An unresolved alarm reached legacy Google refresh after Calendar prep alone rejected missing owner identity | Owner DO alarm and probe/console routing | unbound-owner-alarm.test.ts actual DO no-setup/physical mismatch/unlinked/retained wakes/restoration; probe-turn.test.ts and console-owner-routing.test.ts null/error no-fallback proofs | Reuse canonical physical binding and shared alarm arbitration before scheduled runtime setup |
+
+### Owner artifact continuity
+- [ ] Score the exact artifact identity and revision, and reject unwanted writes even if a later correct write succeeds. Cover identical basenames in different directories, similar/unrelated names, explicit older-file overrides and ambiguous/multiple targets. Scripted receipt delivery and replay scores are not model reasoning results; inspect final provider context and independently read back affected files before claiming live continuity.
+
+| 2026-10-03 | Replay scoring could pass a required write alongside an unwanted write of the same effect kind | Artifact continuity evaluation | trace-replay.test.ts correct plus older-file write RED/GREEN; workspace-referent-replay.test.ts six synthetic variants and applied/unknown/rejected controls | Pin forbidden artifact payloads separately from effect kinds; retain unscored final-state disclosure |
+| 2026-10-03 | Successful workspace write receipts were not projected into a later owner prompt; a test-only file ID hid same-file recovery failure | Owner task continuity | curated-skills-owner-do.test.ts drops conversation/restarts, parses host-projected receipt, revises same ID once and reads back with unrelated older file unchanged; store.test.ts pending/stale/tombstone/foreign/byte-row boundary rejection | Project bounded current committed host metadata independently of history; preserve current-request precedence and model ambiguity judgment; receipts grant no authority |
+
+- [ ] Recent artifact metadata retains external provenance: Scribe must admit unchanged bytes before names join the owner prompt. Health/instruction filenames, rewritten email paths and active-forget matches are withheld, never offered as exact replacement targets. Host-verified receipts do not authorize tools, overwrite a current owner target, or establish model relevance quality.
+
+- [ ] Workspace continuity reads precede tool selection. Cancellation fixtures pause the actual write dispatch, while foreign ingress and scheduled-write rejection retain the pre-existing read-only manifest and perform no additional workspace I/O.
+
+### Bounded provider document previews
+- [ ] Apply the existing external Scribe policy before bounding a content preview, then measure the complete escaped metadata/body/account envelope. Redaction expansion must not silently spill a supposedly inline preview to offload. Test dense emails, escaped metadata and Unicode through the actual dispatcher with an offload spy; recompute visible byte count and preserve truncation after each cut.
+
+| 2026-10-03 | External PII redaction expanded a pre-bounded Google document body beyond the dispatcher inline cap | Drive content preview | read-drive.test.ts dense-email real-Scribe dispatcher/offload-spy RED/GREEN and escaped-metadata Unicode envelope case | Prepare with the existing external Scribe policy before the final whole-envelope bound, retaining normal dispatcher verification and honest visible bytes |
+
+- [ ] Google client inventory parity distinguishes host-bound account metadata from callable proxy operations. Account identity is data, never a new remote operation; retain exact Calendar wire-argument coverage.
+
+### Workspace exact revision preservation
+| 2026-10-03 | Model-visible workspace read redactions were copied into a full replacement, and external-tainted write argument rewriting changed exact fields; workspace_list also blocked enabled skill selection | Workspace revision / reviewed procedure selection | curated-skills-owner-do.test.ts copies actual guarded provider view RED then applies literal edits GREEN with unchanged recipient readback; workspace-tools.test.ts exact-contact edits and mandatory denial checks; curated-skills-after-read.test.ts real loop list→load plus forged/revoked/lifecycle refusals | Preserve unrelated bytes with unique revision-bound literal spans; refuse changed full replacements carrying redaction placeholders; keep model-view privacy separate from owner-private file authorization and preserve taint after read-only reviewed selection |
+
+- [ ] Exact workspace writes run existing original-taint hard checks on supplied text or changed values; only ordinary email/phone/address substitutions may be skipped for executable private-write data. Forced-card fields remain refused. Initial creation and full replacement use the same reject-only policy as literal edits. No original file bytes are promoted into model context, restored from tokens, or auto-reinstated after explicit deletion; unchanged private fields are byte-preserved, including legitimate owner-private health content.
+
+- [ ] Full workspace replacement guards cover every emitted Scribe placeholder, including instruction masking. Adversarial marker cases must reject without changing the immutable revision or writing a new body; literal owner-authorized masking remains a separate edit path.
+
+- [ ] Email-only signup pages expose no telephone input or contact-save action, including a resumed legacy contact cookie. Preserve verified-email completion, exact invite consumption, owner/session cookies, CSRF and same-owner recovery; UI removal never changes identity admission or grants.
+
+- [ ] Google REST read 403s request consent only for exact structured insufficient-scope evidence; API-disabled, quota and ordinary denials do not imply missing consent. Test direct and proxy reason propagation, foreign/unknown/malformed reasons, 401 and 5xx; deploy matching Edge reason transport before its Worker consumer. MCP and ledgered-write parity are separate, unproven surfaces.
+
+- [ ] Test initial private file creation after an external metadata read through the actual owner DO, not only null-taint creation before a read. Compare stored bytes and hashes, then revise and download both immutable revisions after restart; model read views must remain redacted. Preserve cumulative external taint, owner admission, CAS and invocation identity while refusing mandatory secret/card/health/injection substitutions before storage.
+
+| 2026-10-03 | External workspace_list taint silently rewrote ordinary contacts in a successful initial workspace_write, so literal edits preserved an already corrupted file | Private workspace creation / full replacement | owner-do-registered-workspace.test.ts external list→create RED then exact bytes/hash, literal revision, guarded reads and authenticated downloads after restart; workspace-tools.test.ts null/external full-text replacement and mandatory refusal matrix | Treat all owner-private workspace write arguments as exact executable data under the existing reject-only checks; do not weaken read redaction or reset taint |
+
+### Graph labels, input and focus
+- [ ] Bound full-em label glyphs and hit rectangles, not average character width; preserve all returned nodes and only stored relationships. Cover wide Latin/CJK labels, parent selection without view reset and reversed trace segments with graph layout/trace/interaction tests and real rendered text-box checks.
+- [ ] Native background touch must scroll horizontally and vertically while node touch remains isolated for dragging. Recover off-canvas focused nodes at the current zoom before scrolling their rendered bounds; retain zoom and node positions. Verify computed styles, keyboard focus and real mobile touch/pixel behavior after pan/zoom.
+
+| 2026-10-03 | Wide-glyph labels collided, parent selection reset graph view, and reversed circuit segments were routed incorrectly | Console graph | constellation-layout.test.ts full-em dense collision cases, GraphMap.test.ts inline-parent selection preservation, graph-traces.test.ts reversed segments; Chrome wide-label text boxes | Keep label geometry conservative, view identity independent of selection and trace geometry direction-safe |
+| 2026-10-03 | Map background touch could not scroll horizontally and a keyboard-focused target stayed over 1,000 pixels offscreen after pan/zoom | Console graph mobile/focus | GraphMap.regressions.test.ts two RED/GREEN cases; isolated Chrome 200px native touch and transformed focus readback | Permit both native background scroll axes; repair SVG clipping then scroll the actual focused element after rendering |
+### Selective forgetting regression, 2026-10-03
+- [ ] Apply forget-only principal/tenant custody and retained-recall gating in the real owner DO, then exercise authenticated enqueue and alarm dispatch. Test complete and incomplete mixed-source cleanup, canonical bytes and witnesses after recreation, current `get_context` availability, ignored writer claim additions and revocation during selection. A reviewed unapplied wiring patch is not a serving capability.
+
+| Bug class | Evidence and regression | Boundary |
+|---|---|---|
+| Literal topic marker removal leaves associated preference values in retained episodes | forget-selective-span.test.ts mixed-source red regression; owner-message-context-adapter.test.ts canonical request-to-selector and limited-recall provider capture | Bounded ASCII exact-topic source clauses only; markerless paraphrases, unsupported projections and provider retention are not certified erased |
+| Selective-forget source alone did not populate the canonical DO capability or gate retained recall | owner-turn-admitted-do.test.ts three authenticated enqueue/alarm RED cases without wiring, GREEN with complete/incomplete/revoked selection and recreated readback | Private admitted principal/tenant capability and owner-local cleanup store; unchanged provider grants and current live-tool permission |
+| Incomplete forgetting could replay a frozen calendar/mail output after recreation while original bytes remained unproved | calendar-prep-owner-do.test.ts and mail-follow-up-owner-do.test.ts real-alarm RED/GREEN holds with no sends, attempts or payload mutation | Recheck owner-local coverage at source-derived delivery; defer within expiry and keep current owner request lane usable |
+
+### Independent exact-ID forgetting and coverage recovery
+- [ ] A rejected or unavailable topic selector must not discard independently valid explicit claim/node deletions. Recheck owner admission after provider failure, reject invalid IDs, preserve unrelated retained storage, and keep recall limited while topic association remains unproved. Recreate the actual registered owner DO before asserting later-provider withholding.
+- [ ] Fail custody writes at the current coverage INSERT seam: originals survive, no accepted-pending or automatic-retry receipt is claimed, and the owner receives an honest request to retry. Forget-turn logs retain metadata only, including model reasoning.
+- [ ] Supported topic cleanup requires exact reviewed clauses beyond the marker. Verify literal and decoded-JSON clause recovery with an explicit owner retry after independent conversation/ledger readback; bare markers, unsupported Unicode topics and malformed truncated summaries preserve originals and incomplete coverage. Never relax the marker-only guard to satisfy legacy expectations.
+
+| Bug class | Evidence and regression | Boundary |
+|---|---|---|
+| Unproved topic selection cleared independently valid explicit claim and node deletions; unavailable selector aborted them too | memory-forget-do-provider.test.ts registered two-argument DO rejected/unavailable hybrid RED/GREEN with invalid IDs, durable unrelated retention and recreation | Only the unproved topic is withheld; applyClaimOps retains existing intent/eligible-ID checks, currentness is rechecked outside selector catch, retained recall remains limited |
+| Coverage custody INSERT failure lost the specific honest retry receipt | memory-forget-do-provider.test.ts actual SQL seam RED/GREEN, originals preserved and no accepted-pending claim | Fail closed before destruction; do not promise automatic recovery without durable custody |
+
+### Pasted-task source scope across follow-ups (RED diagnosis)
+- [ ] Preserve authenticated task source restrictions and current fictional referents across correction, recreation, history windows and recall holds. Record reads independently of writes. Test a provider attempting five connected-mail searches and two thread reads while the pasted-only restriction is still present. Accept a repair only with owner-authorized task transition, ambiguous-referent clarification, stale-retrieval precedence and forbidden-source exclusion controls; never restore withheld history wholesale or infer scope with phrase regex.
+
+| Bug class | Evidence and regression | Boundary |
+|---|---|---|
+| Pasted-only task restriction is present in the reply context but does not constrain a drifting provider's connected-source reads | pasted-task-scope.test.ts actual responder/durable DO storage/Google handler mock ports, five-search/two-read RED; ordinary recreation and structural no-effect read scorer controls pass | Scripted host-admission diagnosis, not a real-model replay, semantic answer grade or full authenticated inbox proof |
+| An unrelated incomplete-forgetting hold removes earlier task restrictions from reply context | pasted-task-scope.test.ts coverage marker plus recreated responder RED at66854e71 | Independent later condition; cannot explain N03 at74f1e763. Future repair must retain privacy withholding and prove forbidden-source exclusion |
+
+### Owner task source custody and physical reads
+- [ ] Refusal diagnostics must agree with current admission for default reads, unresolved tasks, connector metadata and source-independent tools. Distinguish unsettled scope from absent membership; ordinary task text never approves a pending owner confirmation.
+- [ ] Task classifiers never change identity, grants, consent, ACLs or effect approvals. Retain/restrict cannot broaden current planning scope. Explicit new/change/close may update planning constraints only with a host-bound fresh authenticated owner occurrence, exact current bytes and matching ephemeral evidence outside host-marked quotes. Missing, ambiguous, stale, foreign or quoted evidence must preserve restrictions/fail closed. State changes use owner/task/revision CAS and clear obsolete cards; compatibility cards remain nonce/expiry checked. Recognition is model-dependent, not deterministic authorization.
+- [ ] Fence steering on arrival and every physical provider operation after awaited authentication; discard old results and tool turns after scope changes. Permit cleanup of opened browser sessions independently.
+- [ ] Gate automatic memory, standing order, workspace metadata and canonical recall suppliers before reads. Limited canonical tasks require a trusted task-safe mandatory-material supplier; absence fails closed. Restrict history to the current task's host-owned input boundary; recall holds still withhold historical task facts.
+
+| Adversarial failure | Regression evidence | Verification limit |
+|---|---|---|
+| Owner steering arrives during connector authentication or a Gmail list response | pasted-task-scope.test.ts steering-auth control; task-source-scope.test.ts Gmail transport and browser session-start controls | Scripted provider; an admitted remote operation cannot be rolled back |
+| Tool-only scope policy leaves automatic retained suppliers unconstrained | pasted-task-scope.test.ts forbidden memory/order/workspace sentinels; owner-message-context-adapter.test.ts absent task-safe supplier and zero ordinary material/recall reads | Mandatory base is host-trusted; real-model restriction recognition still needs live acceptance |
+
+- [ ] Classify render/export/edit operations by their source reads even when they mutate state. Creation from current supplied bytes remains possible; reading existing source revisions requires workspace custody. Vault-backed MCP must fence after grant resolution and at proxy dispatch, not only bearer fetch.
+- [ ] A fresh authenticated owner explicitly starting a workspace task after a pasted-only task must be able to list/create/read under unchanged workspace identity and mapping checks. An ambiguous referent follow-up remains supplied-only. Ordinary task planning must not depend on a second approval UI; independent privileged-effect approvals remain required.
+
+
+| 2026-10-03 | N01R new workspace task denied after pasted-only scope because restrict intersected old[] and new required an extra card | Owner task planning / admission | Actual default owner DO RED→GREEN: strict follow-up denied; fresh authenticated new workspace list/create/readback allowed with mail/browser denied after recreation. task-source-scope tests reject quoted/stale/invented evidence and revoked owner; owner/task/revision CAS invalidates old cards/reads. | Model interprets explicit intent within independent host grants/ACLs; unmarked pasted text intent remains model-dependent. Live N01/N02 file referent correctness remains unproved. |
+
+
+| Date | Failure | Domain | Regression/evidence | Limitation |
+| --- | --- | --- | --- | --- |
+| 2026-10-03 | N01R workspace continuation kept workspace families but made custody unreadable after invalid/uncertain classification | Owner task planning recovery | Actual default DO RED→GREEN after recreation: list/read/derive plan succeeds, original unchanged, mail denied. Strict[] and valid narrowing remain denied; baseline/unready/closed/pending/quote/stale/steering controls and concurrent restriction CAS fail closed. Enum-only outcome diagnostics distinguish recovery/denial without raw model output. | Only exact ordinary fresh owner input with prior ready narrowed pinned scope may recover. New restrictions missed by model can remain unrecognized; existing unresolved rows are not blindly revived. Wrong-file referents remain unproved. |
+
+- [ ] An invalid/uncertain ordinary source classification must not disable a previously ready narrow workspace task. Recovery preserves exact task/families/boundary and independent permissions; initial, unready, closed, pending, quoted/stale or steering states cannot recover. A valid new supplied-only restriction always overrides recovery.
+- [ ] Metadata-only custody outcomes must distinguish invalid_decision/uncertain from retained_invalid/retained_uncertain; never export raw classifier output/evidence or classify private content with diagnostic regexes.
+
+
+| 2026-10-03 | Plain unquoted pasted excerpt widened a strict task to external families without confirmation; legacy close card restored all sources | Task source permission custody | PR692 source RED plus actual owner inbox/card RED→GREEN. Each added retained/external family requires a visible card; private workspace still needs none. Pending retain/uncertain/invalid preserves nonce, foreign/replayed decisions fail, callback performs no reads/connects, legacy close stays empty inactive. | Exact owner message bytes do not prove pasted-line permission. Existing baseline policy is unchanged; live classifier/UX behavior remains separate. |
+
+- [ ] Evidence matching cannot independently authorize newly added retained/external source families; compare against prior established scope for both new and change and require the visible owner decision.
+- [ ] Pending model continuations preserve inactive custody and the exact approval nonce/revision; only an authenticated matching card decision may activate the displayed families.
+- [ ] Task closure must enforce empty inactive scope even for legacy all-family card payloads; ordinary retain cannot restore baseline families.
+
+
+| 2026-10-03 | Provider schema permitted duplicate known task families rejected by decoder; broad #693 failure recovery retained external reads on malformed owner narrowing | Structured source classification | Schema-valid duplicate RED→GREEN canonical-set decode; malformed/uncertain owner-narrowing source controls and actual connected owner-DO zero-incremental-read regression; valid workspace continuation/readback/original preservation. Finite decode category privacy canaries. | Supersedes #693 failure recovery, not proof of historical trace5691 cause or guaranteed natural-language intent recognition. |
+
+- [ ] Decoder acceptance must match the provider schema: canonicalize repeated known source families without accepting unknowns or malformed evidence.
+- [ ] Malformed or uncertain source classification cannot keep protected reads active for the current instruction; negative owner-narrowing control must observe zero incremental connector calls, alongside usable valid continuation.
+- [ ] Metadata-only decoder categories must identify syntax/shape/decision/source/evidence failures without logging private raw classifier text.
+### Bounded public browser continuity
+- [ ] Reconnect must preserve the exact guarded provider session; test the pinned SDK's actual request serializer, including missing/expired IDs, without fresh allocation fallback
+- [ ] Final native action and read-only receipt reconciliation bind the canonical owner/task/session/generation, exact observed URL, form state and fresh approval. Drift requires observation and approval again; unknown submission never repeats the physical action
+- [ ] Provider termination must work without a valid page/context and prove session absence. Lost allocation IDs remain honest cleanup uncertainty bounded by provider TTL
+- [ ] Bounded streamed receipt rejection cancels asynchronously: awaiting cancel on a tee branch can hang behind the other branch. Reject oversized/malformed bodies without waiting for peer consumption
+
+| 2026-10-03 | Pinned Cloudflare connectOverCDP endpoint session path selected fresh launch; error diagnostics leaked provider details; URL could drift before act; invalid page blocked cleanup; empty fill caused a side effect before evidence rejected it | Public browser adapter | public-fixture-browser.test.ts actual installed SDK transport, phase errors, final URL drift, popup-independent termination and empty-fill denial | Use public connect with persistent default context, closed errors and exact final synchronous native snapshot |
+| 2026-10-03 | Awaiting cancellation of an oversized tee-stream response stalled receipt rejection | Authoritative receipt reader | public-fixture-browser.test.ts malformed/oversized response test | Initiate cancellation without awaiting peer branch consumption |
+| 2026-10-03 | Unknown-submit readback could verify after private session generation changed | Browser task receipt reconciliation | browser-task-continuity.test.ts generation drift zero receipt I/O | Recheck the stored exact scope digest before receipt replay or authoritative readback |
+- [ ] Stop output distinguishes logical action fencing from provider cleanup confirmation. Report cleanup_pending when termination fails or allocation identity is lost; never imply paid resource termination succeeded
+- [ ] Recheck enabled and absolute expiry after awaited grant admission, including the final action callback; time can expire while authority lookup is pending
+| 2026-10-03 | Stop projected unconditional cancellation despite provider cleanup failure | Typed browse_act stop | browser-task-handler.test.ts cleanup_pending projection; browser-task-continuity.test.ts throwing provider end fences further action | Return honest bounded cleanup outcome |
+| 2026-10-03 | Final admission could resolve after absolute expiry and still authorize physical submit | Browser task grant boundary | browser-task-continuity.test.ts final admission advances beyond expiresAt, zero physical submit | Revalidate lifetime/flag after asynchronous authority lookup |
+- [ ] Approval publication failure/Modify must preserve recoverability: editing or repreparing atomically invalidates old exact proposal IDs while retaining the current form, never reopening submitted/unknown actions
+| 2026-10-03 | A failed approval-card publication or Modify stranded the task in approval_pending | Browser proposal preparation | browser-task-continuity.test.ts reprepare/edit invalidates old approvals with zero submit | Permit bounded pending preparation and supersede old references atomically |
+- [ ] Owner stop first revokes independent admission before task-mutex cleanup. A pending provider await must encounter current revocation at the final action callback; typed stop without this host hook fails closed
+| 2026-10-03 | Cleanup mutex alone could queue owner stop behind an in-flight physical action | Browser stop integration | browser-task-continuity.test.ts deferred callback sees independent stop; browser-task-handler.test.ts requires ordered stop hook | Revoke canonical admission immediately before queued provider cleanup |
+- [ ] Malformed authoritative driver receipt metadata remains unknown without throwing away no-retry intent or promoting completion; parse before durable verified transition
+| 2026-10-03 | Malformed site receipt metadata could throw during durable checkpoint promotion | Browser authoritative result reconciliation | browser-task-continuity.test.ts bad ID/time receipt remains unknown, exactly one physical action | Safe-parse receipt and retain unknown state |
+
+
+### Browser owner host admission and lifecycle checks
+
+- [ ] Typed browser commands fail closed without trusted configuration; legacy free-text handler remains singly registered. A BROWSER binding alone does not activate canonical owner identity.
+- [ ] Physical DO, current canonical directory owner/presence/revision, exact immutable task/manifest/site, fresh operation evidence and atomically claimed exact desk proposal agree before physical actions.
+- [ ] One private task/checkpoint per owner, five write attempts, 32 fresh authorizations and bounded lifetime survive reconstruction. Owner stop fences admission before waiting for the task mutex.
+- [ ] Concurrent same-owner initial reads resume one allocation under the mutex. Ended cleanup is idempotent, and browser cleanup never awaits in front of inbox/outbox/scheduler arbitration.
+- [ ] Shared alarm retains browser expiry/retry wakes; failed cleanup remains private pending evidence. Two distinct canonical UUIDs in separate physical DOs cannot project each other's session identities.
+
+- [ ] Missing, malformed or already-closed browser checkpoints retire stale runnable wakes; malformed private metadata is preserved and quarantined, never treated as a fresh task.
+- [ ] Cleanup physical attempts persist before provider I/O and stop after three, including across reconstruction. Lost allocation IDs, unavailable or incompatible configured drivers and exhausted cleanup retain unresolved private evidence with no runnable browser retry wake; none claims provider closure.
+
+- Browser trial consent must return default404 before work; configured owner-keyed rate admission and declared/chunked body bounds precede directory/storage. Stop, expiry and rebinding during final lookup cannot install or resurrect consent; replay preserves usage.
+- Typed browser source withdrawal during lookup, SDK load/connect or DOM observation denies subsequent allocation/read/fill/submit/receipt and stale result publication; cleanup remains independent. Approval rechecks durable task revision without a completed turn closure.
+- [ ] In-flight browser inspect/fill failures or source withdrawal immediately attempt independent cleanup. Failed close retains the exact private session as cleanup_pending; nested denial never resurrects active state or duplicates that attempt, and verified receipts survive cleanup failure.
+- [ ] Denied exact desk approval causes zero approval-bearing grant-supplier calls; removing only the initial approval rejection must fail its regression while the post-await check remains. Denied or withdrawn approval also fences submit after grant/directory/storage/source waits and synchronously after the final source await before native DOM evaluation. Local proof is not a live exploit claim.
+- An unavailable optional browser binding RPC must leave the existing ordinary default responder usable while its noncanonical principal remains unable to resolve the canonical browser host. Test the default preparation path, not only the injected canonical host.
+
+
+| 2026-10-04 | A code-styled link label made an entire generated Telegram file readback literal; entity rejection had no plain fallback | Channel presentation | Representative readback RED→GREEN, literal/code/URL escaping, definite-rejection fallback and concurrent-forget/owner/ambiguity controls in telegram-presentation.test.ts | Exact N01T output and live Telegram acceptance remain unverified; unsupported Markdown nesting stays literal. |
+
+- [ ] Render generated Telegram finals at the channel boundary only: preserve artifact/tool bytes and opaque code, escape HTML and exact receipt URLs, and avoid unsupported nested code entities.
+- [ ] Plain fallback requires a definite entity-format rejection and the same current frozen attempt, owner eligibility and expiry; concurrent cancellation/forget must prevent fallback and stale payload restoration. Network uncertainty never authorizes a retry.
+
+- [ ] A generated final's frozen plain fallback crosses the same secret-URL persistence and egress boundary as its rich copy. Redact before HTML escaping and at both enqueue lanes; synthetic provider OAuth URLs must disappear from both copies and fallback transport. Literal escaped backslashes remain data.
+
+- Start the built default Worker under its deployed compatibility date and flags: default-off browser code must not import an SDK requiring unsupported Node modules. A configured Cloudflare trial supplies its SDK loader through trusted host preparation; adding runtime compatibility or browser bindings remains a separate reviewed activation.
+
+### Google refresh classification
+
+- [ ] Preserve token-endpoint status and typed failure through native, Drive and MCP reads. Only invalid/revoked grants mark permanent connection health or request reconnect; rate limits, outages, transport/timeouts and client configuration failures leave the pinned account intact. Recover on that same grant without retrying an uncertain effect intent.
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| Google token 503/temporarily_unavailable became 401 and failing health | connector-proxy-entry.test.ts signed native/Drive/MCP refresh matrix and same-connection recovery; google-token-refresh.test.ts local bearer health | Scoped credentials and intent_pending custody unchanged; no provider retry or account widening |
+
+- [ ] Public browser adapters must exercise the installed SDK serializer with wrapped bindings; name lookup can reject wrappers despite passing fake SDK tests. Connect the exact retained ID, never silently allocate a replacement.
+- [ ] Redirect checks must precede every followed target, including prohibited ports/credentials. Playwright route.continue does not intercept every redirect hop; test actual route callbacks and finite egress before following.
+- [ ] The ordinary registered two-argument ownerDO must deliver page evidence through the real public-read handler. Node fakes cannot prove Worker native-object compatibility; canonical admit/deadline controls must survive hook context projection.
+- [ ] Browser allocation IDs require actual string validation before custody or connection; regex coercion of missing/null values cannot yield a completed read or skip cleanup.
+
+- [ ] Controlled synthetic browser submit classification includes native button/default-button and input submit/image controls plus Enter in a form. Model labels or a declared read never bypass the owner hold; a declared send may widen it. Regression: browser-synthetic-commands.test.ts native submitter matrix.
+- [ ] Browser absolute expiry is checked synchronously after the final awaited observation, at physical execution and at exact approved request authorization. Regression: browser-synthetic-commands.test.ts advances the clock during final observation and proves zero POSTs plus physical cleanup.
+- [ ] Widening a hold from a model-declared send must not substitute a different action. Only the observed configured native form submit or Enter may mint this slice's submit card; other declared sends remain explicitly unsupported, with no card, action or success claim.
+
+| 2026-10-07 | PR897 firstCI found canonical SQL history42/source43 drift, missing custody/rollback table inventory, stale Telegram presentation and valid0.4 corruption fixture; bounded review then found comment versions counted as executable SQL and unqualified personal-derived custody exemption | Data and migrations / Forget inventory | canonical-history-versions.test.mjs ignores line/nested block comments and rejects malformed/quoted/duplicate declarations; actual verifier commentout exits nonzero, correct43GREEN; forget-store-table.test.ts custody KNOWN_GAP; workunit version/envelope regressions48GREEN | Count executable SQL only, preserve DB assertion; no-text identity hash is not non-personal. Runtime/SQLschema unchanged, sourceguards not live acceptance |
+| 2026-10-07 | Interior `$assertion$` tag hidden in a presumed comment ended the real PL/pgSQL body while the lexer counted smuggled declarations (old verifier exit0 FALSE-GREEN on probe); runtime diagnostic 429 omitted a bounded Retry-After header | Data and migrations / Runtime diagnostic | canonical-history-versions.test.mjs interior-tag unit + subprocess verifier exit1 RED->GREEN; common-runtime-diagnostic.test.ts asserts retry-after 60; old-lexer probe reproduces false-green | Validate the true dollar-quote body boundary before lexing; fixed bounded retry header per repo convention. Runtime/SQL schema otherwise unchanged |
+| 2026-10-07 | PR897 ec30CI found DO migrations 9-11 (custody/workunit/continuation) landed in do-schema.ts without do-migration-reservations.json entries | Data and migrations / DO lineage | guard-do-migration-lineage fails closed on unreserved migrations; reserved 9-11 appended per rebase_then_append, guard ok (11 reserved) | Reserve DO migration versions in the same commit that lands the migration |
+
+- [ ] Before publication, run the complete repository guard matrix, not only focused feature suites. Released protocol bytes remain immutable: extend via a new common schema and runtime composition, never edit a released union or repin its fingerprint.
+- [ ] Common execution deadlines contribute persisted due time to the sole alarm arbiter; a scheduler rearm with no rows or a later wake must preserve the common deadline. Regression: scheduler-alarm.test.ts persisted common execution deadline; RED without its arbiter contribution.
+
+| 2026-10-07 | Exhaustive PR897 guard run found duplicated model IDs, two direct alarm calls, released v0.3 union mutation/new file misclassified as released v0.4; shared scheduler rearm could erase common execution wake; local pgTAP inherited IST | Repository contracts / Alarm lifetime / Released protocol bytes | Canonical WALDO_CHAT_MODEL reference; original released bytes restored and common extension composed separately; scheduler-alarm.test.ts deadline-preservation RED->GREEN; full guards and pgTAP466/466; test cluster explicitlyUTC | Guard breadth before push. One physical alarm arbiter, persisted common deadline, pinned released protocol bytes, deterministic local test timezone. No guard bypass or golden fingerprint change |
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| Multi-part ACK persistence errors were caught as transport errors and could resolve without surfacing the storage fault | heartbeat-outbox.test.ts crash persistence; cap-size-limits.test.ts three-part ACK failure and middle-part response loss | Persist attempting before every part, propagate storage faults, quarantine uncertainty without resend |
+
+- Health span withholding must leave JSON-encoded object/array correlation intact for the existing health denial scan; cover raw and wrapped JSON strings as well as unencoded structured measurements.
+
+### Common host bootstrap independence
+
+- [ ] Exercise signed common-owner source/execution RPCs with the serving binding profile, without local-only or unused legacy provider bindings. Keep local ingress and legacy provider guards closed, and preserve common lease wakes when persisted legacy work fails.
+
+| 2026-10-08 | Eager legacy RunLoop provider resolution prevented signed common-owner RPCs from constructing when staging had no WALDO_ENV | Runtime composition / serving binding profile | common-run-loop-bootstrap.test.ts reproduces exact constructor error, then source replay and execution receipt settlement across eviction; invalid authority/local seams and legacy dispatch controls | Shared coordinator/scheduler construction must not initialize an unrelated provider; legacy resolver guards remain unchanged |
+
+- [ ] Public-only browser releases contain no custody/migration/proxy activation and leave registration/binding absent by default. Prove ordinary inbox/day-plan/reminder/memory controls, retained owner read/navigation/tabs/PNG/cancel, effect refusal, explicit-provider isolation and uncertain-action non-replay. Browser-off gateway selection returns before constructing an unused optional adapter. Live provider latency and complete paid-test admission require separate receipts.
+
+### Normal public browser reads
+
+A fresh staging Cloudflare public read uses the existing reader without requiring paid-test registration. Its authenticated owner host reserves the bounded browser-duration estimate against retained owner/month accounting before acquisition, including prior spend refs. Only validated physical absence settles unused duration in the original reservation month; lost or late acquisition and uncertain cleanup retain the full estimate. Legacy charges and replay evidence remain intact, while ordinary reads have no invented lifetime cap. Account-level billing and registered test envelopes are separate from this usage estimate. Registration-backed retained session operations remain separate. Provider binding/SDK readiness and the authenticated read-only diagnostic do not grant spending approval. Ordinary model turns receive no new acceptance capsule or retry change.
+
+- [ ] Normal public reads reserve duration once, retain exact replay evidence, and settle atomically only after valid physical absence. Cover late acquire/readback, malformed session lists, owner/custody/intent drift, legacy retention, month boundaries and real lower ceilings; never credit another month or infer zero cost from uncertainty.
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| A shared $20 historical-format constant also admitted new tests above the approved $10 cap | common-staging-registration.test.ts hard-coded $10 boundary; owner-browser-public-read.test.ts rejected declarations, unchanged historical $10/$15/$20 records and retained lower ceilings; historical automatic/manual cleanup and read-only diagnostic regressions | New admission tightens; historical charges, replay evidence, monthly counters and actual ceilings remain unchanged |
+
+- [ ] Expired historical registrations cannot block the ordinary public-read path solely because their immutable ceiling predates a tighter admission cap. Validate owner/pin/format before expiry fallback, reject live/future over-cap registration, count all historical charges under the effective lower ceiling, and preserve that bound when the descriptor disappears.
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| Expired $17.91 registration hit new $10 admission validation before normal-read fallback; removing its descriptor could restore the historical ceiling | common-owner-browser-registration.test.ts automatic/manual real-handler reads, $8 control, live/future/pin/owner/custody refusals and descriptor removal; owner-browser-public-read.test.ts unchanged legacy aggregates and retained test ceilings | Exact historical pins, refs, charges and funded cleanup remain intact; only new ordinary admission is bounded, with no reset/refund or environment mutation |
+
+### Ordinary retained browser journeys
+
+- [ ] Ordinary interactive requests select `retain_session` through the published model schema and dispatcher, receive DOM/native AX/PNG, continue beyond four observations and across an owner reply, then prove exact-session absence before settling duration. Read-only requests keep one-shot cleanup. Bound image history independently of actions; separate provider inactivity from the real admitted task deadline. Preserve existing charges and ceilings without issuing/refilling trial authority.
+- [ ] Malformed or duplicate provider session IDs cannot certify absence. Lost connections invalidate old refs and disclose recreated document state; wrong/expired handles or changed owner custody never allocate a replacement or replay an effect.
+
+### Google reply and Calendar recovery evidence
+
+- [ ] Resolve a Gmail reply parent and subject from the selected account's thread, validate its provider Message-ID/References, and freeze those headers in approved MIME. A send acknowledgement or search hit cannot establish Sent: require metadata with SENT, exact RFC822 Message-ID and intended thread. Test response loss, unavailable/mismatched metadata, frozen-byte substitution, wrong account and restart without another send.
+- [ ] Calendar apply and Undo use distinct private operation markers. Reconcile uncertain Undo read-only while retaining the confirmed applied ETag and original Undo payload. A recovered apply never promotes a later readback ETag into Undo authority; missing cancellation markers remain uncertain. Restore date-only events with date and clear dateTime, and clear date when moving to timed endpoints. Test later edits, marker loss, restart and replay without another mutation.
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| Reply MIME omitted provider threading headers; Gmail search/acknowledgement could claim Sent without exact metadata; Calendar recovered matching fields without an operation marker, discarded uncertain Undo custody, and restored all-day values as dateTime | google-recovery-journey.test.ts registered Gmail and Calendar handlers, approval desk and restarted effect ledger over labelled synthetic provider doubles; google.test.ts metadata readback; approvals.test.ts exact Sent evidence | Local synthetic/source proof only. Existing account routing, frozen MIME, stable create IDs and If-Match fences remain. No live provider, grants, deployment or database reset; cancellation tombstones without markers remain uncertain |
+
+- [ ] Positive effect fixtures must include the same exact provider evidence required in production: Sent metadata or the captured Calendar operation marker. Keep missing/wrong evidence and replay controls alongside success cases; owner-ingress payload assertions include the operation marker.
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| Six existing positive fixtures asserted completion from a Gmail acknowledgement/search hit or unmarked Calendar evidence, or omitted the new create marker from an exact payload assertion | owner-effect-approval.test.ts and owner-effect-break-936.test.ts exact Sent doubles; owner-effect-adapters.test.ts captured marker and missing/foreign controls; owner-do-ingress-isolation.test.ts exact marked create payload | Fixture-only correction; source checks unchanged. Missing/mismatched Sent metadata and Calendar markers stay uncertain with one dispatch across replay |
+
+- [ ] Recovery metadata must not change Calendar attendee notification policy. Preserve the baseline's omitted sendUpdates/sendNotifications parameters on create, move, marked cancellation and legacy DELETE, while keeping operation markers and If-Match fences.
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| Google recovery added undisclosed sendUpdates=none across Calendar mutation paths | google.test.ts six synthetic wire cases for marked/unmarked create, move and cancellation; google-recovery-journey.test.ts existing approved apply/Undo, replay and later-edit controls | Restore baseline omission, not a new sendUpdates=all policy. Marked cancellation remains atomic PATCH status=cancelled plus marker under If-Match. Provider guest-delivery behavior and tombstone marker retention still require staging acceptance |
+
+### Basic native admission and recovery
+
+- [ ] App text admission commits payload and wake together before ACK; a storage/alarm fault rolls both back. Preserve earlier sibling wakes, quarantine recovered running attempts without provider replay, retain queued custody on directory outage, and deny revoked pending sessions. Canonical history requires signed current session, physical owner routing and matching principal/tenant witnesses. Cover strict session DTO, maximum text input, same-ID body conflicts, settings action receipts and push-first signout with fresh validated absence.
+
+| Failure | Regression | Boundary |
+| --- | --- | --- |
+| Legacy app acknowledged a volatile turn and trusted a do-name header; a separated wake could strand committed work | app-basic-serving and app-inbox signed no-Telegram journey, reconstruction/alarm, malformed authority and atomic wake fault | Local synthetic OTP/directory/model proof; native, live provider and staged namespace acceptance remain separate |

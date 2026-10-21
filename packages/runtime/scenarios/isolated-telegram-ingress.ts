@@ -3,6 +3,7 @@
 // scripted responders here cannot score a W/R model answer or emulate provider effects.
 import { handleTelegramWebhook } from '../src/channels/telegram-webhook';
 import { TelegramOwnerListener, type TelegramTurnOutcome, type TelegramOwnerApi, type TurnLogEntry } from '../src/channels/telegram-listener';
+import { inboundTurn, ownerWords } from '../src/channels/owner-inbound-turn';
 import type { OwnerDirectory, OwnerRoute } from '../src/identity/owner-directory';
 
 export type IngressRecord = Readonly<{
@@ -44,7 +45,7 @@ export const isolatedTelegramIngress = (
       const api: TelegramOwnerApi = {
         setMessageReaction: async (request) => { bucket.sends.push({ method: 'setMessageReaction', request }); },
         sendChatAction: async (request) => { bucket.sends.push({ method: 'sendChatAction', request }); },
-        sendMessage: async (request) => { bucket.sends.push({ method: 'sendMessage', request }); },
+        sendMessage: async (request) => { bucket.sends.push({ method: 'sendMessage', request }); return { message_id: bucket.sends.length }; },
       };
       const listener = new TelegramOwnerListener({
         ownerTelegramId: sender, api,
@@ -52,7 +53,7 @@ export const isolatedTelegramIngress = (
         saveOffset: async () => undefined,
         log: (entry) => bucket.hops.push(entry),
       });
-      bucket.outcomes.push(await listener.handle({ updateId: parsed.update_id, messageId: null, senderId: sender, chatId: sender, sentAt: null, text: parsed.message.text }));
+      bucket.outcomes.push(await listener.handle(inboundTurn({ updateId: parsed.update_id, messageId: null, senderId: sender, chatId: sender, sentAt: null, parts: ownerWords(parsed.message.text) })));
       return new Response('ok');
     } }),
   } as unknown as DurableObjectNamespace;
@@ -71,7 +72,7 @@ export const isolatedTelegramIngress = (
       const response = await handleTelegramWebhook(new Request('https://fixture.invalid/telegram/webhook', {
         method: 'POST', headers: { 'x-telegram-bot-api-secret-token': 'fixture-secret' },
         body: JSON.stringify({ update_id: ++sequence, message: { from: { id: subject }, chat: { id: subject, type: 'private' }, text } }),
-      }), { TELEGRAM_WEBHOOK_SECRET: 'fixture-secret', TELEGRAM_OWNER_DO: namespace }, (work) => pending.push(work), directory);
+      }), { TELEGRAM_WEBHOOK_SECRET: 'fixture-secret', OWNER_DO: namespace }, (work) => pending.push(work), directory);
       if (response.status !== 200) throw new Error(`test ingress returned ${response.status}`);
       await Promise.all(pending);
       return snapshot(owner);

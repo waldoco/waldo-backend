@@ -1,4 +1,5 @@
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { canonicalHistoryVersions } from './canonical-history-versions.mjs';
 
 const expectedMigrations = [
   '20260709171312_0001_identity.sql',
@@ -31,11 +32,41 @@ const expectedMigrations = [
   '20260928130000_waldo_delete_owner_vault_portable.sql',
   '20260928140000_waldo_delete_owner_session_tables.sql',
   '20260928160000_waldo_health_context.sql',
+  '20260928182541_health_context_daily_only.sql',
   '20260928190000_waldo_invite_chain.sql',
   '20260929030000_waldo_console_session_ttl.sql',
   '20260930060000_waldo_proxy_intent_integrity.sql',
   '20260930070000_waldo_workspace_owner_mapping.sql',
   '20260930100000_waldo_admin_invite_projection.sql',
+  '20260930134308_waldo_health_context_access_hardening.sql',
+  '20261002120000_waldo_owner_admission_revision.sql',
+  '20261002170021_waldo_optional_phone_signup.sql',
+  '20261003000000_waldo_router_signed_fail_closed.sql',
+  '20261004190110_owner_trace_identity.sql',
+  '20261007040100_common_owner_authority.sql',
+  '20261008000000_browser_owner_binding.sql',
+  '20261008000100_waldo_device_bridge.sql',
+  '20261010010000_app_session_authority.sql',
+  '20261010040000_app_push_custody.sql',
+  '20261010060000_owner_runtime_authority.sql',
+  '20261011000000_health_plane.sql',
+  '20261011010000_delete_owner_health_context.sql',
+  '20261011020000_health_series.sql',
+  '20261011030000_health_context_write_fence.sql',
+  '20261011200000_waldo_connect_channel_app.sql',
+  '20261011210000_health_retention_derived.sql',
+  '20261011220000_health_retention_sweep.sql',
+  '20261011230000_delete_owner_identity.sql',
+  '20261012000000_waldo_imessage_connector.sql',
+  '20261013000000_waldo_device_bridge_v030.sql',
+  '20261013150000_gmail_push_route.sql',
+  '20261014060000_waldo_admin_invite_uncapped.sql',
+  '20261014120000_waldo_imessage_shared_bridge.sql',
+  '20261014130000_waldo_device_pairing_owner.sql',
+  '20261017090000_waldo_whatsapp_onboarding_replies.sql',
+  '20261017100000_waldo_console_auth_throttle_window.sql',
+  '20261017120000_waldo_whatsapp_text_first_link.sql',
+  '20261020120000_waldo_cost_ledger.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);
@@ -48,6 +79,12 @@ if (JSON.stringify(migrations) !== JSON.stringify(expectedMigrations)) {
   throw new Error(
     `migration list drifted\nexpected: ${expectedMigrations.join(', ')}\nactual: ${migrations.join(', ')}`,
   );
+}
+
+const historyAssertion = readFileSync(new URL('../supabase/fixtures/assert-canonical-migration-history.sql', import.meta.url), 'utf8');
+const historyVersions = canonicalHistoryVersions(historyAssertion);
+if (JSON.stringify(historyVersions) !== JSON.stringify(expectedMigrations.map(name => name.slice(0, 14)))) {
+  throw new Error('SQL canonical migration history assertion drifted from source list');
 }
 
 console.log(`canonical Supabase migration list verified (${migrations.length} migrations)`);

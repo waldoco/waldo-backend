@@ -3,6 +3,6 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["test/browser-workspace-fixture.test.ts"],
+    include: ["test/browser-workspace-fixture.test.ts", "test/console-signin-browser.test.ts"],
   },
 });

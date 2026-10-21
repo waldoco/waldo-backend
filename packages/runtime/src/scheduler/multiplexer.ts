@@ -11,19 +11,23 @@ import {
   type ScheduleRecurrence,
 } from '@waldo/contracts';
 import type { Deps } from '../seams/deps';
-import { armAlarm } from './alarm-slot';
+import { FINAL_OUTBOX_KEY, type FinalRecord } from '../channels/telegram-final-outbox';
+import { rearmSharedAlarm } from './alarm-slot';
 
 const MAX_MISSED_CHAIN = 64;
 // Minimum spacing for an immediate re-arm (next row already due). Live turns are unaffected
 // (due work still fires within DUE_LOOKAHEAD_MS); the pacing lets a long missed-run drain
 // yield the isolate between deliveries instead of starving sibling work back-to-back.
-const MIN_REARM_DELAY_MS = 250;
+
 const DUE_LOOKAHEAD_MS = 1_000;
 const MAX_DUE_PER_ALARM = 8;
 const PRODUCT_RETRY_DELAY_MS = 30_000;
 const DURABILITY_RETRY_CAP_MS = 15 * 60_000;
-const QUARANTINE_AFTER_ATTEMPTS = 3;
+export const QUARANTINE_AFTER_ATTEMPTS = 3;
 const QUARANTINE_MS = 24 * 60 * 60_000;
+// A paused row whose pause has ended. rearm() wakes for it. hasDue() counts it as due work and reapQuarantine() returns it to
+// armed, and both read this one condition: a row one counts and the other skips would wake the alarm every 250 ms.
+const PAUSE_ENDED = "status = 'quarantined' AND quarantined_until IS NOT NULL AND quarantined_until <= ?";
 
 type ScheduleSqlRow = {
   id: string;
@@ -49,7 +53,15 @@ export type ScheduleInput = {
   recurrence?: ScheduleRecurrence | null;
 };
 
-export type ScheduleExecutor = (entry: ScheduleEntry) => Promise<void>;
+// Thrown by read(id) for a row this Worker cannot parse, so a caller can tell it apart from a passing fault.
+export class UnreadableScheduleRowError extends Error {
+  constructor() { super('schedule row unreadable'); this.name = 'UnreadableScheduleRowError'; }
+}
+
+// One id's row as this Worker reads it. `unreadable` is a row this Worker cannot parse, such as one a newer Worker wrote.
+export type ScheduleLookup = Readonly<{ state: 'absent' } | { state: 'entry'; entry: ScheduleEntry } | { state: 'unreadable' }>;
+
+export type ScheduleExecutor = (entry: ScheduleEntry) => Promise<void | 'delivery_pending'>;
 export type ScheduleExecutors = Partial<Record<ScheduleKind, ScheduleExecutor>>;
 
 export class Scheduler {
@@ -118,28 +130,82 @@ export class Scheduler {
     return scheduled;
   }
 
+  // Moves an armed entry's next run earlier, to `at`, and nothing else: its last run, retry count and quarantine stay
+  // as the scheduler set them, so an outside wake never resets a retry or lifts a quarantine. A retrying entry keeps its
+  // backoff. Returns whether the entry moved.
+  async pullForward(id: string, at: number): Promise<boolean> {
+    const moved = this.sql.exec(
+      `UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ?
+        WHERE id = ? AND status = 'armed' AND attempts = 0 AND due_at > ?`,
+      at, at, this.deps.now(), id, at,
+    ).rowsWritten > 0;
+    if (moved) await this.rearm();
+    return moved;
+  }
+
   async cancel(id: string): Promise<void> {
     this.sql.exec('DELETE FROM schedule WHERE id = ?', id);
     await this.rearm();
+  }
+
+  async cancelKind(kind: ScheduleKind): Promise<number> {
+    const count = this.sql.exec<{ count: number }>('SELECT COUNT(*) AS count FROM schedule WHERE kind = ?', kind).toArray()[0]!.count;
+    this.sql.exec('DELETE FROM schedule WHERE kind = ?', kind);
+    await this.rearm();
+    return count;
   }
 
   read(id: string): ScheduleEntry | null {
     const row = this.sql
       .exec<ScheduleSqlRow>('SELECT * FROM schedule WHERE id = ?', id)
       .toArray()[0];
-    return row ? toEntry(row) : null;
+    if (!row) return null;
+    const [entry] = readable([row]).entries;
+    if (!entry) throw new UnreadableScheduleRowError();
+    return entry;
   }
 
-  async dispatchDue(executors: ScheduleExecutors): Promise<readonly ScheduleEntry[]> {
+  // For callers that arm or cancel a fixed id at start-up. They treat an unreadable row as present and leave it as it is,
+  // so one reshaped row neither fails the runtime's start nor is overwritten before the Worker that wrote it returns.
+  lookup(id: string): ScheduleLookup {
+    const row = this.sql.exec<ScheduleSqlRow>('SELECT * FROM schedule WHERE id = ?', id).toArray()[0];
+    if (!row) return { state: 'absent' };
+    const [entry] = readable([row]).entries;
+    if (entry) return { state: 'entry', entry };
+    console.log(JSON.stringify({ hop: 'schedule_row_invalid', ok: false, code: 'lookup', count: 1 }));
+    return { state: 'unreadable' };
+  }
+
+  async cancelReadable(id: string): Promise<void> {
+    if (this.lookup(id).state === 'entry') await this.cancel(id);
+  }
+
+  hasDue(): boolean {
+    const now = this.deps.now();
+    return this.dueEntries(now).entries.length > 0
+      || readable(this.sql.exec<ScheduleSqlRow>(`SELECT * FROM schedule WHERE ${PAUSE_ENDED}`, now).toArray()).entries.length > 0;
+  }
+
+  // canStart: asked before each entry; false leaves it and the rest armed and due for the next wake.
+  async dispatchDue(executors: ScheduleExecutors, canStart?: () => boolean): Promise<readonly ScheduleEntry[]> {
     const now = this.deps.now();
     this.reapQuarantine(now);
-    const due = this.dueEntries(now).slice(0, MAX_DUE_PER_ALARM);
+    const { entries, unreadable } = this.dueEntries(now);
+    if (unreadable > 0) console.log(JSON.stringify({ hop: 'schedule_row_invalid', ok: false, count: unreadable }));
+    const due = entries.slice(0, MAX_DUE_PER_ALARM);
     const dispatched: ScheduleEntry[] = [];
 
     try {
       for (const entry of due) {
+        if (canStart?.() === false) break;
         let fresh = this.read(entry.id);
         if (fresh === null || fresh.status !== 'armed' || fresh.due_at > now + DUE_LOOKAHEAD_MS) {
+          continue;
+        }
+        // Telegram final already committed before a crash at executor-return/complete.
+        // Advance scheduling without replaying its model/tools; outbox owns delivery settlement.
+        if (this.hasCommittedFinal(fresh)) {
+          this.complete(fresh, now);
           continue;
         }
         // C3 dedupe: an occurrence still running (or crashed-and-unsettled) blocks this fire.
@@ -182,14 +248,22 @@ export class Scheduler {
             this.settleRun(runId, 'failed', 'scheduler_handoff', now);
             throw new Error(`no scheduler executor for ${bumped.kind}`);
           }
-          await executor(bumped);
+          const delivery = await executor(bumped);
           this.complete(bumped, now);
-          this.settleRun(runId, 'ok', null, now);
+          if (delivery !== 'delivery_pending') this.settleRun(runId, 'ok', null, now);
+          else { this.markHeartbeatDecision(runId, 'acted'); this.markDelivery(runId, 'pending'); }
           dispatched.push(bumped);
         } catch (err) {
           if (isCrashInjectionError(err)) {
             // No settle: a row stuck in 'running' is the crashed-run evidence.
             throw err;
+          }
+          if (this.hasCommittedFinal(bumped)) {
+            this.complete(bumped, now);
+            this.markHeartbeatDecision(runId, 'acted');
+            this.markDelivery(runId, 'pending');
+            dispatched.push(bumped);
+            continue;
           }
           const disposition = this.applyFailurePolicy(bumped, now);
           if (this.runOutcome(runId) === 'running') {
@@ -206,17 +280,25 @@ export class Scheduler {
     }
   }
 
-  private dueEntries(now: number): ScheduleEntry[] {
-    return this.sql
+  private hasCommittedFinal(entry: ScheduleEntry): boolean {
+    if (entry.kind !== 'reminder' && entry.kind !== 'heartbeat') return false;
+    const finals = this.storage.kv.get<readonly FinalRecord[]>(FINAL_OUTBOX_KEY) ?? [];
+    return finals.some(record => {
+      const receipt = entry.kind === 'reminder' ? record.reminder : record.heartbeat;
+      return receipt?.id === entry.id && receipt.occurrence === entry.occurrence_at;
+    });
+  }
+
+  private dueEntries(now: number): Readonly<{ entries: ScheduleEntry[]; unreadable: number }> {
+    const { entries, unreadable } = readable(this.sql
       .exec<ScheduleSqlRow>(
         `SELECT *
            FROM schedule
           WHERE status = 'armed' AND due_at <= ?`,
         now + DUE_LOOKAHEAD_MS,
       )
-      .toArray()
-      .map(toEntry)
-      .sort(compareScheduleEntries);
+      .toArray());
+    return { entries: entries.sort(compareScheduleEntries), unreadable };
   }
 
   private bumpAttempt(id: string, now: number): ScheduleEntry {
@@ -333,7 +415,7 @@ export class Scheduler {
     const [lower, upper] = occurrenceIdRange(scheduleId, occurrenceAt);
     const row = this.sql
       .exec<{ id: string }>(
-        `SELECT id FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ? AND outcome = 'running' ORDER BY id DESC LIMIT 1`,
+        `SELECT id FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ? AND outcome = 'running' ORDER BY attempt DESC, id DESC LIMIT 1`,
         scheduleId,
         lower,
         upper,
@@ -374,6 +456,18 @@ export class Scheduler {
     );
   }
 
+  settleDelivery(runId: string, delivered: boolean): void {
+    this.markHeartbeatDecision(runId, 'acted');
+    this.markDelivery(runId, delivered ? 'sent' : 'failed');
+    this.settleRun(runId, delivered ? 'ok' : 'quarantined', delivered ? null : 'delivery', this.deps.now());
+  }
+
+  // The owner cancelled the work before it was sent: the run did not fail, and no delivery was attempted.
+  settleCancelled(runId: string): void {
+    this.sql.exec(`UPDATE schedule_runs SET delivery = NULL WHERE id = ? AND outcome = 'running'`, runId);
+    this.settleRun(runId, 'ok', null, this.deps.now());
+  }
+
   private settleRun(runId: string, outcome: 'ok' | 'failed' | 'quarantined' | 'missed', errorClass: 'run' | 'scheduler_handoff' | 'delivery' | null, now: number): void {
     this.sql.exec(
       `UPDATE schedule_runs
@@ -389,11 +483,20 @@ export class Scheduler {
 
   private hasRunningRun(scheduleId: string, occurrenceAt: number): boolean {
     const [lower, upper] = occurrenceIdRange(scheduleId, occurrenceAt);
+    // Preserve crashed attempts as evidence; a later terminal attempt of that exact
+    // occurrence supersedes them. Removing the numeric attempt suffix isolates its prefix.
     return (
       this.sql
         .exec(
-          `SELECT 1 FROM schedule_runs
-            WHERE schedule_id = ? AND outcome = 'running' AND NOT (id >= ? AND id < ?)
+          `SELECT 1 FROM schedule_runs AS running
+            WHERE running.schedule_id = ? AND running.outcome = 'running' AND NOT (running.id >= ? AND running.id < ?)
+              AND NOT EXISTS (
+                SELECT 1 FROM schedule_runs AS recovered
+                 WHERE recovered.schedule_id = running.schedule_id
+                   AND recovered.attempt > running.attempt
+                   AND (recovered.outcome = 'ok' OR recovered.delivery IN ('sent', 'failed'))
+                   AND recovered.id = substr(running.id, 1, length(running.id) - length(CAST(running.attempt AS TEXT))) || recovered.attempt
+              )
             LIMIT 1`,
           scheduleId,
           lower,
@@ -501,23 +604,17 @@ export class Scheduler {
               occurrence_at = quarantined_until,
               quarantined_until = NULL,
               updated_at = ?
-        WHERE status = 'quarantined'
-          AND quarantined_until IS NOT NULL
-          AND quarantined_until <= ?`,
+        WHERE ${PAUSE_ENDED}`,
       now,
       now,
     );
   }
 
-  private async rearm(): Promise<void> {
+  async rearm(): Promise<void> {
     const bound = nextWakeBound(
-      this.sql.exec<ScheduleSqlRow>('SELECT * FROM schedule').toArray().map(toEntry),
+      readable(this.sql.exec<ScheduleSqlRow>('SELECT * FROM schedule').toArray()).entries,
     );
-    if (bound === null) {
-      await this.storage.deleteAlarm();
-      return;
-    }
-    await armAlarm(this.storage, Math.max(bound, this.deps.now() + MIN_REARM_DELAY_MS));
+    await rearmSharedAlarm(this.storage, bound, this.deps.now());
   }
 }
 
@@ -540,6 +637,19 @@ function shouldPropagateDurabilityInvariant(kind: ScheduleKind, err: unknown): b
   return /invalid option|no outbox row|journal\/outbox delivery state mismatch/i.test(
     err.message,
   );
+}
+
+// A row this Worker cannot read is skipped and left exactly as it is. After a rollback, an older Worker can meet a kind
+// or field only a newer one writes: throwing would stop every other job for this owner, and rewriting or quarantining
+// the row would keep the newer Worker from running it after the roll-forward. Skipped rows also set no wake time, so a
+// due one cannot keep the alarm firing.
+function readable(rows: readonly ScheduleSqlRow[]): { entries: ScheduleEntry[]; unreadable: number } {
+  const entries: ScheduleEntry[] = [];
+  let unreadable = 0;
+  for (const row of rows) {
+    try { entries.push(toEntry(row)); } catch { unreadable += 1; }
+  }
+  return { entries, unreadable };
 }
 
 function toEntry(row: ScheduleSqlRow): ScheduleEntry {
@@ -567,7 +677,7 @@ function compareScheduleEntries(a: ScheduleEntry, b: ScheduleEntry): number {
   );
 }
 
-function nextOccurrence(recurrence: ScheduleRecurrence, now: number): number {
+export function nextOccurrence(recurrence: ScheduleRecurrence, now: number): number {
   if (recurrence.type === 'interval') {
     const phase = recurrence.phase_ms % recurrence.every_ms;
     const next =
@@ -583,10 +693,23 @@ function nextOccurrence(recurrence: ScheduleRecurrence, now: number): number {
     if (next === null) throw new Error(`cron recurrence has no occurrence within scan bound: ${recurrence.expression}`);
     return next;
   }
-  return nextDailyLocalOccurrence(recurrence.time, recurrence.timezone, now);
+  if (recurrence.type === 'daily_local') return nextDailyLocalOccurrence(recurrence.time, recurrence.timezone, now);
+  const current = localParts(now, recurrence.timezone);
+  let date = localDate(current);
+  const [hour, minute] = recurrence.time.split(':').map(Number) as [number, number];
+  for (let day = 0; day < 8; day += 1) {
+    const weekday = new Date(Date.UTC(date.year, date.month - 1, date.day)).getUTCDay();
+    const matches = recurrence.type === 'weekdays_local' ? weekday >= 1 && weekday <= 5 : weekday === recurrence.weekday;
+    if (matches && !(day === 0 && current.hour * 60 + current.minute >= hour * 60 + minute)) {
+      const candidate = findLocalOccurrence(date, hour, minute, recurrence.timezone, now);
+      if (sameLocalDate(localParts(candidate, recurrence.timezone), date)) return candidate;
+    }
+    date = addLocalDays(date, 1);
+  }
+  throw new Error('No owner-local recurrence occurrence within one week');
 }
 
-function nextDailyLocalOccurrence(time: string, timezone: string, now: number): number {
+export function nextDailyLocalOccurrence(time: string, timezone: string, now: number): number {
   const [hourText, minuteText] = time.split(':');
   const hour = Number(hourText);
   const minute = Number(minuteText);

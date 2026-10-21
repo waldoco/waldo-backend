@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { browseActHandler, executeBrowserSubmit } from '../src/tools/live/browser';
 
-const ctx = {} as never;
+const ctx = { egressAllowlist: ['*'] } as never;
 const args = { url: 'https://example.com', task: 'find the pricing section', max_actions: 3 };
 
-type Op = 'start' | 'navigate' | 'observe' | 'act' | 'extract' | 'end';
+type Op = 'start' | 'navigate' | 'observe' | 'act' | 'extract' | 'debug' | 'end';
 const opOf = (url: string): Op =>
-  url.includes('/start') ? 'start' : url.includes('/navigate') ? 'navigate' : url.includes('/observe') ? 'observe' : url.includes('/act') ? 'act' : url.includes('/extract') ? 'extract' : 'end';
+  url.includes('/debug') ? 'debug' : url.includes('/start') ? 'start' : url.includes('/navigate') ? 'navigate' : url.includes('/observe') ? 'observe' : url.includes('/act') ? 'act' : url.includes('/extract') ? 'extract' : 'end';
 
 type Action = { selector: string; description: string; method?: string; arguments?: string[] };
 const stagehand = (opts: {
@@ -35,6 +35,8 @@ const stagehand = (opts: {
         return new Response(JSON.stringify({ success: true, data: { result: null, actionId: 'a2' } }));
       case 'extract':
         return new Response(JSON.stringify(opts.extraction ?? { success: true, data: { result: { summary: 'Pricing shown' }, actionId: 'a3' } }));
+      case 'debug':
+        return new Response(JSON.stringify({ pages: [{ id: 'p1', url: 'https://example.com/', title: 't' }] }));
       case 'end':
         return new Response(JSON.stringify({ success: true }));
     }
@@ -82,6 +84,22 @@ describe('browse_act', () => {
       { selector: '#b', description: 'Delete account', method: 'click' },
       { selector: '#b', description: 'Log in', method: 'click' },
       { selector: '#b', description: 'Continue', method: 'submit' },
+      { selector: '#q', description: 'Press Enter in the search box', method: 'press' },
+      { selector: '#q', description: 'Choose an option', method: 'selectOption' },
+      { selector: '#b', description: 'Do the thing', method: 'weirdUnknown' },
+      { selector: '#b', description: 'Do the thing' },
+      { selector: '#b', description: 'Sign in', method: 'click' },
+      { selector: '#b', description: 'Add to cart', method: 'click' },
+      { selector: '#b', description: 'Subscribe to the newsletter', method: 'click' },
+      { selector: '#b', description: 'Donate now', method: 'click' },
+      { selector: '#b', description: 'Sign-in', method: 'click' },
+      { selector: '#b', description: 'Sign up for free', method: 'click' },
+      { selector: '#b', description: 'Log-in', method: 'click' },
+      { selector: '#b', description: 'Reserve a table', method: 'click' },
+      { selector: '#b', description: 'Enroll now', method: 'click' },
+      { selector: '#b', description: 'RSVP', method: 'click' },
+      { selector: '#b', description: 'Get started', method: 'click' },
+      { selector: '#b', description: 'Continue with Google', method: 'click' },
     ]) {
       const record = vi.fn();
       const { calls, fetcher } = stagehand({ actions: [blocked] });
@@ -94,6 +112,16 @@ describe('browse_act', () => {
       expect(calls.filter((c) => c.op === 'act')).toHaveLength(0);
       expect(record).not.toHaveBeenCalled();
     }
+  });
+
+  it('ordinary reading steps still run: click next page, open the transcript, type in a field, scroll', async () => {
+    const record = vi.fn();
+    const { calls, fetcher } = stagehand({ actions: [{ selector: '#n', description: 'Click Next page', method: 'click' }, { selector: '#t', description: 'Click Show transcript', method: 'click' }, { selector: '#s', description: 'Scroll to next section', method: 'nextChunk' }, null] });
+    const result = await browseActHandler('k', 'p', undefined, record, undefined, fetcher).handle(args, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.actions_taken).toHaveLength(3);
+    expect(calls.filter((c) => c.op === 'act')).toHaveLength(3);
   });
 
   it('stops honestly when observe finds nothing on the first step', async () => {

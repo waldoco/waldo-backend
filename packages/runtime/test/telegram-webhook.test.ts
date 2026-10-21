@@ -21,14 +21,27 @@ const run = async (request: Request, env: TelegramWebhookEnv, directory?: OwnerD
 afterEach(() => vi.unstubAllGlobals());
 
 describe('handleTelegramWebhook', () => {
-  it('hands a verified update from the configured owner to their Durable Object and answers at once', async () => {
+  it('forwards only directory identity to the authenticated inbox, never a caller header or baggage', async () => {
+    const n = namespace();
+    const verified = { owner_id: '10000000-0000-0000-0000-00000000000a', owner_email: 'verified@test.invalid' };
+    const directory: OwnerDirectory = { byPresence: async () => ({ doName: 'do-a', subject: '42', timezone: null, traceIdentity: verified }), redeem: async () => null };
+    const request = post('secret');
+    request.headers.set('x-waldo-owner-trace', JSON.stringify({ owner_email: 'from-chat@test.invalid' }));
+    await run(request, { TELEGRAM_WEBHOOK_SECRET: 'secret', TELEGRAM_BOT_TOKEN: 'token', OWNER_DO: n.ns }, directory);
+    const [, init] = n.fetch.mock.calls[0] as unknown as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(JSON.parse(decodeURIComponent(headers.get('x-waldo-owner-trace')!))).toEqual(verified);
+    expect(headers.has('baggage')).toBe(false);
+  });
+  it('waits for authenticated owner inbox admission before answering', async () => {
     const { fetch, idFromName, ns } = namespace();
-    const env: TelegramWebhookEnv = { TELEGRAM_OWNER_DO: ns, TELEGRAM_WEBHOOK_SECRET: 's3cret', WALDO_OWNER_TELEGRAM_ID: '42', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata' };
+    const env: TelegramWebhookEnv = { OWNER_DO: ns, TELEGRAM_WEBHOOK_SECRET: 's3cret', WALDO_OWNER_TELEGRAM_ID: '42', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata' };
     expect((await run(post('s3cret'), env)).status).toBe(200);
     expect(idFromName).toHaveBeenCalledWith('42');
-    expect(fetch).toHaveBeenCalledWith('https://telegram-owner/turn', {
+    expect(fetch).toHaveBeenCalledWith('https://telegram-owner/enqueue', {
       method: 'POST', body: message(42),
-      headers: { 'x-waldo-origin': 'https://w.test', 'x-waldo-telegram-subject': '42', 'x-waldo-timezone': 'Asia/Kolkata' },
+      signal: expect.any(AbortSignal),
+      headers: { 'x-waldo-do-name': '42', 'x-waldo-inbox-secret': 's3cret', 'x-waldo-origin': 'https://w.test', 'x-waldo-telegram-subject': '42', 'x-waldo-timezone': 'Asia/Kolkata' },
     });
   });
 
@@ -38,55 +51,113 @@ describe('handleTelegramWebhook', () => {
       byPresence: async (_provider, subject) => ({ '1': { doName: 'do-a', subject: '1', timezone: null }, '2': { doName: 'do-b', subject: '2', timezone: null } })[subject] ?? null,
       redeem: async () => null,
     };
-    const env: TelegramWebhookEnv = { TELEGRAM_OWNER_DO: ns, TELEGRAM_WEBHOOK_SECRET: 's3cret' };
+    const env: TelegramWebhookEnv = { OWNER_DO: ns, TELEGRAM_WEBHOOK_SECRET: 's3cret' };
     await run(post('s3cret', message(1)), env, directory);
     await run(post('s3cret', message(2)), env, directory);
     expect(idFromName.mock.calls.map(([name]) => name)).toEqual(['do-a', 'do-b']);
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
-  it('never wakes an owner for a stranger, a sender-less update, or a stranger trying a link code', async () => {
-    const { fetch, ns } = namespace();
-    const telegram = vi.fn(async () => new Response(JSON.stringify({ ok: true, result: {} })));
-    vi.stubGlobal('fetch', telegram);
+  it('ignores unknown ordinary text and malformed coded setup without redemption', async () => {
+    const {fetch,ns}=namespace();const redeem=vi.fn();const directory:OwnerDirectory={byPresence:async()=>null,redeem};
+    await run(post('s3cret',message(7)),{OWNER_DO:ns,TELEGRAM_WEBHOOK_SECRET:'s3cret'},directory);
+    await run(post('s3cret',message(7,'/start WRONG1')),{OWNER_DO:ns,TELEGRAM_WEBHOOK_SECRET:'s3cret'},directory);
+    expect(fetch).not.toHaveBeenCalled();expect(redeem).not.toHaveBeenCalled();
+  });
+  it('guards coded setup before DO allocation then waits for durable admission', async()=>{
+    const {fetch,idFromName,ns}=namespace();let release!:()=>void;const gate=new Promise<void>(r=>{release=r});fetch.mockImplementationOnce(async()=>{await gate;return new Response('ok')});
+    const limit=vi.fn(async()=>({success:true}));const env:TelegramWebhookEnv={OWNER_DO:ns,TELEGRAM_WEBHOOK_SECRET:'s3cret',TELEGRAM_BOT_TOKEN:'7:token',RESPONSIBILITY_RATE_LIMITER:{limit}as unknown as RateLimit};
+    let done=false;const result=run(post('s3cret',message(7,'/link ABCDEFGH23')),env).then(r=>{done=true;return r});
+    await vi.waitFor(()=>expect(fetch).toHaveBeenCalled());expect(done).toBe(false);expect(limit).toHaveBeenCalledTimes(2);expect(idFromName).toHaveBeenCalledWith('telegram-link:7:7');
+    expect(JSON.stringify(fetch.mock.calls)).not.toContain('ABCDEFGH23');release();expect((await result).status).toBe(200);
+  });
+  it('edge throttling and absent limiter allocate no routing object',async()=>{
+    const {idFromName,ns}=namespace();const base={OWNER_DO:ns,TELEGRAM_WEBHOOK_SECRET:'s3cret',TELEGRAM_BOT_TOKEN:'7:token'};
+    expect((await run(post('s3cret',message(7,'/start ABCDEFGH23')),base)).status).toBe(503);
+    expect((await run(post('s3cret',message(7,'/start ABCDEFGH23')),{...base,RESPONSIBILITY_RATE_LIMITER:{limit:async()=>({success:false})}as unknown as RateLimit})).status).toBe(429);
+    expect(idFromName).not.toHaveBeenCalled();
+  });
+  it('a forwarded /start or /link CODE is never coded setup: no throttle, no link object, no redemption; a linked owner\'s goes to their own inbox', async () => {
+    const sam = { id: 4242, is_bot: false, first_name: 'Sam' };
+    // The shape the Bot API server sends: forward_origin beside the legacy forward fields.
+    const forwarded = (from: number, text: string) => JSON.stringify({ update_id: 1, message: { from: { id: from }, chat: { id: from, type: 'private' }, text, forward_origin: { type: 'user', date: 1_700_000_000, sender_user: sam }, forward_from: sam, forward_date: 1_700_000_000 } });
+    const { fetch, idFromName, ns } = namespace();
+    const limit = vi.fn(async () => ({ success: true }));
     const redeem = vi.fn(async () => null);
-    const directory: OwnerDirectory = { byPresence: async () => null, redeem };
-    const env: TelegramWebhookEnv = { TELEGRAM_OWNER_DO: ns, TELEGRAM_WEBHOOK_SECRET: 's3cret', TELEGRAM_BOT_TOKEN: 'bot' };
-    await run(post('s3cret', message(7)), env, directory);
-    await run(post('s3cret', '{"update_id":2}'), env, directory);
-    await run(post('s3cret', message(7, '/start WRONG1')), env, directory);
-    expect(fetch).not.toHaveBeenCalled();
-    expect(redeem).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(String((telegram.mock.calls[0] as unknown as [string, RequestInit])[1].body)).text).toContain('did not work');
+    const directory: OwnerDirectory = { byPresence: async (_provider, subject) => subject === '8' ? { doName: 'do-8', subject, timezone: null } : null, redeem };
+    const env: TelegramWebhookEnv = { OWNER_DO: ns, TELEGRAM_WEBHOOK_SECRET: 's3cret', TELEGRAM_BOT_TOKEN: '7:token', RESPONSIBILITY_RATE_LIMITER: { limit } as unknown as RateLimit };
+    for (const text of ['/start ABCDEFGH23', '/link ABCDEFGH23']) {
+      expect((await run(post('s3cret', forwarded(7, text)), env, directory)).status).toBe(200);
+      expect((await run(post('s3cret', forwarded(8, text)), env, directory)).status).toBe(200);
+    }
+    expect(limit).not.toHaveBeenCalled();
+    expect(redeem).not.toHaveBeenCalled();
+    expect(idFromName.mock.calls.map(([name]) => name)).toEqual(['do-8', 'do-8']);
+    expect((fetch.mock.calls as unknown as [string][]).map(([url]) => url)).toEqual(['https://telegram-owner/enqueue', 'https://telegram-owner/enqueue']);
   });
-
-  it('binds a stranger who sends a valid link code and tells them', async () => {
-    const { fetch, ns } = namespace();
-    const telegram = vi.fn(async () => new Response(JSON.stringify({ ok: true, result: {} })));
-    vi.stubGlobal('fetch', telegram);
-    const redeem = vi.fn(async () => ({ doName: 'do-a', subject: '7', timezone: null }));
-    const env: TelegramWebhookEnv = { TELEGRAM_OWNER_DO: ns, TELEGRAM_WEBHOOK_SECRET: 's3cret', TELEGRAM_BOT_TOKEN: 'bot' };
-    await run(post('s3cret', message(7, '/link GOOD12')), env, { byPresence: async () => null, redeem });
-    expect(redeem).toHaveBeenCalledWith('telegram', '7', 'GOOD12');
-    expect(JSON.parse(String((telegram.mock.calls[0] as unknown as [string, RequestInit])[1].body)).text).toContain('Linked');
-    expect(fetch).not.toHaveBeenCalled();
-  });
-
   it('ignores link codes sent from a group chat', async () => {
     const { ns } = namespace();
     const redeem = vi.fn(async () => null);
     const group = JSON.stringify({ update_id: 3, message: { from: { id: 7 }, chat: { id: -5, type: 'group' }, text: '/link GOOD12' } });
-    await run(post('s3cret', group), { TELEGRAM_OWNER_DO: ns, TELEGRAM_WEBHOOK_SECRET: 's3cret', TELEGRAM_BOT_TOKEN: 'bot' }, { byPresence: async () => null, redeem });
+    await run(post('s3cret', group), { OWNER_DO: ns, TELEGRAM_WEBHOOK_SECRET: 's3cret', TELEGRAM_BOT_TOKEN: 'bot' }, { byPresence: async () => null, redeem });
     expect(redeem).not.toHaveBeenCalled();
   });
 
   it('rejects a missing or wrong secret and hides the route when unconfigured', async () => {
     const { fetch, ns } = namespace();
-    const env: TelegramWebhookEnv = { TELEGRAM_OWNER_DO: ns, TELEGRAM_WEBHOOK_SECRET: 's3cret', WALDO_OWNER_TELEGRAM_ID: '42' };
+    const env: TelegramWebhookEnv = { OWNER_DO: ns, TELEGRAM_WEBHOOK_SECRET: 's3cret', WALDO_OWNER_TELEGRAM_ID: '42' };
     expect((await run(post(null), env)).status).toBe(403);
     expect((await run(post('s3cre'), env)).status).toBe(403);
     expect((await run(new Request('https://w.test/telegram/webhook'), env)).status).toBe(404);
     expect((await run(post('s3cret'), { ...env, TELEGRAM_WEBHOOK_SECRET: undefined })).status).toBe(404);
     expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+it('does not return success before admission resolves, or when admission fails', async () => {
+  const n = namespace(); let release!: (r: Response) => void;
+  n.fetch.mockImplementationOnce(() => new Promise<Response>(resolve => { release = resolve; }));
+  let finished = false; const result = run(post('s3cret'), { OWNER_DO: n.ns, TELEGRAM_WEBHOOK_SECRET: 's3cret', WALDO_OWNER_TELEGRAM_ID: '42' }).then(r => { finished = true; return r; });
+  await vi.waitFor(() => expect(n.fetch).toHaveBeenCalled()); expect(finished).toBe(false); release(new Response('failed', {status:503})); expect((await result).status).toBe(503);
+});
+it('returns deliberate errors for malformed payload and failed directory', async () => {
+  const n = namespace(); const env = { OWNER_DO: n.ns, TELEGRAM_WEBHOOK_SECRET: 's3cret' };
+  expect((await run(post('s3cret', '{'), env)).status).toBe(400);
+  expect((await run(post('s3cret'), env, { byPresence: async () => { throw new Error('offline'); }, redeem: async () => null })).status).toBe(503);
+  expect(n.fetch).not.toHaveBeenCalled();
+});
+it('limiter error fails closed without routing-object allocation',async()=>{const{idFromName,ns}=namespace();const env:TelegramWebhookEnv={OWNER_DO:ns,TELEGRAM_WEBHOOK_SECRET:'s3cret',TELEGRAM_BOT_TOKEN:'7:token',RESPONSIBILITY_RATE_LIMITER:{limit:async()=>{throw Error('limiter fault')}}as unknown as RateLimit};expect((await run(post('s3cret',message(7,'/link ABCDEFGH23')),env)).status).toBe(503);expect(idFromName).not.toHaveBeenCalled()});
+
+describe('status log', () => {
+  const dir = (route: unknown): OwnerDirectory => ({ byPresence: async () => route as never, redeem: async () => null as never } as unknown as OwnerDirectory);
+  const env = (n: ReturnType<typeof namespace>, extra: Partial<TelegramWebhookEnv> = {}): TelegramWebhookEnv => ({ TELEGRAM_WEBHOOK_SECRET: 's', TELEGRAM_BOT_TOKEN: 'token', OWNER_DO: n.ns, ...extra });
+  const route = { doName: 'do-a', subject: '42', timezone: null };
+  const lines = async (work: () => Promise<unknown>) => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try { await work().catch(() => {}); return spy.mock.calls.map(c => String(c[0])).filter(l => l.includes('telegram_webhook')); } finally { spy.mockRestore(); }
+  };
+  const cases: ReadonlyArray<readonly [string, () => Promise<unknown>, string, number]> = [
+    ['routed', () => run(post('s', message(42, 'secret words')), env(namespace()), dir(route)), 'routed', 200],
+    ['no_route', () => run(post('s', message(42, 'secret words')), env(namespace()), dir(null)), 'no_route', 200],
+    ['owner refusal', () => { const n = namespace(); n.fetch.mockResolvedValue(new Response('no', { status: 403 })); return run(post('s'), env(n), dir(route)); }, 'owner_refused_403', 503],
+    ['owner unreachable', () => { const n = namespace(); n.fetch.mockRejectedValue(new Error('x')); return run(post('s'), env(n), dir(route)); }, 'owner_unreachable', 503],
+    ['bad secret', () => run(post('wrong'), env(namespace()), dir(route)), 'bad_secret', 403],
+    ['bad json', () => run(post('s', 'not json'), env(namespace()), dir(route)), 'bad_json', 400],
+    ['no sender', () => run(post('s', '{"x":1}'), env(namespace()), dir(route)), 'no_sender', 200],
+    ['not configured', () => run(post('s'), env(namespace(), { TELEGRAM_WEBHOOK_SECRET: undefined }), dir(route)), 'not_configured', 404],
+    ['not post', () => run(new Request('https://w.test/telegram/webhook'), env(namespace()), dir(route)), 'not_post', 404],
+    ['route lookup failed', () => run(post('s'), env(namespace()), { byPresence: async () => { throw new Error('x'); } } as unknown as OwnerDirectory), 'route_lookup_failed', 503],
+  ];
+  it.each(cases)('logs exactly one status-only line: %s', async (_name, work, status, http) => {
+    const out = await lines(work);
+    expect(out).toHaveLength(1);
+    expect(JSON.parse(out[0]!)).toEqual({ hop: 'telegram_webhook', ok: http < 400, status, http });
+    expect(out[0]).not.toContain('secret words');
+  });
+  it('logs a throw once and still throws', async () => {
+    const throwing = { get TELEGRAM_WEBHOOK_SECRET(): string { return 's'; }, OWNER_DO: namespace().ns } as TelegramWebhookEnv;
+    const request = post('s', '{"message":{"from":{"id":{"toString":null}}}}');
+    const out = await lines(() => handleTelegramWebhook(request, throwing, () => {}, dir(route)).then(() => { throw new Error('no throw'); }, e => { if (String(e).includes('no throw')) throw e; }));
+    expect(out.map(l => JSON.parse(l).status)).toEqual(['handler_threw']);
   });
 });

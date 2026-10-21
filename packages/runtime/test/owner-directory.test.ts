@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { linkCodeHash, ownerDirectory, routerSignature } from '../src/identity/owner-directory';
+import { linkCodeHash, ownerDirectory, routerSignature, signedRpc } from '../src/identity/owner-directory';
 
 const env = { SUPABASE_PROJECT_URL: 'https://db.test', SUPABASE_PUBLISHABLE_KEY: 'pub', WALDO_ROUTER_HMAC_SECRET: 'router' };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
@@ -10,6 +10,19 @@ const sent = (fetcher: ReturnType<typeof vi.fn>, index = 0) => {
 };
 
 describe('ownerDirectory', () => {
+  it('carries only verified route identity and refreshes email on each inbound lookup', async () => {
+    const ownerId = '10000000-0000-0000-0000-00000000000a';
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(json([{ do_name: 'do-a', subject: '42', timezone: null, owner_id: ownerId, owner_email: 'one@test.invalid', admission_revision: '1', refresh_token: 'NEVER_EXPORT' }]))
+      .mockResolvedValueOnce(json([{ do_name: 'do-a', subject: '42', timezone: null, owner_id: ownerId, owner_email: 'changed@test.invalid', admission_revision: '1' }]));
+    const directory = ownerDirectory(env, fetcher as unknown as typeof fetch, now);
+    const first = await directory.byPresence('telegram', '42');
+    const second = await directory.byPresence('telegram', '42');
+    expect(first).toMatchObject({ traceIdentity: { owner_id: ownerId, owner_email: 'one@test.invalid' } });
+    expect(second).toMatchObject({ traceIdentity: { owner_id: ownerId, owner_email: 'changed@test.invalid' } });
+    expect(JSON.stringify(first)).not.toContain('NEVER_EXPORT');
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
   it('falls back to the one deploy-configured owner when Supabase is not configured', async () => {
     const directory = ownerDirectory({ WALDO_OWNER_TELEGRAM_ID: '42', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata' });
     expect(await directory.byPresence('telegram', '42')).toEqual({ doName: '42', subject: '42', timezone: 'Asia/Kolkata' });
@@ -54,6 +67,25 @@ describe('ownerDirectory', () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
+  it('a code for a subject live under another owner is reported claimed; any other refusal stays uncertain', async () => {
+    const hash = await linkCodeHash('ABCDEFGHJK');
+    const claimed = vi.fn().mockResolvedValue(json({ code: '23505', message: 'presence already linked to another owner' }, 409));
+    expect(await ownerDirectory(env, claimed as unknown as typeof fetch, now).redeemHashed!('imessage', 'a@icloud.invalid', hash)).toEqual({ kind: 'claimed' });
+    const race = vi.fn().mockResolvedValue(json({ code: '23505', message: 'duplicate key value violates unique constraint "presences_live_subject"' }, 409));
+    expect(await ownerDirectory(env, race as unknown as typeof fetch, now).redeemHashed!('imessage', 'a@icloud.invalid', hash)).toEqual({ kind: 'uncertain' });
+    const raised = vi.fn().mockResolvedValue(json({ code: 'P0001', message: 'other' }, 400));
+    expect(await ownerDirectory(env, raised as unknown as typeof fetch, now).redeemHashed!('imessage', 'a@icloud.invalid', hash)).toEqual({ kind: 'uncertain' });
+    const opaque = vi.fn().mockResolvedValue(new Response('bad gateway', { status: 409 }));
+    expect(await ownerDirectory(env, opaque as unknown as typeof fetch, now).redeemHashed!('imessage', 'a@icloud.invalid', hash)).toEqual({ kind: 'uncertain' });
+  });
+  it('a refused call keeps only whether the subject is claimed elsewhere, never the database message', async () => {
+    const message = 'duplicate key value violates unique constraint: (subject)=(+15550100123)';
+    const fetcher = vi.fn(async () => json({ code: '23505', message }, 409));
+    const error = await signedRpc(env, fetcher as unknown as typeof fetch, now)!('redeem_link', 'redeem', {}).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ status: 409, sqlState: '23505', claimedElsewhere: false });
+    expect(JSON.stringify(error)).not.toContain('15550100123');
+    expect(JSON.stringify(error)).not.toContain('duplicate key');
+  });
   it('surfaces a database failure instead of treating it as an unknown sender', async () => {
     const fetcher = vi.fn(async () => json({ message: 'unsigned router call' }, 403));
     await expect(ownerDirectory(env, fetcher as unknown as typeof fetch, now).byPresence('telegram', '42')).rejects.toThrow('owner directory 403');

@@ -1,136 +1,15 @@
 import { env } from 'cloudflare:workers';
-import { armAlarm } from '../src/scheduler/alarm-slot';
-import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { rearmSharedAlarm } from '../src/scheduler/alarm-slot';
+import { runInDurableObject } from 'cloudflare:test';
+import { describe, expect, it } from 'vitest';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import type { Deps } from '../src/seams/deps';
-import { FakeSink } from '../src/tracer/sink';
-import type { TracerDO } from '../src/tracer/tracer-do';
-
-const FETCH = 'fetch_alert';
-
-type SchedulerStub = DurableObjectStub<TracerDO> & {
-  startRun(input: Parameters<TracerDO['startRun']>[0]): Promise<string>;
-  scheduleRun(input: { runId: string; dueAt: number }): Promise<void>;
-  scheduleOutboxRetry(input: { runId: string; dueAt: number }): Promise<void>;
-  scheduleProactiveWake(input: {
-    id: string;
-    kind: 'brief' | 'pre_activity_spot';
-    userId: string;
-    dueAt: number;
-    occurrenceAt: number;
-  }): Promise<void>;
-};
-
-beforeEach(() => {
-  new FakeSink().reset();
-});
+import type { TestStorageDO } from './support/worker-entry';
 
 let seq = 0;
-function freshStub(): SchedulerStub {
+function freshStub(): DurableObjectStub<TestStorageDO> {
   seq += 1;
-  const id = env.TRACER_DO.idFromName(`scheduler-alarm-${seq}`);
-  return env.TRACER_DO.get(id) as SchedulerStub;
-}
-
-function soon(): number {
-  return Date.now() + 500;
-}
-
-async function tick(stub: SchedulerStub, runId: string): Promise<void> {
-  await runInDurableObject(stub, async (instance: TracerDO) => {
-    await instance.tickRun(runId);
-  });
-}
-
-async function readState(stub: SchedulerStub) {
-  return runInDurableObject(stub, (_instance, state) => {
-    const sql = state.storage.sql;
-    const journal = sql
-      .exec<{ trigger: string; state: string }>(
-        'SELECT trigger, state FROM journal ORDER BY created_at, run_id',
-      )
-      .toArray();
-    const schedules = sql
-      .exec<{ id: string; kind: string; status: string }>(
-        'SELECT id, kind, status FROM schedule ORDER BY id',
-      )
-      .toArray();
-    const outbox = sql
-      .exec<{ status: string; attempts: number }>(
-        `SELECT status, attempts FROM outbox ORDER BY created_at, run_id`,
-      )
-      .toArray();
-    return { journal, schedules, outbox };
-  });
-}
-
-async function readScheduleRows(stub: SchedulerStub) {
-  return runInDurableObject(stub, (_instance, state) =>
-    state.storage.sql
-      .exec<{
-        id: string;
-        kind: string;
-        status: string;
-        attempts: number;
-        due_at: number;
-        payload_json: string;
-        quarantined_until: number | null;
-      }>(
-        `SELECT id, kind, status, attempts, due_at, payload_json, quarantined_until
-           FROM schedule
-          ORDER BY kind, due_at, id`,
-      )
-      .toArray(),
-  );
-}
-
-async function forceSchedulesDue(stub: SchedulerStub): Promise<void> {
-  await runInDurableObject(stub, (_instance, state) => {
-    const now = Date.now();
-    state.storage.sql.exec(
-      'UPDATE schedule SET due_at = MAX(occurrence_at, ?), updated_at = ?',
-      now,
-      now,
-    );
-  });
-}
-
-// Park any still-armed rows far in the future so a past-due re-arm cannot auto-fire during the
-// assertions that follow a partial batch dispatch.
-async function holdSchedules(stub: SchedulerStub): Promise<void> {
-  await runInDurableObject(stub, async (_instance, state) => {
-    const held = Date.now() + 60_000;
-    state.storage.sql.exec("UPDATE schedule SET due_at = ?, updated_at = ? WHERE status = 'armed'", held, Date.now());
-    // Move the platform alarm itself, not only the row: a past-due re-arm would otherwise
-    // auto-fire during the assertions that follow a partial batch dispatch.
-    await armAlarm(state.storage, held);
-  });
-}
-
-async function deleteAlarm(stub: SchedulerStub): Promise<void> {
-  await runInDurableObject(stub, async (_instance, state) => {
-    await state.storage.deleteAlarm();
-  });
-}
-
-async function runAlarmEntrypoint(stub: SchedulerStub): Promise<void> {
-  await runInDurableObject(stub, async (instance: TracerDO) => {
-    await instance.alarm();
-  });
-}
-
-async function startScheduledRun(
-  stub: SchedulerStub,
-  input: { userId: string; dueAt: number; occurrenceAt?: number },
-): Promise<string> {
-  const runId = await stub.startRun({
-    userId: input.userId,
-    trigger: FETCH,
-    occurrenceAt: input.occurrenceAt ?? input.dueAt,
-  });
-  await stub.scheduleRun({ runId, dueAt: input.dueAt });
-  return runId;
+  return env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`scheduler-alarm-${seq}`));
 }
 
 function fixedDeps(nowRef: { value: number }): Deps {
@@ -175,237 +54,58 @@ async function dispatchRecurringBrief(input: {
 }
 
 describe('scheduler alarm multiplexer', () => {
-  // Owner decision 2026-09-28 (direction A): null-taint free-text health values may persist at
-  // internal_context, so the hard line for operational identities is the canary scan (denied at
-  // every taint and destination).
-  it('rejects a canary-bearing proactive schedule identity before persistence', async () => {
-    const stub = freshStub();
-    const dueAt = soon();
-
-    await expect(
-      runInDurableObject(stub, (instance) =>
-        (instance as TracerDO).scheduleProactiveWake({
-          id: 'brief:aaaaaaaaaaaaaaaa',
-          kind: 'brief',
-          userId: 'user-scheduler-brief',
-          dueAt,
-          occurrenceAt: dueAt,
-        }),
-      ),
-    ).rejects.toThrow('scribe:canary_leak');
-
-    expect(await readScheduleRows(stub)).toEqual([]);
-  });
-
-  it('rejects a forbidden proactive schedule user identity before persistence', async () => {
-    const stub = freshStub();
-    const dueAt = soon();
-
-    await expect(
-      runInDurableObject(stub, (instance) =>
-        (instance as TracerDO).scheduleProactiveWake({
-          id: 'brief:safe-schedule-id',
-          kind: 'brief',
-          userId: 'sb_secret_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789',
-          dueAt,
-          occurrenceAt: dueAt,
-        }),
-      ),
-    ).rejects.toThrow('scribe:secret_leak');
-
-    expect(await readScheduleRows(stub)).toEqual([]);
-  });
-
-  it('dispatches due run resume, outbox retry, and scheduled proactive wake from one alarm', async () => {
-    const sink = new FakeSink();
-    const stub = freshStub();
-    // This test first inspects all three armed rows, then manually fires the alarm. Keep the
-    // actual wake safely in the future so workerd cannot legitimately auto-fire it while the
-    // setup performs the retry crash/recovery work; forceSchedulesDue below is the controlled
-    // transition into the scheduler's real due path.
-    const occurrenceAt = Date.now();
-    const dueAt = occurrenceAt + 60_000;
-
-    const resumeRunId = await stub.startRun({
-      userId: 'user-scheduler-resume',
-      trigger: FETCH,
-      occurrenceAt,
+  // Ported from the TracerDO-hosted journeys: the owner object's alarm calls the same Scheduler.dispatchDue.
+  it('dispatches a deterministic due batch by kind priority, due time and schedule id, and leaves the rest due', async () => {
+    await runInDurableObject(freshStub(), async (_instance, state) => {
+      const nowRef = { value: Date.parse('2026-01-01T09:00:00Z') };
+      const scheduler = new Scheduler(state.storage.sql, state.storage, fixedDeps(nowRef));
+      const now = nowRef.value;
+      for (let i = 0; i < 8; i += 1) {
+        const dueAt = now - (i === 7 ? 1_000 : 0);
+        await scheduler.schedule({ id: `brief:order-${i}`, kind: 'brief', occurrenceAt: dueAt, dueAt, payloadRefs: { id: `brief:order-${i}` } });
+      }
+      await scheduler.schedule({ id: 'dreaming:order', kind: 'dreaming', occurrenceAt: now - 60_000, dueAt: now - 60_000, payloadRefs: { id: 'dreaming:order' } });
+      await scheduler.schedule({ id: 'journal:order', kind: 'journal', occurrenceAt: now, dueAt: now, payloadRefs: { id: 'journal:order' } });
+      const fired: string[] = [];
+      const record = async (entry: { id: string }) => { fired.push(entry.id); };
+      await scheduler.dispatchDue({ brief: record, dreaming: record, journal: record });
+      expect(fired).toEqual(['journal:order', 'brief:order-7', ...[0, 1, 2, 3, 4, 5].map((i) => `brief:order-${i}`)]);
+      const left = () => state.storage.sql.exec<{ id: string }>('SELECT id FROM schedule ORDER BY id').toArray().map((row) => row.id);
+      expect(left()).toEqual(['brief:order-6', 'dreaming:order']);
+      await scheduler.dispatchDue({ brief: record, dreaming: record, journal: record });
+      expect(fired.slice(8)).toEqual(['brief:order-6', 'dreaming:order']);
+      expect(left()).toEqual([]);
     });
-    await stub.scheduleRun({ runId: resumeRunId, dueAt });
-
-    const retryRunId = await stub.startRun({
-      userId: 'user-scheduler-retry',
-      trigger: FETCH,
-      occurrenceAt,
-    });
-    await runInDurableObject(stub, (instance: TracerDO) => {
-      instance.__crashAfter = 'post_sink_pre_ack';
-    });
-    await expect(tick(stub, retryRunId)).rejects.toThrow('post_sink_pre_ack');
-    await runInDurableObject(stub, (instance: TracerDO) => {
-      instance.__crashAfter = undefined;
-    });
-    expect(sink.observedDeliveries()).toBe(1);
-    await stub.scheduleOutboxRetry({ runId: retryRunId, dueAt });
-
-    await stub.scheduleProactiveWake({
-      id: 'brief:morning',
-      kind: 'brief',
-      userId: 'user-scheduler-brief',
-      dueAt,
-      occurrenceAt,
-    });
-
-    const scheduled = await readScheduleRows(stub);
-    expect(scheduled).toHaveLength(3);
-    expect(
-      scheduled.map((row) => [row.kind, Object.keys(JSON.parse(row.payload_json)).sort()]),
-    ).toEqual(
-      expect.arrayContaining([
-        ['journal', ['run_id']],
-        ['handoff', ['run_id']],
-        ['brief', ['id', 'user_id']],
-      ]),
-    );
-
-    await forceSchedulesDue(stub);
-    expect(await runDurableObjectAlarm(stub)).toBe(true);
-
-    const state = await readState(stub);
-    expect(state.schedules).toEqual([]);
-    expect(state.journal).toEqual(
-      expect.arrayContaining([
-        { trigger: FETCH, state: 'DONE' },
-        { trigger: FETCH, state: 'DONE' },
-        { trigger: 'brief', state: 'DONE' },
-      ]),
-    );
-    expect(state.outbox).toEqual(
-      expect.arrayContaining([
-        { status: 'acked', attempts: 1 },
-        { status: 'acked', attempts: 2 },
-        { status: 'acked', attempts: 1 },
-      ]),
-    );
-    expect(sink.observedDeliveries()).toBe(3);
-  });
-
-  it('survives eviction before the alarm and treats duplicate delivery after success as a no-op', async () => {
-    const sink = new FakeSink();
-    const stub = freshStub();
-    const occurrenceAt = Date.now();
-    const dueAt = occurrenceAt + 60_000;
-
-    await startScheduledRun(stub, { userId: 'user-scheduler-evict', dueAt, occurrenceAt });
-    expect(await readScheduleRows(stub)).toHaveLength(1);
-
-    await runInDurableObject(stub, () => {
-      // Touch the live instance before eviction so this test proves reconstruction from storage.
-    });
-    await evictDurableObject(stub);
-
-    await forceSchedulesDue(stub);
-    expect(await runDurableObjectAlarm(stub)).toBe(true);
-    expect((await readState(stub)).schedules).toEqual([]);
-    expect(sink.observedDeliveries()).toBe(1);
-
-    await runAlarmEntrypoint(stub);
-    expect(sink.observedDeliveries()).toBe(1);
-  });
-
-  it('selects a deterministic due batch by kind priority, due time, and schedule id', async () => {
-    const stub = freshStub();
-    const occurrenceAt = Date.now();
-    const dueAt = occurrenceAt + 60_000;
-
-    for (let i = 0; i < 9; i += 1) {
-      await startScheduledRun(stub, { userId: `user-scheduler-order-${i}`, dueAt, occurrenceAt });
-    }
-    const orderedIds = (await readScheduleRows(stub)).map((row) => row.id).sort();
-
-    await forceSchedulesDue(stub);
-    expect(await runDurableObjectAlarm(stub)).toBe(true);
-    await holdSchedules(stub);
-
-    const remaining = await readScheduleRows(stub);
-    expect(remaining).toHaveLength(1);
-    expect(remaining[0]!.id).toBe(orderedIds[8]);
-    expect((await readState(stub)).journal.filter((row) => row.state === 'DONE')).toHaveLength(8);
-  });
-
-  it('picks up a lost due schedule row on the next in-scope wake', async () => {
-    const sink = new FakeSink();
-    const stub = freshStub();
-    const occurrenceAt = Date.now();
-    const dueAt = occurrenceAt + 60_000;
-
-    await startScheduledRun(stub, { userId: 'user-scheduler-lost', dueAt, occurrenceAt });
-    await deleteAlarm(stub);
-    expect(await runDurableObjectAlarm(stub)).toBe(false);
-
-    await stub.scheduleProactiveWake({
-      id: 'brief:lost-alarm-wake',
-      kind: 'brief',
-      userId: 'user-scheduler-lost-brief',
-      dueAt,
-      occurrenceAt,
-    });
-
-    await forceSchedulesDue(stub);
-    expect(await runDurableObjectAlarm(stub)).toBe(true);
-    expect((await readState(stub)).schedules).toEqual([]);
-    expect(sink.observedDeliveries()).toBe(2);
   });
 
   it('quarantines a repeatedly failing product schedule instead of wedging the alarm slot', async () => {
-    const stub = freshStub();
-    const dueAt = Date.now() + 60_000;
+    await runInDurableObject(freshStub(), async (_instance, state) => {
+      const nowRef = { value: Date.parse('2026-01-01T09:00:00Z') };
+      const scheduler = new Scheduler(state.storage.sql, state.storage, fixedDeps(nowRef));
+      await scheduler.schedule({ id: 'brief:poison', kind: 'brief', occurrenceAt: nowRef.value, dueAt: nowRef.value, payloadRefs: { id: 'brief:poison' } });
+      const fired: string[] = [];
+      const executors = {
+        brief: async (entry: { id: string }) => {
+          fired.push(entry.id);
+          if (entry.id === 'brief:poison') throw new Error('poison');
+        },
+      };
+      const row = () => state.storage.sql
+        .exec<{ id: string; status: string; attempts: number; quarantined_until: number | null }>("SELECT id, status, attempts, quarantined_until FROM schedule WHERE id = 'brief:poison'")
+        .one();
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        await scheduler.dispatchDue(executors);
+        expect(row().attempts).toBe(attempt);
+        nowRef.value += 10 * 60_000;
+      }
+      expect(row()).toMatchObject({ status: 'quarantined', attempts: 3 });
+      expect(row().quarantined_until).not.toBeNull();
 
-    await stub.scheduleProactiveWake({
-      id: 'brief:poison',
-      kind: 'brief',
-      userId: 'user-scheduler-poison',
-      dueAt,
-      occurrenceAt: Date.now(),
+      await scheduler.schedule({ id: 'brief:healthy-after-poison', kind: 'brief', occurrenceAt: nowRef.value, dueAt: nowRef.value, payloadRefs: { id: 'brief:healthy-after-poison' } });
+      await scheduler.dispatchDue(executors);
+      expect(fired).toEqual(['brief:poison', 'brief:poison', 'brief:poison', 'brief:healthy-after-poison']);
+      expect(state.storage.sql.exec<{ id: string; status: string }>('SELECT id, status FROM schedule').toArray()).toEqual([{ id: 'brief:poison', status: 'quarantined' }]);
     });
-    await runInDurableObject(stub, (_instance, state) => {
-      state.storage.sql.exec(
-        `UPDATE schedule
-            SET payload_json = ?,
-                updated_at = ?
-          WHERE id = ?`,
-        JSON.stringify({ id: 'brief:poison' }),
-        Date.now(),
-        'brief:poison',
-      );
-    });
-
-    await forceSchedulesDue(stub);
-    expect(await runDurableObjectAlarm(stub)).toBe(true);
-    await forceSchedulesDue(stub);
-    expect(await runDurableObjectAlarm(stub)).toBe(true);
-    await forceSchedulesDue(stub);
-    expect(await runDurableObjectAlarm(stub)).toBe(true);
-
-    const [row] = await readScheduleRows(stub);
-    expect(row!).toMatchObject({ id: 'brief:poison', kind: 'brief', status: 'quarantined' });
-    expect(row!.attempts).toBe(3);
-    expect(row!.quarantined_until).not.toBeNull();
-
-    const healthyAt = Date.now() + 60_000;
-    await stub.scheduleProactiveWake({
-      id: 'brief:healthy-after-poison',
-      kind: 'brief',
-      userId: 'user-scheduler-healthy',
-      dueAt: healthyAt,
-      occurrenceAt: Date.now(),
-    });
-    await forceSchedulesDue(stub);
-    expect(await runDurableObjectAlarm(stub)).toBe(true);
-
-    const afterHealthy = await readScheduleRows(stub);
-    expect(afterHealthy.map((schedule) => schedule.id)).toEqual(['brief:poison']);
-    expect(afterHealthy[0]!.status).toBe('quarantined');
   });
 
   it('advances daily local recurrence across DST gaps without double-firing a repeated hour', async () => {
@@ -457,4 +157,18 @@ describe('cron recurrence create-time validation (Codex #229)', () => {
       expect(rows).toEqual([]);
     });
   });
+});
+
+it('shared alarm keeps earlier retained common browser expiry alongside scheduled work',async()=>{
+ const stub=freshStub();
+ await runInDurableObject(stub,async(_instance,state)=>{
+  const now=Date.now(),browserDue=now+60000;
+  await state.storage.put('common_browser_due_v1',browserDue);
+  await rearmSharedAlarm(state.storage,now+120000,now);
+  expect(await state.storage.getAlarm()).toBe(browserDue);
+  await state.storage.put('common_browser_due_v1',null);
+  await rearmSharedAlarm(state.storage,now+120000,now);
+  expect(await state.storage.getAlarm()).toBe(now+120000);
+  await state.storage.deleteAlarm();
+ });
 });

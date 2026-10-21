@@ -1,6 +1,6 @@
 import { OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
-import { consoleAccess, signInPage, parseConsoleAction, consoleMayApprove, renderConsole, sessionCookie } from '../src/channels/console';
+import { consoleAccess, consoleSessionRows, signInPage, parseConsoleAction, consoleMayApprove, renderConsole, sessionCookie } from '../src/channels/console';
 import { SAMPLE_CONSOLE_VIEW } from './fixtures/console-sample';
 
 const memoryStore = () => {
@@ -16,6 +16,22 @@ const formOf = (fields: Record<string, string>) => {
   for (const [key, value] of Object.entries(fields)) form.set(key, value);
   return form;
 };
+
+describe('console session rows', () => {
+  const at = Date.parse('2026-10-06T00:00:00Z');
+  const sessions = [
+    { token: 'secret-token-a', csrf: 'secret-csrf-a', expires: at + 3 * 3_600_000 },
+    { token: 'secret-token-b', csrf: 'secret-csrf-b', expires: at + 10 * 3_600_000 },
+  ];
+  it('lists newest sign-in first, marks this browser, and carries no credentials', () => {
+    const rows = consoleSessionRows(sessions, sessions[0]!, 'Asia/Kolkata');
+    expect(rows).toEqual([
+      { signed_in: '2026-10-06 03:30', until: '2026-10-06 15:30', current: false },
+      { signed_in: '2026-10-05 20:30', until: '2026-10-06 08:30', current: true },
+    ]);
+    expect(JSON.stringify(rows)).not.toContain('secret');
+  });
+});
 
 describe('owner console', () => {
   it('opening a link only shows a sign-in button, so link previews cannot spend the token', async () => {
@@ -200,8 +216,8 @@ describe('owner console', () => {
     expect(html).toContain('Hello, full message.');
     expect(html).not.toContain('>Send it</button>');
     expect(html).not.toContain('value="approval.approve"');
-    expect(html).toContain('approving this send happens there. Not now dismisses it');
-    // Dismissal is the safe direction: open send proposals carry Not now, never Do it.
+    expect(html).toContain("approving this send happens there. Don't do this dismisses it");
+    // Dismissal is the safe direction: open send proposals carry Don't do this, never Do it.
     expect(html).toContain('value="approval.skip"');
     expect(html).toContain('This console cannot approve or dismiss it.');
     // Exactly the two open send proposals are dismissible; mcp/browser stay undecidable here.
@@ -338,10 +354,11 @@ describe('owner console', () => {
     expect(html).toContain('invite-gated email OTP');
   });
 
-  it('shows the browser count and offers sign-out-everywhere only when more than one browser is signed in', () => {
+  it('shows the browser count and always offers sign-out-everywhere, which also covers app sign-ins this count omits', () => {
     const one = renderConsole({ ...SAMPLE_CONSOLE_VIEW, sessionCount: 1 }, 'connections');
     expect(one).toContain('on 1 browser.');
-    expect(one).not.toContain('session.signout.all');
+    expect(one).toContain('session.signout.all');
+    expect(one).toContain('Sign out of every browser and the app?');
     const two = renderConsole({ ...SAMPLE_CONSOLE_VIEW, sessionCount: 2 }, 'connections');
     expect(two).toContain('on 2 browsers.');
     expect(two).toContain('session.signout.all');
@@ -350,6 +367,17 @@ describe('owner console', () => {
   it('reads the session cookie', () => {
     expect(sessionCookie(new Request('https://x/console', { headers: { cookie: 'a=1; waldo_console=abc' } }))).toBe('abc');
     expect(sessionCookie(new Request('https://x/console'))).toBeNull();
+  });
+
+  it('shows every scheduled behavior with its state and a reset, and parses the schedule actions', () => {
+    const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, schedules: { ...SAMPLE_CONSOLE_VIEW.schedules, heartbeat: false } }, 'day');
+    expect(html).toContain('Scheduled behaviors');
+    expect(html).toContain('periodic open-loop check: <b>off</b>');
+    expect(html).toContain('prep notes before events: <b>on</b>');
+    expect(html).toContain('name="value" value="on"><span>periodic open-loop check');
+    expect(html).toContain('value="schedule.reset"');
+    expect(parseConsoleAction(formOf({ action: 'schedule.set', id: 'heartbeat', value: 'on', csrf: 'good' }), 'good')).toEqual({ action: 'schedule.set', id: 'heartbeat', value: 'on' });
+    expect(parseConsoleAction(formOf({ action: 'schedule.reset', csrf: 'good' }), 'good')).toEqual({ action: 'schedule.reset', id: '', value: '' });
   });
 
   it('accepts only known actions carrying the session csrf token', () => {
@@ -390,6 +418,10 @@ describe('owner console', () => {
     expect(waiting).not.toContain('id="overview"');
     const activity = renderConsole(SAMPLE_CONSOLE_VIEW, 'activity');
     expect(activity).toContain('<a href="/console/activity" aria-current="page">Activity</a>');
+    // Separate pages reachable from every page's nav: invites, devices and iMessage.
+    for (const page of [overview, waiting, activity]) {
+      expect(page).toContain('<a href="/console/devices">Devices</a><a href="/console/imessage">iMessage</a></nav>');
+    }
   });
 
   it('a spot stuck mid-forget stays visible with a working Retry action', () => {

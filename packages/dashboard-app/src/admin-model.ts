@@ -20,7 +20,8 @@ export function readAdmin(v: unknown): AdminRecord {
 export function inviteStatus(i: AdminRecord['invites'][number], asOf: string) {
   return i.used_at ? 'used' : i.revoked_at ? 'revoked' : i.expires_at && Date.parse(i.expires_at) <= Date.parse(asOf) ? 'expired' : 'open';
 }
-export const quota = (issued: number) => ({used:issued,remaining:Math.max(0,5-issued)});
+// Only the viewing admin is known to be uncapped; the projection carries no admin flag for other issuers.
+export const quotaLabel = (issued: number, uncapped: boolean) => uncapped ? `${issued} issued · no limit` : `${issued} of 5 used`;
 export const pageRows = <T,>(rows: T[], page: number, size = 10) => {
   const pages=Math.max(1,Math.ceil(rows.length/size)); const current=Math.max(1,Math.min(page,pages));
   return {rows:rows.slice((current-1)*size,current*size),current,pages,total:rows.length};
@@ -42,5 +43,11 @@ export async function submitInvite(data: AdminRecord, action: 'invite.create'|'i
   try { receipt=await response.json(); }
   catch { throw new Error('The receipt is unavailable. Refresh records before retrying; a code cannot be recovered.'); }
   if(!obj(receipt)||typeof receipt.message!=='string'||(action==='invite.create'&&typeof receipt.code!=='string'))throw new Error('The receipt is unavailable. Refresh records before retrying; a code cannot be recovered.');
-  return {message:receipt.message,code:typeof receipt.code==='string'?receipt.code:null};
+  let link: string | null = null;
+  if (typeof receipt.link === 'string') {
+    const url = new URL(receipt.link, location.origin);
+    if (url.origin !== location.origin || url.pathname !== '/console/signup' || url.search || !url.hash) throw new Error('The invite link receipt is unavailable. Refresh before retrying.');
+    link = url.href;
+  }
+  return {message:receipt.message,code:typeof receipt.code==='string'?receipt.code:null,link};
 }

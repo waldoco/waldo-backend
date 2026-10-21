@@ -1,8 +1,13 @@
-import type { ApprovalItem, ApprovalReview } from './approvals';
+import { calendarInviteDetails, type ApprovalItem, type ApprovalReview } from './approvals';
+import type { CardLatest, CardState } from './day-cards';
+import { SCHEDULE_KINDS } from '@waldo/contracts';
+import { SCHEDULE_LABELS, type SchedulePreferences } from './schedule-preferences';
 import type { Claim, ConstellationEdge, ConstellationNode, profile } from '../memory/claims';
 import type { Proactivity } from './loops';
-import type { E2EStep, TraceRow } from './harness';
+import type { E2EStep, LastRequest, TraceRow } from './harness';
 import type { StoredFile } from './files';
+import { localIso } from './reminders';
+import { signConsoleTicket } from '../identity/console-ticket';
 
 export const CONSOLE_PATH = '/console';
 export const CONSOLE_ACTION_PATH = `${CONSOLE_PATH}/action`;
@@ -17,6 +22,16 @@ const SESSION_MS = 12 * 60 * 60_000;
 type Store = Readonly<{ get<T>(key: string): Promise<T | undefined>; put(key: string, value: unknown): Promise<void>; delete(key: string): Promise<boolean> }>;
 type Grant = Readonly<{ token: string; expires: number }>;
 export type ConsoleSession = Readonly<{ token: string; csrf: string; expires: number }>;
+
+// One row per live browser session. The store keeps only an expiry that each sign-in resets to now + SESSION_MS, so
+// signed_in is the latest sign-in on that browser; no device name or last-seen time is recorded. Tokens never leave this function.
+export type ConsoleSessionRow = Readonly<{ signed_in: string; until: string; current: boolean }>;
+export const consoleSessionRows = (sessions: readonly ConsoleSession[], current: ConsoleSession, timezone: string): readonly ConsoleSessionRow[] =>
+  [...sessions].sort((a, b) => b.expires - a.expires).map((session) => ({
+    signed_in: localIso(session.expires - SESSION_MS, timezone).slice(0, 16).replace('T', ' '),
+    until: localIso(session.expires, timezone).slice(0, 16).replace('T', ' '),
+    current: session.token === current.token,
+  }));
 
 const randomToken = () => [...crypto.getRandomValues(new Uint8Array(32))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 
@@ -37,10 +52,12 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => {
     return session.token;
   };
   return {
-    async mintLink(origin: string): Promise<string> {
+    async mintLink(origin: string, issuer?: Readonly<{ owner: string; secret: string }>): Promise<string> {
       const token = randomToken();
-      await store.put('console:link', { token, expires: now() + LINK_MS } satisfies Grant);
-      return `${origin}${CONSOLE_PATH}?t=${token}`;
+      const expires = now() + LINK_MS;
+      await store.put('console:link', { token, expires } satisfies Grant);
+      const ticket = issuer ? await signConsoleTicket({ owner: issuer.owner, token, expires }, issuer.secret) : token;
+      return `${origin}${CONSOLE_PATH}?t=${ticket}`;
     },
     async redeem(token: string, current: string | null = null): Promise<string | null> {
       const link = await store.get<Grant>('console:link');
@@ -80,14 +97,14 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => {
 // Link previews (Telegram fetches URLs it sees) must not burn the one-time token, so opening the
 // link only shows a button; the token is spent by the POST that button sends.
 export const signInPage = (token: string): Response => new Response(
-  `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Waldo console</title><style>body{font-family:system-ui,sans-serif;background:#FAFAF8;color:#1A1A1A;display:grid;place-items:center;min-height:100vh;margin:0}form{text-align:center}button{font:inherit;font-size:18px;padding:12px 28px;border:0;border-radius:10px;background:#1A1A1A;color:#FAFAF8;cursor:pointer}</style></head><body><form method="post" action="${CONSOLE_PATH}"><p>Waldo console</p><input type="hidden" name="t" value="${token.replace(/[^0-9a-f]/g, '')}"><button>Open console</button></form></body></html>`,
+  `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Waldo console</title><style>body{font-family:system-ui,sans-serif;background:#FAFAF8;color:#1A1A1A;display:grid;place-items:center;min-height:100vh;margin:0}form{text-align:center}button{font:inherit;font-size:18px;padding:12px 28px;border:0;border-radius:10px;background:#1A1A1A;color:#FAFAF8;cursor:pointer}</style></head><body><form method="post" action="${CONSOLE_PATH}"><p>Waldo console</p><input type="hidden" name="t" value="${/^c1\.[A-Za-z0-9_-]+\.[a-f0-9]{64}$/.test(token) && token.length <= 2048 ? token : token.replace(/[^0-9a-f]/g, '')}"><button>Open console</button></form></body></html>`,
   { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } },
 );
 
 export const sessionCookie = (request: Request): string | null =>
   (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim().split('=')).find(([name]) => name === CONSOLE_COOKIE)?.[1] ?? null;
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'schedule.set', 'schedule.reset', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set'] as const;
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
 
 // The trace detail for a console action. The form id is free-form text (parseConsoleAction
@@ -114,6 +131,9 @@ export const parseConsoleAction = (form: FormData, csrf: string): ConsoleAction 
 export const NOTICES: Readonly<Record<string, string>> = {
   'spot.dismiss': 'Spot dismissed. Waldo will stop using it.',
   'proactivity.set': 'Saved. Waldo will reach out on your new settings.',
+  'proactive_surface.set': 'Saved. Waldo sends its next messages there.',
+  'schedule.set': 'Saved. That scheduled behavior is updated.',
+  'schedule.reset': 'Reset. Every scheduled behavior is back to its default (on).',
   'invite.create': 'Invite saved. Send the code to the intended person yourself; Waldo did not email anyone.',
   'invite.member': 'Invite saved. Send the code yourself; Waldo did not email anyone.',
   'invite.revoke': 'Invite revoked.',
@@ -122,10 +142,12 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'spot.confirm': 'Confirmed. It now counts as something you said.',
   'spot.forget': 'Removed from long-term memory and blocked from relearning. The current chat may still mention it until the conversation moves on.',
   'spot.forget.incomplete': 'Forget is incomplete: part of memory storage could not be updated, so the text may still be in that store. The trace log records which store failed; try again or ask in chat.',
+  'node.forget.incomplete': 'The pattern was hidden and blocked from relearning, but retained conversation text could not be fully redacted. Supporting Spots remain. Ask Waldo in chat to inspect the incomplete removal; no dashboard retry target is available.',
   'node.forget': 'Pattern hidden from memory views and its name blocked from relearning. The spots behind it stay - forget those too to remove them. The current chat may still mention it until the conversation moves on.',
   'card.today': 'Card time set for today.',
   'card.pin': 'Card pinned. Waldo will use this time every day.',
   'card.unpin': 'Pin cleared. Waldo plans this card again.',
+  'card.unreadable.failed': "This card's schedule is stored in a form this version can't read, so it can't be changed here. Nothing was changed.",
   'google.disconnect': 'Google disconnected. Waldo no longer reads your calendar or mail.',
   'google.connected': 'Google connected.',
   'google.connect.failed': 'Google connect could not start. Try again.',
@@ -134,20 +156,29 @@ export const NOTICES: Readonly<Record<string, string>> = {
   invalid: 'That change could not be applied.',
 };
 
-export type ConsoleCard = Readonly<{ id: string; name: string; defaultTime: string; time: string | null; reason: string; sent: boolean; pin: string | null }>;
+// latest is the Main chat row today's card was delivered to; only the app's day view reads it.
+export type ConsoleCard = Readonly<{ id: string; name: string; defaultTime: string; time: string | null; reason: string; sent: boolean; pin: string | null;
+  latest?: CardLatest | null; state?: CardState }>;
 
 export type ConsoleView = Readonly<{
   release: string;
   timezone: string;
+  // True once the owner chose the zone themselves (timezone.set); a stored or fallback zone is not confirmed.
+  timezoneConfirmed: boolean;
   now: string;
   sessionUntil: string;
   sessionCount: number;
+  sessions: readonly ConsoleSessionRow[];
   approvals: readonly ApprovalItem[];
   usage: readonly Readonly<{ model: string; calls: number; input: number; cached: number; output: number; usd: number }>[];
   csrf: string;
   notice: string | null;
   google: Readonly<{ accounts: readonly Readonly<{ id: string; email: string; error: string | null; calendar: boolean; mail: boolean; tasks: boolean }>[]; connectAvailable: boolean }>;
   telegram: Readonly<{ linked: boolean; unlinkAvailable: boolean }>;
+  /** Whether this owner has an active iMessage link (their own handle, via "waldo CODE"). Absent = unknown. */
+  imessage?: Readonly<{ linked: boolean }>;
+  /** Whether this owner has an active WhatsApp link. Absent = unknown. */
+  whatsapp?: Readonly<{ linked: boolean }>;
   profile: ReturnType<typeof profile>;
   barriers: number;
   spots: readonly Claim[];
@@ -159,8 +190,10 @@ export type ConsoleView = Readonly<{
   cards: readonly ConsoleCard[];
   ledger: string;
   proactivity: Proactivity;
+  schedules: SchedulePreferences;
   files: readonly StoredFile[];
   steps: readonly E2EStep[];
+  lastRequest: LastRequest | null;
   trace: readonly TraceRow[];
   // A5b: recent background runs (delegate children, fires, beats) with their trace hops.
   runs: readonly Readonly<{ id: string; kind: string; status: string; summary: string | null; parent_id: string | null; started: string; ended: string | null }>[];
@@ -206,8 +239,10 @@ const connectors = (view: ConsoleView) => {
       google.accounts.length ? '' : status(false, 'Not connected'),
       google.connectAvailable ? form(csrf, 'google.connect', google.accounts.length ? 'Add account' : 'Connect Google', { value: 'calendar' }, { tone: google.accounts.length ? 'quiet' : 'primary' }) : '<span class="note">OAuth app keys are not set on this server yet</span>'),
     row('Telegram', 'Your owner DM. Chat, cards and reminders arrive here, and it is how you sign in to this console.', status(telegram.linked, telegram.linked ? 'Connected' : 'Unlinked'), telegramAction),
+    row('iMessage', 'Text Waldo from your own iPhone. Only you reach your Waldo: link your number with a one-time code.', view.imessage ? status(view.imessage.linked, view.imessage.linked ? 'Connected' : 'Not linked') : '', `<a class="btn quiet" href="/console/imessage">${view.imessage?.linked ? 'Manage' : 'Set up'}</a>`),
+    row('WhatsApp', 'Chat with your Waldo on WhatsApp after linking your number with a one-time code.', '', form(csrf, 'whatsapp.link', 'Get a WhatsApp link code', {}, {})),
     row('Console session', `Signed in until ${esc(view.sessionUntil)} on ${view.sessionCount} ${view.sessionCount === 1 ? 'browser' : 'browsers'}. Send /console on Telegram for a fresh link.`, status(true, 'Active'),
-      form(csrf, 'session.signout', 'Sign out') + (view.sessionCount > 1 ? form(csrf, 'session.signout.all', 'Sign out everywhere', {}, { tone: 'danger', confirm: 'Sign out of every browser?' }) : '')),
+      form(csrf, 'session.signout', 'Sign out') + form(csrf, 'session.signout.all', 'Sign out everywhere', {}, { tone: 'danger', confirm: 'Sign out of every browser and the app?' })),
     row('WhatsApp', 'The channel route exists, but this page cannot verify a linked WhatsApp number or live delivery. Ask Waldo in chat before relying on it.', chip('Status unknown here', 'provisional'), ''),
     row('Phone number and OTP sign-in', 'This console currently offers invite-gated email OTP and Telegram one-time links, not phone OTP sign-in.', chip('Not available', 'muted'), ''),
     row('Health data', 'Apple Health / Apple Watch first, then Health Connect, Samsung and WHOOP.', chip('Not built yet', 'muted'), ''),
@@ -235,18 +270,30 @@ const serviceStatus = (view: ConsoleView) => {
 // Sends need a bound sender account and exact destination in addition to words. The current
 // proposal stores neither for every channel, so console APPROVAL stays chat-only for sends.
 // Dismissal is the safe direction - it can only prevent a send, never cause one - so the
-// console offers Not now for open send proposals. That also un-strands proposals whose
+// console offers Don't do this for open send proposals. That also un-strands proposals whose
 // Telegram approval card lost its inline keyboard (2026-09-28 staging receipt).
-export const consoleMayApprove = (item: ApprovalItem | undefined): boolean => Boolean(item && item.state === 'open' && item.kind === 'calendar_change' && item.review?.kind === 'calendar_change');
+// Open email/message send proposals the console may only dismiss (approve stays in chat).
+export const consoleMayDismiss = (item: ApprovalItem): boolean =>
+  (item.state === 'open' || item.state === 'review_only') && !(consoleMayApprove(item) && item.review?.kind === item.kind) && (item.kind === 'email_send' || item.kind === 'message_send');
+export const consoleMayApprove = (item: ApprovalItem | undefined): boolean => Boolean(item && item.state === 'open' && item.kind === 'calendar_change' && item.review?.kind === 'calendar_change' && !calendarInviteDetails(item.review));
 
 const APPROVAL_LABELS: Readonly<Record<string, string>> = {
   calendar_change: 'Calendar adjustment', email_send: 'Email send', message_send: 'Message send',
-  browser_submit: 'Browser action', mcp_call: 'MCP tool call',
+  browser_submit: 'Browser action', mcp_call: 'MCP tool call', google_task_change: 'Google task change',
 };
 const reviewDetails = (review: ApprovalReview): string => {
   if (review.kind === 'email_send') return `<div class="approval-review"><div>To: ${esc(review.to.join(', '))}</div>${review.cc.length ? `<div>CC: ${esc(review.cc.join(', '))}</div>` : ''}${review.bcc.length ? `<div>BCC: ${esc(review.bcc.join(', '))}</div>` : ''}<div>Subject: ${esc(review.subject)}</div><pre>${esc(review.body)}</pre></div>`;
   if (review.kind === 'message_send') return `<div class="approval-review"><div>Channel: ${esc(review.channel)}</div><pre>${esc(review.content)}</pre></div>`;
-  return `<div class="approval-review"><div>Action: ${esc(review.action)}</div>${review.title ? `<div>Event: ${esc(review.title)}</div>` : ''}${review.event_id ? `<div>Event ID: ${esc(review.event_id)}</div>` : ''}${review.start ? `<div>Start: ${esc(review.start)}</div>` : ''}${review.end ? `<div>End: ${esc(review.end)}</div>` : ''}<div>Reason: ${esc(review.reason)}</div></div>`;
+  if (review.kind === 'google_task_change') {
+    const { args, list, before } = review.proposal;
+    const task = args.changes?.title ?? before?.title;
+    return `<div class="approval-review"><div>Account: ${esc(review.account)}</div><div>List: ${esc(list.title)}</div><div>Action: ${esc(args.action)}</div>${task ? `<div>Task: ${esc(task)}</div>` : ''}${args.changes?.notes ? `<pre>${esc(args.changes.notes)}</pre>` : ''}${args.changes?.due_date ? `<div>Due: ${esc(args.changes.due_date)}</div>` : ''}<div>Reason: ${esc(args.reason)}</div></div>`;
+  }
+  return `<div class="approval-review"><div>Action: ${esc(review.action)}</div>${review.title ? `<div>Event: ${esc(review.title)}</div>` : ''}${review.event_id ? `<div>Event ID: ${esc(review.event_id)}</div>` : ''}${review.start ? `<div>Start: ${esc(review.start)}</div>` : ''}${review.end ? `<div>End: ${esc(review.end)}</div>` : ''}`
+    + `${review.calendar_id && review.calendar_id !== 'primary' ? `<div>Calendar: ${esc(review.calendar_id)}</div>` : ''}${review.attendees?.length ? `<div>Guests: ${esc(review.attendees.join(', '))}</div>` : ''}`
+    + `${review.send_updates ? `<div>${review.send_updates === 'all' ? 'Google emails the guests' : 'Google does not email the guests'}</div>` : ''}${review.location ? `<div>Place: ${esc(review.location)}</div>` : ''}`
+    + `${review.add_meet_link ? '<div>With a Meet link</div>' : ''}${review.description ? `<div>Notes on the event:</div><pre>${esc(review.description)}</pre>` : ''}`
+    + `<div>Reason: ${esc(review.reason)}</div>${calendarInviteDetails(review) ? '<div>Approve it in chat or the Waldo app, where the full invite is shown.</div>' : ''}</div>`;
 };
 const approvals = (view: ConsoleView) => {
   if (view.approvals.length === 0) return empty('Nothing waiting on you. When Waldo proposes a change, it appears here and in your chat.');
@@ -256,15 +303,15 @@ const approvals = (view: ConsoleView) => {
     const canApprove = consoleMayApprove(item) && safeReview !== null;
     // Open send proposals are dismissible here: skipping changes nothing external, it only
     // closes the loop. Approving a send stays in chat with the exact words on the card.
-    const dismissible = (item.state === 'open' || item.state === 'review_only') && !canApprove && (item.kind === 'email_send' || item.kind === 'message_send');
+    const dismissible = consoleMayDismiss(item);
     const actions = canApprove
-      ? form(view.csrf, 'approval.approve', 'Do it', { id: item.id }, { tone: 'primary' }) + form(view.csrf, 'approval.skip', 'Not now', { id: item.id })
+      ? form(view.csrf, 'approval.approve', 'Do it', { id: item.id }, { tone: 'primary' }) + form(view.csrf, 'approval.skip', "Don't do this", { id: item.id })
       : item.state === 'open' || item.state === 'review_only'
-        ? dismissible ? form(view.csrf, 'approval.skip', 'Not now', { id: item.id }) : ''
+        ? dismissible ? form(view.csrf, 'approval.skip', "Don't do this", { id: item.id }) : ''
         : item.undoable ? form(view.csrf, 'approval.undo', 'Undo', { id: item.id }, { tone: 'danger', confirm: 'Undo this calendar change?' }) : '';
     const review = safeReview ? reviewDetails(safeReview) : '';
     const holdReason = item.state === 'review_only' ? '<div class="sub">The full email did not fit in the chat card, so no Send it button was offered. Nothing has been sent. Ask for a shorter version or a draft to review.</div>' : item.state === 'unconfirmed' ? '<div class="sub">Review card delivery was not confirmed. This email cannot be approved here or in chat; nothing has been sent. Check chat before making a fresh request.</div>' : item.state !== 'open' || canApprove ? '' : item.kind === 'email_send' || item.kind === 'message_send'
-      ? '<div class="sub">Review the exact sender, recipient and words in your chat - approving this send happens there. Not now dismisses it, here or in chat.</div>'
+      ? '<div class="sub">Review the exact sender, recipient and words in your chat - approving this send happens there. Don\'t do this dismisses it, here or in chat.</div>'
       : '<div class="sub">Full action details are not available here. This console cannot approve or dismiss it. Ask Waldo to show the proposal in full before deciding.</div>';
     const changeHint = (item.state === 'open' || item.state === 'review_only') && ['calendar_change', 'email_send', 'message_send'].includes(item.kind)
       ? '<div class="sub">Want to change it? Ask Waldo to prepare a new proposal before approving.</div>' : '';
@@ -329,9 +376,10 @@ const retired = (view: ConsoleView) => view.retiredSpots.length === 0 ? '' : `<d
 const forgetting = (view: ConsoleView) => view.forgettingSpots.length === 0 ? '' : `<div class="forgetting"><h3>Forget in progress (${view.forgettingSpots.length})</h3><div class="sub">These removals could not finish: part of memory storage still holds the text. Retry completes the removal.</div>${view.forgettingSpots.map((spot) => `<div class="row spot"><div class="main"><div class="line">${esc(spot.text)}</div></div>${chip('Removal incomplete', 'danger')}<div class="act">${form(view.csrf, 'spot.forget', 'Retry forget', { id: String(spot.id) }, { tone: 'danger', confirm: 'Retry forgetting this spot?' })}</div></div>`).join('')}</div>`;
 
 const cards = (view: ConsoleView) => [...view.cards].sort((a, b) => (a.time ?? a.defaultTime).localeCompare(b.time ?? b.defaultTime)).map((card) => {
-  const when = card.time ?? 'Skipped today';
+  const when = card.time ?? 'Not scheduled today';
+  const status = card.state === 'skipped' ? chip('Skipped') : card.state === 'held' ? chip('Held for quiet hours') : card.state === 'sent' ? chip('Sent', 'good') : card.sent ? chip('Done') : chip('Upcoming');
   const controls = card.sent ? '' : `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="id" value="${esc(card.id)}"><input type="time" name="value" value="${esc(card.time ?? card.defaultTime)}" required><button class="btn quiet" name="action" value="card.today">Set for today</button><button class="btn quiet" name="action" value="card.pin">Always at this time</button></form>`;
-  return `<div class="row card"><div class="time">${esc(when)}</div><div class="main"><div class="line"><b>${esc(card.name)}</b> ${card.sent ? chip('Sent', 'good') : chip('Upcoming')} ${card.pin ? chip(`Pinned ${card.pin}`, 'good') : ''}</div><div class="sub">${esc(card.reason)}</div>${controls}${card.pin ? form(view.csrf, 'card.unpin', 'Clear pin', { id: card.id }) : ''}</div></div>`;
+  return `<div class="row card"><div class="time">${esc(when)}</div><div class="main"><div class="line"><b>${esc(card.name)}</b> ${status} ${card.pin ? chip(`Pinned ${card.pin}`, 'good') : ''}</div><div class="sub">${esc(card.reason)}</div>${controls}${card.pin ? form(view.csrf, 'card.unpin', 'Clear pin', { id: card.id }) : ''}</div></div>`;
 }).join('');
 
 const VOLUMES: readonly (readonly [string, string])[] = [['low', 'Low: only the three day cards'], ['normal', 'Normal: plus updates that change your day'], ['high', 'High: plus smaller useful updates']];
@@ -339,6 +387,9 @@ const VOLUMES: readonly (readonly [string, string])[] = [['low', 'Low: only the 
 const timezone = (view: ConsoleView) => `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="timezone.set"><label>Time zone <input name="value" id="tz" value="${esc(view.timezone)}" autocomplete="off"></label><button class="btn quiet" type="button" onclick="document.getElementById('tz').value=Intl.DateTimeFormat().resolvedOptions().timeZone">Use this device</button><button class="btn quiet">Save</button></form><div class="sub">Waldo plans your day and fires reminders in this time zone. Change it when you travel.</div>`;
 
 const proactivity = (view: ConsoleView) => `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="proactivity.set"><label>Quiet from <input type="time" name="quiet_start" value="${esc(view.proactivity.quiet_start ?? '')}"></label><label>until <input type="time" name="quiet_end" value="${esc(view.proactivity.quiet_end ?? '')}"></label><select name="volume">${VOLUMES.map(([value, label]) => `<option value="${value}"${view.proactivity.volume === value ? ' selected' : ''}>${esc(label)}</option>`).join('')}</select><button class="btn quiet">Save</button></form><div class="sub">During quiet hours Waldo holds cards, updates and event briefs. Reminders you set still fire. Leave both times empty for no quiet hours.</div>`;
+
+const scheduleRows = (view: ConsoleView) => SCHEDULE_KINDS.map((kind) => `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="schedule.set"><input type="hidden" name="id" value="${kind}"><input type="hidden" name="value" value="${view.schedules[kind] ? 'off' : 'on'}"><span>${esc(SCHEDULE_LABELS[kind])}: <b>${view.schedules[kind] ? 'on' : 'off'}</b></span><button class="btn quiet">${view.schedules[kind] ? 'Turn off' : 'Turn on'}</button></form>`).join('');
+const schedules = (view: ConsoleView) => `${scheduleRows(view)}<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="schedule.reset"><button class="btn quiet">Reset to defaults</button></form><div class="sub">Nothing here is forced on you. You can also tell Waldo in chat, and both places stay in sync. Reset turns everything back on.</div>`;
 
 const size = (bytes: number | null) => bytes === null ? '' : bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 const KIND_LABEL: Readonly<Record<string, string>> = { photo: 'Photo', document: 'Document', voice: 'Voice note', audio: 'Audio' };
@@ -387,10 +438,11 @@ const overview = (view: ConsoleView) => {
   const currentTime = view.now.split(' ')[1] ?? '';
   const nextCard = [...view.cards].filter((card) => !card.sent && card.time !== null && card.time >= currentTime).sort((a, b) => (a.time ?? '').localeCompare(b.time ?? ''))[0];
   const brief = view.cards.find((card) => card.id === 'card:brief');
-  const briefState = brief?.sent ? 'Sent today' : brief?.time === null ? 'Not scheduled today' : 'Not sent yet';
+  const briefSkipped = brief?.state === 'skipped';
+  const briefState = briefSkipped ? 'Skipped today' : brief?.sent ? 'Sent today' : brief?.time === null ? 'Not scheduled today' : 'Not sent yet';
   const google = view.google.accounts.some((account) => !account.error);
   return `<div class="overview-top"><div><div class="eyebrow">Your Waldo · ${esc(view.now)} ${esc(view.timezone)}</div><h1>${greeting}<br><em>Here is where things stand.</em></h1><p>What needs you, what ran, and what comes next. No guesswork.</p></div><div class="overview-status">${chip(waiting.length ? `${waiting.length} waiting on you` : 'Nothing waiting on you', waiting.length ? 'provisional' : 'good')}<span>${google ? 'Google access saved. Live reads still need a real check.' : 'Google is not connected.'}</span></div></div>
-<div class="overview-grid"><div class="overview-feature"><div class="eyebrow">The Brief · ${esc(briefState)}</div><h3>${brief?.sent ? 'The Brief is marked sent.' : 'No Brief to read here yet.'}</h3><p>${brief?.sent ? 'Waldo recorded a send. This does not confirm delivery or show the message text; open your chat to check it.' : 'Waldo has not recorded a sent Brief for today. This page will not make one up.'}</p><a href="${CONSOLE_PATH}/day" class="text-link">See the day cards →</a></div>
+<div class="overview-grid"><div class="overview-feature"><div class="eyebrow">The Brief · ${esc(briefState)}</div><h3>${briefSkipped ? 'Waldo skipped the Brief today.' : brief?.sent ? 'The Brief is marked sent.' : 'No Brief to read here yet.'}</h3><p>${briefSkipped ? 'The Brief came due and Waldo had nothing worth sending, so no message went out.' : brief?.sent ? 'Waldo recorded a send. This does not confirm delivery or show the message text; open your chat to check it.' : 'Waldo has not recorded a sent Brief for today. This page will not make one up.'}</p><a href="${CONSOLE_PATH}/day" class="text-link">See the day cards →</a></div>
 <div class="overview-side"><div class="eyebrow">The Handoff</div><h3>${waiting.length ? `${waiting.length} ${waiting.length === 1 ? 'decision' : 'decisions'} waiting.` : 'Nothing needs your approval.'}</h3><p>${waiting.length ? esc(waiting[0]!.summary) : 'If Waldo proposes a change, review its exact details before anything happens.'}</p><a href="${CONSOLE_PATH}/waiting" class="text-link">${waiting.length ? 'Review the proposal' : 'See approvals'} →</a></div>
 <div class="overview-side"><div class="eyebrow">Next on the day</div><h3>${nextCard ? `${esc(nextCard.time!)} · ${esc(nextCard.name)}` : 'No more cards scheduled ahead.'}</h3><p>${nextCard ? esc(nextCard.reason) : 'There is no future card recorded in today’s plan.'}</p><a href="${CONSOLE_PATH}/day" class="text-link">See the plan →</a></div></div>
 <div class="overview-foot"><div><div class="eyebrow">The Patrol · latest recorded movement</div>${lastMovement}</div><a href="${CONSOLE_PATH}/activity" class="text-link">All activity →</a></div>`;
@@ -473,6 +525,26 @@ export const CONSOLE_PAGES = [
   { slug: 'account', title: 'Account' },
 ] as const;
 
+// The classic pages now live in the dashboard app: an HTML visit opens the matching
+// dashboard route. JSON reads and form posts keep their handlers. A ?m notice is dropped,
+// never carried, so a crafted link cannot put its own words on the console.
+const CLASSIC_PAGE_ROUTES: Readonly<Record<string, string>> = {
+  '': '', legacy: '', waiting: 'waiting', setup: 'setup', connections: 'connections', spots: 'memory/spots',
+  constellation: 'memory/constellation', day: 'day', memory: 'memory', files: 'files', usage: 'usage',
+  activity: 'patrol', account: 'account', invites: 'invites',
+  imessage: 'connections/imessage', devices: 'connections/devices',
+};
+export const classicConsoleRedirect = (request: Request): Response | null => {
+  if (request.method !== 'GET' && request.method !== 'HEAD') return null;
+  if ((request.headers.get('accept') ?? '').includes('application/json')) return null;
+  const url = new URL(request.url);
+  const slug = url.pathname === CONSOLE_PATH ? (url.searchParams.has('m') ? 'legacy' : null)
+    : url.pathname.startsWith(`${CONSOLE_PATH}/`) ? url.pathname.slice(CONSOLE_PATH.length + 1) : null;
+  if (slug === null || !Object.hasOwn(CLASSIC_PAGE_ROUTES, slug)) return null;
+  const route = CLASSIC_PAGE_ROUTES[slug];
+  return new Response(null, { status: 303, headers: { location: route ? `${CONSOLE_PATH}#/${route}` : CONSOLE_PATH, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } });
+};
+
 export const renderConsole = (view: ConsoleView, page: string = '', banner = ''): string => {
   const sentToday = view.cards.filter((card) => card.sent).length;
   const seen = view.steps.filter((step) => step.state === 'ok').length;
@@ -485,7 +557,7 @@ export const renderConsole = (view: ConsoleView, page: string = '', banner = '')
     connections: section('connections', 'Connections', 'What Waldo has permission to reach. To verify a tool, try a real request in chat and check Activity below.', serviceStatus(view) + connectors(view)),
     spots: section('spots', 'Spots', 'Small things Waldo has noticed about you. You can confirm, dismiss, or forget a spot here; corrections go through chat.', spots(view) + forgetting(view) + retired(view) + held(view)),
     constellation: section('constellation', 'Constellation', 'Lasting patterns built each night from repeated spots, and how they link. Strength is Waldo\'s uncalibrated estimate from 0 to 1, not a probability of truth.', constellation(view)),
-    day: section('day', 'Your day', 'Waldo plans when each card arrives. Change a time for today, or pin it so Waldo always uses it.', cards(view) + '<h3>Time zone</h3>' + timezone(view) + '<h3>Quiet hours and volume</h3>' + proactivity(view)),
+    day: section('day', 'Your day', 'Waldo plans when each card arrives. Change a time for today, or pin it so Waldo always uses it.', cards(view) + '<h3>Time zone</h3>' + timezone(view) + '<h3>Quiet hours and volume</h3>' + proactivity(view) + '<h3>Scheduled behaviors</h3>' + schedules(view)),
     memory: section('memory', 'Memory', 'What Waldo keeps about you. It updates after chats and each night.', memory(view)),
     files: section('files', 'Files', 'What you have sent Waldo on Telegram. Files stay stored with Telegram; this list keeps a reference so you can open them again.', files(view)),
     usage: section('usage', 'Usage and cost', 'Real per-model totals from Waldo\'s own trace log, most expensive first.', usage(view)),
@@ -496,7 +568,7 @@ export const renderConsole = (view: ConsoleView, page: string = '', banner = '')
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Waldo console</title>
 ${FONTS}<style>${STYLE}</style></head><body><div class="wrap">
 ${banner}<header><div class="brand">Waldo<small>Console</small></div><div class="env">Staging · ${esc(view.release)} · ${esc(view.now)} ${esc(view.timezone)}</div></header>
-<nav>${nav}<a href="${CONSOLE_PATH}/invites">Invites</a></nav>
+<nav>${nav}<a href="${CONSOLE_PATH}/invites">Invites</a><a href="${CONSOLE_PATH}/devices">Devices</a><a href="${CONSOLE_PATH}/imessage">iMessage</a></nav>
 ${view.notice ? `<div class="notice">${esc(view.notice)}</div>` : ''}
 ${pages[page] ?? pages['']}
 <footer>Only you can open this page. Links come from your Telegram DM and expire after 10 minutes; a session lasts 12 hours.</footer>

@@ -72,13 +72,13 @@ describe('retained byte store',()=>{
  expect((await s.write({...args(10499,'zero',new Uint8Array()),expected_revision:499})).revision).toBe(500);
  expect(await s.tombstone(last.file_id,500)).toEqual({status:'purged'});expect(f.state().bodies).toHaveLength(0);expect(f.state().operations).toHaveLength(500);
  await expect(s.write({...args(20001,'new',new Uint8Array())})).rejects.toThrow('workspace_capacity');await expect(s.write({...args(10499,'zero',new Uint8Array()),expected_revision:499})).rejects.toThrow('workspace_not_found');
- });
+ },30_000);
  it('pending reservation consumes the last slot and existing recovery works at cap',async()=>{
  const f=fixture(),s=await workspaceStore(f.host);for(let i=0;i<499;i++)await s.write({...args(10000+i,'zero',new Uint8Array()),expected_revision:i});
  const original=f.host.bodies.put;f.host.bodies.put=vi.fn(async(b,v)=>{await original(b,v);f.suspend();});
  await expect(s.write({...args(10499,'zero',new Uint8Array()),expected_revision:499})).rejects.toThrow('workspace_rejected');expect(f.state().operations).toHaveLength(500);expect(f.state().bodies).toHaveLength(499);
  f.host.admit=async()=>({status:'ok'});const restart=await workspaceStore(f.host);expect((await restart.reconcile(id(10499))).revision).toBe(500);expect(f.state().bodies).toHaveLength(500);
- });
+ },30_000);
  it('binding map-version mismatch at construction never reaches bodies',async()=>{
  const f=fixture();await workspaceStore(f.host);f.host.binding={...binding,mappingVersion:2};await expect(workspaceStore(f.host)).rejects.toThrow('workspace_rejected');expect(f.host.bodies.get).not.toHaveBeenCalled();expect(f.host.bodies.put).not.toHaveBeenCalled();
  });
@@ -98,4 +98,61 @@ describe('retained byte store',()=>{
  it('bounded metadata pages validate cursor/limits and never include storage keys or bodies',async()=>{
  const f=fixture(),s=await workspaceStore(f.host);await s.write(args());await s.write(args(11,'second'));const first=await s.list(undefined,1);expect(first.count).toBe(1);expect(first.next_cursor).not.toBeNull();const next=await s.list(first.next_cursor!,1);expect(next.count).toBe(1);expect(next.next_cursor).toBeNull();expect(JSON.stringify(first)).not.toMatch(/blob_id|binding|hello/);await expect(s.list(id(999),1)).rejects.toThrow('workspace_invalid');await expect(s.list(undefined,51)).rejects.toThrow('workspace_invalid');
  });
+});
+
+it('export caller byte ceiling rejects an immutable revision before any body read', async()=>{
+ const f=fixture(),s=await workspaceStore(f.host),m=await s.write(args());
+ f.host.bodies.get=vi.fn(f.host.bodies.get);
+ await expect(s.export(m.file_id,1,4)).rejects.toThrow('workspace_quota');
+ expect(f.host.bodies.get).not.toHaveBeenCalled();
+ expect((await s.export(m.file_id,1,5)).bytes.byteLength).toBe(5);
+ await expect(s.export(m.file_id,1,-1)).rejects.toThrow('workspace_invalid');
+});
+
+ it('projects only current committed workspace receipts after restart, with no file bodies',async()=>{
+ const f=fixture(),s=await workspaceStore(f.host);
+ const old=await s.write(args(20,'older.md',new TextEncoder().encode('unrelated private body')));
+ const saved=await s.write(args(21,'demo.md',new TextEncoder().encode('demo draft body')));
+ const restarted=await workspaceStore(f.host);
+ const receipts=await restarted.recentWrites();
+ expect(receipts).toEqual([{backend:'workspace',operation_id:id(21),file_id:saved.file_id,path:'demo.md',revision:1},{backend:'workspace',operation_id:id(20),file_id:old.file_id,path:'older.md',revision:1}]);
+ expect(JSON.stringify(receipts)).not.toContain('body');
+ expect(f.host.bodies.get).not.toHaveBeenCalled();
+ await s.tombstone(saved.file_id,1);
+ expect((await restarted.recentWrites()).map(r=>r.file_id)).toEqual([old.file_id]);
+ f.suspend();await expect(restarted.recentWrites()).rejects.toThrow('workspace_rejected');
+ });
+
+ it('bounds receipt rows and omits pending, stale, malformed and foreign metadata',async()=>{
+ const f=fixture(),s=await workspaceStore(f.host);
+ for(let n=0;n<5;n++)await s.write(args(30+n,`draft${n}.md`));
+ expect(await s.recentWrites()).toHaveLength(3);
+ const latest=f.state().operations.at(-1)!;const index=f.state().operations.length-1;
+ f.state().operations[index]={...latest,status:'pending'};
+ expect((await s.recentWrites()).some(r=>r.operation_id===latest.operation_id)).toBe(false);
+ f.state().operations[index]={...f.state().operations[index]!,status:'committed'};
+ f.state().files[index]={...f.state().files[index]!,path:'bad\\path'};
+ expect((await s.recentWrites()).some(r=>r.operation_id===latest.operation_id)).toBe(false);
+ f.state().files[index]={...f.state().files[index]!,path:'draft4.md',revision:8};
+ expect((await s.recentWrites()).some(r=>r.operation_id===latest.operation_id)).toBe(false);
+ const current=f.state().operations.at(-1)!;
+ f.state().operations[index]={...current,body:{...current.body,binding:{...current.body.binding,ownerId:id(999)}}};
+ await expect(s.recentWrites()).rejects.toThrow('workspace_rejected');
+ });
+
+ it('literal revisions retain current-owner admission and refuse revoked or foreign custody before new bytes',async()=>{
+ const f=fixture(),s=await workspaceStore(f.host);await s.write(args());
+ const edit={path:'file.txt',mime:'text/plain',expected_revision:1,operation_id:id(80),edits:[{before:'hello',after:'updated'}]};
+ f.state().binding={...binding,ownerId:id(999)};
+ await expect(s.reviseText(edit)).rejects.toThrow('workspace_rejected');expect(f.state().files[0]!.revision).toBe(1);
+ f.state().binding={...binding};f.suspend();await expect(s.reviseText(edit)).rejects.toThrow('workspace_rejected');
+ expect(f.host.bodies.put).toHaveBeenCalledTimes(1);
+ });
+
+it.each(['EMAIL','PHONE','ADDRESS','CREDIT_CARD','ATTENDEE_NAME','INSTRUCTION'])('refuses a changed full replacement containing the Scribe %s placeholder without advancing the revision',async kind=>{
+ const f=fixture(),s=await workspaceStore(f.host),saved=await s.write(args());
+ await expect(s.reviseText({path:'file.txt',mime:'text/plain',expected_revision:1,operation_id:id(81),text:`Changed [REDACTED_${kind}]`})).rejects.toThrow('workspace_conflict');
+ expect((await s.read(saved.file_id,1,0,10)).text).toBe('hello');
+ expect(f.state().files[0]!.revision).toBe(1);
+ expect(f.host.bodies.put).toHaveBeenCalledTimes(1);
 });

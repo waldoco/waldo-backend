@@ -276,3 +276,14 @@ it("invalid run IDs/nonces, primitive/nested/whitespace bindings and foreign rec
     "acknowledged_fixture",
   );
 });
+
+it('exposes a writable POST form and a task-scoped canonical receipt readback route', async () => {
+  const f = await fixture();
+  const html = await (await fetch(f.pageUrl)).text();
+  expect(html).toContain('<form id="form" method="post" action="/fixture/run-one/submit">');
+  expect(html).not.toContain(' readonly');
+  expect((await fetch(`${f.baseUrl}/fixture/run-one/receipt/current`)).status).toBe(404);
+  const submitted = await submit(f, { runId: 'run-one', token: await token(f), binding });
+  const issued = await submitted.json();
+  expect(await (await fetch(`${f.baseUrl}/fixture/run-one/receipt/current`)).json()).toEqual(issued);
+});

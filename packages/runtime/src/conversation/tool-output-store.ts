@@ -15,6 +15,8 @@ export type ToolOutputStore = Readonly<{
   // id exists and what span is actually retrievable. A marker string inside tool output text is
   // provider content and proves nothing - callers verify ids here before promising retrieval.
   stat(id: string): StoredPut | null;
+  // Re-derivable cache invalidation, never id reuse. No retained output may survive owner forget.
+  clear(): void;
 }>;
 
 // Aggregate budget: input preparation bounds each string and node count, but without a total
@@ -35,6 +37,7 @@ export const inMemoryToolOutputStore = (): ToolOutputStore => {
   let total = 0;
   let next = 0;
   return {
+    clear() { outputs.clear(); originals.clear(); provenance.clear(); total = 0; },
     put(output, prov) {
       next += 1;
       const id = `to-${next}`;

@@ -275,3 +275,36 @@ describe('crsResult', () => {
     expect(crsResultSchema.safeParse({ ...baseResult, hrv_rmssd: 42 }).success).toBe(false);
   });
 });
+
+describe('recovery.v1 derived health view', () => {
+  const recoveryView = {
+    authority: 'backend',
+    algorithm_version: 'recovery.v1',
+    recovery_zone: 'mixed',
+    trend: 'declining',
+    freshness: 'fresh',
+    missing_components: ['hrv'],
+    confidence_band: 'medium',
+    provenance_refs: ['hpr_0123456789abcdef0123456789abcdef'],
+    destination_eligibility: ['trigger_prompt', 'volatile_run'],
+  } as const;
+
+  it('accepts a strict recovery view eligible for the prompt and the volatile run', () => {
+    expect(derivedHealthDestinationViewSchema.safeParse(recoveryView).success).toBe(true);
+  });
+
+  it('rejects mixing the Form and Recovery vocabularies or raw fields', () => {
+    for (const extra of [{ form_zone: 'steady' }, { recovery_score: 41 }, { hrv_ms: 58 }]) {
+      expect(derivedHealthDestinationViewSchema.safeParse({ ...recoveryView, ...extra }).success).toBe(false);
+    }
+    expect(
+      derivedHealthDestinationViewSchema.safeParse({ ...recoveryView, recovery_zone: 'energized' }).success,
+    ).toBe(false);
+    expect(
+      derivedHealthDestinationViewSchema.safeParse({ ...recoveryView, missing_components: ['motion'] }).success,
+    ).toBe(false);
+    expect(
+      derivedHealthDestinationViewSchema.safeParse({ ...baseDestinationView, algorithm_version: 'recovery.v1' }).success,
+    ).toBe(false);
+  });
+});

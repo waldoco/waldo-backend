@@ -11,7 +11,7 @@ export type Metadata = { transaction<T>(work: (state: WorkspaceState) => T): T }
 export type Bodies = { put(body: BodyRevision, bytes: Uint8Array): Promise<void>; get(body: BodyRevision): Promise<Uint8Array | null>; remove(body: BodyRevision): Promise<void> };
 export type Admission = (binding: OwnerBinding, action: 'construct' | 'read' | 'write' | 'finalize' | 'export' | 'delete') => Promise<Readonly<{ status: 'ok' | 'unavailable' | 'rejected' }>>;
 export type WorkspaceHost = Readonly<{ binding: OwnerBinding; admit: Admission; metadata: Metadata; bodies: Bodies; now(): number; newId(): string }>;
-export const LIMITS = { fileBytes: 10 * 1024 * 1024, ownerBytes: 100 * 1024 * 1024, files: 500, retainedBodies: 500, operationReceipts: 500, textWriteBytes: 256 * 1024, textReadBytes: 8192, pageRows: 50, uploadMs: 60_000 } as const;
+export const LIMITS = { fileBytes: 10 * 1024 * 1024, ownerBytes: 100 * 1024 * 1024, files: 500, retainedBodies: 500, operationReceipts: 500, textWriteBytes: 256 * 1024, textReadBytes: 8192, searchBytes: 4 * 1024 * 1024, searchSnippetBytes: 240, pageRows: 50, uploadMs: 60_000 } as const;
 export class WorkspaceError extends Error { constructor(public readonly code: 'invalid' | 'unavailable' | 'rejected' | 'conflict' | 'pending' | 'not_found' | 'quota' | 'capacity') { super(`workspace_${code}`); } }
 const fail = (code: WorkspaceError['code']): never => { throw new WorkspaceError(code); };
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -28,6 +28,9 @@ const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 const decode = (bytes: Uint8Array): string => { try { return utf8.decode(bytes); } catch { return fail('invalid'); } };
 const byteTotal = (state: WorkspaceState): number => state.bodies.reduce((s, b) => s + b.byte_size, 0) + state.operations.filter(o => o.status === 'pending').reduce((s, o) => s + o.body.byte_size, 0);
 const copyMeta = (meta: FileMeta): FileMeta => ({ ...meta });
+export type LiteralEdit = Readonly<{ before: string; after: string }>;
+export type TextRevision = Readonly<{ path: string; expected_revision: number; operation_id: string; mime: string; text?: string; edits?: readonly LiteralEdit[] }>;
+const REDACTION_MARKERS = ['[REDACTED_EMAIL]', '[REDACTED_PHONE]', '[REDACTED_ADDRESS]', '[REDACTED_CREDIT_CARD]', '[REDACTED_ATTENDEE_NAME]', '[REDACTED_INSTRUCTION]'] as const;
 export type Write = Readonly<{ path: string; bytes: Uint8Array; mime: string; expected_revision: number; provenance: Provenance; operation_id: string }>;
 export const workspaceStore = async (host: WorkspaceHost) => {
   validateBinding(host.binding);
@@ -80,7 +83,27 @@ export const workspaceStore = async (host: WorkspaceHost) => {
     return copyMeta(saved.meta);
     });
   };
-  return {
+  const store = {
+    // Recover recent successful writes from durable operation receipts, not conversation text.
+    // Only the current ready revision is projected. Mapping/admission still gate every read.
+    async recentWrites() {
+      await admit('read');
+      return transact(state => {
+        const seen = new Set<string>();
+        return state.operations.slice().reverse().filter(operation => {
+          const file = state.files.find(file => file.file_id === operation.meta.file_id);
+          if (operation.status !== 'committed' || !file || file.state !== 'ready'
+            || file.revision !== operation.meta.revision || file.path !== operation.meta.path
+            || seen.has(file.file_id) || !validId(file.file_id) || !validId(operation.operation_id)
+            || !Number.isSafeInteger(file.revision) || file.revision < 1) return false;
+          try { validatePath(file.path); } catch { return false; }
+          seen.add(file.file_id);
+          return true;
+        }).slice(0, 3).map(operation => ({ backend: 'workspace' as const,
+          operation_id: operation.operation_id, file_id: operation.meta.file_id,
+          path: operation.meta.path, revision: operation.meta.revision }));
+      });
+    },
     async list(cursor?: string, limit = 20, prefix = '') {
       await admit('read');
       if (!Number.isInteger(limit) || limit < 1 || limit > LIMITS.pageRows || typeof prefix !== 'string' || new TextEncoder().encode(prefix).length > 240 || (cursor !== undefined && !validId(cursor))) fail('invalid');
@@ -91,6 +114,35 @@ export const workspaceStore = async (host: WorkspaceHost) => {
         const page = rows.slice(index + 1, index + 1 + limit);
         return { files: page.map(copyMeta), count: page.length, next_cursor: index + 1 + limit < rows.length ? page.at(-1)!.file_id : null };
       });
+    },
+    // Literal, case-insensitive substring search over the CURRENT revision of ready text files. Read-only.
+    // One hit per file (the first match). Case folding skips characters whose lowercase changes length, so
+    // those characters match only themselves. A file that would push the scan past the byte budget is skipped
+    // and the result says truncated; later smaller files are still scanned.
+    async search(query: string, prefix = '', limit = 10) {
+      await admit('read');
+      if (typeof query !== 'string' || query.length < 1 || query.length > 200 || !Number.isInteger(limit) || limit < 1 || limit > 20 || typeof prefix !== 'string' || new TextEncoder().encode(prefix).length > 240) fail('invalid');
+      const fold = (v: string) => [...v].map(ch => { const l = ch.toLowerCase(); return l.length === ch.length ? l : ch; }).join('');
+      const needle = fold(query);
+      const candidates = transact(state => state.files.filter(f => f.state === 'ready' && f.path.startsWith(prefix) && (f.mime === 'text/plain' || f.mime === 'text/markdown')).sort((a, b) => a.file_id.localeCompare(b.file_id)).flatMap(f => { const body = state.bodies.find(b => b.file_id === f.file_id && b.revision === f.revision); return body ? [{ meta: { ...f }, body: { ...body } }] : []; }));
+      const hits: { file_id: string; path: string; revision: number; offset: number; snippet: string }[] = [];
+      let scanned = 0; let truncated = false;
+      for (const { meta, body } of candidates) {
+        if (scanned + body.byte_size > LIMITS.searchBytes) { truncated = true; continue; }
+        scanned += body.byte_size;
+        const bytes = await verifyBody(body);
+        let text: string; try { text = utf8.decode(bytes); } catch { continue; }
+        const folded = fold(text); const at = folded.indexOf(needle);
+        if (at < 0) continue;
+        if (hits.length >= limit) { truncated = true; break; }
+        let start = Math.max(0, at - 60); let stop = Math.min(text.length, at + needle.length + 60);
+        while (new TextEncoder().encode(text.slice(start, stop)).length > LIMITS.searchSnippetBytes && stop - start > 1) { if (at - start > stop - at - needle.length && start < at) start++; else stop--; }
+        if (start < stop && (text.charCodeAt(start) & 0xfc00) === 0xdc00) start++;
+        if (stop > start && (text.charCodeAt(stop - 1) & 0xfc00) === 0xd800) stop--;
+        hits.push({ file_id: meta.file_id, path: meta.path, revision: meta.revision, offset: new TextEncoder().encode(text.slice(0, at)).length, snippet: text.slice(start, stop) });
+      }
+      transact(state => { for (const h of hits) if (!state.files.some(f => f.file_id === h.file_id && f.state === 'ready')) fail('not_found'); });
+      return { hits, truncated };
     },
     async stat(fileId: string) {
       await admit('read');
@@ -130,6 +182,43 @@ export const workspaceStore = async (host: WorkspaceHost) => {
       await admit('write');
       await bounded(() => host.bodies.put(reserved.operation.body, bytes));
       return commit(reserved.operation);
+    },
+    // Literal spans address only changed bytes. Redacted model views never supply a whole
+    // replacement for hidden fields; original owner-private bytes stay behind this store.
+    async reviseText(args: TextRevision): Promise<FileMeta> {
+      if (!Number.isSafeInteger(args.expected_revision) || args.expected_revision < 1
+        || (args.text === undefined) === (args.edits === undefined)) fail('invalid');
+      validatePath(args.path);
+      if (args.edits !== undefined && (!Array.isArray(args.edits) || args.edits.length < 1 || args.edits.length > 20
+        || args.edits.reduce((bytes,edit) => !edit || typeof edit.before !== 'string' || typeof edit.after !== 'string'
+          ? Infinity : bytes + new TextEncoder().encode(edit.before).length + new TextEncoder().encode(edit.after).length,0) > LIMITS.textWriteBytes)) fail('invalid');
+      await admit('read');
+      const meta = transact(state => state.files.find(file => file.path === args.path && file.state === 'ready'));
+      if (!meta) fail('not_found');
+      const original = decode((await store.export(meta!.file_id, args.expected_revision, LIMITS.textWriteBytes)).bytes);
+      let revised: string;
+      if (args.edits !== undefined) {
+        if (!Array.isArray(args.edits) || args.edits.length < 1 || args.edits.length > 20) fail('invalid');
+        const spans = args.edits.map(edit => {
+          if (!edit || typeof edit.before !== 'string' || !edit.before || typeof edit.after !== 'string'
+            || decode(new TextEncoder().encode(edit.before)) !== edit.before
+            || decode(new TextEncoder().encode(edit.after)) !== edit.after) fail('invalid');
+          const start = original.indexOf(edit.before);
+          if (start < 0 || original.indexOf(edit.before, start + 1) !== -1) fail('conflict');
+          return { start, end: start + edit.before.length, after: edit.after };
+        }).sort((a,b) => a.start - b.start);
+        if (spans.some((span,index) => index > 0 && span.start < spans[index - 1]!.end)) fail('conflict');
+        revised = original;
+        for (const span of spans.slice().reverse()) revised = revised.slice(0,span.start) + span.after + revised.slice(span.end);
+      } else {
+        if (typeof args.text !== 'string') fail('invalid');
+        revised = args.text!;
+        if (revised !== original && REDACTION_MARKERS.some(marker => revised.includes(marker))) fail('conflict');
+      }
+      const bytes = new TextEncoder().encode(revised);
+      if (bytes.length > LIMITS.textWriteBytes) fail('invalid');
+      return store.write({ path: args.path, bytes, mime: args.mime,
+        expected_revision: args.expected_revision, operation_id: args.operation_id, provenance: 'agent_generated' });
     },
     async reconcile(operationId: string): Promise<FileMeta> {
       await admit('finalize');
@@ -180,16 +269,19 @@ export const workspaceStore = async (host: WorkspaceHost) => {
       }
       return { status: 'purged' as const };
     },
-    async export(fileId: string, revision: number) {
+    async export(fileId: string, revision: number, maxBytes: number = LIMITS.fileBytes) {
       await admit('export');
       if (!validId(fileId) || !Number.isSafeInteger(revision) || revision < 1) fail('invalid');
       const record = transact(state => { const meta = state.files.find(f => f.file_id === fileId && f.state === 'ready'); const body = state.bodies.find(b => b.file_id === fileId && b.revision === revision); return meta && body ? { meta, body } : null; });
       if (!record) fail('not_found');
+      if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > LIMITS.fileBytes) fail('invalid');
+      if (record!.body.byte_size > maxBytes) fail('quota');
       const bytes = await verifyBody(record!.body);
       await admit('export');
       transact(state => { if (!state.files.some(f => f.file_id === fileId && f.state === 'ready') || !state.bodies.some(b => b.blob_id === record!.body.blob_id)) fail('not_found'); });
       return { bytes, meta: { ...record!.meta, revision, mime: record!.body.mime, provenance: record!.body.provenance, updated_at: record!.body.created_at, byte_size: record!.body.byte_size, sha256: record!.body.sha256 } };
     },
   };
+  return store;
 };
 export type WorkspaceStore = Awaited<ReturnType<typeof workspaceStore>>;

@@ -155,7 +155,6 @@ describe('privileged-action set — ADR-0049', () => {
     // draft_email is deliberately absent (owner decision 2026-09-25): a draft is a reviewable
     // artifact, not a send.
     expect(PRIVILEGED_ACTION_TOOLS).toEqual([
-      'update_memory',
       'execute_action',
       'send_message',
       'call_mcp_tool',
@@ -169,6 +168,9 @@ describe('privileged-action set — ADR-0049', () => {
       'restore_message',
       'archive_thread',
       'update_thread_topics',
+      'skills_install',
+      'skills_disable',
+      'use_mac',
     ]);
   });
 
@@ -257,16 +259,25 @@ describe('external-origin tool classification — ADR-0049', () => {
   it('covers every connector, calendar, communication, task, web, document, and MCP result', () => {
     expect(EXTERNAL_ORIGIN_TOOLS).toEqual([
       'query_calendar',
+      'query_availability',
       'get_communication',
       'search_communication',
+      'search_contacts',
       'read_thread',
       'get_tasks',
       'web_search',
       'read_document',
       'call_mcp_tool',
+      'read_mcp_tool',
+      'read_drive',
       'search_connector',
       'read_tool_output',
       'read_artifact',
+      'workspace_list',
+      'workspace_read',
+      'workspace_search',
+      'browse_page',
+      'browse_act',
       'delegate_task',
     ]);
   });

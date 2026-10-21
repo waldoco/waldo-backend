@@ -26,13 +26,13 @@ describe('real exporter transport boundary', () => {
     expect(send).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
   });
-  it('bounds a single unfinished trace by the existing 50-item budget and recovers on flush', async () => {
+  it('bounds a single unfinished trace by the buffered-hop budget and recovers on flush', async () => {
     const bodies: string[] = [];
     const log = otlpTurnExporter(config, context, async (_url, init) => { bodies.push(String(init.body)); return new Response(null); });
-    for (let i = 0; i < 50; i++) await log({ ...root('full'), hop: 'pickup' });
+    for (let i = 0; i < 1000; i++) await log({ ...root('full'), hop: 'pickup' });
     await expect(log({ ...root('full'), hop: 'pickup' })).rejects.toThrow('otlp_buffer_evicted');
     await log(root('full'));
-    expect(JSON.parse(bodies[0]!).resourceSpans[0].scopeSpans[0].spans).toHaveLength(51);
+    expect(JSON.parse(bodies[0]!).resourceSpans[0].scopeSpans[0].spans).toHaveLength(1001);
     await log({ ...root('next'), hop: 'pickup' });
     await log(root('next'));
     expect(JSON.parse(bodies[1]!).resourceSpans[0].scopeSpans[0].spans).toHaveLength(2);
@@ -158,7 +158,7 @@ describe('real exporter transport boundary', () => {
   it('recovers from abandoned traces by reporting eviction and retaining the new hop', async () => {
     const bodies: string[] = [];
     const log = otlpTurnExporter(config, context, async (_url, init) => { bodies.push(String(init.body)); return new Response(null); });
-    for (let i = 0; i < 50; i++) await log({ ...root(`abandoned-${i}`), hop: 'pickup' });
+    for (let i = 0; i < 1000; i++) await log({ ...root(`abandoned-${i}`), hop: 'pickup' });
     await expect(log({ ...root('fresh'), hop: 'typing' })).rejects.toThrow('otlp_buffer_evicted');
     await log(root('fresh'));
     const [parent, child] = JSON.parse(bodies[0]!).resourceSpans[0].scopeSpans[0].spans;
@@ -217,7 +217,7 @@ describe('real exporter transport boundary', () => {
     await log({ ...root('a'), hop: 'tool_a_old' });
     await log({ ...root('b'), hop: 'tool_b_old' });
     await log({ ...root('a'), hop: 'tool_a_new' });
-    for (let i = 0; i < 47; i++) await log({ ...root(`filler-${i}`), hop: 'tool_filler' });
+    for (let i = 0; i < 997; i++) await log({ ...root(`filler-${i}`), hop: 'tool_filler' });
     for (let i = 0; i < 2; i++) await expect(log({ ...root(`overflow-${i}`), hop: 'tool_overflow' })).rejects.toThrow('otlp_buffer_evicted');
     await log(root('a'));
     await log(root('b'));
