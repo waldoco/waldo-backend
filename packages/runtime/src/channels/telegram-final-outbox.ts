@@ -126,8 +126,8 @@ export class TelegramFinalOutbox {
     await this.save(rows);
   }
   // `supersedes` names the waiting records the new one replaces (a newer report of the same order). In the same save, each of
-  // them that never went out (pending, no part delivered) ends blocked as superseded and settles on the next drain. A record
-  // any part of which reached the provider is never touched: it was sent.
+  // them that never went out (pending, no part delivered or taken by the provider) ends blocked as superseded and settles on the
+  // next drain. A record any part of which reached the provider is never touched: it was sent.
   async enqueue(input: Omit<FinalRecord, 'digest' | 'status' | 'dueAt' | 'createdAt' | 'attempts'>, options?: Readonly<{ supersedes?(record: FinalRecord): boolean }>): Promise<void> {
     input = { ...input, payload: guardedPayload(input.payload) };
     const hash = await digest(input);
@@ -144,7 +144,7 @@ export class TelegramFinalOutbox {
       if (index < 0) throw new Error('final outbox capacity');
       rows = rows.filter((_, i) => i !== index);
     }
-    for (const row of rows) if (row.status === 'pending' && !row.deliveredParts && options?.supersedes?.(row)) {
+    for (const row of rows) if (row.status === 'pending' && !row.deliveredParts && !(row.providerMessageIds ?? []).some(Boolean) && options?.supersedes?.(row)) {
       row.status = 'blocked'; row.reason = 'superseded'; row.settled = false;
     }
     rows.push({ ...input, payload: { ...input.payload }, parts: payloadParts(input.payload), digest: hash, status: 'pending', dueAt: this.now() + 250, createdAt: this.now(), attempts: 0 });
