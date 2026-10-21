@@ -9,7 +9,10 @@ import type { RunEffectScope } from '../src/channels/run-effect-scope';
 import { createOwnerTurnContext } from '../src/context-composer/owner-turn';
 import { ownerMessageAdmission } from '../src/identity/owner-message-admission';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
-import { claimStore } from '../src/memory/claims';
+import { claimStore, type ClaimStore } from '../src/memory/claims';
+import { episodeIndex } from '../src/channels/episodes';
+import { memoryHandlers } from '../src/tools/live/memory';
+import { searchEpisodesHandler } from '../src/tools/live/search-episodes';
 import { messagingSystemPrompt, VOICE_VERSION, type SurfacePresentation } from '../src/prompt/messaging-behavior';
 import { CALENDAR_PREP_FORMAT } from '../src/channels/event-briefs';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
@@ -224,4 +227,208 @@ it('background decisions send the stable behaviour text as the system prompt, wi
     expect(decisions).toHaveLength(2);
     for (const hop of decisions) expect(hop.shape?.voice_version).toBe(VOICE_VERSION);
   });
+});
+
+// The frozen context is judged by the store, not by its rendered text: recall highlights episode snippets, fences rewrite
+// angle brackets, and a forget can select a claim by a word only its evidence carries or by a span of the owner's message.
+// Whatever selected it, a forgotten fact leaves the next round's message, and the message holds again after that rebuild.
+type Forget = Readonly<{ args: object; handle?: (sql: SqlStorage) => void } | { outOfBand: (memory: ClaimStore) => void }>;
+const forgetMidTurn = async (name: string, scenario: Readonly<{ text: string; seed: (memory: ClaimStore, sql: SqlStorage, traceId: string) => void; forget: Forget; episodes?: boolean }>) =>
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`stable-prefix-${name}`)), async (_instance, state) => {
+    const traceId = `stable-prefix-${name}-1`;
+    const memory = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
+    scenario.seed(memory, state.storage.sql, traceId);
+    const handlers = [
+      { name: 'get_context' as const, description: 'Owner context.', schema: z.object({ topic: z.string() }), trigger_allowlist: allowlist('get_context'), autonomy_gated: false,
+        handle: async () => ({ ok: true as const, data: {}, source_taint: null }) },
+      ...('handle' in scenario.forget && scenario.forget.handle
+        ? [{ name: 'forget_memory' as const, description: 'Forget.', schema: forgetMemoryArgsSchema, trigger_allowlist: allowlist('forget_memory'), autonomy_gated: false, mutates_state: true,
+          handle: async () => { (scenario.forget as { handle: (sql: SqlStorage) => void }).handle(state.storage.sql); return { ok: true as const, data: {}, source_taint: null }; } }]
+        : memoryHandlers({ sql: state.storage.sql, store: memory, conversationRef: name, hideHistory: async () => undefined }).filter((handler) => handler.name === 'forget_memory')),
+      ...(scenario.episodes ? [searchEpisodesHandler(episodeIndex(state.storage.sql))] : []),
+    ];
+    const forgetCall = 'args' in scenario.forget ? [call(2, 'forget_memory', scenario.forget.args)] : [call(2, 'get_context', { topic: 'week' })];
+    const script = [[call(1, 'get_context', { topic: 'week' })], forgetCall, [call(3, 'get_context', { topic: 'week' })]];
+    const messages: string[] = [];
+    const gateway: LLMGatewayAdapter = { complete: async ({ request }) => {
+      if (!request.tools?.length) return { ok: true, data: { model: request.model, text: 'ok', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 } };
+      const toolCalls = script[messages.length];
+      const message = String(request.messages.at(-1)?.content ?? '');
+      // Only what Waldo appended after the owner's own words: the owner's message can still say the topic.
+      messages.push(message.slice(message.indexOf(scenario.text) + scenario.text.length));
+      if (messages.length === 2 && 'outOfBand' in scenario.forget) scenario.forget.outOfBand(memory);
+      const data: LLMResponse = toolCalls
+        ? { model: request.model, text: '', tool_calls: toolCalls, output_items: toolCalls.map((item) => ({ type: 'function_call', id: `fc_${item.call_id}`, ...item })), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 }
+        : { model: request.model, text: 'Done.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 };
+      return { ok: true, data };
+    } };
+    const hops: TurnLogEntry[] = [];
+    const args: Parameters<typeof createOwnerResponder> = ['fixture'];
+    args[2] = memory; args[3] = (entry) => { hops.push(entry); }; args[4] = { timezone: 'Asia/Kolkata', now: () => new Date(Date.UTC(2026, 9, 15, 1, 23, 30)) }; args[5] = handlers as never; args[10] = gateway;
+    await createOwnerResponder(...args).respond(ownerTyped({ traceId, conversationRef: name, surface: 'telegram', text: scenario.text }), time);
+    expect(messages).toHaveLength(4);
+    if ('args' in scenario.forget) expect(hops.find((hop) => hop.hop === 'tool_forget_memory')?.ok).toBe(true);
+    return messages;
+  });
+
+const AISLE = { kind: 'fact', text: 'Prefers aisle seats', source: 'stated', evidence: '"Prefers aisle seats"', origin: 'owner', source_ref: 'owner, fixture-1' } as const;
+
+it('a topic forget that matches only a claim\'s evidence rebuilds the turn context without that claim', async () => {
+  const messages = await forgetMidTurn('evidence-topic', {
+    text: 'Forget what I said about Dr. Rao',
+    seed: (memory) => {
+      memory.add(AISLE, AT);
+      memory.add({ kind: 'fact', text: 'Has therapy weekly', source: 'stated', evidence: '"I see Dr. Rao for therapy"', origin: 'owner', source_ref: 'owner, fixture-2' }, AT);
+    },
+    forget: { args: { topic: 'Dr. Rao', scope_note: 'the therapist' } },
+  });
+  expect(messages[0]).toContain('Has therapy weekly');
+  expect(messages[1]).toBe(messages[0]);
+  expect(messages[2]).not.toContain('therapy');
+  expect(messages[2]).toContain('Prefers aisle seats');
+  expect(messages[3]).toBe(messages[2]);
+});
+
+it('a forget by a span of the owner\'s message rebuilds the turn context without the claim it grounded', async () => {
+  const messages = await forgetMidTurn('span', {
+    text: 'I see Dr. Rao for therapy weekly. Please forget that.',
+    seed: (memory, _sql, traceId) => {
+      memory.add(AISLE, AT);
+      memory.add({ kind: 'fact', text: 'Has therapy weekly', source: 'stated', evidence: 'I see Dr. Rao for therapy weekly', origin: 'owner', source_ref: `owner, ${traceId}` }, AT);
+    },
+    forget: { args: { source: { message_ref: 'stable-prefix-span-1', start: 0, end: 32 }, scope_note: 'the therapy line' } },
+  });
+  expect(messages[0]).toContain('Has therapy weekly');
+  expect(messages[2]).not.toContain('Has therapy weekly');
+  expect(messages[2]).toContain('Prefers aisle seats');
+  expect(messages[3]).toBe(messages[2]);
+});
+
+it('a forget by id of a claim whose text the fence rewrites rebuilds the turn context without it', async () => {
+  const messages = await forgetMidTurn('angle', {
+    text: 'Drop the quiet hours note',
+    seed: (memory) => {
+      memory.add(AISLE, AT);
+      memory.add({ kind: 'preference', text: 'Keeps <quiet hours> after nine', source: 'stated', evidence: '"Keeps <quiet hours> after nine"', origin: 'owner', source_ref: 'owner, fixture-2' }, AT);
+    },
+    forget: { args: { claim_ids: [2], scope_note: 'the quiet hours note' } },
+  });
+  expect(messages[0]).toContain('quiet hours');
+  expect(messages[2]).not.toContain('quiet hours');
+  expect(messages[2]).toContain('Prefers aisle seats');
+  expect(messages[3]).toBe(messages[2]);
+});
+
+it('a multi-word topic forget rebuilds the turn context without the highlighted episode recall found', async () => {
+  const messages = await forgetMidTurn('episode-topic', {
+    text: 'Please forget that Priya has lupus',
+    episodes: true,
+    seed: (memory, sql) => {
+      memory.add(AISLE, AT);
+      episodeIndex(sql).add('tg-earlier', 'owner_said', 'my sister Priya has lupus and moved to Pune', Date.UTC(2026, 9, 14));
+    },
+    forget: { args: { topic: 'Priya has lupus', scope_note: 'my sister\'s diagnosis' } },
+  });
+  expect(messages[0]).toContain('[lupus]');
+  expect(messages[2]).not.toContain('lupus');
+  expect(messages[3]).toBe(messages[2]);
+});
+
+// The turn's own count covers a forget tool whose removal the store's count does not see.
+it('any successful forget this turn rebuilds the turn context, even one the store does not count', async () => {
+  const messages = await forgetMidTurn('epoch', {
+    text: 'I see Dr. Rao for therapy weekly. Please forget that.',
+    seed: (memory) => {
+      memory.add(AISLE, AT);
+      memory.add({ kind: 'fact', text: 'Has therapy weekly', source: 'stated', evidence: '"Has therapy weekly"', origin: 'owner', source_ref: 'owner, fixture-2' }, AT);
+    },
+    forget: { args: { source: { message_ref: 'stable-prefix-epoch-1', start: 0, end: 32 }, scope_note: 'the therapy line' }, handle: (sql) => { sql.exec('DELETE FROM claims WHERE id = 2'); } },
+  });
+  expect(messages[0]).toContain('Has therapy weekly');
+  expect(messages[2]).not.toContain('Has therapy weekly');
+  expect(messages[3]).toBe(messages[2]);
+});
+
+it('a forget from outside the turn (the console) rebuilds the turn context on the next round', async () => {
+  const messages = await forgetMidTurn('out-of-band', {
+    text: 'what does my week look like?',
+    seed: (memory) => {
+      memory.add(AISLE, AT);
+      memory.add({ kind: 'fact', text: 'Sees a counsellor on Thursdays', source: 'stated', evidence: '"Sees a counsellor on Thursdays"', origin: 'owner', source_ref: 'owner, fixture-2' }, AT);
+    },
+    forget: { outOfBand: (memory) => { memory.purge([2], AT); memory.settle([2]); } },
+  });
+  expect(messages[0]).toContain('Sees a counsellor on Thursdays');
+  expect(messages[2]).not.toContain('counsellor');
+  expect(messages[2]).toContain('Prefers aisle seats');
+  expect(messages[3]).toBe(messages[2]);
+});
+
+it('an owner steer mid-turn recomputes recall for the steered message', async () => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('stable-prefix-steer')), async (_instance, state) => {
+    const memory = claimStore(state.storage.sql);
+    memory.add({ kind: 'event', text: 'Locker 42 is on the second floor', source: 'stated', evidence: '"Locker 42 is on the second floor"', origin: 'owner', source_ref: 'owner, fixture-1' }, AT);
+    const handlers = [{ name: 'get_context' as const, description: 'Owner context.', schema: z.object({ topic: z.string() }), trigger_allowlist: allowlist('get_context'), autonomy_gated: false,
+      handle: async () => ({ ok: true as const, data: {}, source_taint: null }) }];
+    const messages: string[] = [];
+    let responder: ReturnType<typeof createOwnerResponder> | undefined;
+    const gateway: LLMGatewayAdapter = { complete: async ({ request }) => {
+      if (!request.tools?.length) return { ok: true, data: { model: request.model, text: 'ok', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 } };
+      messages.push(String(request.messages.at(-1)?.content ?? ''));
+      if (messages.length === 1) expect(responder!.control.steerTarget('run', 5, { text: 'also, where is my locker?', foreignRanges: [] })).toBe(true);
+      const toolCalls = messages.length === 1 ? [call(1, 'get_context', { topic: 'week' })] : undefined;
+      const data: LLMResponse = toolCalls
+        ? { model: request.model, text: '', tool_calls: toolCalls, output_items: toolCalls.map((item) => ({ type: 'function_call', id: `fc_${item.call_id}`, ...item })), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 }
+        : { model: request.model, text: 'Done.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 };
+      return { ok: true, data };
+    } };
+    const args: Parameters<typeof createOwnerResponder> = ['fixture'];
+    args[2] = memory; args[4] = { timezone: 'Asia/Kolkata', now: () => new Date(Date.UTC(2026, 9, 15, 1, 23, 30)) }; args[5] = handlers as never; args[10] = gateway;
+    responder = createOwnerResponder(...args);
+    responder.control.bindTarget('run');
+    await responder.respond(ownerTyped({ traceId: 'stable-prefix-steer-1', conversationRef: 'steer', surface: 'telegram', text: 'plan my evening' }), time);
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).not.toContain('Locker 42');
+    expect(messages[1]).toContain('also, where is my locker?');
+    expect(messages[1]).toContain('Locker 42 is on the second floor');
+  });
+});
+
+// Withdrawing health sharing mid-turn takes the shared health out of the next round's message; it never rides a frozen copy.
+it('rebuilds the turn context mid-turn when health sharing is withdrawn', async () => {
+  const owner = '10000000-0000-0000-0000-000000000002';
+  const scope = (): RunEffectScope => ({ runId: 'run-health', attempt: 'attempt-health', deadline: Date.now() + 15 * 60_000, signal: new AbortController().signal, admit: () => undefined, commit: (work) => work() });
+  const day = new Date().toISOString().slice(0, 10);
+  let shared = true;
+  const health = async () => shared ? toContextHealthMaterial({ context: { id: 'ctx-2', day, form: { score: 72, zone: 'good', drivers: [], confidence: 0.8 }, recovery: { score: 70, zone: 'good' }, weight: { score: 45, zone: 'moderate' }, drivers: [], confidence: 0.8, freshness: 'fresh', tags: [], compiled_at: new Date(Date.now() - 3_600_000).toISOString() }, previous: null }, { timezone: 'UTC', now: () => new Date() }) : null;
+  const handlers = [{ name: 'get_context' as const, description: 'Owner context.', schema: z.object({ topic: z.string() }), trigger_allowlist: allowlist('get_context'), autonomy_gated: false,
+    handle: async () => ({ ok: true as const, data: {}, source_taint: null }) }];
+  const messages: string[] = [];
+  const gateway: LLMGatewayAdapter = { complete: async ({ request }) => {
+    if (!request.tools?.length) return { ok: true, data: { model: request.model, text: 'ok', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 } };
+    messages.push(String(request.messages.at(-1)?.content ?? ''));
+    if (messages.length === 1) shared = false;
+    const toolCalls = messages.length < 3 ? [call(messages.length, 'get_context', { topic: 'week' })] : undefined;
+    const data: LLMResponse = toolCalls
+      ? { model: request.model, text: '', tool_calls: toolCalls, output_items: toolCalls.map((item) => ({ type: 'function_call', id: `fc_${item.call_id}`, ...item })), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 }
+      : { model: request.model, text: 'Done.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 };
+    return { ok: true, data };
+  } };
+  const admission = await ownerMessageAdmission({
+    lookup: async () => ({ owner_id: owner, do_name: 'owner-health', state_version: 0, admission_revision: '1', presence_id: '20000000-0000-0000-0000-000000000002', provider: 'telegram', subject: '1002' }),
+    scope: scope(), locator: { environment: 'staging', namespace: 'owner-staging', doName: 'owner-health', doId: 'actual-do' },
+    actualDoId: 'actual-do', expectedDoId: (name: string) => name === 'owner-health' ? 'actual-do' : 'other-do',
+    allowedDoNames: ['owner-health'], provider: 'telegram' as const, subject: '1002', text: 'how should I pace today?',
+    occurrenceKey: 'stable-health-1', occurredAt: Date.now() - 1, now: Date.now,
+  });
+  const context = createOwnerTurnContext(admission, { health });
+  const args: Parameters<typeof createOwnerResponder> = ['fixture'];
+  args[4] = { timezone: 'Asia/Kolkata', now: () => new Date(Date.UTC(2026, 9, 15, 1, 23)) }; args[5] = handlers as never; args[10] = gateway;
+  args[18] = []; args[19] = scope(); args[21] = { context };
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('stable-prefix-health')), () =>
+    createOwnerResponder(...args).respond(ownerTyped({ traceId: 'stable-health-1', conversationRef: context.conversationRef, surface: 'app', text: 'how should I pace today?', memoryWrites: false, presentation: presentation('app') }), time));
+  expect(messages).toHaveLength(3);
+  expect(messages[0]).toContain('Form zone: steady.');
+  expect(messages[1]).not.toContain('Form zone');
+  expect(messages[2]).toBe(messages[1]);
 });

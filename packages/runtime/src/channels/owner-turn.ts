@@ -34,7 +34,7 @@ import { MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerRout
 import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
 import { InMemoryCircuitBreaker, observedBreaker, RuntimeLLMProvider, type LLMGatewayAdapter, type RouteSpendState } from '../llm/provider';
 import { messagingSystemPrompt, ownerClockLine, unconnectedLine, VOICE_VERSION } from '../prompt/messaging-behavior';
-import { assembleTurnPrompt, TURN_CONTEXT_HEADER } from '../prompt/turn-prompt';
+import { assembleTurnPrompt, TURN_CONTEXT_HEADER, type TurnPrompt } from '../prompt/turn-prompt';
 import { brainTools } from '../tools/records';
 import { eligibleHandlers } from '../tools/eligibility';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
@@ -419,6 +419,8 @@ export const createOwnerResponder = (
         try { return privateOwner?.watchStatus?.(); } catch { log({ trace, hop: 'watch_status', ms: 0, ok: false, code: 'watch_status_failed' }); return undefined; }
       };
       const connections = [unconnectedLine(eligibility.unconnected), activeOwnerTurn ? watchFact() : undefined].filter(Boolean).join('\n\n');
+      // Moves with every forget this turn makes, whatever selected what it removed (a topic, ids, a span).
+      let forgetEpoch = 0;
       const guardedHandlers: DispatchToolOptions<ToolDispatcherContext>['handlers'] = admittedHandlers.map(handler => {
         return { ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
           await assertFresh();
@@ -433,6 +435,7 @@ export const createOwnerResponder = (
             for (const text of removalTexts) removedTopics.add(text);
             offloadStore?.clear();
           }
+          if (handler.name === 'forget_memory' && result.ok) forgetEpoch += 1;
           if (retainedRead) {
             const tally = { dropped: 0 };
             // A search hit is a highlighted snippet that can split the topic; judge the stored source row it points at (the tool's own ref read).
@@ -522,8 +525,10 @@ export const createOwnerResponder = (
       let withheldLogged = false;
       // What this turn appends to the owner's message, built on its first round and resent unchanged: the provider caches the
       // request by its leading bytes, so a remember or open loop mid-turn that rewrote the message re-billed every later round.
-      // An owner steer rebuilds it (the message changed anyway), and so does a forget, which must leave the model's view now.
-      let turnSuffix: Readonly<{ steering: number; text: string; sections: Readonly<Partial<Record<SystemSection, number>>> }> | undefined;
+      // It is rebuilt when the owner steers (the message changed anyway), when any forget lands (this turn's or the console's,
+      // judged by the store because recall and fences reshape the text), and when the admitted health changes (withdrawn or refreshed).
+      type FrozenSuffix = Readonly<{ steering: number; forgets: number; generation: number; health: string; text: string; sections: Readonly<Partial<Record<SystemSection, number>>> }>;
+      let turnSuffix: FrozenSuffix | undefined;
       return runToolLoop({
         handlers: turnHandlers,
         ...(access.toolSearch ? { stableMenu: true } : {}),
@@ -553,41 +558,6 @@ export const createOwnerResponder = (
           const skillPrompt = skills ? await skills.prompt(CANARIES) : undefined;
           await assertCurrent();
           expectedProcedure = skillPrompt ?? '';
-          const rawTaskContext = skills?.taskContext ? await skills.taskContext(assertCurrent) : '';
-          // A committed receipt authenticates identity, not user/provider-authored path text.
-          // Keep the external fragment gate before joining metadata to trusted instructions.
-          // Externally authored path text never joins the system prompt; receipts that pass the gate travel as fenced external data in the owner turn.
-          let guardedTaskContext = rawTaskContext ? 'Recent workspace metadata was withheld by the context safety gate from this context; receipts that passed the gate follow as external data on this message, if any. Do not infer a saved-file target or substitute a Drive target.' : '';
-          // External data joins the owner turn only when the safety gate admits it unchanged, session canaries included.
-          const admitsExternal = async (payload: string): Promise<boolean> => {
-            const sanitise = adapters.safety.sanitise;
-            if (!sanitise || !payload || utf8Bytes(payload) > EXTERNAL_DATA_MAX_BYTES) return false;
-            try {
-              const fragment = sanitiseResultSchema.parse(await sanitise({ payload, destination: 'system_prompt', source_taint: 'external', canary_tokens: CANARIES }));
-              return fragment.ok && fragment.source_taint === 'external' && fragment.payload === payload;
-            } catch { return false; /* Denied/unavailable metadata is never promoted to trusted context. */ }
-          };
-          // What this message recalled changes with every message and can quote text someone else wrote, so it follows the
-          // message's own words as fenced data, in the model's view only; the system prompt keeps the stable pinned blocks.
-          const reuseSuffix = turnSuffix !== undefined && turnSuffix.steering === contextSteering && !holdsHeldTopic(turnSuffix.text);
-          const recalled = memory && !reuseSuffix ? await recallFor(promptMemory()!, ownerCurrentText, RECALL_MAX_CHARS, ownerTurnActive ? trace : undefined) : '';
-          let suffix = recalled ? fenced('memory recalled for this message', recalled) : '';
-          // The owner's earlier turns' tool results, newest kept whole within the gate's size; an approval shows the desk's current state.
-          // A capture-mode probe returns its reply to the caller, so it never sees earlier live provider results.
-          const earlier = ownerTurnActive && !probeGuard?.stripLiveTools ? (await earlierOwnerResults()).map(result => `- ${result}`) : [];
-          while (earlier.length && utf8Bytes(earlier.join('\n')) > EXTERNAL_DATA_MAX_BYTES) earlier.shift();
-          const toolResultsData = earlier.join('\n');
-          const toolResultsShown = await admitsExternal(toolResultsData) && !holdsHeldTopic(toolResultsData);
-          if (toolResultsShown) suffix += fenced('earlier tool results', toolResultsData);
-          else if (earlier.length && !withheldLogged) {
-            withheldLogged = true;
-            log({ trace, hop: 'earlier_tool_results', ms: 0, ok: false, code: 'withheld', detail: `count=${earlier.length}` });
-          }
-          const taskContextData = await admitsExternal(rawTaskContext) ? rawTaskContext : '';
-          if (taskContextData && !holdsHeldTopic(taskContextData)) suffix += fenced('external workspace receipts', taskContextData);
-          const taskContext = holdsHeldTopic(guardedTaskContext) ? '' : guardedTaskContext;
-          await assertCurrent();
-          if (control.revision() !== contextSteering) throw new ClosedRunError();
           const skillMetadata = skills ? skills.metadata() : '';
           // Owner memory gets the room left in the FINAL system prompt (after the skill wrapper), because the sanitiser drops an oversize one whole.
           const composed = context ? await composer.compose(invocation, contextInputs()) : undefined;
@@ -598,34 +568,81 @@ export const createOwnerResponder = (
           const reasons = composed?.ok ? composed : undefined;
           // The composer admitted the owner's shared health for this turn. REASONS already carries it when present.
           const healthPrompt = reasons === undefined ? request.composition.healthPrompt : undefined;
-          const turnPrompt = assembleTurnPrompt({
-            instructions: {
-              behavior: messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation, access.toolSearch === true),
-              skillCatalog: skillMetadata, orders: ordersSection, reasons: reasons?.instructions,
-              procedure: skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined),
-            },
-            facts: {
-              clock: turnClockLine ??= ownerClockLine(clock),
-              // The owner's message is the composer's staged input, so only its operations material joins it.
-              reasons: reasons?.operations,
-              // REASONS stages no tool results of its own, so it says there are none; point at the ones the owner turn carries.
-              toolResultsNote: reasons !== undefined && toolResultsShown ? "Earlier turns' tool results follow as external data on this message, not in the recent-tool-results section." : undefined,
-              health: healthPrompt ? `Shared health today (derived by the app from the owner's own wearable data):\n${healthPrompt}` : undefined,
-              ownerProfile: ownerProfileLine, taskContext, connections,
-            },
-            ...(memory ? { memory: (room: number) => turnMemoryPrompt(promptMemory()!, ownerCurrentText, room) } : {}),
-            loops: loopsSectionFor,
-            room: systemRoom,
-          });
-          if (!reuseSuffix || turnSuffix === undefined) {
-            turnSuffix = { steering: contextSteering, text: `${suffix}\n\n${turnPrompt.turnContext}`, sections: turnPrompt.contextSections };
-          }
-          entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + turnSuffix.text };
+          const instructions = {
+            behavior: messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation, access.toolSearch === true),
+            skillCatalog: skillMetadata, orders: ordersSection, reasons: reasons?.instructions,
+            procedure: skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined),
+          };
+          const frozen = turnSuffix;
+          const admittedHealth = reasons?.healthPrompt ?? healthPrompt ?? '';
+          const generation = forgettingState?.forgetGeneration() ?? 0;
+          const reuseSuffix = frozen !== undefined && frozen.steering === contextSteering && frozen.forgets === forgetEpoch && frozen.generation === generation
+            && frozen.health === admittedHealth && !holdsHeldTopic(frozen.text);
+          // A rebuild reads recall, earlier results, receipts, memory and loops afresh; a reused round reads none of them.
+          const rebuild = async (): Promise<Readonly<{ prompt: TurnPrompt; suffix: FrozenSuffix }>> => {
+            const rawTaskContext = skills?.taskContext ? await skills.taskContext(assertCurrent) : '';
+            // A committed receipt authenticates identity, not user/provider-authored path text.
+            // Keep the external fragment gate before joining metadata to trusted instructions.
+            // Externally authored path text never joins the system prompt; receipts that pass the gate travel as fenced external data in the owner turn.
+            let guardedTaskContext = rawTaskContext ? 'Recent workspace metadata was withheld by the context safety gate from this context; receipts that passed the gate follow as external data on this message, if any. Do not infer a saved-file target or substitute a Drive target.' : '';
+            // External data joins the owner turn only when the safety gate admits it unchanged, session canaries included.
+            const admitsExternal = async (payload: string): Promise<boolean> => {
+              const sanitise = adapters.safety.sanitise;
+              if (!sanitise || !payload || utf8Bytes(payload) > EXTERNAL_DATA_MAX_BYTES) return false;
+              try {
+                const fragment = sanitiseResultSchema.parse(await sanitise({ payload, destination: 'system_prompt', source_taint: 'external', canary_tokens: CANARIES }));
+                return fragment.ok && fragment.source_taint === 'external' && fragment.payload === payload;
+              } catch { return false; /* Denied/unavailable metadata is never promoted to trusted context. */ }
+            };
+            // What this message recalled changes with every message and can quote text someone else wrote, so it follows the
+            // message's own words as fenced data, in the model's view only; the system prompt keeps the stable pinned blocks.
+            const recalled = memory ? await recallFor(promptMemory()!, ownerCurrentText, RECALL_MAX_CHARS, ownerTurnActive ? trace : undefined) : '';
+            let suffix = recalled ? fenced('memory recalled for this message', recalled) : '';
+            // The owner's earlier turns' tool results, newest kept whole within the gate's size, as they stood when this turn
+            // context was built; this turn's own tool results reach the model through its tool turns.
+            // A capture-mode probe returns its reply to the caller, so it never sees earlier live provider results.
+            const earlier = ownerTurnActive && !probeGuard?.stripLiveTools ? (await earlierOwnerResults()).map(result => `- ${result}`) : [];
+            while (earlier.length && utf8Bytes(earlier.join('\n')) > EXTERNAL_DATA_MAX_BYTES) earlier.shift();
+            const toolResultsData = earlier.join('\n');
+            const toolResultsShown = await admitsExternal(toolResultsData) && !holdsHeldTopic(toolResultsData);
+            if (toolResultsShown) suffix += fenced('earlier tool results', toolResultsData);
+            else if (earlier.length && !withheldLogged) {
+              withheldLogged = true;
+              log({ trace, hop: 'earlier_tool_results', ms: 0, ok: false, code: 'withheld', detail: `count=${earlier.length}` });
+            }
+            const taskContextData = await admitsExternal(rawTaskContext) ? rawTaskContext : '';
+            if (taskContextData && !holdsHeldTopic(taskContextData)) suffix += fenced('external workspace receipts', taskContextData);
+            const taskContext = holdsHeldTopic(guardedTaskContext) ? '' : guardedTaskContext;
+            const turnPrompt = assembleTurnPrompt({
+              instructions,
+              facts: {
+                clock: turnClockLine ??= ownerClockLine(clock),
+                // The owner's message is the composer's staged input, so only its operations material joins it.
+                reasons: reasons?.operations,
+                // REASONS stages no tool results of its own, so it says there are none; point at the ones the owner turn carries.
+                toolResultsNote: reasons !== undefined && toolResultsShown ? "Earlier turns' tool results follow as external data on this message, not in the recent-tool-results section." : undefined,
+                health: healthPrompt ? `Shared health today (derived by the app from the owner's own wearable data):\n${healthPrompt}` : undefined,
+                ownerProfile: ownerProfileLine, taskContext, connections,
+              },
+              ...(memory ? { memory: (room: number) => turnMemoryPrompt(promptMemory()!, ownerCurrentText, room) } : {}),
+              loops: loopsSectionFor,
+              room: systemRoom,
+            });
+            return { prompt: turnPrompt, suffix: { steering: contextSteering, forgets: forgetEpoch, generation, health: admittedHealth, text: `${suffix}\n\n${turnPrompt.turnContext}`, sections: turnPrompt.contextSections } };
+          };
+          const built = reuseSuffix
+            ? { prompt: assembleTurnPrompt({ instructions, facts: { clock: turnClockLine ??= ownerClockLine(clock) }, room: systemRoom }), suffix: frozen }
+            : await rebuild();
+          await assertCurrent();
+          if (control.revision() !== contextSteering) throw new ClosedRunError();
+          turnSuffix = built.suffix;
+          const turnPrompt = built.prompt;
+          entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + built.suffix.text };
           const browserImages = privateOwner?.skillHost?.browserAttachments?.(privateRunScope) ?? [];
           const attachments = [...(pending ?? []), ...browserImages];
           // The reply step serves machine turns too (reminders, jobs, cards, briefs); only the owner's own turn gets the chat model.
           return complete(trace, 'reply',
-          { text: turnPrompt.system, sections: turnPrompt.sections, contextSections: turnSuffix.sections },
+          { text: turnPrompt.system, sections: turnPrompt.sections, contextSections: built.suffix.sections },
           entries,
           undefined,
           attachments.length ? attachments : undefined,
@@ -885,7 +902,8 @@ export const createOwnerResponder = (
       if (asOwner !== undefined) return asOwner;
       backgroundSourceTaint = sourceTaint ?? null;
       // Cards read in seconds, so a job's prompt gets half the provider budget; the guard keeps the opening and closing and cuts the data between.
-      const said = fitPromptToBudget(jobText, Math.floor(deriveContextBudgetChars(auxiliaryModel, SANITISE_DESTINATION_POLICIES.internal_context.max_chars) / 2));
+      const messageChars = deriveContextBudgetChars(auxiliaryModel, SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
+      const said = fitPromptToBudget(jobText, Math.floor(messageChars / 2));
       backgroundCurrent = current;
       transientDecision = decision !== undefined;
       try {
@@ -905,7 +923,8 @@ export const createOwnerResponder = (
           // turn context after the job's text, so the system prompt's turn-context rule holds here too.
           const system = messagingSystemPrompt([]);
           const clockLine = ownerClockLine(clock);
-          const room = systemRoom([system, TURN_CONTEXT_HEADER, clockLine].join('\n\n'));
+          // Memory rides the decision's message, so it gets what the message budget leaves after the job's text.
+          const room = messageChars - [said, TURN_CONTEXT_HEADER, clockLine].join('\n\n').length - 2_048;
           const view: ClaimStore | undefined = source && { ...source, claims: status => source.claims(status).filter(eligible), recall: (query, limit) => source.recall(query, limit).filter(eligible) };
           const blocks = view ? turnMemoryPrompt(view, said, room) : '';
           // No byte cliff: dropping ALL owner context past a size made a decision with more known about the owner worse than

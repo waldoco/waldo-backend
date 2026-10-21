@@ -349,6 +349,10 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
   // A topic-only forget (no claim left to carry retry state) keeps its exact owner-evidenced words here, only until the
   // caller confirms every store is clean and settles it. No permanent plaintext list: settle(ids, topics) deletes the row.
   sql.exec('CREATE TABLE IF NOT EXISTS topic_purge_pending (fingerprint TEXT PRIMARY KEY, topic TEXT NOT NULL, created_at TEXT NOT NULL)');
+  // A count, never content. Every forget moves it, whoever asked (a tool, the console, the nightly pass), so text built from
+  // memory earlier can be checked for staleness against the store rather than against its own rendering.
+  sql.exec('CREATE TABLE IF NOT EXISTS forget_generation (id INTEGER PRIMARY KEY CHECK (id = 1), value INTEGER NOT NULL)');
+  const forgetLanded = () => sql.exec('INSERT INTO forget_generation (id, value) VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET value = value + 1');
   if (!sql.exec("SELECT name FROM pragma_table_info('forget_barriers')").toArray().some((col) => (col as { name: string }).name === 'topic_hash')) {
     sql.exec('ALTER TABLE forget_barriers ADD COLUMN topic_hash TEXT');
   }
@@ -361,6 +365,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
   // and dedupe on it. Also store the lower-cased, space-collapsed form: alias forms are normalised, so a capitalised topic
   // must still match them. The as-given hash stays for exact claim-text blocking.
   const barrier = (topic: string, at: string): void => {
+    forgetLanded();
     const given = topic.trim();
     for (const hash of new Set([textFingerprint(given), textFingerprint(given.toLowerCase().replace(/\s+/g, ' '))])) {
       const existing = sql.exec<{ n: number }>('SELECT count(*) AS n FROM forget_barriers WHERE topic_hash = ?', hash).one().n;
@@ -420,6 +425,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         match, Math.max(1, Math.min(12, Math.trunc(limit)))).toArray();
     },
     barriers: () => sql.exec<ForgetBarrier>('SELECT * FROM forget_barriers ORDER BY id').toArray(),
+    forgetGeneration: (): number => sql.exec<{ value: number }>('SELECT value FROM forget_generation WHERE id = 1').toArray()[0]?.value ?? 0,
     nodes: () => sql.exec<ConstellationNode>('SELECT * FROM constellation_nodes ORDER BY strength DESC').toArray(),
     edges: () => sql.exec<ConstellationEdge>('SELECT * FROM constellation_edges ORDER BY strength DESC').toArray(),
     add(claim: NewClaim, at: string, id?: number): void {
@@ -501,6 +507,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         edge.from_id, edge.to_id, edge.relation, edge.strength, edge.evidence_count);
     },
     forgetNode(id: number): void {
+      forgetLanded();
       sql.exec('DELETE FROM constellation_edges WHERE from_id = ? OR to_id = ?', id, id);
       sql.exec('DELETE FROM constellation_nodes WHERE id = ?', id);
     },
@@ -538,6 +545,8 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       }
     },
     purge(ids: readonly number[], at: string, topics: readonly string[] = []): { ready: boolean; remaining: Record<string, number>; texts: readonly string[]; failed: readonly string[]; receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> } } {
+      // Before anything is removed: if the count cannot move, nothing is forgotten either.
+      forgetLanded();
       const forgotten = ids.length
         ? sql.exec<Claim>(`SELECT * FROM claims WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids).toArray()
         : [];

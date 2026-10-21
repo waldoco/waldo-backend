@@ -323,6 +323,17 @@ describe('otlpTurnExporter', () => {
     expect(attrs(generation)['langfuse.observation.metadata.context_context_sections']).toBeUndefined();
   });
 
+  it('leaves voice_version off a generation whose call ran on no voice block', async () => {
+    const { send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
+    await log({ trace: 'tg-novoice', hop: 'llm_nightly_memory', ms: 5, ok: true, usage: { model: OPENAI_GPT_6_LUNA_MODEL, input: 100, output: 10, cached: 0 }, shape: { system_bytes: 40, request_bytes: 90, context: {
+      tools_count: 0, tools_bytes: 0, tool_turns_bytes: 0, history_messages: 1, history_bytes: 30, current_bytes: 12, attachments: 0 } } });
+    await log({ trace: 'tg-novoice', hop: 'turn', ms: 10, ok: true });
+    const generation = spans(0).find((span) => span.name === 'llm_nightly_memory')!;
+    expect(attrs(generation)['langfuse.observation.metadata.context_system_bytes']).toBe('40');
+    expect(Object.keys(attrs(generation))).not.toContain('langfuse.observation.metadata.voice_version');
+  });
+
   it('keeps every hop of one long turn that exceeds the outstanding-export budget', async () => {
     const { calls, send, spans } = capture();
     const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
