@@ -6,6 +6,8 @@ import { redactSecretUrls } from './egress-guard';
 import { telegramRichReply } from './rich-format';
 
 export const FINAL_OUTBOX_KEY = 'telegram_final_outbox_v1';
+// One report per occurrence: the producer and the scheduler both find a queued report by this id.
+export const standingOrderFinalId = (orderId: string, occurrence: number): string => `standing-order:${orderId}:${occurrence}`;
 export const FINAL_OUTBOX_DUE_KEY = 'telegram_final_outbox_due_v1';
 // Statuses a surface reported for a message id before the outbox could match them to a record (the record was still being
 // sent, or the id was never the outbox's). Kept briefly, so a record that finishes its send then picks up what arrived early.
