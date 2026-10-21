@@ -385,6 +385,23 @@ describe('produceHealthScores', () => {
     expect(await run(harness(seriesOf(history(25)), { written: true, changed: ['form'] }, computeDailyScores, { onZoneChange: async () => { throw new Error('owner object away'); } }))).toBe('written');
   });
 
+  it('never scores a newly worn wearable against the old one\'s baseline', async () => {
+    // Two weeks on the watch, then three nights on a strap: the strap's nights are its own short history, still learning.
+    const watch = Array.from({ length: 14 }, (_, i) => dayOfReadings(addDays(TODAY, -3 - i), i)).flat();
+    const strap = Array.from({ length: 3 }, (_, i) => dayOfReadings(addDays(TODAY, -i), i, { hrvMethod: 'rmssd' })).flat()
+      .filter(s => !SCORED_WINDOW_SIGNALS.includes(s.signal as string)).map(s => s.signal === 'overnight_hrv' ? { ...s, value: 31 } : s);
+    const h = harness({ access: 'granted', read_at: READ_AT, sources: [
+      { source: 'apple', consent_epoch: 1, truncated: false, samples: watch },
+      { source: 'whoop', consent_epoch: 1, truncated: false, samples: strap },
+    ] });
+    await run(h);
+    const today = h.inputs.find(i => i.targetDay === TODAY)!;
+    expect(today.days.filter(d => d.overnightHrv).map(d => d.day).sort()).toEqual([addDays(TODAY, -2), addDays(TODAY, -1), TODAY]);
+    const row = h.writes.find(w => w.day === TODAY)!;
+    expect(row.basis).toEqual([{ source: 'whoop', consent_epoch: 1 }]);
+    expect(row.recovery).not.toHaveProperty('score');
+  });
+
   it('computes from the higher-ranked of two sources and names only that source as the basis', async () => {
     const series = { access: 'granted', read_at: READ_AT, sources: [
       { source: 'health_connect', consent_epoch: 1, truncated: false, samples: history(3) },
