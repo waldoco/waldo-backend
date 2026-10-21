@@ -89,6 +89,22 @@ Every batch is reviewed against these questions before it merges. They are quest
 11. **The wedge.** Does it serve health-aware planning, including for people without a wearable, and keep its pilot thresholds measurable?
 12. **Privacy and authority lines.** Are health values kept out of logs, ledger rows, third-party sends and long-term memory? Are credentials kept out of prompts? Is consent checked?
 13. **Cost.** Does it stay inside the per-owner cost envelope, with tokens, rungs and cache share visible per turn?
+14. **Untrusted text stays untrusted.** Every field the owner did not type enters context as delimited untrusted data, and memory written from it records its source. That covers contact names, vCards, location labels, email sender names, page text, and MCP server or tool descriptions. A turn that has read untrusted content creates no channel links, grants, schedules or standing instructions without the owner's approval.
+15. **Disclosed AI, with a human behind it.** Does Waldo identify as an AI on every channel? Does a route to a human exist where a channel requires one? Apple asked Poke for both before approving it for Messages for Business.
+
+### Tool checklist
+
+Each tool change is checked against these:
+
+1. Every write takes an application idempotency key, never a transport id, and a replay returns the original receipt.
+2. The approval card shows the frozen arguments, and dispatch rejects any change to their digest.
+3. Approval and run-without-a-card decisions never rest on annotations from a third-party server, which are hints only.
+4. Schemas are strict, each with a valid and an invalid test. Fields the code already knows, such as the owner, time zone or tokens, are never asked of the model.
+5. Results show names rather than ids, offer a concise form, and paginate and cap long lists, with guidance on how to narrow them.
+6. Errors use the one refusal shape, and a test proves the suggested fix succeeds on retry.
+7. Tools are task-shaped and listed in a deterministic order. Only the core set stays loaded; the rest are found through tool search.
+8. A tool change ships after a held-out eval run whose transcripts have been read. State is checked by assertions, never by a judge alone.
+
 
 The comparison set for this bar:
 - Harnesses: Claude Code and the Agent SDK, OpenAI Codex, OpenClaw, Pi, Goose, Hermes and Cursor.
@@ -103,6 +119,13 @@ The bar draws on public writing:
 - Cognition, "Don't build multi-agents" (2025);
 - HumanLayer, "12-factor agents";
 - OpenAI, "A practical guide to building agents" (2025).
+
+2026 sources behind questions 14 and 15 and the tool checklist:
+- the MCP 2026-07-28 specification changelog (deterministic tool order; Client ID Metadata Documents replacing Dynamic Client Registration; `iss` validation; `input_required` results);
+- Imperva and Zenity on OpenClaw injections through message metadata and self-edited configuration (February and June 2026);
+- TechCrunch on Apple's conditions for Poke (4 June 2026);
+- Anthropic, "Demystifying evals for AI agents" (January 2026);
+- arXiv 2606.10315 and 2606.19544 on judge blind spots and agreement.
 
 ## How we prove it
 
