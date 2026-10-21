@@ -1,0 +1,78 @@
+// The labelled replies the voice judge is measured on, and the agreement between the judge and the labels. A label
+// is a person's call on one reply against the six tests; until reviewed_by names someone, it is a draft.
+import { readFileSync } from 'node:fs';
+import { z } from 'zod';
+import { VOICE_ANCHORS, VOICE_TESTS, type VoiceJudgeInput, type VoiceTestKey, type VoiceVerdict } from './voice';
+
+export const VOICE_LABELS_PATH = new URL('../fixtures/voice-labels-v0.jsonl', import.meta.url);
+
+const testKey = z.enum(VOICE_TESTS.map((entry) => entry.key) as [VoiceTestKey, ...VoiceTestKey[]]);
+const labelSchema = z.object({
+  id: z.string().min(1),
+  voice: z.object({ moment: z.string().min(1), note: z.string().min(1).optional() }).strict(),
+  transcript: z.array(z.object({ role: z.enum(['owner', 'waldo', 'world']), text: z.string().min(1), surface: z.enum(['chat', 'notification']).optional() }).strict()).min(1),
+  tools: z.array(z.object({ name: z.string().min(1), ok: z.boolean() }).strict()),
+  effects: z.array(z.object({ kind: z.string().min(1), payload: z.unknown() }).strict()),
+  label: z.enum(['pass', 'fail']),
+  failed_tests: z.array(testKey).min(1).optional(),
+  why: z.string().min(1),
+  labelled_by: z.string().min(1),
+  reviewed_by: z.string().min(1).nullable(),
+}).strict().refine((row) => (row.label === 'fail') === (row.failed_tests !== undefined), { error: 'a fail names its failed tests; a pass names none' })
+  .refine((row) => row.transcript.some((turn) => turn.role === 'waldo'), { error: 'a label grades at least one Waldo message' });
+export type VoiceLabel = z.infer<typeof labelSchema>;
+
+export const parseVoiceLabels = (text: string): readonly VoiceLabel[] => {
+  const rows = text.split('\n').filter((line) => line.trim()).map((line, index) => {
+    const parsed = labelSchema.safeParse(JSON.parse(line));
+    if (!parsed.success) throw new Error(`voice label line ${index + 1}: ${parsed.error.issues.map((issue) => issue.message).join('; ')}`);
+    return parsed.data;
+  });
+  if (new Set(rows.map((row) => row.id)).size !== rows.length) throw new Error('voice label ids must be unique');
+  // A label that repeats a calibration anchor measures recall of the prompt, not judgment.
+  const anchors = new Set(VOICE_ANCHORS.flatMap((pair) => [pair.waldo, pair.not_waldo]));
+  for (const row of rows) for (const turn of row.transcript) if (anchors.has(turn.text)) throw new Error(`voice label ${row.id} repeats a calibration anchor`);
+  return rows;
+};
+export const loadVoiceLabels = (path: URL | string = VOICE_LABELS_PATH) => parseVoiceLabels(readFileSync(path, 'utf8'));
+
+export const labelInput = (row: VoiceLabel): VoiceJudgeInput => ({ voice: row.voice, transcript: row.transcript, tools: row.tools, effects: row.effects });
+
+export type LabelledVerdict = Readonly<{ id: string; outcome: VoiceVerdict['outcome']; failed_tests?: readonly VoiceTestKey[] }>;
+export const labelledVerdict = (id: string, verdict: VoiceVerdict): LabelledVerdict => ({
+  id, outcome: verdict.outcome,
+  ...(verdict.tests ? { failed_tests: VOICE_TESTS.map((entry) => entry.key).filter((key) => !verdict.tests![key].met) } : {}),
+});
+
+const ratio = (part: number, whole: number) => (whole === 0 ? null : part / whole);
+
+// Agreement on the pass/fail call, over the labels the judge decided. false_pass (the judge passes a labelled fail) is
+// the error that lets a bad reply through, so it is reported apart from false_fail. failed_test_hit: of the labelled
+// fails the judge also failed, the share where it failed at least one of the tests the label names.
+export const voiceAgreement = (labels: readonly VoiceLabel[], verdicts: readonly LabelledVerdict[]) => {
+  const byId = new Map(verdicts.map((verdict) => [verdict.id, verdict]));
+  const decided = labels.flatMap((label) => {
+    const verdict = byId.get(label.id);
+    return verdict && (verdict.outcome === 'pass' || verdict.outcome === 'fail') ? [{ label, verdict }] : [];
+  });
+  const cell = (label: 'pass' | 'fail', judged: 'pass' | 'fail') => decided.filter((pair) => pair.label.label === label && pair.verdict.outcome === judged).length;
+  const [pp, pf, fp, ff] = [cell('pass', 'pass'), cell('pass', 'fail'), cell('fail', 'pass'), cell('fail', 'fail')];
+  const n = decided.length;
+  const observed = ratio(pp + ff, n);
+  const chance = n === 0 ? null : (((pp + pf) / n) * ((pp + fp) / n)) + (((fp + ff) / n) * ((pf + ff) / n));
+  const caught = decided.filter((pair) => pair.label.label === 'fail' && pair.verdict.outcome === 'fail');
+  return {
+    labels: labels.length,
+    reviewed: labels.filter((label) => label.reviewed_by !== null).length,
+    decided: n,
+    undecided: labels.length - n,
+    confusion: { label_pass_judge_pass: pp, label_pass_judge_fail: pf, label_fail_judge_pass: fp, label_fail_judge_fail: ff },
+    accuracy: observed,
+    kappa: observed === null || chance === null || chance === 1 ? null : (observed - chance) / (1 - chance),
+    false_pass_rate: ratio(fp, fp + ff),
+    false_fail_rate: ratio(pf, pp + pf),
+    failed_test_hit: ratio(caught.filter((pair) => (pair.verdict.failed_tests ?? []).some((key) => pair.label.failed_tests!.includes(key))).length, caught.length),
+    disagreements: decided.filter((pair) => pair.label.label !== pair.verdict.outcome).map((pair) => pair.label.id),
+  };
+};
+export type VoiceAgreement = ReturnType<typeof voiceAgreement>;

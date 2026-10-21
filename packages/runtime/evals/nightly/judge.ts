@@ -2,8 +2,9 @@
 // what the trial produced against the scenario's written rubric. Effects and final state are the
 // ground truth for what happened; the replies are graded against them.
 import { z } from 'zod';
-import type { CallBudget } from './budget';
+import { askJudgeModel, type JudgeModelConfig } from './anthropic';
 import type { TrialOutcome } from './scorecard';
+import type { VoiceRubric } from './voice';
 
 export type Rubric = Readonly<{
   // What has to be true at the end for the trial to pass.
@@ -11,11 +12,14 @@ export type Rubric = Readonly<{
   // What Waldo must ask the owner before acting, when the scenario has a wrong-person, new-obligation or money risk.
   must_ask?: string;
   must_not: readonly string[];
+  // Also grade every Waldo message against the personality's six tests (voice.ts).
+  voice?: VoiceRubric;
 }>;
 export type JudgeInput = Readonly<{
   scenario: string;
   rubric: Rubric;
-  transcript: readonly Readonly<{ role: 'owner' | 'waldo' | 'world'; text: string }>[];
+  // A Waldo message names where it appeared: the chat, or a notification that can show on a lock screen.
+  transcript: readonly Readonly<{ role: 'owner' | 'waldo' | 'world'; text: string; surface?: 'chat' | 'notification' }>[];
   tools: readonly Readonly<{ name: string; ok: boolean }>[];
   effects: readonly unknown[];
   final_state: unknown;
@@ -64,22 +68,8 @@ const decide = (input: JudgeInput, text: string): Verdict => {
   return { outcome: pass ? 'pass' : 'fail', reasons: { outcome: parsed.outcome.why, asked_first: parsed.asked_first.why, avoided: parsed.avoided.why } };
 };
 
-export const liveJudge = (config: Readonly<{ apiKey: string; model: string; budget: CallBudget; fetcher?: typeof fetch }>): Judge => async (input) => {
-  if (!config.budget.take('judge')) return { outcome: 'budget_exhausted' };
-  try {
-    const response = await (config.fetcher ?? fetch)('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'x-api-key': config.apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model: config.model, max_tokens: 6000, thinking: { type: 'enabled', budget_tokens: 4000 },
-        system: INSTRUCTIONS, messages: [{ role: 'user', content: packet(input) }],
-      }),
-    });
-    if (!response.ok) return { outcome: 'judge_error' };
-    const body = await response.json() as { content?: { type: string; text?: string }[]; usage?: { input_tokens?: number; output_tokens?: number } };
-    config.budget.spent('judge', (body.usage?.input_tokens ?? 0) + (body.usage?.output_tokens ?? 0));
-    return decide(input, (body.content ?? []).filter((part) => part.type === 'text').map((part) => part.text ?? '').join(''));
-  } catch {
-    return { outcome: 'judge_error' };
-  }
+export const liveJudge = (config: JudgeModelConfig): Judge => async (input) => {
+  const text = await askJudgeModel(config, INSTRUCTIONS, packet(input));
+  if (text === 'budget_exhausted') return { outcome: 'budget_exhausted' };
+  return text === null ? { outcome: 'judge_error' } : decide(input, text);
 };
