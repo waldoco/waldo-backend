@@ -7,6 +7,7 @@ import { OpenAIResponsesAdapter } from '../../src/llm/openai';
 import { scriptedGateway } from '../../src/testing/scripted-gateway';
 import { callBudget } from './budget';
 import { assertIndependentJudge, liveJudge, type Judge } from './judge';
+import { liveVoiceJudge } from './voice';
 import type { NightlyRun } from './suite';
 
 type Env = Readonly<Record<string, string | undefined>>;
@@ -56,5 +57,6 @@ export const nightlyConfig = (env: Env): NightlyRun => {
     // No client retries: every attempt is one counted call.
     gateway: () => new OpenAIResponsesAdapter({ client: new OpenAI({ apiKey, maxRetries: 0, timeout: 60_000 }) }),
     judge: liveJudge({ apiKey: judgeKey, model: judgeModel, budget }),
+    voiceJudge: liveVoiceJudge({ apiKey: judgeKey, model: judgeModel, budget }),
   };
 };
