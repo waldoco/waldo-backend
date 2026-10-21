@@ -27,7 +27,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
-const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '4a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
 // A fallback zone that differs from the directory's 'UTC' default, so saving the fallback is observable.
@@ -58,7 +58,7 @@ type Owner = Readonly<{ setup(channel: string): Runtime; fetch(request: Request)
 type Stored = Readonly<{ zone?: string; confirmed?: boolean; pins?: Record<string, string>; capture?: boolean }>;
 
 const withAppOwner = async <T>(name: string, stored: Stored, run: (owner: Owner, state: DurableObjectState) => Promise<T>): Promise<T> => {
-  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   return runInDurableObject(stub, async (_instance, state) => {
     claimStore(state.storage.sql); ensureSchema(state.storage); traceBook(state.storage.sql);
     state.storage.kv.put('do_name', name);
@@ -66,7 +66,7 @@ const withAppOwner = async <T>(name: string, stored: Stored, run: (owner: Owner,
     if (stored.zone) state.storage.kv.put('timezone', stored.zone);
     if (stored.confirmed) state.storage.kv.put('timezone_confirmed', true);
     for (const [card, time] of Object.entries(stored.pins ?? {})) dayPlanBook(state.storage.sql).pin(card as never, time);
-    const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: FALLBACK, WALDO_OWNER_TELEGRAM_ID: undefined, ...(stored.capture ? { LANGFUSE_CAPTURE_TEXT: 'true', WALDO_ENVIRONMENT: 'staging' } : {}) }) as unknown as Owner;
+    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: FALLBACK, WALDO_OWNER_TELEGRAM_ID: undefined, ...(stored.capture ? { LANGFUSE_CAPTURE_TEXT: 'true', WALDO_ENVIRONMENT: 'staging' } : {}) }) as unknown as Owner;
     try { return await run(owner, state); } finally { await state.storage.deleteAlarm(); }
   });
 };
@@ -292,8 +292,8 @@ describe('Weight\'s calendar demand route on the owner object', () => {
 
   it('refuses a signed request on an object that has not been bound to that owner', async () => {
     const name = 'demand-unbound';
-    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
-      const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: FALLBACK, WALDO_OWNER_TELEGRAM_ID: undefined }) as unknown as Owner;
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+      const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: FALLBACK, WALDO_OWNER_TELEGRAM_ID: undefined }) as unknown as Owner;
       const owners = { idFromName: (n: string) => n as never, get: () => ({ fetch: (request: Request) => owner.fetch(request) }) };
       const today = localIso(Date.now(), 'Europe/London').slice(0, 10);
       await expect(readOwnerDemand(owners, directory.WALDO_ROUTER_HMAC_SECRET, name, { from: shiftDay(today, -2), to: today, timezone: 'Europe/London' })).rejects.toThrow('calendar demand unavailable');

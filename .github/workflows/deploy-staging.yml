@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Read-only inspection, reviewed migration apply, or Worker deployment
+        description: Read-only inspection, reviewed migration apply, Worker deployment, or read-only deploy gate
         required: true
         type: choice
         default: deploy
@@ -22,8 +22,9 @@ on:
           - preflight
           - migration-apply
           - deploy
+          - gate
       expected_source_sha:
-        description: Exact reviewed 40-character source SHA (preflight requires this)
+        description: Exact reviewed 40-character source SHA (preflight requires this; gate compares the deployed release to it when set)
         required: false
         type: string
       reviewed_pending_sha256:
@@ -124,6 +125,44 @@ jobs:
         # traces name the exact code deployed (Codex #271 review: bare wrangler leaves it
         # "unreleased"). The script exists on the dispatched ref (beta-mvp), not on main.
         run: scripts/deploy-runtime.sh --env staging
+
+      - name: Read-only deploy gate on the SHA just deployed
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: node scripts/staging-gate.mjs --expect-sha "$GITHUB_SHA"
+  # What is deployed, is it healthy, how to roll back: reads and refusal-path probes only, no
+  # deploy, rollback or write. See docs/ops/STAGING_DEPLOY_GATE.md.
+  gate:
+    if: inputs.operation == 'gate'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: staging
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@008330803749db0355799c700092d9a85fd074e9 # v6.0.9
+        with:
+          version: 10.34.4
+      - name: Install (frozen lockfile, for the pinned wrangler)
+        run: pnpm install --frozen-lockfile
+      - name: Gate logic tests
+        run: node --test scripts/staging-gate.test.mjs scripts/staging-rollback.test.mjs
+      - name: Staging gate
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "$EXPECTED_SOURCE_SHA" ]; then node scripts/staging-gate.mjs --expect-sha "$EXPECTED_SOURCE_SHA"; else node scripts/staging-gate.mjs; fi
 
 # Required repo secrets (staging scope only; production stays Mac-lane until he says so):
 #   CLOUDFLARE_API_TOKEN      - Workers:Edit on the staging worker only

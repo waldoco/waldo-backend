@@ -2,7 +2,7 @@ import { buildSessionState, getContextArgsSchema, TOOL_PERMISSIONS, triggerTypeS
 import { describe, expect, it } from 'vitest';
 import { capToolOutput, runToolLoop, TOOL_OUTPUT_LIMIT } from '../src/conversation/tool-loop';
 import { MAX_STORED_ITEM_CHARS, inMemoryToolOutputStore } from '../src/conversation/tool-output-store';
-import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
+import { resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
 import { readToolOutputHandler } from '../src/tools/read-tool-output';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];

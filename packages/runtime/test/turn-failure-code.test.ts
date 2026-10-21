@@ -20,6 +20,7 @@ describe('turnFailureCode (capture-off diagnostics)', () => {
     expect(turnFailureCode(new Error('conversation model returned empty output'))).toBe('model_empty');
     expect(turnFailureCode(new Error('conversation owner authentication mismatch'))).toBe('owner_mismatch');
     expect(turnFailureCode(new Error('conversation invocation owner mismatch'))).toBe('owner_mismatch');
+    expect(turnFailureCode(new Error('conversation history owner mismatch'))).toBe('owner_mismatch');
     expect(turnFailureCode(new Error('turn timed out after 60000 ms'))).toBe('turn_timeout');
   });
 });

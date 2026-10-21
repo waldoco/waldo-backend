@@ -12,7 +12,7 @@ const post = (token: string | null, body: unknown = { text: 'probe ping' }) => n
 });
 const staging = (ns: DurableObjectNamespace): ProbeTurnEnv => ({
   WALDO_ENVIRONMENT: 'staging', WALDO_PROBE_TOKEN: 'probe-secret',
-  WALDO_OWNER_TELEGRAM_ID: '42', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata', TELEGRAM_OWNER_DO: ns,
+  WALDO_OWNER_TELEGRAM_ID: '42', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata', OWNER_DO: ns,
 });
 const directory: OwnerDirectory = {
   byPresence: async () => ({ doName: 'do-a', subject: '42', timezone: 'Asia/Kolkata' }),
@@ -87,6 +87,8 @@ describe('probe capture confinement (Codex #230/#231 holds)', () => {
     const { googleHandlers } = await import('../src/tools/live/google');
     const { browsePageHandler, browseActHandler } = await import('../src/tools/live/browser');
     const { callMcpToolHandler } = await import('../src/tools/live/mcp');
+    // A capture probe records the turn's sends in its response, so a minted console link would go to the probe caller.
+    const { consoleLinkHandler } = await import('../src/tools/live/console-link');
     const google = googleHandlers(
       { client: async () => { throw new Error('no client in test'); }, connectUrl: async () => null } as never,
       { propose: async () => 'p', proposeSendEmail: async () => 'p', record: () => undefined } as never,
@@ -98,6 +100,7 @@ describe('probe capture confinement (Codex #230/#231 holds)', () => {
       browseActHandler('k', 'p', 'm', () => undefined, async () => 'p').name,
       callMcpToolHandler(undefined).name,
       'connect_service',
+      consoleLinkHandler(async () => ({ sent: false, reason: 'unavailable' })).name,
     ];
     for (const name of liveNames) {
       expect(PROBE_STRIPPED_TOOLS, `live handler ${name} must be stripped from capture-mode probes`).toContain(name);

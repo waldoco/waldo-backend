@@ -144,12 +144,12 @@ describe('produceHealthScores', () => {
   });
 
   it('tags a day whose Weight was read without a calendar Google reported gone', async () => {
-    const tagsAfter = async (nights: number) => {
-      const h = harness(seriesOf(history(nights)), undefined, undefined, { readDemand: async () => ({ state: 'available', days: busyMonth(i => i === 0) }) });
+    const tagsAfter = async (calendarDays: number) => {
+      const h = harness(seriesOf(history(25)), undefined, undefined, { readDemand: async () => ({ state: 'available', days: busyMonth(i => i === 0).slice(0, calendarDays) }) });
       await run(h);
       return Object.fromEntries(h.writes.map(w => [w.day, w.tags]));
     };
-    expect(await tagsAfter(25)).toEqual({ [TODAY]: ['calendar_partial'], [addDays(TODAY, -1)]: [] });
+    expect(await tagsAfter(31)).toEqual({ [TODAY]: ['calendar_partial'], [addDays(TODAY, -1)]: [] });
     // No Weight was shown, so there is nothing for the tag to qualify.
     expect((await tagsAfter(3))[TODAY]).toEqual([]);
   });
@@ -163,15 +163,40 @@ describe('produceHealthScores', () => {
     expect(today.demand?.physicalLoad).toBe(96 + 60);
   });
 
-  it('needs readings on the baseline days too: calendar minutes attach only to days with health readings', async () => {
+  it('takes the calendar baseline from every day the calendar reports, not only days with health readings', async () => {
     const busy = Array.from({ length: 31 }, (_, i) => ({ day: addDays(TODAY, -i), busy_minutes: Math.round(240 + wobble(i, 40)) }));
-    const weightAfter = async (nights: number) => {
-      const h = harness(seriesOf(history(nights)), undefined, undefined, { readDemand: async () => ({ state: 'available', days: busy }) });
+    const h = harness(seriesOf(history(3)), undefined, undefined, { readDemand: async () => ({ state: 'available', days: busy }) });
+    await run(h);
+    const weight = h.writes.find(w => w.day === TODAY)!.weight as Record<string, unknown>;
+    expect(typeof weight.score).toBe('number');
+    expect(weight.confidence).toBe(0.35);
+  });
+
+  it('writes Weight for a day the phone sent nothing for yet, and leaves its other pillars to reasons', async () => {
+    const samples = history(25).filter(r => r.day !== TODAY);
+    const h = harness(seriesOf(samples), undefined, undefined, { readDemand: async () => ({ state: 'available', days: busyMonth() }) });
+    await run(h);
+    const row = h.writes.find(w => w.day === TODAY)!;
+    expect(typeof (row.weight as Record<string, unknown>).score).toBe('number');
+    expect(row.recovery).toEqual({ reason: expect.any(String) });
+    expect(row.form).toEqual({ reason: expect.any(String) });
+    expect(h.inputs.find(input => input.targetDay === TODAY)!.days.find(d => d.day === TODAY)).toMatchObject({ timezone: 'UTC', sleep: null, hourly: [], workouts: [], demand: { physicalLoad: null } });
+  });
+
+  it('leaves Recovery and Form as they were when the calendar adds days the phone sent nothing for', async () => {
+    const samples = history(25).filter(r => ![addDays(TODAY, -2), addDays(TODAY, -5), addDays(TODAY, -9)].includes(r.day as string));
+    const pillars = async (readDemand?: ProducerDeps['readDemand']) => {
+      const h = harness(seriesOf(samples), undefined, undefined, readDemand ? { readDemand } : {});
       await run(h);
-      return h.writes.find(w => w.day === TODAY)!.weight as Record<string, unknown>;
+      return h.writes.map(w => ({ day: w.day, recovery: w.recovery, form: w.form }));
     };
-    expect(await weightAfter(3)).toEqual({ reason: 'baseline_immature' });
-    expect(typeof (await weightAfter(15)).score).toBe('number');
+    expect(await pillars(async () => ({ state: 'available', days: busyMonth() }))).toEqual(await pillars());
+  });
+
+  it('writes no row for a day with no readings when the calendar gives Weight too little to score', async () => {
+    const h = harness(seriesOf(history(25).filter(r => r.day !== TODAY)), undefined, undefined, { readDemand: async () => ({ state: 'available', days: busyMonth().slice(0, 1) }) });
+    await run(h);
+    expect(h.writes.map(w => w.day)).toEqual([addDays(TODAY, -1)]);
   });
 
   it('leaves physical load unknown on a day with no movement reading and no workout, even with heart-rate hours', async () => {
@@ -283,7 +308,7 @@ describe('produceHealthScores', () => {
       const load = (day: string) => h.inputs.find(input => input.targetDay === TODAY)!.days.find(d => d.day === day)!.demand?.physicalLoad;
       expect([load(TODAY), load(YESTERDAY)]).toEqual([null, 96 + 60]);
       // Weight's baselines admit fewer physical-load days too, so Weight is a new version as well.
-      expect((h.writes.find(w => w.day === TODAY)!.weight as Record<string, unknown>).algorithm_version).toBe('weight.candidate.v2');
+      expect((h.writes.find(w => w.day === TODAY)!.weight as Record<string, unknown>).algorithm_version).toBe('weight.candidate.v3');
     });
 
     it('checks the whole series, so an overlap across a day boundary clears both days', async () => {
@@ -325,7 +350,7 @@ describe('produceHealthScores', () => {
       expect(overlapped.form).toEqual(without.form);
       expect(counted.form).not.toEqual(without.form);
       // Admitting fewer inputs is a new Form version under ADR-0081.
-      expect((counted.form as Record<string, unknown>).algorithm_version).toBe('form.candidate.v2');
+      expect((counted.form as Record<string, unknown>).algorithm_version).toBe('form.candidate.v3');
     });
   });
 

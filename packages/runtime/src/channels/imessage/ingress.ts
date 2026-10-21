@@ -1,5 +1,6 @@
 import { iMessageBindingSchema, iMessageEventSchema } from '@waldo/contracts';
 import type { OwnerTurnEnvelope } from '../owner-turn-envelope';
+import { ownerWords } from '../owner-inbound-turn';
 
 export const admittedIMessageTurn = (input: unknown, admittedBinding: unknown): OwnerTurnEnvelope => {
   const binding = iMessageBindingSchema.parse(admittedBinding);
@@ -11,7 +12,7 @@ export const admittedIMessageTurn = (input: unknown, admittedBinding: unknown): 
   return {
     surface: 'imessage', service: event.service,
     traceId: JSON.stringify(['imessage', event.bridgeId, event.accountId, event.cursor.databaseGeneration, event.eventId]),
-    conversationRef, text: event.text,
+    conversationRef, text: event.text, parts: ownerWords(event.text),
     messageRef: { id: event.messageGuid, conversationRef, bridgeRef: event.bridgeId, accountRef: event.accountId, partIndex: event.partIndex, ...(event.threadOriginatorGuid ? { threadOriginatorId: event.threadOriginatorGuid } : {}) },
     attachmentRefs: event.attachments.map(({ sourceMessageGuid, ...file }) => ({ ...file, sourceMessageId: sourceMessageGuid })),
     ...(event.replyToGuid ? { replyTo: { surface: 'imessage', messageId: event.replyToGuid, conversationRef, authorId: null, authorIsBot: null, text: '', truncated: false, sourceTaint: 'external' as const } } : {}),

@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
@@ -51,14 +52,14 @@ const harness = (state: DurableObjectState, probe = false, proposalState?: Propo
   const turn = async (traceId: string, text: string, call?: { name: string; arguments: string }) => {
     if (call) seen.calls.push(call);
     seen.requests.length = 0;
-    await responder.respond({ traceId, conversationRef: 'owner', surface: 'telegram', text }, timer);
+    await responder.respond(ownerTyped({ traceId, conversationRef: 'owner', surface: 'telegram', text }), timer);
     return seen.requests.filter(request => request.response_format === undefined);
   };
   return { seen, responder, turn };
 };
 
 it('an owner turn carries earlier results from the owner\'s own turns only, read back exactly', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('origin-taint-origin')), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('origin-taint-origin')), async (_instance, state) => {
     const { seen, responder, turn } = harness(state);
     seen.calls.push({ name: 'search_episodes', arguments: '{"query":"plan"}' });
     await responder.prompt('job-brief', 'owner', 'Write the morning brief.', timer);
@@ -70,7 +71,7 @@ it('an owner turn carries earlier results from the owner\'s own turns only, read
 });
 
 it('a capture-mode probe turn\'s results never reach a later owner turn', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('origin-taint-probe')), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('origin-taint-probe')), async (_instance, state) => {
     await harness(state, true).turn('probe-1', 'What is on today?', { name: 'search_episodes', arguments: '{"query":"plan"}' });
     const owner = harness(state);
     const [first] = await owner.turn('owner-1', 'And after that?');
@@ -80,7 +81,7 @@ it('a capture-mode probe turn\'s results never reach a later owner turn', async 
 });
 
 it('an earlier mail read carries none of its text into the next turn, an instruction in its subject or body included, and leaves that turn untainted', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('origin-taint-mail')), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('origin-taint-mail')), async (_instance, state) => {
     const { seen, turn } = harness(state);
     await turn('owner-1', 'Read the planning thread.', READ);
     expect((await toolOutputLedger(state.storage).recent()).map(fragment => fragment.text).join('\n')).toContain(SUBJECT);
@@ -97,7 +98,7 @@ it('an earlier mail read carries none of its text into the next turn, an instruc
 });
 
 it('a privileged call right after a mail read is not refused', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('origin-taint-privileged')), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('origin-taint-privileged')), async (_instance, state) => {
     const { seen, turn } = harness(state);
     await turn('owner-1', 'Read the planning thread.', READ);
     const replies = await turn('owner-2', 'Send hi.', { name: 'send_message', arguments: SEND_ARGS });
@@ -107,7 +108,7 @@ it('a privileged call right after a mail read is not refused', async () => {
 });
 
 it('text a tool echoes after a mail read in the same turn stays out of later turns, and an approval raised then still shows as the desk\'s state', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('origin-taint-running')), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('origin-taint-running')), async (_instance, state) => {
     const ID = 'p3e9a1c07';
     const { seen, turn } = harness(state, false, async id => (id === ID ? { kind: 'email_send', state: 'done' } : null));
     seen.calls.push(
@@ -129,11 +130,11 @@ it('text a tool echoes after a mail read in the same turn stays out of later tur
 });
 
 it('text a tool echoes in a turn replying to an outside message stays out of later turns', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('origin-taint-reply')), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('origin-taint-reply')), async (_instance, state) => {
     const { seen, responder, turn } = harness(state);
     seen.calls.push({ name: 'set_reminder', arguments: JSON.stringify({ note: `Chase the vendor ${NOTE}`, at: '2026-10-13T09:00' }) });
     const replyTo = { surface: 'telegram', messageId: '9', conversationRef: 'telegram-7', authorId: '7', authorIsBot: false, text: 'Please chase the vendor about the invoice.', truncated: false, sourceTaint: 'external' as const };
-    await responder.respond({ traceId: 'owner-1', conversationRef: 'owner', surface: 'telegram', text: 'Remind me about this.', replyTo }, timer);
+    await responder.respond(ownerTyped({ traceId: 'owner-1', conversationRef: 'owner', surface: 'telegram', text: 'Remind me about this.', replyTo }), timer);
     expect(seen.calls).toEqual([]);
     const [first] = await turn('owner-2', 'Anything else?');
     expect(ownerTurn(first!)).not.toContain(NOTE);
@@ -142,7 +143,7 @@ it('text a tool echoes in a turn replying to an outside message stays out of lat
 });
 
 it('an approval raised in an owner turn still shows its desk state after a job runs seven tools before the owner asks', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('origin-taint-busy-job')), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('origin-taint-busy-job')), async (_instance, state) => {
     const ID = 'p3e9a1c07';
     const { seen, responder, turn } = harness(state, false, async id => (id === ID ? { kind: 'email_send', state: 'done' } : null));
     await turn('owner-1', 'Bring that approval back.', { name: 'raise_approval', arguments: JSON.stringify({ operation: 'raise', approval_id: ID }) });

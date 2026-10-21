@@ -1,10 +1,11 @@
 import { appControlProjectionV1Schema, appControlResultV1Schema } from '../../contracts/src/app/controls';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
-import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
+import { OwnerDO } from '../src/channels/owner-do';
 import { handleApp } from '../src/channels/app-api';
 import { routerSignature } from '../src/identity/owner-directory';
 import { armAlarm } from '../src/scheduler/alarm-slot';
+import { episodeIndex } from '../src/channels/episodes';
 
 vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(), createTelegramCaller: () => async () => { throw Error('No Telegram binding exists'); } }));
 
@@ -17,7 +18,7 @@ type Seen = { deletes: number; state: DurableObjectState; name: string };
 // delete_owner revokes every session and the owner's authority, as the SQL function does, so the
 // signed-out assertions observe the fixture's directory rather than a constant.
 const fixture = async (outcome: Outcome, run: (app: App, seen: Seen) => Promise<void>) => {
-  const name = `app-delete-owner-${crypto.randomUUID()}`, stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
+  const name = `app-delete-owner-${crypto.randomUUID()}`, stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   await runInDurableObject(stub, async (_unused, state) => {
     let hash: string | undefined, live = false, owned = true;
     const created = new Date().toISOString(), expires = Date.now() + 3_600_000, seen: Seen = { deletes: 0, state, name };
@@ -48,8 +49,8 @@ const fixture = async (outcome: Outcome, run: (app: App, seen: Seen) => Promise<
       throw Error(`Unlisted fixture RPC ${fn}`);
     });
     const settings = { ...env, TELEGRAM_BOT_TOKEN: undefined, WALDO_OWNER_TELEGRAM_ID: undefined, OPENAI_API_KEY: 'synthetic-model-key', COMMON_OWNER_TASKS: '0', COMMON_BROWSER_REGISTRATION: undefined, WALDO_ENVIRONMENT: 'staging', WALDO_OWNER_DO_NAMESPACE: 'delete-app-owner', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_TOOL_OFFLOAD: '0', SUPABASE_PROJECT_URL: DIRECTORY, SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key', WALDO_ROUTER_HMAC_SECRET: SECRET, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) }, BROWSER: undefined };
-    const instance = new TelegramOwnerDO(state, settings as never);
-    const routed = { ...settings, TELEGRAM_OWNER_DO: { idFromName: (n: string) => env.TELEGRAM_OWNER_DO!.idFromName(n), get: () => ({ fetch: (r: Request) => instance.fetch(r) }) } } as never;
+    const instance = new OwnerDO(state, settings as never);
+    const routed = { ...settings, OWNER_DO: { idFromName: (n: string) => env.OWNER_DO!.idFromName(n), get: () => ({ fetch: (r: Request) => instance.fetch(r) }) } } as never;
     const app: App = async (path, body, credential) => {
       const response = await handleApp(new Request(`${ORIGIN}/app/v1${path}`, { method: body === undefined ? 'GET' : 'POST', headers: { 'content-type': 'application/json', ...(credential ? { authorization: `Bearer ${credential}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), routed);
       expect(response).not.toBeNull(); return response!;
@@ -91,6 +92,21 @@ it('an app-only owner deletes their account from the app: the directory removes 
     expect((await app('/actions/delete-request-0001', undefined, credential)).status).toBe(401);
     expect((await app('/chat/main/messages', { client_message_id: 'after-delete-0001', text: 'hello' }, credential)).status).toBe(401);
     expect(seen.deletes).toBe(1);
+    expect(stored(seen.state)).toBe(0);
+  });
+});
+
+// App replies can carry the owner's own health numbers, and app turns index them into the full-text episodes table.
+it('deleting the account leaves no episodes row holding an app reply that carried a health number', async () => {
+  await fixture('deleted', async (app, seen) => {
+    const credential = await signIn(app);
+    const reply = 'Your resting heart rate was 52 this morning, a little under your usual.';
+    const episodes = episodeIndex(seen.state.storage.sql);
+    episodes.add('app-8000000000001-reply', 'waldo', reply, Date.now());
+    expect(episodes.search('resting heart rate', 5).map(hit => hit.entry_id)).toEqual(['app-8000000000001-reply']);
+    const view = await account(app, credential);
+    expect((await app('/actions', remove(view.revision, 'delete-episodes-0001'), credential)).status).toBe(200);
+    expect(seen.state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM sqlite_master WHERE name = 'episodes'").one().n).toBe(0);
     expect(stored(seen.state)).toBe(0);
   });
 });

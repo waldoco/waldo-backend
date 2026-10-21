@@ -15,14 +15,15 @@ it('shows explicit notice for unknown settings destinations',()=>{
  expect(renderToStaticMarkup(<Dashboard data={data} route={route}/>)).toContain('Settings page not found');
  expect(renderToStaticMarkup(<Dashboard data={data} route={route}/>)).not.toContain('Nothing waiting.');
 });
-it('renders one top bar with four destinations and a Settings link, and no drawer or Menu button',async()=>{
+it('renders one top bar with five destinations, a chat button and a Settings link, and no drawer or Menu button',async()=>{
  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);
  vi.stubGlobal('fetch',vi.fn(async()=>new Response('{}',{status:404})));
  const host=document.createElement('div');document.body.append(host);const root=createRoot(host);
  try{
   await act(async()=>root.render(<App/>));
   const links=[...host.querySelectorAll('nav[aria-label="Dashboard pages"] a')].map(a=>a.textContent?.trim());
-  expect(links).toEqual(['Today','Waiting','Memory','Patrol']);
+  expect(links).toEqual(['Today','Chat','Waiting','Memory','Patrol']);
+  expect(host.querySelector('.topbar-actions a.chat-link')?.getAttribute('href')).toBe('#/chat');
   expect(host.querySelector('a[aria-label="Settings"]')?.getAttribute('href')).toBe('#/settings');
   expect(host.querySelector('dialog')).toBeNull();
   expect([...host.querySelectorAll('button')].some(b=>b.textContent==='Menu')).toBe(false);

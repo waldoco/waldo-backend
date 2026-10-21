@@ -47,7 +47,7 @@ const wordCost = (text: string) => Math.ceil(new TextEncoder().encode(text).byte
 
 describe('memory golden development evaluation', () => {
   it('scores cross-session recall and reports misses instead of silently adding semantic backends', async () => {
-    const results = await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('memory-eval-owner-a')), (_instance, state) => {
+    const results = await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('memory-eval-owner-a')), (_instance, state) => {
       const store = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
       const ids = new Map<string, number>();
       for (const [session, facts] of sessions.entries()) {
@@ -78,7 +78,7 @@ describe('memory golden development evaluation', () => {
         return { id: probe.id, hit, promptVisible, noise, unexpected: hitIds.filter((id) => forbiddenIds.includes(id)).length, tokens: wordCost(prompt), profileLeak: ['forwarded', 'trip', 'city-old'].some((key) => prompt.includes(sessions.flat().find((f) => f.key === key)!.text)) };
       });
     });
-    const other = await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('memory-eval-owner-b')), (_instance, state) => claimStore(state.storage.sql).recall('coffee'));
+    const other = await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('memory-eval-owner-b')), (_instance, state) => claimStore(state.storage.sql).recall('coffee'));
     const correct = results.filter((row) => row.hit).length;
     const promptCorrect = results.filter((row) => row.promptVisible).length;
     console.log('MEMORY_GOLDEN_EVAL ' + JSON.stringify({ correct, total: results.length, accuracy: `${correct}/${results.length}`, promptVisible: `${promptCorrect}/${results.length}`, unexpected: results.reduce((n, row) => n + row.unexpected, 0), noise: results.reduce((n, row) => n + row.noise, 0), meanPromptTokens: Math.round(results.reduce((n, row) => n + row.tokens, 0) / results.length), results }));

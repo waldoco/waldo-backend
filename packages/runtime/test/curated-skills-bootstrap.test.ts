@@ -8,7 +8,7 @@ const owner = 'owner-a';
 const canaries = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
 const turn = (turnId: string, ownerText = 'make me a day brief') => ({ owner, turnId, trigger: 'user_message' as const, ownerText, assertCurrent: async () => {} });
 const withDo = (name: string, run: (sql: SqlStorage) => Promise<void>) =>
-  runInDurableObject(env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName(name)), async (_, state) => { provisionDoSchema(state.storage); await run(state.storage.sql); });
+  runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(name)), async (_, state) => { provisionDoSchema(state.storage); await run(state.storage.sql); });
 const rows = (sql: SqlStorage) => sql.exec<{ name: string; status: string; version: number; required_tools_json: string; required_connectors_json: string }>('SELECT name,status,version,required_tools_json,required_connectors_json FROM skills ORDER BY name').toArray();
 
 it('a new owner gets every reviewed builtin active with no install command, and each loads for its own turn', async () => {

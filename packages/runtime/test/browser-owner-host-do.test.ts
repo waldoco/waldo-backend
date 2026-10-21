@@ -1,7 +1,7 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { type LLMRequest } from '@waldo/contracts';
-import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
+import { OwnerDO } from '../src/channels/owner-do';
 import { BROWSER_TASK_KEY, type BrowserOwnerConfiguration } from '../src/channels/browser-owner-host';
 import { armAlarm } from '../src/scheduler/alarm-slot';
 import { syntheticCommandAdapter, type SyntheticRequest } from '../src/channels/browser-synthetic-commands';
@@ -28,7 +28,7 @@ async function browserProof(work: (h: {
   reloadAbsent(): void; failCleanup(): void; failFinishRunOnce(): void; alarm(): Promise<void>; replyOnly(): void; pauseCleanup(): (() => void) & { reached: Promise<void> }; state: DurableObjectState; requests: LLMRequest[]; pauseInspect(): (() => void) & { reached: Promise<void> }; pauseLookup(): (() => void) & { reached: Promise<void> }; starts(): number; ends(): number; inspections(): number;
 }) => Promise<void>, mode: 'enabled' | 'absent' | 'disabled' | 'factory_failed' | 'legacy_factory_failed' | 'journey' = 'enabled', ownerId = '10000000-0000-0000-0000-000000000001') {
   const subject = 81101, doName = `browser-do-proof-${++sequence}`;
-  const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(doName));
+  const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName));
   await runInDurableObject(stub, async (_instance, state) => {
     const noFetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('browser proof denies network'));
     let starts = 0, ends = 0, inspections = 0, replyOnly = false, cleanupFails = false;
@@ -70,7 +70,7 @@ async function browserProof(work: (h: {
     };
     modelGateway.current = host.gateway as never;
     const privateEnv = { ...env, WALDO_ENVIRONMENT: 'staging', LANGFUSE_CAPTURE_TEXT: 'true', WALDO_EGRESS_ALLOWLIST: 'fixture.example', TELEGRAM_BOT_TOKEN: '12345:fictional', TELEGRAM_WEBHOOK_SECRET: 'fictional-browser-inbox-secret', OPENAI_API_KEY: 'fictional-model-key' };
-    const construct = () => new TelegramOwnerDO(state, privateEnv, mode === 'absent' || mode === 'factory_failed' || mode === 'legacy_factory_failed' ? undefined : config, mode === 'factory_failed' || mode === 'legacy_factory_failed' ? { policy: { enabled: false, doName, fixtureOrigin: 'https://fixture.example' }, manifest: { origin: 'https://fixture.example', pagePath: '/form', submitPath: '/submit', receiptPrefix: '/receipts/', runId: 'trial-one', fields: ['value'], formSelector: '#form', submitSelector: '#submit', resultSelector: '#result' } } : undefined);
+    const construct = () => new OwnerDO(state, privateEnv, mode === 'absent' || mode === 'factory_failed' || mode === 'legacy_factory_failed' ? undefined : config, mode === 'factory_failed' || mode === 'legacy_factory_failed' ? { policy: { enabled: false, doName, fixtureOrigin: 'https://fixture.example' }, manifest: { origin: 'https://fixture.example', pagePath: '/form', submitPath: '/submit', receiptPrefix: '/receipts/', runId: 'trial-one', fields: ['value'], formSelector: '#form', submitSelector: '#submit', resultSelector: '#result' } } : undefined);
     if (mode === 'legacy_factory_failed') { legacyModel.enabled = true; legacyModel.calls = 0; }
     let instance = construct();
     const sendUpdate = async (update: object, text = '', expectedStatus = 200) => {
@@ -94,7 +94,7 @@ async function browserProof(work: (h: {
       task.finishRun = async () => { task.finishRun = original; throw Error('synthetic finishRun storage failure'); };
     };
     const pause = (kind: 'inspect' | 'lookup') => { let enter!: () => void, resume!: () => void; const reached = new Promise<void>(resolve => { enter = resolve; }); const slot = { enter, wait: new Promise<void>(resolve => { resume = resolve; }) }; if (kind === 'inspect') inspectPause = slot; else lookupPause = slot; return Object.assign(resume, { reached }); };
-    try { await work({ failFinishRunOnce, approve: (id, owner) => decide(id, 'a', owner), deny: id => decide(id, 's'), readOnly: () => { journeyCommands.splice(0, journeyCommands.length, { operation: 'read' }); }, submits: () => submits, present: () => present, pauseInspect: () => pause('inspect'), pauseLookup: () => pause('lookup'), send, state, requests, reloadAbsent: () => { instance = new TelegramOwnerDO(state, privateEnv); }, failCleanup: () => { cleanupFails = true; }, alarm: () => instance.alarm(), replyOnly: () => { replyOnly = true; }, pauseCleanup: () => { let enter!: () => void, resume!: () => void; const reached = new Promise<void>(resolve => { enter = resolve; }); const wait = new Promise<void>(resolve => { resume = resolve; }); endPause = { enter, wait }; return Object.assign(resume, { reached }); }, starts: () => starts, ends: () => ends, inspections: () => inspections, reload: () => { instance = construct(); }, foreign: () => { directory = { ...directory, owner_id: '10000000-0000-0000-0000-000000000002' }; }, stale: () => { directory = { ...directory, admission_revision: '9007199254740995' }; } }); }
+    try { await work({ failFinishRunOnce, approve: (id, owner) => decide(id, 'a', owner), deny: id => decide(id, 's'), readOnly: () => { journeyCommands.splice(0, journeyCommands.length, { operation: 'read' }); }, submits: () => submits, present: () => present, pauseInspect: () => pause('inspect'), pauseLookup: () => pause('lookup'), send, state, requests, reloadAbsent: () => { instance = new OwnerDO(state, privateEnv); }, failCleanup: () => { cleanupFails = true; }, alarm: () => instance.alarm(), replyOnly: () => { replyOnly = true; }, pauseCleanup: () => { let enter!: () => void, resume!: () => void; const reached = new Promise<void>(resolve => { enter = resolve; }); const wait = new Promise<void>(resolve => { resume = resolve; }); endPause = { enter, wait }; return Object.assign(resume, { reached }); }, starts: () => starts, ends: () => ends, inspections: () => inspections, reload: () => { instance = construct(); }, foreign: () => { directory = { ...directory, owner_id: '10000000-0000-0000-0000-000000000002' }; }, stale: () => { directory = { ...directory, admission_revision: '9007199254740995' }; } }); }
     finally { legacyModel.enabled = false; await state.storage.deleteAlarm(); noFetch.mockRestore(); }
   });
 }
@@ -102,6 +102,7 @@ it('authenticated actual DO typed inspection persists one owner browser session 
   await browserProof(async h => {
     await h.send('Inspect the public fixture.');
     expect(h.starts()).toBe(1); expect(h.inspections()).toBeGreaterThan(0);
+    expect(JSON.stringify(h.requests)).toContain('"browse_act"');
     const before = await h.state.storage.get(BROWSER_TASK_KEY);
     expect(before).toMatchObject({ session: { ownerId: 'prn_10000000000000000000000000000001' }, phase: 'active' });
     h.reload(); await h.send('Inspect that same public fixture again.');
@@ -111,12 +112,13 @@ it('authenticated actual DO typed inspection persists one owner browser session 
     expect(projected).toContain('field_refs');
   });
 });
-for (const mode of ['absent', 'disabled', 'factory_failed'] as const) it(`actual DO ${mode} browser configuration rejects typed calls without provider allocation`, async () => {
+for (const mode of ['absent', 'disabled', 'factory_failed'] as const) it(`actual DO ${mode} browser configuration offers no typed browser and allocates nothing`, async () => {
   await browserProof(async h => {
     await h.send('Inspect the public fixture.');
     expect(h.starts()).toBe(0); expect(h.inspections()).toBe(0);
     expect(await h.state.storage.get(BROWSER_TASK_KEY)).toBeUndefined();
-    expect(JSON.stringify(h.requests)).toContain('rejected');
+    // No browser binding, Browserbase key or enabled task host serves it, so the model is never offered browse_act.
+    expect(JSON.stringify(h.requests)).not.toContain('"browse_act"');
   }, mode);
 });
 for (const mutation of ['foreign', 'stale'] as const) it(`actual owner admission ${mutation} lookup cannot operate a retained browser session`, async () => {
@@ -259,7 +261,7 @@ it('browser approval custody survives reconstruction but denies replaced physica
     await h.send('Inspect the public fixture.');
     const ownerKey = 'telegram:physical-owner-one';
     let currentOwner = ownerKey;
-    const owner = async () => currentOwner;
+    const owner = async () => [currentOwner];
     const payload = { url: 'https://fixture.example/form', action: { selector: '#submit', method: 'click', description: 'synthetic' }, binding: { value: 'synthetic' }, steps: [], continuation: { version: 1 as const, taskRef: 'synthetic-task', proposalId: 'synthetic-proposal', scopeDigest: `sha256:${'a'.repeat(64)}` } };
     browserTaskSourceCustody(h.state.storage.sql, h.state.storage.kv, owner).capture(payload, ownerKey);
     const guard = browserTaskSourceCustody(h.state.storage.sql, h.state.storage.kv, owner).guard(payload); await guard();
@@ -290,7 +292,7 @@ it('browser approval custody remains valid without a classifier and is revoked b
     const { browserTaskSourceCustody } = await import('../src/channels/browser-task-source');
     await h.send('Inspect the public fixture.');
     const ownerKey = 'telegram:physical-owner';
-    const owner = async () => ownerKey;
+    const owner = async () => [ownerKey];
     const payload = { url: 'https://fixture.example/form', action: { selector: '#submit', method: 'click', description: 'synthetic' }, binding: { value: 'synthetic' }, steps: [], continuation: { version: 1 as const, taskRef: 'synthetic-task', proposalId: 'synthetic-proposal', scopeDigest: `sha256:${'a'.repeat(64)}` } };
     const custody = browserTaskSourceCustody(h.state.storage.sql, h.state.storage.kv, owner);
     custody.capture(payload, ownerKey);

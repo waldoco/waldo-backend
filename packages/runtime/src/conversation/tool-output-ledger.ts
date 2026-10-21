@@ -22,6 +22,8 @@ export type ToolOutputEntry = Readonly<{
   // The approval a proposing tool's output names, read from the full output before the summary is cut: '' when the row
   // is withheld, null when the tool proposed nothing. Absent on other tools' rows and on rows stored before it was kept.
   proposal_ref?: string | null;
+  // The thread whose turn produced the output; absent for main. Each chat reads and keeps only its own rows.
+  thread?: string;
 }>;
 
 // The approval desk's current state for one approval, or null when it holds none by that id.
@@ -60,10 +62,11 @@ type KeyValueStorage = {
 const entryKey = (seq: number) => `toolout:${String(seq).padStart(10, '0')}`;
 // The owner's own turns keep their newest rows apart from everything else, so a busy job never pushes them out.
 const ownersRow = (row: ToolOutputEntry) => row.origin === 'owner';
-// The rows a write drops: any stored before origins were kept, and those past the newest MAX_KEPT of the new row's kind.
+// The rows a write drops: any stored before origins were kept, and those past the newest MAX_KEPT of the new row's kind in
+// the new row's chat.
 const evicted = (rows: Iterable<[string, ToolOutputEntry]>, added: ToolOutputEntry): string[] => {
   const all = [...rows];
-  const kind = all.filter(([, row]) => row.origin !== undefined && ownersRow(row) === ownersRow(added)).map(([key]) => key).sort();
+  const kind = all.filter(([, row]) => row.origin !== undefined && ownersRow(row) === ownersRow(added) && row.thread === added.thread).map(([key]) => key).sort();
   return [...all.filter(([, row]) => row.origin === undefined).map(([key]) => key), ...kind.slice(0, Math.max(0, kind.length - MAX_KEPT))];
 };
 
@@ -204,8 +207,8 @@ export const toolOutputLedger = (storage: KeyValueStorage, options: Readonly<{ p
     const rows = await storage.list<ToolOutputEntry>({ prefix: 'toolout:' });
     return [...rows.values()].filter(entry => redact(entry.summary) !== entry.summary).length;
   },
-  async recent(texts: readonly string[] = []): Promise<readonly ContextFragment[]> {
-    return (await shownRows(storage, options, texts)).map(({ entry, seq, text }) => ({
+  async recent(texts: readonly string[] = [], thread?: string): Promise<readonly ContextFragment[]> {
+    return (await shownRows(storage, options, texts, row => row.thread === thread)).map(({ entry, seq, text }) => ({
       text,
       source: {
         // The row sequence keeps two same-tool calls in one millisecond distinct: the timestamp alone repeats.
@@ -219,8 +222,8 @@ export const toolOutputLedger = (storage: KeyValueStorage, options: Readonly<{ p
   },
   // What the owner's own earlier turns' tools returned. Provider text never carries across turns: an external result shows
   // only as the desk's state for an approval it proposed, and a failure that names no approval only as its tool and code.
-  async ownerTurnResults(texts: readonly string[] = []): Promise<readonly string[]> {
-    return (await shownRows(storage, options, texts, ownersRow)).filter(({ entry, desk }) => desk || entry.taint === null).map(({ entry, desk, text }) => desk || entry.ok ? text : failureOf(entry));
+  async ownerTurnResults(texts: readonly string[] = [], thread?: string): Promise<readonly string[]> {
+    return (await shownRows(storage, options, texts, row => ownersRow(row) && row.thread === thread)).filter(({ entry, desk }) => desk || entry.taint === null).map(({ entry, desk, text }) => desk || entry.ok ? text : failureOf(entry));
   },
 });
 

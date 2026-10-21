@@ -15,14 +15,6 @@ export type OwnerSkillCapability = Readonly<{
  prompt(canaries:readonly string[]):Promise<string>;
  assertProcedureCurrent(expected:string,canaries:readonly string[]):Promise<void>;
 }>;
-// Host constructs this only after canonical owner admission. No model or source bytes can
-// construct lifecycle authority; the original admitted owner text and run identity are fixed.
-export function createCuratedSkillCapability(sql:SqlStorage, admission:OwnerMessageAdmission, ownerText:string, turnId:string, scope:RunEffectScope):OwnerSkillCapability {
- const owner=admission.invocation.verified_authority.principal_ref;
- const turn:CuratedSkillTurn={owner,ownerText,turnId,trigger:admission.invocation.runtime_binding.trigger,
-  assertCurrent:async()=>{scope.admit();await admission.assertCurrent();scope.admit();}};
- return createScopedCuratedSkillCapability(sql,turn,scope);
-}
 // Existing owner-channel ingress supplies this private capability; model arguments never do.
 export function createScopedCuratedSkillCapability(sql:SqlStorage, turn:CuratedSkillTurn, scope:RunEffectScope):OwnerSkillCapability {
  const owner=turn.owner;
@@ -47,5 +39,5 @@ export function createScopedCuratedSkillCapability(sql:SqlStorage, turn:CuratedS
    // External data may inform that choice; original owner/run and exact catalog checks remain.
    handle:async(args:SkillsVersionArgs,ctx:ToolDispatcherContext)=>checked(ctx,()=>book[action](args.name,args.version,turn),action==='load')})),
  ];
- return Object.freeze({handlers,metadata:()=>`Reviewed skill catalog (metadata only): ${JSON.stringify(book.list())}. Use skills_load only if an enabled skill fits the current task. Disabled skills cannot load; install requires the explicit owner lifecycle command.`,prompt:async(canaries:readonly string[])=>book.prompt(turn,canaries),assertProcedureCurrent:async(expected:string,canaries:readonly string[])=>{if(await book.prompt(turn,canaries)!==expected)throw new Error('Selected skill is no longer current.');}});
+ return Object.freeze({handlers,metadata:()=>['Reviewed skill catalog (metadata only). Use skills_load only if an enabled skill fits the current task; disabled skills cannot load, and install requires the explicit owner lifecycle command. skills_list gives the full metadata.',...book.list().map(s=>`- ${s.name}@${s.version}${s.enabled?'':' (disabled)'}: ${s.description}`)].join('\n'),prompt:async(canaries:readonly string[])=>book.prompt(turn,canaries),assertProcedureCurrent:async(expected:string,canaries:readonly string[])=>{if(await book.prompt(turn,canaries)!==expected)throw new Error('Selected skill is no longer current.');}});
 }

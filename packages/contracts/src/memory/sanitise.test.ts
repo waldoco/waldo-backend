@@ -12,6 +12,7 @@ import {
   derivedScoreActionSchema,
   EXTERNAL_SOURCE_TAINT,
   HEALTH_DESTINATION_RULES,
+  PLAIN_WORD_DERIVED_SCORES,
   healthRuleSchema,
   isExternalSourceTaint,
   MEMORY_BLOCK_CONTENT_MAX,
@@ -306,6 +307,23 @@ describe('sanitiseResult', () => {
     ).toBe(false);
   });
 
+  it('accepts a bounded, content-free stage diagnostic on a rejection', () => {
+    expect(sanitiseResultSchema.safeParse({ ...baseReject, reason: 'invalid_payload', diagnostic: { stage: 'pii' } }).success).toBe(true);
+    expect(sanitiseResultSchema.safeParse({
+      ...baseReject, reason: 'invalid_payload',
+      diagnostic: { stage: 'decode', decode: { cause: 'nesting', kind: 'percent', depth: 3 } },
+    }).success).toBe(true);
+  });
+
+  it('rejects a diagnostic with an unknown stage, an unbounded depth or extra fields', () => {
+    expect(sanitiseResultSchema.safeParse({ ...baseReject, diagnostic: { stage: 'secret' } }).success).toBe(false);
+    expect(sanitiseResultSchema.safeParse({
+      ...baseReject, diagnostic: { stage: 'decode', decode: { cause: 'nesting', kind: 'percent', depth: 99 } },
+    }).success).toBe(false);
+    expect(sanitiseResultSchema.safeParse({ ...baseReject, diagnostic: { stage: 'decode', span: 'https%253A' } }).success).toBe(false);
+    expect(sanitiseResultSchema.safeParse({ ...baseOk, diagnostic: { stage: 'decode' } }).success).toBe(false);
+  });
+
   it('rejects an unknown failure reason', () => {
     expect(
       sanitiseResultSchema.safeParse({ ...baseReject, reason: 'pii_found' }).success,
@@ -467,17 +485,18 @@ describe('check 2 — health value lockout', () => {
     expect(rawSensorActionSchema.safeParse('keep_raw').success).toBe(false);
   });
 
-  it('derivedScoreAction is reject-only for numeric derived health at generic destinations', () => {
-    expect(derivedScoreActionSchema.options).toEqual(['reject']);
+  it('derivedScoreAction rejects, or on an external read rejects only the scored form of a plain word', () => {
+    expect(derivedScoreActionSchema.options).toEqual(['reject', 'reject_scored_on_external_read']);
+    expect(PLAIN_WORD_DERIVED_SCORES).toEqual(['form', 'recovery', 'load']);
     expect(derivedScoreActionSchema.safeParse('keep_raw').success).toBe(false);
     expect(derivedScoreActionSchema.safeParse('redact_to_zone').success).toBe(false);
   });
 
-  it('rejects raw and numeric-derived health at every generic destination', () => {
+  it('rejects raw and numeric-derived health at every generic destination; only a read into the turn spares plain words', () => {
     expect(HEALTH_DESTINATION_RULES).toEqual({
       memory_block: { raw_sensor: 'reject', derived_score: 'reject' },
       system_prompt: { raw_sensor: 'reject', derived_score: 'reject' },
-      internal_context: { raw_sensor: 'reject', derived_score: 'reject' },
+      internal_context: { raw_sensor: 'reject', derived_score: 'reject_scored_on_external_read' },
       draft_document: { raw_sensor: 'reject', derived_score: 'reject' },
       draft_email: { raw_sensor: 'reject', derived_score: 'reject' },
       send_message: { raw_sensor: 'reject', derived_score: 'reject' },

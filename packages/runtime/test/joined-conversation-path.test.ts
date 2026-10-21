@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { acceptTrustedInvocation } from '@waldo/contracts';
-import { localTrustedBriefScheduleInput, resolveRunLoopAdapters } from '../src/run-loop/adapters';
+import { localTrustedBriefScheduleInput, resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
 import { JoinedConversationPath } from '../src/conversation/joined-path';
 
 const fixture = localTrustedBriefScheduleInput();

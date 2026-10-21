@@ -1,4 +1,4 @@
-import { ROSTER, type HookPayload, type SanitiseResult } from '@waldo/contracts';
+import { ROSTER, TOOL_ERRORS, type HookPayload, type SanitiseResult } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
 import {
   egressAllowlistHook,
@@ -132,6 +132,26 @@ describe('hook registry', () => {
     await Promise.all(
       payloads.map((payload) => runHooks(payload.event, payload, {}, { registry: [] })),
     );
+  });
+
+  it("keeps the run scope's AbortSignal itself through a hook's context copy, so later tools can still compose it", async () => {
+    const registry = registerHook<{ runScope: { signal: AbortSignal } }>({
+      name: 'scope_reader',
+      event: 'PostPromptBuild',
+      priority: 100,
+      async handle(_payload, ctx) {
+        expect(ctx.runScope.signal).toBe(signal);
+        return { ok: true };
+      },
+    });
+    const run = new AbortController();
+    const { signal } = run;
+    const ctx = { runScope: { signal } };
+    await runHooks('PostPromptBuild', postPromptPayload, ctx, { registry });
+    expect(ctx.runScope.signal).toBe(signal);
+    const composed = AbortSignal.any([ctx.runScope.signal, AbortSignal.timeout(60_000)]);
+    run.abort();
+    expect(composed.aborted).toBe(true);
   });
 
   it('ignores in-place payload mutation unless a hook returns a replacement payload', async () => {
@@ -306,16 +326,34 @@ describe('hook registry', () => {
     ).rejects.toMatchObject({
       hook: 'autonomy_gate_check',
       code: 'forbidden',
-      clientMessage: expect.stringContaining('propose_action'),
+      clientMessage: TOOL_ERRORS.taint_needs_approval.cause,
+      toolError: expect.objectContaining({ code: 'taint_needs_approval', fix: expect.stringContaining('propose_action') }),
     });
   });
 
-  it('keeps the hard block for an external-tainted tool with no approval path', async () => {
+  it('routes every external-tainted privileged tool to the approval card, the MCP write included', async () => {
     const ctx = runtimeCtx({ toolArgSourceTaint: 'external' });
     await runHooks('OnInvocationStart', { event: 'OnInvocationStart', trace_id: 'trace-taint-mcp' }, ctx);
     await expect(
       runHooks('PreToolUse', { event: 'PreToolUse', tool: 'call_mcp_tool', args: { server: 's', tool: 't', args: {} } }, ctx),
-    ).rejects.toMatchObject({ code: 'forbidden', clientMessage: 'hook halted' });
+    ).rejects.toMatchObject({ code: 'forbidden', toolError: expect.objectContaining({ code: 'taint_needs_approval' }) });
+  });
+
+  it('admits exactly the approved tainted call: the token names the tool, and the dispatcher has checked its digest', async () => {
+    const ctx = runtimeCtx({ toolArgSourceTaint: 'external', approvedTaintedAction: { tool: 'write_task', args_digest: 'f'.repeat(64) } });
+    await runHooks('OnInvocationStart', { event: 'OnInvocationStart', trace_id: 'trace-taint-token' }, ctx);
+    await expect(runHooks('PreToolUse', { event: 'PreToolUse', tool: 'write_task', args: { title: 'hello', reasoning: 'asked' } }, ctx)).resolves.toMatchObject({ tool: 'write_task' });
+    await expect(runHooks('PreToolUse', { event: 'PreToolUse', tool: 'update_task', args: { task_id: 't1', changes: { title: 'hello' }, reasoning: 'asked' } }, ctx))
+      .rejects.toMatchObject({ toolError: expect.objectContaining({ code: 'taint_needs_approval' }) });
+  });
+
+  it('admits a tainted call to a handler that only raises the owner card, and only for that tool', async () => {
+    const ctx = runtimeCtx({ toolArgSourceTaint: 'external', proposalOnlyCall: 'send_message' });
+    await runHooks('OnInvocationStart', { event: 'OnInvocationStart', trace_id: 'trace-taint-card' }, ctx);
+    const send = { channel: 'telegram', content: 'hello', idempotency_key: 'c'.repeat(64) };
+    await expect(runHooks('PreToolUse', { event: 'PreToolUse', tool: 'send_message', args: send }, ctx)).resolves.toMatchObject({ tool: 'send_message' });
+    await expect(runHooks('PreToolUse', { event: 'PreToolUse', tool: 'write_task', args: { title: 'hello', reasoning: 'asked' } }, ctx))
+      .rejects.toMatchObject({ toolError: expect.objectContaining({ code: 'taint_needs_approval' }) });
   });
 
   it('fails closed when an ACL-granted tool has no contract arg schema yet', async () => {
@@ -742,10 +780,10 @@ describe('hook registry', () => {
       hook: 'acl_check',
       reason: 'tool outside trigger ACL',
       code: 'forbidden',
-      clientMessage: 'hook halted',
+      clientMessage: TOOL_ERRORS.acl_denied.cause,
       onErrorPayload: {
         event: 'OnError',
-        error: 'hook halted',
+        error: TOOL_ERRORS.acl_denied.cause,
         code: 'forbidden',
       },
     });
@@ -878,10 +916,10 @@ describe('hook registry', () => {
       hook: 'medical_gate',
       reason: 'unsafe output',
       code: 'forbidden',
-      clientMessage: 'hook halted',
+      clientMessage: TOOL_ERRORS.hook_denied.cause,
       onErrorPayload: {
         event: 'OnError',
-        error: 'hook halted',
+        error: TOOL_ERRORS.hook_denied.cause,
         code: 'forbidden',
       },
     });

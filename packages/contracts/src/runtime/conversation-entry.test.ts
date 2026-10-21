@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ConversationTree, literalJsonTextRedactor, literalTextRedactor, type ConversationEntry } from './conversation-entry';
+import { ConversationTree, literalJsonTextRedactor, literalTextRedactor, redactConversationEntry, type ConversationEntry } from './conversation-entry';
 
 const entry = (overrides: Partial<ConversationEntry> = {}): ConversationEntry => ({
   id: 'root', ownerId: 'owner-a', chatId: 'chat-a', parentId: null,
@@ -125,4 +125,20 @@ it('does not retain overwritten forgotten JSON members during active forgetting'
   expect(literalJsonTextRedactor(['synthetic forgotten'], '[forgotten]', 'arguments')(raw)).toBe('{"text":"safe"}');
   const result = '{"ok":true,"data":' + raw + '}';
   expect(literalJsonTextRedactor(['synthetic forgotten'], '[forgotten]', 'tool_result')(result)).not.toContain('synthetic forgotten');
+});
+
+describe('redactConversationEntry', () => {
+  it('redacts a stored receipt\'s line and targets with the same literal redactor as the text', () => {
+    const entry: ConversationEntry = { id: 'r', ownerId: 'o', chatId: 'c', parentId: null, threadAnchorId: null, surface: 'app', modelPayload: 'ok',
+      appPayload: 'ok\n\nDone: workspace file written divorce-plan.md', modelProjection: { mode: 'include' }, role: 'assistant',
+      receipt: { line: 'Done: workspace file written divorce-plan.md', more: 0, items: [
+        { kind: 'workspace_file_written', target: 'divorce-plan.md', outcome: 'accepted', via_task: false, at: 1_790_000_000_000, digest: null },
+        { kind: 'reminder_set', target: null, outcome: 'accepted', via_task: false, at: 1_790_000_000_000, digest: null },
+      ] } };
+    const redacted = redactConversationEntry(entry, literalTextRedactor(['divorce'], '[forgotten]'));
+    expect(JSON.stringify(redacted)).not.toContain('divorce');
+    expect(redacted.receipt).toEqual({ ...entry.receipt, line: 'Done: workspace file written [forgotten]-plan.md',
+      items: [{ ...entry.receipt!.items[0]!, target: '[forgotten]-plan.md' }, entry.receipt!.items[1]] });
+    expect(redactConversationEntry({ ...entry, receipt: undefined }, value => value)).not.toHaveProperty('receipt', expect.anything());
+  });
 });

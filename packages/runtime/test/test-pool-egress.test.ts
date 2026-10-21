@@ -2,7 +2,7 @@ import {describe,it,expect} from 'vitest';
 import {env} from 'cloudflare:workers';
 import {runInDurableObject} from 'cloudflare:test';
 
-const egress=(url:string,init?:RequestInit)=>runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('test-pool-egress')),async()=>{
+const egress=(url:string,init?:RequestInit)=>runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('test-pool-egress')),async()=>{
  const response=await fetch(url,init);
  return {status:response.status,marker:response.headers.get('x-waldo-test-egress'),body:await response.text()};
 });
@@ -14,7 +14,7 @@ describe('workers test pool egress',()=>{
   expect(JSON.parse(reply.body)).toMatchObject({error:{type:'invalid_request_error',code:'invalid_api_key'}});
  });
  it('answers a fictional WhatsApp send locally with the rejection Meta gives it',async()=>{
-  const reply=await egress('https://graph.facebook.com/v21.0/fictional-phone-id/messages',{method:'POST',headers:{authorization:'Bearer fictional','content-type':'application/json'},body:'{}'});
+  const reply=await egress('https://graph.facebook.com/v26.0/fictional-phone-id/messages',{method:'POST',headers:{authorization:'Bearer fictional','content-type':'application/json'},body:'{}'});
   expect(reply).toMatchObject({status:401,marker:'blocked'});
   expect(JSON.parse(reply.body)).toMatchObject({error:{type:'OAuthException',code:190}});
  });
