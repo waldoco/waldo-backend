@@ -82,6 +82,13 @@ export const BROWSING_UNAVAILABLE = 'Browsing is unavailable on this Waldo for t
 const BROWSE_TOOLS: ReadonlySet<string> = new Set(['browse_page', 'browse_act']);
 const TIME_UP_NOTE = `\n[budget: turn time is up - no more tool calls; ${CLOSING}]`;
 
+// Every round resends the turn's tool results. Past this many characters of result text the oldest results are cleared
+// (the call stays, its result becomes a short note), down to half of it at once, so a long turn stays inside the model's
+// input and the cleared prefix stays byte-stable for the rounds after. The newest round is never cleared.
+export const TOOL_RESULTS_KEEP_CHARS = 160_000;
+export const clearedToolResult = (name: string): string =>
+  `[cleared: this ${name.replaceAll('_', ' ')} result from earlier in this turn is no longer shown, to keep the turn within its context; run it again if you still need it]`;
+
 // Set once by the first loop of a turn, from the run it serves, and shared with its child loops through the budget.
 const turnDeadline = (budget: { deadline?: number } | undefined, scope: RunEffectScope | undefined): number => {
   const deadline = budget?.deadline ?? turnDeadlineFor(scope);
@@ -137,11 +144,25 @@ export async function runToolLoop(input: Readonly<{
   // reasoning items still precede its calls, and names what it set aside.
   const roundStarts: number[] = [];
   const shownTurns = (): readonly LLMToolTurn[] => {
+    clearOldResults();
     if (turns.length <= LLM_TOOL_TURNS_MAX) return turns;
     const start = roundStarts.find((index) => turns.length - index <= LLM_TOOL_TURNS_MAX) ?? roundStarts.at(-1)!;
     const [first, ...rest] = turns.slice(start);
     const names = [...new Set(turns.slice(0, start).map((turn) => turn.call.name))].join(', ');
     return [{ ...first!, output: `${first!.output}\n[earlier in this turn: ${start} older tool results are no longer shown (${names}); run a read again if you still need its result]` }, ...rest];
+  };
+  // Results cleared so far, oldest first; clearing only moves forward, so what was sent stays as it was sent.
+  let cleared = 0;
+  const clearOldResults = () => {
+    const newest = roundStarts.at(-1) ?? 0;
+    let total = turns.slice(cleared).reduce((sum, turn) => sum + turn.output.length, 0);
+    if (total <= TOOL_RESULTS_KEEP_CHARS) return;
+    while (cleared < newest && total > TOOL_RESULTS_KEEP_CHARS / 2) {
+      const turn = turns[cleared]!;
+      total -= turn.output.length;
+      turns[cleared] = { ...turn, output: clearedToolResult(turn.call.name) };
+      cleared += 1;
+    }
   };
   let browsingWithheld = false;
   let exit: LoopExit = 'completed';
