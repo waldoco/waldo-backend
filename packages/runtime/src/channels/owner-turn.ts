@@ -11,12 +11,12 @@ import { ownerContextHandler } from '../tools/live/owner-context';
 import { searchLocation } from '../tools/live/search-location';
 import {
   deriveContextBudgetChars, EXTERNAL_ORIGIN_TOOLS, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, SANITISE_DESTINATION_POLICIES, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_REASONING, WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL,
-  type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
+  TOOL_ERRORS, toolError, type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName, type ToolError,
 } from '@waldo/contracts';
 import type { ConversationModelMessage } from '@waldo/contracts';
 import { BUDGET_CHARS_PER_TOKEN, MODEL_CONTEXT_MAX_CHARS } from '@waldo/contracts';
 import { PROBE_STRIPPED_TOOLS } from './probe-turn';
-import { runToolLoop } from '../conversation/tool-loop';
+import { runToolLoop, type ToolLoopEvent } from '../conversation/tool-loop';
 import { turnReceipt } from '../hooks/receipt-line';
 import { THREAD_TITLE_FORMAT, THREAD_TITLE_INSTRUCTION, threadOfChain } from './app-threads';
 import type { LoopEventLike } from '../hooks/claim-hook';
@@ -28,11 +28,11 @@ import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
 import { localTrustedBriefScheduleInput, localTrustedBriefTurnSnapshot, resolveRunLoopAdapters, type LocalSystemSkillBinding } from '../llm/run-loop-adapters';
 import type { ContextHealthMaterial } from '../context-composer/types';
 import { JoinedConversationPath } from '../conversation/joined-path';
-import { COMPACTION, COMPACTION_INSTRUCTION, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, supersededCompaction, type CompactedStats } from '../conversation/compaction';
+import { COMPACTION, COMPACTION_INSTRUCTION, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, supersededCompaction, type CompactedStats, type CompactionFlush } from '../conversation/compaction';
 import { numericHealthIn } from '../scribe/sanitiser';
 import { MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
-import { InMemoryCircuitBreaker, observedBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
+import { InMemoryCircuitBreaker, observedBreaker, RuntimeLLMProvider, type LLMGatewayAdapter, type RouteSpendState } from '../llm/provider';
 import { messagingSystemPrompt, ownerClockLine, unconnectedLine } from '../prompt/messaging-behavior';
 import { assembleTurnPrompt } from '../prompt/turn-prompt';
 import { eligibleHandlers } from '../tools/eligibility';
@@ -64,6 +64,13 @@ const TURN_ONLY_OUTPUT = JSON.stringify({ retained: false, reason: 'turn_only_ou
 const EXTERNAL_REACH_TOOLS = new Set(['execute_action', 'delete_message', 'restore_message']);
 export const ownerToolApproval = ({ tool }: { tool: string }): boolean => !EXTERNAL_REACH_TOOLS.has(tool);
 const OWNER_TURN_ONLY_TOOLS: ReadonlySet<string> = new Set(['raise_approval', 'send_progress_note', 'attach_file']);
+// Past the owner's monthly spend ceiling these are held: each bills browser or sandbox time on top of the model call.
+export const PAID_RUNG_TOOLS: ReadonlySet<string> = new Set(['browse_page', 'browse_act', 'execute_code']);
+// The refusal a held paid tool returns: what still works comes from the catalogue, the reset day from the clock.
+export const spendHold = (now: Date): ToolError => {
+  const reset = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString().slice(0, 10);
+  return { ...toolError('spend_ceiling_reached'), fix: `${TOOL_ERRORS.spend_ceiling_reached.fix} The ceiling resets on ${reset} (UTC).` };
+};
 
 // Session canaries are per-runtime tripwires: random 16-hex tokens derived when the owner
 // runtime (DO session) boots, checked by the scribe against every fragment bound for the
@@ -89,10 +96,17 @@ export type OwnerJobHost = Readonly<{ admit(): Promise<OwnerMessageAdmission | u
 // ownerProfile: the host-framed line about who the owner is. An admitted job composes it into its owner context; a turn
 // without a composed owner context reads it directly.
 // watchStatus: the host fact about Google pushes that are not running, for the owner's own turns ('' when all run).
-export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string }>;
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string }>;
+export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; compactionFlush?: CompactionFlush; spend?: () => OwnerSpend }>;
+// This owner's spend so far this month and the ceiling it is held to, read once when a turn starts.
+export type OwnerSpend = Readonly<{ spentUsd: number; ceilingUsd: number }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; compactionFlush?: CompactionFlush; spend?: () => OwnerSpend }>;
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
+// The typed failure on a tool hop: the ToolError code when the tool returned one, else the loop's coarse code.
+const toolErrorCode = (event: ToolLoopEvent): { error_code?: string } => {
+  const code = event.error_code ?? event.code;
+  return code ? { error_code: code } : {};
+};
 // Tool definitions are JSON: about four UTF-8 bytes per token on current tokenizers, close enough to compare rounds.
 const BYTES_PER_TOKEN_EST = 4;
 // The reply's system prompt with the byte size of each joined section, so a trace shows what fills it.
@@ -193,6 +207,12 @@ export const createOwnerResponder = (
     authenticatedUserId: skills?.admission?.invocation.verified_authority.principal_ref ?? ownerId, trigger: 'user_message' as const, canaryTokens: CANARIES,
     sourceTaint: null, toolArgSourceTaint: null, egressAllowlist,
     hasApproval: ownerToolApproval,
+    heldTool: (tool: string) => {
+      if (!turnCapped() || !PAID_RUNG_TOOLS.has(tool)) return null;
+      // The cost ledger counts each hold as a held:<tool> row, so the alpha shows how often the ceiling bites.
+      log({ trace: traceId, hop: 'spend_hold', ms: 0, ok: false, code: `spend_ceiling_reached:${tool}`, error_code: 'spend_ceiling_reached' });
+      return spendHold(clock.now());
+    },
     sanitise: adapters.safety.sanitise,
     // Typed store provenance for the provider's retrieval receipts (owner review on #212).
     ...(offloadStore === undefined ? {} : { toolOutputStore: offloadStore }),
@@ -246,6 +266,7 @@ export const createOwnerResponder = (
       ...(callScope ?? privateRunScope ? { runScope: callScope ?? privateRunScope } : {}),
       trigger: 'user_message',
       policy: effectivePolicy,
+      ...(turnSpend ? { spend: turnSpend } : {}),
       renderRequest: ({ step }) => {
         // The effort follows the model this attempt runs on, not the responder's chat model.
         const effort = OPENAI_REASONING[step.model]?.effort;
@@ -276,14 +297,20 @@ export const createOwnerResponder = (
     };
     const response = result.ok ? result.response : undefined;
     const metadataOnly = transientDecision || purpose.startsWith('memory') || purpose.startsWith('task_source') || purpose === 'compaction';
-    // The provider that answered, and whether the ladder moved off the first provider/model to get there (a same-model retry is not a fallback).
-    const served = result.attempts.at(-1);
-    const routing = served ? { provider: served.provider, fallback_fired: new Set(result.attempts.map((attempt) => `${attempt.provider}/${attempt.model}`)).size > 1 } : {};
+    // The floor line is answered by no provider: every attempt failed, and the last failure is why the floor ran.
+    const floor = result.ok && result.fallback_step === 'template';
+    const served = floor ? undefined : result.attempts.at(-1);
+    const lastFailure = floor ? [...result.attempts].reverse().find((attempt) => attempt.outcome === 'failure') : undefined;
+    // Otherwise the provider that answered, and whether the ladder moved off the first provider/model to get there (a same-model retry is not a fallback).
+    const routing = floor
+      ? { fallback_fired: true, ...(lastFailure?.outcome === 'failure' ? { error_code: lastFailure.code } : {}) }
+      : served ? { provider: served.provider, fallback_fired: new Set(result.attempts.map((attempt) => `${attempt.provider}/${attempt.model}`)).size > 1 } : {};
     if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by, result.scribe?.reason, result.scribe_stage, result.detail].filter(Boolean).join(':'), error_code: result.code, shape, ...routing, ...(metadataOnly ? {} : { text: { input } }) });
     else log({
-      trace, hop: `llm_${purpose}`, ms: result.usage.latency_ms, ok: true, ...routing,
-      usage: { model: result.usage.model, input: result.usage.input_tokens, output: result.usage.output_tokens, cached: result.usage.cache_read_input_tokens,
-        web_searches: response!.output_items?.filter((item) => item.type === 'web_search_call').length ?? 0 },
+      trace, hop: `llm_${purpose}`, ms: floor ? Date.now() - started : result.usage.latency_ms, ok: true, ...routing,
+      // No model call answered the floor line, so it carries no usage: the cost rollup counts a call wherever usage is set.
+      ...(floor ? { code: 'template_floor' } : { usage: { model: result.usage.model, input: result.usage.input_tokens, output: result.usage.output_tokens, cached: result.usage.cache_read_input_tokens,
+        web_searches: response!.output_items?.filter((item) => item.type === 'web_search_call').length ?? 0 } }),
       shape,
       ...(metadataOnly ? {} : { text: { input, output: response!.text || JSON.stringify(response!.tool_calls), ...(reasoning ? { reasoning } : {}) } }),
     });
@@ -476,7 +503,7 @@ export const createOwnerResponder = (
             return response;
           },
           onTool: (event) => {
-              log({ trace, hop: `subagent_tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: event.call.arguments, output: event.output } });
+              log({ trace, hop: `subagent_tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...toolErrorCode(event), ...(event.guard ? { guard: event.guard } : {}), text: { input: event.call.arguments, output: event.output } });
           },
         });
           await assertCurrent();
@@ -602,7 +629,7 @@ export const createOwnerResponder = (
           const receipt = event.call.name === 'remember' && event.ok ? JSON.parse(event.output) as { data?: { status?: string } } : undefined;
           if (receipt?.data?.status !== 'duplicate') turnToolEvents.push({ seq: turnToolEvents.length + 1, call: { name: event.call.name, args: parseToolArgs(event.call.arguments, event.call.name) }, ok: event.ok, at: Date.now(), ...(event.code ? { code: event.code } : {}) });
           privateRunScope?.admit();
-          log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':'), error_code: event.code } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: event.call.arguments, output: event.output } });
+          log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, parallel_batches: event.parallel_batches, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...toolErrorCode(event), ...(event.guard ? { guard: event.guard } : {}), text: { input: event.call.arguments, output: event.output } });
           privateRunScope?.admit();
           pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: event.taint, origin: ownerTurnActive && !probeGuard?.stripLiveTools ? 'owner' : 'machine', summary: turnOnlyOutput.has(event.call.name) ? TURN_ONLY_OUTPUT : event.output, ...(thread ? { thread } : {}) });
         },
@@ -614,6 +641,10 @@ export const createOwnerResponder = (
   // Set by converse() for the duration of one submit: delegate_task rides owner chat turns
   // only, never reminder/scheduled machine turns that flow through the same closure.
   let ownerTurnActive = false;
+  // Read once when a turn starts, so a turn that crosses the ceiling mid-flight finishes on the model it began with. Past the
+  // ceiling the provider clamps every call to the auxiliary route, which is where machine turns already run.
+  let turnSpend: RouteSpendState | undefined;
+  const turnCapped = () => turnSpend !== undefined && turnSpend.cap_cents !== null && turnSpend.spent_cents >= turnSpend.cap_cents;
   // Room left in the system prompt for owner memory: the sanitiser drops a system prompt over its limit whole.
   const systemRoom = (others: string) => SANITISE_DESTINATION_POLICIES.system_prompt.max_chars - others.length - 2_048;
   let turnToolEvents: LoopEventLike[] = [];
@@ -695,7 +726,7 @@ export const createOwnerResponder = (
       ...(health ? { health: () => healthRead ??= health(trace) } : {}),
       onPhase: (phase, previousMs) => log({ trace, hop: 'composer_phase', ms: previousMs, ok: true, detail: phase }),
     });
-    const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, privateRunScope, privateSystemSkills, { context: jobContext });
+    const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, privateRunScope, privateSystemSkills, { context: jobContext, ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}) });
     control.route(scoped.control);
     try { return await work(scoped); }
     finally { control.unroute(scoped.control); }
@@ -708,18 +739,23 @@ export const createOwnerResponder = (
     traceId = id;
     turnClockLine = undefined;
     ownerTurnActive = fromOwner;
+    const spend = privateOwner?.spend?.();
+    turnSpend = spend && { spent_cents: Math.floor(spend.spentUsd * 100), cap_cents: Math.round(spend.ceilingUsd * 100), clamp: ownerRoutePolicy(auxiliaryModel, model, access) };
     turnToolEvents = [];
     control.begin(fromOwner);
     try {
       const userEntry = tree.get(id) ?? { id, ownerId, chatId: conversationRef, parentId: conversationLeaves.get(conversationRef) ?? null, threadAnchorId: null, surface, modelPayload: said, appPayload: received, modelProjection: { mode: 'include' as const }, role:'user' as const, inputOrigin: fromOwner ? 'owner' as const : 'machine' as const, createdAt: Date.now() };
-      if(fromOwner && context && privateRunScope) await conversationStore?.persistOwnerInput?.(userEntry,privateRunScope);
+      // Once stored, the row is the input's record: a forget in this turn rewrites it and its witness in place, so the turn
+      // publishes its reply alone, never its own copy of the input.
+      const inputStored = fromOwner && context !== undefined && privateRunScope !== undefined && conversationStore?.persistOwnerInput !== undefined;
+      if (inputStored) await conversationStore.persistOwnerInput(userEntry, privateRunScope);
       const publication = await time('joined_path', () => path.submit({
         ...(privateRunScope ? { runScope: privateRunScope } : {}),
         authenticatedOwnerId: ownerId, invocation,
         context: contextInputs(),
         userEntry,
         assistantEntryId: `${id}-reply`,
-      })).finally(() => { ownerTurnActive = false; backgroundToolNames = undefined; control.end(); });
+      })).finally(() => { ownerTurnActive = false; turnSpend = undefined; backgroundToolNames = undefined; control.end(); });
       privateRunScope?.admit();
       await assertFresh();
       const reply = tree.get(publication.leafId)!.appPayload;
@@ -727,7 +763,7 @@ export const createOwnerResponder = (
       const receipt = fromOwner ? await turnReceipt(turnToolEvents) : null;
       const out = receipt ? `${reply}\n\n${receipt.line}` : reply;
       const redact = literalTextRedactor([...removedTopics], FORGOTTEN);
-      const savedEntries = [tree.get(id)!, { ...tree.get(publication.leafId)!, ...(context ? { appPayload: out, ...(receipt ? { receipt } : {}) } : {}) }].map(entry => redactConversationEntry(entry, redact));
+      const savedEntries = [...(inputStored ? [] : [tree.get(id)!]), { ...tree.get(publication.leafId)!, ...(context ? { appPayload: out, ...(receipt ? { receipt } : {}) } : {}) }].map(entry => redactConversationEntry(entry, redact));
       await conversationStore?.save(savedEntries, publication.leafId, privateRunScope);
       for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); }
       privateRunScope?.admit();
@@ -765,6 +801,12 @@ export const createOwnerResponder = (
       await conversationStore.noteCompactionAttempt?.(ref, now, privateRunScope);
       const plan = compactionPlan(tree, leafId, live);
       if (!plan || tree.get(compactionId(plan.covers.to_id))) return;
+      // The memory flush sees the span before the summary takes its place; until it has run, the span stays in the window.
+      if (privateOwner?.compactionFlush) {
+        try { await privateOwner.compactionFlush({ conversationRef: ref, covers: plan.covers, messages: plan.input }); }
+        catch (error) { if (error instanceof ClosedRunError) throw error; hop(false, 'flush_failed'); return; }
+        privateRunScope?.admit();
+      }
       const started = Date.now();
       const response = await complete(traceId, 'compaction', COMPACTION_INSTRUCTION, plan.input, undefined, undefined, undefined, undefined, auxiliaryModel);
       const summary = response.text.trim();
@@ -791,7 +833,7 @@ export const createOwnerResponder = (
         const capturedTurn = { ...turn, memoryWrites };
         const preparedContext = privateOwner?.contextHost ? await privateOwner.contextHost.prepare(capturedTurn, turn.runScope) : undefined;
         const preparedSkills = privateOwner?.skillHost ? await privateOwner.skillHost.prepare(capturedTurn, preparedContext?.invocation.verified_authority.principal_ref ?? ownerId, turn.runScope) : undefined;
-        const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}), ...(privateOwner?.watchStatus ? { watchStatus: privateOwner.watchStatus } : {}) });
+        const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}), ...(privateOwner?.watchStatus ? { watchStatus: privateOwner.watchStatus } : {}), ...(privateOwner?.compactionFlush ? { compactionFlush: privateOwner.compactionFlush } : {}), ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}) });
         control.route(scoped.control);
         scopedCompaction = scoped.compactIfDue;
         try { return await scoped.respond(capturedTurn, time); }
