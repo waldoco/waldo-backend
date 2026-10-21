@@ -1,6 +1,6 @@
 // OAuth 2.1 for owner-connected MCP servers, per the MCP authorization spec, revision 2026-07-28.
 // Discovery and the authorize URL run in the owner's Durable Object; token, refresh, registration and
-// revocation run only in the mcp-proxy Edge Function, which shares this module. Every URL goes through
+// revocation run only in the oauth-proxy Edge Function, which shares this module. Every URL goes through
 // the egress rail. Discovered endpoints are recorded once, at connect, and pinned from then on.
 import { egressTarget, guardedFetch } from './egress.ts';
 
@@ -176,19 +176,31 @@ export const readCallback = (params: URLSearchParams, expectedIssuer: string, is
   return code ? { ok: true, code } : { ok: false, reason: 'malformed' };
 };
 
-// Endpoints and client identity fixed when the owner connected. The edge refuses to send a token, code
-// or client secret anywhere else.
+// Endpoints and client identity fixed when the owner connected, for an MCP server or any other provider
+// the oauth-proxy holds. The edge refuses to send a token, code or client secret anywhere else.
 export type ClientPins = Readonly<{
-  // The MCP endpoint the owner connected, and the RFC 8707 resource its tokens are bound to.
-  server_url: string;
-  resource: string;
   issuer: string;
   token_endpoint: string;
   revocation_endpoint?: string;
   client_id: string;
   client_auth: 'none' | 'client_secret_post' | 'client_secret_basic';
   redirect_uri: string;
+  // An MCP connection: the endpoint the owner connected, and the RFC 8707 resource its tokens are bound to.
+  server_url?: string;
+  resource?: string;
+  // A provider's HTTP API: the only URL prefix the fetch operation sends the access token to.
+  api_base?: string;
+  // Where the provider names whose tokens these are: a GET under api_base, and the field holding the id.
+  account_url?: string;
+  account_field?: string;
+  // single_use: the provider retires a refresh token when it issues the next one, so an answer without a
+  // new one leaves no refresh token rather than the spent one. Unset: an answer without a refresh token
+  // means the old one stays valid (RFC 6749 section 6).
+  rotation?: 'single_use';
+  // Sent as the scope of a refresh request, for a provider that requires one.
+  refresh_scope?: string;
 }>;
+export type McpPins = ClientPins & Readonly<{ server_url: string; resource: string }>;
 
 export type TokenSet = Readonly<{ access_token: string; refresh_token?: string; expires_at?: number; scope?: string }>;
 export class TokenEndpointError extends Error {
@@ -196,7 +208,7 @@ export class TokenEndpointError extends Error {
 }
 
 const tokenCall = async (fetcher: typeof fetch, pins: ClientPins, body: Record<string, string>, secret: string | undefined, now: number): Promise<TokenSet> => {
-  const form = new URLSearchParams({ ...body, resource: pins.resource });
+  const form = new URLSearchParams({ ...body, ...(pins.resource ? { resource: pins.resource } : {}) });
   const headers: Record<string, string> = { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' };
   if (pins.client_auth === 'client_secret_basic' && secret) headers.authorization = `Basic ${btoa(`${encodeURIComponent(pins.client_id)}:${encodeURIComponent(secret)}`)}`;
   else { form.set('client_id', pins.client_id); if (pins.client_auth === 'client_secret_post' && secret) form.set('client_secret', secret); }
@@ -226,11 +238,12 @@ const tokenCall = async (fetcher: typeof fetch, pins: ClientPins, body: Record<s
   };
 };
 
-export const exchangeCode = (fetcher: typeof fetch, pins: ClientPins, input: Readonly<{ code: string; verifier: string; redirectUri: string }>, secret: string | undefined, now: number) =>
-  tokenCall(fetcher, pins, { grant_type: 'authorization_code', code: input.code, code_verifier: input.verifier, redirect_uri: input.redirectUri }, secret, now);
+// The verifier is absent only for a provider that documents no PKCE; an MCP exchange always carries one.
+export const exchangeCode = (fetcher: typeof fetch, pins: ClientPins, input: Readonly<{ code: string; verifier?: string; redirectUri: string }>, secret: string | undefined, now: number) =>
+  tokenCall(fetcher, pins, { grant_type: 'authorization_code', code: input.code, ...(input.verifier ? { code_verifier: input.verifier } : {}), redirect_uri: input.redirectUri }, secret, now);
 
 export const refreshTokens = (fetcher: typeof fetch, pins: ClientPins, refreshToken: string, secret: string | undefined, now: number) =>
-  tokenCall(fetcher, pins, { grant_type: 'refresh_token', refresh_token: refreshToken }, secret, now);
+  tokenCall(fetcher, pins, { grant_type: 'refresh_token', refresh_token: refreshToken, ...(pins.refresh_scope ? { scope: pins.refresh_scope } : {}) }, secret, now);
 
 // RFC 7009. 200 means the token is gone or was never valid; anything else is not a confirmed revoke.
 export const revokeToken = async (fetcher: typeof fetch, pins: ClientPins, token: string, hint: 'refresh_token' | 'access_token', secret: string | undefined): Promise<boolean> => {

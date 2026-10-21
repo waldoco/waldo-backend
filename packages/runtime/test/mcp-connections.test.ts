@@ -2,11 +2,11 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { EVERY_READ_ONLY_HINT, mcpConnections, McpRefusal, McpToolFailed, mcpState, readMcpState, type McpConnections } from '../src/connectors/mcp-connections';
-import { mcpProxy } from '../src/connectors/mcp-proxy-client';
+import { oauthProxy } from '../src/connectors/oauth-proxy-client';
 import { callMcpToolHandler } from '../src/tools/live/mcp';
 import type { McpCallProposal } from '../src/channels/approvals';
 import { fakeMcpWorld, ISSUER, MCP_URL, WALDO_ORIGIN, type FakeMcpWorld, type FakeOptions } from './support/fake-mcp-world';
-import { loadEdge, routeEdgeFetch, vaultFake, workerToEdge, WORKER_ENV, type VaultFake } from './support/mcp-edge-harness';
+import { loadEdge, routeEdgeFetch, vaultFake, workerToEdge, WORKER_ENV, type VaultFake } from './support/oauth-edge-harness';
 
 const SECRET = 'fixture-state-secret';
 let serve: (request: Request) => Promise<Response>;
@@ -26,7 +26,7 @@ const withRig = (name: string, options: Partial<FakeOptions>, run: (rig: Rig) =>
   await runInDurableObject(stub, async (_instance, state) => {
     const mcp = mcpConnections({
       sql: state.storage.sql, transaction: (work) => state.storage.transactionSync(work),
-      proxy: extra.proxy === false ? null : mcpProxy(WORKER_ENV, workerToEdge(serve, (body) => edge.push(body)), () => Date.now()),
+      proxy: extra.proxy === false ? null : oauthProxy(WORKER_ENV, workerToEdge(serve, (body) => edge.push(body)), () => Date.now()),
       doName: () => 'owner-a', stateSecret: SECRET, fetcher: world.fetcher, now: () => Date.now(),
       ...(extra.reserved ? { reserved: () => extra.reserved! } : {}), log: (entry) => logs.push(entry),
     });

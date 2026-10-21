@@ -1,5 +1,5 @@
 // MCP client for owner-connected servers over Streamable HTTP, revision 2026-07-28, shared with the
-// mcp-proxy Edge Function. A modern request carries its version, client info and capabilities in _meta
+// oauth-proxy Edge Function. A modern request carries its version, client info and capabilities in _meta
 // and in the MCP-Protocol-Version, Mcp-Method and Mcp-Name headers; there is no handshake and no session.
 // A legacy server (2025-11-25 and earlier) is detected the way the spec's backward-compatibility section
 // says: a 4xx whose body is not a recognised modern error. It then gets the initialize handshake.

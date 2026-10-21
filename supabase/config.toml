@@ -22,6 +22,6 @@ enabled = false
 verify_jwt = false
 
 # Router-HMAC signed by the Worker; the function rejects unsigned calls itself.
-[functions.mcp-proxy]
+[functions.oauth-proxy]
 verify_jwt = false
 

@@ -1,5 +1,5 @@
 // The one egress rail for owner-connected MCP servers and their authorization servers, shared with the
-// mcp-proxy Edge Function. Every URL is https on the default port, carries no credentials, and names a
+// oauth-proxy Edge Function. Every URL is https on the default port, carries no credentials, and names a
 // globally reachable host. A connection's calls are also pinned to the origins recorded when the owner
 // connected it, so a server or authorization server cannot point Waldo, or a token, somewhere new later.
 // Nothing here resolves DNS; the private-address list is literal (security/public-host).

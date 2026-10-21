@@ -160,7 +160,7 @@ import { bindWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, f
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
 import { connectorsLine, mcpConnections, McpRefusal, MCP_FINISH_PATH, MCP_START_PATH, type McpConnections } from '../connectors/mcp-connections';
-import { mcpProxy } from '../connectors/mcp-proxy-client';
+import { oauthProxy } from '../connectors/oauth-proxy-client';
 import { sendMessageHandler } from '../tools/live/messaging';
 import { approvalReplayContext, proposeActionHandler, taintedActionReplay } from '../tools/live/propose-action';
 import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
@@ -330,7 +330,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private mcp(): McpConnections {
     return this.mcpRegistry ??= mcpConnections({
       sql: this.ctx.storage.sql, transaction: (work) => this.ctx.storage.transactionSync(work),
-      proxy: mcpProxy(this.env), doName: () => this.ctx.storage.kv.get<string>('do_name') ?? null,
+      proxy: oauthProxy(this.env), doName: () => this.ctx.storage.kv.get<string>('do_name') ?? null,
       ...(this.env.TELEGRAM_WEBHOOK_SECRET ? { stateSecret: this.env.TELEGRAM_WEBHOOK_SECRET } : {}),
       fetcher: (input, init) => fetch(input, init), now: () => Date.now(),
       reserved: () => mcpServers(this.env.WALDO_MCP_SERVERS).map((server) => server.name),

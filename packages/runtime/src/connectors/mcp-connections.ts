@@ -1,12 +1,12 @@
 // The owner's MCP connections, held only by the owner's Durable Object: which servers are connected,
 // the sign-in attempts in flight, each server's tool definitions with their digests, and which tools the
-// owner lets run without asking. Tokens are never here: OAuth servers are called through the mcp-proxy
+// owner lets run without asking. Tokens are never here: OAuth servers are called through the oauth-proxy
 // Edge Function by connection id. Servers that need no sign-in are called directly, on the same rail.
 import { egressTarget, EgressError } from './egress';
-import { authorizationUrl, callbackUrl, clientMetadataUrl, discoverAuthorizationServer, discoverProtectedResource, McpOAuthError, pkceChallenge, pkceVerifier, readCallback, registrationMode, requestedScope, type ClientPins, type RegistrationMode } from './mcp-oauth';
+import { authorizationUrl, callbackUrl, clientMetadataUrl, discoverAuthorizationServer, discoverProtectedResource, McpOAuthError, pkceChallenge, pkceVerifier, readCallback, registrationMode, requestedScope, type ClientPins, type McpPins, type RegistrationMode } from './mcp-oauth';
 import { McpChallenge, McpRpcError, McpServerError, mcpRequest, type McpEra } from './mcp-protocol';
-import { McpProxyError, type McpProxy } from './mcp-proxy-client';
-import type { McpMethod, McpProxyFailure } from './mcp-proxy-wire';
+import { OAuthProxyError, type OAuthProxy } from './oauth-proxy-client';
+import type { McpMethod, OAuthProxyFailure } from './oauth-proxy-wire';
 import { argsDigest, checkArgs, marksReadOnly, parseToolsPage, rankTools, toolDigest, toolHeaders, type McpToolDef } from './mcp-tools';
 
 // Every tool the server labels read-only. TOOL_NAME never admits '*', so no real tool shares this value.
@@ -104,12 +104,12 @@ const toolErrorText = (result: Record<string, unknown>) => {
   const text = Array.isArray(result.content) ? result.content.flatMap((part) => (isRecord(part) && part.type === 'text' && typeof part.text === 'string' ? [part.text] : [])).join(' ') : '';
   return text.slice(0, 500) || 'no detail';
 };
-const NOT_APPLIED: ReadonlySet<McpProxyFailure['code']> = new Set(['reauth_needed', 'token_failed', 'token_expired', 'scope_missing', 'connection_unavailable', 'rate_limited', 'intent_conflict', 'egress_refused', 'unconfigured', 'unsigned', 'invalid_request']);
+const NOT_APPLIED: ReadonlySet<OAuthProxyFailure['code']> = new Set(['reauth_needed', 'token_failed', 'token_expired', 'scope_missing', 'connection_unavailable', 'rate_limited', 'intent_conflict', 'egress_refused', 'unconfigured', 'unsigned', 'invalid_request']);
 
 export type McpConnectionsDeps = Readonly<{
   sql: SqlStorage;
   transaction: <T>(work: () => T) => T;
-  proxy: McpProxy | null;
+  proxy: OAuthProxy | null;
   doName: () => string | null;
   stateSecret?: string;
   fetcher: typeof fetch;
@@ -151,11 +151,11 @@ const nameFor = (host: string, taken: ReadonlySet<string>) => {
   return name;
 };
 
-const proxyCause = (failure: McpProxyFailure, server: string): McpRefusal => {
+const proxyCause = (failure: OAuthProxyFailure, server: string): McpRefusal => {
   const refusal = refusalFor(failure, server);
   return new McpRefusal(refusal.code, refusal.message, NOT_APPLIED.has(failure.code));
 };
-const refusalFor = (failure: McpProxyFailure, server: string): McpRefusal => {
+const refusalFor = (failure: OAuthProxyFailure, server: string): McpRefusal => {
   switch (failure.code) {
     case 'reauth_needed': case 'token_failed': return new McpRefusal('auth_failed', `The sign-in for ${server} is no longer valid. Ask the owner to reconnect ${server} in Connections on their Waldo console (send_console_link sends it).`);
     case 'scope_missing': return new McpRefusal('auth_failed', `${server} needs more access for this tool${failure.scope ? ` (${failure.scope})` : ''}. Ask the owner to reconnect ${server} in Connections on their Waldo console and grant it.`);
@@ -178,7 +178,7 @@ const directCause = (error: unknown, server: string): McpRefusal => {
   if (error instanceof McpRpcError) return proxyCause({ code: 'rpc_error', rpc_code: error.code, message: error.message.slice(0, 500) }, server);
   // A redirect answer on a direct call came back after the server saw the request: unknown, not refused.
   if (error instanceof EgressError) return proxyCause({ code: error.code === 'egress_oversize' ? 'egress_oversize' : error.code === 'egress_network' || error.code === 'egress_timeout' || error.code === 'egress_redirect' ? 'unavailable' : 'egress_refused' }, server);
-  if (error instanceof McpProxyError) return proxyCause(error.failure, server);
+  if (error instanceof OAuthProxyError) return proxyCause(error.failure, server);
   return new McpRefusal('transient', `${server} could not be used right now.`);
 };
 
@@ -234,7 +234,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
         update(r.id, { version: out.version, expires_at: out.expires_at ?? null, scopes: out.scopes.join(' '), status: 'active' });
         log('mcp_refresh', started);
       } catch (error) {
-        const code = error instanceof McpProxyError ? error.failure.code : 'unavailable';
+        const code = error instanceof OAuthProxyError ? error.failure.code : 'unavailable';
         if (code === 'reauth_needed' || code === 'connection_unavailable') update(r.id, { status: 'reauth_needed' });
         log('mcp_refresh', started, code);
         throw directCause(error, r.name);
@@ -264,7 +264,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     };
     const failed = (error: unknown) => {
       // The server asked for scopes the grant lacks: kept so the owner's reconnect asks for them too.
-      if (error instanceof McpProxyError && error.failure.code === 'scope_missing' && error.failure.scope) {
+      if (error instanceof OAuthProxyError && error.failure.code === 'scope_missing' && error.failure.scope) {
         const now = row(r.id);
         if (now) update(r.id, { step_up: [...new Set([...now.step_up.split(' '), ...error.failure.scope.split(' ')].filter(Boolean))].join(' ') });
       }
@@ -275,12 +275,12 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     try {
       return await attempt(first);
     } catch (error) {
-      const code = error instanceof McpProxyError ? error.failure.code : undefined;
+      const code = error instanceof OAuthProxyError ? error.failure.code : undefined;
       // An expired or refused access token gets one refresh and one retry; anything else is the answer.
       if (code !== 'token_expired' && code !== 'reauth_needed') throw failed(error);
       await refresh(first, first.version);
       return attempt(current()).catch((retry: unknown) => {
-        if (retry instanceof McpProxyError && retry.failure.code === 'reauth_needed') update(r.id, { status: 'reauth_needed' });
+        if (retry instanceof OAuthProxyError && retry.failure.code === 'reauth_needed') update(r.id, { status: 'reauth_needed' });
         throw failed(retry);
       });
     }
@@ -455,7 +455,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
         log('mcp_connect', started);
         return { kind: 'redirect', path: `${MCP_START_PATH}${nonce}` };
       } catch (error) {
-        const reason = error instanceof McpOAuthError ? error.code : error instanceof EgressError ? error.code : error instanceof McpProxyError ? error.failure.code : 'discovery_failed';
+        const reason = error instanceof McpOAuthError ? error.code : error instanceof EgressError ? error.code : error instanceof OAuthProxyError ? error.failure.code : 'discovery_failed';
         log('mcp_connect', started, reason);
         return { kind: 'failed', reason };
       }
@@ -487,9 +487,9 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       if (!deps.proxy || !doName) { const outcome: ConnectOutcome = { kind: 'failed', reason: 'oauth_unavailable' }; settle(nonce, outcome); return outcome; }
       // Settled before the exchange: the code is single-use, so a second callback must never redeem it.
       settle(nonce, { kind: 'failed', reason: 'exchange_unconfirmed' });
-      const pins: ClientPins = { server_url: attempt.server_url, resource: attempt.resource, issuer: attempt.issuer, token_endpoint: attempt.token_endpoint, ...(attempt.revocation_endpoint ? { revocation_endpoint: attempt.revocation_endpoint } : {}), client_id: attempt.client_id, client_auth: attempt.client_auth, redirect_uri: callbackUrl(origin) };
+      const pins: McpPins = { server_url: attempt.server_url, resource: attempt.resource, issuer: attempt.issuer, token_endpoint: attempt.token_endpoint, ...(attempt.revocation_endpoint ? { revocation_endpoint: attempt.revocation_endpoint } : {}), client_id: attempt.client_id, client_auth: attempt.client_auth, redirect_uri: callbackUrl(origin) };
       try {
-        const exchanged = await deps.proxy.exchange(doName, pins, callback.code, attempt.verifier, attempt.scope);
+        const exchanged = await deps.proxy.exchange(doName, 'mcp', pins, callback.code, { verifier: attempt.verifier, ...(attempt.scope ? { scope: attempt.scope } : {}) });
         const r = store({ id: exchanged.id, server_url: attempt.server_url, auth: 'oauth', registration: attempt.registration, issuer: attempt.issuer, scopes: exchanged.scopes, version: exchanged.version, ...(exchanged.expires_at === undefined ? {} : { expires_at: exchanged.expires_at }) });
         await refreshTools(r).catch(() => undefined);
         const outcome: ConnectOutcome = { kind: 'linked', id: r.id, name: r.name };
@@ -497,7 +497,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
         log('mcp_consent', started);
         return outcome;
       } catch (error) {
-        const outcome: ConnectOutcome = { kind: 'failed', reason: error instanceof McpProxyError ? error.failure.code : 'exchange_failed' };
+        const outcome: ConnectOutcome = { kind: 'failed', reason: error instanceof OAuthProxyError ? error.failure.code : 'exchange_failed' };
         settle(nonce, outcome);
         log('mcp_consent', started, outcome.reason);
         return outcome;
@@ -517,7 +517,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
         forget(id);
         return { ok: true, provider: out.provider };
       } catch (error) {
-        if (error instanceof McpProxyError && error.failure.code === 'connection_unavailable') { forget(id); return { ok: true, provider: 'not_needed' }; }
+        if (error instanceof OAuthProxyError && error.failure.code === 'connection_unavailable') { forget(id); return { ok: true, provider: 'not_needed' }; }
         return { ok: false, provider: 'failed' };
       }
     },
