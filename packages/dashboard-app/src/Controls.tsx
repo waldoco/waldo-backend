@@ -52,6 +52,13 @@ function ProactiveSurfaceSetting({ surface, busy, onAction }: { surface: Proacti
   </div></details>;
 }
 
+// One tap either way. What the owner asks Waldo to remember is kept whatever this says.
+function HealthMemorySetting({ on, busy, onAction }: { on: boolean } & ActionProps) {
+  return <details name="day-settings" className="disclosure"><summary><Icon name="memory"/><span className="label key">Health notes</span><span className="value">{on ? 'On' : 'Off'}</span></summary><div className="disclosure-body"><p>When older chat leaves Waldo’s view, and each night, Waldo keeps what you said that stays true. With this on, that includes how you say you feel and what tends to affect it, in words, never numbers. Each health note it keeps is named in its next reply to you.</p>
+    <button className="primary" disabled={busy} onClick={() => onAction('health_memory.set', { value: on ? 'off' : 'on' })}>{on ? 'Turn off health notes' : 'Turn on health notes'}</button>
+  </div></details>;
+}
+
 export function DayControls({ record, busy, onAction }: { record: DayRecord } & ActionProps) {
   const [timezone, setTimezone] = useState(record.data.timezone);
   const [quietStart, setQuietStart] = useState(record.data.proactivity.quiet_start ?? '');
@@ -85,6 +92,7 @@ export function DayControls({ record, busy, onAction }: { record: DayRecord } & 
       </form>
     </div></details>
     {record.data.proactive_surface && <ProactiveSurfaceSetting surface={record.data.proactive_surface} busy={busy} onAction={onAction}/>}
+    {record.data.health_memory !== undefined && <HealthMemorySetting on={record.data.health_memory} busy={busy} onAction={onAction}/>}
     </div>
     <p className="caption">These cards run in chat. Their content and verified Close results aren’t shown here.</p>
   </>;

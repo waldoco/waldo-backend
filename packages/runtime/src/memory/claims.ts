@@ -1,3 +1,4 @@
+import { numericHealthIn } from '../scribe/sanitiser';
 type Sql = Pick<SqlStorage, 'exec'>;
 import { carriesTopic, hidesTopic } from './forget-guard';
 import type { ForgetSource, ForgetBatch, ForgetHeldBy } from './selective-forget';
@@ -1040,6 +1041,16 @@ export const NIGHTLY_MEMORY_INSTRUCTION = [
   ...PIN_RULES,
 ].join('\n');
 
+// Older conversation is about to leave Waldo's view (compaction): what the owner said there that should stay true is saved
+// now, rather than waiting for the night. Nothing is forgotten or pinned from here.
+export const FLUSH_INSTRUCTION = [
+  'The earlier part of this conversation between the owner and Waldo is about to leave Waldo\'s view. Save what the owner said in it that should stay true and is not already a claim, so it is not lost.',
+  'Mark claims it repeated as seen. dismiss stays empty.',
+  ...CLAIM_RULES,
+  'Health notes are qualitative patterns in the owner\'s words: how they feel, what tends to help or hurt their sleep, energy or mood. Never a number, score or measurement.',
+  'forget_claims, forget_nodes, pin and unpin stay empty, and forget_topic is null.',
+].join('\n');
+
 export const MIGRATION_INSTRUCTION = [
   'Waldo is moving its memory from four notes files into claims. Split the files into claims, one fact per claim.',
   'MEMORY_CORE, MEMORY_GOALS and MEMORY_FOLLOWUPS were written from the owner\'s own words: mark those stated. intelligence-summary is Waldo\'s inference: mark those inferred.',
@@ -1079,6 +1090,15 @@ const pinnedUsage = (store: ClaimStore): string => {
 
 export const nightlyInput = (store: ClaimStore, day: string): string =>
   [memoryPrompt(store), barrierPrompt(store), pinnedUsage(store), `The last day of conversation:\n<conversation>\n${fence(day)}\n</conversation>`].join('\n\n');
+export const flushInput = (store: ClaimStore, span: string): string =>
+  [memoryPrompt(store), barrierPrompt(store), `The conversation leaving Waldo's view:\n<conversation>\n${fence(span)}\n</conversation>`].join('\n\n');
+
+// The owner turned health notes off for memory Waldo writes on its own: health claims and corrections to them are dropped
+// before admission, so none is written or held.
+export const withoutHealthClaims = (raw: string): string => {
+  const ops = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as ClaimOps;
+  return JSON.stringify({ ...ops, add: ops.add.filter((claim) => claim.kind !== 'health'), corrections: (ops.corrections ?? []).filter((item) => item.kind !== 'health') });
+};
 
 // Slice 4 admission gate: candidate claims are grounded against the exchange sections before
 // admission. 'stated' must ground in the owner's own words; evidence that only matches Waldo's
@@ -1154,6 +1174,14 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     store.recordHold(claim.kind, 'forgotten', claim.text, at);
     holdReasons.add('forgotten');
   }
+  // Memory keeps how the owner is, never a measurement: a claim whose text, evidence or aliases carry a numeric health
+  // value is held whatever its kind, because evidence and aliases are stored beside the text.
+  const numeric = (...texts: readonly (string | undefined)[]) => texts.some((text) => typeof text === 'string' && numericHealthIn(text));
+  for (const claim of ops.add.filter((candidate) => !held.includes(candidate) && numeric(candidate.text, candidate.evidence, ...(candidate.aliases ?? [])))) {
+    store.recordHold(claim.kind, 'numeric-health', claim.text, at);
+    holdReasons.add('numeric-health');
+    held.push(claim);
+  }
   // Explicit corrections are applied first. A correction is all-or-nothing at the admission gate: one owner-quoted
   // replacement with a live old id, never an agent paraphrase or a forwarded statement. Like remember, it names the one
   // owner message its quote sits in: that message is its source ref, and without one the correction is held.
@@ -1167,6 +1195,13 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     if (!known.has(correction.old_id) || corrected.has(correction.old_id) ||
       (forgetsAllowed && ops.forget_claims.includes(correction.old_id)) ||
       !CLAIM_KINDS.includes(correction.kind as never) || !correction.text.trim()) continue;
+    if (numeric(correction.text, correction.evidence)) {
+      store.recordHold(correction.kind, 'numeric-health', correction.text, at);
+      holdReasons.add('numeric-health');
+      heldCorrections += 1;
+      replacements.set(normalizeForGrounding(correction.text), 'held');
+      continue;
+    }
     const ref = grounding && ground(correction.evidence, grounding) === 'owner' ? ownerSourceRef(correction.evidence, grounding) ?? ownerTurnRef(evidence) : undefined;
     // From here the owner asked for a change and Waldo is not making it. That is recorded as a hold with a
     // closed reason, so the reply can say the memory was not updated instead of the skip being silent.

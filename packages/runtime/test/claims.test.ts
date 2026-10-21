@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { applyClaimOps, applyPromotion, claimStore, memoryPrompt, turnMemoryPrompt, nightlyInput, profile , FORGOTTEN, textFingerprint } from '../src/memory/claims';
+import { applyClaimOps, applyPromotion, claimStore, withoutHealthClaims, memoryPrompt, turnMemoryPrompt, nightlyInput, profile , FORGOTTEN, textFingerprint } from '../src/memory/claims';
 import { backupAndCopySpots, LEGACY_BACKUP, markCoreFilesMigrated, pendingCoreFiles } from '../src/memory/migration';
 import { CLAIM_OPS_SCHEMA, FACTS_BLOCK_MAX_CHARS, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, PROFILE_BLOCK_MAX_CHARS } from '../src/memory/claims';
 import { createOwnerResponder } from '../src/channels/owner-turn';
@@ -857,5 +857,58 @@ describe('pinned blocks', () => {
       expect((await responder.consolidate('night-2', 'a synthetic day')).detail).toMatch(/ unpinned1\b/);
       expect(pins()).toEqual([[short, 'facts', 1]]);
     });
+  });
+});
+
+// Memory keeps how the owner is, in words: a measurement never reaches a claim, whichever field would carry it.
+it('holds a claim or correction carrying a numeric health value, and admits the qualitative note beside it', async () => {
+  await withSql((sql) => {
+    const store = claimStore(sql);
+    store.add({ kind: 'routine', text: 'Runs on weekday mornings', source: 'stated', evidence: '"I run on weekday mornings"', origin: 'owner', source_ref: 'owner, fixture-1' }, AT, 1);
+    const owner = 'I sleep badly after late coffee. My resting heart rate was 52 this morning. I run on weekday evenings now';
+    const detail = applyClaimOps(store, ops({
+      add: [
+        { kind: 'health', text: 'Sleeps badly after late coffee', source: 'stated', evidence: 'I sleep badly after late coffee', touches_forgotten: false },
+        { kind: 'health', text: 'Resting heart rate was 52', source: 'stated', evidence: 'My resting heart rate was 52 this morning', touches_forgotten: false },
+        { kind: 'health', text: 'Checks in on mornings', source: 'stated', evidence: 'My resting heart rate was 52 this morning', touches_forgotten: false },
+        { kind: 'health', text: 'Notices low mornings', source: 'inferred', evidence: 'low mornings', aliases: ['heart rate 52'], touches_forgotten: false },
+      ],
+      corrections: [{ old_id: 1, kind: 'routine', text: 'Runs at heart rate 150 in the evenings', evidence: 'I run on weekday evenings now' }],
+    }), AT, 'owner agreed', undefined, { owner });
+    expect(store.claims().map((claim) => claim.text).sort()).toEqual(['Runs on weekday mornings', 'Sleeps badly after late coffee']);
+    expect(detail).toContain('numeric-health');
+    expect(store.holds().filter((hold) => hold.reason === 'numeric-health')).toHaveLength(4);
+  });
+});
+
+it('drops health claims and corrections to health when the owner has health notes off, and keeps the rest', () => {
+  const raw = ops({
+    add: [
+      { kind: 'health', text: 'Sleeps badly after late coffee', source: 'stated', evidence: 'late coffee', touches_forgotten: false },
+      { kind: 'preference', text: 'Wants calm evenings', source: 'stated', evidence: 'calm evenings', touches_forgotten: false },
+    ],
+    corrections: [{ old_id: 1, kind: 'health', text: 'Sleeps well now', evidence: 'sleep well' }, { old_id: 2, kind: 'routine', text: 'Runs at 7', evidence: 'run at 7' }],
+  });
+  const kept = JSON.parse(withoutHealthClaims(raw)) as { add: { kind: string }[]; corrections: { kind: string }[]; seen: unknown[] };
+  expect(kept.add.map((claim) => claim.kind)).toEqual(['preference']);
+  expect(kept.corrections.map((item) => item.kind)).toEqual(['routine']);
+  expect(kept.seen).toEqual([]);
+});
+
+// The nightly pass keeps health notes under the same owner setting as the flush.
+it('the nightly pass keeps no health note when the owner has health notes off, and keeps the rest', async () => {
+  await withSql(async (sql) => {
+    const store = claimStore(sql);
+    const day = 'owner: I sleep badly after late coffee. Please keep my evenings calm.';
+    const reply = ops({ add: [
+      { kind: 'health', text: 'Sleeps badly after late coffee', source: 'stated', evidence: 'I sleep badly after late coffee', touches_forgotten: false },
+      { kind: 'preference', text: 'Wants calm evenings', source: 'stated', evidence: 'Please keep my evenings calm', touches_forgotten: false },
+    ] });
+    const gateway: LLMGatewayAdapter = { complete: async (request) => ({ ok: true, data: { model: request.request.model, text: reply, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } }) };
+    const responder = createOwnerResponder('fixture', undefined, store, undefined, undefined, [], undefined, false, undefined, undefined, gateway);
+    await responder.consolidate('night-off', day, { owner: day, shared: '', waldo: '', ownerMessages: [] }, { health: false });
+    expect(store.claims().map((claim) => claim.kind)).toEqual(['preference']);
+    await responder.consolidate('night-on', day, { owner: day, shared: '', waldo: '', ownerMessages: [] }, { health: true });
+    expect(store.claims().filter((claim) => claim.kind === 'health').map((claim) => claim.text)).toEqual(['Sleeps badly after late coffee']);
   });
 });

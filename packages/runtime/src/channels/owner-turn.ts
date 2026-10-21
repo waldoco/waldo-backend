@@ -28,7 +28,7 @@ import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
 import { localTrustedBriefScheduleInput, localTrustedBriefTurnSnapshot, resolveRunLoopAdapters, type LocalSystemSkillBinding } from '../llm/run-loop-adapters';
 import type { ContextHealthMaterial } from '../context-composer/types';
 import { JoinedConversationPath } from '../conversation/joined-path';
-import { COMPACTION, COMPACTION_INSTRUCTION, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, supersededCompaction, type CompactedStats, type CompactionFlush } from '../conversation/compaction';
+import { COMPACTION, COMPACTION_INSTRUCTION, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, supersededCompaction, type CompactedStats, type CompactionFlush, type SpanMemory } from '../conversation/compaction';
 import { numericHealthIn } from '../scribe/sanitiser';
 import { MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
@@ -40,7 +40,7 @@ import { eligibleHandlers } from '../tools/eligibility';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
 import { fitPromptToBudget } from '../prompt/fit-prompt';
-import { FORGOTTEN, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, type ClaimStore } from '../memory/claims';
+import { FORGOTTEN, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, FLUSH_INSTRUCTION, flushInput, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, withoutHealthClaims, type ClaimStore } from '../memory/claims';
 import { episodesFromSearchTool, previousOwnerMessage, RECALL_MAX_CHARS, recallForTurn } from '../memory/turn-recall';
 import type { ConversationStore } from './conversation-store';
 import { reactionInstruction, reactionSchema } from './reactions';
@@ -97,10 +97,12 @@ export type OwnerJobHost = Readonly<{ admit(): Promise<OwnerMessageAdmission | u
 // ownerProfile: the host-framed line about who the owner is. An admitted job composes it into its owner context; a turn
 // without a composed owner context reads it directly.
 // watchStatus: the host fact about Google pushes that are not running, for the owner's own turns ('' when all run).
-export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; compactionFlush?: CompactionFlush; spend?: () => OwnerSpend }>;
+// memoryNotice: a line the next owner reply carries about memory Waldo saved on its own since the owner last heard; taking
+// it clears it.
+export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => string | null; spend?: () => OwnerSpend }>;
 // This owner's spend so far this month and the ceiling it is held to, read once when a turn starts.
 export type OwnerSpend = Readonly<{ spentUsd: number; ceilingUsd: number }>;
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; compactionFlush?: CompactionFlush; spend?: () => OwnerSpend }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => string | null; spend?: () => OwnerSpend }>;
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 // The typed failure on a tool hop: the ToolError code when the tool returned one, else the loop's coarse code.
@@ -763,7 +765,8 @@ export const createOwnerResponder = (
       const reply = tree.get(publication.leafId)!.appPayload;
       // Native delivery reads durable history, so the visible effect receipt belongs in that row, as text and typed.
       const receipt = fromOwner ? await turnReceipt(turnToolEvents) : null;
-      const out = receipt ? `${reply}\n\n${receipt.line}` : reply;
+      const notice = fromOwner ? privateOwner?.memoryNotice?.() ?? null : null;
+      const out = [reply, receipt?.line, notice].filter(Boolean).join('\n\n');
       const redact = literalTextRedactor([...removedTopics], FORGOTTEN);
       const savedEntries = [...(inputStored ? [] : [tree.get(id)!]), { ...tree.get(publication.leafId)!, ...(context ? { appPayload: out, ...(receipt ? { receipt } : {}) } : {}) }].map(entry => redactConversationEntry(entry, redact));
       await conversationStore?.save(savedEntries, publication.leafId, privateRunScope);
@@ -783,6 +786,19 @@ export const createOwnerResponder = (
       catch (flush) { if (!(flush instanceof ClosedRunError)) throw flush; }
       throw error;
     } finally { activeOwnerTurn = undefined; }
+  };
+  // What the owner said in conversation about to leave the window, kept as memory first: the same admission gate as the
+  // nightly pass, in this turn's scope, never forgetting or pinning. Returns the claims it wrote.
+  const saveFromSpan: SpanMemory['save'] = async (span, sides, policy) => {
+    if (!memory || probeGuard?.suppressMemory) return [];
+    const before = new Set(memory.allClaims().map(claim => claim.id));
+    const started = Date.now();
+    const raw = await ask(traceId, 'memory_flush', FLUSH_INSTRUCTION, flushInput(promptMemory()!, span), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+    await assertFresh();
+    privateRunScope?.admit();
+    const detail = applyClaimOps(memory, policy.health ? raw : withoutHealthClaims(raw), new Date().toISOString(), `owner, day of ${traceId}`, undefined, sides, false, undefined, false);
+    log({ trace: traceId, hop: 'memory_flush', ms: Date.now() - started, ok: true, detail });
+    return memory.allClaims().filter(claim => !before.has(claim.id)).map(claim => ({ id: claim.id, kind: claim.kind }));
   };
   // A scoped turn runs in its own responder (below); its compaction runs there too, after the reply is delivered.
   let scopedCompaction: ((conversationRef: string) => Promise<void>) | undefined;
@@ -805,7 +821,7 @@ export const createOwnerResponder = (
       if (!plan || tree.get(compactionId(plan.covers.to_id))) return;
       // The memory flush sees the span before the summary takes its place; until it has run, the span stays in the window.
       if (privateOwner?.compactionFlush) {
-        try { await privateOwner.compactionFlush({ conversationRef: ref, covers: plan.covers, messages: plan.input }); }
+        try { await privateOwner.compactionFlush({ conversationRef: ref, covers: plan.covers, messages: plan.input, entryIds: plan.entryIds }, { save: saveFromSpan }); }
         catch (error) { if (error instanceof ClosedRunError) throw error; hop(false, 'flush_failed'); return; }
         privateRunScope?.admit();
       }
@@ -835,7 +851,7 @@ export const createOwnerResponder = (
         const capturedTurn = { ...turn, memoryWrites };
         const preparedContext = privateOwner?.contextHost ? await privateOwner.contextHost.prepare(capturedTurn, turn.runScope) : undefined;
         const preparedSkills = privateOwner?.skillHost ? await privateOwner.skillHost.prepare(capturedTurn, preparedContext?.invocation.verified_authority.principal_ref ?? ownerId, turn.runScope) : undefined;
-        const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}), ...(privateOwner?.watchStatus ? { watchStatus: privateOwner.watchStatus } : {}), ...(privateOwner?.compactionFlush ? { compactionFlush: privateOwner.compactionFlush } : {}), ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}) });
+        const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}), ...(privateOwner?.watchStatus ? { watchStatus: privateOwner.watchStatus } : {}), ...(privateOwner?.compactionFlush ? { compactionFlush: privateOwner.compactionFlush } : {}), ...(privateOwner?.memoryNotice ? { memoryNotice: privateOwner.memoryNotice } : {}), ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}) });
         control.route(scoped.control);
         scopedCompaction = scoped.compactIfDue;
         try { return await scoped.respond(capturedTurn, time); }
@@ -907,14 +923,14 @@ export const createOwnerResponder = (
         return await converse(id, conversationRef, said, time, false, surface, toolNames);
       } finally { backgroundCurrent = undefined; transientDecision = false; promptContext = ''; backgroundSourceTaint = null; }
     },
-    async consolidate(trace, day, sides) {
-      const asOwner = await asOwnerJob(trace, job => job.consolidate(trace, day, sides));
+    async consolidate(trace, day, sides, policy) {
+      const asOwner = await asOwnerJob(trace, job => job.consolidate(trace, day, sides, policy));
       if (asOwner !== undefined) return asOwner;
       if (!memory) return { done: true, detail: 'no memory' };
       const raw = await ask(trace, 'nightly_memory', NIGHTLY_MEMORY_INSTRUCTION, nightlyInput(promptMemory()!, day), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
       // The nightly pass is where the pinned blocks are curated.
-      return { done: true, detail: applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`, undefined, sides ?? { owner: day }, false, undefined, true) };
+      return { done: true, detail: applyClaimOps(memory, policy?.health === false ? withoutHealthClaims(raw) : raw, new Date().toISOString(), `owner, day of ${trace}`, undefined, sides ?? { owner: day }, false, undefined, true) };
     },
     threadTitle: (trace, exchange, scope) => withCallDeadline(scope, scope.deadline, () => ask(trace, 'thread_title', THREAD_TITLE_INSTRUCTION, exchange, THREAD_TITLE_FORMAT, undefined, undefined, undefined, auxiliaryModel, scope)),
     async migrate(trace, input) {

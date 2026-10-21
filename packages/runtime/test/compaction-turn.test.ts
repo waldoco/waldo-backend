@@ -5,11 +5,12 @@ import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { canonicalOwnerConversationStore } from '../src/conversation/canonical-owner-store';
 import { COMPACTION, COMPACTION_INSTRUCTION, COMPACTION_SUPERSEDED_MARKER, type CompactionFlush, type CompactionSpan } from '../src/conversation/compaction';
 import { compactionSummaryOpen } from '@waldo/contracts';
+import { claimStore, FLUSH_INSTRUCTION } from '../src/memory/claims';
 
-const fake = vi.hoisted(() => ({ summary: 'The owner prefers tea and wants quiet mornings.', bodies: [] as Array<{ instructions?: string; input?: unknown }> }));
+const fake = vi.hoisted(() => ({ summary: 'The owner prefers tea and wants quiet mornings.', flushOps: '', bodies: [] as Array<{ instructions?: string; input?: unknown }> }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: { instructions?: string; input?: unknown }) => {
   fake.bodies.push(body);
-  const text = body.instructions?.startsWith(COMPACTION_INSTRUCTION.slice(0, 40)) ? fake.summary : 'Noted.';
+  const text = body.instructions?.startsWith(COMPACTION_INSTRUCTION.slice(0, 40)) ? fake.summary : body.instructions === FLUSH_INSTRUCTION ? fake.flushOps : 'Noted.';
   return { id: 'fixture', output_text: text, output: [], usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
 } }; } }));
 const { createOwnerResponder } = await import('../src/channels/owner-turn');
@@ -206,6 +207,77 @@ describe('the memory flush seam', () => {
       await responder.compactIfDue!('owner');
       expect(flushes).toBe(2);
       expect([...storage.data.values()].some(value => (value as { role?: string })?.role === 'compaction')).toBe(true);
+    });
+  });
+});
+
+describe('what the flush keeps', () => {
+  const OWNER = 'I sleep badly after late coffee. Please keep my evenings calm.';
+  const flushOps = JSON.stringify({
+    add: [
+      { kind: 'health', text: 'Sleeps badly after late coffee', source: 'stated', evidence: 'I sleep badly after late coffee', touches_forgotten: false, aliases: [], aliases_touch_forgotten: false },
+      { kind: 'preference', text: 'Wants calm evenings', source: 'stated', evidence: 'Please keep my evenings calm', touches_forgotten: false, aliases: [], aliases_touch_forgotten: false },
+    ],
+    corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [1], forget_nodes: [], forget_topic: 'tea', pin: [{ id: 1, block: 'owner_profile', order: 1 }], unpin: [],
+  });
+  type Kept = Readonly<{ saved: (readonly Readonly<{ id: number; kind: string }>[])[]; memory: ReturnType<typeof claimStore>; logs: TurnLogEntry[] }>;
+  const keepWith = async (name: string, health: boolean, inspect: (kept: Kept) => void) => {
+    Object.assign(COMPACTION, { enabled: true, budgetTokens: 160, minOwnerRows: 2, minIntervalMs: 0 });
+    fake.flushOps = flushOps;
+    const storage = memoryStorage();
+    const logs: TurnLogEntry[] = [];
+    return runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+      const memory = claimStore(state.storage.sql);
+      memory.add({ kind: 'preference', text: 'Prefers tea', source: 'stated', evidence: '"Prefers tea"', origin: 'owner', source_ref: 'owner, fixture-1' }, '2026-10-20T08:00:00Z', 1);
+      const saved: (readonly Readonly<{ id: number; kind: string }>[])[] = [];
+      const store = canonicalOwnerConversationStore(storage, { invocation: localTrustedBriefScheduleInput().admission as never, assertCurrent: async () => undefined });
+      const args: Parameters<typeof createOwnerResponder> = ['fixture', store, memory];
+      args[3] = entry => logs.push(entry);
+      args[21] = { compactionFlush: async (_span, keep) => { saved.push(await keep.save(`owner: ${OWNER}`, { owner: OWNER }, { health })); } };
+      const responder = createOwnerResponder(...args);
+      for (let n = 1; n <= 6; n += 1) await responder.respond(ownerTyped({ traceId: `app-${n}`, conversationRef: 'owner', surface: 'app', text: question(n), memoryWrites: false }), (_name, work) => work());
+      await responder.compactIfDue!('owner');
+      inspect({ saved, memory, logs });
+    });
+  };
+
+  it('writes what the owner said through the admission gate, and never forgets or pins from there', async () => {
+    await keepWith('flush-keeps', true, ({ saved, memory, logs }) => {
+      expect(saved).toHaveLength(1);
+      expect(saved[0]!.map((claim) => claim.kind).sort()).toEqual(['health', 'preference']);
+      expect(memory.claims().map((claim) => [claim.text, claim.origin, claim.source]).sort()).toEqual([
+        ['Prefers tea', 'owner', 'stated'], ['Sleeps badly after late coffee', 'owner', 'stated'], ['Wants calm evenings', 'owner', 'stated'],
+      ]);
+      expect(memory.barriers()).toEqual([]);
+      expect(memory.claims().every((claim) => claim.pinned === null)).toBe(true);
+      expect(fake.bodies.some((body) => body.instructions === FLUSH_INSTRUCTION)).toBe(true);
+      expect(logs.find((entry) => entry.hop === 'memory_flush')).toMatchObject({ ok: true });
+    });
+  });
+
+  it('keeps no health note when the owner has health notes off', async () => {
+    await keepWith('flush-no-health', false, ({ saved, memory }) => {
+      expect(saved[0]!.map((claim) => claim.kind)).toEqual(['preference']);
+      expect(memory.claims().some((claim) => claim.kind === 'health')).toBe(false);
+    });
+  });
+});
+
+describe('the memory notice', () => {
+  it('rides the owner\'s next reply after its receipts, once, and never a machine turn\'s', async () => {
+    const storage = memoryStorage();
+    const notices = ['Saved to memory from our earlier chat: "Sleeps badly after late coffee" (c1).'];
+    await inOwner('memory-notice', async () => {
+      const store = canonicalOwnerConversationStore(storage, { invocation: localTrustedBriefScheduleInput().admission as never, assertCurrent: async () => undefined });
+      const args: Parameters<typeof createOwnerResponder> = ['fixture', store];
+      args[21] = { memoryNotice: () => notices.shift() ?? null };
+      const responder = createOwnerResponder(...args);
+      const job = await responder.prompt('job-1', 'owner', '[Reminder] stretch', (_name, work) => work());
+      expect(job).not.toContain('Saved to memory');
+      const first = await responder.respond(ownerTyped({ traceId: 'app-1', conversationRef: 'owner', surface: 'app', text: 'hello' }), (_name, work) => work());
+      expect(first).toBe('Noted.\n\nSaved to memory from our earlier chat: "Sleeps badly after late coffee" (c1).');
+      const second = await responder.respond(ownerTyped({ traceId: 'app-2', conversationRef: 'owner', surface: 'app', text: 'and now?' }), (_name, work) => work());
+      expect(second).toBe('Noted.');
     });
   });
 });
