@@ -33,7 +33,9 @@ import { numericHealthIn } from '../scribe/sanitiser';
 import { MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
 import { InMemoryCircuitBreaker, observedBreaker, RuntimeLLMProvider, type LLMGatewayAdapter, type RouteSpendState } from '../llm/provider';
-import { messagingSystemPrompt, ownerClockLine, unconnectedLine, withOwnerSkillProcedures } from '../prompt/messaging-behavior';
+import { messagingSystemPrompt, ownerClockLine, unconnectedLine } from '../prompt/messaging-behavior';
+import { assembleTurnPrompt } from '../prompt/turn-prompt';
+import { brainTools } from '../tools/records';
 import { eligibleHandlers } from '../tools/eligibility';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
@@ -109,7 +111,7 @@ const toolErrorCode = (event: ToolLoopEvent): { error_code?: string } => {
 // Tool definitions are JSON: about four UTF-8 bytes per token on current tokenizers, close enough to compare rounds.
 const BYTES_PER_TOKEN_EST = 4;
 // The reply's system prompt with the byte size of each joined section, so a trace shows what fills it.
-type SystemPrompt = Readonly<{ text: string; sections: Readonly<Partial<Record<SystemSection, number>>> }>;
+type SystemPrompt = Readonly<{ text: string; sections: Readonly<Partial<Record<SystemSection, number>>>; contextSections?: Readonly<Partial<Record<SystemSection, number>>> }>;
 
 export const createOwnerResponder = (
   modelAccess: string | OwnerModelAccess,
@@ -287,7 +289,7 @@ export const createOwnerResponder = (
           system, messages: userMessages.map(({ attachments: _names, ...message }) => message), max_tokens: OUTPUT_TOKENS[step.model] ?? step.max_tokens ?? 4_096, temperature: 0.2,
           ...(effort ? { reasoning_effort: effort } : {}),
           ...(format ? { response_format: format } : {}), ...(attachments ? { attachments: [...attachments] } : {}),
-          ...(tools ? { tools: [...tools] } : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),
+          ...(tools ? brainTools(tools, access.toolSearch === true && purpose === 'reply') : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),
           ...(tools && ownerTurnActive && purpose === 'reply' ? { web_search: searchLocation(clock.timezone) } : {}),
         };
       },
@@ -304,7 +306,7 @@ export const createOwnerResponder = (
         tool_turns_bytes: turns?.length ? utf8Bytes(JSON.stringify(turns)) : 0,
         history_messages: Math.max(0, userMessages.length - 1), history_bytes: utf8Bytes(JSON.stringify(userMessages.slice(0, -1))),
         current_bytes: utf8Bytes(userMessages.at(-1)?.content ?? ''), attachments: attachments?.length ?? 0,
-        ...(typeof systemPrompt === 'string' ? {} : { system_sections: systemPrompt.sections }),
+        ...(typeof systemPrompt === 'string' ? {} : { system_sections: systemPrompt.sections, ...(systemPrompt.contextSections ? { context_sections: systemPrompt.contextSections } : {}) }),
       },
     };
     const response = result.ok ? result.response : undefined;
@@ -530,6 +532,7 @@ export const createOwnerResponder = (
       let withheldLogged = false;
       return runToolLoop({
         handlers: turnHandlers,
+        ...(access.toolSearch ? { stableMenu: true } : {}),
         budget: turnBudget,
         ...(offloadStore === undefined ? {} : { offload: offloadStore }),
         maxSteps: turnRounds,
@@ -560,7 +563,7 @@ export const createOwnerResponder = (
           // A committed receipt authenticates identity, not user/provider-authored path text.
           // Keep the external fragment gate before joining metadata to trusted instructions.
           // Externally authored path text never joins the system prompt; receipts that pass the gate travel as fenced external data in the owner turn.
-          let guardedTaskContext = rawTaskContext ? 'Recent workspace metadata was withheld by the context safety gate from these instructions; receipts that passed the gate follow as external data in the owner turn, if any. Do not infer a saved-file target or substitute a Drive target.' : '';
+          let guardedTaskContext = rawTaskContext ? 'Recent workspace metadata was withheld by the context safety gate from this context; receipts that passed the gate follow as external data on this message, if any. Do not infer a saved-file target or substitute a Drive target.' : '';
           // External data joins the owner turn only when the safety gate admits it unchanged, session canaries included.
           const admitsExternal = async (payload: string): Promise<boolean> => {
             const sanitise = adapters.safety.sanitise;
@@ -600,43 +603,35 @@ export const createOwnerResponder = (
           // A composed owner context carries this line in its identity; a turn or job without one (no directory) reads it here.
           const ownerProfileLine = context ? undefined : (await privateOwner?.ownerProfile?.()) ?? undefined;
           await assertCurrent();
-          const unboundSystem = (): SystemPrompt => {
-            const wrapped = skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined);
-            const reasons = composed?.ok ? composed.prompt : undefined;
-            const behavior = messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation);
-            // The composer admitted the owner's shared health for this turn. REASONS already carries it when present.
-            const healthPrompt = reasons === undefined ? request.composition.healthPrompt : undefined;
-            const healthSection = healthPrompt ? `Shared health today (derived by the app from the owner's own wearable data):\n${healthPrompt}` : undefined;
-            // REASONS stages no tool results of its own, so it says there are none; point at the ones the owner turn carries.
-            const toolResultsNote = reasons !== undefined && toolResultsShown ? "Earlier turns' tool results follow as external data in the owner turn, not in the recent-tool-results section above." : undefined;
-            const clockLine = turnClockLine ??= ownerClockLine(clock);
-            // Stable head (behavior, catalog, orders, loops), then the procedure, then the per-turn tail; REASONS opens with the owner's text.
-            const headWith = (loops = '') => [behavior, skillMetadata, ordersSection, loops].filter(Boolean).join('\n\n');
-            const tailWith = (memoryPart: readonly string[]) => [...memoryPart, reasons, toolResultsNote, healthSection, ownerProfileLine, clockLine, taskContext, connections].filter(Boolean).join('\n\n');
-            // Owner memory takes its room first; open loops get what the same reserve leaves, and the section names what it left out.
-            const room = systemRoom(withOwnerSkillProcedures(headWith(), wrapped, tailWith([])));
-            const memoryPart = memory ? [turnMemoryPrompt(promptMemory()!, ownerCurrentText, room)] : [];
-            const loopsSection = loopsSectionFor(Math.max(0, systemRoom(withOwnerSkillProcedures(headWith(), wrapped, tailWith(memoryPart)))));
-            const head = headWith(loopsSection);
-            const tail = tailWith(memoryPart);
-            const joined = `${head}\n\n${tail}`;
-            const text = withOwnerSkillProcedures(head, wrapped, tail);
-            const sections: Partial<Record<SystemSection, number>> = {
-              ...(reasons ? { reasons: utf8Bytes(reasons) } : {}), ...(toolResultsNote ? { tool_results: utf8Bytes(toolResultsNote) } : {}), behavior: utf8Bytes(behavior),
-              ...(healthSection ? { health: utf8Bytes(healthSection) } : {}), ...(ownerProfileLine ? { owner_profile: utf8Bytes(ownerProfileLine) } : {}), clock: utf8Bytes(clockLine),
-              ...(memoryPart.length ? { memory: utf8Bytes(memoryPart[0]!) } : {}), ...(ordersSection ? { orders: utf8Bytes(ordersSection) } : {}),
-              ...(loopsSection ? { loops: utf8Bytes(loopsSection) } : {}), ...(skillMetadata ? { skill_catalog: utf8Bytes(skillMetadata) } : {}),
-              ...(taskContext ? { task_context: utf8Bytes(taskContext) } : {}), ...(connections ? { connections: utf8Bytes(connections) } : {}),
-              skill_procedures: utf8Bytes(text) - utf8Bytes(joined),
-            };
-            return { text, sections };
-          };
+          const reasons = composed?.ok ? composed : undefined;
+          // The composer admitted the owner's shared health for this turn. REASONS already carries it when present.
+          const healthPrompt = reasons === undefined ? request.composition.healthPrompt : undefined;
+          const turnPrompt = assembleTurnPrompt({
+            instructions: {
+              behavior: messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation, access.toolSearch === true),
+              skillCatalog: skillMetadata, orders: ordersSection, reasons: reasons?.instructions,
+              procedure: skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined),
+            },
+            facts: {
+              clock: turnClockLine ??= ownerClockLine(clock),
+              // The owner's message is the composer's staged input, so only its operations material joins it.
+              reasons: reasons?.operations,
+              // REASONS stages no tool results of its own, so it says there are none; point at the ones the owner turn carries.
+              toolResultsNote: reasons !== undefined && toolResultsShown ? "Earlier turns' tool results follow as external data on this message, not in the recent-tool-results section." : undefined,
+              health: healthPrompt ? `Shared health today (derived by the app from the owner's own wearable data):\n${healthPrompt}` : undefined,
+              ownerProfile: ownerProfileLine, taskContext, connections,
+            },
+            ...(memory ? { memory: (room: number) => turnMemoryPrompt(promptMemory()!, ownerCurrentText, room) } : {}),
+            loops: loopsSectionFor,
+            room: systemRoom,
+          });
+          entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: `${entries[entries.length - 1]!.content}\n\n${turnPrompt.turnContext}` };
           const browserImages = privateOwner?.skillHost?.browserAttachments?.(privateRunScope) ?? [];
           const attachments = [...(pending ?? []), ...browserImages];
           // The reply step serves machine turns too (reminders, jobs, cards, briefs); only the owner's own turn, and a late answer
           // to it, gets the chat model.
           return complete(trace, 'reply',
-          unboundSystem(),
+          { text: turnPrompt.system, sections: turnPrompt.sections, contextSections: turnPrompt.contextSections },
           entries,
           undefined,
           attachments.length ? attachments : undefined,

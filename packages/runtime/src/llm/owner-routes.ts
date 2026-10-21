@@ -24,7 +24,9 @@ import { routedGateway, type CircuitBreaker, type LLMGatewayAdapter } from './pr
 // 'external' when the turn carried such words, so a retry of it runs under the same taint.
 export type FloorTurn = Readonly<{ traceId: string; conversationRef: string; surface: string; text: string; taint: 'external' | null; messageRef?: string; receivedAt: number }>;
 export type FloorPromise = Readonly<{ promise(turn: FloorTurn): string }>;
-export type OwnerModelAccess = Readonly<{ openaiApiKey: string; anthropicApiKey?: string; floorReply?: boolean | FloorPromise; health?: CircuitBreaker }>;
+// toolSearch: the brain's reply loads core tools up front and the rest through the provider's tool search, with strict
+// schemas where the provider allows them. Off by default until a staging smoke shows both providers take the request.
+export type OwnerModelAccess = Readonly<{ openaiApiKey: string; anthropicApiKey?: string; floorReply?: boolean | FloorPromise; health?: CircuitBreaker; toolSearch?: boolean }>;
 
 export const ownerModelAccess = (access: string | OwnerModelAccess): OwnerModelAccess =>
   typeof access === 'string' ? { openaiApiKey: access } : access;

@@ -25,6 +25,9 @@ export type TelegramWebhookEnv = Readonly<{
   WALDO_RELEASE?: string;
   OPENAI_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;
+  // 'on' loads the brain's core tools up front and the rest through the provider's tool search, with strict OpenAI
+  // schemas; anything else (the default, and every environment until a staging smoke passes) sends every tool up front.
+  WALDO_TOOL_SEARCH?: string;
   SMALLEST_AI_API_KEY?: string;
   BRAVE_SEARCH_API_KEY?: string;
   // A5 artifact bodies; absent in tests/local, bound in wrangler (r2_buckets).
