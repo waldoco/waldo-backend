@@ -33,6 +33,7 @@ type Harness = Readonly<{
   error(status: number, headers?: Record<string, string>): Error;
   // Where the request landed in the provider body.
   toolNames(body: Record<string, unknown>): string[];
+  toolSchema(body: Record<string, unknown>, name: string): unknown;
   replayedCallIds(body: Record<string, unknown>): string[];
   replayedResultIds(body: Record<string, unknown>): string[];
   schema(body: Record<string, unknown>): unknown;
@@ -49,6 +50,7 @@ const openai: Harness = {
   empty: (usage) => ({ id: 'resp_3', status: 'completed', output_text: '', output: [{ type: 'reasoning', summary: [] }], usage: { input_tokens: usage.input, output_tokens: usage.output, input_tokens_details: { cached_tokens: usage.cached } } }),
   error: (status, headers) => new OpenAI.APIError(status, { message: SECRET, type: 'server_error' }, SECRET, new Headers(headers)),
   toolNames: (body) => (body.tools as Array<{ name: string }>).map((tool) => tool.name),
+  toolSchema: (body, name) => (body.tools as Array<{ name: string; parameters: unknown }>).find((tool) => tool.name === name)?.parameters,
   replayedCallIds: (body) => (body.input as Array<{ type?: string; call_id?: string }>).filter((item) => item.type === 'function_call').map((item) => item.call_id!),
   replayedResultIds: (body) => (body.input as Array<{ type?: string; call_id?: string }>).filter((item) => item.type === 'function_call_output').map((item) => item.call_id!),
   schema: (body) => (body.text as { format: { schema: unknown } }).format.schema,
@@ -63,6 +65,7 @@ const anthropic: Harness = {
   empty: (usage) => ({ id: 'msg_3', type: 'message', role: 'assistant', model: ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, stop_reason: 'end_turn', content: [{ type: 'thinking', thinking: '', signature: 'sig' }], usage: { input_tokens: usage.input - usage.cached, output_tokens: usage.output, cache_read_input_tokens: usage.cached, cache_creation_input_tokens: 0 } }),
   error: (status, headers) => Anthropic.APIError.generate(status, { type: 'error', error: { type: 'api_error', message: SECRET } }, SECRET, new Headers(headers)),
   toolNames: (body) => (body.tools as Array<{ name: string }>).map((tool) => tool.name),
+  toolSchema: (body, name) => (body.tools as Array<{ name: string; input_schema: unknown }>).find((tool) => tool.name === name)?.input_schema,
   replayedCallIds: (body) => (body.messages as Array<{ content: Array<{ type: string; id?: string }> | string }>).flatMap((message) => Array.isArray(message.content) ? message.content.filter((block) => block.type === 'tool_use').map((block) => block.id!) : []),
   replayedResultIds: (body) => (body.messages as Array<{ content: Array<{ type: string; tool_use_id?: string }> | string }>).flatMap((message) => Array.isArray(message.content) ? message.content.filter((block) => block.type === 'tool_result').map((block) => block.tool_use_id!) : []),
   schema: (body) => (body.output_config as { format: { schema: unknown } }).format.schema,
@@ -104,6 +107,16 @@ describe.each([
     expect(harness.replayedCallIds(bodies[0]!)).toEqual(['call_1']);
     expect(harness.replayedResultIds(bodies[0]!)).toEqual(['call_1']);
     expect(result).toMatchObject({ ok: true, data: { model: harness.model, tool_calls: [{ call_id: 'call_2', name: 'get_context', arguments: '{"detail":"time"}' }] } });
+  });
+
+  it('sends a tool parameter that takes either an integer or a string (anyOf) unchanged, and returns the string the model chose', async () => {
+    // The memory tools name a claim as `c12` or `12`; both providers accept anyOf in tool parameters.
+    const parameters = { type: 'object', additionalProperties: false, required: ['claim_ids'], properties: { claim_ids: { type: 'array', items: { anyOf: [{ type: 'integer' }, { type: 'string', pattern: '^c?[0-9]+$' }] } } } };
+    const { adapter, bodies } = recorder(harness, harness.toolCall({ id: 'call_3', name: 'forget_memory', args: { claim_ids: ['c12', 13] } }, usage));
+    const base = gatewayRequest(harness.model);
+    const result = await adapter.complete({ ...base, request: { ...base.request, tools: [{ name: 'forget_memory', description: 'Forget claims', parameters }] } });
+    expect(harness.toolSchema(bodies[0]!, 'forget_memory')).toEqual(parameters);
+    expect(result).toMatchObject({ ok: true, data: { tool_calls: [{ call_id: 'call_3', name: 'forget_memory', arguments: '{"claim_ids":["c12",13]}' }] } });
   });
 
   it('asks for the JSON schema the request names and returns the JSON text', async () => {
