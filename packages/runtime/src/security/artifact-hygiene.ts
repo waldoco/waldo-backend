@@ -18,9 +18,36 @@ export type Quarantine = Readonly<{
 
 export const artifactMarker = (kind: ArtifactKind): string => `[quarantined: ${kind} artifact - view in the source app]`;
 
-// A code is digits only: 4-8 plain digits ("123456") or the split form ("123-456"). Alphanumeric
-// order/tracking ids never match.
-const CODE = String.raw`(?:\d{3}-\d{3}|\d{4,8})`;
+// A code is 4-8 digits only. Mail laid out in table cells renders it split by whitespace or a hyphen, in groups of
+// any size. The even splits come first, so they relay exactly; after a keyword, then any split whose first group
+// has at most four digits, joined up to eight; then the plain run. So "1234 5678" is never cut to "1234", and
+// "482913 10" stays "482913". A code ends where no digit follows, so text glued after it ("482913Expires") never
+// hides it. Digits after a keyword, or before "is your … code", are taken as a code whatever they are: catching a
+// code comes before relaying it accurately, so an id or a date there is quarantined too.
+// Extraction first turns each whitespace run into one space or one newline, so a gap is one character. A gap may be
+// a newline, so a code can join digits that start the next row: the code stays hidden and the relay carries them.
+const GAP = String.raw`[ \n]`;
+const SEP = String.raw`(?:-|${GAP})`;
+const EVEN = String.raw`\d{3}${SEP}\d{3}|\d{4}${SEP}\d{4}|\d{2}(?:${GAP}\d{2}){1,3}|\d(?:${GAP}\d){3,7}`;
+const CODE = String.raw`(?<code>${EVEN}|(?=\d{1,4}${SEP}\d)\d(?:${SEP}?\d){3,7}|\d{4,8})(?!\d)`;
+// Before "is your", nothing anchors where a code starts. An uneven split would reach back into digits ending the line
+// before ("$12.99" then "092893 is your code" relayed 99092893), so only even splits and the plain run apply. A split
+// starts at a word boundary, so it never takes digits from a token like "Acme2024"; a plain run may start right
+// after a word ("Hello482913 is your code"). Digits joined by an invisible character are already one run, so
+// "Acme2024\u200b5209" is taken whole.
+const CODE_BEFORE = String.raw`(?<code>\b(?:${EVEN})|\d{4,8})(?!\d)`;
+// Characters that render nothing: the soft hyphen, the combining grapheme joiner, zero-width spaces and joiners,
+// direction marks, embeddings and isolates, the word joiner and invisible operators. They are dropped, so a keyword or
+// a link they split reads whole. Between two digits outside a link they decide how the digits read: a run no longer
+// than a code joins ("45­53­6­6"), so a short code is relayed with digits beside it ("4829​2026"); a longer run
+// is split at them ("482913​2026").
+const INVISIBLE = String.raw`[\u00ad\u034f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069]`;
+// It starts only where a digit run starts: tried from inside a long run, it backtracked quadratically.
+const INVISIBLE_SPLIT_DIGITS = new RegExp(String.raw`(?<!\d)\d+(?:${INVISIBLE}+\d+)+`, 'g');
+const INVISIBLE_ANYWHERE = new RegExp(`${INVISIBLE}+`, 'g');
+const CODE_MAX_DIGITS = 8;
+// The keyword may run straight into the code ("Verification code482913") when its table cell had no separator.
+const KEYWORD_END = String.raw`(?![a-z])`;
 
 // Between a keyword and its code: whitespace, then an optional "is", ":" or "-", then an optional "#", each
 // owning the whitespace after it. Three adjacent optional whitespace runs backtracked cubically on a long run of
@@ -46,17 +73,21 @@ const LINKS: ReadonlyArray<{ kind: Exclude<ArtifactKind, 'otp'>; re: RegExp }> =
   { kind: 'password_reset', re: /^https?:\/\/[^\s"'<>)\]]*(?:\/reset[-_]?password|\/password[-_]?reset|reset[-_]?token=|confirmation[-_]?token=)/i },
 ];
 
+// In this order. Google's SMS/mail prefix form keeps its prefix in the relay; "… is your code" comes before the
+// keyword forms, which would otherwise take its noun and the digits after it ("482913 is your code\n13 10 2026").
 const OTPS: readonly RegExp[] = [
-  // "Your Google verification code is 123456", "login code: 123-456", "security code 123456".
-  // The vendor word before the adjective is bounded: an unbounded run scanned to the end from every word start.
-  new RegExp(String.raw`\b[\w-]{0,40}\s?(?:verification|one[- ]?time|login|log[- ]?in|sign[- ]?in|security|authentication|confirmation|access)\s+(?:code|passcode|pin|otp)\b` + LEAD + CODE + String.raw`\b`, 'gi'),
-  // "code: 123456", "OTP: 123456", "passcode is 123456" - the bare form, no vendor adjective needed.
-  new RegExp(String.raw`\b(?:code|otp|passcode)\b` + BARE_LEAD + CODE + String.raw`\b`, 'gi'),
-  // Google's SMS/mail prefix form runs first: "G-123456 is your Google verification code" would
-  // otherwise lose its prefix to the generic "is your" pattern below before extraction sees it.
   new RegExp(String.raw`\bG-\d{6}\b`, 'g'),
-  // "123456 is your Google verification code", "123-456 is your WhatsApp code".
-  new RegExp(String.raw`\b` + CODE + String.raw`\s+is\s+your\s+(?:[\w-]+\s){0,3}(?:code|passcode|otp)\b`, 'gi'),
+  // "123456 is your Google verification code", "123-456 is your WhatsApp code", "482913is your code". The code may
+  // start right after a word ("Hello482913 is your code"), and the keyword may run into the next word.
+  new RegExp(String.raw`(?<!\d)` + CODE_BEFORE + String.raw`\s*is\s+your\s+(?:[\w-]+\s){0,3}(?:code|passcode|otp)`, 'gi'),
+  // "Your Google verification code is 123456", "login code: 123-456", "security code 123456".
+  // Glue on either side of a word must not hide a code, since a table cell can end right against the next one:
+  // the phrase starts at the adjective, even mid-word ("Xverification pin 123456"), and the noun may follow it
+  // directly ("verificationcode"). Scanning a vendor word before the adjective also cost time on every word start.
+  new RegExp(String.raw`(?:verification|one[- ]?time|login|log[- ]?in|sign[- ]?in|security|authentication|confirmation|access)\s*(?:code|passcode|pin|otp)` + KEYWORD_END + LEAD + CODE, 'gi'),
+  // "code: 123456", "OTP: 123456", "passcode is 123456" - the bare form, no vendor adjective needed. It starts
+  // mid-word too ("Enter thiscode: 482913"), so a postcode or barcode followed by digits is quarantined as well.
+  new RegExp(String.raw`(?:code|otp|passcode)` + KEYWORD_END + BARE_LEAD + CODE, 'gi'),
 ];
 
 // Replace every artifact match with a typed marker. Returns the redacted text plus the distinct
@@ -84,16 +115,28 @@ export const extractArtifacts = (text: string): { text: string; artifacts: reado
     }
     return artifactMarker(kind);
   };
-  // Links relay whole; the first matching kind names the run.
-  let redacted = text.replace(URL_RUN, (url) => {
-    const link = LINKS.find(({ re }) => re.test(url));
-    return link ? take(link.kind, url) : url;
-  });
+  // Invisible characters go first, except between two digits. Links come next and lose the rest of theirs, so a link
+  // is whole before any digits are split. Then digits joined by invisible characters are joined or split, and each
+  // whitespace run becomes one character: a newline if it breaks a line, else a space. That bounds every gap a code
+  // can be split by, whatever the source formatting. Text with no artifact comes back untouched.
+  const digit = (char: string | undefined) => char !== undefined && char >= '0' && char <= '9';
+  const linked = text.replace(INVISIBLE_ANYWHERE, (run: string, at: number) => digit(text[at - 1]) && digit(text[at + run.length]) ? run : '')
+    .replace(URL_RUN, (run) => {
+      // The first matching kind names the link, which relays whole.
+      const url = run.replace(INVISIBLE_ANYWHERE, '');
+      const link = LINKS.find(({ re }) => re.test(url));
+      return link ? take(link.kind, url) : url;
+    });
+  let redacted = linked.replace(INVISIBLE_SPLIT_DIGITS, (run) => run.replace(INVISIBLE_ANYWHERE, run.replace(INVISIBLE_ANYWHERE, '').length > CODE_MAX_DIGITS ? ' ' : ''))
+    .replace(/\s+/g, (run) => (/[\n\r\u2028\u2029]/.test(run) ? '\n' : ' '));
   for (const re of OTPS) {
-    // OTP patterns match the surrounding phrase ("Your login code is 123456"); the relay value
-    // is the code itself. The G- prefix form must be tried first - its six digits would
-    // otherwise match the plain-digit alternative.
-    redacted = redacted.replace(re, (match) => take('otp', match.match(/G-\d{6}|\d{3}-\d{3}|\d{4,8}/)?.[0] ?? match));
+    // OTP patterns match the surrounding phrase ("Your login code is 123456"); the relay value is the code itself,
+    // from its own capture, never a digit elsewhere in the phrase. The G- prefix form relays whole.
+    redacted = redacted.replace(re, (match: string, ...rest: unknown[]) => {
+      const groups = rest.at(-1);
+      const code = typeof groups === 'object' && groups !== null ? (groups as Record<string, string | undefined>).code : undefined;
+      return take('otp', code === undefined ? match : code.replace(/\s/g, ''));
+    });
   }
   return artifacts.length === 0 ? { text, artifacts: [] } : { text: redacted, artifacts };
 };

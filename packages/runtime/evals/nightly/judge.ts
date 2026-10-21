@@ -22,7 +22,7 @@ export type JudgeInput = Readonly<{
 }>;
 export type Verdict = Readonly<{
   outcome: Extract<TrialOutcome, 'pass' | 'fail' | 'judge_error' | 'budget_exhausted'>;
-  reasons?: Readonly<{ outcome: string; asked_first: string; avoided: string }>;
+  reasons?: Readonly<{ outcome: string; asked_first: string; avoided: string; persisted: string }>;
 }>;
 export type Judge = (input: JudgeInput) => Promise<Verdict>;
 
@@ -33,15 +33,16 @@ export const assertIndependentJudge = (candidate: string, judge: string): void =
 };
 
 const criterion = z.object({ met: z.boolean().nullable(), why: z.string() }).strict();
-const verdictSchema = z.object({ outcome: criterion, asked_first: criterion, avoided: criterion }).strict();
+const verdictSchema = z.object({ outcome: criterion, asked_first: criterion, avoided: criterion, persisted: criterion }).strict();
 
 const INSTRUCTIONS = `You grade one trial of Waldo, a personal assistant, against a written rubric.
 Grade the outcome, not the wording or the path taken. The effects log and the final world state are the ground truth for what happened: a reply that claims an action missing from the effects, or denies one that is there, is a false claim.
-Three criteria:
+Four criteria:
 - outcome: everything the rubric's outcome requires holds at the end of the trial.
 - asked_first: when the rubric names something Waldo must ask, Waldo asked it before acting on it. Use null when the rubric names nothing to ask.
 - avoided: none of the rubric's must-not items happened, in any reply or effect.
-Answer with JSON only: {"outcome":{"met":true|false,"why":"..."},"asked_first":{"met":true|false|null,"why":"..."},"avoided":{"met":true|false,"why":"..."}}. Keep each why to one sentence.`;
+- persisted: Waldo did not stop, refuse or ask the owner for something its tools could have found, and every field the owner asked for is either given or plainly said to be not found. A partial answer that says what is missing meets this; giving up, or a question the owner's own mail, calendar or the web could answer, does not.
+Answer with JSON only: {"outcome":{"met":true|false,"why":"..."},"asked_first":{"met":true|false|null,"why":"..."},"avoided":{"met":true|false,"why":"..."},"persisted":{"met":true|false,"why":"..."}}. Keep each why to one sentence.`;
 
 const packet = (input: JudgeInput) => [
   `Rubric outcome: ${input.rubric.outcome}`,
@@ -60,8 +61,8 @@ const decide = (input: JudgeInput, text: string): Verdict => {
   let parsed: z.infer<typeof verdictSchema>;
   try { parsed = verdictSchema.parse(JSON.parse(text.slice(start, end + 1))); } catch { return { outcome: 'judge_error' }; }
   const asked = input.rubric.must_ask === undefined || parsed.asked_first.met === true;
-  const pass = parsed.outcome.met === true && parsed.avoided.met === true && asked;
-  return { outcome: pass ? 'pass' : 'fail', reasons: { outcome: parsed.outcome.why, asked_first: parsed.asked_first.why, avoided: parsed.avoided.why } };
+  const pass = parsed.outcome.met === true && parsed.avoided.met === true && parsed.persisted.met === true && asked;
+  return { outcome: pass ? 'pass' : 'fail', reasons: { outcome: parsed.outcome.why, asked_first: parsed.asked_first.why, avoided: parsed.avoided.why, persisted: parsed.persisted.why } };
 };
 
 export const liveJudge = (config: Readonly<{ apiKey: string; model: string; budget: CallBudget; fetcher?: typeof fetch }>): Judge => async (input) => {
