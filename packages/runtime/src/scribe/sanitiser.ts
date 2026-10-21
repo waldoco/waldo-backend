@@ -1,7 +1,9 @@
 import { validId } from '@waldo/workspace';
 import {
   DERIVED_SCORE_PATTERNS,
+  HEALTH_DESTINATION_RULES,
   MODEL_CONTEXT_MAX_CHARS,
+  PLAIN_WORD_DERIVED_SCORES,
   derivedHealthDestinationViewSchema,
   PII_PATTERNS,
   RAW_SENSOR_PATTERNS,
@@ -156,6 +158,39 @@ function matches(pattern: RegExp, text: string): boolean {
 
 function compactKey(key: string): string {
   return key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+}
+
+// Core build plan H-3, by the contracts health rule `reject_scored_on_external_read`: where external content is read
+// into the owner's turn, form/recovery/load with a bare number ("Form 16", "load 3 trucks", "recovery 2 days") is
+// ordinary text. A "score", a %, a health unit or a ratio after it makes it a reading again, and crs, the sensor
+// families and structured readings are never spared. Persistence and egress destinations keep the whole floor.
+const PLAIN_WORDS = PLAIN_WORD_DERIVED_SCORES.join('|');
+const PLAIN_WORD_SPAN = new RegExp(String.raw`^["'\s]*(?:${PLAIN_WORDS})\b(?![\s_-]*score)(?:\s+[a-z]+){0,3}?[\s:=,"']*[+-]?\d+(?:\.\d+)?(?:e[+-]?\d+)?["']?$`, 'i');
+const READING_TAIL = /^["']?\s*(?:%|\/\s*\d|(?:percent|pct|ms|bpm|mmhg|kg|kgs|lbs?|kcal|cal|calories|score)\b)/i;
+const PLAIN_WORD_KEY = new RegExp(String.raw`(^|[^a-z0-9])(?:${PLAIN_WORDS})(?![\s_-]*score)(?=[^a-z0-9]|$)`, 'gi');
+const PLAIN_WORD_COMPACT = new RegExp(String.raw`^(?:${PLAIN_WORDS})$`, 'i');
+
+function sparesPlainWords(input: Readonly<{ destination: SanitiseDestination; source_taint: SourceTaint }>): boolean {
+  return input.source_taint === 'external' && HEALTH_DESTINATION_RULES[input.destination].derived_score === 'reject_scored_on_external_read';
+}
+
+function plainWordSpan(match: string, rest: string): boolean {
+  return PLAIN_WORD_SPAN.test(match) && !READING_TAIL.test(rest);
+}
+
+// Whether text holds a match of pattern that is health in this scope: with plain words spared, a match that is only a
+// plain word and a bare number does not count, and the scan moves on to the next match.
+function healthMatchIn(pattern: RegExp, text: string, plainWords: boolean): boolean {
+  if (!plainWords) return matches(pattern, text);
+  const global = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
+  for (const match of text.matchAll(global)) {
+    if (!plainWordSpan(match[0], text.slice(match.index + match[0].length))) return true;
+  }
+  return false;
+}
+
+function healthKeyIn(key: string, plainWords: boolean): boolean {
+  return HEALTH_KEY.test(plainWords ? key.replace(PLAIN_WORD_KEY, '$1') : key);
 }
 
 function isNumeric(value: unknown): boolean {
@@ -384,9 +419,10 @@ function pendingKind(text: string): SanitiseDecodeFailure['kind'] {
 function hasDecodedHealthIndicator(
   text: string,
   destination: SanitiseDestination,
+  plainWords = false,
 ): boolean {
   const decoded = decodedViews(text);
-  return decoded.views.some(isHealthIndicatorText);
+  return decoded.views.some((view) => isHealthIndicatorText(view, plainWords));
 }
 
 function visitStrings(
@@ -525,7 +561,8 @@ function looksLikeDerivedHealthView(value: Record<string, JsonValue>): boolean {
   );
 }
 
-function isHealthIndicatorText(value: string): boolean {
+function isHealthIndicatorText(value: string, plainWords = false): boolean {
+  if (plainWords && PLAIN_WORD_COMPACT.test(compactKey(value))) return false;
   return (
     HEALTH_INDICATOR_VALUE.test(value.trim()) ||
     HEALTH_KEY_COMPACT.test(compactKey(value))
@@ -535,6 +572,7 @@ function isHealthIndicatorText(value: string): boolean {
 function subtreeHealthFlags(
   value: JsonValue,
   destination: SanitiseDestination,
+  plainWords = false,
 ): {
   indicator: boolean;
   strongIndicator: boolean;
@@ -552,7 +590,7 @@ function subtreeHealthFlags(
     };
   }
   if (typeof value === 'string') {
-    const indicator = isHealthIndicatorText(value);
+    const indicator = isHealthIndicatorText(value, plainWords);
     return {
       indicator,
       strongIndicator: indicator,
@@ -607,7 +645,7 @@ function subtreeHealthFlags(
   let unit = false;
   if (Array.isArray(value)) {
     for (const item of value) {
-      const child = subtreeHealthFlags(item, destination);
+      const child = subtreeHealthFlags(item, destination, plainWords);
       indicator ||= child.indicator;
       strongIndicator ||= child.strongIndicator;
       measurement ||= child.measurement;
@@ -617,13 +655,13 @@ function subtreeHealthFlags(
     measurement ||= numeric;
   } else {
     for (const [key, item] of Object.entries(value)) {
-      const healthKey = HEALTH_KEY.test(key) || hasDecodedHealthIndicator(key, destination);
-      const strongHealthKey = isStrongHealthKey(key) || hasDecodedHealthIndicator(key, destination);
+      const healthKey = healthKeyIn(key, plainWords) || hasDecodedHealthIndicator(key, destination, plainWords);
+      const strongHealthKey = isStrongHealthKey(key, plainWords) || hasDecodedHealthIndicator(key, destination, plainWords);
       const encodedHealthIndicator =
         typeof item === 'string' &&
         HEALTH_DISCRIMINATOR_KEY.test(key) &&
-        hasDecodedHealthIndicator(item, destination);
-      const child = subtreeHealthFlags(item, destination);
+        hasDecodedHealthIndicator(item, destination, plainWords);
+      const child = subtreeHealthFlags(item, destination, plainWords);
       const rawHealthSeries = RAW_HEALTH_SERIES_KEY.test(key) && child.numeric && child.unit;
       indicator ||= healthKey || rawHealthSeries || encodedHealthIndicator;
       indicator ||= child.indicator;
@@ -640,9 +678,9 @@ function subtreeHealthFlags(
   return { indicator, strongIndicator, measurement, numeric, unit };
 }
 
-function objectHasHealthCorrelation(value: JsonValue, destination: SanitiseDestination): boolean {
+function objectHasHealthCorrelation(value: JsonValue, destination: SanitiseDestination, plainWords = false): boolean {
   if (typeof value !== 'object' || value === null) return false;
-  const flags = subtreeHealthFlags(value, destination);
+  const flags = subtreeHealthFlags(value, destination, plainWords);
   return flags.indicator && flags.measurement;
 }
 
@@ -650,7 +688,8 @@ function containsForbiddenHealth(
   input: PreparedInput,
   jsonPass = 0,
 ): { invalid?: SanitiseDenialDiagnostic; matched: boolean } {
-  if (objectHasHealthCorrelation(input.payload, input.destination)) {
+  const plainWords = sparesPlainWords(input);
+  if (objectHasHealthCorrelation(input.payload, input.destination, plainWords)) {
     return { matched: true };
   }
   // Free-text scan scope (owner decision 2026-09-28, direction A): the scan exists to keep raw
@@ -686,8 +725,8 @@ function containsForbiddenHealth(
       if (
         freeTextScan &&
         (RAW_SENSOR_PATTERNS.some((pattern) => matches(pattern, text)) ||
-          DERIVED_SCORE_PATTERNS.some((pattern) => matches(pattern, text)) ||
-          HEALTH_FREE_TEXT.some((pattern) => pattern.test(text)))
+          DERIVED_SCORE_PATTERNS.some((pattern) => healthMatchIn(pattern, text, plainWords)) ||
+          HEALTH_FREE_TEXT.some((pattern) => healthMatchIn(pattern, text, plainWords)))
       ) {
         return true;
       }
@@ -731,6 +770,7 @@ const HEALTH_SPAN_MARKER = '[health value withheld]';
 function redactExternalHealthSpans(
   payload: JsonValue,
   redactions: Redaction[],
+  plainWords = false,
 ): { invalid: boolean; payload: JsonValue; redactions: Redaction[] } {
   const counts = new Map<RedactionKind, number>();
   const patterns = [...RAW_SENSOR_PATTERNS, ...DERIVED_SCORE_PATTERNS, ...HEALTH_FREE_TEXT];
@@ -744,7 +784,7 @@ function redactExternalHealthSpans(
         return inner.invalid ? text : JSON.stringify(inner.payload);
       }
     } catch { /* Ordinary free text is scanned for spans. */ }
-    return patterns.reduce((output, pattern) => replaceAndCount(output, pattern, HEALTH_SPAN_MARKER, 'health_value', counts), text);
+    return patterns.reduce((output, pattern) => replaceAndCount(output, pattern, HEALTH_SPAN_MARKER, 'health_value', counts, plainWords ? plainWordSpan : undefined), text);
   };
   const transformed = transformJsonStrings(payload, (text) => redact(text));
   if (transformed.invalid) return { invalid: true, payload, redactions };
@@ -771,7 +811,25 @@ function replaceAndCount(
   replacement: string,
   kind: RedactionKind,
   counts: Map<RedactionKind, number>,
+  // A match it returns true for (given the text after it) is left as it is and not counted.
+  keep?: (match: string, rest: string) => boolean,
 ): string {
+  if (keep !== undefined) {
+    const global = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
+    let output = '';
+    let last = 0;
+    let replaced = 0;
+    for (const match of text.matchAll(global)) {
+      const end = match.index + match[0].length;
+      if (keep(match[0], text.slice(end))) continue;
+      output += text.slice(last, match.index) + replacement;
+      last = end;
+      replaced += 1;
+    }
+    if (replaced === 0) return text;
+    increment(counts, kind, replaced);
+    return output + text.slice(last);
+  }
   const count = replacementCount(text, pattern);
   if (count === 0) return text;
   increment(counts, kind, count);
@@ -1202,7 +1260,7 @@ export function sanitise(raw: SanitiseInput): SanitiseResult {
   // still denies structured health correlation.
   const withheld =
     input.source_taint === 'external' && input.destination === 'internal_context'
-      ? redactExternalHealthSpans(input.payload, [])
+      ? redactExternalHealthSpans(input.payload, [], sparesPlainWords(input))
       : { invalid: false, payload: input.payload, redactions: [] as Redaction[] };
   if (withheld.invalid) return denyInvalid({ stage: 'external_health' });
   const scanned = { ...input, payload: withheld.payload };
@@ -1241,7 +1299,8 @@ function numericFromBase64(token: string): string | undefined {
   }
 }
 
-function isStrongHealthKey(key: string): boolean {
+function isStrongHealthKey(key: string, plainWords = false): boolean {
+  if (plainWords && PLAIN_WORD_COMPACT.test(compactKey(key))) return false;
   const base = compactKey(key).replace(HEALTH_MEASUREMENT_SUFFIX, '');
   return HEALTH_KEY_COMPACT.test(base);
 }

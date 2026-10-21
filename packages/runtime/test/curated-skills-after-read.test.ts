@@ -7,7 +7,7 @@ import { runToolLoop } from '../src/conversation/tool-loop';
 import { sanitise } from '../src/scribe/sanitiser';
 const canaries=['ababcdbcdbababcd','cdcdababcdcdabab','bababcdcbababcdc'];
 it('reviewed enabled selection remains owner-bound after an external workspace read without widening lifecycle grants',async()=>{
- const stub=env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('skill-selection-after-read'));
+ const stub=env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('skill-selection-after-read'));
  await runInDurableObject(stub,async(_,state)=>{
   let closed=false;const scope={runId:'run',attempt:'attempt',deadline:Date.now()+15*60_000,signal:new AbortController().signal,admit(){if(closed)throw new Error('closed');},commit<T>(work:()=>T){this.admit();return work();}};
   const turn={owner:'owner',turnId:'turn',trigger:'user_message' as const,ownerText:'/skills install document-email-preparation@1',assertCurrent:async()=>scope.admit()};

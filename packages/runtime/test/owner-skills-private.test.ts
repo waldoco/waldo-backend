@@ -7,7 +7,7 @@ import { acceptTrustedInvocation, MODEL_CONTEXT_MAX_CHARS, skillRowSchema, WALDO
 import {
   localTrustedBriefScheduleInput,
   type LocalSystemSkillBinding,
-} from "../src/run-loop/adapters";
+} from "../src/llm/run-loop-adapters";
 const captured = vi.hoisted(() => ({
   systems: [] as string[],
   replies: [] as string[],

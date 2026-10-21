@@ -16,8 +16,6 @@ export async function persistAppInboxWake(txn: DurableObjectTransaction, due: nu
   await armAlarm(txn, existing === null ? due : Math.min(existing, due));
 }
 
-export const COMMON_EXECUTION_DUE_KEY = 'common_execution_due_v1';
-
 export const WHATSAPP_PENDING_DUE_KEY = 'whatsapp_pending_due_v1';
 
 // The owner alarm handler's own retry after a failed pass; the pass that is that retry consumes it.
@@ -29,7 +27,7 @@ export const ALARM_FAILED_LANE_KEY = 'owner_alarm_failed_lane_v1';
 // arms a wake writes its key first and no re-arm can drop it. guard-wake-due-keys fails on a due key written in the
 // runtime but missing here, and on a lane that arms the alarm without naming one.
 export const WAKE_DUE_KEYS = [
-  'imessage_owner_inbox_due_v1', 'imessage_final_outbox_due_v1', APP_INBOX_DUE_KEY, COMMON_EXECUTION_DUE_KEY,
+  'imessage_owner_inbox_due_v1', 'imessage_final_outbox_due_v1', APP_INBOX_DUE_KEY,
   'telegram_final_outbox_due_v1', 'telegram_owner_inbox_due_v1', 'telegram_link_due_v1',
   'browser_owner_task_due_v1', 'common_browser_due_v1', 'common_browser_lease_due_v1', WHATSAPP_PENDING_DUE_KEY,
   'mac_results_due_v1', ALARM_RETRY_DUE_KEY,
@@ -37,8 +35,7 @@ export const WAKE_DUE_KEYS = [
 
 // The lanes of an owner alarm pass, each with the wakes of the work it runs; 'schedule' owns the schedule's next entry.
 // A failure inside a lane holds that lane until its retry while the others run; a failure outside every lane, or in a
-// second lane while one is held, holds the whole pass ('pass'). The retry's own key is the held lane's, and the common
-// execution wake is the run-loop object's alarm, not an owner lane's.
+// second lane while one is held, holds the whole pass ('pass'). The retry's own key is the held lane's.
 export const ALARM_LANES = {
   inbox: ['telegram_owner_inbox_due_v1', 'telegram_link_due_v1'],
   transport: ['telegram_final_outbox_due_v1'],

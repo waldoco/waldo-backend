@@ -363,7 +363,13 @@ export const DERIVED_SCORE_PATTERNS: readonly RegExp[] = [
 export const rawSensorActionSchema = z.enum(['reject']);
 export type RawSensorAction = z.infer<typeof rawSensorActionSchema>;
 
-export const derivedScoreActionSchema = z.enum(['reject']);
+// reject_scored_on_external_read (core build plan H-3): form, recovery and load are also ordinary words ("Form 16",
+// "load 3 trucks", "recovery 2 days"). Where external content - the owner's own mail, calendar or a page - is read into
+// his turn, one of these words with a bare number is not a derived score; with "score", a unit or a % it still is, and
+// crs, the sensor families and structured health are unchanged. Every persistence and egress destination keeps 'reject'.
+export const derivedScoreActionSchema = z.enum(['reject', 'reject_scored_on_external_read']);
+// The derived-score words that are also ordinary English. crs is Waldo's own name and is never spared.
+export const PLAIN_WORD_DERIVED_SCORES = ['form', 'recovery', 'load'] as const;
 export type DerivedScoreAction = z.infer<typeof derivedScoreActionSchema>;
 
 export const healthRuleSchema = z.strictObject({
@@ -377,7 +383,7 @@ export type HealthRule = z.infer<typeof healthRuleSchema>;
 export const HEALTH_DESTINATION_RULES: Readonly<Record<SanitiseDestination, HealthRule>> = {
   memory_block: { raw_sensor: 'reject', derived_score: 'reject' },
   system_prompt: { raw_sensor: 'reject', derived_score: 'reject' },
-  internal_context: { raw_sensor: 'reject', derived_score: 'reject' },
+  internal_context: { raw_sensor: 'reject', derived_score: 'reject_scored_on_external_read' },
   draft_document: { raw_sensor: 'reject', derived_score: 'reject' },
   draft_email: { raw_sensor: 'reject', derived_score: 'reject' },
   send_message: { raw_sensor: 'reject', derived_score: 'reject' },

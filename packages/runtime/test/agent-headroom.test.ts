@@ -5,7 +5,7 @@ import { delegateTaskHandler, runChildLoop, SUBAGENT_ROUND_SHARE } from '../src/
 import { dispatchTool, MAX_TOOL_ERROR_CHARS, type ToolDispatcherContext } from '../src/tools/dispatcher';
 import { inMemoryToolOutputStore } from '../src/conversation/tool-output-store';
 import { getContextHandler } from '../src/tools/live/get-context';
-import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
+import { resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
 const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' });

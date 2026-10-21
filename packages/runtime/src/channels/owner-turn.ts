@@ -10,7 +10,7 @@ import { receivedView, renderForModel, type InboundPart } from './owner-inbound-
 import { ownerContextHandler } from '../tools/live/owner-context';
 import { searchLocation } from '../tools/live/search-location';
 import {
-  deriveContextBudgetChars, EXTERNAL_ORIGIN_TOOLS, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, SANITISE_DESTINATION_POLICIES, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_PROVIDER, OPENAI_REASONING, routingPolicySchema, WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL,
+  deriveContextBudgetChars, EXTERNAL_ORIGIN_TOOLS, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, SANITISE_DESTINATION_POLICIES, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_REASONING, WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL,
   type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
 } from '@waldo/contracts';
 import type { ConversationModelMessage } from '@waldo/contracts';
@@ -25,14 +25,14 @@ import { CHECK_BACK_TOOLS, reminderCheckBackText } from './check-back';
 import { inMemoryToolOutputStore } from '../conversation/tool-output-store';
 import { readToolOutputHandler } from '../tools/read-tool-output';
 import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
-import { localTrustedBriefScheduleInput, localTrustedBriefTurnSnapshot, resolveRunLoopAdapters, type LocalSystemSkillBinding } from '../run-loop/adapters';
+import { localTrustedBriefScheduleInput, localTrustedBriefTurnSnapshot, resolveRunLoopAdapters, type LocalSystemSkillBinding } from '../llm/run-loop-adapters';
 import type { ContextHealthMaterial } from '../context-composer/types';
 import { JoinedConversationPath } from '../conversation/joined-path';
 import { COMPACTION, COMPACTION_INSTRUCTION, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, supersededCompaction, type CompactedStats } from '../conversation/compaction';
 import { numericHealthIn } from '../scribe/sanitiser';
-import { OpenAIResponsesAdapter } from '../llm/openai';
+import { MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
-import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
+import { InMemoryCircuitBreaker, observedBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
 import { messagingSystemPrompt, ownerClockLine, unconnectedLine, withOwnerSkillProcedures } from '../prompt/messaging-behavior';
 import { eligibleHandlers } from '../tools/eligibility';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
@@ -92,11 +92,13 @@ export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost;
 type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string }>;
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
+// Tool definitions are JSON: about four UTF-8 bytes per token on current tokenizers, close enough to compare rounds.
+const BYTES_PER_TOKEN_EST = 4;
 // The reply's system prompt with the byte size of each joined section, so a trace shows what fills it.
 type SystemPrompt = Readonly<{ text: string; sections: Readonly<Partial<Record<SystemSection, number>>> }>;
 
 export const createOwnerResponder = (
-  openaiApiKey: string,
+  modelAccess: string | OwnerModelAccess,
   store?: ConversationStore,
   memory?: ClaimStore,
   log: (entry: TurnLogEntry) => void = () => undefined,
@@ -182,8 +184,9 @@ export const createOwnerResponder = (
   } }), onComposerPhase: (phase, previousMs) => log({ trace: traceId, hop: 'composer_phase', ms: previousMs, ok: true, detail: phase }) });
   // Tool outputs from the current turn; flushed to the ledger when the turn's entries persist.
   const pendingToolOutputs: Array<{ tool: string; ok: boolean; at: number; taint: 'external' | null; origin: 'owner' | 'machine'; summary: string; thread?: string }> = [];
-  const circuitBreaker = new InMemoryCircuitBreaker();
-  const policy = routingPolicySchema.parse({ routes: [{ trigger: 'user_message', primary: { provider: OPENAI_PROVIDER, model, cache: 'none', max_tokens: 4096 }, fallback: [], floor: 'template' }], escalation: [], template_fallback: false });
+  const access = ownerModelAccess(modelAccess);
+  const circuitBreaker = access.health ?? new InMemoryCircuitBreaker();
+  const policy = ownerRoutePolicy(model, model, access);
   const offloadStore = offload ? inMemoryToolOutputStore() : undefined;
   const safety = {
     authenticatedUserId: skills?.admission?.invocation.verified_authority.principal_ref ?? ownerId, trigger: 'user_message' as const, canaryTokens: CANARIES,
@@ -213,8 +216,7 @@ export const createOwnerResponder = (
     const mark = (detail: string) => log({ trace, hop: 'complete_phase', ms: Date.now() - started, ok: true, detail: `${purpose}:${detail}` });
     mark('enter');
     let reasoning: string | undefined;
-    const effectivePolicy = modelOverride === undefined || modelOverride === model ? policy
-      : routingPolicySchema.parse({ routes: [{ trigger: 'user_message', primary: { provider: OPENAI_PROVIDER, model: modelOverride, cache: 'none', max_tokens: 4096 }, fallback: [], floor: 'template' }], escalation: [], template_fallback: false });
+    const effectivePolicy = modelOverride === undefined || modelOverride === model ? policy : ownerRoutePolicy(modelOverride, model, access);
     // Entries stay separate typed messages so the provider's degrade path can actually reduce:
     // when one historical entry is unrenderable, the retry carries only the current text instead
     // of the identical joined string. Roles come from the typed entry seam, never guessed here.
@@ -225,7 +227,7 @@ export const createOwnerResponder = (
     }));
     mark(`messages=${userMessages.length}`);
     const ownerCall = ownerTurnActive && (purpose === 'reply' || purpose === 'subagent');
-    const adapter = gateway ?? new OpenAIResponsesAdapter({ apiKey: openaiApiKey, ...(ownerCall ? { timeoutMs: OWNER_TURN_CALL_TIMEOUT_MS } : {}), onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; } });
+    const adapter = gateway ?? ownerModelGateway(access, { ...(ownerCall ? { timeoutMs: OWNER_TURN_CALL_TIMEOUT_MS } : {}), onOpenAIMetadata: (metadata) => { reasoning = metadata.reasoning; } });
     const admittedGateway: LLMGatewayAdapter = context || skills || backgroundCurrent ? { complete: async request => {
       await assertCurrent();
       if (transientDecision && new TextEncoder().encode(JSON.stringify(request.request)).byteLength > MODEL_CONTEXT_MAX_CHARS) throw new Error('background decision context bound');
@@ -239,7 +241,7 @@ export const createOwnerResponder = (
       return result;
     } } : adapter;
     const sanitise = safety.sanitise;
-    const result = await new RuntimeLLMProvider({ gateway: admittedGateway, circuitBreaker }).complete({
+    const result = await new RuntimeLLMProvider({ gateway: admittedGateway, circuitBreaker: observedBreaker(circuitBreaker, (provider) => log({ trace, hop: 'provider_breaker', ms: 0, ok: false, code: 'circuit_open', detail: provider })) }).complete({
       ...(callScope ?? privateRunScope ? { runScope: callScope ?? privateRunScope } : {}),
       trigger: 'user_message',
       policy: effectivePolicy,
@@ -248,13 +250,15 @@ export const createOwnerResponder = (
         const effort = OPENAI_REASONING[step.model]?.effort;
         return {
           cache_key: cacheKey,
-          system, messages: userMessages.map(({ attachments: _names, ...message }) => message), max_tokens: OUTPUT_TOKENS[step.model] ?? 4_096, temperature: 0.2,
+          system, messages: userMessages.map(({ attachments: _names, ...message }) => message), max_tokens: OUTPUT_TOKENS[step.model] ?? step.max_tokens ?? 4_096, temperature: 0.2,
           ...(effort ? { reasoning_effort: effort } : {}),
           ...(format ? { response_format: format } : {}), ...(attachments ? { attachments: [...attachments] } : {}),
           ...(tools ? { tools: [...tools] } : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),
           ...(tools && ownerTurnActive && purpose === 'reply' ? { web_search: searchLocation(clock.timezone) } : {}),
         };
       },
+      // Only the owner's own reply has a floor line; a side job that exhausts its route fails to its caller.
+      ...(access.floorReply && ownerTurnActive && purpose === 'reply' ? { renderTemplate: () => MODEL_UNREACHABLE_REPLY } : {}),
     }, safety);
     await assertCurrent();
     privateRunScope?.admit();
@@ -262,7 +266,7 @@ export const createOwnerResponder = (
     const shape = {
       system_bytes: utf8Bytes(system), request_bytes: utf8Bytes(input),
       context: {
-        tools_count: tools?.length ?? 0, tools_bytes: tools?.length ? utf8Bytes(JSON.stringify(tools)) : 0,
+        tools_count: tools?.length ?? 0, tools_bytes: tools?.length ? utf8Bytes(JSON.stringify(tools)) : 0, tools_tokens_est: tools?.length ? Math.ceil(utf8Bytes(JSON.stringify(tools)) / BYTES_PER_TOKEN_EST) : 0,
         tool_turns_bytes: turns?.length ? utf8Bytes(JSON.stringify(turns)) : 0,
         history_messages: Math.max(0, userMessages.length - 1), history_bytes: utf8Bytes(JSON.stringify(userMessages.slice(0, -1))),
         current_bytes: utf8Bytes(userMessages.at(-1)?.content ?? ''), attachments: attachments?.length ?? 0,
@@ -271,9 +275,12 @@ export const createOwnerResponder = (
     };
     const response = result.ok ? result.response : undefined;
     const metadataOnly = transientDecision || purpose.startsWith('memory') || purpose.startsWith('task_source') || purpose === 'compaction';
-    if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by, result.scribe?.reason, result.scribe_stage, result.detail].filter(Boolean).join(':'), shape, ...(metadataOnly ? {} : { text: { input } }) });
+    // The provider that answered, and whether the ladder moved off the first provider/model to get there (a same-model retry is not a fallback).
+    const served = result.attempts.at(-1);
+    const routing = served ? { provider: served.provider, fallback_fired: new Set(result.attempts.map((attempt) => `${attempt.provider}/${attempt.model}`)).size > 1 } : {};
+    if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by, result.scribe?.reason, result.scribe_stage, result.detail].filter(Boolean).join(':'), error_code: result.code, shape, ...routing, ...(metadataOnly ? {} : { text: { input } }) });
     else log({
-      trace, hop: `llm_${purpose}`, ms: result.usage.latency_ms, ok: true,
+      trace, hop: `llm_${purpose}`, ms: result.usage.latency_ms, ok: true, ...routing,
       usage: { model: result.usage.model, input: result.usage.input_tokens, output: result.usage.output_tokens, cached: result.usage.cache_read_input_tokens,
         web_searches: response!.output_items?.filter((item) => item.type === 'web_search_call').length ?? 0 },
       shape,
@@ -300,7 +307,7 @@ export const createOwnerResponder = (
     return Object.entries(value).flatMap(([key, child]) => [key, ...structuredStrings(child, depth + 1)]);
   };
   const removedTopics = new Set<string>();
-  const heldTopics = () => [...removedTopics, ...forgettingState?.claims('purging').flatMap(claim => [claim.text, claim.evidence]) ?? [], ...forgettingState?.pendingTopics() ?? [], ...forgettingState?.incompleteTopics() ?? []];
+  const heldTopics = () => [...removedTopics, ...forgettingState?.claims('purging').flatMap(claim => [claim.text, claim.evidence]) ?? [], ...forgettingState?.pendingTopics() ?? []];
   const holdsAnyHeldTopic = (): boolean => heldTopics().length > 0;
   const holdsIn = (held: readonly string[]) => (...values: readonly (string | null | undefined)[]): boolean =>
     values.some(value => typeof value === 'string' && held.some(topic => carriesTopic(value, topic) || hidesTopic(value, topic)));
@@ -602,7 +609,7 @@ export const createOwnerResponder = (
           const receipt = event.call.name === 'remember' && event.ok ? JSON.parse(event.output) as { data?: { status?: string } } : undefined;
           if (receipt?.data?.status !== 'duplicate') turnToolEvents.push({ seq: turnToolEvents.length + 1, call: { name: event.call.name, args: parseToolArgs(event.call.arguments, event.call.name) }, ok: event.ok, at: Date.now(), ...(event.code ? { code: event.code } : {}) });
           privateRunScope?.admit();
-          log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: event.call.arguments, output: event.output } });
+          log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':'), error_code: event.code } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: event.call.arguments, output: event.output } });
           privateRunScope?.admit();
           pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: event.taint, origin: ownerTurnActive && !probeGuard?.stripLiveTools ? 'owner' : 'machine', summary: turnOnlyOutput.has(event.call.name) ? TURN_ONLY_OUTPUT : event.output, ...(thread ? { thread } : {}) });
         },
@@ -695,7 +702,7 @@ export const createOwnerResponder = (
       ...(health ? { health: () => healthRead ??= health(trace) } : {}),
       onPhase: (phase, previousMs) => log({ trace, hop: 'composer_phase', ms: previousMs, ok: true, detail: phase }),
     });
-    const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, privateRunScope, privateSystemSkills, { context: jobContext });
+    const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, privateRunScope, privateSystemSkills, { context: jobContext });
     control.route(scoped.control);
     try { return await work(scoped); }
     finally { control.unroute(scoped.control); }
@@ -791,7 +798,7 @@ export const createOwnerResponder = (
         const capturedTurn = { ...turn, memoryWrites };
         const preparedContext = privateOwner?.contextHost ? await privateOwner.contextHost.prepare(capturedTurn, turn.runScope) : undefined;
         const preparedSkills = privateOwner?.skillHost ? await privateOwner.skillHost.prepare(capturedTurn, preparedContext?.invocation.verified_authority.principal_ref ?? ownerId, turn.runScope) : undefined;
-        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}), ...(privateOwner?.watchStatus ? { watchStatus: privateOwner.watchStatus } : {}) });
+        const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}), ...(privateOwner?.watchStatus ? { watchStatus: privateOwner.watchStatus } : {}) });
         control.route(scoped.control);
         scopedCompaction = scoped.compactIfDue;
         try { return await scoped.respond(capturedTurn, time); }
@@ -867,8 +874,6 @@ export const createOwnerResponder = (
       const asOwner = await asOwnerJob(trace, job => job.consolidate(trace, day, sides));
       if (asOwner !== undefined) return asOwner;
       if (!memory) return { done: true, detail: 'no memory' };
-      if (memory.incompleteTopics().length) return { done: false, detail: 'historical memory consolidation deferred: forgetting coverage incomplete' };
-
       const raw = await ask(trace, 'nightly_memory', NIGHTLY_MEMORY_INSTRUCTION, nightlyInput(promptMemory()!, day), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
       // The nightly pass is where the pinned blocks are curated.
@@ -888,7 +893,6 @@ export const createOwnerResponder = (
       const asOwner = await asOwnerJob(trace, job => job.promote(trace));
       if (asOwner !== undefined) return asOwner;
       if (!memory || memory.claims().length === 0) return 'no claims';
-      if (memory.incompleteTopics().length) return 'historical memory promotion deferred: forgetting coverage incomplete';
       const raw = await ask(trace, 'constellation', PROMOTION_INSTRUCTION, promotionInput(memory), { name: 'promotion', schema: PROMOTION_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
       return applyPromotion(memory, raw, new Date().toISOString(), (receipt) => log({
@@ -902,7 +906,7 @@ export const createOwnerResponder = (
       ?? ask(trace, 'day_plan', DAY_PLAN_INSTRUCTION, composeDayPlanInput(input, memory, auxiliaryModel), { name: 'day_plan', schema: DAY_PLAN_SCHEMA }, undefined, undefined, undefined, auxiliaryModel),
     chooseReaction: async (turn) => {
       if (turn.runScope && privateRunScope !== turn.runScope) {
-        return createOwnerResponder(openaiApiKey, undefined, undefined, log, clock, [], model, false, undefined, undefined, gateway, undefined, probeGuard, undefined, undefined, auxiliaryModel, egressAllowlist, undefined, reactionChoices, turn.runScope).chooseReaction(turn);
+        return createOwnerResponder(modelAccess, undefined, undefined, log, clock, [], model, false, undefined, undefined, gateway, undefined, probeGuard, undefined, undefined, auxiliaryModel, egressAllowlist, undefined, reactionChoices, turn.runScope).chooseReaction(turn);
       }
       privateRunScope?.admit();
       const quote = await quoteContext(turn.replyTo);
