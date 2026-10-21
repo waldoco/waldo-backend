@@ -1,0 +1,87 @@
+# Waldo build direction, 21 October 2026
+
+Waldo is a full personal assistant that plans and acts around how its owner actually is. It launches globally to wearable owners, runs one brain per owner with task workers around it, and is built in five waves. This file records the owner's decisions of 21 October 2026 and the wave order. It replaces the September build plan and the older release sequences wherever they conflict.
+
+Current source and tests decide what actually works. A plan line is never evidence that a capability ships.
+
+## Decisions (owner, 21 October 2026)
+
+| Area | Decision |
+| --- | --- |
+| Market | Global-first. The first owners wear an Apple Watch, WHOOP, Oura or a Health Connect device on Android, anywhere in the world. People without a wearable use a one-tap "how are you today?" check-in. The agent and its rails must also work in India, but India is not the launch frame. |
+| Product | Mail, calendar, follow-ups, errands and research by chat, fitted to the owner's sleep, recovery and load. Health-aware planning is the wedge. Health admin (refills, appointments, tests, insurance) is the first deep vertical. Later expansion reuses the same rails. |
+| Per-market rails | UPI hand-off, Swiggy's MCP servers and Indian-language voice notes are per-market adapters. Core code never assumes one market. |
+| Architecture | One brain per owner: `OwnerDO` is the only authority root and the only writer of memory, chats and approvals. Task workers run long, parallel or untrusted work and hold no authority. The second brain (RunLoopDO, `WaldoCoordinator`, the responsibility protocol, TracerDO) is deleted in wave 1. |
+| Health data | The app collects Apple Health (HealthKit) on iPhone and Health Connect on Android. WHOOP and Oura connect through their cloud APIs. The backend computes Form, Recovery and Load once for every source, and the model sees zone words. Baselines are kept per source and per HRV method, and missing time is unknown, never zero. |
+| Channels | The app is the primary presence: onboarding, health sync, approvals and "What Waldo knows". Chat runs on iMessage (Photon as a transport behind the iMessage bridge) and WhatsApp (Meta Cloud API, waiting on business verification). Telegram stays a team test channel until iMessage and WhatsApp carry the alpha cohort, then retires. No feature is built for one surface only. |
+| Onboarding | Health connect moves into the first run as an optional, skippable step, so the first Brief can compare against a baseline. The rest of the first-run flow follows the onboarding research: three questions at most, a first look at the day, ask-first authority widened one area at a time. |
+| Owner look-up | Looking the owner up is an agent skill, not an onboarding gate. The agent may search the owner's public footprint (web search, handles the owner names, the owner's own exports). Every finding shows its source in "What Waldo knows" and can be corrected or forgotten. It never infers health, religion, caste, politics or sexuality, and never profiles other people. The privacy notice says the look-up happens (GDPR Art. 14, DPDP notice). |
+| Voice | The personality north star (Suyash, 20 October) is the voice source, with the build handoff's four adjustments: "assistant" is the word owners hear, but he acts on their behalf; a coming decision plus a changed state counts as waiting-makes-it-worse; approval cards always show recipient, content, time and undo; spelling follows the owner's locale. |
+
+## Waves
+
+Each wave starts when the previous one has merged. Each wave item runs as one session.
+
+1. **Land wave 1.** Ashish's 18 PRs (#1318–#1336 without #1334) as one integration, then #1334 after a read-only check shows the deleted classes' hosted storage is empty. In parallel: resolve every other open PR (land, rebase or close), and repoint the repository rules to this file.
+2. **Harness and voice.** These items:
+   - a byte-stable prompt with a versioned voice block (H-4);
+   - parallel read calls (H-5);
+   - compaction (H-8);
+   - rule pruning with ablations (H-9);
+   - the personality merged into the voice block, with eval cases;
+   - a durable post-chat memory flush (M-4);
+   - fixes for the iMessage proactive-delivery gap and the unwired per-owner cost cap.
+3. **Worker layer.** These items, followed by R-4, the parked retry that makes the honest floor reply true:
+   - the jobs table and job protocol;
+   - TaskWorker;
+   - worker profiles;
+   - `start_task`;
+   - reader jobs;
+   - crash recovery and parking.
+4. **The wedge.** These items:
+   - a health trigger: a zone change plus a coming decision produces one approval card, and nothing runs in real time;
+   - WHOOP and Oura app approval;
+   - the Health Connect client;
+   - Photon for iMessage;
+   - WhatsApp production switches;
+   - onboarding and the consent ledger (O-1 to O-8).
+5. **Connectors and launch jobs.** These items:
+   - an MCP client with OAuth and the Waldo connect page (C-1 to C-5);
+   - health admin from mail;
+   - launch jobs J-0 to J-7;
+   - browser work, starting from the Browser Use bake-off once the team's redraft is done.
+
+Approvals that run on other companies' clocks start now, whatever the wave: WHOOP, Oura, Photon (data terms and proactive messages on shared numbers), Meta business verification, Apple Messages for Business, and zero-retention terms with the model providers.
+
+## How we prove it
+
+Every wave ships against the same proof ladder. A step that cannot run yet is recorded as NOT RUN with its reason, never as a pass.
+
+| Rung | What it proves | Where it lives |
+| --- | --- | --- |
+| Verify wall | Contracts, runtime, guards and migrations hold | `pnpm verify`, `verify.yml` |
+| Scripted scenarios | Tool order, receipts and refusals on fixed model output (194 tests at the M0 baseline) | `vitest.scenarios.config.ts` |
+| Recorded eval gate | Every eval scenario still runs on behaviour PRs | `evals.yml`, `evals/nightly/gate.ts` |
+| Live eval suite | Pass rate and pass^k per job with a judge model, under a call cap | `evals-live.yml`, `pnpm eval:nightly` |
+| Voice and safety judge | Replies pass the personality's six tests; dose, diagnosis and crisis cases hold | New eval cases in the nightly suite |
+| Memory suite | Knowledge updates, time reasoning and abstention (LongMemEval-style, synthetic) | M-5 to M-11 |
+| Fault injection | Provider fallback, breaker and parked retry behave under outages | R-7 cases and the game day |
+| Staging channel probes | Real webhooks on test accounts for the app, iMessage, WhatsApp and Telegram, with receipts | `scripts/probe-staging.mjs`, Simulator |
+| Owner telemetry | Cost, latency, cache share and tool choice per turn | Turn event v9, cost ledger, Langfuse |
+| Alpha pilot | Wearable-informed days against check-in days: proposal acceptance, actions per week, day-30 retention, false alarms | Pilot thresholds in "Health as Waldo's wedge" |
+
+Each failure found in dogfooding or the pilot becomes a regression eval case in the same change that fixes it.
+
+## Source documents
+
+These Claude docs hold the detail behind each decision. Where they disagree with this file, this file wins until they are updated.
+
+- [Waldo build handoff: backend, harness and personality](https://claude.ai/artifact/J1CnxUzs8KZDstptVXCmaD)
+- [Waldo launch brief](https://claude.ai/code/artifact/99e32f08-88a5-409c-87e8-2bfb3176371e)
+- [Waldo agent build plan](https://claude.ai/artifact/MGDBPSqzWQibPfCVvCqzY3): the architecture, the job protocol and memory sections hold. Its India-first framing, channel table and pricing are superseded by the decisions above.
+- [Waldo personality: north star](https://claude.ai/artifact/9VE8Rz71y1rqY6C6Up86Uh)
+- [Waldo v1 build](https://claude.ai/artifact/1xg9szN3bk7TgMp57Csx6R)
+- [Health as Waldo's wedge](https://claude.ai/artifact/V5cYvfv58wZfFB4EcmDExm)
+- [Waldo onboarding: how a real assistant starts](https://claude.ai/artifact/48GNboKousd11DSgsdELkL)
+
+The Brain launch contract (`01-Waldo/product/WALDO_PERSONAL_AGENT_LAUNCH.md` in `Pin4sf/waldo-brain`) still describes the September product and is amended to match this file.
