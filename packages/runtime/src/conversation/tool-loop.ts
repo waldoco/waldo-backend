@@ -1,5 +1,5 @@
 import { guardArtifactLinks, receiptUrl } from './artifact-link-guard';
-import { LLM_TOOL_TURNS_MAX, toolError, toolNameSchema, toolParameters, type ConnectIntent, type LLMTool, type LLMToolCall, type LLMToolTurn, type ToolError } from '@waldo/contracts';
+import { LLM_TOOL_TURNS_MAX, toolError, toolNameSchema, toolParameters, type ConnectIntent, type LLMTool, type LLMToolCall, type LLMToolTurn, type ToolError, type ToolName } from '@waldo/contracts';
 import { dispatchTool, type DispatchToolOptions, type ToolDispatcherContext } from '../tools/dispatcher';
 import { CONNECT_BUTTON_SENT, CONNECT_BUTTON_UNSENT } from '../tools/live/connect-text';
 import { ClosedRunError } from '../channels/run-effect-scope';
@@ -29,7 +29,9 @@ export type ToolLoopStep = (
 ) => Promise<Readonly<{ text: string; tool_calls?: readonly LLMToolCall[]; output_items?: readonly Record<string, unknown>[] }>>;
 
 // taint is the turn's once this result landed: external when this result, an earlier one, or the turn's own context was.
-export type ToolLoopEvent = Readonly<{ call: LLMToolCall; ok: boolean; ms: number; output: string; error?: string; error_code?: string; retryable?: boolean; code?: string; reason?: string; guard?: string; taint: 'external' | null }>;
+// parallel_batches is 1 on the first call of a dispatch batch and 0 on the calls that ran beside it, so summing it over a
+// turn's tool hops counts its batches.
+export type ToolLoopEvent = Readonly<{ call: LLMToolCall; ok: boolean; ms: number; output: string; error?: string; error_code?: string; retryable?: boolean; code?: string; reason?: string; guard?: string; taint: 'external' | null; parallel_batches: 0 | 1 }>;
 
 export const toolDefinitions = (handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']): LLMTool[] =>
   handlers.map((handler) => ({
@@ -45,6 +47,18 @@ const TOOL_TIME_WARN_MS = 15_000;
 // A successful read may run again once any other call ran after it, or once this long has passed; an identical read
 // back to back is a loop. A write never runs twice, and the browse tools keep their own session rule.
 export const READ_REPEAT_AFTER_MS = MODEL_CALL_TIMEOUT_MS;
+
+// Reads one model response may dispatch together. Each was checked to change nothing a later call can observe: no store
+// write that spans an await, no send, no session, no tool-menu change. Running them at once leaves every effect where it
+// was. The Google reads and read_drive stay out: their client stamps probe and health state across awaits and can send a
+// reconnect link, so two at once could send it twice. read_thread can relay a message, and read_tool_output reads a store
+// that sibling calls evict from. Anything not listed, and every write, approval or browse call, runs alone in model order.
+export const CONCURRENT_READ_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
+  'get_context', 'get_health', 'read_owner_context', 'read_memory', 'search_episodes', 'web_search',
+  'list_artifacts', 'read_artifact', 'list_reminders', 'list_responsibilities', 'list_health_logs',
+  'list_standing_orders', 'workspace_list', 'workspace_read', 'workspace_search', 'skills_list',
+]);
+export const MAX_CONCURRENT_READS = 4;
 
 // 'completed' means the model closed while resources remained. 'budget_exhausted'
 // means the loop withdrew tools at its local/shared round cap, 'time_exhausted' that
@@ -176,8 +190,26 @@ export async function runToolLoop(input: Readonly<{
     }
     let firstCall = true;
     roundStarts.push(turns.length);
-    for (const call of response.tool_calls) {
+    const calls = response.tool_calls;
+    // Reads dispatched ahead of their turn in a batch, by call index. A batch starts at the first read of a run of
+    // concurrent reads and is fully settled before any of its results is applied, so a hook's context write-back never
+    // lands over a taint the loop applied. Results then apply strictly in model order, as if each had just run.
+    const early = new Map<number, Promise<Readonly<{ result: LoopToolResult; ms: number }>>>();
+    let batchLead = true;
+    for (const [index, call] of calls.entries()) {
       input.ctx.runScope?.admit();
+      if (!early.has(index)) {
+        const batch = offer ? concurrentBatch(calls, index, mutationTools, seen) : [index];
+        if (batch.length > 1) {
+          for (const member of batch) {
+            const startedAt = Date.now();
+            early.set(member, dispatch(calls[member]!, input).then((result) => ({ result, ms: Date.now() - startedAt })));
+          }
+          await Promise.allSettled(batch.map((member) => early.get(member)!));
+          input.ctx.runScope?.admit();
+        }
+        batchLead = true;
+      }
       const started = Date.now();
       const key = `${call.name}\u0000${call.arguments}`;
       const cached = seen.get(key);
@@ -195,6 +227,7 @@ export async function runToolLoop(input: Readonly<{
       const runs = !previous && offer && !(browsingWithheld && BROWSE_TOOLS.has(call.name));
       // Preserve settled nonretryable failures and mutation failures verbatim.
       // Replaying them performs no I/O; transient reads may retry within the budget.
+      const settled = early.has(index) ? await early.get(index) : undefined;
       let result = previous
         ? previous.ok
           ? refusal(toolError('repeat_refusal'), 'repeat_refusal')
@@ -203,7 +236,7 @@ export async function runToolLoop(input: Readonly<{
           ? refusal(toolError('tools_withdrawn'), 'not_found', 'handler_unavailable')
           : !runs
             ? refusal(toolError('browsing_withheld', BROWSING_UNAVAILABLE), 'auth_failed', 'withheld_this_turn')
-            : await dispatch(call, input);
+            : settled?.result ?? await dispatch(call, input);
       if (runs) {
         dispatched += 1;
         readRuns.set(key, { dispatched, at: Date.now() });
@@ -284,7 +317,7 @@ export async function runToolLoop(input: Readonly<{
       const typed = result.ok ? undefined : (result as { code?: string; reason?: string; guard?: string; error_code?: string; retryable?: boolean });
       const failure = result.ok ? undefined : result.error ?? (typed?.code ? `${typed.code}${typed.reason ? `:${typed.reason}` : ''}` : undefined);
       input.onTool?.({
-        call, ok: result.ok, ms: Date.now() - started, output,
+        call, ok: result.ok, ms: settled?.ms ?? Date.now() - started, output, parallel_batches: batchLead ? 1 : 0,
         taint: (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint === 'external' ? 'external' : null,
         ...(failure ? { error: failure } : {}),
         ...(typed?.code ? { code: typed.code } : {}),
@@ -293,6 +326,7 @@ export async function runToolLoop(input: Readonly<{
         ...(typed?.reason ? { reason: typed.reason } : {}),
         ...(typed?.guard ? { guard: typed.guard } : {}),
       });
+      batchLead = false;
       if(call.name==='use_mac' && result.ok && result.data && typeof result.data==='object' && 'request_id' in result.data && typeof result.data.request_id==='string') {
        input.onSettle?.('completed');
        return `Sent to your Mac for approval. Request: ${result.data.request_id}`;
@@ -300,6 +334,24 @@ export async function runToolLoop(input: Readonly<{
     }
   }
 }
+
+// The calls from `start` that may dispatch together: the run of concurrent reads beginning there, up to the cap, each a
+// call the loop would dispatch now (no settled result for its exact arguments this turn) and none repeating an earlier
+// call's arguments in the run, which then meets that call's settled result exactly as it would in order. A single call,
+// a write, or a read that would not dispatch is a batch of one and runs in order.
+const concurrentBatch = (calls: readonly LLMToolCall[], start: number, mutationTools: ReadonlySet<string>, seen: ReadonlyMap<string, unknown>): readonly number[] => {
+  const batch: number[] = [];
+  const keys = new Set<string>();
+  for (let index = start; index < calls.length && batch.length < MAX_CONCURRENT_READS; index += 1) {
+    const call = calls[index]!;
+    const key = `${call.name}\u0000${call.arguments}`;
+    if (!CONCURRENT_READ_TOOLS.has(call.name as ToolName) || mutationTools.has(call.name) || BROWSE_TOOLS.has(call.name)) break;
+    if (seen.has(key) || keys.has(key)) break;
+    keys.add(key);
+    batch.push(index);
+  }
+  return batch.length > 1 ? batch : [start];
+};
 
 type LoopToolResult = Readonly<{ ok: boolean; data?: unknown; error?: string; error_code?: string; fix?: string; retryable?: boolean; code?: string; reason?: string; guard?: string; source_taint?: 'external' | null; connect?: ConnectIntent }>;
 
