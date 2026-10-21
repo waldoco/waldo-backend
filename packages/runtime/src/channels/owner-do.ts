@@ -140,7 +140,7 @@ import { googleCircuit } from '../connectors/google-circuit';
 import { confirmGoogleReadback, GoogleReadbackError, readbackFeature, reauthNoticeTransition } from '../connectors/google-reconnect';
 import { connectServiceHandler, googleHandlers } from '../tools/live/google';
 import { getHealthHandler, healthReadBook } from '../tools/live/health';
-import { appApprovalParts, approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals';
+import { appApprovalParts, approvalDesk, endCardWaits, forgetWaitingCards, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { googleTaskApprovals } from './google-task-approvals';
 import { googleTaskHandlers } from '../tools/live/tasks';
 import { approvalHandlers } from '../tools/live/raise-approval';
@@ -336,6 +336,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private activeInbox: InboxRecord | null = null;
   private activeScope: RunEffectScope | undefined;
   private activeAbort: AbortController | undefined;
+
+  // Binds this owner's WhatsApp to a number, or unbinds it, inside the caller's transactionSync. When the number changes, an
+  // approval card that waited for the owner's next message there was made for the number that is gone, so it stops waiting.
+  private bindWhatsApp(subject: string | null): void {
+    const { kv, sql } = this.ctx.storage;
+    const moving = subject === null || kv.get<string>('whatsapp_subject') !== subject;
+    bindWhatsAppNumber(kv, subject);
+    if (moving) endCardWaits(sql, 'whatsapp');
+  }
 
   private closeRunAtomic(run: InboxRecord, reason: string, awaitingDelivery = false): void {
     this.ctx.storage.transactionSync(() => {
@@ -1383,7 +1392,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const current = kv.get<string>('whatsapp_subject');
       if (current !== subject) {
         if (current !== seen || (seen !== undefined && !reconciled)) { changed = true; return; }
-        bindWhatsAppNumber(kv, subject);
+        this.bindWhatsApp(subject);
         rebound = true;
       }
       claimed = claimNewWhatsAppMessages(kv, value.messages ?? [], Date.now());
@@ -1606,7 +1615,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (form.get('action') === WHATSAPP_LINK_CONFIRM_ACTION) return whatsappLinkConfirmAction(form, session.csrf, this.ctx.storage.kv.get<string>('do_name') ?? '', whatsappLinkDirectory(this.env), subject => {
         // A new number starts clean: nothing held for the old one may reach it.
         const { kv } = this.ctx.storage;
-        this.ctx.storage.transactionSync(() => bindWhatsAppNumber(kv, subject));
+        this.ctx.storage.transactionSync(() => this.bindWhatsApp(subject));
         this.runtimes = {};
       });
       if (form.get('action') === 'device.pair' || form.get('action') === 'device.revoke' || form.get('action') === 'device.query' || form.get('action') === 'device.notify') return deviceConsoleAction(form, session.csrf, this.ctx.storage.kv.get<string>('do_name') ?? '', deviceDirectory(this.env), this.env.DEVICE_BRIDGE_DO, request.headers.get('accept') ?? '');
@@ -1739,7 +1748,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
                 // and sends resolve no owner, and what was held for that chat is discarded with it. A refused unlink keeps
                 // the binding, since the old number still routes here.
                 const name=this.ctx.storage.kv.get<string>('do_name'),done=name?await consoleAuth(this.env)?.unlinkWhatsApp?.(name)===true:false;
-                if(done){const {kv}=this.ctx.storage;this.ctx.storage.transactionSync(()=>bindWhatsAppNumber(kv,null));this.runtimes={};}
+                if(done){this.ctx.storage.transactionSync(()=>this.bindWhatsApp(null));this.runtimes={};}
                 return whatsappUnlinkReceipt(done);
               }
               if(action.action==='session.signout'||action.action==='session.signout.all'){
@@ -3115,9 +3124,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
           const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
           forgetHeldWhatsApp(this.ctx.storage.kv, texts);
+          const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now());
           const imessage = redactIMessageEntries(this.ctx.storage, texts, FORGOTTEN, scope);
           const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope);
-          if (result.remaining + mail.remaining + prep.remaining + reports.remaining + imessage.remaining + titles.remaining) throw new Error('Memory history cleanup is incomplete');
+          if (result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + imessage.remaining + titles.remaining) throw new Error('Memory history cleanup is incomplete');
           const scrubEpisodes = () => {
             const redact = literalTextRedactor(texts, FORGOTTEN);
             for (const row of storage.sql.exec<{ ref: number; text: string }>('SELECT rowid AS ref, text FROM episodes').toArray()) {
@@ -3895,6 +3905,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
               kvRemaining += redactCalendarPrepEntries(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
               kvRemaining += redactJobReportEntries(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
               forgetHeldWhatsApp(this.ctx.storage.kv, result.texts);
+              kvRemaining += forgetWaitingCards(this.ctx.storage.sql, result.texts, now).remaining;
               kvRemaining += redactThreadTitles(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
               await redactToolOutputLedger(this.ctx.storage, result.texts, FORGOTTEN);
             }
@@ -3924,6 +3935,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           await clean(() => redactCalendarPrepEntries(this.ctx.storage.kv, [node.label], FORGOTTEN));
           await clean(() => redactJobReportEntries(this.ctx.storage.kv, [node.label], FORGOTTEN));
           await clean(() => forgetHeldWhatsApp(this.ctx.storage.kv, [node.label]));
+          await clean(() => forgetWaitingCards(this.ctx.storage.sql, [node.label], now));
           await clean(() => redactThreadTitles(this.ctx.storage.kv, [node.label], FORGOTTEN));
           if (remaining > 0) {
             log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: false, detail: 'node.forget retained-copy redaction incomplete' });

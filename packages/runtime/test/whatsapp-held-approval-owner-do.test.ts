@@ -94,6 +94,12 @@ const owned = async (name: string, script: (steps: Readonly<{
   approvals(): Approval[];
   shown(id: string): Shown[];
   held(): string[];
+  // A console forget of a memory that names the text, as a stated fact (spot) or a pattern (node).
+  forget(kind: 'node' | 'spot', text: string): Promise<boolean | string>;
+  // The owner's WhatsApp is bound to another number, as a confirmed link, a reconciled admission or an unlink and relink do.
+  rebind(subject: string): void;
+  // The owner writes from the given number.
+  replyFrom(subject: string, text: string): Promise<void>;
 }>) => Promise<void>, wrote = 30 * HOUR) => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql);
@@ -109,6 +115,18 @@ const owned = async (name: string, script: (steps: Readonly<{
     const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
     const owner = new OwnerDO(state, { ...env, ...directory, ...whatsapp, ...google, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     let seq = 0;
+    const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+    const internals = owner as unknown as { bindWhatsApp(subject: string | null): void; runtimes: Record<string, unknown>; whatsappInflight: Set<Promise<void>>;
+      setup(channel: string): { act(input: { action: 'node.forget' | 'spot.forget'; id: string; value: string }): Promise<boolean | string> } };
+    const replyFrom = async (subject: string, text: string) => {
+      seq += 1;
+      const response = await owner.fetch(new Request('https://telegram-owner/whatsapp-admit', {
+        method: 'POST', headers: { 'x-waldo-whatsapp-subject': subject },
+        body: JSON.stringify({ messages: [{ from: subject, id: `wamid.in.${seq}`, timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: text } }] }),
+      }));
+      expect(response.status).toBe(200);
+      await Promise.all([...internals.whatsappInflight]);
+    };
     try {
       await script({
         // A queued record falls due 250 ms after it is written, so each pass waits that out. The wake a pass armed is cleared
@@ -119,15 +137,15 @@ const owned = async (name: string, script: (steps: Readonly<{
           const at = new Date(Date.now() - 30 * 60_000).toISOString().slice(11, 16);
           await standingOrderBook(state.storage.sql, scheduler, clock, () => 'ord1').set({ scope: 'email Sam the weekly numbers', trigger: 'daily', at, gate: 'act_and_report', escalation: 'log_only' });
         },
-        reply: async text => {
-          seq += 1;
-          const response = await owner.fetch(new Request('https://telegram-owner/whatsapp-admit', {
-            method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT },
-            body: JSON.stringify({ messages: [{ from: SUBJECT, id: `wamid.in.${seq}`, timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: text } }] }),
-          }));
-          expect(response.status).toBe(200);
-          await Promise.all([...(owner as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+        reply: text => replyFrom(SUBJECT, text),
+        replyFrom: (subject, text) => replyFrom(subject, text),
+        forget: async (kind, text) => {
+          if (kind === 'node') state.storage.sql.exec("INSERT INTO constellation_nodes(domain,label,summary,strength,status,first_seen,last_confirmed,supporting_spots) VALUES ('work',?,'synthetic',0.5,'active','now','now','[]')", text);
+          else memory.add({ kind: 'fact', text, source: 'stated', evidence: `"${text}"`, origin: 'owner' }, new Date().toISOString());
+          const id = kind === 'node' ? memory.nodes().find(row => row.label === text)!.id : memory.claims().find(row => row.text === text)!.id;
+          return internals.setup('whatsapp').act({ action: `${kind}.forget`, id: String(id), value: '' });
         },
+        rebind: subject => { state.storage.transactionSync(() => internals.bindWhatsApp(subject)); internals.runtimes = {}; },
         later: async (ms, step) => {
           const now = Date.now;
           Date.now = () => now() + ms;
@@ -209,6 +227,39 @@ describe('an approval card for a WhatsApp-only owner raised while the 24-hour wi
       expect(wire.events.some(isCard(approval!.id))).toBe(false);
       expect(approvals()).toMatchObject([{ id: approval!.id, status: 'expired' }]);
       expect(shown(approval!.id)).toEqual([]);
+    });
+  });
+});
+
+describe('a waiting approval card the owner may no longer be shown', { timeout: 30_000 }, () => {
+  it.each(['spot', 'node'] as const)('is never sent after a console forget (%s) that names it', async kind => {
+    await owned(`wa-held-approval-forget-${kind}`, async ({ alarms, order, reply, forget, approvals }) => {
+      await order();
+      await alarms(4);
+      const [approval] = approvals();
+      expect(approval).toMatchObject({ kind: 'email_send', status: 'card_unconfirmed' });
+      expect(await forget(kind, 'Weekly numbers')).toBe(true);
+      expect(approvals()).toMatchObject([{ id: approval!.id, status: 'skipped' }]);
+      await reply(OWNER_SAYS);
+      expect(wire.events.some(event => event.includes('Weekly numbers'))).toBe(false);
+      expect(wire.events.some(isCard(approval!.id))).toBe(false);
+      expect(wire.events).toContain('turn');
+      expect(mail.sent).toEqual([]);
+    });
+  });
+
+  it('is never sent to a number linked after it was made', async () => {
+    const NEW = '15550004444';
+    await owned('wa-held-approval-rebind', async ({ alarms, order, rebind, replyFrom, approvals, shown }) => {
+      await order();
+      await alarms(4);
+      const [approval] = approvals();
+      expect(approval).toMatchObject({ status: 'card_unconfirmed' });
+      rebind(NEW);
+      await replyFrom(NEW, OWNER_SAYS);
+      expect(wire.events.some(isCard(approval!.id))).toBe(false);
+      expect(shown(approval!.id)).toEqual([]);
+      expect(approvals()).toMatchObject([{ id: approval!.id, status: 'card_unconfirmed' }]);
     });
   });
 });

@@ -11,6 +11,7 @@ import type { TurnLogEntry } from './telegram-listener';
 import { MASK, isCredentialKey, maskedUrl, maskedValue } from './secret-fields';
 import { APP_REVIEW_MAX_CHARS, appApprovalPart, type AppApprovalPart } from './surfaces/app';
 import { SEND_NOW_ONLY } from './delivery-routes';
+import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import { replyApprovalPartV1Schema } from '@waldo/contracts';
 import { appApprovalExactV1Schema, appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
 
@@ -251,6 +252,32 @@ const appShowsInFull = (entry: LedgerRow) => { try { return appReview(entry).ful
 // The owner's "door" for effects: proposals become Telegram cards with Do it / Modify / Not now,
 // nothing reaches the calendar before Do it, and every effect lands in one ledger with a
 // 10-minute undo where the provider allows it.
+// The statuses in which a card that waits for the owner's next message can still go out.
+const CARD_WAITING = "status IN ('card_unconfirmed', 'open', 'review_only')";
+const hasCardWaits = (sql: SqlStorage) => sql.exec<{ name: string }>("SELECT name FROM pragma_table_info('ledger') WHERE name = 'card_waits_on'").toArray().length > 0;
+
+// Owner forget: a card still waiting for the owner's next message would carry the forgotten text to them, rebuilt from its
+// ledger row, which the purge does not rewrite. Each such approval ends as skipped, so no surface sends it and nothing can
+// approve it. remaining counts waiting cards that still carry a text afterwards, for the caller's verdict.
+export const forgetWaitingCards = (sql: SqlStorage, texts: readonly string[], now: number): Readonly<{ ended: number; remaining: number }> => {
+  const topics = [...new Set(texts.map(text => text.trim()).filter(Boolean))];
+  if (!topics.length || !hasCardWaits(sql)) return { ended: 0, remaining: 0 };
+  const carries = (row: Readonly<{ summary: string; payload_json: string }>) =>
+    topics.some(topic => [row.summary, row.payload_json].some(value => carriesTopic(value, topic) || hidesTopic(value, topic)));
+  const waiting = () => sql.exec<{ id: string; summary: string; payload_json: string }>(`SELECT id, summary, payload_json FROM ledger WHERE card_waits_on IS NOT NULL AND ${CARD_WAITING}`).toArray().filter(carries);
+  let ended = 0;
+  for (const { id } of waiting()) {
+    ended += sql.exec(`UPDATE ledger SET status = 'skipped', decided_at = ?, card_waits_on = NULL WHERE id = ? AND card_waits_on IS NOT NULL AND ${CARD_WAITING}`, now, id).rowsWritten;
+  }
+  return { ended, remaining: waiting().length };
+};
+
+// The surface was bound to another number, or unbound: a card that waited for the owner's next message there was made for the
+// number that is gone, so it no longer waits. Synchronous, for the transaction that changes the binding.
+export const endCardWaits = (sql: SqlStorage, surface: string): void => {
+  if (hasCardWaits(sql)) sql.exec('UPDATE ledger SET card_waits_on = NULL WHERE card_waits_on = ?', surface);
+};
+
 export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   effects?: OwnerEffectLedger;
   call: TelegramCall;
@@ -534,6 +561,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     // An uncertain row with no effect record never reached dispatch (the record is written before the provider call), so it is safe to run again; a record sends it through reconcile instead.
     const recovering = entry?.status === 'uncertain' && deps.effects !== undefined && (action === 'a' || action === 'u' && entry.kind === 'calendar_change' && !!entry.undo_json && !!deps.effects.get(`${operationRef}:undo`));
     if (entry?.status === 'uncertain' && entry.kind !== 'browser_submit' && action === 'a' && !recovering) return { toast: 'Outcome unknown', message: 'The outcome of that approval is unknown. Check the result before retrying; nothing was sent again.' };
+    if (entry?.status === 'card_unconfirmed' && entry.card_waits_on != null) return { toast: 'Not out yet', message: `That card has not reached you on ${entry.card_waits_on} yet; it goes out there when you next write. Nothing was done.` };
     if (!entry || (entry.status !== expected && !((action === 's' || action === 'd') && entry.status === 'review_only') && !recovering)) return { toast: 'Already handled.', message: 'Already handled.' };
     if ((action === 'a' || action === 'e') && entry.status === 'open' && !presentedTo(entry, via)) return notPresented(entry);
     const proposal = JSON.parse(entry.payload_json) as Stored;
@@ -966,11 +994,14 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     // send, so one whose send ends unknown is never sent twice. One refused again waits again and, like a failure, ends the pass.
     async ownerWrote() {
       expireDue();
-      const due = sql.exec<{ id: string }>("SELECT id FROM ledger WHERE card_waits_on = ? AND status IN ('card_unconfirmed', 'open', 'review_only') AND deferred_at IS NULL ORDER BY created_at, id", surface).toArray();
-      const shownHere = (id: string) => sql.exec('SELECT 1 FROM approval_presentations WHERE approval_id = ? AND surface = ?', id, surface).toArray().length > 0;
+      const passStarted = deps.now();
+      const due = sql.exec<{ id: string }>(`SELECT id FROM ledger WHERE card_waits_on = ? AND ${CARD_WAITING} AND deferred_at IS NULL ORDER BY created_at, id`, surface).toArray();
+      // Shown in this pass: an older presentation of a card that was put off and raised does not count.
+      const shownHere = (id: string) => sql.exec('SELECT 1 FROM approval_presentations WHERE approval_id = ? AND surface = ? AND presented_at >= ?', id, surface, passStarted).toArray().length > 0;
       let shown = 0;
       for (const { id } of due) {
-        sql.exec('UPDATE ledger SET card_waits_on = NULL WHERE id = ? AND card_waits_on = ?', id, surface);
+        // Claimed against the row as it is now: one decided, put off or forgotten while an earlier card was sending is skipped.
+        if (!sql.exec(`UPDATE ledger SET card_waits_on = NULL WHERE id = ? AND card_waits_on = ? AND ${CARD_WAITING} AND deferred_at IS NULL`, id, surface).rowsWritten) continue;
         // A card refused again, or whose send failed or ended unknown, is not shown here, even when the app showed it.
         if (!await present(id).then(() => shownHere(id), () => false)) {
           deps.log({ trace: id, hop: 'approval_card_waited', ms: 0, ok: false, code: row(id)?.card_waits_on != null ? 'waits_again' : 'unshown' });

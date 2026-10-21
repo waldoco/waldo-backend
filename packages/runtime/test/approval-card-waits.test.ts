@@ -5,7 +5,8 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { approvalDesk, PROPOSAL_TTL_MS, proposalStatus } from '../src/channels/approvals';
+import { approvalDesk, endCardWaits, forgetWaitingCards, PROPOSAL_TTL_MS, proposalStatus } from '../src/channels/approvals';
+import type { TurnLogEntry } from '../src/channels/telegram-listener';
 import { WhatsAppApiError } from '../src/channels/whatsapp-api';
 import { whatsappWindowCaller, whatsappWindowOpen } from '../src/channels/whatsapp-window';
 import { sha256Hex } from '../src/connectors/google';
@@ -21,7 +22,8 @@ const fixture = (state: DurableObjectState, options: Readonly<{ app?: boolean }>
   let now = NOW, wamid = 0, next: 'unknown' | 'refused' | null = null, n = 0;
   // The owner last wrote 30 hours ago, so the window is closed.
   kv.put('wa_last_inbound_ms', NOW - 30 * HOUR);
-  const attempts: string[] = [], delivered: string[] = [], sent: string[] = [], ran: string[] = [];
+  const attempts: string[] = [], delivered: string[] = [], sent: string[] = [], ran: string[] = [], logs: TurnLogEntry[] = [];
+  let duringSend: ((text: string) => void) | null = null;
   const inner = async (method: string, body: object) => {
     if (method === 'sendTemplate') { delivered.push('knock'); return { messages: [{ id: 'wamid.knock' }] }; }
     // WhatsApp has no callback answers or keyboards to edit.
@@ -32,16 +34,20 @@ const fixture = (state: DurableObjectState, options: Readonly<{ app?: boolean }>
     if (failing === 'unknown') throw new Error('whatsapp send timed out; delivery uncertain');
     if (failing === 'refused') throw new WhatsAppApiError(400, JSON.stringify({ error: { code: 131047 } }));
     wamid += 1; delivered.push(text);
+    duringSend?.(text);
     return { messaging_product: 'whatsapp', contacts: [{ input: String(OWNER), wa_id: String(OWNER) }], messages: [{ id: `wamid.card-${wamid}` }] };
   };
   const call = whatsappWindowCaller(inner, { kv, template: { name: 'waldo_update_ready', language: 'en' }, now: () => now, log: () => undefined });
   const desk = approvalDesk(sql, { owner: OWNER, surface: 'whatsapp', call, writesFirstNow: () => whatsappWindowOpen(kv, now),
-    google: async () => null, newId: () => `w${++n}`, now: () => now, timezone: 'UTC', log: () => undefined, commit: work => state.storage.transactionSync(work),
+    google: async () => null, newId: () => `w${++n}`, now: () => now, timezone: 'UTC', log: entry => { logs.push(entry); }, commit: work => state.storage.transactionSync(work),
     sendMessage: async proposal => { sent.push(proposal.content); return { provider_id: `wamid.sent-${sent.length}` }; },
     replayTaintedAction: async proposal => { ran.push(proposal.tool); return { status: 'done', message: 'Created.' }; },
     ...(options.app ? { appIdentity: () => true } : {}) });
   return {
-    desk, attempts, delivered, sent, ran,
+    desk, attempts, delivered, sent, ran, logs, sql,
+    now: () => now,
+    // Runs while WhatsApp accepts a card, as a decision made elsewhere during the pass would.
+    onSend: (work: (text: string) => void) => { duringSend = work; },
     tick: (ms: number) => { now += ms; },
     // The owner writes on WhatsApp, which opens the window.
     writes: () => { kv.put('wa_last_inbound_ms', now); },
@@ -228,6 +234,90 @@ describe('an approval card the surface cannot send now', () => {
       await expect(desk.proposeSendMessage(message('blocked'))).rejects.toThrow('Approval card not confirmed');
       expect(desk.placement('pb1')).toEqual({ here: false, hereApprovable: false, app: false, appApprovable: false });
       expect(desk.ledger([])).toContain('(review card delivery unconfirmed; cannot approve)');
+    });
+  });
+});
+
+describe('a waiting approval card the owner can no longer be shown', () => {
+  it('is ended by a forget that names it, so the owner\'s next message never sends it; one that does not name it still goes out', async () => {
+    await owner('approval-card-forget', async state => {
+      const f = fixture(state);
+      const named = await f.desk.proposeSendEmail(await email());
+      const other = await f.desk.proposeSendMessage(message('Running late'));
+      expect(forgetWaitingCards(f.sql, ['weekly numbers'], f.now())).toEqual({ ended: 1, remaining: 0 });
+      expect(f.status(named)).toBe('skipped');
+      expect(f.desk.placement(named)).toEqual({ here: false, hereApprovable: false, app: false, appApprovable: false });
+      f.tick(HOUR); f.writes();
+      await f.desk.ownerWrote();
+      expect(f.attempts).toEqual([expect.stringContaining('Running late')]);
+      expect(f.attempts.join('\n')).not.toContain('Weekly numbers');
+      expect(f.status(other)).toBe('open');
+      // Nothing is left waiting, and a second forget finds nothing.
+      expect(forgetWaitingCards(f.sql, ['weekly numbers'], f.now())).toEqual({ ended: 0, remaining: 0 });
+    });
+  });
+
+  it('a forget before any approval was ever made finds no ledger and ends nothing', async () => {
+    await owner('approval-card-forget-empty', async state => {
+      expect(forgetWaitingCards(state.storage.sql, ['weekly numbers'], NOW)).toEqual({ ended: 0, remaining: 0 });
+      expect(() => endCardWaits(state.storage.sql, 'whatsapp')).not.toThrow();
+    });
+  });
+
+  it('stops waiting when the surface is bound to another number: the new number never gets a card made before it was linked', async () => {
+    await owner('approval-card-rebind', async state => {
+      const f = fixture(state);
+      const id = await f.desk.proposeSendMessage(message('Made for the old number'));
+      endCardWaits(f.sql, 'whatsapp');
+      f.tick(HOUR); f.writes();
+      await f.desk.ownerWrote();
+      expect(f.attempts).toEqual([]);
+      expect(f.desk.placement(id)).toEqual({ here: false, hereApprovable: false, app: false, appApprovable: false });
+      expect(f.desk.ledger([])).toContain('- Send this on whatsapp: "Made for the old number" (review card delivery unconfirmed; cannot approve)');
+    });
+  });
+
+  it('is not sent when it was decided elsewhere while the pass was sending the card before it', async () => {
+    await owner('approval-card-decided-mid-pass', async state => {
+      const f = fixture(state, { app: true });
+      const first = await f.desk.proposeSendMessage(message('first'));
+      const second = await f.desk.proposeSendMessage(message('second'));
+      f.onSend(text => { if (text.includes('first')) f.sql.exec("UPDATE ledger SET status = 'skipped', decided_at = ? WHERE id = ?", f.now(), second); });
+      f.tick(HOUR); f.writes();
+      await f.desk.ownerWrote();
+      expect(f.attempts).toEqual([expect.stringContaining('first')]);
+      expect(f.status(first)).toBe('open');
+      expect(f.status(second)).toBe('skipped');
+    });
+  });
+
+  it('a card shown before, put off, raised and refused again counts as not shown in this pass', async () => {
+    await owner('approval-card-refused-again', async state => {
+      const f = fixture(state);
+      // The owner wrote 23 hours ago, so the card goes out at once, and the window closes an hour later.
+      f.writes(); f.tick(23 * HOUR);
+      const id = await f.desk.proposeSendMessage(message('shown once'));
+      expect(f.shown(id)).toHaveLength(1);
+      await f.desk.decide(id, 'd', 'trace', { surface: 'whatsapp', messageRef: `${OWNER}:0` });
+      f.tick(2 * HOUR);
+      await f.desk.reraise(id);
+      expect(f.desk.placement(id)).toMatchObject({ waitsHere: true });
+      f.writes(); f.failNext('refused');
+      f.logs.length = 0;
+      await f.desk.ownerWrote();
+      expect(f.logs.filter(entry => entry.hop === 'approval_card_waited').map(entry => [entry.ok, entry.code ?? entry.detail])).toEqual([[false, 'waits_again']]);
+    });
+  });
+
+  it('answers a decision on a card that has not gone out yet with when it will, not "Already handled."', async () => {
+    await owner('approval-card-decide-waiting', async state => {
+      const f = fixture(state);
+      const id = await f.desk.proposeSendMessage(message('not out yet'));
+      const out = await f.desk.decide(id, 'a', 'trace', { surface: 'app' });
+      expect(out.message).not.toBe('Already handled.');
+      expect(out.message).toContain('when you next write');
+      expect(f.sent).toEqual([]);
+      expect(f.status(id)).toBe('card_unconfirmed');
     });
   });
 });
