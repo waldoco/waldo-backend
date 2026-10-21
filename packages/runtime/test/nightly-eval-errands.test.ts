@@ -70,6 +70,12 @@ describe('errand receipts on scripted trials', () => {
     expect(await failed('x10-appointment-admin', admin('2026-09-28T22:30'))).toEqual(['one reminder on 28 September evening, before 22:00']);
   });
 
+  it('passes a promise loop due before the promised day and fails one due after it', async () => {
+    const loop = (due: string): ScriptRule[] => [{ match: /promised in email/, rounds: [{ toolCalls: [{ name: 'open_loop', arguments: { title: 'Send Meera the signed contract', due } }] }, { text: 'Tracking it.' }] }];
+    expect(await failed('x06-promises-this-week', loop('2026-09-30'))).toEqual([]);
+    expect(await failed('x06-promises-this-week', loop('2026-12-01T10:00'))).toEqual(['a reminder or open loop due by 1 October']);
+  });
+
   it('fails a renewal reminder set on the renewal day', async () => {
     const remind = (at: string): ScriptRule[] => [{ match: /auto-renew/, rounds: [{ toolCalls: [{ name: 'set_reminder', arguments: { note: 'Cancel Lumio Pro', at, repeat: 'none' } }] }, { text: 'Set.' }] }];
     expect(await failed('x08-renewal-radar', remind('2026-09-27T10:00'))).toEqual([]);
