@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import {
-  ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL,
-  ANTHROPIC_CLAUDE_SONNET_4_6_MODEL,
+  ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL,
+  ANTHROPIC_CLAUDE_OPUS_5_5_MODEL,
   OPENAI_GPT_6_1_SOL_MODEL,
   OPENAI_GPT_6_LUNA_MODEL,
   WORKERS_AI_GEMMA_4_26B_MODEL,
@@ -34,10 +34,9 @@ export type ModelContextSpec = z.infer<typeof modelContextSpecSchema>;
 // - OPENAI_GPT_6_LUNA_MODEL: OpenAI model page - 1,050,000 context, 128,000 max output
 //   (developers.openai.com/api/docs/models/<id>, verified 2026-09-28).
 // - OPENAI_GPT_6_1_SOL_MODEL: OpenAI model page - 1,050,000 context, 128,000 max output (same URL shape).
-// - ANTHROPIC_CLAUDE_SONNET_4_6_MODEL: Anthropic context-windows doc - listed in the 1M-window
-//   group, 128k max output (platform.claude.com/docs/en/build-with-claude/context-windows).
-// - ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL: same doc - outside the 1M group, so the 200k window;
-//   64k output reserve.
+// - ANTHROPIC_CLAUDE_OPUS_5_5_MODEL: Anthropic models doc - 1M context window, 128k max output
+//   (platform.claude.com/docs/en/about-claude/models, checked 2026-10-20).
+// - ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL: same doc - 1M context window, 128k max output.
 // - WORKERS_AI_GEMMA_4_26B_MODEL: Workers AI model page not publicly documented at this
 //   revision - conservative 128k-window assumption, marked for correction against the
 //   Workers AI dashboard before this model ever routes production traffic.
@@ -47,15 +46,15 @@ export const MODEL_CONTEXT_SPECS = {
     output_reserve_tokens: 8_192,
     safety_margin_tokens: 8_192,
   },
-  [ANTHROPIC_CLAUDE_SONNET_4_6_MODEL]: {
+  [ANTHROPIC_CLAUDE_OPUS_5_5_MODEL]: {
     context_window_tokens: 1_000_000,
     output_reserve_tokens: 128_000,
     safety_margin_tokens: 16_384,
   },
-  [ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL]: {
-    context_window_tokens: 200_000,
-    output_reserve_tokens: 64_000,
-    safety_margin_tokens: 8_192,
+  [ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL]: {
+    context_window_tokens: 1_000_000,
+    output_reserve_tokens: 128_000,
+    safety_margin_tokens: 16_384,
   },
   [OPENAI_GPT_6_LUNA_MODEL]: {
     context_window_tokens: 1_050_000,

@@ -8,7 +8,9 @@ import {
   PROVIDER_OF,
   reasoningEffortSchema,
   ROSTER,
+  WALDO_AUXILIARY_FALLBACK_MODEL,
   WALDO_AUXILIARY_MODEL,
+  WALDO_CHAT_FALLBACK_MODEL,
   WALDO_CHAT_MODEL,
 } from './roster';
 
@@ -40,6 +42,13 @@ describe('chat model seam', () => {
     expect(WALDO_CHAT_MODEL).toBe(OPENAI_GPT_6_1_SOL_MODEL);
     expect(WALDO_AUXILIARY_MODEL).toBe(OPENAI_GPT_6_LUNA_MODEL);
   });
+
+  it('falls back to the current Claude Opus for owner turns and the current Claude Haiku for auxiliary calls', () => {
+    expect(WALDO_CHAT_FALLBACK_MODEL).toBe('claude-opus-5-5');
+    expect(WALDO_AUXILIARY_FALLBACK_MODEL).toBe('claude-haiku-5-5');
+    expect(PROVIDER_OF[WALDO_CHAT_FALLBACK_MODEL]).toBe('anthropic');
+    expect(PROVIDER_OF[WALDO_AUXILIARY_FALLBACK_MODEL]).toBe('anthropic');
+  });
 });
 
 describe('reasoning effort', () => {
@@ -70,16 +79,16 @@ describe('reasoning effort', () => {
 describe('roster', () => {
   it('binds each role to the ADR-0069 model, with the two reuse invariants', () => {
     expect(ROSTER.primary).toBe('@cf/google/gemma-4-26b-a4b-it');
-    expect(ROSTER.reasoning).toBe('claude-sonnet-4-6');
-    expect(ROSTER.fallback).toBe('claude-haiku-4-5');
+    expect(ROSTER.reasoning).toBe('claude-opus-5-5');
+    expect(ROSTER.fallback).toBe('claude-haiku-5-5');
     expect(ROSTER.auxiliary).toBe(ROSTER.primary);
     expect(ROSTER.harness_judge).toBe(ROSTER.fallback);
   });
 
   it('assigns the correct provider per model', () => {
     expect(PROVIDER_OF['@cf/google/gemma-4-26b-a4b-it']).toBe('workers_ai');
-    expect(PROVIDER_OF['claude-sonnet-4-6']).toBe('anthropic');
-    expect(PROVIDER_OF['claude-haiku-4-5']).toBe('anthropic');
+    expect(PROVIDER_OF['claude-opus-5-5']).toBe('anthropic');
+    expect(PROVIDER_OF['claude-haiku-5-5']).toBe('anthropic');
     expect(PROVIDER_OF[OPENAI_GPT_6_LUNA_MODEL]).toBe('openai');
     expect(PROVIDER_OF[OPENAI_GPT_6_1_SOL_MODEL]).toBe('openai');
   });
@@ -89,12 +98,12 @@ describe('roster', () => {
       modelNameSchema.options.filter((model) => PROVIDER_OF[model] !== 'openai').sort(),
     );
     expect(CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS[ROSTER.reasoning]).toEqual({
-      request: 'anthropic/claude-sonnet-4.6',
-      response: ['claude-sonnet-4-6'],
+      request: 'anthropic/claude-opus-5.5',
+      response: ['claude-opus-5-5'],
     });
     expect(CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS[ROSTER.fallback]).toEqual({
-      request: 'anthropic/claude-haiku-4.5',
-      response: ['claude-haiku-4-5', 'claude-haiku-4-5-20251001'],
+      request: 'anthropic/claude-haiku-5.5',
+      response: ['claude-haiku-5-5'],
     });
   });
 });
