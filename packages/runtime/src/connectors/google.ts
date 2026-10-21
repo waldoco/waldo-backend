@@ -439,15 +439,20 @@ type GmailPayload = Readonly<{ mimeType?: string; body?: { data?: string }; part
 type GmailFullMessage = Readonly<{ id?: string; threadId?: string; snippet?: string; internalDate?: string; payload?: GmailPayload }>;
 const htmlText = (html: string): string => {
   const blocks = new Set(['p', 'div', 'br', 'li', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'section', 'article', 'hr']);
+  // Adjacent cells would otherwise run together ("Verification code482913"), hiding a code from extraction.
+  const cells = new Set(['td', 'th']);
   let suppressed = 0;
   const chunks: string[] = [];
-  const boundary = () => { if (!suppressed && chunks.length && chunks.at(-1) !== '\n') chunks.push('\n'); };
+  const mark = (separator: string) => { if (!suppressed) chunks.push(separator); };
   new Parser({
-    onopentag(name) { if (name === 'script' || name === 'style') suppressed++; else if (blocks.has(name)) boundary(); },
-    ontext(text) { if (!suppressed) chunks.push(text); },
-    onclosetag(name) { if (name === 'script' || name === 'style') suppressed = Math.max(0, suppressed - 1); else if (blocks.has(name)) boundary(); },
+    onopentag(name) { if (name === 'script' || name === 'style') suppressed++; else if (blocks.has(name)) mark('\n'); },
+    // A run of source whitespace, line breaks included, becomes one space. Preformatted text collapses too: its layout
+    // is lost, its words are kept.
+    ontext(text) { if (!suppressed) chunks.push(text.replace(/\s+/g, ' ')); },
+    onclosetag(name) { if (name === 'script' || name === 'style') suppressed = Math.max(0, suppressed - 1); else if (blocks.has(name)) mark('\n'); else if (cells.has(name)) mark(' '); },
   }, { decodeEntities: true }).end(html);
-  return chunks.join('').trim();
+  // A block or row ends a line, a cell ends with a space.
+  return chunks.join('').replace(/\s+/g, (run) => (run.includes('\n') ? '\n' : ' ')).trim();
 };
 const threadBody = (payload: GmailPayload | undefined): string => {
   const partText = (part: GmailPayload, mime: string): string => {
