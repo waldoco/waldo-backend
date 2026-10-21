@@ -67,6 +67,11 @@ const carried = z.strictObject({
 });
 // Open follow-ups, soonest due first and undated last. source says where one came from, never which thread.
 const openLoop = z.strictObject({ id: text.min(1).max(100), title: workTitle, due: localWhen.nullable(), source: z.enum(['gmail', 'chat']) });
+// Today's update cards in Main chat, newest first, each named like a card's latest delivery. checked_at (epoch ms) is
+// when Waldo last read the calendar and inbox for changes, null before its first real read. A check can hold what it
+// found for the next main card, so an empty page does not mean nothing changed.
+const updates = z.strictObject({ items: z.array(latestDelivery).max(APP_OVERVIEW_PAGE_MAX_V1), total: count, checked_at: z.int().positive().nullable() })
+  .refine(page => page.total >= page.items.length, { error: 'total counts every update card today', path: ['total'] });
 // timezone_confirmed is true once the owner set the zone themselves (timezone.set); absent from a Worker that does not say.
 export const appControlDayDataV1Schema = z.strictObject({
   timezone: text, timezone_confirmed: z.boolean().optional(), date: text,
@@ -76,6 +81,7 @@ export const appControlDayDataV1Schema = z.strictObject({
   schedules: z.strictObject({ daily_brief: z.boolean(), followups: z.boolean(), event_briefs: z.boolean(), nightly: z.boolean(), heartbeat: z.boolean() }),
   carrying: firstPage(carried).optional(),
   open_loops: firstPage(openLoop).optional(),
+  updates: updates.optional(),
 });
 // Lists only the channels this Waldo can link. Addressing is masked and exists exactly while the
 // binding keeps it: an unlinked or pending channel holds no peer identifier.
