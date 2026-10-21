@@ -631,7 +631,7 @@ export const createOwnerResponder = (
           const receipt = event.call.name === 'remember' && event.ok ? JSON.parse(event.output) as { data?: { status?: string } } : undefined;
           if (receipt?.data?.status !== 'duplicate') turnToolEvents.push({ seq: turnToolEvents.length + 1, call: { name: event.call.name, args: parseToolArgs(event.call.arguments, event.call.name) }, ok: event.ok, at: Date.now(), ...(event.code ? { code: event.code } : {}) });
           privateRunScope?.admit();
-          log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, parallel_batches: event.parallel_batches, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...toolErrorCode(event), ...(event.guard ? { guard: event.guard } : {}), text: { input: event.call.arguments, output: event.output } });
+          log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, parallel_batches: event.parallel_batches, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...toolErrorCode(event), ...(event.guard ? { guard: event.guard } : {}), ...(event.blocked ? { blocked_reason: event.blocked } : {}), text: { input: event.call.arguments, output: event.output } });
           privateRunScope?.admit();
           pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: event.taint, origin: ownerTurnActive && !probeGuard?.stripLiveTools ? 'owner' : 'machine', summary: turnOnlyOutput.has(event.call.name) ? TURN_ONLY_OUTPUT : event.output, ...(thread ? { thread } : {}) });
         },

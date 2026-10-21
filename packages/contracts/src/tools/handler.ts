@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { errorCodeSchema, type ErrorCode } from '../core/error';
+import { errorCodeSchema, rungBlockedOutcomeSchema, type ErrorCode, type RungBlockedOutcome } from '../core/error';
 import { triggerTypeSchema, type TriggerType } from '../core/trigger';
 import { isExternalSourceTaint, sourceTaintSchema, type SourceTaint } from '../memory/sanitise';
 import { waldoCardSchema, type WaldoCard } from '../ui/card';
@@ -19,14 +19,15 @@ export const toolResultSchema = <Data extends z.ZodType>(dataSchema: Data) =>
       card: waldoCardSchema.optional(),
       source_taint: z.null(),
     }),
-    z.strictObject({ ok: z.literal(false), error: z.string().min(1), code: errorCodeSchema, source_taint: sourceTaintSchema.optional(), connect: connectIntentSchema.optional() }),
+    z.strictObject({ ok: z.literal(false), error: z.string().min(1), code: errorCodeSchema, source_taint: sourceTaintSchema.optional(), connect: connectIntentSchema.optional(), blocked: rungBlockedOutcomeSchema.optional() }),
   ]);
 
 export type ToolResult<T> =
   | { ok: true; data: T; source_taint: SourceTaint; card?: WaldoCard }
   // connect (CONNECT_FLOW_DESIGN 4.4): a typed auth intent the responder turns into the channel's
   // connect affordance. Never a URL - the model only ever sees fixed words.
-  | { ok: false; error: string; code: ErrorCode; source_taint?: SourceTaint; connect?: ConnectIntent };
+  // blocked: why a page or site stopped the call, when the tool knows it for certain; the refusal's fix names the next rung.
+  | { ok: false; error: string; code: ErrorCode; source_taint?: SourceTaint; connect?: ConnectIntent; blocked?: RungBlockedOutcome };
 
 // The trusted RunLoop V2 path provides this content-free capability only after it has committed
 // a durable effect intent. A handler that cannot reconcile a retry on this key must not be used
@@ -79,6 +80,7 @@ export const externalToolResultSchema = <Data extends z.ZodType>(dataSchema: Dat
       code: errorCodeSchema,
       source_taint: z.literal('external'),
       connect: connectIntentSchema.optional(),
+      blocked: rungBlockedOutcomeSchema.optional(),
     }),
   ]);
 
