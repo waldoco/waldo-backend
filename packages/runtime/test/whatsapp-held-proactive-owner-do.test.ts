@@ -318,7 +318,7 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
   });
 
   it('delivers the report of an order whose turn outlasts its period, and completes its run', async () => {
-    await owned('wa-late-order', async ({ alarms, order, runs, outbox }) => {
+    await owned('wa-late-order', async ({ alarms, arrived, order, runs, outbox }) => {
       // An every-minute order whose report turn takes two minutes: the report is written after the order's next slot.
       model.slowReportMs = 2 * 60_000;
       await order('* * * * *');
@@ -326,13 +326,15 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
       expect(model.reports).toBeGreaterThanOrEqual(1);
       expect(wire.events).toContain(`text:${REPORT}`);
       expect(runs().length).toBe(model.reports);
+      expect(new Set(outbox().map(record => record.status))).toEqual(new Set(['accepted']));
+      await arrived();
       expect(new Set(runs().map(run => `${run.status}: ${run.summary}`))).toEqual(new Set(['completed: order reported']));
       expect(new Set(outbox().map(record => record.status))).toEqual(new Set(['delivered']));
     }, HOUR);
   });
 
   it('replaces a report still waiting when the order reports again: the older one is never sent and its run stops', async () => {
-    await owned('wa-superseded-order', async ({ alarms, reply, later, order, runs, outbox }) => {
+    await owned('wa-superseded-order', async ({ alarms, reply, arrived, later, order, runs, outbox }) => {
       await order();
       await alarms(3);
       expect(runs()).toEqual([{ status: 'running', summary: null }]);
@@ -342,8 +344,12 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
       expect(outbox().map(record => [record.status, record.reason])).toEqual([['blocked', 'superseded'], ['pending', undefined]]);
       expect(runs()).toEqual([{ status: 'stopped', summary: 'order ran; a newer report replaced this one' }, { status: 'running', summary: null }]);
 
-      await later(24 * HOUR + 120_000, reply);
-      expect(wire.events.filter(event => event === `text:${REPORT}`)).toHaveLength(1);
+      await later(24 * HOUR + 120_000, async () => {
+        await reply();
+        expect(wire.events.filter(event => event === `text:${REPORT}`)).toHaveLength(1);
+        expect(runs().map(run => run.status)).toEqual(['stopped', 'running']);
+        await arrived();
+      });
       expect(runs().map(run => run.status)).toEqual(['stopped', 'completed']);
     });
   });
@@ -377,11 +383,17 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
   });
 
   it('leaves a report that was delivered alone when the order reports again', async () => {
-    await owned('wa-delivered-then-next', async ({ alarms, reply, later, order, runs, outbox }) => {
+    await owned('wa-delivered-then-next', async ({ alarms, reply, arrived, later, order, runs, outbox }) => {
       await order();
       await alarms(4);
+      expect(runs()).toEqual([{ status: 'running', summary: null }]);
+      await arrived();
       expect(runs()).toEqual([{ status: 'completed', summary: 'order reported' }]);
-      await later(24 * HOUR + 60_000, async () => { await reply(); await alarms(4); });
+      await later(24 * HOUR + 60_000, async () => {
+        await reply(); await alarms(4);
+        expect(outbox().map(record => record.status)).toEqual(['delivered', 'accepted']);
+        await arrived();
+      });
       expect(outbox().map(record => record.status)).toEqual(['delivered', 'delivered']);
       expect(runs()).toEqual([{ status: 'completed', summary: 'order reported' }, { status: 'completed', summary: 'order reported' }]);
     }, HOUR);
@@ -402,7 +414,7 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
   });
 
   it('does not fail an order whose report is queued when a later step throws; the report still settles its run', async () => {
-    await owned('wa-order-queued-then-throw', async ({ alarms, reply, order, runs }) => {
+    await owned('wa-order-queued-then-throw', async ({ alarms, reply, arrived, order, runs }) => {
       const rearm = Scheduler.prototype.rearm;
       let thrown = false;
       const spy = vi.spyOn(Scheduler.prototype, 'rearm').mockImplementation(async function (this: Scheduler, ...args: Parameters<Scheduler['rearm']>) {
@@ -418,6 +430,8 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
       expect(runs()).toEqual([{ status: 'running', summary: null }]);
       await reply();
       expect(wire.events.filter(event => event === `text:${REPORT}`)).toHaveLength(1);
+      expect(runs()).toEqual([{ status: 'running', summary: null }]);
+      await arrived();
       expect(runs()).toEqual([{ status: 'completed', summary: 'order reported' }]);
     });
   });
@@ -446,13 +460,17 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
   });
 
   it('keeps a waiting report current until the order reports again: a reply a day later, before any newer report, gets it', async () => {
-    await owned('wa-held-order-later-reply', async ({ alarms, reply, later, order, runs, outbox }) => {
+    await owned('wa-held-order-later-reply', async ({ alarms, reply, arrived, later, order, runs, outbox }) => {
       await order();
       await alarms(3);
       expect(runs()).toEqual([{ status: 'running', summary: null }]);
 
-      await later(25 * HOUR, reply);
-      expect(wire.events).toEqual(['template:waldo_update_ready', `text:${REPORT}`, 'turn']);
+      await later(25 * HOUR, async () => {
+        await reply();
+        expect(wire.events).toEqual(['template:waldo_update_ready', `text:${REPORT}`, 'turn']);
+        expect(runs()).toEqual([{ status: 'running', summary: null }]);
+        await arrived();
+      });
       expect(runs()).toEqual([{ status: 'completed', summary: 'order reported' }]);
       expect(outbox()).toMatchObject([{ status: 'delivered' }]);
     });
