@@ -8,13 +8,14 @@ import type { TurnLogEntry } from '../../src/channels/telegram-listener';
 import type { LLMGatewayAdapter } from '../../src/llm/provider';
 import type { CallBudget } from './budget';
 import type { JudgeInput } from './judge';
-import { evalWorld, TIMEZONE, type Effect, type WorldSeed } from './world';
+import { evalWorld, TIMEZONE, type Effect, type SeedMail, type WorldSeed } from './world';
 
 export type Step =
   | Readonly<{ say: string }>
   | Readonly<{ advance_to: string }>
   | Readonly<{ fire_due: true }>
-  | Readonly<{ health: 'shared' | 'withdrawn' }>;
+  | Readonly<{ health: 'shared' | 'withdrawn' }>
+  | Readonly<{ mail_arrives: SeedMail }>;
 export type TrialScenario = Readonly<{ id: string; start: string; steps: readonly Step[]; world: WorldSeed }>;
 export type TrialRecord = Readonly<{
   status: 'ran' | 'harness_error' | 'budget_exhausted';
@@ -46,7 +47,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
     world.handlers, model, false, undefined, async () => true, metered(deps.gateway, deps.budget), undefined, undefined, undefined, undefined,
     WALDO_AUXILIARY_MODEL, undefined, world.health, undefined, 'app');
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
-  const transcript: { role: 'owner' | 'waldo' | 'world'; text: string }[] = [];
+  const transcript: JudgeInput['transcript'][number][] = [];
   let status: TrialRecord['status'] = 'ran';
   let error: string | undefined;
   let turn = 0;
@@ -55,7 +56,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
       if ('say' in step) {
         turn += 1;
         transcript.push({ role: 'owner', text: step.say });
-        transcript.push({ role: 'waldo', text: await responder.respond(inboundTurn({ updateId: turn, messageId: null, senderId: 1, chatId: 1, sentAt: null, parts: ownerWords(step.say) }), time) });
+        transcript.push({ role: 'waldo', surface: 'chat', text: await responder.respond(inboundTurn({ updateId: turn, messageId: null, senderId: 1, chatId: 1, sentAt: null, parts: ownerWords(step.say) }), time) });
       } else if ('advance_to' in step) {
         world.advance(step.advance_to);
         transcript.push({ role: 'world', text: `The time is now ${world.localNow()} (${TIMEZONE}).` });
@@ -63,8 +64,11 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         for (const reminder of world.due()) {
           world.markFired(reminder.id);
           transcript.push({ role: 'world', text: `The reminder "${reminder.note}" fires.` });
-          transcript.push({ role: 'waldo', text: await responder.remind(`${scenario.id}-${reminder.id}`, 1, reminder.note, time) });
+          transcript.push({ role: 'waldo', surface: 'notification', text: await responder.remind(`${scenario.id}-${reminder.id}`, 1, reminder.note, time) });
         }
+      } else if ('mail_arrives' in step) {
+        world.deliver(step.mail_arrives);
+        transcript.push({ role: 'world', text: `New mail arrives from ${step.mail_arrives.from}: "${step.mail_arrives.subject}".` });
       } else {
         world.shareHealth(step.health === 'shared');
         transcript.push({ role: 'world', text: step.health === 'shared' ? 'The owner shares health data.' : 'The owner withdraws health sharing.' });
