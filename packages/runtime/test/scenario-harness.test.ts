@@ -5,6 +5,7 @@ import { SCENARIOS } from '../scenarios/catalog';
 import { checkScenario, runScenario, type ScenarioRun } from '../scenarios/run-l1';
 import { scriptedGateway } from '../src/testing/scripted-gateway';
 import { sanitise } from '../src/scribe/sanitiser';
+import { TURN_CONTEXT_HEADER } from '../src/prompt/turn-prompt';
 import type { Scenario } from '../scenarios/types';
 
 describe('L1 scenario harness', () => {
@@ -77,14 +78,15 @@ describe('recall by relevance', () => {
     const current = request.messages.at(-1)!.content;
     expect(current.indexOf('What was my locker number again?')).toBeGreaterThanOrEqual(0);
     expect(current.indexOf('What was my locker number again?')).toBeLessThan(current.indexOf(FENCE));
-    // The pinned blocks stay in the system prompt; the per-message block does not.
-    expect(request.system).toContain('<owner_profile>');
+    // The pinned blocks ride the message as turn context, like the per-message block; the system prompt carries neither.
+    expect(current).toContain('<owner_profile>');
+    expect(request.system).not.toContain('<owner_profile>');
     expect(request.system).not.toContain('<recalled>');
     expect(request.system).not.toContain('Matched to this message by shared words');
     // History is rebuilt from the stored conversation on every turn. Earlier turns recalled too, and none of their fences
     // came back with their messages, so recall never reached the stored rows.
     expect(run.modelRequests.slice(1, 7).some((requests) => fencedIn(requests.at(-1)!.request.messages.at(-1)!.content) !== '')).toBe(true);
-    expect(request.messages.slice(0, -1).filter((message) => message.content.includes(FENCE))).toEqual([]);
+    expect(request.messages.slice(0, -1).filter((message) => message.content.includes(FENCE) || message.content.includes(TURN_CONTEXT_HEADER))).toEqual([]);
     expect(run.replies.join('\n')).not.toContain(FENCE);
   });
 
