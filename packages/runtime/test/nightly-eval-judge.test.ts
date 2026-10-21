@@ -38,7 +38,8 @@ describe('nightly eval judge', () => {
     expect(headers.get('anthropic-version')).toBe('2023-06-01');
     const body = JSON.parse(String(sent[0]!.init.body)) as { model: string; thinking: { type: string }; messages: { content: string }[] };
     expect(body.model).toBe('judge-model');
-    expect(body.thinking.type).toBe('enabled');
+    // A fixed thinking budget is a 400 on current Claude models; adaptive thinking with an effort level is the request.
+    expect(body.thinking).toEqual({ type: 'adaptive' });
     for (const part of ['A reminder is set for 17:00', 'Which bank', 'claim the call was made', 'Remind me at 5 to call the bank.', 'Set for 5pm.', 'set_reminder', 'reminder.set', '"reminders":1'])
       expect(body.messages[0]!.content).toContain(part);
     expect(budget.usage()).toMatchObject({ judge_calls: 1, judge_tokens: 1020 });

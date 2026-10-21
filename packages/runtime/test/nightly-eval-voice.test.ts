@@ -34,7 +34,9 @@ describe('voice judge', () => {
     const body = JSON.parse(String(sent[0]!.body)) as { system: string; messages: { content: string }[]; thinking: unknown };
     for (const entry of VOICE_TESTS) expect(body.system).toContain(entry.test);
     for (const pair of VOICE_ANCHORS) { expect(body.system).toContain(pair.waldo); expect(body.system).toContain(pair.not_waldo); }
-    expect(body.thinking).toMatchObject({ type: 'enabled' });
+    expect(body.thinking).toEqual({ type: 'adaptive' });
+    expect(JSON.parse(String(sent[0]!.body))).toMatchObject({ output_config: { effort: 'high' } });
+    expect(String(sent[0]!.body)).not.toContain('budget_tokens');
     expect(body.messages[0]!.content).toBe(voicePacket(voiceInput));
     expect(body.messages[0]!.content).toContain('WALDO (notification, can show on a lock screen): Time to decide.');
     expect(body.messages[0]!.content).toContain('WALDO (chat): Set for 7.');
@@ -46,6 +48,13 @@ describe('voice judge', () => {
     const verdict = await judge(voiceInput);
     expect(verdict.outcome).toBe('fail');
     expect(verdict.tests?.discreet.met).toBe(false);
+  });
+
+  it('treats a refused or truncated grade as a judge error', async () => {
+    for (const stop_reason of ['refusal', 'max_tokens']) {
+      const fetcher = async () => new Response(JSON.stringify({ stop_reason, content: [{ type: 'text', text: allMet() }], usage: { input_tokens: 1, output_tokens: 1 } }));
+      expect((await liveVoiceJudge({ apiKey: 'k', model: 'm', budget: callBudget(5), fetcher })(voiceInput)).outcome).toBe('judge_error');
+    }
   });
 
   it('never passes an undecided, partial or unreadable verdict, a failed call or a refused budget', async () => {
