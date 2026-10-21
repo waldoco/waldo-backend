@@ -354,7 +354,38 @@ describe('produceHealthScores', () => {
     });
   });
 
-  it('computes from the source with the most readings and names only that source as the basis', async () => {
+  it('computes each day from the highest-ranked source holding its sleep, never the one with most readings', async () => {
+    // A ring sends one record a night; the phone sends dozens of hourly windows. Rank decides, so the owner is not re-based
+    // on another wearable whenever the phone happens to send more.
+    const ring = history(25).filter(s => !SCORED_WINDOW_SIGNALS.includes(s.signal as string));
+    const series = { access: 'granted', read_at: READ_AT, sources: [
+      { source: 'health_connect', consent_epoch: 1, truncated: false, samples: history(25) },
+      { source: 'whoop', consent_epoch: 2, truncated: false, samples: ring },
+    ] };
+    const h = harness(series);
+    await run(h);
+    expect(h.writes.map(w => w.basis)).toEqual([[{ source: 'whoop', consent_epoch: 2 }], [{ source: 'whoop', consent_epoch: 2 }]]);
+    // The night the ring missed is computed from the next source that has it, and that row names that source.
+    const missed = { ...series, sources: [series.sources[0]!, { ...series.sources[1]!, samples: ring.filter(s => s.day !== TODAY) }] };
+    const g = harness(missed);
+    await run(g);
+    expect(g.writes.map(w => [w.day, w.basis])).toEqual([[addDays(TODAY, -1), [{ source: 'whoop', consent_epoch: 2 }]], [TODAY, [{ source: 'health_connect', consent_epoch: 1 }]]]);
+  });
+
+  it('tells the owner only that today moved zone, and only when the writer says a pillar moved', async () => {
+    const told: string[] = [];
+    const onZoneChange = async (day: string) => { told.push(day); };
+    await run(harness(seriesOf(history(25)), { written: true, changed: [] }, computeDailyScores, { onZoneChange }));
+    expect(told).toEqual([]);
+    await run(harness(seriesOf(history(25)), { written: true, changed: ['recovery'] }, computeDailyScores, { onZoneChange }));
+    expect(told).toEqual([TODAY]);
+    await run(harness(seriesOf(history(25)), { written: false, stale: true, changed: ['recovery'] }, computeDailyScores, { onZoneChange }));
+    expect(told).toEqual([TODAY]);
+    // A notice that fails never fails the write.
+    expect(await run(harness(seriesOf(history(25)), { written: true, changed: ['form'] }, computeDailyScores, { onZoneChange: async () => { throw new Error('owner object away'); } }))).toBe('written');
+  });
+
+  it('computes from the higher-ranked of two sources and names only that source as the basis', async () => {
     const series = { access: 'granted', read_at: READ_AT, sources: [
       { source: 'health_connect', consent_epoch: 1, truncated: false, samples: history(3) },
       { source: 'apple', consent_epoch: 4, truncated: false, samples: history(25) },

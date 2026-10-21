@@ -4,8 +4,12 @@ import { describe, expect, it } from 'vitest';
 import type { ProposeCalendarChangeArgs } from '@waldo/contracts';
 import type { Proactivity } from '../src/channels/loops';
 import { localIso } from '../src/channels/reminders';
+import type { CalendarItem, TaskItem } from '../src/connectors/google';
+import type { Loop } from '../src/channels/loops';
+import { DeliveryGateStore } from '../src/delivery-gate/store';
+import { ensureSchema } from '../src/tracer/schema';
 import {
-  calendarEgressClear, healthTriggerBook, healthTriggerDueAt, healthTriggerPrompt, healthTriggerView, ownerInstant, parseHealthDecision, runHealthTrigger,
+  calendarEgressClear, comingItemsFrom, healthCardBudget, healthTriggerBook, healthTriggerDueAt, healthTriggerPrompt, healthTriggerView, ownerInstant, parseHealthDecision, runHealthTrigger,
   HEALTH_FALSE_ALARM_WINDOW_MS, HEALTH_TRIGGER_FLOOR_MS, type ComingItem, type HealthTriggerDeps, type HealthTriggerOutcome,
 } from '../src/health/trigger';
 
@@ -266,12 +270,12 @@ describe('proposal checks', () => {
     expect(ownerInstant('2026-10-21 13:00', 'Asia/Kolkata')).toBeNull();
   });
 
-  it('checks every calendar field that reaches Google, and only those', () => {
+  it('checks every calendar field that reaches Google, as whole words', () => {
     const words = ['compromised', 'recovery', 'sleep'];
-    expect(calendarEgressClear({ action: 'create', title: 'Focus block', start: 'x', end: 'y', reason: 'Recovery is compromised' }, words)).toBe(true);
-    expect(calendarEgressClear({ action: 'create', title: 'Sleep in', start: 'x', end: 'y', reason: 'r' }, words)).toBe(false);
-    expect(calendarEgressClear({ action: 'create', title: 'Block', description: 'recovery time', start: 'x', end: 'y', reason: 'r' }, words)).toBe(false);
-    expect(calendarEgressClear({ action: 'create', title: 'Sleepless in Seattle screening', start: 'x', end: 'y', reason: 'r' }, words)).toBe(true);
+    expect(calendarEgressClear({ title: 'Focus block' }, words)).toBe(true);
+    expect(calendarEgressClear({ title: 'Sleep in' }, words)).toBe(false);
+    expect(calendarEgressClear({ title: 'Block', description: 'recovery time' }, words)).toBe(false);
+    expect(calendarEgressClear({ title: 'Sleepless in Seattle screening' }, words)).toBe(true);
   });
 
   it('cancels only an event, and asks Google to email guests only when the model said so', () => {
@@ -284,5 +288,41 @@ describe('proposal checks', () => {
     expect(healthTriggerDueAt(NOW, null)).toBe(NOW);
     expect(healthTriggerDueAt(NOW, NOW - 600_000)).toBe(NOW - 600_000 + HEALTH_TRIGGER_FLOOR_MS);
     expect(healthTriggerDueAt(NOW, NOW - 2 * HEALTH_TRIGGER_FLOOR_MS)).toBe(NOW);
+  });
+});
+
+describe('coming decisions', () => {
+  const from = NOW, to = NOW + 24 * 3_600_000;
+  const event = (over: Partial<CalendarItem>): CalendarItem => ({ id: 'ev', title: 'Standup', start: '2026-10-21T05:00:00Z', end: '2026-10-21T05:15:00Z', all_day: false, ...over });
+  const loop = (over: Partial<Loop>): Loop => ({ id: 'o1', title: 'Send the deck', due: '2026-10-21T18:00', status: 'open', created_at: 0, closed_at: null, ...over });
+
+  it('takes events that overlap the next day, open tasks and own loops due by its end, in time order', async () => {
+    const items = await comingItemsFrom({
+      events: async () => [event({ id: 'later', start: '2026-10-21T11:00:00Z', end: '2026-10-21T12:00:00Z', attendees: 3 }), event({ id: 'soon' }), event({ id: 'gone', status: 'cancelled' }),
+        event({ id: 'past', start: '2026-10-21T01:00:00Z', end: '2026-10-21T02:00:00Z' }), event({ id: 'far', start: '2026-10-23T05:00:00Z', end: '2026-10-23T06:00:00Z' })],
+      tasks: async () => [{ id: 't', title: 'Return', status: 'todo', due: '2026-10-22T00:00:00.000Z' }, { id: 'd', title: 'Done', status: 'done', due: '2026-10-21' }, { id: 'n', title: 'Someday', status: 'todo' }, { id: 'f', title: 'Next week', status: 'todo', due: '2026-10-29' }] as TaskItem[],
+      loops: () => [loop({}), loop({ id: 'o2', source_ref: 'mail:1', title: 'From an email' }), loop({ id: 'o3', due: '2026-10-25T09:00' }), loop({ id: 'o4', due: null })],
+    }, from, to, TZ);
+    expect(items.map(item => [item.kind, item.id])).toEqual([['event', 'soon'], ['event', 'later'], ['task', 't'], ['loop', 'o1']]);
+    expect(items[1]).toMatchObject({ guests: 3 });
+  });
+
+  it('fails when the calendar cannot be read, and shrugs off tasks it cannot read', async () => {
+    await expect(comingItemsFrom({ events: async () => { throw new Error('calendar 503'); }, tasks: null, loops: () => [] }, from, to, TZ)).rejects.toThrow('calendar 503');
+    expect(await comingItemsFrom({ events: null, tasks: async () => { throw new Error('no tasks grant'); }, loops: () => [loop({})] }, from, to, TZ)).toEqual([{ kind: 'loop', id: 'o1', title: 'Send the deck', due: '2026-10-21T18:00' }]);
+  });
+});
+
+describe('the health card budget', () => {
+  it('admits a card on a day with interruptions left, charges it once, and holds the next inside the cooldown', async () => {
+    await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`health-budget-${sequence++}`)), async (_instance, state) => {
+      ensureSchema(state.storage);
+      let now = NOW;
+      const budget = healthCardBudget(new DeliveryGateStore(state.storage.sql), 'owner-1', TZ, () => now);
+      expect(budget.admit('health:2026-10-21')).toBe(true);
+      budget.charge('health:2026-10-21');
+      now += 10 * 60_000;
+      expect(budget.admit('health:2026-10-21')).toBe(false);
+    });
   });
 });

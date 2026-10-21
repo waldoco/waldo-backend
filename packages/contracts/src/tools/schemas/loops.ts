@@ -24,9 +24,9 @@ export const setProactivityArgsSchema = z.strictObject({
 export type SetProactivityArgs = z.infer<typeof setProactivityArgsSchema>;
 
 // Owner-set schedule preferences: every out-of-the-box scheduled behavior can be turned off, back on, or reset.
-export const SCHEDULE_KINDS = ['daily_brief', 'followups', 'event_briefs', 'nightly', 'heartbeat'] as const;
+export const SCHEDULE_KINDS = ['daily_brief', 'followups', 'event_briefs', 'nightly', 'heartbeat', 'health_proposals'] as const;
 export const setSchedulePreferenceArgsSchema = z.strictObject({
   action: z.enum(['off', 'on', 'reset']).describe("off: stop that behavior. on: turn it back on. reset: restore every scheduled behavior to its out-of-the-box default (kind is ignored)."),
-  kind: z.enum(SCHEDULE_KINDS).optional().describe('daily_brief: the day cards. followups: mail and calendar follow-ups. event_briefs: prep notes before events. nightly: overnight memory consolidation. heartbeat: periodic open-loop check. Required for on and off.'),
+  kind: z.enum(SCHEDULE_KINDS).optional().describe('daily_brief: the day cards. followups: mail and calendar follow-ups. event_briefs: prep notes before events. nightly: overnight memory consolidation. heartbeat: periodic open-loop check. health_proposals: proposing one plan change when a health zone change meets a coming decision. Required for on and off.'),
 });
 export type SetSchedulePreferenceArgs = z.infer<typeof setSchedulePreferenceArgsSchema>;

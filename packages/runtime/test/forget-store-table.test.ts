@@ -27,6 +27,8 @@ const TABLES: Record<string, Row> = {
   claim_recall_ready: exempt('claim ids'),
   cost_ledger: exempt('day, call kind, responsibility id, trigger enum, model name, token counts and cost; no owner text'),
   schedule_preferences: exempt('a scheduled-behavior kind enum and an on/off flag; no owner text'),
+  health_trigger_pending: exempt('an owner-local day and the time it was marked; no owner text, zone word or reading'),
+  health_trigger_runs: exempt('run id, time, local day, mode, outcome code, approval id and verdict code; no owner text, zone word or reading'),
   calendar_demand: exempt('local day, zone, a sha256 of the selected calendar set and busy-minute counts; no event titles, attendees or ids'),
   owner_request_last: exempt('trace id, time, ok flag and step count of the last owner request; no owner text (hop notes stay in trace_log)'),
   owner_source_scope: exempt('an enum value (none or pasted_only) and a time; no owner text'),

@@ -1,4 +1,8 @@
-import { formZoneOf, fromRowZone, type ProposeCalendarChangeArgs } from '@waldo/contracts';
+import { formZoneOf, fromRowZone, proposeCalendarChangeArgsSchema, type DeliveryCandidate, type ProposeCalendarChangeArgs } from '@waldo/contracts';
+import type { CalendarItem, TaskItem } from '../connectors/google';
+import type { Loop } from '../channels/loops';
+import { computeAdmission } from '../delivery-gate/gate';
+import type { DeliveryGateStore } from '../delivery-gate/store';
 import type { FormZone, LoadZone, RecoveryZone } from '../../../contracts/src/health/crs';
 import { rowFreshness } from '../channels/health-context';
 import { isQuiet, type Proactivity } from '../channels/loops';
@@ -144,10 +148,44 @@ export type ComingItem = Readonly<{
   start?: string; end?: string; due?: string; guests?: number; all_day?: boolean;
 }>;
 
+// The owner's coming decisions from their own sources: timed or all-day events that start before the horizon, open
+// tasks and open loops due by its local day. A loop opened from a mail keeps its outside-text title out of the prompt,
+// as every other prompt does. A calendar that cannot be read fails the run, so it is retried rather than read as a free
+// day; tasks are best effort, since not every owner grants them.
+export const comingItemsFrom = async (sources: Readonly<{
+  events: (() => Promise<readonly CalendarItem[]>) | null; tasks: (() => Promise<readonly TaskItem[]>) | null; loops: () => readonly Loop[];
+}>, from: number, to: number, timezone: string): Promise<readonly ComingItem[]> => {
+  const lastDay = localIso(to, timezone).slice(0, 10), lastMinute = localIso(to, timezone);
+  const events = (sources.events ? await sources.events() : []).flatMap((event): ComingItem[] => {
+    const start = Date.parse(event.start), end = Date.parse(event.end);
+    if (event.status === 'cancelled' || !Number.isFinite(start) || !Number.isFinite(end) || end <= from || start >= to) return [];
+    return [{ kind: 'event', id: event.id, title: event.title, start: event.start, end: event.end, ...(event.attendees ? { guests: event.attendees } : {}), ...(event.all_day ? { all_day: true } : {}) }];
+  });
+  const tasks = await (sources.tasks ? sources.tasks().catch((): readonly TaskItem[] => []) : Promise.resolve([] as readonly TaskItem[]));
+  const due = tasks.flatMap((task): ComingItem[] => (task.status === 'todo' && task.due && task.due.slice(0, 10) <= lastDay ? [{ kind: 'task', id: task.id, title: task.title, due: task.due.slice(0, 10) }] : []));
+  const loops = sources.loops().flatMap((loop): ComingItem[] => (!loop.source_ref && loop.due && loop.due <= lastMinute ? [{ kind: 'loop', id: loop.id, title: loop.title, due: loop.due }] : []));
+  return [...events.sort((a, b) => a.start!.localeCompare(b.start!)), ...due, ...loops];
+};
+
+// The delivery gate's per-owner budget for one proposed adjustment from this trigger. A health card waits for a day the
+// owner still has interruptions left; it never degrades into one that skips the budget.
+export const healthCardBudget = (store: DeliveryGateStore, owner: string, timezone: string, now: () => number) => {
+  const candidate = (eventId: string): DeliveryCandidate => ({ push_class: 'adjustment', sub_kind: 'proposed', trigger: 'patrol', event_id: eventId });
+  const admission = (eventId: string) => {
+    const at = now(), c = candidate(eventId);
+    return computeAdmission({ candidate: c, classState: store.readClassState(owner, c, at, timezone), subKindState: store.readSubKindState(owner, 'adjustment', 'proposed', at, timezone),
+      countedSends: store.readBudget(owner, at, timezone).sends_total, now: at, timezone });
+  };
+  return {
+    admit: (eventId: string): boolean => admission(eventId).verdict === 'send',
+    charge: (eventId: string): void => { const at = now(); store.applyAdmission(owner, candidate(eventId), admission(eventId), at, timezone); },
+  };
+};
+
 // The words this run put in front of the model about the owner's health. Calendar fields go to Google, where guests can
 // read them (ADR-0081: no health reason reaches a calendar), so none of these may appear in one.
 export const healthWordsOf = (view: HealthTriggerView): readonly string[] => {
-  const zones = [view.now, ...(view.before ? [view.before.zones] : [])].flatMap(z => [z.recovery, z.form, z.load]).filter((word): word is string => word !== null);
+  const zones = [view.now, ...(view.before ? [view.before.zones] : [])].flatMap((z): (string | null)[] => [z.recovery, z.form, z.load]).filter((word): word is string => word !== null);
   return [...new Set([...zones, 'recovery', 'form', 'load', 'health', 'sleep', 'hrv', 'readiness', 'strain'])];
 };
 const mentions = (text: string, words: readonly string[]): boolean => {
@@ -218,23 +256,26 @@ export const parseHealthDecision = (raw: string, items: readonly ComingItem[], n
     if (start === null || end === null || start <= now || end <= start || end - start > 12 * 60 * 60_000) throw new Error('invalid health decision time');
     return { start: new Date(start).toISOString(), end: new Date(end).toISOString() };
   };
+  const propose = (args: unknown): HealthDecision => {
+    const parsed = proposeCalendarChangeArgsSchema.safeParse(args);
+    if (!parsed.success) throw new Error('invalid health decision shape');
+    return { kind: 'propose', args: parsed.data };
+  };
   if (value.action === 'create') {
     const title = typeof value.title === 'string' ? value.title.trim() : '';
     if (!title || title.length > TITLE_MAX) throw new Error('invalid health decision title');
-    return { kind: 'propose', args: { action: 'create', title, ...span(), reason } };
+    return propose({ action: 'create', title, ...span(), reason });
   }
   if (value.action !== 'move' && value.action !== 'cancel') throw new Error('invalid health decision action');
   const item = typeof value.item === 'string' ? refsOf(items).get(value.item) : undefined;
   if (!item || item.kind !== 'event') throw new Error('invalid health decision item');
   const notify = item.guests ? { send_updates: value.notify_guests === true ? 'all' as const : 'none' as const } : {};
-  return value.action === 'move'
-    ? { kind: 'propose', args: { action: 'move', event_id: item.id, ...span(), reason, ...notify } }
-    : { kind: 'propose', args: { action: 'cancel', event_id: item.id, reason, ...notify } };
+  return value.action === 'move' ? propose({ action: 'move', event_id: item.id, ...span(), reason, ...notify }) : propose({ action: 'cancel', event_id: item.id, reason, ...notify });
 };
 
 // The calendar fields that reach Google carry no health word from this run. Egress is a hard boundary, so a hit refuses
 // the whole proposal rather than editing it.
-export const calendarEgressClear = (args: ProposeCalendarChangeArgs, words: readonly string[]): boolean =>
+export const calendarEgressClear = (args: Pick<ProposeCalendarChangeArgs, 'title' | 'description' | 'location'>, words: readonly string[]): boolean =>
   ![args.title, args.description, args.location].some(field => typeof field === 'string' && mentions(field, words));
 
 export type HealthTriggerDeps = Readonly<{

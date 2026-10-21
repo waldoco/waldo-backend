@@ -10,6 +10,7 @@ import { armBriefSweep, BRIEF_SWEEP_ID } from './event-briefs';
 import { armNightly, NIGHTLY_CATCH_UP_ID, NIGHTLY_ID } from './episodes';
 import { armHeartbeat, HEARTBEAT_ID } from './heartbeat';
 import type { LoopBook } from './loops';
+import { HEALTH_TRIGGER_ID } from '../health/trigger';
 
 export type ScheduleKind = (typeof SCHEDULE_KINDS)[number];
 export type SchedulePreferences = Readonly<Record<ScheduleKind, boolean>>;
@@ -21,6 +22,7 @@ export const SCHEDULE_LABELS: Readonly<Record<ScheduleKind, string>> = {
   event_briefs: 'prep notes before events',
   nightly: 'overnight memory consolidation',
   heartbeat: 'periodic open-loop check',
+  health_proposals: 'one proposed plan change when a health zone change meets a coming decision',
 };
 
 // Every scheduled behavior is on by default (out of the box) and can be turned off per owner.
@@ -60,6 +62,8 @@ export const applySchedulePreferences = async (prefs: SchedulePreferences, ctx: 
   if (want('nightly')) { if (prefs.nightly) await armNightly(scheduler, timezone, now); else for (const id of [NIGHTLY_ID, NIGHTLY_CATCH_UP_ID]) await scheduler.cancelReadable(id); }
   if (want('heartbeat')) { if (prefs.heartbeat) await armHeartbeat(scheduler, now); else await scheduler.cancelReadable(HEARTBEAT_ID); }
   if (want('event_briefs')) { if (prefs.event_briefs) await armBriefSweep(scheduler, now); else await scheduler.cancelReadable(BRIEF_SWEEP_ID); }
+  // Health proposals are armed by a zone change, never by the clock, so on arms nothing.
+  if (want('health_proposals') && !prefs.health_proposals) await scheduler.cancelReadable(HEALTH_TRIGGER_ID);
   if (want('daily_brief')) {
     if (prefs.daily_brief) await applyDayPlan(scheduler, plans, timezone, now, defaultPlan(DAY_CARDS), true, true);
     else for (const card of DAY_CARDS) await scheduler.cancelReadable(card.id);
@@ -83,6 +87,7 @@ export const reconcileSchedulePreferences = async (prefs: SchedulePreferences, c
   if (!prefs.nightly) for (const id of [NIGHTLY_ID, NIGHTLY_CATCH_UP_ID]) await cancelIf(id);
   if (!prefs.heartbeat) await cancelIf(HEARTBEAT_ID);
   if (!prefs.event_briefs) await cancelIf(BRIEF_SWEEP_ID);
+  if (!prefs.health_proposals) await cancelIf(HEALTH_TRIGGER_ID);
   if (!prefs.daily_brief) for (const card of DAY_CARDS) await cancelIf(card.id);
 };
 
@@ -91,6 +96,7 @@ const scheduleKindOf = (entry: ScheduleEntry): ScheduleKind | null => {
   if (entry.kind === 'dreaming' && (entry.id === NIGHTLY_ID || entry.id === NIGHTLY_CATCH_UP_ID)) return 'nightly';
   if (entry.kind === 'heartbeat' && entry.id === HEARTBEAT_ID) return 'heartbeat';
   if (entry.kind === 'pre_activity_spot' && entry.id === BRIEF_SWEEP_ID) return 'event_briefs';
+  if (entry.kind === 'patrol' && entry.id === HEALTH_TRIGGER_ID) return 'health_proposals';
   if (entry.kind === 'brief' && DAY_CARDS.some((card) => card.id === entry.id)) return 'daily_brief';
   return null;
 };
