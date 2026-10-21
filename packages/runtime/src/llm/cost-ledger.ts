@@ -21,6 +21,9 @@ export type CostEntry = Readonly<{
 export type KindSpend = Readonly<{ kind: CostKind; calls: number; usd: number }>;
 
 export const LOW_EFFORT_FRACTION = 0.8;
+// Each owner's monthly spend ceiling in USD; the owner can change it here. Past it an owner turn degrades to the
+// auxiliary model and paid tools are held. It is inert while WALDO_COST_LEDGER_SYNC is off, since nothing counts the month.
+export const MONTHLY_SPEND_CEILING_USD = 25;
 
 export type SpendPosture = Readonly<{
   effort: 'normal' | 'low';

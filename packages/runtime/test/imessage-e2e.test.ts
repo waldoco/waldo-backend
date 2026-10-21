@@ -556,6 +556,24 @@ it('an iMessage turn with no public origin on record mints nothing, says so, and
   expect((await outbox(w.ownerStub)).map(row => row.replyRef.split(':')[0])).toEqual(['reply']);
 });
 
+it('an iMessage forget whose topic matches nothing completes the turn, replies, and the next turn loads the message as the forget left it', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  proof.outputs.push([{ type: 'function_call', call_id: 'forget', name: 'forget_memory', arguments: JSON.stringify({ topic: 'zebra stripes', scope_note: 'zebras' }) }], []);
+  await replyFor(w, 'Forget zebra stripes');
+  expect((await inbox(w.ownerStub))[0]).toMatchObject({ state: 'completed', closedReason: 'final_committed' });
+  expect(proof.turns.join('\n')).toContain('No stored memory carries that topic or span');
+  const first = (await w.host.pull()).delivery!;
+  expect(JSON.parse(first.body).text.startsWith(proof.reply)).toBe(true);
+  expect((await w.host.postResult(first, await w.host.execute(first))).status).toBe(200);
+  await w.pump(2);
+  await replyFor(w, 'What is on today?');
+  expect((await inbox(w.ownerStub)).map(record => record.state)).toEqual(['completed', 'completed']);
+  const next = proof.turns.at(-1)!;
+  expect(next).toContain('Forget [forgotten]');
+  expect(next).not.toContain('zebra stripes');
+});
+
 it('an iMessage owner turn carries the host fact about a Gmail watch that failed to start', async () => {
   const w = await world();
   await w.pairAndActivate();
@@ -565,7 +583,9 @@ it('an iMessage owner turn carries the host fact about a Gmail watch that failed
   });
   await replyFor(w, 'Did my new email come in?');
   expect(proof.systems).toHaveLength(1);
-  expect(proof.systems[0]!.split('New emails are not pushed to Waldo').length - 1).toBe(1);
-  expect(proof.systems[0]).not.toContain('mail-owner@example.invalid');
+  // The fact is current for this message, so it rides the owner's message as turn context, never the system prompt.
+  expect(proof.systems[0]).not.toContain('New emails are not pushed to Waldo');
+  expect(proof.turns[0]!.split('New emails are not pushed to Waldo').length - 1).toBe(1);
+  for (const sent of [proof.systems[0]!, proof.turns[0]!]) expect(sent).not.toContain('mail-owner@example.invalid');
   expect(forbiddenEgress).toEqual([]);
 });
