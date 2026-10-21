@@ -2,35 +2,19 @@ import { z } from 'zod';
 import { channelNameSchema } from '../../adapters/channel';
 import { docProviderSchema } from '../../adapters/doc';
 import { iso8601Schema } from '../../core/error';
-import { hallTypeSchema } from '../../memory/hall';
-import { MEMORY_BLOCK_CONTENT_MAX } from '../../memory/sanitise';
 import { idempotencyKeySchema } from '../../runtime/outbox';
 
 // Mutating tool arg surface (ADR-0021; execute_code per ADR-0023). These schemas are the
 // PreToolUse validation seam for the write tools: strictObject makes an unknown arg a parse
 // failure, and every external mutation is autonomy-gated (ADR-0018) before any adapter call.
 
-// The facts hall is not agent-writable. Derived from the hall vocabulary's single owner, so
-// a new hall surfaces here (admitted or deliberately excluded) at review time, not by drift.
-export const memoryWriteHallSchema = hallTypeSchema.exclude(['facts']);
-export type MemoryWriteHall = z.infer<typeof memoryWriteHallSchema>;
-
-// update_memory stages through the Scribe inbox (ADR-0006), never memory_blocks direct.
-// Single-write-path decision (owner, 2026-09-27, docs/planning/MEMORY_WRITE_PATH_DECISION_2026-09-27.md):
-// chat-surface memory writes flow exclusively through the post-reply claim_ops settle; this tool
-// stays dreaming_mode-only.
-export const updateMemoryArgsSchema = z.strictObject({
-  hall: memoryWriteHallSchema,
-  content: z.string().min(1).max(MEMORY_BLOCK_CONTENT_MAX),
-  tags: z.array(z.string().min(1)).max(10).optional(),
-});
-export type UpdateMemoryArgs = z.infer<typeof updateMemoryArgsSchema>;
-
+// The owner-confirm route for a privileged action whose arguments came from external content (ADR-0049): the
+// intended tool and its exact arguments are frozen on a card, and on approval the dispatcher replays that one call.
+// The tool name is checked against the tool union by the handler, which also validates args against that tool's schema.
 export const proposeActionArgsSchema = z.strictObject({
-  action_type: z.string().min(1).max(100),
-  description: z.string().min(1).max(1_000),
+  tool: z.string().min(1).max(64),
+  args: z.record(z.string(), z.unknown()),
   reasoning: z.string().min(1).max(500),
-  urgency: z.enum(['low', 'medium', 'high']).default('medium'),
 });
 export type ProposeActionArgs = z.infer<typeof proposeActionArgsSchema>;
 

@@ -13,7 +13,7 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (body: {
   return { id: 'fixture', output_text: text, output: [], usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
 } }; } }));
 const { createOwnerResponder } = await import('../src/channels/owner-turn');
-const { localTrustedBriefScheduleInput } = await import('../src/run-loop/adapters');
+const { localTrustedBriefScheduleInput } = await import('../src/llm/run-loop-adapters');
 
 const defaults = { ...COMPACTION };
 beforeEach(() => { fake.bodies = []; fake.summary = 'The owner prefers tea and wants quiet mornings.'; });

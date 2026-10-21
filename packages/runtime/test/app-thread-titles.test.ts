@@ -241,7 +241,7 @@ describe('titles and erasure', () => {
       const kite = await thread('\u212Aite repair');
       await say('/chat/main', 'title-client-13', 'Please forget kite.');
       const answered = model.turnRequests.find(request => request.includes('"tool_turns"'))!;
-      expect(answered).toContain(String.raw`"output":"{\"ok\":false,\"error\":\"tool handler failed\"`);
+      expect(answered).toContain(String.raw`"output":"{\"ok\":false,\"error\":\"The tool threw while running.\",\"error_code\":\"handler_failed\"`);
       expect((await listed(call, kite))!.title).toBe('\u212Aite repair');
       expect(memory.claims().map(claim => claim.text)).toEqual(['Wants to learn to kite in Tarifa']);
     });

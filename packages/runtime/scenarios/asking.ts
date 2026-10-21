@@ -148,6 +148,34 @@ export const ASKING_SCENARIOS: readonly Scenario[] = [
     },
   },
   {
+    // The owner reports the booking sites blocked; a search result carrying a price reaches the model beside the rule
+    // that lets it share that price only labelled from search and unverified, with its link and the date seen.
+    id: 'asking-blocked-site-shares-search-prices-labelled',
+    category: 'asking',
+    turns: ['MakeMyTrip and Agoda keep blocking you. Just get me hotel prices near Pune station for Friday night.'],
+    llm: [
+      { match: /keep blocking you/, rounds: [
+        { toolCalls: [{ name: 'web_search', arguments: { query: 'hotels near Pune station Friday price' } }] },
+        { text: 'From search, unverified (seen today): Station Inn from ₹3,400 a night, link below. Confirm the price, Friday availability and whether GST is included on the site before booking.' },
+      ] },
+    ],
+    fixtures: { web: [{ title: 'Station Inn Pune - StayFinder', url: 'https://stayfinder.example/station-inn-pune', snippet: 'Rooms from ₹3,400 a night, 400 m from Pune station.' }] },
+    assert: {
+      mustCall: ['web_search'],
+      modelInput: [{
+        turn: 1,
+        mustContain: [
+          'MakeMyTrip and Agoda keep blocking you.',
+          'Rooms from ₹3,400 a night, 400 m from Pune station.',
+          'https://stayfinder.example/station-inn-pune',
+          "you may share prices or options a search result showed: tie each to its result's link, label it from search and unverified, give the date you saw it",
+          'Never present it as a checked price, and never give a figure no result showed.',
+        ],
+        mustNotContain: REMOVED_ASKING_RULES,
+      }],
+    },
+  },
+  {
     // "Book it" reaches the model with the rule that bookings need confirmed details and a yes, and that browsing stops short.
     id: 'asking-book-it-needs-a-yes',
     category: 'asking',

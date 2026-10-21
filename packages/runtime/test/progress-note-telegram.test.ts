@@ -87,6 +87,8 @@ it('the note reaches the Telegram chat while the turn runs, before the reply lea
   await telegramOwner('progress-note-telegram-order', async owner => {
     expect(await owner.send(950001, 'Find me a hotel near the station for Friday.')).toBe('awaiting_delivery');
     expect(world.requests[0]!.tools?.map(tool => tool.name)).toContain('send_progress_note');
+    // Telegram finals leave through the outbox, which carries no files, so the tool is not offered here.
+    expect(world.requests[0]!.tools?.map(tool => tool.name)).not.toContain('attach_file');
     // The turn has finished thinking; only the note has reached the chat so far.
     expect(world.sends).toEqual([{ text: NOTE, chat: 42 }]);
     expect(JSON.stringify(world.requests[1]!.tool_turns)).toContain('\\"sent\\":true');

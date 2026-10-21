@@ -48,7 +48,6 @@ describe('toolName', () => {
       'query_availability',
       'read_owner_context',
       'read_memory',
-      'update_memory',
       'remember',
       'forget_memory',
       'search_episodes',
@@ -118,6 +117,7 @@ describe('toolName', () => {
       'use_mac',
       'search_contacts',
       'send_progress_note',
+      'attach_file',
     ]);
   });
 
@@ -242,6 +242,7 @@ describe('TOOL_PERMISSIONS', () => {
         'connect_service',
         'send_console_link',
         'send_progress_note',
+        'attach_file',
         'get_communication',
         'search_communication',
         'search_contacts',
@@ -313,7 +314,7 @@ describe('TOOL_PERMISSIONS', () => {
       'skills_disable',
       'skills_load',
       ],
-      dreaming_mode: ['read_memory', 'update_memory', 'search_episodes'],
+      dreaming_mode: ['read_memory', 'search_episodes'],
       pre_activity_spot: [
         'get_crs',
         'query_calendar',
@@ -331,7 +332,7 @@ describe('TOOL_PERMISSIONS', () => {
     for (const trigger of triggerTypeSchema.options) {
       expect(TOOL_PERMISSIONS[trigger].length).toBeLessThan(toolNameSchema.options.length);
     }
-    const withheld = ['execute_code', 'update_todo', 'update_memory', 'list_responsibilities', 'close_responsibility'];
+    const withheld = ['execute_code', 'update_todo', 'list_responsibilities', 'close_responsibility'];
     expect(TOOL_PERMISSIONS.user_message).toHaveLength(toolNameSchema.options.length - withheld.length);
     for (const name of withheld) expect(TOOL_PERMISSIONS.user_message).not.toContain(name);
   });

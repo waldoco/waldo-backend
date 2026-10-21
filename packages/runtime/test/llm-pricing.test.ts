@@ -23,3 +23,15 @@ it('keeps Luna at $0.10 input, $0.01 cached input and $0.50 output per million t
 it('has no price for a model outside the table', () => {
   expect(modelCost({ model: 'unpriced-model', input: 1, output: 1, cached: 0 })).toBeNull();
 });
+
+it('adds hosted web search at $10 per 1,000 calls to the call total', () => {
+  const tokens = modelCost({ model: OPENAI_GPT_6_1_SOL_MODEL, input: 2_000, output: 100, cached: 1_500 })!;
+  const searched = modelCost({ model: OPENAI_GPT_6_1_SOL_MODEL, input: 2_000, output: 100, cached: 1_500, web_searches: 3 })!;
+  expect(searched.web_search).toBeCloseTo(0.03, 12);
+  expect(searched.total).toBeCloseTo(tokens.total + 0.03, 12);
+  expect(modelCost({ model: OPENAI_GPT_6_LUNA_MODEL, input: 0, output: 0, cached: 0, web_searches: 1 })?.total).toBeCloseTo(0.01, 12);
+});
+
+it('leaves the cost shape unchanged for a call with no hosted search', () => {
+  expect(modelCost({ model: OPENAI_GPT_6_LUNA_MODEL, input: 1, output: 1, cached: 0, web_searches: 0 })).not.toHaveProperty('web_search');
+});

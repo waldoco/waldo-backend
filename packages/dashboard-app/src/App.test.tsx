@@ -1,18 +1,28 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { Dashboard, DashboardNavigation, DashboardFeedback, resolveRoute } from './App';
+import { Dashboard, DashboardNavigation, DashboardFeedback, isSettingsRoute, resolveRoute } from './App';
 import type { OverviewV1 } from './model';
 const empty: OverviewV1 = { version: 1, as_of: '2026-09-29T07:40:00Z', timezone: 'Asia/Kolkata', brief: { status: 'not_sent', at: null }, waiting: { count: 0, first: null }, next_card: null, latest_activity: null, services: [] };
 describe('dashboard routing and overview boundaries', () => {
-  it('keeps primary navigation to four destinations and puts everything else under Settings', () => {
+  it('keeps primary navigation to five destinations and puts everything else under Settings', () => {
     const html = renderToStaticMarkup(<DashboardNavigation route="connections" />);
-    for (const path of ['today', 'waiting', 'memory', 'patrol']) expect(html).toContain(`href="#/${path}"`);
+    for (const path of ['today', 'chat', 'waiting', 'memory', 'patrol']) expect(html).toContain(`href="#/${path}"`);
     for (const path of ['#/connections', '#/files', '#/invites', '#/settings', '/console/legacy']) expect(html).not.toContain(`href="${path}"`);
     const settings = renderToStaticMarkup(<Dashboard data={empty} route="settings"/>);
-    for (const path of ['#/settings/day', '#/connections', '#/files', '#/settings/usage', '#/settings/account', '#/invites', '/console/legacy']) expect(settings).toContain(`href="${path}"`);
+    for (const path of ['#/settings/day', '#/connections', '#/files', '#/settings/usage', '#/settings/account', '#/invites']) expect(settings).toContain(`href="${path}"`);
+    expect(settings).not.toContain('href="/console/legacy"');
     expect(settings).not.toContain('href="#/admin"');
     expect(renderToStaticMarkup(<Dashboard data={empty} route="settings" isAdmin/>)).toContain('href="#/admin"');
     expect(settings).not.toContain('href="#/account"');
+  });
+  it('opens iMessage and Devices setup under Connections in the shell', () => {
+    for (const [route, label] of [['connections/imessage', 'iMessage'], ['connections/devices', 'Devices']] as const) {
+      expect(resolveRoute(route)).toBe(route); expect(isSettingsRoute(route)).toBe(true);
+      const html = renderToStaticMarkup(<Dashboard data={empty} route={route}/>);
+      expect(html).toContain('Settings.'); expect(html).toContain('aria-current="page" href="#/connections"');
+      expect(html).toContain(`<span aria-current="page">${label}</span>`); expect(html).toContain('Loading your controls');
+    }
+    expect(resolveRoute('connections/unknown')).toBe('not-found');
   });
   it('loads controls independently rather than turning overview summaries into complete records', () => {
     const record: OverviewV1 = { ...empty, waiting: { count: 1, first: { id: 'p1', summary: 'Overview-only proposal' } }, services: [{ account_id: 'g1', email: 'owner@example.test', grants: ['calendar'], health: 'needs_reconnect' }] };

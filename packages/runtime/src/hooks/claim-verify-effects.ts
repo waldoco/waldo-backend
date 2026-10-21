@@ -9,6 +9,8 @@ export const TOOL_CLAIM_EFFECT: Readonly<Record<ToolName, string | null>> = {
   send_console_link: null,
   // A note says what the turn is doing, never that something is done; the effect claims stay with the tools that act.
   send_progress_note: null,
+  // Queued is not sent: the file leaves after the reply is written, so no done-claim can rest on this receipt.
+  attach_file: null,
   get_crs: null, get_health: null, query_calendar: null, get_communication: null, search_communication: null, search_contacts: null,
   read_thread: null, get_tasks: null, get_master_metrics: null, get_context: null, query_availability: null,
   read_owner_context: null, read_memory: null, search_episodes: null, propose_action: null, web_search: null,
@@ -29,7 +31,7 @@ export const TOOL_CLAIM_EFFECT: Readonly<Record<ToolName, string | null>> = {
   // effect holds. delegate_task runs a read-only subagent. The rest have no live handler in this tree
   // (memory writes go through the memory path), so their effect is unverified: give each a label when its handler ships.
   remember: 'memory_stored', forget_memory: 'memory_forgotten',
-  call_mcp_tool: null, delegate_task: null, update_memory: null, execute_action: null, write_task: null, update_task: null,
+  call_mcp_tool: null, delegate_task: null, execute_action: null, write_task: null, update_task: null,
   draft_document: null, write_sheet_cell: null, execute_code: null, create_thread: null, delete_message: null, restore_message: null,
   archive_thread: null, update_thread_topics: null,
 };
