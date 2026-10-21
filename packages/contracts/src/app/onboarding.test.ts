@@ -1,0 +1,112 @@
+import { describe, expect, it } from 'vitest';
+import {
+  APP_PRIVACY_NOTICE_VERSION_V1, APP_TERMS_VERSION_V1, appConsentChangeV1Schema, appConsentGrantV1Schema, appConsentListV1Schema,
+  appConsentStateV1Schema, appConsentWithdrawV1Schema, appFindingActionV1Schema, appFindingListV1Schema, appFindingResultV1Schema,
+  appFindingV1Schema, appOnboardingActionV1Schema, appOnboardingErrorV1Schema, appOnboardingResultV1Schema, appOnboardingRoutesV1,
+  appOnboardingV1Schema,
+} from './onboarding';
+
+const rejected = (schema: { safeParse(input: unknown): { success: boolean } }, inputs: unknown[]) => inputs.forEach(input => expect(schema.safeParse(input).success, JSON.stringify(input)).toBe(false));
+const accepted = (schema: { safeParse(input: unknown): { success: boolean } }, inputs: unknown[]) => inputs.forEach(input => expect(schema.safeParse(input).success, JSON.stringify(input)).toBe(true));
+const REVISION = 'a'.repeat(64);
+
+describe('consent ledger', () => {
+  const granted = { purpose: 'owner_lookup', version: APP_PRIVACY_NOTICE_VERSION_V1, status: 'granted', granted_at: 1_000, withdrawn_at: null };
+  it('reads a state for every purpose, never granted, granted or withdrawn', () => {
+    accepted(appConsentStateV1Schema, [granted, { ...granted, status: 'withdrawn', withdrawn_at: 2_000 }, { purpose: 'terms', version: null, status: 'not_granted', granted_at: null, withdrawn_at: null }]);
+    rejected(appConsentStateV1Schema, [
+      { ...granted, status: 'withdrawn' }, { ...granted, withdrawn_at: 2_000 }, { ...granted, status: 'withdrawn', withdrawn_at: 500 },
+      { ...granted, status: 'not_granted' }, { ...granted, version: null }, { ...granted, purpose: 'health_processing' },
+      { ...granted, purpose: 'terms', status: 'withdrawn', withdrawn_at: 2_000 }, { ...granted, owner_id: 'other' },
+    ]);
+  });
+  it('lists each purpose exactly once with the 18+ attestation', () => {
+    const consents = ['terms', 'privacy_notice', 'owner_lookup'].map(purpose => ({ purpose, version: null, status: 'not_granted', granted_at: null, withdrawn_at: null }));
+    accepted(appConsentListV1Schema, [{ age_attested_18_plus: false, consents }]);
+    rejected(appConsentListV1Schema, [{ consents }, { age_attested_18_plus: false, consents: consents.slice(1) }, { age_attested_18_plus: false, consents: [consents[0], consents[0], consents[1]] }]);
+  });
+  it('grants name a copy version and always carry the 18+ attestation; only the look-up can be withdrawn', () => {
+    const grant = { request_id: 'consent-001', purpose: 'owner_lookup', version: 1, age_attested_18_plus: true };
+    accepted(appConsentGrantV1Schema, [grant, { ...grant, purpose: 'terms', version: APP_TERMS_VERSION_V1 }]);
+    rejected(appConsentGrantV1Schema, [{ ...grant, age_attested_18_plus: false }, { ...grant, version: 0 }, { ...grant, version: '1' }, { ...grant, purpose: '*' }, { ...grant, request_id: 'short' }, { ...grant, user_id: 'forged' }]);
+    accepted(appConsentWithdrawV1Schema, [{ request_id: 'withdraw-01', purpose: 'owner_lookup' }]);
+    rejected(appConsentWithdrawV1Schema, [{ request_id: 'withdraw-01', purpose: 'terms' }, { request_id: 'withdraw-01', purpose: 'privacy_notice' }, { request_id: 'withdraw-01' }]);
+    accepted(appConsentChangeV1Schema, [{ consent: granted, replayed: false, findings_erased: 0 }]);
+    rejected(appConsentChangeV1Schema, [{ consent: granted, replayed: false }, { consent: granted, replayed: false, findings_erased: -1 }]);
+  });
+});
+
+describe('first run', () => {
+  const steps = { agreements: 'pending', name: 'pending', google: 'pending', health: 'pending', first_look: 'pending', brief_time: 'pending', priority: 'pending' };
+  const fresh = { version: 1, state: 'not_started', run_id: null, started_at: null, completed_at: null, steps, first_look: { message_id: null }, brief: { time: null, timezone_confirmed: false }, revision: REVISION };
+  const run = { ...fresh, state: 'in_progress', run_id: `onb_${'b'.repeat(32)}`, started_at: 1_000 };
+  const done = { ...run, state: 'completed', completed_at: 9_000, steps: { ...steps, agreements: 'done', name: 'skipped', google: 'skipped', health: 'skipped', first_look: 'done', brief_time: 'done', priority: 'skipped' }, first_look: { message_id: 'onboarding-first-look-1' }, brief: { time: '07:30', timezone_confirmed: true } };
+  it('reads a run before start, in progress and completed', () => {
+    accepted(appOnboardingV1Schema, [fresh, run, done]);
+    rejected(appOnboardingV1Schema, [
+      { ...fresh, run_id: run.run_id }, { ...run, run_id: null }, { ...run, started_at: null }, { ...done, completed_at: null }, { ...run, completed_at: 5 },
+      { ...done, steps: { ...done.steps, agreements: 'pending' } }, { ...run, steps: { ...steps, agreements: 'skipped' } }, { ...run, steps: { ...steps, first_look: 'skipped' } },
+      { ...run, steps: { ...steps, first_look: 'done' } }, { ...run, first_look: { message_id: 'onboarding-first-look-1' } },
+      { ...run, steps: { ...steps, mood_quiz: 'pending' } }, { ...run, brief: { time: '7:30', timezone_confirmed: false } }, { ...run, brief: { time: '24:00', timezone_confirmed: false } },
+      { ...run, run_id: 'onb_short' }, { ...run, revision: 'nope' }, { ...run, version: 2 },
+    ]);
+  });
+  it('takes exactly three question answers, the agreements and connection outcomes, and nothing else', () => {
+    const r = { request_id: 'onboarding-0001' };
+    accepted(appOnboardingActionV1Schema, [
+      { ...r, action: 'start' },
+      { ...r, action: 'agreements.accept', terms_version: 1, notice_version: 1, age_attested_18_plus: true, owner_lookup: false },
+      { ...r, action: 'name.set', name: 'Sam' }, { ...r, action: 'brief_time.set', time: '07:30', timezone: 'Asia/Kolkata' },
+      { ...r, action: 'priority.set', text: 'Ship the board deck' }, { ...r, action: 'health.connected' }, { ...r, action: 'first_look.request' },
+      ...['name', 'google', 'health', 'brief_time', 'priority'].map(step => ({ ...r, action: 'skip', step })), { ...r, action: 'complete' },
+    ]);
+    rejected(appOnboardingActionV1Schema, [
+      { ...r, action: 'agreements.accept', terms_version: 1, notice_version: 1, age_attested_18_plus: false, owner_lookup: true },
+      { ...r, action: 'agreements.accept', terms_version: 1, notice_version: 1, owner_lookup: true },
+      { ...r, action: 'name.set', name: '   ' }, { ...r, action: 'name.set', name: 'x'.repeat(81) },
+      { ...r, action: 'brief_time.set', time: '7:30', timezone: 'Asia/Kolkata' }, { ...r, action: 'brief_time.set', time: '07:30' }, { ...r, action: 'brief_time.set', time: '07:30', timezone: '../etc' },
+      { ...r, action: 'priority.set', text: '' }, { ...r, action: 'skip', step: 'agreements' }, { ...r, action: 'skip', step: 'first_look' },
+      { ...r, action: 'mood.set', value: 'tired' }, { ...r, action: 'start', owner_id: 'forged' }, { action: 'start' }, { ...r, action: 'name.set', name: 'Sam', extra: true },
+    ]);
+  });
+  it('answers with the run and whether the request was replayed', () => {
+    accepted(appOnboardingResultV1Schema, [{ request_id: 'onboarding-0001', onboarding: run, replayed: false }]);
+    rejected(appOnboardingResultV1Schema, [{ request_id: 'onboarding-0001', onboarding: run }, { request_id: 'onboarding-0001', onboarding: { ...run, state: 'paused' }, replayed: false }]);
+    accepted(appOnboardingErrorV1Schema, [{ error: 'agreements_required' }, { error: 'stale_version', message: 'Notice copy 2 is current.' }]);
+    rejected(appOnboardingErrorV1Schema, [{ error: 'boom' }, { error: 'unavailable', stack: 'x' }]);
+  });
+});
+
+describe('look-up findings', () => {
+  const finding = { finding_id: `fnd_${'c'.repeat(32)}`, category: 'work', text: 'Product manager at Acme', source: { url: 'https://acme.example/team', title: 'Team' }, state: 'unconfirmed', found_at: 1_000, decided_at: null };
+  it('carries an http(s) source, a closed category and the owner decision', () => {
+    accepted(appFindingV1Schema, [finding, { ...finding, state: 'kept', decided_at: 2_000 }, { ...finding, state: 'corrected', decided_at: 2_000 }]);
+    for (const category of ['work', 'education', 'public_work', 'based_in', 'public_profile', 'interest', 'achievement']) expect(appFindingV1Schema.safeParse({ ...finding, category }).success, category).toBe(true);
+    rejected(appFindingV1Schema, [
+      ...['health', 'religion', 'caste', 'politics', 'sexuality', 'other', 'family'].map(category => ({ ...finding, category })),
+      { ...finding, source: { url: 'javascript:alert(1)', title: '' } }, { ...finding, source: { url: 'file:///etc/passwd', title: '' } }, { ...finding, source: { title: 'Team' } },
+      { ...finding, subject: 'Priya' }, { ...finding, state: 'kept' }, { ...finding, decided_at: 5 }, { ...finding, text: '' }, { ...finding, text: 'x'.repeat(301) },
+    ]);
+  });
+  it('pages newest first with the look-up consent status', () => {
+    accepted(appFindingListV1Schema, [{ lookup: 'granted', items: [finding], total: 3, next_cursor: 'c2' }, { lookup: 'withdrawn', items: [], total: 0, next_cursor: null }]);
+    rejected(appFindingListV1Schema, [{ lookup: 'granted', items: [finding], total: 0, next_cursor: null }, { lookup: 'maybe', items: [], total: 0, next_cursor: null }, { items: [], total: 0, next_cursor: null }]);
+  });
+  it('lets the owner keep, correct or forget one finding', () => {
+    const r = { request_id: 'finding-0001', finding_id: finding.finding_id };
+    accepted(appFindingActionV1Schema, [{ ...r, action: 'keep' }, { ...r, action: 'correct', text: 'Product lead at Acme' }, { ...r, action: 'forget' }]);
+    rejected(appFindingActionV1Schema, [{ ...r, action: 'correct' }, { ...r, action: 'correct', text: ' ' }, { ...r, action: 'keep', text: 'x' }, { ...r, action: 'share' }, { ...r, finding_id: 'fnd_x', action: 'forget' }]);
+    accepted(appFindingResultV1Schema, [{ ...r, outcome: 'forgotten', replayed: false }]);
+    rejected(appFindingResultV1Schema, [{ ...r, outcome: 'deleted', replayed: false }]);
+  });
+});
+
+describe('routes', () => {
+  it('are authenticated, and every write is idempotent by request_id', () => {
+    for (const route of appOnboardingRoutesV1) {
+      expect(route.authenticated).toBe(true);
+      expect(route.path.startsWith('/app/v1/')).toBe(true);
+      if (route.method === 'POST') expect('idempotency_field' in route && route.idempotency_field).toBe('request_id');
+    }
+  });
+});
