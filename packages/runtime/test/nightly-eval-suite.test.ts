@@ -6,6 +6,7 @@ import type { Judge } from '../evals/nightly/judge';
 import { nightlyConfig } from '../evals/nightly/config';
 import { SCENARIOS, type NightlyScenario } from '../evals/nightly/scenarios';
 import { runNightly } from '../evals/nightly/suite';
+import { evalWorld } from '../evals/nightly/world';
 
 const quick = (id: string, extra: Partial<NightlyScenario> = {}): NightlyScenario => ({
   id, title: id, pain: 'context', start: '2026-09-24T09:00:00+05:30', world: {}, steps: [{ say: `hello ${id}` }],
@@ -73,15 +74,29 @@ describe('nightly eval suite', () => {
 });
 
 describe('nightly eval catalogue', () => {
-  it('has the twenty research tasks and the owner\'s two, each with a pain and a rubric', () => {
-    expect(SCENARIOS).toHaveLength(22);
-    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(22);
+  it('has the twenty research tasks, the owner\'s two and the three errand failures, each with a pain and a rubric', () => {
+    expect(SCENARIOS).toHaveLength(25);
+    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(25);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('t'))).toHaveLength(20);
+    expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('e'))).toHaveLength(3);
     expect(new Set(SCENARIOS.map((scenario) => scenario.pain))).toEqual(new Set(['context', 'follow_through', 'judgment']));
     for (const scenario of SCENARIOS) {
       expect(scenario.rubric.outcome.trim()).not.toBe('');
       expect(scenario.steps.some((step) => 'say' in step)).toBe(true);
     }
+  });
+
+  it('seeds every fact the errand rubrics require, and makes the named second calendar unreadable', async () => {
+    const seeded = (id: string) => SCENARIOS.find((scenario) => scenario.id === id)!;
+    for (const [id, facts] of [['e1-look-before-asking', ['07:30', '07:05', 'BOM Terminal 1', '25 September']], ['e2-every-asked-field', ['Seabreeze Residency', '14:00', '14,600', '23:59', '30 September']]] as const) {
+      const body = (seeded(id).world.mail ?? []).map((row) => row.body).join(' ');
+      for (const fact of facts) { expect(body).toContain(fact); expect(seeded(id).rubric.outcome).toContain(fact); }
+    }
+    const errand = seeded('e3-one-calendar-unreadable');
+    const availability = evalWorld(errand.world, errand.start).handlers.find((handler) => handler.name === 'query_availability')!;
+    const answer = await availability.handle({ date_range: { from: '2026-09-25T12:00:00+05:30', to: '2026-09-25T18:00:00+05:30' }, calendar_ids: ['primary', 'family@group.calendar.example'], duration_minutes: 60, work_windows: [] } as never, undefined as never);
+    expect(answer).toMatchObject({ ok: true, data: { free_windows: [], unavailable_calendar_ids: ['family@group.calendar.example'] } });
+    expect(JSON.stringify(errand.steps)).toContain('family@group.calendar.example');
   });
 
   it('fires the owner\'s check-back at its time and recalls across a day', () => {
