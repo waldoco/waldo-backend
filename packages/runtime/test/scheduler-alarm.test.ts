@@ -172,4 +172,3 @@ it('shared alarm keeps earlier retained common browser expiry alongside schedule
   await state.storage.deleteAlarm();
  });
 });
-
