@@ -155,6 +155,15 @@ export interface LLMGatewayAdapter {
   executeOrReconcile?(input: TrustedGatewayExecution): Promise<TrustedGatewayAdapterResult>;
 }
 
+// One gateway for a route whose steps span providers: each step goes to its provider's adapter. A provider without an
+// adapter fails its step as a missing credential, so the route moves on and the attempt log says why.
+export function routedGateway(adapters: Readonly<Partial<Record<Provider, LLMGatewayAdapter>>>): LLMGatewayAdapter {
+  return {
+    complete: (input) => adapters[input.step.provider]?.complete(input)
+      ?? Promise.resolve({ ok: false, code: 'auth_failed', error: `no ${input.step.provider} adapter` }),
+  };
+}
+
 export type RouteSpendState = {
   spent_cents_today: number;
   cap_cents: number | null;
@@ -434,9 +443,10 @@ export class RuntimeLLMProvider {
         input.runScope?.admit();
       }
       // A retry or a later rung starts only while the turn still has time for it.
+      // The floor answers for providers that could not be reached, not for a turn out of time: the turn's own reply
+      // for that says what already ran.
       if (callTimeLeftMs(input.runScope) <= 0) {
-        lastDetail = 'turn_deadline';
-        break;
+        return templateUnavailableFailure(effectiveRoute, attempts, routingLogs, 'turn_deadline');
       }
       if (this.circuitBreaker.isOpen(plan.step.provider)) {
         attempts.push({
