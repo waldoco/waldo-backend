@@ -20,6 +20,7 @@ export type JobsLaneDeps = Readonly<{
   startWorker(ticket: TaskTicket): Promise<void>;
   // A machine turn on the owner's chain (responder.prompt): the job's text, the tools it may use, a check that the job is
   // still the one being applied, and the taint of what it carries.
+  // A retried turn answers the owner's own message, so it runs on the model their turns use.
   turn(job: 'task_report' | 'retry_turn', trace: string, text: string, current: () => Promise<void>, sourceTaint: 'external' | null, toolNames?: readonly ToolName[]): Promise<string>;
   // The owner tools an apply turn may use: everything but starting or cancelling tasks, so a result cannot start more work.
   applyTools(): readonly ToolName[];
