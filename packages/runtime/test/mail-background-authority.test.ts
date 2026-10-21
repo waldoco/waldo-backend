@@ -48,7 +48,7 @@ it('denies a model-requested OTP relay outside the background tool ceiling and p
 });
 
 it('requires a grounded source for background loop creation while owner tools remain backward compatible', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('mail-loop-authority')), async (_i, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('mail-loop-authority')), async (_i, state) => {
     let seq = 0;
     const loops = loopBook(state.storage.sql, { now: () => 1, newId: () => String(++seq) });
     const create = async (id: string, args: unknown, restricted = true) => {

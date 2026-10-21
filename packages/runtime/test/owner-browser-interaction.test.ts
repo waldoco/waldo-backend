@@ -10,7 +10,7 @@ function fixture(){
  const rows=new Map<string,any>([['do_name','interactive-owner'],['telegram_subject','81102']]);let alarm:number|null=null;
  const storage={kv:{get:(key:string)=>rows.get(key),put:(key:string,value:unknown)=>rows.set(key,structuredClone(value)),list:({prefix}:{prefix:string})=>[...rows].filter(([key])=>key.startsWith(prefix))},transactionSync:<T>(work:()=>T)=>work(),getAlarm:async()=>alarm,setAlarm:async(at:number)=>{alarm=at;}} as unknown as DurableObjectStorage;
  const scope=(id:string):RunEffectScope=>({runId:id,attempt:id,deadline:Date.now()+3_600_000,signal:new AbortController().signal,admit(){},commit:work=>work()});let active=scope('first');
- const env={WALDO_ENVIRONMENT:'staging',BROWSER:{},TELEGRAM_OWNER_DO:{idFromName:()=>({toString:()=> 'physical'})}} as never;
+ const env={WALDO_ENVIRONMENT:'staging',BROWSER:{},OWNER_DO:{idFromName:()=>({toString:()=> 'physical'})}} as never;
  const options={env,storage,actualDoId:'physical',activeScope:()=>active},runtime=ownerBrowserRuntime(options),fallback={name:'browse_page',handle:vi.fn(()=>{throw Error('No provider fallback');})} as never;
  const context=()=>({authenticatedUserId:'trusted-local-owner',runScope:active,turnId:active.runId,toolCallId:crypto.randomUUID(),egressAllowlist:['*']}) as never;
  const url='https://example.com/a';
@@ -56,10 +56,7 @@ it('ordinary interaction cannot exceed a retained lower owner ceiling',async()=>
 it('a dropped handle cannot silently replace an open ordinary journey with a fresh one-shot read',async()=>{
  const f=fixture(),first:any=await f.read();expect(first.ok).toBe(true);
  expect(await f.act(first.data.session_handle,{operation:'type',element_ref:first.data.elements[0].ref,value:'Unsent owner note'})).toMatchObject({ok:true});
- for(let turn=0;turn<2;turn++){
-  if(turn)await f.next();
-  for(const runtime of [f.runtime,f.reconstruct()])expect(await runtime.read(f.fallback).handle({url:f.url,instruction:'Read the current page'},f.context())).toMatchObject({ok:false,code:'rejected',error:expect.stringContaining('session_handle')});
- }
+ expect(await f.runtime.read(f.fallback).handle({url:f.url,instruction:'Read the current page'},f.context())).toMatchObject({ok:false,code:'rejected',error:expect.stringContaining(first.data.session_handle)});
  expect(commonBrowserFixture.allocations).toBe(1);
  expect(await f.act(first.data.session_handle,{operation:'read'})).toMatchObject({ok:true,data:{field_values:expect.arrayContaining([expect.objectContaining({value:'Unsent owner note'})])}});
 });

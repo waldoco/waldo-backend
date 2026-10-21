@@ -17,7 +17,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
-const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '5d1f3c2b-8a4e-4b6c-9d0e-1f2a3b4c5d6e';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
@@ -46,7 +46,7 @@ const plantReshaped = (sql: SqlStorage, id: string, kind: string, dueAt: number)
   id, kind, dueAt, dueAt, JSON.stringify({ type: 'every_other_tuesday', every_ms: 600_000 }), JSON.stringify({ id }), dueAt, dueAt);
 const rowOf = (sql: SqlStorage, id: string) => sql.exec('SELECT * FROM schedule WHERE id = ?', id).toArray();
 
-type Owner = InstanceType<typeof TelegramOwnerDO>;
+type Owner = InstanceType<typeof OwnerDO>;
 const headers = (name: string) => ({ 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' });
 const send = async (owner: Owner, state: DurableObjectState, name: string, text: string) => {
   const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers: headers(name), body: JSON.stringify({ client_message_id: `client-${name}-0001`, text }) }));
@@ -60,14 +60,14 @@ const send = async (owner: Owner, state: DurableObjectState, name: string, text:
 describe('a fixed-id schedule row this Worker cannot read, on an app owner with a confirmed zone', () => {
   const cases = [['heartbeat', HEARTBEAT_ID, 'heartbeat'], ['nightly', NIGHTLY_ID, 'dreaming'], ['brief sweep', BRIEF_SWEEP_ID, 'pre_activity_spot'], ['day card', DAY_CARDS[0]!.id, 'brief']] as const;
   const boot = (name: string, plant: (sql: SqlStorage) => void, work: (owner: Owner, state: DurableObjectState) => Promise<void>) =>
-    runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
       claimStore(state.storage.sql);
       ensureSchema(state.storage);
       state.storage.kv.put('do_name', name);
       state.storage.kv.put('timezone', 'UTC');
       state.storage.kv.put('timezone_confirmed', true);
       plant(state.storage.sql);
-      const owner = new TelegramOwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+      const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
       try { await work(owner, state); } finally { await state.storage.deleteAlarm(); }
     });
 

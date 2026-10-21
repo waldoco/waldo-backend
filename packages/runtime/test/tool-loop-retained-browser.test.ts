@@ -1,12 +1,12 @@
 import { expect, it, vi, beforeEach } from 'vitest';
 import { browsePageArgsSchema, browseActArgsSchema, buildSessionState, TOOL_PERMISSIONS, triggerTypeSchema, type ToolHandler } from '@waldo/contracts';
 import { runToolLoop } from '../src/conversation/tool-loop';
-import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
+import { resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 const canaries = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
 const ctx = { authenticatedUserId: 'owner', trigger: 'user_message' as const, canaryTokens: canaries, sourceTaint: null, toolArgSourceTaint: null, sanitise: resolveRunLoopAdapters({ WALDO_ENV: 'local' }).safety.sanitise, egressAllowlist: ['*'], session: buildSessionState({ trigger: 'user_message', canary_tokens: canaries, started_at: 0 }) };
 beforeEach(()=>{ctx.session=buildSessionState({trigger:'user_message',canary_tokens:canaries,started_at:0});ctx.toolArgSourceTaint=null;});
-const args = JSON.stringify({ provider: 'cloudflare_playwright', url: 'https://example.com/a', instruction: 'Read page' });
+const args = JSON.stringify({ url: 'https://example.com/a', instruction: 'Read page' });
 for (const retained of [true, false]) it(`${retained ? 'retained host' : 'ordinary provider'} read keeps its correct duplicate and hard-budget behavior`, async () => {
  const handle = vi.fn(async () => ({ ok: true as const, data: { url: 'https://example.com/a', ...(retained ? { session_handle: 'host-session' } : {}) }, source_taint: 'external' as const }));
  const handler: ToolHandler<unknown, unknown, ToolDispatcherContext> = { name: 'browse_page', schema: browsePageArgsSchema, description: 'Read', trigger_allowlist: triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes('browse_page')), autonomy_gated: false, handle };

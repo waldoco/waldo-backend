@@ -343,6 +343,43 @@ describe('trusted invocation acceptance', () => {
   });
 
   it.each([
+    ['brief', 'brief'],
+    ['pre_activity_spot', 'pre_activity_spot'],
+    ['dreaming', 'dreaming_mode'],
+    ['reminder', 'intervention'],
+    ['heartbeat', 'intervention'],
+    ['standing_order', 'intervention'],
+    ['device_followup', 'intervention'],
+  ])('binds the owner job %s to the %s trigger, admitted only by the owner scheduler', (job, trigger) => {
+    const invocation = accept({ ...trustedAdmission, admission_source: 'trusted_scheduler', intent: { kind: 'run_owner_job', job } });
+
+    expect(invocation.verified_authority).toEqual(trustedAdmission.verified_authority);
+    expect(invocation.runtime_binding).toEqual({ trigger, variant: null, governor_resolution: 'from_trigger' });
+    expect(invocation.output).toEqual({ disposition: 'proactive_delivery', occurrence_ref: trustedAdmission.occurrence.occurrence_ref });
+    for (const admission_source of ['authenticated_ingress', 'trusted_internal'] as const) {
+      expect(acceptTrustedInvocation({ ...trustedAdmission, admission_source, intent: { kind: 'run_owner_job', job } }))
+        .toEqual({ ok: false, error: { code: 'invalid_trusted_admission' } });
+    }
+  });
+
+  it.each(['journal', 'handoff', 'patrol', 'pre_brief_sweep', 'nightly', 'device', 'mac_followup', ''])('rejects %o as an owner job', (job) => {
+    expect(acceptTrustedInvocation({ ...trustedAdmission, admission_source: 'trusted_scheduler', intent: { kind: 'run_owner_job', job } }))
+      .toEqual({ ok: false, error: { code: 'invalid_trusted_admission' } });
+    expect(acceptTrustedInvocation({ ...trustedAdmission, admission_source: 'trusted_scheduler', intent: { kind: 'run_owner_job' } }))
+      .toEqual({ ok: false, error: { code: 'invalid_trusted_admission' } });
+  });
+
+  it('refuses an owner job envelope re-labelled as internal work at the durable boundary', () => {
+    const invocation = accept({ ...trustedAdmission, admission_source: 'trusted_scheduler', intent: { kind: 'run_owner_job', job: 'brief' } });
+
+    expect(trustedInvocationEnvelopeSchema.safeParse(invocation).success).toBe(true);
+    expect(trustedInvocationEnvelopeSchema.safeParse({
+      ...invocation, admission_source: 'trusted_internal',
+      idempotency: { ...invocation.idempotency, scope: 'internal_work' }, output: { disposition: 'internal_no_output' },
+    }).success).toBe(false);
+  });
+
+  it.each([
     ['owner', 'owner-controlled'],
     ['subscription_tier', 'pro'],
     ['durable_object_id', 'do-controlled'],

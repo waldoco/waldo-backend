@@ -9,10 +9,12 @@ import { Scheduler, type ScheduleExecutors } from '../src/scheduler/multiplexer'
 import { ensureSchema } from '../src/tracer/schema';
 import type { Deps } from '../src/seams/deps';
 import { TelegramFinalOutbox, type HeartbeatReceipt } from '../src/channels/telegram-final-outbox';
-import type { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
+import type { OwnerDO } from '../src/channels/owner-do';
+// Stands in for the check-back turn: reports which loops it was given.
+const checkedBack = async (loops: readonly { title: string }[]) => `Checked ${loops.map(loop => loop.title).join(', ')}`;
 
 let sequence = 0;
-const stub = () => env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`proactivity-${sequence++}`)) as DurableObjectStub<TelegramOwnerDO>;
+const stub = () => env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`proactivity-${sequence++}`)) as DurableObjectStub<OwnerDO>;
 const at = (iso: string) => Date.parse(iso);
 const TZ = 'Asia/Kolkata';
 const deps = (now: number): Deps => ({ now: () => now, newRunId: () => 'run-fixed', newOutboxId: () => 'out-fixed', sha256Hex: async () => 'sha-fixed' });
@@ -37,7 +39,7 @@ const withBeat = async <T>(now: number, work: (ctx: {
     const beat = async (occurrenceAt: number) => {
       await scheduler.schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', occurrenceAt, dueAt: occurrenceAt, payloadRefs: { id: HEARTBEAT_ID } }).catch(() => undefined);
       return scheduler.dispatchDue({
-        heartbeat: heartbeatTick({ scheduler, sql, loops: book, plans, timezone: TZ, now: () => now, enqueue: enqueueSend(sql, state.storage, scheduler, now, async (text) => { sent.push(text); }) }),
+        heartbeat: heartbeatTick({ scheduler, sql, loops: book, plans, timezone: TZ, now: () => now, checkBack: checkedBack, enqueue: enqueueSend(sql, state.storage, scheduler, now, async (text) => { sent.push(text); }) }),
       } as ScheduleExecutors);
     };
     const runs = () => sql.exec<RunRow>('SELECT schedule_id, outcome, heartbeat_result, delivery, attempt FROM schedule_runs ORDER BY id').toArray();

@@ -34,11 +34,11 @@ vi.mock('../src/channels/telegram-turn', async load => {
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
-const { TelegramOwnerDO } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO } = await import('../src/channels/owner-do');
 
 it('review proof: cancelled prep is still retained as Waldo conversation and nightly evidence', async () => {
   const name = 'calendar-review-cancelled-history-proof';
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const originalNow = Date.now;
     const now = Date.parse('2026-10-03T04:30:00Z');
     Date.now = () => now;
@@ -46,7 +46,7 @@ it('review proof: cancelled prep is still retained as Waldo conversation and nig
     fixture.event = { id: 'event-1', title: 'Design review', status: 'confirmed', start: '2026-10-03T10:30:00+05:30', end: '2026-10-03T11:00:00+05:30', all_day: false, description: 'Bring the onboarding mocks.', etag: 'r1' };
     fixture.mutate = () => { fixture.event = { ...fixture.event!, status: 'cancelled' }; };
     const config = { ...env, CALENDAR_GROUNDED_PREP: '1', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' };
-    const owner = new TelegramOwnerDO(state, config);
+    const owner = new OwnerDO(state, config);
     state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
     await state.storage.put('origin', 'https://fixture.invalid');
     await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
@@ -67,7 +67,7 @@ it('review proof: cancelled prep is still retained as Waldo conversation and nig
 
 it('review proof: changed source retry does not reuse cached stale decision', async () => {
   const name = 'calendar-review-stale-cache-proof';
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const originalNow = Date.now;
     const now = Date.parse('2026-10-03T04:30:00Z');
     Date.now = () => now;
@@ -75,7 +75,7 @@ it('review proof: changed source retry does not reuse cached stale decision', as
     fixture.event = { id: 'event-1', title: 'Design review', status: 'confirmed', start: '2026-10-03T10:30:00+05:30', end: '2026-10-03T11:00:00+05:30', all_day: false, description: 'Bring the onboarding mocks.', etag: 'r1' };
     fixture.mutate = () => { fixture.event = { ...fixture.event!, etag: 'r2', description: 'Bring revised diagrams; onboarding mocks are obsolete.' }; };
     const config = { ...env, CALENDAR_GROUNDED_PREP: '1', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' };
-    const owner = new TelegramOwnerDO(state, config);
+    const owner = new OwnerDO(state, config);
     state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
     await state.storage.put('origin', 'https://fixture.invalid');
     await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
@@ -97,7 +97,7 @@ it('review proof: changed source retry does not reuse cached stale decision', as
 
 it('review proof: literal forget removes source identifiers from every retained prep copy', async () => {
   const name = 'calendar-review-identifier-forget-proof';
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const originalNow = Date.now;
     const now = Date.parse('2026-10-03T04:30:00Z');
     Date.now = () => now;
@@ -105,7 +105,7 @@ it('review proof: literal forget removes source identifiers from every retained 
     fixture.event = { id: 'secretmeeting123', title: 'Design review', status: 'confirmed', start: '2026-10-03T10:30:00+05:30', end: '2026-10-03T11:00:00+05:30', all_day: false, description: 'Bring the onboarding mocks.', etag: 'r1' };
     fixture.mutate = null;
     const config = { ...env, CALENDAR_GROUNDED_PREP: '1', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' };
-    const owner = new TelegramOwnerDO(state, config);
+    const owner = new OwnerDO(state, config);
     state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
     await state.storage.put('origin', 'https://fixture.invalid');
     await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);

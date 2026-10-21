@@ -23,6 +23,7 @@ export const sendMessageHandler = (desk: MessageDesk): ToolHandler<SendMessageAr
   trigger_allowlist: allowlist('send_message'),
   autonomy_gated: false,
   mutates_state: true,
+  proposal_only: true,
   handle: async (args: SendMessageArgs, ctx?: ToolDispatcherContext): Promise<ToolResult<unknown>> => {
     const proposal_id = await desk.proposeSendMessage({
       operation_ref: await ownerEffectOperationRef(ctx),

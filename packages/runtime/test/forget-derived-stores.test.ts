@@ -10,7 +10,7 @@ const AT = '2026-09-26T04:00:00Z';
 // Derived text the model later reads back: update cards feed the prompt and day-plan reasons feed
 // day cards. A forgotten fact must not survive in either.
 it('forgetting a claim also clears derived card and day-plan text', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('forget-derived')), (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('forget-derived')), (_instance, state) => {
     const sql = state.storage.sql;
     const store = claimStore(sql);
     sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0)`);
@@ -31,7 +31,7 @@ it('forgetting a claim also clears derived card and day-plan text', async () => 
 });
 
 it('clears card changes whose forgotten text contains JSON-escaped characters', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('forget-derived-json')), (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('forget-derived-json')), (_instance, state) => {
     const sql = state.storage.sql;
     const store = claimStore(sql);
     const text = `Owner calls it "${MARKER}" and says\nhi`;
@@ -46,7 +46,7 @@ it('clears card changes whose forgotten text contains JSON-escaped characters', 
 });
 
 it('a malformed card row does not stop cleanup of later valid cards, and nested strings are verified', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('forget-derived-bad')), (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('forget-derived-bad')), (_instance, state) => {
     const sql = state.storage.sql;
     const store = claimStore(sql);
     sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0)`);
@@ -64,7 +64,7 @@ it('a malformed card row does not stop cleanup of later valid cards, and nested 
 });
 
 it('an unterminated JSON array hiding the phrase behind unicode escapes is not reported clean', async () => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('forget-derived-unicode')), (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('forget-derived-unicode')), (_instance, state) => {
     const sql = state.storage.sql;
     const store = claimStore(sql);
     sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0)`);

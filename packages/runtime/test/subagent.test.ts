@@ -15,13 +15,13 @@ import {
   type WebSearchArgs,
 } from '@waldo/contracts';
 import { runToolLoop, type LoopExit, type ToolLoopEvent } from '../src/conversation/tool-loop';
-import { assertChildEffectsReceivable, childReceiptEvent, CHILD_TOOL_NAMES, delegateTaskHandler, runChildLoop, SUBAGENT_MAX_ROUNDS, SUBAGENT_MAX_SPAWNS_PER_TURN, SUBAGENT_SYSTEM_PROMPT, withDelegation } from '../src/conversation/subagent';
+import { assertChildEffectsReceivable, childReceiptEvent, CHILD_TOOL_NAMES, delegateTaskHandler, runChildLoop, SUBAGENT_MAX_SPAWNS_PER_TURN, SUBAGENT_SYSTEM_PROMPT, withDelegation } from '../src/conversation/subagent';
 import { dispatchTool, type ToolDispatcherContext } from '../src/tools/dispatcher';
 import type { LoopEventLike } from '../src/hooks/claim-hook';
 import { evaluateTurnClaims, receiptsFromLoopEvents } from '../src/hooks/claim-hook';
 import { receiptLine } from '../src/hooks/receipt-line';
 import { sanitise } from '../src/scribe/sanitiser';
-import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
+import { resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
 const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' });
@@ -50,7 +50,7 @@ describe('delegate_task (subagent orchestration v1)', () => {
       let exit: LoopExit = 'completed';
       const text = await runToolLoop({
         handlers: [stubRead('web_search'), stubRead('read_memory')],
-        ctx, maxSteps: SUBAGENT_MAX_ROUNDS,
+        ctx, maxSteps: 15,
         onSettle: (settled) => { exit = settled; },
         step: async (tools, turns) => {
           childToolSets.push(tools?.map((tool: LLMTool) => tool.name));
@@ -118,6 +118,24 @@ describe('delegate_task (subagent orchestration v1)', () => {
     const result = JSON.parse(outputs[0]!);
     expect(result.ok).toBe(false);
     expect(result.error).toContain('ran out of its round budget');
+    expect(result.error).toContain('partial findings');
+  });
+
+  it("a child stopped by the turn's time hands back a failed round that says so", async () => {
+    const delegate = delegateTaskHandler(async () => ({ exit: 'time_exhausted' as const, text: 'partial findings' }));
+    const outputs: string[] = [];
+    let n = 0;
+    await runToolLoop({
+      handlers: [delegate], ctx, maxSteps: 5,
+      onTool: (event) => outputs.push(event.output),
+      step: async (tools) => {
+        n += 1;
+        return tools && n === 1 ? { text: '', tool_calls: [{ call_id: 'd1', name: 'delegate_task', arguments: '{"task":"long task"}' }] } : { text: 'closed.' };
+      },
+    });
+    const result = JSON.parse(outputs[0]!);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("ran out of the turn's time");
     expect(result.error).toContain('partial findings');
   });
 });
@@ -326,8 +344,8 @@ describe('Codex #224 holds (regressions)', () => {
     expect(budget.remaining).toBe(0);
   });
 
-  it('child loop observes the shared budget: 2 remaining rounds cap a 10-round slice', async () => {
-    const budget = { remaining: 2 };
+  it('child loop draws down the shared budget and leaves the parent rounds for its report', async () => {
+    const budget = { remaining: 5 };
     let offered = 0;
     const result = await runChildLoop('research topic', {
       handlers: [stubRead('web_search')],
@@ -341,8 +359,8 @@ describe('Codex #224 holds (regressions)', () => {
         return { text: '', tool_calls: [{ call_id: `k${offered}`, name: 'web_search', arguments: `{"q":"q${offered}"}` }] };
       },
     });
-    expect(offered).toBe(2);
-    expect(budget.remaining).toBe(0);
+    expect(offered).toBe(3);
+    expect(budget.remaining).toBe(2);
     expect(result.exit).toBe('budget_exhausted');
   });
 });
@@ -408,7 +426,7 @@ describe('runChildLoop delegated effect receipts', () => {
   it.each([
     { label: 'accepted', args: JSON.stringify(writeArgs), parsedArgs: writeArgs, ok: true, ref: 'notes.md', calls: 1, code: undefined },
     { label: 'schema-rejected', args: JSON.stringify({ path: 'notes.md' }), parsedArgs: { path: 'notes.md' }, ok: false, ref: 'notes.md', calls: 0, code: 'invalid_args' },
-    { label: 'malformed JSON', args: '{"path":"notes.md"', parsedArgs: undefined, ok: false, ref: undefined, calls: 0, code: undefined },
+    { label: 'malformed JSON', args: '{"path":"notes.md"', parsedArgs: undefined, ok: false, ref: undefined, calls: 0, code: 'invalid_args' },
   ])('forwards exactly one delegated receipt for a $label call through real dispatch', async ({ args, parsedArgs, ok, ref, calls, code }) => {
     await withEffectTool(async () => {
       const handler = writeHandler();
@@ -417,7 +435,7 @@ describe('runChildLoop delegated effect receipts', () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       try {
         const result = await runChildLoop('write a note', {
-          handlers: [handler, stubRead('read_memory')], ctx: { ...ctx }, budget: { remaining: 3 },
+          handlers: [handler, stubRead('read_memory')], ctx: { ...ctx }, budget: { remaining: 5 },
           controlRound: () => '', onTool, onReceipt,
           complete: async (_content, tools, turns) => {
             expect(tools?.map(tool => (tool as LLMTool).name)).toContain('workspace_write');

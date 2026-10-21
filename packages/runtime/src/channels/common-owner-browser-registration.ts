@@ -1,4 +1,4 @@
-import { commonOwnerAuthority } from '../identity/common-owner-authority';
+import { localOwnerBinding, verifyOwnerBinding } from '../identity/owner-binding';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 import { commonPublicBrowserConfiguration } from './common-public-browser-configuration';
 import { commonStagingRegistration } from './common-staging-registration';
@@ -23,12 +23,10 @@ export function commonOwnerBrowserRegistration(options: Readonly<{
   // or removing access to a previously funded cleanup obligation.
   const selected = invalid || raw?.scope === 'verified_owners';
   const operator = selected ? JSON.stringify(raw) : undefined;
-  const directory = commonOwnerAuthority(env);
   const physical = () => {
-    const doName = storage.kv.get<string>('do_name'), subject = storage.kv.get<string>('telegram_subject');
-    if (!doName || !subject || storage.kv.get('telegram_unlinked') === true
-      || env.TELEGRAM_OWNER_DO?.idFromName(doName).toString() !== actualDoId) throw Error('automatic browser owner unavailable');
-    return { doName, subject };
+    const binding = localOwnerBinding(storage.kv, env.OWNER_DO, actualDoId);
+    if (!binding) throw Error('automatic browser owner unavailable');
+    return binding;
   };
   const configuration = (registration: Record<string, any>, cleanupOnly: boolean) => {
     const registered = commonStagingRegistration({ WALDO_ENVIRONMENT: env.WALDO_ENVIRONMENT, COMMON_BROWSER_REGISTRATION: JSON.stringify(registration) }, cleanupOnly ? 'retained_read' : 'admission');
@@ -46,7 +44,7 @@ export function commonOwnerBrowserRegistration(options: Readonly<{
       if (invalid) throw Error('automatic browser operator policy invalid');
       if (!selected) return undefined;
       const before = physical();
-      const owner = await directory.resolve('telegram', before.subject, before.doName);
+      const owner = await verifyOwnerBinding(env, before, actualDoId, env.OWNER_DO);
       const after = physical();
       if (!owner || owner.doName !== after.doName || owner.subject !== after.subject
         || JSON.stringify(before) !== JSON.stringify(after)) throw Error('automatic browser authority unavailable');

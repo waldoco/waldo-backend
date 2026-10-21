@@ -23,8 +23,11 @@ const DUE_LOOKAHEAD_MS = 1_000;
 const MAX_DUE_PER_ALARM = 8;
 const PRODUCT_RETRY_DELAY_MS = 30_000;
 const DURABILITY_RETRY_CAP_MS = 15 * 60_000;
-const QUARANTINE_AFTER_ATTEMPTS = 3;
+export const QUARANTINE_AFTER_ATTEMPTS = 3;
 const QUARANTINE_MS = 24 * 60 * 60_000;
+// A paused row whose pause has ended. rearm() wakes for it. hasDue() counts it as due work and reapQuarantine() returns it to
+// armed, and both read this one condition: a row one counts and the other skips would wake the alarm every 250 ms.
+const PAUSE_ENDED = "status = 'quarantined' AND quarantined_until IS NOT NULL AND quarantined_until <= ?";
 
 type ScheduleSqlRow = {
   id: string;
@@ -127,6 +130,19 @@ export class Scheduler {
     return scheduled;
   }
 
+  // Moves an armed entry's next run earlier, to `at`, and nothing else: its last run, retry count and quarantine stay
+  // as the scheduler set them, so an outside wake never resets a retry or lifts a quarantine. A retrying entry keeps its
+  // backoff. Returns whether the entry moved.
+  async pullForward(id: string, at: number): Promise<boolean> {
+    const moved = this.sql.exec(
+      `UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ?
+        WHERE id = ? AND status = 'armed' AND attempts = 0 AND due_at > ?`,
+      at, at, this.deps.now(), id, at,
+    ).rowsWritten > 0;
+    if (moved) await this.rearm();
+    return moved;
+  }
+
   async cancel(id: string): Promise<void> {
     this.sql.exec('DELETE FROM schedule WHERE id = ?', id);
     await this.rearm();
@@ -164,9 +180,14 @@ export class Scheduler {
     if (this.lookup(id).state === 'entry') await this.cancel(id);
   }
 
-  hasDue(): boolean { return this.dueEntries(this.deps.now()).entries.length > 0; }
+  hasDue(): boolean {
+    const now = this.deps.now();
+    return this.dueEntries(now).entries.length > 0
+      || readable(this.sql.exec<ScheduleSqlRow>(`SELECT * FROM schedule WHERE ${PAUSE_ENDED}`, now).toArray()).entries.length > 0;
+  }
 
-  async dispatchDue(executors: ScheduleExecutors): Promise<readonly ScheduleEntry[]> {
+  // canStart: asked before each entry; false leaves it and the rest armed and due for the next wake.
+  async dispatchDue(executors: ScheduleExecutors, canStart?: () => boolean): Promise<readonly ScheduleEntry[]> {
     const now = this.deps.now();
     this.reapQuarantine(now);
     const { entries, unreadable } = this.dueEntries(now);
@@ -176,6 +197,7 @@ export class Scheduler {
 
     try {
       for (const entry of due) {
+        if (canStart?.() === false) break;
         let fresh = this.read(entry.id);
         if (fresh === null || fresh.status !== 'armed' || fresh.due_at > now + DUE_LOOKAHEAD_MS) {
           continue;
@@ -440,6 +462,12 @@ export class Scheduler {
     this.settleRun(runId, delivered ? 'ok' : 'quarantined', delivered ? null : 'delivery', this.deps.now());
   }
 
+  // The owner cancelled the work before it was sent: the run did not fail, and no delivery was attempted.
+  settleCancelled(runId: string): void {
+    this.sql.exec(`UPDATE schedule_runs SET delivery = NULL WHERE id = ? AND outcome = 'running'`, runId);
+    this.settleRun(runId, 'ok', null, this.deps.now());
+  }
+
   private settleRun(runId: string, outcome: 'ok' | 'failed' | 'quarantined' | 'missed', errorClass: 'run' | 'scheduler_handoff' | 'delivery' | null, now: number): void {
     this.sql.exec(
       `UPDATE schedule_runs
@@ -576,9 +604,7 @@ export class Scheduler {
               occurrence_at = quarantined_until,
               quarantined_until = NULL,
               updated_at = ?
-        WHERE status = 'quarantined'
-          AND quarantined_until IS NOT NULL
-          AND quarantined_until <= ?`,
+        WHERE ${PAUSE_ENDED}`,
       now,
       now,
     );
