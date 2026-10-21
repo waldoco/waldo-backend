@@ -3,7 +3,7 @@ import { browserTaskReceiptSchema } from './browser-session';
 
 const digestSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/);
 const ref = z.string().min(1).max(200);
-const httpsOrigin = z.url().refine(value => { try { const url = new URL(value); return url.protocol === 'https:' && url.origin === value && !url.username && !url.password; } catch { return false; } }, 'errand origin must be a bare HTTPS origin');
+const httpsOrigin = z.string().max(300).regex(/^https:\/\/[a-z0-9-]+(\.[a-z0-9-]+)*(:\d{1,5})?$/, 'errand origin must be a bare HTTPS origin');
 const httpsUrl = z.url().refine(value => /^https:\/\/(?![^/]*@)/.test(value), 'errand URL must be credential-free HTTPS');
 const factsSchema = z.record(z.string().min(1).max(80), z.string().min(1).max(500))
   .refine(value => Object.keys(value).length > 0 && Object.keys(value).length <= 24 && Object.keys(value).every(key => !['__proto__', 'constructor', 'prototype'].includes(key)), 'errand facts need 1-24 plain keys');
