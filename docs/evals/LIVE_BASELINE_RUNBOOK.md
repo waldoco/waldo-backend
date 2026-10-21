@@ -134,4 +134,3 @@ WALDO_EVAL_MODE=live WALDO_EVAL_MEMORY=raw_history WALDO_EVAL_JUDGE_MODEL=claude
 ```
 
 It runs only the memory cases whose facts arrive in owner turns (`t19`, `r1`, `m02`, `h04`), since a seeded claim has no raw-history equivalent, and it skips their claim-store receipts, which have nothing to read. The same judge rubrics and the other receipts still apply, so the two scorecards compare like with like. Its scorecard is reported, never gated, and the label on the card says `(raw_history)`. If the claim store does not beat this baseline on those cases, the store is not earning its keep.
-
