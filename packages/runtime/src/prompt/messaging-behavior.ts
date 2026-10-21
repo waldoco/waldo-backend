@@ -117,10 +117,13 @@ export type SurfacePresentation = Readonly<{
 }>;
 // The function list names the callable tools each round and narrows when a round withholds some, so the prompt does not
 // repeat it; only an empty set is said, because an absent function list says nothing.
-export function messagingSystemPrompt(tools: readonly string[], presentation?: SurfacePresentation): string {
-  const none = tools.length === 0 ? ['Tools available in this chat: none.'] : [];
-  if (!presentation) return [MESSAGING_BEHAVIOR, ...none].join('\n\n');
-  return [IDENTITY, VOICE, WALDO_VOCABULARY, TASKS, EXAMPLES, DOING, HEALTH, REMEMBERING, surfacePresentationPrompt(presentation), ...none].join('\n\n');
+// With tool search on, a provider may show the model only the core tools, so the categories it can load are named here.
+export const TOOL_SEARCH_LINE = "Tools you need less often load through tool search when a task calls for them: calendar changes and Google Tasks, sending mail and contacts, acting on web pages and Drive, memory upkeep and past conversations, health logs, reminders and follow-ups, settings and standing orders, skills, workspace files, artifacts, and actions that reach beyond this chat. Search for the one you need rather than saying you can't do it.";
+
+export function messagingSystemPrompt(tools: readonly string[], presentation?: SurfacePresentation, toolSearch = false): string {
+  const tail = [...(tools.length > 0 && toolSearch ? [TOOL_SEARCH_LINE] : []), ...(tools.length === 0 ? ['Tools available in this chat: none.'] : [])];
+  if (!presentation) return [MESSAGING_BEHAVIOR, ...tail].join('\n\n');
+  return [IDENTITY, VOICE, WALDO_VOCABULARY, TASKS, EXAMPLES, DOING, HEALTH, REMEMBERING, surfacePresentationPrompt(presentation), ...tail].join('\n\n');
 }
 
 export function surfacePresentationPrompt(presentation: SurfacePresentation): string {

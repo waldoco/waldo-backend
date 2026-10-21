@@ -476,3 +476,63 @@ describe('OpenAIResponsesAdapter hosted web search', () => {
     expect((bodies[1]!.input as unknown[]).slice(1)).toEqual([...roundOne, { type: 'function_call_output', call_id: 'c1', output: '{"ok":true}' }]);
   });
 });
+
+describe('OpenAIResponsesAdapter tool search', () => {
+  const when = { type: 'object', properties: { day: { type: 'string', format: 'date' }, note: { type: 'string', pattern: '^[a-z]+$' } }, required: ['day'], additionalProperties: false };
+  const searchRequest = (): LLMGatewayRequest => {
+    const base = gatewayRequest();
+    return { ...base, request: { ...base.request, tools: [
+      { name: 'get_context', description: 'Current time', parameters: { type: 'object', properties: {} } },
+      { name: 'query_availability', description: 'Free and busy time', parameters: when, namespace: 'calendar', defer_loading: true },
+      { name: 'free_form', description: 'Takes anything', parameters: { type: 'object', properties: { args: { type: 'object', additionalProperties: {} } } }, namespace: 'calendar', defer_loading: true },
+    ], tool_search: { namespaces: { calendar: 'Calendar changes and free time.' } } } };
+  };
+
+  it('sends core functions strict up front, deferred ones in their namespace, then the hosted tool_search', async () => {
+    let sent: { tools?: unknown } = {};
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async (body: { tools?: unknown }) => { sent = body; return { id: 'r', output_text: 'ok', output: [], usage: { input_tokens: 1, output_tokens: 1 } }; }) });
+    await adapter.complete(searchRequest());
+    expect(sent.tools).toEqual([
+      { type: 'function', name: 'get_context', description: 'Current time', parameters: { type: 'object', properties: {}, required: [], additionalProperties: false }, strict: true },
+      { type: 'namespace', name: 'calendar', description: 'Calendar changes and free time.', tools: [
+        // The pattern is outside the strict subset and is dropped; the tool's own schema still checks it on dispatch.
+        { type: 'function', name: 'query_availability', description: 'Free and busy time', strict: true, defer_loading: true, parameters: {
+          type: 'object', properties: { day: { type: 'string', format: 'date' }, note: { anyOf: [{ type: 'string' }, { type: 'null' }] } }, required: ['day', 'note'], additionalProperties: false } },
+        // A free-form record cannot be strict, so it goes as it is.
+        { type: 'function', name: 'free_form', description: 'Takes anything', strict: false, defer_loading: true, parameters: { type: 'object', properties: { args: { type: 'object', additionalProperties: {} } } } },
+      ] },
+      { type: 'tool_search' },
+    ]);
+  });
+
+  it('returns a strict call with the nulls for fields the model left out removed, other calls as sent', async () => {
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async () => ({ id: 'r', output_text: '', usage: { input_tokens: 1, output_tokens: 1 }, output: [
+      { type: 'tool_search_call', id: 'ts_1', call_id: null, execution: 'server', status: 'completed', arguments: { query: 'free time' } },
+      { type: 'tool_search_output', id: 'tso_1', call_id: null, execution: 'server', status: 'completed', tools: [] },
+      { type: 'function_call', call_id: 'c1', name: 'query_availability', namespace: 'calendar', arguments: '{"day":"2030-11-04","note":null}' },
+      { type: 'function_call', call_id: 'c2', name: 'free_form', namespace: 'calendar', arguments: '{"args":null}' },
+    ] })) });
+    const result = await adapter.complete(searchRequest());
+    expect(result).toMatchObject({ ok: true, data: { tool_calls: [
+      { call_id: 'c1', name: 'query_availability', arguments: '{"day":"2030-11-04"}' },
+      { call_id: 'c2', name: 'free_form', arguments: '{"args":null}' },
+    ] } });
+  });
+
+  it('replays the search items while tools are offered, and leaves them out of a closing round that offers none', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async (body: Record<string, unknown>) => { bodies.push(body); return { id: 'r', output_text: 'done', output: [], usage: { input_tokens: 1, output_tokens: 1 } }; }) });
+    const search = { type: 'tool_search_call', id: 'ts_1', execution: 'server', status: 'completed', arguments: { query: 'free time' } };
+    const loaded = { type: 'tool_search_output', id: 'tso_1', execution: 'server', status: 'completed', tools: [{ type: 'namespace', name: 'calendar' }] };
+    const call = { type: 'function_call', call_id: 'c1', name: 'query_availability', namespace: 'calendar', arguments: '{"day":"2030-11-04"}' };
+    const turns = [{ call: { call_id: 'c1', name: 'query_availability', arguments: '{"day":"2030-11-04"}' }, output: '{"free":true}', prior_items: [search, loaded, call] }];
+    const offered = searchRequest();
+    await adapter.complete({ ...offered, request: { ...offered.request, tool_turns: turns } });
+    const closing = searchRequest();
+    const { tools: _withdrawn, ...closingRequest } = closing.request;
+    await adapter.complete({ ...closing, request: { ...closingRequest, tool_turns: turns } });
+    expect((bodies[0]!.input as unknown[]).slice(1)).toEqual([search, loaded, call, { type: 'function_call_output', call_id: 'c1', output: '{"free":true}' }]);
+    const { namespace: _namespace, ...plainCall } = call;
+    expect((bodies[1]!.input as unknown[]).slice(1)).toEqual([plainCall, { type: 'function_call_output', call_id: 'c1', output: '{"free":true}' }]);
+  });
+});

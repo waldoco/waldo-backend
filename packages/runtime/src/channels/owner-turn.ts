@@ -35,6 +35,7 @@ import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDea
 import { InMemoryCircuitBreaker, observedBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
 import { messagingSystemPrompt, ownerClockLine, unconnectedLine } from '../prompt/messaging-behavior';
 import { assembleTurnPrompt } from '../prompt/turn-prompt';
+import { brainTools } from '../tools/records';
 import { eligibleHandlers } from '../tools/eligibility';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
@@ -254,7 +255,7 @@ export const createOwnerResponder = (
           system, messages: userMessages.map(({ attachments: _names, ...message }) => message), max_tokens: OUTPUT_TOKENS[step.model] ?? step.max_tokens ?? 4_096, temperature: 0.2,
           ...(effort ? { reasoning_effort: effort } : {}),
           ...(format ? { response_format: format } : {}), ...(attachments ? { attachments: [...attachments] } : {}),
-          ...(tools ? { tools: [...tools] } : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),
+          ...(tools ? brainTools(tools, access.toolSearch === true && purpose === 'reply') : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),
           ...(tools && ownerTurnActive && purpose === 'reply' ? { web_search: searchLocation(clock.timezone) } : {}),
         };
       },
@@ -491,6 +492,7 @@ export const createOwnerResponder = (
       let withheldLogged = false;
       return runToolLoop({
         handlers: turnHandlers,
+        ...(access.toolSearch ? { stableMenu: true } : {}),
         budget: turnBudget,
         ...(offloadStore === undefined ? {} : { offload: offloadStore }),
         maxSteps: turnRounds,
@@ -566,7 +568,7 @@ export const createOwnerResponder = (
           const healthPrompt = reasons === undefined ? request.composition.healthPrompt : undefined;
           const turnPrompt = assembleTurnPrompt({
             instructions: {
-              behavior: messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation),
+              behavior: messagingSystemPrompt(turnHandlers.map((handler) => handler.name), surfacePresentation, access.toolSearch === true),
               skillCatalog: skillMetadata, orders: ordersSection, reasons: reasons?.instructions,
               procedure: skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined),
             },

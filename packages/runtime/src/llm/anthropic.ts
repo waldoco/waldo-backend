@@ -163,10 +163,14 @@ function messagesInput(request: LLMRequest): Anthropic.MessageParam[] | null {
   for (const round of toolRounds(request.tool_turns ?? [])) {
     // The round's own tool calls and words are replayed from the blocks the model produced; a round another provider
     // ran, or one recorded without them, is rebuilt from its call records.
+    // With tool search on and tools offered, the search call and its result go back unchanged, as the tool search guide
+    // requires; a closing round declares no deferred tools, so it leaves them out and its calls stay plain tool_use.
+    const searchReplay = request.tool_search !== undefined && request.tools !== undefined;
     const replayed = round.prior.flatMap((item): Anthropic.ContentBlockParam[] => {
       if (outputItemProvider(item) !== ANTHROPIC_PROVIDER) return [];
       const block = item.block as Anthropic.ContentBlock | undefined;
-      return block?.type === 'tool_use' || block?.type === 'text' ? [block as Anthropic.ContentBlockParam] : [];
+      const kind = block?.type as string | undefined;
+      return kind === 'tool_use' || kind === 'text' || (searchReplay && (kind === 'server_tool_use' || kind === 'tool_search_tool_result')) ? [block as Anthropic.ContentBlockParam] : [];
     });
     const covered = new Set(replayed.flatMap((block) => block.type === 'tool_use' ? [block.id] : []));
     history.push({
@@ -203,9 +207,19 @@ function toolInput(args: string): Record<string, unknown> {
 
 // A request that replays tool blocks must define their tools. When the turn has withdrawn them for its closing round,
 // the replayed names are declared with an empty schema and the model is told not to call them.
+// With tool search on (the tool search tool guide), deferred tools carry defer_loading and stay out of the prompt until
+// the BM25 search tool loads them; core tools and the search tool load up front. Schemas stay non-strict here: strict tool
+// use allows at most 20 strict tools, 24 optional parameters and 16 union parameters per request, which the brain's
+// tool list exceeds.
 function toolsParams(request: LLMRequest): Pick<Anthropic.MessageCreateParams, 'tools' | 'tool_choice'> {
   if (request.tools) {
-    return { tools: request.tools.map((tool): Anthropic.Tool => ({ name: tool.name, description: tool.description, input_schema: { ...tool.parameters, type: 'object' } })) };
+    const tools = request.tools.map((tool): Anthropic.Tool => ({
+      name: tool.name, description: tool.description, input_schema: { ...tool.parameters, type: 'object' },
+      ...(request.tool_search && tool.defer_loading ? { defer_loading: true } : {}),
+    }));
+    if (!request.tool_search || !request.tools.some((tool) => tool.defer_loading)) return { tools };
+    // The installed SDK types the search tool and defer_loading only on the beta surface; the Messages API takes them.
+    return { tools: [{ type: 'tool_search_tool_bm25_20251119', name: 'tool_search_tool_bm25' } as unknown as Anthropic.Tool, ...tools] };
   }
   const replayed = [...new Set((request.tool_turns ?? []).map((turn) => turn.call.name))];
   if (replayed.length === 0) return {};

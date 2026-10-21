@@ -94,6 +94,9 @@ export async function runToolLoop(input: Readonly<{
   // the channel's offerConnect seam. Fired at most once per (service, reason) per turn. It answers
   // true when a connect button reached the owner, or the words the model gets instead.
   onConnect?: (intent: ConnectIntent) => Promise<boolean | string>;
+  // Offer the same tool list every round: the list leads the provider's cache prefix, so a change mid-turn re-bills the
+  // rest of the turn. propose_action refuses an untainted call and dispatch refuses withheld browsing instead.
+  stableMenu?: boolean;
 }>): Promise<string> {
   const tools = toolDefinitions(input.handlers);
   const turns: LLMToolTurn[] = [];
@@ -139,7 +142,7 @@ export async function runToolLoop(input: Readonly<{
     // propose_action is the route for a privileged call whose arguments came from external content, so it is on the
     // menu exactly while the turn is tainted; the browse tools leave it once browsing is withheld.
     const tainted = (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint === 'external';
-    const roundTools = tools.filter((tool) => (tool.name !== 'propose_action' || tainted) && !(browsingWithheld && BROWSE_TOOLS.has(tool.name)));
+    const roundTools = input.stableMenu ? tools : tools.filter((tool) => (tool.name !== 'propose_action' || tainted) && !(browsingWithheld && BROWSE_TOOLS.has(tool.name)));
     const offer = roundTools.length > 0 && roundsAvailable && timeAvailable;
     // An initially empty authority ceiling can reject an illegal request once and
     // give the model a final closing step. This consumes a round and performs no I/O.
