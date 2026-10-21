@@ -163,7 +163,9 @@ export const settleHeartbeat = (record: FinalRecord, sql: Sql, scheduler: Schedu
     if (record.deliveredAt === undefined) throw new Error('heartbeat ACK timestamp missing');
     for (const loop of record.heartbeat.loops) markNotified(sql, loop, record.deliveredAt);
   }
-  scheduler.settleDelivery(record.heartbeat.schedulerRunId, record.status === 'delivered');
+  // A check-back the owner's forget cancelled was never sent and never failed.
+  if (record.reason === 'owner_forget') scheduler.settleCancelled(record.heartbeat.schedulerRunId);
+  else scheduler.settleDelivery(record.heartbeat.schedulerRunId, record.status === 'delivered');
 };
 
 const markNotified = (sql: Sql, loop: Readonly<{ id: string; due: string }>, at: number): void => {
