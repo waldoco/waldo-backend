@@ -3,7 +3,9 @@ import { z } from 'zod';
 // First run, the consent ledger and the owner look-up findings, app.v1. Additive and self-contained: it imports only zod so
 // the app can pin it verbatim. Owner identity is never in a request; the authenticated serving adapter derives it.
 // Health consent is not here: it stays in the health plane's own per-source ledger (health-ingest.ts), and the first run's
-// health step only reads it.
+// health step only reads it. One consent, one representation: the purposes below are the non-health ones, and no health
+// source or purpose, WHOOP's express authorization included, is ever a value here. WHOOP's authorization is the health plane's
+// (whoop, storage_compute) and (whoop, model_processing) grants, both live.
 
 // The copy versions a grant is recorded against. A grant names the version the owner saw; a stale version is refused, so a
 // record always points at the copy that was on screen. Notice copy 1 says Waldo may look the owner up on the public web.
@@ -85,6 +87,7 @@ export const appOnboardingV1Schema = z.strictObject({
 });
 // agreements.accept records terms and the notice at their current versions, the 18+ attestation and the owner's look-up choice
 // in one step. health.connected is checked against the health plane's own consent ledger; an app's word alone never marks it.
+// A device source counts on its storage grant; a cloud wearable such as WHOOP counts only with storage and model use both live.
 const action = <Name extends string, Shape extends z.ZodRawShape>(name: Name, shape: Shape) => z.strictObject({ request_id: requestId, action: z.literal(name), ...shape });
 export const appOnboardingActionV1Schema = z.discriminatedUnion('action', [
   action('start', {}),

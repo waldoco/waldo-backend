@@ -3,8 +3,9 @@ import {
   APP_PRIVACY_NOTICE_VERSION_V1, APP_TERMS_VERSION_V1, appConsentChangeV1Schema, appConsentGrantV1Schema, appConsentListV1Schema,
   appConsentStateV1Schema, appConsentWithdrawV1Schema, appFindingActionV1Schema, appFindingListV1Schema, appFindingResultV1Schema,
   appFindingV1Schema, appOnboardingActionV1Schema, appOnboardingErrorV1Schema, appOnboardingResultV1Schema, appOnboardingRoutesV1,
-  appOnboardingV1Schema,
+  appOnboardingV1Schema, appConsentPurposeV1Schema,
 } from './onboarding';
+import { healthPurposeV1Schema, healthSourceV1Schema } from './health-ingest';
 
 const rejected = (schema: { safeParse(input: unknown): { success: boolean } }, inputs: unknown[]) => inputs.forEach(input => expect(schema.safeParse(input).success, JSON.stringify(input)).toBe(false));
 const accepted = (schema: { safeParse(input: unknown): { success: boolean } }, inputs: unknown[]) => inputs.forEach(input => expect(schema.safeParse(input).success, JSON.stringify(input)).toBe(true));
@@ -33,6 +34,15 @@ describe('consent ledger', () => {
     rejected(appConsentWithdrawV1Schema, [{ request_id: 'withdraw-01', purpose: 'terms' }, { request_id: 'withdraw-01', purpose: 'privacy_notice' }, { request_id: 'withdraw-01' }]);
     accepted(appConsentChangeV1Schema, [{ consent: granted, replayed: false, findings_erased: 0 }]);
     rejected(appConsentChangeV1Schema, [{ consent: granted, replayed: false }, { consent: granted, replayed: false, findings_erased: -1 }]);
+  });
+});
+
+describe('one consent representation per purpose', () => {
+  it('names no purpose the health plane already names, and no health source', () => {
+    const health = new Set<string>([...healthPurposeV1Schema.options, ...healthSourceV1Schema.options, 'whoop', 'oura', 'whoop_storage_ai']);
+    expect(appConsentPurposeV1Schema.options.filter(purpose => health.has(purpose))).toEqual([]);
+    rejected(appConsentGrantV1Schema, [...health].map(purpose => ({ request_id: 'consent-001', purpose, version: 1, age_attested_18_plus: true })));
+    rejected(appConsentStateV1Schema, [...health].map(purpose => ({ purpose, version: null, status: 'not_granted', granted_at: null, withdrawn_at: null })));
   });
 });
 

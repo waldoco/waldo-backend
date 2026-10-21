@@ -16,7 +16,7 @@ type RunRow = Readonly<{ run_id: string; started_at: number; completed_at: numbe
 // The first-run steps reach the owner's existing settings, connections and chat through the owner object.
 export type FirstRunHost = Readonly<{
   googleConnected(): Promise<boolean>;
-  // Whether the health plane holds a live storage consent for any source; 'unavailable' when it cannot be read.
+  // Whether the health plane holds a live connection consent for any source (storage for a device source, storage and model use for a cloud wearable); 'unavailable' when it cannot be read.
   healthConnected(): Promise<boolean | 'unavailable'>;
   timezoneConfirmed(): boolean;
   // The owner's proactive-surface setting (the console's own): read it for the view, write it for the channel step.

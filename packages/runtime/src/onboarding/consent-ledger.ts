@@ -10,6 +10,9 @@ export const CURRENT_CONSENT_VERSION: Readonly<Record<AppConsentPurposeV1, numbe
   terms: APP_TERMS_VERSION_V1, privacy_notice: APP_PRIVACY_NOTICE_VERSION_V1, owner_lookup: APP_PRIVACY_NOTICE_VERSION_V1,
 };
 const AGE = 'age_18_plus';
+// The only purposes this ledger can hold. The table refuses any other, so a health purpose cannot reach it by any code path:
+// health consent has one representation, in the health plane, per source and purpose.
+const LEDGER_PURPOSES = [...appConsentPurposeV1Schema.options, AGE].map(purpose => `'${purpose}'`).join(', ');
 
 type Row = Readonly<{ purpose: string; action: 'granted' | 'withdrawn'; version: number | null; at: number }>;
 export type ConsentGrant = Readonly<{ state: AppConsentStateV1; changed: boolean }> | 'stale_version';
@@ -19,7 +22,7 @@ export type ConsentGrant = Readonly<{ state: AppConsentStateV1; changed: boolean
 // terms and the notice end only with the account; the 18+ attestation is a row of its own.
 export const consentLedger = (sql: Sql) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS consent_ledger (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, purpose TEXT NOT NULL, action TEXT NOT NULL CHECK (action IN ('granted', 'withdrawn')),
+    id INTEGER PRIMARY KEY AUTOINCREMENT, purpose TEXT NOT NULL CHECK (purpose IN (${LEDGER_PURPOSES})), action TEXT NOT NULL CHECK (action IN ('granted', 'withdrawn')),
     version INTEGER, at INTEGER NOT NULL)`);
   const latest = (purpose: string): Row | null =>
     sql.exec<Row>('SELECT purpose, action, version, at FROM consent_ledger WHERE purpose = ? ORDER BY id DESC LIMIT 1', purpose).toArray()[0] ?? null;

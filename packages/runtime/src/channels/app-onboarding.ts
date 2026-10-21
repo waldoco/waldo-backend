@@ -3,8 +3,8 @@ import {
   appConsentWithdrawV1Schema, appFindingActionV1Schema, appFindingListQueryV1Schema, appFindingListV1Schema, appFindingResultV1Schema,
   appOnboardingActionV1Schema, appOnboardingResultV1Schema, appOnboardingV1Schema,
 } from '../../../contracts/src/app/onboarding';
-import { healthConsentListV1Schema } from '../../../contracts/src/app/health-ingest';
 import { literalTextRedactor } from '@waldo/contracts';
+import { z } from 'zod';
 import { redactToolOutputLedger } from '../conversation/tool-output-ledger';
 import { claimStore, FORGOTTEN } from '../memory/claims';
 import { consentLedger, type ConsentLedger } from '../onboarding/consent-ledger';
@@ -27,6 +27,17 @@ export type AppOnboardingHost = Readonly<{
   // Rechecks the app session before an answer leaves.
   assertCurrent(): Promise<void>;
 }>;
+
+// The two grants the first run reads from the health plane, by source and purpose. Only the fields it decides on are read, so a
+// source the health plane learns later never makes the step unreadable.
+const healthConsentRows = z.object({ consents: z.array(z.object({ source: z.string(), purpose: z.string(), status: z.string() })) });
+// The app's own on-device collectors. Any other source is a cloud wearable, whose express authorization to store the owner's
+// data and use it in AI processing is both grants for that source; an unknown source gets the stricter rule.
+const DEVICE_HEALTH_SOURCES: ReadonlySet<string> = new Set(['apple', 'samsung', 'health_connect']);
+export const healthStepConnected = (rows: z.infer<typeof healthConsentRows>['consents']): boolean => {
+  const live = (source: string, purpose: string) => rows.some(row => row.source === source && row.purpose === purpose && row.status === 'granted');
+  return rows.some(row => row.purpose === 'storage_compute' && live(row.source, 'storage_compute') && (DEVICE_HEALTH_SOURCES.has(row.source) || live(row.source, 'model_processing')));
+};
 
 const STATUS = { invalid_request: 400, not_found: 404, stale_version: 409, agreements_required: 409, not_started: 409, not_connected: 409, completed: 409, request_reused: 409, unavailable: 503 } as const;
 type Problem = keyof typeof STATUS;
@@ -122,8 +133,8 @@ export const ownerOnboardingHost = (deps: OwnerOnboardingDeps): AppOnboardingHos
     if (!deps.rpc) return 'unavailable';
     let answer: unknown;
     try { answer = await deps.rpc('health_consent_list', `health.consent_list.${deps.doName}.${md5Hex('{}')}`, { p_do_name: deps.doName, p_payload: '{}' }); } catch { return 'unavailable'; }
-    const list = healthConsentListV1Schema.safeParse(answer);
-    return list.success ? list.data.consents.some(row => row.purpose === 'storage_compute' && row.status === 'granted') : 'unavailable';
+    const list = healthConsentRows.safeParse(answer);
+    return list.success ? healthStepConnected(list.data.consents) : 'unavailable';
   };
   const firstRunHost: FirstRunHost = {
     googleConnected: async () => (storage.kv.get<unknown[]>('google:accounts') ?? []).length > 0,

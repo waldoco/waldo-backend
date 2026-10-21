@@ -135,6 +135,67 @@ describe('first run', () => {
   }));
 });
 
+describe('one consent representation per purpose', () => {
+  const row = (source: string, purpose: string, status = 'granted') => ({ consent_class: 'health_processing', source, purpose, version: 2, status, epoch: 1, granted_at: '2026-10-21T00:00:00Z', withdrawn_at: null, deletion_state: 'not_required' });
+  const everything = { consents: [row('apple', 'storage_compute'), row('apple', 'model_processing'), row('whoop', 'storage_compute'), row('whoop', 'model_processing')] };
+  const ledgerPurposes = (storage: DurableObjectStorage) => storage.sql.exec<{ purpose: string }>('SELECT DISTINCT purpose FROM consent_ledger ORDER BY purpose').toArray().map(entry => entry.purpose);
+  it('keeps every health grant out of the ledger through a whole first run', () => owner(async ({ storage, act }) => {
+    await act({ action: 'start' }); await act(agree);
+    expect((await run(await act({ action: 'health.connected' }))).steps.health).toBe('done');
+    await act({ action: 'complete' });
+    expect(ledgerPurposes(storage)).toEqual(['age_18_plus', 'owner_lookup', 'privacy_notice', 'terms']);
+  }, { rpc: async () => everything }));
+  it('refuses a health purpose on the consent route and leaves the ledger empty', () => owner(async ({ storage, send }) => {
+    for (const purpose of ['storage_compute', 'model_processing', 'whoop', 'whoop_storage_ai']) {
+      const response = await send('/app/v1/consents', { request_id: `consent-${purpose}`.slice(0, 40), purpose, version: 1, age_attested_18_plus: true });
+      expect([purpose, response.status]).toEqual([purpose, 400]);
+    }
+    expect(storage.sql.exec('SELECT 1 FROM consent_ledger').toArray()).toEqual([]);
+  }));
+  it('cannot store a health purpose even by a direct write', () => owner(async ({ storage }) => {
+    const ledger = consentLedger(storage.sql);
+    expect(ledger.grant('storage_compute' as never, 1, 1)).toBe('stale_version');
+    for (const purpose of ['storage_compute', 'model_processing', 'whoop']) {
+      expect(() => storage.sql.exec("INSERT INTO consent_ledger (purpose, action, version, at) VALUES (?, 'granted', 1, 1)", purpose)).toThrow();
+    }
+    expect(storage.sql.exec('SELECT 1 FROM consent_ledger').toArray()).toEqual([]);
+  }));
+  it('lists only the three non-health purposes', () => owner(async ({ send }) => {
+    const list = await (await send('/app/v1/consents')).json() as { consents: { purpose: string }[] };
+    expect(list.consents.map(consent => consent.purpose)).toEqual(['terms', 'privacy_notice', 'owner_lookup']);
+  }));
+});
+
+describe('health step reads both grants a cloud wearable needs', () => {
+  const grant = (source: string, purpose: string, status = 'granted') => ({ consent_class: 'health_processing', source, purpose, version: 2, status, epoch: 1, granted_at: '2026-10-21T00:00:00Z', withdrawn_at: null, deletion_state: 'not_required' });
+  const connected = (consents: unknown[]) => owner(async ({ act }) => {
+    await act({ action: 'start' }); await act(agree);
+    const response = await act({ action: 'health.connected' });
+    return [response.status, response.status === 200 ? (await run(response)).steps.health : (await response.json() as { error: string }).error];
+  }, { rpc: async () => ({ consents }) });
+  it('counts a device source on its storage grant alone', async () => {
+    expect(await connected([grant('apple', 'storage_compute')])).toEqual([200, 'done']);
+    expect(await connected([grant('health_connect', 'storage_compute'), grant('health_connect', 'model_processing', 'withdrawn')])).toEqual([200, 'done']);
+  });
+  it('needs both grants for WHOOP: storage alone, or storage with model use withdrawn, is not a connection', async () => {
+    expect(await connected([grant('whoop', 'storage_compute')])).toEqual([409, 'not_connected']);
+    expect(await connected([grant('whoop', 'storage_compute'), grant('whoop', 'model_processing', 'withdrawn')])).toEqual([409, 'not_connected']);
+    expect(await connected([grant('whoop', 'model_processing')])).toEqual([409, 'not_connected']);
+    expect(await connected([grant('whoop', 'storage_compute'), grant('whoop', 'model_processing')])).toEqual([200, 'done']);
+  });
+  it('does not let one source borrow another source\'s grant', async () => {
+    expect(await connected([grant('whoop', 'storage_compute'), grant('apple', 'model_processing')])).toEqual([409, 'not_connected']);
+  });
+  it('treats a provider it has not met as needing both grants, and does not fail on it', async () => {
+    expect(await connected([grant('oura', 'storage_compute')])).toEqual([409, 'not_connected']);
+    expect(await connected([grant('oura', 'storage_compute'), grant('oura', 'model_processing')])).toEqual([200, 'done']);
+    expect(await connected([grant('apple', 'storage_compute'), grant('oura', 'storage_compute')])).toEqual([200, 'done']);
+  });
+  it('answers unavailable for an answer it cannot read, never connected', async () => {
+    expect(await connected([{ source: 'apple' }])).toEqual([503, 'unavailable']);
+  });
+});
+
 describe('consent and findings routes', () => {
   const seed = (storage: DurableObjectStorage) => {
     const claims = claimStore(storage.sql, work => storage.transactionSync(work)), consent = consentLedger(storage.sql), findings = findingStore(storage.sql, claims, consent);
