@@ -28,6 +28,7 @@ export { RunLoopDO, RuntimeProbeDO, TracerDO } from './retired-durable-objects';
 export { DeviceBridgeDO } from './devices/device-bridge-do';
 export { IMessageBridgeDO } from './channels/imessage/bridge-do';
 export { OwnerDO } from './channels/owner-do';
+export { TaskWorkerDO } from './tasks/worker-do';
 import type { RunLoopDO, RuntimeProbeDO, TracerDO } from './retired-durable-objects';
 import type { IMessageBridgeDO } from './channels/imessage/bridge-do';
 import { handleIMessageHost, isIMessageHostPath } from './channels/imessage/http';

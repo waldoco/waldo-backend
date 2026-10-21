@@ -11,6 +11,8 @@ export const TOOL_CLAIM_EFFECT: Readonly<Record<ToolName, string | null>> = {
   send_progress_note: null,
   // Queued is not sent: the file leaves after the reply is written, so no done-claim can rest on this receipt.
   attach_file: null,
+  // Started is not done: the task reports later, and the owner hears its result from the apply turn.
+  start_task: 'task_started', cancel_task: 'task_cancelled',
   get_crs: null, get_health: null, query_calendar: null, get_communication: null, search_communication: null, search_contacts: null,
   read_thread: null, get_tasks: null, get_master_metrics: null, get_context: null, query_availability: null,
   read_owner_context: null, read_memory: null, search_episodes: null, propose_action: null, web_search: null,

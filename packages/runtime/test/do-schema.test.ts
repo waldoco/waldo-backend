@@ -86,7 +86,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(8);
+    expect(result.version).toBe(12);
     expect(result.version).toBe(DO_SCHEMA_VERSION);
     expect(result.assertResult.ok).toBe(true);
     for (const table of DO_PRODUCT_TABLES) {
@@ -156,7 +156,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(8);
+    expect(result.version).toBe(DO_SCHEMA_VERSION);
     expect(result.tables).toContain('goals');
     expect(result.explicitGoalsIndexes).toEqual([]);
     expect(result.draft).toEqual({
@@ -349,7 +349,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       provisionDoSchema(state.storage);
       const beforeVersion = getSchemaVersion(state.storage.sql);
       const badMigration: DoMigration = {
-        version: 9,
+        version: DO_SCHEMA_VERSION + 1,
         name: 'intentional-failure',
         up: [
           'CREATE TABLE transient_failure_probe (id TEXT PRIMARY KEY);',
@@ -371,8 +371,8 @@ describe('HEY-10 DO SQLite schema root', () => {
     });
 
     expect(result).toEqual({
-      beforeVersion: 8,
-      afterVersion: 8,
+      beforeVersion: DO_SCHEMA_VERSION,
+      afterVersion: DO_SCHEMA_VERSION,
       goalsPresent: true,
       probeTables: [],
     });

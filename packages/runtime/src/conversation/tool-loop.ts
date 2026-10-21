@@ -94,10 +94,17 @@ export async function runToolLoop(input: Readonly<{
   // the channel's offerConnect seam. Fired at most once per (service, reason) per turn. It answers
   // true when a connect button reached the owner, or the words the model gets instead.
   onConnect?: (intent: ConnectIntent) => Promise<boolean | string>;
+  // A task worker's loop: the brain holds the handlers, so it supplies the tool definitions and runs every call. `final` names
+  // the tool whose successful call ends the loop (the worker's result), and `mutations` the tools that change state.
+  remote?: Readonly<{ tools: readonly LLMTool[]; dispatch(call: LLMToolCall): Promise<LoopToolResult>; mutations?: readonly string[]; final?: string }>;
+  // The tool turns a resumed loop starts from (a checkpoint). Finished calls are not run again; the model sees their results.
+  resume?: readonly LLMToolTurn[];
+  // Awaited after each round's results, before the next model call: the worker's checkpoint. A throw ends the loop.
+  afterRound?: (turns: readonly LLMToolTurn[]) => Promise<void>;
 }>): Promise<string> {
-  const tools = toolDefinitions(input.handlers);
-  const turns: LLMToolTurn[] = [];
-  const seen = new Map<string, Awaited<ReturnType<typeof dispatch>>>();
+  const tools = input.remote ? [...input.remote.tools] : toolDefinitions(input.handlers);
+  const turns: LLMToolTurn[] = [...(input.resume ?? [])];
+  const seen = new Map<string, LoopToolResult>();
   const offered = new Map<string, string>();
   const browserActions = new Map<string, number>();
   const browserReads = new Map<string, {handle:string; epoch:number}>();
@@ -110,7 +117,7 @@ export async function runToolLoop(input: Readonly<{
   const receiptUrls = new Set<string>();
   // A landed mutation opens a new read epoch. Mutation replay keys survive resets,
   // so a state change cannot re-fire a write. Recovery shares the finite round budget.
-  const mutationTools = new Set(input.handlers.filter((h) => h.autonomy_gated || h.mutates_state).map((h) => h.name));
+  const mutationTools = new Set<string>(input.remote ? input.remote.mutations ?? [] : input.handlers.filter((h) => h.autonomy_gated || h.mutates_state).map((h) => h.name));
   // The scope the turn handed in, which its model step also carries. Read once: a tool hook writes a copy of the
   // context back over input.ctx, so its runScope is a different object after the first dispatch.
   const runScope = input.ctx.runScope;
@@ -121,7 +128,9 @@ export async function runToolLoop(input: Readonly<{
   const readRuns = new Map<string, Readonly<{ dispatched: number; at: number }>>();
   // A request replays at most LLM_TOOL_TURNS_MAX results. A longer turn sends its latest whole rounds, so each round's
   // reasoning items still precede its calls, and names what it set aside.
-  const roundStarts: number[] = [];
+  // A resumed checkpoint's rounds start where a reasoning item opens one; turns from a model that sends none each count as one.
+  const resumedRounds = turns.some((turn) => turn.prior_items !== undefined);
+  const roundStarts: number[] = turns.flatMap((turn, index) => index === 0 || !resumedRounds || turn.prior_items !== undefined ? [index] : []);
   const shownTurns = (): readonly LLMToolTurn[] => {
     if (turns.length <= LLM_TOOL_TURNS_MAX) return turns;
     const start = roundStarts.find((index) => turns.length - index <= LLM_TOOL_TURNS_MAX) ?? roundStarts.at(-1)!;
@@ -203,7 +212,7 @@ export async function runToolLoop(input: Readonly<{
           ? refusal(toolError('tools_withdrawn'), 'not_found', 'handler_unavailable')
           : !runs
             ? refusal(toolError('browsing_withheld', BROWSING_UNAVAILABLE), 'auth_failed', 'withheld_this_turn')
-            : await dispatch(call, input);
+            : input.remote ? await input.remote.dispatch(call) : await dispatchLoopTool(call, input);
       if (runs) {
         dispatched += 1;
         readRuns.set(key, { dispatched, at: Date.now() });
@@ -297,17 +306,22 @@ export async function runToolLoop(input: Readonly<{
        input.onSettle?.('completed');
        return `Sent to your Mac for approval. Request: ${result.data.request_id}`;
       }
+      if (input.remote?.final === call.name && result.ok) {
+        input.onSettle?.('completed');
+        return '';
+      }
     }
+    await input.afterRound?.(turns);
   }
 }
 
-type LoopToolResult = Readonly<{ ok: boolean; data?: unknown; error?: string; error_code?: string; fix?: string; retryable?: boolean; code?: string; reason?: string; guard?: string; source_taint?: 'external' | null; connect?: ConnectIntent }>;
+export type LoopToolResult = Readonly<{ ok: boolean; data?: unknown; error?: string; error_code?: string; fix?: string; retryable?: boolean; code?: string; reason?: string; guard?: string; source_taint?: 'external' | null; connect?: ConnectIntent }>;
 
 // A refusal the loop makes itself, in the dispatcher's error shape; code and reason keep their telemetry vocabulary.
 const refusal = (error: ToolError, code: string, reason?: string): LoopToolResult =>
   ({ ok: false, error: error.cause, error_code: error.code, fix: error.fix, retryable: error.retryable, code, ...(reason ? { reason } : {}) });
 
-async function dispatch(
+export async function dispatchLoopTool(
   call: LLMToolCall,
   input: Readonly<{ handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']; ctx: ToolDispatcherContext; offload?: ToolOutputStore }>,
 ): Promise<LoopToolResult> {

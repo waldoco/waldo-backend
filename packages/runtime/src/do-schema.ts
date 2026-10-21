@@ -389,6 +389,7 @@ export const TASK_JOBS_TABLE_SCHEMA = [
     deadline_at     INTEGER NOT NULL,
     checkpoint_seq  INTEGER NOT NULL DEFAULT 0 CHECK (checkpoint_seq >= 0),
     checkpoint_json TEXT,
+    inflight_json   TEXT,
     taint           TEXT CHECK (taint IS NULL OR taint = 'external'),
     result_json     TEXT,
     outcome         TEXT CHECK (outcome IS NULL OR outcome IN ('done', 'partial', 'blocked', 'failed')),

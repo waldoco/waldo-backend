@@ -26,7 +26,8 @@
       { "name": "TRACER_DO", "class_name": "TracerDO" },
       { "name": "OWNER_DO", "class_name": "OwnerDO" },
       { "name": "DEVICE_BRIDGE_DO", "class_name": "DeviceBridgeDO" },
-      { "name": "IMESSAGE_BRIDGE_DO", "class_name": "IMessageBridgeDO" }
+      { "name": "IMESSAGE_BRIDGE_DO", "class_name": "IMessageBridgeDO" },
+      { "name": "TASK_WORKER_DO", "class_name": "TaskWorkerDO" }
     ]
   },
   // A5 artifact bodies (metadata lives in the owner DO; DO namespaces are per-worker, so
@@ -60,7 +61,8 @@
         { "name": "TRACER_DO", "class_name": "TracerDO" },
         { "name": "OWNER_DO", "class_name": "OwnerDO" },
       { "name": "DEVICE_BRIDGE_DO", "class_name": "DeviceBridgeDO" },
-      { "name": "IMESSAGE_BRIDGE_DO", "class_name": "IMessageBridgeDO" }
+      { "name": "IMESSAGE_BRIDGE_DO", "class_name": "IMessageBridgeDO" },
+      { "name": "TASK_WORKER_DO", "class_name": "TaskWorkerDO" }
       ]
     },
     "ratelimits": [
@@ -96,7 +98,8 @@
           { "name": "TRACER_DO", "class_name": "TracerDO" },
           { "name": "OWNER_DO", "class_name": "OwnerDO" },
       { "name": "DEVICE_BRIDGE_DO", "class_name": "DeviceBridgeDO" },
-      { "name": "IMESSAGE_BRIDGE_DO", "class_name": "IMessageBridgeDO" }
+      { "name": "IMESSAGE_BRIDGE_DO", "class_name": "IMessageBridgeDO" },
+      { "name": "TASK_WORKER_DO", "class_name": "TaskWorkerDO" }
         ]
       },
       "r2_buckets": [
@@ -116,7 +119,8 @@
         { "tag": "v4", "new_sqlite_classes": ["TelegramOwnerDO"] },
         { "tag": "v5", "new_sqlite_classes": ["DeviceBridgeDO"] },
         { "tag": "v6", "renamed_classes": [{ "from": "TelegramOwnerDO", "to": "OwnerDO" }] },
-        { "tag": "v7", "new_sqlite_classes": ["IMessageBridgeDO"] }
+        { "tag": "v7", "new_sqlite_classes": ["IMessageBridgeDO"] },
+    { "tag": "v8", "new_sqlite_classes": ["TaskWorkerDO"] }
       ],
       "ai": { "binding": "AI" },
       "vectorize": [
@@ -131,6 +135,7 @@
     { "tag": "v4", "new_sqlite_classes": ["TelegramOwnerDO"] },
     { "tag": "v5", "new_sqlite_classes": ["DeviceBridgeDO"] },
     { "tag": "v6", "renamed_classes": [{ "from": "TelegramOwnerDO", "to": "OwnerDO" }] },
-    { "tag": "v7", "new_sqlite_classes": ["IMessageBridgeDO"] }
+    { "tag": "v7", "new_sqlite_classes": ["IMessageBridgeDO"] },
+    { "tag": "v8", "new_sqlite_classes": ["TaskWorkerDO"] }
   ]
 }

@@ -46,6 +46,8 @@ export const TOOL_REPLAY_CLASS: Readonly<Record<ToolName, ToolReplayRow>> = {
   log_meal: unknown(NOT_INSPECTED), log_workout: unknown(NOT_INSPECTED),
   set_standing_order: unknown(NOT_INSPECTED), cancel_standing_order: unknown(NOT_INSPECTED),
   call_mcp_tool: unknown('proposes a card on the owner channel, executes directly elsewhere; remote effect unknown'),
+  start_task: { replay: 'provider_idempotent', basis: 'the job key is turn+toolCall and the job book keeps one job per key; a replay returns the job already made', evidence: { file: 'tasks/tools.ts', needle: 'idempotencyKey: key' } },
+  cancel_task: { replay: 'provider_idempotent', basis: 'cancels by job id; a second cancel finds the job settled and changes nothing', evidence: { file: 'tasks/jobs.ts', needle: 'WHERE id = ? AND status IN (${placeholders(OPEN)})' } },
   delegate_task: read('runs a read-only subagent (TOOL_CLAIM_EFFECT comment)'),
   remember: { replay: 'reconcilable_write', basis: 'owner-local active claims dedupe by kind/text and corrections record supersedes_id', evidence: { file: 'tools/live/memory.ts', needle: 'supersedes_id' } },
   forget_memory: unknown('local forget plus retained history cleanup; reconcile scope before retrying'),

@@ -16,7 +16,7 @@ const NAME = 'guard-wake-due-keys';
 const RUNTIME_SRC = ['packages', 'runtime', 'src'];
 const ALARM_SLOT = 'scheduler/alarm-slot.ts';
 // Each of these files is its own Durable Object (or a test probe) with its own alarm slot.
-const OTHER_ALARM_OWNERS = new Set(['channels/imessage/bridge-do.ts', 'devices/device-bridge-do.ts', 'index.ts']);
+const OTHER_ALARM_OWNERS = new Set(['channels/imessage/bridge-do.ts', 'devices/device-bridge-do.ts', 'tasks/worker-do.ts', 'index.ts']);
 const DUE_KEY = /'([a-z0-9_]+_due_v\d+)'/g;
 const CONST_STRING = /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*'([^']*)'/g;
 const ARMS = /\barmAlarm\s*\(/;
