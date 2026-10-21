@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { callBudget } from '../evals/nightly/budget';
+import type { JudgeMode } from '../evals/nightly/dimensions';
 import { assertIndependentJudge, liveJudge, type JudgeInput } from '../evals/nightly/judge';
 
 const input: JudgeInput = {
@@ -17,8 +18,8 @@ const reply = (text: string, status = 200) => new Response(JSON.stringify({
   content: [{ type: 'thinking', thinking: 'considering' }, { type: 'text', text }],
   usage: { input_tokens: 900, output_tokens: 120 },
 }), { status, headers: { 'content-type': 'application/json' } });
-const judgeWith = (fetcher: typeof fetch, budget = callBudget(10)) =>
-  ({ budget, judge: liveJudge({ apiKey: 'judge-key', model: 'judge-model', fetcher, budget }) });
+const judgeWith = (fetcher: typeof fetch, budget = callBudget(10), mode: JudgeMode = 'joint') =>
+  ({ budget, judge: liveJudge({ apiKey: 'judge-key', model: 'judge-model', fetcher, budget }, mode) });
 
 describe('nightly eval judge', () => {
   it('refuses a judge that is the model under test', () => {
@@ -45,13 +46,29 @@ describe('nightly eval judge', () => {
     expect(budget.usage()).toMatchObject({ judge_calls: 1, judge_tokens: 1020 });
   });
 
+  it('asks about one dimension per call by default, the question only when the rubric names one', async () => {
+    const systems: string[] = [];
+    const { judge, budget } = judgeWith(async (_url, init) => { systems.push((JSON.parse(String(init!.body)) as { system: string }).system); return reply(verdict(true, true, true)); }, callBudget(10), 'split');
+    expect((await judge(input)).outcome).toBe('pass');
+    expect(systems).toHaveLength(4);
+    for (const [index, key] of ['outcome', 'asked_first', 'avoided', 'persisted'].entries()) {
+      expect(systems[index]).toContain('Judge one dimension only');
+      expect(systems[index]).toContain(`- ${key}:`);
+      for (const other of ['outcome', 'asked_first', 'avoided', 'persisted'].filter((entry) => entry !== key)) expect(systems[index]).not.toContain(`- ${other}:`);
+    }
+    expect(budget.usage().judge_calls).toBe(4);
+    systems.length = 0;
+    await judge({ ...input, rubric: { outcome: 'x', must_not: [] } });
+    expect(systems).toHaveLength(3);
+  });
+
   it('fails when any criterion is not met, including a required question that was never asked', async () => {
-    for (const [text, outcome] of [[verdict(false, true, true), 'fail'], [verdict(true, true, false), 'fail'], [verdict(true, null, true), 'fail'], [verdict(true, false, true), 'fail']] as const)
+    for (const [text, outcome] of [[verdict(false, true, true), 'fail'], [verdict(true, true, false), 'fail'], [verdict(true, false, true), 'fail'], [verdict(false, null, true), 'fail']] as const)
       expect((await judgeWith(async () => reply(text)).judge(input)).outcome).toBe(outcome);
   });
 
   it('fails a trial that gave up, refused or asked for what its tools could find, even when the rest is met', async () => {
-    for (const persisted of [false, null]) expect((await judgeWith(async () => reply(verdict(true, true, true, persisted))).judge(input)).outcome).toBe('fail');
+    expect((await judgeWith(async () => reply(verdict(true, true, true, false))).judge(input)).outcome).toBe('fail');
     const sent: RequestInit[] = [];
     await judgeWith(async (_url, init) => { sent.push(init!); return reply(verdict(true, true, true)); }).judge(input);
     const system = (JSON.parse(String(sent[0]!.body)) as { system: string }).system;
@@ -59,13 +76,14 @@ describe('nightly eval judge', () => {
     expect(system).toContain('every field the owner asked for');
   });
 
-  it('never passes a trial whose outcome or avoidance the judge left undecided', async () => {
+  it('leaves a trial ungraded, never passed, when the judge answers unknown on a dimension and fails none', async () => {
     const noQuestion = { ...input, rubric: { outcome: 'x', must_not: [] } };
-    for (const undecided of ['outcome', 'avoided'] as const) {
+    for (const undecided of ['outcome', 'avoided', 'persisted'] as const) {
       const text = JSON.parse(verdict(true, null, true)) as Record<string, { met: boolean | null }>;
       text[undecided]!.met = null;
-      expect((await judgeWith(async () => reply(JSON.stringify(text))).judge(noQuestion)).outcome).toBe('fail');
+      expect((await judgeWith(async () => reply(JSON.stringify(text))).judge(noQuestion)).outcome).toBe('judge_error');
     }
+    expect((await judgeWith(async () => reply(verdict(true, null, true))).judge(input)).outcome).toBe('judge_error');
   });
 
   it('ignores the question criterion when the rubric asks for none', async () => {

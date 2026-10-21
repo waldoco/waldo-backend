@@ -30,7 +30,7 @@ describe('voice judge', () => {
   it('sends the six tests and every calibration anchor, and marks each Waldo message with where it appeared', async () => {
     const sent: RequestInit[] = [];
     const budget = callBudget(5);
-    const judge = liveVoiceJudge({ apiKey: 'k', model: 'judge-model', budget, fetcher: async (_url, init) => { sent.push(init!); return anthropic(allMet()); } });
+    const judge = liveVoiceJudge({ apiKey: 'k', model: 'judge-model', budget, fetcher: async (_url, init) => { sent.push(init!); return anthropic(allMet()); } }, 'joint');
     expect(await judge(voiceInput)).toMatchObject({ outcome: 'pass' });
     const body = JSON.parse(String(sent[0]!.body)) as { system: string; messages: { content: string }[]; thinking: unknown };
     for (const entry of VOICE_TESTS) expect(body.system).toContain(entry.test);
@@ -44,8 +44,31 @@ describe('voice judge', () => {
     expect(budget.usage()).toMatchObject({ judge_calls: 1, judge_tokens: 15 });
   });
 
+  it('asks about one test per call by default, each call naming that test alone', async () => {
+    const systems: string[] = [];
+    const budget = callBudget(10);
+    const judge = liveVoiceJudge({ apiKey: 'k', model: 'm', budget, fetcher: async (_url, init) => { systems.push((JSON.parse(String(init!.body)) as { system: string }).system); return anthropic(allMet()); } });
+    expect((await judge(voiceInput)).outcome).toBe('pass');
+    expect(systems).toHaveLength(VOICE_TESTS.length);
+    for (const [index, entry] of VOICE_TESTS.entries()) {
+      expect(systems[index]).toContain('Judge one dimension only');
+      expect(systems[index]).toContain(`- ${entry.key}: ${entry.test}`);
+    }
+    expect(budget.usage().judge_calls).toBe(VOICE_TESTS.length);
+  });
+
+  it('fails on any test not met even beside an unknown, and leaves an all-met-but-unknown reply ungraded', async () => {
+    const mixed = JSON.parse(allMet({ discreet: false })) as Record<string, { met: boolean | null }>;
+    mixed.kind!.met = null;
+    expect((await liveVoiceJudge({ apiKey: 'k', model: 'm', budget: callBudget(10), fetcher: async () => anthropic(JSON.stringify(mixed)) })(voiceInput)).outcome).toBe('fail');
+    const unknown = JSON.parse(allMet()) as Record<string, { met: boolean | null }>;
+    unknown.kind!.met = null;
+    const verdict = await liveVoiceJudge({ apiKey: 'k', model: 'm', budget: callBudget(10), fetcher: async () => anthropic(JSON.stringify(unknown)) })(voiceInput);
+    expect(verdict).toMatchObject({ outcome: 'judge_error', tests: { kind: { met: null } } });
+  });
+
   it('fails a reply that misses any one test and names the tests it missed', async () => {
-    const judge = liveVoiceJudge({ apiKey: 'k', model: 'm', budget: callBudget(5), fetcher: async () => anthropic(allMet({ discreet: false })) });
+    const judge = liveVoiceJudge({ apiKey: 'k', model: 'm', budget: callBudget(10), fetcher: async () => anthropic(allMet({ discreet: false })) });
     const verdict = await judge(voiceInput);
     expect(verdict.outcome).toBe('fail');
     expect(verdict.tests?.discreet.met).toBe(false);
@@ -62,7 +85,7 @@ describe('voice judge', () => {
     const partial = JSON.stringify({ knows_you: { met: true, why: 'w' } });
     const undecided = allMet().replace('"kind":{"met":true', '"kind":{"met":null');
     for (const text of [partial, undecided, 'no json here']) {
-      expect((await liveVoiceJudge({ apiKey: 'k', model: 'm', budget: callBudget(5), fetcher: async () => anthropic(text) })(voiceInput)).outcome).toBe('judge_error');
+      expect((await liveVoiceJudge({ apiKey: 'k', model: 'm', budget: callBudget(10), fetcher: async () => anthropic(text) })(voiceInput)).outcome).toBe('judge_error');
     }
     expect((await liveVoiceJudge({ apiKey: 'k', model: 'm', budget: callBudget(5), fetcher: async () => anthropic(allMet(), 500) })(voiceInput)).outcome).toBe('judge_error');
     const spent = callBudget(1);
@@ -257,13 +280,32 @@ describe('voice labels and judge agreement', () => {
     expect(report.confusion).toEqual({ label_pass_judge_pass: passes - 2, label_pass_judge_fail: 1, label_fail_judge_pass: 1, label_fail_judge_fail: fails - 1 });
     expect(report.false_pass_rate).toBeCloseTo(1 / fails);
     expect(report.false_fail_rate).toBeCloseTo(1 / (passes - 1));
-    expect(report.accuracy).toBeCloseTo((labels.length - 3) / (labels.length - 1));
+    expect(report.exact_match).toBeCloseTo((labels.length - 3) / (labels.length - 1));
     expect(report.kappa).toBeGreaterThan(0.8);
     expect(report.failed_test_hit).toBe(1);
     expect(report.disagreements.sort()).toEqual(['brief-report-fail', 'link-pass']);
   });
 
   it('gives no rates when the judge decided nothing', () => {
-    expect(voiceAgreement(labels, [])).toMatchObject({ decided: 0, accuracy: null, kappa: null, false_pass_rate: null, false_fail_rate: null });
+    expect(voiceAgreement(labels, [])).toMatchObject({ decided: 0, coverage: 0, exact_match: null, kappa: null, false_pass_rate: null, false_fail_rate: null });
+  });
+
+  it('scores a judge that passes everything at kappa 0 however high its exact match on a pass-heavy set', () => {
+    const passHeavy = [...labels.filter((label) => label.label === 'pass'), ...labels.filter((label) => label.label === 'fail').slice(0, 2)];
+    const report = voiceAgreement(passHeavy, passHeavy.map((label) => ({ id: label.id, outcome: 'pass' as const, failed_tests: [], unknown_tests: [] })));
+    expect(report.exact_match!).toBeGreaterThan(0.85);
+    expect(report.kappa).toBe(0);
+    expect(report.false_pass_rate).toBe(1);
+  });
+
+  it('reports coverage beside kappa, and per-test kappa over the tests the judge decided', () => {
+    const verdicts: LabelledVerdict[] = labels.map((label, index) => index % 2 === 0
+      ? { id: label.id, outcome: 'judge_error', failed_tests: [], unknown_tests: ['kind'] }
+      : { id: label.id, outcome: label.label, failed_tests: label.failed_tests ?? [], unknown_tests: [] });
+    const report = voiceAgreement(labels, verdicts);
+    expect(report.coverage).toBeCloseTo(Math.floor(labels.length / 2) / labels.length);
+    expect(report.kappa).toBe(1);
+    expect(report.per_test.kind.n).toBe(Math.floor(labels.length / 2));
+    expect(report.per_test.discreet.n).toBe(labels.length);
   });
 });

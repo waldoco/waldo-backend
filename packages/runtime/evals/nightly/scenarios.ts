@@ -16,6 +16,8 @@ export type NightlyScenario = TrialScenario & Readonly<{
   blocked?: string;
   // Deterministic checks a graded trial must also pass (receipts.ts).
   receipts?: readonly Receipt[];
+  // A memory case whose facts arrive in owner turns: it also runs in the raw-history baseline (WALDO_EVAL_MEMORY).
+  memory_case?: true;
 }>;
 
 export const START = '2026-09-24T09:00:00+05:30';

@@ -1,5 +1,6 @@
 // The labelled replies the voice judge is measured on, and the agreement between the judge and the labels. A label
-// is a person's call on one reply against the six tests; until reviewed_by names someone, it is a draft.
+// is a person's call on one reply against the six tests; until reviewed_by names someone, it is a draft. A fail's
+// failed_tests lists every test the reply fails, and every test it leaves out is a pass: per-test agreement rests on it.
 import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 import { VOICE_ANCHORS, VOICE_TESTS, type VoiceJudgeInput, type VoiceTestKey, type VoiceVerdict } from './voice';
@@ -38,41 +39,62 @@ export const loadVoiceLabels = (path: URL | string = VOICE_LABELS_PATH) => parse
 
 export const labelInput = (row: VoiceLabel): VoiceJudgeInput => ({ voice: row.voice, transcript: row.transcript, tools: row.tools, effects: row.effects });
 
-export type LabelledVerdict = Readonly<{ id: string; outcome: VoiceVerdict['outcome']; failed_tests?: readonly VoiceTestKey[] }>;
+export type LabelledVerdict = Readonly<{ id: string; outcome: VoiceVerdict['outcome']; failed_tests?: readonly VoiceTestKey[]; unknown_tests?: readonly VoiceTestKey[] }>;
 export const labelledVerdict = (id: string, verdict: VoiceVerdict): LabelledVerdict => ({
   id, outcome: verdict.outcome,
-  ...(verdict.tests ? { failed_tests: VOICE_TESTS.map((entry) => entry.key).filter((key) => !verdict.tests![key].met) } : {}),
+  ...(verdict.tests ? {
+    failed_tests: VOICE_TESTS.map((entry) => entry.key).filter((key) => verdict.tests![key].met === false),
+    unknown_tests: VOICE_TESTS.map((entry) => entry.key).filter((key) => verdict.tests![key].met === null),
+  } : {}),
 });
 
 const ratio = (part: number, whole: number) => (whole === 0 ? null : part / whole);
 
-// Agreement on the pass/fail call, over the labels the judge decided. false_pass (the judge passes a labelled fail) is
-// the error that lets a bad reply through, so it is reported apart from false_fail. failed_test_hit: of the labelled
-// fails the judge also failed, the share where it failed at least one of the tests the label names.
+// Cohen's kappa over pass/fail pairs: agreement beyond what the two marginals give by chance. Exact-match agreement
+// overstates a judge that mostly says pass on a set that is mostly pass; kappa does not.
+const kappaOf = (pairs: readonly Readonly<{ label: 'pass' | 'fail'; judged: 'pass' | 'fail' }>[]) => {
+  const n = pairs.length;
+  if (n === 0) return { n, kappa: null, exact: null };
+  const count = (label: 'pass' | 'fail', judged: 'pass' | 'fail') => pairs.filter((pair) => pair.label === label && pair.judged === judged).length;
+  const [pp, pf, fp, ff] = [count('pass', 'pass'), count('pass', 'fail'), count('fail', 'pass'), count('fail', 'fail')];
+  const observed = (pp + ff) / n;
+  const chance = (((pp + pf) / n) * ((pp + fp) / n)) + (((fp + ff) / n) * ((pf + ff) / n));
+  return { n, kappa: chance === 1 ? null : (observed - chance) / (1 - chance), exact: observed };
+};
+
+// Agreement on the pass/fail call, over the labels the judge decided. kappa is the headline; coverage (the share of
+// labels the judge decided) sits beside it, because a judge that answers unknown to every hard case scores well on the
+// rest. false_pass (the judge passes a labelled fail) is the error that lets a bad reply through, so it is reported apart
+// from false_fail. per_test is kappa for each of the six tests, over the labels where the judge decided that test.
 export const voiceAgreement = (labels: readonly VoiceLabel[], verdicts: readonly LabelledVerdict[]) => {
   const byId = new Map(verdicts.map((verdict) => [verdict.id, verdict]));
   const decided = labels.flatMap((label) => {
     const verdict = byId.get(label.id);
-    return verdict && (verdict.outcome === 'pass' || verdict.outcome === 'fail') ? [{ label, verdict }] : [];
+    return verdict && (verdict.outcome === 'pass' || verdict.outcome === 'fail') ? [{ label, verdict, judged: verdict.outcome as 'pass' | 'fail' }] : [];
   });
-  const cell = (label: 'pass' | 'fail', judged: 'pass' | 'fail') => decided.filter((pair) => pair.label.label === label && pair.verdict.outcome === judged).length;
+  const overall = kappaOf(decided.map((pair) => ({ label: pair.label.label, judged: pair.judged })));
+  const cell = (label: 'pass' | 'fail', judged: 'pass' | 'fail') => decided.filter((pair) => pair.label.label === label && pair.judged === judged).length;
   const [pp, pf, fp, ff] = [cell('pass', 'pass'), cell('pass', 'fail'), cell('fail', 'pass'), cell('fail', 'fail')];
-  const n = decided.length;
-  const observed = ratio(pp + ff, n);
-  const chance = n === 0 ? null : (((pp + pf) / n) * ((pp + fp) / n)) + (((fp + ff) / n) * ((pf + ff) / n));
-  const caught = decided.filter((pair) => pair.label.label === 'fail' && pair.verdict.outcome === 'fail');
+  const caught = decided.filter((pair) => pair.label.label === 'fail' && pair.judged === 'fail');
+  const perTest = Object.fromEntries(VOICE_TESTS.map(({ key }) => [key, kappaOf(labels.flatMap((label) => {
+    const verdict = byId.get(label.id);
+    if (!verdict?.failed_tests || verdict.unknown_tests?.includes(key)) return [];
+    return [{ label: (label.failed_tests ?? []).includes(key) ? 'fail' as const : 'pass' as const, judged: verdict.failed_tests.includes(key) ? 'fail' as const : 'pass' as const }];
+  }))])) as Record<VoiceTestKey, ReturnType<typeof kappaOf>>;
   return {
     labels: labels.length,
     reviewed: labels.filter((label) => label.reviewed_by !== null).length,
-    decided: n,
-    undecided: labels.length - n,
+    kappa: overall.kappa,
+    coverage: ratio(decided.length, labels.length),
+    decided: decided.length,
+    undecided: labels.length - decided.length,
+    exact_match: overall.exact,
     confusion: { label_pass_judge_pass: pp, label_pass_judge_fail: pf, label_fail_judge_pass: fp, label_fail_judge_fail: ff },
-    accuracy: observed,
-    kappa: observed === null || chance === null || chance === 1 ? null : (observed - chance) / (1 - chance),
     false_pass_rate: ratio(fp, fp + ff),
     false_fail_rate: ratio(pf, pp + pf),
     failed_test_hit: ratio(caught.filter((pair) => (pair.verdict.failed_tests ?? []).some((key) => pair.label.failed_tests!.includes(key))).length, caught.length),
-    disagreements: decided.filter((pair) => pair.label.label !== pair.verdict.outcome).map((pair) => pair.label.id),
+    per_test: perTest,
+    disagreements: decided.filter((pair) => pair.label.label !== pair.judged).map((pair) => pair.label.id),
   };
 };
 export type VoiceAgreement = ReturnType<typeof voiceAgreement>;

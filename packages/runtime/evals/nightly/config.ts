@@ -8,6 +8,8 @@ import { scriptedGateway } from '../../src/testing/scripted-gateway';
 import { callBudget } from './budget';
 import { assertIndependentJudge, liveJudge, type Judge } from './judge';
 import { liveVoiceJudge } from './voice';
+import { judgeModeOf } from './dimensions';
+import type { MemoryMode } from './world';
 import type { NightlyRun } from './suite';
 
 type Env = Readonly<Record<string, string | undefined>>;
@@ -33,11 +35,16 @@ export const nightlyConfig = (env: Env): NightlyRun => {
   const mode = env.WALDO_EVAL_MODE;
   if (mode !== 'recorded' && mode !== 'live') throw new Error('WALDO_EVAL_MODE must be recorded or live');
   const trials = positive(env, 'WALDO_EVAL_TRIALS', '3');
+  const memory = env.WALDO_EVAL_MEMORY ?? 'claims';
+  if (memory !== 'claims' && memory !== 'raw_history') throw new Error('WALDO_EVAL_MEMORY must be claims or raw_history');
+  // The raw-history baseline's card names its mode, so it is never read as the normal run's.
+  const label = (name: string) => (memory === 'raw_history' ? `${name} (raw_history)` : name);
+  const memoryMode: Readonly<{ memory?: MemoryMode }> = memory === 'raw_history' ? { memory } : {};
   if (mode === 'recorded') {
     return {
       trials, budget: callBudget(positive(env, 'WALDO_EVAL_MAX_CALLS', '10000')),
       gateway: () => scriptedGateway({ rules: [], unmatchedText: 'Recorded reply.' }),
-      judge: recordedJudge, candidate: 'recorded', judgeModel: 'recorded',
+      judge: recordedJudge, candidate: label('recorded'), judgeModel: 'recorded', ...memoryMode,
     };
   }
   const model = modelNameSchema.parse(env.WALDO_EVAL_MODEL ?? WALDO_CHAT_MODEL);
@@ -47,11 +54,12 @@ export const nightlyConfig = (env: Env): NightlyRun => {
   const judgeModel = required(env, 'WALDO_EVAL_JUDGE_MODEL');
   assertIndependentJudge(model, judgeModel);
   const budget = callBudget(positive(env, 'WALDO_EVAL_MAX_CALLS'));
+  const judgeMode = judgeModeOf(env.WALDO_EVAL_JUDGE_MODE);
   return {
-    trials, budget, candidate: model, judgeModel, model,
+    trials, budget, candidate: label(model), judgeModel: `${judgeModel} (${judgeMode})`, model, ...memoryMode,
     // No client retries: every attempt is one counted call.
     gateway: () => new OpenAIResponsesAdapter({ client: new OpenAI({ apiKey, maxRetries: 0, timeout: 60_000 }) }),
-    judge: liveJudge({ apiKey: judgeKey, model: judgeModel, budget }),
-    voiceJudge: liveVoiceJudge({ apiKey: judgeKey, model: judgeModel, budget }),
+    judge: liveJudge({ apiKey: judgeKey, model: judgeModel, budget }, judgeMode),
+    voiceJudge: liveVoiceJudge({ apiKey: judgeKey, model: judgeModel, budget }, judgeMode),
   };
 };

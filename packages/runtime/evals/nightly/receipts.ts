@@ -2,12 +2,14 @@
 // appeared. They hold the judge to what can be checked without one: a graded trial whose receipts fail is a fail
 // whatever the judge said. Recorded trials are never graded, so their receipts are never read.
 import type { TrialRecord } from './trial';
+import type { MemoryMode } from './world';
 
-export type TrialEvidence = Pick<TrialRecord, 'transcript' | 'effects' | 'final_state'>;
-export type Receipt = Readonly<{ why: string; holds: (trial: TrialEvidence) => boolean }>;
+export type TrialEvidence = Pick<TrialRecord, 'transcript' | 'effects' | 'final_state' | 'tools'>;
+// memory_store: the check reads the claim store, so the raw-history baseline, which has none, skips it.
+export type Receipt = Readonly<{ why: string; holds: (trial: TrialEvidence) => boolean; memory_store?: true }>;
 
-export const failedReceipts = (receipts: readonly Receipt[], trial: TrialEvidence): readonly string[] =>
-  receipts.filter((receipt) => !receipt.holds(trial)).map((receipt) => receipt.why);
+export const failedReceipts = (receipts: readonly Receipt[], trial: TrialEvidence, memory: MemoryMode = 'claims'): readonly string[] =>
+  receipts.filter((receipt) => (memory === 'claims' || !receipt.memory_store) && !receipt.holds(trial)).map((receipt) => receipt.why);
 
 const effectsOf = (trial: TrialEvidence, kind: string) => trial.effects.filter((effect) => effect.kind === kind);
 

@@ -8,6 +8,7 @@ import { failedReceipts } from './receipts';
 import type { NightlyScenario } from './scenarios';
 import { scorecard, type ScenarioTrials, type TrialOutcome } from './scorecard';
 import { runTrial, type TrialRecord } from './trial';
+import type { MemoryMode } from './world';
 import type { VoiceJudge, VoiceVerdict } from './voice';
 
 export type NightlyRun = Readonly<{
@@ -21,6 +22,8 @@ export type NightlyRun = Readonly<{
   candidate: string;
   judgeModel: string;
   model?: ModelName;
+  // The memory the trials run with; the raw-history baseline when set to raw_history.
+  memory?: MemoryMode;
   // A local look at each judged trial; the scorecard never carries any of it.
   show?: (scenario: NightlyScenario, record: TrialRecord, verdict: Verdict, checks: Readonly<{ voice?: VoiceVerdict; receipts: readonly string[] }>) => void;
 }>;
@@ -37,12 +40,12 @@ export const runNightly = async (scenarios: readonly NightlyScenario[], run: Nig
     for (let trial = 0; trial < run.trials; trial += 1) {
       if (scenario.blocked) { outcomes.push('blocked'); continue; }
       if (run.budget.exhausted()) { outcomes.push('budget_exhausted'); continue; }
-      const record = await runTrial(scenario, { gateway: run.gateway(), budget: run.budget, ...(run.model ? { model: run.model } : {}) });
+      const record = await runTrial(scenario, { gateway: run.gateway(), budget: run.budget, ...(run.model ? { model: run.model } : {}), ...(run.memory ? { memory: run.memory } : {}) });
       if (record.status !== 'ran') { outcomes.push(record.status); if (record.error) errors.push(record.error); continue; }
       const verdict = await run.judge({ scenario: scenario.id, rubric: scenario.rubric, transcript: record.transcript, tools: record.tools, effects: record.effects, final_state: record.final_state });
       let outcome: TrialOutcome = verdict.outcome;
       let voice: VoiceVerdict | undefined;
-      const receipts = graded(outcome) ? failedReceipts(scenario.receipts ?? [], record) : [];
+      const receipts = graded(outcome) ? failedReceipts(scenario.receipts ?? [], record, run.memory) : [];
       if (receipts.length) { receiptFailed += 1; outcome = 'fail'; }
       if (graded(verdict.outcome) && scenario.rubric.voice && run.voiceJudge) {
         voice = await run.voiceJudge({ voice: scenario.rubric.voice, transcript: record.transcript, tools: record.tools, effects: record.effects });
