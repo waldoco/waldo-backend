@@ -70,7 +70,7 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
       expect(page.messages.find((m:any)=>m.role==='user')).toMatchObject({id:receipt.message_id,text:body.text,channel:'app'});
       expect(page.messages.find((m:any)=>m.role==='assistant')).toMatchObject({text:'Hello from the signed app owner.',parent_id:receipt.message_id,channel:'app'});
       expect(forwards[0]!.headers.get('x-waldo-app-session-hash')).toBe(hash);expect(proof.inputs.filter(i=>!i.text?.format)).toHaveLength(1);
-      const told=proof.inputs.find(i=>!i.text?.format).instructions as string;expect(told.split('Form zone: steady.')).toHaveLength(2);expect(told).not.toContain('No derived health context');expect(healthReads).toBe(1);
+      const told=JSON.stringify(proof.inputs.find(i=>!i.text?.format));expect(told.split('Form zone: steady.')).toHaveLength(2);expect(told).not.toContain('No derived health context');expect(healthReads).toBe(1);
       const count=proof.inputs.length;instance=new OwnerDO(state,settings as never);
       const recovered=await app(`/chat/main/messages/${clientId}`,undefined,credential);expect(recovered.status).toBe(200);expect(await recovered.json()).toMatchObject({message_id:receipt.message_id,state:'completed'});
       const retried=await app('/chat/main/messages',body,credential);expect(retried.status).toBe(202);expect(await retried.json()).toMatchObject({message_id:receipt.message_id,state:'completed'});

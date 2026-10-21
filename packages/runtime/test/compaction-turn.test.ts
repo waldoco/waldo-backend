@@ -1,9 +1,9 @@
 import { ownerTyped } from './helpers/owner-typed';
 import { env, runInDurableObject } from 'cloudflare:test';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { canonicalOwnerConversationStore } from '../src/conversation/canonical-owner-store';
-import { COMPACTION, COMPACTION_INSTRUCTION, COMPACTION_SUPERSEDED_MARKER } from '../src/conversation/compaction';
+import { COMPACTION, COMPACTION_INSTRUCTION, COMPACTION_SUPERSEDED_MARKER, type CompactionFlush, type CompactionSpan } from '../src/conversation/compaction';
 import { compactionSummaryOpen } from '@waldo/contracts';
 
 const fake = vi.hoisted(() => ({ summary: 'The owner prefers tea and wants quiet mornings.', bodies: [] as Array<{ instructions?: string; input?: unknown }> }));
@@ -23,10 +23,10 @@ const memoryStorage = () => {
   const data = new Map<string, unknown>();
   return {
     data,
-    get: async (key: string) => data.get(key),
+    get: async (key: string | string[]) => Array.isArray(key) ? new Map(key.filter((one) => data.has(one)).map((one) => [one, data.get(one)])) : data.get(key),
     put: async (entries: Record<string, unknown> | string, value?: unknown) => { if (typeof entries === 'string') data.set(entries, value); else for (const [key, item] of Object.entries(entries)) data.set(key, item); },
-    list: async ({ prefix, reverse, limit }: { prefix: string; reverse?: boolean; limit?: number }) => {
-      const rows = [...data].filter(([key]) => key.startsWith(prefix)).sort(([a], [b]) => a.localeCompare(b));
+    list: async ({ prefix, reverse, limit, end }: { prefix: string; reverse?: boolean; limit?: number; end?: string }) => {
+      const rows = [...data].filter(([key]) => key.startsWith(prefix) && (end === undefined || key < end)).sort(([a], [b]) => a.localeCompare(b));
       if (reverse) rows.reverse();
       return new Map(limit ? rows.slice(0, limit) : rows);
     },
@@ -152,5 +152,60 @@ it('after a restart the stored summary row is never the leaf: the next turn cont
     expect(parentOf('app-8')).toBe('app-7-reply');
     expect(inputText()).not.toContain(compactionSummaryOpen(0).slice(0, 20));
     expect(inputText()).toContain(question(7));
+  });
+});
+
+describe('the memory flush seam', () => {
+  const withFlush = (store: ReturnType<typeof canonicalOwnerConversationStore>, logs: TurnLogEntry[], compactionFlush: CompactionFlush) => {
+    const args: Parameters<typeof createOwnerResponder> = ['fixture', store];
+    args[3] = entry => logs.push(entry);
+    args[21] = { compactionFlush };
+    return createOwnerResponder(...args);
+  };
+
+  it('sees the span, before its summary row exists, with the rows the summary covers', async () => {
+    Object.assign(COMPACTION, { enabled: true, budgetTokens: 160, minOwnerRows: 2, minIntervalMs: 0 });
+    const storage = memoryStorage();
+    const logs: TurnLogEntry[] = [];
+    const seen: CompactionSpan[] = [];
+    let summaryExistedAtFlush: boolean | undefined;
+    await inOwner('compaction-flush', async () => {
+      const store = canonicalOwnerConversationStore(storage, { invocation: localTrustedBriefScheduleInput().admission as never, assertCurrent: async () => undefined });
+      const responder = withFlush(store, logs, async (span) => {
+        seen.push(span);
+        summaryExistedAtFlush = [...storage.data.values()].some(value => (value as { role?: string })?.role === 'compaction');
+      });
+      for (let n = 1; n <= 6; n += 1) await responder.respond(ownerTyped({ traceId: `app-${n}`, conversationRef: 'owner', surface: 'app', text: question(n) }), (_name, work) => work());
+      await responder.compactIfDue!('owner');
+      expect(seen).toHaveLength(1);
+      expect(summaryExistedAtFlush).toBe(false);
+      const summary = [...storage.data.values()].find(value => (value as { role?: string })?.role === 'compaction') as { covers: unknown };
+      expect(seen[0]).toMatchObject({ conversationRef: 'owner', covers: summary.covers });
+      // the flush gets the same rows the summarizer reads
+      expect(seen[0]!.messages.map(message => message.content)).toContain(question(5));
+      for (const message of seen[0]!.messages) expect(inputText()).toContain(JSON.stringify(message.content).slice(1, 40));
+      expect(logs.filter(entry => entry.hop === 'compaction').at(-1)).toMatchObject({ ok: true, code: 'compacted' });
+    });
+  });
+
+  it('a flush that fails writes no summary and keeps the span in the window; the next attempt runs it again', async () => {
+    Object.assign(COMPACTION, { enabled: true, budgetTokens: 160, minOwnerRows: 2, minIntervalMs: 0 });
+    const storage = memoryStorage();
+    const logs: TurnLogEntry[] = [];
+    let fail = true, flushes = 0;
+    await inOwner('compaction-flush-fails', async () => {
+      const store = canonicalOwnerConversationStore(storage, { invocation: localTrustedBriefScheduleInput().admission as never, assertCurrent: async () => undefined });
+      const responder = withFlush(store, logs, async () => { flushes += 1; if (fail) throw new Error('memory store unavailable'); });
+      for (let n = 1; n <= 6; n += 1) await responder.respond(ownerTyped({ traceId: `app-${n}`, conversationRef: 'owner', surface: 'app', text: question(n) }), (_name, work) => work());
+      const calls = fake.bodies.length;
+      await responder.compactIfDue!('owner');
+      expect(logs.filter(entry => entry.hop === 'compaction').at(-1)).toMatchObject({ ok: false, code: 'flush_failed' });
+      expect(fake.bodies.length).toBe(calls);
+      expect([...storage.data.values()].some(value => (value as { role?: string })?.role === 'compaction')).toBe(false);
+      fail = false;
+      await responder.compactIfDue!('owner');
+      expect(flushes).toBe(2);
+      expect([...storage.data.values()].some(value => (value as { role?: string })?.role === 'compaction')).toBe(true);
+    });
   });
 });

@@ -16,7 +16,7 @@ export const standingEscalationSchema = z.enum(['message_owner', 'log_only']);
 export type StandingEscalation = z.infer<typeof standingEscalationSchema>;
 
 export const setStandingOrderArgsSchema = z.strictObject({
-  scope: z.string().min(1).max(500).describe("The standing order, in the owner's words."),
+  scope: z.string().min(1).max(2000).describe("The standing order, in the owner's words."),
   trigger: z.enum(['every_turn', 'daily', 'weekdays', 'weekly', 'cron']).describe('every_turn applies on each chat turn; other triggers schedule owner-local recurring runs. weekly uses the current local weekday.'),
   at: z
     .string()

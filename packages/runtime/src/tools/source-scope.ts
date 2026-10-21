@@ -7,37 +7,11 @@
 // triggers cannot set or clear it. It never expires and /stop does not clear it; the prompt line
 // shows it every turn so the model clears it when the owner starts a different task.
 import type { ToolName } from '@waldo/contracts';
+import { toolRecordColumn } from './records';
 export type SourceScope = 'none' | 'pasted_only';
 const SCOPES: readonly SourceScope[] = ['none', 'pasted_only'];
-// Every tool name is classified, so adding a tool fails the build until someone decides.
-// deny  = brings in material from outside the text the owner pasted (mail, calendar, files, web,
-//         stored memory/context/notes/tasks/health, earlier tool output, browsing, MCP).
-// allow = does not read owner or outside content: clock/date (get_context), the owner's own
-//         reminder/standing-order lists (needed to act on what the owner asks), tool/skill catalog
-//         metadata, and writers/proposals that read nothing back.
-// delegate_task is allow here because the guard must be applied to the child's handlers too (see wiring).
-export const SOURCE_SCOPE_CLASS: Readonly<Record<ToolName, 'deny' | 'allow'>> = {
-  use_mac: 'deny',
-  send_console_link: 'allow',
-  send_progress_note: 'allow',
-  attach_file: 'allow',
-  get_crs: 'deny', get_health: 'deny', query_calendar: 'deny', get_communication: 'deny', search_communication: 'deny', search_contacts: 'deny',
-  read_thread: 'deny', get_tasks: 'deny', get_master_metrics: 'deny', get_context: 'allow', query_availability: 'deny',
-  remember: 'allow', forget_memory: 'allow',
-  read_owner_context: 'deny', read_memory: 'deny', search_episodes: 'deny', propose_action: 'allow',
-  execute_action: 'allow', send_message: 'allow', web_search: 'deny', get_weather: 'deny', read_document: 'deny', list_artifacts: 'deny',
-  read_artifact: 'deny', call_mcp_tool: 'deny', read_mcp_tool: 'deny', read_drive: 'deny', write_task: 'allow', update_task: 'allow',
-  draft_document: 'allow', create_artifact: 'allow', revise_artifact: 'allow', export_artifact: 'allow', draft_email: 'allow',
-  send_email: 'allow', search_connector: 'deny', propose_schedule: 'allow', write_sheet_cell: 'allow', execute_code: 'allow',
-  create_thread: 'allow', delete_message: 'allow', restore_message: 'allow', archive_thread: 'allow', update_thread_topics: 'allow',
-  search_tools: 'allow', set_reminder: 'allow', list_reminders: 'allow', cancel_reminder: 'allow', propose_calendar_change: 'allow',
-  propose_google_task_change: 'deny',
-  open_loop: 'allow', close_loop: 'allow', raise_approval: 'allow', track_responsibility: 'allow', update_todo: 'allow', list_responsibilities: 'allow', close_responsibility: 'allow', set_proactivity: 'allow', set_schedule_preference: 'allow', read_tool_output: 'deny', connect_service: 'allow',
-  browse_page: 'deny', browse_act: 'deny', delegate_task: 'allow', log_meal: 'allow', log_workout: 'allow', list_health_logs: 'deny',
-  set_standing_order: 'allow', list_standing_orders: 'allow', cancel_standing_order: 'allow', workspace_list: 'deny',
-  workspace_read: 'deny', workspace_search: 'deny', workspace_write: 'allow', workspace_render: 'allow', skills_list: 'allow', skills_install: 'allow',
-  skills_disable: 'allow', skills_load: 'allow',
-};
+// Whether each tool reads outside the pasted text, kept in its tool record with the reasons for the split.
+export const SOURCE_SCOPE_CLASS: Readonly<Record<ToolName, 'deny' | 'allow'>> = toolRecordColumn('scope');
 export const EXTERNAL_READ_TOOLS = (Object.keys(SOURCE_SCOPE_CLASS) as ToolName[]).filter(name => SOURCE_SCOPE_CLASS[name] === 'deny');
 const DENIED = new Set<string>(EXTERNAL_READ_TOOLS);
 export type ScopeContext = Readonly<{ trigger: string; toolArgSourceTaint: string | null }>;
