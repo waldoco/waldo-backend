@@ -99,12 +99,13 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
   // What filled a model call, as numbers only, so section sizes can be compared across turns and surfaces.
   const contextMetadata = ({ shape }: TurnLogEntry) => {
     if (!shape?.context) return [];
-    const { system_sections: sections = {}, ...counts } = shape.context;
+    const { system_sections: sections = {}, context_sections: turnSections = {}, ...counts } = shape.context;
     return [
       attr('langfuse.observation.metadata.context_system_bytes', String(shape.system_bytes)),
       attr('langfuse.observation.metadata.context_request_bytes', String(shape.request_bytes)),
       ...Object.entries(counts).map(([key, value]) => attr(`langfuse.observation.metadata.context_${key}`, String(value))),
       ...Object.entries(sections).map(([key, value]) => attr(`langfuse.observation.metadata.context_system_${key}_bytes`, String(value))),
+      ...Object.entries(turnSections).map(([key, value]) => attr(`langfuse.observation.metadata.context_turn_${key}_bytes`, String(value))),
     ];
   };
 

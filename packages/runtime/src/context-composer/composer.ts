@@ -96,10 +96,8 @@ export function createContextComposer(deps: ContextComposerDependencies): Contex
         );
 
         enter('rendering');
-        const rendered = await renderProviderPrompt(
-          assembleReasonsPrompt(invocation.data, stagedInputs, materials, skills.selected, recall, health),
-          inputs.canary_tokens,
-        );
+        const assembled = assembleReasonsPrompt(invocation.data, stagedInputs, materials, skills.selected, recall, health);
+        const rendered = await renderProviderPrompt(assembled.prompt, inputs.canary_tokens);
         if (!rendered.ok) throw new FailClosed(rendered.failure);
         const prompt = rendered.prompt;
         enter('provenance');
@@ -140,6 +138,8 @@ export function createContextComposer(deps: ContextComposerDependencies): Contex
         return Object.freeze({
           ok: true as const,
           prompt,
+          instructions: assembled.instructions,
+          operations: assembled.operations,
           ...(skills.selected.length ? { skillPrompt: wrapSkills(skills.selected) } : {}),
           healthPrompt: renderHealth(health),
           checkpoint: checkedCheckpoint.data,

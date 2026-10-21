@@ -73,7 +73,31 @@ it('an owner turn tries Sol with full then reduced context, then Opus, then the 
   expect(models()).toEqual([OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_SOL_MODEL, ANTHROPIC_CLAUDE_OPUS_5_5_MODEL]);
   expect(reply).toBe(MODEL_UNREACHABLE_REPLY);
   expect(hops).toHaveLength(1);
-  expect(hops[0]).toMatchObject({ ok: true });
+  // No provider answered the floor line: the hop names none, says the ladder fell back, carries the failure that drove it,
+  // and has no usage for the cost rollup to count as a model call.
+  expect(hops[0]).toMatchObject({ ok: true, fallback_fired: true, error_code: 'transient', code: 'template_floor' });
+  expect(hops[0]).not.toHaveProperty('provider');
+  expect(hops[0]).not.toHaveProperty('usage');
+});
+
+it('a floor reply with one provider deployed still records that the ladder fell back', async () => {
+  const { gateway } = scriptedProviders({ [OPENAI_PROVIDER]: [{ fail: 'rate_limited' }] });
+  const hops: TurnLogEntry[] = [];
+  const args: Parameters<typeof createOwnerResponder> = [{ openaiApiKey: 'fixture-openai', floorReply: true }];
+  args[3] = (entry) => { if (entry.hop === 'llm_reply') hops.push(entry); };
+  args[5] = [getContextHandler({ timezone: 'Asia/Kolkata', now: () => new Date('2026-10-20T08:20:00Z') })]; args[10] = gateway;
+  await expect(createOwnerResponder(...args).respond(ownerTyped({ traceId: 'floor-one-provider', conversationRef: 'telegram-1', surface: 'telegram', text: 'what is on today', memoryWrites: false }), time)).resolves.toBe(MODEL_UNREACHABLE_REPLY);
+  expect(hops).toEqual([expect.objectContaining({ ok: true, fallback_fired: true, error_code: 'rate_limited', code: 'template_floor' })]);
+  expect(hops[0]).not.toHaveProperty('provider');
+});
+
+it('a reply the fallback provider answered names that provider and no floor code', async () => {
+  const { gateway } = scriptedProviders({ [ANTHROPIC_PROVIDER]: [{ text: 'Answered.' }] });
+  const hops: TurnLogEntry[] = [];
+  const owner = responder(gateway, (entry) => { if (entry.hop === 'llm_reply') hops.push(entry); });
+  await owner.respond(ownerTyped({ traceId: 'served-by-anthropic', conversationRef: 'telegram-1', surface: 'telegram', text: 'what is on today', memoryWrites: false }), time);
+  expect(hops).toEqual([expect.objectContaining({ ok: true, provider: ANTHROPIC_PROVIDER, fallback_fired: true, usage: expect.objectContaining({ model: ANTHROPIC_CLAUDE_OPUS_5_5_MODEL }) })]);
+  expect(hops[0]).not.toHaveProperty('code');
 });
 
 it('an owner turn without the floor reply fails the way it did before, once every provider has failed', async () => {
