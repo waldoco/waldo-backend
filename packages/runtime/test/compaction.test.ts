@@ -70,7 +70,9 @@ describe('compaction', () => {
     expect(first.covers.to_id).toBe('a7');
     expect(first.gap).toBeGreaterThan(0);
     expect(first.covers.rows).toBe(first.input.length);
-    expect(first.covers.from_id).toBe(tree.path('a7').at(-first.covers.rows)!.id);
+    // over the input budget the owner's messages go in first, so the span starts at the oldest owner message that fits
+    expect(first.input.map((message) => message.content.split(' ').slice(0, 2).join(' '))).toEqual(['question 5', 'question 6', 'question 7']);
+    expect(first.covers.from_id).toBe('u5');
     expect(first.input.reduce((sum, message) => sum + estimateMessageTokens(message), 0)).toBeLessThanOrEqual(120);
     // a later compaction carries the live summary first and its coverage forward
     const live = compactionRow(first, 'earlier summary', 'owner', 99);
@@ -87,6 +89,34 @@ describe('compaction', () => {
     // the whole span fits a larger input budget: coverage starts at the chain's first row, with no gap
     const whole = compactionPlan(tree, leafOf(8), null, settings, 10_000)!;
     expect(whole).toMatchObject({ gap: 0, covers: { from_id: 'u1', to_id: 'a7', rows: 14 } });
+  });
+
+  it('no owner instruction is lost when the span outgrows the summarizer input: replies give way first, and the summary view stays within budget', () => {
+    const settings = { ...COMPACTION, enabled: true, budgetTokens: 2_000 };
+    const tree = new ConversationTree();
+    let parent: string | null = null;
+    const instructions: string[] = [];
+    for (let round = 1; round <= 40; round += 1) {
+      const instruction = `Instruction ${String.fromCharCode(64 + (round % 26) + 1)}${round % 2 ? ' always' : ' never'}: keep calls short`;
+      instructions.push(instruction);
+      tree.append(row(`u${round}`, parent, 'user', instruction, round * 10));
+      tree.append(row(`a${round}`, `u${round}`, 'assistant', `Sure. ${'long reply '.repeat(120)}`, round * 10 + 1));
+      parent = `a${round}`;
+    }
+    const plan = compactionPlan(tree, 'a40', null, settings)!;
+    const input = plan.input.map((message) => message.content);
+    // every owner instruction in the span reaches the summarizer; only replies were left out
+    const spanInstructions = instructions.filter((_text, index) => tree.path(plan.covers.to_id).some((entry) => entry.id === `u${index + 1}`));
+    expect(spanInstructions.length).toBeGreaterThan(30);
+    for (const instruction of spanInstructions) expect(input).toContain(instruction);
+    expect(plan.gap).toBeGreaterThan(0);
+    expect(plan.input.reduce((sum, message) => sum + estimateMessageTokens(message), 0)).toBeLessThanOrEqual(2_000);
+    // the next turn's view is the summary plus a verbatim tail, inside the budget, where the plain window would drop rows
+    tree.append(compactionRow(plan, 'Owner instructions:\n- keep calls short', 'owner', 999));
+    const view = compactedHistory(tree, 'a40', undefined, settings);
+    expect(view.stats.compacted).toBe(1);
+    expect(view.stats.estimated_tokens).toBeLessThanOrEqual(2_000);
+    expect(windowModelMessages(tree.modelContext('a40'), 2_000).stats.dropped).toBeGreaterThan(0);
   });
 
   it('is due only when the window dropped or ran near the budget, enough owner rows arrived, and the last attempt is old', () => {

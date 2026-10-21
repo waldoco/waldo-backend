@@ -417,5 +417,26 @@ export const SCENARIOS: readonly Scenario[] = [
       replies: [/card:brief/],
     },
   },
+  {
+    // Past the monthly ceiling a paid tool is held before it runs; the model reads the one refusal shape, with what
+    // still works and when the ceiling resets, and degrades the task on the reads that remain.
+    id: 'spend-ceiling-holds-browsing',
+    category: 'degradation',
+    turns: ['find me a hotel near the venue for friday'],
+    fixtures: { spentUsd: 30, browse: true, web: [{ title: 'Hotel Aster, 400 m from the venue', url: 'https://example.com/aster', snippet: 'Rooms from Friday.' }] },
+    llm: [
+      { match: /hotel near the venue/, rounds: [
+        { toolCalls: [{ name: 'browse_page', arguments: { url: 'https://example.com/hotels', instruction: 'list hotels near the venue' } }] },
+        { toolCalls: [{ name: 'web_search', arguments: { query: 'hotel near the venue friday' } }] },
+        { text: 'Browsing is paused until the month resets, so I searched instead: Hotel Aster is 400 m from the venue. Next step: book it from https://example.com/aster, or I can compare more options by search.' },
+      ] },
+    ],
+    assert: {
+      mustCall: ['browse_page', 'web_search'],
+      hops: [{ hop: 'spend_hold', ok: false, note: /spend_ceiling_reached:browse_page/ }, { hop: 'tool_browse_page', ok: false }, { hop: 'tool_web_search', ok: true }],
+      modelInput: [{ turn: 1, mustContain: ['spend_ceiling_reached', 'web_search and the other read tools still work', 'The ceiling resets on'], mustNotContain: ['fixture page'] }],
+      replies: [/Next step:/],
+    },
+  },
   ...ASKING_SCENARIOS,
 ];
