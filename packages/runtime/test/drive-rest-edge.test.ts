@@ -68,6 +68,12 @@ it.each([401,403])('actual wire provider %i maps meaningfully with external tain
  expect(JSON.stringify(result)).not.toContain('PRIVATE_CANARY');expect(f.hops).toEqual(['proxy_access','token','drive']);
 });
 
+it('actual wire provider 403 userRateLimitExceeded reaches the model as transient, not refused',async()=>{
+ const f=fixture(undefined,403,{error:{code:403,message:'PRIVATE_CANARY',errors:[{domain:'usageLimits',reason:'userRateLimitExceeded',message:'PRIVATE_CANARY'}]}});
+ const result=await runtimeRead({action:'recent'});
+ expect(result).toMatchObject({ok:false,code:'transient',source_taint:'external'});expect(result).not.toHaveProperty('connect');
+ expect(JSON.stringify(result)).not.toContain('PRIVATE_CANARY');expect(f.hops).toEqual(['proxy_access','token','drive']);
+});
 it('actual content rail denies metadata-only grants before refresh',async()=>{
  const f=fixture(['https://www.googleapis.com/auth/drive.metadata.readonly']);
  const r=await serve(await signed({...input,method:'driveReadFileContent',args:[{fileId:'document_123456',expectedModifiedTime:'2026-10-03T10:00:00Z'}]}));
