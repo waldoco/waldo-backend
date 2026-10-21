@@ -1176,6 +1176,9 @@ const ownerSourceRef = (evidence: string, grounding: ClaimGrounding | undefined)
   const message = grounding?.ownerMessages?.find(candidate => ground(evidence, { owner: candidate.text }) === 'owner');
   return message ? `owner, ${message.ref}` : undefined;
 };
+// A per-exchange caller's evidence label names the owner message in hand (`owner, <entry id>`); the nightly pass's label
+// names a day, not a message, so it is never a source ref.
+const ownerTurnRef = (evidence: string): string | undefined => evidence.startsWith('owner, ') && !evidence.includes('day of') ? evidence : undefined;
 
 export const normalizeForGrounding = (text: string): string => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').replace(/^ +| +$/g, '');
 
@@ -1202,7 +1205,6 @@ export const ground = (evidence: string, sections: ClaimGrounding): GroundingVer
   return 'ungrounded';
 };
 
-const refForCorrection = (evidence: string): string | undefined => /^owner, tg-[\w-]+$/.test(evidence) ? evidence : undefined;
 // pin and unpin are unknown[]: older replies and fixtures omit them, and each entry is checked before it is applied.
 type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolean; aliases_touch_forgotten?: boolean })[]; corrections?: readonly { old_id: number; kind: string; text: string; evidence: string }[]; seen: readonly number[]; confirm: readonly number[]; dismiss: readonly number[]; forget_claims: readonly number[]; forget_nodes: readonly number[]; forget_topic: string | null; pin?: readonly unknown[]; unpin?: readonly unknown[] }>;
 const pinOp = (value: unknown): value is Readonly<{ id: number; block: PinBlock; order: number }> => {
@@ -1216,9 +1218,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   // Background extraction does not infer permission for destructive effects.
   const forgetsAllowed = forgetAllowed === true;
   const ops = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as ClaimOps;
-  const currentClaims = store.claims();
-  const known = new Set(currentClaims.map((claim) => claim.id));
-  const byClaimId = new Map(currentClaims.map((claim) => [claim.id, claim]));
+  const known = new Set(store.claims().map((claim) => claim.id));
   // Claims mid-scrub (a previous purge left survivors) are forgettable too: that is the retry path.
   const forgettable = new Set([...known, ...['purging', 'superseded', 'promoted'].flatMap(status => store.claims(status).map(claim => claim.id))]);
   const nodes = new Set(store.nodes().map((node) => node.id));
@@ -1234,51 +1234,48 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     store.recordHold(claim.kind, 'forgotten', claim.text, at);
     holdReasons.add('forgotten');
   }
-  // Apply explicit corrections first, so an extractor that also emits the replacement
-  // in add cannot write a second active copy.
-  // A correction is all-or-nothing at the admission gate: one owner-quoted replacement
-  // with a live old id, never an agent paraphrase or a forwarded statement.
+  // Explicit corrections are applied first. A correction is all-or-nothing at the admission gate: one owner-quoted
+  // replacement with a live old id, never an agent paraphrase or a forwarded statement. Like remember, it names the one
+  // owner message its quote sits in: that message is its source ref, and without one the correction is held.
   const corrected = new Set<number>();
   const correctionIds = new Set((ops.corrections ?? []).filter((item) => !(forgetsAllowed && ops.forget_claims.includes(item.old_id))).map((item) => item.old_id));
-  // Hold failed replacements for known ids so the add path cannot bypass correction grounding.
-  const blockedReplacementTexts = new Set<string>();
+  // Each correction's replacement text, so the add path writes it at most once: never a second copy of an applied
+  // correction, and for a held one only on the owner's own words, never a shared or paraphrased twin standing in for it.
+  const replacements = new Map<string, 'applied' | 'held'>();
   let heldCorrections = 0;
   for (const correction of ops.corrections ?? []) {
-    const old = byClaimId.get(correction.old_id);
-    if (old) {
-      blockedReplacementTexts.add(normalizeForGrounding(correction.text));
-    }
     if (!known.has(correction.old_id) || corrected.has(correction.old_id) ||
       (forgetsAllowed && ops.forget_claims.includes(correction.old_id)) ||
       !CLAIM_KINDS.includes(correction.kind as never) || !correction.text.trim()) continue;
+    const ref = grounding && ground(correction.evidence, grounding) === 'owner' ? ownerSourceRef(correction.evidence, grounding) ?? ownerTurnRef(evidence) : undefined;
     // From here the owner asked for a change and Waldo is not making it. That is recorded as a hold with a
     // closed reason, so the reply can say the memory was not updated instead of the skip being silent.
-    // Grounding preserves owner provenance; the model chooses which claim to replace.
-    if (barrierHashes.has(textFingerprint(correction.text.trim())) ||
-      !refForCorrection(evidence) || !grounding || ground(correction.evidence, grounding) !== 'owner') {
-      // Only an active owner-local id can reach this correction path.
-      if (old) {
-        store.recordHold(correction.kind, 'correction-not-applied', correction.text, at);
-        holdReasons.add('correction-not-applied');
-        heldCorrections += 1;
-      }
+    if (ref === undefined || barrierHashes.has(textFingerprint(correction.text.trim()))) {
+      store.recordHold(correction.kind, 'correction-not-applied', correction.text, at);
+      holdReasons.add('correction-not-applied');
+      heldCorrections += 1;
+      replacements.set(normalizeForGrounding(correction.text), 'held');
       continue;
     }
-    const ref = refForCorrection(evidence);
     if (store.correct(correction.old_id, { kind: correction.kind, text: correction.text.trim(), source: 'stated',
-      evidence: correction.evidence.trim(), origin: 'owner', source_ref: ref }, at)) corrected.add(correction.old_id);
+      evidence: correction.evidence.trim(), origin: 'owner', source_ref: ref }, at)) {
+      corrected.add(correction.old_id);
+      replacements.set(normalizeForGrounding(correction.text), 'applied');
+    }
   }
   let downgraded = 0;
   let written = 0;
   const admitted = ops.add.filter((claim) => !held.includes(claim) && CLAIM_KINDS.includes(claim.kind as never) && claim.text.trim() && claim.evidence.trim());
   for (const claim of admitted) {
-    if (blockedReplacementTexts.has(normalizeForGrounding(claim.text))) continue;
+    const replacement = replacements.get(normalizeForGrounding(claim.text));
+    if (replacement === 'applied') continue;
     let source = claim.source === 'inferred' ? 'inferred' : 'stated';
     // Origin is the gate's provenance column: where the evidence actually lives. The model
     // proposes; only code writes it (OpenClaw's origin classes - untrusted never promotes).
     let origin: string | null = null;
-    if (grounding !== undefined) {
-      const verdict = ground(claim.evidence, grounding);
+    const verdict = grounding === undefined ? undefined : ground(claim.evidence, grounding);
+    if (replacement === 'held' && verdict !== 'owner') continue;
+    if (verdict !== undefined) {
       if (verdict === 'waldo') {
         // Self-report: evidence grounds only in Waldo's own reply. Held, never written -
         // an unverifiable self-reported outcome is the draft_saved-without-receipt failure class.
@@ -1297,8 +1294,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     }
     // An alias that is itself a forgotten topic is dropped, not stored.
     const aliases = claim.aliases_touch_forgotten ? [] : (claim.aliases ?? []).filter((alias) => typeof alias === 'string' && !aliasForms(alias).some((form) => barrierHashes.has(textFingerprint(form))));
-    const sourceRef = origin !== 'owner' ? undefined
-      : ownerSourceRef(claim.evidence, grounding) ?? (evidence.startsWith('owner, ') && !evidence.includes('day of') ? evidence : undefined);
+    const sourceRef = origin !== 'owner' ? undefined : ownerSourceRef(claim.evidence, grounding) ?? ownerTurnRef(evidence);
     store.add({ kind: claim.kind, text: claim.text.trim(), source, evidence: claim.evidence.trim(), aliases, origin: origin ?? undefined, source_ref: sourceRef }, at);
     written += 1;
   }
