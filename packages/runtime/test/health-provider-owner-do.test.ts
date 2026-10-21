@@ -24,6 +24,13 @@ vi.mock('openai', () => ({ default: class { responses = { create: async () => { 
 vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(), createTelegramCaller: () => async () => true }));
 const { OwnerDO } = await import('../src/channels/owner-do');
 
+// Synthetic readings and the secrets the sync handled. None may be left in the object's tables or storage, or in any line it printed.
+const SENTINELS = ['47.318', '93.5', '96.4', '33.2', 'access-', 'refresh-', 'client-secret-fixture', 'good-code'];
+const dump = (state: DurableObjectState) => JSON.stringify([
+  state.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE '\\_cf\\_%' ESCAPE '\\'").toArray().map(({ name }) => [name, state.storage.sql.exec(`SELECT * FROM "${name}"`).toArray()]),
+  [...state.storage.kv.list()],
+]);
+
 const world = newWorld();
 const plane = newPlane();
 const written: string[] = [];
@@ -52,7 +59,7 @@ beforeEach(() => {
     return new Response('unexpected', { status: 500 });
   });
 });
-afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers(); });
 
 type Owner = Readonly<{ fetch(request: Request): Promise<Response>; alarm(): Promise<void> }>;
 const withOwner = (work: (o: { owner: Owner; state: DurableObjectState; doName: string; call(op: Parameters<typeof callOwnerProvider>[3], body?: Record<string, unknown>): Promise<Response>; row(id: string): { kind: string; due_at: number } | null }) => Promise<void>, over: Record<string, unknown> = {}) => {
@@ -97,6 +104,8 @@ describe('WHOOP on the owner object', () => {
 
   it('links on the callback, arms a sync, and a real alarm pass reads the month, recomputes the owner\'s rows and arms the health trigger', async () => {
     for (let i = 0; i < 30; i += 1) addNight(world, i);
+    const printed: string[] = [];
+    for (const method of ['log', 'info', 'warn', 'error'] as const) vi.spyOn(console, method).mockImplementation((...args: unknown[]) => { printed.push(args.map(String).join(' ')); });
     await withOwner(async ({ owner, state, call, row }) => {
       const linked = await call('exchange', { code: 'good-code', denied: false });
       expect([linked.status, await linked.json()]).toEqual([200, { outcome: 'linked' }]);
@@ -114,6 +123,8 @@ describe('WHOOP on the owner object', () => {
       expect(row(HEALTH_TRIGGER_ID)).toMatchObject({ kind: 'patrol' });
       expect(row(WHOOP_SYNC_ID)!.due_at).toBeGreaterThan(Date.now());
       expect(models.calls).toBe(0);
+      expect(dump(state), 'the dump reads the real tables').toContain(WHOOP_SYNC_ID);
+      for (const sentinel of SENTINELS) for (const [where, text] of [['tables and storage', dump(state)], ['printed lines', printed.join('\n')]] as const) expect(text, `${sentinel} in ${where}`).not.toContain(sentinel);
       const status = await (await call('status')).json() as { providers: { state: string; last_sync_at: string }[] };
       expect(status.providers[0]).toMatchObject({ state: 'connected', last_sync_at: new Date(START).toISOString() });
     });
