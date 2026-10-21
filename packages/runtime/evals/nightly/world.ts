@@ -3,7 +3,7 @@
 // everything that would leave the owner object (cards, drafts, reminders, standing orders).
 // Nothing here reaches Google, a search engine or a real owner. A fresh world per trial.
 import { DatabaseSync } from 'node:sqlite';
-import { TOOL_PERMISSIONS, type HealthRowZone, triggerTypeSchema, webSearchArgsSchema, type SetReminderArgs, type SetStandingOrderArgs, type WebSearchArgs } from '@waldo/contracts';
+import { TOOL_PERMISSIONS, type HealthRowZone, type ProposeCalendarChangeArgs, triggerTypeSchema, webSearchArgsSchema, type SetReminderArgs, type SetStandingOrderArgs, type WebSearchArgs } from '@waldo/contracts';
 import { IsolatedSourceWorld } from '../../scenarios/isolated-source-world';
 import { isolatedGoogleClient } from '../../scenarios/isolated-google-client';
 import { localIso, reminderHandlers, type ReminderBook } from '../../src/channels/reminders';
@@ -12,6 +12,7 @@ import { loopBook, loopHandlers } from '../../src/channels/loops';
 import { episodeIndex, indexedConversationStore } from '../../src/channels/episodes';
 import { durableConversationStore } from '../../src/channels/conversation-store';
 import { toContextHealthMaterial, type HealthContextRow } from '../../src/channels/health-context';
+import { comingItemsFrom, healthTriggerBook, runHealthTrigger, type HealthTriggerOutcome } from '../../src/health/trigger';
 import { connectServiceHandler, googleHandlers, type EffectDesk, type GoogleAccess } from '../../src/tools/live/google';
 import { memoryHandlers } from '../../src/tools/live/memory';
 import { searchEpisodesHandler } from '../../src/tools/live/search-episodes';
@@ -41,6 +42,8 @@ export type WorldSeed = Readonly<{
   events?: readonly SeedEvent[]; mail?: readonly SeedMail[]; web?: readonly SeedWeb[];
   // What the shared health looks like once a step shares it; a moderate day with a short night when unset.
   health?: SeedHealth;
+  // The day before, for a step that has the health trigger run on a change from it; none when unset.
+  health_before?: SeedHealth;
   // unconfirmed_draft: saving a draft may have reached Gmail, but nothing confirms it (the effect ledger's unknown outcome).
   faults?: Readonly<{ draft?: 'unconfirmed' }>;
   mcp?: SeedMcp;
@@ -258,8 +261,35 @@ export const evalWorld = (seed: WorldSeed, start: string) => {
     previous: null,
   });
 
+  // The health trigger, as the owner object runs it: the production module over this world's calendar and loops, the
+  // consented read of zone words as the health plane answers it, and the model call the caller supplies. A zone change
+  // marks today; the one card it can raise is recorded as an effect, never applied.
+  const healthBook = healthTriggerBook(sql);
+  const triggerRow = () => {
+    const today = localIso(now(), TIMEZONE).slice(0, 10), basis = [{ source: 'apple', consent_epoch: 1 }];
+    return {
+      context: { id: 'eval-health', day: today, compiled_at: new Date(now() - 3_600_000).toISOString(), basis, form: { score: day.form_score }, recovery: { zone: day.recovery }, weight: { zone: day.load } },
+      previous: seed.health_before ? { day: shift(today, -1), form_score: seed.health_before.form_score, recovery_zone: seed.health_before.recovery, weight_zone: seed.health_before.load, basis } : null,
+    };
+  };
+  const healthChange = async (decide: (id: string, prompt: string) => Promise<string>): Promise<Readonly<{ outcome: HealthTriggerOutcome; proposal: ProposeCalendarChangeArgs | null }>> => {
+    healthBook.mark(localIso(now(), TIMEZONE).slice(0, 10), now());
+    let proposal: ProposeCalendarChangeArgs | null = null;
+    const outcome = await runHealthTrigger({
+      book: healthBook, now, newId: () => nextId('health'), timezone: TIMEZONE, enabled: () => true, proactivity: () => ({ quiet_start: null, quiet_end: null, volume: 'normal' }), modeSetting: () => 'auto',
+      readHealth: async () => (sharing === 'shared' ? triggerRow() : null),
+      comingItems: (from, to) => comingItemsFrom({
+        events: async () => (await client.calendarPage!('primary', new Date(from).toISOString(), new Date(to).toISOString(), 20, false)).events, tasks: null, loops: () => loops.list(),
+      }, from, to, TIMEZONE),
+      admit: () => true, charge: () => undefined, decide,
+      propose: async (args) => { proposal = args; effect('calendar.change.proposed', args); return nextId('proposal'); },
+      reschedule: async () => undefined, log: () => undefined,
+    });
+    return { outcome, proposal };
+  };
+
   return {
-    clock, conversation, memory, handlers,
+    clock, conversation, memory, handlers, healthChange,
     ready: mcpReady,
     health: async () => (sharing === 'shared' ? toContextHealthMaterial(sharedHealth(), clock) : null),
     shareHealth(shared: boolean) { sharing = shared ? 'shared' : 'withdrawn'; },

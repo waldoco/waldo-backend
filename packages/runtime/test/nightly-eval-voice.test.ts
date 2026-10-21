@@ -230,10 +230,11 @@ describe('the nightly catalogue', () => {
   it('holds the research tasks, the owner\'s two and the fourteen voice and safety scenarios, at the gate\'s floor', () => {
     expect(VOICE_SCENARIOS).toHaveLength(14);
     expect(new Set(NIGHTLY_SCENARIOS.map((entry) => entry.id)).size).toBe(NIGHTLY_SCENARIOS.length);
-    // The floor is the 22-scenario M0 baseline, the connector case (c1-connected-tracker) and this set, so it holds
-    // whether or not other scenarios land beside it.
+    // The floor is the 22-scenario M0 baseline, the connector case (c1-connected-tracker), the health trigger case
+    // (h1-health-change-card) and this set, so it holds whether or not other scenarios land beside it.
     expect(NIGHTLY_SCENARIOS.some((entry) => entry.id === 'c1-connected-tracker')).toBe(true);
-    expect(NIGHTLY_THRESHOLDS.recorded.min_scenarios).toBe(22 + 1 + VOICE_SCENARIOS.length);
+    expect(NIGHTLY_SCENARIOS.some((entry) => entry.id === 'h1-health-change-card')).toBe(true);
+    expect(NIGHTLY_THRESHOLDS.recorded.min_scenarios).toBe(22 + 1 + 1 + VOICE_SCENARIOS.length);
     expect(NIGHTLY_THRESHOLDS.live.min_scenarios).toBe(NIGHTLY_THRESHOLDS.recorded.min_scenarios);
     expect(NIGHTLY_SCENARIOS.length).toBeGreaterThanOrEqual(NIGHTLY_THRESHOLDS.recorded.min_scenarios);
     for (const entry of VOICE_SCENARIOS) {

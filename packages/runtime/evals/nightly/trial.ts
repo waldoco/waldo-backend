@@ -3,6 +3,7 @@
 // reminder path, as the owner object's alarm drives it.
 import { WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL, type ModelName } from '@waldo/contracts';
 import { createTelegramResponder } from '../../src/channels/telegram-turn';
+import { HEALTH_TRIGGER_FORMAT } from '../../src/health/trigger';
 import { inboundTurn, ownerWords } from '../../src/channels/owner-inbound-turn';
 import type { TurnLogEntry } from '../../src/channels/telegram-listener';
 import type { LLMGatewayAdapter } from '../../src/llm/provider';
@@ -15,6 +16,8 @@ export type Step =
   | Readonly<{ advance_to: string }>
   | Readonly<{ fire_due: true }>
   | Readonly<{ health: 'shared' | 'withdrawn' }>
+  // The owner's derived health moves zone and the health trigger runs, with one structured model call.
+  | Readonly<{ health_change: true }>
   | Readonly<{ mail_arrives: SeedMail }>;
 export type TrialScenario = Readonly<{ id: string; start: string; steps: readonly Step[]; world: WorldSeed }>;
 export type TrialRecord = Readonly<{
@@ -70,6 +73,10 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
       } else if ('mail_arrives' in step) {
         world.deliver(step.mail_arrives);
         transcript.push({ role: 'world', text: `New mail arrives from ${step.mail_arrives.from}: "${step.mail_arrives.subject}".` });
+      } else if ('health_change' in step) {
+        const { outcome, proposal } = await world.healthChange((id, prompt) => responder.prompt(id, 1, prompt, time, [], async () => undefined, HEALTH_TRIGGER_FORMAT));
+        transcript.push({ role: 'world', text: `The owner's health moves zone and the health trigger runs (${outcome}).` });
+        if (proposal) transcript.push({ role: 'waldo', surface: 'notification', text: proposal.reason });
       } else {
         world.shareHealth(step.health === 'shared');
         transcript.push({ role: 'world', text: step.health === 'shared' ? 'The owner shares health data.' : 'The owner withdraws health sharing.' });
