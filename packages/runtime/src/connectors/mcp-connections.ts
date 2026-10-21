@@ -74,10 +74,13 @@ export type ConnectOutcome = Readonly<{ kind: 'linked'; id: string; name: string
 export type BeginResult = Readonly<{ kind: 'redirect'; path: string } | { kind: 'connected'; id: string; name: string } | { kind: 'already'; id: string; name: string } | { kind: 'failed'; reason: string }>;
 
 // The one shape handlers turn into a tool refusal. cause is safe to show the model; nothing here is a
-// token, and server text appears only where the model needs it to correct a call.
+// token, and server text appears only where the model needs it to correct a call. notApplied is true only
+// when the call provably did nothing: refused before sending, or answered with an auth challenge or a
+// rate limit. Anything else after the request left may have run, so an approval reports it as unknown.
 export class McpRefusal extends Error {
-  constructor(public readonly code: 'not_found' | 'auth_failed' | 'forbidden' | 'invalid_args' | 'rejected' | 'transient' | 'oversize', cause: string) { super(cause); this.name = 'McpRefusal'; }
+  constructor(public readonly code: 'not_found' | 'auth_failed' | 'forbidden' | 'invalid_args' | 'rejected' | 'transient' | 'oversize', cause: string, public readonly notApplied = false) { super(cause); this.name = 'McpRefusal'; }
 }
+const NOT_APPLIED: ReadonlySet<McpProxyFailure['code']> = new Set(['reauth_needed', 'token_failed', 'token_expired', 'scope_missing', 'connection_unavailable', 'rate_limited', 'intent_conflict', 'egress_refused', 'unconfigured', 'unsigned', 'invalid_request']);
 
 export type McpConnectionsDeps = Readonly<{
   sql: SqlStorage;
@@ -126,6 +129,10 @@ const nameFor = (host: string, taken: ReadonlySet<string>) => {
 };
 
 const proxyCause = (failure: McpProxyFailure, server: string): McpRefusal => {
+  const refusal = refusalFor(failure, server);
+  return new McpRefusal(refusal.code, refusal.message, NOT_APPLIED.has(failure.code));
+};
+const refusalFor = (failure: McpProxyFailure, server: string): McpRefusal => {
   switch (failure.code) {
     case 'reauth_needed': case 'token_failed': return new McpRefusal('auth_failed', `The sign-in for ${server} is no longer valid. Ask the owner to reconnect ${server} in Connections on their Waldo console (send_console_link sends it).`);
     case 'scope_missing': return new McpRefusal('auth_failed', `${server} needs more access for this tool${failure.scope ? ` (${failure.scope})` : ''}. Ask the owner to reconnect ${server} in Connections on their Waldo console and grant it.`);
@@ -146,7 +153,8 @@ const directCause = (error: unknown, server: string): McpRefusal => {
   if (error instanceof McpChallenge) return proxyCause({ code: error.status === 401 ? 'reauth_needed' : 'scope_missing' }, server);
   if (error instanceof McpServerError) return proxyCause({ code: error.kind === 'rate_limited' ? 'rate_limited' : error.kind === 'not_found' ? 'not_found' : error.kind === 'unavailable' ? 'unavailable' : 'unavailable', ...(error.retryAfterSeconds === undefined ? {} : { retry_after: error.retryAfterSeconds }) }, server);
   if (error instanceof McpRpcError) return proxyCause({ code: 'rpc_error', rpc_code: error.code, message: error.message.slice(0, 500) }, server);
-  if (error instanceof EgressError) return proxyCause({ code: error.code === 'egress_oversize' ? 'egress_oversize' : error.code === 'egress_network' || error.code === 'egress_timeout' ? 'unavailable' : 'egress_refused' }, server);
+  // A redirect answer on a direct call came back after the server saw the request: unknown, not refused.
+  if (error instanceof EgressError) return proxyCause({ code: error.code === 'egress_oversize' ? 'egress_oversize' : error.code === 'egress_network' || error.code === 'egress_timeout' || error.code === 'egress_redirect' ? 'unavailable' : 'egress_refused' }, server);
   if (error instanceof McpProxyError) return proxyCause(error.failure, server);
   return new McpRefusal('transient', `${server} could not be used right now.`);
 };
@@ -196,7 +204,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     if (pending) return pending;
     const run = (async () => {
       const started = deps.now(), doName = deps.doName();
-      if (!deps.proxy || !doName) throw new McpRefusal('transient', 'Connected servers are not reachable on this Waldo right now.');
+      if (!deps.proxy || !doName) throw new McpRefusal('transient', 'Connected servers are not reachable on this Waldo right now.', true);
       try {
         const out = await deps.proxy.refresh(doName, r.id, seen ?? undefined);
         update(r.id, { version: out.version, expires_at: out.expires_at ?? null, scopes: out.scopes.join(' '), status: 'active' });
@@ -219,10 +227,10 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       return out.result;
     }
     const doName = deps.doName();
-    if (!deps.proxy || !doName) throw new McpRefusal('transient', 'Connected servers are not reachable on this Waldo right now.');
+    if (!deps.proxy || !doName) throw new McpRefusal('transient', 'Connected servers are not reachable on this Waldo right now.', true);
     const current = () => {
       const now = row(r.id);
-      if (!now) throw new McpRefusal('not_found', `${r.name} is no longer connected, so nothing ran.`);
+      if (!now) throw new McpRefusal('not_found', `${r.name} is no longer connected, so nothing ran.`, true);
       return now;
     };
     const attempt = async (at: Row) => {
@@ -292,7 +300,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     const r = byName(name);
     if (!r) {
       const names = rows().map((x) => x.name);
-      throw new McpRefusal('not_found', names.length ? `No connected MCP server is named "${name}". Connected: ${names.join(', ')}.` : 'The owner has no MCP servers connected. They connect one in Connections on their Waldo console (send_console_link sends it).');
+      throw new McpRefusal('not_found', names.length ? `No connected MCP server is named "${name}". Connected: ${names.join(', ')}.` : 'The owner has no MCP servers connected. They connect one in Connections on their Waldo console (send_console_link sends it).', true);
     }
     if (r.status === 'reauth_needed') throw proxyCause({ code: 'reauth_needed' }, r.name);
     return r;
@@ -487,7 +495,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       await freshTools(r).catch(() => undefined);
       let found = toolOf(r, tool);
       if (!found) { await refreshTools(r).catch(() => undefined); found = toolOf(r, tool); }
-      if (!found) throw new McpRefusal('not_found', `${r.name} has no tool named "${tool}". Use search_mcp_tools to find the right name.`);
+      if (!found) throw new McpRefusal('not_found', `${r.name} has no tool named "${tool}". Use search_mcp_tools to find the right name.`, true);
       return { connection: r.id, def: found.def, digest: found.digest, runs: reads(r.id).get(tool) === found.digest ? 'without_asking' : 'asks_first' };
     },
 
@@ -496,18 +504,18 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     async invoke(input: Readonly<{ server: string; tool: string; args: Readonly<Record<string, unknown>>; mode: 'read' } | { connection: string; tool: string; args: Readonly<Record<string, unknown>>; mode: 'approved'; digest: string; intentId: string }>): Promise<Readonly<{ server: string; result: unknown }>> {
       const started = deps.now();
       const r = input.mode === 'read' ? live(input.server) : row(input.connection);
-      if (!r) throw new McpRefusal('not_found', 'That server is no longer connected, so nothing ran.');
+      if (!r) throw new McpRefusal('not_found', 'That server is no longer connected, so nothing ran.', true);
       if (r.status === 'reauth_needed') throw proxyCause({ code: 'reauth_needed' }, r.name);
       try {
         let found = toolOf(r, input.tool);
         if (!found && input.mode === 'read') { await refreshTools(r).catch(() => undefined); found = toolOf(r, input.tool); }
-        if (!found) throw new McpRefusal('not_found', `${r.name} has no tool named "${input.tool}" now. Use search_mcp_tools to find the right name.`);
+        if (!found) throw new McpRefusal('not_found', `${r.name} has no tool named "${input.tool}" now. Use search_mcp_tools to find the right name.`, true);
         if (input.mode === 'read' && reads(r.id).get(input.tool) !== found.digest) {
-          throw new McpRefusal('forbidden', `${r.name}'s ${input.tool} asks the owner first${reads(r.id).has(input.tool) ? ' (its definition changed since the owner allowed it)' : ''}. Call call_mcp_tool with the same server, tool and args; the owner gets a card.`);
+          throw new McpRefusal('forbidden', `${r.name}'s ${input.tool} asks the owner first${reads(r.id).has(input.tool) ? ' (its definition changed since the owner allowed it)' : ''}. Call call_mcp_tool with the same server, tool and args; the owner gets a card.`, true);
         }
-        if (input.mode === 'approved' && found.digest !== input.digest) throw new McpRefusal('rejected', `${r.name} changed ${input.tool} after the owner approved it, so nothing ran. Look at the tool again and propose it anew.`);
+        if (input.mode === 'approved' && found.digest !== input.digest) throw new McpRefusal('rejected', `${r.name} changed ${input.tool} after the owner approved it, so nothing ran. Look at the tool again and propose it anew.`, true);
         const problem = checkArgs(found.def, input.args);
-        if (problem) throw new McpRefusal('invalid_args', `${input.tool}: ${problem}.`);
+        if (problem) throw new McpRefusal('invalid_args', `${input.tool}: ${problem}.`, true);
         const result = await send(r, 'tools/call', { name: input.tool, arguments: input.args }, { headers: toolHeaders(found.def, input.args), ...(input.mode === 'approved' ? { intentId: input.intentId } : {}) });
         log('mcp_call', started);
         return { server: r.name, result };

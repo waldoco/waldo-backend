@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { connectIntentSchema } from '../connect-intent';
 import {
   callMcpToolArgsSchema,
+  searchMcpToolsArgsSchema,
   callMcpToolResultSchema,
   connectServiceArgsSchema,
   executeActionArgsSchema,
@@ -294,6 +295,26 @@ describe('callMcpToolArgs', () => {
     expect(callMcpToolArgsSchema.safeParse({ ...base, server: '' }).success).toBe(false);
     expect(callMcpToolArgsSchema.safeParse({ ...base, args: 'not-a-record' }).success).toBe(false);
   });
+
+  it('accepts a 128-character MCP tool name and refuses an empty one', () => {
+    expect(callMcpToolArgsSchema.safeParse({ ...base, tool: 't'.repeat(128) }).success).toBe(true);
+    expect(callMcpToolArgsSchema.safeParse({ ...base, tool: '' }).success).toBe(false);
+  });
+});
+
+describe('searchMcpToolsArgs', () => {
+  it.each([
+    ['no arguments', {}],
+    ['a query', { query: 'create an issue' }],
+    ['one server', { server: 'linear' }],
+    ['the next page', { query: 'issue', cursor: '20' }],
+  ])('accepts %s', (_name, args) => expect(searchMcpToolsArgsSchema.safeParse(args).success).toBe(true));
+
+  it.each([
+    ['an empty query', { query: '' }],
+    ['a non-string server', { server: 7 }],
+    ['an unknown key', { query: 'x', url: 'https://evil.example.net/mcp' }],
+  ])('refuses %s', (_name, args) => expect(searchMcpToolsArgsSchema.safeParse(args).success).toBe(false));
 });
 
 describe('external-origin results carry taint (ADR-0049)', () => {
