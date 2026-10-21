@@ -546,4 +546,23 @@ describe('OpenAIResponsesAdapter tool search', () => {
     expect(sent.tools!.find((tool) => tool.type === 'namespace')!.tools!.map((tool) => tool.name)).toEqual(['free_form']);
     expect(sent.input!.slice(1)).toEqual([{ type: 'function_call', call_id: 'c1', name: 'query_availability', arguments: '{"day":"2030-11-04"}' }, { type: 'function_call_output', call_id: 'c1', output: 'free' }]);
   });
+
+  it('sends no length, count or number bounds in a strict schema; the tool checks them after the call', async () => {
+    let sent: { tools?: Array<{ type: string; name?: string; parameters?: unknown; strict?: boolean }> } = {};
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async (body: typeof sent) => { sent = body; return { id: 'r', output_text: 'ok', output: [], usage: { input_tokens: 1, output_tokens: 1 } }; }) });
+    const base = searchRequest();
+    const bounded = { type: 'object', properties: {
+      body: { type: 'string', minLength: 1, maxLength: 2000 },
+      to: { type: 'array', items: { type: 'string', format: 'email' }, minItems: 1, maxItems: 10 },
+      count: { type: 'integer', minimum: 1, maximum: 50 },
+    }, required: ['body', 'to'], additionalProperties: false };
+    await adapter.complete({ ...base, request: { ...base.request, tools: [{ name: 'send_note', description: 'Send a note', parameters: bounded }] } });
+    const tool = sent.tools!.find((item) => item.name === 'send_note')!;
+    expect(tool.strict).toBe(true);
+    expect(tool.parameters).toEqual({ type: 'object', properties: {
+      body: { type: 'string' },
+      to: { type: 'array', items: { type: 'string', format: 'email' } },
+      count: { anyOf: [{ type: 'integer' }, { type: 'null' }] },
+    }, required: ['body', 'to', 'count'], additionalProperties: false });
+  });
 });

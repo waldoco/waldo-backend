@@ -1,18 +1,19 @@
+// Strict here means only well-formed calls: valid JSON, every required field, the right types. It never narrows a tool.
 // OpenAI strict function calling (Structured Outputs, "Supported schemas"): every object lists all its properties as
 // required and sets additionalProperties false, an optional field becomes a union with null, the root is an object,
 // and only a documented subset of JSON Schema is accepted; a schema outside it is a request error. A tool whose schema
 // cannot be shown to sit inside that subset is sent non-strict. A pattern is dropped although the subset allows one:
 // zod writes it in JavaScript regex syntax, the provider compiles only a subset of regex, and a pattern it cannot compile
 // fails the whole request. The tool's own schema still validates every call after it arrives, so a constraint dropped
-// here (a pattern, an unlisted format, a default) is still enforced.
+// here (a pattern, a bound, an unlisted format, a default) is still enforced.
 type Json = Record<string, unknown>;
 
-const KEPT = new Set([
-  'type', 'properties', 'required', 'additionalProperties', 'items', 'anyOf', 'enum', 'description',
-  'minLength', 'maxLength', 'multipleOf', 'maximum', 'exclusiveMaximum', 'minimum', 'exclusiveMinimum',
-  'minItems', 'maxItems', 'format', '$ref', '$defs',
-]);
-const DROPPED = new Set(['$schema', 'default', 'title', 'pattern', 'examples', '$id', '$comment', 'readOnly', 'writeOnly', 'deprecated']);
+const KEPT = new Set(['type', 'properties', 'required', 'additionalProperties', 'items', 'anyOf', 'enum', 'description', 'format', '$ref', '$defs']);
+// Bounds stay with the tool's own schema. Constrained decoding would make the model stop at a maxLength or maxItems and
+// send a cut-off body or list that then passes validation; checked after the call, an oversize argument is refused with
+// a fix the model can act on (page, split, narrow).
+const BOUNDS = ['minLength', 'maxLength', 'multipleOf', 'maximum', 'exclusiveMaximum', 'minimum', 'exclusiveMinimum', 'minItems', 'maxItems'];
+const DROPPED = new Set(['$schema', 'default', 'title', 'pattern', 'examples', '$id', '$comment', 'readOnly', 'writeOnly', 'deprecated', ...BOUNDS]);
 const FORMATS = new Set(['date-time', 'time', 'date', 'duration', 'email', 'hostname', 'ipv4', 'ipv6', 'uuid']);
 
 class Unsupported extends Error {}
