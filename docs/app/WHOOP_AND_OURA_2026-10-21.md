@@ -19,8 +19,8 @@ How the build meets it:
 - Storage in the health plane and use by the AI model are authorized by the owner, expressly, through the two grants every source
   has, for source `whoop`: `storage_compute` (Waldo stores the data) and `model_processing` (AI models process it to plan the owner's
   day). Both must be live before a connection starts, before the callback code is traded for tokens, and before every sync or
-  webhook fetch. The notice version recorded on the grants is WHOOP-specific copy saying exactly that; the copy is the onboarding
-  lane's, and the backend records the version it is given. The database refuses a WHOOP reading while `storage_compute` is not
+  webhook fetch. The notice a WHOOP grant rests on is WHOOP's own, copy version 3 (see "WHOOP consent copy" below); the database
+  accepts a WHOOP grant only on version 3 and a device grant only on version 2, and stores the version. The database refuses a WHOOP reading while `storage_compute` is not
   live. Withdrawing `storage_compute` withdraws the source and purges what it stored (see below for what it leaves); withdrawing
   `model_processing` stops sync and model use and deletes nothing.
 - WHOOP data is never used to create, develop, test, train, fine-tune or improve any model, prompt or eval. The tests, fakes and
@@ -50,6 +50,23 @@ Owner decision for Oura (pick one):
    is the WHOOP one with Oura's differences (PKCE, single-use refresh token, signature encoding, `410` cancels a subscription).
 2. Oura owners reach Waldo through Apple Health or Health Connect on the device. The ring app writes there; no Oura API is used.
 3. Use Oura's MCP server at model time with nothing stored. This loses per-source baselines, so the trigger has nothing to compare against.
+
+## WHOOP consent copy (version 3)
+
+A device source's consent screen is copy version 2. WHOOP's is its own, copy version 3, and a grant for WHOOP carries `version: 3`
+(the contract refuses `whoop` on 2 and a device source on 3; the health plane enforces the same and stores the version, so a stored
+grant shows which notice it rested on). The wording is the app and onboarding lane's; the backend fixes what it must say, taken from
+WHOOP's terms (§3 and §4 above):
+
+1. Waldo stores the owner's WHOOP data (sleep, recovery and workouts, with WHOOP's scores) in its health store.
+2. AI models process that data to plan the owner's day. It is never used to create, train, fine-tune or improve any model.
+3. It is not shared with anyone else, and Waldo's notes about it are not medical advice.
+4. How to stop: withdrawing storage stops the sync and deletes what was stored; withdrawing AI use stops the sync and AI use; disconnecting
+   ends WHOOP's access.
+
+Both grants (storage, then AI use) are asked on this notice. The copy changes only with a new version number, which asks the owner again.
+Until the app ships that notice and the migration `20261021170000_health_consent_copy_version.sql` is applied, set no WHOOP secret and
+enter no client for the edge.
 
 ## WHOOP in the build
 

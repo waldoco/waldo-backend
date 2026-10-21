@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  appHealthRoutesV1, HEALTH_CONSENT_VERSION_V1, healthApiErrorV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema,
-  healthConsentListV1Schema, healthConsentWithdrawV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthSampleV1Schema,
+  appHealthRoutesV1, HEALTH_CONSENT_VERSION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, healthApiErrorV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema,
+  healthConsentListV1Schema, healthConsentVersionV1, healthConsentWithdrawV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthSampleV1Schema,
   healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema,
 } from './health-ingest';
 
@@ -19,11 +19,19 @@ describe('health consent', () => {
     expect(healthConsentWithdrawV1Schema.safeParse({ request_id: 'withdraw-health-1', source: 'samsung', purpose: 'model_processing', expected_epoch: 1 }).success).toBe(true);
   });
   it('takes every source the app can read and the one provider the backend syncs, and no other vendor', () => {
-    for (const source of ['apple', 'samsung', 'health_connect', 'whoop']) expect(healthConsentGrantV1Schema.safeParse({ ...grant, source }).success, source).toBe(true);
+    for (const source of ['apple', 'samsung', 'health_connect', 'whoop']) expect(healthConsentGrantV1Schema.safeParse({ ...grant, source, version: healthConsentVersionV1(source) }).success, source).toBe(true);
     rejected(healthConsentGrantV1Schema, [{ ...grant, source: 'garmin' }, { ...grant, source: 'oura' }]);
   });
-  it('carries the copy version that names intraday window summaries', () => {
-    expect(HEALTH_CONSENT_VERSION_V1).toBe(2);
+  it('carries the copy version that names intraday window summaries for a device source and the WHOOP-specific notice for WHOOP', () => {
+    expect([HEALTH_CONSENT_VERSION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1]).toEqual([2, 3]);
+    expect(['apple', 'samsung', 'health_connect', 'whoop'].map(healthConsentVersionV1)).toEqual([2, 2, 2, 3]);
+  });
+  it('ties a grant to the copy of its own source: WHOOP on the device copy, or a device source on the WHOOP copy, is refused', () => {
+    expect(healthConsentGrantV1Schema.safeParse({ ...grant, source: 'whoop', version: HEALTH_PROVIDER_CONSENT_VERSION_V1 }).success).toBe(true);
+    rejected(healthConsentGrantV1Schema, [{ ...grant, source: 'whoop' }, { ...grant, source: 'whoop', version: HEALTH_CONSENT_VERSION_V1 }, { ...grant, version: HEALTH_PROVIDER_CONSENT_VERSION_V1 }, { ...grant, source: 'whoop', version: 4 }]);
+    const row = { consent_class: 'health_processing', source: 'whoop', purpose: 'storage_compute', version: HEALTH_PROVIDER_CONSENT_VERSION_V1, status: 'granted', epoch: 1, granted_at: '2026-10-10T00:00:00Z', withdrawn_at: null, deletion_state: 'not_required' };
+    expect(healthConsentListV1Schema.safeParse({ consents: [row] }).success).toBe(true);
+    rejected(healthConsentListV1Schema, [{ consents: [{ ...row, version: HEALTH_CONSENT_VERSION_V1 }] }, { consents: [{ ...row, source: 'apple' }] }]);
   });
   it('reports state, list and change receipts strictly', () => {
     const state = { consent_class: 'health_processing', source: 'apple', purpose: 'storage_compute', version: HEALTH_CONSENT_VERSION_V1, status: 'granted', epoch: 1, granted_at: '2026-10-10T00:00:00Z', withdrawn_at: null, deletion_state: 'not_required' };
