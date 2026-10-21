@@ -70,7 +70,9 @@ describe('nightly eval suite', () => {
       expect(text).not.toContain(scenario.rubric.outcome);
     }
     expect(text).not.toContain('example.com');
-  });
+    // Runs every scenario through a whole owner turn, so its time grows with the catalogue and with machine load;
+    // the default 5 s budget is per unit test, not per catalogue.
+  }, 30_000);
 });
 
 describe('nightly eval catalogue', () => {

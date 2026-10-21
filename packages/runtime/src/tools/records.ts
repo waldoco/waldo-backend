@@ -79,7 +79,7 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   list_artifacts: { brain: 'artifacts', scope: 'deny', claim: null, replay: read() },
   read_artifact: { brain: 'artifacts', scope: 'deny', claim: null, replay: read() },
   read_mcp_tool: { brain: 'web', scope: 'deny', claim: null, replay: read('read-only MCP allowlist; every call goes through the proxy intent ledger (tools/live/mcp.ts); the remote server is trusted to be read-only') },
-  search_mcp_tools: { brain: 'web', scope: 'deny', claim: null, replay: read() },
+  search_mcp_tools: { brain: 'web', scope: 'deny', claim: null, replay: read('searches stored tool definitions, refreshing a stale list with tools/list; runs no server tool') },
   read_drive: { brain: 'web', scope: 'deny', claim: null, replay: read() },
   search_connector: { brain: 'web', scope: 'deny', claim: null, replay: unknown(NO_HANDLER + ' (schema only)') },
   propose_schedule: { brain: 'calendar', scope: 'allow', claim: null, replay: unknown('proposal handler not inspected') },
