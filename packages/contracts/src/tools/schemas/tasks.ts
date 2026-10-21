@@ -10,12 +10,12 @@ export type TaskProfile = z.infer<typeof taskProfileSchema>;
 export const taskJobIdSchema = z.string().regex(/^job_[0-9a-f]{12}$/);
 
 export const startTaskArgsSchema = z.strictObject({
-  profile: taskProfileSchema.describe('reader: mail, calendar, contacts, tasks, Drive and the web. errand: reader plus a browser for multi-step web errands; a submit comes back to you as an approval card. code: not available yet.'),
-  title: z.string().min(1).describe('A short name the owner sees in progress notes, such as "Inbox since Monday".'),
-  goal: z.string().min(1).describe('What the task must find or do.'),
-  context: z.string().describe('Everything the worker needs from this conversation: names, dates, addresses, links, what the owner already said and decided.'),
-  constraints: z.string().optional().describe('What the worker must avoid or respect.'),
-  done_when: z.string().min(1).describe('What a good result looks like, so the worker knows when to stop.'),
+  profile: taskProfileSchema.describe('reader: mail, calendar, contacts, tasks, Drive, the web. errand: reader plus a browser; submits come back as approval cards. code: not available yet.'),
+  title: z.string().min(1).describe('A short name for progress notes, such as "Inbox since Monday".'),
+  goal: z.string().min(1).describe('What to find or do.'),
+  context: z.string().describe('All it needs from this conversation: names, dates, addresses, links, what the owner said and decided.'),
+  constraints: z.string().optional().describe('What to avoid or respect.'),
+  done_when: z.string().min(1).describe('What a good result looks like.'),
   effort: z.enum(['standard', 'deep']).optional().describe('deep for careful reasoning across many sources.'),
 });
 export type StartTaskArgs = z.infer<typeof startTaskArgsSchema>;
