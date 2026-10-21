@@ -49,13 +49,7 @@ const TABLES: Record<string, Row> = {
   class_state: exempt('counts and times per push class'), daily_push_budget: exempt('counts per day'), event_cooldowns: exempt('event id and time'),
   exempt_telemetry: exempt('counts'), subkind_state: exempt('counts and times'), loop_kill_flags: exempt('flag keys'), loop_progress: exempt('counts'),
   loop_progress_params: exempt('parameter hashes'), loop_observations: exempt('tool name and hashes'),
-  owner_roots: exempt('root key and owner id'),
-  common_message_custody: gap('retained authority metadata: owner/presence IDs and digest derived from directory, subject (including WhatsApp phone), locator and revision; no message text, but personal-derived identity retention across content-forget is not a justified unqualified exemption; routing authority is not erased by this inventory'),
-  execution_workunit_down_guard: exempt('temporary rollback guard containing only an allowed integer; dropped in the same migration'),
-  execution_continuation_down_guard: exempt('temporary rollback guard containing only an allowed integer; dropped in the same migration'),
-  owner_event_state: exempt('cursor'), presence_registrations: exempt('ids and state'), presence_sessions: exempt('session ids and times'),
-  planning_execution_leases: exempt('lease ids, fences and times'), execution_writer_rollback_guard: exempt('a flag'),
-  judgment_authority_rollback_guard: exempt('a flag'), workspace_upload_lease: exempt('lease token, expiry and byte count'),
+  workspace_upload_lease: exempt('lease token, expiry and byte count'),
   approval_presentations: exempt('approval id, surface, provider chat/message or run ref, approvable flag, payload digest and times; the app card is rendered from the ledger row at read time, so no review text is stored here'),
   card_pins: exempt('card id and time'), heartbeat_notified: exempt('loop id and times'), artifact_exports: exempt('ids, format, size and time'),
   event_briefs: exempt('event id and times'), schedule_runs: exempt('ids, status codes and times'),
@@ -73,12 +67,6 @@ const TABLES: Record<string, Row> = {
   // Product-schema tables (do-schema.ts), none wired to purge
   memory_blocks: purged('memory-forget-do-provider.test.ts'), memory_inbox: purged('memory-forget-do-provider.test.ts'), patrol_log: purged('memory-forget-do-provider.test.ts'), interventions: gap(TEXT_JSON), adjustments: gap(TEXT_JSON),
   skills: gap(TEXT_JSON), sheet_commits: gap(TEXT_JSON), thread_topic_index: purged('memory-forget-do-provider.test.ts'), drafts: gap(TEXT_JSON), goals: purged('memory-forget-do-provider.test.ts'),
-  outcomes: gap(TEXT_JSON), missions: gap(TEXT_JSON), work_units: gap(TEXT_JSON), owner_domain_events: gap(TEXT_JSON), responsibility_commands: gap(TEXT_JSON),
-  responsibility_projection: gap(TEXT_JSON), responsibility_projection_state: gap(TEXT_JSON), planning_execution_requests: gap(TEXT_JSON),
-  planning_agent_sessions: gap(TEXT_JSON), planning_provider_invocations: gap(TEXT_JSON), execution_attempts: gap(TEXT_JSON), execution_observations: gap(TEXT_JSON),
-  execution_reconciliations: gap(TEXT_JSON), work_unit_candidate_plans: gap(TEXT_JSON), work_unit_planning_commands: gap(TEXT_JSON), work_unit_planning_controls: gap(TEXT_JSON),
-  work_unit_planning_projection: gap(TEXT_JSON), judgment_requests: gap(TEXT_JSON), judgment_decisions: gap(TEXT_JSON), authority_grants: gap(TEXT_JSON),
-  judgment_commands: gap(TEXT_JSON), judgment_projection: gap(TEXT_JSON), judgment_projection_state: gap(TEXT_JSON),
 };
 
 // Vite replaces a literal import.meta.glob call at build time; this package carries no vite client types, hence the directives.
@@ -102,7 +90,7 @@ describe('forget store table', () => {
     expect(Object.keys(TABLES).filter((name) => !created.has(name)).sort()).toEqual([]);
   });
   it('has a row for every table in the shared schema manifests', () => {
-    expect(manifest.size).toBeGreaterThan(40);
+    expect(manifest.size).toBeGreaterThan(20);
     expect([...manifest].filter((name) => !(name in TABLES)).sort()).toEqual([]);
   });
   it('every PURGED row names a test that exists and mentions the table', () => {

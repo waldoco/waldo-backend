@@ -18,6 +18,11 @@ const SOURCE_PATH = 'packages/runtime/src/do-schema.ts';
 const RESERVATION_PATH = 'packages/runtime/do-migration-reservations.json';
 const ALLOCATION_POLICY = 'rebase_then_append';
 
+// Retirement policy: a migration that no live Durable Object applies may leave
+// DO_SCHEMA_MIGRATIONS only by marking its reservation `"retired": true`. Its version and name stay
+// reserved forever (never reused, never un-retired), the source chain keeps every other version
+// number unchanged (gaps are allowed only at retired versions), and appends still go at the end.
+
 function parseRoot(argv) {
   const index = argv.indexOf('--root');
   if (index === -1) return fileURLToPath(new URL('../../', import.meta.url));
@@ -340,12 +345,13 @@ function parseReservations(raw, findings) {
       !entry ||
       typeof entry !== 'object' ||
       !Number.isInteger(entry.version) ||
-      typeof entry.name !== 'string'
+      typeof entry.name !== 'string' ||
+      (entry.retired !== undefined && entry.retired !== true)
     ) {
       findings.push(`${RESERVATION_PATH}: migration ${index + 1} is malformed`);
-      return { version: Number.NaN, name: '' };
+      return { version: Number.NaN, name: '', retired: false };
     }
-    return { version: entry.version, name: entry.name };
+    return { version: entry.version, name: entry.name, retired: entry.retired === true };
   });
 }
 
@@ -375,6 +381,29 @@ function validateSequence(migrations, path, findings) {
   }
 }
 
+// The source chain skips only retired versions: strictly increasing, unique names.
+function validateSourceOrder(migrations, path, findings) {
+  const seenNames = new Set();
+  let previous = 0;
+  for (const migration of migrations) {
+    if (!(migration.version > previous)) {
+      findings.push(`${path}: migration ${JSON.stringify(migration.name)} has version ${migration.version}; versions must increase`);
+    }
+    if (seenNames.has(migration.name)) {
+      findings.push(`${path}: migration name ${JSON.stringify(migration.name)} is duplicated`);
+    }
+    if (migration.name.length === 0) {
+      findings.push(`${path}: migration ${migration.version} has an empty name`);
+    }
+    seenNames.add(migration.name);
+    previous = migration.version;
+  }
+}
+
+function activeReservations(reservations) {
+  return reservations.filter((reservation) => !reservation.retired);
+}
+
 function compareReservations(sourceMigrations, reservations, findings) {
   const count = Math.max(sourceMigrations.length, reservations.length);
   for (let index = 0; index < count; index += 1) {
@@ -401,14 +430,22 @@ function compareReservations(sourceMigrations, reservations, findings) {
   }
 }
 
-function compareHistoricalPrefix(baseMigrations, migrations, findings) {
-  for (const [index, baseMigration] of baseMigrations.entries()) {
-    const migration = migrations[index];
-    if (
-      !migration ||
-      migration.version !== baseMigration.version ||
-      migration.name !== baseMigration.name
-    ) {
+function compareHistoricalPrefix(baseMigrations, migrations, reservations, findings) {
+  for (const baseMigration of baseMigrations) {
+    const migration = migrations.find((candidate) => candidate.version === baseMigration.version);
+    if (migration) {
+      if (migration.name !== baseMigration.name) {
+        findings.push(`${SOURCE_PATH}: historical migration ${baseMigration.version} changed`);
+      }
+      continue;
+    }
+    const retired = reservations.find(
+      (reservation) =>
+        reservation.version === baseMigration.version &&
+        reservation.name === baseMigration.name &&
+        reservation.retired,
+    );
+    if (!retired) {
       findings.push(`${SOURCE_PATH}: historical migration ${baseMigration.version} changed`);
     }
   }
@@ -425,6 +462,10 @@ function compareHistoricalReservations(baseReservations, reservations, findings)
       findings.push(
         `${RESERVATION_PATH}: historical reservation ${baseReservation.version} changed`,
       );
+    } else if (baseReservation.retired && !reservation.retired) {
+      findings.push(
+        `${RESERVATION_PATH}: retired reservation ${baseReservation.version} cannot be reused`,
+      );
     }
   }
 }
@@ -437,22 +478,22 @@ function main() {
   const sourceMigrations = parseSource(readRequired(root, SOURCE_PATH), findings);
   const reservations = parseReservations(readRequired(root, RESERVATION_PATH), findings);
 
-  validateSequence(sourceMigrations, SOURCE_PATH, findings);
+  validateSourceOrder(sourceMigrations, SOURCE_PATH, findings);
   validateSequence(reservations, RESERVATION_PATH, findings);
-  compareReservations(sourceMigrations, reservations, findings);
+  compareReservations(sourceMigrations, activeReservations(reservations), findings);
 
   if (baseRef) {
     const baseMigrations = parseSource(readAtRef(root, baseRef, SOURCE_PATH), findings);
     const baseReservationsRaw = readOptionalAtRef(root, baseRef, RESERVATION_PATH);
     const baseReservations = baseReservationsRaw
       ? parseReservations(baseReservationsRaw, findings)
-      : baseMigrations.map(({ version, name }) => ({ version, name }));
-    validateSequence(baseMigrations, `${baseRef}:${SOURCE_PATH}`, findings);
+      : baseMigrations.map(({ version, name }) => ({ version, name, retired: false }));
+    validateSourceOrder(baseMigrations, `${baseRef}:${SOURCE_PATH}`, findings);
     validateSequence(baseReservations, `${baseRef}:${RESERVATION_PATH}`, findings);
     if (baseReservationsRaw) {
-      compareReservations(baseMigrations, baseReservations, findings);
+      compareReservations(baseMigrations, activeReservations(baseReservations), findings);
     }
-    compareHistoricalPrefix(baseMigrations, sourceMigrations, findings);
+    compareHistoricalPrefix(baseMigrations, sourceMigrations, reservations, findings);
     compareHistoricalReservations(baseReservations, reservations, findings);
   }
 

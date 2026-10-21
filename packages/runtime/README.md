@@ -3,9 +3,9 @@
 Proves that real Workers/Durable-Object code executes inside the Workers runtime
 (workerd via Miniflare), not a Node approximation. This is Gate 5 (hermetic
 runtime) of the local-dev testing pipeline. It runs under
-`@cloudflare/vitest-pool-workers` and holds one test-only Durable Object
-(`RuntimeProbeDO`) exercising DO SQLite durability, the single alarm slot, and
-eviction survival. No product logic, no live services, no secrets.
+`@cloudflare/vitest-pool-workers`. Tests that need bare Durable Object SQLite storage use
+the test-only `TestStorageDO` (`test/support/worker-entry.ts`, bound as `TEST_STORAGE_DO` in the
+vitest configs, never in `wrangler.jsonc`). No product logic, no live services, no secrets.
 
 ## Confirmed `@cloudflare/vitest-pool-workers` pool limitations
 
