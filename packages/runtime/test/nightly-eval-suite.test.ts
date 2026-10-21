@@ -6,6 +6,7 @@ import type { Judge } from '../evals/nightly/judge';
 import { nightlyConfig } from '../evals/nightly/config';
 import { SCENARIOS, type NightlyScenario } from '../evals/nightly/scenarios';
 import { runNightly } from '../evals/nightly/suite';
+import { runTrial } from '../evals/nightly/trial';
 import { evalWorld } from '../evals/nightly/world';
 
 const quick = (id: string, extra: Partial<NightlyScenario> = {}): NightlyScenario => ({
@@ -74,16 +75,16 @@ describe('nightly eval suite', () => {
 });
 
 describe('nightly eval catalogue', () => {
-  it('has the twenty research tasks, the owner\'s two, the three errand failures and the background task, each with a pain and a rubric', () => {
-    expect(SCENARIOS).toHaveLength(26);
-    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(26);
+  it('has the twenty research tasks, the owner\'s two, the three errand failures, the background task and the late answer, each with a pain and a rubric', () => {
+    expect(SCENARIOS).toHaveLength(27);
+    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(27);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('t'))).toHaveLength(20);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('e'))).toHaveLength(3);
-    expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('w'))).toHaveLength(1);
+    expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('w'))).toHaveLength(2);
     expect(new Set(SCENARIOS.map((scenario) => scenario.pain))).toEqual(new Set(['context', 'follow_through', 'judgment']));
     for (const scenario of SCENARIOS) {
       expect(scenario.rubric.outcome.trim()).not.toBe('');
-      expect(scenario.steps.some((step) => 'say' in step)).toBe(true);
+      expect(scenario.steps.some((step) => 'say' in step || 'late_answer' in step)).toBe(true);
     }
   });
 
@@ -97,6 +98,19 @@ describe('nightly eval catalogue', () => {
     expect(await start.handle(args as never, ctx)).toMatchObject({ ok: true, data: { status: 'started', profile: 'reader' } });
     expect(await start.handle(args as never, ctx)).toMatchObject({ ok: true, data: { status: 'already_started' } });
     expect(world.effects()).toEqual([{ kind: 'task.start', payload: expect.objectContaining({ profile: 'reader', goal: args.goal, timezone: 'Asia/Kolkata' }) }]);
+  });
+
+  it('runs the late-answer scenario as R-4 does: the floor promise, then one retry turn on the owner model that quotes the message', async () => {
+    const scenario = SCENARIOS.find((entry) => entry.id === 'w2-late-answer-keeps-promise')!;
+    const gateway = scriptedGateway({ rules: [{ match: /this is the late answer/, rounds: [{ text: 'Sorry for the wait: linen shirts, one blazer, sunscreen.' }] }] });
+    const record = await runTrial(scenario, { gateway, budget: callBudget(20) });
+    expect(record.status).toBe('ran');
+    expect(record.transcript.map((line) => line.role)).toEqual(['owner', 'waldo', 'world', 'waldo']);
+    expect(record.transcript[1]!.text).toMatch(/^I can't answer properly right now\. I'll come back to you by \d\d:\d\d\.$/);
+    expect(record.transcript[3]!.text).toBe('Sorry for the wait: linen shirts, one blazer, sunscreen.');
+    const retry = gateway.requests().map((input) => input.request).find((request) => JSON.stringify(request).includes('this is the late answer'))!;
+    expect(JSON.stringify(retry)).toContain('What should I pack?');
+    expect(retry.model).toBe(WALDO_CHAT_MODEL);
   });
 
   it('seeds every fact the errand rubrics require, and makes the named second calendar unreadable', async () => {

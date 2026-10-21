@@ -6,6 +6,8 @@ import { createTelegramResponder } from '../../src/channels/telegram-turn';
 import { inboundTurn, ownerWords } from '../../src/channels/owner-inbound-turn';
 import type { TurnLogEntry } from '../../src/channels/telegram-listener';
 import type { LLMGatewayAdapter } from '../../src/llm/provider';
+import { floorReplyText } from '../../src/prompt/fixed-lines';
+import { promisedBy, RETRY_FIRST_TRY_MS, retryTurnText } from '../../src/tasks/retry-turn';
 import type { CallBudget } from './budget';
 import type { JudgeInput } from './judge';
 import { evalWorld, TIMEZONE, type Effect, type WorldSeed } from './world';
@@ -14,6 +16,8 @@ export type Step =
   | Readonly<{ say: string }>
   | Readonly<{ advance_to: string }>
   | Readonly<{ fire_due: true }>
+  // The owner says this while no model is reachable: they get the floor reply's promise, and the retry answers it later.
+  | Readonly<{ late_answer: string }>
   | Readonly<{ health: 'shared' | 'withdrawn' }>;
 export type TrialScenario = Readonly<{ id: string; start: string; steps: readonly Step[]; world: WorldSeed }>;
 export type TrialRecord = Readonly<{
@@ -59,6 +63,17 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
       } else if ('advance_to' in step) {
         world.advance(step.advance_to);
         transcript.push({ role: 'world', text: `The time is now ${world.localNow()} (${TIMEZONE}).` });
+      } else if ('late_answer' in step) {
+        // The same machine turn the owner object runs once a model is back, with the tools an apply turn gets.
+        turn += 1;
+        const saidAt = world.clock.now().getTime(), promised = promisedBy(saidAt);
+        transcript.push({ role: 'owner', text: step.late_answer });
+        transcript.push({ role: 'waldo', text: floorReplyText(promised, TIMEZONE) });
+        world.advance(new Date(saidAt + RETRY_FIRST_TRY_MS).toISOString());
+        transcript.push({ role: 'world', text: `No model answered at the time. The time is now ${world.localNow()} (${TIMEZONE}) and models answer again.` });
+        const brief = { message_ref: `${scenario.id}-${turn}`, text: step.late_answer, conversation_ref: 'eval', said_at: saidAt, promised_by: promised };
+        const tools = world.handlers.map((handler) => handler.name).filter((name) => name !== 'start_task' && name !== 'cancel_task');
+        transcript.push({ role: 'waldo', text: await responder.prompt(`${scenario.id}-retry-${turn}`, 1, retryTurnText(brief, TIMEZONE), time, tools as never, undefined, undefined, undefined, undefined, true) });
       } else if ('fire_due' in step) {
         for (const reminder of world.due()) {
           world.markFired(reminder.id);
