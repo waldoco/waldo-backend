@@ -33,8 +33,8 @@ describe('nightly eval gate', () => {
       .toEqual(['pass rate 0.7 required but nothing was graded']);
   });
 
-  it('keeps the recorded thresholds at the M0 baseline', () => {
-    expect(NIGHTLY_THRESHOLDS.recorded).toEqual({ min_scenarios: 22, max_blocked: 3, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null });
+  it('keeps the recorded thresholds at the M0 baseline plus the fourteen voice and safety scenarios', () => {
+    expect(NIGHTLY_THRESHOLDS.recorded).toEqual({ min_scenarios: 36, max_blocked: 3, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null });
   });
 
   it('renders a marked, text-free comment with the verdict, totals and each scenario', () => {
