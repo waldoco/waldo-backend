@@ -719,7 +719,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
         const [to, cc, replyTo] = ['To', 'Cc', 'Reply-To'].map((name) => addressList(header(name)));
         const capped = [to!, cc!, replyTo!].some((list) => list.length > MAX_RECIPIENTS);
         return { ...(validMessageId(messageId) ? {message_id:messageId} : {}), ...(references.length ? {references} : {}), to: to!.slice(0, MAX_RECIPIENTS), cc: cc!.slice(0, MAX_RECIPIENTS), ...(replyTo!.length ? { reply_to: replyTo!.slice(0, MAX_RECIPIENTS) } : {}), ...(capped ? { recipients_capped: true as const } : {}), id: message.id ?? '', from: header('From'), subject: header('Subject'), at: new Date(Number(message.internalDate ?? 0)).toISOString(), ...body };
-      });
+      }));
       const next = offset + messages.length;
       return {messages, cursor: next < ids.length ? b64url(new TextEncoder().encode(JSON.stringify({binding,offset:next}))) : null};
   };
