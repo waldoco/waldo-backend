@@ -11,6 +11,9 @@ export type ProactiveTarget = 'app' | 'whatsapp' | 'imessage';
 const WANTED: Readonly<Record<ProactiveSurface, readonly ProactiveTarget[]>> = {
   app: ['app'], whatsapp: ['whatsapp'], both: ['app', 'whatsapp'], imessage: ['imessage'], app_imessage: ['app', 'imessage'],
 };
+// The stored choice read as a list of surfaces, the one that takes the work first and then each that gets a copy. This is
+// the only reader of the enum: everything after it works on the list, whatever surfaces it names.
+export const wantedTargets = (setting: ProactiveSurface): readonly ProactiveTarget[] => WANTED[setting];
 export const PROACTIVE_SURFACE_KEY = 'proactive_surface_v1';
 
 type Kv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void }>;
@@ -26,14 +29,33 @@ export const setProactiveSurface = (kv: Kv, value: string): boolean => {
   return true;
 };
 
-// The setting chooses among the surfaces the owner can be reached on now. When none it names is reachable, the first
-// reachable one is used, the app first: a chat surface that is unlinked or no longer bound falls back to the app, and an
-// owner who has not used the app yet keeps WhatsApp.
-export const proactiveTargets = (setting: ProactiveSurface, reachable: Readonly<{ app: boolean; whatsapp: boolean; imessage?: boolean }>): readonly ProactiveTarget[] => {
+// The wanted surfaces the owner can be reached on now, in order: the first takes the work, the rest get a copy. When none
+// of them is reachable, the first reachable surface is used, the app first: a chat surface that is unlinked or no longer
+// bound falls back to the app, and an owner who has not used the app yet keeps WhatsApp.
+export const proactiveTargets = (wanted: readonly ProactiveTarget[], reachable: Readonly<Partial<Record<ProactiveTarget, boolean>>>): readonly ProactiveTarget[] => {
   const can = (target: ProactiveTarget) => reachable[target] === true;
-  const wanted = WANTED[setting].filter(can);
-  return wanted.length ? wanted : (['app', 'whatsapp', 'imessage'] as const).filter(can).slice(0, 1);
+  const kept = wanted.filter(can);
+  return kept.length ? kept : (['app', 'whatsapp', 'imessage'] as const).filter(can).slice(0, 1);
 };
+
+// A call whose effect is a message Waldo sends first, later: a reminder, a scheduled standing order, a loop with a date to
+// check back on. An owner with no surface that takes proactive work (one who writes only on iMessage, without the app)
+// would be promised a message that never comes, so such a call is refused with that reason and nothing is scheduled. A
+// standing order for every turn and a loop with no date still work: they need no message from Waldo first.
+const startsLaterMessage = (tool: string, args: unknown): boolean => {
+  const given = (args ?? {}) as { trigger?: unknown; due?: unknown };
+  return tool === 'set_reminder'
+    || (tool === 'set_standing_order' && given.trigger !== 'every_turn')
+    || (tool === 'open_loop' && given.due !== null && given.due !== undefined);
+};
+export const UNREACHABLE_CHECK_BACK = 'Nothing was scheduled: Waldo cannot message this owner first here. On iMessage Waldo only answers; reminders, '
+  + 'scheduled reports and check-backs need the Waldo app. Tell the owner that, and that a loop with no date stays on the list for when they write.';
+export const refusingUnreachableCheckBacks = <H extends Readonly<{ name: string; handle(args: never, ctx: never): Promise<unknown> }>>(handlers: readonly H[], reachable: () => boolean): H[] =>
+  handlers.map(handler => ['set_reminder', 'set_standing_order', 'open_loop'].includes(handler.name)
+    ? { ...handler, handle: async (args: never, ctx: never) => !reachable() && startsLaterMessage(handler.name, args)
+      ? { ok: false as const, code: 'rejected' as const, error: UNREACHABLE_CHECK_BACK, source_taint: null }
+      : handler.handle(args, ctx) }
+    : handler);
 
 // A WhatsApp copy of a message the app already has. Its id names the app delivery it copies, so each one is copied once.
 export const WHATSAPP_COPY_PREFIX = 'whatsapp-copy:';

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SEND_NOW_ONLY } from '../src/channels/delivery-routes';
-import { PROACTIVE_SURFACE_KEY, WHATSAPP_COPY_PREFIX, WHATSAPP_SUBJECTS_KEY, proactiveSurface, proactiveTargets, rememberWhatsAppSubject, setProactiveSurface,
+import { PROACTIVE_SURFACE_KEY, WHATSAPP_COPY_PREFIX, WHATSAPP_SUBJECTS_KEY, proactiveSurface, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, setProactiveSurface, UNREACHABLE_CHECK_BACK, wantedTargets,
   waitingForWhatsApp, whatsappSubjects, withWhatsAppCopy, type ProactiveSurface } from '../src/channels/proactive-surface';
 import { appCaller } from '../src/channels/surfaces/app';
 import type { FinalRecord } from '../src/channels/telegram-final-outbox';
@@ -47,9 +47,9 @@ describe('where proactive work goes', () => {
     ['both', false, false, []],
   ];
   it.each(table)('setting %s, app reachable %s, WhatsApp reachable %s: %j', (setting, app, whatsapp, targets) => {
-    expect(proactiveTargets(setting, { app, whatsapp })).toEqual(targets);
+    expect(proactiveTargets(wantedTargets(setting), { app, whatsapp })).toEqual(targets);
     // An iMessage that is not reachable changes nothing for the app and WhatsApp choices.
-    expect(proactiveTargets(setting, { app, whatsapp, imessage: false })).toEqual(targets);
+    expect(proactiveTargets(wantedTargets(setting), { app, whatsapp, imessage: false })).toEqual(targets);
   });
 
   // iMessage has the same two choices as WhatsApp, instead of the app or with it, and the same fallback to the app.
@@ -64,7 +64,7 @@ describe('where proactive work goes', () => {
     ['app_imessage', false, false, []],
   ];
   it.each(imessage)('setting %s, app reachable %s, iMessage reachable %s: %j', (setting, app, reachable, targets) => {
-    expect(proactiveTargets(setting, { app, whatsapp: false, imessage: reachable })).toEqual(targets);
+    expect(proactiveTargets(wantedTargets(setting), { app, whatsapp: false, imessage: reachable })).toEqual(targets);
   });
 });
 
@@ -147,5 +147,50 @@ describe('messages still waiting for WhatsApp', () => {
     for (let n = 0; n < 12; n += 1) rememberWhatsAppSubject(kv, String(15550003000 + n));
     expect(whatsappSubjects(kv).size).toBe(8);
     expect(whatsappSubjects(kv).has('15550003011')).toBe(true);
+  });
+});
+
+// iMessage replies leave through their own outbox, so outside a turn a send with no delivery bound is not acknowledged:
+// the producer that sent it records nothing as sent.
+describe('a send on a surface that acknowledges only in its turn', () => {
+  it('returns no message outside a turn with no delivery bound, and a receipt when one is bound', async () => {
+    let turn = false;
+    let bound: ((text: string) => Promise<string>) | null = null;
+    const call = appCaller(() => bound, () => turn);
+    expect(await call('sendMessage', { chat_id: 7, text: 'Time to call Sam.' })).toBeUndefined();
+    turn = true;
+    expect(await call('sendMessage', { chat_id: 7, text: 'Time to call Sam.' })).toMatchObject({ message_id: 1 });
+    turn = false;
+    bound = async () => 'proactive:rem-1';
+    expect(await call('sendMessage', { chat_id: 7, text: 'Time to call Sam.' })).toMatchObject({ app_row_id: 'proactive:rem-1' });
+  });
+});
+
+describe('a check-back for an owner Waldo cannot message first', () => {
+  const handled: string[] = [];
+  const handler = (name: string) => ({ name, handle: async (args: never) => { handled.push(`${name}:${JSON.stringify(args)}`); return { ok: true as const, data: {}, source_taint: null }; } });
+  const tools = [handler('set_reminder'), handler('set_standing_order'), handler('open_loop'), handler('read_memory')];
+  const call = (reachable: boolean, name: string, args: object) => refusingUnreachableCheckBacks(tools, () => reachable).find((tool) => tool.name === name)!.handle(args as never);
+
+  it.each([
+    ['set_reminder', { note: 'call Sam', at: '2026-10-22T09:00', repeat: 'none' }],
+    ['set_standing_order', { scope: 'send me a mail digest', trigger: 'daily', at: '08:00' }],
+    ['open_loop', { title: 'Check the visa appointment', due: '2026-10-23' }],
+  ] as const)('refuses %s with the reason and schedules nothing', async (name, args) => {
+    handled.length = 0;
+    expect(await call(false, name, args)).toEqual({ ok: false, code: 'rejected', error: UNREACHABLE_CHECK_BACK, source_taint: null });
+    expect(handled).toEqual([]);
+    expect(await call(true, name, args)).toMatchObject({ ok: true });
+    expect(handled).toHaveLength(1);
+  });
+
+  it.each([
+    ['set_standing_order', { scope: 'keep replies short', trigger: 'every_turn' }],
+    ['open_loop', { title: 'Check the visa appointment', due: null }],
+    ['read_memory', { query: 'visa' }],
+  ] as const)('keeps %s that needs no message from Waldo first', async (name, args) => {
+    handled.length = 0;
+    expect(await call(false, name, args)).toMatchObject({ ok: true });
+    expect(handled).toHaveLength(1);
   });
 });

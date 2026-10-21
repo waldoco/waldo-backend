@@ -17,6 +17,7 @@ import { PROACTIVE_SURFACE_KEY } from '../src/channels/proactive-surface';
 import { reminderBook } from '../src/channels/reminders';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
+import type { ScheduleEntry } from '@waldo/contracts';
 
 // Scripted model: every non-structured responses.create call is one owner turn.
 const proof = vi.hoisted(() => ({ turns: [] as string[], systems: [] as string[], reply: 'Scripted owner reply.', hold: null as null | (() => Promise<void>), outputs: [] as any[][] }));
@@ -631,5 +632,37 @@ it.each(['imessage', 'app_imessage'] as const)('a due reminder reaches iMessage 
   expect(JSON.parse(delivery!.body)).toMatchObject({ operation: 'send', text: REMINDER, binding: { subject: SUBJECT, chatGuid: CHAT } });
   await runInDurableObject(w.ownerStub, async (_i, state) => {
     expect(new IMessageFinalOutbox(state.storage).records().filter((row) => row.replyRef.startsWith('proactive:'))).toHaveLength(1);
+  });
+});
+
+// Outside a turn, iMessage has a send only while a scheduled pass bound one: a reminder fired with none is not delivered,
+// so it is never recorded as sent. The note stays for the next pass and its run says it failed.
+it('a reminder fired on iMessage with no delivery bound is never reported as sent', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await replyFor(w, 'Morning');
+  await runInDurableObject(w.ownerStub, async (instance, state) => {
+    const runtime = (instance as unknown as { setup(channel: 'imessage'): { ready: Promise<void>; fire(entry: ScheduleEntry): Promise<unknown>; reminders: ReturnType<typeof reminderBook>; scheduler: Scheduler } }).setup('imessage');
+    await runtime.ready;
+    const reminder = await runtime.reminders.set({ note: 'call Sam', at: new Date(Date.now() + 3_600_000).toISOString().slice(0, 16), repeat: 'none' });
+    proof.reply = 'Time to call Sam, as you asked.';
+    try { await expect(runtime.fire(runtime.scheduler.read(reminder.id)!)).rejects.toThrow(); } finally { proof.reply = 'Scripted owner reply.'; }
+    expect(runtime.reminders.note(reminder.id)).toBe('call Sam');
+    expect(state.storage.sql.exec<{ status: string; summary: string }>("SELECT status, summary FROM background_runs WHERE kind = 'reminder'").toArray()).toEqual([{ status: 'failed', summary: 'reminder failed' }]);
+    expect(new IMessageFinalOutbox(state.storage).records().filter((row) => row.replyRef.startsWith('proactive:'))).toEqual([]);
+  });
+});
+
+// An owner who writes only on iMessage, without the app, has no surface that takes proactive work, so Waldo refuses to
+// schedule a reminder and says why instead of promising one that never comes.
+it('an iMessage-only owner asking for a reminder is told it cannot be sent, and nothing is scheduled', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  const at = new Date(Date.now() + 3_600_000).toISOString().slice(0, 16);
+  proof.outputs.push([{ type: 'function_call', call_id: 'remind', name: 'set_reminder', arguments: JSON.stringify({ note: 'call Sam', at, repeat: 'none' }) }], []);
+  await replyFor(w, 'Remind me to call Sam in an hour');
+  expect(proof.turns.join('\n')).toContain('Waldo cannot message this owner first here');
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    expect(state.storage.sql.exec("SELECT id FROM schedule WHERE kind = 'reminder'").toArray()).toEqual([]);
   });
 });
