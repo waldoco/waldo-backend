@@ -59,8 +59,11 @@ const expectNameOnce = () => {
   const replies = asked();
   expect(replies.length, 'the owner turn reached the model').toBeGreaterThan(0);
   for (const request of replies) {
-    expect(count(request.system ?? '', LABEL), 'the name line appears once').toBe(1);
-    expect(request.system).toContain('"Zoë Okonkwo-Ström"');
+    // A composed owner context carries the name in its fixed identity layer (system prompt); a turn without one carries
+    // it in the turn context on the owner's message. Either way the model is told once.
+    const told = `${request.system ?? ''}\n${String(request.messages.at(-1)?.content ?? '')}`;
+    expect(count(told, LABEL), 'the name line appears once').toBe(1);
+    expect(told).toContain('"Zoë Okonkwo-Ström"');
     expect(JSON.stringify(request)).not.toContain(PHONE);
   }
 };
@@ -170,8 +173,8 @@ it('a local connect keeps the profile too, and a Telegram turn without the compo
       for (let i = 0; i < 3; i++) { now += 61_000; state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm(); }
       expect(model.sent.some(text => text.includes('Noted.'))).toBe(true);
       expectNameOnce();
-      const replies = logs.mock.calls.flatMap(([raw]) => { try { const json = JSON.parse(String(raw)) as { hop?: string; shape?: { context?: { system_sections?: Record<string, number> } } }; return json.hop === 'llm_reply' ? [json] : []; } catch { return []; } });
-      expect.soft(replies.some(entry => (entry.shape?.context?.system_sections?.owner_profile ?? 0) > 0), 'the tail line is measured in its own section').toBe(true);
+      const replies = logs.mock.calls.flatMap(([raw]) => { try { const json = JSON.parse(String(raw)) as { hop?: string; shape?: { context?: { context_sections?: Record<string, number> } } }; return json.hop === 'llm_reply' ? [json] : []; } catch { return []; } });
+      expect.soft(replies.some(entry => (entry.shape?.context?.context_sections?.owner_profile ?? 0) > 0), 'the turn-context line is measured in its own section').toBe(true);
       expectNoPhoneWrite(outbound);
       expect(JSON.stringify(logs.mock.calls), 'no log carries the phone').not.toContain(PHONE);
     } finally { Date.now = originalNow; logs.mockRestore(); await state.storage.deleteAlarm(); }

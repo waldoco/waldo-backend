@@ -366,7 +366,7 @@ describe('Codex #224 holds (regressions)', () => {
 });
 
 describe('delegated effects are receipted (slice 9, S2b finding 3)', () => {
-  const event = (name: string, ok: boolean, args: string, code?: string): ToolLoopEvent => ({ call: { call_id: 'c', name, arguments: args }, ok, ms: 1, output: '', taint: null, ...(code ? { code } : {}) });
+  const event = (name: string, ok: boolean, args: string, code?: string): ToolLoopEvent => ({ call: { call_id: 'c', name, arguments: args }, ok, ms: 1, output: '', taint: null, parallel_batches: 1, ...(code ? { code } : {}) });
 
   it('turns a child effect call into a delegated typed event for the parent; reads give none', () => {
     expect(childReceiptEvent(event('web_search', true, '{}'), 1)).toBeNull();

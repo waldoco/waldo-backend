@@ -19,7 +19,9 @@ import { routedGateway, type CircuitBreaker, type LLMGatewayAdapter } from './pr
 // until a failed turn's message is actually kept and answered later; until then a failed turn ends the way it always did.
 // `health` is the owner's provider breaker, kept by the owner's Durable Object so misses count across turns and channels;
 // without it each responder starts with every provider closed.
-export type OwnerModelAccess = Readonly<{ openaiApiKey: string; anthropicApiKey?: string; floorReply?: boolean; health?: CircuitBreaker }>;
+// toolSearch: the brain's reply loads core tools up front and the rest through the provider's tool search, with strict
+// schemas where the provider allows them. Off by default until a staging smoke shows both providers take the request.
+export type OwnerModelAccess = Readonly<{ openaiApiKey: string; anthropicApiKey?: string; floorReply?: boolean; health?: CircuitBreaker; toolSearch?: boolean }>;
 
 export const ownerModelAccess = (access: string | OwnerModelAccess): OwnerModelAccess =>
   typeof access === 'string' ? { openaiApiKey: access } : access;

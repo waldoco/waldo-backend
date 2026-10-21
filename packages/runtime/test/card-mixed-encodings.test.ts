@@ -177,7 +177,8 @@ describe('a realistic card with two-layer links beside one-layer siblings', () =
       const args: Parameters<typeof createOwnerResponder> = ['fixture']; args[10] = gateway;
       const reply = createOwnerResponder(...args).prompt('card-realistic-links', 'owner:fixture', realistic, async (_hop, work) => work());
       await expect(reply).resolves.toBe('Morning card.');
-      expect(requests.at(-1)!.request.messages.at(-1)!.content).toBe(realistic);
+      // The host's turn context follows the job prompt on the same message; the prompt itself is untouched.
+      expect(requests.at(-1)!.request.messages.at(-1)!.content.startsWith(`${realistic}\n\nTurn context from Waldo's host`)).toBe(true);
     });
   });
 
