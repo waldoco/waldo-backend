@@ -5,11 +5,8 @@
   "type": "module",
   "scripts": {
     "cli": "tsx src/cli/index.ts",
-    "typecheck": "pnpm typecheck:worker && pnpm typecheck:integration",
-    "typecheck:worker": "tsc --noEmit",
-    "typecheck:integration": "tsc --project tsconfig.integration.json --noEmit",
-    "test": "vitest run && vitest run --config vitest.console-ticket.config.ts && vitest run --config vitest.common-bootstrap.config.ts",
-    "test:responsibility-integration": "pnpm typecheck:integration && vitest run --config vitest.integration.config.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run && vitest run --config vitest.console-ticket.config.ts",
     "test:property": "vitest run --config vitest.scribe.config.ts",
     "test:mutation": "stryker run stryker.config.mjs",
     "test:mutation:delivery-gate": "stryker run stryker.delivery-gate.config.mjs",

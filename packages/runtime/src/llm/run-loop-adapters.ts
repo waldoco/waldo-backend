@@ -21,7 +21,7 @@ import type { HookRuntimeContext } from '../hooks/registry';
 import {
   CloudflareAIGatewayAdapter,
   type GatewaySecretBinding,
-} from '../llm/gateway';
+} from './gateway';
 import type {
   CircuitBreaker,
   LLMGatewayAdapter,
@@ -29,12 +29,35 @@ import type {
   RouteSpendState,
   TrustedGatewayAdapterResult,
   TrustedGatewayExecution,
-} from '../llm/provider';
+} from './provider';
 import { sanitise } from '../scribe/sanitiser';
 import { productionDeps, type Deps } from '../seams/deps';
 import type { ResolvedSkillBudget } from '../skills/budget';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
-import type { V2ReplayArtifactSource } from './trusted-v2';
+
+// Replay sources for the fixed local trusted brief (fake provider mode). The RunLoopDO consumer of
+// these artifacts is gone; the shape stays because the local fixture still supplies them to tests.
+export type V2ReplayArtifactSource = Readonly<{
+  resolvePlan(input: Readonly<{
+    iteration: number;
+    plan_ref: string;
+    plan_digest: string;
+    snapshot_ref: string;
+    snapshot_at: number;
+  }>): Promise<unknown>;
+  resolveToolResult(input: Readonly<{
+    result_ref: string;
+    result_hash: string;
+    snapshot_ref: string;
+    snapshot_at: number;
+  }>): Promise<unknown>;
+  resolveSynthesis(input: Readonly<{
+    result_ref: string;
+    result_digest: string;
+    snapshot_ref: string;
+    snapshot_at: number;
+  }>): Promise<unknown>;
+}>;
 
 export const RUN_LOOP_DELIVERY_TEXT = 'Derived steady-state brief ready for delivery.';
 export const RUN_LOOP_PLAN_SYSTEM_PREFIX = 'run-loop:plan';

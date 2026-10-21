@@ -49,7 +49,7 @@ export const DEFERRED_DO_PRODUCT_TABLES = [
   'handoff_state',
 ] as const;
 
-// These tables are provisioned by the existing RunLoop/Journal substrate, not by the
+// These tables are provisioned by the owner substrate schema (tracer/schema.ts), not by the
 // product migration chain. Listing them prevents an implicit second schema manifest.
 export const DO_RUNTIME_SUBSTRATE_TABLES = [
   'journal',
@@ -69,14 +69,6 @@ export const DO_RUNTIME_SUBSTRATE_TABLES = [
   'schedule',
   'schedule_runs',
   'heartbeat_notified',
-  'runtime_runs',
-  'runtime_invocation_v2',
-  'runtime_invocation_v2_scribe_audit',
-  'runtime_journal',
-  'runtime_trace',
-  'local_ingress_rate',
-  'responsibility_ingress_rate',
-  'runtime_run_scribe_audit',
 ] as const;
 
 export type DoProductTable = (typeof DO_PRODUCT_TABLES)[number];

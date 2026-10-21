@@ -1,7 +1,7 @@
 import { expect, it, vi, beforeEach } from 'vitest';
 import { browsePageArgsSchema, browseActArgsSchema, buildSessionState, TOOL_PERMISSIONS, triggerTypeSchema, type ToolHandler } from '@waldo/contracts';
 import { runToolLoop } from '../src/conversation/tool-loop';
-import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
+import { resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 const canaries = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
 const ctx = { authenticatedUserId: 'owner', trigger: 'user_message' as const, canaryTokens: canaries, sourceTaint: null, toolArgSourceTaint: null, sanitise: resolveRunLoopAdapters({ WALDO_ENV: 'local' }).safety.sanitise, egressAllowlist: ['*'], session: buildSessionState({ trigger: 'user_message', canary_tokens: canaries, started_at: 0 }) };

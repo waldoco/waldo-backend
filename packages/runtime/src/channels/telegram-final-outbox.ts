@@ -27,8 +27,6 @@ export type FinalRecord = {
   inbox?: { id: string; runId: string; attempt: string };
   parts?: FinalPart[];
   deliveredParts?: number;
-  // Host-owned frozen settlement intent, committed with the physical final.
-  commonExecution?: { request: Omit<import('../identity/common-execution-request').CommonExecutionRequest,'signature'>; settled?: boolean; disposition?:'indeterminate' };
   heartbeat?: HeartbeatReceipt;
   // A paused job's notice, naming the pause: the route holds it through quiet hours and drops it once that pause is lifted.
   scheduleNotice?: { scheduleId: string; until: number };

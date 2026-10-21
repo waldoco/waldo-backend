@@ -22,8 +22,8 @@ import { consoleAccess, CONSOLE_COOKIE, NOTICES } from '../src/channels/console'
 // Real registered two-argument owner DO and its fenced inbox/listener/responder path.
 // Only the model SDK and Telegram transport are scripted. No live provider or source service.
 const seen = vi.hoisted(() => ({ writer: '{}', requests: [] as unknown[], fetches: [] as string[], replyText: 'Recorded fixture response.', reasoning: undefined as string | undefined, toolSuppliers: [] as (() => Promise<readonly import('../src/context-composer/types').ContextFragment[]>)[], offloads: [] as import('../src/conversation/tool-output-store').ToolOutputStore[], selectorThrows: false, selectedText: undefined as string | undefined, selectedTexts: [] as string[], selectorInputs: [] as string[], selectorCalls: [] as unknown[], failCleanup: false, onCleanup: undefined as undefined | (() => void), selectorOutputMessage: false, selectorMode: 'normal' as 'normal' | 'empty' | 'invalid' | 'missing-ref' | 'capped', onSelector: undefined as undefined | (() => void), onReply: undefined as undefined | (() => unknown[] | undefined | Promise<unknown[] | undefined>) }));
-vi.mock('../src/run-loop/adapters', async load => {
- const actual = await load<typeof import('../src/run-loop/adapters')>();
+vi.mock('../src/llm/run-loop-adapters', async load => {
+ const actual = await load<typeof import('../src/llm/run-loop-adapters')>();
  return { ...actual, resolveRunLoopAdapters: (...args: Parameters<typeof actual.resolveRunLoopAdapters>) => {
   if (args[1]?.toolOutputs) seen.toolSuppliers.push(args[1].toolOutputs);
   return actual.resolveRunLoopAdapters(...args);

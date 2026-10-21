@@ -4,7 +4,7 @@ import { buildSessionState } from '@waldo/contracts';
 import { ClosedRunError, type RunEffectScope } from '../src/channels/run-effect-scope';
 import { runToolLoop } from '../src/conversation/tool-loop';
 import { getContextHandler } from '../src/tools/live/get-context';
-import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
+import { resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
 const state=vi.hoisted(()=>({entered:undefined as undefined|(()=>void),finish:undefined as undefined|((value:unknown)=>void)}));
 vi.mock('openai',()=>({default:class {responses={create:async(body:unknown)=>{
  const b=body as {input?:unknown};if(JSON.stringify(b.input).includes('DELAYED_OLD')) {state.entered?.();return new Promise(r=>{state.finish=r;});}

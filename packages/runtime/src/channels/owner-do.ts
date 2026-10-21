@@ -1979,12 +1979,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (leftForWhatsApp) await finalOutbox.wake(waitingForWhatsApp(leftForWhatsApp));
       await lane('mac', () => this.drainMacDeliveries());
       await lane('transport', () => finalOutbox.maintain());
-      // Reconcile finals before quarantining recovered claims with committed payloads.
-      for(const final of finalOutbox.records())if(final.commonExecution&&!final.commonExecution.settled&&!final.commonExecution.disposition) {
-      }
       const finals = finalOutbox.records();
       const protectedAttempts = new Set(this.liveAttempts);
-      for (const final of finals) if (final.inbox&&!final.commonExecution?.disposition) {
+      for (const final of finals) if (final.inbox) {
         protectedAttempts.add(final.inbox.attempt);
         await this.inbox.transition(final.inbox.id, final.inbox.attempt, 'awaiting_delivery');
       }
@@ -2086,7 +2083,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const owned = addressed ?? ((r: FinalRecord) => r.payload.chat_id === runtime.owner && r.ownerSubject === String(runtime.owner));
     const route: OutboxRoute = {
       addressed: owned,
-      allowed: async r => (!r.commonExecution || r.commonExecution.settled===true) && (!(r.mailFollowup || r.calendarPrep) || runtime.retainedRecallAvailable()) && owned(r)
+      allowed: async r => (!(r.mailFollowup || r.calendarPrep) || runtime.retainedRecallAvailable()) && owned(r)
         && (!r.bot || r.bot === this.env.TELEGRAM_BOT_TOKEN?.split(':')[0])
         && r.doName === (this.ctx.storage.kv.get<string>('do_name') ?? '')
         && this.ctx.storage.kv.get<boolean>(`${surface}_unlinked`) !== true
@@ -2097,7 +2094,6 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         && (!r.reminder || this.ctx.storage.sql.exec('SELECT 1 FROM reminder_notes WHERE id = ?', r.reminder.id).toArray().length > 0)
         && heartbeatEligible(r, this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC', Date.now()),
       defer: async r => {
-        if(r.commonExecution&&!r.commonExecution.settled)return Date.now()+30_000;
         if (r.scheduleNotice && isQuiet(loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity(), Date.now(), this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')) return Date.now() + 10 * 60_000;
         // Frozen source-derived outputs cannot replay retained facts while coverage is unproved.
         // Keep bytes and transport state intact; current owner replies use a separate lane.
