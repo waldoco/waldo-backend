@@ -141,8 +141,8 @@ describe('consent and findings routes', () => {
     consent.grant('owner_lookup', 1, 1);
     const { id } = findings.record({ category: 'based_in', text: 'Based in Pune since 2019', source_url: 'https://samrivera.dev/about', evidence_quote: 'Pune', anchor: 'samrivera.dev' }, 'About', 2) as { id: string };
     const episodes = episodeIndex(storage.sql);
-    episodes.add('e1', 'owner', 'Book me a table in Pune on Friday', '2026-10-20T10:00:00Z');
-    episodes.add('e2', 'waldo', 'Your site says: Based in Pune since 2019', '2026-10-20T10:01:00Z');
+    episodes.add('e1', 'owner', 'Book me a table in Pune on Friday', 1);
+    episodes.add('e2', 'waldo', 'Your site says: Based in Pune since 2019', 2);
     expect((await send('/app/v1/findings/actions', { request_id: 'finding-forget-s', finding_id: id, action: 'forget' })).status).toBe(200);
     expect(storage.sql.exec<{ text: string }>('SELECT text FROM episodes ORDER BY entry_id').toArray().map(row => row.text)).toEqual(['Book me a table in Pune on Friday', 'Your site says: [forgotten]']);
   }));
