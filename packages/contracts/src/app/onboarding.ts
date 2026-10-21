@@ -73,7 +73,7 @@ export const appOnboardingChannelsV1Schema = z.strictObject({
 // A one-time code the owner sends from their own phone, which links that account to their own Waldo. It has no request_id: it
 // is a secret that is never stored for a replay, and a repeat just issues another code. text is what to send; address and
 // send_url are set only where Waldo knows the number to open (iMessage). Linking is the owner's act in the app, never Waldo's:
-// no tool can issue a code, and a turn that read untrusted text could only ask for one through an approval card.
+// no tool issues a code, and one that did would have to go through an approval card.
 export const appChannelLinkRequestV1Schema = z.strictObject({ provider: appChatProviderV1Schema });
 export const appChannelLinkCodeV1Schema = z.strictObject({
   provider: appChatProviderV1Schema,
