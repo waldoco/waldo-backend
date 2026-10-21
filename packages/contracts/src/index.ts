@@ -80,6 +80,7 @@ export * from './runtime/connection';
 export * from './runtime/connector-operation';
 export * from './runtime/browser-session';
 export * from './runtime/browser-policy';
+export * from './runtime/browser-errand';
 export * from './runtime/heartbeat';
 export * from './runtime/approval';
 export * from './runtime/activity';
