@@ -40,7 +40,7 @@ const healthConsentRows = z.object({ consents: z.array(z.object({ source: z.stri
 // The app's own on-device collectors. Any other source is a cloud wearable, whose express authorization to store the owner's
 // data and use it in AI processing is both grants for that source; an unknown source gets the stricter rule.
 const DEVICE_HEALTH_SOURCES: ReadonlySet<string> = new Set(['apple', 'samsung', 'health_connect']);
-export const healthStepConnected = (rows: z.infer<typeof healthConsentRows>['consents']): boolean => {
+const healthStepConnected = (rows: z.infer<typeof healthConsentRows>['consents']): boolean => {
   const live = (source: string, purpose: string) => rows.some(row => row.source === source && row.purpose === purpose && row.status === 'granted');
   return rows.some(row => row.purpose === 'storage_compute' && live(row.source, 'storage_compute') && (DEVICE_HEALTH_SOURCES.has(row.source) || live(row.source, 'model_processing')));
 };
