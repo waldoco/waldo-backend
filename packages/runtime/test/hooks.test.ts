@@ -1,4 +1,4 @@
-import { ROSTER, type HookPayload, type SanitiseResult } from '@waldo/contracts';
+import { ROSTER, TOOL_ERRORS, type HookPayload, type SanitiseResult } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
 import {
   egressAllowlistHook,
@@ -326,7 +326,8 @@ describe('hook registry', () => {
     ).rejects.toMatchObject({
       hook: 'autonomy_gate_check',
       code: 'forbidden',
-      clientMessage: expect.stringContaining('propose_action'),
+      clientMessage: TOOL_ERRORS.taint_needs_approval.cause,
+      toolError: expect.objectContaining({ code: 'taint_needs_approval', fix: expect.stringContaining('propose_action') }),
     });
   });
 
@@ -335,7 +336,7 @@ describe('hook registry', () => {
     await runHooks('OnInvocationStart', { event: 'OnInvocationStart', trace_id: 'trace-taint-mcp' }, ctx);
     await expect(
       runHooks('PreToolUse', { event: 'PreToolUse', tool: 'call_mcp_tool', args: { server: 's', tool: 't', args: {} } }, ctx),
-    ).rejects.toMatchObject({ code: 'forbidden', clientMessage: 'hook halted' });
+    ).rejects.toMatchObject({ code: 'forbidden', clientMessage: TOOL_ERRORS.taint_blocked.cause, toolError: expect.objectContaining({ code: 'taint_blocked' }) });
   });
 
   it('fails closed when an ACL-granted tool has no contract arg schema yet', async () => {
@@ -762,10 +763,10 @@ describe('hook registry', () => {
       hook: 'acl_check',
       reason: 'tool outside trigger ACL',
       code: 'forbidden',
-      clientMessage: 'hook halted',
+      clientMessage: TOOL_ERRORS.acl_denied.cause,
       onErrorPayload: {
         event: 'OnError',
-        error: 'hook halted',
+        error: TOOL_ERRORS.acl_denied.cause,
         code: 'forbidden',
       },
     });
@@ -898,10 +899,10 @@ describe('hook registry', () => {
       hook: 'medical_gate',
       reason: 'unsafe output',
       code: 'forbidden',
-      clientMessage: 'hook halted',
+      clientMessage: TOOL_ERRORS.hook_denied.cause,
       onErrorPayload: {
         event: 'OnError',
-        error: 'hook halted',
+        error: TOOL_ERRORS.hook_denied.cause,
         code: 'forbidden',
       },
     });

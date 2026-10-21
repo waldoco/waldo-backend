@@ -426,7 +426,7 @@ describe('runChildLoop delegated effect receipts', () => {
   it.each([
     { label: 'accepted', args: JSON.stringify(writeArgs), parsedArgs: writeArgs, ok: true, ref: 'notes.md', calls: 1, code: undefined },
     { label: 'schema-rejected', args: JSON.stringify({ path: 'notes.md' }), parsedArgs: { path: 'notes.md' }, ok: false, ref: 'notes.md', calls: 0, code: 'invalid_args' },
-    { label: 'malformed JSON', args: '{"path":"notes.md"', parsedArgs: undefined, ok: false, ref: undefined, calls: 0, code: undefined },
+    { label: 'malformed JSON', args: '{"path":"notes.md"', parsedArgs: undefined, ok: false, ref: undefined, calls: 0, code: 'invalid_args' },
   ])('forwards exactly one delegated receipt for a $label call through real dispatch', async ({ args, parsedArgs, ok, ref, calls, code }) => {
     await withEffectTool(async () => {
       const handler = writeHandler();

@@ -15,6 +15,7 @@ import {
   type ModelName,
   type TriggerType,
   MODEL_CONTEXT_MAX_CHARS,
+  TOOL_ERRORS,
 } from '@waldo/contracts';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -1306,7 +1307,7 @@ describe('RuntimeLLMProvider', () => {
       ok: false,
       code: 'forbidden',
       reason: 'hook_halt',
-      error: 'hook halted',
+      error: TOOL_ERRORS.sanitise_denied.cause,
       fallback_step: 'configured_model',
     });
   });

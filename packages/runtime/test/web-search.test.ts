@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { buildSessionState } from '@waldo/contracts';
+import { TOOL_ERRORS, buildSessionState } from '@waldo/contracts';
+// The dispatcher's error shape for a catalogue code; cause overridden where the tool's own text rides it.
+const shaped = (code: keyof typeof TOOL_ERRORS, cause = TOOL_ERRORS[code].cause) => ({ error: cause, error_code: code, fix: TOOL_ERRORS[code].fix, retryable: TOOL_ERRORS[code].retryable });
+
 import { dispatchTool, type ToolDispatcherContext } from '../src/tools/dispatcher';
 import { sanitise } from '../src/scribe/sanitiser';
 import { webSearchHandler } from '../src/tools/live/web-search';
@@ -115,7 +118,7 @@ describe('web_search dispatcher receipts', () => {
     }) as typeof fetch);
     expect(await dispatchSearch(handler)).toEqual({
       ok: false, call_id: 'search-receipt', tool: 'web_search',
-      code: 'transient', error: 'synthetic provider timeout',
+      code: 'transient', ...shaped('transient', 'synthetic provider timeout'),
       reason: 'tool_result_error', source_taint: 'external',
     });
   });
@@ -123,7 +126,7 @@ describe('web_search dispatcher receipts', () => {
     const handler = webSearchHandler('synthetic-key', (async () => new Response('unavailable', { status: 503 })) as typeof fetch);
     expect(await dispatchSearch(handler)).toEqual({
       ok: false, call_id: 'search-receipt', tool: 'web_search',
-      code: 'transient', error: 'Brave search returned HTTP 503',
+      code: 'transient', ...shaped('transient', 'Brave search returned HTTP 503'),
       reason: 'tool_result_error', source_taint: 'external',
     });
   });
@@ -132,7 +135,7 @@ describe('web_search dispatcher receipts', () => {
     const handler = webSearchHandler(key, (async () => { requests += 1; throw new Error('must not fetch'); }) as typeof fetch);
     expect(await dispatchSearch(handler)).toEqual({
       ok: false, call_id: 'search-receipt', tool: 'web_search',
-      code: 'auth_failed', error: 'Web search is not set up on this Waldo yet.',
+      code: 'auth_failed', ...shaped('auth_failed', 'Web search is not set up on this Waldo yet.'),
       reason: 'tool_result_error', source_taint: 'external',
     });
     expect(requests).toBe(0);
@@ -141,7 +144,7 @@ describe('web_search dispatcher receipts', () => {
     const handler = webSearchHandler('synthetic-key', (async () => new Response('rejected', { status })) as typeof fetch);
     expect(await dispatchSearch(handler)).toEqual({
       ok: false, call_id: 'search-receipt', tool: 'web_search',
-      code: 'auth_failed', error: `The web search key was rejected (HTTP ${status}) - it needs replacing.`,
+      code: 'auth_failed', ...shaped('auth_failed', `The web search key was rejected (HTTP ${status}) - it needs replacing.`),
       reason: 'tool_result_error', source_taint: 'external',
     });
   });
@@ -160,7 +163,7 @@ describe('web_search dispatcher receipts', () => {
   it('preserves non-Error provider rejections as external diagnostics', async () => {
     const handler = webSearchHandler('synthetic-key', (async () => { throw 'synthetic network rejection'; }) as typeof fetch);
     expect(await dispatchSearch(handler)).toMatchObject({
-      ok: false, code: 'transient', error: 'synthetic network rejection',
+      ok: false, code: 'transient', ...shaped('transient', 'synthetic network rejection'),
       reason: 'tool_result_error', source_taint: 'external',
     });
   });
@@ -178,7 +181,7 @@ describe('web_search dispatcher receipts', () => {
     };
     expect(await dispatchSearch(malformedHandler)).toEqual({
       ok: false, call_id: 'search-receipt', tool: 'web_search',
-      code: 'transient', error: 'tool handler returned invalid result', reason: 'invalid_handler_result',
+      code: 'transient', ...shaped('invalid_handler_result'), reason: 'invalid_handler_result',
     });
   });
 });
