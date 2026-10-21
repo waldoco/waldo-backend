@@ -32,12 +32,18 @@ const flights = new WeakMap<Kv, Promise<void>>();
 export const costRollupEnabled = (env: Readonly<{ WALDO_COST_LEDGER_SYNC?: string }>): boolean => env.WALDO_COST_LEDGER_SYNC === 'on';
 
 export const costRollupDelta = (entry: TurnLogEntry, at: number): CostRollupRow | null => {
+  const day = new Date(at).toISOString().slice(0, 10);
+  // A paid tool the spend ceiling held: one call on model held:<tool>, costing nothing.
+  if (entry.hop === 'spend_hold') {
+    const tool = entry.code?.match(/^budget_exhausted:([a-z_]+)$/)?.[1];
+    return tool ? { day, kind: entry.cost_kind ?? 'turn', model: `held:${tool}`, calls: 1, input: 0, output: 0, cached: 0, web_searches: 0, browser_ms: 0, sandbox_ms: 0, broker_calls: 0, usd: 0 } : null;
+  }
   const { usage } = entry;
   const browserMs = entry.browser_ms ?? 0;
   const sandboxMs = entry.sandbox_ms ?? 0;
   if (!usage && browserMs <= 0 && sandboxMs <= 0) return null;
   return {
-    day: new Date(at).toISOString().slice(0, 10), kind: entry.cost_kind ?? 'turn', model: usage?.model ?? '',
+    day, kind: entry.cost_kind ?? 'turn', model: usage?.model ?? '',
     calls: usage ? 1 : 0, input: usage?.input ?? 0, output: usage?.output ?? 0, cached: usage?.cached ?? 0,
     web_searches: usage?.web_searches ?? 0, browser_ms: browserMs, sandbox_ms: sandboxMs, broker_calls: 0,
     usd: usage ? modelCost(usage)?.total ?? 0 : 0,

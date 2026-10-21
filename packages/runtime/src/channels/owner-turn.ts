@@ -11,7 +11,7 @@ import { ownerContextHandler } from '../tools/live/owner-context';
 import { searchLocation } from '../tools/live/search-location';
 import {
   deriveContextBudgetChars, EXTERNAL_ORIGIN_TOOLS, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, SANITISE_DESTINATION_POLICIES, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_REASONING, WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL,
-  type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
+  TOOL_ERRORS, toolError, type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName, type ToolError,
 } from '@waldo/contracts';
 import type { ConversationModelMessage } from '@waldo/contracts';
 import { BUDGET_CHARS_PER_TOKEN, MODEL_CONTEXT_MAX_CHARS } from '@waldo/contracts';
@@ -65,7 +65,11 @@ export const ownerToolApproval = ({ tool }: { tool: string }): boolean => !EXTER
 const OWNER_TURN_ONLY_TOOLS: ReadonlySet<string> = new Set(['raise_approval', 'send_progress_note', 'attach_file']);
 // Past the owner's monthly spend ceiling these are held: each bills browser or sandbox time on top of the model call.
 export const PAID_RUNG_TOOLS: ReadonlySet<string> = new Set(['browse_page', 'browse_act', 'execute_code']);
-export const SPEND_CEILING_HELD = 'The monthly spend ceiling is reached, so browsing and running code are held until next month or until the ceiling is raised. Nothing ran. Answer with what you have, and tell the owner what is held and why.';
+// The refusal a held paid tool returns: what still works comes from the catalogue, the reset day from the clock.
+export const spendHold = (now: Date): ToolError => {
+  const reset = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString().slice(0, 10);
+  return { ...toolError('budget_exhausted'), fix: `${TOOL_ERRORS.budget_exhausted.fix} The ceiling resets on ${reset} (UTC).` };
+};
 
 // Session canaries are per-runtime tripwires: random 16-hex tokens derived when the owner
 // runtime (DO session) boots, checked by the scribe against every fragment bound for the
@@ -197,6 +201,12 @@ export const createOwnerResponder = (
     authenticatedUserId: skills?.admission?.invocation.verified_authority.principal_ref ?? ownerId, trigger: 'user_message' as const, canaryTokens: CANARIES,
     sourceTaint: null, toolArgSourceTaint: null, egressAllowlist,
     hasApproval: ownerToolApproval,
+    heldTool: (tool: string) => {
+      if (!turnCapped() || !PAID_RUNG_TOOLS.has(tool)) return null;
+      // The cost ledger counts each hold as a held:<tool> row, so the alpha shows how often the ceiling bites.
+      log({ trace: traceId, hop: 'spend_hold', ms: 0, ok: false, code: `budget_exhausted:${tool}`, error_code: 'budget_exhausted' });
+      return spendHold(clock.now());
+    },
     sanitise: adapters.safety.sanitise,
     // Typed store provenance for the provider's retrieval receipts (owner review on #212).
     ...(offloadStore === undefined ? {} : { toolOutputStore: offloadStore }),
@@ -396,11 +406,6 @@ export const createOwnerResponder = (
       const guardedHandlers: DispatchToolOptions<ToolDispatcherContext>['handlers'] = admittedHandlers.map(handler => {
         return { ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
           await assertFresh();
-          // ErrorCode is ADR-0025's closed set, so the hold reaches the model as a rejection and the trace names it.
-          if (turnCapped() && PAID_RUNG_TOOLS.has(handler.name)) {
-            log({ trace: traceId, hop: 'spend_hold', ms: 0, ok: false, code: 'budget_exhausted', detail: handler.name });
-            return { ok: false, code: 'rejected', error: SPEND_CEILING_HELD, source_taint: EXTERNAL_ORIGIN_TOOLS.includes(handler.name) ? 'external' : null };
-          }
           const retainedRead = ['read_owner_context', 'read_memory', 'search_episodes', 'read_tool_output'].includes(handler.name);
                   if (backgroundToolNames !== undefined && handler.name === 'open_loop' && (args === null || typeof args !== 'object' || !('source_ref' in args) || typeof args.source_ref !== 'string')) {
             return { ok: false, code: 'invalid_args', error: 'Background mail follow-up requires an observed source_ref.', source_taint: null };

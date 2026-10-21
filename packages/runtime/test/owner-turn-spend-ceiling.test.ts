@@ -9,16 +9,17 @@ import {
   triggerTypeSchema,
   type ToolName,
 } from '@waldo/contracts';
-import { createOwnerResponder, SPEND_CEILING_HELD, type OwnerSpend } from '../src/channels/owner-turn';
+import { createOwnerResponder, spendHold, type OwnerSpend } from '../src/channels/owner-turn';
 import { MONTHLY_SPEND_CEILING_USD } from '../src/llm/cost-ledger';
 import { modelCost } from '../src/llm/pricing';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
-import { costRollup } from '../src/observability/cost-rollup';
+import { costRollup, costRollupDelta } from '../src/observability/cost-rollup';
+import { gateTraceEntry } from '../src/observability/trace-privacy';
 import { getContextHandler } from '../src/tools/live/get-context';
 import { ownerTyped } from './helpers/owner-typed';
 
 // Past the owner's monthly ceiling a turn degrades instead of stopping: the provider clamps every call of the turn to the
-// auxiliary route (Luna, then Haiku), paid tools are held (traced as budget_exhausted), machine turns such as the Brief still go out,
+// auxiliary route (Luna, then Haiku), paid tools are refused before they run with budget_exhausted, machine turns such as the Brief still go out,
 // and a turn keeps the route it started on even when the ceiling is crossed mid-turn.
 
 const time = async <T,>(_hop: string, work: () => Promise<T>) => work();
@@ -108,19 +109,33 @@ it('a Brief still goes out past the ceiling, on the auxiliary model', async () =
   expect(models()).toEqual([OPENAI_GPT_6_LUNA_MODEL]);
 });
 
-it('past the ceiling a paid tool is held, the trace names it budget_exhausted, and its handler never runs', async () => {
+it('past the ceiling a paid tool is refused before it runs, in the one refusal shape, and the ledger counts the hold', async () => {
   let browsed = 0;
   const browse = { name: 'browse_page', description: 'fixture browser', schema: browsePageArgsSchema, autonomy_gated: false, trigger_allowlist: allowlist('browse_page'),
     handle: async () => { browsed += 1; return { ok: true, data: { text: 'page' }, source_taint: 'external' as const }; } };
-  const steps: Step[] = [{ tool: 'browse_page', args: { url: 'https://example.com/hotels', instruction: 'list hotels' } }, { text: 'Browsing is held this month.' }];
+  const steps: Step[] = [{ tool: 'browse_page', args: { url: 'https://example.com/hotels', instruction: 'list hotels' } }, { text: 'Searched instead.' }];
   const over = scripted(steps);
+  const costs = costRollup({ kv: memoryKv(), call: null, doName: null, newId: () => 'batch' });
   const holds: unknown[] = [];
-  const reply = await responder(over.gateway, at(25), [browse] as never, (entry) => { if (entry.hop === 'spend_hold') holds.push(entry); }).respond(turn('cap-paid', 'find me a hotel'), time);
+  const rows: unknown[] = [];
+  const log = (entry: Parameters<NonNullable<Args[3]>>[0]) => {
+    if (entry.hop === 'spend_hold') { holds.push(entry); rows.push(costRollupDelta(gateTraceEntry(entry, false), NOW)); }
+    costs.record(entry, NOW);
+  };
+  const reply = await responder(over.gateway, at(25), [browse] as never, log).respond(turn('cap-paid', 'find me a hotel'), time);
   expect(browsed).toBe(0);
-  expect(reply).toContain('Browsing is held this month.');
-  const output = over.requests.at(-1)!.request.tool_turns?.at(-1)?.output ?? '';
-  expect(output).toContain(SPEND_CEILING_HELD);
-  expect(holds).toEqual([expect.objectContaining({ code: 'budget_exhausted', detail: 'browse_page', ok: false })]);
+  expect(reply).toContain('Searched instead.');
+  const shown = over.requests.at(-1)!.request.tool_turns!.at(-1)!.output;
+  const output = JSON.parse(shown.slice(shown.indexOf('{')).split('\n[')[0]!) as Record<string, unknown>;
+  const refusal = spendHold(clock.now());
+  expect(output).toMatchObject({ ok: false, error_code: 'budget_exhausted', error: refusal.cause, fix: refusal.fix, retryable: false, reason: 'held' });
+  expect(refusal.fix).toContain('web_search and the other read tools still work');
+  expect(refusal.fix).toContain('The ceiling resets on 2026-11-01 (UTC).');
+  // the hold reached nothing external, so the turn stays untainted
+  expect(over.requests.at(-1)!.request.tools?.map((tool) => tool.name)).not.toContain('propose_action');
+  expect(holds).toEqual([expect.objectContaining({ code: 'budget_exhausted:browse_page', error_code: 'budget_exhausted', ok: false })]);
+  // the row survives the privacy gate with capture off
+  expect(rows).toEqual([expect.objectContaining({ kind: 'turn', model: 'held:browse_page', calls: 1, usd: 0 })]);
   // the same call under the ceiling reaches the handler: the hold is the ceiling, not the fixture
   const under = scripted(steps);
   await responder(under.gateway, at(1), [browse] as never).respond(turn('cap-paid-under', 'find me a hotel'), time);

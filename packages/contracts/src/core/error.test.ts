@@ -17,6 +17,19 @@ describe('toolError', () => {
   });
 });
 
+describe('budget_exhausted', () => {
+  it('is a host-stage tool refusal in the one refusal shape, not retryable', () => {
+    expect(toolErrorSchema.safeParse(toolError('budget_exhausted')).success).toBe(true);
+    expect(toolError('budget_exhausted')).toMatchObject({ code: 'budget_exhausted', retryable: false });
+  });
+
+  it('is not an adapter ErrorCode, so a handler cannot return it, and the refusal shape still rejects a missing fix', () => {
+    expect(errorCodeSchema.safeParse('budget_exhausted').success).toBe(false);
+    const { fix: _fix, ...withoutFix } = toolError('budget_exhausted');
+    expect(toolErrorSchema.safeParse(withoutFix).success).toBe(false);
+  });
+});
+
 describe('errorCode', () => {
   it('is exactly the eight canonical codes, in order', () => {
     expect(errorCodeSchema.options).toEqual([

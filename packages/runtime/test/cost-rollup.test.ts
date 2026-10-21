@@ -43,6 +43,13 @@ describe('costRollupDelta', () => {
       .toMatchObject({ kind: 'worker', model: '', calls: 0, sandbox_ms: 1500, usd: 0 });
   });
 
+  it('counts a spend-ceiling hold as one call on held:<tool>, costing nothing, and ignores a malformed hold', () => {
+    expect(costRollupDelta({ trace: 't', hop: 'spend_hold', ms: 0, ok: false, code: 'budget_exhausted:browse_act' }, DAY))
+      .toEqual({ day: '2026-10-20', kind: 'turn', model: 'held:browse_act', calls: 1, input: 0, output: 0, cached: 0, web_searches: 0, browser_ms: 0, sandbox_ms: 0, broker_calls: 0, usd: 0 });
+    expect(costRollupDelta({ trace: 't', hop: 'spend_hold', ms: 0, ok: false, code: 'budget_exhausted' }, DAY)).toBeNull();
+    expect(costRollupDelta({ trace: 't', hop: 'spend_hold', ms: 0, ok: false, code: 'budget_exhausted:Browse Page' }, DAY)).toBeNull();
+  });
+
   it('defaults the kind to turn and ignores hops that cost nothing', () => {
     expect(costRollupDelta(llm({ cost_kind: undefined }), DAY)?.kind).toBe('turn');
     expect(costRollupDelta({ trace: 't', hop: 'send', ms: 3, ok: true }, DAY)).toBeNull();
