@@ -3,6 +3,8 @@ import { runInDurableObject } from 'cloudflare:test';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mcpConnections, McpRefusal, mcpState, readMcpState, type McpConnections } from '../src/connectors/mcp-connections';
 import { mcpProxy } from '../src/connectors/mcp-proxy-client';
+import { callMcpToolHandler } from '../src/tools/live/mcp';
+import type { McpCallProposal } from '../src/channels/approvals';
 import { fakeMcpWorld, ISSUER, MCP_URL, WALDO_ORIGIN, type FakeMcpWorld, type FakeOptions } from './support/fake-mcp-world';
 import { loadEdge, routeEdgeFetch, vaultFake, workerToEdge, WORKER_ENV, type VaultFake } from './support/mcp-edge-harness';
 
@@ -290,6 +292,28 @@ describe('MCP connections, hostile and failing servers', () => {
     expect(retry.params).toMatchObject({ name: 'create_page', arguments: { title: 'Plan' }, inputResponses: { workspace: { action: 'accept', content: { workspace: 'Work' } } }, requestState: 'opaque-state-1' });
     // The answer slot is single-use.
     expect(await refusal(approved({ workspace: { action: 'accept', content: { workspace: 'Work' } } }, { title: 'Plan' }, 4))).toMatchObject({ code: 'rejected', message: expect.stringContaining('expired') });
+  }));
+
+  it('raises a card that carries the server\'s questions and the owner\'s answers, and never runs an owner server without a card', withRig('handler-answers', {
+    results: (name) => name === 'create_page' ? { resultType: 'input_required', inputRequests: { workspace: { method: 'elicitation/create', params: { message: 'Which workspace?', requestedSchema: { type: 'object', properties: { workspace: { type: 'string' } }, required: ['workspace'] } } } } } : { content: [] },
+  }, async (rig) => {
+    const { mcp } = rig;
+    await connect(rig);
+    const frozen = await mcp.describe('example', 'create_page');
+    const asked = await mcp.invoke({ mode: 'approved', connection: frozen.connection, tool: 'create_page', args: { title: 'Plan' }, digest: frozen.digest, intentId: 'approval:00000000-0000-4000-8000-0000000000f1:apply' });
+    if (!('input_required' in asked)) throw new Error('expected questions');
+    const proposals: McpCallProposal[] = [];
+    const handler = callMcpToolHandler(undefined, { proposeMcpCall: async (proposal) => { proposals.push(proposal); return 'p1'; } }, undefined, mcp);
+    expect(handler.proposal_only).toBe(true);
+    const answers = { handle: asked.input_required.handle, responses: { workspace: { action: 'accept', content: { workspace: 'Work' } } } };
+    expect(await handler.handle({ server: 'example', tool: 'create_page', args: { title: 'Plan' }, answers }, undefined as never)).toMatchObject({ ok: true, data: { proposal_id: 'p1', applied: false } });
+    expect(proposals).toEqual([expect.objectContaining({ connection: frozen.connection, tool_digest: frozen.digest, answers, questions: [{ id: 'workspace', message: 'Which workspace?' }] })]);
+    expect(await handler.handle({ server: 'example', tool: 'create_page', args: { title: 'Plan' }, answers: { ...answers, responses: { workspace: { action: 'accept', content: {} } } } }, undefined as never)).toMatchObject({ ok: false, code: 'invalid_args' });
+    expect(await handler.handle({ server: 'example', tool: 'create_page', args: { title: 7 } }, undefined as never)).toMatchObject({ ok: false, code: 'invalid_args' });
+    expect(proposals).toHaveLength(1);
+    const deskless = callMcpToolHandler(undefined, undefined, undefined, mcp);
+    expect(deskless.proposal_only).toBeUndefined();
+    expect(await deskless.handle({ server: 'example', tool: 'create_page', args: { title: 'Plan' } }, undefined as never)).toMatchObject({ ok: false, code: 'forbidden' });
   }));
 
   it('refuses a sampling or URL request Waldo never declared, so nothing runs', withRig('sampling', {

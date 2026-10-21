@@ -844,11 +844,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           } catch (error) {
             if (notRun && (error instanceof EffectNotAppliedError || error === notRun)) {
               setStatus(id, 'failed');
-              return { toast: 'Not done', message: `Nothing ran: ${notRun.message}` };
+              return { toast: 'Nothing ran', message: `Nothing ran: ${notRun.message}` };
             }
             const recorded = deps.effects?.get(`${operationRef}:apply`);
             if(recorded && recorded.state !== 'rejected') {setStatus(id,'uncertain');return {toast:'Outcome unknown',message:'The MCP outcome is unknown. Check the result before retrying; nothing was run again.'};}
-            if(error instanceof EffectUnknownError || error instanceof ProxyIntentError || (error instanceof GoogleError && error.message==='intent_pending')) {setStatus(id,'uncertain');return {toast:'Outcome unknown',message:'The MCP outcome is unknown. Check it before retrying; nothing was run again.'};}
+            if(error instanceof EffectUnknownError || error instanceof ProxyIntentError || (error instanceof GoogleError && error.message==='intent_pending') || error instanceof McpRefusal) {setStatus(id,'uncertain');return {toast:'Outcome unknown',message:'The MCP outcome is unknown. Check it before retrying; nothing was run again.'};}
             setStatus(id, 'failed');
             out = { toast: 'That failed', message: `The call failed (${error instanceof Error ? error.message : String(error)}). Nothing else ran - ask me to try again.` };
           }
