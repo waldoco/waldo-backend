@@ -929,7 +929,7 @@ describe('RuntimeLLMProvider', () => {
           escalation: [],
           template_fallback: true,
         },
-        spend: { spent_cents_today: 70, cap_cents: 70 },
+        spend: { spent_cents: 70, cap_cents: 70 },
         renderRequest({ step, context }) {
           return {
             system: `${context}:${step.model}`,
@@ -1011,7 +1011,7 @@ describe('RuntimeLLMProvider', () => {
           escalation: [],
           template_fallback: true,
         },
-        spend: { spent_cents_today: 70, cap_cents: 70 },
+        spend: { spent_cents: 70, cap_cents: 70 },
         renderRequest({ step, context }) {
           return {
             system: `${context}:${step.model}`,
@@ -1053,6 +1053,37 @@ describe('RuntimeLLMProvider', () => {
     ]);
   });
 
+  it('clamps a capped call to the caller\'s own cheaper policy, with its fallback, instead of the roster primary alone', async () => {
+    const gateway = new ScriptedGateway(() => ({ ok: false, error: 'gateway unavailable', code: 'transient' }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const expensive = {
+      ...ROUTING_TABLE.brief,
+      primary: { provider: 'anthropic' as const, model: ROSTER.reasoning, cache: 'none' as const },
+      fallback: [{ provider: 'anthropic' as const, model: ROSTER.fallback, cache: 'none' as const }],
+    };
+    const cheap = {
+      ...ROUTING_TABLE.brief,
+      primary: { provider: 'anthropic' as const, model: ROSTER.fallback, cache: 'none' as const },
+      fallback: [{ provider: 'workers_ai' as const, model: ROSTER.primary, cache: 'none' as const }],
+    };
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        policy: { routes: Object.values({ ...ROUTING_TABLE, brief: expensive }), escalation: [], template_fallback: true },
+        spend: { spent_cents: 70, cap_cents: 70, clamp: { routes: Object.values({ ...ROUTING_TABLE, brief: cheap }), escalation: [], template_fallback: true } },
+        renderRequest: ({ context, step }) => ({ system: `${context}:${step.model}`, messages: [{ role: 'user', content: 'brief' }], max_tokens: 512, temperature: 0.3 }),
+        renderTemplate: () => 'template fallback',
+      },
+      runtimeCtx(),
+    );
+    expect(result).toMatchObject({ ok: true, fallback_step: 'template', routing_logs: ['spend_cap_degrade'] });
+    expect(gateway.requests.map((request) => [request.step.model, request.context, request.fallback_step])).toEqual([
+      [ROSTER.fallback, 'full_context', 'spend_cap_clamp'],
+      [ROSTER.fallback, 'reduced_context', 'spend_cap_clamp'],
+      [ROSTER.primary, 'reduced_context', 'gateway_chain'],
+    ]);
+  });
+
   it('fails closed for a capped structural P6 route until its durable count reaches the primary floor', async () => {
     const gateway = new ScriptedGateway((request) => ({
       ok: true,
@@ -1066,7 +1097,7 @@ describe('RuntimeLLMProvider', () => {
         escalation: [],
         template_fallback: true,
       },
-      spend: { spent_cents_today: 70, cap_cents: 70 },
+      spend: { spent_cents: 70, cap_cents: 70 },
       renderRequest({ step, context }) {
         return {
           system: `${context}:${step.model}`,
@@ -1162,7 +1193,7 @@ describe('RuntimeLLMProvider', () => {
       provider.complete(
         {
           trigger: 'brief',
-          spend: { spent_cents_today: 70, cap_cents: 70 },
+          spend: { spent_cents: 70, cap_cents: 70 },
           renderRequest() {
             return {
               messages: [{ role: 'user', content: 'unsafe prompt text' }],
@@ -1551,7 +1582,7 @@ describe('RuntimeLLMProvider', () => {
 
   it.each([
     ['route exhaustion', undefined],
-    ['spend cap', { spent_cents_today: 70, cap_cents: 70 }],
+    ['spend cap', { spent_cents: 70, cap_cents: 70 }],
   ] as const)('passes owner-channel health template output on %s (direction A completion, owner ruling 2026-09-28)', async (_case, spend) => {
     const gateway = new ScriptedGateway(() => ({
       ok: false,
@@ -1582,7 +1613,7 @@ describe('RuntimeLLMProvider', () => {
 
   it.each([
     ['route exhaustion', undefined, 3],
-    ['spend cap', { spent_cents_today: 70, cap_cents: 70 }, 2],
+    ['spend cap', { spent_cents: 70, cap_cents: 70 }, 2],
   ] as const)(
     'redacts safe template PII and preserves the terminal tool source on %s',
     async (_case, spend, gatewayCalls) => {
@@ -1682,7 +1713,7 @@ describe('RuntimeLLMProvider', () => {
       provider.complete(
         {
           trigger: 'brief',
-          spend: { spent_cents_today: 70, cap_cents: 70 },
+          spend: { spent_cents: 70, cap_cents: 70 },
           renderRequest() {
             return {
               messages: [{ role: 'user', content: 'safe prompt' }],
@@ -1709,7 +1740,7 @@ describe('gateway attempt failure detail', () => {
   class RunClosedProbe extends Error {}
   const request = () => ({
     trigger: 'user_message' as const,
-    spend: { spent_cents_today: 0, cap_cents: 70 },
+    spend: { spent_cents: 0, cap_cents: 70 },
     renderRequest() {
       return { messages: [{ role: 'user' as const, content: 'safe prompt' }], max_tokens: 512, temperature: 0.3 };
     },
