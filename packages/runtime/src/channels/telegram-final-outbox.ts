@@ -450,7 +450,9 @@ export const retireSurfaceRecords = (kv: StatusKv, addressed: (record: FinalReco
   const rows = new TelegramFinalOutbox(kv).records();
   const retired: string[] = [];
   for (const row of rows) {
-    if (!addressed(row) || (row.status !== 'pending' && row.status !== 'accepted' && row.status !== 'attempting')) continue;
+    if (!addressed(row)) continue;
+    // A record that already ended and still owes its settlement keeps how it ended, and is handed back to be settled: no pass for this surface runs again.
+    if (row.status !== 'pending' && row.status !== 'accepted' && row.status !== 'attempting') { if (row.settled === false) retired.push(row.id); continue; }
     const sent = row.status !== 'pending' || (row.providerMessageIds ?? []).some(Boolean);
     row.status = sent ? 'quarantined' : 'blocked'; row.reason = 'surface_unlinked'; row.settled = false; row.dueAt = 0;
     retired.push(row.id);

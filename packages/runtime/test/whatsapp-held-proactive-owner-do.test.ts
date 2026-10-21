@@ -394,9 +394,8 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
       expect(report()).toMatchObject([{ status: 'pending' }]);
       await later(30 * 24 * HOUR + 60_000, () => alarms(2));
       expect(wire.events).toEqual(['template:waldo_update_ready']);
-      expect(report()).toMatchObject([{ status: 'blocked' }]);
-      expect(report()[0]!.reason).not.toBe('expired');
-      expect(runs()[0]).toEqual({ status: 'stopped', summary: 'order ran; its report was not sent' });
+      expect(report()).toMatchObject([{ status: 'blocked', reason: 'lapsed' }]);
+      expect(runs()[0]).toEqual({ status: 'stopped', summary: 'order ran; its report waited 30 days for your WhatsApp window and was not sent' });
     });
   });
 

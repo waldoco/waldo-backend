@@ -162,6 +162,23 @@ describe('the surface is unlinked or its number replaced', () => {
   });
 });
 
+describe('an unlink with a record already ended and not yet settled', () => {
+  it('hands it back to be settled as it ended, since no pass for the surface runs again', async () => {
+    const kv = store(), clock = { now: 1_000 };
+    const outbox = new TelegramFinalOutbox(kv, () => clock.now);
+    await outbox.enqueue({ ...base, id: 'forgotten' });
+    expect(redactJobReportEntries(kv, ['harbour fund'], '[forgotten]', undefined)).toEqual({ rewritten: 0, remaining: 0 });
+    const ended = outbox.records();
+    ended[0] = { ...ended[0]!, status: 'blocked', reason: 'owner_forget', settled: false };
+    kv.put(FINAL_OUTBOX_KEY, ended);
+    expect(retireSurfaceRecords(kv, addressed)).toEqual(['forgotten']);
+    expect(rows(kv)).toEqual([{ id: 'forgotten', status: 'blocked', reason: 'owner_forget' }]);
+    const settled = vi.fn(async () => undefined);
+    await new TelegramFinalOutbox(kv, () => clock.now).settleEnded(['forgotten'], settled);
+    expect(settled).toHaveBeenCalledWith(expect.objectContaining({ id: 'forgotten', status: 'blocked', reason: 'owner_forget' }));
+  });
+});
+
 describe('settling the records an unlink retired', () => {
   it('settles only them, and leaves a send another pass has in flight alone', async () => {
     const kv = store(), clock = { now: 1_000 };
