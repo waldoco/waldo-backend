@@ -186,6 +186,7 @@ Append an entry each time you finish a merge, a lane milestone or a decision. Co
 | 2026-10-21 16:40 | Lane checkpoints received, all containing `beta-mvp` `19ccd5e8`: evals #1342 `b4340dd9`, #1345 `7ae34032`, new **#1360** (state and memory evals, draft) `3dec7c1e`; WhatsApp #1309 `1db91d11`, #1310 `408d99c0`, #1311 `ab2eb6b7`; connectors #1357 `94aa5990`; onboarding #1356 `925549a6` (wall NOT RUN). Worker layer #1355 and wearables #1354 still finishing. **Decision (orchestrator):** WHOOP express authorization = the existing (whoop, storage_compute) + (whoop, model_processing) grants with WHOOP-specific notice copy. Drop `provider_terms`; connect needs both grants. This is next step 1 for C3. Accepted: #1354's Scheduler.schedule() fix, so a re-arm always moves updated_at. | see row | C5 adds #1360 to its scope. |
 | 2026-10-21 17:12 | Final split. Cloud: C0 plus lanes C1–C7 build. Local: L1–L6, verification and all merges. Every lane is pushed and clean (checked on disk). Worker layer #1355 is at `9a2213d6`, wearables #1354 at `3daeb4bb`. | — | Cloud: start C0, then the children. Local: L1, L2. |
 | 2026-10-21 17:20 | **C0 up (cloud, Ansh's account).** Probes: PR comment PASS (#1359 comment 6322128873). Push to a non-session branch: this commit is the probe; a no-op push to `evals/state-memory` returned up-to-date (not conclusive alone). Full wall: running on `beta-mvp` `19ccd5e8` in a container with 4 cores and 15 GB; Docker started for `verify:supabase`. Children share one runner (`/home/user/wt/wall.sh`) under a lock, so only one wall runs at a time. | beta-mvp `19ccd5e8` | Wall result, then start C1, C2, C3. |
+| 2026-10-21 17:22 | Push probe **PASS**: `3e84c3cd` pushed to `handoff/2026-10-21`, a non-session branch, so lanes push to their own branches and no stacked-branch fallback is needed. **Started C1** (worker layer #1355 from `9a2213d6`, Opus), **C2** (connectors #1357 from `94aa5990`, Opus) and **C3** (wearables #1354 from `3daeb4bb`, Sonnet), each in its own worktree with a shared brief. C2 builds the provider-generic edge rotate path first and posts its interface on #1354; C3 then merges #1357's head for it, so **#1354 and #1357 must land in one train**. | #1355, #1357, #1354 | Wall result on `19ccd5e8`; add C4, C5, C7 once C1–C3 are under way. |
 
 ### Owner asks raised since handoff
 
@@ -193,4 +194,5 @@ Append an entry each time you finish a merge, a lane milestone or a decision. Co
 
 ### Conflicts and open risks for the takeover
 
-(none yet)
+- #1354 depends on #1357 for the edge token-rotate path (WHOOP refreshes must not run in the DO). Land them in one train, or #1357 first.
+- Up to five cloud lanes share one container (4 cores, 15 GB). Full walls run one at a time through a lock, so a lane can wait an hour or more for its wall.
