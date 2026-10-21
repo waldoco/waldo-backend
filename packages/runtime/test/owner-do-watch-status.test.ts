@@ -61,23 +61,27 @@ it('an owner turn carries the host fact while the Gmail watch is not running, an
       const replies = model.requests.filter(request => request.response_format === undefined && JSON.stringify(request.messages.at(-1)?.content ?? '').includes(ASKED));
       model.requests = [];
       expect(replies.length, 'the owner turn reached the model').toBeGreaterThan(0);
-      return replies.map(request => request.system ?? '');
+      // The fact is current for this message, so it rides the owner's message as turn context, never the system prompt.
+      return replies.map(request => {
+        expect(request.system ?? '').not.toContain(FACT);
+        expect(request.system).toContain('send_console_link');
+        return String(request.messages.at(-1)?.content ?? '');
+      });
     };
     try {
-      for (const system of await turn('client-watch-missed')) {
-        expect(system.split(FACT).length - 1, 'the fact appears once').toBe(1);
-        expect(system).toContain('send_console_link');
-        expect(system).not.toContain('owner@example.test');
+      for (const told of await turn('client-watch-missed')) {
+        expect(told.split(FACT).length - 1, 'the fact appears once').toBe(1);
+        expect(told).not.toContain('owner@example.test');
       }
       // An older account first in the list keeps the mail route: the fact names it, since reconnecting another would not help.
       await state.storage.put('google:accounts', [{ id: 'local:old@example.test', email: 'old@example.test', refresh_token: 'synthetic-offline-only', scopes: MAIL }, { id: 'conn-1', email: 'owner@example.test', scopes: MAIL }]);
       gmailPushBook(state.storage.kv).fail(Date.now(), 'local_rail');
-      for (const system of await turn('client-watch-older')) {
-        expect(system).toContain('the mail account "old@example.test" is connected the older way');
-        expect(system).not.toContain('owner@example.test');
+      for (const told of await turn('client-watch-older')) {
+        expect(told).toContain('the mail account "old@example.test" is connected the older way');
+        expect(told).not.toContain('owner@example.test');
       }
       gmailPushBook(state.storage.kv).record({ historyId: '555', expiration: Date.now() + 7 * 86_400_000 }, 'conn-1', Date.now());
-      for (const system of await turn('client-watch-running')) expect(system).not.toContain(FACT);
+      for (const told of await turn('client-watch-running')) expect(told).not.toContain(FACT);
     } finally { await state.storage.deleteAlarm(); }
   });
 });

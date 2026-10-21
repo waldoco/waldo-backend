@@ -36,7 +36,9 @@ it('the reply call reports what fills its context, and the system sections add u
     expect(context.tool_turns_bytes).toBe(0);
     const sections = context.system_sections!;
     expect(sections.behavior).toBeGreaterThan(0);
-    expect(sections.clock).toBeGreaterThan(0);
+    // The clock changes every turn, so it rides the owner's message, not the cached system prompt.
+    expect(sections.clock).toBeUndefined();
+    expect(context.context_sections!.clock).toBeGreaterThan(0);
     sectionsAddUp(shape);
   });
 });
