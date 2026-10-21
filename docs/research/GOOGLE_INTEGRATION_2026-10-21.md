@@ -116,7 +116,7 @@ A choice of C rules out Fitbit and Pixel data in the cloud.
 | Rank | Fix | Size | Owner of files |
 |---|---|---|---|
 | 1 | Mark the client agentic, or create a separate agentic client for MCP, before **2026-11-11** (owner ask, console). | Console | Owner |
-| 2 | Drive: treat `403 rateLimitExceeded`/`userRateLimitExceeded` as rate-limited so the tool reports it as transient. **Opened in this pass** (see PR list). | S | `drive-rest.ts` |
+| 2 | Drive: treat `403 rateLimitExceeded`/`userRateLimitExceeded` as rate-limited so the tool reports it as transient. **Opened in this pass as waldoco/waldo-backend#1347**; it goes live only with a connector-proxy redeploy. | S | `drive-rest.ts` |
 | 3 | Mail sweep: page through every new message since the marker, or move to `history.list` with the `404` full-sync fallback (fixes G3 and G4 for mail). | M | `update-cards.ts`, `connectors/google.ts` (after pr-carries lands) |
 | 4 | Revoke at Google on disconnect: a new edge op that calls `oauth2.googleapis.com/revoke` before deleting the Vault row (G5). | M | proxy, `connections.ts`, `owner-do.ts` |
 | 5 | Incremental consent: ask for the base set at connect and for Drive, Docs, Sheets, Slides and contacts only when a feature first needs them, per Google's "in context" rule (G2). This reverses the 2026-09-24 owner ruling, so it needs a fresh owner call. | M | `connectors/google.ts`, `owner-do.ts` |
