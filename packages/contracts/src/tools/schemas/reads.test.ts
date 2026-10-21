@@ -296,6 +296,12 @@ describe('callMcpToolArgs', () => {
     expect(callMcpToolArgsSchema.safeParse({ ...base, args: 'not-a-record' }).success).toBe(false);
   });
 
+  it('accepts the owner\'s answers to a server question and refuses answers without a handle', () => {
+    expect(callMcpToolArgsSchema.safeParse({ ...base, answers: { handle: 'q_abc', responses: { workspace: { action: 'accept', content: { workspace: 'Work' } } } } }).success).toBe(true);
+    expect(callMcpToolArgsSchema.safeParse({ ...base, answers: { responses: {} } }).success).toBe(false);
+    expect(callMcpToolArgsSchema.safeParse({ ...base, answers: { handle: 'q_abc', responses: {}, request_state: 'x' } }).success).toBe(false);
+  });
+
   it('accepts a 128-character MCP tool name and refuses an empty one', () => {
     expect(callMcpToolArgsSchema.safeParse({ ...base, tool: 't'.repeat(128) }).success).toBe(true);
     expect(callMcpToolArgsSchema.safeParse({ ...base, tool: '' }).success).toBe(false);

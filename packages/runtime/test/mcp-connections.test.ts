@@ -25,7 +25,7 @@ const withRig = (name: string, options: Partial<FakeOptions>, run: (rig: Rig) =>
     const mcp = mcpConnections({
       sql: state.storage.sql, transaction: (work) => state.storage.transactionSync(work),
       proxy: extra.proxy === false ? null : mcpProxy(WORKER_ENV, workerToEdge(serve, (body) => edge.push(body)), () => Date.now()),
-      doName: () => 'owner-a', origin: async () => WALDO_ORIGIN, stateSecret: SECRET, fetcher: world.fetcher, now: () => Date.now(),
+      doName: () => 'owner-a', stateSecret: SECRET, fetcher: world.fetcher, now: () => Date.now(),
       ...(extra.reserved ? { reserved: () => extra.reserved! } : {}), log: (entry) => logs.push(entry),
     });
     await run({ world, vault, mcp, edge, logs, tick: (ms) => { world.advance(ms); vi.setSystemTime(world.now()); } });
@@ -34,7 +34,7 @@ const withRig = (name: string, options: Partial<FakeOptions>, run: (rig: Rig) =>
 
 // The owner's whole consent round trip: connect page, start link, provider consent, callback.
 const connect = async ({ world, mcp }: Rig, url = MCP_URL, decision: 'allow' | 'deny' = 'allow') => {
-  const begun = await mcp.begin(url);
+  const begun = await mcp.begin(url, WALDO_ORIGIN);
   if (begun.kind !== 'redirect') throw new Error(`expected a redirect, got ${JSON.stringify(begun)}`);
   const authorize = await mcp.start(begun.path.split('/').at(-1)!);
   const back = await world.authorize(authorize!, decision);
@@ -103,7 +103,7 @@ describe('MCP connections, end to end through the edge', () => {
 
   it('drops a forged state, an expired attempt and a mismatched issuer before any exchange', withRig('forged', {}, async (rig) => {
     const { world, mcp, edge, tick } = rig;
-    const begun = await mcp.begin(MCP_URL);
+    const begun = await mcp.begin(MCP_URL, WALDO_ORIGIN);
     if (begun.kind !== 'redirect') throw new Error('expected a redirect');
     const nonce = begun.path.split('/').at(-1)!;
     expect(await readMcpState('other-secret', await mcpState(SECRET, 'owner-a', nonce))).toBeNull();
@@ -111,7 +111,7 @@ describe('MCP connections, end to end through the edge', () => {
     // RFC 9207: the authorization server advertises iss, so a callback naming another issuer is refused.
     const back = await world.authorize((await mcp.start(nonce))!, 'allow', 'https://evil.example.net');
     expect(await mcp.finish(nonce, back.searchParams)).toEqual({ kind: 'failed', reason: 'iss_mismatch' });
-    const late = await mcp.begin(MCP_URL);
+    const late = await mcp.begin(MCP_URL, WALDO_ORIGIN);
     if (late.kind !== 'redirect') throw new Error('expected a redirect');
     const lateNonce = late.path.split('/').at(-1)!;
     const lateBack = await world.authorize((await mcp.start(lateNonce))!);
@@ -136,19 +136,19 @@ describe('MCP connections, end to end through the edge', () => {
 
   it('refuses internal, metadata and query-string server addresses at the connect page', withRig('ssrf', {}, async ({ mcp, world }) => {
     for (const [url, reason] of [['https://169.254.169.254/latest/meta-data', 'egress_host'], ['http://mcp.example.com/mcp', 'egress_scheme'], ['https://localhost/mcp', 'egress_host'], ['https://mcp.example.com:8443/mcp', 'egress_port'], [`${MCP_URL}?token=x`, 'query_string']] as const) {
-      expect(await mcp.begin(url)).toEqual({ kind: 'failed', reason });
+      expect(await mcp.begin(url, WALDO_ORIGIN)).toEqual({ kind: 'failed', reason });
     }
     expect(world.hits).toEqual([]);
   }));
 
   it('connects a server that needs no sign-in directly, and calls it on the same egress rail', withRig('open', { auth: false }, async ({ mcp, edge }) => {
-    const begun = await mcp.begin(MCP_URL);
+    const begun = await mcp.begin(MCP_URL, WALDO_ORIGIN);
     expect(begun).toEqual({ kind: 'connected', id: expect.any(String), name: 'example' });
     expect(mcp.list()[0]).toMatchObject({ auth: 'none', registration: 'none', tools: 2 });
     await mcp.setRuns(mcp.list()[0]!.id, 'search_pages', true);
     expect(resultOf(await mcp.invoke({ mode: 'read', server: 'example', tool: 'search_pages', args: { query: 'q' } }))).toMatchObject({ content: [{ text: expect.stringContaining('search_pages ran') }] });
     expect(edge).toEqual([]);
-    expect(await mcp.begin(MCP_URL)).toEqual({ kind: 'already', id: mcp.list()[0]!.id, name: 'example' });
+    expect(await mcp.begin(MCP_URL, WALDO_ORIGIN)).toEqual({ kind: 'already', id: mcp.list()[0]!.id, name: 'example' });
   }));
 
   it('never takes a name a deploy-configured server already uses', withRig('reserved', {}, async (rig) => {
@@ -310,7 +310,7 @@ describe('MCP connections, hostile and failing servers', () => {
   }));
 
   it('reports OAuth as unavailable when the edge is not configured, without touching the server twice', withRig('no-edge', {}, async ({ mcp, world }) => {
-    expect(await mcp.begin(MCP_URL)).toEqual({ kind: 'failed', reason: 'oauth_unavailable' });
+    expect(await mcp.begin(MCP_URL, WALDO_ORIGIN)).toEqual({ kind: 'failed', reason: 'oauth_unavailable' });
     expect(world.hits).toEqual([`POST ${MCP_URL}`]);
   }, { proxy: false }));
 });

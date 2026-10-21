@@ -128,6 +128,7 @@ export function ConnectionsControls({ record, busy, onAction, section }: { recor
           <li className="branch"><details name="connections" className="disclosure"><summary><span className="marks"><Icon name="chat"/></span><span className="value">This console</span><span className="access-label">Signed in</span></summary>
             <div className="disclosure-body"><p>Chat with Waldo right here. It’s the same conversation as the Waldo app.</p>
               <div className="control-actions"><a className="quiet-link" href="#/chat">Open chat</a></div></div></details></li></ul>
+        <McpServers servers={record.data.mcp} busy={busy} onAction={onAction}/>
         <p className="tree-group label">Devices</p>
         <ul><li className="branch"><details name="connections" className="disclosure"><summary><span className="marks"><Icon name="settings"/></span><span className="value">Your Mac</span></summary>
           <div className="disclosure-body"><p>Pair Kennel on your Mac so Waldo can check on it and send it notifications you choose.</p>
@@ -149,13 +150,46 @@ export function ControlsFeedback({ state, onRefresh }: { state: Exclude<Controls
   return <section className="panel" role="alert"><h2>{state.signedOut ? 'Sign in to your Waldo.' : 'Controls unavailable.'}</h2><p>{state.message}</p>{state.signedOut ? <a href="/console/signin">Sign in</a> : <button onClick={onRefresh}>Retry read</button>}</section>;
 }
 
+// Remote MCP servers the owner connected. Every tool asks first until the owner says otherwise; the
+// server's read-only label is shown as its claim, and allowing those tools is the owner's click.
+function McpServers({ servers, busy, onAction }: { servers: ConnectionsRecord['data']['mcp'] } & ActionProps) {
+  const [address, setAddress] = useState('');
+  if (servers === undefined) return null;
+  return <>
+    <p className="tree-group label">Apps over MCP</p>
+    <ul>{servers.map(server => { const needs = server.status === 'reauth_needed' || server.wants_scopes.length > 0; return <li key={server.id} className={`branch${needs ? ' broken' : ''}`}>
+      <details name="connections" className="disclosure"><summary><span className="marks"><Icon name="settings"/></span><span className="value">{server.name} · {server.host}</span>
+        <span className={`access-label${needs ? ' reconnect' : ''}`}>{server.status === 'reauth_needed' ? 'Reconnect needed' : server.wants_scopes.length ? 'Needs more access' : `${server.tools} tools · ${server.runs_without_asking} run without asking`}</span></summary>
+        <div className="disclosure-body">
+          <p>{server.auth === 'oauth' ? `Signed in${server.scopes.length ? ` with: ${server.scopes.join(', ')}` : ''}.` : 'Connected without sign-in.'} Waldo has not reviewed this server: its tool names and descriptions are its own words.</p>
+          {server.wants_scopes.length > 0 && <p>A tool asked for more access: {server.wants_scopes.join(', ')}. Reconnect to grant it.</p>}
+          {server.tools_changed && <p>Some tools changed since you allowed them, so they ask you first again.</p>}
+          {server.hidden_tools > 0 && <p className="meta">{server.hidden_tools} tools were hidden because the server described them in a way MCP does not allow.</p>}
+          <ul className="grant-list">{server.tool_list.map(tool => <li key={tool.tool}><span className="strong">{tool.tool}</span>{tool.title ? ` · ${tool.title}` : ''}{tool.read_only_hint ? ' · server says read-only' : ''}
+            <button disabled={busy} onClick={() => onAction('mcp.runs', { id: server.id, value: `${tool.tool}|${tool.runs === 'without_asking' ? 'off' : 'on'}` })}>{tool.runs === 'without_asking' ? 'Ask me first' : 'Run without asking'}</button></li>)}</ul>
+          {!server.tool_list.length && <p className="empty-line">No tools returned yet.</p>}
+          <div className="control-actions">
+            {server.marked_read_only > 0 && <button disabled={busy} onClick={() => { if (window.confirm(`Let the ${server.marked_read_only} tools ${server.name} labels read-only run without asking? The label is the server's claim; Waldo cannot check it.`)) onAction('mcp.runs', { id: server.id, value: 'marked_read_only|on' }); }}>Let tools labelled read-only run without asking</button>}
+            {needs && <button className="primary" disabled={busy} onClick={() => onAction('mcp.connect', { value: server.server_url })}>Reconnect {server.name}</button>}
+            <button disabled={busy} onClick={() => { if (window.confirm(`Disconnect ${server.name}? Waldo asks the server to revoke its access and forgets it.`)) onAction('mcp.disconnect', { id: server.id }); }}>Disconnect {server.name}</button>
+          </div>
+        </div></details></li>; })}
+      <li className="branch"><form className="control-form" onSubmit={event => { event.preventDefault(); if (address.trim()) onAction('mcp.connect', { value: address.trim() }); }}>
+        <label>Server address<input type="url" inputMode="url" placeholder="https://mcp.example.com/mcp" value={address} onChange={event => setAddress(event.target.value)}/></label>
+        <div className="control-actions"><button className="primary" disabled={busy || !address.trim()}>Connect a server</button></div>
+        <p className="meta">Use the MCP address the app publishes. Its tools ask you first; you choose which may run without asking.</p>
+      </form></li>
+    </ul>
+  </>;
+}
+
 export function ControlReceipt({ result, onCheck, onRefresh, busy }: { result: ActionResult; onCheck?: () => void; onRefresh: () => void; busy: boolean }) {
   const { receipt } = result;
   return <section className={`panel control-receipt ${receipt.state}`} role={receipt.state === 'recorded' ? 'status' : 'alert'}>
     <span className="receipt-mark" aria-hidden="true">{receipt.state === 'recorded' ? <svg viewBox="0 0 24 24"><path d="m6 12.5 4 4 8-9"/></svg> : <Icon name="warning"/>}</span>
     <h2>{receipt.signed_out ? 'Signed out.' : receipt.state === 'recorded' ? 'Receipt recorded.' : receipt.state === 'incomplete' ? 'Change incomplete.' : receipt.state === 'rejected' ? 'Change not applied.' : 'Outcome unconfirmed.'}</h2>
     <p className="control-receipt-message">{receipt.message}</p>{result.reveal && <RevealedValue reveal={result.reveal}/>}{result.duplicate && <p className="muted">This is the recorded receipt for the same request. It did not run again. Any code it issued is not shown again.</p>}
-    {receipt.navigation && <a className="button-link" href={receipt.navigation}>Continue to Google</a>}
+    {receipt.navigation && <a className="button-link" href={receipt.navigation}>{receipt.navigation.startsWith('/console/mcp/start/') ? 'Continue to sign in' : 'Continue to Google'}</a>}
     {receipt.signed_out ? <a href="/console/signin">Sign in again</a> : <div className="control-actions">{onCheck && <button disabled={busy} onClick={onCheck}>Check this request</button>}<button disabled={busy} onClick={onRefresh}>Refresh controls</button></div>}
   </section>;
 }

@@ -7,6 +7,8 @@ import { handleProbeTurn, PROBE_TURN_PATH } from './channels/probe-turn';
 import { handleWhatsAppWebhook, WHATSAPP_WEBHOOK_PATH } from './channels/whatsapp-webhook';
 import { EVENT_INGRESS_PREFIX, handleEventIngress } from './channels/event-ingress';
 import { handleGoogleCallback } from './channels/google-oauth';
+import { handleMcpCallback, handleMcpClientMetadata } from './channels/mcp-oauth-routes';
+import { MCP_CALLBACK_PATH, MCP_CLIENT_METADATA_PATH } from './connectors/mcp-oauth';
 import { CONNECT_LINK_PREFIX, handleConnectTicket } from './channels/connect-link';
 import { GOOGLE_CALLBACK_PATH } from './connectors/google';
 import { CONSOLE_PATH } from './channels/console';
@@ -174,6 +176,8 @@ export default {
     if (new URL(request.url).pathname === GOOGLE_CALLBACK_PATH) {
       return handleGoogleCallback(request, env);
     }
+    if (new URL(request.url).pathname === MCP_CLIENT_METADATA_PATH && request.method === 'GET') return handleMcpClientMetadata(request);
+    if (new URL(request.url).pathname === MCP_CALLBACK_PATH && request.method === 'GET') return handleMcpCallback(request, env);
     return new Response('not found', {
       status: 404,
       headers: {

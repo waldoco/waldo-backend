@@ -21,7 +21,7 @@ export async function loadReceiptBook(store:Store,sessions:()=>Promise<readonly 
 export const receiptCapacityReached=(book:Readonly<Record<string,StoredReceipt>>,session:string)=>Object.keys(book).filter(id=>id.startsWith(session+':')).length>=100||Object.keys(book).length>=1000;
 // view() is read only for views that do not list their own actions. book names the caller's receipt book (default: the shared one).
 export type ControlActionDeps=Readonly<{csrf:string;expires:number;sessions():Promise<readonly {csrf:string;expires:number}[]>;projection(view:string,id?:string):Promise<Projection|null>;view?():Promise<ConsoleView>;act(action:ConsoleAction,fields:Readonly<Record<string,string>>):Promise<boolean|string|ControlReceipt|RevealingReceipt>;store:Store;book?:string}>;
-const allowed:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm','spot.dismiss','spot.forget','node.forget'],day:['timezone.set','proactivity.set','proactive_surface.set','card.today','card.pin','card.unpin'],connections:['google.connect','google.disconnect','telegram.link','telegram.unlink','whatsapp.link','whatsapp.unlink','session.signout','session.signout.all'],waiting:['approval.approve','approval.skip','approval.undo'],files:['file.remove'],
+const allowed:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm','spot.dismiss','spot.forget','node.forget'],day:['timezone.set','proactivity.set','proactive_surface.set','card.today','card.pin','card.unpin'],connections:['google.connect','google.disconnect','telegram.link','telegram.unlink','whatsapp.link','whatsapp.unlink','session.signout','session.signout.all','mcp.connect','mcp.disconnect','mcp.runs'],waiting:['approval.approve','approval.skip','approval.undo'],files:['file.remove'],
  imessage:['imessage.link','imessage.unlink','imessage.pair','imessage.pair_shared','imessage.verify','imessage.activate','imessage.activate_shared','imessage.revoke'],devices:['device.pair','device.revoke','device.query','device.notify']};
 // Fields a view's actions carry beyond the console action. They are fingerprinted with it.
 const viewFields:Readonly<Record<string,readonly string[]>>={imessage:['subject','chat'],devices:['query_kind','body','severity']};
@@ -42,6 +42,23 @@ export const googleConnectReceipt=(link:string|null,origin:string|undefined):Con
  if(!origin||destination.origin!==origin||!/^\/c\/[A-Za-z0-9_-]{22}$/.test(destination.pathname)||destination.search||destination.hash)return {state:'rejected',message:'Google connect returned an unavailable destination. Try again later.'};
  return {state:'recorded',message:'Google connect is ready to begin. Access has not been granted or tested.',navigation:destination.pathname};
 };
+// An MCP connect either finished without sign-in or continues on this deployment's own start link,
+// which redirects to the provider only for the signed-in owner. No other destination is ever returned.
+const MCP_CONNECT_FAILURES:Readonly<Record<string,string>>={
+ egress_scheme:'That address is not https. Use the server\'s https URL.',egress_host:'That address points at a private or internal network, which Waldo does not reach.',egress_port:'Waldo connects to servers on the standard https port only.',
+ egress_credentials:'Remove the user name or password from the address.',egress_malformed:'That is not a web address.',query_string:'Remove the part after "?" from the address.',
+ pkce_unsupported:'That server\'s sign-in does not support the secure flow (PKCE with S256) Waldo requires.',registration_unsupported:'That server does not let Waldo register as an app, so it cannot be connected yet.',
+ oauth_unavailable:'Signing in to servers is not set up on this Waldo yet.',
+};
+export const mcpConnectReceipt=(result:Readonly<{kind:string;path?:string;name?:string;reason?:string}>):ControlReceipt=>{
+ if(result.kind==='connected')return {state:'recorded',message:`Connected ${result.name}. It needed no sign-in. Its tools ask you first until you choose otherwise.`};
+ if(result.kind==='already')return {state:'recorded',message:`${result.name} is already connected.`};
+ if(result.kind==='redirect'&&result.path&&/^\/console\/mcp\/start\/[A-Za-z0-9_-]{43}$/.test(result.path))return {state:'recorded',message:'Sign in to the server to finish connecting. Nothing has been granted yet.',navigation:result.path};
+ return {state:'rejected',message:MCP_CONNECT_FAILURES[result.reason??'']??'That server could not be connected. Check the address and try again.'};
+};
+export const mcpDisconnectReceipt=(result:Readonly<{ok:boolean;provider:string}>):ControlReceipt=>!result.ok
+ ?{state:'rejected',message:'The server was not disconnected because Waldo could not reach its sign-in service. Try again.'}
+ :{state:'recorded',message:result.provider==='revoked'?'Disconnected, and the server revoked Waldo\'s access.':result.provider==='failed'||result.provider==='unsupported'?'Disconnected and forgotten by Waldo. The server did not confirm it revoked access; remove Waldo in that service\'s settings to be sure.':'Disconnected.'};
 export const whatsappLinkReceipt=(code:string|null):ControlReceipt=>code
  ?{state:'recorded',message:`Send this to the Waldo WhatsApp number within 10 minutes: waldo ${code}`}
  :{state:'rejected',message:'Linking WhatsApp needs account sign-in, which is not configured on this server.'};

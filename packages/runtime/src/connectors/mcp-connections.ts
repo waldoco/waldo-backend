@@ -10,6 +10,8 @@ import type { McpMethod, McpProxyFailure } from './mcp-proxy-wire';
 import { argsDigest, checkArgs, marksReadOnly, parseToolsPage, rankTools, toolDigest, toolHeaders, type McpToolDef } from './mcp-tools';
 
 export const MCP_START_PATH = '/console/mcp/start/';
+// The Worker hands the provider's callback to the owner object on this internal path.
+export const MCP_FINISH_PATH = '/mcp/consent';
 const ATTEMPT_TTL_MS = 15 * 60_000;
 // How long a server's questions wait for the owner's answer. The server's own requestState may expire
 // sooner; its retry then simply asks again.
@@ -64,8 +66,11 @@ export type McpToolCard = Readonly<{
 export type McpQuestion = Readonly<{ id: string; message: string; fields: Readonly<Record<string, unknown>> }>;
 export type McpInputRequired = Readonly<{ handle: string; questions: readonly McpQuestion[] }>;
 export type McpAnswers = Readonly<{ handle: string; responses: Readonly<Record<string, unknown>> }>;
+export type McpWaiting = Readonly<{ server: string; tool: string; args: Readonly<Record<string, unknown>>; answers_handle: string; questions: readonly McpQuestion[] }>;
 
 type Attempt = Readonly<{
+  // The Waldo origin the owner started from: the client metadata document and callback live there.
+  origin: string;
   server_url: string;
   verifier: string;
   resource: string;
@@ -96,7 +101,6 @@ export type McpConnectionsDeps = Readonly<{
   transaction: <T>(work: () => T) => T;
   proxy: McpProxy | null;
   doName: () => string | null;
-  origin: () => Promise<string | null>;
   stateSecret?: string;
   fetcher: typeof fetch;
   now: () => number;
@@ -180,7 +184,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
   // A permission is for one tool definition: a changed definition no longer matches and asks again.
   sql.exec('CREATE TABLE IF NOT EXISTS mcp_tool_reads (connection TEXT NOT NULL, name TEXT NOT NULL, digest TEXT NOT NULL, granted_at INTEGER NOT NULL, PRIMARY KEY (connection, name))');
   sql.exec('CREATE TABLE IF NOT EXISTS mcp_attempts (nonce TEXT PRIMARY KEY, record TEXT NOT NULL, expires INTEGER NOT NULL, started INTEGER NOT NULL DEFAULT 0, settled TEXT, settled_at INTEGER)');
-  sql.exec('CREATE TABLE IF NOT EXISTS mcp_questions (handle TEXT PRIMARY KEY, connection TEXT NOT NULL, tool TEXT NOT NULL, args_digest TEXT NOT NULL, ids TEXT NOT NULL, schemas TEXT NOT NULL, request_state TEXT, expires INTEGER NOT NULL)');
+  sql.exec('CREATE TABLE IF NOT EXISTS mcp_questions (handle TEXT PRIMARY KEY, connection TEXT NOT NULL, tool TEXT NOT NULL, args TEXT NOT NULL, args_digest TEXT NOT NULL, questions TEXT NOT NULL, request_state TEXT, created INTEGER NOT NULL, expires INTEGER NOT NULL)');
   const refreshing = REFRESHING.get(sql) ?? new Map<string, Promise<void>>();
   REFRESHING.set(sql, refreshing);
   const log = (hop: string, started: number, code?: string) => deps.log?.({ hop, ok: code === undefined, ...(code === undefined ? {} : { code }), ms: deps.now() - started });
@@ -353,26 +357,32 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     if (!questions.length && state === null) throw new McpRefusal('rejected', `${r.name} returned an incomplete answer for ${tool}, so it did not run.`, true);
     const handle = `q_${b64url(crypto.getRandomValues(new Uint8Array(12)))}`;
     sql.exec('DELETE FROM mcp_questions WHERE expires < ?', deps.now());
-    sql.exec('INSERT INTO mcp_questions (handle, connection, tool, args_digest, ids, schemas, request_state, expires) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      handle, r.id, tool, await argsDigest(args), JSON.stringify(questions.map((q) => q.id)), JSON.stringify(questions.map((q) => q.fields)), state, deps.now() + QUESTION_TTL_MS);
+    sql.exec('INSERT INTO mcp_questions (handle, connection, tool, args, args_digest, questions, request_state, created, expires) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      handle, r.id, tool, JSON.stringify(args), await argsDigest(args), JSON.stringify(questions), state, deps.now(), deps.now() + QUESTION_TTL_MS);
     return { handle, questions };
   };
   // The retry's inputResponses and requestState, from the owner's answers for exactly this call.
   const answerParams = async (r: Row, tool: string, args: Readonly<Record<string, unknown>>, answers: McpAnswers) => {
-    const kept = sql.exec<{ connection: string; tool: string; args_digest: string; ids: string; schemas: string; request_state: string | null; expires: number }>('SELECT * FROM mcp_questions WHERE handle = ?', answers.handle).toArray()[0];
+    const kept = sql.exec<{ connection: string; tool: string; args_digest: string; questions: string; request_state: string | null; expires: number }>('SELECT * FROM mcp_questions WHERE handle = ?', answers.handle).toArray()[0];
     if (!kept || kept.expires < deps.now()) throw new McpRefusal('rejected', `${r.name}'s question has expired, so nothing ran. Call ${tool} again and the server will ask afresh.`, true);
     if (kept.connection !== r.id || kept.tool !== tool || kept.args_digest !== await argsDigest(args)) throw new McpRefusal('rejected', `Those answers belong to a different ${r.name} call, so nothing ran. Send them with the same tool and arguments the server asked about.`, true);
-    const ids = JSON.parse(kept.ids) as string[], schemas = JSON.parse(kept.schemas) as Record<string, unknown>[];
+    const questions = JSON.parse(kept.questions) as McpQuestion[];
     for (const [id, response] of Object.entries(answers.responses)) {
-      const index = ids.indexOf(id);
-      if (index < 0) throw new McpRefusal('invalid_args', `${r.name} asked no question "${id}". It asked: ${ids.join(', ')}.`, true);
+      const question = questions.find((q) => q.id === id);
+      if (!question) throw new McpRefusal('invalid_args', `${r.name} asked no question "${id}". It asked: ${questions.map((q) => q.id).join(', ')}.`, true);
       if (!isRecord(response) || !['accept', 'decline', 'cancel'].includes(response.action as string)) throw new McpRefusal('invalid_args', `The answer to "${id}" needs action accept, decline or cancel.`, true);
       if (response.action === 'accept') {
-        const problem = checkArgs({ name: id, inputSchema: schemas[index]! }, isRecord(response.content) ? response.content : {});
+        const problem = checkArgs({ name: id, inputSchema: question.fields }, isRecord(response.content) ? response.content : {});
         if (problem) throw new McpRefusal('invalid_args', `The answer to "${id}": ${problem}.`, true);
       }
     }
-    return { inputResponses: answers.responses, ...(kept.request_state === null ? {} : { requestState: kept.request_state }) };
+    return { params: { inputResponses: answers.responses, ...(kept.request_state === null ? {} : { requestState: kept.request_state }) }, questions };
+  };
+  const waiting = (): readonly McpWaiting[] => {
+    const names = new Map(rows().map((r) => [r.id, r.name]));
+    return sql.exec<{ handle: string; connection: string; tool: string; args: string; questions: string }>('SELECT handle, connection, tool, args, questions FROM mcp_questions WHERE expires >= ? ORDER BY created, handle', deps.now()).toArray()
+      .filter((q) => names.has(q.connection))
+      .map((q) => ({ server: names.get(q.connection)!, tool: q.tool, args: JSON.parse(q.args) as Record<string, unknown>, answers_handle: q.handle, questions: JSON.parse(q.questions) as McpQuestion[] }));
   };
 
   const forget = (id: string) => deps.transaction(() => {
@@ -384,10 +394,16 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
 
   return {
     list: (): readonly McpConnectionView[] => rows().map(view),
+    // Servers waiting on an owner's answer; the prompt names only the server, the questions come back through search.
+    waitingServers: (): readonly string[] => [...new Set(waiting().map((q) => q.server))],
+    // The questions a card carries next to the owner's answers, refused when the answers do not fit them.
+    async checkAnswers(server: string, tool: string, args: Readonly<Record<string, unknown>>, answers: McpAnswers): Promise<readonly McpQuestion[]> {
+      return (await answerParams(live(server), tool, args, answers)).questions;
+    },
     hasActive: (): boolean => rows().some((r) => r.status === 'active'),
 
     // Discovery for a server URL the owner typed on the connect page. Nothing here holds a secret.
-    async begin(raw: string): Promise<BeginResult> {
+    async begin(raw: string, origin: string): Promise<BeginResult> {
       const started = deps.now();
       let url: URL;
       try { url = egressTarget(raw.trim()); } catch (error) { return { kind: 'failed', reason: error instanceof EgressError ? error.code : 'egress_malformed' }; }
@@ -395,8 +411,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       const serverUrl = url.toString();
       const kept = rows().find((r) => r.server_url === serverUrl && r.status === 'active' && !r.step_up);
       if (kept) return { kind: 'already', id: kept.id, name: kept.name };
-      const origin = await deps.origin();
-      if (!origin) return { kind: 'failed', reason: 'origin_unknown' };
+      if (!/^https:\/\/[^/?#]+$/.test(origin)) return { kind: 'failed', reason: 'origin_unknown' };
       let challenge: McpChallenge['challenge'];
       try {
         const probe = await mcpRequest(deps.fetcher, { url: serverUrl, pinned: [url.origin] }, 'tools/list', {}, DIRECT.list);
@@ -421,7 +436,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
         const scope = requestedScope(challenge.scope, resource, server, previous ? [...previous.scopes.split(' '), ...previous.step_up.split(' ')].filter(Boolean) : []);
         const nonce = b64url(crypto.getRandomValues(new Uint8Array(32)));
         const attempt: Attempt = {
-          server_url: serverUrl, verifier: pkceVerifier(), resource: resource.resource, issuer, iss_supported: server.iss_parameter_supported,
+          origin, server_url: serverUrl, verifier: pkceVerifier(), resource: resource.resource, issuer, iss_supported: server.iss_parameter_supported,
           authorization_endpoint: server.authorization_endpoint, token_endpoint: server.token_endpoint, ...(server.revocation_endpoint ? { revocation_endpoint: server.revocation_endpoint } : {}),
           client_id: client.client_id, client_auth: client.client_auth, registration: mode, ...(scope ? { scope } : {}),
         };
@@ -443,8 +458,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       const found = sql.exec<{ record: string; expires: number; started: number; settled: string | null }>('SELECT record, expires, started, settled FROM mcp_attempts WHERE nonce = ?', nonce).toArray()[0];
       if (!found || found.started || found.settled || found.expires < deps.now()) return null;
       sql.exec('UPDATE mcp_attempts SET started = 1 WHERE nonce = ?', nonce);
-      const attempt = JSON.parse(found.record) as Attempt, origin = await deps.origin();
-      if (!origin) return null;
+      const attempt = JSON.parse(found.record) as Attempt, origin = attempt.origin;
       const server = { issuer: attempt.issuer, authorization_endpoint: attempt.authorization_endpoint, token_endpoint: attempt.token_endpoint, client_id_metadata_document_supported: attempt.registration === 'cimd', iss_parameter_supported: attempt.iss_supported };
       return authorizationUrl(server, { clientId: attempt.client_id, redirectUri: callbackUrl(origin), state: await mcpState(deps.stateSecret, doName, nonce), challenge: await pkceChallenge(attempt.verifier), resource: attempt.resource, ...(attempt.scope ? { scope: attempt.scope } : {}) });
     },
@@ -459,8 +473,8 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       const attempt = JSON.parse(found.record) as Attempt;
       const callback = readCallback(params, attempt.issuer, attempt.iss_supported);
       if (!callback.ok) { const outcome: ConnectOutcome = callback.reason === 'denied' ? { kind: 'denied' } : { kind: 'failed', reason: callback.reason }; settle(nonce, outcome); log('mcp_consent', started, callback.reason); return outcome; }
-      const doName = deps.doName(), origin = await deps.origin();
-      if (!deps.proxy || !doName || !origin) { const outcome: ConnectOutcome = { kind: 'failed', reason: 'oauth_unavailable' }; settle(nonce, outcome); return outcome; }
+      const doName = deps.doName(), origin = attempt.origin;
+      if (!deps.proxy || !doName) { const outcome: ConnectOutcome = { kind: 'failed', reason: 'oauth_unavailable' }; settle(nonce, outcome); return outcome; }
       // Settled before the exchange: the code is single-use, so a second callback must never redeem it.
       settle(nonce, { kind: 'failed', reason: 'exchange_unconfirmed' });
       const pins: ClientPins = { server_url: attempt.server_url, resource: attempt.resource, issuer: attempt.issuer, token_endpoint: attempt.token_endpoint, ...(attempt.revocation_endpoint ? { revocation_endpoint: attempt.revocation_endpoint } : {}), client_id: attempt.client_id, client_auth: attempt.client_auth, redirect_uri: callbackUrl(origin) };
@@ -523,7 +537,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     },
 
     // The model's search over the owner's tools: words, or one server's full list, a page at a time.
-    async search(input: Readonly<{ query?: string; server?: string; cursor?: string }>): Promise<Readonly<{ tools: readonly McpToolCard[]; next_cursor?: string; servers: readonly Readonly<{ name: string; status: McpStatus; tools: number }>[]; unmatched?: true; failures: readonly string[] }>> {
+    async search(input: Readonly<{ query?: string; server?: string; cursor?: string }>): Promise<Readonly<{ tools: readonly McpToolCard[]; next_cursor?: string; servers: readonly Readonly<{ name: string; status: McpStatus; tools: number }>[]; unmatched?: true; failures: readonly string[]; questions_waiting?: readonly McpWaiting[] }>> {
       const targets = input.server ? [live(input.server)] : rows().filter((r) => r.status === 'active');
       const failures: string[] = [];
       await Promise.all(targets.map((r) => freshTools(r).catch((error: unknown) => { failures.push(`${r.name}: ${directCause(error, r.name).message}`); })));
@@ -532,12 +546,14 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       const pool = ranked.length || !input.query ? ranked : items;
       const offset = input.cursor && /^\d{1,6}$/.test(input.cursor) ? Number(input.cursor) : 0;
       const page = pool.slice(offset, offset + SEARCH_PAGE);
+      const asked = waiting().filter((q) => !input.server || q.server === input.server);
       return {
         tools: page.map((item) => card(item.r, item.def, item.digest, item.granted)),
         ...(offset + SEARCH_PAGE < pool.length ? { next_cursor: String(offset + SEARCH_PAGE) } : {}),
         servers: rows().map((r) => ({ name: r.name, status: r.status as McpStatus, tools: toolRows(r.id).length })),
         ...(input.query && !ranked.length && items.length ? { unmatched: true as const } : {}),
         failures,
+        ...(asked.length ? { questions_waiting: asked } : {}),
       };
     },
 
@@ -570,7 +586,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
         if (input.mode === 'approved' && found.digest !== input.digest) throw new McpRefusal('rejected', `${r.name} changed ${input.tool} after the owner approved it, so nothing ran. Look at the tool again and propose it anew.`, true);
         const problem = checkArgs(found.def, input.args);
         if (problem) throw new McpRefusal('invalid_args', `${input.tool}: ${problem}.`, true);
-        const answered = input.mode === 'approved' && input.answers ? await answerParams(r, input.tool, input.args, input.answers) : {};
+        const answered = input.mode === 'approved' && input.answers ? (await answerParams(r, input.tool, input.args, input.answers)).params : {};
         const result = await send(r, 'tools/call', { name: input.tool, arguments: input.args, ...answered }, { headers: toolHeaders(found.def, input.args), ...(input.mode === 'approved' ? { intentId: input.intentId } : {}) });
         if (input.mode === 'approved' && input.answers) sql.exec('DELETE FROM mcp_questions WHERE handle = ?', input.answers.handle);
         const asked = await questionsOf(r, input.tool, input.args, result);

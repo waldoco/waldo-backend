@@ -335,6 +335,9 @@ export const callMcpToolArgsSchema = z.strictObject({
   // MCP tool names run to 128 characters; the server's own list decides which exist.
   tool: z.string().min(1),
   args: z.record(z.string(), z.unknown()),
+  // The owner's answers to a connected server's questions (an input_required result), sent with the same
+  // call: handle names the questions, responses maps each question id to the owner's answer.
+  answers: z.strictObject({ handle: z.string().min(1), responses: z.record(z.string(), z.unknown()) }).optional(),
 });
 export type CallMcpToolArgs = z.infer<typeof callMcpToolArgsSchema>;
 
