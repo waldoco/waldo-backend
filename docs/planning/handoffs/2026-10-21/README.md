@@ -94,7 +94,7 @@ Later: #1253 and #1260 (`owner-do` structural), then the #1227/#1238/#1240 stack
 - Model per lane: Opus for design, security and privacy; Sonnet for implementing a settled design, carries and doc syncs. About five concurrent building sessions is fine; start more to fix newly found issues.
 - APIs and MCP first; browser and computer use last. Tools are strong, never narrowed. No restriction without a named harm; degrade, don't fail.
 
-## Who owns what (FINAL SPLIT, 21 Oct 16:50Z)
+## Who owns what (FINAL SPLIT, 21 Oct 17:12Z)
 
 Two sides work in parallel and meet only on GitHub.
 
@@ -173,7 +173,7 @@ Append an entry each time you finish a merge, a lane milestone or a decision. Co
 | 2026-10-21 15:55 | Limit reset. Orchestrator and lanes resumed; wearables, onboarding, evals and WhatsApp moved to Sonnet. Work split per "Who owns what". | — | Cloud: gate reviews, plus fixing #1346/#1349. |
 | 2026-10-21 16:02 | The owner moved ALL work to Ansh's cloud sessions to save the original account's usage. Every local lane was told to stop, push and finalize its `## Handoff`. Roles are C0–C7 (see "Who owns what"). | — | Start C0 first. |
 | 2026-10-21 16:40 | Lane checkpoints received, all containing `beta-mvp` `19ccd5e8`: evals #1342 `b4340dd9`, #1345 `7ae34032`, new **#1360** (state and memory evals, draft) `3dec7c1e`; WhatsApp #1309 `1db91d11`, #1310 `408d99c0`, #1311 `ab2eb6b7`; connectors #1357 `94aa5990`; onboarding #1356 `925549a6` (wall NOT RUN). Worker layer #1355 and wearables #1354 still finishing. **Decision (orchestrator):** WHOOP express authorization = the existing (whoop, storage_compute) + (whoop, model_processing) grants with WHOOP-specific notice copy. Drop `provider_terms`; connect needs both grants. This is next step 1 for C3. Accepted: #1354's Scheduler.schedule() fix, so a re-arm always moves updated_at. | see row | C5 adds #1360 to its scope. |
-| 2026-10-21 16:50 | Final split. Cloud: C0 plus lanes C1–C7 build. Local: L1–L6, verification and all merges. Every lane is pushed and clean (checked on disk). Worker layer #1355 is at `9a2213d6`, wearables #1354 at `3daeb4bb`. | — | Cloud: start C0, then the children. Local: L1, L2. |
+| 2026-10-21 17:12 | Final split. Cloud: C0 plus lanes C1–C7 build. Local: L1–L6, verification and all merges. Every lane is pushed and clean (checked on disk). Worker layer #1355 is at `9a2213d6`, wearables #1354 at `3daeb4bb`. | — | Cloud: start C0, then the children. Local: L1, L2. |
 
 ### Owner asks raised since handoff
 
