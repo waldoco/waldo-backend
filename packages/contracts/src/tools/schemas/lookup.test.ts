@@ -9,7 +9,7 @@ describe('owner look-up tool arguments', () => {
     for (const bad of [
       { ...finding, category: 'religion' }, { ...finding, category: 'politics' }, { ...finding, category: 'health' }, { ...finding, category: 'caste' }, { ...finding, category: 'sexuality' },
       { ...finding, subject: 'Priya' }, { ...finding, source_url: 'javascript:alert(1)' }, { ...finding, source_url: 'not a url' },
-      { ...finding, anchor: 'ab' }, { ...finding, evidence_quote: ' ' }, { ...finding, text: 'x'.repeat(301) },
+      { ...finding, anchor: 'ab' }, { ...finding, evidence_quote: ' ' }, { ...finding, evidence_quote: 'Pune' }, { ...finding, text: 'x'.repeat(301) },
       (({ anchor: _a, ...rest }) => rest)(finding), (({ source_url: _s, ...rest }) => rest)(finding),
     ]) expect(recordOwnerFindingArgsSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
   });

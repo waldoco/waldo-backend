@@ -113,6 +113,7 @@ export type OwnerOnboardingDeps = Readonly<{
 }>;
 // Quiet hours run from this time until the Brief, so nothing but the Brief opens the owner's morning.
 export const FIRST_RUN_QUIET_FROM = '22:00';
+const HIDE_TEXT_MIN_CHARS = 12;
 export const ownerOnboardingHost = (deps: OwnerOnboardingDeps): AppOnboardingHost => {
   const { storage, now } = deps, sql = storage.sql, transaction = <T>(work: () => T) => storage.transactionSync(work);
   const claims = claimStore(sql, transaction), consent = consentLedger(sql), findings = findingStore(sql, claims, consent);
@@ -138,7 +139,11 @@ export const ownerOnboardingHost = (deps: OwnerOnboardingDeps): AppOnboardingHos
   return {
     firstRun: firstRun(sql, consent, claims, findings, firstRunHost, now), consent, findings, requests: requestBook(sql, now), now, transaction,
     assertCurrent: deps.assertCurrent,
-    async hideText(texts) {
+    // A short literal would hide every chat line that happens to contain it, so only passages of the length the owner-evidence
+    // rule uses are swept; the finding itself is gone either way.
+    async hideText(all) {
+      const texts = all.map(text => text.trim()).filter(text => text.length >= HIDE_TEXT_MIN_CHARS);
+      if (!texts.length) return;
       await redactConversationEntries(storage, texts, FORGOTTEN);
       await redactToolOutputLedger(storage, texts, FORGOTTEN);
       const redact = literalTextRedactor(texts, FORGOTTEN);

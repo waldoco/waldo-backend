@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { buildSessionState, sendMessageArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type ToolHandler } from '@waldo/contracts';
+import { buildSessionState, sendMessageArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type ToolHandler, type ToolName } from '@waldo/contracts';
 import { dispatchTool } from '../src/tools/dispatcher';
 import { sanitise } from '../src/scribe/sanitiser';
 import { claimStore } from '../src/memory/claims';
@@ -36,7 +36,7 @@ const turn = (storage: DurableObjectStorage, ownerSaid: string, options: Readonl
     memoryTurn: { ownerId: OWNER, conversationRef: 'app:main', current: { message_ref: 'm1', text: ownerSaid }, recent: [] },
   };
   let call = 0;
-  const run = (name: string, args: unknown, taint: 'external' | null = 'external') => dispatchTool({ id: `call-${call++}`, name, args }, { ...context, toolArgSourceTaint: taint }, { handlers });
+  const run = (name: ToolName, args: unknown, taint: 'external' | null = 'external') => dispatchTool({ id: `call-${call++}`, name, args }, { ...context, toolArgSourceTaint: taint }, { handlers });
   return { claims, consent, findings, pages, run };
 };
 const withStorage = <T>(fn: (storage: DurableObjectStorage) => T | Promise<T>) =>

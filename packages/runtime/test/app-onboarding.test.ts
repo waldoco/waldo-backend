@@ -6,6 +6,7 @@ import { appOnboardingRequest, ownerOnboardingHost, type OwnerOnboardingDeps } f
 import { claimStore } from '../src/memory/claims';
 import { consentLedger } from '../src/onboarding/consent-ledger';
 import { findingStore } from '../src/onboarding/findings';
+import { episodeIndex } from '../src/channels/episodes';
 
 let sequence = 0;
 type Calls = { acts: unknown[]; admitted: string[]; rpc: number };
@@ -134,6 +135,16 @@ describe('consent and findings routes', () => {
     await act({ action: 'start' }); await act({ ...agree, owner_lookup: false });
     expect(storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM owner_findings').one().n).toBe(0);
     expect(consentLedger(storage.sql).state('owner_lookup').status).toBe('withdrawn');
+  }));
+  it('forgetting a finding with a short quote hides the long passage only, never every line that shares a word', () => owner(async ({ storage, send }) => {
+    const claims = claimStore(storage.sql, work => storage.transactionSync(work)), consent = consentLedger(storage.sql), findings = findingStore(storage.sql, claims, consent);
+    consent.grant('owner_lookup', 1, 1);
+    const { id } = findings.record({ category: 'based_in', text: 'Based in Pune since 2019', source_url: 'https://samrivera.dev/about', evidence_quote: 'Pune', anchor: 'samrivera.dev' }, 'About', 2) as { id: string };
+    const episodes = episodeIndex(storage.sql);
+    episodes.add('e1', 'owner', 'Book me a table in Pune on Friday', '2026-10-20T10:00:00Z');
+    episodes.add('e2', 'waldo', 'Your site says: Based in Pune since 2019', '2026-10-20T10:01:00Z');
+    expect((await send('/app/v1/findings/actions', { request_id: 'finding-forget-s', finding_id: id, action: 'forget' })).status).toBe(200);
+    expect(storage.sql.exec<{ text: string }>('SELECT text FROM episodes ORDER BY entry_id').toArray().map(row => row.text)).toEqual(['Book me a table in Pune on Friday', 'Your site says: [forgotten]']);
   }));
   it('forgets one finding and hides its copies in the chat', () => owner(async ({ storage, send }) => {
     const { id } = seed(storage);

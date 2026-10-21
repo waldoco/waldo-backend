@@ -118,6 +118,8 @@ describe('toolName', () => {
       'search_contacts',
       'send_progress_note',
       'attach_file',
+      'record_owner_finding',
+      'list_owner_findings',
     ]);
   });
 
@@ -313,6 +315,8 @@ describe('TOOL_PERMISSIONS', () => {
       'skills_install',
       'skills_disable',
       'skills_load',
+      'record_owner_finding',
+      'list_owner_findings',
       ],
       dreaming_mode: ['read_memory', 'search_episodes'],
       pre_activity_spot: [
