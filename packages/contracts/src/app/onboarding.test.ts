@@ -3,7 +3,7 @@ import {
   APP_PRIVACY_NOTICE_VERSION_V1, APP_TERMS_VERSION_V1, appConsentChangeV1Schema, appConsentGrantV1Schema, appConsentListV1Schema,
   appConsentStateV1Schema, appConsentWithdrawV1Schema, appFindingActionV1Schema, appFindingListV1Schema, appFindingResultV1Schema,
   appFindingV1Schema, appOnboardingActionV1Schema, appOnboardingErrorV1Schema, appOnboardingResultV1Schema, appOnboardingRoutesV1,
-  appOnboardingV1Schema, appConsentPurposeV1Schema,
+  appOnboardingV1Schema, appConsentPurposeV1Schema, appChannelLinkCodeV1Schema, appChannelLinkRequestV1Schema, appOnboardingChannelsV1Schema,
 } from './onboarding';
 import { healthPurposeV1Schema, healthSourceV1Schema } from './health-ingest';
 
@@ -67,6 +67,7 @@ describe('first run', () => {
       { ...r, action: 'start' },
       { ...r, action: 'agreements.accept', terms_version: 1, notice_version: 1, age_attested_18_plus: true, owner_lookup: false },
       { ...r, action: 'name.set', name: 'Sam' }, { ...r, action: 'brief_time.set', time: '07:30', timezone: 'Asia/Kolkata' },
+      ...['imessage', 'whatsapp', 'telegram'].map(provider => ({ ...r, action: 'channel.linked', provider })),
       { ...r, action: 'priority.set', text: 'Ship the board deck' }, ...['app', 'whatsapp', 'both'].map(surface => ({ ...r, action: 'channel.set', surface })), { ...r, action: 'health.connected' }, { ...r, action: 'first_look.request' },
       ...['name', 'google', 'health', 'brief_time', 'priority', 'channel'].map(step => ({ ...r, action: 'skip', step })), { ...r, action: 'complete' },
     ]);
@@ -76,6 +77,7 @@ describe('first run', () => {
       { ...r, action: 'name.set', name: '   ' }, { ...r, action: 'name.set', name: 'x'.repeat(81) },
       { ...r, action: 'brief_time.set', time: '7:30', timezone: 'Asia/Kolkata' }, { ...r, action: 'brief_time.set', time: '07:30' }, { ...r, action: 'brief_time.set', time: '07:30', timezone: '../etc' },
       { ...r, action: 'priority.set', text: '' }, { ...r, action: 'skip', step: 'agreements' }, { ...r, action: 'skip', step: 'first_look' },
+      { ...r, action: 'channel.linked' }, { ...r, action: 'channel.linked', provider: 'app' }, { ...r, action: 'channel.linked', provider: 'discord' }, { ...r, action: 'channel.linked', provider: 'telegram', code: 'ABCDEFGHJK' },
       { ...r, action: 'channel.set', surface: 'telegram' }, { ...r, action: 'channel.set' }, { ...r, action: 'channel.set', surface: 'app', extra: true }, { ...r, action: 'mood.set', value: 'tired' }, { ...r, action: 'start', owner_id: 'forged' }, { action: 'start' }, { ...r, action: 'name.set', name: 'Sam', extra: true },
     ]);
   });
@@ -111,12 +113,47 @@ describe('look-up findings', () => {
   });
 });
 
+describe('chat channels', () => {
+  const channels = [{ provider: 'imessage', state: 'linked' }, { provider: 'whatsapp', state: 'not_linked' }, { provider: 'telegram', state: 'not_offered' }];
+  it('lists iMessage, WhatsApp and Telegram once each with what the owner can do with them', () => {
+    accepted(appOnboardingChannelsV1Schema, [{ surface: 'app', channels }, { surface: 'both', channels: channels.map(channel => ({ ...channel, state: 'unknown' })) }]);
+    rejected(appOnboardingChannelsV1Schema, [
+      { surface: 'app', channels: channels.slice(1) }, { surface: 'app', channels: [channels[0], channels[0], channels[1]] }, { channels },
+      { surface: 'app', channels: channels.map(channel => ({ ...channel, state: 'connected' })) }, { surface: 'app', channels: [...channels.slice(0, 2), { provider: 'app', state: 'linked' }] },
+      { surface: 'telegram', channels }, { surface: 'app', channels, extra: true },
+    ]);
+  });
+  const code = 'ABCDEFGHJK';
+  it('hands out a one-time code that names the text to send, for any provider', () => {
+    accepted(appChannelLinkRequestV1Schema, ['imessage', 'whatsapp', 'telegram'].map(provider => ({ provider })));
+    rejected(appChannelLinkRequestV1Schema, [{}, { provider: 'app' }, { provider: 'whatsapp', request_id: 'link-0001' }, { provider: 'whatsapp', owner: 'other' }]);
+    accepted(appChannelLinkCodeV1Schema, [
+      { provider: 'imessage', code, text: `waldo ${code}`, address: '+15550100', send_url: `sms:+15550100&body=waldo%20${code}`, expires_in_seconds: 600 },
+      { provider: 'whatsapp', code, text: `waldo ${code}`, address: null, send_url: null, expires_in_seconds: 600 },
+      { provider: 'telegram', code, text: `/link ${code}`, address: null, send_url: null, expires_in_seconds: 600 },
+    ]);
+    rejected(appChannelLinkCodeV1Schema, [
+      { provider: 'telegram', code, text: '/link', address: null, send_url: null, expires_in_seconds: 600 },
+      { provider: 'whatsapp', code: 'abc', text: 'waldo abc', address: null, send_url: null, expires_in_seconds: 600 },
+      { provider: 'whatsapp', code, text: `waldo ${code}`, address: null, send_url: 'https://example.com', expires_in_seconds: 600 },
+      { provider: 'whatsapp', code, text: `waldo ${code}`, address: null, send_url: null, expires_in_seconds: 60 },
+      { provider: 'whatsapp', code, text: `waldo ${code}`, address: null, send_url: null },
+    ]);
+  });
+});
+
 describe('routes', () => {
-  it('are authenticated, and every write is idempotent by request_id', () => {
+  // The link-code route answers with a one-time secret, so it has no request_id: a replay is recorded nowhere and a repeat
+  // simply issues another code.
+  const ONE_TIME_SECRET = '/app/v1/onboarding/channel-link';
+  it('are authenticated, and every write is idempotent by request_id except the one that returns a one-time code', () => {
     for (const route of appOnboardingRoutesV1) {
       expect(route.authenticated).toBe(true);
       expect(route.path.startsWith('/app/v1/')).toBe(true);
-      if (route.method === 'POST') expect('idempotency_field' in route && route.idempotency_field).toBe('request_id');
+      if (route.method === 'POST' && route.path !== ONE_TIME_SECRET) expect('idempotency_field' in route && route.idempotency_field).toBe('request_id');
     }
+    const link = appOnboardingRoutesV1.find(route => route.path === ONE_TIME_SECRET);
+    expect(link).toMatchObject({ method: 'POST', request: appChannelLinkRequestV1Schema, response: appChannelLinkCodeV1Schema });
+    expect(link && 'idempotency_field' in link).toBe(false);
   });
 });

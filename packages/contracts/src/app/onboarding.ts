@@ -52,7 +52,7 @@ export const appConsentChangeV1Schema = z.strictObject({ consent: appConsentStat
 
 // First run. Three questions at most, each skippable: name, brief_time and priority are the only steps that ask the owner
 // anything. google and health are connections the owner may decline; channel is a choice among fixed surfaces, with the app
-// the default when it is skipped; first_look is Waldo's first piece of work. A step is pending until the owner answers,
+// the default when it is skipped, plus linking a chat channel (iMessage, WhatsApp or Telegram, one flow for all); first_look is Waldo's first piece of work. A step is pending until the owner answers,
 // connects or skips it.
 export const appOnboardingStepV1Schema = z.enum(['agreements', 'name', 'google', 'health', 'first_look', 'brief_time', 'priority', 'channel']);
 export const appOnboardingStepStateV1Schema = z.enum(['pending', 'done', 'skipped']);
@@ -60,6 +60,30 @@ export const APP_ONBOARDING_SKIPPABLE_V1 = ['name', 'google', 'health', 'brief_t
 // Where Waldo's proactive messages go: the Brief, reminders and follow-ups. This is the console's own setting (app by default).
 // Choosing whatsapp or both before WhatsApp is linked is safe: delivery falls back to the app until the number is linked.
 export const appProactiveSurfaceV1Schema = z.enum(['app', 'whatsapp', 'both']);
+// The chat channels an owner can link, the same flow for each: iMessage, WhatsApp and Telegram (the team's test channel while it
+// lasts; the server stops offering it by reporting not_offered). linked is read live from the owner directory, never from the
+// app's word. not_offered means this server cannot link it, so the app hides it; unknown means the directory could not be read.
+export const appChatProviderV1Schema = z.enum(['imessage', 'whatsapp', 'telegram']);
+export const appChatLinkStateV1Schema = z.enum(['linked', 'not_linked', 'not_offered', 'unknown']);
+export const appOnboardingChannelsV1Schema = z.strictObject({
+  surface: appProactiveSurfaceV1Schema,
+  channels: z.array(z.strictObject({ provider: appChatProviderV1Schema, state: appChatLinkStateV1Schema })).length(appChatProviderV1Schema.options.length)
+    .refine(rows => new Set(rows.map(row => row.provider)).size === rows.length, 'each provider is listed once'),
+});
+// A one-time code the owner sends from their own phone, which links that account to their own Waldo. It has no request_id: it
+// is a secret that is never stored for a replay, and a repeat just issues another code. text is what to send; address and
+// send_url are set only where Waldo knows the number to open (iMessage). Linking is the owner's act in the app, never Waldo's:
+// no tool can issue a code, and a turn that read untrusted text could only ask for one through an approval card.
+export const appChannelLinkRequestV1Schema = z.strictObject({ provider: appChatProviderV1Schema });
+export const appChannelLinkCodeV1Schema = z.strictObject({
+  provider: appChatProviderV1Schema,
+  code: z.string().regex(/^[A-HJ-NP-Z2-9]{10}$/),
+  text: z.string().max(64),
+  address: z.string().min(3).max(320).nullable(),
+  send_url: z.string().startsWith('sms:').max(512).nullable(),
+  expires_in_seconds: z.literal(600),
+}).refine(link => link.text.endsWith(link.code), { error: 'the text to send carries the code', path: ['text'] });
+
 const steps = z.strictObject({
   agreements: appOnboardingStepStateV1Schema, name: appOnboardingStepStateV1Schema, google: appOnboardingStepStateV1Schema,
   health: appOnboardingStepStateV1Schema, first_look: appOnboardingStepStateV1Schema, brief_time: appOnboardingStepStateV1Schema,
@@ -98,6 +122,7 @@ export const appOnboardingActionV1Schema = z.discriminatedUnion('action', [
   action('brief_time.set', { time: clock, timezone }),
   action('priority.set', { text: z.string().trim().min(1).max(500) }),
   action('channel.set', { surface: appProactiveSurfaceV1Schema }),
+  action('channel.linked', { provider: appChatProviderV1Schema }),
   action('skip', { step: z.enum(APP_ONBOARDING_SKIPPABLE_V1) }),
   action('complete', {}),
 ]);
@@ -139,18 +164,22 @@ export const appFindingResultV1Schema = z.strictObject({
   request_id: requestId, finding_id: appFindingIdV1Schema, outcome: z.enum(['kept', 'corrected', 'forgotten']), replayed: z.boolean(),
 });
 
+// channel.linked marks the channel step done once the owner directory shows that provider linked, as health.connected does for health.
 // A client acts on `error` only. stale_version: the grant named a copy that is no longer current. agreements_required: a step
 // that needs the accepted agreements came first. not_started: the run must be started first. not_connected: health.connected
-// found no live health consent. completed: the run is finished and changes go through the controls. request_reused: a
+// found no live health consent, or channel.linked found the provider not linked. not_offered: this server cannot link that chat
+// channel. completed: the run is finished and changes go through the controls. request_reused: a
 // request_id came back with a different body. not_found: no such finding.
 export const appOnboardingErrorV1Schema = z.strictObject({
-  error: z.enum(['invalid_request', 'stale_version', 'agreements_required', 'not_started', 'not_connected', 'completed', 'request_reused', 'not_found', 'unavailable']),
+  error: z.enum(['invalid_request', 'stale_version', 'agreements_required', 'not_started', 'not_connected', 'not_offered', 'completed', 'request_reused', 'not_found', 'unavailable']),
   message: z.string().max(1000).optional(),
 });
 
 export const appOnboardingRoutesV1 = [
   { method: 'GET', path: '/app/v1/onboarding', response: appOnboardingV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/onboarding/actions', request: appOnboardingActionV1Schema, response: appOnboardingResultV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: APP_ONBOARDING_MAX_REQUEST_BYTES_V1 },
+  { method: 'GET', path: '/app/v1/onboarding/channels', response: appOnboardingChannelsV1Schema, authenticated: true, success_status: 200 },
+  { method: 'POST', path: '/app/v1/onboarding/channel-link', request: appChannelLinkRequestV1Schema, response: appChannelLinkCodeV1Schema, authenticated: true, success_status: 200, max_request_bytes: APP_ONBOARDING_MAX_REQUEST_BYTES_V1 },
   { method: 'GET', path: '/app/v1/consents', response: appConsentListV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/consents', request: appConsentGrantV1Schema, response: appConsentChangeV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: APP_ONBOARDING_MAX_REQUEST_BYTES_V1 },
   { method: 'POST', path: '/app/v1/consents/withdraw', request: appConsentWithdrawV1Schema, response: appConsentChangeV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: APP_ONBOARDING_MAX_REQUEST_BYTES_V1 },
@@ -164,6 +193,10 @@ export type AppOnboardingV1 = z.infer<typeof appOnboardingV1Schema>;
 export type AppOnboardingActionV1 = z.infer<typeof appOnboardingActionV1Schema>;
 export type AppOnboardingStepV1 = z.infer<typeof appOnboardingStepV1Schema>;
 export type AppProactiveSurfaceV1 = z.infer<typeof appProactiveSurfaceV1Schema>;
+export type AppChatProviderV1 = z.infer<typeof appChatProviderV1Schema>;
+export type AppChatLinkStateV1 = z.infer<typeof appChatLinkStateV1Schema>;
+export type AppOnboardingChannelsV1 = z.infer<typeof appOnboardingChannelsV1Schema>;
+export type AppChannelLinkCodeV1 = z.infer<typeof appChannelLinkCodeV1Schema>;
 export type AppFindingV1 = z.infer<typeof appFindingV1Schema>;
 export type AppFindingCategoryV1 = z.infer<typeof appFindingCategoryV1Schema>;
 export type AppFindingActionV1 = z.infer<typeof appFindingActionV1Schema>;

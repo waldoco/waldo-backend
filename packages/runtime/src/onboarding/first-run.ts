@@ -1,6 +1,6 @@
 import {
   APP_ONBOARDING_SKIPPABLE_V1, appOnboardingStepV1Schema, appOnboardingV1Schema,
-  type AppOnboardingActionV1, type AppOnboardingStepV1, type AppProactiveSurfaceV1, type AppOnboardingV1,
+  type AppChatProviderV1, type AppOnboardingActionV1, type AppOnboardingStepV1, type AppProactiveSurfaceV1, type AppOnboardingV1,
 } from '../../../contracts/src/app/onboarding';
 import type { ClaimStore } from '../memory/claims';
 import type { ConsentLedger } from './consent-ledger';
@@ -22,12 +22,14 @@ export type FirstRunHost = Readonly<{
   // The owner's proactive-surface setting (the console's own): read it for the view, write it for the channel step.
   proactiveSurface(): AppProactiveSurfaceV1;
   setProactiveSurface(surface: AppProactiveSurfaceV1): boolean;
+  // Whether the owner directory shows this chat channel linked; 'not_offered' where the server cannot link it, 'unknown' when it cannot say.
+  chatLink(provider: AppChatProviderV1): Promise<'linked' | 'not_linked' | 'not_offered' | 'unknown'>;
   // Sets the owner's zone, pins The Brief at time and makes quiet hours end when it arrives.
   setBriefTime(time: string, timezone: string): Promise<boolean>;
   // Admits one main-chat message under clientId; repeating the id returns the first admission.
   admitFirstLook(clientId: string, text: string): Promise<boolean>;
 }>;
-export type FirstRunError = 'stale_version' | 'agreements_required' | 'not_started' | 'not_connected' | 'completed' | 'unavailable';
+export type FirstRunError = 'stale_version' | 'agreements_required' | 'not_started' | 'not_connected' | 'not_offered' | 'completed' | 'unavailable';
 
 // The request the first look sends into main chat on the owner's tap. It reads as what the owner asked for, because it is.
 export const FIRST_LOOK_TEXT = 'Show me today as you see it, and what you noticed about how I work.';
@@ -124,6 +126,14 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, f
         if (!host.setProactiveSurface(action.surface)) return 'unavailable';
         step(row()!, 'channel', 'done');
         return null;
+      case 'channel.linked': {
+        const state = await host.chatLink(action.provider);
+        if (state === 'not_offered') return 'not_offered';
+        if (state === 'unknown') return 'unavailable';
+        if (state === 'not_linked') return 'not_connected';
+        step(row()!, 'channel', 'done');
+        return null;
+      }
       case 'first_look.request': {
         // One first look per run: the client id comes from the run, so a repeat or a second device gets the same message.
         const client = `onboarding-first-look-${run.run_id.slice(4, 36)}`;

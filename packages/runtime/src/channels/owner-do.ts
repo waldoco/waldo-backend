@@ -1,5 +1,6 @@
 import { appControlsRequest } from './app-controls';
 import { APP_ONBOARDING_PATHS, appOnboardingRequest, ownerOnboardingHost } from './app-onboarding';
+import { chatChannelLinks } from './chat-channel-links';
 import { consentLedger } from '../onboarding/consent-ledger';
 import { findingStore, observeReads, observedPages, ownerLookupHandlers } from '../onboarding/findings';
 import { consoleLog, consoleTrace } from '../observability/console-correlation';
@@ -1020,6 +1021,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const current=async()=>{await this.appAuthority(name,hash);};
         try{
           return await appOnboardingRequest(request,ownerOnboardingHost({storage:this.ctx.storage,doName:name,now:Date.now,rpc:signedRpc(this.env),assertCurrent:current,
+            chat:chatChannelLinks({env:this.env,kv:this.ctx.storage.kv,doName:name,auth:consoleAuth(this.env)}),
             act:action=>this.setup('app').act(action,current),
             admit:async(client,text)=>{
               this.bindAppSubject(name);

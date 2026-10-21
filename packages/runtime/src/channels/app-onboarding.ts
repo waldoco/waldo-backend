@@ -1,9 +1,11 @@
 import {
-  APP_FINDINGS_PAGE_MAX_V1, APP_ONBOARDING_MAX_REQUEST_BYTES_V1, appConsentChangeV1Schema, appConsentGrantV1Schema, appConsentListV1Schema,
+  APP_FINDINGS_PAGE_MAX_V1, APP_ONBOARDING_MAX_REQUEST_BYTES_V1, appChannelLinkCodeV1Schema, appChannelLinkRequestV1Schema, appChatProviderV1Schema,
+  appOnboardingChannelsV1Schema, type AppOnboardingChannelsV1, type AppProactiveSurfaceV1, appConsentChangeV1Schema, appConsentGrantV1Schema, appConsentListV1Schema,
   appConsentWithdrawV1Schema, appFindingActionV1Schema, appFindingListQueryV1Schema, appFindingListV1Schema, appFindingResultV1Schema,
   appOnboardingActionV1Schema, appOnboardingResultV1Schema, appOnboardingV1Schema,
 } from '../../../contracts/src/app/onboarding';
 import { literalTextRedactor } from '@waldo/contracts';
+import type { ChatChannels } from './chat-channel-links';
 import { z } from 'zod';
 import { redactToolOutputLedger } from '../conversation/tool-output-ledger';
 import { claimStore, FORGOTTEN } from '../memory/claims';
@@ -16,10 +18,14 @@ import { loopBook } from './loops';
 import { md5Hex } from './md5';
 import { proactiveSurface, setProactiveSurface } from './proactive-surface';
 
-export const APP_ONBOARDING_PATHS: readonly string[] = ['/app/v1/onboarding', '/app/v1/onboarding/actions', '/app/v1/consents', '/app/v1/consents/withdraw', '/app/v1/findings', '/app/v1/findings/actions'];
+const CHANNELS_PATH = '/app/v1/onboarding/channels', CHANNEL_LINK_PATH = '/app/v1/onboarding/channel-link';
+export const APP_ONBOARDING_PATHS: readonly string[] = ['/app/v1/onboarding', '/app/v1/onboarding/actions', CHANNELS_PATH, CHANNEL_LINK_PATH, '/app/v1/consents', '/app/v1/consents/withdraw', '/app/v1/findings', '/app/v1/findings/actions'];
 
 export type AppOnboardingHost = Readonly<{
   firstRun: FirstRun; consent: ConsentLedger; findings: FindingStore; requests: RequestBook;
+  chat: ChatChannels;
+  // The owner's proactive-surface setting (the console's own).
+  proactiveSurface(): AppProactiveSurfaceV1;
   now(): number;
   transaction<T>(work: () => T): T;
   // Hides retained copies of a forgotten finding in chat history and stored tool output.
@@ -39,7 +45,7 @@ export const healthStepConnected = (rows: z.infer<typeof healthConsentRows>['con
   return rows.some(row => row.purpose === 'storage_compute' && live(row.source, 'storage_compute') && (DEVICE_HEALTH_SOURCES.has(row.source) || live(row.source, 'model_processing')));
 };
 
-const STATUS = { invalid_request: 400, not_found: 404, stale_version: 409, agreements_required: 409, not_started: 409, not_connected: 409, completed: 409, request_reused: 409, unavailable: 503 } as const;
+const STATUS = { invalid_request: 400, not_found: 404, stale_version: 409, agreements_required: 409, not_started: 409, not_connected: 409, not_offered: 409, completed: 409, request_reused: 409, unavailable: 503 } as const;
 type Problem = keyof typeof STATUS;
 const reply = (body: object, status = 200) => Response.json(body, { status, headers: { 'cache-control': 'private, no-store' } });
 const problem = (error: Problem) => reply({ error }, STATUS[error]);
@@ -58,6 +64,11 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
   const answer = async (body: object) => { await host.assertCurrent(); return reply(body); };
   if (request.method === 'GET') {
     if (path === '/app/v1/onboarding' && !url.search) return answer(appOnboardingV1Schema.parse(await host.firstRun.view()));
+    if (path === CHANNELS_PATH && !url.search) {
+      const channels = await Promise.all(appChatProviderV1Schema.options.map(async provider =>
+        ({ provider, state: host.chat.offered(provider) ? await host.chat.linked(provider) : 'not_offered' as const })));
+      return answer(appOnboardingChannelsV1Schema.parse({ surface: host.proactiveSurface(), channels } satisfies AppOnboardingChannelsV1));
+    }
     if (path === '/app/v1/consents' && !url.search) return answer(appConsentListV1Schema.parse(host.consent.list()));
     if (path === '/app/v1/findings') {
       if ([...url.searchParams.keys()].some(key => url.searchParams.getAll(key).length !== 1)) return problem('invalid_request');
@@ -68,8 +79,17 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
     }
     return path.startsWith('/app/v1/') && APP_ONBOARDING_PATHS.includes(path) ? reply({ error: 'method_not_allowed' }, 405) : problem('not_found');
   }
-  if (request.method !== 'POST' || !['/app/v1/onboarding/actions', '/app/v1/consents', '/app/v1/consents/withdraw', '/app/v1/findings/actions'].includes(path)) return reply({ error: 'method_not_allowed' }, 405);
+  if (request.method !== 'POST' || !['/app/v1/onboarding/actions', CHANNEL_LINK_PATH, '/app/v1/consents', '/app/v1/consents/withdraw', '/app/v1/findings/actions'].includes(path)) return reply({ error: 'method_not_allowed' }, 405);
   const raw = await readBody(request);
+  if (path === CHANNEL_LINK_PATH) {
+    // The answer is a one-time secret, so it never enters the request book: a repeat issues another code.
+    const link = appChannelLinkRequestV1Schema.safeParse(raw);
+    if (!link.success) return problem('invalid_request');
+    if (!host.consent.active('terms') || !host.consent.active('privacy_notice')) return problem('agreements_required');
+    if (!host.chat.offered(link.data.provider)) return problem('not_offered');
+    const issued = await host.chat.issue(link.data.provider).catch(() => null);
+    return issued ? answer(appChannelLinkCodeV1Schema.parse(issued)) : problem('unavailable');
+  }
   const parsed = path === '/app/v1/onboarding/actions' ? appOnboardingActionV1Schema.safeParse(raw)
     : path === '/app/v1/consents' ? appConsentGrantV1Schema.safeParse(raw)
     : path === '/app/v1/consents/withdraw' ? appConsentWithdrawV1Schema.safeParse(raw)
@@ -122,6 +142,8 @@ export type OwnerOnboardingDeps = Readonly<{
   act(action: Readonly<{ action: 'timezone.set' | 'proactivity.set' | 'card.pin'; id: string; value: string }>): Promise<unknown>;
   admit(clientId: string, text: string): Promise<boolean>;
   assertCurrent(): Promise<void>;
+  // The chat channels the owner can link.
+  chat: ChatChannels;
 }>;
 // Quiet hours run from this time until the Brief, so nothing but the Brief opens the owner's morning.
 export const FIRST_RUN_QUIET_FROM = '22:00';
@@ -142,6 +164,7 @@ export const ownerOnboardingHost = (deps: OwnerOnboardingDeps): AppOnboardingHos
     timezoneConfirmed: () => storage.kv.get<boolean>('timezone_confirmed') === true,
     proactiveSurface: () => proactiveSurface(storage.kv),
     setProactiveSurface: surface => setProactiveSurface(storage.kv, surface),
+    chatLink: async provider => deps.chat.offered(provider) ? deps.chat.linked(provider) : 'not_offered',
     async setBriefTime(time, timezone) {
       if (await deps.act({ action: 'timezone.set', id: '', value: timezone }) !== true) return false;
       if (await deps.act({ action: 'card.pin', id: 'card:brief', value: time }) !== true) return false;
@@ -151,7 +174,7 @@ export const ownerOnboardingHost = (deps: OwnerOnboardingDeps): AppOnboardingHos
     admitFirstLook: deps.admit,
   };
   return {
-    firstRun: firstRun(sql, consent, claims, findings, firstRunHost, now), consent, findings, requests: requestBook(sql, now), now, transaction,
+    firstRun: firstRun(sql, consent, claims, findings, firstRunHost, now), consent, findings, requests: requestBook(sql, now), chat: deps.chat, proactiveSurface: firstRunHost.proactiveSurface, now, transaction,
     assertCurrent: deps.assertCurrent,
     // A short literal would hide every chat line that happens to contain it, so only passages of the length the owner-evidence
     // rule uses are swept; the finding itself is gone either way.

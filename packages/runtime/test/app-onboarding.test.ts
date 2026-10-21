@@ -1,7 +1,8 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { appConsentChangeV1Schema, appFindingListV1Schema, appOnboardingResultV1Schema, appOnboardingV1Schema } from '../../contracts/src/app/onboarding';
+import { appChannelLinkCodeV1Schema, appConsentChangeV1Schema, appFindingListV1Schema, appOnboardingChannelsV1Schema, appOnboardingResultV1Schema, appOnboardingV1Schema } from '../../contracts/src/app/onboarding';
+import type { ChatChannels } from '../src/channels/chat-channel-links';
 import { appOnboardingRequest, ownerOnboardingHost, type OwnerOnboardingDeps } from '../src/channels/app-onboarding';
 import { claimStore } from '../src/memory/claims';
 import { consentLedger } from '../src/onboarding/consent-ledger';
@@ -10,13 +11,14 @@ import { episodeIndex } from '../src/channels/episodes';
 
 let sequence = 0;
 type Calls = { acts: unknown[]; admitted: string[]; rpc: number };
-type Fakes = Partial<Pick<OwnerOnboardingDeps, 'rpc' | 'act' | 'admit'>>;
+type Fakes = Partial<Pick<OwnerOnboardingDeps, 'rpc' | 'act' | 'admit' | 'chat' | 'assertCurrent'>>;
+const NO_CHAT: ChatChannels = { offered: () => false, linked: async () => 'unknown', issue: async () => null };
 const owner = <T>(fn: (o: { storage: DurableObjectStorage; calls: Calls; send(path: string, body?: unknown, method?: string): Promise<Response>; act(body: Record<string, unknown>): Promise<Response> }) => Promise<T>, fakes: Fakes = {}) =>
   runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`app-onboarding-${sequence++}`)), async (_instance, state) => {
     const calls: Calls = { acts: [], admitted: [], rpc: 0 };
     let clock = 1_000;
     const deps: OwnerOnboardingDeps = {
-      storage: state.storage, doName: 'owner-name', now: () => clock++, assertCurrent: async () => {},
+      storage: state.storage, doName: 'owner-name', now: () => clock++, assertCurrent: fakes.assertCurrent ?? (async () => {}), chat: fakes.chat ?? NO_CHAT,
       rpc: fakes.rpc ?? (async () => { calls.rpc += 1; return { consents: [] }; }),
       act: fakes.act ?? (async action => { calls.acts.push(action); if (action.action === 'timezone.set') state.storage.kv.put('timezone_confirmed', true); return true; }),
       admit: fakes.admit ?? (async client => { calls.admitted.push(client); return true; }),
@@ -133,6 +135,93 @@ describe('first run', () => {
     const reused = await send('/app/v1/onboarding/actions', { ...body, action: 'complete' });
     expect([reused.status, await reused.json()]).toEqual([409, { error: 'request_reused' }]);
   }));
+});
+
+describe('chat channels in the first run', () => {
+  const CODE = 'ABCDEFGHJK';
+  const chat = (state: Record<string, 'linked' | 'not_linked' | 'unknown'>, offered: string[] = ['imessage', 'whatsapp', 'telegram']) => {
+    const issued: string[] = [];
+    const channels: ChatChannels = {
+      offered: provider => offered.includes(provider), linked: async provider => state[provider] ?? 'not_linked',
+      issue: async provider => { issued.push(provider); return { provider, code: CODE, text: provider === 'telegram' ? `/link ${CODE}` : `waldo ${CODE}`, address: null, send_url: null, expires_in_seconds: 600 }; },
+    };
+    return { issued, channels };
+  };
+  it('lists the three chat channels with the live state of each, and says which the server does not offer', () => {
+    const { channels } = chat({ imessage: 'linked', whatsapp: 'unknown' }, ['imessage', 'whatsapp']);
+    return owner(async ({ send }) => {
+      const view = appOnboardingChannelsV1Schema.parse(await (await send('/app/v1/onboarding/channels')).json());
+      expect(view).toEqual({ surface: 'app', channels: [{ provider: 'imessage', state: 'linked' }, { provider: 'whatsapp', state: 'unknown' }, { provider: 'telegram', state: 'not_offered' }] });
+    }, { chat: channels });
+  });
+  it('gives the same link flow to every provider, and never stores the code', () => {
+    const { issued, channels } = chat({});
+    return owner(async ({ storage, send, act }) => {
+      await act({ action: 'start' }); await act(agree);
+      for (const provider of ['imessage', 'whatsapp', 'telegram']) {
+        const response = await send('/app/v1/onboarding/channel-link', { provider });
+        expect([provider, response.status, response.headers.get('cache-control')]).toEqual([provider, 200, 'private, no-store']);
+        expect(appChannelLinkCodeV1Schema.parse(await response.json())).toMatchObject({ provider, code: CODE });
+      }
+      await send('/app/v1/onboarding/channel-link', { provider: 'whatsapp' });
+      expect(issued).toEqual(['imessage', 'whatsapp', 'telegram', 'whatsapp']);
+      // A secret must not sit in the replay book or the run: only its absence is the guarantee.
+      const everything = JSON.stringify([storage.sql.exec('SELECT * FROM app_write_requests').toArray(), storage.sql.exec('SELECT * FROM onboarding_runs').toArray()]);
+      expect(everything).not.toContain(CODE);
+    }, { chat: channels });
+  });
+  it('issues no code before the agreements, for a provider not offered, or for an unknown provider', () => {
+    const { issued, channels } = chat({}, ['whatsapp']);
+    return owner(async ({ send, act }) => {
+      await act({ action: 'start' });
+      expect(await (await send('/app/v1/onboarding/channel-link', { provider: 'whatsapp' })).json()).toEqual({ error: 'agreements_required' });
+      await act(agree);
+      expect(await (await send('/app/v1/onboarding/channel-link', { provider: 'imessage' })).json()).toEqual({ error: 'not_offered' });
+      expect((await send('/app/v1/onboarding/channel-link', { provider: 'discord' })).status).toBe(400);
+      expect((await send('/app/v1/onboarding/channel-link', { provider: 'whatsapp', request_id: 'link-0001' })).status).toBe(400);
+      expect((await send('/app/v1/onboarding/channel-link', {})).status).toBe(400);
+      expect(issued).toEqual([]);
+    }, { chat: channels });
+  });
+  it('answers unavailable when the directory gives no code', () => owner(async ({ send, act }) => {
+    await act({ action: 'start' }); await act(agree);
+    const response = await send('/app/v1/onboarding/channel-link', { provider: 'telegram' });
+    expect([response.status, await response.json()]).toEqual([503, { error: 'unavailable' }]);
+  }, { chat: { offered: () => true, linked: async () => 'not_linked', issue: async () => null } }));
+  it('issues nothing when the app session is no longer current', () => {
+    const { issued, channels } = chat({});
+    let ended = false;
+    return owner(async ({ send, act }) => {
+      await act({ action: 'start' }); await act(agree);
+      ended = true;
+      await expect(send('/app/v1/onboarding/channel-link', { provider: 'whatsapp' })).rejects.toThrow('session ended');
+      expect(issued).toEqual([]);
+    }, { chat: channels, assertCurrent: async () => { if (ended) throw new Error('session ended'); } });
+  });
+  it('marks the channel step done only when the directory shows the provider linked', () => {
+    const { channels } = chat({ whatsapp: 'linked', imessage: 'unknown' });
+    return owner(async ({ act }) => {
+      await act({ action: 'start' }); await act(agree);
+      const notLinked = await act({ action: 'channel.linked', provider: 'telegram' });
+      expect([notLinked.status, await notLinked.json()]).toEqual([409, { error: 'not_connected' }]);
+      const unknown = await act({ action: 'channel.linked', provider: 'imessage' });
+      expect([unknown.status, await unknown.json()]).toEqual([503, { error: 'unavailable' }]);
+      expect((await run(await act({ action: 'start' }))).steps.channel).toBe('pending');
+      expect((await run(await act({ action: 'channel.linked', provider: 'whatsapp' }))).steps.channel).toBe('done');
+    }, { chat: channels });
+  });
+  it('does not mark a provider the server does not offer, even if the directory says linked', () => {
+    const { channels } = chat({ telegram: 'linked' }, ['whatsapp']);
+    return owner(async ({ act }) => {
+      await act({ action: 'start' }); await act(agree);
+      expect(await (await act({ action: 'channel.linked', provider: 'telegram' })).json()).toEqual({ error: 'not_offered' });
+      expect((await run(await act({ action: 'start' }))).steps.channel).toBe('pending');
+    }, { chat: channels });
+  });
+  it('refuses to mark a channel before the agreements', () => owner(async ({ act }) => {
+    await act({ action: 'start' });
+    expect(await (await act({ action: 'channel.linked', provider: 'whatsapp' })).json()).toEqual({ error: 'agreements_required' });
+  }, { chat: chat({ whatsapp: 'linked' }).channels }));
 });
 
 describe('one consent representation per purpose', () => {
