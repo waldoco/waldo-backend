@@ -94,7 +94,7 @@ Later: #1253 and #1260 (`owner-do` structural), then the #1227/#1238/#1240 stack
 - Model per lane: Opus for design, security and privacy; Sonnet for implementing a settled design, carries and doc syncs. About five concurrent building sessions is fine; start more to fix newly found issues.
 - APIs and MCP first; browser and computer use last. Tools are strong, never narrowed. No restriction without a named harm; degrade, don't fail.
 
-## Who owns what (FINAL, 21 Oct ~16:30Z)
+## Who owns what (FINAL, 21 Oct 16:02Z)
 
 **All work now moves to cloud sessions on Ansh's account.** The original account's sessions have stopped. Each one pushed its work and wrote a `## Handoff` section at the top of its PR. Nobody on the original account pushes or merges until the owner says it is taking back over.
 
@@ -174,7 +174,7 @@ Append an entry each time you finish a merge, a lane milestone or a decision. Co
 | 2026-10-21 12:46 | **Train #1358 merged** (`19ccd5e8`). #1351, #1347 and #1352 all show merged. The five #1351 constituents (#1340, #1343, #1243, #1248, #1348) still need closing as "landed via #1351/#1358". | beta-mvp `19ccd5e8` | Close the constituents (orchestrator). |
 | 2026-10-21 14:50 | Five lanes hit the original account's usage limit mid-work. The orchestrator committed their uncommitted work as found ("WIP: checkpoint at the session limit") and pushed it: #1357 `7b71f5a1`, #1354 `13049cf3`, #1355 `2f533c04`, new branch `evals/state-memory` `73b8f645`, and the #1311 carry `36123341`. These WIP commits may not build. | — | Lanes re-check typecheck and tests first. |
 | 2026-10-21 15:55 | Limit reset. Orchestrator and lanes resumed; wearables, onboarding, evals and WhatsApp moved to Sonnet. Work split per "Who owns what". | — | Cloud: gate reviews, plus fixing #1346/#1349. |
-| 2026-10-21 16:30 | The owner moved ALL work to Ansh's cloud sessions to save the original account's usage. Every local lane was told to stop, push and finalize its `## Handoff`. Roles are C0–C7 (see "Who owns what"). | — | Start C0 first. |
+| 2026-10-21 16:02 | The owner moved ALL work to Ansh's cloud sessions to save the original account's usage. Every local lane was told to stop, push and finalize its `## Handoff`. Roles are C0–C7 (see "Who owns what"). | — | Start C0 first. |
 
 ### Owner asks raised since handoff
 
