@@ -68,7 +68,8 @@ export const turnEventSchema = z.strictObject({
   usage: turnModelUsageSchema.optional(),
   cost_kind: costKindSchema.optional(),
   responsibility_id: z.string().optional(),
-  shape: z.strictObject({ system_bytes: count, request_bytes: count, context: turnContextShapeSchema.optional() }).optional(),
+  // voice_version: the voice block's version on calls whose system prompt carries it.
+  shape: z.strictObject({ system_bytes: count, request_bytes: count, voice_version: count.optional(), context: turnContextShapeSchema.optional() }).optional(),
   text: turnTextSchema.optional(),
   // v9: tools and parallelism (a batch is a group of tool calls dispatched concurrently; one call is one batch).
   tools_called: count.optional(),

@@ -303,13 +303,14 @@ describe('otlpTurnExporter', () => {
     const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
     await log({ trace: 'tg-ctx', hop: 'llm_reply', ms: 5, ok: true,
       usage: { model: OPENAI_GPT_6_LUNA_MODEL, input: 100, output: 10, cached: 0 },
-      shape: { system_bytes: 40, request_bytes: 90, context: {
+      shape: { system_bytes: 40, request_bytes: 90, voice_version: 2, context: {
         tools_count: 3, tools_bytes: 1200, tool_turns_bytes: 0, history_messages: 2, history_bytes: 30, current_bytes: 12, attachments: 0,
         system_sections: { behavior: 20 }, context_sections: { clock: 8, memory: 8 } } } });
     await log({ trace: 'tg-ctx', hop: 'turn', ms: 10, ok: true });
     const generation = spans(0).find((span) => span.name === 'llm_reply')!;
     expect(attrs(generation)).toMatchObject({
       'langfuse.observation.metadata.context_system_bytes': '40',
+      'langfuse.observation.metadata.voice_version': '2',
       'langfuse.observation.metadata.context_tools_count': '3',
       'langfuse.observation.metadata.context_tools_bytes': '1200',
       'langfuse.observation.metadata.context_history_messages': '2',
