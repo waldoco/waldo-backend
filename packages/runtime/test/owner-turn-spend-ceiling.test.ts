@@ -9,105 +9,134 @@ import {
   triggerTypeSchema,
   type ToolName,
 } from '@waldo/contracts';
-import { createOwnerResponder, SPEND_CEILING_HELD } from '../src/channels/owner-turn';
-import { spendPosture } from '../src/llm/cost-ledger';
+import { createOwnerResponder, SPEND_CEILING_HELD, type OwnerSpend } from '../src/channels/owner-turn';
+import { MONTHLY_SPEND_CEILING_USD } from '../src/llm/cost-ledger';
+import { modelCost } from '../src/llm/pricing';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
+import { costRollup } from '../src/observability/cost-rollup';
 import { getContextHandler } from '../src/tools/live/get-context';
 import { ownerTyped } from './helpers/owner-typed';
 
-// Past the owner's monthly ceiling a turn degrades instead of stopping: the owner's own turn runs on the auxiliary
-// model with its own fallback, paid tools answer with a refusal the model can pass on, and a turn keeps the model it
-// started on even when the ceiling is crossed mid-turn.
+// Past the owner's monthly ceiling a turn degrades instead of stopping: the provider clamps every call of the turn to the
+// auxiliary route (Luna, then Haiku), paid tools are held (traced as budget_exhausted), machine turns such as the Brief still go out,
+// and a turn keeps the route it started on even when the ceiling is crossed mid-turn.
 
 const time = async <T,>(_hop: string, work: () => Promise<T>) => work();
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => (TOOL_PERMISSIONS[trigger] as readonly ToolName[]).includes(name));
 const clock = { timezone: 'Asia/Kolkata', now: () => new Date('2026-10-21T08:20:00Z') };
+const NOW = Date.UTC(2026, 9, 21, 8, 20);
 
 type Step = Readonly<{ tool: string; args: Record<string, unknown> }> | Readonly<{ text: string }> | 'fail';
-const scripted = (steps: readonly Step[], onCall: () => void = () => undefined) => {
+const scripted = (steps: readonly Step[], options: Readonly<{ onCall?: () => void; inputTokens?: number }> = {}) => {
   const requests: LLMGatewayRequest[] = [];
   let index = 0;
   const gateway: LLMGatewayAdapter = { complete: async (input) => {
     requests.push(input);
-    onCall();
+    options.onCall?.();
     const step = steps[Math.min(index++, steps.length - 1)]!;
     if (step === 'fail') return { ok: false, code: 'transient', error: 'down' };
-    const base = { model: input.request.model, input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, latency_ms: 1 };
+    const base = { model: input.request.model, input_tokens: options.inputTokens ?? 10, output_tokens: 5, cache_read_input_tokens: 0, latency_ms: 1 };
     if ('text' in step) return { ok: true, data: { ...base, text: step.text } };
     return { ok: true, data: { ...base, text: '', tool_calls: [{ call_id: `call-${index}`, name: step.tool, arguments: JSON.stringify(step.args) }] } };
   } };
   return { gateway, requests, models: () => requests.map((request) => request.request.model) };
 };
 
-const responder = (gateway: LLMGatewayAdapter, spend?: () => ReturnType<typeof spendPosture>, tools: Parameters<typeof createOwnerResponder>[5] = []) => {
-  const args: Parameters<typeof createOwnerResponder> = [{ openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic', floorReply: true }];
+type Args = Parameters<typeof createOwnerResponder>;
+const responder = (gateway: LLMGatewayAdapter, spend?: () => OwnerSpend, tools: Args[5] = [], log?: Args[3]) => {
+  const args: Args = [{ openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic', floorReply: true }];
+  if (log) args[3] = log;
   args[5] = [getContextHandler(clock), ...tools]; args[10] = gateway; args[16] = ['example.com']; args[18] = ['👌'];
   if (spend) args[21] = { spend };
   return createOwnerResponder(...args);
 };
+const at = (spentUsd: number) => () => ({ spentUsd, ceilingUsd: MONTHLY_SPEND_CEILING_USD });
 const turn = (traceId: string, text = 'what is on today') => ownerTyped({ traceId, conversationRef: 'telegram-1', surface: 'telegram', text, memoryWrites: false });
+const memoryKv = () => {
+  const rows = new Map<string, unknown>();
+  return { get: <T>(key: string) => rows.get(key) as T | undefined, put: <T>(key: string, value: T) => { rows.set(key, structuredClone(value)); }, delete: (key: string) => rows.delete(key) };
+};
+
+it('the ceiling is a code value of 25 USD per owner per month', () => {
+  expect(MONTHLY_SPEND_CEILING_USD).toBe(25);
+});
 
 it('under the ceiling an owner turn runs on the chat model, as before', async () => {
   const { gateway, models } = scripted([{ text: 'Your day is clear.' }]);
-  const reply = await responder(gateway, () => spendPosture(4, 10)).respond(turn('cap-under'), time);
-  expect(reply).toBe('Your day is clear.');
+  expect(await responder(gateway, at(4)).respond(turn('cap-under'), time)).toBe('Your day is clear.');
   expect(models()).toEqual([OPENAI_GPT_6_1_SOL_MODEL]);
 });
 
-it('past the ceiling an owner turn runs on the auxiliary model, and its fallback is the auxiliary fallback, not Opus', async () => {
+it('a capped owner turn still answers, on the auxiliary model', async () => {
+  const { gateway, models } = scripted([{ text: 'Your day is clear.' }]);
+  expect(await responder(gateway, at(25)).respond(turn('cap-answers'), time)).toBe('Your day is clear.');
+  expect(models()).toEqual([OPENAI_GPT_6_LUNA_MODEL]);
+});
+
+it('a capped owner turn whose auxiliary model is down falls back to Haiku, never Sol or Opus', async () => {
   const { gateway, models } = scripted(['fail']);
-  await responder(gateway, () => spendPosture(10, 10)).respond(turn('cap-over'), time);
+  await responder(gateway, at(30)).respond(turn('cap-over'), time);
   expect(models()[0]).toBe(OPENAI_GPT_6_LUNA_MODEL);
   expect(models()).toContain(ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL);
   expect(models()).not.toContain(OPENAI_GPT_6_1_SOL_MODEL);
   expect(models()).not.toContain(ANTHROPIC_CLAUDE_OPUS_5_5_MODEL);
 });
 
-it('past the ceiling the turn still answers: degraded, not failed', async () => {
-  const { gateway } = scripted([{ text: 'Your day is clear.' }]);
-  expect(await responder(gateway, () => spendPosture(25, 10)).respond(turn('cap-answers'), time)).toBe('Your day is clear.');
-});
+it('crossing the ceiling mid-month: the recorded spend crosses it during a turn, that turn finishes on Sol, the next degrades', async () => {
+  // Each call costs a bit over half the ceiling, so the second turn starts under it and ends past it.
+  const perMillion = modelCost({ model: OPENAI_GPT_6_1_SOL_MODEL, input: 1_000_000, output: 0, cached: 0 })!.total;
+  const inputTokens = Math.ceil(((MONTHLY_SPEND_CEILING_USD * 0.6) / perMillion) * 1_000_000);
+  const costs = costRollup({ kv: memoryKv(), call: null, doName: null, newId: () => 'batch' });
+  let reads = 0;
+  const spend = () => { reads += 1; return { spentUsd: costs.monthSpendUsd(NOW), ceilingUsd: MONTHLY_SPEND_CEILING_USD }; };
+  const { gateway, models } = scripted([{ tool: 'get_context', args: {} }, { text: 'Done.' }, { text: 'Second.' }, { text: 'Third.' }], { inputTokens });
+  const owner = responder(gateway, spend, [], (entry) => { costs.record(entry, NOW); });
 
-it('reads the ceiling once per turn: a turn that crosses it mid-flight finishes on the model it began with', async () => {
-  let spent = 9.5, reads = 0;
-  const { gateway, models } = scripted([{ tool: 'get_context', args: {} }, { tool: 'get_context', args: {} }, { text: 'Done.' }], () => { spent += 1; });
-  const owner = responder(gateway, () => { reads += 1; return spendPosture(spent, 10); });
-  await owner.respond(turn('cap-midturn'), time);
-  expect(models()).toEqual([OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_SOL_MODEL]);
+  expect(await owner.respond(turn('mid-1'), time)).toBe('Done.');
+  expect(costs.monthSpendUsd(NOW)).toBeGreaterThan(MONTHLY_SPEND_CEILING_USD);
+  expect(models()).toEqual([OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_SOL_MODEL]);
   expect(reads).toBe(1);
-  // the next turn starts past the ceiling and degrades
-  await owner.respond(turn('cap-next'), time);
+
+  expect(await owner.respond(turn('mid-2'), time)).toBe('Second.');
   expect(models().at(-1)).toBe(OPENAI_GPT_6_LUNA_MODEL);
 });
 
-it('past the ceiling a paid tool is held with a refusal the model reads, and the handler never runs', async () => {
+it('a Brief still goes out past the ceiling, on the auxiliary model', async () => {
+  const { gateway, models } = scripted([{ text: 'Morning: two meetings, one open loop.' }]);
+  const reply = await responder(gateway, at(40)).prompt('brief-1', 'telegram-1', 'Write the morning brief.', time);
+  expect(reply).toContain('two meetings');
+  expect(models()).toEqual([OPENAI_GPT_6_LUNA_MODEL]);
+});
+
+it('past the ceiling a paid tool is held, the trace names it budget_exhausted, and its handler never runs', async () => {
   let browsed = 0;
   const browse = { name: 'browse_page', description: 'fixture browser', schema: browsePageArgsSchema, autonomy_gated: false, trigger_allowlist: allowlist('browse_page'),
     handle: async () => { browsed += 1; return { ok: true, data: { text: 'page' }, source_taint: 'external' as const }; } };
   const steps: Step[] = [{ tool: 'browse_page', args: { url: 'https://example.com/hotels', instruction: 'list hotels' } }, { text: 'Browsing is held this month.' }];
   const over = scripted(steps);
-  const reply = await responder(over.gateway, () => spendPosture(10, 10), [browse] as never).respond(turn('cap-paid', 'find me a hotel'), time);
+  const holds: unknown[] = [];
+  const reply = await responder(over.gateway, at(25), [browse] as never, (entry) => { if (entry.hop === 'spend_hold') holds.push(entry); }).respond(turn('cap-paid', 'find me a hotel'), time);
   expect(browsed).toBe(0);
   expect(reply).toContain('Browsing is held this month.');
   const output = over.requests.at(-1)!.request.tool_turns?.at(-1)?.output ?? '';
   expect(output).toContain(SPEND_CEILING_HELD);
+  expect(holds).toEqual([expect.objectContaining({ code: 'budget_exhausted', detail: 'browse_page', ok: false })]);
   // the same call under the ceiling reaches the handler: the hold is the ceiling, not the fixture
   const under = scripted(steps);
-  await responder(under.gateway, () => spendPosture(1, 10), [browse] as never).respond(turn('cap-paid-under', 'find me a hotel'), time);
+  await responder(under.gateway, at(1), [browse] as never).respond(turn('cap-paid-under', 'find me a hotel'), time);
   expect(browsed).toBe(1);
+});
+
+it('past the ceiling a delegated child runs on the auxiliary model too', async () => {
+  const { gateway, requests } = scripted([{ tool: 'delegate_task', args: { task: 'find what is on my calendar today and report it' } }, { text: 'Child report.' }, { text: 'Here is your day.' }]);
+  await responder(gateway, at(25)).respond(turn('cap-child', 'look into my day'), time);
+  const tools = (request: LLMGatewayRequest) => (request.request.tools ?? []).map((tool) => tool.name);
+  expect(requests.find((request) => !tools(request).includes('delegate_task')), 'the child call ran').toBeDefined();
+  expect(requests.map((request) => request.request.model)).toEqual(requests.map(() => OPENAI_GPT_6_LUNA_MODEL));
 });
 
 it('without a spend reader nothing changes', async () => {
   const { gateway, models } = scripted([{ text: 'ok' }]);
   await responder(gateway).respond(turn('cap-none'), time);
   expect(models()).toEqual([OPENAI_GPT_6_1_SOL_MODEL]);
-});
-
-it('past the ceiling a delegated child runs on the auxiliary model too', async () => {
-  const { gateway, requests } = scripted([{ tool: 'delegate_task', args: { task: 'find what is on my calendar today and report it' } }, { text: 'Child report.' }, { text: 'Here is your day.' }]);
-  await responder(gateway, () => spendPosture(10, 10)).respond(turn('cap-child', 'look into my day'), time);
-  const tools = (request: LLMGatewayRequest) => (request.request.tools ?? []).map((tool) => tool.name);
-  const child = requests.find((request) => !tools(request).includes('delegate_task'));
-  expect(child, 'the child call ran').toBeDefined();
-  expect(requests.map((request) => request.request.model)).toEqual(requests.map(() => OPENAI_GPT_6_LUNA_MODEL));
 });

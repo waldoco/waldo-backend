@@ -30,10 +30,9 @@ import type { ContextHealthMaterial } from '../context-composer/types';
 import { JoinedConversationPath } from '../conversation/joined-path';
 import { COMPACTION, COMPACTION_INSTRUCTION, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerRowsSince, supersededCompaction, type CompactedStats } from '../conversation/compaction';
 import { numericHealthIn } from '../scribe/sanitiser';
-import type { SpendPosture } from '../llm/cost-ledger';
 import { MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
-import { InMemoryCircuitBreaker, observedBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
+import { InMemoryCircuitBreaker, observedBreaker, RuntimeLLMProvider, type LLMGatewayAdapter, type RouteSpendState } from '../llm/provider';
 import { messagingSystemPrompt, ownerClockLine, unconnectedLine, withOwnerSkillProcedures } from '../prompt/messaging-behavior';
 import { eligibleHandlers } from '../tools/eligibility';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
@@ -66,7 +65,7 @@ export const ownerToolApproval = ({ tool }: { tool: string }): boolean => !EXTER
 const OWNER_TURN_ONLY_TOOLS: ReadonlySet<string> = new Set(['raise_approval', 'send_progress_note', 'attach_file']);
 // Past the owner's monthly spend ceiling these are held: each bills browser or sandbox time on top of the model call.
 export const PAID_RUNG_TOOLS: ReadonlySet<string> = new Set(['browse_page', 'browse_act', 'execute_code']);
-export const SPEND_CEILING_HELD = 'The monthly spend ceiling is reached, so browsing and running code are held until next month or until the ceiling is raised. Answer with what you have, and tell the owner what is held and why.';
+export const SPEND_CEILING_HELD = 'The monthly spend ceiling is reached, so browsing and running code are held until next month or until the ceiling is raised. Nothing ran. Answer with what you have, and tell the owner what is held and why.';
 
 // Session canaries are per-runtime tripwires: random 16-hex tokens derived when the owner
 // runtime (DO session) boots, checked by the scribe against every fragment bound for the
@@ -92,8 +91,10 @@ export type OwnerJobHost = Readonly<{ admit(): Promise<OwnerMessageAdmission | u
 // ownerProfile: the host-framed line about who the owner is. An admitted job composes it into its owner context; a turn
 // without a composed owner context reads it directly.
 // watchStatus: the host fact about Google pushes that are not running, for the owner's own turns ('' when all run).
-export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; spend?: () => SpendPosture }>;
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; spend?: () => SpendPosture }>;
+export type OwnerContextIntegration = Readonly<{ contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; spend?: () => OwnerSpend }>;
+// This owner's spend so far this month and the ceiling it is held to, read once when a turn starts.
+export type OwnerSpend = Readonly<{ spentUsd: number; ceilingUsd: number }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; spend?: () => OwnerSpend }>;
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 // Tool definitions are JSON: about four UTF-8 bytes per token on current tokenizers, close enough to compare rounds.
@@ -249,6 +250,7 @@ export const createOwnerResponder = (
       ...(callScope ?? privateRunScope ? { runScope: callScope ?? privateRunScope } : {}),
       trigger: 'user_message',
       policy: effectivePolicy,
+      ...(turnSpend ? { spend: turnSpend } : {}),
       renderRequest: ({ step }) => {
         // The effort follows the model this attempt runs on, not the responder's chat model.
         const effort = OPENAI_REASONING[step.model]?.effort;
@@ -394,7 +396,11 @@ export const createOwnerResponder = (
       const guardedHandlers: DispatchToolOptions<ToolDispatcherContext>['handlers'] = admittedHandlers.map(handler => {
         return { ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
           await assertFresh();
-          if (turnCapped && PAID_RUNG_TOOLS.has(handler.name)) return { ok: false, code: 'rejected', error: SPEND_CEILING_HELD, source_taint: EXTERNAL_ORIGIN_TOOLS.includes(handler.name) ? 'external' : null };
+          // ErrorCode is ADR-0025's closed set, so the hold reaches the model as a rejection and the trace names it.
+          if (turnCapped() && PAID_RUNG_TOOLS.has(handler.name)) {
+            log({ trace: traceId, hop: 'spend_hold', ms: 0, ok: false, code: 'budget_exhausted', detail: handler.name });
+            return { ok: false, code: 'rejected', error: SPEND_CEILING_HELD, source_taint: EXTERNAL_ORIGIN_TOOLS.includes(handler.name) ? 'external' : null };
+          }
           const retainedRead = ['read_owner_context', 'read_memory', 'search_episodes', 'read_tool_output'].includes(handler.name);
                   if (backgroundToolNames !== undefined && handler.name === 'open_loop' && (args === null || typeof args !== 'object' || !('source_ref' in args) || typeof args.source_ref !== 'string')) {
             return { ok: false, code: 'invalid_args', error: 'Background mail follow-up requires an observed source_ref.', source_taint: null };
@@ -475,7 +481,7 @@ export const createOwnerResponder = (
           controlRound: consumeRound,
           complete: async (content, tools, turns) => {
             await assertCurrent();
-            const response = await complete(trace, 'subagent', SUBAGENT_SYSTEM_PROMPT, [{ role: 'user', content }], undefined, undefined, tools as never, turns, turnCapped ? auxiliaryModel : undefined);
+            const response = await complete(trace, 'subagent', SUBAGENT_SYSTEM_PROMPT, [{ role: 'user', content }], undefined, undefined, tools as never, turns);
             await assertCurrent();
             return response;
           },
@@ -606,7 +612,7 @@ export const createOwnerResponder = (
           attachments.length ? attachments : undefined,
           tools,
           withholdHeldTurns(turns, output => holdsHeldTopic(output), output => narrowHeldJson(output, (value, tally) => withholdHeldItems(value, tally))),
-          ownerTurnActive && !turnCapped ? undefined : auxiliaryModel,
+          ownerTurnActive ? undefined : auxiliaryModel,
           );
         },
         onTool: (event) => {
@@ -626,8 +632,10 @@ export const createOwnerResponder = (
   // Set by converse() for the duration of one submit: delegate_task rides owner chat turns
   // only, never reminder/scheduled machine turns that flow through the same closure.
   let ownerTurnActive = false;
-  // Read once when a turn starts, so a turn that crosses the ceiling mid-flight finishes on the model it began with.
-  let turnCapped = false;
+  // Read once when a turn starts, so a turn that crosses the ceiling mid-flight finishes on the model it began with. Past the
+  // ceiling the provider clamps every call to the auxiliary route, which is where machine turns already run.
+  let turnSpend: RouteSpendState | undefined;
+  const turnCapped = () => turnSpend !== undefined && turnSpend.cap_cents !== null && turnSpend.spent_cents >= turnSpend.cap_cents;
   // Room left in the system prompt for owner memory: the sanitiser drops a system prompt over its limit whole.
   const systemRoom = (others: string) => SANITISE_DESTINATION_POLICIES.system_prompt.max_chars - others.length - 2_048;
   let turnToolEvents: LoopEventLike[] = [];
@@ -722,7 +730,8 @@ export const createOwnerResponder = (
     traceId = id;
     turnClockLine = undefined;
     ownerTurnActive = fromOwner;
-    turnCapped = privateOwner?.spend?.().ceilingReached ?? false;
+    const spend = privateOwner?.spend?.();
+    turnSpend = spend && { spent_cents: Math.floor(spend.spentUsd * 100), cap_cents: Math.round(spend.ceilingUsd * 100), clamp: ownerRoutePolicy(auxiliaryModel, model, access) };
     turnToolEvents = [];
     control.begin(fromOwner);
     try {
@@ -734,7 +743,7 @@ export const createOwnerResponder = (
         context: contextInputs(),
         userEntry,
         assistantEntryId: `${id}-reply`,
-      })).finally(() => { ownerTurnActive = false; turnCapped = false; backgroundToolNames = undefined; control.end(); });
+      })).finally(() => { ownerTurnActive = false; turnSpend = undefined; backgroundToolNames = undefined; control.end(); });
       privateRunScope?.admit();
       await assertFresh();
       const reply = tree.get(publication.leafId)!.appPayload;
