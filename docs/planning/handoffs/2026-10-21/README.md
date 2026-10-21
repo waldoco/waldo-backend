@@ -94,17 +94,55 @@ Later: #1253 and #1260 (`owner-do` structural), then the #1227/#1238/#1240 stack
 - Model per lane: Opus for design, security and privacy; Sonnet for implementing a settled design, carries and doc syncs. About five concurrent building sessions is fine; start more to fix newly found issues.
 - APIs and MCP first; browser and computer use last. Tools are strong, never narrowed. No restriction without a named harm; degrade, don't fail.
 
-## Who owns what (updated 21 Oct 15:55Z)
+## Who owns what (FINAL, 21 Oct ~16:30Z)
 
-The original account's limit reset at 14:50Z, and its orchestrator resumed. **It is the single merge owner for `beta-mvp`.** The local lanes on that account continue their own branches. **The cloud session does not push to them.**
+**All work now moves to cloud sessions on Ansh's account.** The original account's sessions have stopped. Each one pushed its work and wrote a `## Handoff` section at the top of its PR. Nobody on the original account pushes or merges until the owner says it is taking back over.
 
-| Owner | Work |
-|---|---|
-| Local lanes on the original account | Worker layer #1355 (Opus), connectors #1357 (Opus), wearables #1354 (Sonnet), onboarding #1356 (Sonnet), evals #1342, #1345 and `evals/state-memory` (Sonnet), WhatsApp #1309–#1311 (Sonnet) |
-| **Cloud session (Ansh's account)** | **1. Independent gate reviews.** Review adversarially against the review bar and tool checklist in `BUILD_DIRECTION`. Post each verdict as a PR comment headed `## Gate review (cloud)`, with the exact head SHA reviewed, findings ranked block / should-fix / nit, each with file:line and a failure scenario, and a verdict of MERGE, MERGE WITH FOLLOW-UPS or BLOCK. Review in this order: #1309, #1310, #1311 (they touch the send path #1338 changed); #1344; #1342 and #1345; then the 12 PR-carries in the table on #1105; then lane PRs as they leave draft. Read source; do not push to those branches. **2. Fix and carry #1346 and #1349** (branches `claude/harness-prompt-70c8ac` and its stacked branch; see their `## Handoff` sections). Shard 1 fails in two tests H-4 broke, `owner-skills-private` and `imessage-e2e`, which read memory and the watch line from the system prompt, where they now live in the turn context. Fix the tests, merge the current `beta-mvp` with merge commits, and get CI green. Also review #1349 for cache stability: discovered tools append, never reshuffle the prefix. **You own those two branches.** **3. Log everything** in the Progress log below. |
-| Orchestrator (original account) | Design reviews, merge trains, owner decisions, lane A after #1346 lands. |
+Cloud sessions cannot message each other. They coordinate through GitHub: PR bodies, PR comments, and this file's Progress log.
 
-Do not merge anything yourself. When a PR has your MERGE verdict and green CI, add it to the Progress log as "ready to merge". The orchestrator lands it in the next train.
+| Cloud session | Model | Owns | Starts from |
+|---|---|---|---|
+| **C0 orchestrator** | Opus | The **only merge owner** for `beta-mvp`, plus merge trains, gate reviews, design questions from lanes, owner asks, and this Progress log | This README |
+| C1 worker layer | Opus | #1355, branch `claude/worker-layer` | #1355 `## Handoff` |
+| C2 connectors | Opus | #1357, branch `claude/connectors-mcp-397547` | #1357 `## Handoff` |
+| C3 wearables and health trigger | Sonnet | #1354, branch `claude/wearables-trigger-a69617` | #1354 `## Handoff` |
+| C4 onboarding and consent | Sonnet | #1356, branch `claude/onboarding-consent-a1f9ee` | #1356 `## Handoff` |
+| C5 evals | Sonnet | #1342, #1345, `evals/state-memory` | their `## Handoff` sections |
+| C6 harness prompt | Opus | #1346, #1349: fix the two shard-1 tests H-4 broke (`owner-skills-private`, `imessage-e2e`, which now read the turn context), carry onto the current tip, check #1349's cache stability. Then lane A (below). | #1346 `## Handoff` |
+| C7 carries | Sonnet | WhatsApp #1309, #1310, #1311, and the 12 PR-carries in the table on #1105: keep them on the current tip, fix CI | their `## Handoff` sections, #1105 comment |
+
+Run C0 plus as many lanes as the budget allows, in this order: C0, C1, C6, C2, C3, C4, C5, C7. One session writes a branch at a time.
+
+**Lane rules** (every lane session):
+- Work only on your own branch, with merge commits only. Merge `beta-mvp` in often, because the lineage guard fails otherwise. Never push to `beta-mvp`, and never merge.
+- Keep your PR's `## Handoff` section current, and post "ready for gate review at <sha>" as a PR comment when the wall is green.
+- If a design question is not settled in your PR body, post it as a PR comment headed `## Question for orchestrator` and wait. Don't decide it yourself.
+- Never deploy, apply hosted migrations, touch secrets, or touch production.
+- Report PASS, FAIL, NOT RUN and UNAVAILABLE separately, at an exact SHA.
+
+**C0 duties:**
+1. Answer `## Question for orchestrator` comments.
+2. Gate-review each "ready" PR: an independent adversarial review against the review bar and tool checklist in `BUILD_DIRECTION`, with findings verified in source. Post a `## Gate review` comment with the SHA and a verdict.
+3. Land green, approved PRs with merge trains and `merge-when-green.sh`.
+4. Log every merge, decision and owner ask below.
+
+**Lane A** (C6, after #1346 lands):
+- H-9: rule pruning with ablations, which also clears the 11 `post-mvp-cleanup` issues;
+- M-4: the memory flush on `compactionFlush`, keeping qualitative health patterns only;
+- cheapest-rung guidance plus structured blocked outcomes (`login_required`, `js_required`, `challenge`);
+- the iMessage proactive-delivery gap;
+- untrusted fields delimited, with their provenance;
+- no links, grants, schedules or standing instructions from a tainted turn without approval.
+
+### Prompts to start the cloud sessions
+
+Every session runs in repository `waldoco/waldo-backend`. Each prompt begins with:
+
+> Read `docs/planning/handoffs/2026-10-21/README.md` on branch `handoff/2026-10-21`, then CLAUDE.md and `.claude/rules/`.
+
+Then add the line for the session's role:
+- **C0:** "You are C0, the orchestrator and only merge owner. Follow the C0 duties. Keep the Progress log on `handoff/2026-10-21` current."
+- **C1–C7:** "You are C<n>. Check out <branch> and continue from the `## Handoff` section of <PR>. Follow the lane rules."
 
 ## How to land work
 
@@ -136,6 +174,7 @@ Append an entry each time you finish a merge, a lane milestone or a decision. Co
 | 2026-10-21 12:46 | **Train #1358 merged** (`19ccd5e8`). #1351, #1347 and #1352 all show merged. The five #1351 constituents (#1340, #1343, #1243, #1248, #1348) still need closing as "landed via #1351/#1358". | beta-mvp `19ccd5e8` | Close the constituents (orchestrator). |
 | 2026-10-21 14:50 | Five lanes hit the original account's usage limit mid-work. The orchestrator committed their uncommitted work as found ("WIP: checkpoint at the session limit") and pushed it: #1357 `7b71f5a1`, #1354 `13049cf3`, #1355 `2f533c04`, new branch `evals/state-memory` `73b8f645`, and the #1311 carry `36123341`. These WIP commits may not build. | — | Lanes re-check typecheck and tests first. |
 | 2026-10-21 15:55 | Limit reset. Orchestrator and lanes resumed; wearables, onboarding, evals and WhatsApp moved to Sonnet. Work split per "Who owns what". | — | Cloud: gate reviews, plus fixing #1346/#1349. |
+| 2026-10-21 16:30 | The owner moved ALL work to Ansh's cloud sessions to save the original account's usage. Every local lane was told to stop, push and finalize its `## Handoff`. Roles are C0–C7 (see "Who owns what"). | — | Start C0 first. |
 
 ### Owner asks raised since handoff
 
