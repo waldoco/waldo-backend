@@ -66,7 +66,9 @@ const MIN = 60_000;
 const DAY_MIN = 1_440;
 const localDayOf = (at: number, offset: number): string => new Date(at + offset * MIN).toISOString().slice(0, 10);
 const epochSeconds = (iso: string): number => Math.floor(Date.parse(iso) / 1000);
-const round = (value: number, places = 2): number => Math.round(value * 10 ** places) / 10 ** places;
+const PLACES = 2;
+const RMSSD_PLACES = 3;
+const round = (value: number, places = PLACES): number => Math.round(value * 10 ** places) / 10 ** places;
 
 type Base = Readonly<{ day: string; utc_offset_minutes: number; start_at: string; end_at: string }>;
 
@@ -95,10 +97,10 @@ export const whoopNightSamples = (night: Readonly<{ sleep: WhoopSleep; recovery:
   }
   if (recovery?.score && recovery.sleep_id === sleep.id) {
     const revision = epochSeconds(recovery.updated_at);
-    const { hrv_rmssd_milli: hrv, resting_heart_rate: rhr, spo2_percentage: spo2 } = recovery.score;
-    if (hrv !== null && hrv > 0 && hrv <= 1000) out.push({ ...base, sample_id: `whoop:${sleep.id}:overnight_hrv`, revision, signal: 'overnight_hrv', unit: 'milliseconds', method: 'rmssd', value: round(hrv, 3) });
-    if (rhr !== null && rhr > 0 && rhr <= 300) out.push({ ...base, sample_id: `whoop:${sleep.id}:resting_heart_rate`, revision, signal: 'resting_heart_rate', unit: 'beats_per_minute', method: 'provider_resting_daily', value: round(rhr, 2) });
-    if (spo2 !== null && spo2 >= 50 && spo2 <= 100) out.push({ ...base, sample_id: `whoop:${sleep.id}:spo2`, revision, signal: 'spo2', unit: 'percent', value: round(spo2, 2) });
+    const { hrv_rmssd_milli: rmssd, resting_heart_rate: resting, spo2_percentage: oxygen } = recovery.score;
+    if (rmssd !== null && rmssd > 0 && rmssd <= 1000) out.push({ ...base, sample_id: `whoop:${sleep.id}:overnight_hrv`, revision, signal: 'overnight_hrv', unit: 'milliseconds', method: 'rmssd', value: round(rmssd, RMSSD_PLACES) });
+    if (resting !== null && resting > 0 && resting <= 300) out.push({ ...base, sample_id: `whoop:${sleep.id}:resting_heart_rate`, revision, signal: 'resting_heart_rate', unit: 'beats_per_minute', method: 'provider_resting_daily', value: round(resting) });
+    if (oxygen !== null && oxygen >= 50 && oxygen <= 100) out.push({ ...base, sample_id: `whoop:${sleep.id}:spo2`, revision, signal: 'spo2', unit: 'percent', value: round(oxygen) });
   }
   return out;
 };

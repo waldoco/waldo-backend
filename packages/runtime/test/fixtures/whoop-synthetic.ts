@@ -11,10 +11,12 @@ export const sleepRecord = (over: Record<string, unknown> = {}) => ({
   },
   ...over,
 });
+// The invented readings behind the default recovery, named so the tests can look for them in places they must never reach.
+export const SYNTHETIC_RECOVERY = { score: 61, resting: 53, rmssd: 47.318, oxygen: 96.4, skin: 33.2 } as const;
 export const recoveryRecord = (over: Record<string, unknown> = {}) => ({
   cycle_id: 810001, sleep_id: '3f6c1a52-9b0e-4d7a-8c11-2a5e7d9b0c01', user_id: 70001,
   created_at: '2026-10-20T06:10:00.000Z', updated_at: '2026-10-20T06:45:00.000Z', score_state: 'SCORED',
-  score: { user_calibrating: false, recovery_score: 61, resting_heart_rate: 53, hrv_rmssd_milli: 47.318, spo2_percentage: 96.4, skin_temp_celsius: 33.2 },
+  score: { user_calibrating: false, recovery_score: SYNTHETIC_RECOVERY.score, resting_heart_rate: SYNTHETIC_RECOVERY.resting, hrv_rmssd_milli: SYNTHETIC_RECOVERY.rmssd, spo2_percentage: SYNTHETIC_RECOVERY.oxygen, skin_temp_celsius: SYNTHETIC_RECOVERY.skin },
   ...over,
 });
 export const workoutRecord = (over: Record<string, unknown> = {}) => ({

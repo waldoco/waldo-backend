@@ -28,6 +28,9 @@ export const ouraSleep = (raw: unknown): OuraSleep | null => {
 
 const MIN = 60_000;
 const DAY_MS = 1_440 * MIN;
+const PLACES = 2;
+const MIDPOINT_PLACES = 3;
+const round = (value: number, places = PLACES): number => Math.round(value * 10 ** places) / 10 ** places;
 // The offset an ISO timestamp was written in, or null for a bare UTC one.
 const offsetOf = (iso: string): number | null => { const match = /(Z|[+-]\d{2}:\d{2})$/.exec(iso); return match ? offsetMinutes(match[1]!) : null; };
 
@@ -41,8 +44,8 @@ export const ouraSleepSamples = (sleep: OuraSleep, fetchedAtSeconds: number): He
   const asleep = sleep.total_sleep_duration !== null ? sleep.total_sleep_duration / 60 : null;
   if (asleep !== null && asleep > 0 && asleep <= 1_440) {
     const midpoint = ((((start + end) / 2 + offset * MIN) % DAY_MS) + DAY_MS) % DAY_MS / MIN;
-    out.push({ ...base, sample_id: `oura:${sleep.id}:sleep_duration`, signal: 'sleep_duration', unit: 'minutes', method: 'asleep_duration', value: Math.round(asleep * 100) / 100 });
-    out.push({ ...base, sample_id: `oura:${sleep.id}:sleep_midpoint`, signal: 'sleep_midpoint', unit: 'local_minute', method: 'sleep_midpoint', value: Math.min(Math.round(midpoint * 1000) / 1000, 1439.999) });
+    out.push({ ...base, sample_id: `oura:${sleep.id}:sleep_duration`, signal: 'sleep_duration', unit: 'minutes', method: 'asleep_duration', value: round(asleep) });
+    out.push({ ...base, sample_id: `oura:${sleep.id}:sleep_midpoint`, signal: 'sleep_midpoint', unit: 'local_minute', method: 'sleep_midpoint', value: Math.min(round(midpoint, MIDPOINT_PLACES), 1439.999) });
     if (sleep.efficiency !== null && sleep.efficiency >= 0 && sleep.efficiency <= 100) out.push({ ...base, sample_id: `oura:${sleep.id}:sleep_efficiency`, signal: 'sleep_efficiency', unit: 'ratio', value: Math.round(sleep.efficiency) / 100 });
   }
   if (sleep.lowest_heart_rate !== null && sleep.lowest_heart_rate > 0 && sleep.lowest_heart_rate <= 300) out.push({ ...base, sample_id: `oura:${sleep.id}:resting_heart_rate`, signal: 'resting_heart_rate', unit: 'beats_per_minute', method: 'overnight_resting', value: sleep.lowest_heart_rate });
