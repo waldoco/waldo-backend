@@ -74,16 +74,29 @@ describe('nightly eval suite', () => {
 });
 
 describe('nightly eval catalogue', () => {
-  it('has the twenty research tasks, the owner\'s two and the three errand failures, each with a pain and a rubric', () => {
-    expect(SCENARIOS).toHaveLength(25);
-    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(25);
+  it('has the twenty research tasks, the owner\'s two, the three errand failures and the background task, each with a pain and a rubric', () => {
+    expect(SCENARIOS).toHaveLength(26);
+    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(26);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('t'))).toHaveLength(20);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('e'))).toHaveLength(3);
+    expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('w'))).toHaveLength(1);
     expect(new Set(SCENARIOS.map((scenario) => scenario.pain))).toEqual(new Set(['context', 'follow_through', 'judgment']));
     for (const scenario of SCENARIOS) {
       expect(scenario.rubric.outcome.trim()).not.toBe('');
       expect(scenario.steps.some((step) => 'say' in step)).toBe(true);
     }
+  });
+
+  it('gives the background-task scenario the production start_task, which records the brief once per call', async () => {
+    const scenario = SCENARIOS.find((entry) => entry.id === 'w1-long-read-in-background')!;
+    const world = evalWorld(scenario.world, scenario.start);
+    const start = world.handlers.find((handler) => handler.name === 'start_task')!;
+    expect(start.description).toContain('never this conversation');
+    const args = { profile: 'reader', title: 'Promises', goal: 'List promises the owner made.', context: 'Mail from the last three months.', done_when: 'A list: who, what, by when.' };
+    const ctx = { turnId: 'turn-1', toolCallId: 'call-1' } as never;
+    expect(await start.handle(args as never, ctx)).toMatchObject({ ok: true, data: { status: 'started', profile: 'reader' } });
+    expect(await start.handle(args as never, ctx)).toMatchObject({ ok: true, data: { status: 'already_started' } });
+    expect(world.effects()).toEqual([{ kind: 'task.start', payload: expect.objectContaining({ profile: 'reader', goal: args.goal, timezone: 'Asia/Kolkata' }) }]);
   });
 
   it('seeds every fact the errand rubrics require, and makes the named second calendar unreadable', async () => {

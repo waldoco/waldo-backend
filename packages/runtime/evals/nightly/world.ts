@@ -16,6 +16,8 @@ import { connectServiceHandler, googleHandlers, type EffectDesk, type GoogleAcce
 import { memoryHandlers } from '../../src/tools/live/memory';
 import { searchEpisodesHandler } from '../../src/tools/live/search-episodes';
 import { claimStore } from '../../src/memory/claims';
+import { taskToolHandlers } from '../../src/tasks/tools';
+import type { JobBook, JobRow } from '../../src/tasks/jobs';
 import type { GoogleClient, MailItem, ThreadMessage } from '../../src/connectors/google';
 import type { OwnerClock } from '../../src/tools/live/get-context';
 
@@ -167,7 +169,23 @@ export const evalWorld = (seed: WorldSeed, start: string) => {
     autonomy_gated: false,
     handle: async (_args: WebSearchArgs) => ({ ok: true as const, data: { results: seed.web ?? [] }, source_taint: 'external' as const }),
   };
+  // The production task tools over a job book that only records what the owner object would write: whether and how the
+  // model hands work to a background worker is graded; no worker runs in a trial.
+  const tasks: JobRow[] = [];
+  const jobs = {
+    create: (input: Parameters<JobBook['create']>[0]) => {
+      const known = tasks.find((row) => row.idempotency_key === input.idempotencyKey);
+      if (known) return { job: known, created: false };
+      effect('task.start', { profile: input.profile, ...input.brief });
+      const row = { id: `job_${String(tasks.length + 1).padStart(12, '0')}`, idempotency_key: input.idempotencyKey, status: 'queued' } as JobRow;
+      tasks.push(row);
+      return { job: row, created: true };
+    },
+    get: (id: string) => tasks.find((row) => row.id === id) ?? null,
+    cancel: (id: string) => { const row = tasks.find((entry) => entry.id === id); if (!row) return false; effect('task.cancel', { id }); return true; },
+  } as unknown as JobBook;
   const handlers = [
+    ...taskToolHandlers({ book: jobs, now, timezone: () => TIMEZONE, surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined }),
     ...googleHandlers(google, desk, clock), connectServiceHandler(google), ...reminderHandlers(reminderBook), ...standingOrderHandlers(standingOrders),
     ...loopHandlers(loops), ...memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async () => undefined }),
     searchEpisodesHandler(episodes), web,

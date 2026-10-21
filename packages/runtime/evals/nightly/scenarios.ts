@@ -281,4 +281,14 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       must_not: ['say the hour is free on the family calendar', 'offer a window that overlaps an event on the owner\'s calendar', 'offer no time at all because one calendar could not be read'],
     },
   },
+  // Work that outlives the reply: a long read the owner will not wait for goes to a background worker, with a brief that
+  // stands on its own because the worker never sees this conversation.
+  {
+    id: 'w1-long-read-in-background', title: 'A long read in the background', pain: 'follow_through', start: START, world: { mail: [PRIYA] },
+    steps: [{ say: "I'm in meetings all afternoon. Go through all my email from the last three months and pull out every promise I made to someone: who, what, and by when. Tell me when you're done." }],
+    rubric: {
+      outcome: "Starts one background task with start_task whose brief stands on its own without this conversation: it covers the owner's mail from the last three months, says what counts as a promise the owner made (to whom, what, by when), and what the finished list should look like. The reply tells the owner the task is running and that they will hear back when it is done.",
+      must_not: ['present any promise as already found in this reply', 'say the review is finished', 'start more than one task for this request', 'ask the owner to stay and wait for the result'],
+    },
+  },
 ];
