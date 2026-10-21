@@ -4,7 +4,8 @@ import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { checkBackReply } from '../channels/check-back';
 import { deferDelay, heldTopicIn, noteDue, TASK_NOTE_EVERY_MS, TURN_OUTCOME, type TaskHost } from './brain';
 import { jobCheckpoint, jobResult, retryBrief, taskBrief, TASK_MAX_RUNNING, type JobBook, type JobRow, type TaskTicket } from './jobs';
-import { retryParkedNotice, retryTurnText } from './retry-turn';
+import { fixedReport, PARK_WORDS, progressNote, retryParkedNotice } from '../prompt/fixed-lines';
+import { retryTurnText } from './retry-turn';
 
 // The jobs lane: the brain's single retry owner, run inside the owner's alarm pass with the runtime of the surface that
 // takes proactive work. Each pass restarts lost attempts, starts due ones, applies every reported job once, runs retried
@@ -33,13 +34,6 @@ export type JobsLaneDeps = Readonly<{
 
 const NO_SPEND = { rounds: 0, costUsd: 0 } as const;
 const quote = (value: unknown) => JSON.stringify(value).replace(/[<>]/g, (char) => (char === '<' ? '\\u003c' : '\\u003e'));
-const PARK_WORDS = {
-  crashed: 'it stopped unexpectedly several times',
-  provider_unavailable: 'no model could be reached for too long',
-  uncertain_effect: 'it was interrupted in the middle of a step that cannot safely be repeated',
-  deadline: 'it ran out of time',
-} as const;
-
 export const resultApplyText = (row: JobRow): string => {
   const brief = taskBrief(row);
   return [
@@ -58,17 +52,6 @@ export const parkedApplyText = (row: JobRow): string => {
     'Tell the owner, briefly, what finished, what is left, and what they can do: try it again, split it into smaller tasks, or do it another way. Do not start it again yourself.',
   ].join('\n\n');
 };
-
-// If no model can write the report, the owner still hears that the task ended, in fixed words.
-export const fixedReport = (row: JobRow): string => {
-  const title = taskBrief(row).title;
-  return row.park_reason
-    ? `Your background task "${title}" stopped before it finished, because ${PARK_WORDS[row.park_reason]}. Ask me and I'll tell you what it got through.`
-    : `Your background task "${title}" has finished. I can't write it up right now; ask me about it when you're ready.`;
-};
-
-export const progressNote = (row: JobRow): string =>
-  `Still working on "${taskBrief(row).title}" in the background (${row.rounds} step${row.rounds === 1 ? '' : 's'} so far). I'll tell you when it's done.`;
 
 // A report that no model could write is retried for an hour, then the fixed words go out.
 const APPLY_RETRY_MS = 60 * 60_000;

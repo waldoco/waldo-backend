@@ -23,6 +23,9 @@ type Harness = Readonly<{
   book: JobBook; sql: SqlStorage; clock: { at: number }; host: ReturnType<typeof taskHost>; log: TurnLogEntry[]; released: RunEffectScope[]; ran: string[];
   ticket(profile?: 'reader' | 'errand'): TaskTicket; setSpend(spend: { spentUsd: number; ceilingUsd: number } | undefined): void;
   hold: { release?: () => void; waiting?: Promise<void> };
+  // The owner object's serial queue, as OwnerDO.serial() runs it: one unit at a time, in arrival order.
+  serial<T>(work: () => Promise<T>): Promise<T>;
+  browse: { ms: number };
   handler: { search?: (ctx: ToolDispatcherContext) => Promise<unknown> };
 }>;
 let seq = 0;
@@ -34,23 +37,26 @@ const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const log: TurnLogEntry[] = [], released: RunEffectScope[] = [], ran: string[] = [];
     let spend: { spentUsd: number; ceilingUsd: number } | undefined;
     const hold: Harness['hold'] = {};
+    let queue: Promise<unknown> = Promise.resolve();
+    const serial = <T,>(work: () => Promise<T>): Promise<T> => { const run = queue.then(work); queue = run.catch(() => undefined); return run; };
+    const browse = { ms: 0 };
     const handler: Harness['handler'] = {};
     const handlers = [
       { name: 'search_communication', description: 'Search mail.', schema: z.object({ query: z.string() }), trigger_allowlist: allowlist('search_communication'), autonomy_gated: false, mutates_state: false,
         async handle(_args: unknown, ctx: ToolDispatcherContext) { ran.push('search_communication'); return { ok: true as const, data: await (handler.search?.(ctx) ?? { hits: 2 }), source_taint: 'external' as const }; } },
       { name: 'browse_act', description: 'Act in the browser.', schema: z.object({ url: z.string(), task: z.string() }).loose(), trigger_allowlist: allowlist('browse_act'), autonomy_gated: false, mutates_state: true,
-        async handle() { ran.push('browse_act'); return { ok: true as const, data: { done: true }, source_taint: 'external' as const }; } },
+        async handle() { ran.push('browse_act'); if (browse.ms) await new Promise(resolve => setTimeout(resolve, browse.ms)); ran.push('browse_act:done'); return { ok: true as const, data: { done: true }, source_taint: 'external' as const }; } },
     ] as unknown as ReturnType<TaskHostDeps['handlers']>;
     const host = taskHost({
       book, now: () => clock.at, handlers: () => handlers, context: () => ({ authenticatedUserId: 'owner-1', sanitise, egressAllowlist: ['example.com'] }),
-      serialBrowser: async (_scope, run) => { if (hold.waiting) await hold.waiting; return run(); },
+      serialBrowser: (_scope, run) => serial(async () => { if (hold.waiting) await hold.waiting; return run(); }),
       releaseBrowser: scope => { released.push(scope); }, log: entry => { log.push(entry); }, spend: () => spend, wake: async () => undefined,
     });
     const ticket = (profile: 'reader' | 'errand' = 'reader') => {
       const { job } = book.create({ kind: 'task', profile, idempotencyKey: `k${n += 1}`, origin: 'tg-1', surface: 'app', brief, dueAt: T0, deadlineAt: T0 + 3_600_000 });
       return book.startAttempt(job.id)!;
     };
-    return work({ book, sql: state.storage.sql, clock, host, log, released, ran, ticket, setSpend: next => { spend = next; }, hold, handler });
+    return work({ book, sql: state.storage.sql, clock, host, log, released, ran, serial, browse, ticket, setSpend: next => { spend = next; }, hold, handler });
   });
 
 describe('the task brain host', () => {
@@ -115,9 +121,27 @@ describe('the task brain host', () => {
       expect(book.lapse(host.busy())).toEqual([]);
       release();
       expect(await pending).toMatchObject({ ok: true });
-      expect(ran).toEqual(['browse_act']);
+      expect(ran).toEqual(['browse_act', 'browse_act:done']);
       expect(book.get(t.jobId)!.inflight_json).toBeNull();
       expect(host.busy().has(t.jobId)).toBe(false);
+    });
+  });
+
+  it('an owner message during an errand waits for one browser step at most: the lane yields between steps', async () => {
+    await withHost(async ({ host, ticket, ran, serial, browse }) => {
+      const t = ticket('errand');
+      await host.claim(t);
+      browse.ms = 40;
+      const errand = (async () => {
+        await host.tool(t, call('browse_act'), CANARIES);
+        await host.tool(t, call('browse_act'), CANARIES);
+      })();
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const asked = Date.now();
+      const answered = await serial(async () => { ran.push('owner_turn'); return Date.now(); });
+      await errand;
+      expect(ran).toEqual(['browse_act', 'browse_act:done', 'owner_turn', 'browse_act', 'browse_act:done']);
+      expect(answered - asked).toBeLessThan(browse.ms * 2);
     });
   });
 
