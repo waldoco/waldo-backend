@@ -565,4 +565,23 @@ describe('OpenAIResponsesAdapter tool search', () => {
       count: { anyOf: [{ type: 'integer' }, { type: 'null' }] },
     }, required: ['body', 'to', 'count'], additionalProperties: false });
   });
+
+  it('sends a tool non-strict when an optional field already takes null, so leaving it out still means keep it', async () => {
+    let sent: { tools?: Array<{ type: string; name?: string; parameters?: unknown; strict?: boolean }> } = {};
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async (body: typeof sent) => { sent = body; return { id: 'r', output_text: '', usage: { input_tokens: 1, output_tokens: 1 }, output: [
+      { type: 'function_call', call_id: 'c1', name: 'change_task', arguments: '{"task_id":"t1","changes":{"title":"Renamed"}}' },
+    ] }; }) });
+    const base = searchRequest();
+    // What zod writes for `.nullable().optional()`: absent keeps the field, null clears it.
+    const changes = { type: 'object', properties: {
+      title: { type: 'string', minLength: 1 },
+      notes: { anyOf: [{ type: 'string', maxLength: 8192 }, { type: 'null' }] },
+    }, additionalProperties: false };
+    const parameters = { type: 'object', properties: { task_id: { type: 'string' }, changes }, required: ['task_id'], additionalProperties: false };
+    const result = await adapter.complete({ ...base, request: { ...base.request, tools: [{ name: 'change_task', description: 'Change a task', parameters }] } });
+    const tool = sent.tools!.find((item) => item.name === 'change_task')!;
+    expect(tool.strict).toBe(false);
+    expect(tool.parameters).toEqual(parameters);
+    expect(result).toMatchObject({ ok: true, data: { tool_calls: [{ call_id: 'c1', name: 'change_task', arguments: '{"task_id":"t1","changes":{"title":"Renamed"}}' }] } });
+  });
 });

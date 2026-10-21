@@ -46,7 +46,11 @@ function strictNode(node: unknown): Json {
     const required = new Set(Array.isArray(out.required) ? out.required as string[] : []);
     out.properties = Object.fromEntries(Object.entries(out.properties).map(([name, property]) => {
       const strict = strictNode(property);
-      return [name, required.has(name) || acceptsNull(strict) ? strict : { anyOf: [strict, { type: 'null' }] }];
+      if (required.has(name)) return [name, strict];
+      // An optional field that already takes null gives absent and null two meanings (keep it, clear it). Strict mode
+      // makes every field present, so the model could no longer say "leave it alone"; such a tool goes non-strict.
+      if (acceptsNull(strict)) throw new Unsupported();
+      return [name, { anyOf: [strict, { type: 'null' }] }];
     }));
     out.required = Object.keys(out.properties as Json);
     out.additionalProperties = false;
