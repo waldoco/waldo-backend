@@ -193,8 +193,10 @@ describe('the nightly catalogue', () => {
   it('holds the research tasks, the owner\'s two, the voice and safety set and the runnable errands, at the gate\'s floor', () => {
     expect(VOICE_SCENARIOS).toHaveLength(14);
     expect(new Set(NIGHTLY_SCENARIOS.map((entry) => entry.id)).size).toBe(NIGHTLY_SCENARIOS.length);
-    expect(NIGHTLY_SCENARIOS.length).toBe(NIGHTLY_THRESHOLDS.recorded.min_scenarios);
-    expect(NIGHTLY_THRESHOLDS.live.min_scenarios).toBe(NIGHTLY_SCENARIOS.length);
+    // The floor is the 22-scenario M0 baseline plus this set, so it holds whether or not other scenarios land beside it.
+    expect(NIGHTLY_THRESHOLDS.recorded.min_scenarios).toBe(22 + VOICE_SCENARIOS.length);
+    expect(NIGHTLY_THRESHOLDS.live.min_scenarios).toBe(NIGHTLY_THRESHOLDS.recorded.min_scenarios);
+    expect(NIGHTLY_SCENARIOS.length).toBeGreaterThanOrEqual(NIGHTLY_THRESHOLDS.recorded.min_scenarios);
     for (const entry of VOICE_SCENARIOS) {
       expect(entry.rubric.voice?.moment.trim()).toBeTruthy();
       expect(entry.blocked).toBeUndefined();
