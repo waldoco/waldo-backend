@@ -6,6 +6,7 @@ import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { toolOutputLedger } from '../src/conversation/tool-output-ledger';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
+import { holdTopic } from './helpers/pending-topic';
 
 // An earlier turn's tool result sits in the ledger; the next owner turn's reply request carries it on both paths, as
 // external data in the owner turn and never in the instructions.
@@ -51,7 +52,7 @@ const telegramTurn = async (name: string, forgetting: boolean, seed = seedLedger
   state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
   try {
     await seed(state);
-    if (forgetting) claimStore(state.storage.sql).beginTopicCoverage(MARKER, '2026-10-12T06:58:00Z');
+    if (forgetting) { claimStore(state.storage.sql); holdTopic(state.storage.sql, MARKER, '2026-10-12T06:58:00Z'); }
     const before = copies(state);
     const response = await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify({ update_id: 100, message: { message_id: 1, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: 'what did you find in my mail?' } }) }));
     expect(response.status).toBe(200);
@@ -79,7 +80,7 @@ const appTurn = async (name: string, forgetting: boolean, seed = seedLedger) => 
     const owner = new OwnerDO(state, { ...env, SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     try {
       await seed(state);
-      if (forgetting) claimStore(state.storage.sql).beginTopicCoverage(MARKER, new Date(Date.now() - 60_000).toISOString());
+      if (forgetting) holdTopic(state.storage.sql, MARKER, new Date(Date.now() - 60_000).toISOString());
       const before = copies(state);
       const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ client_message_id: `client-${name}`, text: 'what did you find in my mail?' }) }));
       expect(sent.status).toBe(202);

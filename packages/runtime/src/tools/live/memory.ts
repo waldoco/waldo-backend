@@ -43,7 +43,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
     return turn && turn.ownerId === ctx.authenticatedUserId && turn.conversationRef === deps.conversationRef ? turn : null;
   };
   const ready = async (ctx: MemoryToolContext) => { ctx.runScope?.admit(); await ctx.assertTaskSourceCurrent?.(); ctx.runScope?.admit(); };
-  const hidden = (claim: Claim) => [...store.pendingTopics(), ...store.incompleteTopics()].some(topic => [claim.text, claim.evidence, claim.source_ref, (claim as Claim & { aliases?: string | null }).aliases].some(text => typeof text === 'string' && (carriesTopic(text, topic) || hidesTopic(text, topic))));
+  const hidden = (claim: Claim) => store.pendingTopics().some(topic => [claim.text, claim.evidence, claim.source_ref, (claim as Claim & { aliases?: string | null }).aliases].some(text => typeof text === 'string' && (carriesTopic(text, topic) || hidesTopic(text, topic))));
   const blocked = (text: string) => store.barriers().some(barrier => barrier.topic_hash === textFingerprint(text.trim()) || barrier.topic_hash === textFingerprint(text.trim().toLowerCase().replace(/\s+/g, ' ')));
   const base = (name: ToolName, description: string) => ({ name, description, trigger_allowlist: triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes(name)), autonomy_gated: false });
   return [
@@ -120,7 +120,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
             const counts = purge.receipt; touched = [counts.deleted, counts.redacted, counts.terminalised].some(group => Object.values(group).some(count => count > 0));
             if (purge.ready) store.settle(ids, topics); else incomplete = true;
           }
-          if (args.topic && !incomplete) for (const held of [...store.pendingTopics(), ...store.incompleteTopics()]) if (carriesTopic(held, args.topic) || carriesTopic(args.topic, held)) store.finishPendingTopic(held);
+          if (args.topic && !incomplete) for (const held of store.pendingTopics()) if (carriesTopic(held, args.topic) || carriesTopic(args.topic, held)) store.finishPendingTopic(held);
         };
         const atomic = () => deps.transaction ? deps.transaction(commit) : commit();
         if (ctx.runScope) ctx.runScope.commit(atomic); else atomic();

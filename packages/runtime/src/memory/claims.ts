@@ -1,7 +1,7 @@
 type Sql = Pick<SqlStorage, 'exec'>;
 import { carriesTopic, hidesTopic } from './forget-guard';
 import type { ForgetSource, ForgetBatch, ForgetHeldBy } from './selective-forget';
-import { asciiLiteralIncludes, isPlainForgetText, MAX_FORGET_SOURCES } from './selective-forget';
+import { asciiLiteralIncludes, MAX_FORGET_SOURCES } from './selective-forget';
 
 export const CLAIM_KINDS = ['fact', 'preference', 'routine', 'goal', 'followup', 'health', 'event', 'pattern', 'observation'] as const;
 export const CLAIM_SOURCES = ['stated', 'confirmed', 'inferred'] as const;
@@ -349,11 +349,6 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
   // A topic-only forget (no claim left to carry retry state) keeps its exact owner-evidenced words here, only until the
   // caller confirms every store is clean and settles it. No permanent plaintext list: settle(ids, topics) deletes the row.
   sql.exec('CREATE TABLE IF NOT EXISTS topic_purge_pending (fingerprint TEXT PRIMARY KEY, topic TEXT NOT NULL, created_at TEXT NOT NULL)');
-  // 0: exact retry target; 1: unproved owner intent; 2: selected coverage
-  // awaiting readback. Neither coverage state is an ordinary literal needle.
-  if (!sql.exec("SELECT name FROM pragma_table_info('topic_purge_pending') WHERE name = 'coverage_incomplete'").toArray().length) {
-    sql.exec('ALTER TABLE topic_purge_pending ADD COLUMN coverage_incomplete INTEGER NOT NULL DEFAULT 0');
-  }
   if (!sql.exec("SELECT name FROM pragma_table_info('forget_barriers')").toArray().some((col) => (col as { name: string }).name === 'topic_hash')) {
     sql.exec('ALTER TABLE forget_barriers ADD COLUMN topic_hash TEXT');
   }
@@ -361,6 +356,25 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
   // every memory pass, so redact the legacy topic to the marker - forgotten text must never
   // re-enter a prompt. Hash matching is unaffected (legacy rows have no hash to match).
   sql.exec('UPDATE forget_barriers SET topic = ? WHERE topic_hash IS NULL AND topic != ?', FORGOTTEN, FORGOTTEN);
+  // forget_topic is model-supplied free text, and barriers go back to the model in every memory pass: persisting the
+  // words would be the leak returning. Store the marker + fingerprint only (the fingerprint is what blocks re-admission),
+  // and dedupe on it. Also store the lower-cased, space-collapsed form: alias forms are normalised, so a capitalised topic
+  // must still match them. The as-given hash stays for exact claim-text blocking.
+  const barrier = (topic: string, at: string): void => {
+    const given = topic.trim();
+    for (const hash of new Set([textFingerprint(given), textFingerprint(given.toLowerCase().replace(/\s+/g, ' '))])) {
+      const existing = sql.exec<{ n: number }>('SELECT count(*) AS n FROM forget_barriers WHERE topic_hash = ?', hash).one().n;
+      if (existing === 0) sql.exec('INSERT INTO forget_barriers (topic, topic_hash, created_at) VALUES (?, ?, ?)', FORGOTTEN, hash, at);
+    }
+  };
+  // An older build kept a topic the owner asked to forget as "coverage incomplete" until a span selector had proved its
+  // sources. That selector is gone, and such a row deferred every nightly pass. The forget it stood for is not dropped:
+  // the row becomes an ordinary pending topic, which stays hidden from every prompt and is purged and settled by the
+  // literal path (the only one left), and a content-free barrier keeps the topic from being relearned.
+  if (sql.exec("SELECT name FROM pragma_table_info('topic_purge_pending') WHERE name = 'coverage_incomplete'").toArray().length) {
+    for (const row of sql.exec<{ topic: string; created_at: string }>('SELECT topic, created_at FROM topic_purge_pending WHERE coverage_incomplete != 0').toArray()) barrier(row.topic, row.created_at);
+    sql.exec('UPDATE topic_purge_pending SET coverage_incomplete = 0 WHERE coverage_incomplete != 0');
+  }
   sql.exec('CREATE TABLE IF NOT EXISTS memory_backups (id INTEGER PRIMARY KEY AUTOINCREMENT, reason TEXT NOT NULL UNIQUE, payload TEXT NOT NULL, created_at TEXT NOT NULL)');
   // Admission-gate audit: every candidate the gate refuses lands here as kind + reason +
   // fingerprint - never the text. A held claim can quote forgotten or waldo-side text, so
@@ -462,18 +476,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
     forget(id: number): void {
       sql.exec('DELETE FROM claims WHERE id = ?', id);
     },
-    barrier(topic: string, at: string): void {
-      // forget_topic is model-supplied free text, and barriers go back to the model in every
-      // memory pass: persisting the words would be the leak returning. Store the marker +
-      // fingerprint only (the fingerprint is what blocks re-admission), and dedupe on it.
-      // Also store the lower-cased, space-collapsed form: alias forms are normalised, so a capitalised
-      // topic must still match them. The as-given hash stays for exact claim-text blocking.
-      const given = topic.trim();
-      for (const hash of new Set([textFingerprint(given), textFingerprint(given.toLowerCase().replace(/\s+/g, ' '))])) {
-        const existing = sql.exec<{ n: number }>('SELECT count(*) AS n FROM forget_barriers WHERE topic_hash = ?', hash).one().n;
-        if (existing === 0) sql.exec('INSERT INTO forget_barriers (topic, topic_hash, created_at) VALUES (?, ?, ?)', FORGOTTEN, hash, at);
-      }
-    },
+    barrier,
     recordHold(kind: string, reason: string, text: string, at: string): void {
       sql.exec('INSERT INTO claim_holds (kind, reason, fingerprint, created_at) VALUES (?, ?, ?, ?)', kind, reason, textFingerprint(text.trim()), at);
     },
@@ -535,14 +538,6 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       }
     },
     purge(ids: readonly number[], at: string, topics: readonly string[] = []): { ready: boolean; remaining: Record<string, number>; texts: readonly string[]; failed: readonly string[]; receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> } } {
-      const uncovered = topics.map(topic => topic.trim()).filter(topic => sql.exec('SELECT 1 FROM topic_purge_pending WHERE fingerprint = ? AND coverage_incomplete != 0', textFingerprint(topic)).toArray().length);
-      if (uncovered.length) {
-        // A derived update card carrying the topic holds the forget and its only exit is this purge, while the span selector (which authorises coverage) cannot run under that hold.
-        // So derived cards alone are blanked now, with the same predicate as the hold; every other store waits for the selector. The pending row is already durable (custody first).
-        const failed: string[] = [];
-        if (tableExists(sql, 'update_cards')) for (const topic of uncovered) { try { this.purgeUpdateCards(topic, true); } catch { failed.push('update_cards'); } }
-        return { ready: false, remaining: { selected_source_coverage: 1 }, texts: [], failed: [...new Set(failed)], receipt: { deleted: {}, redacted: {}, terminalised: {} } };
-      }
       const forgotten = ids.length
         ? sql.exec<Claim>(`SELECT * FROM claims WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids).toArray()
         : [];
@@ -783,7 +778,9 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         // The purged claims themselves still hold their text until settle below - exclude them.
         attempt('claims', () => add('claims', sql.exec<{ text: string; evidence: string; aliases: string | null; source_ref: string | null }>(`SELECT text, evidence, aliases, source_ref FROM claims WHERE (text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\' OR aliases LIKE ? ESCAPE '\\' OR source_ref LIKE ? ESCAPE '\\')${notPurging}`, like, like, like, like, ...idList).toArray().filter((row) => exact(row.text) || exact(row.evidence) || (row.aliases !== null && exact(row.aliases)) || (row.source_ref !== null && exact(row.source_ref))).length));
         if (hasEpisodes) attempt('episodes', () => add('episodes', sql.exec<{ text: string }>(`SELECT text FROM episodes WHERE text LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.text)).length));
-        attempt('memory_backups', () => add('memory_backups', sql.exec<{ payload: string }>(`SELECT payload FROM memory_backups WHERE payload LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.payload)).length));
+        // A backup payload is JSON, so the topic can sit in it escaped (a tab as \t) where the literal LIKE prefilter cannot
+        // see it; every backup is read back whole, and an escaped copy the literal redaction left keeps the forget pending.
+        attempt('memory_backups', () => add('memory_backups', sql.exec<{ payload: string }>('SELECT payload FROM memory_backups').toArray().filter((row) => exact(row.payload)).length));
         if (hasSpots) attempt('legacy_spots', () => add('legacy_spots', sql.exec<{ text: string }>(`SELECT text FROM spots WHERE text LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.text)).length));
         if (hasRevisions) attempt('legacy_core_files', () => add('legacy_core_files', sql.exec<{ content: string }>(`SELECT content FROM core_file_revisions WHERE content LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.content)).length));
         if (hasCards) attempt('update_cards', () => {
@@ -826,18 +823,11 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
     // Idempotent: already-deleted rows are no-ops. Only 'purging' rows are removed, so a
     // claim re-admitted after a failed attempt is never swept away by a late settle.
     pendingTopics(): string[] {
-      return sql.exec<{ topic: string }>('SELECT topic FROM topic_purge_pending WHERE coverage_incomplete = 0 ORDER BY created_at, fingerprint').toArray().map((row) => row.topic);
+      return sql.exec<{ topic: string }>('SELECT topic FROM topic_purge_pending ORDER BY created_at, fingerprint').toArray().map((row) => row.topic);
     },
     // An owner-requested forget that ran to completion closes a legacy hold on the same topic, so consolidation never waits on it forever.
     finishPendingTopic(topic: string): void {
       sql.exec('DELETE FROM topic_purge_pending WHERE topic = ?', topic);
-    },
-    incompleteTopics(): string[] {
-      return sql.exec<{ topic: string }>('SELECT topic FROM topic_purge_pending WHERE coverage_incomplete != 0 ORDER BY created_at, fingerprint').toArray().map(row => row.topic);
-    },
-    topicCoverage(topic: string): number | null {
-      const row = sql.exec<{ topic: string; coverage_incomplete: number }>('SELECT topic, coverage_incomplete FROM topic_purge_pending WHERE fingerprint = ?', textFingerprint(topic.trim())).toArray()[0];
-      return row?.topic === topic.trim() ? row.coverage_incomplete : null;
     },
     forgetSources(topic: string, batch = false): { sources: ForgetSource[]; incomplete: boolean; held?: string[]; heldBy?: ForgetHeldBy[]; otherIncomplete?: boolean; more?: boolean } {
       const sources: ForgetSource[] = [];
@@ -920,58 +910,12 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       const page = this.forgetSources(topic, true);
       return { sources: page.sources, incomplete: page.incomplete, ...(page.held ? { held: page.held, heldBy: page.heldBy, otherIncomplete: page.otherIncomplete } : {}), more: !!page.more };
     },
-    beginTopicCoverage(topic: string, at: string): void {
-      topic = topic.trim();
-      if (topic.length < 3 || topic.length > 512) throw new Error('pending topic bound');
-      const fingerprint = textFingerprint(topic);
-      const prior = sql.exec<{ topic: string }>('SELECT topic FROM topic_purge_pending WHERE fingerprint = ?', fingerprint).toArray()[0];
-      if (prior && prior.topic !== topic) throw new Error('pending topic fingerprint conflict');
-      const pending = sql.exec<{ topic: string }>('SELECT topic FROM topic_purge_pending').toArray().map(row => row.topic);
-      const aggregate = [...new Set([...pending, topic])];
-      if (aggregate.length > 128 || new TextEncoder().encode(JSON.stringify(aggregate)).byteLength > 65536) throw new Error('pending topic budget exceeded');
-      sql.exec('INSERT INTO topic_purge_pending (fingerprint, topic, created_at, coverage_incomplete) VALUES (?, ?, ?, 1) ON CONFLICT(fingerprint) DO UPDATE SET coverage_incomplete = CASE WHEN topic_purge_pending.coverage_incomplete = 2 THEN 2 ELSE 1 END', fingerprint, topic, at);
-    },
-    authoriseTopicCoverage(topic: string, selected: readonly string[], at: string, complete = true): void {
-      topic = topic.trim();
-      if (!selected.length || selected.length > MAX_FORGET_SOURCES || /[^\x20-\x7e]/.test(topic) || selected.some(text => text.length < 12 || text.length > 4096 || !isPlainForgetText(text) || !asciiLiteralIncludes(text, topic) || text.trim().toLowerCase() === topic.toLowerCase())) throw new Error('selected topic scope');
-      const texts = [...new Set([...this.pendingTopics(), ...selected])];
-      const existing = sql.exec<{ topic: string }>('SELECT topic FROM topic_purge_pending').toArray().map(row => row.topic);
-      const aggregate = [...new Set([...existing, ...texts])];
-      if (aggregate.length > 128 || new TextEncoder().encode(JSON.stringify(aggregate)).byteLength > 65536) throw new Error('pending topic budget exceeded');
-      const rows = texts.map(text => ({ fingerprint: textFingerprint(text), topic: text }));
-      const hashes = new Map<string, string>();
-      for (const row of rows) {
-        const prior = sql.exec<{ topic: string; coverage_incomplete: number }>('SELECT topic, coverage_incomplete FROM topic_purge_pending WHERE fingerprint = ?', row.fingerprint).toArray()[0];
-        if ((prior && prior.topic !== row.topic) || (hashes.has(row.fingerprint) && hashes.get(row.fingerprint) !== row.topic)) throw new Error('pending topic fingerprint conflict');
-        if (prior && prior.coverage_incomplete !== 0) throw new Error('pending topic coverage conflict');
-        hashes.set(row.fingerprint, row.topic);
-      }
-      // A failed barrier write leaves coverage incomplete and originals intact.
-      // Selected clauses become literal-ready only after every exact hash exists.
-      // The owner topic stays incomplete until independently verified settlement.
-      for (const text of [topic, ...selected]) this.barrier(text, at);
-      // One atomic SQL statement couples selected-clause custody to the proof
-      // state. Partial batches retain 1; only full coverage uses 2, awaiting readback.
-      const batch = [...rows.map(row => ({ ...row, coverage: 0 })), { fingerprint: textFingerprint(topic), topic, coverage: complete ? 2 : 1 }];
-      sql.exec(`INSERT INTO topic_purge_pending (fingerprint, topic, created_at, coverage_incomplete)
-        SELECT json_extract(value, '$.fingerprint'), json_extract(value, '$.topic'), ?, json_extract(value, '$.coverage') FROM json_each(?) WHERE 1
-        ON CONFLICT(fingerprint) DO UPDATE SET coverage_incomplete = excluded.coverage_incomplete`, at, JSON.stringify(batch));
-    },
-    verifyEmptyTopicCoverage(topic: string, at: string): void {
-      // Caller proves complete current inventory, including unsaved requests,
-      // before this transition; settlement still requires independent readback.
-      this.barrier(topic, at);
-      sql.exec('UPDATE topic_purge_pending SET coverage_incomplete = 2 WHERE fingerprint = ? AND topic = ? AND coverage_incomplete != 0', textFingerprint(topic.trim()), topic.trim());
-    },
-    settle(ids: readonly number[], topics: readonly string[] = [], coveredTopic?: string): void {
-      for (const topic of topics) sql.exec('DELETE FROM topic_purge_pending WHERE fingerprint = ? AND coverage_incomplete = 0', textFingerprint(topic.trim()));
+    settle(ids: readonly number[], topics: readonly string[] = []): void {
+      for (const topic of topics) sql.exec('DELETE FROM topic_purge_pending WHERE fingerprint = ?', textFingerprint(topic.trim()));
       for (const id of ids) {
         sql.exec("DELETE FROM claims WHERE id = ? AND status = 'purging'", id);
         sql.exec('DELETE FROM purge_pending WHERE claim_id = ?', id);
       }
-      // Only an explicit source-coverage proof after async readback may retire
-      // topic custody. Ordinary literal retries cannot establish that proof.
-      if (coveredTopic) sql.exec('DELETE FROM topic_purge_pending WHERE fingerprint = ? AND topic = ? AND coverage_incomplete = 2', textFingerprint(coveredTopic.trim()), coveredTopic.trim());
     },
   };
 };
