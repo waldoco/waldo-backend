@@ -583,7 +583,9 @@ it('an iMessage owner turn carries the host fact about a Gmail watch that failed
   });
   await replyFor(w, 'Did my new email come in?');
   expect(proof.systems).toHaveLength(1);
-  expect(proof.systems[0]!.split('New emails are not pushed to Waldo').length - 1).toBe(1);
-  expect(proof.systems[0]).not.toContain('mail-owner@example.invalid');
+  // The fact is current for this message, so it rides the owner's message as turn context, never the system prompt.
+  expect(proof.systems[0]).not.toContain('New emails are not pushed to Waldo');
+  expect(proof.turns[0]!.split('New emails are not pushed to Waldo').length - 1).toBe(1);
+  for (const sent of [proof.systems[0]!, proof.turns[0]!]) expect(sent).not.toContain('mail-owner@example.invalid');
   expect(forbiddenEgress).toEqual([]);
 });

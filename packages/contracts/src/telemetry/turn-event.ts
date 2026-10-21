@@ -37,10 +37,12 @@ export type TurnModelUsage = z.infer<typeof turnModelUsageSchema>;
 
 // What fills one model call, in UTF-8 bytes: numeric metadata only, never text.
 // tools_tokens_est: the tool definitions' size in tokens, estimated from bytes (the provider reports no split).
+// context_sections: the parts of the turn context that ride the owner's message instead of the system prompt.
 export const turnContextShapeSchema = z.strictObject({
   tools_count: count, tools_bytes: count, tools_tokens_est: count.optional(), tool_turns_bytes: count,
   history_messages: count, history_bytes: count, current_bytes: count, attachments: count,
   system_sections: z.partialRecord(systemSectionSchema, count).optional(),
+  context_sections: z.partialRecord(systemSectionSchema, count).optional(),
 });
 export type TurnContextShape = z.infer<typeof turnContextShapeSchema>;
 
