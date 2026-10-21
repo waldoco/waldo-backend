@@ -384,7 +384,8 @@ const writeRows = (kv: StatusKv, rows: FinalRecord[]): void => {
 };
 
 // One report on one part of a record the surface took. Only a record still waiting on that part changes: a report about a
-// record that has already ended (delivered, blocked, expired, unconfirmed) or about a part sent again since is ignored.
+// record that has already ended (delivered, blocked, expired, unconfirmed), about a part sent again since, or a refusal or
+// failure about a part that already arrived (a replayed report) is ignored.
 // Answers whether the record changed.
 const applyStatus = (row: FinalRecord, index: number, kind: SurfaceStatus['kind'], now: number): boolean => {
   if (row.status !== 'accepted' && row.status !== 'pending') return false;
@@ -396,6 +397,7 @@ const applyStatus = (row: FinalRecord, index: number, kind: SurfaceStatus['kind'
     if (row.status === 'accepted' && arrived.every(Boolean)) { row.status = 'delivered'; row.deliveredAt = now; row.settled = false; row.dueAt = now; }
     return true;
   }
+  if (arrived[index]) return false;
   if (kind === 'failed' || row.forgotten) {
     row.status = 'blocked'; row.reason = kind === 'failed' ? 'provider_failed' : 'owner_forget'; row.settled = false; row.dueAt = now;
     return true;

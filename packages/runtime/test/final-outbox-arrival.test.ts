@@ -98,6 +98,20 @@ describe('a record a surface accepted and reports on later', () => {
     expect(new TelegramFinalOutbox(kv).records()[0]).toMatchObject({ status: 'accepted', providerMessageIds: ['wamid.3', 'wamid.2'] });
   });
 
+  it('ignores a refusal or a failure about a part that already arrived, such as a replayed report', async () => {
+    const kv = store(), clock = { now: 1_000 };
+    const { surface } = await drained(kv, clock, { id: 'card', payload: { chat_id: 42, text: `${'a'.repeat(3000)}\n\n${'b'.repeat(3000)}` } });
+    expect(observeSurfaceStatuses(kv, [{ id: 'wamid.1', kind: 'arrived', at: clock.now }], addressed, clock.now)).toBe(1);
+    expect(observeSurfaceStatuses(kv, [{ id: 'wamid.1', kind: 'refused', at: clock.now }], addressed, clock.now)).toBe(0);
+    expect(observeSurfaceStatuses(kv, [{ id: 'wamid.1', kind: 'failed', at: clock.now }], addressed, clock.now)).toBe(0);
+    clock.now += 300;
+    await new TelegramFinalOutbox(kv, () => clock.now).drain(surface.delivery);
+    expect(surface.sent).toHaveLength(2);
+    expect(new TelegramFinalOutbox(kv).records()[0]).toMatchObject({ status: 'accepted', arrived: [true, false], providerMessageIds: ['wamid.1', 'wamid.2'] });
+    observeSurfaceStatuses(kv, [{ id: 'wamid.2', kind: 'arrived', at: clock.now }], addressed, clock.now);
+    expect(rows(kv)).toEqual([{ id: 'card', status: 'delivered' }]);
+  });
+
   it('ends unconfirmed once its time to report has passed, and that settles it as not delivered', async () => {
     const kv = store(), clock = { now: 1_000 };
     const { surface } = await drained(kv, clock, { id: 'report', standingOrder: { runId: 'run', gate: 'act_and_report' } });
