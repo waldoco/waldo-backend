@@ -14,7 +14,7 @@ const turn = (ownerText:string,turnId='turn-1') => ({ owner, turnId, trigger:'us
 const bytes = (t:string) => new TextEncoder().encode(t).length;
 
 it('catalog lists the file-backed reviewed skills, instruction-only (defaults are covered in curated-skills-bootstrap)', async () => {
- const stub = env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('catalog-list'));
+ const stub = env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('catalog-list'));
  await runInDurableObject(stub, async (_,state) => {
   provisionDoSchema(state.storage);
   new CuratedOwnerSkills(state.storage.sql, owner); state.storage.sql.exec("UPDATE skills SET status='archived'");
@@ -33,7 +33,7 @@ it('every bundled skill fits its bounded rendered ceiling as a rendered skill an
  }
 });
 it('each skill installs by exact owner command, loads on a later turn, injects only itself, and disable revokes', async () => {
- const stub = env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('catalog-lifecycle'));
+ const stub = env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('catalog-lifecycle'));
  await runInDurableObject(stub, async (_,state) => {
   provisionDoSchema(state.storage);
   new CuratedOwnerSkills(state.storage.sql, owner); state.storage.sql.exec("UPDATE skills SET status='archived'");
@@ -50,7 +50,7 @@ it('each skill installs by exact owner command, loads on a later turn, injects o
  });
 });
 it('installing one skill never enables another, and a command for one name cannot install another', async () => {
- const stub = env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('catalog-isolation'));
+ const stub = env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('catalog-isolation'));
  await runInDurableObject(stub, async (_,state) => {
   provisionDoSchema(state.storage);
   new CuratedOwnerSkills(state.storage.sql, owner); state.storage.sql.exec("UPDATE skills SET status='archived'");
@@ -63,7 +63,7 @@ it('installing one skill never enables another, and a command for one name canno
  });
 });
 it('allows one reviewed procedure per turn', async () => {
- const stub = env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('catalog-one-per-turn'));
+ const stub = env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('catalog-one-per-turn'));
  await runInDurableObject(stub, async (_,state) => {
   provisionDoSchema(state.storage);
   new CuratedOwnerSkills(state.storage.sql, owner); state.storage.sql.exec("UPDATE skills SET status='archived'");
@@ -75,7 +75,7 @@ it('allows one reviewed procedure per turn', async () => {
  });
 });
 it('tampering with one skill row disables only that skill', async () => {
- const stub = env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('catalog-tamper'));
+ const stub = env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('catalog-tamper'));
  await runInDurableObject(stub, async (_,state) => {
   provisionDoSchema(state.storage);
   new CuratedOwnerSkills(state.storage.sql, owner); state.storage.sql.exec("UPDATE skills SET status='archived'");
@@ -90,7 +90,7 @@ it('no pack skill declares a trigger that cannot call skills_load (no dead trigg
  for (const s of CURATED_PACK_SKILLS.filter(s=>s.name!=='document-email-preparation')) for (const trigger of s.trigger_types) expect(TOOL_PERMISSIONS[trigger], `${s.name}:${trigger}`).toContain('skills_load');
 });
 it('a brief-trigger turn cannot load or inject a catalog skill', async () => {
- const stub = env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('catalog-brief'));
+ const stub = env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('catalog-brief'));
  await runInDurableObject(stub, async (_,state) => {
   provisionDoSchema(state.storage);
   new CuratedOwnerSkills(state.storage.sql, owner); state.storage.sql.exec("UPDATE skills SET status='archived'");

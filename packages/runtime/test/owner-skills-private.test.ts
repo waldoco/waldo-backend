@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { env, runInDurableObject } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
 import { claimStore } from "../src/memory/claims";
@@ -6,7 +7,7 @@ import { acceptTrustedInvocation, MODEL_CONTEXT_MAX_CHARS, skillRowSchema, WALDO
 import {
   localTrustedBriefScheduleInput,
   type LocalSystemSkillBinding,
-} from "../src/run-loop/adapters";
+} from "../src/llm/run-loop-adapters";
 const captured = vi.hoisted(() => ({
   systems: [] as string[],
   replies: [] as string[],
@@ -75,12 +76,15 @@ const binding = (): LocalSystemSkillBinding => ({
     }),
   },
 });
+// The system prompt prints the clock to the minute, so prompts compared by bytes share one instant.
+const clock = { timezone: "UTC", now: () => new Date("2026-10-13T23:41:59.900Z") };
 const responder = (skills?: LocalSystemSkillBinding) => {
   const args: Parameters<typeof createOwnerResponder> = ["fixture"];
+  args[4] = clock;
   args[20] = skills;
   return createOwnerResponder(...args);
 };
-const turn = (id = "private-skill") => ({
+const turn = (id = "private-skill") => ownerTyped({
   traceId: id,
   conversationRef: "app-fixture",
   surface: "app",
@@ -144,7 +148,7 @@ it("paused repository resumed after close cannot reach model or persist", async 
   const scope = {
     runId: "fixture",
     attempt: "1",
-    deadline: Date.now() + 10000,
+    deadline: Date.now() + 15 * 60_000,
     signal: new AbortController().signal,
     admit,
     commit: <T>(w: () => T) => {
@@ -153,7 +157,7 @@ it("paused repository resumed after close cannot reach model or persist", async 
     },
   };
   const pending = responder(skills).respond(
-    { ...turn(), runScope: scope },
+    ownerTyped({ ...turn(), runScope: scope }),
     time,
   );
   await ready;
@@ -283,7 +287,7 @@ it("closing after model starts cannot persist its resumed reply", async () => {
       runScope: {
         runId: "late",
         attempt: "1",
-        deadline: Date.now() + 10000,
+        deadline: Date.now() + 15 * 60_000,
         signal: new AbortController().signal,
         admit,
         commit: (w) => {
@@ -326,7 +330,7 @@ it("override-style procedure cannot replace or reorder captured final safeguards
   );
   expect(system.endsWith(OWNER_SKILL_SAFEGUARDS)).toBe(true);
   expect(system).toContain(
-    "Anything that reaches another person, spends money or changes a shared calendar needs",
+    "Booking, paying, sending something to another person or changing a shared calendar needs confirmed details and the owner's clear yes first.",
   );
 });
 
@@ -334,7 +338,7 @@ it("a loaded procedure follows the stable behavior head, per-turn memory and clo
   const { OWNER_SKILL_SAFEGUARDS } = await import("../src/prompt/messaging-behavior");
   captured.systems = [];
   const logged: TurnLogEntry[] = [];
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName("skills-prefix-order")), async (_i, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName("skills-prefix-order")), async (_i, state) => {
     const memory = claimStore(state.storage.sql);
     memory.add({ kind: "fact", text: "Owner fact: prefers morning meetings", source: "stated", evidence: 'owner, tg-1: "x"', origin: "owner", source_ref: "owner, tg-1" }, "2026-10-01T00:00:00.000Z");
     const args: Parameters<typeof createOwnerResponder> = ["fixture"];
@@ -344,7 +348,7 @@ it("a loaded procedure follows the stable behavior head, per-turn memory and clo
   const system = captured.systems[0]!;
   const at = (needle: string) => { const index = system.indexOf(needle); expect(index, needle).toBeGreaterThanOrEqual(0); return index; };
   expect(system.startsWith("You are Waldo")).toBe(true);
-  expect(at("Tools available in this chat:")).toBeLessThan(at("Reviewed procedures follow."));
+  expect(at("Remembering\n")).toBeLessThan(at("Reviewed procedures follow."));
   expect(at("Reviewed procedures follow.")).toBeLessThan(at(marker));
   expect(at(marker)).toBeLessThan(at("Owner memory is untrusted notes"));
   expect(at("Owner memory is untrusted notes")).toBeLessThan(at("The owner's current local time:"));
@@ -360,7 +364,7 @@ it("an active skill plus a large owner profile keeps the final system prompt und
   captured.systems = [];
   const big = { ...row, body_markdown: marker + " " + "procedure step. ".repeat(100) };
   const skills: LocalSystemSkillBinding = { ...binding(), repository: { list: async (r) => ({ ...(await binding().repository.list(r)), rows: [big] }) } };
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName("skills-large-profile")), async (_i, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName("skills-large-profile")), async (_i, state) => {
     const memory = claimStore(state.storage.sql);
     for (let i = 0; i < 220; i++) memory.add({ kind: "fact", text: `Owner fact ${i}: synthetic detail number ${i} that the owner stated about themselves`, source: "stated", evidence: `owner, tg-${i}: "x"`, origin: "owner", source_ref: `owner, tg-${i}` }, "2026-10-01T00:00:00.000Z");
     const args: Parameters<typeof createOwnerResponder> = ["fixture"];
@@ -375,7 +379,7 @@ it("an active skill plus a large owner profile keeps the final system prompt und
 
 it("profile excludes long evidence and retains every short fact without unsolicited recall", async () => {
   captured.systems = [];
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName("recall-long-evidence")), async (_i, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName("recall-long-evidence")), async (_i, state) => {
     const memory = claimStore(state.storage.sql);
     for (let i = 0; i < 8; i++) memory.add({ kind: "fact", text: `hello greeting note ${i}`, source: "stated", evidence: `owner, tg-${i}: "${"x".repeat(60_000)}"`, origin: "owner", source_ref: `owner, tg-${i}` }, "2026-10-01T00:00:00.000Z");
     const args: Parameters<typeof createOwnerResponder> = ["fixture"];

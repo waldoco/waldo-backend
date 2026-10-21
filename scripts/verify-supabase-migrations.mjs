@@ -56,6 +56,17 @@ const expectedMigrations = [
   '20261011200000_waldo_connect_channel_app.sql',
   '20261011210000_health_retention_derived.sql',
   '20261011220000_health_retention_sweep.sql',
+  '20261011230000_delete_owner_identity.sql',
+  '20261012000000_waldo_imessage_connector.sql',
+  '20261013000000_waldo_device_bridge_v030.sql',
+  '20261013150000_gmail_push_route.sql',
+  '20261014060000_waldo_admin_invite_uncapped.sql',
+  '20261014120000_waldo_imessage_shared_bridge.sql',
+  '20261014130000_waldo_device_pairing_owner.sql',
+  '20261017090000_waldo_whatsapp_onboarding_replies.sql',
+  '20261017100000_waldo_console_auth_throttle_window.sql',
+  '20261017120000_waldo_whatsapp_text_first_link.sql',
+  '20261020120000_waldo_cost_ledger.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);

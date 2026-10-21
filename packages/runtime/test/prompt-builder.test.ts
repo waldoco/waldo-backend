@@ -21,7 +21,6 @@ import { describe, expect, it, vi } from 'vitest';
 import type { HookRuntimeContext } from '../src/hooks/registry';
 import { RuntimeLLMProvider, type LLMGatewayAdapter } from '../src/llm/provider';
 import { createRuntimePromptBuilder, type RuntimePromptContext } from '../src/prompt/reasons';
-import { RecallSecurityHalt } from '../src/recall/gateway';
 import { sanitise } from '../src/scribe/sanitiser';
 import type { ResolvedSkillBudget } from '../src/skills/budget';
 
@@ -233,8 +232,8 @@ describe('createRuntimePromptBuilder', () => {
     expect(prompt).not.toContain('<available-skills>');
   });
 
-  it('propagates a recall security halt without substituting an empty result', async () => {
-    const halt = new RecallSecurityHalt('memory');
+  it('propagates a recall failure without substituting an empty result', async () => {
+    const halt = new Error('recall failed');
     const builder = createRuntimePromptBuilder({
       loadForTrigger: async () => ({ selected: [], excluded: [] }),
       recall: async () => {

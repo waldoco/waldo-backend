@@ -2,7 +2,7 @@
 // Runs under the default test config (wrangler defaults: production, capture off); the env is also overridden per case.
 import { env, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
-import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
+import { OwnerDO } from '../src/channels/owner-do';
 import { OWNER_TRACE_HEADER } from '../src/observability/owner-trace-identity';
 
 vi.mock('openai', () => ({ default: class {
@@ -14,8 +14,8 @@ const IDENTITY = { owner_id: '10000000-0000-0000-0000-0000000000aa', owner_email
 
 const admit = async (name: string, vars: Record<string, string>) => {
   let stored = '';
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
-    const instance = new TelegramOwnerDO(state, {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    const instance = new OwnerDO(state, {
       ...env, ...vars, TELEGRAM_BOT_TOKEN: '123456:fictional-telegram-token', TELEGRAM_WEBHOOK_SECRET: 'fictional-inbox-secret', OPENAI_API_KEY: 'fictional-model-key',
     });
     // Admission only; the drain is not the subject here.

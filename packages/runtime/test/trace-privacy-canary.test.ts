@@ -252,3 +252,23 @@ it.each(['invalid_decision', 'uncertain', 'retained_invalid', 'retained_uncertai
   const sink = noteSink(); traceBook(sink.sql).record(gated, Date.now());
   expect(sink.notes).toEqual([code]);
 });
+
+describe('v9 typed fields at the gate', () => {
+  it('keeps the typed v9 fields with capture off and drops any that are not in their vocabulary', () => {
+    const typed: TurnLogEntry = {
+      trace: 't9', hop: 'tool_draft_email', ms: 5, ok: false, error: `provider says ${MARKER}`,
+      error_code: 'rate_limited', rung: 'email', blocked_reason: 'approval_required', provider: 'openai', fallback_fired: true,
+      ttft_ms: 120, tools_called: 1, parallel_batches: 1, job_id: 'job_01', job_profile: 'reader', outcome: 'blocked', browser_ms: 0, sandbox_ms: 0,
+    };
+    const gated = gateTraceEntry(typed, false);
+    expect(gated).toMatchObject({ error_code: 'rate_limited', rung: 'email', blocked_reason: 'approval_required', provider: 'openai', fallback_fired: true, ttft_ms: 120, tools_called: 1, parallel_batches: 1, job_id: 'job_01', job_profile: 'reader', outcome: 'blocked', browser_ms: 0, sandbox_ms: 0 });
+    expect(JSON.stringify(gated)).not.toContain(MARKER);
+
+    const smuggled = gateTraceEntry({
+      ...typed, error_code: `rate_limited ${MARKER}`, rung: MARKER as never, blocked_reason: MARKER as never, provider: MARKER as never,
+      job_id: `job ${MARKER}`, job_profile: `reader ${MARKER}`, outcome: MARKER as never, ttft_ms: Number.NaN, tools_called: -1,
+    }, false);
+    expect(JSON.stringify(smuggled)).not.toContain(MARKER);
+    for (const key of ['error_code', 'rung', 'blocked_reason', 'provider', 'job_id', 'job_profile', 'outcome', 'ttft_ms', 'tools_called'] as const) expect(smuggled[key]).toBeUndefined();
+  });
+});

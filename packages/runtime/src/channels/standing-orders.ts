@@ -3,7 +3,7 @@ import {
   type CancelStandingOrderArgs, type ListStandingOrdersArgs, type SetStandingOrderArgs, type StandingEscalation, type StandingGate, type ToolHandler, type ToolName,
 } from '@waldo/contracts';
 import type { ScheduleKind } from '@waldo/contracts';
-import { nextOccurrence, type Scheduler } from '../scheduler/multiplexer';
+import { nextOccurrence, UnreadableScheduleRowError, type Scheduler } from '../scheduler/multiplexer';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { OwnerClock } from '../tools/live/get-context';
 import { localIso, reminderRecurrence } from './reminders';
@@ -17,11 +17,14 @@ export type StandingOrder = Readonly<{
   scope: string;
   trigger: SetStandingOrderArgs['trigger'];
   cron?: string;
+  // Set when the order's schedule row is stored in a form this version cannot read.
+  schedule_unreadable?: true;
   at: string | null;
   gate: StandingGate;
   escalation: StandingEscalation;
   created_at: number;
 }>;
+type StoredOrder = Omit<StandingOrder, 'schedule_unreadable'>;
 
 type Sql = Pick<SqlStorage, 'exec'>;
 
@@ -35,8 +38,10 @@ export type StandingOrderBook = Readonly<{
 export const standingOrderBook = (sql: Sql, scheduler: Scheduler, clock: OwnerClock, newId: () => string): StandingOrderBook => {
   sql.exec(`CREATE TABLE IF NOT EXISTS standing_orders (
     id TEXT PRIMARY KEY, scope TEXT NOT NULL, trigger TEXT NOT NULL, at TEXT, gate TEXT NOT NULL, escalation TEXT NOT NULL, created_at INTEGER NOT NULL)`);
-  const toOrder = (row: StandingOrder): StandingOrder => {
-    const recurrence = scheduler.read(row.id)?.recurrence;
+  const toOrder = (row: StoredOrder): StandingOrder => {
+    const found = scheduler.lookup(row.id);
+    if (found.state === 'unreadable') return { ...row, schedule_unreadable: true };
+    const recurrence = found.state === 'entry' ? found.entry.recurrence : undefined;
     return recurrence?.type === 'cron' ? { ...row, cron: recurrence.expression } : row;
   };
   return {
@@ -72,8 +77,8 @@ export const standingOrderBook = (sql: Sql, scheduler: Scheduler, clock: OwnerCl
       }
       return { id, scope: args.scope, trigger: args.trigger, at: args.at ?? null, ...(args.cron === undefined ? {} : { cron: args.cron }), gate: args.gate, escalation: args.escalation, created_at: clock.now().getTime() };
     },
-    list: () => sql.exec<StandingOrder>('SELECT * FROM standing_orders ORDER BY created_at').toArray().map(toOrder),
-    byId: (id) => sql.exec<StandingOrder>('SELECT * FROM standing_orders WHERE id = ?', id).toArray().map(toOrder)[0] ?? null,
+    list: () => sql.exec<StoredOrder>('SELECT * FROM standing_orders ORDER BY created_at').toArray().map(toOrder),
+    byId: (id) => sql.exec<StoredOrder>('SELECT * FROM standing_orders WHERE id = ?', id).toArray().map(toOrder)[0] ?? null,
     async cancel(id) {
       const known = scheduler.read(id)?.kind === 'standing_order';
       // A DELETE returns no rows, so whether the order existed is read before removing it. The order row goes
@@ -94,7 +99,7 @@ export const standingOrdersPrompt = (book: StandingOrderBook): string => {
   const orders = book.list();
   if (orders.length === 0) return '';
   const line = (order: StandingOrder): string =>
-    `- [${order.id}] ${order.scope} (${order.trigger === 'every_turn' ? 'applies every turn' : `runs ${order.trigger} ${order.cron ?? `at ${order.at}`}`}; gate: ${order.gate === 'confirm_first' ? 'confirm with the owner before acting' : 'act and report'})`;
+    `- [${order.id}] ${order.scope} (${order.trigger === 'every_turn' ? 'applies every turn' : `runs ${order.trigger} ${order.cron ?? (order.schedule_unreadable ? "on a schedule stored in a form this version can't read" : `at ${order.at}`)}`}; gate: ${order.gate === 'confirm_first' ? 'confirm with the owner before acting' : 'act and report'})`;
   return [
     'Standing orders from the owner (apply until cancelled; a confirm_first order is never license to act without the owner):',
     ...orders.map(line),
@@ -146,7 +151,13 @@ export const standingOrderHandlers = (book: StandingOrderBook) => [
     autonomy_gated: false,
     mutates_state: true,
     async handle({ id }) {
-      return { ok: true, data: { id, cancelled: await book.cancel(id) }, source_taint: null };
+      try {
+        return { ok: true, data: { id, cancelled: await book.cancel(id) }, source_taint: null };
+      } catch (error) {
+        // Retrying cannot help: nothing was cancelled, and this version will never read the row.
+        if (error instanceof UnreadableScheduleRowError) return { ok: false, code: 'rejected', error: "That standing order's schedule is stored in a form this version can't read, so it can't be cancelled here. Nothing was changed." };
+        throw error;
+      }
     },
   } satisfies ToolHandler<CancelStandingOrderArgs, { id: string; cancelled: boolean }, ToolDispatcherContext>,
 ];

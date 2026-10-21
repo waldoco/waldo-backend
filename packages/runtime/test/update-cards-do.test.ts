@@ -15,7 +15,7 @@ const fake = (calendar: CalendarChange[], mail: MailItem[], asked: unknown[][] =
 
 describe('update cards', () => {
   it('seeds on the first check, then reports calendar and mail changes since the last check', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('update-cards'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('update-cards'));
     await runInDurableObject(stub, async (_instance, state) => {
       const book = updateBook(state.storage.sql);
       const asked: unknown[][] = [];
@@ -73,7 +73,7 @@ describe('update cards', () => {
 });
 
 
-const updateFixture = vi.hoisted(() => ({ changed: false, sent: [] as string[], prompts: [] as string[] }));
+const updateFixture = vi.hoisted(() => ({ changed: false, sent: [] as string[], markups: [] as unknown[], prompts: [] as string[] }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
   return { ...original, googleClient: (...args: Parameters<typeof original.googleClient>) => args[0].clientId !== 'update-fixture' ? original.googleClient(...args) : ({
@@ -83,22 +83,22 @@ vi.mock('../src/connectors/google', async load => {
 });
 vi.mock('../src/channels/telegram-api', async load => {
   const original = await load<typeof import('../src/channels/telegram-api')>();
-  return { ...original, createTelegramCaller: () => async (method: string, payload: { chat_id?: number; text?: string }) => {
-    if (method === 'sendMessage') { updateFixture.sent.push(payload.text ?? ''); return { message_id: updateFixture.sent.length, chat: { id: payload.chat_id } }; } return true;
+  return { ...original, createTelegramCaller: () => async (method: string, payload: { chat_id?: number; text?: string; reply_markup?: unknown }) => {
+    if (method === 'sendMessage') { updateFixture.sent.push(payload.text ?? ''); updateFixture.markups.push(payload.reply_markup); return { message_id: updateFixture.sent.length, chat: { id: payload.chat_id } }; } return true;
   } };
 });
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   return { ...original, createTelegramResponder: () => ({ prompt: async (_id: string, _chat: number, text: string) => { updateFixture.prompts.push(text); return 'Calendar update: Lunch added.'; } }) };
 });
-const { TelegramOwnerDO: UpdateOwner } = await import('../src/channels/telegram-owner-do');
+const { OwnerDO: UpdateOwner } = await import('../src/channels/owner-do');
 const { loopBook: updateLoops } = await import('../src/channels/loops');
 const { dayPlanBook: updatePlans } = await import('../src/channels/day-cards');
 it.each(['normal', 'low', 'quiet', 'off', 'closed'] as const)('updates without a brief respect owner preferences: %s', async mode => {
-  await runInDurableObject(env.TRACER_DO.get(env.TRACER_DO.idFromName(`update-without-brief-${mode}`)), async (_instance, state) => {
+  await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`update-without-brief-${mode}`)), async (_instance, state) => {
     const now = Date.parse('2026-10-08T09:00:00Z');
     const savedNow = Date.now; Date.now = () => now;
-    updateFixture.changed = false; updateFixture.sent = []; updateFixture.prompts = [];
+    updateFixture.changed = false; updateFixture.sent = []; updateFixture.markups = []; updateFixture.prompts = [];
     try {
       state.storage.kv.put('telegram_subject', '7');
       await state.storage.put('origin', 'https://fixture.invalid');
@@ -112,6 +112,11 @@ it.each(['normal', 'low', 'quiet', 'off', 'closed'] as const)('updates without a
       await runtime.updateCheck('changed');
       expect(updatePlans(state.storage.sql).read('2026-10-08').some(row => row.card === 'card:brief' && row.sent)).toBe(false);
       expect(updateFixture.sent.filter(text => text === 'Calendar update: Lunch added.')).toHaveLength(mode === 'normal' ? 1 : 0);
+      // On Telegram the update card carries its Useful / Not useful feedback buttons, keyed to its stored row.
+      if (mode === 'normal') {
+        const id = state.storage.sql.exec<{ id: number }>('SELECT id FROM update_cards WHERE pushed = 1').one().id;
+        expect(updateFixture.markups).toEqual([{ inline_keyboard: [[{ text: 'Useful', callback_data: `fb:${id}:u` }, { text: 'Not useful', callback_data: `fb:${id}:n` }]] }]);
+      }
       expect(closedTraces(state, 'changed')).toBe(1);
     } finally { Date.now = savedNow; await state.storage.deleteAlarm(); }
   });
@@ -119,7 +124,7 @@ it.each(['normal', 'low', 'quiet', 'off', 'closed'] as const)('updates without a
 const closedTraces = (state: DurableObjectState, trace: string) =>
   state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM trace_log WHERE trace = ? AND hop = 'machine_turn'", trace).one().n;
 it('a day card held for quiet hours still closes its trace, so the exporter flushes it', async () => {
-  await runInDurableObject(env.TRACER_DO.get(env.TRACER_DO.idFromName('day-card-quiet-root')), async (_instance, state) => {
+  await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('day-card-quiet-root')), async (_instance, state) => {
     const now = Date.parse('2026-10-08T09:00:00Z');
     const savedNow = Date.now; Date.now = () => now;
     try {

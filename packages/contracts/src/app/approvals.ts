@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import { appControlRequestIdV1Schema, appControlResultV1Schema } from './controls';
 import {
-  approvalActionV1Schema, approvalIdV1Schema, approvalKindV1Schema, approvalReviewV1Schema, epochMsV1Schema, payloadDigestV1Schema,
-  type ApprovalActionV1, type ApprovalKindV1,
+  approvalActionV1Schema, approvalIdV1Schema, approvalKindV1Schema, approvalLabelsV1Schema, approvalQuestionV1Schema, approvalReviewV1Schema,
+  epochMsV1Schema, labelsOfferedActions, payloadDigestV1Schema, type ApprovalActionV1, type ApprovalKindV1,
 } from './parts';
 import { surfaceNameV1Schema } from './surfaces';
 
@@ -12,8 +12,10 @@ export const appApprovalStateV1Schema = z.enum([
   'unconfirmed', 'open', 'review_only', 'edit_requested', 'skipped', 'expired', 'superseded', 'done', 'not_done', 'outcome_unknown', 'undone',
 ]);
 export type AppApprovalStateV1 = z.infer<typeof appApprovalStateV1Schema>;
+// Deferring is desk state, so every surface sees it: the approval stays open (it can still expire), the
+// default list leaves it out until Waldo raises it again, and the decision is recorded with approval_state open.
 const DECISIONS_BY_STATE: Readonly<Partial<Record<AppApprovalStateV1, readonly ApprovalActionV1[]>>> = {
-  open: ['approve', 'edit', 'skip'], review_only: ['skip'], done: ['undo'],
+  open: ['approve', 'edit', 'skip', 'defer'], review_only: ['skip', 'defer'], done: ['undo'],
 };
 
 const addresses = z.array(z.string().min(1).max(320)).max(100);
@@ -31,11 +33,19 @@ export const appApprovalTaskExactV1Schema = z.strictObject({
 // Derived from the frozen desk payload, exposing no more than the desk review does: never raw MIME,
 // tokens, browser bindings or MCP arguments. Bindings and arguments appear only in `review`, with
 // credential values masked; a browser scope is the page without its query string or fragment.
+const instant = z.iso.datetime({ offset: true });
+// The calendar details are approvals revision 2, each present exactly when the review states it: the invited guests,
+// whether Google emails the guests, the place, a calendar other than the primary one, the Google account, the event's
+// time before a move, and the time zone the review's times are written in.
+const CALENDAR_DETAILS = ['guests', 'emails_guests', 'location', 'calendar', 'account', 'previous', 'time_zone'] as const;
 export const appApprovalExactV1Schema = z.strictObject({
   recipients: z.strictObject({ to: addresses.min(1), cc: addresses, bcc: addresses }).optional(),
   changes: z.strictObject({
     action: z.enum(['create', 'move', 'cancel']), title: z.string().min(1).max(200).nullable(),
-    start: z.iso.datetime({ offset: true }).nullable(), end: z.iso.datetime({ offset: true }).nullable(),
+    start: instant.nullable(), end: instant.nullable(),
+    guests: z.array(z.email()).min(1).max(50).optional(), emails_guests: z.boolean().optional(),
+    location: z.string().min(1).max(300).optional(), calendar: z.string().min(1).max(254).optional(), account: z.email().optional(),
+    previous: z.strictObject({ start: instant, end: instant }).optional(), time_zone: z.string().min(1).max(64).optional(),
   }).optional(),
   scope: z.string().min(1).max(2048).optional(),
   task: appApprovalTaskExactV1Schema.optional(),
@@ -43,19 +53,31 @@ export const appApprovalExactV1Schema = z.strictObject({
 // What each kind must show before it can be decided: who receives a send, what a calendar change
 // does, where a browser or MCP action lands, and which task fields change.
 const EXACT_BY_KIND = {
-  email_send: 'recipients', message_send: 'recipients', calendar_change: 'changes', browser_submit: 'scope', mcp_call: 'scope', google_task_change: 'task',
+  email_send: 'recipients', message_send: 'recipients', calendar_change: 'changes', browser_submit: 'scope', mcp_call: 'scope', google_task_change: 'task', tainted_action: 'scope',
 } as const satisfies Readonly<Record<ApprovalKindV1, keyof z.infer<typeof appApprovalExactV1Schema>>>;
 
 export const appApprovalV1Schema = z.strictObject({
   approval_id: approvalIdV1Schema, kind: approvalKindV1Schema, state: appApprovalStateV1Schema,
   review: approvalReviewV1Schema, exact: appApprovalExactV1Schema,
   payload_digest: payloadDigestV1Schema, expires_at: epochMsV1Schema,
-  actions: z.array(approvalActionV1Schema).max(3),
+  actions: z.array(approvalActionV1Schema).max(4),
   presented_surfaces: z.array(surfaceNameV1Schema).max(surfaceNameV1Schema.options.length)
     .refine(surfaces => new Set(surfaces).size === surfaces.length, 'surfaces repeat').optional(),
+  // undo_until is when the undo on offer closes, so the app can count it down; it comes only while undo is offered.
+  question: approvalQuestionV1Schema.optional(), labels: approvalLabelsV1Schema.optional(), undo_until: epochMsV1Schema.optional(),
 }).refine(approval => approval.exact[EXACT_BY_KIND[approval.kind]] !== undefined, { error: 'exact must name what this kind changes', path: ['exact'] })
+  .refine(labelsOfferedActions, { error: 'labels name only actions offered', path: ['labels'] })
+  .refine(approval => approval.undo_until === undefined || approval.actions.includes('undo'), { error: 'undo_until needs undo offered', path: ['undo_until'] })
   .refine(approval => new Set(approval.actions).size === approval.actions.length
     && approval.actions.every(action => DECISIONS_BY_STATE[approval.state]?.includes(action)), { error: 'actions must be decisions the desk accepts in this state', path: ['actions'] });
+export const APP_APPROVALS_CONTRACT_REVISION = 2;
+// An approval as a build reading `revision` parses it: revision 1 is the shape before the calendar details.
+export const appApprovalAtRevision = (approval: AppApprovalV1, revision: number): AppApprovalV1 => {
+  const changes = approval.exact.changes;
+  if (revision >= 2 || !changes) return approval;
+  const first = Object.fromEntries(Object.entries(changes).filter(([key]) => !(CALENDAR_DETAILS as readonly string[]).includes(key))) as typeof changes;
+  return { ...approval, exact: { ...approval.exact, changes: first } };
+};
 export const appApprovalListQueryV1Schema = z.strictObject({ state: appApprovalStateV1Schema.optional() });
 export const appApprovalListV1Schema = z.strictObject({ approvals: z.array(appApprovalV1Schema).max(100) });
 

@@ -1,22 +1,26 @@
 import type { ConversationEntry } from '@waldo/contracts';
-import { APP_SEND_MAX_WIRE_BYTES, appCodeRequestSchema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
+import { iMessageSendUrl } from './imessage/send-url';
+import { APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appCodeRequestSchema, appContractHeaderV1Schema, appIMessageLinkCodeV1Schema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
 import type { AppApprovalCards } from './approvals';
 import { consoleAuth, type ConsoleAuth } from '../identity/console-auth';
-import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/app-session-fence';
+import { readOwnerDemand } from '../health/calendar-demand-route';
 import { linkCodeHash, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { signedRpc } from '../identity/owner-directory';
 import { computeDailyScores } from '../health/scores';
 import { APP_HEALTH_PATH, handleAppHealth } from './app-health';
+import { fenceSession } from './session-fence';
 import { CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS, CONSOLE_OTP_SEND_LIMIT, CONSOLE_OTP_VERIFY_LIMIT } from './console-signin';
 
 export const APP_PATH = '/app/v1';
+const APP_IMESSAGE_LINK_CODE_PATH = `${APP_PATH}/channels/imessage/link-code`;
 export const APP_CHAT_PATH = `${APP_PATH}/chat/main`;
+export const APP_THREADS_PATH = `${APP_PATH}/threads`;
 export const APP_CHAT_SEND_PATH = `${APP_CHAT_PATH}/messages`;
 export const APP_APPROVALS_PATH = `${APP_PATH}/approvals`;
 export const APP_APPROVAL_DECISIONS_PATH = `${APP_APPROVALS_PATH}/decisions`;
 const MAX_BODY_BYTES = 8192;
 
-type AppEnv = OwnerDirectoryEnv & Readonly<{ TELEGRAM_OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
+type AppEnv = OwnerDirectoryEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string }>;
 
 // Errors before authentication share one shape so the app cannot learn who is invited.
 const fail = (status: 401 | 403 | 404 | 405 | 413 | 429 | 503) => Response.json({ error: 'unavailable' }, { status, headers: { 'cache-control': 'no-store', ...(status === 429 ? { 'retry-after': '60' } : {}) } });
@@ -29,7 +33,7 @@ const readJson = async (request: Request): Promise<Record<string, unknown> | nul
   let text: string; try { text = new TextDecoder('utf-8', {fatal:true,ignoreBOM:true}).decode(bytes); } catch { return null; }
   try { const value: unknown = JSON.parse(text); return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null; } catch { return null; }
 };
-const readBoundedBody = async (request:Request, max:number):Promise<Uint8Array|null> => {
+export const readBoundedBody = async (request:Request, max:number):Promise<Uint8Array|null> => {
   if (!request.body) return new Uint8Array();
   const reader=request.body.getReader(), chunks:Uint8Array[]=[]; let size=0, expired=false;
   const timer=setTimeout(()=>{expired=true;void reader.cancel();},5000);
@@ -82,27 +86,11 @@ const sessionView = async (auth: ConsoleAuth, doName: string, credential: string
   return appSessionV1Schema.parse({ state: 'active', session_ref: `sess_${hash}`, account_ref: `acct_${await linkCodeHash(doName)}`, surface: 'app', absolute_expires_at: created + 12 * 60 * 60_000 });
 };
 
-// Closes the session's queued work and stops its running turn in the owner Durable Object; false when it cannot be confirmed.
-// Signout calls it before the revoke, which makes a retry safe, and again after it for work admitted in between.
-const fenceSession = async (env: AppEnv, owners: NonNullable<AppEnv['TELEGRAM_OWNER_DO']>, doName: string, sessionHash: string): Promise<boolean> => {
-  const secret = env.WALDO_ROUTER_HMAC_SECRET;
-  if (!secret) return false;
-  try {
-    const response = await owners.get(owners.idFromName(doName)).fetch(new Request(`https://telegram-owner${APP_SESSION_FENCE_PATH}`, {
-      method: 'POST',
-      headers: { 'x-waldo-do-name': doName, 'x-waldo-app-session-hash': sessionHash, 'x-waldo-fence-sig': await appSessionFenceSignature(secret, doName, sessionHash) },
-    }));
-    if (response.ok) return true;
-  } catch { /* reported below */ }
-  console.error('app session fence unavailable');
-  return false;
-};
-
 // App sign-in and the shared main chat. Returns null for paths outside /app/v1 so the caller keeps routing.
 export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth | null = consoleAuth(env), defer?: (work: Promise<unknown>) => void): Promise<Response | null> => {
   const url = new URL(request.url);
   if (url.pathname !== APP_PATH && !url.pathname.startsWith(`${APP_PATH}/`)) return null;
-  const owners = env.TELEGRAM_OWNER_DO;
+  const owners = env.OWNER_DO;
   if (!auth || !owners) return fail(404);
 
   if (url.pathname === `${APP_PATH}/auth/code`) {
@@ -143,14 +131,30 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   // Health uploads can arrive in long runs, so they spend their own per-owner budget and never the chat one.
   if (url.pathname === APP_HEALTH_PATH || url.pathname.startsWith(`${APP_HEALTH_PATH}/`)) {
     try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-health:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
-    return handleAppHealth({ request, url, doName: who.doName, rpc: signedRpc(env), readBody: readBoundedBody, defer, compute: computeDailyScores });
+    const secret = env.WALDO_ROUTER_HMAC_SECRET, doName = who.doName;
+    return handleAppHealth({ request, url, doName, rpc: signedRpc(env), readBody: readBoundedBody, defer, compute: computeDailyScores,
+      ...(secret ? { readDemand: (range: { from: string; to: string; timezone: string }) => readOwnerDemand(owners, secret, doName, range) } : {}) });
   }
-  const bucket = request.method !== 'POST' ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : 'app-chat-send';
+  // A stop is a control on a message already paid for, so it counts as a read, not a send.
+  const stop = url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) && url.pathname.endsWith('/cancel');
+  const linkCode = url.pathname === APP_IMESSAGE_LINK_CODE_PATH;
+  const bucket = request.method !== 'POST' || stop || linkCode ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : 'app-chat-send';
   try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `${bucket}:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
 
   if (url.pathname === `${APP_PATH}/session`) {
     if (request.method !== 'GET') return fail(405);
     try { return ok(await sessionView(auth, who.doName, who.credential)); } catch { return fail(503); }
+  }
+
+  if (linkCode) {
+    if (request.method !== 'POST') return fail(405);
+    const address = env.IMESSAGE_WALDO_ADDRESS;
+    if (!address || !auth.issueProviderLinkCode) return fail(503);
+    try {
+      const code = await auth.issueProviderLinkCode(who.doName, 'imessage');
+      if (!code) return fail(503);
+      return ok(appIMessageLinkCodeV1Schema.parse({ code, text: `waldo ${code}`, address, send_url: iMessageSendUrl(address, code), expires_in_seconds: 600 }));
+    } catch { return fail(503); }
   }
 
   if (url.pathname === `${APP_PATH}/auth/signout`) {
@@ -162,7 +166,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     return ok({ result: revoked ? 'revoked' : 'already_gone' });
   }
 
-  if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname === `${APP_PATH}/controls` || url.pathname === `${APP_PATH}/actions` || url.pathname.startsWith(`${APP_PATH}/actions/`) || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_APPROVAL_DECISIONS_PATH) {
+  if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname === APP_THREADS_PATH || url.pathname.startsWith(`${APP_THREADS_PATH}/`) || url.pathname === `${APP_PATH}/controls` || url.pathname === `${APP_PATH}/actions` || url.pathname.startsWith(`${APP_PATH}/actions/`) || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_APPROVAL_DECISIONS_PATH) {
     const sending = url.pathname === APP_CHAT_SEND_PATH;
     if (!['GET', 'POST'].includes(request.method) || ((url.pathname === APP_CHAT_PATH || url.pathname === APP_APPROVALS_PATH) && request.method !== 'GET') || ((sending || url.pathname === APP_APPROVAL_DECISIONS_PATH) && request.method !== 'POST')) return fail(405);
     const mutating = request.method === 'POST';
@@ -170,9 +174,11 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     const length = request.headers.get('content-length');
     if (length && (!/^\d+$/.test(length) || Number(length) > (sending ? APP_SEND_MAX_WIRE_BYTES : maxBytes))) return fail(413);
     const body=mutating?await readBoundedBody(request,sending?APP_SEND_MAX_WIRE_BYTES:maxBytes):new Uint8Array();if(!body)return fail(413);
+    const contract = request.headers.get(APP_CONTRACT_HEADER);
     const forwarded = new Request(`https://telegram-owner${url.pathname}${url.search}`, {
       method: request.method,
-      headers: { 'x-waldo-do-name': who.doName, 'x-waldo-app-session-hash': await linkCodeHash(sessionIdOf(who.credential)!), 'x-waldo-app-origin': url.origin, 'content-type': request.headers.get('content-type') ?? 'application/json' },
+      headers: { 'x-waldo-do-name': who.doName, 'x-waldo-app-session-hash': await linkCodeHash(sessionIdOf(who.credential)!), 'x-waldo-app-origin': url.origin, 'content-type': request.headers.get('content-type') ?? 'application/json',
+        ...(appContractHeaderV1Schema.safeParse(contract).success ? { [APP_CONTRACT_HEADER]: contract! } : {}) },
       ...(mutating ? { body: body } : {}),
     });
     try { return await owners.get(owners.idFromName(who.doName)).fetch(forwarded); } catch { return fail(503); }
@@ -198,9 +204,15 @@ export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor:
   const newestReply = new Map(shown.filter(entry => entry.role === 'assistant' && entry.parentId).map(entry => [entry.parentId!, entry.id]));
   const messages = shown.slice(start, end).reverse().map(entry => {
     const presented = entry.parentId && newestReply.get(entry.parentId) === entry.id ? cards(entry.parentId) : NO_CARDS;
+    // `text` keeps the receipt line at its end: a reader without the receipt part shows the line in the text, and a reader with the
+    // part hides that one line, which the part repeats as its fallback byte for byte. Changing what `text` carries would change
+    // what installed builds show, which the additive app.v1 rule forbids.
     // A reader that cannot parse a part shows only `text`, and a decided card is no longer a part, so a reply that presented cards is never textless.
     const text = entry.appPayload.trim() || !presented.fallbacks.length ? entry.appPayload : presented.fallbacks.join('\n\n');
-    return { id: entry.id, role: entry.role, text, parts: [{ type: 'text' as const, text }, ...presented.live], channel: entry.surface, parent_id: entry.parentId };
+    const operation = entry.operation ? [{ type: 'operation' as const, operation_id: entry.operation.id, state: entry.operation.state, message: text }] : [];
+    const receipt = entry.receipt ? [{ type: 'receipt' as const, items: [...entry.receipt.items], more: entry.receipt.more, fallback_text: entry.receipt.line }] : [];
+    return { id: entry.id, role: entry.role, text, parts: [{ type: 'text' as const, text }, ...operation, ...presented.live, ...receipt], channel: entry.surface, parent_id: entry.parentId,
+      ...(entry.createdAt === undefined ? {} : { created_at: entry.createdAt }) };
   });
   return { messages, next_cursor: start > 0 ? `before:${shown[start]!.id}` : null };
 };

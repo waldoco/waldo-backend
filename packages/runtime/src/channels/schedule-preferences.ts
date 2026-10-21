@@ -5,8 +5,9 @@ import type { ToolDispatcherContext } from '../tools/dispatcher';
 import { TOOL_PERMISSIONS, triggerTypeSchema } from '@waldo/contracts';
 import { DAY_CARDS } from '../prompt/day-cards';
 import { applyDayPlan, defaultPlan, type DayPlanBook } from './day-cards';
+import { localIso } from './reminders';
 import { armBriefSweep, BRIEF_SWEEP_ID } from './event-briefs';
-import { armNightly, NIGHTLY_ID } from './episodes';
+import { armNightly, NIGHTLY_CATCH_UP_ID, NIGHTLY_ID } from './episodes';
 import { armHeartbeat, HEARTBEAT_ID } from './heartbeat';
 import type { LoopBook } from './loops';
 
@@ -49,27 +50,37 @@ export type SchedulePreferenceBook = ReturnType<typeof schedulePreferences>;
 export const schedulePreferencesLine = (prefs: SchedulePreferences): string =>
   `Scheduled behaviors (owner can change any with set_schedule_preference): ${SCHEDULE_KINDS.map((kind) => `${kind} (${SCHEDULE_LABELS[kind]}) ${prefs[kind] ? 'on' : 'off'}`).join('; ')}`;
 
-export type ScheduleApplyContext = Readonly<{ scheduler: Scheduler; plans: DayPlanBook; timezone: string; now: number }>;
+// `armable` says whether a kind may be armed on this surface right now; a kind that is on but not armable is left as is.
+export type ScheduleApplyContext = Readonly<{ scheduler: Scheduler; plans: DayPlanBook; timezone: string; now: number; armable?: (kind: ScheduleKind) => boolean }>;
 
 // Bring the scheduler in line with the preferences: off cancels the entries, on arms them again.
 export const applySchedulePreferences = async (prefs: SchedulePreferences, ctx: ScheduleApplyContext, only?: ScheduleKind): Promise<void> => {
   const { scheduler, plans, timezone, now } = ctx;
-  const want = (kind: ScheduleKind) => only === undefined || only === kind;
-  if (want('nightly')) { if (prefs.nightly) await armNightly(scheduler, timezone, now); else if (scheduler.read(NIGHTLY_ID)) await scheduler.cancel(NIGHTLY_ID); }
-  if (want('heartbeat')) { if (prefs.heartbeat) await armHeartbeat(scheduler, now); else if (scheduler.read(HEARTBEAT_ID)) await scheduler.cancel(HEARTBEAT_ID); }
-  if (want('event_briefs')) { if (prefs.event_briefs) await armBriefSweep(scheduler, now); else if (scheduler.read(BRIEF_SWEEP_ID)) await scheduler.cancel(BRIEF_SWEEP_ID); }
+  const want = (kind: ScheduleKind) => (only === undefined || only === kind) && (!prefs[kind] || (ctx.armable?.(kind) ?? true));
+  if (want('nightly')) { if (prefs.nightly) await armNightly(scheduler, timezone, now); else for (const id of [NIGHTLY_ID, NIGHTLY_CATCH_UP_ID]) await scheduler.cancelReadable(id); }
+  if (want('heartbeat')) { if (prefs.heartbeat) await armHeartbeat(scheduler, now); else await scheduler.cancelReadable(HEARTBEAT_ID); }
+  if (want('event_briefs')) { if (prefs.event_briefs) await armBriefSweep(scheduler, now); else await scheduler.cancelReadable(BRIEF_SWEEP_ID); }
   if (want('daily_brief')) {
     if (prefs.daily_brief) await applyDayPlan(scheduler, plans, timezone, now, defaultPlan(DAY_CARDS), true, true);
-    else for (const card of DAY_CARDS) if (scheduler.read(card.id)) await scheduler.cancel(card.id);
+    else for (const card of DAY_CARDS) await scheduler.cancelReadable(card.id);
   }
+};
+
+// Re-plan every day card for today in the new zone after the zone changes: the time already planned for that date where
+// one exists, the default otherwise, pins kept. Entries armed in the old zone can name another date, so a card that is not
+// armed again (it already went out today) keeps no entry.
+export const replanDayCards = async (scheduler: Scheduler, plans: DayPlanBook, timezone: string, now: number): Promise<void> => {
+  const planned = new Map(plans.read(localIso(now, timezone).slice(0, 10)).map(({ card, time, reason }) => [card, { card, time, reason }]));
+  const handled = new Set((await applyDayPlan(scheduler, plans, timezone, now, defaultPlan(DAY_CARDS).map(card => planned.get(card.card) ?? card))).map(entry => entry.card));
+  for (const card of DAY_CARDS) if (!handled.has(card.id)) await scheduler.cancelReadable(card.id);
 };
 
 // Cancel-only pass for kinds that are off. Run at startup: a stop between saving a preference and cancelling
 // its entries must not leave a due entry behind. It never arms anything.
 export const reconcileSchedulePreferences = async (prefs: SchedulePreferences, ctx: ScheduleApplyContext): Promise<void> => {
   const { scheduler } = ctx;
-  const cancelIf = async (id: string) => { if (scheduler.read(id)) await scheduler.cancel(id); };
-  if (!prefs.nightly) await cancelIf(NIGHTLY_ID);
+  const cancelIf = (id: string) => scheduler.cancelReadable(id);
+  if (!prefs.nightly) for (const id of [NIGHTLY_ID, NIGHTLY_CATCH_UP_ID]) await cancelIf(id);
   if (!prefs.heartbeat) await cancelIf(HEARTBEAT_ID);
   if (!prefs.event_briefs) await cancelIf(BRIEF_SWEEP_ID);
   if (!prefs.daily_brief) for (const card of DAY_CARDS) await cancelIf(card.id);
@@ -77,7 +88,7 @@ export const reconcileSchedulePreferences = async (prefs: SchedulePreferences, c
 
 // The kind an out-of-the-box schedule entry belongs to, or null for owner-created and internal entries.
 const scheduleKindOf = (entry: ScheduleEntry): ScheduleKind | null => {
-  if (entry.kind === 'dreaming' && entry.id === NIGHTLY_ID) return 'nightly';
+  if (entry.kind === 'dreaming' && (entry.id === NIGHTLY_ID || entry.id === NIGHTLY_CATCH_UP_ID)) return 'nightly';
   if (entry.kind === 'heartbeat' && entry.id === HEARTBEAT_ID) return 'heartbeat';
   if (entry.kind === 'pre_activity_spot' && entry.id === BRIEF_SWEEP_ID) return 'event_briefs';
   if (entry.kind === 'brief' && DAY_CARDS.some((card) => card.id === entry.id)) return 'daily_brief';
@@ -86,10 +97,16 @@ const scheduleKindOf = (entry: ScheduleEntry): ScheduleKind | null => {
 
 // Fire-time recheck: read the preference at dispatch, not only when arming. A disabled entry is cleared and
 // does nothing, so no send, no card state and no model call happens for something the owner turned off.
-export const gateScheduleExecutors = (executors: ScheduleExecutors, prefs: SchedulePreferenceBook, scheduler: Scheduler): ScheduleExecutors =>
+// A held kind is skipped without cancelling: the occurrence passes and a recurring entry stays armed for its next one.
+// A dropped kind is cancelled: it cannot run on this surface at all, so it is not kept waking.
+export type ScheduleHold = 'hold' | 'drop' | false;
+export const gateScheduleExecutors = (executors: ScheduleExecutors, prefs: SchedulePreferenceBook, scheduler: Scheduler, held: (kind: ScheduleKind) => ScheduleHold = () => false, onHeld: (kind: ScheduleKind, outcome: Exclude<ScheduleHold, false>) => void = () => {}): ScheduleExecutors =>
   Object.fromEntries(Object.entries(executors).map(([kind, executor]) => [kind, async (entry: ScheduleEntry) => {
     const owned = scheduleKindOf(entry);
     if (owned !== null && !prefs.enabled(owned)) { await scheduler.cancel(entry.id); return; }
+    const outcome = owned === null ? false : held(owned);
+    if (outcome === 'drop') await scheduler.cancel(entry.id);
+    if (outcome) { onHeld(owned!, outcome); return; }
     return executor!(entry);
   }])) as ScheduleExecutors;
 

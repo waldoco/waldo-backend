@@ -6,7 +6,10 @@ import {
   appApprovalListV1Schema,
   appApprovalRoutesV1,
   appApprovalStateV1Schema,
+  appApprovalAtRevision,
   appApprovalV1Schema,
+  APP_APPROVALS_CONTRACT_REVISION,
+  type AppApprovalV1,
 } from './approvals';
 import { appControlReceiptV1Schema, appControlRequestIdV1Schema } from './controls';
 import { payloadDigestV1Schema, replyApprovalPartV1Schema } from './parts';
@@ -147,5 +150,96 @@ describe('approval decisions', () => {
   it('publishes the list route with its state query and the decision route', () => {
     expect(appApprovalRoutesV1.map(route => `${route.method} ${route.path}`)).toEqual(['GET /app/v1/approvals', 'POST /app/v1/approvals/decisions']);
     expect(appApprovalRoutesV1[0].query).toBe(appApprovalListQueryV1Schema);
+  });
+});
+
+describe('not now', () => {
+  const part = { type: 'approval', approval_id: 'p0001', kind: 'email_send', review: email.review, payload_digest: digest, expires_at: expiresAtMs, fallback_text: 'Open Waldo to review this email.' };
+  it('defers an open or review-only approval, separately from skip', () => {
+    expect(appApprovalDecisionV1Schema.safeParse({ ...decision, action: 'defer' }).success).toBe(true);
+    expect(appApprovalV1Schema.safeParse({ ...email, actions: ['approve', 'edit', 'skip', 'defer'] }).success).toBe(true);
+    expect(appApprovalV1Schema.safeParse({ ...email, state: 'review_only', actions: ['skip', 'defer'] }).success).toBe(true);
+    expect(replyApprovalPartV1Schema.safeParse({ ...part, actions: ['approve', 'edit', 'skip', 'defer'] }).success).toBe(true);
+  });
+  it('refuses a defer where the desk cannot defer, and repeated or extra actions', () => {
+    expect(appApprovalV1Schema.safeParse({ ...calendar, state: 'done', actions: ['undo', 'defer'] }).success).toBe(false);
+    expect(appApprovalV1Schema.safeParse({ ...email, state: 'skipped', actions: ['defer'] }).success).toBe(false);
+    expect(appApprovalV1Schema.safeParse({ ...email, actions: ['approve', 'edit', 'skip', 'defer', 'defer'] }).success).toBe(false);
+    expect(appApprovalV1Schema.safeParse({ ...email, actions: ['defer', 'defer'] }).success).toBe(false);
+    expect(replyApprovalPartV1Schema.safeParse({ ...part, actions: ['approve', 'edit', 'skip', 'defer', 'undo'] }).success).toBe(false);
+    expect(replyApprovalPartV1Schema.safeParse({ ...part, actions: ['defer', 'defer'] }).success).toBe(false);
+  });
+});
+
+describe('the wording a server may send with an approval', () => {
+  const worded = { ...email, question: 'Send "Friday" to sam@example.com?', labels: { approve: 'Send email', skip: "Don't do this" } } as const;
+  const card = (approval: Readonly<Record<string, unknown>>) => {
+    const { approval_id, kind, review, payload_digest, expires_at, actions, question, labels } = approval;
+    return { type: 'approval', approval_id, kind, review, payload_digest, expires_at, actions, fallback_text: review,
+      ...(question === undefined ? {} : { question }), ...(labels === undefined ? {} : { labels }) };
+  };
+  const done = { ...calendar, state: 'done', actions: ['undo'], labels: { undo: 'Undo' }, undo_until: expiresAtMs } as const;
+
+  it('accepts a one-line question and labels for offered actions, in the list and on the chat card; an action may go unlabelled', () => {
+    expect(appApprovalV1Schema.safeParse(worded).success).toBe(true);
+    expect(replyApprovalPartV1Schema.safeParse(card(worded)).success).toBe(true);
+  });
+
+  it('accepts when undo closes, while undo is offered', () => {
+    expect(appApprovalV1Schema.safeParse(done).success).toBe(true);
+  });
+
+  it('is optional, so an approval without it parses as before', () => {
+    expect(appApprovalV1Schema.safeParse(email).success).toBe(true);
+    expect(replyApprovalPartV1Schema.safeParse(card(email)).success).toBe(true);
+  });
+
+  it.each([
+    ['a question on two lines', { question: 'Send "Friday"\nto sam@example.com?' }],
+    ['a blank question', { question: '   ' }],
+    ['a question over 120 characters', { question: `Send "${'x'.repeat(120)}"?` }],
+    ['a label over 40 characters', { labels: { approve: 'x'.repeat(41) } }],
+    ['a blank label', { labels: { skip: ' ' } }],
+    ['a label for an action not offered', { labels: { defer: 'Skip' } }],
+    ['a label for an unknown action', { labels: { later: 'Later' } }],
+  ])('rejects %s, in the list and on the chat card', (_shape, change) => {
+    expect(appApprovalV1Schema.safeParse({ ...worded, ...change }).success).toBe(false);
+    expect(replyApprovalPartV1Schema.safeParse(card({ ...worded, ...change })).success).toBe(false);
+  });
+
+  it('rejects when undo closes on an approval that offers no undo', () => {
+    expect(appApprovalV1Schema.safeParse({ ...worded, undo_until: expiresAtMs }).success).toBe(false);
+    expect(appApprovalV1Schema.safeParse({ ...done, actions: [], labels: undefined }).success).toBe(false);
+  });
+});
+
+describe('calendar details, approvals revision 2', () => {
+  const details = {
+    guests: ['sam@example.com', 'pat@example.org'], emails_guests: true, location: 'Room 4', calendar: 'team@group.calendar.google.com', account: 'me@example.com',
+    previous: { start: '2026-10-11T15:00:00+01:00', end: '2026-10-11T16:00:00+01:00' }, time_zone: 'Europe/London',
+  } as const;
+  const detailed = { ...calendar, exact: { changes: { ...calendar.exact.changes, ...details } } };
+  const withChange = (key: string, value: unknown) => ({ ...calendar, exact: { changes: { ...calendar.exact.changes, [key]: value } } });
+
+  it('accepts each detail alone and all together', () => {
+    for (const [key, value] of Object.entries(details)) expect([key, appApprovalV1Schema.safeParse(withChange(key, value)).success]).toEqual([key, true]);
+    expect(appApprovalV1Schema.safeParse(detailed).success).toBe(true);
+  });
+
+  it('rejects each detail in a wrong shape', () => {
+    const invalid: readonly (readonly [string, unknown])[] = [
+      ['guests', []], ['guests', ['not an address']], ['emails_guests', 'all'], ['location', ''], ['location', 'x'.repeat(301)],
+      ['calendar', ''], ['account', 'me'], ['previous', { start: '2026-10-11T15:00:00+01:00' }], ['previous', { start: 'Fri 15:00', end: 'Fri 16:00' }],
+      ['previous', { ...details.previous, event_id: 'e1' }], ['time_zone', ''], ['time_zone', 'x'.repeat(65)],
+    ];
+    for (const [key, value] of invalid) expect([key, value, appApprovalV1Schema.safeParse(withChange(key, value)).success]).toEqual([key, value, false]);
+  });
+
+  it('a build reading revision 1 gets exactly the shape before the details, and a later build gets them all', () => {
+    const parsed = appApprovalV1Schema.parse(detailed) as AppApprovalV1;
+    expect(JSON.stringify(appApprovalAtRevision(parsed, 1))).toBe(JSON.stringify(calendar));
+    expect(appApprovalAtRevision(parsed, APP_APPROVALS_CONTRACT_REVISION)).toBe(parsed);
+    const mail = appApprovalV1Schema.parse(email) as AppApprovalV1;
+    expect(appApprovalAtRevision(mail, 1)).toBe(mail);
   });
 });

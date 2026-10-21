@@ -1,13 +1,15 @@
 // Regression for the wa_seq read/turn/put race (fixed: allocation + turns + persist are one serial unit).
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
-import { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
+import { OwnerDO } from '../src/channels/owner-do';
 import { WA_UPDATE_BASE } from '../src/channels/whatsapp-api';
 
 vi.mock('openai', () => ({ default: class {
   responses = { create: async () => ({ id: 'fixture', output_text: '{}', output: [], usage: { input_tokens: 1, output_tokens: 1 } }) };
 } }));
 
+// Admission acks before the turns run; settle waits for them, as the webhook's waitUntil would.
+const settle = (instance: OwnerDO) => Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
 const deferred = () => {
   let resolve!: () => void;
   const promise = new Promise<void>(done => { resolve = done; });
@@ -16,19 +18,19 @@ const deferred = () => {
 
 it('allocates distinct update_ids for overlapping different wamids (known wa_seq race)', async () => {
   const name = 'whatsapp-owner-do-sequence-race';
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const firstSend = deferred();
     const releaseSend = deferred();
     const secondQueued = deferred();
     const sent: unknown[] = [];
     const graph = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
-      expect(String(input)).toBe('https://graph.facebook.com/v21.0/fictional-phone-id/messages');
+      expect(String(input)).toBe('https://graph.facebook.com/v26.0/fictional-phone-id/messages');
       sent.push(JSON.parse(String(init?.body)));
       firstSend.resolve();
       await releaseSend.promise;
       return Response.json({ messages: [{ id: 'wamid.out' }] });
     });
-    const instance = new TelegramOwnerDO(state, {
+    const instance = new OwnerDO(state, {
       ...env, TELEGRAM_BOT_TOKEN: 'fictional-telegram-token', OPENAI_API_KEY: 'fictional-model-key',
       WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id',
     });
@@ -43,7 +45,7 @@ it('allocates distinct update_ids for overlapping different wamids (known wa_seq
       if (state.storage.kv.get('wamid:wamid.concurrent.B') !== undefined) secondQueued.resolve();
       return result;
     });
-    const post = (id: string) => instance.fetch(new Request('https://telegram-owner/whatsapp-turn', {
+    const post = (id: string) => instance.fetch(new Request('https://telegram-owner/whatsapp-admit', {
       method: 'POST', headers: { 'x-waldo-whatsapp-subject': '15550001111' },
       body: JSON.stringify({ messages: [{ from: '15550001111', id, type: 'text', text: { body: '/stop' } }] }),
     }));
@@ -59,6 +61,7 @@ it('allocates distinct update_ids for overlapping different wamids (known wa_seq
       releaseSend.resolve();
       const replies = await Promise.all(pending);
       expect(replies.map(reply => reply.status)).toEqual([200, 200]);
+      await settle(instance);
       expect(turns).toHaveBeenCalledTimes(2);
       const ids = turns.mock.calls.map(([update]) => update.update_id);
       // Before the fix this yielded [BASE+1, BASE+1].
@@ -75,9 +78,9 @@ it('allocates distinct update_ids for overlapping different wamids (known wa_seq
   });
 });
 
-const harness = async (name: string, work: (instance: TelegramOwnerDO, state: DurableObjectState, turns: ReturnType<typeof vi.spyOn>) => Promise<void>) => {
-  await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), async (_instance, state) => {
-    const instance = new TelegramOwnerDO(state, {
+const harness = async (name: string, work: (instance: OwnerDO, state: DurableObjectState, turns: ReturnType<typeof vi.spyOn>) => Promise<void>) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    const instance = new OwnerDO(state, {
       ...env, TELEGRAM_BOT_TOKEN: 'fictional-telegram-token', OPENAI_API_KEY: 'fictional-model-key',
       WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id',
     });
@@ -85,10 +88,14 @@ const harness = async (name: string, work: (instance: TelegramOwnerDO, state: Du
     try { await work(instance, state, turns as never); } finally { await state.storage.deleteAlarm(); turns.mockRestore(); }
   });
 };
-const post = (instance: TelegramOwnerDO, messages: { id: string }[]) => instance.fetch(new Request('https://telegram-owner/whatsapp-turn', {
-  method: 'POST', headers: { 'x-waldo-whatsapp-subject': '15550001111' },
-  body: JSON.stringify({ messages: messages.map(m => ({ from: '15550001111', id: m.id, type: 'text', text: { body: 'hi' } })) }),
-}));
+const post = async (instance: OwnerDO, messages: { id: string }[]) => {
+  const response = await instance.fetch(new Request('https://telegram-owner/whatsapp-admit', {
+    method: 'POST', headers: { 'x-waldo-whatsapp-subject': '15550001111' },
+    body: JSON.stringify({ messages: messages.map(m => ({ from: '15550001111', id: m.id, type: 'text', text: { body: 'hi' } })) }),
+  }));
+  await settle(instance);
+  return response;
+};
 
 it('a turn that throws does not let the next message reuse its update_id', async () => {
   await harness('whatsapp-seq-after-throw', async (instance, state, turns) => {

@@ -4,7 +4,7 @@ import { GOOGLE_CONSENT_SCOPES, GOOGLE_FEATURE_SCOPES, googleHas, isGoogleFeatur
 import { connectIntentSchema } from '@waldo/contracts';
 
 const DRIVE = 'https://www.googleapis.com/auth/drive.readonly';
-const entry = { name: 'drive', url: 'https://drivemcp.googleapis.com/mcp/v1', auth: 'google', requires: 'drive', allow_tools: ['list_files', 'get_file'] };
+const entry = { name: 'drive', url: 'https://drivemcp.googleapis.com/mcp/v1', auth: 'google', requires: 'drive', allow_tools: ['search_files', 'get_file_metadata'] };
 const never: McpGoogleAuth = {
   resolve: async () => { throw new Error('auth must not be consulted'); },
   proxy: async () => { throw new Error('proxy must not run'); },
@@ -34,18 +34,18 @@ describe('Drive read-only MCP slice (source only)', () => {
   it('registry keeps requires and allow_tools, and drops malformed entries', () => {
     const parsed = mcpServers(JSON.stringify([entry, { ...entry, name: 'bad', requires: 'not-a-feature' }, { ...entry, name: 'bad2', allow_tools: 'list_files' }]));
     expect(parsed.map((s) => s.name)).toEqual(['drive']);
-    expect(parsed[0]).toMatchObject({ requires: 'drive', allow_tools: ['list_files', 'get_file'] });
+    expect(parsed[0]).toMatchObject({ requires: 'drive', allow_tools: ['search_files', 'get_file_metadata'] });
   });
 
-  it('a tool outside the allowlist is rejected before auth or network', async () => {
+  it('a read the deploy config left out is rejected before auth or network', async () => {
     const [server] = mcpServers(JSON.stringify([entry]));
-    await expect(executeMcp(server!, 'delete_file', {}, never, (() => { throw new Error('network'); }) as unknown as typeof fetch))
+    await expect(executeMcp(server!, 'list_recent_files', {}, never, (() => { throw new Error('network'); }) as unknown as typeof fetch))
       .rejects.toMatchObject({ message: expect.stringContaining('not allowed') });
   });
 
   it('a server that requires a feature but has no allowlist fails closed', async () => {
-    const server = { name: 'drive', url: 'https://drivemcp.googleapis.com/mcp/v1', auth: 'google' as const, requires: 'drive' as const };
-    await expect(executeMcp(server, 'list_files', {}, never)).rejects.toMatchObject({ message: expect.stringContaining('allowlist') });
+    const server = { name: 'drive', url: 'https://mcp.fixture/rpc', auth: 'google' as const, requires: 'drive' as const };
+    await expect(executeMcp(server, 'search_files', {}, never)).rejects.toMatchObject({ message: expect.stringContaining('allowlist') });
   });
 
   it('requires is only honoured on google-auth servers', async () => {
@@ -60,32 +60,32 @@ describe('Drive read-only MCP slice (source only)', () => {
       resolve: async (_intent, feature) => { seen.push(feature); return { mode: 'proxy', connection: 'c1' }; },
       proxy: async () => [{ text: 'ok' }],
     };
-    await executeMcp(server!, 'list_files', {}, auth);
+    await executeMcp(server!, 'search_files', {}, auth);
     expect(seen).toEqual(['drive']);
   });
 
-  it('a disallowed tool through the handler is a rejected result with no connect card', async () => {
+  it('a write tool through the handler is refused with no connect card', async () => {
     const handler = callMcpToolHandler(JSON.stringify([entry]), undefined, never);
     const out = await handler.handle({ server: 'drive', tool: 'delete_file', args: {} }, {} as never);
     expect(out.ok).toBe(false);
-    if (!out.ok) { expect(out.code).toBe('rejected'); expect(out.connect).toBeUndefined(); }
+    if (!out.ok) { expect(out.code).toBe('forbidden'); expect(out.connect).toBeUndefined(); }
   });
-  it('proxy 403 on a drive server is a scope gap that names drive', async () => {
+  it('the edge finding the grant without drive is a scope gap that names drive', async () => {
     const [server] = mcpServers(JSON.stringify([entry]));
     const auth: McpGoogleAuth = {
       resolve: async () => ({ mode: 'proxy', connection: 'c1' }),
-      proxy: async () => { throw Object.assign(new Error('forbidden'), { status: 403 }); },
+      proxy: async () => { throw Object.assign(new Error('insufficient scopes'), { status: 403 }); },
     };
-    await expect(executeMcp(server!, 'list_files', {}, auth)).rejects.toMatchObject({ reason: 'scope_missing', feature: 'drive' });
+    await expect(executeMcp(server!, 'search_files', {}, auth)).rejects.toMatchObject({ reason: 'scope_missing', feature: 'drive' });
   });
 
   it('the handler connect card carries feature drive so the link is not a calendar default', async () => {
     const auth: McpGoogleAuth = {
       resolve: async () => ({ mode: 'proxy', connection: 'c1' }),
-      proxy: async () => { throw Object.assign(new Error('forbidden'), { status: 403 }); },
+      proxy: async () => { throw Object.assign(new Error('insufficient scopes'), { status: 403 }); },
     };
     const handler = callMcpToolHandler(JSON.stringify([entry]), undefined, auth);
-    const out = await handler.handle({ server: 'drive', tool: 'list_files', args: {} }, {} as never);
+    const out = await handler.handle({ server: 'drive', tool: 'search_files', args: {} }, {} as never);
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.connect).toMatchObject({ reason: 'scope_missing', feature: 'drive' });
   });

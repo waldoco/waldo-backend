@@ -47,6 +47,21 @@ const STORAGE_GUARDS = [...TEXT_FIELDS.map(([field,limit,nullable])=>boundedText
 const STORED_ROW_QUERY = `SELECT CASE WHEN ${STORAGE_GUARDS.join(' AND ')} THEN 1 ELSE 0 END AS admitted,
  ${[...TEXT_FIELDS.map(([field,limit,nullable])=>`CASE WHEN ${boundedText(field,limit,nullable)} THEN ${field} ELSE NULL END AS ${field}`),
  ...NUMERIC_FIELDS.map(field=>`CASE WHEN ${boundedNumber(field)} THEN ${field} ELSE NULL END AS ${field}`)].join(', ')} FROM skills WHERE name=?`;
+const CUSTODY_MARKER = ':owner:';
+// The custody key most of this owner's reviewed rows carry, so every surface of one owner reads one skill book: a
+// Telegram-first owner keeps the key those rows were seeded under when an app turn arrives, and an app-first owner
+// keeps the principal when Telegram links later. Only rows the book itself would admit vote (the storage guards,
+// system provenance, identity-locked, not provisional, a reviewed-builtin source, a catalog name), so a hostile or
+// over-long row cannot steer the key. No such rows yet leaves the caller's key in force.
+export function seededSkillCustody(sql: SqlStorage, catalog: readonly Skill[] = CURATED_SKILLS): string | undefined {
+ sql.exec(SKILLS_TABLE_SCHEMA);
+ if (catalog.length === 0) return undefined;
+ const row = sql.exec<{ custody: string; n: number }>(`SELECT substr(created_by, instr(created_by, ?) + ?) AS custody, count(*) AS n FROM skills
+  WHERE ${STORAGE_GUARDS.join(' AND ')} AND provenance='system' AND identity_locked=1 AND provisional=0 AND created_by LIKE 'reviewed-builtin:%'
+  AND instr(created_by, ?) > 0 AND name IN (${catalog.map(() => '?').join(',')}) GROUP BY custody ORDER BY n DESC, custody LIMIT 1`,
+  CUSTODY_MARKER, CUSTODY_MARKER.length, CUSTODY_MARKER, ...catalog.map(s => s.name)).toArray()[0];
+ return row && row.custody.length > 0 ? row.custody : undefined;
+}
 
 export class CuratedOwnerSkills {
  // One selected procedure per invocation; selection does not change tool admission.

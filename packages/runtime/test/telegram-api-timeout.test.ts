@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createTelegramCaller } from '../src/channels/telegram-api';
 import { TelegramOwnerListener, type TelegramOwnerApi } from '../src/channels/telegram-listener';
@@ -42,7 +43,7 @@ describe('telegram api egress timeout', () => {
       sendMessage: async (r) => { calls.push(['send', r]); return { message_id: 1 }; },
     };
     const listener = new TelegramOwnerListener({ ownerTelegramId: OWNER, api, respond: async (t) => `echo ${t.text}`, saveOffset: async () => undefined, reactionTimeoutMs: 50 });
-    const pending = listener.handle(turn);
+    const pending = listener.handle(ownerTyped(turn));
     const outcome = await Promise.race([
       pending,
       vi.advanceTimersByTimeAsync(5_000).then(() => 'wedged' as const),

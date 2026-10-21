@@ -12,6 +12,7 @@ type Store = { get<T>(key: string): Promise<T | undefined>; put(key: string, val
 export type OwnerControlsDeps = {
   owner: string; csrf: string; expires: number; auth: Auth | null; requestUrl: string; store: Store;
   sessions(): Promise<readonly { csrf: string; expires: number }[]>;
+  purgeOwnerFiles(): Promise<boolean>;
   eraseOwnerStorage(): Promise<void>;
 };
 type Receipt = { state: 'recorded' | 'incomplete' | 'rejected' | 'unconfirmed'; message: string; signed_out?: boolean };
@@ -85,6 +86,15 @@ export async function ownerControlsAction(form: FormData, deps: OwnerControlsDep
     book[key] = { fingerprint, expires: deps.expires, status, receipt };
     try { await deps.store.put('console:owner-control-receipts', book); } catch { return reply({ receipt: unknown, duplicate: false }, 503); }
     return reply({ receipt, duplicate: false, ...(done ? { invite: { email: action.value, code, link: inviteLink(deps.requestUrl, action.value, code), expiry_days: 14 } } : {}) }, status);
+  }
+  // Files first: it is the one step that can fail without losing the account, so the owner can simply ask again.
+  let filesGone = false;
+  try { filesGone = await deps.purgeOwnerFiles(); } catch { filesGone = false; }
+  if (!filesGone) {
+    receipt = { state: 'rejected', message: 'Your stored files could not be confirmed removed, so nothing was deleted and you are still signed in. Try again.' }; status = 503;
+    book[key] = { fingerprint, expires: deps.expires, status, receipt };
+    try { await deps.store.put('console:owner-control-receipts', book); } catch { return reply({ receipt: unknown, duplicate: false }, 503); }
+    return reply({ receipt, duplicate: false }, status);
   }
   try {
     const deleted = await deps.auth.deleteOwner(deps.owner);

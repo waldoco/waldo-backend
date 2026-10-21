@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest';
-import { deviceConsoleAction, devicesUnavailablePage, renderDevices } from '../src/devices/console-devices';
 import { workspacePage, workspaceDownload, workspaceReceipt } from '../src/channels/console-workspace';
 import { workspaceRequest } from '../src/channels/workspace-host';
 import { browserHandoffConsole } from '../src/channels/browser-handoff-console';
@@ -14,7 +13,6 @@ import type { ArtifactBook, ReadResult } from '../src/channels/artifacts';
 import type { ConsoleAuth } from '../src/identity/console-auth';
 
 const browser = { accept: 'text/html,application/xhtml+xml,*/*;q=0.8' };
-const device = { device_id: 'device_fixture', label: '<script>hostile</script>', capabilities: 'machine_state_query,notify_local', created_at: '2026-10-11T10:00:00Z', last_seen_at: null, online: true };
 const fileMeta = { file_id: '00000000-0000-4000-8000-000000000001', path: 'notes/<script>x</script>.md', revision: 2, mime: 'text/markdown', byte_size: 4096, sha256: 'never-public', provenance: 'owner_upload', source_taint: 'external', created_at: 0, updated_at: 0, state: 'ready' } as const;
 const artifact: ReadResult = { meta: { id: 'art:test', name: '<b>Report</b>', kind: 'document', revision: 1, byte_size: 6, r2_key: 'private-key', provenance: 'tool', taint: 'external', created_at: 0, updated_at: 0 }, text: '# Heading\n- item', total_chars: '# Heading\n- item'.length, next_offset: null };
 const book = (result: ReadResult | null = artifact) => ({ read: async () => result, byId: () => result?.meta ?? null } as unknown as ArtifactBook);
@@ -27,14 +25,12 @@ const handoffPost = (body: string) => new Request('https://fixture.invalid/conso
 
 // Every family, rendered in a representative state, as the browser would receive it.
 const families = async (): Promise<Record<string, string>> => ({
-  devices: renderDevices([{ ...device, commands: [] }], 'csrf_fixture'),
-  devicesUnavailable: devicesUnavailablePage(),
   workspace: await workspacePage([fileMeta], 'csrf_fixture', null).text(),
   workspaceReceipt: await workspaceReceipt('remove', { status: 200, body: { status: 'cleanup_pending' } }).text(),
   handoff: await (await browserHandoffConsole(new Request('https://fixture.invalid/console/browser-handoff'), handoff())).text(),
   invites: renderMemberInvites([], 'csrf_fixture'),
   admin: renderAdmin({ owners: [], invites: [] } as never, 'csrf_fixture'),
-  signin: await (await handleConsole(new Request('https://fixture.invalid/console/signin'), { TELEGRAM_OWNER_DO: {} } as never, {} as ConsoleAuth))!.text(),
+  signin: await (await handleConsole(new Request('https://fixture.invalid/console/signin'), { OWNER_DO: {} } as never, {} as ConsoleAuth))!.text(),
   signup: await (await handleSignup(new Request('https://fixture.invalid/console/signup'), {} as never, null, null)).text(),
   ticket: await signInPage('c1.fixture.' + 'a'.repeat(64)).text(),
   oauth: await consentPage({ kind: 'invalid' }, null).text(),
@@ -62,58 +58,7 @@ describe('standalone worker pages share the dashboard presentation', () => {
       expect(pages[name], name).not.toContain('Back to dashboard');
     }
     for (const name of ['signin', 'signup', 'ticket'] as const) expect(pages[name], name).not.toContain('href="/console"');
-    for (const name of ['devices', 'workspace', 'handoff', 'invites', 'admin', 'artifact'] as const) expect(pages[name], name).toContain('href="/console"');
-  });
-});
-
-describe('devices', () => {
-  it('labels every command control and keeps commands, history and revoke on separate rows', () => {
-    const html = renderDevices([{ ...device, commands: [{ command_id: 'c', class: 'notify_local', state: 'delivery_unknown', result_status: null, result_state: 'unknown', issued_at: 1, expires_at: 2 }] }], 'csrf_fixture');
-    expect(html).toContain('<label for="query-0">Question</label><select id="query-0" name="query_kind">');
-    for (const kind of ['session_status', 'attempt_status', 'worktree_watch']) expect(html).toContain(`<option value="${kind}">`);
-    expect(html).toContain('<label>Severity <select name="severity">');
-    expect(html).toContain('<label>Notification text <select name="body">');
-    // Literal states stay literal and neutral; nothing reads as confirmed.
-    expect(html).toContain('<span class="chip">delivery_unknown</span>');
-    expect(html).toContain('Reported result: unknown');
-    expect(html).not.toMatch(/delivery_unknown<\/span>[^<]*positive|chip positive">delivery_unknown/);
-    expect(html).toContain('<button class="danger">Revoke</button>');
-    expect(html).toContain('2026-10-11 10:00 UTC');
-    expect(html).not.toContain('<script>hostile</script>');
-  });
-
-  it('renders the empty state and absent capabilities without inventing any', () => {
-    expect(renderDevices([], 'csrf')).toContain('No devices are paired yet.');
-    const bare = renderDevices([{ ...device, capabilities: '', online: false }], 'csrf');
-    expect(bare).toContain('None reported');
-    expect(bare).not.toContain('device.query');
-    expect(bare).not.toContain('device.notify');
-    expect(bare).toContain('Never');
-  });
-
-  it('pairing returns a styled one-time receipt only to browsers; other callers keep the text contract', async () => {
-    const directory = () => ({ issuePairingCode: vi.fn(async () => true), revokeDevice: vi.fn() });
-    const form = () => { const value = new FormData(); value.set('action', 'device.pair'); value.set('csrf', 'csrf'); return value; };
-    const text = await deviceConsoleAction(form(), 'csrf', 'owner', directory());
-    expect(text.headers.get('content-type')).toBe('text/plain; charset=utf-8');
-    expect(await text.text()).toMatch(/^[^\n]+\nExpires in 10 minutes\. Single use\.$/);
-    const page = await deviceConsoleAction(form(), 'csrf', 'owner', directory(), undefined, true);
-    expect(page.headers.get('content-type')).toBe('text/html; charset=utf-8');
-    expect(page.headers.get('cache-control')).toBe('no-store');
-    expect(page.headers.get('referrer-policy')).toBe('no-referrer');
-    const html = await page.text();
-    expect(html).toMatch(/<code class="secret">[^<]+<\/code>/);
-    expect(html).toContain('expires in 10 minutes');
-  });
-
-  it('a refused browser action is a styled page with the same status; API callers keep plain text', async () => {
-    const form = new FormData(); form.set('action', 'device.pair'); form.set('csrf', 'wrong');
-    const directory = { issuePairingCode: vi.fn(), revokeDevice: vi.fn() };
-    expect(await (await deviceConsoleAction(form, 'csrf', 'owner', directory)).text()).toBe('invalid');
-    const page = await deviceConsoleAction(form, 'csrf', 'owner', directory, undefined, true);
-    expect(page.status).toBe(403);
-    expect(await page.text()).toContain('role="alert"');
-    expect(directory.issuePairingCode).not.toHaveBeenCalled();
+    for (const name of ['workspace', 'handoff', 'invites', 'admin', 'artifact'] as const) expect(pages[name], name).toContain('href="/console"');
   });
 });
 

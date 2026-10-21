@@ -25,6 +25,7 @@ describe('reminder tools', () => {
       return { id: 'reminder:1', ...args };
     },
     list: () => [{ id: 'reminder:1', note: 'water', at: '2026-09-23T18:30', repeat: 'daily' }],
+    unreadable: () => 0,
     async cancel(id) { calls.push(`cancel:${id}`); return id === 'reminder:1'; },
     async cancelAll() { return 0; },
     note: () => null,

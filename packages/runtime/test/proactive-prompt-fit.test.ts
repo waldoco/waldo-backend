@@ -1,11 +1,11 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { deriveContextBudgetChars, SANITISE_DESTINATION_POLICIES, WALDO_CHAT_MODEL } from '@waldo/contracts';
+import { deriveContextBudgetChars, SANITISE_DESTINATION_POLICIES, WALDO_AUXILIARY_MODEL } from '@waldo/contracts';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import { fitPromptToBudget } from '../src/prompt/fit-prompt';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 
-const limit = deriveContextBudgetChars(WALDO_CHAT_MODEL, SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
+const limit = deriveContextBudgetChars(WALDO_AUXILIARY_MODEL, SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
 const wire = (content: string) => JSON.stringify([{ role: 'user', content }]).length;
 const lines = (prefix: string, count: number) => Array.from({ length: count }, (_, index) => `${prefix}-${index} ${'x'.repeat(200)}`).join('\n');
 
@@ -41,7 +41,7 @@ describe('fitPromptToBudget', () => {
 
 describe('proactive prompts through the owner responder', () => {
   it('admits an oversized scheduled prompt on a reduced form instead of failing the job', async () => {
-    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('proactive-fit')), async () => {
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('proactive-fit')), async () => {
       const requests: LLMGatewayRequest[] = [];
       const gateway: LLMGatewayAdapter = { complete: async request => { requests.push(request); return { ok: true, data: { model: request.request.model, text: 'ok', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } }; } };
       const args: Parameters<typeof createOwnerResponder> = ['fixture']; args[10] = gateway;
@@ -58,7 +58,7 @@ describe('proactive prompts through the owner responder', () => {
   });
 
   it('leaves a prompt that fits exactly as written', async () => {
-    await runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('proactive-fit-small')), async () => {
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('proactive-fit-small')), async () => {
       const requests: LLMGatewayRequest[] = [];
       const gateway: LLMGatewayAdapter = { complete: async request => { requests.push(request); return { ok: true, data: { model: request.request.model, text: 'ok', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } }; } };
       const args: Parameters<typeof createOwnerResponder> = ['fixture']; args[10] = gateway;

@@ -71,6 +71,11 @@ If you'd rather have two keys for billing separation: make an all-models key and
 4. App Settings -> Basic -> App secret -> `WHATSAPP_APP_SECRET` (used to verify webhook signatures).
 5. The webhook verify token: I generate it, nothing for you.
 6. In parallel: Settings -> Business verification in Meta Business Suite. That plus a real number is what takes WhatsApp past the 5-recipient test cap, when we want it.
+7. "Waldo texts first" outside WhatsApp's 24-hour window needs one approved template.
+   - In WhatsApp Manager -> Message templates, create a **Utility** template with no variables. The suggested name, body and button are in PR #1295.
+   - Once it is approved, set its name and language in the `vars` blocks of `packages/runtime/wrangler.jsonc`: `WHATSAPP_REENGAGE_TEMPLATE` (for example `waldo_update_ready`) and `WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE` (for example `en`).
+   - These are plain vars, not secrets. A dashboard value is overwritten by the next deploy.
+   - While they are empty, Waldo holds messages outside the window and sends nothing until you write.
 
 ## The stated-vs-inferred memory decision (plain words)
 

@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TelegramOwnerListener, type TelegramOwnerApi } from '../src/channels/telegram-listener';
 import { TelegramPollingAdapter } from '../src/channels/telegram-polling';
@@ -56,14 +57,14 @@ describe('TelegramOwnerListener', () => {
     const { calls, api } = recorder();
     let finish!: (text: string) => void;
     const listener = new TelegramOwnerListener({ ownerTelegramId: OWNER, api, respond: () => new Promise((resolve) => { finish = resolve; }), saveOffset: async () => undefined, typingEveryMs: 1_000 });
-    const pending = listener.handle({ updateId: 1, messageId: 3, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'slow' });
+    const pending = listener.handle(ownerTyped({ updateId: 1, messageId: 3, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'slow' }));
     await vi.advanceTimersByTimeAsync(9_000);
     finish('done');
     await expect(pending).resolves.toBe('answered');
     expect(calls.filter(([kind]) => kind === 'send').map(([, r]) => (r as { text: string }).text)).toEqual(['done']);
 
     const failing = new TelegramOwnerListener({ ownerTelegramId: OWNER, api, respond: async () => { throw new Error('model down'); }, saveOffset: async () => undefined });
-    await expect(failing.handle({ updateId: 2, messageId: null, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'x' })).resolves.toBe('failed');
+    await expect(failing.handle(ownerTyped({ updateId: 2, messageId: null, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'x' }))).resolves.toBe('failed');
     expect(calls.at(-1)?.[1]).toEqual({ chat_id: OWNER, text: 'Sorry - I hit a problem answering that. Please try again in a moment.' });
   });
 
@@ -74,7 +75,7 @@ describe('TelegramOwnerListener', () => {
         ownerTelegramId: OWNER, api, respond: reply, saveOffset: async () => undefined,
         chooseReaction: async () => { if (choice instanceof Error) throw choice; return choice; },
       });
-      await listener.handle({ updateId: 1, messageId: 9, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'thanks!' });
+      await listener.handle(ownerTyped({ updateId: 1, messageId: 9, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'thanks!' }));
       return calls.filter(([kind]) => kind === 'react').map(([, r]) => (r as { reaction: [{ emoji: string }] }).reaction[0].emoji);
     };
     await expect(reactions('🙏')).resolves.toEqual(['👀', '🙏']);
@@ -93,7 +94,7 @@ describe('TelegramOwnerListener', () => {
       ownerTelegramId: OWNER, api, respond: async () => 'fast', saveOffset: async () => undefined,
       chooseReaction: () => new Promise((resolve) => { pick = resolve; }),
     });
-    const pending = listener.handle({ updateId: 1, messageId: 9, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'hey' });
+    const pending = listener.handle(ownerTyped({ updateId: 1, messageId: 9, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'hey' }));
     await vi.waitFor(() => expect(calls.some(([kind]) => kind === 'send')).toBe(true));
     pick('🔥');
     await expect(pending).resolves.toBe('answered');
@@ -106,13 +107,12 @@ describe('TelegramOwnerListener', () => {
     const reply = update(20);
     const withReply = { ...reply, message: { ...reply.message, reply_to_message: { message_id: 3, text: 'earlier' } } };
     const { text: _text, ...photo } = update(21).message;
-    const forwarded = { update_id: 22, message: { ...update(22).message, forward_origin: { type: 'user' } } };
+    const forwarded = { update_id: 22, message: { ...update(22).message, text: 'sent on', forward_origin: { type: 'hidden_user', date: 1, sender_user_name: 'Sam' }, forward_sender_name: 'Sam', forward_date: 1 } };
     const stranger = { update_id: 23, message: { ...photo, from: { id: 42, is_bot: false }, chat: { id: 42, type: 'private' }, sticker: {} } };
     const adapter = new TelegramPollingAdapter({ getUpdates: async () => [withReply, { update_id: 21, message: { ...photo, photo: [] } }, forwarded, stranger] });
-    await expect(listener.pollOnce(adapter, 0)).resolves.toEqual(['answered', 'unsupported', 'unsupported', 'ignored']);
+    await expect(listener.pollOnce(adapter, 0)).resolves.toEqual(['answered', 'answered', 'unsupported', 'ignored']);
     const sends = calls.filter(([kind]) => kind === 'send').map(([, r]) => (r as { text: string }).text);
-    expect(sends[0]).toBe('echo hi');
-    expect(sends.slice(1)).toEqual(Array(2).fill('I can read text, photos, documents and voice notes here. Videos, stickers, forwards and some formatting do not come through yet.'));
+    expect(sends).toEqual(['echo hi', 'echo sent on', 'I can read text, photos, documents and voice notes here. Videos, stickers and some formatting do not come through yet.']);
     expect(calls.some(([kind, r]) => kind !== 'typing' && (r as { chat_id: number }).chat_id === 42)).toBe(false);
   });
 
@@ -138,7 +138,7 @@ describe('TelegramOwnerListener', () => {
       chooseReaction: async () => '🙏',
       respond: (turn, time) => time('model', async () => `echo ${turn.text}`),
     });
-    await listener.handle({ updateId: 7, messageId: 70, senderId: OWNER, chatId: OWNER, sentAt: 9_000, text: 'hi' });
+    await listener.handle(ownerTyped({ updateId: 7, messageId: 70, senderId: OWNER, chatId: OWNER, sentAt: 9_000, text: 'hi' }));
     const hops = entries.map((e) => (e as { hop: string }).hop);
     expect([...hops].sort()).toEqual(['choose_reaction', 'model', 'pickup', 'receipt', 'resolved', 'respond', 'send', 'turn', 'typing']);
     expect(hops.slice(-3)).toEqual(['send', 'resolved', 'turn']);
@@ -148,7 +148,7 @@ describe('TelegramOwnerListener', () => {
 
     entries.length = 0;
     const failing = new TelegramOwnerListener({ ownerTelegramId: OWNER, api, saveOffset: async () => undefined, now: () => (clock += 5), log: (entry) => entries.push(entry), respond: async () => { throw new Error('model down'); } });
-    await failing.handle({ updateId: 8, messageId: 80, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'x' });
+    await failing.handle(ownerTyped({ updateId: 8, messageId: 80, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'x' }));
     expect(entries.at(-1)).toMatchObject({ trace: 'tg-8', hop: 'turn', ok: false, error: 'model down' });
     expect(entries).toContainEqual(expect.objectContaining({ hop: 'respond', ok: false, error: 'model down' }));
   });
@@ -157,7 +157,7 @@ describe('TelegramOwnerListener', () => {
     const entries: Array<{ hop: string; ok: boolean; code?: string }> = [];
     const api = { ...recorder().api, sendMessage: async () => { throw new Error('provider failed'); } };
     const listener = new TelegramOwnerListener({ ownerTelegramId: OWNER, api, saveOffset: async () => undefined, respond: async () => 'answer', log: (entry) => entries.push(entry) });
-    expect(await listener.handle({ updateId: 42, messageId: null, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'hi' })).toBe('failed');
+    expect(await listener.handle(ownerTyped({ updateId: 42, messageId: null, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'hi' }))).toBe('failed');
     expect(entries).toContainEqual(expect.objectContaining({ hop: 'send', ok: false }));
     expect(entries.at(-1)).toMatchObject({ hop: 'turn', ok: false });
     expect(entries).not.toContainEqual(expect.objectContaining({ hop: 'turn', ok: true }));
@@ -173,7 +173,7 @@ describe('TelegramOwnerListener', () => {
     const { calls, api } = recorder();
     let finish!: (text: string) => void;
     const listener = new TelegramOwnerListener({ ownerTelegramId: OWNER, api, respond: () => new Promise((resolve) => { finish = resolve; }), saveOffset: async () => undefined, turnTimeoutMs: 1_000 });
-    const pending = listener.handle({ updateId: 9, messageId: null, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'huge' });
+    const pending = listener.handle(ownerTyped({ updateId: 9, messageId: null, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'huge' }));
     await vi.advanceTimersByTimeAsync(1_001);
     await expect(pending).resolves.toBe('failed');
     finish('late');
@@ -192,7 +192,7 @@ describe('host-selected compatibility surface traces', () => {
       respond: async (_turn, time) => time('fixture_model', async () => 'ok'),
       saveOffset: async () => undefined, log: entry => entries.push(entry),
     });
-    await expect(listener.handle({ updateId: 9000000000001, messageId: null, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'telegram: spoof trace' })).resolves.toBe('answered');
+    await expect(listener.handle(ownerTyped({ updateId: 9000000000001, messageId: null, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'telegram: spoof trace' }))).resolves.toBe('answered');
     expect(entries.length).toBeGreaterThan(0);
     expect(entries.every(entry => entry.trace === 'whatsapp-9000000000001')).toBe(true);
     expect(entries.some(entry => entry.hop === 'fixture_model')).toBe(true);
@@ -209,7 +209,7 @@ describe('host-selected compatibility surface traces', () => {
   it('wrong owner still cannot receive or log WhatsApp content', async () => {
     const { calls, api } = recorder(); const respond = vi.fn(async () => 'never'); const log = vi.fn();
     const listener = new TelegramOwnerListener({ ownerTelegramId: OWNER, surface: 'whatsapp', api, respond, saveOffset: async () => undefined, log });
-    await expect(listener.handle({ updateId: 9000000000003, messageId: null, senderId: OWNER + 1, chatId: OWNER, sentAt: null, text: 'private' })).resolves.toBe('ignored');
+    await expect(listener.handle(ownerTyped({ updateId: 9000000000003, messageId: null, senderId: OWNER + 1, chatId: OWNER, sentAt: null, text: 'private' }))).resolves.toBe('ignored');
     expect(respond).not.toHaveBeenCalled(); expect(log).not.toHaveBeenCalled(); expect(calls).toEqual([]);
   });
 });
@@ -217,7 +217,7 @@ describe('host-selected compatibility surface traces', () => {
 it('failed WhatsApp model span and final failure retain WhatsApp trace', async () => {
   const { api } = recorder(); const entries: Array<{ trace: string; hop: string; ok: boolean }> = [];
   const listener = new TelegramOwnerListener({ ownerTelegramId: OWNER, surface: 'whatsapp', api, respond: async (_turn, time) => time('fixture_model', async () => { throw Error('fixture failure'); }), saveOffset: async () => undefined, log: entry => entries.push(entry) });
-  await expect(listener.handle({ updateId: 12, messageId: null, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'hi' })).rejects.toThrow('fixture failure');
+  await expect(listener.handle(ownerTyped({ updateId: 12, messageId: null, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'hi' }))).rejects.toThrow('fixture failure');
   expect(entries.every(entry => entry.trace === 'whatsapp-12')).toBe(true);
   expect(entries.some(entry => entry.hop === 'fixture_model' && !entry.ok)).toBe(true);
   expect(entries.some(entry => entry.hop === 'turn' && !entry.ok)).toBe(true);
@@ -228,7 +228,7 @@ it('renders WhatsApp final directly as guarded plain text, with no Telegram HTML
   for (const queued of [false,true]) {
     const {api,calls}=recorder(); const queueFinal=vi.fn(async(_turn: unknown,_payload: unknown,_reaction: string)=>undefined);
     const listener=new TelegramOwnerListener({ownerTelegramId:OWNER,surface:'whatsapp',api,respond:async()=>text,saveOffset:async()=>undefined,...(queued?{queueFinal}:{})});
-    await listener.handle({updateId:1,senderId:OWNER,chatId:OWNER,messageId:null,sentAt:null,text:'make note'});
+    await listener.handle(ownerTyped({updateId:1,senderId:OWNER,chatId:OWNER,messageId:null,sentAt:null,text:'make note'}));
     const payload=queued?queueFinal.mock.calls[0]![1]:calls.find(([kind])=>kind==='send')![1];
     expect(payload).toEqual({chat_id:OWNER,text});
   }
@@ -237,6 +237,6 @@ it('WhatsApp actual listener propagates uncertain final send without retry wordi
  let effects=0;const sent:string[]=[];
  const api={...recorder().api,sendMessage:async(payload:{text:string})=>{sent.push(payload.text);throw Error('uncertain post-issue');}};
  const listener=new TelegramOwnerListener({surface:'whatsapp',ownerTelegramId:OWNER,api,respond:async()=>{effects++;return 'Saved result.';},saveOffset:async()=>undefined});
- await expect(listener.handle({updateId:9000000000020,messageId:null,senderId:OWNER,chatId:OWNER,sentAt:null,text:'save result'})).rejects.toThrow('uncertain post-issue');
+ await expect(listener.handle(ownerTyped({updateId:9000000000020,messageId:null,senderId:OWNER,chatId:OWNER,sentAt:null,text:'save result'}))).rejects.toThrow('uncertain post-issue');
  expect(effects).toBe(1);expect(sent).toEqual(['Saved result.']);
 });

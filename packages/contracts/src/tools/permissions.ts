@@ -24,7 +24,6 @@ export const toolNameSchema = z.enum([
   'query_availability',
   'read_owner_context',
   'read_memory',
-  'update_memory',
   'remember',
   'forget_memory',
   'search_episodes',
@@ -63,6 +62,7 @@ export const toolNameSchema = z.enum([
   'propose_google_task_change',
   'open_loop',
   'close_loop',
+  'raise_approval',
   'track_responsibility',
   'update_todo',
   'list_responsibilities',
@@ -71,6 +71,8 @@ export const toolNameSchema = z.enum([
   'set_schedule_preference',
   'read_tool_output',
   'connect_service',
+  // send_console_link: the host sends the owner a one-time console sign-in link on the turn's own surface.
+  'send_console_link',
   'browse_page',
   'browse_act',
   // delegate_task 42 (subagent orchestration v1): turn-scoped, owner chat turns only; children
@@ -96,6 +98,13 @@ export const toolNameSchema = z.enum([
   'skills_install',
   'skills_disable',
   'skills_load',
+  'use_mac',
+  // search_contacts: the owner's Google contacts and other contacts, by name or address prefix.
+  'search_contacts',
+  // send_progress_note: a short non-blocking note to the owner's chat while their own turn keeps working.
+  'send_progress_note',
+  // attach_file: queue one of the owner's workspace files to go out with this turn's reply, where the surface carries files.
+  'attach_file',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -192,12 +201,17 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
   intervention: ['get_crs', 'get_health', 'read_memory', 'update_task', 'propose_action'],
   // Everything except execute_code (ADR-0050) — no trigger ever gets the full surface.
   user_message: [
+    'use_mac',
     'get_crs',
     'get_health',
     'query_calendar',
     'connect_service',
+    'send_console_link',
+    'send_progress_note',
+    'attach_file',
     'get_communication',
     'search_communication',
+    'search_contacts',
     'read_thread',
     'get_tasks',
     'get_master_metrics',
@@ -245,6 +259,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'propose_google_task_change',
     'open_loop',
     'close_loop',
+    'raise_approval',
     'track_responsibility',
     'set_proactivity',
     'set_schedule_preference',
@@ -265,7 +280,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'skills_disable',
     'skills_load',
   ],
-  dreaming_mode: ['read_memory', 'update_memory', 'search_episodes'],
+  dreaming_mode: ['read_memory', 'search_episodes'],
   // Always carries send_message — a Spot is never silent (ADR-0042).
   pre_activity_spot: [
     'get_crs',
@@ -291,6 +306,7 @@ export const LAZY_DISCOVERY_TRIGGERS: readonly TriggerType[] = ['user_message', 
 // there is this list ∩ the ACL — loading never widens permission.
 // connect_service joined the always-on set (owner direction 2026-09-24): connect intent must be
 // prompt-visible without discovery - the model cannot search_tools for a tool it does not know exists.
+// send_console_link joined for the same reason: the owner asks for their console in words, never a slash command.
 export const ALWAYS_ON_TOOLS: readonly ToolName[] = [
   'read_memory',
   'remember',
@@ -299,7 +315,9 @@ export const ALWAYS_ON_TOOLS: readonly ToolName[] = [
   'propose_action',
   'search_tools',
   'connect_service',
+  'send_console_link',
   'skills_list',
+  'use_mac',
 ];
 
 // search_tools returns top-K by query relevance only — "show me everything" is

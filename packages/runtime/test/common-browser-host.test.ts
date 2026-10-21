@@ -18,6 +18,14 @@ it('retains exact grant/session and guarded documents after host reconstruction 
  expect(commonBrowserFixture.allocations).toBe(1);expect(commonBrowserFixture.pages).toHaveLength(1);
  await two.cancel();expect(commonBrowserFixture.pages).toHaveLength(0);expect(commonBrowserFixture.ends).toBe(1);
 });
+it('an over-limit page image is left out of the model attachments; an explicit screenshot save still refuses it',async()=>{
+ const f=fixture();(f.grant as {maxScreenshotBytes:number}).maxScreenshotBytes=8;const host=f.host();
+ const read=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.',retain_session:true} as never,f.ctx) as any;
+ expect(read).toMatchObject({ok:true,data:{image_omitted:'oversize'}});expect(host.attachments()).toEqual([]);
+ const saved=await host.actionHandler.handle({session_handle:read.data.session_handle,url:'https://public-pages.fixture.invalid/a',task:'Save it.',max_actions:1,command:{operation:'screenshot'}} as never,f.ctx) as any;
+ expect(saved).toMatchObject({ok:false});expect(saved.error).toContain('image_oversize');
+ await host.cancel();
+});
 it('changed grant and pending allocation refuse replacement allocation',async()=>{
  const f=fixture();await f.host().handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read.'},f.ctx);
  (f.grant as {expiresAt:number}).expiresAt++;
@@ -48,9 +56,9 @@ it('records exact allocation when authority expires in flight and denies image/r
  expect(commonBrowserFixture.ends).toBe(1);expect(host.attachments()).toHaveLength(0);
  expect(await f.host().handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read.'},f.ctx)).toMatchObject({ok:false});expect(commonBrowserFixture.allocations).toBe(1);
 });
-it('wrong owner/provider/origin are rejected before allocation',async()=>{
+it('wrong owner and origin are rejected before allocation',async()=>{
  const f=fixture();const host=f.host();
- for(const args of [{url:'https://public-pages.fixture.invalid/a',provider:'browserbase'},{url:'https://outside.fixture.invalid/a'}])expect(await host.handler.handle({...args,instruction:'Read.'} as never,f.ctx)).toMatchObject({ok:false});
+ expect(await host.handler.handle({url:'https://outside.fixture.invalid/a',instruction:'Read.'},f.ctx)).toMatchObject({ok:false});
  expect(await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read.'},{authenticatedUserId:'another-owner'} as never)).toMatchObject({ok:false});
  expect(commonBrowserFixture.allocations).toBe(0);
 });
@@ -89,7 +97,7 @@ it('registered dispatcher and post hooks preserve provider402 to model-bound res
 
 it('finite grants cannot bypass the established private-network boundary',async()=>{
  const f=fixture();(f.grant as {allowedOrigins:readonly string[]}).allowedOrigins=['https://127.0.0.1'];
- expect(await f.host().handler.handle({url:'https://127.0.0.1/private',instruction:'Read.',provider:'cloudflare_playwright'},f.ctx)).toMatchObject({ok:false});
+ expect(await f.host().handler.handle({url:'https://127.0.0.1/private',instruction:'Read.'},f.ctx)).toMatchObject({ok:false});
  expect(commonBrowserFixture.allocations).toBe(0);
 });
 
@@ -102,7 +110,7 @@ it('read result exposes the real retained session handle across fresh host reads
 });
 it('normal browser host reads, types into an observed public input, reobserves and terminates one allocation',async()=>{
  const f=fixture(),host=f.host();
- const first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.',provider:'cloudflare_playwright'},f.ctx) as any;
+ const first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.'},f.ctx) as any;
  const filled=await host.actionHandler.handle({url:first.data.url,task:'Set the note',max_actions:1,command:{operation:'type',element_ref:first.data.elements[0].ref,value:'Owner note',intent:'read'}},f.ctx);
  expect(filled).toMatchObject({ok:true,data:{field_values:[{name:'Note',value:'Owner note'}],session_handle:first.data.session_handle}});
  const read=await host.actionHandler.handle({url:first.data.url,task:'Check the note',max_actions:1,command:{operation:'read',intent:'read'}},f.ctx);
@@ -132,7 +140,7 @@ it('registered dispatcher uses the existing host for native field observation an
  const f=fixture(),host=f.host();const {dispatchTool}=await import('../src/tools/dispatcher');const {buildSessionState}=await import('@waldo/contracts');
  const ctx={...f.ctx as any,trigger:'user_message',egressAllowlist:['public-pages.fixture.invalid'],session:buildSessionState({trigger:'user_message',canary_tokens:['1111111111111111','2222222222222222','3333333333333333'],started_at:Date.now()}),hasApproval:()=>true,sourceTaint:null,toolArgSourceTaint:null,sanitise:(await import('../src/scribe/sanitiser')).sanitise} as never;
  const handlers=[host.handler,host.actionHandler];
- const first=await dispatchTool({id:'native-read',name:'browse_page',args:{url:'https://public-pages.fixture.invalid/a',instruction:'Read the note input.',provider:'cloudflare_playwright'}},ctx,{handlers}) as any;
+ const first=await dispatchTool({id:'native-read',name:'browse_page',args:{url:'https://public-pages.fixture.invalid/a',instruction:'Read the note input.'}},ctx,{handlers}) as any;
  expect(first).toMatchObject({ok:true});
  const acted=await dispatchTool({id:'native-type',name:'browse_act',args:{url:first.data.url,task:'Set the note',max_actions:1,command:{operation:'type',element_ref:first.data.elements[0].ref,value:'Exact owner note',intent:'read'}}},ctx,{handlers});
  expect(acted).toMatchObject({ok:true,data:{field_values:[{value:'Exact owner note'}]},source_taint:'external'});
@@ -234,4 +242,92 @@ it('separates an admitted long task from the provider inactivity timeout',async(
  let idle:number|undefined;const load=f.config.loadSdk;f.config.loadSdk=async()=>{const sdk=await load();return {...sdk,acquire:async(binding:any,options:any)=>{idle=options.keep_alive;return sdk.acquire(binding,options);}} as never;};
  const host=f.host();expect(await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read.'},f.ctx)).toMatchObject({ok:true});expect(idle).toBe(600_000);
  expect((f.rows.get('common-browser:fixture-task') as any).session.expiresAt).toBeGreaterThan(Date.now()+3_500_000);await host.cancel();
+});
+
+const registered=async(f:ReturnType<typeof fixture>)=>{
+ const {dispatchTool}=await import('../src/tools/dispatcher');const {buildSessionState}=await import('@waldo/contracts');
+ const ctx={...f.ctx as any,trigger:'user_message',egressAllowlist:['public-pages.fixture.invalid'],session:buildSessionState({trigger:'user_message',canary_tokens:['1111111111111111','2222222222222222','3333333333333333'],started_at:Date.now()}),hasApproval:()=>true,sourceTaint:null,toolArgSourceTaint:null,sanitise:(await import('../src/scribe/sanitiser')).sanitise} as never;
+ const host=f.host(),handlers=[host.handler,host.actionHandler];let call=0;
+ return {host,run:(name:'browse_page'|'browse_act',args:unknown)=>dispatchTool({id:`registered-${++call}`,name,args},ctx,{handlers}) as Promise<any>};
+};
+it('an over-limit screenshot still returns the page as a text-only observation through the registered dispatcher',async()=>{
+ const f=fixture();(f.grant as {maxScreenshotBytes:number}).maxScreenshotBytes=8;const {host,run}=await registered(f);
+ const read=await run('browse_page',{url:'https://public-pages.fixture.invalid/a',instruction:'Read A.'});
+ expect(read).toMatchObject({ok:true,data:{text_only:true,text:'Option A costs 10 fictional tokens.',session_handle:host.sessionHandle()}});
+ expect(JSON.stringify(read)).not.toContain('image_oversize');expect(host.attachments()).toHaveLength(0);
+ // A page action on the same over-limit page completes as a known outcome; it does not become uncertain.
+ const typed=await run('browse_act',{url:read.data.url,task:'Set the note',max_actions:1,command:{operation:'type',element_ref:read.data.elements[0].ref,value:'Owner note',intent:'read'}});
+ expect(typed).toMatchObject({ok:true,data:{text_only:true,field_values:[{name:'Note',value:'Owner note'}]}});
+ expect(f.rows.get('common-browser:fixture-task')).toMatchObject({action:{state:'observed'}});
+ // Only an explicit screenshot save still reports image_oversize, and says what to use instead.
+ const shot=await run('browse_act',{url:read.data.url,task:'Save a screenshot',max_actions:1,command:{operation:'screenshot'}});
+ expect(shot).toMatchObject({ok:false});expect(JSON.stringify(shot)).toContain('image_oversize');expect(JSON.stringify(shot)).toContain('browse_act read');
+ expect(commonBrowserFixture.allocations).toBe(1);await host.cancel();
+});
+it('failed reads and actions name the open session_handle and a next step, never only "inspect before retrying"',async()=>{
+ const f=fixture();const {host,run}=await registered(f);
+ const first=await run('browse_page',{url:'https://public-pages.fixture.invalid/a',instruction:'Read A.'});expect(first.ok).toBe(true);
+ commonBrowserFixture.onGoto=()=>{throw Error('lost navigation');};
+ const failedRead=await run('browse_page',{url:'https://public-pages.fixture.invalid/b',instruction:'Read B.'});commonBrowserFixture.onGoto=undefined;
+ expect(failedRead).toMatchObject({ok:false});
+ const readText=JSON.stringify(failedRead);
+ expect(readText).toContain(first.data.session_handle);expect(readText).toContain('provider_unavailable');expect(readText).toContain('Retry once');expect(readText).not.toContain('Inspect retained task state');
+ const stale=await run('browse_act',{url:first.data.url,task:'Click a stale ref',max_actions:1,command:{operation:'type',element_ref:'e:stale-ref:0',value:'Note',intent:'read'}});
+ expect(stale).toMatchObject({ok:false});
+ const actText=JSON.stringify(stale);
+ expect(actText).toContain(first.data.session_handle);expect(actText).toContain('browse_act read');expect(actText).not.toContain('Inspect the current page before retrying');
+ await host.cancel();
+});
+it('cancel ends a retained session that has no current observation, whatever url it is given',async()=>{
+ const f=fixture(),host=f.host();
+ const first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.'},f.ctx) as any;expect(first.ok).toBe(true);
+ commonBrowserFixture.text='é'.repeat(140000);
+ expect(await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read again.'},f.ctx)).toMatchObject({ok:false});
+ expect((f.rows.get('common-browser:fixture-task') as any).observation).toBeUndefined();
+ expect(await host.actionHandler.handle({url:'https://public-pages.fixture.invalid/other',task:'Close the browser',max_actions:1,session_handle:first.data.session_handle,command:{operation:'cancel'}} as never,f.ctx)).toMatchObject({ok:true,data:{ended:true}});
+ expect(commonBrowserFixture.ends).toBe(1);expect(f.rows.get('common-browser:fixture-task')).toMatchObject({cleanup:'closed'});
+});
+it('an over-limit PNG reaches the model as a smaller JPEG, while the owner\'s screenshot save still needs a PNG',async()=>{
+ const f=fixture();(f.grant as {maxScreenshotBytes:number}).maxScreenshotBytes=40;commonBrowserFixture.jpeg=Uint8Array.from([0xff,0xd8,0xff,0xe0,...new Array(20).fill(0)]);
+ const {host,run}=await registered(f);
+ const read=await run('browse_page',{url:'https://public-pages.fixture.invalid/a',instruction:'Read A.'});
+ expect(read).toMatchObject({ok:true});expect(read.data.text_only).toBeUndefined();
+ expect(host.attachments()).toEqual([expect.objectContaining({kind:'image',mime_type:'image/jpeg',filename:expect.stringMatching(/\.jpg$/),data_base64:expect.stringMatching(/^\/9j\//)})]);
+ const shot=await run('browse_act',{url:read.data.url,task:'Save a screenshot',max_actions:1,command:{operation:'screenshot'}});
+ expect(shot).toMatchObject({ok:false});expect(JSON.stringify(shot)).toContain('image_oversize');
+ await host.cancel();
+});
+const deadlineHost=(f:ReturnType<typeof fixture>,deadline:()=>number)=>commonBrowserHost({storage:f.storage,config:f.config,ownerId:'fixture-owner',source:()=>({taskId:'fixture-task',revision:1,sources:['browser'],ready:true,startRef:'fixture-owner'}),assertCurrent:async()=>{},deadline,now:Date.now});
+it('a read cut off by the turn deadline is transient, so a later turn can retry it',async()=>{
+ const f=fixture();let deadline=Date.now()+60000;const host=deadlineHost(f,()=>deadline);
+ const read=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.',retain_session:true} as never,f.ctx) as any;
+ expect(read.ok).toBe(true);
+ deadline=Date.now()-1;
+ const late=await host.actionHandler.handle({session_handle:read.data.session_handle,url:'https://public-pages.fixture.invalid/a',task:'Read it.',max_actions:1,command:{operation:'read'}} as never,f.ctx) as any;
+ expect(late).toMatchObject({ok:false,code:'transient'});expect(late.error).toContain('turn_deadline');
+ deadline=Date.now()+60000;await host.cancel();
+});
+it('a deadline hit after an effect was prepared stays a refused, uncertain effect rather than a retryable one',async()=>{
+ const f=fixture();let deadline=Date.now()+60000;const host=deadlineHost(f,()=>deadline);
+ const read=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.',retain_session:true} as never,f.ctx) as any;
+ commonBrowserFixture.onGoto=()=>{deadline=Date.now()-1;};
+ const moved=await host.actionHandler.handle({session_handle:read.data.session_handle,url:'https://public-pages.fixture.invalid/a',task:'Open B.',max_actions:1,command:{operation:'goto',url:'https://public-pages.fixture.invalid/b'}} as never,f.ctx) as any;
+ commonBrowserFixture.onGoto=undefined;
+ expect(moved).toMatchObject({ok:false,code:'rejected'});
+ expect((f.rows.get('common-browser:fixture-task') as any).action.state).toBe('uncertain');
+ deadline=Date.now()+60000;await host.cancel();
+});
+it('browse_act back returns to the previous page as a read, and says so plainly when there is none',async()=>{
+ const f=fixture(),host=f.host();
+ const first=await host.handler.handle({url:'https://public-pages.fixture.invalid/a',instruction:'Read A.',retain_session:true} as never,f.ctx) as any;
+ const none=await host.actionHandler.handle({session_handle:first.data.session_handle,url:first.data.url,task:'Go back.',max_actions:1,command:{operation:'back'}} as never,f.ctx) as any;
+ expect(none).toMatchObject({ok:true,data:{back:'no_history',session_handle:first.data.session_handle}});
+ const second=await host.handler.handle({url:'https://public-pages.fixture.invalid/b',instruction:'Read B.',session_handle:first.data.session_handle} as never,f.ctx) as any;
+ expect(second).toMatchObject({ok:true,data:{url:'https://public-pages.fixture.invalid/b'}});
+ const back=await host.actionHandler.handle({session_handle:first.data.session_handle,url:second.data.url,task:'Go back.',max_actions:1,command:{operation:'back'}} as never,f.ctx) as any;
+ expect(back).toMatchObject({ok:true,data:{url:'https://public-pages.fixture.invalid/a',text:'Option A costs 10 fictional tokens.'}});
+ expect(back.data.browser_action_session_handle).toBeUndefined();
+ expect((f.rows.get('common-browser:fixture-task') as any).action).toBeUndefined();
+ expect(commonBrowserFixture.allocations).toBe(1);
+ await host.cancel();
 });

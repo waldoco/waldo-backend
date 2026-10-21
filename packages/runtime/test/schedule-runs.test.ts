@@ -3,14 +3,16 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { Scheduler, type ScheduleExecutors } from '../src/scheduler/multiplexer';
 import type { Deps } from '../src/seams/deps';
-import type { TracerDO } from '../src/tracer/tracer-do';
+import type { TestStorageDO } from './support/worker-entry';
 import { TelegramFinalOutbox } from '../src/channels/telegram-final-outbox';
 import { heartbeatEligible, heartbeatTick, settleHeartbeat } from '../src/channels/heartbeat';
 import { loopBook } from '../src/channels/loops';
 import { dayPlanBook } from '../src/channels/day-cards';
+// Stands in for the check-back turn: reports which loops it was given.
+const checkedBack = async (loops: readonly { title: string }[]) => `Checked ${loops.map(loop => loop.title).join(', ')}`;
 
 let seq = 0;
-const stub = () => env.TRACER_DO.get(env.TRACER_DO.idFromName(`schedule-runs-${(seq += 1)}`)) as DurableObjectStub<TracerDO>;
+const stub = () => env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`schedule-runs-${(seq += 1)}`)) as DurableObjectStub<TestStorageDO>;
 const deps = (now: number): Deps => ({ now: () => now, newRunId: () => 'run-fixed', newOutboxId: () => 'out-fixed', sha256Hex: async () => 'sha-fixed' });
 
 type RunRow = {
@@ -118,7 +120,7 @@ describe('run decision + delivery lifecycle (owner shape call)', () => {
       loops.open({ title: 'Synthetic errand', due: '2026-10-02T11:00' });
       const outbox = new TelegramFinalOutbox(state.storage.kv, () => now);
       const tick = heartbeatTick({ scheduler, sql: state.storage.sql, loops, plans: dayPlanBook(state.storage.sql),
-        timezone: 'Etc/UTC', now: () => now, enqueue: async (text, heartbeat) => outbox.enqueue({
+        timezone: 'Etc/UTC', now: () => now, checkBack: checkedBack, enqueue: async (text, heartbeat) => outbox.enqueue({
           id: `final:${heartbeat.id}:${heartbeat.occurrence}`, trace: 'heartbeat-trace', payload: { chat_id: 7, text },
           ownerSubject: 'owner', doName: 'owner-do', heartbeat,
         }) });
@@ -380,7 +382,7 @@ describe('C3 dedupe + missed-run policy', () => {
       loops.open({ title: 'Synthetic errand', due: '2026-10-02T11:00' });
       const outbox = new TelegramFinalOutbox(state.storage.kv, () => now);
       const tick = heartbeatTick({ scheduler, sql: state.storage.sql, loops, plans: dayPlanBook(state.storage.sql),
-        timezone: 'Etc/UTC', now: () => now, enqueue: async (text, heartbeat) => outbox.enqueue({
+        timezone: 'Etc/UTC', now: () => now, checkBack: checkedBack, enqueue: async (text, heartbeat) => outbox.enqueue({
           id: `final:${heartbeat.id}:${heartbeat.occurrence}`, trace: 'heartbeat-trace', payload: { chat_id: 7, text },
           ownerSubject: 'owner', doName: 'owner-do', heartbeat,
         }) });
