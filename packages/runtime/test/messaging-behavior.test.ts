@@ -1,7 +1,7 @@
 // Prompt contract checks: what the model is told, on each surface. They cannot show what a live model does with it;
 // the everyday-errands eval judges that after deploy.
 import { describe, expect, it } from 'vitest';
-import { MESSAGING_BEHAVIOR, messagingSystemPrompt, ownerClockLine, WALDO_VOCABULARY, type SurfacePresentation } from '../src/prompt/messaging-behavior';
+import { MESSAGING_BEHAVIOR, messagingSystemPrompt, ownerClockLine, surfacePresentationPrompt, VOICE, VOICE_VERSION, WALDO_VOCABULARY, type SurfacePresentation } from '../src/prompt/messaging-behavior';
 import { sanitise, sanitiseVerifyOnly } from '../src/scribe/sanitiser';
 
 const presentation = (surface: string, approval: SurfacePresentation['delivery']['approval']): SurfacePresentation =>
@@ -111,7 +111,7 @@ describe('messagingSystemPrompt', () => {
   it('pins model-chosen memory tools and the proactive never-list', () => {
     expect(MESSAGING_BEHAVIOR).toContain('When the owner volunteers a fact, you decide whether to keep it');
     expect(MESSAGING_BEHAVIOR).not.toContain('before your reply');
-    expect(MESSAGING_BEHAVIOR).toContain('never generic check-ins');
+    expect(MESSAGING_BEHAVIOR).toContain('Never generic check-ins');
     expect(MESSAGING_BEHAVIOR).toContain('congratulations on normal metrics');
     expect(MESSAGING_BEHAVIOR).toContain('new information or a decision');
     expect(MESSAGING_BEHAVIOR).toContain('not the contents of their Gmail, Calendar or Drive');
@@ -202,15 +202,86 @@ describe('the rules that pulled against each other are gone', () => {
 
   // A ceiling, so new behaviour text is paid for by cuts. The 14 Oct hotel turn carried 15,259 bytes, its tool names
   // included; without them the largest surface's block is about 15,060. The blocked-site search fallback adds about
-  // 410 bytes, to 15,475.
-  it('keeps every delivered behaviour text under 15,500 bytes', () => {
-    expect(Math.max(...prompts().map(([, prompt]) => bytes(prompt)))).toBeLessThanOrEqual(15_500);
+  // 410 bytes, to 15,475. The turn-context rule then took the clock and connection instructions out of the per-turn
+  // tail (sent every turn already, about 830 bytes), and voice version 2 merged the personality north star (about
+  // 2,500 bytes), to 18,803. Rule pruning against the eval gate is where the next cuts come from.
+  it('keeps every delivered behaviour text under 18,900 bytes', () => {
+    expect(Math.max(...prompts().map(([, prompt]) => bytes(prompt)))).toBeLessThanOrEqual(18_900);
   });
 
   it.each(prompts())('%s: passes the system-prompt sanitiser unchanged', (_surface, prompt) => {
     const canary_tokens = ['1111111111111111', '2222222222222222', '3333333333333333'];
     expect(sanitise({ payload: prompt, destination: 'system_prompt', canary_tokens, source_taint: null })).toMatchObject({ ok: true, payload: prompt });
     expect(sanitiseVerifyOnly({ payload: prompt, destination: 'system_prompt', canary_tokens, source_taint: null })).toMatchObject({ ok: true, payload: prompt });
+  });
+});
+
+// The voice is a contract: a change to it is deliberate, versioned and in the changelog, never drift between releases.
+const VOICE_DIGESTS: Readonly<Record<number, string>> = {
+  2: '0f3a1ee9e2745665380501f1b8ad1263f5cbb8a0a43cfe4590005325847c1c3a',
+};
+const sha256 = async (text: string) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))), (byte) => byte.toString(16).padStart(2, '0')).join('');
+
+describe('the voice block', () => {
+  it('is pinned to its version: change VOICE, bump VOICE_VERSION and add a changelog line in WALDO_PERSONALITY_AND_VOICE.md', async () => {
+    expect(await sha256(VOICE), `VOICE changed without a new VOICE_VERSION (now ${VOICE_VERSION})`).toBe(VOICE_DIGESTS[VOICE_VERSION]);
+  });
+
+  it.each(prompts())('%s: carries the voice once, as one block', (_surface, prompt) => {
+    expect(prompt.split(VOICE)).toHaveLength(2);
+  });
+
+  it('carries the character and the six tests', () => {
+    expect(VOICE).toContain('Alfred in a modern register, a friend they could text: composed, perceptive, quietly warm, dryly funny');
+    expect(VOICE).toContain('An empty category never appears');
+    expect(VOICE).toContain("When you can't reach them in time, hold rather than commit.");
+    expect(VOICE).toContain('a capable peer who serves, not a servant who performs');
+    expect(VOICE).toContain('You are software and say so when it matters or anyone asks');
+    for (const test of ['(1) someone who genuinely knows them would send it', '(2) the point is in the first line', '(3) it does one job', '(4) nothing in it is claimed but not known', "(5) you'd say it with someone reading over their shoulder", '(6) it is kind before it is clever']) {
+      expect(VOICE).toContain(test);
+    }
+  });
+
+  it('keeps "assistant" as the word owners hear while saying plainly that Waldo acts for them', () => {
+    expect(MESSAGING_BEHAVIOR).toContain("You are Waldo, your owner's personal assistant.");
+    expect(MESSAGING_BEHAVIOR).toContain('you act on their behalf when they allow it');
+    expect(MESSAGING_BEHAVIOR).not.toContain('personal agent');
+  });
+
+  it('counts a coming decision plus a changed state as waiting that makes things worse', () => {
+    expect(VOICE).toContain('when waiting would make things worse (a coming decision their changed state bears on counts)');
+  });
+
+  it('keeps approval cards complete however short the voice is', () => {
+    expect(VOICE).toContain('An approval card always shows the exact recipient, content, time and undo, however long');
+  });
+
+  it('lets spelling follow the owner\'s locale', () => {
+    expect(VOICE).toContain("Spelling follows the owner's locale.");
+    expect(VOICE).not.toMatch(/British spelling/);
+  });
+
+  it('talks about the body in zone words, against their own normal, without alarm or diagnosis', () => {
+    expect(VOICE).toContain('zone words against their own normal, never population averages');
+    expect(VOICE).toContain('a raw reading only when they ask, never in a notification');
+    expect(VOICE).toContain("say you're still learning them");
+    expect(VOICE).toContain('a short night is a reason to move the 8am, not a warning');
+  });
+
+  it('answers near medicine with the doctor\'s call and then help with the day', () => {
+    expect(VOICE).toContain('"That\'s your doctor\'s call" in one warm line, then help with the day');
+    expect(MESSAGING_BEHAVIOR).toContain('Never give medication, supplement or dose instructions.');
+  });
+
+  // "Use a number when it helps, inline" pulled against "never raw numbers in chat"; zone words win, a number on request.
+  it('has one rule for health numbers in chat', () => {
+    expect(MESSAGING_BEHAVIOR).not.toContain('Use a number when it helps');
+  });
+
+  // The stable system prompt the provider caches. Update this snapshot only with a VOICE_VERSION bump or a reviewed rule change.
+  it('snapshots the stable behaviour text and each surface\'s presentation facts', () => {
+    expect(messagingSystemPrompt(HOTEL_TURN_TOOLS)).toMatchSnapshot('direct');
+    for (const surface of SURFACES) expect(surfacePresentationPrompt(surface)).toMatchSnapshot(surface.surface);
   });
 });
 
@@ -225,7 +296,14 @@ describe('ownerClockLine', () => {
   it('says how long the local day has run so a request just after midnight can widen "today"', () => {
     const line = ownerClockLine({ timezone: 'Asia/Calcutta', now: () => new Date('2026-10-05T18:43:00Z') });
     expect(line).toContain('The local day began 0h 13m ago');
-    expect(line).toContain('last 24 hours');
+    expect(MESSAGING_BEHAVIOR).toContain('search or read the last 24 hours instead of the new calendar day');
+  });
+
+  // The clock is a per-turn fact; how to read it is a stable rule, so the system prompt never moves with the minute.
+  it('is a bare fact, with the instructions for it in the behaviour text', () => {
+    const line = ownerClockLine({ timezone: 'Asia/Calcutta', now: () => new Date('2026-10-05T18:43:00Z') });
+    expect(line).toBe("The owner's current local time: Tuesday, 6 October 2026 at 00:13 (Asia/Calcutta). The local day began 0h 13m ago.");
+    expect(MESSAGING_BEHAVIOR).toContain('Anchor greetings and time-of-day words to its local time, and call get_context if you need fresh precision mid-turn.');
   });
 
   it('falls back to UTC instead of throwing on a malformed stored timezone', () => {
@@ -235,7 +313,6 @@ describe('ownerClockLine', () => {
 });
 
 it('keeps named dates and relative days like tomorrow exact when widening a bare today', () => {
-  const line = ownerClockLine({ timezone: 'Asia/Calcutta', now: () => new Date('2026-10-05T18:43:00Z') });
-  expect(line).toContain('applies only to a bare "today"');
-  expect(line).toContain('"tomorrow" means exactly that day');
+  expect(MESSAGING_BEHAVIOR).toContain('a bare "today" usually means the day that just ended');
+  expect(MESSAGING_BEHAVIOR).toContain('"tomorrow" means exactly that day');
 });
