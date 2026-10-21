@@ -15,8 +15,9 @@ export type WhoopRoutesEnv = OwnerDirectoryEnv & Readonly<{
   WHOOP_CLIENT_ID?: string; WHOOP_CLIENT_SECRET?: string; WHOOP_REDIRECT_URI?: string;
   OWNER_DO?: OwnerNamespace; RESPONSIBILITY_RATE_LIMITER?: Readonly<{ limit(options: { key: string }): Promise<{ success: boolean }> }>;
 }>;
-// All three or none: a deploy that sets only some of them runs no WHOOP at all.
-export const whoopConfig = (env: Readonly<{ WHOOP_CLIENT_ID?: string; WHOOP_CLIENT_SECRET?: string; WHOOP_REDIRECT_URI?: string }>): WhoopConfig | null =>
+// All three or none: a deploy that sets only some of them runs no WHOOP at all. The Worker keeps the client secret only to
+// verify WHOOP's webhook signature; the token exchange and refresh use the copy the edge holds in Vault.
+export const whoopConfig = (env: Readonly<{ WHOOP_CLIENT_ID?: string; WHOOP_CLIENT_SECRET?: string; WHOOP_REDIRECT_URI?: string }>): (WhoopConfig & Readonly<{ clientSecret: string }>) | null =>
   env.WHOOP_CLIENT_ID && env.WHOOP_CLIENT_SECRET && env.WHOOP_REDIRECT_URI ? { clientId: env.WHOOP_CLIENT_ID, clientSecret: env.WHOOP_CLIENT_SECRET, redirectUri: env.WHOOP_REDIRECT_URI } : null;
 
 const sha256 = async (text: string) => hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));

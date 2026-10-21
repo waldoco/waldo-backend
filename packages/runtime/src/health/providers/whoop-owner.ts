@@ -1,15 +1,18 @@
 import { healthIngestReceiptV1Schema, healthSampleV1Schema, type HealthSampleV1 } from '../../../../contracts/src/app/health-ingest';
 import { invokeHealth } from '../../channels/app-health';
 import { md5Hex } from '../../channels/md5';
-import { hex, OwnerDirectoryError } from '../../identity/owner-directory';
-import { WhoopError, WHOOP_SCOPES, type WhoopClient, type WhoopTokens } from './whoop-client';
+import { hex } from '../../identity/owner-directory';
+import { OAuthProxyError, type OAuthProxy } from '../../connectors/oauth-proxy-client';
+import { whoopAuthorizeUrl, whoopClient, whoopPins, WhoopError, WHOOP_SCOPES, type EdgeReply, type WhoopCall, type WhoopConfig } from './whoop-client';
 import { whoopDeletions, whoopNightSamples, whoopWorkoutSamples, type WhoopDeletion, type WhoopRecovery, type WhoopSleep, type WhoopWorkout } from './whoop-map';
 
-// The owner object's side of WHOOP: connect, token custody, sync and webhook hints, disconnect. The owner's tokens live in
-// Vault behind the signed connection calls; this object reads them, refreshes them single-file, and writes the rotated
-// token back before using it. Every reading goes through the same signed waldo.health_ingest the app uses, so consent,
-// epochs, revisions and idempotency are the database's, not this module's. Nothing here stores a reading or a zone, and the
-// only things it keeps in the object are ids, dates and counters.
+// The owner object's side of WHOOP: connect, sync, webhook hints, disconnect. Every token lives at the oauth-proxy Edge
+// Function, which exchanges the code, makes each WHOOP request, and refreshes and rotates the single-use refresh token with a
+// compare-and-set; this object never receives a token, a code's result or the client secret. It is the one retry owner per
+// connection: it refreshes once, single-file, with the version a failing call reported, and then retries once. Every reading
+// goes through the same signed waldo.health_ingest the app uses, so consent, epochs, revisions and idempotency are the
+// database's, not this module's. Nothing here stores a reading or a zone, and the only things it keeps in the object are ids,
+// dates, a token version and counters.
 export const WHOOP_SYNC_ID = 'whoop-sync';
 const SOURCE = 'whoop';
 const BACKFILL_DAYS = 30;
@@ -23,6 +26,8 @@ const PAGE_LIMIT = 20;
 const BATCH_MAX = 128;
 const LOOKUPS_PER_WINDOW = 10;
 const SEEN_TTL_MS = DAY_MS;
+// The edge reports a token expired this long before it lapses, so a call never leaves with one about to.
+const EXPIRY_SKEW_MS = 120_000;
 const ATTEMPT_TTL_MS = 30 * 60_000;
 const CHANNEL = 'app';
 
@@ -33,7 +38,9 @@ export type WhoopOwnerDeps = Readonly<{
   // Read when used: the owner object learns its own name after it is built.
   doName(): string;
   rpc: Rpc | null;
-  client: WhoopClient | null;
+  // The client id and redirect address only. The client secret is the edge's.
+  config: WhoopConfig | null;
+  proxy: OAuthProxy | null;
   kv: Kv;
   now(): number;
   timezone(): string;
@@ -52,13 +59,15 @@ export type ProviderState = 'not_connected' | 'connected' | 'needs_reconnect' | 
 export type SyncResult = 'idle' | 'synced' | 'needs_reconnect' | 'consent_required' | 'rate_limited' | 'failed';
 export type HintResult = 'handled' | 'duplicate' | 'ignored' | 'needs_reconnect' | 'consent_required' | 'rate_limited' | 'failed';
 
-// The owner must connect again: WHOOP no longer accepts the saved access, or the rotated token could not be saved.
+// The owner must connect again: WHOOP no longer accepts the saved access.
 class NeedsReconnect extends Error {}
 class ConsentGone extends Error {}
 class RateLimited extends Error { constructor(readonly afterMs: number) { super('rate limited'); } }
 class Failed extends Error {}
 
-type Conn = Readonly<{ id: string; account: string }>;
+// What the object keeps of a connection: the edge's id for it, WHOOP's account id, the version of the token last used (so a
+// refresh can say which token failed) and when that token lapses. Never a token.
+type Conn = Readonly<{ id: string; account: string; version: string; expires_at: number | null }>;
 type Cursor = Readonly<{ backfilled: boolean; next_from: number | null; last_sync_at: number | null }>;
 const FRESH: Cursor = { backfilled: false, next_from: null, last_sync_at: null };
 
@@ -73,7 +82,7 @@ const sha256 = async (text: string) => hex(await crypto.subtle.digest('SHA-256',
 const record = (value: unknown): Record<string, unknown> | null => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null);
 
 export const whoopOwner = (deps: WhoopOwnerDeps) => {
-  const { kv, client } = deps;
+  const { kv } = deps;
   const doName = () => deps.doName();
   const connection = (): Conn | null => kv.get<Conn>('whoop:conn') ?? null;
   const cursor = (): Cursor => ({ ...FRESH, ...(kv.get<Cursor>('whoop:cursor') ?? {}) });
@@ -82,65 +91,54 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
     return deps.rpc(fn, message, { p_do_name: doName(), ...args });
   };
 
-  // ---- Tokens: one refresh at a time, saved before use ----
-  let cache: Readonly<{ id: string; tokens: WhoopTokens }> | null = null;
-  let refreshing: Promise<WhoopTokens> | null = null;
-  const secretJson = (tokens: WhoopTokens) => JSON.stringify({ v: 1, access: tokens.access, refresh: tokens.refresh, expires_at: tokens.expiresAt });
-  const parseSecret = (raw: unknown): WhoopTokens | null => {
-    if (typeof raw !== 'string') return null;
-    try {
-      const value = record(JSON.parse(raw));
-      return value && value.v === 1 && typeof value.access === 'string' && typeof value.refresh === 'string' && typeof value.expires_at === 'number' ? { access: value.access, refresh: value.refresh, expiresAt: value.expires_at } : null;
-    } catch { return null; }
+  // ---- Tokens: the edge's. This object passes a connection id and a version ----
+  const proxy = deps.proxy, config = deps.config;
+  const reconnecting = () => kv.get<boolean>('whoop:reconnect') === true;
+  const needReconnect = (): NeedsReconnect => { kv.put('whoop:reconnect', true); return new NeedsReconnect('reconnect'); };
+  const remember = (conn: Conn): Conn => { kv.put('whoop:conn', conn); return conn; };
+  const refused = (error: unknown): unknown => {
+    if (!(error instanceof OAuthProxyError)) return error;
+    const { code, retry_after } = error.failure;
+    if (code === 'reauth_needed' || code === 'connection_unavailable') return needReconnect();
+    return code === 'unavailable' && retry_after ? new RateLimited(retry_after * 1000) : new Failed(code);
   };
-  const store = async (account: string, tokens: WhoopTokens): Promise<string> => {
-    const secret = secretJson(tokens);
-    const id = await rpc('connection_store', `connstore.${doName()}.${SOURCE}.${account}.${WHOOP_SCOPES}.${await sha256(secret)}`, { p_provider: SOURCE, p_account: account, p_scopes: WHOOP_SCOPES, p_secret: secret });
-    if (typeof id !== 'string') throw new Failed('token not saved');
-    return id;
-  };
-  const markFailing = async (conn: Conn, reason: string): Promise<void> => {
-    cache = null;
-    try { await rpc('connection_health', `connhealth.${doName()}.${conn.id}.${reason}`, { p_connection: conn.id, p_error: reason }); } catch { /* the sync stops either way */ }
-  };
-  const tokensFor = async (conn: Conn, force = false): Promise<WhoopTokens> => {
-    if (!force && cache?.id === conn.id && cache.tokens.expiresAt - 60_000 > deps.now()) return cache.tokens;
+  // One refresh at a time. A caller that arrives with a stale version gets the winner's token from the edge, which never
+  // spends a rotated refresh token twice.
+  let refreshing: Promise<Conn> | null = null;
+  const refresh = async (conn: Conn): Promise<Conn> => {
     if (refreshing) return refreshing;
-    const work = (async (): Promise<WhoopTokens> => {
-      const current = parseSecret(await rpc('connection_secret', `connsecret.${doName()}.${conn.id}`, { p_connection: conn.id }));
-      if (!current) { cache = null; throw new NeedsReconnect('no saved access'); }
-      if (!force && current.expiresAt - 60_000 > deps.now()) { cache = { id: conn.id, tokens: current }; return current; }
-      let fresh: WhoopTokens;
-      try { fresh = await client!.refresh(current.refresh); }
-      catch (error) {
-        if (error instanceof WhoopError && error.kind === 'rejected') { await markFailing(conn, 'refresh_rejected'); throw new NeedsReconnect('refresh rejected'); }
-        throw error;
-      }
-      // WHOOP has already retired the old refresh token. Save the new one before anything uses it; if it cannot be saved the
-      // old one is useless, so the owner connects again instead of this object retrying with a dead token.
-      try { if (await store(conn.account, fresh) !== conn.id) throw new Failed('connection changed'); }
-      catch { await markFailing(conn, 'token_save_failed'); throw new NeedsReconnect('token not saved'); }
-      cache = { id: conn.id, tokens: fresh };
-      return fresh;
+    const work = (async (): Promise<Conn> => {
+      try {
+        const data = await proxy!.refresh(doName(), conn.id, conn.version);
+        return remember({ ...conn, version: data.version, expires_at: data.expires_at ?? null });
+      } catch (error) { throw refused(error); }
     })();
     refreshing = work;
     try { return await work; } finally { refreshing = null; }
   };
-  // Runs a call with the owner's access token. A 401 refreshes once and tries again; a second 401 means the access is gone.
-  const withAccess = async <T>(work: (access: string) => Promise<T>): Promise<T> => {
-    const conn = connection();
-    if (!conn || !client) throw new NeedsReconnect('not connected');
-    try { return await work((await tokensFor(conn)).access); }
-    catch (error) {
-      if (error instanceof WhoopError && error.kind === 'rate_limited') throw new RateLimited(error.resetSeconds * 1000 + 1_000);
-      if (!(error instanceof WhoopError) || error.kind !== 'unauthorized') throw error;
-    }
-    try { return await work((await tokensFor(conn, true)).access); }
-    catch (error) {
-      if (error instanceof WhoopError && error.kind === 'unauthorized') { await markFailing(conn, 'unauthorized'); throw new NeedsReconnect('unauthorized'); }
-      if (error instanceof WhoopError && error.kind === 'rate_limited') throw new RateLimited(error.resetSeconds * 1000 + 1_000);
-      throw error;
-    }
+  const SIGNED_OUT = new Set(['token_expired', 'reauth_needed']);
+  // A request to WHOOP through the edge. A token about to lapse is refreshed first; one the edge reports expired or refused
+  // is refreshed once and the request tried once more. A second refusal means the owner revoked access at WHOOP.
+  const call: WhoopCall = async (method, path, query) => {
+    let conn = connection();
+    if (!conn || !proxy || reconnecting()) throw new NeedsReconnect('not connected');
+    if (conn.expires_at !== null && conn.expires_at - EXPIRY_SKEW_MS <= deps.now()) conn = await refresh(conn);
+    const attempt = async (current: Conn): Promise<EdgeReply> => {
+      const reply = await proxy.fetch(doName(), current.id, method, path, query);
+      if (reply.version !== current.version) remember({ ...current, version: reply.version });
+      return reply;
+    };
+    try { return await attempt(conn); }
+    catch (error) { if (!(error instanceof OAuthProxyError) || !SIGNED_OUT.has(error.failure.code)) throw refused(error); }
+    conn = await refresh(conn);
+    try { return await attempt(conn); }
+    catch (error) { throw error instanceof OAuthProxyError && SIGNED_OUT.has(error.failure.code) ? needReconnect() : refused(error); }
+  };
+  const api = whoopClient(call);
+  // WHOOP's own answers: a rate limit waits for the window to reset.
+  const guard = async <T>(work: () => Promise<T>): Promise<T> => {
+    try { return await work(); }
+    catch (error) { if (error instanceof WhoopError && error.kind === 'rate_limited') throw new RateLimited(error.resetSeconds * 1000 + 1_000); throw error; }
   };
 
   // ---- Consent: the database's answer, read before each connect and sync ----
@@ -190,11 +188,11 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
   };
 
   // ---- Sync: a month back on connect, the last days on every later pass ----
-  const collect = async <T>(fetchPage: (access: string, next: string | null) => Promise<Readonly<{ records: readonly T[]; next: string | null; dropped: number }>>): Promise<T[]> => {
+  const collect = async <T>(fetchPage: (next: string | null) => Promise<Readonly<{ records: readonly T[]; next: string | null; dropped: number }>>): Promise<T[]> => {
     const out: T[] = [];
     let next: string | null = null;
     for (let pages = 0; pages < PAGE_LIMIT; pages += 1) {
-      const page = await withAccess(access => fetchPage(access, next));
+      const page = await guard(() => fetchPage(next));
       out.push(...page.records);
       if (page.dropped) deps.log({ hop: 'whoop', ok: false, code: 'record_dropped' });
       if (!page.next) return out;
@@ -204,16 +202,16 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
   };
   const windowBatch = async (from: number, to: number, epoch: number): Promise<number> => {
     const range = { start: new Date(from).toISOString(), end: new Date(to).toISOString() };
-    const sleeps = await collect((access, next) => client!.sleeps(access, { ...range, next }));
-    const recoveries = await collect((access, next) => client!.recoveries(access, { ...range, next }));
-    const workouts = await collect((access, next) => client!.workouts(access, { ...range, next }));
+    const sleeps = await collect(next => api.sleeps({ ...range, next }));
+    const recoveries = await collect(next => api.recoveries({ ...range, next }));
+    const workouts = await collect(next => api.workouts({ ...range, next }));
     const byId = new Map(sleeps.map(sleep => [sleep.id, sleep]));
     // A recovery whose night fell just outside the window still needs its sleep to be placed on a day.
     let lookups = 0;
     for (const recovery of recoveries) {
       if (byId.has(recovery.sleep_id) || lookups >= LOOKUPS_PER_WINDOW) continue;
       lookups += 1;
-      const sleep = await withAccess(access => client!.sleep(access, recovery.sleep_id));
+      const sleep = await guard(() => api.sleep(recovery.sleep_id));
       if (sleep) byId.set(sleep.id, sleep);
     }
     const recoveryOf = new Map(recoveries.map(recovery => [recovery.sleep_id, recovery]));
@@ -231,7 +229,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
 
   const sync = async (): Promise<SyncResult> => {
     const conn = connection();
-    if (!conn || !client) return 'idle';
+    if (!conn || !proxy) return 'idle';
     const started = deps.now();
     let progress = cursor();
     let changed = 0;
@@ -263,7 +261,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
   const hint = async (input: Readonly<{ type: string; id: string; trace: string }>): Promise<HintResult> => {
     const match = KINDS.exec(input.type);
     const conn = connection();
-    if (!match || !conn || !client || !/^[A-Za-z0-9-]{1,64}$/.test(input.id) || !/^[A-Za-z0-9-]{1,64}$/.test(input.trace)) return 'ignored';
+    if (!match || !conn || !proxy || !/^[A-Za-z0-9-]{1,64}$/.test(input.id) || !/^[A-Za-z0-9-]{1,64}$/.test(input.trace)) return 'ignored';
     const seen = `whoop:seen:${input.trace}`;
     if (kv.get<number>(seen) !== undefined) return 'duplicate';
     const [, kind, action] = match as unknown as [string, 'sleep' | 'recovery' | 'workout', 'updated' | 'deleted'];
@@ -274,12 +272,12 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
       if (missingGrants(consent).length > 0) return 'consent_required';
       if (action === 'deleted') changed = await ingest({ samples: [], deletions: whoopDeletions(kind, input.id, Math.floor(deps.now() / 1000)) }, consent.epoch);
       else if (kind === 'workout') {
-        const workout: WhoopWorkout | null = await withAccess(access => client!.workout(access, input.id));
+        const workout: WhoopWorkout | null = await guard(() => api.workout(input.id));
         changed = workout ? await ingest({ samples: whoopWorkoutSamples(workout), deletions: [] }, consent.epoch) : 0;
       } else {
         // A recovery's id is its sleep's id, so both kinds start from the sleep.
-        const sleep: WhoopSleep | null = await withAccess(access => client!.sleep(access, input.id));
-        const recovery: WhoopRecovery | null = sleep ? await withAccess(access => client!.cycleRecovery(access, sleep.cycle_id)) : null;
+        const sleep: WhoopSleep | null = await guard(() => api.sleep(input.id));
+        const recovery: WhoopRecovery | null = sleep ? await guard(() => api.cycleRecovery(sleep.cycle_id)) : null;
         changed = sleep ? await ingest({ samples: whoopNightSamples({ sleep, recovery }), deletions: [] }, consent.epoch) : 0;
       }
       if (changed > 0) await deps.produce().catch(() => deps.log({ hop: 'whoop', ok: false, code: 'produce_failed' }));
@@ -298,7 +296,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
 
   // ---- Connect, callback, status, disconnect ----
   const connect = async (): Promise<ConnectResult> => {
-    if (!client) return { error: 'not_configured' };
+    if (!config || !proxy) return { error: 'not_configured' };
     try {
       const consent = await consents();
       if (!consent) return { error: 'unavailable' };
@@ -307,34 +305,31 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
       const state = newState(), hash = await sha256(state);
       const session = await rpc('connect_session_issue', `connsess.issue.${doName()}.${SOURCE}.${CHANNEL}.${hash}`, { p_provider: SOURCE, p_channel: CHANNEL, p_ticket_hash: hash });
       if (typeof session !== 'string') return { error: 'unavailable' };
-      return { authorize_url: client.authorizeUrl(state), expires_at: deps.now() + ATTEMPT_TTL_MS };
+      return { authorize_url: whoopAuthorizeUrl(config, state), expires_at: deps.now() + ATTEMPT_TTL_MS };
     } catch { return { error: 'unavailable' }; }
   };
 
   const exchange = async (input: Readonly<{ code: string | null; denied: boolean }>): Promise<ExchangeResult> => {
-    if (!client || input.denied || !input.code) return input.denied || !input.code ? 'denied' : 'failed';
+    if (!config || !proxy || input.denied || !input.code) return input.denied || !input.code ? 'denied' : 'failed';
     try {
       // The grants can be withdrawn between starting a connection and returning from WHOOP; the code is then left unused.
       const grants = await consents();
       if (!grants) return 'failed';
       if (missingGrants(grants).length > 0) return 'consent_required';
-      const tokens = await client.exchange(input.code);
-      const account = await client.profile(tokens.access);
+      const linked = await proxy.exchange(doName(), SOURCE, whoopPins(config), input.code, { scope: WHOOP_SCOPES });
       const previous = connection();
       // One WHOOP account per owner: a different account replaces the old connection, whose saved access is dropped.
-      if (previous && previous.account !== account) await rpc('connection_revoke', `connrevoke.${doName()}.${previous.id}`, { p_connection: previous.id }).catch(() => undefined);
-      let id: string;
-      try { id = await store(account, tokens); }
-      catch (error) { return error instanceof OwnerDirectoryError && error.sqlState === '23505' ? 'already_linked' : 'failed'; }
-      cache = { id, tokens };
-      kv.put('whoop:conn', { id, account });
+      if (previous && previous.id !== linked.id) await proxy.revoke(doName(), previous.id).catch(() => undefined);
+      remember({ id: linked.id, account: linked.account, version: linked.version, expires_at: linked.expires_at ?? null });
       kv.put('whoop:cursor', FRESH);
+      kv.delete('whoop:reconnect');
       await deps.arm(deps.now());
       deps.log({ hop: 'whoop', ok: true, code: 'linked' });
       return 'linked';
     } catch (error) {
-      deps.log({ hop: 'whoop', ok: false, code: error instanceof WhoopError ? `exchange_${error.kind}` : 'exchange_failed' });
-      return 'failed';
+      const code = error instanceof OAuthProxyError ? error.failure.code : 'failed';
+      deps.log({ hop: 'whoop', ok: false, code: `exchange_${code}` });
+      return code === 'account_linked' ? 'already_linked' : 'failed';
     }
   };
 
@@ -347,7 +342,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
       const listed = await rpc('connection_list', `connlist.${doName()}`, {});
       const row = Array.isArray(listed) ? listed.map(record).find(item => item?.id === conn.id) : null;
       if (!row) return { provider: 'whoop', state: 'not_connected', last_sync_at };
-      if (row.status === 'failing') return { provider: 'whoop', state: 'needs_reconnect', last_sync_at };
+      if (row.status === 'failing' || reconnecting()) return { provider: 'whoop', state: 'needs_reconnect', last_sync_at };
       const consent = await consents();
       return { provider: 'whoop', state: consent && missingGrants(consent).length === 0 ? 'connected' : 'consent_required', last_sync_at };
     } catch { return { provider: 'whoop', state: 'connected', last_sync_at }; }
@@ -358,12 +353,11 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
   const disconnect = async (): Promise<Readonly<{ revoked_at_provider: boolean }>> => {
     const conn = connection();
     let revoked = false;
-    if (conn && client) {
-      try { revoked = await withAccess(access => client.revoke(access)); } catch { revoked = false; }
-      try { await rpc('connection_revoke', `connrevoke.${doName()}.${conn.id}`, { p_connection: conn.id }); } catch { /* the next call to the provider fails closed on a missing secret */ }
+    if (conn && proxy) {
+      try { revoked = await guard(() => api.revoke()); } catch { revoked = false; }
+      try { await proxy.revoke(doName(), conn.id); } catch { /* the owner disconnects again; the edge refuses a call on a connection it no longer holds */ }
     }
-    cache = null;
-    for (const key of ['whoop:conn', 'whoop:cursor']) kv.delete(key);
+    for (const key of ['whoop:conn', 'whoop:cursor', 'whoop:reconnect']) kv.delete(key);
     for (const [key] of [...kv.list<number>({ prefix: 'whoop:seen:' })]) kv.delete(key);
     await deps.disarm();
     deps.log({ hop: 'whoop', ok: true, code: 'disconnected' });

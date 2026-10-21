@@ -7,12 +7,15 @@ import { WHOOP_SYNC_ID } from '../src/health/providers/whoop-owner';
 import { armAlarm } from '../src/scheduler/alarm-slot';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
-import { addNight, newPlane, newWorld, planeRpc, whoopFetch } from './helpers/whoop-fakes';
+import { addNight, edge, newPlane, newWorld, planeRpc, whoopFetch } from './helpers/whoop-fakes';
+import { EDGE_ENV } from './support/oauth-edge-harness';
 
 // The owner object's side of WHOOP, end to end on the real object: a signed call from the Worker, a real alarm pass that
-// runs the sync, the score producer, and the health trigger armed by the zone change the writer reports. The database and
-// WHOOP are the recorded fakes; no model is ever called.
-const SECRET = 'router-secret-fixture-0000000000';
+// runs the sync, the score producer, and the health trigger armed by the zone change the writer reports. The oauth-proxy
+// Edge Function runs for real, in process, over a Vault stand-in; the health plane and WHOOP are the recorded fakes; no
+// model is ever called.
+// The edge in this test verifies the router signature with the key the harness gives it, so the owner object signs with the same one.
+const SECRET = EDGE_ENV.WALDO_ROUTER_HMAC_SECRET;
 const OWNER_ID = '4a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
 const START = Date.parse('2026-10-21T08:00:00Z');
 const CONFIG = { TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_ROUTER_HMAC_SECRET: SECRET,
@@ -46,6 +49,8 @@ beforeEach(() => {
     if (url.startsWith('https://api.prod.whoop.com')) return whoop(input, init);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
     const body = init?.body ? JSON.parse(String(init.body)) as Record<string, string | number> : {};
+    if (url === `${CONFIG.SUPABASE_PROJECT_URL}/functions/v1/oauth-proxy`) return edge(new Request(input, init));
+    if (fn && url.startsWith(`${EDGE_ENV.SUPABASE_URL}/`)) return plane.vault.answer(fn, body);
     if (fn === 'common_owner_authority') return presenceAuthority(OWNER_ID, init?.body);
     if (fn === 'owner_runtime_authority') return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: body.p_do_name, state_version: 1, admission_revision: '5' });
     if (fn === 'health_context_read' || fn === 'health_log_recent') return Response.json(fn === 'health_log_recent' ? [] : null);
@@ -110,6 +115,8 @@ describe('WHOOP on the owner object', () => {
       const linked = await call('exchange', { code: 'good-code', denied: false });
       expect([linked.status, await linked.json()]).toEqual([200, { outcome: 'linked' }]);
       expect(row(WHOOP_SYNC_ID)).toMatchObject({ kind: 'provider_sync' });
+      // The code was traded and the tokens saved by the edge, never by the object.
+      expect([plane.vault.rpcs, plane.vault.rows.map(connection => [connection.provider, connection.account])]).toEqual([['oauth_client_get', 'oauth_store'], [['whoop', '70001']]]);
       expect(row(WHOOP_SYNC_ID)!.due_at).toBeLessThanOrEqual(Date.now());
       await armAlarm(state.storage, Date.now());
       await state.storage.deleteAlarm();
@@ -136,7 +143,7 @@ describe('WHOOP on the owner object', () => {
       await call('exchange', { code: 'good-code', denied: false });
       const response = await call('disconnect');
       expect([response.status, await response.json()]).toEqual([200, { provider: 'whoop', state: 'not_connected', revoked_at_provider: true }]);
-      expect([plane.vault.size, row(WHOOP_SYNC_ID)]).toEqual([0, null]);
+      expect([plane.vault.rows.filter(connection => connection.status !== 'revoked').length, row(WHOOP_SYNC_ID)]).toEqual([0, null]);
       expect(world.calls).toContain('DELETE /user/access');
     });
   });

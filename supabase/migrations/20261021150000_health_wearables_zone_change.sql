@@ -367,10 +367,10 @@ exception
   when serialization_failure then return '{"error":"sample_conflict"}';
 end $$;
 
--- A provider connection holds the owner's tokens in Vault like Google's, and a provider's own account id resolves to
--- exactly one owner: a second owner linking the same WHOOP account is refused instead of reading the first one's data.
-alter table waldo.connections drop constraint connections_provider_check;
-alter table waldo.connections add constraint connections_provider_check check (provider in ('google','whoop'));
+-- WHOOP's tokens are held by the oauth-proxy Edge Function, which is the only reader of any provider registered to it here.
+-- A provider's own account id resolves to exactly one owner: a second owner linking the same WHOOP account is refused
+-- instead of reading the first one's data.
+insert into waldo.connection_custody (provider, custodian) values ('whoop', 'oauth-proxy');
 create unique index connections_live_provider_account on waldo.connections (provider, account) where provider = 'whoop' and status <> 'revoked';
 
 -- A WHOOP webhook names only the provider's user id. Map it to the owner whose live connection holds that account, so the

@@ -57,15 +57,22 @@ Owner decision for Oura (pick one):
   requires to be eight characters is a random base62 string resolved through the existing connect-session table (hash only,
   single use, 30 minutes), so it carries no owner identity.
 - Callback: `GET /oauth/whoop/callback` on the Worker resolves the attempt, then calls the owner object over the signed provider
-  route (it binds owner, operation and body digest). The code exchange happens inside the owner object.
-- Tokens: stored in Vault through `waldo.connections`; the owner object refreshes single-flight (WHOOP's refresh token is
-  single use and rotating) and saves the new token before using it. A failed save puts the connection in `needs_reconnect`.
+  route (it binds owner, operation and body digest). The owner object hands the code to the `oauth-proxy` Edge Function, which
+  trades it with the client secret it holds, reads the WHOOP account id (`user_id`), and saves the tokens in Vault.
+- Tokens: the owner object never receives a token, a code's result or the client secret. The `oauth-proxy` Edge Function holds
+  them (WHOOP is registered to it in `waldo.connection_custody`), makes every WHOOP request under the pinned API base, and
+  refreshes and rotates WHOOP's single-use refresh token with a compare-and-set on the stored secret. The object keeps only the
+  connection id, the WHOOP account id, the version of the token last used and its expiry. It is the one retry owner: it refreshes
+  once, single-file, before a token lapses or after the edge reports one expired or refused (passing the version that failed),
+  then retries once. A second refusal means the owner revoked access at WHOOP: the object marks the connection `needs_reconnect`
+  and stops calling until the owner connects again. An edge that could not save a rotated token fails the sync for a retry; the
+  next refresh then meets a spent token and asks the owner to reconnect.
 - Sync: a `provider_sync` schedule entry (a daily interval, no model turn) backfills 30 days in seven-day windows on the first run, then
   reconciles the last three days. A webhook only makes the owner object fetch; the fetch uses the owner's own token.
 - Webhook: `POST /events/whoop`, signature `X-WHOOP-Signature` = base64(HMAC-SHA256(timestamp + raw body, client secret)), checked against the
   raw body; deduped on `trace_id`. WHOOP can miss a webhook, so the daily sync reconciles.
-- Disconnect: `POST /app/v1/health/providers/disconnect` revokes at WHOOP (`DELETE /v2/user/access`), removes the saved access, cancels
-  the sync entry.
+- Disconnect: `POST /app/v1/health/providers/disconnect` revokes at WHOOP (`DELETE /v2/user/access`, through the edge), has the edge
+  mark the connection revoked and delete the Vault secret, and cancels the sync entry.
 - Withdrawing a grant is a separate act in the health plane. Withdrawing `storage_compute`: the database refuses new WHOOP readings and
   purges the stored ones. Withdrawing either grant: the owner object's next sync reads `consent_required` and only re-checks daily.
   Neither revokes at WHOOP or removes the saved token; the owner disconnects for that. Having withdrawal disconnect as well is a follow-up.
@@ -80,8 +87,13 @@ Owner decision for Oura (pick one):
 1. Register a WHOOP developer app (Sandbox tier lets 10 members connect; Build lets 100). Scopes requested:
    `offline read:profile read:sleep read:recovery read:workout`.
 2. Set the redirect URL to `https://<worker host>/oauth/whoop/callback` and the webhook URL to `https://<worker host>/events/whoop` (v2 webhooks).
-3. Set Worker secrets `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET` and `WHOOP_REDIRECT_URI` (the redirect URL above, exactly). Without all three
-   the routes answer `not_configured` and nothing is sent to WHOOP.
-4. Apply migration `20261021150000_health_wearables_zone_change.sql` to the health plane before the deploy that reads it.
-5. Decide the terms question above and the WHOOP-specific consent wording with the onboarding lane; the grants are `storage_compute` and `model_processing` on source `whoop`.
-6. One bundled deploy, then connect a WHOOP account on an owner account through the app.
+3. Set Worker secrets `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET` and `WHOOP_REDIRECT_URI` (the redirect URL above, exactly). The Worker
+   uses the client secret only to verify `X-WHOOP-Signature`; the owner object uses the client id and redirect address only. Without all
+   three the routes answer `not_configured` and nothing is sent to WHOOP.
+4. Enter the client for the edge once, with the same id, secret and redirect address (the edge reads it by issuer and redirect address,
+   and the client id must match): `select waldo.oauth_client_put('https://api.prod.whoop.com', '<worker host>/oauth/whoop/callback', '<client id>', 'client_secret_post', '<client secret>');`
+5. Apply migration `20261021150000_health_wearables_zone_change.sql` to the health plane before the deploy that reads it. It registers WHOOP
+   with the `oauth-proxy` custodian, so it needs the connections migration that creates `waldo.connection_custody`, and the `oauth-proxy`
+   Edge Function must be deployed before a connection can start.
+6. Decide the terms question above and the WHOOP-specific consent wording with the onboarding lane; the grants are `storage_compute` and `model_processing` on source `whoop`.
+7. One bundled deploy, then connect a WHOOP account on an owner account through the app.

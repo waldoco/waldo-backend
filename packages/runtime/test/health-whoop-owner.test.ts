@@ -34,7 +34,7 @@ describe('WHOOP connect and callback', () => {
     h.plane.consent = storage; h.plane.model = model;
     expect(await h.owner.connect()).toEqual({ error: 'consent_required', missing });
     expect(h.plane.sessions).toEqual([]);
-    expect(h.world.calls).toEqual([]);
+    expect([h.world.calls, h.edgeCalls]).toEqual([[], []]);
   });
   it('refuses to start when WHOOP is not configured', async () => {
     expect(await harness({ configured: false }).owner.connect()).toEqual({ error: 'not_configured' });
@@ -43,14 +43,24 @@ describe('WHOOP connect and callback', () => {
     const h = harness();
     h.plane.consent = storage; h.plane.model = model;
     expect(await h.owner.exchange({ code: 'good-code', denied: false })).toBe('consent_required');
-    expect([h.world.calls, h.plane.vault.size, h.kv.size, h.armed.length]).toEqual([[], 0, 0, 0]);
+    expect([h.world.calls, h.edgeCalls, h.plane.vault.rows.length, h.kv.size, h.armed.length]).toEqual([[], [], 0, 0, 0]);
   });
 
-  it('saves the tokens in the vault, never in the object, remembers the account and arms a sync at once', async () => {
+  it('has the edge trade the code and keep the tokens, pins what the edge may trust, and keeps only an id, an account and a token version in the object', async () => {
     const h = await connected();
-    expect([...h.plane.vault.values()]).toHaveLength(1);
-    expect(JSON.stringify([...h.kv])).not.toMatch(/access-|refresh-/);
-    expect(h.kv.get('whoop:conn')).toMatchObject({ account: '70001' });
+    const [exchange] = h.edgeCalls;
+    expect(exchange).toMatchObject({ op: 'exchange', provider: 'whoop', code: 'good-code', scope: 'offline read:profile read:sleep read:recovery read:workout' });
+    expect(exchange!.pins).toEqual({
+      issuer: 'https://api.prod.whoop.com', token_endpoint: 'https://api.prod.whoop.com/oauth/oauth2/token', client_id: 'client-id-fixture', client_auth: 'client_secret_post',
+      redirect_uri: 'https://worker.example.invalid/oauth/whoop/callback', api_base: 'https://api.prod.whoop.com/developer/v2/', account_url: 'https://api.prod.whoop.com/developer/v2/user/profile/basic',
+      account_field: 'user_id', rotation: 'single_use', refresh_scope: 'offline',
+    });
+    expect(h.plane.vault.rows).toHaveLength(1);
+    expect(h.plane.vault.rows[0]).toMatchObject({ provider: 'whoop', account: '70001', status: 'active' });
+    expect(JSON.parse(h.plane.vault.rows[0]!.secret)).toMatchObject({ access_token: expect.stringMatching(/^access-/), refresh_token: expect.stringMatching(/^refresh-/) });
+    expect(Object.keys(h.kv.get('whoop:conn') as object).sort()).toEqual(['account', 'expires_at', 'id', 'version']);
+    expect(h.kv.get('whoop:conn')).toMatchObject({ id: h.plane.vault.rows[0]!.id, account: '70001', version: expect.stringMatching(/^[0-9a-f]{16}$/) });
+    expect(JSON.stringify([...h.kv, h.edgeCalls])).not.toMatch(/access-|refresh-|client-secret-fixture/);
     expect(h.armed).toEqual([NOW]);
     expect(await h.owner.status()).toEqual({ provider: 'whoop', state: 'connected', last_sync_at: null });
   });
@@ -70,7 +80,7 @@ describe('WHOOP connect and callback', () => {
     expect(await h.owner.exchange({ code: null, denied: true })).toBe('denied');
     expect(await h.owner.exchange({ code: null, denied: false })).toBe('denied');
     expect(await h.owner.exchange({ code: 'spent-code', denied: false })).toBe('failed');
-    expect([h.kv.size, h.plane.vault.size, h.armed.length]).toEqual([0, 0, 0]);
+    expect([h.kv.size, h.plane.vault.rows.length, h.armed.length]).toEqual([0, 0, 0]);
   });
 });
 
@@ -159,6 +169,8 @@ describe('WHOOP backfill and reconcile', () => {
 });
 
 describe('WHOOP token custody', () => {
+  const tokenCalls = (h: { world: { calls: string[] } }) => h.world.calls.filter(call => call === 'POST /oauth/oauth2/token');
+
   it('stops at a token revoked mid-sync: the committed windows stay, the rest is unknown, the connection is marked, nothing is zero-filled', async () => {
     const h = await connected({}, 30);
     h.world.breakAfter = { path: '/activity/sleep', count: 2, status: 401 };
@@ -168,26 +180,31 @@ describe('WHOOP token custody', () => {
     const cursor = h.kv.get('whoop:cursor') as { backfilled: boolean; next_from: number };
     expect(cursor.backfilled).toBe(false);
     expect(cursor.next_from).toBe(NOW - 30 * DAY + 14 * DAY);
-    expect(h.plane.health).toContain('refresh_rejected');
+    expect(h.plane.vault.rows[0]).toMatchObject({ status: 'failing', last_error: 'oauth_reauth_needed' });
     expect(h.produced.count).toBe(1);
     expect((await h.owner.status()).state).toBe('needs_reconnect');
     const calls = h.world.calls.length;
     expect(await h.owner.sync()).toBe('needs_reconnect');
-    expect(h.world.calls.length - calls).toBeLessThanOrEqual(2);
+    expect(h.world.calls.length - calls).toBe(0);
     for (const stored of h.plane.samples.values()) expect(stored.payload.value).toBeGreaterThan(0);
   });
 
-  it('refreshes an expired access token once, saves the rotated token before it is used, and stores nothing in the object', async () => {
+  it('refreshes an expired access token once, through the edge, which rotates the saved token; the object keeps only the new version', async () => {
     const h = await connected({}, 2);
+    const before = h.plane.vault.rows[0]!.secret;
+    const exchanged = h.kv.get('whoop:conn') as { version: string };
     h.clock.now = NOW + 2 * 3_600_000;
-    h.plane.events.length = 0;
     h.world.calls.length = 0;
+    h.edgeCalls.length = 0;
     await h.owner.sync();
-    expect(h.world.calls.filter(call => call === 'POST /oauth/oauth2/token')).toHaveLength(1);
+    expect(tokenCalls(h)).toHaveLength(1);
     expect(h.world.calls.indexOf('POST /oauth/oauth2/token')).toBe(0);
-    expect(h.plane.events[0]).toBe('store');
     expect(h.world.calls.indexOf('GET /activity/sleep')).toBeGreaterThan(h.world.calls.indexOf('POST /oauth/oauth2/token'));
-    expect(JSON.stringify([...h.kv])).not.toMatch(/access-|refresh-/);
+    expect(h.edgeCalls[0]).toEqual({ op: 'refresh', do_name: 'owner-w', connection: h.plane.vault.rows[0]!.id, version: exchanged.version });
+    expect(h.plane.vault.rpcs).toContain('oauth_rotate');
+    expect(h.plane.vault.rows[0]!.secret).not.toBe(before);
+    expect((h.kv.get('whoop:conn') as { version: string }).version).not.toBe(exchanged.version);
+    expect(JSON.stringify([...h.kv, h.edgeCalls])).not.toMatch(/access-|refresh-|client-secret-fixture/);
   });
 
   it('refreshes once when two calls find the token expired at the same time', async () => {
@@ -196,29 +213,44 @@ describe('WHOOP token custody', () => {
     h.world.calls.length = 0;
     const trace = (n: number) => ({ type: 'sleep.updated', id: night(n).sleep.id as string, trace: `t-${n}` });
     await Promise.all([h.owner.sync(), h.owner.hint(trace(0)), h.owner.hint(trace(1))]);
-    expect(h.world.calls.filter(call => call === 'POST /oauth/oauth2/token')).toHaveLength(1);
+    expect(tokenCalls(h)).toHaveLength(1);
   });
 
-  it('when the refresh worked but the new token could not be saved, marks the connection and never refreshes with the dead token again', async () => {
+  it('keeps the connection healthy when a second runtime races the same expired token: the edge hands it the winner\'s', async () => {
+    const a = await connected({}, 2);
+    const b = harness({ plane: a.plane, world: a.world, clock: a.clock, kv: new Map(a.kv) });
+    a.clock.now = NOW + 2 * 3_600_000;
+    expect(await Promise.all([a.owner.sync(), b.owner.sync()])).toEqual(['synced', 'synced']);
+    expect(a.world.spent).toEqual(['refresh-1']);
+    expect(a.plane.vault.rows[0]).toMatchObject({ status: 'active', last_error: null });
+    expect((a.kv.get('whoop:conn') as { version: string }).version).toBe((b.kv.get('whoop:conn') as { version: string }).version);
+  });
+
+  it('when the edge could not save the rotated token, retries later, and a spent token afterwards asks the owner to connect again', async () => {
     const h = await connected({}, 2);
     h.clock.now = NOW + 2 * 3_600_000;
-    h.plane.failStore = true;
+    h.plane.vault.faults.rotate = 3;
     h.world.calls.length = 0;
-    expect(await h.owner.sync()).toBe('needs_reconnect');
-    expect(h.plane.health).toContain('token_save_failed');
+    expect(await h.owner.sync()).toBe('failed');
+    expect(h.armed.at(-1)).toBe(h.clock.now + 15 * 60_000);
     expect(h.world.calls.filter(call => call.startsWith('GET /activity'))).toEqual([]);
     expect(await h.owner.sync()).toBe('needs_reconnect');
-    expect(h.world.calls.filter(call => call === 'POST /oauth/oauth2/token')).toHaveLength(2);
-    // The second try used the same saved secret and WHOOP refused it: the owner is asked to connect again, not retried forever.
+    // The second try used the saved secret, whose refresh token WHOOP had already spent: the owner connects again, not retried forever.
+    expect(tokenCalls(h)).toHaveLength(2);
     expect((await h.owner.status()).state).toBe('needs_reconnect');
   });
 
-  it('reads a rejected refresh token as the owner having revoked access at WHOOP', async () => {
+  it('reads a rejected refresh token as the owner having revoked access at WHOOP, and stops calling until the owner connects again', async () => {
     const h = await connected({}, 1);
     h.world.validAccess.clear(); h.world.validRefresh.clear();
     expect(await h.owner.sync()).toBe('needs_reconnect');
-    expect(h.plane.health).toEqual(['refresh_rejected']);
+    expect(h.plane.vault.rows[0]).toMatchObject({ status: 'failing', last_error: 'oauth_reauth_needed' });
     expect(h.armed.at(-1)).toBe(NOW);
+    h.world.calls.length = 0;
+    expect(await h.owner.hint({ type: 'sleep.updated', id: night(0).sleep.id as string, trace: 'trace-gggg-0001' })).toBe('needs_reconnect');
+    expect(h.world.calls).toEqual([]);
+    expect(await h.owner.exchange({ code: 'good-code', denied: false })).toBe('linked');
+    expect((await h.owner.status()).state).toBe('connected');
   });
 
   it('waits out WHOOP\'s rate limit and resumes from the committed window', async () => {
@@ -326,7 +358,7 @@ describe('WHOOP disconnect', () => {
     await h.owner.sync();
     const stored = h.plane.samples.size;
     expect(await h.owner.disconnect()).toEqual({ revoked_at_provider: true });
-    expect([h.plane.vault.size, h.kv.has('whoop:conn'), h.kv.has('whoop:cursor'), h.disarmed.count]).toEqual([0, false, false, 1]);
+    expect([h.plane.vault.rows.filter(row => row.status !== 'revoked').length, h.plane.vault.rows[0]!.secret, h.kv.has('whoop:conn'), h.kv.has('whoop:cursor'), h.disarmed.count]).toEqual([0, '', false, false, 1]);
     expect(h.world.calls).toContain('DELETE /user/access');
     expect(h.plane.samples.size).toBe(stored);
     expect(await h.owner.status()).toMatchObject({ state: 'not_connected' });
@@ -337,7 +369,7 @@ describe('WHOOP disconnect', () => {
     const h = await connected({}, 1);
     h.world.revokeStatus = 500;
     expect(await h.owner.disconnect()).toEqual({ revoked_at_provider: false });
-    expect(h.plane.vault.size).toBe(0);
+    expect(h.plane.vault.rows.filter(row => row.status !== 'revoked')).toEqual([]);
   });
 
   it('is safe to repeat', async () => {
@@ -354,7 +386,7 @@ describe('WHOOP privacy', () => {
     h.world.limited = { until: NOW + 10_000 };
     await h.owner.hint({ type: 'sleep.updated', id: night(0).sleep.id as string, trace: 'trace-ffff-0001' });
     await h.owner.disconnect();
-    const text = JSON.stringify([h.logs, [...h.kv]]);
+    const text = JSON.stringify([h.logs, [...h.kv], h.edgeCalls]);
     for (const leak of [...LEAKS, 'access-', 'refresh-', 'client-secret-fixture']) expect(text, leak).not.toContain(leak);
     for (const line of h.logs) expect(Object.keys(line).sort()).toEqual(['code', 'hop', 'ok']);
   });
