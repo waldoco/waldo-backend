@@ -2915,7 +2915,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // those reach the model as the turn's context, which is never stored.
     const healthLogLines = async () => healthSection(await healthLogs.recent(10), clock.timezone);
     const promptLedger = async () =>
-      [loopsSection(loops, clock.timezone), desk.ledger(book.list()), unreadableRemindersLine(book.unreadable()), proactivityLine(loops.proactivity()), schedulePreferencesLine(schedPrefs.all())]
+      [loopsSection(loops, clock.timezone), desk.ledger(book.list()), unreadableRemindersLine(book.unreadable()), proactivityLine(loops.proactivity()), schedulePreferencesLine(schedPrefs.all(), schedPrefs.healthMode())]
         .filter((section) => section !== '')
         .join('\n\n');
     const ledger = async () => [await promptLedger(), await healthLogLines()].filter((section) => section !== '').join('\n\n');
@@ -3506,7 +3506,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const current = async () => { if (!schedPrefs.enabled('health_proposals')) throw new Error('health proposals turned off'); };
       const budget = healthCardBudget(calendarGate, String(owner), timezone, Date.now);
       await runHealthTrigger({ book: healthBook, now: Date.now, newId: () => crypto.randomUUID(), timezone,
-        enabled: () => schedPrefs.enabled('health_proposals'), proactivity: () => loops.proactivity(),
+        enabled: () => schedPrefs.enabled('health_proposals'), modeSetting: () => schedPrefs.healthMode(), proactivity: () => loops.proactivity(),
         readHealth: async () => (rpc && doName ? rpc('health_context_read', `healthctx.read.${doName}`, { p_do_name: doName }) : null),
         comingItems: async (from, to) => {
           const client = await google.client('calendar');

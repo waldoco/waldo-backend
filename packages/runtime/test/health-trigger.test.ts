@@ -10,7 +10,7 @@ import { DeliveryGateStore } from '../src/delivery-gate/store';
 import { ensureSchema } from '../src/tracer/schema';
 import {
   calendarEgressClear, comingItemsFrom, healthCardBudget, healthTriggerBook, healthTriggerDueAt, healthTriggerPrompt, healthTriggerView, ownerInstant, parseHealthDecision, runHealthTrigger,
-  HEALTH_FALSE_ALARM_WINDOW_MS, HEALTH_TRIGGER_FLOOR_MS, type ComingItem, type HealthTriggerDeps, type HealthTriggerOutcome,
+  HEALTH_ASK_AFTER_SKIPS, HEALTH_FALSE_ALARM_WINDOW_MS, HEALTH_KEEP_ASKING, HEALTH_TRIGGER_FLOOR_MS, resolveHealthMode, type ComingItem, type HealthTriggerDeps, type HealthTriggerOutcome,
 } from '../src/health/trigger';
 
 // Distinctive synthetic values: if any of them shows up in a prompt, a ledger row, a log line or a proposal, a reading leaked.
@@ -41,7 +41,7 @@ const withTrigger = <T>(work: (h: Harness) => Promise<T>) => runInDurableObject(
   const prompts: string[] = [], proposals: ProposeCalendarChangeArgs[] = [], logs: string[] = [], reschedules: number[] = [], charged: string[] = [];
   let ids = 0;
   const deps = (over: Partial<HealthTriggerDeps> = {}): HealthTriggerDeps => ({
-    book, now: () => NOW, newId: () => `r${++ids}`, timezone: TZ, enabled: () => true, proactivity: () => NO_QUIET,
+    book, now: () => NOW, newId: () => `r${++ids}`, timezone: TZ, enabled: () => true, proactivity: () => NO_QUIET, modeSetting: () => 'auto',
     readHealth: async () => ROW, comingItems: async () => [REVIEW, DRIVE, TAX],
     admit: () => true, charge: key => { charged.push(key); },
     decide: async (_id, prompt) => { prompts.push(prompt); return move(); },
@@ -168,25 +168,84 @@ describe('the health trigger', () => {
     });
   });
 
-  it('turns proposals to shadow for a week after a skipped card, then back to live', async () => {
-    await withTrigger(async ({ sql, deps, proposals }) => {
-      sql.exec('CREATE TABLE ledger (id TEXT PRIMARY KEY, kind TEXT, status TEXT, summary TEXT, payload_json TEXT, undo_json TEXT, created_at INTEGER, decided_at INTEGER, deferred_at INTEGER)');
-      const book = deps().book;
-      book.mark('2026-10-21', NOW - 60_000);
-      expect(await runHealthTrigger(deps())).toBe('proposed');
-      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, created_at, decided_at) VALUES ('p1', 'calendar_change', 'skipped', 's', '{}', ?, ?)", NOW, NOW + 600_000);
-      expect(book.week(NOW + HEALTH_TRIGGER_FLOOR_MS)).toEqual({ shown: 1, accepted: 0, false_alarms: 1, shadow: 0 });
-      const tomorrow = NOW + 24 * 3_600_000;
-      book.mark('2026-10-22', tomorrow - 60_000);
-      const tomorrowRow = { ...ROW, context: { ...ROW.context, day: '2026-10-22', compiled_at: new Date(tomorrow - 600_000).toISOString() } };
-      const later = (at: number) => deps({ now: () => at, readHealth: async () => ({ ...tomorrowRow, context: { ...tomorrowRow.context, compiled_at: new Date(at - 600_000).toISOString() } }), comingItems: async () => [{ ...REVIEW, start: new Date(at + 7_200_000).toISOString(), end: new Date(at + 9_000_000).toISOString() }],
-        decide: async () => JSON.stringify({ kind: 'propose', action: 'move', item: 'e1', start: localIso(at + 14_400_000, TZ), end: localIso(at + 18_000_000, TZ), title: null, notify_guests: false, reason: 'A later slot.' }) });
-      expect(await runHealthTrigger(later(tomorrow))).toBe('shadow_proposed');
-      expect(proposals).toHaveLength(1);
-      const weekOn = NOW + 600_000 + HEALTH_FALSE_ALARM_WINDOW_MS + 60_000;
-      book.mark(localIso(weekOn, TZ).slice(0, 10), weekOn - 60_000);
-      expect(await runHealthTrigger(later(weekOn))).toBe('proposed');
-      expect(proposals).toHaveLength(2);
+  // A day later each time, so the one-card-a-day budget never decides these tests.
+  const proposeOn = async (h: Harness, at: number, day: string, over: Partial<HealthTriggerDeps> = {}) => {
+    h.deps().book.mark(day, at - 60_000);
+    return runHealthTrigger(h.deps({ now: () => at, readHealth: async () => ({ ...ROW, context: { ...ROW.context, day, compiled_at: new Date(at - 600_000).toISOString() } }),
+      comingItems: async () => [{ ...REVIEW, start: new Date(at + 7_200_000).toISOString(), end: new Date(at + 9_000_000).toISOString() }],
+      decide: async () => JSON.stringify({ kind: 'propose', action: 'move', item: 'e1', start: localIso(at + 14_400_000, TZ), end: localIso(at + 18_000_000, TZ), title: null, notify_guests: false, reason: 'A later slot.' }), ...over }));
+  };
+  const skip = (sql: SqlStorage, id: string, at: number) => sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, created_at, decided_at) VALUES (?, 'calendar_change', 'skipped', 's', '{}', ?, ?)", id, at, at + 600_000);
+  const ledgerTable = (sql: SqlStorage) => sql.exec('CREATE TABLE ledger (id TEXT PRIMARY KEY, kind TEXT, status TEXT, summary TEXT, payload_json TEXT, undo_json TEXT, created_at INTEGER, decided_at INTEGER, deferred_at INTEGER)');
+  const DAY_MS = 24 * 3_600_000;
+  const dayOf = (at: number) => localIso(at, TZ).slice(0, 10);
+
+  it('keeps proposing live after a skip: a skip often means "not now", so it is counted and never mutes the owner', async () => {
+    await withTrigger(async h => {
+      ledgerTable(h.sql);
+      expect(await proposeOn(h, NOW, '2026-10-21')).toBe('proposed');
+      skip(h.sql, 'p1', NOW);
+      expect(h.deps().book.week(NOW + HEALTH_TRIGGER_FLOOR_MS)).toEqual({ shown: 1, accepted: 0, false_alarms: 1, shadow: 0 });
+      const tomorrow = NOW + DAY_MS;
+      expect(await proposeOn(h, tomorrow, dayOf(tomorrow))).toBe('proposed');
+      expect(h.proposals).toHaveLength(2);
+      expect(h.proposals[1]!.reason).toBe('A later slot.');
+    });
+  });
+
+  it('asks on the next card, once a week, whether to keep these coming after three skips in seven days', async () => {
+    await withTrigger(async h => {
+      ledgerTable(h.sql);
+      let at = NOW;
+      for (let i = 0; i < HEALTH_ASK_AFTER_SKIPS; i += 1) {
+        expect(await proposeOn(h, at, dayOf(at))).toBe('proposed');
+        skip(h.sql, `p${i + 1}`, at);
+        at += DAY_MS;
+      }
+      expect(h.proposals.map(p => p.reason)).toEqual(['A later slot.', 'A later slot.', 'A later slot.']);
+      expect(await proposeOn(h, at, dayOf(at))).toBe('proposed');
+      expect(h.proposals[3]!.reason).toBe(`A later slot. ${HEALTH_KEEP_ASKING}`);
+      expect(h.proposals[3]!.reason.length).toBeLessThanOrEqual(300);
+      // The week has had its ask: the next card goes out as a plain proposal, whatever the owner did with this one.
+      skip(h.sql, 'p4', at);
+      at += DAY_MS;
+      expect(await proposeOn(h, at, dayOf(at))).toBe('proposed');
+      expect(h.proposals[4]!.reason).toBe('A later slot.');
+      expect(h.sql.exec('SELECT count(*) AS n FROM health_trigger_runs WHERE asked = 1').toArray()[0]).toEqual({ n: 1 });
+    });
+  });
+
+  it('leaves room for the question: a reason too long to carry it is refused, not trimmed', async () => {
+    await withTrigger(async h => {
+      ledgerTable(h.sql);
+      let at = NOW;
+      for (let i = 0; i < HEALTH_ASK_AFTER_SKIPS; i += 1) { await proposeOn(h, at, dayOf(at)); skip(h.sql, `p${i + 1}`, at); at += DAY_MS; }
+      const long = (reason: string) => async () => JSON.stringify({ kind: 'propose', action: 'move', item: 'e1', start: localIso(at + 14_400_000, TZ), end: localIso(at + 18_000_000, TZ), title: null, notify_guests: false, reason });
+      expect(await proposeOn(h, at, dayOf(at), { decide: long('x'.repeat(280)) })).toBe('invalid');
+      expect(await proposeOn(h, at, dayOf(at), { decide: long('x'.repeat(200)) })).toBe('proposed');
+    });
+  });
+
+  it('under auto, only watches until the owner\'s own baseline exists for the source, then proposes', () => {
+    const view = (over: Record<string, unknown> = {}, previous: unknown = ROW.previous) => healthTriggerView({ context: { ...ROW.context, ...over }, previous }, NOW, TZ)!;
+    expect(resolveHealthMode('auto', view())).toBe('live');
+    // No Recovery zone yet: its baseline for this wearable and HRV method has not matured.
+    expect(resolveHealthMode('auto', view({ recovery: { reason: 'baseline_immature' } }))).toBe('shadow');
+    // A new wearable has no earlier day of its own to compare with.
+    expect(resolveHealthMode('auto', view({}, { ...ROW.previous, basis: [{ source: 'health_connect', consent_epoch: 1 }] }))).toBe('shadow');
+    // The owner's choice wins either way.
+    expect(resolveHealthMode('live', view({ recovery: { reason: 'baseline_immature' } }))).toBe('live');
+    expect(resolveHealthMode('shadow', view())).toBe('shadow');
+  });
+
+  it('records and shows nothing in shadow, and the owner can flip it with one setting', async () => {
+    await withTrigger(async h => {
+      h.deps().book.mark('2026-10-21', NOW - 60_000);
+      expect(await runHealthTrigger(h.deps({ modeSetting: () => 'shadow' }))).toBe('shadow_proposed');
+      expect(h.proposals).toEqual([]);
+      expect(h.sql.exec('SELECT mode, outcome FROM health_trigger_runs').toArray()).toEqual([{ mode: 'shadow', outcome: 'shadow_proposed' }]);
+      h.deps().book.mark('2026-10-21', NOW + 1_000);
+      expect(await runHealthTrigger(h.deps({ now: () => NOW + 2_000, modeSetting: () => 'live' }))).toBe('proposed');
     });
   });
 

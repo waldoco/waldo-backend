@@ -23,13 +23,19 @@ export const HEALTH_TRIGGER_HORIZON_MS = 24 * 60 * 60_000;
 export const HEALTH_TRIGGER_PENDING_TTL_MS = 12 * 60 * 60_000;
 // One health card per owner per local day, on top of the delivery gate's adjustment budget.
 export const HEALTH_CARDS_PER_DAY = 1;
-// The pilot's bar is under one false alarm per owner per week: one skipped health card in the last seven days moves the
-// owner's proposals to shadow (evaluated and recorded, never shown) until it ages out.
+// The pilot's bar is under one false alarm per owner per week, counted from skipped cards. A skip often means "not now",
+// so it never changes what the owner sees. After this many skips in a week the next card asks the owner whether to keep
+// these coming, and only the owner changes the mode.
 export const HEALTH_FALSE_ALARM_WINDOW_MS = 7 * 24 * 60 * 60_000;
+export const HEALTH_ASK_AFTER_SKIPS = 3;
+export const HEALTH_KEEP_ASKING = "You've skipped a few of these lately. Should I keep suggesting them? Tell me if not.";
 const REASON_MAX = 300;
 const TITLE_MAX = 200;
 const ITEMS_MAX = 20;
 
+// What the owner chose: auto watches quietly until their own baseline exists and then suggests, live suggests from the
+// first change, shadow only watches. What a run does is one of the last two.
+export type HealthTriggerSetting = 'auto' | 'live' | 'shadow';
 export type HealthTriggerMode = 'live' | 'shadow';
 export type HealthVerdict = 'accepted' | 'false_alarm' | 'expired' | 'deferred' | 'undone';
 export type HealthTriggerOutcome =
@@ -49,7 +55,7 @@ const VERDICT_BY_STATUS: Readonly<Record<string, HealthVerdict>> = {
 export const healthTriggerBook = (sql: Sql) => {
   sql.exec('CREATE TABLE IF NOT EXISTS health_trigger_pending (day TEXT PRIMARY KEY, marked_at INTEGER NOT NULL)');
   sql.exec(`CREATE TABLE IF NOT EXISTS health_trigger_runs (id TEXT PRIMARY KEY, at INTEGER NOT NULL, local_day TEXT NOT NULL, mode TEXT NOT NULL,
-    outcome TEXT NOT NULL, approval_id TEXT, verdict TEXT, verdict_at INTEGER)`);
+    outcome TEXT NOT NULL, approval_id TEXT, verdict TEXT, verdict_at INTEGER, asked INTEGER NOT NULL DEFAULT 0)`);
   // The answer lives on the approval desk's own ledger, read here so no decision path has to report back.
   const reconcile = () => {
     const ledger = sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ledger'").toArray().length > 0;
@@ -74,14 +80,18 @@ export const healthTriggerBook = (sql: Sql) => {
     clear(upTo: number): void { sql.exec('DELETE FROM health_trigger_pending WHERE marked_at <= ?', upTo); },
     clearAll(): void { sql.exec('DELETE FROM health_trigger_pending'); },
     lastRunAt(): number | null { return sql.exec<{ at: number | null }>('SELECT max(at) AS at FROM health_trigger_runs').toArray()[0]?.at ?? null; },
-    record(run: Readonly<{ id: string; at: number; localDay: string; mode: HealthTriggerMode; outcome: HealthTriggerOutcome; approvalId?: string }>): void {
-      sql.exec('INSERT INTO health_trigger_runs (id, at, local_day, mode, outcome, approval_id) VALUES (?, ?, ?, ?, ?, ?)',
-        run.id, run.at, run.localDay, run.mode, run.outcome, run.approvalId ?? null);
+    record(run: Readonly<{ id: string; at: number; localDay: string; mode: HealthTriggerMode; outcome: HealthTriggerOutcome; approvalId?: string; asked?: boolean }>): void {
+      sql.exec('INSERT INTO health_trigger_runs (id, at, local_day, mode, outcome, approval_id, asked) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        run.id, run.at, run.localDay, run.mode, run.outcome, run.approvalId ?? null, run.asked ? 1 : 0);
     },
-    mode(now: number): HealthTriggerMode {
+    // True when the owner has skipped enough of these this week that the next card should ask whether to keep going, and
+    // no card has asked in that week already.
+    shouldAsk(now: number): boolean {
       reconcile();
-      const skips = sql.exec<{ n: number }>("SELECT count(*) AS n FROM health_trigger_runs WHERE verdict = 'false_alarm' AND verdict_at >= ?", now - HEALTH_FALSE_ALARM_WINDOW_MS).toArray()[0]!.n;
-      return skips > 0 ? 'shadow' : 'live';
+      const since = now - HEALTH_FALSE_ALARM_WINDOW_MS;
+      const skips = sql.exec<{ n: number }>("SELECT count(*) AS n FROM health_trigger_runs WHERE verdict = 'false_alarm' AND verdict_at >= ?", since).toArray()[0]!.n;
+      const asked = sql.exec<{ n: number }>('SELECT count(*) AS n FROM health_trigger_runs WHERE asked = 1 AND at >= ?', since).toArray()[0]!.n;
+      return skips >= HEALTH_ASK_AFTER_SKIPS && asked === 0;
     },
     cardsOn(localDay: string): number {
       return sql.exec<{ n: number }>("SELECT count(*) AS n FROM health_trigger_runs WHERE outcome = 'proposed' AND local_day = ?", localDay).toArray()[0]!.n;
@@ -228,7 +238,7 @@ export const healthTriggerPrompt = (input: Readonly<{
     JSON.stringify(items),
     `How the owner answered recent health proposals: ${answered || 'none yet'}.`,
     'Decide whether this change meets a coming decision where waiting would make the day worse: a hard meeting, a long drive, a deadline. If one change to the plan would clearly help, propose exactly one: move or cancel one listed event by its ref, or create one block of protected time. Otherwise return no_op. A proposal the owner skips costs their trust, so when it is not clearly worth an interruption, return no_op.',
-    'Never diagnose or alarm, and never mention medicine. The reason is one short line for the owner and may use the zone words. A title you write goes to Google, where others can see it: keep any mention of health, sleep or zones out of it (for example "Focus block" or "Buffer"). Times are owner-local ISO (YYYY-MM-DDTHH:MM). notify_guests says whether Google should email the guests of a moved or cancelled event.',
+    'Never diagnose or alarm, and never mention medicine. The reason is one short line for the owner, at most 200 characters, and may use the zone words. A title you write goes to Google, where others can see it: keep any mention of health, sleep or zones out of it (for example "Focus block" or "Buffer"). Times are owner-local ISO (YYYY-MM-DDTHH:MM). notify_guests says whether Google should email the guests of a moved or cancelled event.',
     'Return only JSON: kind (propose or no_op), action (move, cancel or create; null for no_op), item (the ref for move or cancel, else null), start and end (for move and create, else null), title (create only, else null), notify_guests (true or false when the event has guests, else null), reason (empty for no_op).',
   ].join('\n\n');
 };
@@ -244,12 +254,12 @@ export const ownerInstant = (local: string, timezone: string): number | null => 
 };
 
 // The model's answer, checked against what it was shown. Anything that does not fit is refused, never repaired.
-export const parseHealthDecision = (raw: string, items: readonly ComingItem[], now: number, timezone: string): HealthDecision => {
+export const parseHealthDecision = (raw: string, items: readonly ComingItem[], now: number, timezone: string, reasonMax = REASON_MAX): HealthDecision => {
   const value = record(JSON.parse(raw));
   if (!value || (value.kind !== 'propose' && value.kind !== 'no_op')) throw new Error('invalid health decision');
   if (value.kind === 'no_op') return { kind: 'no_op' };
   const reason = typeof value.reason === 'string' ? value.reason.trim() : '';
-  if (!reason || reason.length > REASON_MAX) throw new Error('invalid health decision reason');
+  if (!reason || reason.length > reasonMax) throw new Error('invalid health decision reason');
   const at = (field: unknown) => (typeof field === 'string' ? ownerInstant(field, timezone) : null);
   const span = () => {
     const start = at(value.start), end = at(value.end);
@@ -285,6 +295,8 @@ export type HealthTriggerDeps = Readonly<{
   timezone: string;
   enabled(): boolean;
   proactivity(): Proactivity;
+  // The owner's choice: auto, live or shadow.
+  modeSetting(): HealthTriggerSetting;
   // The signed health_context_read answer for this owner; it returns nothing when model-use consent is not live.
   readHealth(): Promise<unknown>;
   comingItems(from: number, to: number): Promise<readonly ComingItem[]>;
@@ -296,6 +308,12 @@ export type HealthTriggerDeps = Readonly<{
   reschedule(at: number): Promise<void>;
   log(line: Readonly<{ hop: 'health_trigger'; ok: boolean; code: HealthTriggerOutcome; mode?: HealthTriggerMode }>): void;
 }>;
+
+// What a run does. Zone words mean something only against the owner's own normal, so under "auto" a run is a shadow run
+// until the day's Recovery was computed from a mature baseline for its source and HRV method (an unmatured baseline gives
+// no Recovery zone) and an earlier day from the same wearable exists to compare with.
+export const resolveHealthMode = (setting: HealthTriggerSetting, view: HealthTriggerView): HealthTriggerMode =>
+  setting !== 'auto' ? setting : view.now.recovery !== null && view.before !== null ? 'live' : 'shadow';
 
 export const runHealthTrigger = async (deps: HealthTriggerDeps): Promise<HealthTriggerOutcome> => {
   const { book, timezone } = deps;
@@ -309,31 +327,35 @@ export const runHealthTrigger = async (deps: HealthTriggerDeps): Promise<HealthT
     await deps.reschedule(nextDailyLocalOccurrence(settings.quiet_end!, timezone, started));
     return done('held_quiet');
   }
-  const mode = book.mode(started);
   const id = `health:${deps.newId()}`;
-  const finish = (outcome: HealthTriggerOutcome, approvalId?: string): HealthTriggerOutcome => {
-    book.record({ id, at: started, localDay, mode, outcome, ...(approvalId ? { approvalId } : {}) });
-    book.clear(started);
-    return done(outcome, mode);
-  };
+  let mode: HealthTriggerMode | undefined;
   try {
     const view = healthTriggerView(await deps.readHealth(), started, timezone);
     if (!view) { book.clear(started); return done('no_health'); }
+    mode = resolveHealthMode(deps.modeSetting(), view);
+    const chosen = mode;
+    const finish = (outcome: HealthTriggerOutcome, extra: Readonly<{ approvalId?: string; asked?: boolean }> = {}): HealthTriggerOutcome => {
+      book.record({ id, at: started, localDay, mode: chosen, outcome, ...extra });
+      book.clear(started);
+      return done(outcome, chosen);
+    };
     const items = (await deps.comingItems(started, started + HEALTH_TRIGGER_HORIZON_MS)).slice(0, ITEMS_MAX);
     if (!items.length) { book.clear(started); return done('nothing_coming'); }
     const budgetKey = `health:${localDay}`;
     if (mode === 'live' && book.cardsOn(localDay) >= HEALTH_CARDS_PER_DAY) { book.clear(started); return done('budget_day', mode); }
     if (mode === 'live' && !deps.admit(budgetKey)) { book.clear(started); return done('budget_gate', mode); }
+    const asking = mode === 'live' && book.shouldAsk(started);
     const prompt = healthTriggerPrompt({ view, items, now: started, timezone, feedback: book.feedback(started) });
     let decision: HealthDecision;
-    try { decision = parseHealthDecision(await deps.decide(id, prompt), items, started, timezone); }
+    try { decision = parseHealthDecision(await deps.decide(id, prompt), items, started, timezone, asking ? REASON_MAX - HEALTH_KEEP_ASKING.length - 1 : REASON_MAX); }
     catch (error) { if (error instanceof SyntaxError || (error instanceof Error && error.message.startsWith('invalid health decision'))) return finish('invalid'); throw error; }
     if (decision.kind === 'no_op') return finish('no_op');
     if (!calendarEgressClear(decision.args, healthWordsOf(view))) return finish('egress_refused');
     if (mode === 'shadow') return finish('shadow_proposed');
-    const approvalId = await deps.propose(decision.args, id);
+    const args = asking ? { ...decision.args, reason: `${decision.args.reason} ${HEALTH_KEEP_ASKING}` } : decision.args;
+    const approvalId = await deps.propose(args, id);
     deps.charge(budgetKey);
-    return finish('proposed', approvalId);
+    return finish('proposed', { approvalId, asked: asking });
   } catch {
     // The mark stays, so the next floor tries again while the change is still news; the TTL drops it after that.
     await deps.reschedule(started + HEALTH_TRIGGER_FLOOR_MS).catch(() => undefined);
