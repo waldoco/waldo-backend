@@ -4,7 +4,10 @@ import { b64url, consentState, googleConsentUrl, type ConsentSurface, type Googl
 // state), its PKCE verifier and its outcome. The callback settles a record once; a repeat callback
 // for the same attempt (browsers and in-app webviews reload) replays that outcome and never
 // exchanges the single-use code again. Callers serialize start and finish per owner.
-export const CONSENT_TTL_MS = 15 * 60_000;
+// 12 hours: the single-use nonce, the server-held PKCE verifier and settle-once replay make a long window
+// cheap, and the link goes only to the owner's own chat or console. A 15-minute link died silently when the
+// owner opened it later.
+export const CONSENT_TTL_MS = 12 * 3_600_000;
 const KEEP_SETTLED_MS = 24 * 60 * 60_000;
 
 export type ConsentGrant = Readonly<{ email?: string; scopes?: readonly string[] | null }>;
