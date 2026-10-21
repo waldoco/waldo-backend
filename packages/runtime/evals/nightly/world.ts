@@ -18,6 +18,8 @@ import { searchEpisodesHandler } from '../../src/tools/live/search-episodes';
 import { claimStore } from '../../src/memory/claims';
 import type { GoogleClient, MailItem, ThreadMessage } from '../../src/connectors/google';
 import type { OwnerClock } from '../../src/tools/live/get-context';
+import { mcpConnections } from '../../src/connectors/mcp-connections';
+import { callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler } from '../../src/tools/live/mcp';
 
 export const OWNER = 'eval-owner';
 export const OWNER_EMAIL = 'owner@example.com';
@@ -27,7 +29,20 @@ export const CHAT_REF = 'app-1';
 export type SeedEvent = Readonly<{ id: string; title: string; start: string; end: string; all_day?: boolean }>;
 export type SeedMail = Readonly<{ id: string; thread_id: string; from: string; to: readonly string[]; subject: string; body: string; at: string }>;
 export type SeedWeb = Readonly<{ title: string; url: string; snippet: string }>;
-export type WorldSeed = Readonly<{ events?: readonly SeedEvent[]; mail?: readonly SeedMail[]; web?: readonly SeedWeb[] }>;
+// A remote MCP server the owner connected (no sign-in), answered in-process. runs_without_asking names the
+// tools the owner let run without a card; results maps a tool name to the text it returns.
+export type SeedMcpTool = Readonly<{ name: string; description: string; inputSchema: Readonly<Record<string, unknown>>; annotations?: Readonly<Record<string, unknown>> }>;
+export type SeedMcp = Readonly<{ url: string; tools: readonly SeedMcpTool[]; runs_without_asking?: readonly string[]; results: Readonly<Record<string, string>> }>;
+export type WorldSeed = Readonly<{ events?: readonly SeedEvent[]; mail?: readonly SeedMail[]; web?: readonly SeedWeb[]; mcp?: SeedMcp }>;
+
+// Just enough of MCP 2026-07-28 over Streamable HTTP for the seeded server: tools/list and tools/call.
+const seededMcpFetch = (seed: SeedMcp): typeof fetch => (async (input: RequestInfo | URL, init?: RequestInit) => {
+  if (String(input instanceof Request ? input.url : input) !== seed.url) throw new Error('the eval world reaches only its seeded MCP server');
+  const body = JSON.parse(String(init?.body ?? '{}')) as { id?: string; method?: string; params?: { name?: string } };
+  const result = body.method === 'tools/list' ? { tools: seed.tools, ttlMs: 3_600_000, cacheScope: 'private' }
+    : body.method === 'tools/call' ? { content: [{ type: 'text', text: seed.results[body.params?.name ?? ''] ?? 'No result.' }] } : null;
+  return Response.json(result ? { jsonrpc: '2.0', id: body.id, result: { resultType: 'complete', ...result } } : { jsonrpc: '2.0', id: body.id, error: { code: -32601, message: 'Method not found' } });
+}) as typeof fetch;
 export type Effect = Readonly<{ kind: string; payload: unknown }>;
 
 const sqlite = (): SqlStorage => {
@@ -167,10 +182,20 @@ export const evalWorld = (seed: WorldSeed, start: string) => {
     autonomy_gated: false,
     handle: async (_args: WebSearchArgs) => ({ ok: true as const, data: { results: seed.web ?? [] }, source_taint: 'external' as const }),
   };
+  const mcp = mcpConnections({ sql, transaction: (work) => work(), proxy: null, doName: () => null, fetcher: seed.mcp ? seededMcpFetch(seed.mcp) : fetch, now });
+  // An approved MCP card is an effect like any other: recorded, never run.
+  const mcpDesk = { proposeMcpCall: async (proposal: unknown) => { effect('mcp.card', proposal); return nextId('card'); } };
+  const mcpReady = (async () => {
+    if (!seed.mcp) return;
+    const connected = await mcp.begin(seed.mcp.url, 'https://waldo.example');
+    if (connected.kind !== 'connected') throw new Error('the seeded MCP server did not connect');
+    for (const tool of seed.mcp.runs_without_asking ?? []) await mcp.setRuns(connected.id, tool, true);
+  })();
   const handlers = [
     ...googleHandlers(google, desk, clock), connectServiceHandler(google), ...reminderHandlers(reminderBook), ...standingOrderHandlers(standingOrders),
     ...loopHandlers(loops), ...memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async () => undefined }),
     searchEpisodesHandler(episodes), web,
+    searchMcpToolsHandler(mcp), readMcpToolHandler(undefined, undefined, false, mcp), callMcpToolHandler(undefined, mcpDesk, undefined, mcp),
   ];
 
   // Synthetic zone-level context only, as the owner object's health book supplies it.
@@ -187,6 +212,7 @@ export const evalWorld = (seed: WorldSeed, start: string) => {
 
   return {
     clock, conversation, memory, handlers,
+    ready: mcpReady,
     health: async () => (health ? toContextHealthMaterial(health, clock) : null),
     shareHealth(shared: boolean) { health = shared ? sharedHealth() : null; },
     localNow: () => localIso(now(), TIMEZONE),
