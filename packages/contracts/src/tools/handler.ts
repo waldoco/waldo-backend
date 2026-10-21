@@ -120,6 +120,8 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   // delegate_task: child handbacks carry whatever the child read (web, connector text), so the
   // summary - and its failure text - is externally influenced and stamped 'external' end-to-end.
   'delegate_task',
+  // findings are stored web text about the owner; reading them back keeps the taint they arrived with.
+  'list_owner_findings',
 ];
 
 // A privileged action is any DIRECT external mutation or send (ADR-0049) — the conservative

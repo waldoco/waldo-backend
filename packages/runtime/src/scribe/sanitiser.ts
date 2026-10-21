@@ -763,7 +763,7 @@ function containsForbiddenHealth(
   return invalid === undefined ? { matched: visited.matched } : { invalid, matched: visited.matched };
 }
 
-const HEALTH_SPAN_MARKER = '[health value withheld]';
+export const HEALTH_SPAN_MARKER = '[health value withheld]';
 
 // ADR-0081 free-text scan on external content headed to the model (internal_context): the span
 // is withheld and the read continues. Every other destination still denies in containsForbiddenHealth.
