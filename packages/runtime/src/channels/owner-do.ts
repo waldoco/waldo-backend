@@ -767,6 +767,17 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
 
   // A WhatsApp presence bound at ingress to this owner's Durable Object, on a deploy that can send WhatsApp messages.
+  // The old chat's outbox records ended with the binding change (bindWhatsAppNumber). No WhatsApp pass runs for them again,
+  // so their jobs settle now, through the runtime of the surface the change came from; settleEnded sends and sweeps nothing,
+  // so it is safe beside a pass with a send in flight. A failure leaves them to the next transport pass.
+  private async settleRetiredWhatsApp(retired: readonly string[], channel?: ChannelKind): Promise<void> {
+    if (!retired.length) return;
+    try {
+      const runtime = this.setup(channel);
+      await runtime.ready;
+      await runtime.finalOutbox.settleEnded(retired, runtime.settleFinal);
+    } catch { console.error('whatsapp unlink settlement deferred'); }
+  }
   private whatsappBound(): boolean {
     const kv = this.ctx.storage.kv, doName = kv.get<string>('do_name'), subject = kv.get<string>('whatsapp_subject');
     return !!doName && !!subject && /^\d{6,15}$/.test(subject) && kv.get<boolean>('whatsapp_unlinked') !== true
@@ -1370,7 +1381,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // The wake is armed before the record exists: a spurious alarm finds nothing, a missing one would strand a record.
     await armWhatsappPendingWake(this.ctx.storage, Date.now() + WHATSAPP_PENDING_CHECK_MS);
     let claimed: NonNullable<typeof value.messages> = [];
-    let changed = false, rebound = false;
+    let changed = false, rebound = false, retired: readonly string[] = [];
     this.ctx.storage.transactionSync(() => {
       // The binding is decided again here, against what was read before the awaits: the first admission binds, a reconciled
       // one replaces the number it saw, and a binding that moved meanwhile (a confirm, an unlink, a concurrent rebind to
@@ -1379,7 +1390,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const current = kv.get<string>('whatsapp_subject');
       if (current !== subject) {
         if (current !== seen || (seen !== undefined && !reconciled)) { changed = true; return; }
-        bindWhatsAppNumber(kv, subject);
+        retired = bindWhatsAppNumber(kv, subject, this.appBound());
         rebound = true;
       }
       claimed = claimNewWhatsAppMessages(kv, value.messages ?? [], Date.now());
@@ -1389,7 +1400,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       kv.put(WHATSAPP_PENDING_DUE_KEY, Date.now() + WHATSAPP_PENDING_CHECK_MS);
     });
     if (changed) return new Response('unavailable', { status: 503 });
-    if (rebound) this.runtimes = {};
+    if (rebound) { await this.settleRetiredWhatsApp(retired, 'whatsapp'); this.runtimes = {}; }
     if (!claimed.length) return new Response('ok');
     this.liveWhatsapp.add(pendingKey);
     const work = this.runWhatsappClaimed(pendingKey, claimed, subject).catch(() => undefined).finally(() => {
@@ -1608,10 +1619,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const form = await request.clone().formData();
       if (isIMessageConsoleAction(form.get('action'))) return iMessageConsoleAction(form, session.csrf, this.ctx.storage.kv.get<string>('do_name') ?? '', this.imessageHost.env, this.iMessageBridgeRevoked);
       // A confirmed text-first link rebinds this owner's WhatsApp subject, so the new number is admitted and the old one is not.
-      if (form.get('action') === WHATSAPP_LINK_CONFIRM_ACTION) return whatsappLinkConfirmAction(form, session.csrf, this.ctx.storage.kv.get<string>('do_name') ?? '', whatsappLinkDirectory(this.env), subject => {
+      if (form.get('action') === WHATSAPP_LINK_CONFIRM_ACTION) return whatsappLinkConfirmAction(form, session.csrf, this.ctx.storage.kv.get<string>('do_name') ?? '', whatsappLinkDirectory(this.env), async subject => {
         // A new number starts clean: nothing held for the old one may reach it.
         const { kv } = this.ctx.storage;
-        this.ctx.storage.transactionSync(() => bindWhatsAppNumber(kv, subject));
+        let retired: readonly string[] = [];
+        this.ctx.storage.transactionSync(() => { retired = bindWhatsAppNumber(kv, subject, this.appBound()); });
+        await this.settleRetiredWhatsApp(retired, 'whatsapp');
         this.runtimes = {};
       });
       if (form.get('action') === 'device.pair' || form.get('action') === 'device.revoke' || form.get('action') === 'device.query' || form.get('action') === 'device.notify') return deviceConsoleAction(form, session.csrf, this.ctx.storage.kv.get<string>('do_name') ?? '', deviceDirectory(this.env), this.env.DEVICE_BRIDGE_DO, request.headers.get('accept') ?? '');
@@ -1744,9 +1757,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
                 // and sends resolve no owner, and what was held for that chat is discarded with it. A refused unlink keeps
                 // the binding, since the old number still routes here.
                 const name=this.ctx.storage.kv.get<string>('do_name'),done=name?await consoleAuth(this.env)?.unlinkWhatsApp?.(name)===true:false;
-                if(done){const {kv}=this.ctx.storage;let retired:readonly string[]=[];this.ctx.storage.transactionSync(()=>{retired=bindWhatsAppNumber(kv,null);});
-                  // The old chat's outbox records ended in that same step. No WhatsApp pass runs for them again, so their jobs settle now.
-                  if(retired.length)await runtime.finalOutbox.settleEnded(retired,runtime.settleFinal).catch(()=>{console.error('whatsapp unlink settlement deferred');});
+                if(done){const {kv}=this.ctx.storage;let retired:readonly string[]=[];this.ctx.storage.transactionSync(()=>{retired=bindWhatsAppNumber(kv,null,this.appBound());});
+                  await this.settleRetiredWhatsApp(retired);
                   this.runtimes={};}
                 return whatsappUnlinkReceipt(done);
               }

@@ -385,6 +385,19 @@ describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }
     });
   });
 
+  it('a reminder Meta took before the owner\'s number changed ends unconfirmed with the change, and its run settles then', async () => {
+    await drive('whatsapp-rebind-accepted', async ({ alarms, reply, ledger }) => {
+      await reply();
+      await alarms(3);
+      expect(ledger().outbox).toMatchObject([{ status: 'accepted', providerMessageIds: ['wamid.out.1'] }]);
+      // A different number the directory has as this owner's writes: admission rebinds to it, retiring the old chat's records.
+      await reply('15550002222');
+      expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'quarantined', reason: 'surface_unlinked', providerMessageIds: ['wamid.out.1'] }]);
+      // Settled with the rebind itself, before any alarm pass.
+      expect(ledger().runs).toEqual([{ outcome: 'quarantined', delivery: 'failed' }]);
+    });
+  });
+
   it('an unlink discards what was held for the old number, so a number linked next never receives it', async () => {
     await drive('whatsapp-unlink-discards-held', async ({ alarms, unlink, hold, held, reply, windowKeys }) => {
       await alarms(3);

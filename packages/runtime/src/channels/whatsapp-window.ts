@@ -1,4 +1,5 @@
 import { OUTBOX_CUSTODY, SEND_NOW_ONLY, routedDelivery, type OutboxRoute } from './delivery-routes';
+import { rememberWhatsAppSubject, waitingForWhatsApp } from './proactive-surface';
 import { retireSurfaceRecords, type DeliveryReceipt, type FinalRecord, type TelegramFinalOutbox } from './telegram-final-outbox';
 import { WHATSAPP_HELD, WhatsAppApiError, WhatsAppFileRefused, WhatsAppPartialSend, deliverWhatsAppFile, whatsappFileLinkText, whatsappHeld, whatsappLinkOutcome, whatsappOutboundKind, type WhatsAppFileLinkReason, type WhatsAppFileOutcome, type WhatsAppOutboundFile } from './whatsapp-api';
 
@@ -222,11 +223,15 @@ export const releaseWhatsAppOutbox = async (outbox: TelegramFinalOutbox, route: 
 // changes or is unlinked they all go: text held for one number must never reach another, and a new number's window opens
 // only when that number writes. The outbox's records for that chat are retired too, since Meta's reports about them no
 // longer reach this owner: an unsent one is blocked and a sent one ends unconfirmed, and neither goes to the next number.
-// Storage only, so callers run it in the same transaction as the binding change, before the bound number changes; answers
-// the ids of the retired records, for the caller to settle.
-export const clearWhatsAppNumber = (kv: Kv): readonly string[] => {
+// An owner with the app (`appFallback`) keeps the scheduled messages nothing went out for: they go to the app instead
+// (waitingForWhatsApp), so the old number is remembered for that. Storage only, so callers run it in the same transaction
+// as the binding change, before the bound number changes; answers the ids of the retired records, for the caller to settle.
+export const clearWhatsAppNumber = (kv: Kv, appFallback = false): readonly string[] => {
   const old = kv.get<string>('whatsapp_subject');
-  const retired = old ? retireSurfaceRecords(kv, record => record.ownerSubject === old && String(record.payload.chat_id) === old) : [];
+  const toApp = old && appFallback ? waitingForWhatsApp(new Set([old])) : () => false;
+  const kept = (record: FinalRecord) => record.status === 'pending' && !(record.providerMessageIds ?? []).some(Boolean) && toApp(record);
+  const retired = old ? retireSurfaceRecords(kv, record => record.ownerSubject === old && String(record.payload.chat_id) === old && !kept(record)) : [];
+  if (old && appFallback) rememberWhatsAppSubject(kv, old);
   for (const prefix of [WA_HELD_PREFIX, REHELD_PREFIX]) for (const [key] of [...kv.list<unknown>({ prefix })]) kv.delete(key);
   for (const key of [WA_LAST_INBOUND_KEY, KNOCKED_KEY, REFUSED_KEY]) kv.delete(key);
   return retired;
@@ -236,11 +241,11 @@ export const clearWhatsAppNumber = (kv: Kv): readonly string[] => {
 // admission, an unlink. Whatever belonged to another number goes first; binding the number already bound keeps its state. A
 // bound number is linked, so an older unlinked flag goes with any bind. Storage only: callers run it inside the
 // transactionSync that decides the binding, rebuild their runtimes after, and settle the outbox records it answers
-// (TelegramFinalOutbox.settleEnded), since no pass for the old chat runs again.
-export const bindWhatsAppNumber = (kv: Kv, subject: string | null): readonly string[] => {
+// (TelegramFinalOutbox.settleEnded), since no pass for the old chat runs again. `appFallback` as for clearWhatsAppNumber.
+export const bindWhatsAppNumber = (kv: Kv, subject: string | null, appFallback = false): readonly string[] => {
   let retired: readonly string[] = [];
   if (subject === null || kv.get<string>('whatsapp_subject') !== subject) {
-    retired = clearWhatsAppNumber(kv);
+    retired = clearWhatsAppNumber(kv, appFallback);
     if (subject === null) kv.delete('whatsapp_subject'); else kv.put('whatsapp_subject', subject);
   }
   if (subject !== null) kv.delete('whatsapp_unlinked');
