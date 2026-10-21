@@ -387,6 +387,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     catch { console.log(JSON.stringify({ hop: entry.hop, ok: entry.ok, ...(entry.code ? { code: entry.code } : {}), ...(entry.job_id ? { job_id: entry.job_id } : {}) })); }
   }
 
+  // Owner forget, from every place it runs: an open task whose brief, progress or result carried the text is cancelled and
+  // its worker fenced, since the worker holds its own copy of what it was given.
+  private forgetTasks(texts: readonly string[]): void {
+    for (const id of this.jobs().forget(texts)) this.tasks.fence(id);
+  }
+
   // The task worker's calls (OwnerTaskRpc). Each is checked against the attempt's ticket in the job book.
   async taskClaim(ticket: TaskTicket): ReturnType<OwnerTaskRpc['taskClaim']> { return this.tasks.claim(ticket); }
   async taskTool(ticket: TaskTicket, call: LLMToolCall, canaries: readonly string[]): Promise<LoopToolResult | 'fenced'> { return this.tasks.tool(ticket, call, canaries); }
@@ -3252,7 +3258,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
           forgetHeldWhatsApp(this.ctx.storage.kv, texts);
           // A task holding a forgotten text is cancelled and its worker fenced; the purge then redacts the job rows.
-          for (const id of this.jobs().forget(texts)) this.tasks.fence(id);
+          this.forgetTasks(texts);
           const imessage = redactIMessageEntries(this.ctx.storage, texts, FORGOTTEN, scope);
           const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope);
           if (result.remaining + mail.remaining + prep.remaining + reports.remaining + imessage.remaining + titles.remaining) throw new Error('Memory history cleanup is incomplete');
@@ -4036,6 +4042,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
               kvRemaining += redactCalendarPrepEntries(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
               kvRemaining += redactJobReportEntries(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
               forgetHeldWhatsApp(this.ctx.storage.kv, result.texts);
+              this.forgetTasks(result.texts);
               kvRemaining += redactThreadTitles(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
               await redactToolOutputLedger(this.ctx.storage, result.texts, FORGOTTEN);
             }
@@ -4065,6 +4072,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           await clean(() => redactCalendarPrepEntries(this.ctx.storage.kv, [node.label], FORGOTTEN));
           await clean(() => redactJobReportEntries(this.ctx.storage.kv, [node.label], FORGOTTEN));
           await clean(() => forgetHeldWhatsApp(this.ctx.storage.kv, [node.label]));
+          await clean(() => this.forgetTasks([node.label]));
           await clean(() => redactThreadTitles(this.ctx.storage.kv, [node.label], FORGOTTEN));
           if (remaining > 0) {
             log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: false, detail: 'node.forget retained-copy redaction incomplete' });

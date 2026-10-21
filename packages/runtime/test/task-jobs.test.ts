@@ -168,6 +168,23 @@ describe('task job book', () => {
     });
   });
 
+  it('a job the memory purge already rewrote is cancelled too: its worker still holds the text it was given', async () => {
+    await withBook((book, _clock, sql) => {
+      const rewritten = book.create(job('k1', { brief: { ...brief, context: 'Asha said "the Lisbon trip" is off.' } })).job;
+      const read = book.create(job('k2')).job;
+      const ticket = book.startAttempt(read.id)!;
+      book.checkpoint(ticket, 1, { turns: [turn(1)] }, spend);
+      const other = book.create(job('k3')).job;
+      // What the purge leaves: the literal replaced by its marker, in the brief of one job and the checkpoint of another.
+      sql.exec("UPDATE task_jobs SET brief_json = replace(brief_json, 'the Lisbon trip', '[forgotten]') WHERE id = ?", rewritten.id);
+      sql.exec("UPDATE task_jobs SET checkpoint_json = replace(checkpoint_json, 'page 1', '[forgotten]') WHERE id = ?", read.id);
+      expect(book.forget(['Lisbon trip'])).toEqual([rewritten.id, read.id]);
+      expect(book.get(rewritten.id)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten' });
+      expect(book.get(read.id)).toMatchObject({ status: 'cancelled', cancel_reason: 'forgotten', lease_token: null });
+      expect(book.get(other.id)!.status).toBe('queued');
+    });
+  });
+
   it('DO eviction between checkpoint and apply: a fresh book over the same storage carries on', async () => {
     const stub = env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`task-jobs-evict-${seq += 1}`));
     const id = await runInDurableObject(stub, (_instance, state) => {

@@ -1,6 +1,7 @@
 import { type LLMToolTurn, type TaskProfile, type TaskResult } from '@waldo/contracts';
 import { TASK_JOBS_TABLE_SCHEMA } from '../do-schema';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
+import { FORGOTTEN } from '../memory/claims';
 import { md5Hex } from '../channels/md5';
 
 // The job book: the owner object's record of every task it handed to a worker and every turn it retries itself. The owner
@@ -236,11 +237,12 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     },
     // Owner forget: open jobs whose brief, progress or result carries a forgotten text are cancelled, since their worker
     // holds a copy. The text itself is redacted from every row by the memory purge, which lists this table among its
-    // literal-redacted stores and reads it back.
+    // literal-redacted stores and reads it back. A purge that ran first leaves its marker where the text was, and that
+    // job's worker still holds the original, so the marker cancels it too.
     forget(texts: readonly string[]): readonly string[] {
       const topics = [...new Set(texts.map(text => text.trim()).filter(Boolean))];
       if (!topics.length) return [];
-      const holds = (value: string | null) => value !== null && topics.some(topic => carriesTopic(value, topic) || hidesTopic(value, topic));
+      const holds = (value: string | null) => value !== null && (value.includes(FORGOTTEN) || topics.some(topic => carriesTopic(value, topic) || hidesTopic(value, topic)));
       return sql.exec<Pick<JobRow, 'id' | 'brief_json' | 'checkpoint_json' | 'result_json'>>(
         `SELECT id, brief_json, checkpoint_json, result_json FROM task_jobs WHERE status IN (${placeholders(OPEN)})`, ...OPEN,
       ).toArray().filter(row => [row.brief_json, row.checkpoint_json, row.result_json].some(holds) && this.cancel(row.id, 'forgotten')).map(row => row.id);

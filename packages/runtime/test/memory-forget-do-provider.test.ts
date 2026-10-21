@@ -851,6 +851,21 @@ positiveStore('task_jobs', 'POSTASK769', (sql, text) => {
   book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'pos-769-task', origin: 'turn', surface: 'telegram', brief, dueAt: Date.now() + 3_600_000, deadlineAt: Date.now() + 7_200_000 });
 }, sql => JSON.stringify(sql.exec('SELECT status, brief_json, checkpoint_json, result_json FROM task_jobs').toArray()));
 
+it('forget_memory cancels an open task whose brief carried the topic, so its worker cannot report it back', async () => {
+  const name = 'memory-do-forget-open-task';
+  await turn(name, 1, 'Unrelated standup is at 09:10 UTC');
+  await runInDurableObject(stub(name), (_instance, state) => {
+    const book = jobBook(state.storage.sql, { now: () => Date.now(), newId: () => 'b1c2d3e4f5a6', newToken: () => 'token' });
+    const brief = { title: 'Read the backlog', goal: 'Find mail about OPENTASK770.', context: 'Private OPENTASK770 note', done_when: 'summarised', effort: 'standard' as const, timezone: 'UTC', started_at: Date.now() };
+    book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'open-770-task', origin: 'turn', surface: 'telegram', brief, dueAt: Date.now() + 3_600_000, deadlineAt: Date.now() + 7_200_000 });
+  });
+  seen.outputs.push(tool('forget_memory', { topic: 'OPENTASK770', scope_note: 'remove OPENTASK770' }), []);
+  await turn(name, 2, 'Forget OPENTASK770');
+  await runInDurableObject(stub(name), (_instance, state) => {
+    expect(state.storage.sql.exec<{ status: string; cancel_reason: string | null }>('SELECT status, cancel_reason FROM task_jobs').toArray()).toEqual([{ status: 'cancelled', cancel_reason: 'forgotten' }]);
+  });
+});
+
 // Full-store scan: after a successful forget and a DO eviction, no table or text column in the owner DO SQLite holds the forgotten text.
 // An exemption must name why the table cannot hold owner text; there is no skip.
 const SCAN_EXEMPT: Readonly<Record<string, string>> = {};
