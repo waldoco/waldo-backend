@@ -34,14 +34,14 @@ describe('read_drive (Drive v3 metadata over the proxy client)', () => {
   });
   it('maps 401 to the reconnect path, 403 to a plain refusal with Google status, not a consent prompt', async () => {
     const r401 = await call(make({ driveListFiles: async () => { throw new GoogleError(401, 'expired'); } }), { action: 'recent' });
-    expect(r401).toMatchObject({ ok: false, code: 'auth_failed', connect: { reason: 'reauth_needed', feature: 'drive' } });
+    expect(r401).toMatchObject({ ok: false, code: 'auth_failed', error: 'The Google (drive) grant expired.', connect: { reason: 'reauth_needed', feature: 'drive' } });
     const r403 = await call(make({ driveListFiles: async () => { throw new GoogleError(403, 'accessNotConfigured'); } }), { action: 'recent' });
     expect(r403).toMatchObject({ ok: false, code: 'rejected' });
     expect((r403 as { connect?: unknown }).connect).toBeUndefined();
     expect((r403 as { error: string }).error).toContain('accessNotConfigured');
   });
   it('not connected is the typed connect intent; a client without the method is refused, never routed to MCP', async () => {
-    expect(await call(make(null), { action: 'recent' })).toMatchObject({ ok: false, code: 'auth_failed', connect: { reason: 'not_connected' } });
+    expect(await call(make(null), { action: 'recent' })).toMatchObject({ ok: false, code: 'auth_failed', error: 'Google (drive) is not connected.', connect: { reason: 'not_connected' } });
     expect(await call(make({}), { action: 'recent' })).toMatchObject({ ok: false, code: 'rejected' });
   });
   it('schema: search needs name_contains, get needs a closed id, size capped at 50', () => {

@@ -1,4 +1,75 @@
-# Fixture-only Mac host cloud connector
+# iMessage host connector
+
+> **Current state (composed backend connector, `waldo-imessage-http-v1`).** The backend now hosts a
+> complete local connector: Worker routes under `/channels/imessage/v1`, a per bridge/account
+> `IMessageBridgeDO`, canonical pairing/activation/revoke SQL and an `imessage` owner-runtime channel.
+> It ships **disabled** (`IMESSAGE_CONNECTOR_ENABLED=0` in every hosted config) and is proven only
+> locally with a simulated host: see `IMESSAGE_CONNECTOR_RUNBOOK.md` and `fixtures/`. The original
+> fixture-only Node library (below) remains the reference oracle for the relay/mailbox semantics.
+
+## Wire profile `waldo-imessage-http-v1` (shared contract with the Mac host)
+
+All host routes are `POST`, `content-type: application/json`, no query string, raw UTF-8 body bounded
+before parsing, strict unknown-field rejection, `cache-control: no-store`, `referrer-policy: no-referrer`.
+Hosts must use HTTPS with certificate verification and must not follow redirects (loopback HTTP is only
+for the local test harness).
+
+**Signed requests.** Header `X-Waldo-IMessage-S2` holds exactly one strict JSON object
+`{version:1,bridgeId,accountId,atMs,nonce,signature}`. `signature` is lowercase hex HMAC-SHA256 over
+`JSON.stringify([version,bridgeId,accountId,atMs,nonce]) + "\n" + rawBody`, keyed by the UTF-8 bytes of
+the 64-hex credential string. Retries keep the body byte-identical and use a fresh `atMs` and `nonce`.
+
+| POST suffix | Request | Response |
+| --- | --- | --- |
+| `/pair/redeem` (unsigned) | `{version:1,code,hostVersion,transportVersion,databaseGeneration}` | 200 `{version:1,state:"pending_verification",bridgeId,accountId,credential:{kind:"hmac-sha256",key},expiresAtMs}` once. A lost response needs a fresh invitation. |
+| `/events` | S0 `IMessageEvent` | 200 `{admitted:true,eventId,digest}`, digest = SHA-256 of the original body; identical retry returns the same receipt; changed bytes 409. Pending credentials: only the exact setup challenge. |
+| `/heartbeat` | `{version:1,bridgeId,accountId,databaseGeneration,status:"online"\|"offline"}` | 200 `{version:1,accepted:true}`. `atMs` must increase. A new generation resets the cursor, drops capabilities and withdraws never-delivered commands. |
+| `/capabilities` | S0 `IMessageCapabilities` | 200 `{version:1,accepted:true}`. Missing/stale (>90s) means offline/disabled. |
+| `/commands/pull` | `{version:1,bridgeId,accountId}` | 200 `{version:1,delivery:null}` or `{version:1,delivery:{deliveryId,attempt,body,headers,commitment}}`. Redelivery keeps body/headers/deliveryId/commitment and increments `attempt`. Active credentials only. |
+| `/commands/result` | `{version:1,bridgeId,accountId,deliveryId,commandId,commandDigest,result}` | 200 `{version:1,accepted:true}` for the first terminal result or an identical repeat; queued/started, wrong digest/target/command 409; a different later result 409 and retained. |
+
+**Commitment (NEW host requirement).** `commitment = {version:1,commandDigest,expiresAtMs,signature}`;
+`signature` is lowercase hex HMAC-SHA256 under the account key of the UTF-8 text
+`JSON.stringify(["waldo-imessage-http-v1:commitment",1,bridgeId,accountId,deliveryId,commandId,commandDigest,expiresAtMs])`.
+Immediately before any native mutation the host must verify the S2 command headers, that
+`commandDigest = SHA-256(body)`, the commitment signature and `now <= expiresAtMs`, and must journal
+`commandId+digest` durably first. A journaled command is never sent again; an expired never-started
+command is reported as `rejected/not_started`. Vectors: `fixtures/vectors.json` (`generate-vectors.mjs`).
+
+**Errors.** 405 method; 413 body too large; 415 content type; 401 `{"error":"invalid_request"}` for any
+authentication/scope failure (including revoked, expired or pending-only credentials); 400 schema after
+authentication; 409 identity/result/generation conflict; 429 redeem throttle; 503 infrastructure or
+backpressure (never a success ACK). Diagnostics are fixed codes; no bodies, handles, GUIDs or keys.
+
+**Results.** `local_recorded` means recorded in the Mac's local database, never delivered/read. An
+`unknown` result or a missing result after the mutation deadline permanently quarantines the account's
+send lane; there is no clear/reconciliation API. Receipt events are candidate evidence only.
+
+## Lifecycle (PROPOSED, default-off)
+
+Owner console (session + CSRF) `imessage.pair` issues a one-use invitation -> host redeems ->
+pending bridge with a server-minted key (stored only AES-GCM-wrapped under a separate server key,
+bound to environment/bridge/account/credential epoch) -> owner `imessage.verify` sets the exact
+sender and `iMessage;-;` direct chat and receives a one-use challenge -> the owner sends it from that
+sender; the pending host reports it -> owner `imessage.activate` confirms the observed scope ->
+canonical writer creates the exact active presence/binding and bumps the revision. `imessage.revoke`
+invalidates canonical authority first, then unlinks the presence; the bridge withdraws only
+never-delivered commands and keeps delivered/uncertain evidence. This trusts the paired host's
+observation of the challenge; it is not Apple cryptographic attestation.
+
+## Feature matrix
+
+| Feature | Backend status |
+| --- | --- |
+| Direct incoming iMessage text from the verified owner | Supported (owner turn) |
+| Plain-text reply to the same exact direct chat | Supported (frozen, signed, committed) |
+| Groups, SMS, RCS, SMS fallback | Refused / retained as evidence |
+| Incoming media (photos, voice, files) | Retained as held evidence; not loaded, not transcribed |
+| Outgoing files, formatting, effects, GUID replies | Refused (typed not_started) |
+| Reactions, edit, unsend, typing, read receipts | Refused outbound; inbound kept as evidence |
+| Delivered/read receipts | Candidate evidence only, correlated by account + messageGuid |
+
+## Fixture-only reference library (historical)
 
 This library adds a signed pull mailbox, a text sender through the existing S2
 SignedRelay, and a relay-to-owner-turn adapter. It is disabled: there are no HTTP

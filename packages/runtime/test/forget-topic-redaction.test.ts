@@ -1,13 +1,13 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { applyClaimOps, claimStore, FORGOTTEN, MEMORY_INSTRUCTION } from '../src/memory/claims';
+import { applyClaimOps, claimStore, FORGOTTEN, NIGHTLY_MEMORY_INSTRUCTION } from '../src/memory/claims';
 import { episodeIndex } from '../src/channels/episodes';
 
 const ops = (partial: Record<string, unknown>) => JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null, ...partial });
 const AT = '2026-10-03T00:00:00Z';
 const run = <T>(name: string, fn: (sql: SqlStorage, tx: <R>(work: () => R) => R) => T) =>
-  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name)), (_i, state) => fn(state.storage.sql, (work) => state.storage.transactionSync(work)));
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), (_i, state) => fn(state.storage.sql, (work) => state.storage.transactionSync(work)));
 
 describe('forgetting a topic whose claim is already gone', () => {
   it('redacts the topic from retained episodes and backs the barrier', async () => {
@@ -59,7 +59,7 @@ describe('forgetting a topic whose claim is already gone', () => {
 
 describe('forgetting by the exact identifier the owner named', () => {
   it('tells the writer to keep an owner-named literal as forget_topic', () => {
-    expect(MEMORY_INSTRUCTION).toContain('when the owner names an exact code, id or phrase to forget, forget_topic is that text exactly as the owner wrote it');
+    expect(NIGHTLY_MEMORY_INSTRUCTION).toContain('when the owner names an exact code, id or phrase to forget, forget_topic is that text exactly as the owner wrote it');
   });
   it('a literal marker topic cleans the request and the assistant reply that repeated it', async () => {
     await run('forget-topic-literal', (sql, tx) => {

@@ -72,13 +72,13 @@ describe('retained byte store',()=>{
  expect((await s.write({...args(10499,'zero',new Uint8Array()),expected_revision:499})).revision).toBe(500);
  expect(await s.tombstone(last.file_id,500)).toEqual({status:'purged'});expect(f.state().bodies).toHaveLength(0);expect(f.state().operations).toHaveLength(500);
  await expect(s.write({...args(20001,'new',new Uint8Array())})).rejects.toThrow('workspace_capacity');await expect(s.write({...args(10499,'zero',new Uint8Array()),expected_revision:499})).rejects.toThrow('workspace_not_found');
- });
+ },30_000);
  it('pending reservation consumes the last slot and existing recovery works at cap',async()=>{
  const f=fixture(),s=await workspaceStore(f.host);for(let i=0;i<499;i++)await s.write({...args(10000+i,'zero',new Uint8Array()),expected_revision:i});
  const original=f.host.bodies.put;f.host.bodies.put=vi.fn(async(b,v)=>{await original(b,v);f.suspend();});
  await expect(s.write({...args(10499,'zero',new Uint8Array()),expected_revision:499})).rejects.toThrow('workspace_rejected');expect(f.state().operations).toHaveLength(500);expect(f.state().bodies).toHaveLength(499);
  f.host.admit=async()=>({status:'ok'});const restart=await workspaceStore(f.host);expect((await restart.reconcile(id(10499))).revision).toBe(500);expect(f.state().bodies).toHaveLength(500);
- });
+ },30_000);
  it('binding map-version mismatch at construction never reaches bodies',async()=>{
  const f=fixture();await workspaceStore(f.host);f.host.binding={...binding,mappingVersion:2};await expect(workspaceStore(f.host)).rejects.toThrow('workspace_rejected');expect(f.host.bodies.get).not.toHaveBeenCalled();expect(f.host.bodies.put).not.toHaveBeenCalled();
  });

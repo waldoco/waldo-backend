@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { armNightly, backfillEpisodes, episodeIndex, ftsQuery, indexedConversationStore, NIGHTLY_ID, speakerOf, transcript } from '../src/channels/episodes';
+import { armNightly, backfillEpisodes, episodeIndex, ftsQuery, indexedConversationStore, NIGHTLY_ID, speakerOf, speakerOfEntry, transcript } from '../src/channels/episodes';
 import { durableConversationStore } from '../src/channels/conversation-store';
 import { ensureSchema } from '../src/tracer/schema';
 import { Scheduler } from '../src/scheduler/multiplexer';
@@ -15,12 +15,14 @@ const entry = (id: string, text: string, parentId: string | null = null) => ({
 describe('episode history', () => {
   it('names speakers from entry ids and quotes model queries safely', () => {
     expect([speakerOf('tg-5'), speakerOf('tg-5-reply'), speakerOf('reminder:ab:1:0'), speakerOf('reminder:ab:1:0-reply')]).toEqual(['owner', 'waldo', 'system', 'waldo']);
+    // Stamped rows name the speaker on any surface; unstamped rows keep the id convention.
+    expect([speakerOfEntry({ id: 'app-7', role: 'user', inputOrigin: 'owner' }), speakerOfEntry({ id: 'app-7-reply', role: 'assistant' }), speakerOfEntry({ id: 'reminder:ab:1:0', role: 'user', inputOrigin: 'machine' }), speakerOfEntry({ id: 'tg-5' }), speakerOfEntry({ id: 'app-7' })]).toEqual(['owner', 'waldo', 'system', 'owner', 'system']);
     expect(ftsQuery('Knee "pain" OR NEAR(run*)')).toBe('"knee" OR "pain" OR "or" OR "near" OR "run"');
     expect(ftsQuery(' ?! ')).toBeNull();
   });
 
   it('indexes saved turns, backfills old ones, searches and reads a day back', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('episodes'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('episodes'));
     await runInDurableObject(stub, async (_instance, state) => {
       const kv = durableConversationStore(state.storage);
       await kv.save([entry('tg-1', 'My knee hurts after running')], 'tg-1');
@@ -52,7 +54,7 @@ describe('episode history', () => {
   });
 
   it('re-anchors a future stale-zone nightly row without replaying an occurrence', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('nightly-zone-reconcile'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('nightly-zone-reconcile'));
     await runInDurableObject(stub, async (_instance, state) => {
       ensureSchema(state.storage);
       const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
@@ -80,7 +82,7 @@ describe('episode history', () => {
   });
 
   it('arms one nightly memory pass at 03:00 owner time', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('nightly'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('nightly'));
     await runInDurableObject(stub, async (_instance, state) => {
       ensureSchema(state.storage);
       const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
@@ -97,7 +99,7 @@ describe('episode history', () => {
   // (price, time) outside the fragment was unrecoverable, and the model asserted an older
   // answer as the latest. The hit now names its source turn and the full text is retrievable.
   it('a hit names its exact row and the full text behind a truncated snippet is retrievable', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('episodes-source'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('episodes-source'));
     await runInDurableObject(stub, async (_instance, state) => {
       const index = episodeIndex(state.storage.sql);
       const full = `latest options test arrive ${'so '.repeat(30)}A leaves 16:30 for 22k, B leaves 17:45 for 18.5k, C leaves 19:10 for 15k`;
@@ -113,7 +115,7 @@ describe('episode history', () => {
   });
 
   it('the same entry_id indexed twice keeps both rows, and each hit recovers its own body', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('episodes-dup'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('episodes-dup'));
     await runInDurableObject(stub, async (_instance, state) => {
       const index = episodeIndex(state.storage.sql);
       index.add('tg-5', 'owner', 'budget is 22k for the trip', 100);
@@ -129,7 +131,7 @@ describe('episode history', () => {
   });
 
   it('search stays relevance-ranked: a newer, less relevant turn is not promoted', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('episodes-order'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('episodes-order'));
     await runInDurableObject(stub, async (_instance, state) => {
       const index = episodeIndex(state.storage.sql);
       index.add('tg-1', 'owner', 'flight options', Date.parse('2026-09-30T10:00:00Z'));

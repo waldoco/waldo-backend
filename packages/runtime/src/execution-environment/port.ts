@@ -1,13 +1,32 @@
-import {
-  exactRevisionV04Schema,
-  executionEnvironmentRefV04Schema,
-  iso8601Schema,
-  protocolDigestSchema,
-  protocolIdSchema,
-  protocolNameSchema,
-  protocolRevisionSchema,
-  providerRefV04Schema,
-} from '@waldo/contracts';
+import { z } from 'zod';
+import { iso8601Schema } from '@waldo/contracts';
+
+// The port's identifier and reference shapes, kept from the retired responsibility protocol v0.4
+// (contracts/src/protocol, deleted with the second brain) so the port stays reusable for the sandbox.
+const protocolIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
+const protocolNameSchema = protocolIdSchema;
+const protocolRevisionSchema = z.int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const protocolDigestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
+const exactRevisionV04Schema = z.int().positive().max(Number.MAX_SAFE_INTEGER);
+const versionedManifestReferenceV04Schema = z.strictObject({
+  id: protocolIdSchema,
+  version: protocolNameSchema,
+  digest: protocolDigestSchema,
+});
+const providerRefV04Schema = z.strictObject({
+  category: z.literal('provider'),
+  id: protocolIdSchema,
+  version: protocolNameSchema,
+  modelRef: protocolIdSchema,
+  manifest: versionedManifestReferenceV04Schema,
+});
+const executionEnvironmentRefV04Schema = z.strictObject({
+  category: z.literal('execution_environment'),
+  id: protocolIdSchema,
+  version: protocolNameSchema,
+  environmentKind: z.enum(['local', 'cloud', 'human']),
+  manifest: versionedManifestReferenceV04Schema,
+});
 
 export const EXECUTION_ENVIRONMENT_ACTIONS = Object.freeze([
   'start',

@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { expect, it, vi } from 'vitest';
 import { telegramRichReply } from '../src/channels/rich-format';
 import { TelegramOwnerListener } from '../src/channels/telegram-listener';
@@ -22,13 +23,13 @@ it('preserves escaped user-authored literal markup in the generated presentation
   expect(telegramRichReply(text).text).toBe(text);
 });
 
-it('falls back to the exact guarded final after a definite entity rejection', async () => {
+it('falls back to the plain rendering of the guarded final after a definite entity rejection', async () => {
   const text = '**Read** `notes.md` <tag> & [open](https://example.test)';
   const send = vi.fn().mockRejectedValueOnce(new TelegramRejection(400, "Bad Request: can't parse entities: unsupported tag")).mockResolvedValue({ message_id: 3 });
   const listener = new TelegramOwnerListener({ ownerTelegramId: 7, api: { sendMessage: send, sendChatAction: async () => undefined, setMessageReaction: async () => undefined }, respond: async () => text, saveOffset: async () => undefined });
-  expect(await listener.handle({ updateId: 1, senderId: 7, chatId: 7, messageId: 2, sentAt: null, text: 'read' })).toBe('answered');
+  expect(await listener.handle(ownerTyped({ updateId: 1, senderId: 7, chatId: 7, messageId: 2, sentAt: null, text: 'read' }))).toBe('answered');
   expect(send).toHaveBeenCalledTimes(2);
-  expect(send.mock.calls[1]![0]).toEqual({ chat_id: 7, text });
+  expect(send.mock.calls[1]![0]).toEqual({ chat_id: 7, text: 'Read `notes.md` <tag> & open (https://example.test)' });
 });
 
 it.each([
@@ -64,7 +65,7 @@ it('freezes fallback bytes and delivers plain text after rejection without mutat
   const send = vi.fn().mockRejectedValueOnce(rejection()).mockResolvedValue({ message_id: 3, chat: { id: 7 } });
   await new TelegramFinalOutbox(f.kv, f.now).drain({ allowed: async () => true, send, settled: async () => undefined });
   expect(send.mock.calls[0]![0]).not.toHaveProperty('fallback_text');
-  expect(send.mock.calls[1]![0]).toEqual({ chat_id: 7, text: f.text });
+  expect(send.mock.calls[1]![0]).toEqual({ chat_id: 7, text: 'Read `notes.md` <private> & open (https://example.test)' });
   expect(f.outbox.records()[0]).toMatchObject({ status: 'delivered', attempts: 1, payload: f.input.payload });
   f.advance(); await f.outbox.maintain();
   expect(f.outbox.records()[0]!.payload).toEqual({ chat_id: 7, text: '' });

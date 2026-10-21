@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fromRowZone } from '../../contracts/src/health/zone-bridge';
 import { toContextHealthMaterial, type HealthContextRow } from '../src/channels/health-context';
 import { produceHealthScores, type ProducerDeps } from '../src/health/producer';
@@ -11,6 +11,7 @@ const TODAY = '2026-03-20';
 const READ_AT = '2026-03-20T12:00:00.000123Z';
 const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 const wobble = (i: number, amp: number) => ((i * 7919) % 13 - 6) / 6 * amp;
+const SCORED_WINDOW_SIGNALS = ['heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration'];
 
 type Sample = Record<string, unknown>;
 const sample = (signal: string, day: string, over: Sample = {}): Sample =>
@@ -43,16 +44,22 @@ const seriesOf = (samples: Sample[], over: { source?: string; epoch?: number; tr
 });
 
 type Harness = { deps: ProducerDeps; writes: Record<string, unknown>[]; reads: Record<string, unknown>[]; inputs: DailyScoresInput[] };
-const harness = (series: unknown, writeResult: unknown = { written: true }, compute = computeDailyScores): Harness => {
+const harness = (series: unknown, writeResult: unknown = { written: true }, compute = computeDailyScores, extra: Partial<ProducerDeps> = {}): Harness => {
   const h: Harness = { writes: [], reads: [], inputs: [], deps: null as never };
   h.deps = {
     readSeries: async range => { h.reads.push(range); return series; },
     writeContext: async payload => { h.writes.push(JSON.parse(payload)); return writeResult; },
     compute: input => { h.inputs.push(input); return compute(input); },
+    ...extra,
   };
   return h;
 };
 const run = (h: Harness, timezone = 'UTC') => produceHealthScores(h.deps, { now: NOW, timezone });
+const busyMonth = (partial: (i: number) => boolean = () => false) =>
+  Array.from({ length: 31 }, (_, i) => ({ day: addDays(TODAY, -i), busy_minutes: Math.round(240 + wobble(i, 40)), partial: partial(i) }));
+const demandLogs = (log: { mock: { calls: unknown[][] } }) =>
+  log.mock.calls.flatMap(([line]) => { try { const parsed = JSON.parse(String(line)); return parsed.hop === 'weight_demand' ? [parsed] : []; } catch { return []; } });
+afterEach(() => vi.restoreAllMocks());
 
 describe('produceHealthScores', () => {
   it('reads thirty days back from the owner\'s local today and writes today and yesterday', async () => {
@@ -83,6 +90,125 @@ describe('produceHealthScores', () => {
     expect(row.timezone).toBe('UTC');
     expect(row.basis).toEqual([{ source: 'apple', consent_epoch: 3 }]);
     expect(row.freshness).toBe('fresh');
+  });
+
+  it('computes Weight from the calendar\'s busy minutes and the day\'s physical load', async () => {
+    const asked: unknown[] = [];
+    const busy = Array.from({ length: 31 }, (_, i) => ({ day: addDays(TODAY, -i), busy_minutes: Math.round(240 + wobble(i, 40)) }));
+    const h = harness(seriesOf(history(25)), undefined, undefined, { readDemand: async range => { asked.push(range); return { state: 'available', days: busy }; } });
+    await run(h);
+    expect(asked).toEqual([{ from: addDays(TODAY, -30), to: TODAY, timezone: 'UTC' }]);
+    const today = h.inputs.find(input => input.targetDay === TODAY)!.days.find(d => d.day === TODAY)!;
+    expect(today.demand).toEqual({ meetingMinutes: busy[0]!.busy_minutes, messageCount: null, openTaskMinutes: null, physicalLoad: 96 });
+    const weight = h.writes.find(w => w.day === TODAY)!.weight as Record<string, unknown>;
+    expect(typeof weight.score).toBe('number');
+    expect(weight.confidence).toBe(0.55);
+    expect(weight.activation).toBe('candidate_unaccepted');
+  });
+
+  it('leaves Weight unavailable, and still writes Recovery and Form, when the calendar cannot be read', async () => {
+    const cases: [string, ProducerDeps['readDemand'], string[]][] = [
+      ['failed', async () => { throw new Error('do down'); }, ['demand_failed']],
+      ['unavailable', async () => ({ state: 'unavailable', reason: 'not_connected' }), []],
+      ['out of range', async () => ({ state: 'available', days: [{ day: TODAY, busy_minutes: -5 }, { day: addDays(TODAY, -1), busy_minutes: 5000 }] }), []],
+    ];
+    for (const [label, readDemand, codes] of cases) {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      const h = harness(seriesOf(history(25)), undefined, undefined, { readDemand });
+      expect(await run(h)).toBe('written');
+      const row = h.writes.find(w => w.day === TODAY)!;
+      expect([label, row.weight]).toEqual([label, { reason: 'calendar_demand_unavailable' }]);
+      expect(typeof (row.recovery as Record<string, unknown>).score).toBe('number');
+      expect([label, demandLogs(log)]).toEqual([label, codes.map(code => ({ hop: 'weight_demand', ok: false, code }))]);
+      log.mockRestore();
+    }
+  });
+
+  it('starts the calendar read beside the series read, and writes Recovery and Form without waiting past the grace', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const order: string[] = [];
+    let settled = false;
+    const h = harness(seriesOf(history(25)), undefined, undefined, {
+      demandGraceMs: 10,
+      readDemand: () => { order.push('demand'); return new Promise(resolve => setTimeout(() => { settled = true; resolve({ state: 'available', days: busyMonth() }); }, 80)); },
+    });
+    const { readSeries, writeContext } = h.deps;
+    h.deps = { ...h.deps, readSeries: range => { order.push('series'); return readSeries(range); }, writeContext: payload => { order.push(settled ? 'write after demand' : 'write'); return writeContext(payload); } };
+    expect(await run(h)).toBe('written');
+    expect(order).toEqual(['demand', 'series', 'write', 'write']);
+    expect(h.writes.find(w => w.day === TODAY)!.weight).toEqual({ reason: 'calendar_demand_unavailable' });
+    expect(typeof (h.writes.find(w => w.day === TODAY)!.form as Record<string, unknown>).score).toBe('number');
+    expect(demandLogs(log)).toEqual([{ hop: 'weight_demand', ok: false, code: 'demand_late' }]);
+    // The late read still runs to the end, so the owner object can cache it for the next upload.
+    expect(settled).toBe(true);
+  });
+
+  it('tags a day whose Weight was read without a calendar Google reported gone', async () => {
+    const tagsAfter = async (calendarDays: number) => {
+      const h = harness(seriesOf(history(25)), undefined, undefined, { readDemand: async () => ({ state: 'available', days: busyMonth(i => i === 0).slice(0, calendarDays) }) });
+      await run(h);
+      return Object.fromEntries(h.writes.map(w => [w.day, w.tags]));
+    };
+    expect(await tagsAfter(31)).toEqual({ [TODAY]: ['calendar_partial'], [addDays(TODAY, -1)]: [] });
+    // No Weight was shown, so there is nothing for the tag to qualify.
+    expect((await tagsAfter(3))[TODAY]).toEqual([]);
+  });
+
+  it('counts a workout toward physical load only in hours movement did not already cover', async () => {
+    const workout = (start: string, end: string) => sample('workout', TODAY, { start_at: `${TODAY}T${start}:00.000Z`, end_at: `${TODAY}T${end}:00.000Z`, value: 60, activity: 'run' });
+    const h = harness(seriesOf([...history(25), workout('06:00', '07:00'), workout('09:00', '09:30')]), undefined, undefined, { readDemand: async () => ({ state: 'available', days: [] }) });
+    await run(h);
+    const today = h.inputs.find(input => input.targetDay === TODAY)!.days.find(d => d.day === TODAY)!;
+    // 8 hours x 12 movement minutes, plus the 06:00 workout; the 09:00 one falls in an hour movement already counts.
+    expect(today.demand?.physicalLoad).toBe(96 + 60);
+  });
+
+  it('takes the calendar baseline from every day the calendar reports, not only days with health readings', async () => {
+    const busy = Array.from({ length: 31 }, (_, i) => ({ day: addDays(TODAY, -i), busy_minutes: Math.round(240 + wobble(i, 40)) }));
+    const h = harness(seriesOf(history(3)), undefined, undefined, { readDemand: async () => ({ state: 'available', days: busy }) });
+    await run(h);
+    const weight = h.writes.find(w => w.day === TODAY)!.weight as Record<string, unknown>;
+    expect(typeof weight.score).toBe('number');
+    expect(weight.confidence).toBe(0.35);
+  });
+
+  it('writes Weight for a day the phone sent nothing for yet, and leaves its other pillars to reasons', async () => {
+    const samples = history(25).filter(r => r.day !== TODAY);
+    const h = harness(seriesOf(samples), undefined, undefined, { readDemand: async () => ({ state: 'available', days: busyMonth() }) });
+    await run(h);
+    const row = h.writes.find(w => w.day === TODAY)!;
+    expect(typeof (row.weight as Record<string, unknown>).score).toBe('number');
+    expect(row.recovery).toEqual({ reason: expect.any(String) });
+    expect(row.form).toEqual({ reason: expect.any(String) });
+    expect(h.inputs.find(input => input.targetDay === TODAY)!.days.find(d => d.day === TODAY)).toMatchObject({ timezone: 'UTC', sleep: null, hourly: [], workouts: [], demand: { physicalLoad: null } });
+  });
+
+  it('leaves Recovery and Form as they were when the calendar adds days the phone sent nothing for', async () => {
+    const samples = history(25).filter(r => ![addDays(TODAY, -2), addDays(TODAY, -5), addDays(TODAY, -9)].includes(r.day as string));
+    const pillars = async (readDemand?: ProducerDeps['readDemand']) => {
+      const h = harness(seriesOf(samples), undefined, undefined, readDemand ? { readDemand } : {});
+      await run(h);
+      return h.writes.map(w => ({ day: w.day, recovery: w.recovery, form: w.form }));
+    };
+    expect(await pillars(async () => ({ state: 'available', days: busyMonth() }))).toEqual(await pillars());
+  });
+
+  it('writes no row for a day with no readings when the calendar gives Weight too little to score', async () => {
+    const h = harness(seriesOf(history(25).filter(r => r.day !== TODAY)), undefined, undefined, { readDemand: async () => ({ state: 'available', days: busyMonth().slice(0, 1) }) });
+    await run(h);
+    expect(h.writes.map(w => w.day)).toEqual([addDays(TODAY, -1)]);
+  });
+
+  it('leaves physical load unknown on a day with no movement reading and no workout, even with heart-rate hours', async () => {
+    const cases = {
+      sleepOnly: history(25).filter(r => r.day !== TODAY || ['sleep_duration', 'sleep_midpoint', 'overnight_hrv'].includes(r.signal as string)),
+      heartRateHours: history(25).filter(r => r.day !== TODAY || r.signal !== 'movement_duration'),
+    };
+    for (const [label, samples] of Object.entries(cases)) {
+      const h = harness(seriesOf(samples), undefined, undefined, { readDemand: async () => ({ state: 'available', days: [] }) });
+      await run(h);
+      expect([label, h.inputs.find(input => input.targetDay === TODAY)!.days.find(d => d.day === TODAY)!.demand?.physicalLoad]).toEqual([label, null]);
+    }
   });
 
   it('writes only keys the database accepts, and every pillar is either a score or a reason', async () => {
@@ -152,7 +278,80 @@ describe('produceHealthScores', () => {
     expect(today.workouts).toEqual([{ startAt: `${TODAY}T06:00:00.000Z`, endAt: `${TODAY}T06:45:00.000Z` }]);
     expect(today.hourly).toHaveLength(8);
     expect(today.hourly[0]).toMatchObject({ startAt: `${TODAY}T08:00:00.000Z`, daylightMinutes: 20, movementMinutes: 12, hrvMethod: 'rmssd' });
-    expect(today.demand).toBeNull();
+    // Without a calendar reader only physical load is known: 8 hours x 12 movement minutes plus the 45-minute run.
+    expect(today.demand).toEqual({ meetingMinutes: null, messageCount: null, openTaskMinutes: null, physicalLoad: 96 + 45 });
+  });
+
+  describe('hour windows sent again on another grid', () => {
+    const YESTERDAY = addDays(TODAY, -1);
+    const window = (signal: string, day: string, start: string, end: string, value = 30) => sample(signal, day, { start_at: start, end_at: end, value, timezone: 'Asia/Kolkata', utc_offset_minutes: 330 });
+    const hourlyByDay = async (extra: Sample[]) => {
+      const h = harness(seriesOf([...history(25), ...extra]));
+      await run(h);
+      return { h, hourly: new Map(h.inputs[0]!.days.map(d => [d.day, d.hourly.length])) };
+    };
+
+    it('leaves a day with an overlapping window no hourly windows, so Form says intraday inputs are unavailable', async () => {
+      const { h, hourly } = await hourlyByDay([window('movement_duration', TODAY, `${TODAY}T08:30:00.000Z`, `${TODAY}T09:30:00.000Z`)]);
+      expect([hourly.get(TODAY), hourly.get(YESTERDAY)]).toEqual([0, 8]);
+      expect(h.writes.find(w => w.day === TODAY)!.form).toEqual({ reason: 'intraday_inputs_unavailable' });
+      expect(h.writes.find(w => w.day === TODAY)!.recovery).toHaveProperty('score');
+      // A window sent again in the new zone also marks the day as read in two zones.
+      expect(h.writes.find(w => w.day === TODAY)!.tags).toContain('zone_changed');
+    });
+
+    it('leaves physical load unknown on a day with an overlapping window, even with a workout', async () => {
+      const workout = (day: string) => sample('workout', day, { start_at: `${day}T06:00:00.000Z`, end_at: `${day}T07:00:00.000Z`, value: 60, activity: 'run' });
+      const extra = [workout(TODAY), workout(YESTERDAY), window('movement_duration', TODAY, `${TODAY}T08:30:00.000Z`, `${TODAY}T09:30:00.000Z`)];
+      const h = harness(seriesOf([...history(25), ...extra]), undefined, undefined, { readDemand: async () => ({ state: 'available', days: busyMonth() }) });
+      await run(h);
+      const load = (day: string) => h.inputs.find(input => input.targetDay === TODAY)!.days.find(d => d.day === day)!.demand?.physicalLoad;
+      expect([load(TODAY), load(YESTERDAY)]).toEqual([null, 96 + 60]);
+      // Weight's baselines admit fewer physical-load days too, so Weight is a new version as well.
+      expect((h.writes.find(w => w.day === TODAY)!.weight as Record<string, unknown>).algorithm_version).toBe('weight.candidate.v3');
+    });
+
+    it('checks the whole series, so an overlap across a day boundary clears both days', async () => {
+      const { hourly } = await hourlyByDay([window('daylight_duration', TODAY, `${YESTERDAY}T15:30:00.000Z`, `${YESTERDAY}T16:30:00.000Z`)]);
+      expect([hourly.get(TODAY), hourly.get(YESTERDAY), hourly.get(addDays(TODAY, -2))]).toEqual([0, 0, 8]);
+    });
+
+    it('treats the same hour stored under two days as an overlap', async () => {
+      const { hourly } = await hourlyByDay([window('heart_rate_window', TODAY, `${YESTERDAY}T09:00:00.000Z`, `${YESTERDAY}T10:00:00.000Z`)]);
+      expect([hourly.get(TODAY), hourly.get(YESTERDAY)]).toEqual([0, 0]);
+    });
+
+    it('keeps a window that only touches the next one, and a window repeated on the same day', async () => {
+      const { hourly } = await hourlyByDay([
+        window('movement_duration', TODAY, `${TODAY}T16:00:00.000Z`, `${TODAY}T17:00:00.000Z`),
+        window('movement_duration', TODAY, `${TODAY}T08:00:00.000Z`, `${TODAY}T09:00:00.000Z`),
+      ]);
+      expect([hourly.get(TODAY), hourly.get(YESTERDAY)]).toEqual([9, 8]);
+    });
+
+    it('compares windows of one signal only', async () => {
+      const { hourly } = await hourlyByDay([window('daylight_duration', TODAY, `${TODAY}T16:30:00.000Z`, `${TODAY}T17:30:00.000Z`), window('movement_duration', TODAY, `${TODAY}T17:00:00.000Z`, `${TODAY}T18:00:00.000Z`)]);
+      expect(hourly.get(TODAY)).toBe(10);
+    });
+
+    it('leaves an overlapped earlier day out of the baseline, as if it had no hourly windows', async () => {
+      // An earlier day of unusually heavy movement, so whether it is in the baseline shows in today's Form.
+      const day = addDays(TODAY, -3);
+      const heavy = history(25).map(s => (s.day === day && s.signal === 'movement_duration' ? { ...s, value: 55 } : s));
+      const formOf = async (samples: Sample[]) => {
+        const h = harness(seriesOf(samples));
+        await run(h);
+        return { form: h.writes.find(w => w.day === TODAY)!.form, hourly: h.inputs[0]!.days.find(d => d.day === day)?.hourly.length };
+      };
+      const overlapped = await formOf([...heavy, window('movement_duration', day, `${day}T10:30:00.000Z`, `${day}T11:30:00.000Z`)]);
+      const without = await formOf(heavy.filter(s => !(s.day === day && SCORED_WINDOW_SIGNALS.includes(s.signal as string))));
+      const counted = await formOf(heavy);
+      expect([overlapped.hourly, counted.hourly]).toEqual([0, 8]);
+      expect(overlapped.form).toEqual(without.form);
+      expect(counted.form).not.toEqual(without.form);
+      // Admitting fewer inputs is a new Form version under ADR-0081.
+      expect((counted.form as Record<string, unknown>).algorithm_version).toBe('form.candidate.v3');
+    });
   });
 
   it('computes from the source with the most readings and names only that source as the basis', async () => {

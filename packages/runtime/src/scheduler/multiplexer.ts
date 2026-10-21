@@ -23,8 +23,11 @@ const DUE_LOOKAHEAD_MS = 1_000;
 const MAX_DUE_PER_ALARM = 8;
 const PRODUCT_RETRY_DELAY_MS = 30_000;
 const DURABILITY_RETRY_CAP_MS = 15 * 60_000;
-const QUARANTINE_AFTER_ATTEMPTS = 3;
+export const QUARANTINE_AFTER_ATTEMPTS = 3;
 const QUARANTINE_MS = 24 * 60 * 60_000;
+// A paused row whose pause has ended. rearm() wakes for it. hasDue() counts it as due work and reapQuarantine() returns it to
+// armed, and both read this one condition: a row one counts and the other skips would wake the alarm every 250 ms.
+const PAUSE_ENDED = "status = 'quarantined' AND quarantined_until IS NOT NULL AND quarantined_until <= ?";
 
 type ScheduleSqlRow = {
   id: string;
@@ -49,6 +52,14 @@ export type ScheduleInput = {
   payloadRefs: SchedulePayloadRefs;
   recurrence?: ScheduleRecurrence | null;
 };
+
+// Thrown by read(id) for a row this Worker cannot parse, so a caller can tell it apart from a passing fault.
+export class UnreadableScheduleRowError extends Error {
+  constructor() { super('schedule row unreadable'); this.name = 'UnreadableScheduleRowError'; }
+}
+
+// One id's row as this Worker reads it. `unreadable` is a row this Worker cannot parse, such as one a newer Worker wrote.
+export type ScheduleLookup = Readonly<{ state: 'absent' } | { state: 'entry'; entry: ScheduleEntry } | { state: 'unreadable' }>;
 
 export type ScheduleExecutor = (entry: ScheduleEntry) => Promise<void | 'delivery_pending'>;
 export type ScheduleExecutors = Partial<Record<ScheduleKind, ScheduleExecutor>>;
@@ -119,6 +130,19 @@ export class Scheduler {
     return scheduled;
   }
 
+  // Moves an armed entry's next run earlier, to `at`, and nothing else: its last run, retry count and quarantine stay
+  // as the scheduler set them, so an outside wake never resets a retry or lifts a quarantine. A retrying entry keeps its
+  // backoff. Returns whether the entry moved.
+  async pullForward(id: string, at: number): Promise<boolean> {
+    const moved = this.sql.exec(
+      `UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ?
+        WHERE id = ? AND status = 'armed' AND attempts = 0 AND due_at > ?`,
+      at, at, this.deps.now(), id, at,
+    ).rowsWritten > 0;
+    if (moved) await this.rearm();
+    return moved;
+  }
+
   async cancel(id: string): Promise<void> {
     this.sql.exec('DELETE FROM schedule WHERE id = ?', id);
     await this.rearm();
@@ -135,19 +159,45 @@ export class Scheduler {
     const row = this.sql
       .exec<ScheduleSqlRow>('SELECT * FROM schedule WHERE id = ?', id)
       .toArray()[0];
-    return row ? toEntry(row) : null;
+    if (!row) return null;
+    const [entry] = readable([row]).entries;
+    if (!entry) throw new UnreadableScheduleRowError();
+    return entry;
   }
 
-  hasDue(): boolean { return this.dueEntries(this.deps.now()).length > 0; }
+  // For callers that arm or cancel a fixed id at start-up. They treat an unreadable row as present and leave it as it is,
+  // so one reshaped row neither fails the runtime's start nor is overwritten before the Worker that wrote it returns.
+  lookup(id: string): ScheduleLookup {
+    const row = this.sql.exec<ScheduleSqlRow>('SELECT * FROM schedule WHERE id = ?', id).toArray()[0];
+    if (!row) return { state: 'absent' };
+    const [entry] = readable([row]).entries;
+    if (entry) return { state: 'entry', entry };
+    console.log(JSON.stringify({ hop: 'schedule_row_invalid', ok: false, code: 'lookup', count: 1 }));
+    return { state: 'unreadable' };
+  }
 
-  async dispatchDue(executors: ScheduleExecutors): Promise<readonly ScheduleEntry[]> {
+  async cancelReadable(id: string): Promise<void> {
+    if (this.lookup(id).state === 'entry') await this.cancel(id);
+  }
+
+  hasDue(): boolean {
+    const now = this.deps.now();
+    return this.dueEntries(now).entries.length > 0
+      || readable(this.sql.exec<ScheduleSqlRow>(`SELECT * FROM schedule WHERE ${PAUSE_ENDED}`, now).toArray()).entries.length > 0;
+  }
+
+  // canStart: asked before each entry; false leaves it and the rest armed and due for the next wake.
+  async dispatchDue(executors: ScheduleExecutors, canStart?: () => boolean): Promise<readonly ScheduleEntry[]> {
     const now = this.deps.now();
     this.reapQuarantine(now);
-    const due = this.dueEntries(now).slice(0, MAX_DUE_PER_ALARM);
+    const { entries, unreadable } = this.dueEntries(now);
+    if (unreadable > 0) console.log(JSON.stringify({ hop: 'schedule_row_invalid', ok: false, count: unreadable }));
+    const due = entries.slice(0, MAX_DUE_PER_ALARM);
     const dispatched: ScheduleEntry[] = [];
 
     try {
       for (const entry of due) {
+        if (canStart?.() === false) break;
         let fresh = this.read(entry.id);
         if (fresh === null || fresh.status !== 'armed' || fresh.due_at > now + DUE_LOOKAHEAD_MS) {
           continue;
@@ -239,17 +289,16 @@ export class Scheduler {
     });
   }
 
-  private dueEntries(now: number): ScheduleEntry[] {
-    return this.sql
+  private dueEntries(now: number): Readonly<{ entries: ScheduleEntry[]; unreadable: number }> {
+    const { entries, unreadable } = readable(this.sql
       .exec<ScheduleSqlRow>(
         `SELECT *
            FROM schedule
           WHERE status = 'armed' AND due_at <= ?`,
         now + DUE_LOOKAHEAD_MS,
       )
-      .toArray()
-      .map(toEntry)
-      .sort(compareScheduleEntries);
+      .toArray());
+    return { entries: entries.sort(compareScheduleEntries), unreadable };
   }
 
   private bumpAttempt(id: string, now: number): ScheduleEntry {
@@ -413,6 +462,12 @@ export class Scheduler {
     this.settleRun(runId, delivered ? 'ok' : 'quarantined', delivered ? null : 'delivery', this.deps.now());
   }
 
+  // The owner cancelled the work before it was sent: the run did not fail, and no delivery was attempted.
+  settleCancelled(runId: string): void {
+    this.sql.exec(`UPDATE schedule_runs SET delivery = NULL WHERE id = ? AND outcome = 'running'`, runId);
+    this.settleRun(runId, 'ok', null, this.deps.now());
+  }
+
   private settleRun(runId: string, outcome: 'ok' | 'failed' | 'quarantined' | 'missed', errorClass: 'run' | 'scheduler_handoff' | 'delivery' | null, now: number): void {
     this.sql.exec(
       `UPDATE schedule_runs
@@ -549,9 +604,7 @@ export class Scheduler {
               occurrence_at = quarantined_until,
               quarantined_until = NULL,
               updated_at = ?
-        WHERE status = 'quarantined'
-          AND quarantined_until IS NOT NULL
-          AND quarantined_until <= ?`,
+        WHERE ${PAUSE_ENDED}`,
       now,
       now,
     );
@@ -559,7 +612,7 @@ export class Scheduler {
 
   async rearm(): Promise<void> {
     const bound = nextWakeBound(
-      this.sql.exec<ScheduleSqlRow>('SELECT * FROM schedule').toArray().map(toEntry),
+      readable(this.sql.exec<ScheduleSqlRow>('SELECT * FROM schedule').toArray()).entries,
     );
     await rearmSharedAlarm(this.storage, bound, this.deps.now());
   }
@@ -584,6 +637,19 @@ function shouldPropagateDurabilityInvariant(kind: ScheduleKind, err: unknown): b
   return /invalid option|no outbox row|journal\/outbox delivery state mismatch/i.test(
     err.message,
   );
+}
+
+// A row this Worker cannot read is skipped and left exactly as it is. After a rollback, an older Worker can meet a kind
+// or field only a newer one writes: throwing would stop every other job for this owner, and rewriting or quarantining
+// the row would keep the newer Worker from running it after the roll-forward. Skipped rows also set no wake time, so a
+// due one cannot keep the alarm firing.
+function readable(rows: readonly ScheduleSqlRow[]): { entries: ScheduleEntry[]; unreadable: number } {
+  const entries: ScheduleEntry[] = [];
+  let unreadable = 0;
+  for (const row of rows) {
+    try { entries.push(toEntry(row)); } catch { unreadable += 1; }
+  }
+  return { entries, unreadable };
 }
 
 function toEntry(row: ScheduleSqlRow): ScheduleEntry {

@@ -4,6 +4,7 @@ import {
   healthApiErrorV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema, healthConsentListV1Schema, healthConsentWithdrawV1Schema,
   healthIngestReceiptV1Schema, healthIngestV1Schema, healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresUnavailableV1Schema,
 } from '../../../contracts/src/app/health-ingest';
+import { rowFreshness } from './health-context';
 import { md5Hex } from './md5';
 import { produceHealthScores, type ProducerDeps } from '../health/producer';
 
@@ -20,6 +21,8 @@ export type AppHealthInput = Readonly<{
   // After a committed ingest the owner's derived rows are recomputed off the request path. Both must be present to run it.
   defer?: (work: Promise<unknown>) => void;
   compute?: ProducerDeps['compute'];
+  // The owner's calendar busy minutes for Weight, read from the owner's Durable Object. Without it Weight is unavailable.
+  readDemand?: ProducerDeps['readDemand'];
 }>;
 
 export const APP_HEALTH_PATH = '/app/v1/health';
@@ -109,8 +112,10 @@ const scores = async (input: AppHealthInput): Promise<Response> => {
   if (failed) return failed;
   if (typeof result?.unavailable === 'string') return nothing(result.unavailable);
   const stored = asObject(result?.scores);
+  // The stored freshness is the row's at write time; the row is aged when read instead, by its compile time and its own day in its own zone.
+  const aged = typeof stored?.day === 'string' && typeof stored.timezone === 'string' && knownZone(stored.timezone) ? rowFreshness(stored.compiled_at, stored.day, stored.timezone, Date.now()) : null;
   const body = stored && {
-    day: stored.day, timezone: stored.timezone, compiled_at: stored.compiled_at, freshness: stored.freshness,
+    day: stored.day, timezone: stored.timezone, compiled_at: stored.compiled_at, freshness: aged,
     recovery: pillarView('recovery', stored.recovery), form: pillarView('form', stored.form), weight: pillarView('weight', stored.weight),
   };
   const parsed = healthScoresResponseV1Schema.safeParse(body);
@@ -121,13 +126,14 @@ const scores = async (input: AppHealthInput): Promise<Response> => {
 
 // A batch that changed nothing (a replay, or only ignored readings) leaves every derived row as it was. The producer cannot
 // fail the ingest: it starts after the database has answered and its outcome is not part of the response.
-const recompute = ({ rpc, doName, defer, compute }: AppHealthInput, result: unknown, timezone: string): void => {
+const recompute = ({ rpc, doName, defer, compute, readDemand }: AppHealthInput, result: unknown, timezone: string): void => {
   const receipt = healthIngestReceiptV1Schema.safeParse(result);
   if (!defer || !compute || !receipt.success || receipt.data.replayed || receipt.data.accepted + receipt.data.deleted === 0) return;
   defer(produceHealthScores({
     readSeries: range => invoke(rpc, doName, 'series_read', JSON.stringify(range)),
     writeContext: payload => invoke(rpc, doName, 'context_write', payload),
     compute,
+    ...(readDemand ? { readDemand } : {}),
   }, { now: Date.now(), timezone }));
 };
 

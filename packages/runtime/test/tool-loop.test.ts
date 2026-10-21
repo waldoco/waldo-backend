@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { buildSessionState, getContextArgsSchema, sendMessageArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type LLMTool, type LLMToolTurn } from '@waldo/contracts';
+import { buildSessionState, getContextArgsSchema, sendMessageArgsSchema, TOOL_ERRORS, TOOL_PERMISSIONS, triggerTypeSchema, type LLMTool, type LLMToolTurn } from '@waldo/contracts';
 import { capToolOutput, runToolLoop, TOOL_OUTPUT_LIMIT, WARN_WINDOW_ROUNDS } from '../src/conversation/tool-loop';
 import { googleHandlers } from '../src/tools/live/google';
-import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
+import { resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
 import { getContextHandler } from '../src/tools/live/get-context';
 import { webSearchHandler } from '../src/tools/live/web-search';
 
@@ -69,7 +69,7 @@ describe('runToolLoop', () => {
       onTool: (event) => outputs.push(event.output),
       step: async (tools) => (tools ? { text: '', tool_calls: [{ call_id: 'x', name: 'launch_rocket', arguments: '{}' }] } : { text: 'ok' }),
     });
-    expect(JSON.parse(outputs[0]!)).toEqual({ ok: false, error: 'Unknown tool launch_rocket.' });
+    expect(JSON.parse(outputs[0]!)).toEqual({ ok: false, error: 'Unknown tool launch_rocket.', error_code: 'unknown_tool', fix: TOOL_ERRORS.unknown_tool.fix, retryable: false, code: 'invalid_args', reason: 'unknown_tool' });
   });
 
   it('caps an oversized tool result and says how much was cut', () => {
@@ -86,7 +86,7 @@ describe('external taint through the model boundary', () => {
     const seen: (readonly LLMToolTurn[])[] = [];
     const web = webSearchHandler('test-key', async () => Response.json({ web: { results: [{ title: 'T', url: 'https://x.test', description: 'D' }] } }));
     const text = await runToolLoop({
-      handlers: [...handlers, web], ctx, maxSteps: 4,
+      handlers: [...handlers, web], ctx, maxSteps: 10,
       step: async (_tools, turns) => {
         seen.push(turns);
         if (turns.length === 0) return { text: '', tool_calls: [{ call_id: 'c1', name: 'web_search', arguments: '{"query":"q"}' }] };
@@ -150,6 +150,45 @@ describe('runToolLoop connect intents', () => {
     expect(offered).toEqual(['google:not_connected:calendar']);
   });
 
+  it.each([
+    ['a delivered button', async (): Promise<boolean | string> => true, 'A connect button is in the chat'],
+    ['the host\'s own words', async (): Promise<boolean | string> => 'Connect it from settings.', 'Connect it from settings.'],
+    ['an offer that was not sent', async (): Promise<boolean | string> => false, 'No connect button was sent.'],
+    ['an offer that threw', async (): Promise<boolean | string> => { throw new Error('send failed'); }, 'No connect button was sent.'],
+  ] as const)('the model reads what the missing grant is, then what happened to the offer: %s', async (_case, onConnect, outcome) => {
+    const seen: string[] = [];
+    await runToolLoop({
+      handlers: [failing as never], ctx, maxSteps: 3,
+      onConnect,
+      step: async (tools, turns) => {
+        seen.push(JSON.stringify(turns ?? []));
+        return tools ? { text: '', tool_calls: [{ call_id: `c${seen.length}`, name: 'query_calendar', arguments: `{"limit":${seen.length}}` }] } : { text: 'done' };
+      },
+    });
+    const outputs = (JSON.parse(seen.at(-1)!) as { output: string }[]).map(turn => turn.output);
+    expect(outputs.length).toBeGreaterThan(1);
+    for (const output of outputs) {
+      expect(output.split('Google (calendar) is not connected.').length - 1).toBe(1);
+      expect(output.split(outcome).length - 1).toBe(1);
+      if (outcome !== 'A connect button is in the chat') expect(output).not.toContain('connect button is in the chat');
+    }
+  });
+
+  it('a repeated identical failing call does not hear the offer twice', async () => {
+    const seen: string[] = [];
+    await runToolLoop({
+      handlers: [failing as never], ctx, maxSteps: 3,
+      onConnect: async () => true,
+      step: async (tools, turns) => {
+        seen.push(JSON.stringify(turns ?? []));
+        return tools ? { text: '', tool_calls: [{ call_id: `c${seen.length}`, name: 'query_calendar', arguments: '{}' }] } : { text: 'done' };
+      },
+    });
+    const outputs = (JSON.parse(seen.at(-1)!) as { output: string }[]).map(turn => turn.output);
+    expect(outputs.length).toBeGreaterThan(1);
+    for (const output of outputs) expect(output.split('A connect button is in the chat').length - 1).toBe(1);
+  });
+
   it('a throwing offerConnect never breaks the turn', async () => {
     const text = await runToolLoop({
       handlers: [failing as never], ctx, maxSteps: 2,
@@ -190,8 +229,9 @@ describe('warn-first budget notice and distinct read identities', () => {
     });
     expect(text).toBe('wrapped up.');
     expect(seenAt[1]![0]).not.toContain('[budget:');
-    expect(seenAt.some((turns) => turns.some((o) => o.includes('[budget: 4 tool rounds left this turn - start wrapping up')))).toBe(true);
-    expect(seenAt.some((turns) => turns.some((o) => o.includes('[budget: 2 tool rounds left this turn - wrap up and answer now')))).toBe(true);
+    expect(seenAt.some((turns) => turns.some((o) => o.includes('[budget: 3 tool rounds left')))).toBe(false);
+    expect(seenAt.some((turns) => turns.some((o) => o.includes('[budget: 2 tool rounds left this turn - finish the step you are on')))).toBe(true);
+    expect(seenAt.some((turns) => turns.some((o) => o.includes('[budget: 1 tool round left this turn')))).toBe(true);
     const lastDelivered = seenAt[seenAt.length - 1]!;
     expect(lastDelivered[lastDelivered.length - 1]).toContain('[budget: tool budget exhausted this turn');
   });
@@ -494,6 +534,39 @@ describe('turn taint accumulation (Codex #224 hold)', () => {
     // distinguishing evidence is hasApproval: true yet zero dispatches after the tainted read.
     expect(outputs[1]).toContain('"code":"forbidden"');
     expect(outputs[1]).toContain('approval_denied');
+  });
+
+  // A hosted search runs inside the model's own call, so its results arrive with the response, not as a tool result.
+  it('a privileged call in the same round as a hosted web search is halted by the taint gate', async () => {
+    let sent = 0;
+    const send = {
+      name: 'send_message' as const,
+      description: 'Queue a message.',
+      schema: sendMessageArgsSchema,
+      trigger_allowlist: triggerTypeSchema.options.filter((t) => TOOL_PERMISSIONS[t].includes('send_message')),
+      autonomy_gated: true,
+      handle: async () => { sent += 1; return { ok: true as const, data: { queued: true }, source_taint: null }; },
+    };
+    const taintCtx = { ...ctx, toolArgSourceTaint: null, hasApproval: () => true, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
+    const call = { call_id: 'm1', name: 'send_message', arguments: '{"channel":"telegram","content":"hi","idempotency_key":"' + 'd'.repeat(64) + '"}' };
+    const outputs: string[] = [];
+    let n = 0;
+    const text = await runToolLoop({
+      handlers: [send as never], ctx: taintCtx, maxSteps: 25,
+      onTool: (e) => outputs.push(e.output),
+      step: async (tools) => {
+        n += 1;
+        if (!tools || n > 1) return { text: 'done.' };
+        return { text: '', tool_calls: [call], output_items: [
+          { type: 'web_search_call', id: 'ws_1', status: 'completed', action: { type: 'search', query: 'quiet hotels near the venue' } },
+          { type: 'function_call', id: 'fc_1', ...call },
+        ] };
+      },
+    });
+    expect(text).toBe('done.');
+    expect(taintCtx.toolArgSourceTaint).toBe('external');
+    expect(sent).toBe(0);
+    expect(outputs[0]).toContain('approval_denied');
   });
 
   it('a privileged call before any external content still dispatches (control)', async () => {

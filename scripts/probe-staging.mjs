@@ -10,12 +10,14 @@
 //           --live    include the live-send receipt probe (sends ONE real Telegram message to
 //                     the owner; capture mode never sends). Off by default.
 //
-// Endpoint contract (packages/runtime/src/channels/probe-turn.ts + telegram-owner-do.ts):
+// Endpoint contract (packages/runtime/src/channels/probe-turn.ts + owner-do.ts):
 //   404 non-staging/unconfigured/wrong method; 403 missing or wrong token;
 //   400 malformed JSON / empty text / text > 4000 chars; 429 past 20 probes per minute;
 //   503 owner var unset; 200 JSON { trace: "tg-<n>"|null, outcome: string, captured: array|null }.
 // Capture mode (default) suppresses memory persistence and strips live provider tools for the
 // duration of the probe; live:true keeps the full surface and really sends.
+
+import { STAGING_WORKER_URL } from './staging-gate.mjs';
 
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(name);
@@ -24,7 +26,7 @@ const opt = (name, fallback) => {
   return i >= 0 && args[i + 1] ? args[i + 1] : fallback;
 };
 
-const BASE = opt('--url', 'https://waldo-runtime-staging.piyushfulper3210.workers.dev');
+const BASE = opt('--url', STAGING_WORKER_URL);
 const TOKEN = process.env.WALDO_PROBE_TOKEN;
 if (!TOKEN) {
   console.error('FAIL setup: WALDO_PROBE_TOKEN env var is required (value never printed).');

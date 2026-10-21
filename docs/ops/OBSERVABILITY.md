@@ -75,3 +75,19 @@ Each model call is a Langfuse generation with `model.name`, `usage_details` (`in
 
 Deploy with both vars so traces carry them:
 `npx wrangler deploy --name waldo-runtime-staging --var WALDO_OWNER_TELEGRAM_ID:<id> --var WALDO_ENVIRONMENT:staging --var WALDO_RELEASE:$(git rev-parse --short HEAD) --var LANGFUSE_CAPTURE_TEXT:true`
+
+### Durable cost ledger
+
+`waldo.cost_ledger_daily` (Supabase, migration `20261020120000_waldo_cost_ledger.sql`) holds one row per owner, UTC day, cost kind (`turn`, `background`, `worker`, `heartbeat`, `eval`) and model: calls, input, output and cached tokens, hosted web searches, `sandbox_ms`, `usd_estimate`, and the reserved `browser_ms` and `broker_calls` (no producer yet). Rows that are not a model call file under model `''`. The USD figure comes from `llm/pricing.ts`; an unpriced model counts tokens at `0` USD.
+
+The owner's Durable Object is the only writer. `packages/runtime/src/observability/cost-rollup.ts` folds each turn-log hop with usage into per-day deltas held in the DO's KV, and after the hop sends them over the signed router rail (`waldo.cost_ledger_add`). It is write-behind: the turn never waits on Supabase, a failed send keeps the deltas and retries the same batch id on the next hop (the database ignores a batch id it has already applied), and a batch refused 20 times is dropped with a `cost_ledger` hop (`code: sync_failed`). Deleting the owner deletes their ledger rows.
+
+It is off unless the Worker var `WALDO_COST_LEDGER_SYNC=on`. No hosted config sets it; turn it on per environment once the migration has been applied there.
+
+Spend per owner per day for the last 30 days (service role):
+
+```sql
+select o.do_name, l.day, sum(l.usd_estimate) as usd, sum(l.input_tokens) as input, sum(l.cached_tokens) as cached
+from waldo.cost_ledger_daily l join waldo.owners o on o.id = l.owner_id
+where l.day >= current_date - 30 group by 1, 2 order by 2 desc, 3 desc;
+```

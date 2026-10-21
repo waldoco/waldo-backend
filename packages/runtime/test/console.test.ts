@@ -216,8 +216,8 @@ describe('owner console', () => {
     expect(html).toContain('Hello, full message.');
     expect(html).not.toContain('>Send it</button>');
     expect(html).not.toContain('value="approval.approve"');
-    expect(html).toContain('approving this send happens there. Not now dismisses it');
-    // Dismissal is the safe direction: open send proposals carry Not now, never Do it.
+    expect(html).toContain("approving this send happens there. Don't do this dismisses it");
+    // Dismissal is the safe direction: open send proposals carry Don't do this, never Do it.
     expect(html).toContain('value="approval.skip"');
     expect(html).toContain('This console cannot approve or dismiss it.');
     // Exactly the two open send proposals are dismissible; mcp/browser stay undecidable here.
@@ -418,6 +418,10 @@ describe('owner console', () => {
     expect(waiting).not.toContain('id="overview"');
     const activity = renderConsole(SAMPLE_CONSOLE_VIEW, 'activity');
     expect(activity).toContain('<a href="/console/activity" aria-current="page">Activity</a>');
+    // Separate pages reachable from every page's nav: invites, devices and iMessage.
+    for (const page of [overview, waiting, activity]) {
+      expect(page).toContain('<a href="/console/devices">Devices</a><a href="/console/imessage">iMessage</a></nav>');
+    }
   });
 
   it('a spot stuck mid-forget stays visible with a working Retry action', () => {

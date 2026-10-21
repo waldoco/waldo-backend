@@ -21,6 +21,15 @@ it('coded setup accepts exact issuer format once and rejects groups/mismatch/ext
  expect(parseCodedSetup({...message('/start ABCDEFGH23'),message:{...message('/start ABCDEFGH23').message,chat:{id:-1,type:'group'}}})).toBeNull();
  expect(parseCodedSetup({...message('/link ABCDEFGH23'),update_id:-1})).toBeNull();
 });
+it('a forwarded /start or /link CODE is someone else\'s text and never parses as coded setup',()=>{
+ const sam={id:4242,is_bot:false,first_name:'Sam'};
+ for(const text of ['/start ABCDEFGH23','/link ABCDEFGH23']){
+  const typed={update_id:1,message:{from:{id:42},chat:{id:42,type:'private'},text}};
+  expect(parseCodedSetup(typed)).toMatchObject({code:'ABCDEFGH23'});
+  // The shape the Bot API server sends: forward_origin beside the legacy forward fields.
+  expect(parseCodedSetup({...typed,message:{...typed.message,forward_origin:{type:'user',date:1_700_000_000,sender_user:sam},forward_from:sam,forward_date:1_700_000_000}})).toBeNull();
+ }
+});
 
 it('malformed nonempty RPC result is uncertain, not redeemed',async()=>{const f=vi.fn(async()=>Response.json('not-a-uuid'));expect(await ownerDirectory(env,f).redeemHashed!('telegram','42',hash)).toEqual({kind:'uncertain'})});
 it('directory fetch has the same bounded abort signal as webhook admission',async()=>{let signal:AbortSignal|undefined;const f=vi.fn(async(_url:RequestInfo|URL,init?:RequestInit)=>{signal=init?.signal as AbortSignal;throw Error('aborted')});expect(await ownerDirectory(env,f as typeof fetch).redeemHashed!('telegram','42',hash)).toEqual({kind:'uncertain'});expect(signal).toBeInstanceOf(AbortSignal)});

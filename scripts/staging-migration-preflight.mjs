@@ -2,7 +2,8 @@ import {createHash} from 'node:crypto';
 import {readdirSync,readFileSync,writeFileSync,lstatSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-const PROJECT='togdshayyxycitzckpqv';
+export const STAGING_PROJECT='togdshayyxycitzckpqv';
+const PROJECT=STAGING_PROJECT;
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 export function compareHistory(local,remote){
   if(!Array.isArray(remote))throw new Error('history_shape');

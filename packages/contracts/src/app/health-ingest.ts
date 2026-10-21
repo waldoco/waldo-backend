@@ -177,17 +177,30 @@ export const healthScoreUnavailableReasonV1Schema = z.enum([
   'missing_resting_signal', 'stale_inputs', 'conflicting_inputs', 'intraday_inputs_unavailable', 'calendar_demand_unavailable',
 ]);
 const scoreUnavailable = z.strictObject({ state: z.literal('unavailable'), reason: healthScoreUnavailableReasonV1Schema });
+const algorithmVersion = z.string().regex(/^[a-z][a-z0-9-]*(?:\.[a-z0-9-]+)*\.v[0-9]+$/).max(64);
+const activation = z.enum(['candidate_unaccepted', 'accepted']);
 const scoreAvailable = <Zone extends z.ZodType>(zone: Zone) => z.strictObject({
   state: z.literal('available'),
   score: z.number().finite().min(0).max(100),
   // Null while this algorithm version has no ratified zone bands; the app shows the score without a zone word.
   zone: zone.nullable(),
-  algorithm_version: z.string().regex(/^[a-z][a-z0-9-]*(?:\.[a-z0-9-]+)*\.v[0-9]+$/).max(64),
-  activation: z.enum(['candidate_unaccepted', 'accepted']),
+  algorithm_version: algorithmVersion,
+  activation,
   confidence: z.number().finite().min(0).max(1).nullable(),
   hrv_method: hrvMethodV1.nullable(),
 });
 const pillar = <Zone extends z.ZodType>(zone: Zone) => z.union([scoreUnavailable, scoreAvailable(zone)]);
+// Sleep debt over the last 14 nights. A window with a missing night is partial and gives no figure. debt_minutes weighs
+// recent nights more (the last night 1, the oldest 0.5) and earns nothing back for extra sleep, so it is not a count of
+// minutes missed; 14 whole nights of 1,440 minutes bound it.
+export const healthSleepDebtV1Schema = z.union([
+  scoreUnavailable,
+  z.strictObject({ state: z.literal('partial'), confidence: z.number().finite().min(0).max(1), algorithm_version: algorithmVersion, activation }),
+  z.strictObject({
+    state: z.literal('available'), debt_minutes: z.number().finite().min(0).max(20_160), need_basis: z.enum(['owner_confirmed', 'own_average']),
+    algorithm_version: algorithmVersion, activation,
+  }),
+]);
 export const healthScoresQueryV1Schema = z.strictObject({ day: healthDayV1Schema.optional() });
 // compiled_at is the row's own compile time on the backend, never the read time and never a device clock.
 export const healthScoresV1Schema = z.strictObject({
@@ -198,6 +211,8 @@ export const healthScoresV1Schema = z.strictObject({
   recovery: pillar(healthRecoveryZoneV1Schema),
   form: pillar(healthFormZoneV1Schema),
   weight: pillar(healthWeightZoneV1Schema),
+  // Absent when the row was not computed with it, never a stand-in for zero debt.
+  sleep_debt: healthSleepDebtV1Schema.optional(),
 });
 // No row to show for the day: a 200 with the reason, never a zero score.
 export const healthScoresUnavailableV1Schema = z.strictObject({
