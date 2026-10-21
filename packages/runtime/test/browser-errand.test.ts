@@ -24,7 +24,7 @@ type Script = {
 
 function harness(overrides: Partial<Script> = {}) {
   let row: unknown = null, lock: Promise<unknown> = Promise.resolve(), now = 1_000_000, grant = true;
-  let failSave: ((record: BrowserErrandCheckpoint) => boolean) | undefined;
+  let failSave: ((record: BrowserErrandCheckpoint) => boolean) | undefined, fenceFails = false;
   const calls = { prepare: 0, submit: 0, find: 0, run: 0, verify: 0, release: 0, fence: 0, loginStart: 0, confirm: 0 };
   const script: Script = {
     prepare: { kind: 'review', sessionRef: 'vendor-session-secret', runRef: 'vendor-run-prepare', url: 'https://shop.example/account/cancel', facts: { plan: 'Synthetic Premium', effective: '2026-11-01' } },
@@ -47,7 +47,7 @@ function harness(overrides: Partial<Script> = {}) {
     run: async () => { calls.run++; return script.run(); },
     verify: async () => { calls.verify++; return script.verify; },
     release: async () => { calls.release++; },
-    fence: async () => { calls.fence++; },
+    fence: async () => { calls.fence++; if (fenceFails) throw Error('vendor unavailable'); },
     login: {
       start: async () => { calls.loginStart++; return { sessionRef: 'vendor-session-secret', liveViewUrl: 'https://live.vendor.test/view/secret-token' }; },
       confirm: async ({ account }) => { calls.confirm++; return account === 'owner@shop.example'; },
@@ -64,6 +64,7 @@ function harness(overrides: Partial<Script> = {}) {
     advance: (ms: number) => { now += ms; },
     revoke: () => { grant = false; },
     dieOnSave: (when: (record: BrowserErrandCheckpoint) => boolean) => { failSave = when; },
+    failFence: (on: boolean) => { fenceFails = on; },
   };
 }
 
@@ -195,12 +196,25 @@ describe('browser errand seam', () => {
     const h = harness({ submit: async () => ({ status: 'not_started' }) }); const errand = h.make();
     const proposal = await prepared(errand);
     expect(await errand.submit('owner-a', proposal, 'approval-1')).toMatchObject({ status: 'rejected', message: expect.stringContaining('prepare it again') });
-    expect(h.row()).toMatchObject({ phase: 'ready', proposalId: null });
+    expect(h.row()).toMatchObject({ phase: 'ready', proposalId: null, custody: { sessionRef: null } });
+    expect(h.calls.fence, 'the held browser is ended, not forgotten').toBe(1);
     expect(await errand.submit('owner-a', proposal, 'approval-1')).toMatchObject({ status: 'rejected' });
     h.script.submit = async () => ({ status: 'started', runRef: 'vendor-run-submit' });
     const fresh = await prepared(errand);
     expect(fresh.continuation!.proposalId).not.toBe(proposal.continuation!.proposalId);
     expect(h.calls.verify).toBe(0);
+  });
+
+  it('a final step that could not start, whose browser could not be ended, is ended by the next sweep', async () => {
+    const h = harness({ submit: async () => ({ status: 'not_started' }) }); const errand = h.make();
+    const proposal = await prepared(errand);
+    h.failFence(true);
+    expect(await errand.submit('owner-a', proposal, 'approval-1')).toMatchObject({ status: 'rejected' });
+    expect(h.row()).toMatchObject({ phase: 'ready', custody: { sessionRef: 'vendor-session-secret' } });
+    h.failFence(false);
+    expect(await errand.sweep('owner-a')).toBe('ready');
+    expect(h.row().custody.sessionRef).toBeNull();
+    expect(h.calls.fence).toBe(2);
   });
 
   it('refuses a changed approval, an unadopted errand type, a revoked grant and another owner', async () => {

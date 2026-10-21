@@ -321,7 +321,9 @@ export function browserErrand(options: Readonly<{
         try { started = await options.engine.submit({ sessionRef: record.custody.sessionRef, submitKey: intent.submit!.key, profileRef: record.custody.profileRef, finalAction: record.finalAction, facts: record.review.facts }); }
         catch { return readback(intent); }
         if (started.status === 'not_started') {
-          await save({ ...intent, phase: 'ready', review: null, proposalId: null, approvalExpiresAt: null, holdExpiresAt: null, submit: null, custody: { ...intent.custody, sessionRef: null, prepareRunRef: null } });
+          // No run was created, but the held browser is still signed in, and on a conflict another run is active in it:
+          // the session is ended so nothing in it can act. A failed end keeps the reference for the sweep.
+          await release({ ...intent, review: null, proposalId: null, approvalExpiresAt: null, submit: null, custody: { ...intent.custody, prepareRunRef: null } }, 'ready', true);
           return rejected('The final step could not start, so nothing was submitted. Ask me to prepare it again and approve the new review.');
         }
         return readback(await save({ ...intent, phase: 'submitted', custody: { ...intent.custody, submitRunRef: started.runRef } }));
@@ -365,6 +367,8 @@ export function browserErrand(options: Readonly<{
           return (await release({ ...record, login: { ...record.login, state: 'expired' } }, 'expired')).phase;
         }
         if (TERMINAL.has(record.phase) && record.custody.sessionRef !== null) return (await release(record, record.phase)).phase;
+        // Only a failed stop leaves a ready errand holding a browser.
+        if (record.phase === 'ready' && record.custody.sessionRef !== null) return (await release(record, 'ready', true)).phase;
         return record.phase;
       });
     },
