@@ -35,6 +35,8 @@ export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActio
   autonomy_gated: false,
   mutates_state: true,
   handle: async (args: ProposeActionArgs, ctx: ToolDispatcherContext): Promise<ToolResult<unknown>> => {
+    // The card is the route for arguments that came from outside; a turn that read nothing from outside calls the tool.
+    if ((ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint !== 'external') return { ok: false, error: 'Nothing in this turn came from an email, web page or other outside source, so no approval card is needed; call the tool directly.', code: 'rejected' };
     const tool = toolNameSchema.safeParse(args.tool);
     if (!tool.success) return { ok: false, error: `No tool is named ${args.tool}; propose one of the tools you were offered.`, code: 'invalid_args' };
     if (!PRIVILEGED_ACTION_TOOLS.includes(tool.data)) return { ok: false, error: `${tool.data} needs no approval; call it directly.`, code: 'rejected' };
