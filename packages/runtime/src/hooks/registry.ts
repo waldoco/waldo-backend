@@ -73,7 +73,7 @@ import {
   searchToolsArgsSchema,
   sendMessageArgsSchema,
   useMacArgsSchema,
-  browseActArgsSchema, delegateTaskArgsSchema,
+  browseActArgsSchema, delegateTaskArgsSchema, startTaskArgsSchema, cancelTaskArgsSchema,
   browsePageArgsSchema,
   cancelReminderArgsSchema,
   cancelStandingOrderArgsSchema,
@@ -252,6 +252,8 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   browse_page: browsePageArgsSchema,
   browse_act: browseActArgsSchema,
   delegate_task: delegateTaskArgsSchema,
+  start_task: startTaskArgsSchema,
+  cancel_task: cancelTaskArgsSchema,
 });
 
 export const jwtValidateHook: HookHandler<HookRuntimeContext> = {
