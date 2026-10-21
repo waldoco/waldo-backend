@@ -40,7 +40,7 @@ const body = JSON.stringify({ subject: 'fixture', kind: 'incident', title: 'fixt
 
 let sequence = 0;
 const driveEvent = async (identity: Record<string, string | boolean>, arrange?: () => void) => {
-  const stub = env.TRACER_DO.get(env.TRACER_DO.idFromName(`event-owner-egress-${sequence++}`));
+  const stub = env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`event-owner-egress-${sequence++}`));
   return runInDurableObject(stub, async (_instance, state) => {
     const owner = new OwnerDO(state, {
       ...env, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined,

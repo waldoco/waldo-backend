@@ -1,3 +1,4 @@
+import { TOOL_ERRORS } from '@waldo/contracts';
 import { ownerTyped } from './helpers/owner-typed';
 import { beforeEach, expect, it, vi } from 'vitest';
 const calls = vi.hoisted(() => ({ order: [] as string[], replyInputs: [] as string[], onFirstReply: undefined as undefined | (() => void), outputs: [] as unknown[][] }));
@@ -10,7 +11,7 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (body: u
 const { createOwnerResponder } = await import('../src/channels/owner-turn');
 const { loopHandlers } = await import('../src/channels/loops');
 const { rememberArgsSchema } = await import('@waldo/contracts');
-const memory = { incompleteTopics: () => [], pendingTopics: () => [], claims: () => [], allClaims: () => [], recall: () => [], nodes: () => [], edges: () => [], barriers: () => [], beginSettle: () => {}, endSettle: () => {}, settle: () => {}, sweepInterruptedSettles: () => 0 };
+const memory = { pendingTopics: () => [], claims: () => [], allClaims: () => [], recall: () => [], nodes: () => [], edges: () => [], barriers: () => [], beginSettle: () => {}, endSettle: () => {}, settle: () => {}, sweepInterruptedSettles: () => 0 };
 const loopBook = { close: () => true, open: () => ({}), list: () => [], closed: () => [], proactivity: () => ({}), setProactivity: () => ({}) };
 const tool = (name: string, args: unknown) => [{ type: 'function_call', call_id: name, name, arguments: JSON.stringify(args) }];
 // Narrow handler fake tests transport/order/receipts. Real grounding/store handlers are exercised in memory-health-owner-turn.
@@ -66,7 +67,8 @@ it('host-disabled memory writes remove remember even if the model attempts to ca
 it('steering reaches the next main-model round without an intervening writer; a chosen remember call can store it', async () => {
   const { responder, run, writes } = setup({ loops: true });
   calls.outputs.push(tool('close_loop', { id: 'x', outcome: 'done' }), tool('remember', { kind: 'preference', text: 'Vegan', evidence_quote: 'I am vegan now' }), []);
-  calls.onFirstReply = () => { responder.control.steer(5, 'also I am vegan now'); };
+  responder.control.bindTarget('run');
+  calls.onFirstReply = () => { expect(responder.control.steerTarget('run', 5, { text: 'also I am vegan now', foreignRanges: [] })).toBe(true); };
   expect(await run('plan dinner')).toContain('memory stored');
   expect(calls.order).toEqual(['reply', 'reply', 'remember', 'reply']);
   expect(calls.replyInputs[1]).toContain('also I am vegan now');
@@ -81,7 +83,7 @@ it('a throwing remember tool yields a failed receipt, not the removed partial-wr
   expect(calls.order).toEqual(['reply', 'remember', 'reply']);
   expect(writes).toEqual([]);
   const output = JSON.parse(JSON.parse(calls.replyInputs[1]!).input.find((item: { type: string }) => item.type === 'function_call_output').output);
-  expect(output).toEqual({ ok: false, error: 'tool handler failed', code: 'transient', reason: 'handler_failed' });
+  expect(output).toEqual({ ok: false, error: TOOL_ERRORS.handler_failed.cause, error_code: 'handler_failed', fix: TOOL_ERRORS.handler_failed.fix, retryable: false, code: 'transient', reason: 'handler_failed' });
   expect(calls.replyInputs[1]).not.toContain('memory storage unavailable');
   for (const input of calls.replyInputs) expect(input).not.toContain('only partly stored');
 });

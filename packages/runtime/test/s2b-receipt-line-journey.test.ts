@@ -29,7 +29,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
 });
 const { OwnerDO } = await import('../src/channels/owner-do');
 it.each(['effect-turn', 'read-only-turn'])('S2b receipt line on the owner reply: %s', async mode => {
-  await runInDurableObject(env.TRACER_DO.get(env.TRACER_DO.idFromName(`s2b-receipt-${mode}`)), async (_instance, state) => {
+  await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`s2b-receipt-${mode}`)), async (_instance, state) => {
     const originalNow = Date.now;
     let now = Date.parse('2026-10-03T06:59:00Z');
     Date.now = () => now;

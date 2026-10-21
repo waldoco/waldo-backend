@@ -86,8 +86,12 @@ it('runs owner console pair -> signed redeem/connect/heartbeat -> revoke through
   socket.send(canonicalJson({ ...frame, signature }));
   await vi.waitFor(() => expect(touched).toBe(1));
   const deviceStub = env.DEVICE_BRIDGE_DO!.get(env.DEVICE_BRIDGE_DO!.idFromName('dev_fixture')) as DurableObjectStub<DeviceBridgeDO>;
-  const page = await call(new Request('https://bridge.test/console/devices', { headers: { cookie } }));
-  const html = await page.text(); expect(html).toContain('Online'); expect(html).not.toContain('<script>bad</script>');
+  const opened = await call(new Request('https://bridge.test/console/devices', { redirect: 'manual', headers: { cookie } }));
+  expect({ status: opened.status, location: opened.headers.get('location') }).toEqual({ status: 303, location: '/console#/connections/devices' });
+  const read = await call(new Request('https://bridge.test/console/dashboard/api/v1/controls?view=devices', { headers: { cookie, accept: 'application/json' } }));
+  expect(read.headers.get('content-type')).toContain('application/json');
+  // The hostile label stays data in JSON; the dashboard renders it as text.
+  expect(await read.json()).toMatchObject({ data: { devices: [{ id: 'dev_fixture', label: '<script>bad</script>' }] }, status: { devices: [{ id: 'dev_fixture', online: true }] } });
   const originalClosed = new Promise<number>((resolve) => socket.addEventListener('close', (event) => resolve(event.code)));
   const conflictingFrame = { ...frame, nonce: base64url(crypto.getRandomValues(new Uint8Array(16))), payload: { ...frame.payload, outbox_depth: 1 } };
   const conflictSignature = await sign(frameSignatureBase(conflictingFrame.timestamp, conflictingFrame.type, conflictingFrame.message_id, conflictingFrame.nonce, await sha256Hex(new TextEncoder().encode(canonicalJson(conflictingFrame)))));

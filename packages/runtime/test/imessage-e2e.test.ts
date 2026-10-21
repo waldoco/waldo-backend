@@ -8,15 +8,16 @@ import { sha256Hex } from '../src/channels/imessage/crypto';
 import { IMessageFinalOutbox } from '../src/channels/imessage/final-outbox';
 import { IMessageOwnerInbox } from '../src/channels/imessage/owner-inbox';
 import { BridgeStore } from '../src/channels/imessage/bridge-store';
+import { gmailPushBook } from '../src/channels/gmail-push';
 import { PROPOSED_LOCAL_TEST_POLICY } from '../src/channels/imessage/policy';
 import { fixtureDirectory, type FixtureOwner } from './helpers/imessage-fixture-directory';
 import { SimulatedHost } from './helpers/imessage-sim-host';
 
 // Scripted model: every non-structured responses.create call is one owner turn.
-const proof = vi.hoisted(() => ({ turns: [] as string[], reply: 'Scripted owner reply.', hold: null as null | (() => Promise<void>), outputs: [] as any[][] }));
+const proof = vi.hoisted(() => ({ turns: [] as string[], systems: [] as string[], reply: 'Scripted owner reply.', hold: null as null | (() => Promise<void>), outputs: [] as any[][] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: any) => {
   const format = input.text?.format?.name;
-  if (!format) { proof.turns.push(JSON.stringify(input.input ?? '')); if (proof.hold) { const h = proof.hold; proof.hold = null; await h(); } }
+  if (!format) { proof.turns.push(JSON.stringify(input.input ?? '')); proof.systems.push(String(input.instructions ?? '')); if (proof.hold) { const h = proof.hold; proof.hold = null; await h(); } }
   return { id: 'scripted', output: format ? [] : proof.outputs.shift() ?? [], output_text: format === 'claim_ops' ? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : format ? '{}' : proof.reply, usage: { input_tokens: 1, output_tokens: 1 } };
 } }; } }));
 vi.mock('../src/connectors/google', async load => ({ ...await load<typeof import('../src/connectors/google')>(), googleClient: () => ({
@@ -28,13 +29,14 @@ const HOST_ORIGIN = 'https://imessage.fixture.invalid';
 const SUBJECT = 'owner@example.invalid', CHAT = `iMessage;-;${SUBJECT}`;
 const forbiddenEgress: string[] = [];
 
-afterEach(() => { vi.restoreAllMocks(); proof.turns = []; proof.hold = null; proof.outputs = []; });
+afterEach(() => { vi.restoreAllMocks(); proof.turns = []; proof.systems = []; proof.hold = null; proof.outputs = []; });
 
 async function world(ownerName = `imsg-owner-${crypto.randomUUID()}`, ownerId = '10000000-0000-4000-8000-000000000001') {
   const owners: FixtureOwner[] = [{ do_name: ownerName, owner_id: ownerId, state: 'active', state_version: 1, admission_revision: 1 }];
   const fx = fixtureDirectory({ origin: ORIGIN, secret: SECRET, owners, extra: (fn) => {
     if (fn === 'console_session_touch' || fn === 'console_session_open') return Response.json(true);
     if (fn === 'health_context_read' || fn === 'health_plane') return Response.json(null);
+    if (fn === 'admin_overview') return Response.json(null);
     return null;
   } });
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
@@ -78,7 +80,15 @@ async function world(ownerName = `imsg-owner-${crypto.randomUUID()}`, ownerId = 
     expect((await host.capabilities()).status).toBe(200);
     return { code, challenge };
   };
-  return { fx, ownerName, ownerStub, action, host, bridgeStub, call, pump, settle, pairAndActivate, csrf };
+  // The new console's read-then-act, as the dashboard sends it.
+  const dashboard = async (name: string, fields: Record<string, string> = {}) => {
+    const read = await call(new Request(`${HOST_ORIGIN}/console/dashboard/api/v1/controls?view=imessage`, { headers: { cookie, accept: 'application/json' } }));
+    const controls = await read.json() as { csrf: string; revision: string };
+    const body = new URLSearchParams({ csrf: controls.csrf, revision: controls.revision, view: 'imessage', action: name, request_id: `e2e-${crypto.randomUUID()}`, ...fields });
+    const response = await call(new Request(`${HOST_ORIGIN}/console/dashboard/api/v1/actions`, { method: 'POST', headers: { cookie, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body }));
+    return { status: response.status, body: await response.json() };
+  };
+  return { fx, ownerName, ownerStub, action, dashboard, host, bridgeStub, call, pump, settle, pairAndActivate, csrf };
 }
 
 it('pairs with an owner-confirmed challenge; pending credentials reach no owner turn or command', async () => {
@@ -273,6 +283,34 @@ it('revocation during the model await blocks publication and pull; revoked hosts
   expect(w.fx.presences.size).toBe(1);
   expect([...w.fx.presences.values()][0]!.active).toBe(false);
 });
+
+it('a revoke from the new console during the model await does not wait for the turn: it stops that turn and the next queued text never runs', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  // The hold runs inside the owner DO, where runInDurableObject is unavailable, so admissions are counted at the inbox.
+  const admitted: string[] = [], admit = IMessageOwnerInbox.prototype.admit;
+  vi.spyOn(IMessageOwnerInbox.prototype, 'admit').mockImplementation(async function (this: IMessageOwnerInbox, ...args: Parameters<typeof admit>) {
+    const result = await admit.apply(this, args); admitted.push(result.kind); return result;
+  });
+  let revoked: unknown;
+  proof.hold = async () => {
+    await vi.waitFor(() => expect(admitted).toEqual(['admitted', 'admitted']), { timeout: 5_000 });
+    revoked = await w.dashboard('imessage.revoke', { id: w.host.bridgeId });
+  };
+  expect((await w.host.send(w.host.message('Start something long'))).status).toBe(200);
+  expect((await w.host.send(w.host.message('And then this'))).status).toBe(200);
+  await w.pump();
+  expect(revoked).toEqual({ status: 200, body: { receipt: { state: 'recorded', message: 'Mac host revoked. It can no longer send or receive for your Waldo.' }, duplicate: false } });
+  expect(proof.turns).toHaveLength(1);
+  const records = await inbox(w.ownerStub);
+  expect(records).toHaveLength(2);
+  for (const record of records) expect(record).toMatchObject({ state: 'revoked', closedReason: 'authority_revoked' });
+  expect(records.filter((record) => record.effectsUnconfirmed)).toHaveLength(1);
+  expect(await outbox(w.ownerStub)).toEqual([]);
+  for (const r of [await w.host.heartbeat(), await w.host.send(w.host.message('after revoke')), await w.host.capabilities(), await w.host.pull()]) expect(r.status).toBe(401);
+  expect(w.host.nativeSends).toHaveLength(0);
+  expect(forbiddenEgress).toEqual([]);
+}, 15_000);
 
 it('revocation after a reply is queued withdraws it as not_started; a delivered reply stays uncertain evidence', async () => {
   const w = await world();
@@ -534,4 +572,18 @@ it('an iMessage forget whose topic matches nothing completes the turn, replies, 
   const next = proof.turns.at(-1)!;
   expect(next).toContain('Forget [forgotten]');
   expect(next).not.toContain('zebra stripes');
+});
+
+it('an iMessage owner turn carries the host fact about a Gmail watch that failed to start', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    await state.storage.put('google:accounts', [{ id: 'conn-1', email: 'mail-owner@example.invalid', scopes: ['gmail.readonly', 'gmail.send', 'gmail.compose'].map(scope => `https://www.googleapis.com/auth/${scope}`) }]);
+    gmailPushBook(state.storage.kv).fail(Date.now());
+  });
+  await replyFor(w, 'Did my new email come in?');
+  expect(proof.systems).toHaveLength(1);
+  expect(proof.systems[0]!.split('New emails are not pushed to Waldo').length - 1).toBe(1);
+  expect(proof.systems[0]).not.toContain('mail-owner@example.invalid');
+  expect(forbiddenEgress).toEqual([]);
 });

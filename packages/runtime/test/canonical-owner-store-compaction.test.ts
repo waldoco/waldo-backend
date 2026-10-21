@@ -91,4 +91,59 @@ describe('canonical store compaction rows', () => {
     await redactConversationEntries(storage, ['question 1:'], '[forgotten]');
     expect((await store.load()).entries.find((entry) => entry.id === 'a5-compaction-later')).toMatchObject({ modelPayload: 'Later summary.', modelProjection: { mode: 'include' } });
   });
+
+  // An older build hung an app row under the last iMessage row. A turn reads that row on its own chain, so a summary's span
+  // crosses the re-linked edge, and a forget must walk the span the summary was written from.
+  it('a forget whose topic sits before a re-linked edge in the span supersedes the summary', async () => {
+    const storage = memoryStorage();
+    const store = canonicalOwnerConversationStore(storage, context);
+    const im = (entry: ConversationEntry): ConversationEntry => ({ ...entry, chatId: 'imessage-chain', surface: 'imessage' });
+    const filler = (text: string) => `${text} ${'q'.repeat(90)}`;
+    const stored = [
+      row('u1', null, 'user', filler('question 1: the locker code is 4417'), 10), row('a1', 'u1', 'assistant', filler('answer 1'), 11),
+      im(row('i1', null, 'user', filler('texted question'), 12)), im(row('i1r', 'i1', 'assistant', filler('texted answer'), 13)),
+      row('u2', 'i1r', 'user', filler('question 2'), 20), row('a2', 'u2', 'assistant', filler('answer 2'), 21),
+    ];
+    for (let round = 3; round <= 6; round += 1) stored.push(row(`u${round}`, `a${round - 1}`, 'user', filler(`question ${round}`), round * 10), row(`a${round}`, `u${round}`, 'assistant', filler(`answer ${round}`), round * 10 + 1));
+    await store.save(stored, 'a6');
+    const loaded = await store.load();
+    expect(loaded.entries.find((entry) => entry.id === 'u2')!.parentId).toBe('a1');
+    const tree = new ConversationTree();
+    for (const entry of loaded.entries) tree.append(entry);
+    const summary = compactionRow(compactionPlan(tree, 'a6', null, settings, 10_000)!, 'The owner keeps things in a locker.', PRINCIPAL, 99);
+    expect(summary.covers).toEqual({ from_id: 'u1', to_id: 'a5', rows: 10 });
+    await store.appendCompaction!(summary, null);
+    // the span walks back to u1 across the re-linked edge, so a topic outside it leaves the summary alone
+    await redactConversationEntries(storage, ['texted question'], '[forgotten]');
+    expect((await store.load()).entries.find((entry) => entry.id === summary.id)).toEqual(summary);
+    await redactConversationEntries(storage, ['4417'], '[forgotten]');
+    expect((await store.load()).entries.find((entry) => entry.id === summary.id)).toMatchObject({ modelPayload: COMPACTION_SUPERSEDED_MARKER, modelProjection: { mode: 'omit' }, covers: summary.covers });
+  });
+
+  it('a forget supersedes a summary whose span cannot be walked back to its first row, whatever the topic', async () => {
+    const { storage, store, tree, leaf } = await seeded(6);
+    const plan = compactionPlan(tree, leaf, null, settings, 10_000)!;
+    const unwalkable = compactionRow({ ...plan, covers: { ...plan.covers, from_id: 'not-a-row' } }, 'The owner keeps things in a locker.', PRINCIPAL, 99);
+    await store.appendCompaction!(unwalkable, null);
+    await redactConversationEntries(storage, ['a topic nowhere in history'], '[forgotten]');
+    expect((await store.load()).entries.find((entry) => entry.id === unwalkable.id)).toMatchObject({ modelPayload: COMPACTION_SUPERSEDED_MARKER, modelProjection: { mode: 'omit' } });
+  });
+
+  it('a forget supersedes a thread chain\'s summary together with that thread\'s witness, so the thread still loads', async () => {
+    const storage = memoryStorage();
+    const store = canonicalOwnerConversationStore(storage, context, undefined, 'th1');
+    const tree = new ConversationTree();
+    let parent: string | null = null;
+    for (let round = 1; round <= 6; round += 1) {
+      const user = row(`u${round}`, parent, 'user', `question ${round}: ${round === 2 ? 'the locker code is 4417 ' : ''}${'q'.repeat(90)}`, round * 10);
+      const reply = row(`a${round}`, `u${round}`, 'assistant', `answer ${round} ${'a'.repeat(90)}`, round * 10 + 1);
+      await store.save([user, reply], reply.id);
+      tree.append(user); tree.append(reply);
+      parent = reply.id;
+    }
+    const summary = compactionRow(compactionPlan(tree, 'a6', null, settings, 10_000)!, 'The owner keeps things in a locker.', PRINCIPAL, 99);
+    await store.appendCompaction!(summary, null);
+    await redactConversationEntries(storage, ['4417'], '[forgotten]');
+    expect((await store.load()).entries.find((entry) => entry.id === summary.id)).toMatchObject({ modelPayload: COMPACTION_SUPERSEDED_MARKER, modelProjection: { mode: 'omit' } });
+  });
 });

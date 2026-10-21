@@ -1,7 +1,9 @@
 import { validId } from '@waldo/workspace';
 import {
   DERIVED_SCORE_PATTERNS,
+  HEALTH_DESTINATION_RULES,
   MODEL_CONTEXT_MAX_CHARS,
+  PLAIN_WORD_DERIVED_SCORES,
   derivedHealthDestinationViewSchema,
   PII_PATTERNS,
   RAW_SENSOR_PATTERNS,
@@ -12,6 +14,8 @@ import {
   type Redaction,
   type RedactionKind,
   type SanitiseCheck,
+  type SanitiseDecodeFailure,
+  type SanitiseDenialDiagnostic,
   type SanitiseDestination,
   type SanitiseDestinationPolicy,
   type SanitiseFailureReason,
@@ -26,9 +30,22 @@ interface PreparedInput extends Omit<SanitiseInput, 'payload'> {
   payload: JsonValue;
 }
 
-interface DecodeBundle {
-  invalid: boolean;
-  views: string[];
+// An invalid bundle says why decoding stopped short.
+type DecodeBundle = { views: string[] } & (
+  | { invalid: false }
+  | { invalid: true; failure: SanitiseDecodeFailure }
+);
+
+interface EncodedSpan {
+  key: string;
+  start: number;
+  end: number;
+  decoded: string;
+}
+
+interface DecodeNode {
+  text: string;
+  spans: EncodedSpan[];
 }
 
 interface TransformResult {
@@ -41,6 +58,14 @@ const MAX_PREFLIGHT_NODES = 20_000;
 // One string may be as long as the model's own context allows; the destination policy then enforces its own cap.
 const MAX_PREFLIGHT_STRING_CHARS = MODEL_CONTEXT_MAX_CHARS;
 const MAX_DECODE_PASSES = 2;
+// The most views decodedViews can generate. Each frontier node yields at most DECODE_VIEW_KINDS new views per pass
+// (all spans, JSON escapes, percent, base64), and each of those may join the next frontier, so pass p yields at most
+// DECODE_VIEW_KINDS^p views and all passes together sum(DECODE_VIEW_KINDS^p, p = 1..MAX_DECODE_PASSES) = 4 + 16 = 20.
+// Every decoder only shortens text (a JSON escape is 6 characters to 1, a percent byte 3 to at most 1, base64 4 to 3),
+// so no view is longer than the text, and the decoded total is at most MAX_DECODE_VIEWS times the text length. A
+// decoder that ever lengthened text, or a wider fan-out, would trip this cap and fail closed as decode:budget.
+const DECODE_VIEW_KINDS = 4;
+const MAX_DECODE_VIEWS = Array.from({ length: MAX_DECODE_PASSES }, (_, pass) => DECODE_VIEW_KINDS ** (pass + 1)).reduce((sum, views) => sum + views, 0);
 const REDACTION_ORDER: readonly RedactionKind[] = [
   'email',
   'phone',
@@ -110,10 +135,17 @@ const PERSON_NAME = /^[\p{L}][\p{L}'-]+(?:\s+[\p{L}][\p{L}'-]+){1,3}$/u;
 const BASE64_TOKEN = /(?<![A-Za-z0-9+\/_-])(?:(?:[A-Za-z0-9+\/_-]{4})*(?:[A-Za-z0-9+\/_-]{2}==|[A-Za-z0-9+\/_-]{3}=)|(?:[A-Za-z0-9+\/_-]{4})+(?:[A-Za-z0-9+\/_-]{2,3})?)(?![A-Za-z0-9+\/_=-])/g;
 const PHONE_PATTERN = /\+?\b(?:1?[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/g;
 const JSON_ESCAPE = /\\u[0-9a-fA-F]{4}/;
+const JSON_ESCAPES = /\\u[0-9a-fA-F]{4}/g;
 const PERCENT_ESCAPE = /%[0-9a-fA-F]{2}/;
+const PERCENT_RUNS = /(?:%[0-9a-fA-F]{2})+/g;
 
 function deny(check: SanitiseCheck, reason: SanitiseFailureReason): SanitiseResult {
   return { ok: false, check, reason };
+}
+
+// Every structural denial names the stage that produced it, so a trace says which check fired without any content.
+function denyInvalid(diagnostic: SanitiseDenialDiagnostic): SanitiseResult {
+  return { ok: false, check: 'size_cap', reason: 'invalid_payload', diagnostic };
 }
 
 function cloneRegex(pattern: RegExp): RegExp {
@@ -126,6 +158,39 @@ function matches(pattern: RegExp, text: string): boolean {
 
 function compactKey(key: string): string {
   return key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+}
+
+// Core build plan H-3, by the contracts health rule `reject_scored_on_external_read`: where external content is read
+// into the owner's turn, form/recovery/load with a bare number ("Form 16", "load 3 trucks", "recovery 2 days") is
+// ordinary text. A "score", a %, a health unit or a ratio after it makes it a reading again, and crs, the sensor
+// families and structured readings are never spared. Persistence and egress destinations keep the whole floor.
+const PLAIN_WORDS = PLAIN_WORD_DERIVED_SCORES.join('|');
+const PLAIN_WORD_SPAN = new RegExp(String.raw`^["'\s]*(?:${PLAIN_WORDS})\b(?![\s_-]*score)(?:\s+[a-z]+){0,3}?[\s:=,"']*[+-]?\d+(?:\.\d+)?(?:e[+-]?\d+)?["']?$`, 'i');
+const READING_TAIL = /^["']?\s*(?:%|\/\s*\d|(?:percent|pct|ms|bpm|mmhg|kg|kgs|lbs?|kcal|cal|calories|score)\b)/i;
+const PLAIN_WORD_KEY = new RegExp(String.raw`(^|[^a-z0-9])(?:${PLAIN_WORDS})(?![\s_-]*score)(?=[^a-z0-9]|$)`, 'gi');
+const PLAIN_WORD_COMPACT = new RegExp(String.raw`^(?:${PLAIN_WORDS})$`, 'i');
+
+function sparesPlainWords(input: Readonly<{ destination: SanitiseDestination; source_taint: SourceTaint }>): boolean {
+  return input.source_taint === 'external' && HEALTH_DESTINATION_RULES[input.destination].derived_score === 'reject_scored_on_external_read';
+}
+
+function plainWordSpan(match: string, rest: string): boolean {
+  return PLAIN_WORD_SPAN.test(match) && !READING_TAIL.test(rest);
+}
+
+// Whether text holds a match of pattern that is health in this scope: with plain words spared, a match that is only a
+// plain word and a bare number does not count, and the scan moves on to the next match.
+function healthMatchIn(pattern: RegExp, text: string, plainWords: boolean): boolean {
+  if (!plainWords) return matches(pattern, text);
+  const global = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
+  for (const match of text.matchAll(global)) {
+    if (!plainWordSpan(match[0], text.slice(match.index + match[0].length))) return true;
+  }
+  return false;
+}
+
+function healthKeyIn(key: string, plainWords: boolean): boolean {
+  return HEALTH_KEY.test(plainWords ? key.replace(PLAIN_WORD_KEY, '$1') : key);
 }
 
 function isNumeric(value: unknown): boolean {
@@ -247,56 +312,117 @@ function canDecodeAgain(text: string): boolean {
   return false;
 }
 
+function encodedSpans(text: string): EncodedSpan[] {
+  const spans: EncodedSpan[] = [];
+  for (const match of text.matchAll(JSON_ESCAPES)) {
+    const decoded = String.fromCharCode(Number.parseInt(match[0].slice(2), 16));
+    spans.push({ key: `json:${match[0]}`, start: match.index, end: match.index + match[0].length, decoded });
+  }
+  if (typeof decodePercent(text) === 'string') {
+    for (const match of text.matchAll(PERCENT_RUNS)) {
+      const decoded = decodePercent(match[0]);
+      if (typeof decoded !== 'string') continue;
+      spans.push({ key: `percent:${match[0]}`, start: match.index, end: match.index + match[0].length, decoded });
+    }
+  }
+  for (const match of text.matchAll(BASE64_TOKEN)) {
+    const decoded = printableUtf8FromBase64(match[0]);
+    if (decoded === undefined) continue;
+    spans.push({ key: `base64:${match[0]}`, start: match.index, end: match.index + match[0].length, decoded });
+  }
+  return spans.sort((left, right) => left.start - right.start);
+}
+
+// Decodes every span the text carries at once: independent encodings side by side are one layer.
+// Where two kinds claim overlapping characters the earlier span wins; the single-kind views keep
+// the other reading.
+function decodeLayer(node: DecodeNode): string {
+  let output = '';
+  let cursor = 0;
+  for (const span of node.spans) {
+    if (span.start < cursor) continue;
+    output += node.text.slice(cursor, span.start) + span.decoded;
+    cursor = span.end;
+  }
+  return output + node.text.slice(cursor);
+}
+
+function exposesNewSpan(child: EncodedSpan[], parent: EncodedSpan[]): boolean {
+  const remaining = new Map<string, number>();
+  for (const span of parent) remaining.set(span.key, (remaining.get(span.key) ?? 0) + 1);
+  for (const span of child) {
+    const count = remaining.get(span.key) ?? 0;
+    if (count === 0) return true;
+    remaining.set(span.key, count - 1);
+  }
+  return false;
+}
+
 function decodedViews(text: string): DecodeBundle {
   const views = [text];
   const known = new Set(views);
-  // Uniform 4x decode budget (live RCA 2026-09-28: brief card failed internal_context
-  // invalid_payload at 08:46 and 14:01). The old min(destination.max_chars, 4x) formula let
-  // the budget SHRINK below 4x for strings over max_chars/4, so a legal 17k+ card prompt
-  // carrying ordinary nested encodings (a redirect-wrapped URL, an encoded token) generated
-  // two full-length decode views and died on a shape false positive - while the identical
-  // content in a shorter string passed. The payload itself is already capped at
-  // destination.max_chars by applyDestinationPolicy, so total decode work stays bounded at
-  // 4x that cap either way; the recursion defense (MAX_DECODE_PASSES + canDecodeAgain) is
-  // unchanged and still denies genuinely deeper nesting. The context-composer fence scan
-  // (source-sanitisation.ts) has always used this uniform 4x form.
-  const maxDecodedChars = Math.max(text.length, 1) * 4;
-  let frontier = [text];
+  // The budget bounds work; it is not the security boundary (MAX_DECODE_PASSES + canDecodeAgain is). It is the
+  // algorithm's own maximum, so ordinary sibling encodings cannot use it up and deny a legitimate token beside them:
+  // a fixed 4x of the text did exactly that to every day card (decode:budget:mixed:2). See MAX_DECODE_VIEWS.
+  const maxDecodedChars = Math.max(text.length, 1) * MAX_DECODE_VIEWS;
+  let frontier: DecodeNode[] = [{ text, spans: encodedSpans(text) }];
   let decodedChars = 0;
 
+  // Depth is counted per lineage: a view sits one layer below the view it was decoded from.
+  // The all-spans view goes deeper while anything stays decodable. A single-kind view goes
+  // deeper only when its decode exposed a span its parent did not carry (a nested encoding,
+  // or characters that joined a neighbour into a new token); its parent's sibling spans are
+  // already decoded together in the all-spans view, so they are not counted as nesting.
   for (let pass = 0; pass < MAX_DECODE_PASSES; pass += 1) {
-    const next: string[] = [];
-    for (const candidate of frontier) {
+    const next: DecodeNode[] = [];
+    for (const node of frontier) {
       // A percent sequence the strict decoder rejects is not an encoding - the model cannot
       // decode it either, so no obfuscation channel exists. The raw string stays in views[0]
       // and is scanned as-is; ordinary text like "20%DEALS" must not deny the payload (#152).
-      const percent = decodePercent(candidate) ?? undefined;
-      const generated = [decodeJsonEscapes(candidate), percent, decodeBase64Tokens(candidate)];
-      for (const value of generated) {
-        if (typeof value !== 'string' || value === candidate || known.has(value)) continue;
+      const percent = decodePercent(node.text) ?? undefined;
+      const generated = [
+        { value: decodeLayer(node), allSpans: true, kind: 'mixed' },
+        { value: decodeJsonEscapes(node.text), allSpans: false, kind: 'json' },
+        { value: percent, allSpans: false, kind: 'percent' },
+        { value: decodeBase64Tokens(node.text), allSpans: false, kind: 'base64' },
+      ] as const;
+      for (const { value, allSpans, kind } of generated) {
+        if (typeof value !== 'string' || value === node.text || known.has(value)) continue;
         decodedChars += value.length;
         if (value.length > maxDecodedChars || decodedChars > maxDecodedChars) {
-          return { invalid: true, views };
+          return { invalid: true, views, failure: { cause: 'budget', kind, depth: pass + 1 } };
         }
         known.add(value);
         views.push(value);
-        next.push(value);
+        const spans = encodedSpans(value);
+        if (allSpans ? spans.length > 0 : exposesNewSpan(spans, node.spans)) next.push({ text: value, spans });
       }
     }
     frontier = next;
     if (frontier.length === 0) break;
   }
 
-  if (frontier.some(canDecodeAgain)) return { invalid: true, views };
+  const pending = frontier.find((node) => canDecodeAgain(node.text));
+  if (pending !== undefined) {
+    return { invalid: true, views, failure: { cause: 'nesting', kind: pendingKind(pending.text), depth: MAX_DECODE_PASSES + 1 } };
+  }
   return { invalid: false, views };
+}
+
+// The encoding still decodable after the last pass, named in canDecodeAgain's order.
+function pendingKind(text: string): SanitiseDecodeFailure['kind'] {
+  if (JSON_ESCAPE.test(text)) return 'json';
+  if (PERCENT_ESCAPE.test(text) && typeof decodePercent(text) === 'string') return 'percent';
+  return 'base64';
 }
 
 function hasDecodedHealthIndicator(
   text: string,
   destination: SanitiseDestination,
+  plainWords = false,
 ): boolean {
   const decoded = decodedViews(text);
-  return decoded.views.some(isHealthIndicatorText);
+  return decoded.views.some((view) => isHealthIndicatorText(view, plainWords));
 }
 
 function visitStrings(
@@ -304,7 +430,7 @@ function visitStrings(
   destination: SanitiseDestination,
   visitor: (text: string, key: boolean) => boolean,
   skipEligibleHealthViews = false,
-): { invalid: boolean; matched: boolean } {
+): { invalid?: SanitiseDenialDiagnostic; matched: boolean } {
   const pending: Array<{ value: JsonValue; key: boolean }> = [{ value: payload, key: false }];
   while (pending.length > 0) {
     const current = pending.pop();
@@ -312,9 +438,9 @@ function visitStrings(
     const { value } = current;
     if (typeof value === 'string') {
       const decoded = decodedViews(value);
-      if (decoded.invalid) return { invalid: true, matched: false };
+      if (decoded.invalid) return { invalid: { stage: 'decode', decode: decoded.failure }, matched: false };
       if (decoded.views.some((view) => visitor(view, current.key))) {
-        return { invalid: false, matched: true };
+        return { matched: true };
       }
       continue;
     }
@@ -337,13 +463,13 @@ function visitStrings(
       pending.push({ value: item, key: false });
     }
   }
-  return { invalid: false, matched: false };
+  return { matched: false };
 }
 
 function containsCanaryOrSecret(
   payload: JsonValue,
   input: PreparedInput,
-): SanitiseFailureReason | undefined {
+): SanitiseResult | undefined {
   // Only this session's three canaries are tripwires. A regex for any 16-hex run
   // rejected ordinary provider IDs and tracking codes in mail/card context.
   // visitStrings also checks decoded views and object keys at every taint and destination.
@@ -357,9 +483,9 @@ function containsCanaryOrSecret(
     if (SECRET_PATTERNS.some((pattern) => matches(pattern, text))) secretFound = true;
     return false;
   });
-  if (result.invalid) return 'invalid_payload';
-  if (canaryFound) return 'canary_leak';
-  return secretFound ? 'secret_leak' : undefined;
+  if (result.invalid !== undefined) return denyInvalid(result.invalid);
+  if (canaryFound) return deny('canary_token', 'canary_leak');
+  return secretFound ? deny('canary_token', 'secret_leak') : undefined;
 }
 
 function containsStructuredSecret(
@@ -435,7 +561,8 @@ function looksLikeDerivedHealthView(value: Record<string, JsonValue>): boolean {
   );
 }
 
-function isHealthIndicatorText(value: string): boolean {
+function isHealthIndicatorText(value: string, plainWords = false): boolean {
+  if (plainWords && PLAIN_WORD_COMPACT.test(compactKey(value))) return false;
   return (
     HEALTH_INDICATOR_VALUE.test(value.trim()) ||
     HEALTH_KEY_COMPACT.test(compactKey(value))
@@ -445,6 +572,7 @@ function isHealthIndicatorText(value: string): boolean {
 function subtreeHealthFlags(
   value: JsonValue,
   destination: SanitiseDestination,
+  plainWords = false,
 ): {
   indicator: boolean;
   strongIndicator: boolean;
@@ -462,7 +590,7 @@ function subtreeHealthFlags(
     };
   }
   if (typeof value === 'string') {
-    const indicator = isHealthIndicatorText(value);
+    const indicator = isHealthIndicatorText(value, plainWords);
     return {
       indicator,
       strongIndicator: indicator,
@@ -517,7 +645,7 @@ function subtreeHealthFlags(
   let unit = false;
   if (Array.isArray(value)) {
     for (const item of value) {
-      const child = subtreeHealthFlags(item, destination);
+      const child = subtreeHealthFlags(item, destination, plainWords);
       indicator ||= child.indicator;
       strongIndicator ||= child.strongIndicator;
       measurement ||= child.measurement;
@@ -527,13 +655,13 @@ function subtreeHealthFlags(
     measurement ||= numeric;
   } else {
     for (const [key, item] of Object.entries(value)) {
-      const healthKey = HEALTH_KEY.test(key) || hasDecodedHealthIndicator(key, destination);
-      const strongHealthKey = isStrongHealthKey(key) || hasDecodedHealthIndicator(key, destination);
+      const healthKey = healthKeyIn(key, plainWords) || hasDecodedHealthIndicator(key, destination, plainWords);
+      const strongHealthKey = isStrongHealthKey(key, plainWords) || hasDecodedHealthIndicator(key, destination, plainWords);
       const encodedHealthIndicator =
         typeof item === 'string' &&
         HEALTH_DISCRIMINATOR_KEY.test(key) &&
-        hasDecodedHealthIndicator(item, destination);
-      const child = subtreeHealthFlags(item, destination);
+        hasDecodedHealthIndicator(item, destination, plainWords);
+      const child = subtreeHealthFlags(item, destination, plainWords);
       const rawHealthSeries = RAW_HEALTH_SERIES_KEY.test(key) && child.numeric && child.unit;
       indicator ||= healthKey || rawHealthSeries || encodedHealthIndicator;
       indicator ||= child.indicator;
@@ -550,18 +678,19 @@ function subtreeHealthFlags(
   return { indicator, strongIndicator, measurement, numeric, unit };
 }
 
-function objectHasHealthCorrelation(value: JsonValue, destination: SanitiseDestination): boolean {
+function objectHasHealthCorrelation(value: JsonValue, destination: SanitiseDestination, plainWords = false): boolean {
   if (typeof value !== 'object' || value === null) return false;
-  const flags = subtreeHealthFlags(value, destination);
+  const flags = subtreeHealthFlags(value, destination, plainWords);
   return flags.indicator && flags.measurement;
 }
 
 function containsForbiddenHealth(
   input: PreparedInput,
   jsonPass = 0,
-): { invalid: boolean; matched: boolean } {
-  if (objectHasHealthCorrelation(input.payload, input.destination)) {
-    return { invalid: false, matched: true };
+): { invalid?: SanitiseDenialDiagnostic; matched: boolean } {
+  const plainWords = sparesPlainWords(input);
+  if (objectHasHealthCorrelation(input.payload, input.destination, plainWords)) {
+    return { matched: true };
   }
   // Free-text scan scope (owner decision 2026-09-28, direction A): the scan exists to keep raw
   // PROVIDER payloads out of the model's context. Owner/model conversation is null-taint, and at
@@ -588,7 +717,7 @@ function containsForbiddenHealth(
       input.destination === 'system_prompt' ||
       input.destination === 'owner_reply')
   );
-  let nestedInvalid = false;
+  let nestedInvalid: SanitiseDenialDiagnostic | undefined;
   const visited = visitStrings(
     input.payload,
     input.destination,
@@ -596,8 +725,8 @@ function containsForbiddenHealth(
       if (
         freeTextScan &&
         (RAW_SENSOR_PATTERNS.some((pattern) => matches(pattern, text)) ||
-          DERIVED_SCORE_PATTERNS.some((pattern) => matches(pattern, text)) ||
-          HEALTH_FREE_TEXT.some((pattern) => pattern.test(text)))
+          DERIVED_SCORE_PATTERNS.some((pattern) => healthMatchIn(pattern, text, plainWords)) ||
+          HEALTH_FREE_TEXT.some((pattern) => healthMatchIn(pattern, text, plainWords)))
       ) {
         return true;
       }
@@ -608,7 +737,7 @@ function containsForbiddenHealth(
         return false;
       }
       if (jsonPass >= MAX_DECODE_PASSES) {
-        nestedInvalid = true;
+        nestedInvalid ??= { stage: 'health' };
         return false;
       }
       try {
@@ -618,11 +747,11 @@ function containsForbiddenHealth(
         }
         const prepared = prepareInput({ ...input, payload } as SanitiseInput);
         if (prepared === undefined || 'reason' in prepared) {
-          nestedInvalid = true;
+          nestedInvalid ??= { stage: 'health' };
           return false;
         }
         const nested = containsForbiddenHealth(prepared, jsonPass + 1);
-        nestedInvalid ||= nested.invalid;
+        nestedInvalid ??= nested.invalid;
         return nested.matched;
       } catch {
         return false;
@@ -630,7 +759,8 @@ function containsForbiddenHealth(
     },
     true,
   );
-  return { invalid: visited.invalid || nestedInvalid, matched: visited.matched };
+  const invalid = visited.invalid ?? nestedInvalid;
+  return invalid === undefined ? { matched: visited.matched } : { invalid, matched: visited.matched };
 }
 
 const HEALTH_SPAN_MARKER = '[health value withheld]';
@@ -640,18 +770,23 @@ const HEALTH_SPAN_MARKER = '[health value withheld]';
 function redactExternalHealthSpans(
   payload: JsonValue,
   redactions: Redaction[],
+  plainWords = false,
 ): { invalid: boolean; payload: JsonValue; redactions: Redaction[] } {
   const counts = new Map<RedactionKind, number>();
   const patterns = [...RAW_SENSOR_PATTERNS, ...DERIVED_SCORE_PATTERNS, ...HEALTH_FREE_TEXT];
-  const transformed = transformJsonStrings(payload, (text) => {
-    // JSON-encoded structured health still belongs to the correlation check below.
-    // Rewriting its tokens first could destroy the structure and hide the measurement.
+  // A tool result reaches the model as a JSON-encoded string, so the page text sits inside it. Its string values are
+  // redacted in place; keys, numbers and nesting are kept, so structured health still reaches the correlation check below.
+  const redact = (text: string): string => {
     try {
       const parsed: unknown = JSON.parse(text);
-      if (typeof parsed === 'object' && parsed !== null) return text;
+      if (typeof parsed === 'object' && parsed !== null) {
+        const inner = transformJsonStrings(parsed as JsonValue, (value, field) => field === undefined ? value : redact(value));
+        return inner.invalid ? text : JSON.stringify(inner.payload);
+      }
     } catch { /* Ordinary free text is scanned for spans. */ }
-    return patterns.reduce((output, pattern) => replaceAndCount(output, pattern, HEALTH_SPAN_MARKER, 'health_value', counts), text);
-  });
+    return patterns.reduce((output, pattern) => replaceAndCount(output, pattern, HEALTH_SPAN_MARKER, 'health_value', counts, plainWords ? plainWordSpan : undefined), text);
+  };
+  const transformed = transformJsonStrings(payload, (text) => redact(text));
   if (transformed.invalid) return { invalid: true, payload, redactions };
   const count = counts.get('health_value') ?? 0;
   return {
@@ -676,7 +811,25 @@ function replaceAndCount(
   replacement: string,
   kind: RedactionKind,
   counts: Map<RedactionKind, number>,
+  // A match it returns true for (given the text after it) is left as it is and not counted.
+  keep?: (match: string, rest: string) => boolean,
 ): string {
+  if (keep !== undefined) {
+    const global = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
+    let output = '';
+    let last = 0;
+    let replaced = 0;
+    for (const match of text.matchAll(global)) {
+      const end = match.index + match[0].length;
+      if (keep(match[0], text.slice(end))) continue;
+      output += text.slice(last, match.index) + replacement;
+      last = end;
+      replaced += 1;
+    }
+    if (replaced === 0) return text;
+    increment(counts, kind, replaced);
+    return output + text.slice(last);
+  }
   const count = replacementCount(text, pattern);
   if (count === 0) return text;
   increment(counts, kind, count);
@@ -908,7 +1061,7 @@ function inspectInstructions(
       return tag.replace('<', '&lt;').replace('>', '&gt;');
     });
   const transformed = transformJsonStrings(payload, escapeTags);
-  if (transformed.invalid) return deny('size_cap', 'invalid_payload');
+  if (transformed.invalid) return denyInvalid({ stage: 'policy' });
   if (tagCount === 0) return { payload, redactions };
   return {
     payload: transformed.payload,
@@ -969,14 +1122,14 @@ function applyDestinationPolicy(
     isStructured &&
     !isEligibleHealthView(payload, input.destination)
   ) {
-    return deny('size_cap', 'invalid_payload');
+    return denyInvalid({ stage: 'policy' });
   }
   if (
     (policy.payload_kind === 'text' && !isText) ||
     (policy.payload_kind === 'structured' && !isStructured) ||
     (policy.payload_kind === 'text_or_structured' && !isText && !isStructured)
   ) {
-    return deny('size_cap', 'invalid_payload');
+    return denyInvalid({ stage: 'policy' });
   }
 
   const serialized = isText ? payload : JSON.stringify(payload);
@@ -1037,20 +1190,19 @@ function applyDestinationPolicy(
 // read chunks.
 export function guardForOffload(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
-  if (!input) return deny('size_cap', 'invalid_payload');
+  if (!input) return denyInvalid({ stage: 'prepare' });
   if ('reason' in input) return deny('size_cap', input.reason);
 
   const secret = containsCanaryOrSecret(input.payload, input);
-  if (secret === 'invalid_payload') return deny('size_cap', secret);
-  if (secret !== undefined) return deny('canary_token', secret);
+  if (secret !== undefined) return secret;
 
   const health = containsForbiddenHealth(input);
-  if (health.invalid) return deny('size_cap', 'invalid_payload');
+  if (health.invalid !== undefined) return denyInvalid(health.invalid);
   if (health.matched) return deny('health_value', 'health_value_leak');
 
   // The offload store persists, so it never gets the model/owner readable seam: redact as memory_block.
   const pii = redactPii(input.payload, 'memory_block', input.source_taint, input.canary_tokens);
-  if (pii.invalid) return deny('size_cap', 'invalid_payload');
+  if (pii.invalid) return denyInvalid({ stage: 'pii' });
 
   const instructions = inspectsInstructions(input) ? inspectInstructions(pii.payload, pii.redactions) : { payload: pii.payload, redactions: pii.redactions };
   if ('ok' in instructions) return instructions;
@@ -1083,15 +1235,14 @@ function ownerHealthAllowed(input: { destination: SanitiseDestination; source_ta
 
 export function sanitiseVerifyOnly(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
-  if (!input) return deny('size_cap', 'invalid_payload');
+  if (!input) return denyInvalid({ stage: 'prepare' });
   if ('reason' in input) return deny('size_cap', input.reason);
 
   const secret = containsCanaryOrSecret(input.payload, input);
-  if (secret === 'invalid_payload') return deny('size_cap', secret);
-  if (secret !== undefined) return deny('canary_token', secret);
+  if (secret !== undefined) return secret;
 
   const health = containsForbiddenHealth(input);
-  if (health.invalid) return deny('size_cap', 'invalid_payload');
+  if (health.invalid !== undefined) return denyInvalid(health.invalid);
   if (health.matched && !ownerHealthAllowed(input)) return deny('health_value', 'health_value_leak');
 
   return applyDestinationPolicy(input, input.payload, []);
@@ -1099,28 +1250,27 @@ export function sanitiseVerifyOnly(raw: SanitiseInput): SanitiseResult {
 
 export function sanitise(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
-  if (!input) return deny('size_cap', 'invalid_payload');
+  if (!input) return denyInvalid({ stage: 'prepare' });
   if ('reason' in input) return deny('size_cap', input.reason);
 
   const secret = containsCanaryOrSecret(input.payload, input);
-  if (secret === 'invalid_payload') return deny('size_cap', secret);
-  if (secret !== undefined) return deny('canary_token', secret);
+  if (secret !== undefined) return secret;
 
   // External content to the model: withhold matched health spans, then the unchanged scan below
   // still denies structured health correlation.
   const withheld =
     input.source_taint === 'external' && input.destination === 'internal_context'
-      ? redactExternalHealthSpans(input.payload, [])
+      ? redactExternalHealthSpans(input.payload, [], sparesPlainWords(input))
       : { invalid: false, payload: input.payload, redactions: [] as Redaction[] };
-  if (withheld.invalid) return deny('size_cap', 'invalid_payload');
+  if (withheld.invalid) return denyInvalid({ stage: 'external_health' });
   const scanned = { ...input, payload: withheld.payload };
 
   const health = containsForbiddenHealth(scanned);
-  if (health.invalid) return deny('size_cap', 'invalid_payload');
+  if (health.invalid !== undefined) return denyInvalid(health.invalid);
   if (health.matched && !ownerHealthAllowed(input)) return deny('health_value', 'health_value_leak');
 
   const pii = redactPii(scanned.payload, input.destination, input.source_taint, input.canary_tokens);
-  if (pii.invalid) return deny('size_cap', 'invalid_payload');
+  if (pii.invalid) return denyInvalid({ stage: 'pii' });
   pii.redactions.unshift(...withheld.redactions);
 
   const instructions = inspectsInstructions(input) ? inspectInstructions(pii.payload, pii.redactions) : { payload: pii.payload, redactions: pii.redactions };
@@ -1149,7 +1299,8 @@ function numericFromBase64(token: string): string | undefined {
   }
 }
 
-function isStrongHealthKey(key: string): boolean {
+function isStrongHealthKey(key: string, plainWords = false): boolean {
+  if (plainWords && PLAIN_WORD_COMPACT.test(compactKey(key))) return false;
   const base = compactKey(key).replace(HEALTH_MEASUREMENT_SUFFIX, '');
   return HEALTH_KEY_COMPACT.test(base);
 }

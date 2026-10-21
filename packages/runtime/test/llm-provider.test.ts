@@ -15,6 +15,7 @@ import {
   type ModelName,
   type TriggerType,
   MODEL_CONTEXT_MAX_CHARS,
+  TOOL_ERRORS,
 } from '@waldo/contracts';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -1306,7 +1307,7 @@ describe('RuntimeLLMProvider', () => {
       ok: false,
       code: 'forbidden',
       reason: 'hook_halt',
-      error: 'hook halted',
+      error: TOOL_ERRORS.sanitise_denied.cause,
       fallback_step: 'configured_model',
     });
   });
@@ -1944,6 +1945,33 @@ describe('sanitiseRequest structural degradation', () => {
     expect(turns![0]!.output).toContain('do not report it as empty');
   });
 
+  it('withholds an external tool result that carries a wearable reading, and the turn goes on', async () => {
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest: () => ({
+          messages: [{ role: 'user' as const, content: 'current question' }],
+          tool_turns: [
+            { call: { call_id: 'c1', name: 'web_search', arguments: '{"q":"hotel"}' }, output: JSON.stringify({ ok: true, data: { metric: 'hrv', value: 42, unit: 'ms' } }) },
+            { call: { call_id: 'c2', name: 'web_search', arguments: '{"q":"hotel near the beach"}' }, output: JSON.stringify({ ok: true, data: { text: 'Deluxe Twin, free cancellation.' } }) },
+          ],
+          max_tokens: 512,
+          temperature: 0.3,
+        }),
+      },
+      runtimeCtx(),
+    );
+    expect(result.ok).toBe(true);
+    const turns = gateway.requests[0]!.request.tool_turns!;
+    expect(turns).toHaveLength(2);
+    expect(turns[0]!.call).toEqual({ call_id: 'c1', name: 'web_search', arguments: '{}' });
+    expect(turns[0]!.output).toContain('withheld by the health-data filter');
+    expect(JSON.stringify(turns[0])).not.toMatch(/hrv|42/i);
+    expect(turns[1]!.output).toContain('Deluxe Twin');
+  });
+
   it('keeps every tool turn when populated Google reads overflow the batch policy together', async () => {
     // Regression for the live break: two populated reads overflowed the 32,768-char
     // internal_context batch policy as a SET, and the all-or-nothing degrade dropped both -
@@ -2297,6 +2325,36 @@ describe('sanitiseRequest structural degradation', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.scribe?.reason).toBe('canary_leak');
     expect(gateway.requests).toHaveLength(0);
+  });
+});
+
+describe('scribe stage labels', () => {
+  const run = async (content: string) => {
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const result = await new RuntimeLLMProvider({ gateway }).complete(
+      { trigger: 'brief', renderRequest: () => ({ messages: [{ role: 'user' as const, content }], max_tokens: 512, temperature: 0.3 }) },
+      runtimeCtx(),
+    );
+    return { result, requests: gateway.requests.length };
+  };
+
+  it('names the decode stage, cause, view kind and layer on a structural denial', async () => {
+    const nine = Array.from({ length: 9 }).reduce<string>((text) => encodeURIComponent(text), 'room one');
+    const { result, requests } = await run(`note ${nine}`);
+    expect(result).toMatchObject({ ok: false, halted_by: 'scribe_sanitise', scribe: { destination: 'internal_context', reason: 'invalid_payload' }, scribe_stage: 'decode:nesting:percent:3' });
+    expect(requests).toBe(0);
+  });
+
+  it('names a non-decode stage on its own', async () => {
+    // JSON nested past the health scan's two parse passes.
+    const { result } = await run(JSON.stringify({ a: JSON.stringify({ b: JSON.stringify({ c: '[x' }) }) }));
+    expect(result).toMatchObject({ ok: false, scribe: { reason: 'invalid_payload' }, scribe_stage: 'health' });
+  });
+
+  it('leaves hard denials unlabelled', async () => {
+    const { result } = await run(`remember ${canaryTokens[0]} please`);
+    expect(result).toMatchObject({ ok: false, scribe: { reason: 'canary_leak' } });
+    if (!result.ok) expect(result.scribe_stage).toBeUndefined();
   });
 });
 

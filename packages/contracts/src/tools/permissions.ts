@@ -24,7 +24,6 @@ export const toolNameSchema = z.enum([
   'query_availability',
   'read_owner_context',
   'read_memory',
-  'update_memory',
   'remember',
   'forget_memory',
   'search_episodes',
@@ -102,6 +101,10 @@ export const toolNameSchema = z.enum([
   'use_mac',
   // search_contacts: the owner's Google contacts and other contacts, by name or address prefix.
   'search_contacts',
+  // send_progress_note: a short non-blocking note to the owner's chat while their own turn keeps working.
+  'send_progress_note',
+  // attach_file: queue one of the owner's workspace files to go out with this turn's reply, where the surface carries files.
+  'attach_file',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -204,6 +207,8 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'query_calendar',
     'connect_service',
     'send_console_link',
+    'send_progress_note',
+    'attach_file',
     'get_communication',
     'search_communication',
     'search_contacts',
@@ -275,7 +280,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'skills_disable',
     'skills_load',
   ],
-  dreaming_mode: ['read_memory', 'update_memory', 'search_episodes'],
+  dreaming_mode: ['read_memory', 'search_episodes'],
   // Always carries send_message — a Spot is never silent (ADR-0042).
   pre_activity_spot: [
     'get_crs',

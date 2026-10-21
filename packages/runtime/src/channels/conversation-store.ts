@@ -4,6 +4,7 @@ import { redactSecretUrls } from './egress-guard';
 import { hidesTopic } from '../memory/forget-guard';
 import { asciiLiteralIncludes, forgetSourceBatch, type ForgetSource, type ForgetBatch } from '../memory/selective-forget';
 import { supersededCompaction } from '../conversation/compaction';
+import { shapeFault, turnLinkedEntries } from '../conversation/canonical-owner-store';
 
 export type ConversationStore = Readonly<{
   load(): Promise<Readonly<{ entries: readonly ConversationEntry[]; leafId: string | null }>>;
@@ -152,14 +153,27 @@ const conversationSourcesFromRows = (legacy: Map<string, ConversationEntry>, can
 };
 const entryText = (entry: ConversationEntry): string => `${entry.modelPayload}\n${entry.appPayload}\n${entry.modelProjection.mode === 'replace' ? entry.modelProjection.payload : ''}`.toLowerCase();
 
-// The original rows a compaction row covers: the chain from to_id back to from_id, inclusive, by stored parent links.
-const coveredIds = (rows: ReadonlyMap<string, Readonly<{ entry: ConversationEntry }>>, covers: NonNullable<ConversationEntry['covers']>): ReadonlySet<string> => {
-  const ids = new Set<string>();
-  for (let current = rows.get(covers.to_id)?.entry; current && !ids.has(current.id); current = current.parentId === null ? undefined : rows.get(current.parentId)?.entry) {
-    ids.add(current.id);
-    if (current.id === covers.from_id) break;
+// The original rows a compaction row covers: the chain from to_id back to from_id, inclusive, by the parent links a turn
+// reads, which are the links the span was cut from. A walk that never reaches from_id has not seen the whole span: null.
+const coveredRows = (linked: ReadonlyMap<string, ConversationEntry>, covers: NonNullable<ConversationEntry['covers']>): readonly ConversationEntry[] | null => {
+  const seen = new Set<string>(), rows: ConversationEntry[] = [];
+  for (let current = linked.get(covers.to_id); current && !seen.has(current.id); current = current.parentId === null ? undefined : linked.get(current.parentId)) {
+    seen.add(current.id); rows.push(current);
+    if (current.id === covers.from_id) return rows;
   }
-  return ids;
+  return null;
+};
+// Each canonical chain's conv rows in stored order, keyed by the chain's prefix.
+const canonicalChains = (canonical: ReadonlyMap<string, ConversationEntry | Witness>): ReadonlyMap<string, readonly Readonly<{ key: string; entry: ConversationEntry }>[]> => {
+  const chains = new Map<string, { key: string; entry: ConversationEntry }[]>();
+  for (const [key, value] of canonical) {
+    const row = canonicalRow(key);
+    if (row?.kind !== 'conv') continue;
+    const rows = chains.get(row.chain) ?? [];
+    rows.push({ key, entry: value as ConversationEntry });
+    chains.set(row.chain, rows);
+  }
+  return chains;
 };
 
 export const redactConversationEntries = async (
@@ -193,18 +207,26 @@ export const redactConversationEntries = async (
   }
   const hit = (entry: ConversationEntry): boolean => needles.some((needle) => entryText(entry).includes(needle.toLowerCase()) || [entry.modelPayload, entry.appPayload, ...(entry.modelProjection.mode === 'replace' ? [entry.modelProjection.payload] : [])].some(text => conversationHides(text, needle)));
   // A compaction row paraphrases its span, which a literal rewrite cannot reach. When the topic sits in any original row of
-  // the span, or in the summary itself, the row is superseded to the marker and omitted, with its witness in the same unit
-  // and its covers kept; the hit test reads the rows as stored before this rewrite. A superseded summary stays as it is.
-  const rows = new Map<string, Readonly<{ key: string; entry: ConversationEntry }>>();
-  for (const [key, value] of canonical) if (canonicalKind(key) === 'conv') rows.set((value as ConversationEntry).id, { key, entry: value as ConversationEntry });
-  for (const { key, entry } of rows.values()) {
-    if (entry.role !== 'compaction' || !entry.covers || entry.modelProjection.mode === 'omit') continue;
-    if (!hit(entry) && ![...coveredIds(rows, entry.covers)].some((id) => { const row = rows.get(id); return row !== undefined && hit(row.entry); })) continue;
-    const next = supersededCompaction(entry);
-    writes[key] = next; rewritten += 1;
-    const witnessKey = `${key.split(':').slice(0, 3).join(':')}:witness:${entry.id}`;
-    const witness = canonical.get(witnessKey) as Witness | undefined;
-    if (witness?.entry) writes[witnessKey] = { ...witness, entry: next };
+  // the span, or in the summary itself, or the span cannot be walked to its first row, the row is superseded to the marker
+  // and omitted, with its witness in the same unit and its covers kept; the hit test reads the rows as stored before this
+  // rewrite. A superseded summary stays as it is.
+  for (const [chain, rows] of canonicalChains(canonical)) {
+    const left = new Map<string, string | null>(), loaded: ConversationEntry[] = [];
+    for (const { entry } of rows) {
+      if (shapeFault(entry) === null) loaded.push(entry);
+      else left.set(entry.id, typeof entry.parentId === 'string' ? entry.parentId : null);
+    }
+    const linked = new Map(turnLinkedEntries(loaded, left).map((entry) => [entry.id, entry]));
+    for (const { key, entry } of rows) {
+      if (entry.role !== 'compaction' || !entry.covers || entry.modelProjection.mode === 'omit') continue;
+      const span = coveredRows(linked, entry.covers);
+      if (!hit(entry) && span !== null && !span.some(hit)) continue;
+      const next = supersededCompaction(entry);
+      writes[key] = next; rewritten += 1;
+      const witnessKey = `${chain}witness:${entry.id}`;
+      const witness = canonical.get(witnessKey) as Witness | undefined;
+      if (witness?.entry) writes[witnessKey] = { ...witness, entry: next };
+    }
   }
   if (Object.keys(writes).length > 0) {
     if (scope) { if (!storage.kv) throw new Error('fenced redaction store unavailable'); scope.commit(() => { for (const [key, value] of Object.entries(writes)) storage.kv!.put(key, value); }); }

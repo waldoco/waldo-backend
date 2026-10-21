@@ -9,7 +9,7 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (body: u
 } }; } }));
 const { createOwnerResponder } = await import('../src/channels/owner-turn');
 const { rememberArgsSchema } = await import('@waldo/contracts');
-const memory = { incompleteTopics: () => [], pendingTopics: () => [], claims: () => [], allClaims: () => [], recall: () => [], nodes: () => [], edges: () => [], barriers: () => [], beginSettle: () => {}, endSettle: () => {}, settle: () => {}, sweepInterruptedSettles: () => 0 };
+const memory = { pendingTopics: () => [], claims: () => [], allClaims: () => [], recall: () => [], nodes: () => [], edges: () => [], barriers: () => [], beginSettle: () => {}, endSettle: () => {}, settle: () => {}, sweepInterruptedSettles: () => 0 };
 const responder = () => createOwnerResponder('fixture', undefined, memory as never, undefined, undefined, [{ name: 'remember', description: 'fixture', schema: rememberArgsSchema, autonomy_gated: false, trigger_allowlist: ['user_message'], mutates_state: true, handle: async () => { calls.remember++; return { ok: true, data: { id: 1, status: 'stored' }, source_taint: null }; } }] as never);
 const advertised = () => JSON.parse(calls.inputs[0]!).tools.some((tool: { name: string }) => tool.name === 'remember');
 const timer = <T>(_name: string, work: () => Promise<T>) => work();
@@ -45,7 +45,7 @@ it('captures host control before any awaited reply and rejects a model write aft
 });
 
 it('captures host control before entering a scoped responder and rejects a model write after envelope mutation', async () => {
-  const runScope = { runId: 'fixture-run', attempt: 'fixture-attempt', deadline: Date.now() + 30_000, signal: new AbortController().signal, admit: () => {}, commit: <T>(work: () => T) => work() };
+  const runScope = { runId: 'fixture-run', attempt: 'fixture-attempt', deadline: Date.now() + 15 * 60_000, signal: new AbortController().signal, admit: () => {}, commit: <T>(work: () => T) => work() };
   const turn = { traceId: 'scoped-mutation', conversationRef: 'owner', surface: 'telegram', text: 'Synthetic hello', memoryWrites: false, runScope };
   const replying = responder().respond(ownerTyped(turn), timer);
   turn.memoryWrites = true;

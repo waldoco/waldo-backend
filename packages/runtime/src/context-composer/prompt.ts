@@ -1,6 +1,5 @@
 import {
   REASONS_LAYER_JOIN,
-  TOOL_PERMISSIONS,
   renderRecall,
   wrapSkills,
   type CanaryTokens,
@@ -46,12 +45,17 @@ export type RenderedProviderPrompt =
 
 // This is the whole REASONS canvas serializer revision, not the narrower skill serializer.
 // Any semantic rendering change must bump it even when all source snapshots stay unchanged.
-export const CONTEXT_PROMPT_SERIALIZER_REVISION = 'context-reasons-v2';
+export const CONTEXT_PROMPT_SERIALIZER_REVISION = 'context-reasons-v4';
 
 const NO_CONFLICT_AUTHORITY = Object.freeze({
   inDomain: () => false,
   hallAdmits: () => false,
 });
+
+// Only a recall that ran can report that nothing surfaced. A failed or skipped one says so instead, because the owner
+// turn's memory reaches the model through the pinned profile and the block recalled for its message, and an empty
+// result here would read as a claim that nothing is remembered.
+const RECALL_NOT_RUN = 'Recall did not run in this section, so it says nothing about what is remembered. Owner memory, when supplied, is elsewhere in this prompt or in the message.';
 
 const promptStringSchema = Object.freeze({
   safeParse(value: unknown): { success: true; data: string } | { success: false } {
@@ -133,7 +137,7 @@ export function assembleReasonsPrompt(
     .filter((value) => value.length > 0)
     .join(REASONS_LAYER_JOIN);
   const operations = [
-    renderMemoryContext(renderRecall(recall.result, [], NO_CONFLICT_AUTHORITY)),
+    renderMemoryContext(recall.status === 'partial' ? renderRecall(recall.result, [], NO_CONFLICT_AUTHORITY) : RECALL_NOT_RUN),
     renderHealth(health),
     renderWorkspace(materials.workspace),
     renderToolOutputs(materials.tool_outputs),
@@ -142,7 +146,8 @@ export function assembleReasonsPrompt(
     requirements,
     materials.identity.text,
     approach,
-    `Tool ACL ceiling: ${TOOL_PERMISSIONS[invocation.runtime_binding.trigger].join(', ')}. Call only tools in this request's function list; ceiling entries without a live handler are not callable.`,
+    // The trigger's ACL ceiling grants nothing callable (evidence.tool_acl records it); the function list is the callable set.
+    "Call only tools in this request's function list.",
     operations,
     [materials.zone_modifier.text, materials.mode_template.text, materials.soul_base.text].join('\n'),
     materials.safety_rules.text,

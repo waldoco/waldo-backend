@@ -16,7 +16,7 @@ Health-aware capability is required; each person's health consent remains option
 
 [What is built](docs/CURRENT_SYSTEM.md) is the current state at a pinned SHA. One path is live: owner Telegram messages go through the Joined Conversation Path to OpenAI `gpt-5-nano` and back, via a dev listener in a Codespace, not a deployment. The other slices since the September 18 baseline are contracts and runtime modules with tests, not composed into the deployed Worker. [Production architecture](docs/architecture/PRODUCTION_ARCHITECTURE.md) covers per-user isolation, always-on connectors and the activity ledger; [adoption direction](docs/planning/ADOPTION_DIRECTION.md) covers what is taken from peer agents. Re-pin before every implementation claim.
 
-Keep `WaldoCoordinator`, the existing trusted RunLoop, ContextComposer, owning reducers, authority/consent boundaries and intent-before-I/O. Complete production adapters instead of adding another canonical runtime or bypassing fail-closed dependencies. Memory and personality never grant permission; provider completion is not Outcome Acceptance.
+One brain: the per-owner `OwnerDO`, plus short-lived task workers that return results or proposals to it. The second brain (RunLoopDO, `WaldoCoordinator`, the responsibility API) was deleted in B-1. Keep ContextComposer, owning reducers, authority/consent boundaries and intent-before-I/O. Complete production adapters instead of adding another canonical runtime or bypassing fail-closed dependencies. Memory and personality never grant permission; provider completion is not Outcome Acceptance.
 
 ## Documentation policy
 

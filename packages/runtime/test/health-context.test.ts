@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DerivedHealthDestinationView } from '@waldo/contracts';
 import { healthContextBook, rowFreshness, toContextHealthMaterial, type HealthContextRow } from '../src/channels/health-context';
-import { localTrustedBriefTurnSnapshot } from '../src/run-loop/adapters';
+import { localTrustedBriefTurnSnapshot } from '../src/llm/run-loop-adapters';
 import { md5Hex } from '../src/channels/md5';
 
 // Fixed clock: 2026-09-28 10:00 UTC = 15:30 IST, local day 2026-09-28.

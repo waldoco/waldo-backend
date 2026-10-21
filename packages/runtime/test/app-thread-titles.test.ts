@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { appThreadListV1Schema, appThreadOperationResultV1Schema } from '../../contracts/src/app/threads';
 import { appSubjectFor } from '../src/channels/app-api';
 import type { AppInboxRecord } from '../src/channels/app-inbox';
-import { redactThreadTitles } from '../src/channels/app-threads';
+import { nameThread, redactThreadTitles } from '../src/channels/app-threads';
 import { claimStore, FORGOTTEN } from '../src/memory/claims';
 import { THREAD_TITLE_BUDGET_MS } from '../src/llm/time-budget';
 import { ensureSchema } from '../src/tracer/schema';
@@ -155,6 +155,17 @@ describe('the model naming an untitled thread', () => {
     }
   });
 
+  it('a model title with a control or format character is unreadable, and the thread stays untitled', () => {
+    for (const [name, char] of [['newline', '\n'], ['NUL', '\u0000'], ['bidi override', '\u202E'], ['zero-width space', '\u200B']] as const) {
+      const untitled = { state: 'active', title: null, title_revision: 1 };
+      const rows = new Map<string, unknown>([['app:thread:t1', untitled]]);
+      const kv = { get: (key: string) => rows.get(key), put: (key: string, value: unknown) => { rows.set(key, value); } } as unknown as Parameters<typeof nameThread>[0];
+      expect(nameThread(kv, 't1', JSON.stringify({ title: `Lisbon${char}trip` })), name).toBe('unreadable');
+      expect(rows.get('app:thread:t1'), name).toBe(untitled);
+      expect(nameThread(kv, 't1', JSON.stringify({ title: 'Lisbon trip' })), name).toBe('named');
+    }
+  });
+
   // A row an older build left without an input origin fails the entry shape: the turn and the page leave it out, so the
   // title does too, even with its witness in place.
   it('names it from the rows the turn loads; a row the turn left out never reaches the model', async () => {
@@ -230,7 +241,7 @@ describe('titles and erasure', () => {
       const kite = await thread('\u212Aite repair');
       await say('/chat/main', 'title-client-13', 'Please forget kite.');
       const answered = model.turnRequests.find(request => request.includes('"tool_turns"'))!;
-      expect(answered).toContain(String.raw`"output":"{\"ok\":false,\"error\":\"tool handler failed\"`);
+      expect(answered).toContain(String.raw`"output":"{\"ok\":false,\"error\":\"The tool threw while running.\",\"error_code\":\"handler_failed\"`);
       expect((await listed(call, kite))!.title).toBe('\u212Aite repair');
       expect(memory.claims().map(claim => claim.text)).toEqual(['Wants to learn to kite in Tarifa']);
     });

@@ -13,7 +13,7 @@ import {
   isLocalRunLoopEnvironment,
   localTrustedBriefScheduleInput,
   resolveRunLoopAdapters,
-} from '../src/run-loop/adapters';
+} from '../src/llm/run-loop-adapters';
 import type {
   LLMGatewayRequest,
   TrustedProviderEffect,

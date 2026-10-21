@@ -95,7 +95,7 @@ const { OwnerDO: UpdateOwner } = await import('../src/channels/owner-do');
 const { loopBook: updateLoops } = await import('../src/channels/loops');
 const { dayPlanBook: updatePlans } = await import('../src/channels/day-cards');
 it.each(['normal', 'low', 'quiet', 'off', 'closed'] as const)('updates without a brief respect owner preferences: %s', async mode => {
-  await runInDurableObject(env.TRACER_DO.get(env.TRACER_DO.idFromName(`update-without-brief-${mode}`)), async (_instance, state) => {
+  await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`update-without-brief-${mode}`)), async (_instance, state) => {
     const now = Date.parse('2026-10-08T09:00:00Z');
     const savedNow = Date.now; Date.now = () => now;
     updateFixture.changed = false; updateFixture.sent = []; updateFixture.markups = []; updateFixture.prompts = [];
@@ -124,7 +124,7 @@ it.each(['normal', 'low', 'quiet', 'off', 'closed'] as const)('updates without a
 const closedTraces = (state: DurableObjectState, trace: string) =>
   state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM trace_log WHERE trace = ? AND hop = 'machine_turn'", trace).one().n;
 it('a day card held for quiet hours still closes its trace, so the exporter flushes it', async () => {
-  await runInDurableObject(env.TRACER_DO.get(env.TRACER_DO.idFromName('day-card-quiet-root')), async (_instance, state) => {
+  await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('day-card-quiet-root')), async (_instance, state) => {
     const now = Date.parse('2026-10-08T09:00:00Z');
     const savedNow = Date.now; Date.now = () => now;
     try {

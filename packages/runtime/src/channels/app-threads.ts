@@ -67,7 +67,8 @@ export const nameThread = (kv: Pick<DurableObjectStorage['kv'], 'get' | 'put'>, 
   let title: unknown;
   try { title = (JSON.parse(answer) as { title?: unknown }).title; } catch { return 'unreadable'; }
   const parsed = appThreadRenameV1Schema.shape.title.safeParse(title);
-  if (!parsed.success) return 'unreadable';
+  // A model title is one visible line: a control or format character could break the list or reorder what it shows.
+  if (!parsed.success || /[\p{Cc}\p{Cf}]/u.test(parsed.data)) return 'unreadable';
   const record = kv.get<ThreadRecord>(THREAD + thread);
   if (!untitled(record)) return 'refused';
   kv.put(THREAD + thread, { ...record, title: parsed.data, title_revision: 2 });

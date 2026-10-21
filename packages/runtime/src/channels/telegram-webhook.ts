@@ -5,7 +5,6 @@ import {linkCodeHash} from '../identity/owner-directory';
 
 export type TelegramWebhookEnv = Readonly<{
   OWNER_DO?: DurableObjectNamespace;
-  RUN_LOOP_DO?: DurableObjectNamespace<import('../run-loop/do').RunLoopDO>;
   // Held off until connected common-task execution and recovery acceptance.
   COMMON_BROWSER_REGISTRATION?: string;
   COMMON_OWNER_TASKS?: string;
@@ -18,10 +17,13 @@ export type TelegramWebhookEnv = Readonly<{
   LANGFUSE_SECRET_KEY?: string;
   LANGFUSE_BASE_URL?: string;
   LANGFUSE_CAPTURE_TEXT?: string;
+  // 'on' sends per-day spend to waldo.cost_ledger_daily after each turn; anything else keeps it off.
+  WALDO_COST_LEDGER_SYNC?: string;
   WALDO_ENVIRONMENT?: string;
   WALDO_OWNER_DO_NAMESPACE?: string;
   WALDO_RELEASE?: string;
   OPENAI_API_KEY?: string;
+  ANTHROPIC_API_KEY?: string;
   SMALLEST_AI_API_KEY?: string;
   BRAVE_SEARCH_API_KEY?: string;
   // A5 artifact bodies; absent in tests/local, bound in wrangler (r2_buckets).
@@ -40,6 +42,9 @@ export type TelegramWebhookEnv = Readonly<{
   WHATSAPP_APP_SECRET?: string;
   WHATSAPP_ACCESS_TOKEN?: string;
   WHATSAPP_PHONE_NUMBER_ID?: string;
+  // The approved re-engagement template (WhatsApp Manager) sent when the 24-hour window is closed; unset holds without knocking.
+  WHATSAPP_REENGAGE_TEMPLATE?: string;
+  WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string;
   WALDO_MCP_SERVERS?: string;
   MCP_READ_INTENTS?: string;
   DRIVE_READS?: string;
