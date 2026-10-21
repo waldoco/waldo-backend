@@ -13,6 +13,7 @@ import { GOOGLE_MCP_READ_ONLY, GOOGLE_MCP_UNAVAILABLE, googleMcpServer, isGoogle
 import { callMcpToolArgsSchema, searchMcpToolsArgsSchema, triggerTypeSchema, TOOL_PERMISSIONS, type CallMcpToolArgs, type SearchMcpToolsArgs, type ToolHandler, type ToolName, type ToolResult } from '@waldo/contracts';
 import { McpRefusal, type McpConnections } from '../../connectors/mcp-connections';
 import { checkArgs } from '../../connectors/mcp-tools';
+import { egressTarget } from '../../connectors/egress';
 import { connectNeededText } from './connect-text';
 import { proposalStatus, type CardPlacement, type McpCallProposal } from '../../channels/approvals';
 import { callMcpTransport, McpAuthError, McpHttpError, McpToolError, type McpTransportServer } from '../../connectors/mcp-transport';
@@ -83,6 +84,8 @@ export const callMcp = async (server: McpTransportServer, tool: string, args: Re
 // auth mode and runs the call, throwing McpConnectError for owner-actionable auth states.
 export const executeMcp = async (config: McpServerConfig, tool: string, args: Record<string, unknown>, googleAuth?: McpGoogleAuth, fetcher: typeof fetch = fetch, intent?: ProxyIntent): Promise<{ content: unknown; protocolVersion: string }> => {
   if (isGoogleHost(config.url) && !isGoogleMcpRead(config.url, tool)) throw new McpReadOnlyError(config.name, tool);
+  // Deploy-config servers meet the owner servers' address rule: https on the default port, a public host.
+  try { egressTarget(config.url); } catch { throw new ToolExecutionError(`MCP server "${config.name}" has an address Waldo does not reach (https on the standard port, public host only).`); }
   const server = governed(config);
   const catalogue = googleMcpServer(server.url), google = catalogue !== undefined;
   // The catalogue's fixed arguments land after the model's on every rail, so no entry point can drop them.
