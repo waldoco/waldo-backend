@@ -46,7 +46,8 @@ export const TASK_DEADLINE_MS = 6 * 60 * 60_000;
 // minute and draws on the same provider rate limits as their chat. A job past this waits in the queue, never refused, and
 // starts when a running one reports.
 export const TASK_MAX_RUNNING = 3;
-// Settled rows kept for the console and audit; older ones are dropped, newest kept.
+// Settled rows kept for the console and audit. Older ones are dropped, newest kept, so an owner who runs tasks for years does
+// not grow the object's storage without bound; nothing open is ever dropped.
 export const TASK_SETTLED_KEPT = 200;
 
 export type CreateJob = Readonly<{

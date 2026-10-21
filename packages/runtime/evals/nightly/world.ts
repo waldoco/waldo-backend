@@ -177,7 +177,10 @@ export const evalWorld = (seed: WorldSeed, start: string) => {
       const known = tasks.find((row) => row.idempotency_key === input.idempotencyKey);
       if (known) return { job: known, created: false };
       effect('task.start', { profile: input.profile, ...input.brief });
-      const row = { id: `job_${String(tasks.length + 1).padStart(12, '0')}`, idempotency_key: input.idempotencyKey, status: 'queued' } as JobRow;
+      const row = {
+        id: `job_${String(tasks.length + 1).padStart(12, '0')}`, kind: input.kind, profile: input.profile, idempotency_key: input.idempotencyKey,
+        brief_json: JSON.stringify(input.brief), taint: input.taint ?? null, status: 'queued',
+      } as JobRow;
       tasks.push(row);
       return { job: row, created: true };
     },

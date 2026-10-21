@@ -2,11 +2,10 @@ import {
   cancelTaskArgsSchema, startTaskArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type CancelTaskArgs, type StartTaskArgs, type ToolHandler, type ToolName,
 } from '@waldo/contracts';
-import { md5Hex } from '../channels/md5';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { numericHealthIn } from '../scribe/sanitiser';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
-import { TASK_DEADLINE_MS, type JobBook, type TaskBrief } from './jobs';
+import { TASK_DEADLINE_MS, taskBrief, type JobBook, type TaskBrief } from './jobs';
 import { TASK_PROFILE_SPECS } from './profiles';
 
 // The brain's two task tools. Whether a piece of work becomes a task is the model's call: nothing here routes work by its
@@ -45,17 +44,21 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
       };
       // A brief persists with the job, and the owner's health values are never stored: say it in zone words instead.
       if (numericHealthIn(JSON.stringify(brief))) return refusal('The brief contains health values, which a task never stores. Describe them in words (for example "a low-recovery morning") and call start_task again.');
-      // A replayed turn's same call returns the job it already made.
-      const key = `${ctx.turnId ?? 'turn'}:${ctx.toolCallId ?? md5Hex(JSON.stringify(args))}`;
+      // The job is keyed by the turn and its tool call, so a replayed turn's same call returns the job it already made.
+      if (!ctx.turnId || !ctx.toolCallId) return refusal('Task invocation identity is unavailable.');
+      const key = `${ctx.turnId}:${ctx.toolCallId}`;
       const { job, created } = deps.book.create({
-        kind: 'task', profile: args.profile, idempotencyKey: key, origin: ctx.turnId ?? 'turn', surface: deps.surface,
+        kind: 'task', profile: args.profile, idempotencyKey: key, origin: ctx.turnId, surface: deps.surface,
         brief, dueAt: now, deadlineAt: now + TASK_DEADLINE_MS,
+        // A brief written in a turn that read someone else's words may carry them, so the report is applied as tainted.
+        taint: ctx.toolArgSourceTaint === 'external' ? 'external' : null,
       });
       if (created) {
         deps.log({ trace: `task:${job.id}`, hop: 'task_created', ms: 0, ok: true, job_id: job.id, job_profile: args.profile });
         await deps.wake(now);
       }
-      return { ok: true as const, data: { status: created ? 'started' : 'already_started', job_id: job.id, profile: args.profile, title: args.title }, source_taint: null };
+      const made = taskBrief(job);
+      return { ok: true as const, data: { status: 'started', job_id: job.id, profile: job.profile, title: made.title }, source_taint: null };
     },
   } satisfies ToolHandler<StartTaskArgs, unknown, ToolDispatcherContext>,
   {
@@ -66,13 +69,14 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
     autonomy_gated: false,
     mutates_state: true,
     async handle({ job_id }: CancelTaskArgs) {
-      if (!deps.book.cancel(job_id, 'owner')) {
-        const row = deps.book.get(job_id);
-        return refusal(row ? `That task already ${row.status === 'cancelled' ? 'was cancelled' : 'finished'}.` : 'No task has that id.', row ? 'rejected' : 'not_found');
-      }
+      // Only tasks the model started: a retried owner message is the brain's own promise, kept or noticed by the jobs lane.
+      const row = deps.book.get(job_id);
+      if (row?.kind !== 'task') return refusal('No task has that id.', 'not_found');
+      const { title } = taskBrief(row);
+      if (!deps.book.cancel(job_id, 'owner')) return refusal(`"${title}" already ${deps.book.get(job_id)?.status === 'cancelled' ? 'was cancelled' : 'finished'}.`);
       deps.fence(job_id);
       deps.log({ trace: `task:${job_id}`, hop: 'task_cancelled', ms: 0, ok: true, job_id, code: 'owner' });
-      return { ok: true as const, data: { job_id, cancelled: true }, source_taint: null };
+      return { ok: true as const, data: { job_id, title, cancelled: true }, source_taint: null };
     },
   } satisfies ToolHandler<CancelTaskArgs, unknown, ToolDispatcherContext>,
 ];
@@ -82,7 +86,7 @@ export const runningTasksLine = (book: JobBook): string => {
   const open = book.open().filter((row) => row.kind === 'task');
   if (!open.length) return '';
   return ['Background tasks you started that have not reported yet (ids for cancel_task):', ...open.map((row) => {
-    const brief = JSON.parse(row.brief_json) as TaskBrief;
+    const brief = taskBrief(row);
     return `- ${row.id}: "${brief.title}" (${row.profile}, ${row.status === 'reported' ? 'finished, report pending' : `${row.rounds} steps so far`})`;
   })].join('\n');
 };

@@ -95,8 +95,9 @@ describe('nightly eval catalogue', () => {
     expect(start.description).toContain('never this conversation');
     const args = { profile: 'reader', title: 'Promises', goal: 'List promises the owner made.', context: 'Mail from the last three months.', done_when: 'A list: who, what, by when.' };
     const ctx = { turnId: 'turn-1', toolCallId: 'call-1' } as never;
-    expect(await start.handle(args as never, ctx)).toMatchObject({ ok: true, data: { status: 'started', profile: 'reader' } });
-    expect(await start.handle(args as never, ctx)).toMatchObject({ ok: true, data: { status: 'already_started' } });
+    const first = await start.handle(args as never, ctx);
+    expect(first).toMatchObject({ ok: true, data: { status: 'started', profile: 'reader' } });
+    expect(await start.handle(args as never, ctx)).toEqual(first);
     expect(world.effects()).toEqual([{ kind: 'task.start', payload: expect.objectContaining({ profile: 'reader', goal: args.goal, timezone: 'Asia/Kolkata' }) }]);
   });
 
