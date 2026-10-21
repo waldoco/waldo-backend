@@ -167,7 +167,7 @@ const owned = async (name: string, script: (steps: Steps) => Promise<void>) => {
         armed: id => scheduler.lookup(id).state === 'entry',
         cancel: async id => { expect(await reminderBook(state.storage.sql, scheduler, { timezone: 'UTC', now: () => new Date() }, () => 'unused').cancel(id)).toBe(true); },
         claims: status => memory.claims(status).map(claim => claim.text),
-        heldTopics: () => [...memory.pendingTopics(), ...memory.incompleteTopics()],
+        heldTopics: () => memory.pendingTopics(),
       });
     } finally { await state.storage.deleteAlarm(); turns.mockRestore(); }
   });
