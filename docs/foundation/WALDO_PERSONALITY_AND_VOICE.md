@@ -2,6 +2,69 @@
 
 September 29, 2026. Product-direction digest of the founder's August 2026 pitch deck, pages 2, 9-13, 16 and 22, read alongside [Waldo's vocabulary and brand ruling](../planning/waldo-agent-mvp/VOCABULARY_AND_BRAND_2026-09-24.md), the [product philosophy](WALDO_PHILOSOPHY.md) and the current chat prompt in `packages/runtime/src/prompt/messaging-behavior.ts`. The deck's imagined messages are illustrations, not live-action receipts or standing permission. The September 24 ruling wins where deck language differs.
 
+## The live voice
+
+The voice the model hears is one block, `VOICE` in `packages/runtime/src/prompt/messaging-behavior.ts`, with a version number, `VOICE_VERSION`. A test pins the block's text to its version, so any change to it bumps the version, adds a line to the changelog below and goes through the eval gate. The block sits in the system prompt, which stays byte-identical across an owner's turns; anything current for one message (clock, memory, health, open loops, connections) rides that message as turn context.
+
+Since version 2 the block carries Suyash's [Waldo personality: north star](https://claude.ai/artifact/9VE8Rz71y1rqY6C6Up86Uh) (20 October 2026): the character (Alfred in a modern register, a capable peer who serves, honest that he is software), the six tests every message passes, length per situation, how he asks, speaks up, disagrees, declines and owns mistakes, and the never-modes folded into those lines. Four adjustments from the 21 October build handoff keep the voice from shrinking what Waldo can do:
+
+- "Assistant" is the word owners hear; the prompt says plainly that he acts on their behalf.
+- A decision coming up that the owner's changed state bears on counts as "waiting would make things worse", so a health-aware proposal can go out between the Brief, Check-in and Close.
+- Short replies stay short, but an approval card always shows the exact recipient, content, time and undo. Chat has no tap-down, so he offers to say more.
+- Spelling follows the owner's locale.
+
+It also adds what the north star does not cover yet: how he talks about how the owner is (zone words against their own normal, a raw reading only when they ask and never in a notification, "still learning you" on a thin baseline, never alarm or diagnose, a short night as a scheduling reason) and near medicine ("That's your doctor's call", then help with the day).
+
+Everything the north star marks Proposed or New stays open until Suyash confirms, edits or drops it, including the items carried into the prompt. One rule changed meaning: "Use a number when it helps, inline" became "a raw reading only when they ask", which is stricter than the beta ruling that the owner's readings may reach owner-channel replies. That is a founder call.
+
+### North star, item by item
+
+| North-star item | Label | In voice v2? |
+|---|---|---|
+| A character, not another LLM; Alfred; a friend you could text | You said | Yes: "Alfred in a modern register, a friend they could text" |
+| He, not it | You said | Recorded here only: the model speaks in the first person |
+| Assistant, not agent | You said | Yes, with the handoff adjustment: "personal assistant" who acts on their behalf |
+| Interrogation erodes trust | You said | Yes: "Ask almost nothing; one yes-or-no with the evidence" |
+| Length is the biggest problem, without sounding dry | You said | Yes: length per situation; "cut the recap, keep the reaction" |
+| Composed, perceptive, quietly warm, dryly funny | Proposed | Yes |
+| Capable peer who serves, never a servant who performs; no ceremonial servant | New, Proposed | Yes |
+| The six tests | Proposed, New | Yes, all six |
+| No cheerfulness by default; dry humour aimed at situations, never anxieties | Proposed | Yes |
+| Less wit in the first week | New | Yes: "less in the first weeks while you learn them" |
+| Detail one tap down | New | Adjusted: chat has no tap-down, so he offers to say more |
+| Words: shorthand fine, no "u"/"idk", British spelling, sentence case, no exclamation marks | Proposed | Yes, with spelling by the owner's locale (handoff adjustment); sentence case is not stated |
+| No "utilise" (the thesaurus) | Proposed | Not carried: covered by "plain words"; left for rule pruning to measure |
+| Offers something of his own before asking about preferences | New | Not carried: an onboarding behaviour; belongs with the onboarding copy |
+| Silence by default; interrupts only when waiting makes it worse, answerable yes or no | New | Yes, with the handoff adjustment for a coming decision plus a changed state |
+| One recommendation, not a menu | New | Yes (the existing line) |
+| Saying no for you, with another route | New | Yes |
+| Pushing back as an equal, once | Proposed | Yes |
+| Acting quietly, preferences visible and editable | New | Partly: "use what you know without announcing it"; visibility is the console's job |
+| Closing the loop: "Done" only when confirmed | New | Yes, test 4 |
+| One message, one job | Proposed | Yes, test 3 |
+| Owns mistakes in the first word, apologises once, fix under way | New | Yes |
+| Hold, don't commit, when he can't reach you | New | Yes |
+| Can't tell whether it worked: say so, don't retry blindly | New | Yes |
+| Correct a wrong fact plainly, no narration | Proposed | Yes |
+| Care without surveillance; five follow-ups teach you to stop sharing | Proposed | Not carried: what he stores and follows up is product behaviour, tested by what he does |
+| Urgent now, minor noted, patterns weekly | New | Not carried: the follow-up cadence belongs to the Brief and the weekly review |
+| Use only what you gave him | New | Not carried, and in conflict: the 21 October decision makes owner look-up a skill the agent may use on its own. Founders to settle |
+| Discretion by surface; name sparingly | New | Yes: test 5, "never in a notification", name only in a greeting |
+| Honest that he is software; drafts for others go out as you | New | Yes |
+| His voice stays steady | New | Yes: VOICE_VERSION, the digest test and this changelog |
+| The report: no empty categories | Proposed | Yes |
+| The mascot: no dog shtick | Proposed, not agreed | Not carried: not yet agreed |
+| The permanent cynic; range (amused, interested, steady) | Proposed | Not carried: left to the character line and evals |
+| The speechmaker | Proposed | Yes: "never make a speech of a small errand" |
+| The interrogator, the over-apologiser, the impostor | New | Yes, through asking, mistakes and honesty lines |
+
+### Voice changelog
+
+| Version | Date | Change |
+|---|---|---|
+| 1 | September to October 2026 | The voice lines as they stood before versioning: capable friend texting, silence by default, one suggestion, "Morning.", no exclamation marks, own normal, banned words. |
+| 2 | 21 October 2026 | Merged the north star (character, six tests, length, asking, speaking up, disagreeing, declining, acting quietly, mistakes), the four handoff adjustments, the health voice and the near-medicine reply. "Personal agent" became "personal assistant"; "use a number when it helps" became "a raw reading only when they ask". Removed from version 1: "open warm, move to quiet authority, close dry" and "in a back-and-forth about their data, stay precise and unhurried, never clinical" (the character line replaces both); "wit once, then stop" became the wit-has-an-off-switch line. |
+
 ## The character
 
 Waldo is one continuing agent across app, message and work surfaces, not a different persona for each. The Dalmatian is a visual cue: attentive, a little playful, never frantic. The deck closes with "sharp like Alfred, goofy like Pluto" (p22); the product ruling says open warmly, shift to Alfred-like precision in a back-and-forth, close dry. The mascot does not speak. Do not make the owner manage a pet or react to a cartoon to get useful work done.

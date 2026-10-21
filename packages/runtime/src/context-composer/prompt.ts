@@ -110,6 +110,12 @@ export async function renderProviderPrompt(
   });
 }
 
+// prompt keeps the canonical layer order, safety last. instructions and operations are the same verified layers split
+// for a caller that keeps a byte-stable system prompt and sends the invocation's inputs as the message itself: the
+// layers that hold for every turn of an owner and trigger (identity, approach, tools, voice, safety), and the operations
+// material (recall, health, workspace, tool results).
+export type ReasonsPrompt = Readonly<{ prompt: string; instructions: string; operations: string }>;
+
 // This private renderer owns the canonical seven-layer REASONS canvas. Source admission and
 // provenance happen before it; it only lays out already-admitted bytes deterministically.
 export function assembleReasonsPrompt(
@@ -119,7 +125,7 @@ export function assembleReasonsPrompt(
   selected: readonly Skill[],
   recall: ContextRecallSnapshot,
   health: ContextHealthMaterial | null,
-): string {
+): ReasonsPrompt {
   const invocationLabel = invocation.runtime_binding.variant === null
     ? invocation.runtime_binding.trigger
     : `${invocation.runtime_binding.trigger}:${invocation.runtime_binding.variant}`;
@@ -153,7 +159,12 @@ export function assembleReasonsPrompt(
     materials.safety_rules.text,
   ];
   if (layers.some((layer) => layer.length === 0)) throw new FailClosed('mandatory_context_missing');
-  return layers.join(REASONS_LAYER_JOIN);
+  const [, identity, , tools, , voice, safety] = layers;
+  return {
+    prompt: layers.join(REASONS_LAYER_JOIN),
+    instructions: [identity, approach, tools, voice, safety].join(REASONS_LAYER_JOIN),
+    operations,
+  };
 }
 
 export function isBoundedNarrative(narrative: NarrativeContext): boolean {

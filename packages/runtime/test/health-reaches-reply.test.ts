@@ -7,8 +7,9 @@ import type { RunEffectScope } from '../src/channels/run-effect-scope';
 import { createOwnerTurnContext } from '../src/context-composer/owner-turn';
 import { ownerMessageAdmission } from '../src/identity/owner-message-admission';
 
-const seen = vi.hoisted(() => ({ bodies: [] as Array<{ instructions?: string }> }));
-vi.mock('openai', () => ({ default: class { responses = { create: async (body: { instructions?: string }) => {
+type Body = { instructions?: string; input?: string | ReadonlyArray<{ role: string; content: unknown }> };
+const seen = vi.hoisted(() => ({ bodies: [] as Body[] }));
+vi.mock('openai', () => ({ default: class { responses = { create: async (body: Body) => {
   seen.bodies.push(body);
   return { id: 'fixture', output_text: 'pong', output: [], usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
 } }; } }));
@@ -54,17 +55,25 @@ const responderWith = (health: boolean, log?: (entry: TurnLogEntry) => void) =>
   createOwnerResponder('fixture', undefined, undefined, log, undefined, [], undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, async () => health ? readNow() : null);
 const inOwner = <T,>(name: string, work: () => Promise<T>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), work);
-const lastInstructions = () => seen.bodies.at(-1)?.instructions ?? '';
+// Health is a per-turn fact, so it rides the owner's message as turn context and never the cached system prompt.
+const lastTold = () => {
+  const body = seen.bodies.at(-1);
+  const input = body?.input;
+  const message = typeof input === 'string' ? input : String([...(input ?? [])].reverse().find(entry => entry.role === 'user')?.content ?? '');
+  expect(body?.instructions ?? '').not.toMatch(/Form zone:|Recovery zone:|No derived health context/);
+  return message;
+};
 
-it('a messaging owner turn tells the model the shared health context, in its own measured section', async () => {
+it('a messaging owner turn tells the model the shared health context on its message, in its own measured section', async () => {
   const logs: TurnLogEntry[] = [];
   await inOwner('health-reply-with', async () => {
     await responderWith(true, entry => logs.push(entry)).respond(ownerTyped({ traceId: 'tg-health-1', conversationRef: 'owner', surface: 'telegram', text: 'how am I doing today?' }), (_name, work) => work());
   });
-  expectHealth(lastInstructions());
+  expectHealth(lastTold());
   const shape = logs.find(entry => entry.hop === 'llm_reply')!.shape!;
   const { skill_procedures: procedures = 0, ...joined } = shape.context!.system_sections!;
-  expect(joined.health).toBeGreaterThan(0);
+  expect(joined.health).toBeUndefined();
+  expect(shape.context!.context_sections!.health).toBeGreaterThan(0);
   const pieces = Object.values(joined);
   expect(pieces.reduce((sum, bytes) => sum + bytes, 0) + 2 * (pieces.length - 1) + procedures).toBe(shape.system_bytes);
 });
@@ -73,7 +82,7 @@ it('a messaging owner turn without shared health says so once', async () => {
   await inOwner('health-reply-without', async () => {
     await responderWith(false).respond(ownerTyped({ traceId: 'tg-health-2', conversationRef: 'owner', surface: 'telegram', text: 'how am I doing today?' }), (_name, work) => work());
   });
-  expectAbsent(lastInstructions());
+  expectAbsent(lastTold());
 });
 
 it('a Recovery-first row reaches the model with Load stated as unavailable', async () => {
@@ -82,7 +91,7 @@ it('a Recovery-first row reaches the model with Load stated as unavailable', asy
     const responder = createOwnerResponder('fixture', undefined, undefined, undefined, undefined, [], undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, async () => toContextHealthMaterial(recoveryOnly, clock));
     await responder.respond(ownerTyped({ traceId: 'tg-health-3', conversationRef: 'owner', surface: 'telegram', text: 'how am I doing today?' }), (_name, work) => work());
   });
-  const told = lastInstructions();
+  const told = lastTold();
   expect(count(told, 'Recovery zone: solid.')).toBe(1);
   expect(told).toContain('Load: unavailable.');
   expect(told).not.toContain('undefined');
@@ -93,7 +102,7 @@ it('a scheduled prompt such as the Brief tells the model the shared health conte
   await inOwner('health-brief-with', async () => {
     await expect(responderWith(true).prompt('card:brief:1', 'owner', 'Write the morning brief.', async (_hop, work) => work())).resolves.toBeTypeOf('string');
   });
-  expectHealth(lastInstructions());
+  expectHealth(lastTold());
 });
 
 const owner = '10000000-0000-0000-0000-000000000001';
@@ -117,7 +126,7 @@ it('an app owner turn tells the model the shared health context once, with no ab
     const responder = createOwnerResponder('fixture', undefined, undefined, undefined, undefined, [], undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, [], runScope, undefined, { context });
     await responder.respond(ownerTyped({ traceId: 'app-health-1', conversationRef: context.conversationRef, surface: 'app', text }), (_name, work) => work());
   });
-  expectHealth(lastInstructions());
+  expectHealth(lastTold());
 });
 
 it('the app context composer states absence when the owner has no shared health', async () => {

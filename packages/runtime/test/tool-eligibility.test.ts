@@ -23,6 +23,8 @@ const account = (features: Partial<Account> = {}): Account => ({ id: 'acct-1', e
 const turn = async (name: string, accounts: () => readonly Account[] | Promise<readonly Account[]>, script: (round: number) => readonly LLMToolCall[] | undefined) => {
   const offered: (readonly string[] | undefined)[] = [];
   const systems: string[] = [];
+  // The connection fact is current for the turn, so it rides the owner's message; the rule for it is in the system prompt.
+  const told: string[] = [];
   const offers: ConnectIntent[] = [];
   const logs: TurnLogEntry[] = [];
   const google: GoogleAccess = { client: async () => null, state: async () => accounts() };
@@ -30,6 +32,7 @@ const turn = async (name: string, accounts: () => readonly Account[] | Promise<r
     const calls = script(offered.length);
     offered.push(request.tools?.map(tool => tool.name));
     systems.push(request.system ?? '');
+    told.push(String(request.messages.at(-1)?.content ?? ''));
     return { ok: true, data: { model: request.model, text: calls ? '' : 'Done.', ...(calls ? { tool_calls: [...calls] } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 } };
   } };
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async () => {
@@ -39,29 +42,31 @@ const turn = async (name: string, accounts: () => readonly Account[] | Promise<r
     args[6] = WALDO_CHAT_MODEL; args[9] = async intent => { offers.push(intent); return true; }; args[10] = gateway;
     await createOwnerResponder(...args).respond(ownerTyped({ traceId: `${name}-1`, conversationRef: 'telegram-42', surface: 'telegram', text: 'what is on my calendar today?', memoryWrites: false }), (_hop, work) => work());
   });
-  return { offered, systems, offers, logs };
+  return { offered, systems, told, offers, logs };
 };
 const call = (name: string, args: object): LLMToolCall => ({ call_id: `call-${name}`, name, arguments: JSON.stringify(args) });
 
 it('no Google connected: calendar and mail tools are left out, connect_service stays and its connect button still reaches the channel', async () => {
-  const { offered, systems, offers, logs } = await turn('eligibility-none', () => [], round => round === 0 ? [call('connect_service', { service: 'google' })] : undefined);
+  const { offered, systems, told, offers, logs } = await turn('eligibility-none', () => [], round => round === 0 ? [call('connect_service', { service: 'google' })] : undefined);
   expect(offered[0]).toContain('connect_service');
   for (const name of [...CALENDAR, ...MAIL, 'get_tasks']) expect(offered[0], name).not.toContain(name);
   expect(offers).toEqual([expect.objectContaining({ status: 'auth_required', service: 'google', reason: 'not_connected' })]);
-  expect(systems[0]).toContain('Google features not connected for this owner: calendar, mail, tasks.');
+  expect(told[0]).toContain('Google features not connected for this owner: calendar, mail, tasks.');
+  expect(systems[0]).not.toContain('Google features not connected for this owner');
+  expect(systems[0]).toContain('If the owner asks for one, call connect_service with that feature');
   const removal = logs.find(entry => entry.hop === 'tool_eligibility')!;
   expect(removal.detail).toBe('not_connected=9 not_configured=0 check_failed=0');
   const shape = logs.find(entry => entry.hop === 'llm_reply')!.shape!;
   const { skill_procedures: procedures = 0, ...joined } = shape.context!.system_sections!;
-  expect(joined.connections).toBeGreaterThan(0);
+  expect(shape.context!.context_sections!.connections).toBeGreaterThan(0);
   expect(Object.values(joined).reduce((sum, bytes) => sum + bytes, 0) + 2 * (Object.values(joined).length - 1) + procedures).toBe(shape.system_bytes);
 });
 
 it('a calendar-only grant keeps calendar tools, leaves out mail tools, and connect_service offers the missing mail feature', async () => {
-  const { offered, systems, offers } = await turn('eligibility-calendar', () => [account({ mail: false, tasks: false })], round => round === 0 ? [call('connect_service', { service: 'google', feature: 'mail' })] : undefined);
+  const { offered, told, offers } = await turn('eligibility-calendar', () => [account({ mail: false, tasks: false })], round => round === 0 ? [call('connect_service', { service: 'google', feature: 'mail' })] : undefined);
   for (const name of CALENDAR) expect(offered[0], name).toContain(name);
   for (const name of [...MAIL, 'get_tasks']) expect(offered[0], name).not.toContain(name);
-  expect(systems[0]).toContain('Google features not connected for this owner: mail, tasks.');
+  expect(told[0]).toContain('Google features not connected for this owner: mail, tasks.');
   expect(offers).toEqual([{ status: 'auth_required', service: 'google', reason: 'scope_missing', feature: 'mail' }]);
 });
 
