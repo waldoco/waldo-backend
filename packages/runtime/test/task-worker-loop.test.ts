@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ANTHROPIC_PROVIDER, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, type LLMToolCall, type LLMToolTurn, type TaskResult } from '@waldo/contracts';
+import { ANTHROPIC_PROVIDER, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, type LLMToolCall, type LLMToolTurn, type TaskResult } from '@waldo/contracts';
 import type { LoopToolResult } from '../src/conversation/tool-loop';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import type { TaskBrief, TaskTicket } from '../src/tasks/jobs';
@@ -141,6 +141,19 @@ describe('the production task model step', () => {
     expect(response.text).toBe('Read it.');
     expect(models()).toEqual([OPENAI_GPT_6_LUNA_MODEL]);
     expect(event).toMatchObject({ hop: 'llm_task', ok: true, cost_kind: 'worker', job_id: ticket.jobId, job_profile: 'reader', provider: OPENAI_PROVIDER, usage: { model: OPENAI_GPT_6_LUNA_MODEL } });
+  });
+
+  it('a deep task runs on the chat model, and past the owner\'s spend ceiling it is clamped to the auxiliary route like a turn', async () => {
+    const deep = { ...input, claim: { ...claim, brief: { ...brief, effort: 'deep' as const } } };
+    const open = faultInjectedProviders({ [OPENAI_PROVIDER]: [{ text: 'Read it.' }] });
+    await taskModel({ openaiApiKey: 'fixture-openai' }, open.gateway)(deep);
+    expect(open.models()).toEqual([OPENAI_GPT_6_1_SOL_MODEL]);
+    const capped = faultInjectedProviders({ [OPENAI_PROVIDER]: [{ text: 'Read it.' }] });
+    await taskModel({ openaiApiKey: 'fixture-openai' }, capped.gateway)({ ...deep, claim: { ...deep.claim, spend: { spentUsd: 26, ceilingUsd: 25 } } });
+    expect(capped.models()).toEqual([OPENAI_GPT_6_LUNA_MODEL]);
+    const under = faultInjectedProviders({ [OPENAI_PROVIDER]: [{ text: 'Read it.' }] });
+    await taskModel({ openaiApiKey: 'fixture-openai' }, under.gateway)({ ...deep, claim: { ...deep.claim, spend: { spentUsd: 3, ceilingUsd: 25 } } });
+    expect(under.models()).toEqual([OPENAI_GPT_6_1_SOL_MODEL]);
   });
 
   it('every provider failing is unavailability, typed, with no usage', async () => {
