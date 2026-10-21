@@ -111,20 +111,21 @@ export const taskHost = (deps: TaskHostDeps) => {
       const allowed = row.profile !== null && TASK_PROFILE_SPECS[row.profile].tools.includes(call.name as never);
       const scope = scopeFor(ticket, row);
       let result: LoopToolResult;
-      const spend = deps.spend?.();
       if (!allowed) {
         const error = toolError('acl_denied', `${call.name} is not a tool this task can use.`);
         result = { ok: false, error: error.cause, error_code: error.code, fix: error.fix, retryable: false, code: 'rejected' };
-      } else if (spend && spend.spentUsd >= spend.ceilingUsd && PAID_RUNG_TOOLS.has(call.name)) {
-        // Past the ceiling a worker's paid tools are held, as an owner turn's are; the cost ledger counts the hold.
-        deps.log({ trace: traceOf(ticket), hop: 'spend_hold', ms: 0, ok: false, code: `spend_ceiling_reached:${call.name}`, error_code: 'spend_ceiling_reached', cost_kind: 'worker', job_id: row.id, job_profile: row.profile! });
-        const held = spendHold(new Date(deps.now()));
-        result = { ok: false, error: held.cause, error_code: held.code, fix: held.fix, retryable: false, code: 'rejected' };
       } else {
         const handlers = await profileHandlers(row);
+        const spend = deps.spend?.();
         const ctx: ToolDispatcherContext = {
           ...deps.context(row.surface), trigger: 'user_message', canaryTokens: [...canaries], sourceTaint: null, toolArgSourceTaint: 'external',
           hasApproval: () => false, runScope: scope, turnId: traceOf(ticket), toolCallId: call.call_id,
+          // Past the ceiling a worker's paid tools are held the way an owner turn's are; the cost ledger counts each hold.
+          heldTool: (tool: string) => {
+            if (!spend || spend.spentUsd < spend.ceilingUsd || !PAID_RUNG_TOOLS.has(tool)) return null;
+            deps.log({ trace: traceOf(ticket), hop: 'spend_hold', ms: 0, ok: false, code: `spend_ceiling_reached:${tool}`, error_code: 'spend_ceiling_reached', cost_kind: 'worker', job_id: row.id, job_profile: row.profile! });
+            return spendHold(new Date(deps.now()));
+          },
           session: buildSessionState({ trigger: 'user_message', canary_tokens: [...canaries], started_at: started }),
         };
         const effect = unreplayable(call.name);

@@ -1,0 +1,161 @@
+import { env } from 'cloudflare:workers';
+import { runInDurableObject } from 'cloudflare:test';
+import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
+import { TOOL_PERMISSIONS, triggerTypeSchema, type ToolName } from '@waldo/contracts';
+import type { RunEffectScope } from '../src/channels/run-effect-scope';
+import type { TurnLogEntry } from '../src/channels/owner-turn-types';
+import type { ToolDispatcherContext } from '../src/tools/dispatcher';
+import { sanitise } from '../src/scribe/sanitiser';
+import { taskHost, type TaskHostDeps } from '../src/tasks/brain';
+import { jobBook, type JobBook, type TaskBrief, type TaskTicket } from '../src/tasks/jobs';
+
+// The brain's side of the job protocol over the real job book: every worker call is checked against its ticket, the
+// profile's tools are enforced here, and a cancel reaches a call that is already running.
+const T0 = 1_800_000_000_000;
+const brief: TaskBrief = { title: 'Book a table', goal: 'Find a table for two tonight.', context: 'Near Bandra.', done_when: 'A shortlist.', effort: 'standard', timezone: 'UTC', started_at: T0 };
+const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
+const CANARIES = ['a1b2c3d4e5f60718', '1a2b3c4d5e6f7081', 'f0e1d2c3b4a59687'];
+const VALID_ARGS: Record<string, unknown> = { search_communication: { query: 'from:client' }, browse_act: { url: 'https://example.com/book', task: 'Find a table for two at 8pm.' } };
+const call = (name: string) => ({ call_id: `c-${name}`, name, arguments: JSON.stringify(VALID_ARGS[name] ?? {}) });
+
+type Harness = Readonly<{
+  book: JobBook; sql: SqlStorage; clock: { at: number }; host: ReturnType<typeof taskHost>; log: TurnLogEntry[]; released: RunEffectScope[]; ran: string[];
+  ticket(profile?: 'reader' | 'errand'): TaskTicket; setSpend(spend: { spentUsd: number; ceilingUsd: number } | undefined): void;
+  hold: { release?: () => void; waiting?: Promise<void> };
+  handler: { search?: (ctx: ToolDispatcherContext) => Promise<unknown> };
+}>;
+let seq = 0;
+const withHost = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
+  runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`task-brain-${seq += 1}`)), async (_instance, state) => {
+    let n = 0;
+    const clock = { at: T0 };
+    const book = jobBook(state.storage.sql, { now: () => clock.at, newId: () => (n += 1).toString(16).padStart(12, '0'), newToken: () => `tok-${n += 1}` });
+    const log: TurnLogEntry[] = [], released: RunEffectScope[] = [], ran: string[] = [];
+    let spend: { spentUsd: number; ceilingUsd: number } | undefined;
+    const hold: Harness['hold'] = {};
+    const handler: Harness['handler'] = {};
+    const handlers = [
+      { name: 'search_communication', description: 'Search mail.', schema: z.object({ query: z.string() }), trigger_allowlist: allowlist('search_communication'), autonomy_gated: false, mutates_state: false,
+        async handle(_args: unknown, ctx: ToolDispatcherContext) { ran.push('search_communication'); return { ok: true as const, data: await (handler.search?.(ctx) ?? { hits: 2 }), source_taint: 'external' as const }; } },
+      { name: 'browse_act', description: 'Act in the browser.', schema: z.object({ url: z.string(), task: z.string() }).loose(), trigger_allowlist: allowlist('browse_act'), autonomy_gated: false, mutates_state: true,
+        async handle() { ran.push('browse_act'); return { ok: true as const, data: { done: true }, source_taint: 'external' as const }; } },
+    ] as unknown as ReturnType<TaskHostDeps['handlers']>;
+    const host = taskHost({
+      book, now: () => clock.at, handlers: () => handlers, context: () => ({ authenticatedUserId: 'owner-1', sanitise, egressAllowlist: ['example.com'] }),
+      serialBrowser: async (_scope, run) => { if (hold.waiting) await hold.waiting; return run(); },
+      releaseBrowser: scope => { released.push(scope); }, log: entry => { log.push(entry); }, spend: () => spend, wake: async () => undefined,
+    });
+    const ticket = (profile: 'reader' | 'errand' = 'reader') => {
+      const { job } = book.create({ kind: 'task', profile, idempotencyKey: `k${n += 1}`, origin: 'tg-1', surface: 'app', brief, dueAt: T0, deadlineAt: T0 + 3_600_000 });
+      return book.startAttempt(job.id)!;
+    };
+    return work({ book, sql: state.storage.sql, clock, host, log, released, ran, ticket, setSpend: next => { spend = next; }, hold, handler });
+  });
+
+describe('the task brain host', () => {
+  it('a reader job is offered only reader tools, and a call outside its profile is refused without running', async () => {
+    await withHost(async ({ host, ticket, ran }) => {
+      const t = ticket('reader');
+      const claim = await host.claim(t);
+      expect(claim === 'fenced' ? [] : claim.tools.map(tool => tool.name)).toEqual(['search_communication']);
+      const refused = await host.tool(t, call('browse_act'), CANARIES);
+      expect(refused).toMatchObject({ ok: false, error_code: 'acl_denied', code: 'rejected' });
+      expect(ran).toEqual([]);
+      expect(await host.tool(t, call('search_communication'), CANARIES)).toMatchObject({ ok: true, source_taint: 'external' });
+    });
+  });
+
+  it('records external taint on the job when a tool returns outside content', async () => {
+    await withHost(async ({ host, ticket, book }) => {
+      const t = ticket();
+      await host.claim(t);
+      await host.tool(t, call('search_communication'), CANARIES);
+      expect(book.get(t.jobId)!.taint).toBe('external');
+    });
+  });
+
+  it('frozen intent: a brief changed after the job started is not run, and the job parks for the owner to hear', async () => {
+    await withHost(async ({ host, ticket, book, sql, log }) => {
+      const t = ticket();
+      sql.exec("UPDATE task_jobs SET brief_json = replace(brief_json, 'Bandra', 'Juhu') WHERE id = ?", t.jobId);
+      expect(await host.claim(t)).toBe('fenced');
+      expect(book.get(t.jobId)).toMatchObject({ status: 'reported', park_reason: 'uncertain_effect' });
+      expect(log.find(entry => entry.hop === 'task_parked')).toMatchObject({ code: 'brief_changed', ok: false });
+    });
+  });
+
+  it('a cancel while a tool call is in flight aborts its I/O, and the worker gets nothing back', async () => {
+    await withHost(async ({ host, ticket, book, handler }) => {
+      const t = ticket();
+      await host.claim(t);
+      let aborted = false;
+      handler.search = (ctx) => new Promise((resolve) => {
+        ctx.runScope!.signal.addEventListener('abort', () => { aborted = true; resolve({ late: true }); });
+      });
+      const pending = host.tool(t, call('search_communication'), CANARIES);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      expect(book.cancel(t.jobId, 'owner')).toBe(true);
+      host.fence(t.jobId);
+      expect(await pending).toBe('fenced');
+      expect(aborted).toBe(true);
+    });
+  });
+
+  it('an unreplayable step writes its intent only once it can start: waiting behind the serial lane is not an uncertain effect', async () => {
+    await withHost(async ({ host, ticket, book, hold, ran }) => {
+      const t = ticket('errand');
+      await host.claim(t);
+      let release!: () => void;
+      hold.waiting = new Promise<void>(resolve => { release = resolve; });
+      const pending = host.tool(t, call('browse_act'), CANARIES);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      expect(book.get(t.jobId)!.inflight_json).toBeNull();
+      expect(host.busy().has(t.jobId)).toBe(true);
+      expect(book.lapse(host.busy())).toEqual([]);
+      release();
+      expect(await pending).toMatchObject({ ok: true });
+      expect(ran).toEqual(['browse_act']);
+      expect(book.get(t.jobId)!.inflight_json).toBeNull();
+      expect(host.busy().has(t.jobId)).toBe(false);
+    });
+  });
+
+  it('an attempt lost while an unreplayable step ran parks as an uncertain effect at once, never re-run blind', async () => {
+    await withHost(async ({ ticket, book, clock }) => {
+      const t = ticket('errand');
+      expect(book.beginEffect(t, { tool: 'browse_act', call_id: 'c1' })).toBe(true);
+      clock.at += 10 * 60_000;
+      expect(book.lapse(new Set())).toEqual([{ id: t.jobId, parked: true }]);
+      expect(book.get(t.jobId)).toMatchObject({ status: 'reported', park_reason: 'uncertain_effect', crashes: 1 });
+    });
+  });
+
+  it('past the spend ceiling a worker is clamped at claim and its paid tools are held, counted as worker spend', async () => {
+    await withHost(async ({ host, ticket, setSpend, log, ran }) => {
+      setSpend({ spentUsd: 26, ceilingUsd: 25 });
+      const t = ticket('errand');
+      const claim = await host.claim(t);
+      expect(claim === 'fenced' ? null : claim.spend).toEqual({ spentUsd: 26, ceilingUsd: 25 });
+      const held = await host.tool(t, call('browse_act'), CANARIES);
+      expect(held).toMatchObject({ ok: false, error_code: 'spend_ceiling_reached' });
+      expect(ran).toEqual([]);
+      expect(log.find(entry => entry.hop === 'spend_hold')).toMatchObject({ cost_kind: 'worker', code: 'spend_ceiling_reached:browse_act', job_id: t.jobId });
+      expect(await host.tool(t, call('search_communication'), CANARIES)).toMatchObject({ ok: true });
+    });
+  });
+
+  it('a late call from an attempt the brain fenced changes nothing', async () => {
+    await withHost(async ({ host, ticket, book, ran }) => {
+      const t = ticket();
+      await host.claim(t);
+      book.cancel(t.jobId, 'owner');
+      expect(await host.claim(t)).toBe('fenced');
+      expect(await host.tool(t, call('search_communication'), CANARIES)).toBe('fenced');
+      expect(await host.checkpoint(t, 1, [], [], { rounds: 1, costUsd: 0 })).toBe('fenced');
+      expect(await host.report(t, { kind: 'result', result: { status: 'done', summary: 'x', findings: [], proposals: [], left: [] } }, [], { rounds: 0, costUsd: 0 })).toBe('fenced');
+      expect(await host.heartbeat(t)).toBe(false);
+      expect(ran).toEqual([]);
+    });
+  });
+});
