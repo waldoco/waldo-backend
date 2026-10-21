@@ -122,7 +122,7 @@ The bar draws on public writing:
 
 2026 sources behind questions 14 and 15 and the tool checklist:
 - the MCP 2026-07-28 specification changelog (deterministic tool order; Client ID Metadata Documents replacing Dynamic Client Registration; `iss` validation; `input_required` results);
-- Imperva and Zenity on OpenClaw injections through message metadata and self-edited configuration (February and June 2026);
+- Imperva on OpenClaw injections through message objects (10 June 2026);
 - TechCrunch on Apple's conditions for Poke (4 June 2026);
 - Anthropic, "Demystifying evals for AI agents" (January 2026);
 - arXiv 2606.10315 and 2606.19544 on judge blind spots and agreement.
