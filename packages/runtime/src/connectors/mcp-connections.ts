@@ -7,10 +7,13 @@ import { authorizationUrl, callbackUrl, clientMetadataUrl, discoverAuthorization
 import { McpChallenge, McpRpcError, McpServerError, mcpRequest, type McpEra } from './mcp-protocol';
 import { McpProxyError, type McpProxy } from './mcp-proxy-client';
 import type { McpMethod, McpProxyFailure } from './mcp-proxy-wire';
-import { checkArgs, marksReadOnly, parseToolsPage, rankTools, toolDigest, toolHeaders, type McpToolDef } from './mcp-tools';
+import { argsDigest, checkArgs, marksReadOnly, parseToolsPage, rankTools, toolDigest, toolHeaders, type McpToolDef } from './mcp-tools';
 
 export const MCP_START_PATH = '/console/mcp/start/';
 const ATTEMPT_TTL_MS = 15 * 60_000;
+// How long a server's questions wait for the owner's answer. The server's own requestState may expire
+// sooner; its retry then simply asks again.
+const QUESTION_TTL_MS = 24 * 60 * 60_000;
 const KEEP_SETTLED_MS = 24 * 60 * 60_000;
 // tools/list freshness when the server gives no ttlMs (spec: CacheableResult). A refresh also follows any
 // call that names a tool the cache does not have.
@@ -45,16 +48,22 @@ export type McpConnectionView = Readonly<{
   tools_changed: boolean;
   connected_at: number;
 }>;
+// A tool as the model and the console see it. server_text and input_schema are the server's own words:
+// data to read, never instructions. read_only_hint is the server's annotation, a hint only; whether the
+// tool runs without a card is the owner's choice alone (runs).
 export type McpToolCard = Readonly<{
   server: string;
   tool: string;
-  title?: string;
-  description?: string;
-  input_schema: Readonly<Record<string, unknown>>;
   runs: 'without_asking' | 'asks_first';
-  server_marks_read_only: boolean;
-  digest: string;
+  read_only_hint: boolean;
+  server_text: Readonly<{ title?: string; description?: string }>;
+  input_schema: Readonly<Record<string, unknown>>;
 }>;
+// A server's questions for the owner (MCP multi round-trip requests, form elicitation only). handle names
+// the pending answer slot the owner object keeps with the server's opaque requestState.
+export type McpQuestion = Readonly<{ id: string; message: string; fields: Readonly<Record<string, unknown>> }>;
+export type McpInputRequired = Readonly<{ handle: string; questions: readonly McpQuestion[] }>;
+export type McpAnswers = Readonly<{ handle: string; responses: Readonly<Record<string, unknown>> }>;
 
 type Attempt = Readonly<{
   server_url: string;
@@ -171,6 +180,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
   // A permission is for one tool definition: a changed definition no longer matches and asks again.
   sql.exec('CREATE TABLE IF NOT EXISTS mcp_tool_reads (connection TEXT NOT NULL, name TEXT NOT NULL, digest TEXT NOT NULL, granted_at INTEGER NOT NULL, PRIMARY KEY (connection, name))');
   sql.exec('CREATE TABLE IF NOT EXISTS mcp_attempts (nonce TEXT PRIMARY KEY, record TEXT NOT NULL, expires INTEGER NOT NULL, started INTEGER NOT NULL DEFAULT 0, settled TEXT, settled_at INTEGER)');
+  sql.exec('CREATE TABLE IF NOT EXISTS mcp_questions (handle TEXT PRIMARY KEY, connection TEXT NOT NULL, tool TEXT NOT NULL, args_digest TEXT NOT NULL, ids TEXT NOT NULL, schemas TEXT NOT NULL, request_state TEXT, expires INTEGER NOT NULL)');
   const refreshing = REFRESHING.get(sql) ?? new Map<string, Promise<void>>();
   REFRESHING.set(sql, refreshing);
   const log = (hop: string, started: number, code?: string) => deps.log?.({ hop, ok: code === undefined, ...(code === undefined ? {} : { code }), ms: deps.now() - started });
@@ -280,6 +290,8 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       if (!parsed.nextCursor || parsed.nextCursor === cursor) break;
       cursor = parsed.nextCursor;
     }
+    // Stored in name order whatever order the server sent, so every list Waldo shows is stable.
+    tools.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     const digests = await Promise.all(tools.map(toolDigest));
     deps.transaction(() => {
       sql.exec('DELETE FROM mcp_tools WHERE connection = ?', r.id);
@@ -324,9 +336,49 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     return row(input.id)!;
   };
 
+  // The server's interim result: form questions are kept for the owner; any other kind of request (sampling,
+  // roots, a URL to open) is one Waldo never declared, so the server broke the protocol and nothing ran.
+  const questionsOf = async (r: Row, tool: string, args: Readonly<Record<string, unknown>>, result: unknown): Promise<McpInputRequired | null> => {
+    if (!isRecord(result) || result.resultType !== 'input_required') return null;
+    const requests = isRecord(result.inputRequests) ? result.inputRequests : {};
+    const questions: McpQuestion[] = [];
+    for (const [id, request] of Object.entries(requests)) {
+      const params = isRecord(request) && request.method === 'elicitation/create' && isRecord(request.params) ? request.params : null;
+      if (!params || (params.mode !== undefined && params.mode !== 'form') || typeof params.message !== 'string' || !isRecord(params.requestedSchema)) {
+        throw new McpRefusal('rejected', `${r.name} asked for input Waldo does not provide (only questions for the owner are supported), so ${tool} did not run.`, true);
+      }
+      questions.push({ id, message: params.message, fields: params.requestedSchema });
+    }
+    const state = typeof result.requestState === 'string' ? result.requestState : null;
+    if (!questions.length && state === null) throw new McpRefusal('rejected', `${r.name} returned an incomplete answer for ${tool}, so it did not run.`, true);
+    const handle = `q_${b64url(crypto.getRandomValues(new Uint8Array(12)))}`;
+    sql.exec('DELETE FROM mcp_questions WHERE expires < ?', deps.now());
+    sql.exec('INSERT INTO mcp_questions (handle, connection, tool, args_digest, ids, schemas, request_state, expires) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      handle, r.id, tool, await argsDigest(args), JSON.stringify(questions.map((q) => q.id)), JSON.stringify(questions.map((q) => q.fields)), state, deps.now() + QUESTION_TTL_MS);
+    return { handle, questions };
+  };
+  // The retry's inputResponses and requestState, from the owner's answers for exactly this call.
+  const answerParams = async (r: Row, tool: string, args: Readonly<Record<string, unknown>>, answers: McpAnswers) => {
+    const kept = sql.exec<{ connection: string; tool: string; args_digest: string; ids: string; schemas: string; request_state: string | null; expires: number }>('SELECT * FROM mcp_questions WHERE handle = ?', answers.handle).toArray()[0];
+    if (!kept || kept.expires < deps.now()) throw new McpRefusal('rejected', `${r.name}'s question has expired, so nothing ran. Call ${tool} again and the server will ask afresh.`, true);
+    if (kept.connection !== r.id || kept.tool !== tool || kept.args_digest !== await argsDigest(args)) throw new McpRefusal('rejected', `Those answers belong to a different ${r.name} call, so nothing ran. Send them with the same tool and arguments the server asked about.`, true);
+    const ids = JSON.parse(kept.ids) as string[], schemas = JSON.parse(kept.schemas) as Record<string, unknown>[];
+    for (const [id, response] of Object.entries(answers.responses)) {
+      const index = ids.indexOf(id);
+      if (index < 0) throw new McpRefusal('invalid_args', `${r.name} asked no question "${id}". It asked: ${ids.join(', ')}.`, true);
+      if (!isRecord(response) || !['accept', 'decline', 'cancel'].includes(response.action as string)) throw new McpRefusal('invalid_args', `The answer to "${id}" needs action accept, decline or cancel.`, true);
+      if (response.action === 'accept') {
+        const problem = checkArgs({ name: id, inputSchema: schemas[index]! }, isRecord(response.content) ? response.content : {});
+        if (problem) throw new McpRefusal('invalid_args', `The answer to "${id}": ${problem}.`, true);
+      }
+    }
+    return { inputResponses: answers.responses, ...(kept.request_state === null ? {} : { requestState: kept.request_state }) };
+  };
+
   const forget = (id: string) => deps.transaction(() => {
     sql.exec('DELETE FROM mcp_tools WHERE connection = ?', id);
     sql.exec('DELETE FROM mcp_tool_reads WHERE connection = ?', id);
+    sql.exec('DELETE FROM mcp_questions WHERE connection = ?', id);
     sql.exec('DELETE FROM mcp_connections WHERE id = ?', id);
   });
 
@@ -501,7 +553,9 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
 
     // Runs one tool. read: only a tool the owner lets run without asking, at the definition they allowed.
     // approved: a card the owner approved, at the definition the card froze, once per intent.
-    async invoke(input: Readonly<{ server: string; tool: string; args: Readonly<Record<string, unknown>>; mode: 'read' } | { connection: string; tool: string; args: Readonly<Record<string, unknown>>; mode: 'approved'; digest: string; intentId: string }>): Promise<Readonly<{ server: string; result: unknown }>> {
+    // A server that needs the owner's answer first returns input_required: its questions are kept under a
+    // handle, and the retry carries the owner's answers only from an approved card (answers).
+    async invoke(input: Readonly<{ server: string; tool: string; args: Readonly<Record<string, unknown>>; mode: 'read' } | { connection: string; tool: string; args: Readonly<Record<string, unknown>>; mode: 'approved'; digest: string; intentId: string; answers?: McpAnswers }>): Promise<Readonly<{ server: string; result: unknown } | { server: string; input_required: McpInputRequired }>> {
       const started = deps.now();
       const r = input.mode === 'read' ? live(input.server) : row(input.connection);
       if (!r) throw new McpRefusal('not_found', 'That server is no longer connected, so nothing ran.', true);
@@ -516,9 +570,12 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
         if (input.mode === 'approved' && found.digest !== input.digest) throw new McpRefusal('rejected', `${r.name} changed ${input.tool} after the owner approved it, so nothing ran. Look at the tool again and propose it anew.`, true);
         const problem = checkArgs(found.def, input.args);
         if (problem) throw new McpRefusal('invalid_args', `${input.tool}: ${problem}.`, true);
-        const result = await send(r, 'tools/call', { name: input.tool, arguments: input.args }, { headers: toolHeaders(found.def, input.args), ...(input.mode === 'approved' ? { intentId: input.intentId } : {}) });
-        log('mcp_call', started);
-        return { server: r.name, result };
+        const answered = input.mode === 'approved' && input.answers ? await answerParams(r, input.tool, input.args, input.answers) : {};
+        const result = await send(r, 'tools/call', { name: input.tool, arguments: input.args, ...answered }, { headers: toolHeaders(found.def, input.args), ...(input.mode === 'approved' ? { intentId: input.intentId } : {}) });
+        if (input.mode === 'approved' && input.answers) sql.exec('DELETE FROM mcp_questions WHERE handle = ?', input.answers.handle);
+        const asked = await questionsOf(r, input.tool, input.args, result);
+        log('mcp_call', started, asked ? 'input_required' : undefined);
+        return asked ? { server: r.name, input_required: asked } : { server: r.name, result };
       } catch (error) {
         const refusal = directCause(error, r.name);
         log('mcp_call', started, refusal.code);
@@ -529,7 +586,8 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
 };
 export type McpConnections = ReturnType<typeof mcpConnections>;
 
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const card = (r: Readonly<{ name: string }>, def: McpToolDef, digest: string, granted: ReadonlyMap<string, string>): McpToolCard => ({
-  server: r.name, tool: def.name, ...(def.title ? { title: def.title } : {}), ...(def.description ? { description: def.description } : {}),
-  input_schema: def.inputSchema, runs: granted.get(def.name) === digest ? 'without_asking' : 'asks_first', server_marks_read_only: marksReadOnly(def), digest,
+  server: r.name, tool: def.name, runs: granted.get(def.name) === digest ? 'without_asking' : 'asks_first', read_only_hint: marksReadOnly(def),
+  server_text: { ...(def.title ? { title: def.title } : {}), ...(def.description ? { description: def.description } : {}) }, input_schema: def.inputSchema,
 });

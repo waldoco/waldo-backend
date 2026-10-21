@@ -46,6 +46,10 @@ const refusal = async (work: Promise<unknown>) => {
   expect(error).toBeInstanceOf(McpRefusal);
   return error as McpRefusal;
 };
+const resultOf = (out: Awaited<ReturnType<McpConnections['invoke']>>) => {
+  if (!('result' in out)) throw new Error(`expected a result, got ${JSON.stringify(out)}`);
+  return out.result;
+};
 const tokenGrants = (world: FakeMcpWorld) => world.hits.filter((hit) => hit === `POST ${ISSUER}/token`).length;
 
 describe('MCP connections, end to end through the edge', () => {
@@ -63,7 +67,7 @@ describe('MCP connections, end to end through the edge', () => {
     expect(view!.scopes).toEqual(expect.arrayContaining(['pages:read', 'pages:write']));
 
     const found = await mcp.search({ query: 'search pages' });
-    expect(found.tools[0]).toMatchObject({ server: 'example', tool: 'search_pages', runs: 'asks_first', server_marks_read_only: true });
+    expect(found.tools[0]).toMatchObject({ server: 'example', tool: 'search_pages', runs: 'asks_first', read_only_hint: true, server_text: { description: 'Search the workspace pages by text.' } });
     // Until the owner allows it, even a tool the server marks read-only asks first.
     expect((await refusal(mcp.invoke({ mode: 'read', server: 'example', tool: 'search_pages', args: { query: 'q' } }))).code).toBe('forbidden');
     expect(await mcp.setRuns(view!.id, 'marked_read_only', true)).toBe(true);
@@ -76,7 +80,7 @@ describe('MCP connections, end to end through the edge', () => {
     expect(frozen.runs).toBe('asks_first');
     const intentId = 'approval:00000000-0000-4000-8000-0000000000aa:apply';
     const written = await mcp.invoke({ mode: 'approved', connection: frozen.connection, tool: 'create_page', args: { title: 'Plan' }, digest: frozen.digest, intentId });
-    expect(written.result).toMatchObject({ content: [{ text: 'create_page ran with {"title":"Plan"}' }] });
+    expect(resultOf(written)).toMatchObject({ content: [{ text: 'create_page ran with {"title":"Plan"}' }] });
     expect(edge.filter((body) => body.intent_id === intentId)).toHaveLength(1);
 
     expect(await mcp.disconnect(view!.id)).toEqual({ ok: true, provider: 'revoked' });
@@ -142,7 +146,7 @@ describe('MCP connections, end to end through the edge', () => {
     expect(begun).toEqual({ kind: 'connected', id: expect.any(String), name: 'example' });
     expect(mcp.list()[0]).toMatchObject({ auth: 'none', registration: 'none', tools: 2 });
     await mcp.setRuns(mcp.list()[0]!.id, 'search_pages', true);
-    expect((await mcp.invoke({ mode: 'read', server: 'example', tool: 'search_pages', args: { query: 'q' } })).result).toMatchObject({ content: [{ text: expect.stringContaining('search_pages ran') }] });
+    expect(resultOf(await mcp.invoke({ mode: 'read', server: 'example', tool: 'search_pages', args: { query: 'q' } }))).toMatchObject({ content: [{ text: expect.stringContaining('search_pages ran') }] });
     expect(edge).toEqual([]);
     expect(await mcp.begin(MCP_URL)).toEqual({ kind: 'already', id: mcp.list()[0]!.id, name: 'example' });
   }));
@@ -167,8 +171,9 @@ describe('MCP connections, hostile and failing servers', () => {
     // A malformed name is dropped and counted; destructive-and-read-only is not read-only.
     expect(view).toMatchObject({ tools: 2, hidden_tools: 1, marked_read_only: 1 });
     const { tools } = await mcp.search({});
-    expect(tools.map((tool) => [tool.tool, tool.runs, tool.server_marks_read_only])).toEqual([['lookup', 'asks_first', true], ['delete_everything', 'asks_first', false]]);
-    expect(tools[0]!.description).toContain('IGNORE PREVIOUS INSTRUCTIONS');
+    // Name order whatever order the server sent; destructive-and-read-only is not a read-only hint.
+    expect(tools.map((tool) => [tool.tool, tool.runs, tool.read_only_hint])).toEqual([['delete_everything', 'asks_first', false], ['lookup', 'asks_first', true]]);
+    expect(tools[1]!.server_text.description).toContain('IGNORE PREVIOUS INSTRUCTIONS');
     await mcp.setRuns(view.id, 'marked_read_only', true);
     expect((await refusal(mcp.invoke({ mode: 'read', server: 'example', tool: 'delete_everything', args: {} }))).code).toBe('forbidden');
     const before = world.calls.filter((call) => call.method === 'tools/call').length;
@@ -176,7 +181,7 @@ describe('MCP connections, hostile and failing servers', () => {
     expect(bad.code).toBe('invalid_args');
     expect(world.calls.filter((call) => call.method === 'tools/call')).toHaveLength(before);
     // The result comes back as data; nothing here acts on it.
-    expect((await mcp.invoke({ mode: 'read', server: 'example', tool: 'lookup', args: { id: 'a' } })).result).toMatchObject({ content: [{ text: expect.stringContaining('SYSTEM:') }] });
+    expect(resultOf(await mcp.invoke({ mode: 'read', server: 'example', tool: 'lookup', args: { id: 'a' } }))).toMatchObject({ content: [{ text: expect.stringContaining('SYSTEM:') }] });
   }));
 
   it('lapses a permission when the server changes the tool definition, and refuses an approval frozen on the old one', withRig('rug-pull', {}, async (rig) => {
@@ -259,6 +264,43 @@ describe('MCP connections, hostile and failing servers', () => {
     const searched = await mcp.search({ query: 'page' });
     expect(searched.failures).toEqual([expect.stringMatching(/^example: example did not answer/)]);
     expect(searched.tools.length).toBe(2);
+  }));
+
+  it('keeps a server\'s question for the owner and sends only the owner\'s approved answers, with the server\'s state unchanged', withRig('questions', {
+    results: (name) => {
+      return name === 'create_page' ? { resultType: 'input_required', inputRequests: { workspace: { method: 'elicitation/create', params: { mode: 'form', message: 'Which workspace should the page go in?', requestedSchema: { type: 'object', properties: { workspace: { type: 'string', enum: ['Home', 'Work'] } }, required: ['workspace'] } } } }, requestState: 'opaque-state-1' } : { content: [] };
+    },
+  }, async (rig) => {
+    const { mcp, world } = rig;
+    await connect(rig);
+    const frozen = await mcp.describe('example', 'create_page');
+    const first = await mcp.invoke({ mode: 'approved', connection: frozen.connection, tool: 'create_page', args: { title: 'Plan' }, digest: frozen.digest, intentId: 'approval:00000000-0000-4000-8000-0000000000e1:apply' });
+    if (!('input_required' in first)) throw new Error('expected questions');
+    expect(first.input_required.questions).toEqual([{ id: 'workspace', message: 'Which workspace should the page go in?', fields: expect.objectContaining({ required: ['workspace'] }) }]);
+    // The model never sees the server's opaque state.
+    expect(JSON.stringify(first)).not.toContain('opaque-state-1');
+    const approved = (answers: Readonly<Record<string, unknown>>, args: Record<string, unknown> = { title: 'Plan' }, n = 2) => mcp.invoke({ mode: 'approved', connection: frozen.connection, tool: 'create_page', args, digest: frozen.digest, intentId: `approval:00000000-0000-4000-8000-0000000000e${n}:apply`, answers: { handle: first.input_required.handle, responses: answers } });
+    expect(await refusal(approved({ workspace: { action: 'accept', content: { workspace: 'Garage' } } }))).toMatchObject({ code: 'invalid_args', notApplied: true });
+    expect(await refusal(approved({ nope: { action: 'accept', content: {} } }))).toMatchObject({ code: 'invalid_args', message: expect.stringContaining('It asked: workspace') });
+    expect(await refusal(approved({ workspace: { action: 'accept', content: { workspace: 'Work' } } }, { title: 'Other' }))).toMatchObject({ code: 'rejected', notApplied: true });
+    world.options.results = (name, args) => ({ content: [{ type: 'text', text: `${name} ran with ${JSON.stringify(args)}` }] });
+    const done = await approved({ workspace: { action: 'accept', content: { workspace: 'Work' } } }, { title: 'Plan' }, 3);
+    expect(resultOf(done)).toMatchObject({ content: [{ text: 'create_page ran with {"title":"Plan"}' }] });
+    const retry = world.calls.filter((call) => call.method === 'tools/call').at(-1)!.body as { params: Record<string, unknown> };
+    expect(retry.params).toMatchObject({ name: 'create_page', arguments: { title: 'Plan' }, inputResponses: { workspace: { action: 'accept', content: { workspace: 'Work' } } }, requestState: 'opaque-state-1' });
+    // The answer slot is single-use.
+    expect(await refusal(approved({ workspace: { action: 'accept', content: { workspace: 'Work' } } }, { title: 'Plan' }, 4))).toMatchObject({ code: 'rejected', message: expect.stringContaining('expired') });
+  }));
+
+  it('refuses a sampling or URL request Waldo never declared, so nothing runs', withRig('sampling', {
+    results: () => ({ resultType: 'input_required', inputRequests: { think: { method: 'sampling/createMessage', params: { messages: [], maxTokens: 10 } } } }),
+  }, async (rig) => {
+    const { mcp, world } = rig;
+    await connect(rig);
+    await mcp.setRuns(mcp.list()[0]!.id, 'search_pages', true);
+    expect(await refusal(mcp.invoke({ mode: 'read', server: 'example', tool: 'search_pages', args: { query: 'q' } }))).toMatchObject({ code: 'rejected', message: expect.stringContaining('does not provide') });
+    // Waldo declares form questions only, on every modern request.
+    expect((world.calls.at(-1)!.body as { params: { _meta: Record<string, unknown> } }).params._meta['io.modelcontextprotocol/clientCapabilities']).toEqual({ elicitation: { form: {} } });
   }));
 
   it('refuses a result past the read cap with a narrowing hint', withRig('oversize', { results: () => ({ content: [{ type: 'text', text: 'x'.repeat(17 * 1024 * 1024) }] }) }, async (rig) => {

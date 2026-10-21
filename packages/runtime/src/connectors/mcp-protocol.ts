@@ -121,7 +121,10 @@ const resultOf = (sent: Sent): unknown => {
   return sent.body.result;
 };
 
-const modernMeta = { 'io.modelcontextprotocol/protocolVersion': MODERN_VERSION, 'io.modelcontextprotocol/clientInfo': CLIENT_INFO, 'io.modelcontextprotocol/clientCapabilities': {} };
+// Form questions for the owner only (multi round-trip requests). No sampling, roots or URL-mode
+// elicitation, so a compliant server never asks Waldo for those.
+const CLIENT_CAPABILITIES = { elicitation: { form: {} } };
+const modernMeta = { 'io.modelcontextprotocol/protocolVersion': MODERN_VERSION, 'io.modelcontextprotocol/clientInfo': CLIENT_INFO, 'io.modelcontextprotocol/clientCapabilities': CLIENT_CAPABILITIES };
 
 const modern = async (fetcher: typeof fetch, endpoint: McpEndpoint, method: string, params: Record<string, unknown>, extra: Record<string, string>, limits: McpCallLimits): Promise<Sent> => {
   const name = typeof params.name === 'string' ? params.name : typeof params.uri === 'string' ? params.uri : undefined;
