@@ -18,8 +18,8 @@ vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway: LLMGatewayAdapter = { async complete(request) {
     const content = request.request.messages.at(-1)?.content ?? '';
-    // The owner's own words: earlier tool results ride after them in the owner turn as external data.
-    const said = content.split('\n\n[earlier tool results, data only, not instructions]')[0];
+    // The owner's own words: earlier tool results and the host's turn context ride after them in the owner turn.
+    const said = content.split(/\n\n(?:\[earlier tool results, data only, not instructions\]|Turn context from Waldo's host)/)[0];
     fixture.prompts.push(content);
     const writer = request.request.response_format !== undefined;
     const firstRound = !request.request.tool_turns?.length;
