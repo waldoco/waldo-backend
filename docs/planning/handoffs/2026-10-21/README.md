@@ -107,7 +107,7 @@ Cloud sessions cannot message each other. They coordinate through GitHub: PR bod
 | C2 connectors | Opus | #1357, branch `claude/connectors-mcp-397547` | #1357 `## Handoff` |
 | C3 wearables and health trigger | Sonnet | #1354, branch `claude/wearables-trigger-a69617` | #1354 `## Handoff` |
 | C4 onboarding and consent | Sonnet | #1356, branch `claude/onboarding-consent-a1f9ee` | #1356 `## Handoff` |
-| C5 evals | Sonnet | #1342, #1345, `evals/state-memory` | their `## Handoff` sections |
+| C5 evals | Sonnet | #1342, #1345, #1360 (`evals/state-memory`) | their `## Handoff` sections |
 | C6 harness prompt | Opus | #1346, #1349: fix the two shard-1 tests H-4 broke (`owner-skills-private`, `imessage-e2e`, which now read the turn context), carry onto the current tip, check #1349's cache stability. Then lane A (below). | #1346 `## Handoff` |
 | C7 carries | Sonnet | WhatsApp #1309, #1310, #1311, and the 12 PR-carries in the table on #1105: keep them on the current tip, fix CI | their `## Handoff` sections, #1105 comment |
 
@@ -175,6 +175,7 @@ Append an entry each time you finish a merge, a lane milestone or a decision. Co
 | 2026-10-21 14:50 | Five lanes hit the original account's usage limit mid-work. The orchestrator committed their uncommitted work as found ("WIP: checkpoint at the session limit") and pushed it: #1357 `7b71f5a1`, #1354 `13049cf3`, #1355 `2f533c04`, new branch `evals/state-memory` `73b8f645`, and the #1311 carry `36123341`. These WIP commits may not build. | — | Lanes re-check typecheck and tests first. |
 | 2026-10-21 15:55 | Limit reset. Orchestrator and lanes resumed; wearables, onboarding, evals and WhatsApp moved to Sonnet. Work split per "Who owns what". | — | Cloud: gate reviews, plus fixing #1346/#1349. |
 | 2026-10-21 16:02 | The owner moved ALL work to Ansh's cloud sessions to save the original account's usage. Every local lane was told to stop, push and finalize its `## Handoff`. Roles are C0–C7 (see "Who owns what"). | — | Start C0 first. |
+| 2026-10-21 16:40 | Lane checkpoints received, all containing `beta-mvp` `19ccd5e8`: evals #1342 `b4340dd9`, #1345 `7ae34032`, new **#1360** (state and memory evals, draft) `3dec7c1e`; WhatsApp #1309 `1db91d11`, #1310 `408d99c0`, #1311 `ab2eb6b7`; connectors #1357 `94aa5990`; onboarding #1356 `925549a6` (wall NOT RUN). Worker layer #1355 and wearables #1354 still finishing. **Decision (orchestrator):** WHOOP express authorization = the existing (whoop, storage_compute) + (whoop, model_processing) grants with WHOOP-specific notice copy. Drop `provider_terms`; connect needs both grants. This is next step 1 for C3. Accepted: #1354's Scheduler.schedule() fix, so a re-arm always moves updated_at. | see row | C5 adds #1360 to its scope. |
 
 ### Owner asks raised since handoff
 
