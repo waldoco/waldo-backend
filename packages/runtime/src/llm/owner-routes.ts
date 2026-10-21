@@ -11,13 +11,15 @@ import {
 import { AnthropicMessagesAdapter } from './anthropic';
 import { validModelCredential } from './credential-shape';
 import { OpenAIResponsesAdapter, type OpenAIResponseMetadata } from './openai';
-import { routedGateway, type LLMGatewayAdapter } from './provider';
+import { routedGateway, type CircuitBreaker, type LLMGatewayAdapter } from './provider';
 
 // What the owner responder needs to reach the model providers: the OpenAI key alone (callers that predate the second
 // provider), or every provider's key. Credentials stay here and in the adapters; they never reach a prompt, a trace or a store.
 // `floorReply` lets the owner's own turn answer with MODEL_UNREACHABLE_REPLY once every provider has failed. It stays off
 // until a failed turn's message is actually kept and answered later; until then a failed turn ends the way it always did.
-export type OwnerModelAccess = Readonly<{ openaiApiKey: string; anthropicApiKey?: string; floorReply?: boolean }>;
+// `health` is the owner's provider breaker, kept by the owner's Durable Object so misses count across turns and channels;
+// without it each responder starts with every provider closed.
+export type OwnerModelAccess = Readonly<{ openaiApiKey: string; anthropicApiKey?: string; floorReply?: boolean; health?: CircuitBreaker }>;
 
 export const ownerModelAccess = (access: string | OwnerModelAccess): OwnerModelAccess =>
   typeof access === 'string' ? { openaiApiKey: access } : access;

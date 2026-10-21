@@ -11,6 +11,7 @@ import {
 } from '@waldo/contracts';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import { MODEL_UNREACHABLE_REPLY, ownerModelGateway, ownerRoutePolicy } from '../src/llm/owner-routes';
+import { InMemoryCircuitBreaker, type CircuitBreaker } from '../src/llm/provider';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { getContextHandler } from '../src/tools/live/get-context';
@@ -40,8 +41,8 @@ const scriptedProviders = (scripts: Partial<Record<Provider, readonly Step[]>>) 
   return { gateway, requests, models: () => requests.map((request) => request.request.model) };
 };
 
-const responder = (gateway: LLMGatewayAdapter, log: (entry: TurnLogEntry) => void = () => undefined, floorReply = true) => {
-  const args: Parameters<typeof createOwnerResponder> = [{ openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic', floorReply }];
+const responder = (gateway: LLMGatewayAdapter, log: (entry: TurnLogEntry) => void = () => undefined, floorReply = true, health?: CircuitBreaker) => {
+  const args: Parameters<typeof createOwnerResponder> = [{ openaiApiKey: 'fixture-openai', anthropicApiKey: 'fixture-anthropic', floorReply, ...(health ? { health } : {}) }];
   args[3] = log; args[5] = [getContextHandler({ timezone: 'Asia/Kolkata', now: () => new Date('2026-10-20T08:20:00Z') })]; args[10] = gateway; args[18] = ['👌'];
   return createOwnerResponder(...args);
 };
@@ -114,4 +115,37 @@ it('with no second-provider key deployed the route has no fallback step, so a fa
   expect(models()).toEqual([OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_SOL_MODEL]);
   // A malformed key counts as no key: the adapter would refuse it without a call.
   expect(ownerRoutePolicy(OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_SOL_MODEL, { openaiApiKey: 'k', anthropicApiKey: 'bad key' }).routes[0]!.fallback).toEqual([]);
+});
+
+it('provider health outlives the responder: three OpenAI misses across turns open its breaker, and later turns go straight to Opus', async () => {
+  const { gateway, requests } = scriptedProviders({ [OPENAI_PROVIDER]: [{ fail: 'transient' }], [ANTHROPIC_PROVIDER]: [{ text: 'Answered by the second provider.' }] });
+  const health = new InMemoryCircuitBreaker();
+  const hops: TurnLogEntry[] = [];
+  const turn = async (n: number) => {
+    const before = requests.length;
+    // A fresh responder per turn, as the owner's per-turn scoped responders are; only the health is shared.
+    const owner = responder(gateway, (entry) => { if (entry.hop === 'provider_breaker') hops.push(entry); }, false, health);
+    await expect(owner.respond(ownerTyped({ traceId: `health-turn-${n}`, conversationRef: 'telegram-1', surface: 'telegram', text: 'what is on today', memoryWrites: false }), time)).resolves.toBe('Answered by the second provider.');
+    return requests.slice(before).map((request) => request.request.model);
+  };
+  expect(await turn(1)).toEqual([OPENAI_GPT_6_1_SOL_MODEL, OPENAI_GPT_6_1_SOL_MODEL, ANTHROPIC_CLAUDE_OPUS_5_5_MODEL]);
+  // The third miss opens OpenAI's breaker, so this turn's reduced-context retry is skipped.
+  expect(await turn(2)).toEqual([OPENAI_GPT_6_1_SOL_MODEL, ANTHROPIC_CLAUDE_OPUS_5_5_MODEL]);
+  expect(await turn(3)).toEqual([ANTHROPIC_CLAUDE_OPUS_5_5_MODEL]);
+  // The breaker opening is logged once, on the turn where it happened.
+  expect(hops).toEqual([expect.objectContaining({ trace: 'health-turn-2', hop: 'provider_breaker', ok: false, code: 'circuit_open', detail: OPENAI_PROVIDER })]);
+});
+
+it('without shared provider health each responder starts with every provider closed', async () => {
+  const { gateway, requests } = scriptedProviders({ [OPENAI_PROVIDER]: [{ fail: 'transient' }], [ANTHROPIC_PROVIDER]: [{ text: 'ok' }] });
+  for (const n of [1, 2]) await responder(gateway, undefined, false).respond(ownerTyped({ traceId: `no-health-${n}`, conversationRef: 'telegram-1', surface: 'telegram', text: 'hi', memoryWrites: false }), time);
+  expect(requests.filter((request) => request.step.provider === OPENAI_PROVIDER)).toHaveLength(4);
+});
+
+it('a miss caused by the request itself (oversize) never opens the shared breaker for the owner\'s other turns', async () => {
+  const { gateway, requests } = scriptedProviders({ [OPENAI_PROVIDER]: [{ fail: 'oversize' }], [ANTHROPIC_PROVIDER]: [{ text: 'ok' }] });
+  const health = new InMemoryCircuitBreaker();
+  for (const n of [1, 2, 3]) await responder(gateway, undefined, false, health).respond(ownerTyped({ traceId: `oversize-${n}`, conversationRef: 'telegram-1', surface: 'telegram', text: 'hi', memoryWrites: false }), time);
+  expect(health.isOpen(OPENAI_PROVIDER)).toBe(false);
+  expect(requests.filter((request) => request.step.provider === OPENAI_PROVIDER)).toHaveLength(6);
 });

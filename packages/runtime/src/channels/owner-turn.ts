@@ -32,7 +32,7 @@ import { COMPACTION, COMPACTION_INSTRUCTION, compactionDue, compactionId, compac
 import { numericHealthIn } from '../scribe/sanitiser';
 import { MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
-import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
+import { InMemoryCircuitBreaker, observedBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
 import { messagingSystemPrompt, ownerClockLine, unconnectedLine, withOwnerSkillProcedures } from '../prompt/messaging-behavior';
 import { eligibleHandlers } from '../tools/eligibility';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
@@ -184,8 +184,8 @@ export const createOwnerResponder = (
   } }), onComposerPhase: (phase, previousMs) => log({ trace: traceId, hop: 'composer_phase', ms: previousMs, ok: true, detail: phase }) });
   // Tool outputs from the current turn; flushed to the ledger when the turn's entries persist.
   const pendingToolOutputs: Array<{ tool: string; ok: boolean; at: number; taint: 'external' | null; origin: 'owner' | 'machine'; summary: string; thread?: string }> = [];
-  const circuitBreaker = new InMemoryCircuitBreaker();
   const access = ownerModelAccess(modelAccess);
+  const circuitBreaker = access.health ?? new InMemoryCircuitBreaker();
   const policy = ownerRoutePolicy(model, model, access);
   const offloadStore = offload ? inMemoryToolOutputStore() : undefined;
   const safety = {
@@ -241,7 +241,7 @@ export const createOwnerResponder = (
       return result;
     } } : adapter;
     const sanitise = safety.sanitise;
-    const result = await new RuntimeLLMProvider({ gateway: admittedGateway, circuitBreaker }).complete({
+    const result = await new RuntimeLLMProvider({ gateway: admittedGateway, circuitBreaker: observedBreaker(circuitBreaker, (provider) => log({ trace, hop: 'provider_breaker', ms: 0, ok: false, code: 'circuit_open', detail: provider })) }).complete({
       ...(callScope ?? privateRunScope ? { runScope: callScope ?? privateRunScope } : {}),
       trigger: 'user_message',
       policy: effectivePolicy,
