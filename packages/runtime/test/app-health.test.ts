@@ -120,6 +120,14 @@ describe('app health routes: signed database calls', () => {
     expect(JSON.parse(rpcs[0]!.body.p_payload as string)).toEqual(batch);
     expect(rpcs[0]!.body.p_sig).toBe(await routerSignature(SECRET, rpcs[0]!.body.p_at as number, `health.ingest.owner-1.${md5Hex(rpcs[0]!.body.p_payload as string)}`));
   });
+  it('ingests a Health Connect batch the same way, keeping its HC origin', async () => {
+    const origin = { read_api: 'health_connect', source_bundle_id: null, source_package_name: 'com.example.ringapp', source_version: null, source_revision: null, device_ref: null, recording_method: 'automatic', client_record_version: 3 };
+    const hc = { ...batch, request_id: 'health-upload-hc-1', source: 'health_connect', samples: [{ ...sample, sample_id: 'hc:steps:2026-10-10T08', origin }] };
+    rpcResult = { ...receipt, request_id: hc.request_id, source: 'health_connect' };
+    const response = await post('/app/v1/health/ingest', hc, { 'idempotency-key': hc.request_id });
+    expect([response.status, rpcs[0]!.fn]).toEqual([200, 'health_ingest']);
+    expect(JSON.parse(rpcs[0]!.body.p_payload as string)).toEqual(hc);
+  });
   it('refuses a bad batch before any database call, without echoing it', async () => {
     const bad = [
       { ...batch, samples: [{ ...sample, unit: 'steps' }] },

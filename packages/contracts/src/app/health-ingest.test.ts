@@ -116,6 +116,37 @@ describe('health ingest batch', () => {
   });
 });
 
+// Health Connect on Android, mapped per docs/app/HEALTH_CONNECT_MAPPING_2026-10-21.md. The wire is the same as HealthKit's;
+// these pin the HC shapes the app sends so a change that refuses one fails here first.
+describe('health connect uploads', () => {
+  const hc = { read_api: 'health_connect', source_bundle_id: null, source_package_name: 'com.example.ringapp', source_version: null, source_revision: null, device_ref: null, recording_method: 'automatic', manufacturer: 'Example', product_type: 'RING', client_record_version: 3 };
+  const hcBatch = { ...batch, source: 'health_connect', timezone: 'Europe/Berlin' };
+  const night = { ...common, day: '2026-10-10', start_at: '2026-10-09T23:10:00+02:00', end_at: '2026-10-10T06:40:00+02:00', utc_offset_minutes: 120 };
+  const stages = { source_ref: 'hc:session-9', session_ref: 'hc:session-9', waking_day: '2026-10-10', reducer_version: 'asleep-interval-union.v1', contributor_ids: ['hc:session-9'],
+    intervals: [{ contributor_id: 'hc:session-9', start_at: '2026-10-09T23:10:00+02:00', end_at: '2026-10-09T23:25:00+02:00', kind: 'in_bed' }, { contributor_id: 'hc:session-9', start_at: '2026-10-09T23:25:00+02:00', end_at: '2026-10-10T06:40:00+02:00', kind: 'asleep' }] };
+
+  it('takes a staged sleep session, an RMSSD reading, resting heart rate and an hour of steps with their HC origin', () => {
+    const samples = [
+      { ...night, sample_id: 'hc:session-9:sleep_duration', origin: hc, sleep_context: stages, signal: 'sleep_duration', unit: 'minutes', method: 'asleep_duration', value: 435 },
+      { ...night, sample_id: 'hc:session-9:overnight_hrv', origin: hc, signal: 'overnight_hrv', unit: 'milliseconds', method: 'rmssd', value: 42 },
+      { ...common, sample_id: 'hc:rhr-4', origin: { ...hc, recording_method: 'unknown' }, signal: 'resting_heart_rate', unit: 'beats_per_minute', method: 'unknown', value: 58 },
+      { ...hour, sample_id: 'hc:steps:2026-10-10T06', revision: 1_790_000_000, origin: { ...hc, recording_method: 'active' }, signal: 'steps_window', unit: 'count', value: 830 },
+    ];
+    expect(healthIngestV1Schema.safeParse({ ...hcBatch, samples }).success).toBe(true);
+    // A deleted record names the signal each derived reading carried; the app keeps the record type beside the id.
+    expect(healthIngestV1Schema.safeParse({ ...hcBatch, deletions: ['sleep_duration', 'sleep_efficiency', 'sleep_midpoint'].map(signal => ({ sample_id: `hc:session-9:${signal}`, signal, revision: 1_790_000_100 })) }).success).toBe(true);
+  });
+
+  it('refuses HC values the app must map first: an integer recording method, a bare deletion id and an unlabelled HRV', () => {
+    rejected(healthIngestV1Schema, [
+      { ...hcBatch, samples: [{ ...sleep, origin: { ...hc, recording_method: 2 } }] },
+      { ...hcBatch, deletions: [{ sample_id: 'hc:session-9:sleep_duration', revision: 1 }] },
+      { ...hcBatch, samples: [{ ...night, sample_id: 'hc:hrv-1', origin: hc, signal: 'overnight_hrv', unit: 'milliseconds', value: 42 }] },
+      { ...hcBatch, source: 'google_fit' },
+    ]);
+  });
+});
+
 describe('health scores read', () => {
   const available = (zone: string, algorithm_version: string) => ({ state: 'available', score: 71.5, zone, algorithm_version, activation: 'candidate_unaccepted', confidence: 0.8, hrv_method: null });
   const scores = {
