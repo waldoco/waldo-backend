@@ -6,14 +6,19 @@
 //                                WALDO_EVAL_JUDGE_MODE=joint|split (split: one call per test, six per label) picks the
 //                                judge shape, so the two can be compared on the same labels.
 // A live run spends money: it runs only when the owner has approved the spend and set the key.
+// The verdicts are scored against the owner's labels (voice-owner-labels.jsonl, written from the sheet that
+// `pnpm eval:voice-labelling-sheet` prints) and, apart, against Claude's drafts; until the owner has labelled, the owner
+// figure is empty rather than borrowed from the drafts.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { callBudget } from './budget';
-import { labelInput, labelledVerdict, loadVoiceLabels, voiceAgreement, type LabelledVerdict } from './voice-labels';
+import { agreementReport, loadOwnerLabels, OWNER_LABELS_NEEDED, OWNER_LABELS_PATH, ownerLabelled } from './owner-labels';
+import { labelInput, labelledVerdict, loadVoiceLabels, type LabelledVerdict } from './voice-labels';
 import { liveVoiceJudge, voicePacket, VOICE_TESTS } from './voice';
 import { judgeModeOf } from './dimensions';
 
 const env = process.env;
 const labels = loadVoiceLabels();
+const decisions = loadOwnerLabels(OWNER_LABELS_PATH, labels);
 const required = (name: string) => { const value = env[name]?.trim(); if (!value) throw new Error(`${name} is required for a live run`); return value; };
 
 let verdicts: readonly LabelledVerdict[] | null = null;
@@ -44,10 +49,11 @@ if (verdicts === null) {
     labels: labels.length,
     labelled_pass: labels.filter((label) => label.label === 'pass').length,
     labelled_fail: labels.filter((label) => label.label === 'fail').length,
-    reviewed: labels.filter((label) => label.reviewed_by !== null).length,
+    owner_labels: ownerLabelled(labels, decisions).length,
+    owner_labels_needed: OWNER_LABELS_NEEDED,
     live_run_calls: { split: labels.length * VOICE_TESTS.length, joint: labels.length },
     largest_packet_chars: Math.max(...packets),
   }, null, 2));
 } else {
-  console.log(JSON.stringify({ judge_model: judgeModel, ...voiceAgreement(labels, verdicts) }, null, 2));
+  console.log(JSON.stringify({ judge_model: judgeModel, ...agreementReport(labels, decisions, verdicts) }, null, 2));
 }

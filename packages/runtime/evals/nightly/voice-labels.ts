@@ -7,7 +7,7 @@ import { VOICE_ANCHORS, VOICE_TESTS, type VoiceJudgeInput, type VoiceTestKey, ty
 
 export const VOICE_LABELS_PATH = new URL('../fixtures/voice-labels-v0.jsonl', import.meta.url);
 
-const testKey = z.enum(VOICE_TESTS.map((entry) => entry.key) as [VoiceTestKey, ...VoiceTestKey[]]);
+export const testKey = z.enum(VOICE_TESTS.map((entry) => entry.key) as [VoiceTestKey, ...VoiceTestKey[]]);
 const labelSchema = z.object({
   id: z.string().min(1),
   voice: z.object({ moment: z.string().min(1), note: z.string().min(1).optional() }).strict(),

@@ -2,14 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { scriptedGateway, type ScriptRule } from '../src/testing/scripted-gateway';
 import { callBudget } from '../evals/nightly/budget';
 import { NIGHTLY_SCENARIOS, rawHistoryScenarios } from '../evals/nightly/catalogue';
-import { ERRANDS } from '../evals/nightly/errands';
+import { ERRAND_SCENARIOS } from '../evals/nightly/errands';
 import { failedReceipts, STATE_INVARIANTS } from '../evals/nightly/receipts';
 import type { NightlyScenario } from '../evals/nightly/scenarios';
 import { STATE_MEMORY_SCENARIOS } from '../evals/nightly/state-memory-scenarios';
+import { VOICE_SCENARIOS } from '../evals/nightly/voice-scenarios';
 import { runTrial } from '../evals/nightly/trial';
 import type { MemoryMode } from '../evals/nightly/world';
 
-const scenario = (id: string): NightlyScenario => [...STATE_MEMORY_SCENARIOS, ...ERRANDS.flatMap((entry) => (entry.scenario ? [entry.scenario] : []))].find((entry) => entry.id === id)!;
+const scenario = (id: string): NightlyScenario => NIGHTLY_SCENARIOS.find((entry) => entry.id === id)!;
 const run = async (id: string, rules: readonly ScriptRule[], memory: MemoryMode = 'claims') => {
   const trial = await runTrial(scenario(id), { gateway: scriptedGateway({ rules, unmatchedText: 'ok' }), budget: callBudget(80), memory });
   expect(trial.status).toBe('ran');
@@ -28,6 +29,33 @@ describe('state and memory cases in the catalogue', () => {
       expect(entry.receipts?.length, entry.id).toBeGreaterThan(0);
     }
     expect(rawHistoryScenarios(NIGHTLY_SCENARIOS).map((entry) => entry.id)).toEqual(['t19-correct-memory', 'r1-recall-across-day', 'm02-knowledge-update', 'h04-health-memory']);
+  });
+});
+
+describe('state held in code across the catalogue', () => {
+  // The sets this lane owns. A scenario that lands beside them under another prefix is checked by its own change.
+  const owned = NIGHTLY_SCENARIOS.filter((entry) => !entry.blocked && 'trvehsxm'.includes(entry.id[0]!));
+
+  it('gives every runnable scenario of the research, voice, errand and state sets at least one receipt', () => {
+    expect(owned.length).toBeGreaterThanOrEqual(57);
+    for (const entry of owned) expect(entry.receipts?.length, entry.id).toBeGreaterThan(0);
+  });
+
+  it('keeps the voice, errand and state sets off the prefix the worker-layer scenarios use', () => {
+    for (const entry of [...VOICE_SCENARIOS, ...ERRAND_SCENARIOS, ...STATE_MEMORY_SCENARIOS]) expect(entry.id.startsWith('w'), entry.id).toBe(false);
+  });
+
+  it('fails a read-only case that changed state, and a case whose answer never rested on a look', async () => {
+    const card = { name: 'propose_calendar_change', arguments: { action: 'create', title: 'Lunch', start: '2026-09-25T14:00:00+05:30', end: '2026-09-25T15:00:00+05:30', reason: 'Owner asked' } };
+    expect(await failed('t01-calendar-free-hour', [{ match: /free hour/, rounds: [{ toolCalls: [card] }, { text: 'Card is up.' }] }])).toEqual(['nothing was changed: no effect, reminder, standing order or open loop']);
+    expect(await failed('e1-look-before-asking', [say(/airport/, 'Leave at 05:30.')])).toEqual(['it read the mail before answering']);
+    expect(await failed('t10-compare-flights', [say(/flight options/, 'Option one is INR 41,900.')])).toEqual(['it searched before comparing']);
+  });
+
+  it('fails a health reading quoted where the owner did not ask for one', async () => {
+    const rules = (reply: string): ScriptRule[] => [say(/How's my body/, reply), say(/go hard tomorrow/, 'I cannot see your health data now.')];
+    expect(await failed('t20-health-aware-plan', rules('A moderate day after a short night. Keep it easy.'))).toEqual([]);
+    expect(await failed('t20-health-aware-plan', rules('You slept 5h 17, so keep it easy.'))).toEqual(['no reading appears in a reply']);
   });
 });
 
@@ -130,5 +158,35 @@ describe('health memory', () => {
 
   it('fails when the pattern was never saved', async () => {
     expect(await failed('h04-health-memory', [say(/remember about my sleep/, 'Not much yet.')])).toEqual(["the pattern is remembered as the owner's own, where the owner can see it"]);
+  });
+
+  it('fails a reply that quotes last night\'s reading back as something it remembers', async () => {
+    const quoted: ScriptRule[] = [
+      say(/actual numbers/, 'Your own numbers, since you asked: 5h 17 asleep.'),
+      { match: /early flights/, rounds: [{ toolCalls: [remember('pattern', 'The owner sleeps badly before early flights.', 'I sleep badly before early flights')] }, { text: 'Saved.' }] },
+      say(/remember about my sleep/, 'That you sleep badly before early flights, and last night was 5h 17.'),
+    ];
+    expect(await failed('h04-health-memory', quoted)).toEqual(['the reply from memory carries no reading']);
+  });
+
+  describe('numbers the owner typed', () => {
+    const typed = (pattern: string, reply: string): ScriptRule[] => [
+      { match: /slept 4h 20/, rounds: [{ toolCalls: [remember('pattern', pattern, 'I always sleep badly before early flights')] }, { text: 'Saved the pattern.' }] },
+      say(/remember about my sleep/, reply),
+    ];
+
+    it('passes a pattern saved without the hours or the heart rate, and fails a claim or a reply that carries them', async () => {
+      expect(await failed('h05-typed-numbers', typed('The owner sleeps badly before early flights.', 'That you sleep badly before early flights.'))).toEqual([]);
+      expect(await failed('h05-typed-numbers', typed('The owner sleeps badly before early flights: 4h 20 and a resting heart rate of 71.', 'That you sleep badly before early flights.'))).toEqual(['no claim, in any state, holds a number the owner typed']);
+      expect(await failed('h05-typed-numbers', typed('The owner sleeps badly before early flights.', 'That you slept 4h 20 and your resting heart rate was 71.'))).toEqual(['the reply from memory carries no reading']);
+    });
+
+    it('fails when only the number was kept and the pattern was dropped', async () => {
+      expect(await failed('h05-typed-numbers', typed('The owner slept badly last night.', 'Not much.'))).toEqual(["the pattern is remembered as the owner's own, where the owner can see it"]);
+    });
+
+    it('stays out of the raw-history baseline, where the typed numbers are in the history by construction', () => {
+      expect(rawHistoryScenarios(NIGHTLY_SCENARIOS).map((entry) => entry.id)).not.toContain('h05-typed-numbers');
+    });
   });
 });

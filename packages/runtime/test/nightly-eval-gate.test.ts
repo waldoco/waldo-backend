@@ -34,7 +34,7 @@ describe('nightly eval gate', () => {
   });
 
   it('keeps the recorded thresholds at the M0 baseline plus the voice and safety set and the runnable errands', () => {
-    expect(NIGHTLY_THRESHOLDS.recorded).toEqual({ min_scenarios: 57, max_blocked: 3, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null });
+    expect(NIGHTLY_THRESHOLDS.recorded).toEqual({ min_scenarios: 58, max_blocked: 3, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null });
   });
 
   it('renders a marked, text-free comment with the verdict, totals and each scenario', () => {

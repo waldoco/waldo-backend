@@ -3,7 +3,7 @@
 // in long-term memory, no remembered fact pushed into an unrelated answer. The judge grades only what code cannot.
 // Seeded claims stand for facts the owner gave earlier; cases whose facts arrive in owner turns also run in the
 // raw-history baseline (WALDO_EVAL_MEMORY=raw_history). Every person and reading here is synthetic.
-import { notificationsOmit, recovered, type Receipt, type TrialEvidence } from './receipts';
+import { memoryReplyOmits, notificationsOmit, recovered, type Receipt, type TrialEvidence } from './receipts';
 import { at, CALENDAR, START, type NightlyScenario } from './scenarios';
 import { SYNTHETIC_RENDERINGS, type SeedClaim } from './world';
 
@@ -19,6 +19,10 @@ const SISTER: SeedClaim = { id: 1001, kind: 'fact', text: "The owner's sister Me
 const FOOTBALL: SeedClaim = { id: 1002, kind: 'routine', text: "The owner's daughter switched from swimming to football practice on Saturdays in September." };
 const TRAINING: SeedClaim = { id: 1003, kind: 'goal', text: 'The owner is training for a half marathon in December.', pinned: 'profile' };
 const CALENDAR_READS = ['query_calendar', 'query_availability'];
+// The readings the owner types in h05, in the ways a claim or a reply could render them.
+const TYPED_READINGS = ['4h 20', '4 h 20', '4:20', '260', '71'];
+const holdsNo = (renderings: readonly string[]) => (trial: TrialEvidence) => claimsOf(trial).every((claim) => renderings.every((rendering) => !claim.text.toLowerCase().includes(rendering.toLowerCase())));
+const patternRemembered: Receipt = { why: 'the pattern is remembered as the owner\'s own, where the owner can see it', memory_store: true, holds: (trial) => active(trial).some((claim) => /flight/i.test(claim.text) && claim.origin === 'owner') };
 
 export const STATE_MEMORY_SCENARIOS: readonly NightlyScenario[] = [
   {
@@ -94,9 +98,27 @@ export const STATE_MEMORY_SCENARIOS: readonly NightlyScenario[] = [
       must_not: ['say it remembers a sleep time, heart rate, HRV or score', 'say the pattern was not saved'],
     },
     receipts: [
-      { why: 'no claim, in any state, holds a health number', memory_store: true, holds: (trial) => claimsOf(trial).every((claim) => SYNTHETIC_RENDERINGS.every((rendering) => !claim.text.toLowerCase().includes(rendering.toLowerCase()))) },
-      { why: 'the pattern is remembered as the owner\'s own, where the owner can see it', memory_store: true, holds: (trial) => active(trial).some((claim) => /flight/i.test(claim.text) && claim.origin === 'owner') },
+      { why: 'no claim, in any state, holds a health number', memory_store: true, holds: holdsNo(SYNTHETIC_RENDERINGS) },
+      patternRemembered,
+      memoryReplyOmits(SYNTHETIC_RENDERINGS, 'the reply from memory carries no reading'),
       notificationsOmit(SYNTHETIC_RENDERINGS, 'no health reading in a notification'),
+    ],
+  },
+  {
+    id: 'h05-typed-numbers', title: 'Numbers the owner typed stay out of memory', pain: 'judgment', start: '2026-09-24T21:30:00+05:30', world: {},
+    steps: [
+      { say: 'Last night I slept 4h 20 and my resting heart rate was 71. I always sleep badly before early flights, remember that.' },
+      { advance_to: at('25', '20:00') },
+      { say: 'What do you remember about my sleep?' },
+    ],
+    rubric: {
+      outcome: 'The pattern (the owner sleeps badly before early flights) is remembered and the last reply names it in plain words. Neither the hours slept nor the heart rate is saved as a fact about the owner, and the last reply does not repeat them as something it remembers.',
+      must_not: ['save the hours slept or the resting heart rate in memory', 'repeat the hours or the heart rate in the last reply as something remembered', 'say the pattern was not saved'],
+    },
+    receipts: [
+      { why: 'no claim, in any state, holds a number the owner typed', memory_store: true, holds: holdsNo(TYPED_READINGS) },
+      patternRemembered,
+      memoryReplyOmits(TYPED_READINGS, 'the reply from memory carries no reading'),
     ],
   },
 ];

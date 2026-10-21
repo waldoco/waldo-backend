@@ -110,6 +110,10 @@ describe('live run plan', () => {
     const trials = Number(/WALDO_EVAL_TRIALS: '(\d+)'/.exec(workflow)![1]);
     const mode = /WALDO_EVAL_JUDGE_MODE: (split|joint)/.exec(workflow)![1] as 'split' | 'joint';
     expect(cap).toBeGreaterThanOrEqual(callPlan(NIGHTLY_SCENARIOS, trials, mode).suggested_max_calls);
+    // Room for the catalogue to grow by a few scenarios, since an exhausted budget fails the gate: a plan that sits on the
+    // cap would turn the next scenario added, by any change, into a gate failure.
+    const room = NIGHTLY_SCENARIOS.filter((scenario) => !scenario.blocked && scenario.rubric.voice).slice(0, 4);
+    expect(cap).toBeGreaterThanOrEqual(callPlan([...NIGHTLY_SCENARIOS, ...room], trials, mode).suggested_max_calls);
     for (const name of ['WALDO_EVAL_MODE: live', 'OPENAI_API_KEY:', 'ANTHROPIC_API_KEY:', 'WALDO_EVAL_JUDGE_MODEL:']) expect(workflow).toContain(name);
   });
 

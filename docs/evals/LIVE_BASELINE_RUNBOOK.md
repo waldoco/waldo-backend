@@ -29,7 +29,7 @@ The scorecard holds counts, class names and token totals. It never holds reply t
 | `WALDO_EVAL_ANTHROPIC_KEY` | repository secret, set as `ANTHROPIC_API_KEY` locally | An Anthropic key for an eval workspace, with a spend limit set in the Console |
 | `WALDO_EVAL_JUDGE_MODEL` | repository variable | `claude-opus-5-5` is recommended. `claude-sonnet-5-5` costs about half. It must differ from the candidate, and `assertIndependentJudge` refuses a match. |
 | `WALDO_EVAL_MODEL` | optional | An OpenAI roster model. It defaults to `WALDO_CHAT_MODEL` (`gpt-6.1-sol`). |
-| `WALDO_EVAL_MAX_CALLS` | required for live | `2000` for 3 trials of today's catalogue in split mode, `1400` in joint mode (from `pnpm eval:plan`) |
+| `WALDO_EVAL_MAX_CALLS` | required for live | `2400`: `pnpm eval:plan` suggests 2000 in split mode and 1500 in joint mode for 3 trials of today's catalogue, and the workflow sets 2400 so a scenario or two more does not exhaust the budget, which fails the gate |
 | `WALDO_EVAL_JUDGE_MODE` | optional | `split` (default) or `joint` |
 | `WALDO_EVAL_MEMORY` | optional | `claims` (default) or `raw_history`; see the raw-history baseline below |
 | `WALDO_EVAL_TRIALS` | optional | `3`, which pass^k needs |
@@ -49,7 +49,7 @@ A refused or truncated grade counts as a judge error, never a pass.
 ```bash
 cd packages/runtime
 read -s OPENAI_API_KEY; read -s ANTHROPIC_API_KEY; export OPENAI_API_KEY ANTHROPIC_API_KEY
-WALDO_EVAL_MODE=live WALDO_EVAL_JUDGE_MODEL=claude-opus-5-5 WALDO_EVAL_MAX_CALLS=2000 WALDO_EVAL_TRIALS=3 \
+WALDO_EVAL_MODE=live WALDO_EVAL_JUDGE_MODEL=claude-opus-5-5 WALDO_EVAL_MAX_CALLS=2400 WALDO_EVAL_TRIALS=3 \
   WALDO_EVAL_OUT="$PWD/live-scorecard.json" npx -y pnpm@10.34.4 eval:nightly > /dev/null
 WALDO_EVAL_MODE=live npx -y pnpm@10.34.4 exec tsx evals/nightly/report.ts live-scorecard.json live-scorecard.md
 ```
@@ -71,14 +71,14 @@ The job's timeout is 360 minutes, the most a hosted runner allows. Trials run on
 
 ## Calls and cost per run
 
-`pnpm eval:plan` computes the call plan from the catalogue; `WALDO_EVAL_JUDGE_MODE=joint pnpm eval:plan` plans the other mode. Today that is 60 scenarios, 57 of them runnable, at 3 trials:
+`pnpm eval:plan` computes the call plan from the catalogue; `WALDO_EVAL_JUDGE_MODE=joint pnpm eval:plan` plans the other mode. Today that is 61 scenarios, 58 of them runnable, at 3 trials:
 
 | | Split (default) | Joint |
 | --- | --- | --- |
-| Owner turns and fired reminders | 237 | 237 |
-| Candidate calls (2 to 5 per turn, memory writer included) | 474 to 1,185 | 474 to 1,185 |
-| Judge calls | 771 | 213 |
-| Suggested `WALDO_EVAL_MAX_CALLS` | 2000 | 1400 |
+| Owner turns and fired reminders | 243 | 243 |
+| Candidate calls (2 to 5 per turn, memory writer included) | 486 to 1,215 | 486 to 1,215 |
+| Judge calls | 780 | 216 |
+| Suggested `WALDO_EVAL_MAX_CALLS` | 2000 | 1500 |
 
 A test holds the cap in `evals-live.yml` at or above the plan's suggestion for the mode the workflow sets. The wave-1 cap of 300 would have run out on the 22-scenario catalogue alone.
 
@@ -91,8 +91,8 @@ A chat request in the recorded dry run is about 51,000 characters, roughly 13,00
 | Part | Low | High |
 | --- | --- | --- |
 | Candidate (13K to 20K input tokens per call, 0.6K to 1.5K output, half the input cached at the high end) | about $8 | about $44 (about $65 with no cache hits) |
-| Judges on Opus 5.5, joint (3K to 6K input, 1.5K to 4K output with thinking, 213 calls) | about $9 | about $22 |
-| Judges on Opus 5.5, split (the same packet each call, shorter output, 771 calls) | about $25 | about $75 |
+| Judges on Opus 5.5, joint (3K to 6K input, 1.5K to 4K output with thinking, 216 calls) | about $9 | about $22 |
+| Judges on Opus 5.5, split (the same packet each call, shorter output, 780 calls) | about $25 | about $75 |
 | Judges on Sonnet 5.5 | about half of Opus | about half of Opus |
 | **A run, Opus 5.5 judging, joint** | **about $17** | **about $66 (up to about $87 with no cache hits)** |
 | **A run, Opus 5.5 judging, split** | **about $33** | **about $120 (up to about $140 with no cache hits)** |
@@ -107,7 +107,7 @@ The scorecard reports token totals per role, but not the cached split. The exact
 
 1. **Measure the judge first.** Run `eval:voice-agreement` live (about $2) on the labelled set, after Suyash has reviewed the labels (`reviewed_by` set). Read the false-pass rate. If the voice judge passes more than about 1 in 10 labelled fails, fix the rubric before trusting voice verdicts. [proposed] This 1-in-10 bar is a proposed threshold, not an agreed one.
 2. **Smoke-test one scenario**, as above.
-3. **Do the full run** at 3 trials with a cap of 2000 (split) or 1400 (joint), locally or by dispatch.
+3. **Do the full run** at 3 trials with a cap of 2400, locally or by dispatch.
 4. **Read the scorecard before any rate.** Check these things:
    - Blocked must be 3.
    - Harness errors must be 0.

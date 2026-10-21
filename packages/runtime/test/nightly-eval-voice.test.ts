@@ -137,6 +137,20 @@ describe('nightly suite with the voice judge and receipts', () => {
     expect((await run(quick({ receipts }), 'judge_error')).scenarios[0]).toMatchObject({ ungraded: 1, receipt_failed: 0 });
     expect(reads).toBe(1);
   });
+
+  it('with state held, reads receipts on every completed trial: a broken state fails even when no judge could grade it', async () => {
+    const hold = (receipts: NightlyScenario['receipts'], outcome: 'judge_error' | 'pass') =>
+      runNightly([quick({ receipts, rubric: { outcome: 'x', must_not: [] } })], { trials: 1, budget: callBudget(20), gateway: reply, judge: judge(outcome), holdState: true, candidate: 'a', judgeModel: 'b' });
+    expect((await hold([{ why: 'never holds', holds: () => false }], 'judge_error')).scenarios[0]).toMatchObject({ failed: 1, receipt_failed: 1 });
+    expect((await hold([{ why: 'always holds', holds: () => true }], 'judge_error')).scenarios[0]).toMatchObject({ failed: 0, passed: 0, ungraded: 1, receipt_failed: 0 });
+    expect((await hold([{ why: 'never holds', holds: () => false }], 'pass')).scenarios[0]).toMatchObject({ failed: 1, receipt_failed: 1 });
+  });
+
+  it('holds state on a live run and never on the recorded dry run, whose fixed replies carry no state', () => {
+    const live = { WALDO_EVAL_MODE: 'live', OPENAI_API_KEY: 'sk-test-0000000000000000000000', ANTHROPIC_API_KEY: 'ant-key', WALDO_EVAL_JUDGE_MODEL: 'claude-judge', WALDO_EVAL_MAX_CALLS: '600' };
+    expect(nightlyConfig(live).holdState).toBe(true);
+    expect(nightlyConfig({ WALDO_EVAL_MODE: 'recorded' }).holdState).toBeUndefined();
+  });
 });
 
 describe('voice and safety scenarios on scripted trials', () => {

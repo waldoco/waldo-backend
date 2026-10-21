@@ -56,7 +56,7 @@ export const nightlyConfig = (env: Env): NightlyRun => {
   const budget = callBudget(positive(env, 'WALDO_EVAL_MAX_CALLS'));
   const judgeMode = judgeModeOf(env.WALDO_EVAL_JUDGE_MODE);
   return {
-    trials, budget, candidate: label(model), judgeModel: `${judgeModel} (${judgeMode})`, model, ...memoryMode,
+    trials, budget, candidate: label(model), judgeModel: `${judgeModel} (${judgeMode})`, model, holdState: true, ...memoryMode,
     // No client retries: every attempt is one counted call.
     gateway: () => new OpenAIResponsesAdapter({ client: new OpenAI({ apiKey, maxRetries: 0, timeout: 60_000 }) }),
     judge: liveJudge({ apiKey: judgeKey, model: judgeModel, budget }, judgeMode),

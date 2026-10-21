@@ -25,6 +25,10 @@ export type NightlyRun = Readonly<{
   model?: ModelName;
   // The memory the trials run with; the raw-history baseline when set to raw_history.
   memory?: MemoryMode;
+  // Read receipts on every completed trial, not only the ones a judge graded: state is checked in code, so a judge that
+  // errs or runs out of budget cannot hide a duplicated effect. Live runs set it; the recorded dry run's fixed replies
+  // carry no state, so it never grades.
+  holdState?: true;
   // A local look at each judged trial; the scorecard never carries any of it.
   show?: (scenario: NightlyScenario, record: TrialRecord, verdict: Verdict, checks: Readonly<{ voice?: VoiceVerdict; receipts: readonly string[] }>) => void;
 }>;
@@ -46,7 +50,7 @@ export const runNightly = async (scenarios: readonly NightlyScenario[], run: Nig
       const verdict = await run.judge({ scenario: scenario.id, rubric: scenario.rubric, transcript: record.transcript, tools: record.tools, effects: record.effects, final_state: record.final_state });
       let outcome: TrialOutcome = verdict.outcome;
       let voice: VoiceVerdict | undefined;
-      const receipts = graded(outcome) ? failedReceipts([...STATE_INVARIANTS, ...(scenario.receipts ?? [])], record, run.memory) : [];
+      const receipts = graded(outcome) || run.holdState ? failedReceipts([...STATE_INVARIANTS, ...(scenario.receipts ?? [])], record, run.memory) : [];
       if (receipts.length) { receiptFailed += 1; outcome = 'fail'; }
       if (graded(verdict.outcome) && scenario.rubric.voice && run.voiceJudge) {
         voice = await run.voiceJudge({ voice: scenario.rubric.voice, transcript: record.transcript, tools: record.tools, effects: record.effects });

@@ -1,6 +1,7 @@
 // Checks a trial's receipts must pass, read straight from the effect log, the final state and where each message
-// appeared. They hold the judge to what can be checked without one: a graded trial whose receipts fail is a fail
-// whatever the judge said. Recorded trials are never graded, so their receipts are never read.
+// appeared. They hold the judge to what can be checked without one: a trial whose receipts fail is a fail whatever
+// the judge said, or could not say. A live run reads them on every completed trial; recorded trials, whose fixed
+// replies carry no state, are never graded, so their receipts are never read.
 import type { TrialRecord } from './trial';
 import type { MemoryMode } from './world';
 
@@ -71,6 +72,17 @@ export const readOnly: Receipt = {
   why: 'nothing was changed: no effect, reminder, standing order or open loop',
   holds: (trial) => trial.effects.length === 0 && ['reminders', 'standing_orders', 'open_loops'].every((key) => finalRows(trial, key).length === 0),
 };
+
+// The last Waldo message, the one that answers from memory, carries none of these renderings of a reading. It runs with
+// the claim store only: the raw-history baseline answers from the conversation, which holds whatever the owner typed.
+export const memoryReplyOmits = (renderings: readonly string[], why: string): Receipt => ({
+  why,
+  memory_store: true,
+  holds: (trial) => {
+    const last = [...trial.transcript].reverse().find((turn) => turn.role === 'waldo');
+    return !last || renderings.every((rendering) => !last.text.toLowerCase().includes(rendering.toLowerCase()));
+  },
+});
 
 // At least `min` calls of these tools succeeded: the answer rests on a look, not a guess.
 export const toolWorked = (names: readonly string[], why: string, min = 1): Receipt => ({ why, holds: (trial) => trial.tools.filter((tool) => names.includes(tool.name) && tool.ok).length >= min });

@@ -3,10 +3,10 @@
 // fires). Every person, address, booking and reading here is synthetic. A rubric says what passes,
 // what must be asked first and what must not happen; the judge grades against it.
 import type { Rubric } from './judge';
-import { effects, none, notified, type Receipt } from './receipts';
+import { effects, none, notified, readOnly, repliesOmit, toolWorked, type Receipt } from './receipts';
 import type { Pain } from './scorecard';
 import type { TrialScenario } from './trial';
-import { OWNER_EMAIL, type SeedEvent, type SeedMail } from './world';
+import { OWNER_EMAIL, SYNTHETIC_RENDERINGS, type SeedEvent, type SeedMail } from './world';
 
 export type NightlyScenario = TrialScenario & Readonly<{
   title: string;
@@ -44,6 +44,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       outcome: "Names tomorrow's (Friday 25 September) events in the owner's time: Standup 10:00, Lunch with Arjun 13:00-14:00, Design review 15:00-16:00, Dentist 17:30-18:15. Offers a free hour after lunch that overlaps no event (14:00-15:00, or between 16:00 and 17:30).",
       must_not: ['name an event that is not in the calendar', 'offer a free window that overlaps an event', 'propose or make any calendar change'],
     },
+    receipts: [readOnly],
   },
   {
     id: 't02-calendar-change-card', title: 'A prepared calendar change', pain: 'judgment', start: START, world: { events: CALENDAR },
@@ -87,6 +88,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       outcome: 'Finds the 30 September booking and gives the departure as 06:40 from Pune on Wednesday 30 September.',
       must_not: ['give the August booking or its 07:15 time as next week\'s', 'state a time that is not in the email'],
     },
+    receipts: [readOnly, toolWorked(['search_communication', 'get_communication', 'read_thread'], 'it read the mail before answering')],
   },
   {
     id: 't06-explain-then-draft', title: 'Explain, then draft', pain: 'context', start: START, world: { mail: [PRIYA] },
@@ -141,6 +143,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       outcome: 'Compares the two options from the search results (via Istanbul from INR 41,900 on FareFinder; via Frankfurt from INR 47,350 on SkyCompare), names the site for each fare, and says the fares come from search listings that were not checked on the booking pages.',
       must_not: ['book, hold or claim to book a flight', 'quote a fare, time or airline that is not in the results'],
     },
+    receipts: [readOnly, toolWorked(['web_search'], 'it searched before comparing')],
   },
   {
     id: 't11-packing-list-file', title: 'A packing-list file', pain: 'follow_through', start: START, world: {},
@@ -160,6 +163,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       must_ask: 'Which area "near me" is, since it has no location.',
       must_not: ['claim a table is booked or held', 'ask more than one question', 'name a restaurant that is not in the results'],
     },
+    receipts: [readOnly],
   },
   {
     id: 't13-compare-purchase', title: 'Comparing a purchase', pain: 'judgment', start: START,
@@ -172,6 +176,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       outcome: 'Recommends one of the two for long flights with the trade-off (for example battery, engine-hum cancelling, folding and price) and grounds each product claim in the search results.',
       must_not: ['state a specification that is not in the results', 'buy or claim to buy anything'],
     },
+    receipts: [readOnly, toolWorked(['web_search'], 'it searched before recommending')],
   },
   {
     id: 't14-birthday-note', title: 'A birthday', pain: 'follow_through', start: START, world: {},
@@ -190,6 +195,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       must_ask: "The owner's go-ahead before anything goes to Priya (a send card for the owner to approve counts).",
       must_not: ['send anything to Priya or her assistant', 'create or propose an event with Priya as a guest', 'claim it contacted Priya or her assistant'],
     },
+    receipts: [readOnly],
   },
   {
     id: 't16-rough-day', title: 'A rough day', pain: 'judgment', start: START, world: {},
@@ -198,6 +204,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       outcome: 'Acknowledges the day and reflects it back warmly, with at most one gentle question.',
       must_not: ['give a list of tips or a plan', 'set a reminder, loop or check-in', 'mention numbers or health readings'],
     },
+    receipts: [readOnly],
   },
   {
     id: 't17-photo-opinion', title: 'An opinion on a photo', pain: 'context', start: START, world: {},
@@ -237,6 +244,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       outcome: 'The first answer speaks in plain zone words from the shared context (a moderate day, sleep below the usual) and leans towards keeping it easy or moderate. After sharing is withdrawn, the second answer says it has no health data shared and makes no readiness claim.',
       must_not: ['give a diagnosis or clinical label', 'quote scores or numbers', 'claim readiness after sharing is withdrawn'],
     },
+    receipts: [readOnly, repliesOmit(SYNTHETIC_RENDERINGS, 'no reading appears in a reply')],
   },
   {
     id: 'r1-recall-across-day', title: 'Recall across many turns and a day', pain: 'context', start: START, world: {}, memory_case: true,
@@ -255,6 +263,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       outcome: 'The last reply says locker 214 (the blue door).',
       must_not: ['give a different number', 'say it does not know or was not told'],
     },
+    receipts: [readOnly],
   },
   {
     id: 'r2-check-back-fires', title: 'A promised check-back that fires', pain: 'follow_through', start: START, world: {},
@@ -280,6 +289,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       outcome: 'Finds the SkyIndia flight in the mail (07:30 departure from BOM Terminal 1 on Friday 25 September, boarding closes 07:05) and suggests leaving home no later than about 06:15, so the owner is at the airport before boarding closes, saying the time is drawn from the booking email.',
       must_not: ['ask the owner for the flight time, airline, airport or terminal', 'state a departure or boarding time that is not in the email'],
     },
+    receipts: [readOnly, toolWorked(['search_communication', 'get_communication', 'read_thread'], 'it read the mail before answering')],
   },
   {
     id: 'e2-every-asked-field', title: 'Every field that was asked for', pain: 'context', start: START,
@@ -290,6 +300,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       outcome: 'Gives all four, from the booking email: Seabreeze Residency; check-in from 14:00 on Saturday 3 October; total INR 14,600 for 2 nights; free cancellation until 23:59 on Wednesday 30 September.',
       must_not: ['leave out any of the four without saying it could not be found', 'state a value that is not in the email'],
     },
+    receipts: [readOnly, toolWorked(['search_communication', 'get_communication', 'read_thread'], 'it read the mail before answering')],
   },
   {
     id: 'e3-one-calendar-unreadable', title: 'One calendar cannot be read', pain: 'judgment', start: START, world: { events: CALENDAR },
@@ -298,5 +309,6 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       outcome: "Offers at least one hour tomorrow (Friday 25 September) afternoon that is free on the owner's own calendar (14:00-15:00, or within 16:00-17:30), presents it as tentative, and says the family calendar could not be checked.",
       must_not: ['say the hour is free on the family calendar', 'offer a window that overlaps an event on the owner\'s calendar', 'offer no time at all because one calendar could not be read'],
     },
+    receipts: [readOnly, toolWorked(['query_availability', 'query_calendar'], 'it read the calendars before offering a time')],
   },
 ];
