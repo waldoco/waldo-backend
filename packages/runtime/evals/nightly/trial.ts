@@ -6,8 +6,9 @@ import { createTelegramResponder } from '../../src/channels/telegram-turn';
 import { inboundTurn, ownerWords } from '../../src/channels/owner-inbound-turn';
 import type { TurnLogEntry } from '../../src/channels/telegram-listener';
 import type { LLMGatewayAdapter } from '../../src/llm/provider';
-import { floorReplyText } from '../../src/prompt/fixed-lines';
-import { promisedBy, RETRY_FIRST_TRY_MS, retryTurnText } from '../../src/tasks/retry-turn';
+import type { FloorTurn } from '../../src/llm/owner-routes';
+import type { JobBook, RetryBrief } from '../../src/tasks/jobs';
+import { promiseRetry, RETRY_FIRST_TRY_MS, retryTurnText } from '../../src/tasks/retry-turn';
 import type { CallBudget } from './budget';
 import type { JudgeInput } from './judge';
 import { evalWorld, TIMEZONE, type Effect, type WorldSeed } from './world';
@@ -33,8 +34,10 @@ export type TrialRecord = Readonly<{
 }>;
 
 // Every model call the responder makes, the memory writer's included, counts against the run's budget.
-const metered = (inner: LLMGatewayAdapter, budget: CallBudget): LLMGatewayAdapter => ({
+// While `outage.down`, no model answers; the provider runtime then gives the owner's own reply its floor line.
+const metered = (inner: LLMGatewayAdapter, budget: CallBudget, outage: { down: boolean }): LLMGatewayAdapter => ({
   async complete(request) {
+    if (outage.down) return { ok: false, code: 'transient', error: 'no model is reachable' };
     if (!budget.take('candidate')) return { ok: false, code: 'rate_limited', error: 'the eval call budget is spent' };
     const result = await inner.complete(request);
     if (result.ok) budget.spent('candidate', result.data.input_tokens + result.data.output_tokens);
@@ -46,8 +49,13 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
   const world = evalWorld(scenario.world, scenario.start);
   const entries: TurnLogEntry[] = [];
   const model = deps.model ?? WALDO_CHAT_MODEL;
-  const responder = createTelegramResponder('eval-key', world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
-    world.handlers, model, false, undefined, async () => true, metered(deps.gateway, deps.budget), undefined, undefined, undefined, undefined,
+  // The floor promise goes through the production promiseRetry, over a book that only keeps the retry brief it writes.
+  const outage = { down: false };
+  let retry: RetryBrief | undefined;
+  const retryBook = { create: (input: Readonly<{ brief: RetryBrief }>) => { retry = input.brief; return { job: { brief_json: JSON.stringify(input.brief) } }; } } as unknown as JobBook;
+  const floorReply = { promise: (turn: FloorTurn) => promiseRetry(retryBook, turn, TIMEZONE, world.clock.now().getTime()) };
+  const responder = createTelegramResponder({ openaiApiKey: 'eval-key', floorReply }, world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
+    world.handlers, model, false, undefined, async () => true, metered(deps.gateway, deps.budget, outage), undefined, undefined, undefined, undefined,
     WALDO_AUXILIARY_MODEL, undefined, world.health, undefined, 'app');
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
   const transcript: { role: 'owner' | 'waldo' | 'world'; text: string }[] = [];
@@ -64,16 +72,20 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         world.advance(step.advance_to);
         transcript.push({ role: 'world', text: `The time is now ${world.localNow()} (${TIMEZONE}).` });
       } else if ('late_answer' in step) {
-        // The same machine turn the owner object runs once a model is back, with the tools an apply turn gets.
+        // The owner's turn runs while no model answers, so its floor reply promises a time and writes the retry; the
+        // retry then runs as the owner object runs it once a model is back, with the tools an apply turn gets.
         turn += 1;
-        const saidAt = world.clock.now().getTime(), promised = promisedBy(saidAt);
         transcript.push({ role: 'owner', text: step.late_answer });
-        transcript.push({ role: 'waldo', text: floorReplyText(promised, TIMEZONE) });
-        world.advance(new Date(saidAt + RETRY_FIRST_TRY_MS).toISOString());
+        outage.down = true;
+        retry = undefined;
+        try {
+          transcript.push({ role: 'waldo', text: await responder.respond(inboundTurn({ updateId: turn, messageId: null, senderId: 1, chatId: 1, sentAt: null, parts: ownerWords(step.late_answer) }), time) });
+        } finally { outage.down = false; }
+        if (!retry) throw new Error('the floor reply wrote no retry');
+        world.advance(new Date(world.clock.now().getTime() + RETRY_FIRST_TRY_MS).toISOString());
         transcript.push({ role: 'world', text: `No model answered at the time. The time is now ${world.localNow()} (${TIMEZONE}) and models answer again.` });
-        const brief = { message_ref: `${scenario.id}-${turn}`, text: step.late_answer, conversation_ref: 'eval', said_at: saidAt, promised_by: promised };
         const tools = world.handlers.map((handler) => handler.name).filter((name) => name !== 'start_task' && name !== 'cancel_task');
-        transcript.push({ role: 'waldo', text: await responder.prompt(`${scenario.id}-retry-${turn}`, 1, retryTurnText(brief, TIMEZONE), time, tools as never, undefined, undefined, undefined, undefined, true) });
+        transcript.push({ role: 'waldo', text: await responder.prompt(`${scenario.id}-retry-${turn}`, 1, retryTurnText(retry, TIMEZONE), time, tools as never, undefined, undefined, undefined, undefined, true) });
       } else if ('fire_due' in step) {
         for (const reminder of world.due()) {
           world.markFired(reminder.id);

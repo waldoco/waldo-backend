@@ -111,6 +111,22 @@ describe('nightly eval catalogue', () => {
     const retry = gateway.requests().map((input) => input.request).find((request) => JSON.stringify(request).includes('this is the late answer'))!;
     expect(JSON.stringify(retry)).toContain('What should I pack?');
     expect(retry.model).toBe(WALDO_CHAT_MODEL);
+    // The owner's turn wrote its message and the floor reply into the conversation, which the retry reads first.
+    const history = retry.messages.slice(0, -1).map((message) => `${message.role}:${JSON.stringify(message.content)}`).join('\n');
+    expect(history).toContain('What should I pack?');
+    expect(history).toMatch(/assistant:.*I can't answer properly right now/);
+  });
+
+  it('a late answer to a message with health values reads it from the conversation, never from the retry brief', async () => {
+    const said = 'My resting heart rate was 72 bpm this morning, should I still run tonight?';
+    const gateway = scriptedGateway({ rules: [{ match: /this is the late answer/, rounds: [{ text: 'Late, sorry: an easy run is fine.' }] }] });
+    const record = await runTrial(quick('health-late', { steps: [{ late_answer: said }] }), { gateway, budget: callBudget(20) });
+    expect(record.status).toBe('ran');
+    const retry = gateway.requests().map((input) => input.request).find((request) => JSON.stringify(request).includes('this is the late answer'))!;
+    const prompt = JSON.stringify(retry.messages.at(-1)!.content);
+    expect(prompt).toContain('Its text was not kept, because it held health details');
+    expect(prompt).not.toContain('72 bpm');
+    expect(JSON.stringify(retry.messages.slice(0, -1))).toContain('72 bpm');
   });
 
   it('seeds every fact the errand rubrics require, and makes the named second calendar unreadable', async () => {

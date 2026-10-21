@@ -31,6 +31,7 @@ const owner = () => env.OWNER_DO!.get(env.OWNER_DO!.idFromName(NAME));
 const fn = (name: string, args: unknown) => [{ type: 'function_call', call_id: `call-${name}`, name, arguments: JSON.stringify(args) }];
 const BRIEF = { profile: 'reader', title: 'Inbox since Monday', goal: 'Find client mail that still needs a reply.', context: 'Clients write from company domains.', done_when: 'A list of threads with who is waiting.' };
 const RESULT = { status: 'done', summary: 'Two client threads wait on you.', findings: [{ text: 'Asha asked for the quote on Tuesday.' }], proposals: [], left: [] };
+// Polls up to about 5 s, so each case sets its own timeout above the config's 5 s default.
 const until = async <T,>(read: () => Promise<T>, done: (value: T) => boolean): Promise<T> => {
   for (let tries = 0; tries < 100; tries += 1) { const value = await read(); if (done(value)) return value; await new Promise(resolve => setTimeout(resolve, 50)); }
   return read();
@@ -88,7 +89,7 @@ it('an owner turn starts a task; the worker runs with no authority and the resul
     expect(await rpc.taskReport(ticket, { kind: 'result', result: { ...RESULT, summary: 'forged' } }, [], { rounds: 0, costUsd: 0 })).toBe('duplicate');
     expect(JSON.parse(jobs(state.storage.sql)[0]!.result_json!).summary).toBe(RESULT.summary);
   });
-});
+}, 30_000);
 
 it('R-4: when no model answers the owner, the floor reply promises a time and the retry keeps it, once', async () => {
   const name = 'retry-turn-e2e';
@@ -126,4 +127,4 @@ it('R-4: when no model answers the owner, the floor reply promises a time and th
     const outbox = state.storage.kv.get<{ id: string }[]>(FINAL_OUTBOX_KEY) ?? [];
     expect(outbox.filter(record => record.id === `retry:${settled.id}`)).toHaveLength(1);
   });
-});
+}, 30_000);
