@@ -1,6 +1,7 @@
 -- A consent grant carries the version of the notice it rested on, and WHOOP has its own notice. Copy 2 is the device
--- sources' (it names intraday window summaries); copy 3 is WHOOP's: Waldo stores the owner's WHOOP data and AI models process
--- it to plan the owner's day, which is the express authorization WHOOP's terms ask for. The grant function accepts the
+-- sources' (it names intraday window summaries); copy 3 is WHOOP's: Waldo stores the owner's WHOOP data and an AI model provider,
+-- a third party the owner opts into with the model-processing grant, processes it to plan the owner's day, which is the express
+-- authorization WHOOP's terms ask for. The grant function accepts the
 -- version of its own source's copy and stores it; the consent view shows it, including before a grant exists. Both functions
 -- are re-created whole from their last definitions (20261021150000 and 20261011000000); only the version rules change.
 -- The version column already takes any positive number, so no table changes.

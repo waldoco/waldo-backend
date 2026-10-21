@@ -71,10 +71,12 @@ export const healthTriggerBook = (sql: Sql) => {
     mark(day: string, at: number): void {
       sql.exec('INSERT INTO health_trigger_pending (day, marked_at) VALUES (?, ?) ON CONFLICT (day) DO UPDATE SET marked_at = max(marked_at, excluded.marked_at)', day, at);
     },
-    // The newest pending mark with the owner-local day it names, or null. Marks older than the TTL are dropped first.
-    pending(now: number): Readonly<{ day: string; at: number }> | null {
+    // Every pending day, newest mark first, with the time of the newest mark; null when nothing is pending. Marks older than
+    // the TTL are dropped first.
+    pending(now: number): Readonly<{ at: number; days: readonly string[] }> | null {
       sql.exec('DELETE FROM health_trigger_pending WHERE marked_at < ?', now - HEALTH_TRIGGER_PENDING_TTL_MS);
-      return sql.exec<{ day: string; at: number }>('SELECT day, marked_at AS at FROM health_trigger_pending ORDER BY marked_at DESC, day DESC LIMIT 1').toArray()[0] ?? null;
+      const rows = sql.exec<{ day: string; at: number }>('SELECT day, marked_at AS at FROM health_trigger_pending ORDER BY marked_at DESC, day DESC').toArray();
+      return rows.length ? { at: rows[0]!.at, days: rows.map(row => row.day) } : null;
     },
     // A mark that lands while an evaluation runs is newer than its start and survives for the next one.
     clear(upTo: number): void { sql.exec('DELETE FROM health_trigger_pending WHERE marked_at <= ?', upTo); },
@@ -333,9 +335,10 @@ export const runHealthTrigger = async (deps: HealthTriggerDeps): Promise<HealthT
   try {
     const view = healthTriggerView(await deps.readHealth(), started, timezone);
     if (!view) { book.clear(started); return done('no_health'); }
-    // The mark names the owner-local day whose row moved zone. A row for another day (a later night's, or one compiled from
-    // another source) is not that change, and saying it changed would put an unmarked state in front of the model.
-    if (view.day !== marked.day) { book.clear(started); return done('stale_day'); }
+    // A mark names the owner-local day whose row moved zone, and two zones can mark different days, so any pending mark that
+    // names the row's day is enough. A row no mark names (a later night's, or one compiled from another source) is not a
+    // marked change, and saying it changed would put an unmarked state in front of the model.
+    if (!marked.days.includes(view.day)) { book.clear(started); return done('stale_day'); }
     mode = resolveHealthMode(deps.modeSetting(), view);
     const chosen = mode;
     const finish = (outcome: HealthTriggerOutcome, extra: Readonly<{ approvalId?: string; asked?: boolean }> = {}): HealthTriggerOutcome => {

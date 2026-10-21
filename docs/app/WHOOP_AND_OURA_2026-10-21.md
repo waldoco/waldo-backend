@@ -54,13 +54,20 @@ Owner decision for Oura (pick one):
 ## WHOOP consent copy (version 3)
 
 A device source's consent screen is copy version 2. WHOOP's is its own, copy version 3, and a grant for WHOOP carries `version: 3`
-(the contract refuses `whoop` on 2 and a device source on 3; the health plane enforces the same and stores the version, so a stored
-grant shows which notice it rested on). The wording is the app and onboarding lane's; the backend fixes what it must say, taken from
+(a new grant must name its source's current version, in the contract and in the health plane, which stores it, so a stored grant shows
+which notice it rested on; reading one back accepts every version its source has had, WHOOP's being 2 and 3, so a later copy change does
+not break a stored grant). The wording is the app and onboarding lane's; the backend fixes what it must say, taken from
 WHOOP's terms (§3 and §4 above):
 
 1. Waldo stores the owner's WHOOP data (sleep, recovery and workouts, with WHOOP's scores) in its health store.
-2. AI models process that data to plan the owner's day. It is never used to create, train, fine-tune or improve any model.
-3. It is not shared with anyone else, and Waldo's notes about it are not medical advice.
+2. AI models process that data to plan the owner's day. The notice must say who does it: the data goes to Waldo's AI model
+   provider, a third party, and only under the model-processing grant, which is the owner's explicit opt-in that WHOOP's §4 asks for
+   before WHOOP data is exposed to a third party. The notice may say the provider keeps nothing and never uses the data to create,
+   train, fine-tune or improve any model only once zero-retention and no-training terms with that provider are in place; until then
+   it must not promise it.
+3. Beyond that provider it is shown or sent to no one else, and Waldo's notes about it are not medical advice. Staging trace capture
+   (Langfuse) would be a further recipient; the owner's decision on excluding WHOOP-derived turns from capture is open, so the
+   notice must not ship, and no WHOOP secret is set, until that is settled and the notice names any recipient that remains.
 4. How to stop: withdrawing storage stops the sync and deletes what was stored; withdrawing AI use stops the sync and AI use; disconnecting
    ends WHOOP's access.
 

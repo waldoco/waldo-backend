@@ -164,7 +164,7 @@ describe('the health trigger', () => {
       book.mark('2026-10-21', NOW - 60_000);
       let during = false;
       expect(await runHealthTrigger(deps({ decide: async (_id, prompt) => { prompts.push(prompt); book.mark('2026-10-21', NOW + 5_000); during = true; return noOp; } }))).toBe('no_op');
-      expect([prompts.length, during, book.pending(NOW + 10_000)]).toEqual([1, true, { day: '2026-10-21', at: NOW + 5_000 }]);
+      expect([prompts.length, during, book.pending(NOW + 10_000)]).toEqual([1, true, { at: NOW + 5_000, days: ['2026-10-21'] }]);
     });
   });
 
@@ -285,7 +285,7 @@ describe('the health trigger', () => {
       deps().book.mark('2026-10-21', NOW - 60_000);
       expect(await runHealthTrigger(deps({ decide: async () => { throw new Error('model down'); } }))).toBe('failed');
       expect(reschedules).toEqual([NOW + HEALTH_TRIGGER_FLOOR_MS]);
-      expect(deps().book.pending(NOW)).toEqual({ day: '2026-10-21', at: NOW - 60_000 });
+      expect(deps().book.pending(NOW)).toEqual({ at: NOW - 60_000, days: ['2026-10-21'] });
     });
   });
 
@@ -308,19 +308,32 @@ describe('the health trigger', () => {
 describe('the day a change was marked on', () => {
   const rowFor = (day: string, previousDay: string, compiledAt: string) => ({ context: { ...ROW.context, day, compiled_at: compiledAt }, previous: { ...ROW.previous, day: previousDay } });
 
-  it('returns the newest mark with its day, and takes no health row for another day as that change', async () => {
+  it('lists every pending day, and takes no health row for a day nothing marked as that change', async () => {
     await withTrigger(async ({ sql, deps, prompts, proposals, logs }) => {
       const book = deps().book;
       book.mark('2026-10-20', NOW - 3 * 3_600_000);
       book.mark('2026-10-21', NOW - 60_000);
-      expect(book.pending(NOW)).toEqual({ day: '2026-10-21', at: NOW - 60_000 });
-      // The row the read returns is the owner's other day: no change was marked on it, so nothing is claimed and the model is not asked.
-      const outcome = await runHealthTrigger(deps({ readHealth: async () => rowFor('2026-10-20', '2026-10-19', '2026-10-20T03:00:00Z') }));
+      expect(book.pending(NOW)).toEqual({ at: NOW - 60_000, days: ['2026-10-21', '2026-10-20'] });
+      // The row the read returns is a day no mark names: no change was marked on it, so nothing is claimed and the model is not asked.
+      const outcome = await runHealthTrigger(deps({ readHealth: async () => rowFor('2026-10-19', '2026-10-18', '2026-10-19T03:00:00Z') }));
       expect([outcome, prompts.length, proposals.length, book.pending(NOW)]).toEqual(['stale_day', 0, 0, null]);
       expect(logs.map(line => JSON.parse(line).code)).toEqual(['stale_day']);
       expect(sql.exec('SELECT * FROM health_trigger_runs').toArray()).toEqual([]);
       book.mark('2026-10-21', NOW - 30_000);
       expect(await runHealthTrigger(deps())).toBe('proposed');
+    });
+  });
+
+  it('evaluates when an older mark names the row\'s day and a newer mark names another, since two zones can mark different days', async () => {
+    await withTrigger(async ({ deps, prompts }) => {
+      const book = deps().book;
+      // The owner's phone and the WHOOP sync can name a day in different zones: today's mark is older than tomorrow's.
+      book.mark('2026-10-21', NOW - 3 * 3_600_000);
+      book.mark('2026-10-22', NOW - 60_000);
+      expect(await runHealthTrigger(deps({ decide: async (_id, prompt) => { prompts.push(prompt); return noOp; } }))).toBe('no_op');
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0]).toContain('for 2026-10-21');
+      expect(book.pending(NOW)).toBeNull();
     });
   });
 

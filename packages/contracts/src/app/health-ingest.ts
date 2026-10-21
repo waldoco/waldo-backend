@@ -20,13 +20,22 @@ export const HEALTH_PROVIDER_REVISION_V1 = 2;
 export const healthSourceV1Schema = z.enum(['apple', 'samsung', 'health_connect', ...HEALTH_PROVIDER_SOURCES_V1]);
 export const isHealthProviderSourceV1 = (source: string): boolean => (HEALTH_PROVIDER_SOURCES_V1 as readonly string[]).includes(source);
 // A cloud provider has its own consent notice, so its grants carry their own copy version. Copy 3 is WHOOP's: it says that
-// Waldo stores the owner's WHOOP data and that AI models process it to plan the owner's day, which is the express
-// authorization WHOOP's terms ask for. A grant carries the version of its source's copy, never another's, so a stored grant
-// shows which notice it rested on. The app owns the wording; the next provider takes the next number.
+// Waldo stores the owner's WHOOP data and that an AI model provider, a third party the owner opts into with the
+// model-processing grant, processes it to plan the owner's day, which is the express authorization WHOOP's terms ask for.
+// A new grant carries the current version of its source's copy, never another's, so a stored grant shows which notice it
+// rested on. A stored grant keeps the version it was written on, so reading one back accepts every version its source has
+// had (WHOOP's first grants were written on copy 2). The app owns the wording; a changed notice takes the next number.
 export const HEALTH_PROVIDER_CONSENT_VERSION_V1 = 3;
-export const healthConsentVersionV1 = (source: string): number => (isHealthProviderSourceV1(source) ? HEALTH_PROVIDER_CONSENT_VERSION_V1 : HEALTH_CONSENT_VERSION_V1);
-const healthConsentVersionSchema = z.union([z.literal(HEALTH_CONSENT_VERSION_V1), z.literal(HEALTH_PROVIDER_CONSENT_VERSION_V1)]);
-const copyOfItsSource = (row: { source: string; version: number }) => row.version === healthConsentVersionV1(row.source);
+type HealthSourceV1 = z.infer<typeof healthSourceV1Schema>;
+const CONSENT_COPY_V1: Readonly<Record<HealthSourceV1, Readonly<{ current: number; had: readonly number[] }>>> = {
+  apple: { current: HEALTH_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1] },
+  samsung: { current: HEALTH_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1] },
+  health_connect: { current: HEALTH_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1] },
+  whoop: { current: HEALTH_PROVIDER_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1] },
+};
+export const healthConsentVersionV1 = (source: HealthSourceV1): number => CONSENT_COPY_V1[source].current;
+const currentCopyOfItsSource = (row: { source: HealthSourceV1; version: number }) => row.version === CONSENT_COPY_V1[row.source].current;
+const copyItsSourceHad = (row: { source: HealthSourceV1; version: number }) => CONSENT_COPY_V1[row.source].had.includes(row.version);
 // Purposes are separate grants, requested together on one consent screen: storage_compute (store and compute the
 // owner's health data and show the owner their scores) and model_processing (let Waldo use it when it talks to the
 // owner). Model use needs both, so granting model_processing without a live storage grant is consent_required, and an
@@ -49,10 +58,10 @@ export const healthConsentGrantV1Schema = z.strictObject({
   request_id: healthRequestIdV1Schema,
   source: healthSourceV1Schema,
   purpose: healthPurposeV1Schema,
-  version: healthConsentVersionSchema,
+  version: z.int().positive(),
   expected_epoch: epochV1,
   age_attested_18_plus: z.literal(true),
-}).refine(copyOfItsSource, { message: 'the copy version belongs to the source', path: ['version'] });
+}).refine(currentCopyOfItsSource, { message: 'a new grant names the current copy version of its source', path: ['version'] });
 export const healthConsentWithdrawV1Schema = z.strictObject({
   request_id: healthRequestIdV1Schema,
   source: healthSourceV1Schema,
@@ -63,13 +72,13 @@ export const healthConsentStateV1Schema = z.strictObject({
   consent_class: z.literal('health_processing'),
   source: healthSourceV1Schema,
   purpose: healthPurposeV1Schema,
-  version: healthConsentVersionSchema,
+  version: z.int().positive(),
   status: z.enum(['granted', 'withdrawn', 'not_granted']),
   epoch: epochV1,
   granted_at: healthInstantV1Schema.nullable(),
   withdrawn_at: healthInstantV1Schema.nullable(),
   deletion_state: z.enum(['not_required', 'completed']),
-}).refine(copyOfItsSource, { message: 'the copy version belongs to the source', path: ['version'] });
+}).refine(copyItsSourceHad, { message: 'a stored grant carries a copy version its source has had', path: ['version'] });
 export const healthConsentListV1Schema = z.strictObject({ consents: z.array(healthConsentStateV1Schema).max(12) });
 // What a client at an older health revision may be shown: no provider rows, since it cannot parse them.
 export const healthConsentListAtRevisionV1 = <Row extends { source: string }>(consents: readonly Row[], revision: number): Row[] =>

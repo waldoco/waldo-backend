@@ -255,7 +255,7 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       effects('calendar.change.proposed', { max: 1 }, 'at most one card, since the trigger raises one health card a day'),
       effects('calendar.change.proposed', {}, "a card's guest-visible fields carry no health word", (payload) => {
         const card = payload as { title?: unknown; description?: unknown; location?: unknown };
-        return ![card.title, card.description, card.location].some((field) => typeof field === 'string' && /\b(recovery|sleep|health|zone|hrv|readiness|strain)\b/i.test(field));
+        return ![card.title, card.description, card.location].some((field) => typeof field === 'string' && /\b(recovery|sleep|health|zone|hrv|readiness|strain|form|load)\b/i.test(field));
       }),
       repliesOmit(['31.7', '52.6'], 'no health reading appears in anything the owner sees'),
     ],
