@@ -126,7 +126,8 @@ The cloud orchestrator (**C0**) coordinates the lanes, keeps the Progress log, a
 
 **C0 also:**
 - Logs every lane milestone in the Progress log, on branch `handoff/2026-10-21`.
-- Runs at most about 5 children at once. Start order: C1, C2, C3, C4, C5, C7, then C6 once #1346 has merged.
+- First, before starting any child, probes and logs three things: can it push to an existing lane branch? Can it post a PR comment? Can it run the full wall? Pushing needs a fallback of a stacked branch and PR per lane. Comments fall back to the PR body's `## Handoff` section. If the wall can't run, the gate becomes PR CI green on the pushed head, with the local-only checks reported as UNAVAILABLE.
+- Shares one 5-hour usage window across all children. Start C1, C2 and C3 first; add C4, C5 and C7 once those are well under way; start C6 once #1346 has merged. About 5 running at once at most.
 
 ### Local side (the original account on the owner's Mac)
 
@@ -139,7 +140,17 @@ The cloud orchestrator (**C0**) coordinates the lanes, keeps the Progress log, a
 | L5 | **Gate reviews and merge trains** for every `Ready for gate review` PR from the cloud, plus the independent reviews of WhatsApp #1309–#1311 and the 12 PR-carries. |
 | L6 | Later, on the owner's go: the bundled staging deploy, then console end-to-end on the owner's account, traced in Langfuse and `wrangler tail`. |
 
-Local posts its verdicts as PR comments headed `## Gate review`, and records merges in the Progress log.
+Local posts verdicts as PR comments headed `## Gate review` and records each merge as a comment on #1359. **C0 is the only writer of this README.** It folds local's #1359 comments into the Progress log, so the two sides never push the same file.
+
+How each side finds the other's work, since neither can message the other:
+- **Local polls:**
+  ```bash
+  gh search prs --repo waldoco/waldo-backend --state open "Ready for gate review" --json number,title
+  ```
+  plus `gh pr view <n> --comments` on each lane PR.
+- **C0 polls** lane PRs for `## Gate review` comments and #1359 for merge notes, and acts on them.
+- Lanes re-merge `beta-mvp` **immediately before** posting `Ready`.
+- Local lands several Ready PRs as one train rather than one at a time.
 
 ## How to land work
 
