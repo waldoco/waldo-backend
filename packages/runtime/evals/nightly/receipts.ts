@@ -3,7 +3,7 @@
 // whatever the judge said. Recorded trials are never graded, so their receipts are never read.
 import type { TrialRecord } from './trial';
 
-export type TrialEvidence = Pick<TrialRecord, 'transcript' | 'effects' | 'final_state'>;
+export type TrialEvidence = Pick<TrialRecord, 'transcript' | 'effects' | 'final_state' | 'tools'>;
 export type Receipt = Readonly<{ why: string; holds: (trial: TrialEvidence) => boolean }>;
 
 export const failedReceipts = (receipts: readonly Receipt[], trial: TrialEvidence): readonly string[] =>
@@ -32,3 +32,21 @@ export const notificationsOmit = (renderings: readonly string[], why: string): R
 
 // At least one notification reached the owner.
 export const notified = (why: string): Receipt => ({ why, holds: (trial) => trial.transcript.some((turn) => turn.role === 'waldo' && turn.surface === 'notification') });
+
+const finalRows = (trial: TrialEvidence, key: string): readonly unknown[] => ((trial.final_state as Record<string, unknown>)[key] as readonly unknown[] | undefined) ?? [];
+
+// A scenario that only reads and answers: no card, draft, reminder, standing order or open loop comes of it, so any
+// such change is a state defect even when the reply sounds right.
+export const readOnly: Receipt = {
+  why: 'nothing was changed: no effect, reminder, standing order or open loop',
+  holds: (trial) => trial.effects.length === 0 && ['reminders', 'standing_orders', 'open_loops'].every((key) => finalRows(trial, key).length === 0),
+};
+
+// At least `min` calls of these tools succeeded: the answer rests on a look, not a guess.
+export const toolWorked = (names: readonly string[], why: string, min = 1): Receipt => ({ why, holds: (trial) => trial.tools.filter((tool) => names.includes(tool.name) && tool.ok).length >= min });
+
+// No Waldo message, in chat or on a notification, carries any of these renderings of a seeded value.
+export const repliesOmit = (renderings: readonly string[], why: string): Receipt => ({
+  why,
+  holds: (trial) => trial.transcript.filter((turn) => turn.role === 'waldo').every((turn) => renderings.every((rendering) => !turn.text.toLowerCase().includes(rendering.toLowerCase()))),
+});
