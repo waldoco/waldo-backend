@@ -9,6 +9,7 @@ import { approvalDesk, PROPOSAL_TTL_MS, proposalStatus } from '../src/channels/a
 import { WhatsAppApiError } from '../src/channels/whatsapp-api';
 import { whatsappWindowCaller, whatsappWindowOpen } from '../src/channels/whatsapp-window';
 import { sha256Hex } from '../src/connectors/google';
+import { stableJson } from '../src/context-composer/canonical';
 
 const NOW = Date.UTC(2026, 9, 18, 9, 0, 0);
 const HOUR = 60 * 60_000;
@@ -20,7 +21,7 @@ const fixture = (state: DurableObjectState, options: Readonly<{ app?: boolean }>
   let now = NOW, wamid = 0, next: 'unknown' | 'refused' | null = null, n = 0;
   // The owner last wrote 30 hours ago, so the window is closed.
   kv.put('wa_last_inbound_ms', NOW - 30 * HOUR);
-  const attempts: string[] = [], delivered: string[] = [], sent: string[] = [];
+  const attempts: string[] = [], delivered: string[] = [], sent: string[] = [], ran: string[] = [];
   const inner = async (method: string, body: object) => {
     if (method === 'sendTemplate') { delivered.push('knock'); return { messages: [{ id: 'wamid.knock' }] }; }
     // WhatsApp has no callback answers or keyboards to edit.
@@ -37,9 +38,10 @@ const fixture = (state: DurableObjectState, options: Readonly<{ app?: boolean }>
   const desk = approvalDesk(sql, { owner: OWNER, surface: 'whatsapp', call, writesFirstNow: () => whatsappWindowOpen(kv, now),
     google: async () => null, newId: () => `w${++n}`, now: () => now, timezone: 'UTC', log: () => undefined, commit: work => state.storage.transactionSync(work),
     sendMessage: async proposal => { sent.push(proposal.content); return { provider_id: `wamid.sent-${sent.length}` }; },
+    replayTaintedAction: async proposal => { ran.push(proposal.tool); return { status: 'done', message: 'Created.' }; },
     ...(options.app ? { appIdentity: () => true } : {}) });
   return {
-    desk, attempts, delivered, sent,
+    desk, attempts, delivered, sent, ran,
     tick: (ms: number) => { now += ms; },
     // The owner writes on WhatsApp, which opens the window.
     writes: () => { kv.put('wa_last_inbound_ms', now); },
@@ -55,6 +57,11 @@ const message = (content: string) => ({ channel: 'whatsapp', content, idempotenc
 const email = async () => {
   const raw = 'To: sam@example.test\r\nSubject: Weekly numbers\r\nMessage-ID: <weekly@waldo-send>\r\n\r\nHi Sam';
   return { to: ['sam@example.test'], subject: 'Weekly numbers', body: 'Hi Sam', message_id: '<weekly@waldo-send>', raw, digest: await sha256Hex(raw) };
+};
+// An action a turn that read external content wanted to run: it needs the owner's approval card before it runs.
+const tainted = async () => {
+  const args = { title: 'Pay the invoice from the email' };
+  return { tool: 'create_task', args, args_digest: await sha256Hex(stableJson(args)), reasoning: 'The email asked for it.', source: 'external' as const };
 };
 const owner = (name: string, work: (state: DurableObjectState) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`${name}-${crypto.randomUUID()}`)), (_instance, state) => work(state));
@@ -98,6 +105,35 @@ describe('an approval card the surface cannot send now', () => {
       expect(f.sent).toEqual(['On my way']);
       expect(f.status(id)).toBe('done');
       expect(f.delivered.slice(2)).toEqual([expect.stringContaining('Sent:'), 'Already handled.']);
+    });
+  });
+
+  it('a tainted action\'s card follows the same rule: it waits unpresented, goes out when the owner writes, and runs once on approval', async () => {
+    await owner('approval-card-tainted-action', async state => {
+      const f = fixture(state);
+      const id = await f.desk.proposeTaintedAction(await tainted());
+      expect(f.delivered).toEqual(['knock']);
+      expect(f.held()).toBe(0);
+      expect(f.status(id)).toBe('card_unconfirmed');
+      expect(f.shown(id)).toEqual([]);
+      expect(f.desk.placement(id)).toEqual({ here: false, hereApprovable: false, app: false, appApprovable: false, waitsHere: true });
+      expect(proposalStatus(f.desk.placement(id), 'sent to the owner with Do it / Not now buttons', 'Nothing ran.')).toBe('The review card goes out here when the owner next writes, so it cannot be approved yet. Nothing ran.');
+      // Before the card goes out it cannot be approved here.
+      expect((await f.desk.decide(id, 'a', 'trace', { surface: 'whatsapp', messageRef: `${OWNER}:0` })).toast).not.toBe('Done');
+      expect(f.ran).toEqual([]);
+      expect(f.status(id)).toBe('card_unconfirmed');
+      expect(f.attempts).toEqual([]);
+
+      f.tick(HOUR); f.writes();
+      await f.desk.ownerWrote();
+      expect(f.attempts).toEqual([expect.stringContaining('Run this action?')]);
+      expect(f.shown(id)).toEqual([{ surface: 'whatsapp', message_ref: expect.stringMatching(/^wamid\.card-/), approvable: 1, presented_at: NOW + HOUR }]);
+      expect(f.status(id)).toBe('open');
+
+      await f.reply(`a:${id}`);
+      await f.reply(`a:${id}`);
+      expect(f.ran).toEqual(['create_task']);
+      expect(f.status(id)).toBe('done');
     });
   });
 
