@@ -32,7 +32,7 @@ Read in this order:
 
 `beta-mvp` is at `04471476` (#1341 merged). Its CI at `db49cb66` was green.
 
-### Merge train #1358: MERGED as `19ccd5e8` at 14:40Z (history below)
+### Merge train #1358: MERGED as `19ccd5e8` at 12:46Z (history below)
 
 Branch `train/2026-10-21-a`, head `aca8a6b5`. It contains:
 - #1351 at `03f239d9`, the wave 2 harness batch made of #1340, #1343, #1243, #1248 and #1348. It passed an independent review, and three pre-merge fixes are confirmed in source.
@@ -133,7 +133,7 @@ Append an entry each time you finish a merge, a lane milestone or a decision. Co
 | Time (UTC) | What happened | PR / SHA | Next |
 |---|---|---|---|
 | 2026-10-21 13:30 | Handoff written. Train #1358 in CI; lanes #1354–#1357 checkpointing to their PR `## Handoff` sections. | handoff/2026-10-21 | Merge #1358 when green; review lane PRs as they finish. |
-| 2026-10-21 14:40 | **Train #1358 merged** (`19ccd5e8`). #1351, #1347 and #1352 all show merged. The five #1351 constituents (#1340, #1343, #1243, #1248, #1348) still need closing as "landed via #1351/#1358". | beta-mvp `19ccd5e8` | Close the constituents (orchestrator). |
+| 2026-10-21 12:46 | **Train #1358 merged** (`19ccd5e8`). #1351, #1347 and #1352 all show merged. The five #1351 constituents (#1340, #1343, #1243, #1248, #1348) still need closing as "landed via #1351/#1358". | beta-mvp `19ccd5e8` | Close the constituents (orchestrator). |
 | 2026-10-21 14:50 | Five lanes hit the original account's usage limit mid-work. The orchestrator committed their uncommitted work as found ("WIP: checkpoint at the session limit") and pushed it: #1357 `7b71f5a1`, #1354 `13049cf3`, #1355 `2f533c04`, new branch `evals/state-memory` `73b8f645`, and the #1311 carry `36123341`. These WIP commits may not build. | — | Lanes re-check typecheck and tests first. |
 | 2026-10-21 15:55 | Limit reset. Orchestrator and lanes resumed; wearables, onboarding, evals and WhatsApp moved to Sonnet. Work split per "Who owns what". | — | Cloud: gate reviews, plus fixing #1346/#1349. |
 
