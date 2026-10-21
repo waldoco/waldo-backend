@@ -14,19 +14,24 @@ const STATE_WORD = { accepted: 'accepted', failed: 'failed', unresolved: 'unconf
 const shownReceipts = (events: readonly LoopEventLike[]) => receiptsFromLoopEvents(events).filter(r => !NOT_SHOWN.has(r.effect));
 const TARGET_MAX = 200;
 
+// A proposal's effect only asks the owner for an approval: accepted, it is waiting on their yes, never done.
+const PROPOSED = '_proposed';
+
 export const receiptLine = (events: readonly LoopEventLike[]): string | null => {
   const receipts = shownReceipts(events);
   if (receipts.length === 0) return null;
   const stateOf = (r: (typeof receipts)[number]) => STATE_WORD[r.state ?? (r.ok ? 'accepted' : 'failed')];
+  const label = (r: (typeof receipts)[number], effect = r.effect) => `${effect.split('_').join(' ')}${r.ref ? ` ${r.ref}` : ''}`;
+  const named = receipts.slice(0, MAX_NAMED);
+  const more = receipts.length - named.length > 0 ? `; and ${receipts.length - named.length} more` : '';
   // A turn where every effect was accepted reads as plain words; any other state keeps every entry's state explicit.
-  const plain = receipts.every(r => stateOf(r) === 'accepted');
-  const named = receipts.slice(0, MAX_NAMED).map(r => {
-    const label = `${r.effect.split('_').join(' ')}${r.ref ? ` ${r.ref}` : ''}`;
-    if (plain) return r.delegated ? `${label} (via task)` : label;
-    return `${label} (${stateOf(r)}${r.delegated ? ', via task' : ''})`;
-  });
-  const more = receipts.length - named.length;
-  return `${plain ? 'Done' : 'Receipts'}: ${named.join('; ')}${more > 0 ? `; and ${more} more` : ''}`;
+  if (!receipts.every(r => stateOf(r) === 'accepted')) {
+    return `Receipts: ${named.map(r => `${label(r)} (${stateOf(r)}${r.delegated ? ', via task' : ''})`).join('; ')}${more}`;
+  }
+  const plain = (r: (typeof receipts)[number], effect: string) => `${label(r, effect)}${r.delegated ? ' (via task)' : ''}`;
+  const done = named.filter(r => !r.effect.endsWith(PROPOSED)).map(r => plain(r, r.effect));
+  const asked = named.filter(r => r.effect.endsWith(PROPOSED)).map(r => plain(r, r.effect.slice(0, -PROPOSED.length)));
+  return [done.length ? `Done: ${done.join('; ')}` : '', asked.length ? `Needs your yes: ${asked.join('; ')}` : ''].filter(Boolean).join('. ') + more;
 };
 
 // The same receipts in typed form, with the line as their text. A target too long for the part is left out, not cut.
