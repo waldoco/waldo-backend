@@ -110,7 +110,7 @@ describe('recall by relevance', () => {
     expect(checkScenario(scenario, run)).toEqual([]);
     expect(run.tools).toContain('remember');
     const last = recalled(run, 8);
-    expect(last).toMatch(/- \[fact, stated, owner-grounded, \d{4}-\d{2}-\d{2}\] Gym locker is number 214, the one with the blue door/);
+    expect(last).toMatch(/- \[c\d+ · owner-grounded · fact, stated, \d{4}-\d{2}-\d{2}\] Gym locker is number 214, the one with the blue door/);
     // The owner turn the claim was learned from (tg-1, index row 1) is not repeated as an episode line.
     expect(last).not.toContain('ref 1]');
     const machine = recalled(run, 9);

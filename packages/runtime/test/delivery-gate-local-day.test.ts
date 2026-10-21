@@ -11,7 +11,7 @@ const adjustment: DeliveryCandidate = { push_class: 'adjustment', trigger: 'hand
 const at = Date.parse;
 let seq = 0;
 const withStore = async (test: (store: DeliveryGateStore) => void) => {
-  await runInDurableObject(env.TRACER_DO.get(env.TRACER_DO.idFromName(`local-delivery-day-${++seq}`)), async (_instance, state) => test(new DeliveryGateStore(state.storage.sql)));
+  await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`local-delivery-day-${++seq}`)), async (_instance, state) => test(new DeliveryGateStore(state.storage.sql)));
 };
 
 describe('trusted owner-local delivery day', () => {

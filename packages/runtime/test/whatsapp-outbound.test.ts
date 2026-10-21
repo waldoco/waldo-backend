@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createWhatsAppMediaUploader, deliverWhatsAppFile, whatsappTelegramShim } from '../src/channels/whatsapp-api';
+import { WHATSAPP_GRAPH_VERSION, WhatsAppApiError, createWhatsAppCaller, createWhatsAppMediaDownloader, createWhatsAppMediaUploader, deliverWhatsAppFile, whatsappTelegramShim } from '../src/channels/whatsapp-api';
 import { egressGuardedCaller } from '../src/channels/egress-guard';
 import { WA_LAST_INBOUND_KEY, WHATSAPP_HELD, WHATSAPP_HELD_RETENTION_MS, deliverHeldWhatsApp, recordWhatsAppInbound, whatsappHeld, whatsappTemplateConfig, whatsappWindowCaller } from '../src/channels/whatsapp-window';
 import { egressGate, gatedCaller } from '../src/channels/telegram-api';
@@ -7,6 +7,79 @@ import { DOCX_MIME as DOCX } from '../src/channels/document-render';
 
 const graphOk = () => vi.fn(async (_url: string, _init?: RequestInit) => Response.json({ messages: [{ id: 'wamid.out' }] }));
 const sentBodies = (graph: ReturnType<typeof graphOk>) => graph.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
+
+describe('whatsapp graph refusals', () => {
+  it('never carry the access token, even when Graph quotes it back, stray quotes and whitespace included', async () => {
+    const secret = 'EAAG-fictional-access-token-0123456789';
+    for (const token of [secret, ` "${secret}"\n`]) {
+      const echo = vi.fn(async () => Response.json({ error: { code: 190, type: 'OAuthException', message: `Malformed access token ${token}` } }, { status: 401 }));
+      const refusal = await createWhatsAppCaller(token, 'pn1', echo as unknown as typeof fetch)({ to: '15550001111', type: 'text', text: { body: 'hi' } })
+        .then(() => null, (error: unknown) => error);
+      expect(refusal).toBeInstanceOf(WhatsAppApiError);
+      const { body, message, code, status } = refusal as WhatsAppApiError;
+      expect({ code, status }).toEqual({ code: 190, status: 401 });
+      expect(body).toContain('Malformed access token');
+      for (const text of [body, message, JSON.stringify(refusal)]) expect(text).not.toContain(secret);
+    }
+  });
+
+  it('keep Graph\'s answer out of the serialized error', async () => {
+    const refused = vi.fn(async () => Response.json({ error: { code: 131031, message: 'FICTIONAL-DETAIL' } }, { status: 400 }));
+    const refusal = await createWhatsAppCaller('EAAG-fictional-access-token-0123456789', 'pn1', refused as unknown as typeof fetch)({ to: '15550001111', type: 'text', text: { body: 'hi' } })
+      .then(() => null, (error: unknown) => error);
+    expect((refusal as WhatsAppApiError).body).toContain('FICTIONAL-DETAIL');
+    expect(JSON.stringify(refusal)).not.toContain('FICTIONAL-DETAIL');
+  });
+});
+
+describe('whatsapp graph version', () => {
+  it('a send, an upload and a media lookup all call the one pinned Graph version, v26.0', async () => {
+    const graph = vi.fn(async (url: string, _init?: RequestInit) =>
+      url.endsWith('/media') ? Response.json({ id: 'media-77' })
+        : url.endsWith('/media-9') ? Response.json({ url: 'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=abc' })
+          : url.startsWith('https://lookaside.fbsbx.com/') ? new Response(new Uint8Array([1]))
+            : Response.json({ messages: [{ id: 'wamid.out' }] }));
+    const fetcher = graph as unknown as typeof fetch;
+    await createWhatsAppCaller('tok', 'pn1', fetcher)({ to: '15550001111', type: 'text', text: { body: 'hi' } });
+    await createWhatsAppMediaUploader('tok', 'pn1', fetcher)({ bytes: new TextEncoder().encode('%PDF-1.4 test'), mime: 'application/pdf', filename: 'plan.pdf' });
+    await createWhatsAppMediaDownloader('tok', fetcher)('media-9');
+    expect(WHATSAPP_GRAPH_VERSION).toBe('v26.0');
+    expect(graph.mock.calls.map(([url]) => url).filter(url => url.startsWith('https://graph.facebook.com/'))).toEqual([
+      `https://graph.facebook.com/${WHATSAPP_GRAPH_VERSION}/pn1/messages`,
+      `https://graph.facebook.com/${WHATSAPP_GRAPH_VERSION}/pn1/media`,
+      `https://graph.facebook.com/${WHATSAPP_GRAPH_VERSION}/media-9`,
+    ]);
+  });
+});
+
+// Meta prepends the business number's country calling code to a `to` with no leading +, so the stored digits of an
+// Indian owner, sent bare from a US business number, would address +1 91….
+describe('whatsapp recipient numbers', () => {
+  it('a text, a template, a document and an image to the owner all go to the stored number in E.164, with its plus', async () => {
+    const graph = vi.fn(async (url: string, _init?: RequestInit) => url.endsWith('/media') ? Response.json({ id: 'media-77' }) : Response.json({ messages: [{ id: 'wamid.out' }] }));
+    const shim = whatsappTelegramShim('tok', 'pn1', '15550001111', graph as unknown as typeof fetch);
+    await shim('sendMessage', { chat_id: 15550001111, text: 'Your 6 pm reminder' });
+    await shim('sendTemplate', { name: 'waldo_update_ready', language: 'en' });
+    await shim('sendDocument', { chat_id: 15550001111, file: { bytes: new TextEncoder().encode('%PDF-1.4 test'), mime: 'application/pdf', filename: 'plan.pdf' } });
+    await shim('sendDocument', { chat_id: 15550001111, file: { bytes: new Uint8Array([1, 2, 3]), mime: 'image/png', filename: 'chart.png' } });
+    const sends = graph.mock.calls.filter(([url]) => url.endsWith('/messages')).map(([, init]) => JSON.parse(String(init?.body)));
+    expect(sends.map(body => [body.type, body.to])).toEqual([['text', '+15550001111'], ['template', '+15550001111'], ['document', '+15550001111'], ['image', '+15550001111']]);
+  });
+
+  it('only an all-digit to gets the plus: one that has it already is not doubled, and an empty one stays empty', async () => {
+    const graph = graphOk();
+    const call = createWhatsAppCaller('tok', 'pn1', graph as unknown as typeof fetch);
+    await call({ to: '+15550001111', type: 'text', text: { body: 'hi' } });
+    await call({ to: '', type: 'text', text: { body: 'hi' } });
+    expect(sentBodies(graph).map(body => body.to)).toEqual(['+15550001111', '']);
+  });
+
+  it('a business-scoped user id goes out in recipient exactly as given, and the send carries no to', async () => {
+    const graph = graphOk();
+    await createWhatsAppCaller('tok', 'pn1', graph as unknown as typeof fetch)({ recipient: 'US.13491208655302741918', type: 'text', text: { body: 'hi' } });
+    expect(sentBodies(graph)).toEqual([{ messaging_product: 'whatsapp', recipient: 'US.13491208655302741918', type: 'text', text: { body: 'hi' } }]);
+  });
+});
 
 describe('whatsapp link previews', () => {
   it('a text with an http(s) link asks for a preview when the caller has not disabled one', async () => {
@@ -43,7 +116,7 @@ describe('whatsapp outbound files', () => {
     const upload = createWhatsAppMediaUploader('tok', 'pn1', graph as unknown as typeof fetch);
     expect(await upload(pdf)).toBe('media-77');
     const [url, init] = graph.mock.calls[0]!;
-    expect(url).toBe('https://graph.facebook.com/v21.0/pn1/media');
+    expect(url).toBe('https://graph.facebook.com/v26.0/pn1/media');
     expect(new Headers(init?.headers).get('authorization')).toBe('Bearer tok');
     const form = init?.body as FormData;
     expect(form.get('messaging_product')).toBe('whatsapp');
@@ -54,7 +127,7 @@ describe('whatsapp outbound files', () => {
 
     const shim = whatsappTelegramShim('tok', 'pn1', '15550001111', graph as unknown as typeof fetch);
     expect(await shim('sendDocument', { chat_id: 15550001111, file: pdf })).toEqual({ messages: [{ id: 'wamid.doc' }] });
-    expect(JSON.parse(String(graph.mock.calls[2]![1]?.body))).toEqual({ messaging_product: 'whatsapp', to: '15550001111', type: 'document', document: { id: 'media-77', filename: 'plan.pdf' } });
+    expect(JSON.parse(String(graph.mock.calls[2]![1]?.body))).toEqual({ messaging_product: 'whatsapp', to: '+15550001111', type: 'document', document: { id: 'media-77', filename: 'plan.pdf' } });
   });
 
   it('a jpeg or png goes as an image message; docx, xlsx, pptx and txt go as documents', async () => {
@@ -140,7 +213,7 @@ describe('whatsapp 24-hour window', () => {
     recordWhatsAppInbound(kv, [{ timestamp: String(T0 / 1000) }], T0);
     clock.now = T0 + 23 * HOUR;
     expect(await call('sendMessage', { chat_id: 1, text: 'Your 6 pm reminder' })).toEqual({ messages: [{ id: 'wamid.out' }] });
-    expect(sentBodies(graph)).toEqual([{ messaging_product: 'whatsapp', to: '15550001111', type: 'text', text: { body: 'Your 6 pm reminder' } }]);
+    expect(sentBodies(graph)).toEqual([{ messaging_product: 'whatsapp', to: '+15550001111', type: 'text', text: { body: 'Your 6 pm reminder' } }]);
   });
 
   it('outside the window the text is held, one approved template knocks, and a second message does not knock again', async () => {
@@ -152,7 +225,7 @@ describe('whatsapp 24-hour window', () => {
     expect(whatsappHeld(await call('sendMessage', { chat_id: 1, text: 'PRIVATE reminder two' }))).toBe(true);
     expect(whatsappHeld(undefined)).toBe(false);
     const bodies = sentBodies(graph);
-    expect(bodies).toEqual([{ messaging_product: 'whatsapp', to: '15550001111', type: 'template', template: { name: 'waldo_update_ready', language: { code: 'en' } } }]);
+    expect(bodies).toEqual([{ messaging_product: 'whatsapp', to: '+15550001111', type: 'template', template: { name: 'waldo_update_ready', language: { code: 'en' } } }]);
     expect(JSON.stringify(bodies)).not.toContain('PRIVATE');
     expect([...map.keys()].filter(key => key.startsWith('wa_held:'))).toHaveLength(2);
   });
@@ -222,12 +295,12 @@ describe('whatsapp 24-hour window', () => {
     let fail = 'second';
     graph.mockImplementation(async (_url: string, init?: RequestInit) => JSON.parse(String(init?.body)).text?.body === fail ? Response.json({ error: { code: 131000 } }, { status: 500 }) : Response.json({ messages: [{ id: 'wamid.h' }] }));
     const log = vi.fn();
-    await deliverHeldWhatsApp(kv, call, clock.now, log);
+    await deliverHeldWhatsApp(kv, call, clock.now, log, '1');
     expect(sentBodies(graph).map(body => body.text.body)).toEqual(['first', 'second']);
     expect([...map.keys()].filter(key => key.startsWith('wa_held:'))).toHaveLength(1);
     fail = '';
     graph.mockClear();
-    await deliverHeldWhatsApp(kv, call, clock.now, log);
+    await deliverHeldWhatsApp(kv, call, clock.now, log, '1');
     expect(sentBodies(graph).map(body => body.text.body)).toEqual(['third']);
 
     clock.now += 25 * HOUR;
@@ -235,7 +308,7 @@ describe('whatsapp 24-hour window', () => {
     graph.mockClear();
     clock.now += WHATSAPP_HELD_RETENTION_MS;
     recordWhatsAppInbound(kv, [{ timestamp: String(clock.now / 1000) }], clock.now);
-    await deliverHeldWhatsApp(kv, call, clock.now, log);
+    await deliverHeldWhatsApp(kv, call, clock.now, log, '1');
     expect(graph).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith({ hop: 'whatsapp_held', ok: true, expired: 1 });
   });
@@ -252,12 +325,12 @@ describe('whatsapp 24-hour window', () => {
     const log = vi.fn();
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const heldTexts = () => [...map].filter(([key]) => key.startsWith('wa_held:')).sort(([a], [b]) => a < b ? -1 : 1).map(([, value]) => (value as { body: { text: string } }).body.text);
-    await deliverHeldWhatsApp(kv, gated, clock.now, log);
+    await deliverHeldWhatsApp(kv, gated, clock.now, log, '1');
     expect(graph).not.toHaveBeenCalled();
     expect(heldTexts()).toEqual(['first', 'second', 'third']);
     expect(log).toHaveBeenCalledWith({ hop: 'whatsapp_held', ok: false, code: 'not_sent' });
     directory = 'up';
-    await deliverHeldWhatsApp(kv, gated, clock.now, log);
+    await deliverHeldWhatsApp(kv, gated, clock.now, log, '1');
     expect(sentBodies(graph).map(body => body.text.body)).toEqual(['first', 'second', 'third']);
     expect(heldTexts()).toEqual([]);
   });
@@ -268,7 +341,7 @@ describe('whatsapp 24-hour window', () => {
     await call('sendMessage', { chat_id: 1, text: 'waiting' });
     const before = JSON.stringify([...map].filter(([key]) => key.startsWith('wa_held:')));
     graph.mockClear();
-    await deliverHeldWhatsApp(kv, call, clock.now + HOUR, vi.fn());
+    await deliverHeldWhatsApp(kv, call, clock.now + HOUR, vi.fn(), '1');
     expect(graph).not.toHaveBeenCalled();
     expect(JSON.stringify([...map].filter(([key]) => key.startsWith('wa_held:')))).toBe(before);
   });

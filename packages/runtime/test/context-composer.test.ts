@@ -9,6 +9,7 @@ import {
 import fc from 'fast-check';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  ContextRecallFailClosedError,
   ContextRecallUnavailableError,
   ContextSourceRejectedError,
   ContextSourceUnavailableError,
@@ -18,7 +19,6 @@ import {
   type ContextSource,
   type RuntimeOwnedContextInputs,
 } from '../src/context-composer';
-import { RecallSecurityHalt } from '../src/recall/gateway';
 import type { ResolvedSkillBudget } from '../src/skills/budget';
 
 const SNAPSHOT_AT = Date.parse('2026-07-15T12:00:00.000Z');
@@ -1384,7 +1384,7 @@ describe('ContextComposer', () => {
       ...base,
       recall: {
         async recall() {
-          throw new RecallSecurityHalt('memory');
+          throw new ContextRecallFailClosedError();
         },
       },
     }).compose(trustedEnvelope(), RUNTIME_INPUTS);

@@ -3,9 +3,9 @@
 Proves that real Workers/Durable-Object code executes inside the Workers runtime
 (workerd via Miniflare), not a Node approximation. This is Gate 5 (hermetic
 runtime) of the local-dev testing pipeline. It runs under
-`@cloudflare/vitest-pool-workers` and holds one test-only Durable Object
-(`RuntimeProbeDO`) exercising DO SQLite durability, the single alarm slot, and
-eviction survival. No product logic, no live services, no secrets.
+`@cloudflare/vitest-pool-workers`. Tests that need bare Durable Object SQLite storage use
+the test-only `TestStorageDO` (`test/support/worker-entry.ts`, bound as `TEST_STORAGE_DO` in the
+vitest configs, never in `wrangler.jsonc`). No product logic, no live services, no secrets.
 
 ## Confirmed `@cloudflare/vitest-pool-workers` pool limitations
 
@@ -45,63 +45,17 @@ pnpm --filter @waldo/runtime test
 
 ## Local bindings
 
-- `WALDO_ENV` is required before `RunLoopDO` resolves provider adapters. `test`
-  and `local` may default to fake adapters; any undeclared environment fails
-  closed instead of silently selecting fakes.
+- `WALDO_ENV` is required before the owner turn resolves provider adapters
+  (`src/llm/run-loop-adapters.ts`). `test` and `local` may default to fake adapters; any
+  undeclared environment fails closed instead of silently selecting fakes.
 - `RUN_LOOP_PROVIDER_MODE=fake` is allowed only with `WALDO_ENV=test|local`.
   `RUN_LOOP_PROVIDER_MODE=gateway` is staging-only and additionally requires
   `RUN_LOOP_PROVIDER_LIVE=1`, `CLOUDFLARE_ACCOUNT_ID`, `AI_GATEWAY_ID`, and an
   `AI_GATEWAY_API_TOKEN` Cloudflare Secrets Store binding. The binding exposes
   asynchronous `get()` access; no token string belongs in environment variables or source.
-- `RUN_LOOP_LOCAL_INGRESS_TOKEN` enables the fake-first `RunLoopDO` local ingress
-  test seam. It is accepted only with `WALDO_ENV=test|local`, and ingress fails closed
-  when the binding is absent or shorter than 16 characters. The Vitest pool supplies a
-  non-secret synthetic value in `vitest.config.ts`.
-
-### Responsibility public adapter
-
-The responsibility HTTP adapter defaults off. `RESPONSIBILITY_PUBLIC_API_ENABLED=true`
-enables only the version-pinned capture/projection routes; missing configuration fails
-closed. Enabling it requires:
-
-- `SUPABASE_PROJECT_URL` and the non-secret `SUPABASE_PUBLISHABLE_KEY`. Each request is
-  verified against Supabase Auth's fixed `/auth/v1/user` endpoint and then against the
-  no-argument `waldo_responsibility_session_active` PostgREST RPC. The RPC must derive the
-  caller and `session_id` only from the verified user JWT, return exactly one boolean, and
-  expose no session data. The owner root is derived only from the verified Auth subject and is
-  stable across policy/routing revisions. Exact-shape admin-controlled `app_metadata` supplies
-  only bounded bootstrap references for one Presence registration, policy revision, and the pinned
-  routing version; user metadata is ignored. The signed capture/projection admission may establish
-  those values in an empty or legacy owner root exactly once. `IdentityPresenceModule` then owns
-  them: later
-  metadata cannot change the subject, Presence, policy revision, or route, while a renewed Supabase
-  login may add a bounded session binding to that same Presence. Capture and projection revalidate
-  the Waldo-owned state. Public enrollment, multi-Presence onboarding, policy transitions, and
-  Presence lifecycle endpoints are not implemented by this adapter.
-- `RESPONSIBILITY_RATE_LIMITER`, the Cloudflare Rate Limiting binding declared in
-  `wrangler.jsonc`. Its pre-auth bucket is derived only from Cloudflare's trusted
-  `CF-Connecting-IP`; the owner Durable Object separately enforces per-session and
-  per-owner limits. Canonical authority bootstrap/refresh and both counters commit atomically, so a
-  rate rejection cannot leave authority or rate state partially changed.
-- `RESPONSIBILITY_INGRESS_HMAC_SECRET`, provisioned with `wrangler secret put` (or the
-  deployment platform's equivalent), never committed as a production variable. The Worker
-  signs the owner/session/policy/operation/digest envelope before the existing RunLoopDO
-  accepts it.
-
-The runtime fails closed when the active-session RPC is absent, unavailable, unauthorized,
-or does not return a boolean. Malformed successful Auth responses are treated as upstream
-unavailability, not invalid credentials, and remaining access-token lifetime is bounded to two
-hours at this seam. A local Auth/REST integration test proves active public capture and
-projection, current-session logout, and exact still-unexpired-token retries returning the public
-401 shape before owner-root routing. Separately, workerd tests exercise the production HMAC bridge,
-canonical authority admission, RunLoopDO/Coordinator writes, retry, rate limits, and reconstruction.
-These are layered conformance proofs, not one composed local Supabase-to-real-DO test and not proof
-that the migration or Worker is deployed to hosted Supabase/Cloudflare, Kennel acceptance, staging,
-or operations. Keep the deployment switch off until those independent checks pass.
-
-The active-session decision governs admission of a new public request. A request already
-admitted immediately before logout may finish; cancelling already-authorized agent work is
-a separate Waldo WorkUnit lease/cancellation decision, not a side effect of logging out.
+- `RESPONSIBILITY_RATE_LIMITER` is the Cloudflare Rate Limiting binding declared in
+  `wrangler.jsonc`; the channel ingress routes (console, app, Telegram link, iMessage, device
+  connect) use it as their edge rate limiter. The name is historical.
 
 Gateway mode currently wires a metadata-only Cloudflare AI Gateway adapter and a
 fail-closed delivery/safety placeholder. It also fails before provider egress until HEY-99

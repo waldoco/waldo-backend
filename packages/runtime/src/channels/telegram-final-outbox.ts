@@ -27,8 +27,6 @@ export type FinalRecord = {
   inbox?: { id: string; runId: string; attempt: string };
   parts?: FinalPart[];
   deliveredParts?: number;
-  // Host-owned frozen settlement intent, committed with the physical final.
-  commonExecution?: { request: Omit<import('../identity/common-execution-request').CommonExecutionRequest,'signature'>; settled?: boolean; disposition?:'indeterminate' };
   heartbeat?: HeartbeatReceipt;
   // A paused job's notice, naming the pause: the route holds it through quiet hours and drops it once that pause is lifted.
   scheduleNotice?: { scheduleId: string; until: number };
@@ -105,7 +103,10 @@ export class TelegramFinalOutbox {
       ? { ...r, payload: { chat_id: r.payload.chat_id, text: '' }, parts: [], receiptUrls: [], reason: r.status === 'quarantined' ? 'expired_ambiguous_metadata' : r.reason } : r);
     await this.save(rows);
   }
-  async enqueue(input: Omit<FinalRecord, 'digest' | 'status' | 'dueAt' | 'createdAt' | 'attempts'>): Promise<void> {
+  // `supersedes` names the waiting records the new one replaces (a newer report of the same order). In the same save, each of
+  // them that never went out (pending, no part delivered) ends blocked as superseded and settles on the next drain. A record
+  // any part of which reached the provider is never touched: it was sent.
+  async enqueue(input: Omit<FinalRecord, 'digest' | 'status' | 'dueAt' | 'createdAt' | 'attempts'>, options?: Readonly<{ supersedes?(record: FinalRecord): boolean }>): Promise<void> {
     input = { ...input, payload: guardedPayload(input.payload) };
     const hash = await digest(input);
     let rows = this.records();
@@ -120,6 +121,9 @@ export class TelegramFinalOutbox {
       const index = rows.findIndex(r => (r.status === 'delivered' || r.status === 'blocked' || r.reason === 'expired_ambiguous_metadata') && r.settled);
       if (index < 0) throw new Error('final outbox capacity');
       rows = rows.filter((_, i) => i !== index);
+    }
+    for (const row of rows) if (row.status === 'pending' && !row.deliveredParts && options?.supersedes?.(row)) {
+      row.status = 'blocked'; row.reason = 'superseded'; row.settled = false;
     }
     rows.push({ ...input, payload: { ...input.payload }, parts: payloadParts(input.payload), digest: hash, status: 'pending', dueAt: this.now() + 250, createdAt: this.now(), attempts: 0 });
     await this.save(rows);

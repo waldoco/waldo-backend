@@ -6,7 +6,7 @@ import { egressGuardedCaller } from '../src/channels/egress-guard';
 import { createTelegramCaller, gatedCaller } from '../src/channels/telegram-api';
 import { TelegramFinalOutbox } from '../src/channels/telegram-final-outbox';
 import { WHATSAPP_TEXT_MAX_CHARS, WhatsAppPartialSend, whatsappTelegramShim } from '../src/channels/whatsapp-api';
-import { WHATSAPP_HELD, WA_HELD_PREFIX, deliverHeldWhatsApp, forgetHeldWhatsApp, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappReceipt, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from '../src/channels/whatsapp-window';
+import { WHATSAPP_HELD, WA_HELD_PREFIX, WA_LAST_INBOUND_KEY, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, forgetHeldWhatsApp, clearWhatsAppNumber, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappReceipt, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from '../src/channels/whatsapp-window';
 
 const SUBJECT = '15550001111';
 const T0 = 1_700_000_000_000;
@@ -129,7 +129,7 @@ describe('Meta refusing a send later (a failed status with 131047)', () => {
     recordWhatsAppInbound(kv, [{ timestamp: String((T0 + 120_000) / 1000) }], T0 + 120_000);
     expect(whatsappWindowOpen(kv, T0 + 120_000)).toBe(true);
     const call = vi.fn(async () => ack('wamid.again'));
-    return deliverHeldWhatsApp(kv, call, T0 + 120_000, vi.fn()).then(() => {
+    return deliverHeldWhatsApp(kv, call, T0 + 120_000, vi.fn(), '15550001111').then(() => {
       expect(call).toHaveBeenCalledWith('sendMessage', { chat_id: 15550001111, text: 'Your reminder: call Sam.' });
     });
   });
@@ -154,10 +154,32 @@ describe('Meta refusing a send later (a failed status with 131047)', () => {
       await new Promise<void>(resolve => waiting.push(resolve));
       return ack(`wamid.${sent.length}`);
     };
-    const first = deliverHeldWhatsApp(kv, call, now, vi.fn()), second = deliverHeldWhatsApp(kv, call, now, vi.fn());
+    const first = deliverHeldWhatsApp(kv, call, now, vi.fn(), '1'), second = deliverHeldWhatsApp(kv, call, now, vi.fn(), '1');
     for (let step = 0; step < 10; step += 1) { waiting.shift()?.(); await new Promise(resolve => setTimeout(resolve, 0)); }
     await Promise.all([first, second]);
     expect(sent).toEqual(['one', 'two']);
+  });
+
+  it('text held for another number after the clear (a put-back, or a recovery notice held during an unlink) is dropped, never sent', async () => {
+    const { kv, map } = fakeKv();
+    const now = Date.now();
+    recordWhatsAppInbound(kv, [{ timestamp: String(Math.floor(now / 1000)) }], now);
+    kv.put(`${WA_HELD_PREFIX}000000000001`, { heldAt: now, body: { chat_id: 15550001111, text: 'for the old number' } });
+    kv.put(`${WA_HELD_PREFIX}000000000002`, { heldAt: now, body: { chat_id: 15550002222, text: 'for the new number' } });
+    const call = vi.fn(async () => ack('wamid.new'));
+    const log = vi.fn();
+    // Unlinked: no number is bound, so nothing goes out and nothing waits.
+    const unlinked = fakeKv();
+    unlinked.kv.put(WA_LAST_INBOUND_KEY, now);
+    unlinked.kv.put(`${WA_HELD_PREFIX}000000000001`, { heldAt: now, body: { chat_id: 15550001111, text: 'recovery notice' } });
+    await deliverHeldWhatsApp(unlinked.kv, call, now, log, '');
+    expect(call).not.toHaveBeenCalled();
+    expect(held(unlinked.map)).toEqual([]);
+    // Relinked to another number: only that number's text goes out.
+    await deliverHeldWhatsApp(kv, call, now, log, '15550002222');
+    expect(call.mock.calls).toEqual([['sendMessage', { chat_id: 15550002222, text: 'for the new number' }]]);
+    expect(held(map)).toEqual([]);
+    expect(log).toHaveBeenCalledWith({ hop: 'whatsapp_held', ok: false, code: 'other_number', dropped: 1 });
   });
 });
 
@@ -206,6 +228,29 @@ describe('owner forget reaches held WhatsApp text', () => {
   });
 });
 
+describe('an unlink retires the bound chat', () => {
+  it('discards held and re-held text and the window, refusal and knock markers, and nothing else', () => {
+    const { kv, map } = fakeKv();
+    for (const [key, value] of Object.entries({ 'wa_held:000000000001': { heldAt: T0, body: { chat_id: 1, text: 'Held.' } }, 'wa_held:000000000002': { heldAt: T0, body: { chat_id: 1, text: 'Also held.' } },
+      'wa_reheld:wamid.out.1': true, 'wa_last_inbound_ms': T0, 'wa_knocked_for': T0, 'wa_window_refused_for': T0, 'wa_held_seq': 2, 'wa_seq': 7, 'whatsapp_subject': SUBJECT })) kv.put(key, value);
+    clearWhatsAppNumber(kv);
+    expect([...map.keys()].sort()).toEqual(['wa_held_seq', 'wa_seq', 'whatsapp_subject']);
+  });
+
+  it('discards a file link held outside the window along with held text', async () => {
+    const { kv, map } = fakeKv();
+    const graph = vi.fn();
+    const call = whatsappWindowCaller(graph, { kv, template: null, now: () => T0, log: vi.fn() });
+    await call('sendMessage', { chat_id: 1, text: 'Your reply.' });
+    const file = { bytes: new TextEncoder().encode('%PDF-1.4 plan'), mime: 'application/pdf', filename: 'plan.pdf' };
+    expect(await deliverWhatsAppFileInWindow(kv, T0, call, 1, file, async () => 'Open it here: https://waldo.example/f')).toEqual({ status: 'held', reason: 'window_closed' });
+    expect(held(map)).toEqual(['Your reply.', 'Here is plan.pdf. Open it here: https://waldo.example/f']);
+    clearWhatsAppNumber(kv);
+    expect(held(map)).toEqual([]);
+    expect(graph).not.toHaveBeenCalled();
+  });
+});
+
 describe('a send that is only worth delivering now (a one-time code, a signed link)', () => {
   // The owner's real call stack above the window layer: link redaction, then the egress gate.
   const stack = (graph: ReturnType<typeof vi.fn>, opened: number | null) => {
@@ -229,7 +274,7 @@ describe('a send that is only worth delivering now (a one-time code, a signed li
     const graph = vi.fn(async () => Response.json(ack('wamid.code')));
     const { call } = stack(graph, Date.now());
     expect(await call('sendMessage', { chat_id: 1, text: 'Code: 482913', [SEND_NOW_ONLY]: true })).toEqual(ack('wamid.code'));
-    expect(bodiesOf(graph)).toEqual([{ messaging_product: 'whatsapp', to: SUBJECT, type: 'text', text: { body: 'Code: 482913' } }]);
+    expect(bodiesOf(graph)).toEqual([{ messaging_product: 'whatsapp', to: `+${SUBJECT}`, type: 'text', text: { body: 'Code: 482913' } }]);
   });
 
   it('a 131047 refusal inside our window is refused too, and closes the window', async () => {

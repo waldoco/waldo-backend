@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildSessionState, createArtifactArgsSchema, readArtifactArgsSchema, reviseArtifactArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema } from '@waldo/contracts';
 import { runToolLoop } from '../src/conversation/tool-loop';
 import { ARTIFACT_LINK_REMOVED_NOTICE, receiptUrl } from '../src/conversation/artifact-link-guard';
-import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
+import { resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
 
 // Layer: tool-loop with a scripted model step and a stub create_artifact handler (synthetic ids and
 // hosts). It checks the deterministic final-reply guard only; the real artifact book, the delivery

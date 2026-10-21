@@ -60,7 +60,7 @@ describe('recallForTurn', () => {
       expect(recalled.failed).toEqual([]);
       expect(recalled.text.startsWith('<recalled>\n')).toBe(true);
       expect(recalled.text.endsWith('\n</recalled>')).toBe(true);
-      expect(recalled.text).toContain('- [fact, stated, owner-grounded, 2026-10-13] Gym locker is number 214, the one with the blue door');
+      expect(recalled.text).toContain('- [c1 · owner-grounded · fact, stated, 2026-10-13] Gym locker is number 214, the one with the blue door');
       // The owner row the claim was learned from (index row 1) counts once: the claim wins.
       expect(recalled.text).not.toContain('ref 1]');
       expect(recalled.text).toMatch(/- \[waldo, 2026-10-13, ref 2\] .*locker/);

@@ -99,9 +99,9 @@ describe('whatsapp telegram shim', () => {
       reply_markup: { inline_keyboard: [[{ text: 'Send it', callback_data: 'a:p1' }, { text: 'Not now', callback_data: 's:p1' }]] },
     });
     const [url, init] = graph.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe('https://graph.facebook.com/v21.0/pn1/messages');
+    expect(url).toBe('https://graph.facebook.com/v26.0/pn1/messages');
     const body = JSON.parse(String(init.body));
-    expect(body.to).toBe('15550001111');
+    expect(body.to).toBe('+15550001111');
     expect(body.text.body).toBe('Send this email?\n\n- Send it: reply "a:p1"\n- Not now: reply "s:p1"');
     expect(JSON.stringify(body)).not.toContain('tok');
   });
@@ -205,7 +205,7 @@ describe('whatsapp voice notes (W4)', () => {
     expect(graph).toHaveBeenCalledTimes(2);
     const [lookupUrl, lookupInit] = graph.mock.calls[0] as unknown as [string, RequestInit];
     const [fileUrl, fileInit] = graph.mock.calls[1] as unknown as [string, RequestInit];
-    expect(lookupUrl).toBe('https://graph.facebook.com/v21.0/media-9');
+    expect(lookupUrl).toBe('https://graph.facebook.com/v26.0/media-9');
     expect(fileUrl).toBe('https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=abc');
     for (const init of [lookupInit, fileInit]) expect((init.headers as Record<string, string>).authorization).toBe('Bearer wabearer-t0ken');
     expect(lookupUrl + fileUrl).not.toContain('wabearer-t0ken');

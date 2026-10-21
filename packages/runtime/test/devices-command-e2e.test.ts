@@ -83,7 +83,8 @@ it('round-trips owner commands, reconciles old results before new work, and re-r
   const conflictClose = new Promise<number>(resolve => socket.addEventListener('close', event => resolve(event.code)));
   await send({ ...delivered, payload: { status: 'failed', reason: 'delivery_unknown' } }); expect(await conflictClose).toBe(1008); expect(received).toHaveLength(6);
   await connect(); await heartbeat(0);
-  const page = await call(new Request('https://bridge.test/console/devices', { headers: { cookie } })); expect(await page.text()).toContain('delivered');
+  const read = await call(new Request('https://bridge.test/console/dashboard/api/v1/controls?view=devices', { headers: { cookie, accept: 'application/json' } }));
+  expect((await read.json() as { status: { devices: { commands: { class: string; state: string }[] }[] } }).status.devices[0]!.commands).toContainEqual({ class: 'notify_local', state: 'delivered', result_state: null });
   expect((await query('query_cancelled')).status).toBe(303);
   expect((await query('query_queued_cancelled')).status).toBe(303);
   const revoked = new Promise<number>(resolve => socket.addEventListener('close', event => resolve(event.code))); expect((await action('device.revoke')).status).toBe(303); expect(await revoked).toBe(1008);

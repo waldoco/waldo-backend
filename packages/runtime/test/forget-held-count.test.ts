@@ -13,7 +13,6 @@ it('a projection hold reports how many rows hold the forget, not just that one d
     sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL, text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0)`);
     for (const n of [1, 2, 3]) sql.exec('INSERT INTO update_cards (at, day, changes, text) VALUES (?, ?, ?, ?)', n, '2026-10-05', JSON.stringify([{ kind: 'note', title: `likes ${topic} tea, card ${n}` }]), null);
     sql.exec('INSERT INTO update_cards (at, day, changes, text) VALUES (?, ?, ?, ?)', 4, '2026-10-05', JSON.stringify([{ kind: 'note', title: 'standup moved' }]), null);
-    store.beginTopicCoverage(topic, at);
     expect(store.forgetSources(topic).heldBy).toEqual([{ table: 'update_cards', rule: 'projection', rows: 3 }]);
   });
 });

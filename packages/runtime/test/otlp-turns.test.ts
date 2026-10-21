@@ -265,7 +265,7 @@ describe('otlpTurnExporter', () => {
       'langfuse.trace.name': 'telegram.turn', 'langfuse.user.id': 'telegram:1', 'langfuse.session.id': 'telegram-dm:1',
       'langfuse.environment': 'staging', 'langfuse.release': 'abc1234',
       'langfuse.trace.tags': ['channel:telegram', 'feature:reactions', 'feature:reply'],
-      'langfuse.trace.metadata.schema_version': '8', 'langfuse.trace.metadata.trace_key': 'tg-4', 'langfuse.trace.metadata.outcome': 'answered',
+      'langfuse.trace.metadata.schema_version': '9', 'langfuse.trace.metadata.trace_key': 'tg-4', 'langfuse.trace.metadata.outcome': 'answered',
     });
     expect(attrs(receipt!)).toMatchObject({ 'langfuse.observation.metadata.hop': 'receipt', 'langfuse.observation.metadata.feature': 'reactions', 'langfuse.observation.type': 'tool' });
     expect(hopFeature('brand_new_hop')).toBe('other');
@@ -352,5 +352,53 @@ describe('otlpTurnExporter', () => {
     expect(memory.parentSpanId).toBe(root.spanId);
     expect(memory.status).toEqual({ code: 2, message: 'failed' });
     expect(attrs(memory)['langfuse.trace.tags']).toEqual(['channel:telegram', 'feature:memory']);
+  });
+
+  it('exports the v9 turn fields as numbers and enums on the root and the generation, never as text', async () => {
+    const { send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
+    const shape = { system_bytes: 40, request_bytes: 90, context: { tools_count: 12, tools_bytes: 8000, tools_tokens_est: 2000, tool_turns_bytes: 0, history_messages: 2, history_bytes: 30, current_bytes: 12, attachments: 0 } };
+    await log({ trace: 'tg-v9', hop: 'llm_reply', ms: 5, ok: true, usage: { model: OPENAI_GPT_6_LUNA_MODEL, input: 1000, output: 10, cached: 750 }, shape, provider: 'openai', fallback_fired: false, ttft_ms: 310, parallel_batches: 1 });
+    await log({ trace: 'tg-v9', hop: 'tool_search_mail', ms: 50, ok: true, rung: 'connector' });
+    await log({ trace: 'tg-v9', hop: 'tool_draft_email', ms: 5, ok: false, error: 'provider said PRIVATE_CANARY', error_code: 'rate_limited', rung: 'email', blocked_reason: 'approval_required' });
+    await log({ trace: 'tg-v9', hop: 'llm_reply', ms: 5, ok: true, usage: { model: OPENAI_GPT_6_LUNA_MODEL, input: 1000, output: 10, cached: 250 }, shape, provider: 'anthropic', fallback_fired: true, ttft_ms: 900, parallel_batches: 1 });
+    await log({ trace: 'tg-v9', hop: 'turn', ms: 100, ok: true, outcome: 'answered', job_id: 'job_01', job_profile: 'reader', sandbox_ms: 0 });
+    const [root, first, searched, drafted] = spans(0);
+    expect(attrs(root!)).toMatchObject({
+      'langfuse.trace.metadata.schema_version': '9',
+      'langfuse.trace.metadata.outcome': 'answered',
+      'langfuse.trace.metadata.tools_offered': '12', 'langfuse.trace.metadata.tools_bytes': '8000', 'langfuse.trace.metadata.tools_tokens_est': '2000',
+      'langfuse.trace.metadata.tools_called': '2', 'langfuse.trace.metadata.tools_failed': '1', 'langfuse.trace.metadata.tools_called_names': ['draft_email', 'search_mail'],
+      'langfuse.trace.metadata.parallel_batches': '2',
+      'langfuse.trace.metadata.cached_share': '0.5000',
+      'langfuse.trace.metadata.ttft_ms': '310',
+      'langfuse.trace.metadata.provider': 'mixed', 'langfuse.trace.metadata.fallback_fired': 'true',
+      'langfuse.trace.metadata.rungs': ['connector', 'email'], 'langfuse.trace.metadata.blocked_reason': 'approval_required',
+      'langfuse.trace.metadata.error_code': 'rate_limited',
+      'langfuse.trace.metadata.job_id': 'job_01', 'langfuse.trace.metadata.job_profile': 'reader',
+      'langfuse.trace.metadata.sandbox_ms': '0',
+    });
+    expect(attrs(root!)['langfuse.trace.metadata.browser_ms']).toBeUndefined();
+    expect(attrs(first!)).toMatchObject({
+      'langfuse.observation.metadata.provider': 'openai', 'langfuse.observation.metadata.fallback_fired': 'false',
+      'langfuse.observation.metadata.ttft_ms': '310', 'langfuse.observation.metadata.cached_share': '0.7500',
+      'langfuse.observation.metadata.context_tools_tokens_est': '2000',
+    });
+    expect(attrs(searched!)['langfuse.observation.metadata.rung']).toBe('connector');
+    expect(attrs(drafted!)).toMatchObject({ 'langfuse.observation.metadata.rung': 'email', 'langfuse.observation.metadata.blocked_reason': 'approval_required', 'langfuse.observation.metadata.error_code': 'rate_limited' });
+    expect(JSON.stringify(spans(0))).not.toContain('PRIVATE_CANARY');
+  });
+
+  it('derives the outcome class when the root carries none and leaves absent v9 fields out', async () => {
+    const { send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
+    await log({ trace: 'tg-v9-plain', hop: 'turn', ms: 10, ok: false });
+    const root = attrs(spans(0)[0]!);
+    expect(root['langfuse.trace.metadata.outcome']).toBe('failed');
+    expect(root['langfuse.trace.metadata.tools_called']).toBe('0');
+    expect(root['langfuse.trace.metadata.parallel_batches']).toBe('0');
+    for (const key of ['cached_share', 'ttft_ms', 'provider', 'fallback_fired', 'rungs', 'blocked_reason', 'error_code', 'job_id', 'job_profile', 'browser_ms', 'sandbox_ms', 'tools_offered']) {
+      expect(root[`langfuse.trace.metadata.${key}`]).toBeUndefined();
+    }
   });
 });

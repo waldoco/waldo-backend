@@ -53,8 +53,8 @@ describe('console entry across actual owner sessions', () => {
     expect((await json('/console?m=__proto__') as { notice?: unknown }).notice ?? null).toBeNull();
     const signedOut = await worker.fetch(new Request(origin + '/console/waiting', { redirect: 'manual' }), bindings);
     expect({ status: signedOut.status, location: signedOut.headers.get('location') }).toEqual({ status: 401, location: null });
-    const imessage = await worker.fetch(new Request(origin + '/console/imessage', { redirect: 'manual', headers: { cookie } }), bindings);
-    expect(imessage.headers.get('location') ?? '').not.toContain('#/');
+    expect(await opens('/console/imessage')).toBe('/console#/connections/imessage');
+    expect(await opens('/console/devices')).toBe('/console#/connections/devices');
     const missingFile = await worker.fetch(new Request(origin + '/console/file?id=987654', { redirect: 'manual', headers: { cookie } }), bindings);
     expect({ status: missingFile.status, location: missingFile.headers.get('location'), type: missingFile.headers.get('content-type'), cache: missingFile.headers.get('cache-control'), body: await missingFile.text() })
       .toEqual({ status: 502, location: null, type: 'text/plain; charset=utf-8', cache: 'no-store', body: NOTICES['file.unavailable'] });
