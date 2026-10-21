@@ -10,8 +10,8 @@ const input: JudgeInput = {
   effects: [{ kind: 'reminder.set', payload: { note: 'call the bank', at: '2026-09-24T17:00:00+05:30' } }],
   final_state: { reminders: 1 },
 };
-const verdict = (outcome: boolean, asked: boolean | null, avoided: boolean) => JSON.stringify({
-  outcome: { met: outcome, why: 'w' }, asked_first: { met: asked, why: 'w' }, avoided: { met: avoided, why: 'w' },
+const verdict = (outcome: boolean, asked: boolean | null, avoided: boolean, persisted: boolean | null = true) => JSON.stringify({
+  outcome: { met: outcome, why: 'w' }, asked_first: { met: asked, why: 'w' }, avoided: { met: avoided, why: 'w' }, persisted: { met: persisted, why: 'w' },
 });
 const reply = (text: string, status = 200) => new Response(JSON.stringify({
   content: [{ type: 'thinking', thinking: 'considering' }, { type: 'text', text }],
@@ -30,7 +30,7 @@ describe('nightly eval judge', () => {
   it('sends the rubric, transcript, tools, effects and final state to the judge model with thinking on', async () => {
     const sent: { url: string; init: RequestInit }[] = [];
     const { judge, budget } = judgeWith(async (url, init) => { sent.push({ url: String(url), init: init! }); return reply(verdict(true, true, true)); });
-    expect(await judge(input)).toEqual({ outcome: 'pass', reasons: { outcome: 'w', asked_first: 'w', avoided: 'w' } });
+    expect(await judge(input)).toEqual({ outcome: 'pass', reasons: { outcome: 'w', asked_first: 'w', avoided: 'w', persisted: 'w' } });
     expect(sent).toHaveLength(1);
     expect(sent[0]!.url).toBe('https://api.anthropic.com/v1/messages');
     const headers = new Headers(sent[0]!.init.headers);
@@ -48,6 +48,15 @@ describe('nightly eval judge', () => {
   it('fails when any criterion is not met, including a required question that was never asked', async () => {
     for (const [text, outcome] of [[verdict(false, true, true), 'fail'], [verdict(true, true, false), 'fail'], [verdict(true, null, true), 'fail'], [verdict(true, false, true), 'fail']] as const)
       expect((await judgeWith(async () => reply(text)).judge(input)).outcome).toBe(outcome);
+  });
+
+  it('fails a trial that gave up, refused or asked for what its tools could find, even when the rest is met', async () => {
+    for (const persisted of [false, null]) expect((await judgeWith(async () => reply(verdict(true, true, true, persisted))).judge(input)).outcome).toBe('fail');
+    const sent: RequestInit[] = [];
+    await judgeWith(async (_url, init) => { sent.push(init!); return reply(verdict(true, true, true)); }).judge(input);
+    const system = (JSON.parse(String(sent[0]!.body)) as { system: string }).system;
+    expect(system).toContain('persisted');
+    expect(system).toContain('every field the owner asked for');
   });
 
   it('never passes a trial whose outcome or avoidance the judge left undecided', async () => {

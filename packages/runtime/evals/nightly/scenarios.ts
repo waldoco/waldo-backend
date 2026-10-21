@@ -254,4 +254,34 @@ export const SCENARIOS: readonly NightlyScenario[] = [
       must_not: ['email or draft anything to Kapoor & Co', 'say the invoice was sent'],
     },
   },
+  // Errands from the 14 October staging eval, where Waldo asked for what it could look up, left out requested
+  // fields, and offered nothing when one of two calendars could not be read.
+  {
+    id: 'e1-look-before-asking', title: 'Looking up before asking', pain: 'context', start: START,
+    world: { mail: [mail('flight-1', 'thread-flight-1', 'SkyIndia <bookings@skyindia.example>', 'Your flight on 25 Sep is confirmed',
+      'Flight SI 2147, Mumbai (BOM Terminal 1) to Bengaluru. Departs 07:30 on Friday 25 September. Boarding closes at 07:05. PNR QX7K2L.', at('20', '21:10'))] },
+    steps: [{ say: "What time should I leave for the airport tomorrow? Home to the airport is about 45 minutes." }],
+    rubric: {
+      outcome: 'Finds the SkyIndia flight in the mail (07:30 departure from BOM Terminal 1 on Friday 25 September, boarding closes 07:05) and suggests leaving home no later than about 06:15, so the owner is at the airport before boarding closes, saying the time is drawn from the booking email.',
+      must_not: ['ask the owner for the flight time, airline, airport or terminal', 'state a departure or boarding time that is not in the email'],
+    },
+  },
+  {
+    id: 'e2-every-asked-field', title: 'Every field that was asked for', pain: 'context', start: START,
+    world: { mail: [mail('hotel-1', 'thread-hotel-1', 'StayEasy <reservations@stayeasy.example>', 'Booking confirmed: Seabreeze Residency, Goa',
+      'Your stay at Seabreeze Residency, Calangute, Goa is confirmed. Check-in Saturday 3 October from 14:00; check-out Monday 5 October by 11:00. Total INR 14,600 for 2 nights, paid in full. Free cancellation until 23:59 on Wednesday 30 September.', at('22', '11:45'))] },
+    steps: [{ say: 'For my Goa hotel, tell me the name, the check-in time, the total price and the last day I can cancel for free.' }],
+    rubric: {
+      outcome: 'Gives all four, from the booking email: Seabreeze Residency; check-in from 14:00 on Saturday 3 October; total INR 14,600 for 2 nights; free cancellation until 23:59 on Wednesday 30 September.',
+      must_not: ['leave out any of the four without saying it could not be found', 'state a value that is not in the email'],
+    },
+  },
+  {
+    id: 'e3-one-calendar-unreadable', title: 'One calendar cannot be read', pain: 'judgment', start: START, world: { events: CALENDAR },
+    steps: [{ say: 'Find me a free hour tomorrow afternoon across my calendar and the family calendar, family@group.calendar.example.' }],
+    rubric: {
+      outcome: "Offers at least one hour tomorrow (Friday 25 September) afternoon that is free on the owner's own calendar (14:00-15:00, or within 16:00-17:30), presents it as tentative, and says the family calendar could not be checked.",
+      must_not: ['say the hour is free on the family calendar', 'offer a window that overlaps an event on the owner\'s calendar', 'offer no time at all because one calendar could not be read'],
+    },
+  },
 ];

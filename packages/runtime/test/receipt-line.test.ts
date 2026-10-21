@@ -25,8 +25,17 @@ describe('receiptLine', () => {
     expect(receiptLine([ev(1, 'set_reminder', false, { code: 'rejected' }), ev(2, 'workspace_write', true, {}, { path: 'a.md' })]))
       .toBe('Receipts: reminder set (failed); workspace file written a.md (accepted)');
   });
-  it('keeps proposals labelled as proposals', () => {
-    expect(receiptLine([ev(1, 'send_email', true)])).toBe('Done: email send proposed');
+  // A proposal changes nothing until the owner says yes, so it never reads as done.
+  it('says a proposal waits on the owner, never that it is done', () => {
+    expect(receiptLine([ev(1, 'send_email', true)])).toBe('Needs your yes: email send');
+    expect(receiptLine([ev(1, 'propose_calendar_change', true), ev(2, 'propose_google_task_change', true)])).toBe('Needs your yes: calendar change; google task change');
+  });
+  it('says what was done and what waits on the owner, in one line', () => {
+    expect(receiptLine([ev(1, 'propose_calendar_change', true), ev(2, 'workspace_write', true, {}, { path: 'notes.md' })]))
+      .toBe('Done: workspace file written notes.md. Needs your yes: calendar change');
+  });
+  it('keeps a proposal labelled as one once any entry is not accepted', () => {
+    expect(receiptLine([ev(1, 'propose_calendar_change', false, { code: 'rejected' })])).toBe('Receipts: calendar change proposed (failed)');
   });
   it('is bounded: at most 5 lines named, the rest counted', () => {
     const many = Array.from({ length: 8 }, (_, i) => ev(i + 1, 'set_reminder', true));
@@ -34,6 +43,10 @@ describe('receiptLine', () => {
     expect(line.startsWith('Done: ')).toBe(true);
     expect(line.split('; ')).toHaveLength(6);
     expect(line.endsWith('and 3 more')).toBe(true);
+  });
+  it('counts what it leaves unnamed after both parts', () => {
+    const many = [ev(1, 'set_reminder', true), ...Array.from({ length: 6 }, (_, i) => ev(i + 2, 'send_email', true))];
+    expect(receiptLine(many)).toBe('Done: reminder set. Needs your yes: email send; email send; email send; email send; and 2 more');
   });
 });
 
