@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { it, expect, vi } from 'vitest';
 const seen = vi.hoisted(() => ({ models: [] as string[] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
@@ -10,7 +11,7 @@ const { createOwnerResponder } = await import('../src/channels/owner-turn');
 const replyModel = async (text: string): Promise<string> => {
   seen.models = [];
   const responder = createOwnerResponder('fixture', undefined, undefined);
-  await responder.respond({ traceId: `t-${text}`, conversationRef: 'owner', surface: 'telegram', text }, (_name, work) => work());
+  await responder.respond(ownerTyped({ traceId: `t-${text}`, conversationRef: 'owner', surface: 'telegram', text }), (_name, work) => work());
   return seen.models[0]!;
 };
 it('reply model is chosen by the host, never by pattern-matching the owner text', async () => {

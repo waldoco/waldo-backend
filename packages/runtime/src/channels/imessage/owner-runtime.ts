@@ -1,5 +1,5 @@
 import { iMessageBindingSchema } from '@waldo/contracts';
-import { createOwnerTurnContext } from '../../context-composer/owner-turn';
+import { createOwnerTurnContext, type OwnerContextSources } from '../../context-composer/owner-turn';
 import { surfaceOwnerAdmission } from '../../identity/surface-owner-admission';
 import { ClosedRunError, type RunEffectScope } from '../run-effect-scope';
 import { bindingDigest, bindingFromAuthority, iMessageComposition, type IMessageBridgeDO, type IMessageEnv, type IMessageTurnHandoff } from './bridge-do';
@@ -14,8 +14,11 @@ import { IMessageOwnerInbox, type IMessageInboxRecord } from './owner-inbox';
 export type OwnerHost = Readonly<{ storage: DurableObjectStorage; id: DurableObjectId; env: IMessageEnv; ownerNamespace?: DurableObjectNamespace }>;
 
 /** Fresh canonical authority for an inbox record: same owner DO, same revision, same exact binding. */
+// The sender's own authority: on an owner bridge it is the bridge authority for its bound sender; on a
+// shared bridge it comes from that sender's own presence. Another owner's Waldo is never reachable.
 export const currentIMessageAuthority = async (env: IMessageEnv, record: Pick<IMessageInboxRecord, 'environment' | 'binding' | 'revision' | 'ownerDoName' | 'bindingDigest'>): Promise<BridgeAuthority> => {
-  const a = await iMessageDirectory(env).authority(record.environment, record.binding.bridgeId, record.binding.accountId);
+  const found = await iMessageDirectory(env).senderAuthority(record.environment, record.binding.bridgeId, record.binding.accountId, record.binding.subject);
+  const a = found && found.state !== 'unknown_sender' ? found : null;
   const binding = a ? bindingFromAuthority(a) : null;
   if (!a || !binding || a.revision !== record.revision || a.doName !== record.ownerDoName || await bindingDigest(binding) !== record.bindingDigest) throw new ClosedRunError();
   return a;
@@ -44,8 +47,8 @@ export const admitIMessageHandoff = async (host: OwnerHost, input: IMessageTurnH
   return result.kind;
 };
 
-/** Owner context for one running iMessage record: surfaceOwnerAdmission re-reads authority on every check. */
-export const iMessageOwnerContext = async (host: OwnerHost, record: IMessageInboxRecord, scope: RunEffectScope) => {
+/** Owner context for one running iMessage record: surfaceOwnerAdmission re-reads authority whenever its last matching read has aged out. */
+export const iMessageOwnerContext = async (host: OwnerHost, record: IMessageInboxRecord, scope: RunEffectScope, sources: Pick<OwnerContextSources, 'ownerProfile'> = {}) => {
   const lookup = async () => {
     scope.admit();
     const a = await currentIMessageAuthority(host.env, record);
@@ -53,7 +56,7 @@ export const iMessageOwnerContext = async (host: OwnerHost, record: IMessageInbo
     return { ownerId: a.ownerId, bindingRef: a.presenceId ?? a.bridgeId, revision: a.revision, physicalDoId: host.id.toString() };
   };
   const context = createOwnerTurnContext(await surfaceOwnerAdmission({ scope, lookup, expectedPhysicalDoId: host.id.toString(), surface: 'imessage',
-    subject: record.binding.subject, occurrenceKey: record.dedupKey, occurredAt: Math.min(record.occurredAt, record.admittedAt), text: record.text }), { conversationRef: record.conversationRef });
+    subject: record.binding.subject, occurrenceKey: record.dedupKey, occurredAt: Math.min(record.occurredAt, record.admittedAt), text: record.text }), { conversationRef: record.conversationRef, ...sources });
   if (context.conversationRef !== record.conversationRef) throw new ClosedRunError();
   return context;
 };
@@ -67,7 +70,7 @@ export const drainIMessageOutbox = async (host: OwnerHost, maxAgeMs: number): Pr
     let outcome;
     try {
       outcome = await ns.get(ns.idFromName(row.bridgeDoName)).enqueueReply({ replyRef: row.replyRef, commandId: row.commandId, text: row.text,
-        ownerDoName: row.ownerDoName, revision: row.revision, bindingDigest: row.bindingDigest });
+        ownerDoName: row.ownerDoName, revision: row.revision, bindingDigest: row.bindingDigest, ...(row.subject !== undefined ? { subject: row.subject } : {}) });
     } catch { outbox.retryLater(row.replyRef, maxAgeMs); continue; }
     if (outcome.kind === 'queued') outbox.markQueued(row.replyRef);
     else if (outcome.kind === 'terminal') outbox.settle(row.replyRef, row.commandId, outcome.result);

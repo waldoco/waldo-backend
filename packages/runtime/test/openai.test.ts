@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import OpenAI from 'openai';
 import {
+  OPENAI_GPT_6_1_SOL_MODEL,
   OPENAI_GPT_6_LUNA_MODEL,
   OPENAI_PROVIDER,
   type LLMRequest,
@@ -175,20 +176,16 @@ describe('OpenAIResponsesAdapter', () => {
     expect(sent).toMatchObject({ max_output_tokens: 32, reasoning: { effort: 'low', summary: 'auto' } });
   });
 
-  it('a reasoning-only reply is asked for once more, and fails only when the second is also empty', async () => {
+  it('a reasoning-only reply is a transient miss that carries its tokens, and is not asked again here', async () => {
     const empty = { id: 'resp_e', status: 'completed', output_text: '', output: [{ type: 'reasoning', summary: [] }], usage: { input_tokens: 4, output_tokens: 2 } };
     const good = { id: 'resp_g', status: 'completed', output_text: 'Here is your plan.', output: [{ type: 'message', content: [{ type: 'output_text', text: 'Here is your plan.' }] }], usage: { input_tokens: 4, output_tokens: 3 } };
-    const run = async (replies: unknown[]) => {
-      let calls = 0;
-      const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async () => replies[calls++] as never) });
-      return { result: await adapter.complete(gatewayRequest()), calls };
-    };
-    const recovered = await run([empty, good]);
-    expect(recovered.calls).toBe(2);
-    expect(recovered.result).toMatchObject({ ok: true, data: { text: 'Here is your plan.', input_tokens: 8, output_tokens: 5 } });
-    const failed = await run([empty, empty]);
-    expect(failed.calls).toBe(2);
-    expect(failed.result).toEqual({ ok: false, code: 'invalid_args', error: 'OpenAI returned empty output' });
+    let calls = 0;
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async () => [empty, good][calls++] as never) });
+    await expect(adapter.complete(gatewayRequest())).resolves.toEqual({
+      ok: false, code: 'transient', error: 'OpenAI returned empty output',
+      spent: { input_tokens: 4, output_tokens: 2, cache_read_input_tokens: 0 },
+    });
+    expect(calls).toBe(1);
   });
   it('parallel tool calls in one round are replayed once each, not once from the model output and again per call', async () => {
     let sent: Array<{ type?: string; call_id?: string }> = [];
@@ -265,6 +262,64 @@ describe('OpenAIResponsesAdapter', () => {
     });
   });
 });
+describe('OpenAIResponsesAdapter reasoning effort', () => {
+  const sol = (effort?: string): LLMGatewayRequest => {
+    const base = gatewayRequest();
+    return {
+      ...base,
+      request: { ...base.request, model: OPENAI_GPT_6_1_SOL_MODEL, ...(effort === undefined ? {} : { reasoning_effort: effort as never }) },
+      route: { ...base.route, primary: { ...base.route.primary, model: OPENAI_GPT_6_1_SOL_MODEL } },
+      step: { ...base.step, model: OPENAI_GPT_6_1_SOL_MODEL },
+    };
+  };
+  const recording = () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const adapter = new OpenAIResponsesAdapter({
+      apiKey: 'test-key',
+      client: client(async (body: Record<string, unknown>) => {
+        bodies.push(body);
+        return { id: 'r', output_text: 'ok', output: [], usage: { input_tokens: 1, output_tokens: 1 } };
+      }),
+    });
+    return { bodies, adapter };
+  };
+
+  it('sends the effort the request names, with an auto summary', async () => {
+    const { bodies, adapter } = recording();
+    await expect(adapter.complete(sol('medium'))).resolves.toMatchObject({ ok: true });
+    await expect(adapter.complete(sol('low'))).resolves.toMatchObject({ ok: true });
+    expect(bodies.map((body) => [body.model, body.reasoning])).toEqual([
+      [OPENAI_GPT_6_1_SOL_MODEL, { effort: 'medium', summary: 'auto' }],
+      [OPENAI_GPT_6_1_SOL_MODEL, { effort: 'low', summary: 'auto' }],
+    ]);
+  });
+
+  it('a request that names no effort gets the roster effort for its model', async () => {
+    const { bodies, adapter } = recording();
+    await adapter.complete(sol());
+    await adapter.complete(gatewayRequest());
+    expect(bodies.map((body) => [body.model, body.reasoning])).toEqual([
+      [OPENAI_GPT_6_1_SOL_MODEL, { effort: 'medium', summary: 'auto' }],
+      [OPENAI_GPT_6_LUNA_MODEL, { effort: 'low', summary: 'auto' }],
+    ]);
+  });
+
+  it.each(['none', 'minimal'])('refuses %s for Sol without calling the provider', async (effort) => {
+    const { bodies, adapter } = recording();
+    await expect(adapter.complete(sol(effort))).resolves.toEqual({
+      ok: false, code: 'invalid_args', error: 'OpenAI adapter received a reasoning effort the model does not accept',
+    });
+    expect(bodies).toHaveLength(0);
+  });
+
+  it('refuses an effort Luna does not list either, without calling the provider', async () => {
+    const { bodies, adapter } = recording();
+    const base = gatewayRequest();
+    await expect(adapter.complete({ ...base, request: { ...base.request, reasoning_effort: 'minimal' as never } })).resolves.toMatchObject({ ok: false, code: 'invalid_args' });
+    expect(bodies).toHaveLength(0);
+  });
+});
+
 describe('OpenAIResponsesAdapter prompt caching', () => {
   it('passes prompt_cache_key when the request carries a cache key, omits it otherwise', async () => {
     const bodies: Array<Record<string, unknown>> = [];
@@ -332,5 +387,201 @@ describe('OpenAIResponsesAdapter reasoning passback', () => {
       { role: 'assistant', content: 'A at 9, B at 11' },
       { role: 'user', content: 'that one' },
     ]);
+  });
+});
+
+describe('OpenAIResponsesAdapter after another provider ran a round', () => {
+  it('drops the other provider output items and rebuilds the round from its call record', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async (body: Record<string, unknown>) => { bodies.push(body); return { id: 'r', status: 'completed', output_text: 'ok', output: [], usage: { input_tokens: 1, output_tokens: 1 } }; }) });
+    const request = gatewayRequest();
+    request.request.tool_turns = [{
+      call: { call_id: 'c1', name: 'get_context', arguments: '{}' }, output: '{"ok":true}',
+      prior_items: [{ type: 'thinking', provider: 'anthropic', block: { type: 'thinking', thinking: '', signature: 's' } }, { type: 'tool_use', provider: 'anthropic', block: { type: 'tool_use', id: 'c1', name: 'get_context', input: {} } }],
+    }];
+    await expect(adapter.complete(request)).resolves.toMatchObject({ ok: true });
+    expect((bodies[0]!.input as unknown[]).slice(1)).toEqual([
+      { type: 'function_call', call_id: 'c1', name: 'get_context', arguments: '{}' },
+      { type: 'function_call_output', call_id: 'c1', output: '{"ok":true}' },
+    ]);
+  });
+});
+
+describe('OpenAIResponsesAdapter hosted web search', () => {
+  const searching = (replies: unknown[]) => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async (body: Record<string, unknown>) => { bodies.push(body); return replies[bodies.length - 1]; }) });
+    const request = (web_search?: LLMRequest['web_search']): LLMGatewayRequest => {
+      const base = gatewayRequest();
+      return { ...base, request: { ...base.request, tools: [{ name: 'get_context', description: 'Read context.', parameters: { type: 'object', properties: {} } }], ...(web_search ? { web_search } : {}) } };
+    };
+    return { bodies, adapter, request };
+  };
+  const usage = { input_tokens: 1, output_tokens: 1 };
+  const message = (text: string, citations: Array<{ url: string; title: string }>) => ({
+    type: 'message', id: 'msg_1', role: 'assistant', status: 'completed',
+    content: [{ type: 'output_text', text, annotations: citations.map((c) => ({ type: 'url_citation', start_index: 0, end_index: 1, ...c })) }],
+  });
+
+  it('offers the hosted search after the function tools, located where the owner is', async () => {
+    const { bodies, adapter, request } = searching([{ id: 'r', status: 'completed', output_text: 'ok', output: [], usage }]);
+    await adapter.complete(request({ country: 'IN', timezone: 'Asia/Kolkata' }));
+    expect(bodies[0]!.tools).toEqual([
+      { type: 'function', name: 'get_context', description: 'Read context.', parameters: { type: 'object', properties: {} }, strict: false },
+      { type: 'web_search', user_location: { type: 'approximate', country: 'IN', timezone: 'Asia/Kolkata' } },
+    ]);
+  });
+
+  it('leaves a request without hosted search unchanged', async () => {
+    const { bodies, adapter, request } = searching([{ id: 'r', status: 'completed', output_text: 'ok', output: [], usage }]);
+    await adapter.complete(request());
+    expect((bodies[0]!.tools as Array<{ type: string }>).map((tool) => tool.type)).toEqual(['function']);
+  });
+
+  it('adds every cited link the reply text does not already show', async () => {
+    const text = 'The Lalit is 1.2 km from the venue ([thelalit.com](https://www.thelalit.com/bangalore?utm_source=openai)).';
+    const output = [
+      { type: 'web_search_call', id: 'ws_1', status: 'completed', action: { type: 'search', query: 'hotels near the venue' } },
+      message(text, [{ url: 'https://www.thelalit.com/bangalore?utm_source=openai', title: 'The Lalit' }, { url: 'https://maps.example/route?utm_source=openai', title: 'Route\nmap' }]),
+    ];
+    const { adapter, request } = searching([{ id: 'r', status: 'completed', output_text: text, output, usage }]);
+    const result = await adapter.complete(request({ country: 'IN' }));
+    if (!result.ok) throw Error(result.error);
+    expect(result.data.text).toBe(`${text}\n\nSources:\n- Route map: https://maps.example/route?utm_source=openai`);
+  });
+
+  it('leaves a reply whose citations are all shown unchanged', async () => {
+    const text = 'Rooms from ₹6,000 ([agoda.com](https://www.agoda.com/x?utm_source=openai)).';
+    const { adapter, request } = searching([{ id: 'r', status: 'completed', output_text: text, output: [message(text, [{ url: 'https://www.agoda.com/x?utm_source=openai', title: 'Agoda' }])], usage }]);
+    const result = await adapter.complete(request({ country: 'IN' }));
+    if (!result.ok) throw Error(result.error);
+    expect(result.data.text).toBe(text);
+  });
+
+  it('replays a round with a hosted search untouched ahead of its function call output', async () => {
+    const roundOne = [
+      { type: 'reasoning', id: 'rs_1', encrypted_content: 'opaque-1', summary: [] },
+      { type: 'web_search_call', id: 'ws_1', status: 'completed', action: { type: 'search', query: 'hotels near the venue' } },
+      { type: 'function_call', id: 'fc_1', call_id: 'c1', name: 'get_context', arguments: '{}' },
+    ];
+    const { bodies, adapter, request } = searching([
+      { id: 'r1', status: 'completed', output_text: '', output: roundOne, usage },
+      { id: 'r2', status: 'completed', output_text: 'Booked nothing yet; here are three options.', output: [], usage },
+    ]);
+    const first = await adapter.complete(request({ country: 'IN' }));
+    if (!first.ok) throw Error(first.error);
+    const second = request({ country: 'IN' });
+    second.request.tool_turns = [{ call: first.data.tool_calls![0]!, output: '{"ok":true}', prior_items: first.data.output_items! }];
+    await expect(adapter.complete(second)).resolves.toMatchObject({ ok: true });
+    expect((bodies[1]!.input as unknown[]).slice(1)).toEqual([...roundOne, { type: 'function_call_output', call_id: 'c1', output: '{"ok":true}' }]);
+  });
+});
+
+describe('OpenAIResponsesAdapter tool search', () => {
+  const when = { type: 'object', properties: { day: { type: 'string', format: 'date' }, note: { type: 'string', pattern: '^[a-z]+$' } }, required: ['day'], additionalProperties: false };
+  const searchRequest = (): LLMGatewayRequest => {
+    const base = gatewayRequest();
+    return { ...base, request: { ...base.request, tools: [
+      { name: 'get_context', description: 'Current time', parameters: { type: 'object', properties: {} } },
+      { name: 'query_availability', description: 'Free and busy time', parameters: when, namespace: 'calendar', defer_loading: true },
+      { name: 'free_form', description: 'Takes anything', parameters: { type: 'object', properties: { args: { type: 'object', additionalProperties: {} } } }, namespace: 'calendar', defer_loading: true },
+    ], tool_search: { namespaces: { calendar: 'Calendar changes and free time.' } } } };
+  };
+
+  it('sends core functions strict up front, deferred ones in their namespace, then the hosted tool_search', async () => {
+    let sent: { tools?: unknown } = {};
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async (body: { tools?: unknown }) => { sent = body; return { id: 'r', output_text: 'ok', output: [], usage: { input_tokens: 1, output_tokens: 1 } }; }) });
+    await adapter.complete(searchRequest());
+    expect(sent.tools).toEqual([
+      { type: 'function', name: 'get_context', description: 'Current time', parameters: { type: 'object', properties: {}, required: [], additionalProperties: false }, strict: true },
+      { type: 'namespace', name: 'calendar', description: 'Calendar changes and free time.', tools: [
+        // The pattern is dropped (JavaScript regex syntax the provider may not compile); the tool's own schema checks it on dispatch.
+        { type: 'function', name: 'query_availability', description: 'Free and busy time', strict: true, defer_loading: true, parameters: {
+          type: 'object', properties: { day: { type: 'string', format: 'date' }, note: { anyOf: [{ type: 'string' }, { type: 'null' }] } }, required: ['day', 'note'], additionalProperties: false } },
+        // A free-form record cannot be strict, so it goes as it is.
+        { type: 'function', name: 'free_form', description: 'Takes anything', strict: false, defer_loading: true, parameters: { type: 'object', properties: { args: { type: 'object', additionalProperties: {} } } } },
+      ] },
+      { type: 'tool_search' },
+    ]);
+  });
+
+  it('returns a strict call with the nulls for fields the model left out removed, other calls as sent', async () => {
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async () => ({ id: 'r', output_text: '', usage: { input_tokens: 1, output_tokens: 1 }, output: [
+      { type: 'tool_search_call', id: 'ts_1', call_id: null, execution: 'server', status: 'completed', arguments: { query: 'free time' } },
+      { type: 'tool_search_output', id: 'tso_1', call_id: null, execution: 'server', status: 'completed', tools: [] },
+      { type: 'function_call', call_id: 'c1', name: 'query_availability', namespace: 'calendar', arguments: '{"day":"2030-11-04","note":null}' },
+      { type: 'function_call', call_id: 'c2', name: 'free_form', namespace: 'calendar', arguments: '{"args":null}' },
+    ] })) });
+    const result = await adapter.complete(searchRequest());
+    expect(result).toMatchObject({ ok: true, data: { tool_calls: [
+      { call_id: 'c1', name: 'query_availability', arguments: '{"day":"2030-11-04"}' },
+      { call_id: 'c2', name: 'free_form', arguments: '{"args":null}' },
+    ] } });
+  });
+
+  it('replays the search items while tools are offered, and leaves them out of a closing round that offers none', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async (body: Record<string, unknown>) => { bodies.push(body); return { id: 'r', output_text: 'done', output: [], usage: { input_tokens: 1, output_tokens: 1 } }; }) });
+    const search = { type: 'tool_search_call', id: 'ts_1', execution: 'server', status: 'completed', arguments: { query: 'free time' } };
+    const loaded = { type: 'tool_search_output', id: 'tso_1', execution: 'server', status: 'completed', tools: [{ type: 'namespace', name: 'calendar' }] };
+    const call = { type: 'function_call', call_id: 'c1', name: 'query_availability', namespace: 'calendar', arguments: '{"day":"2030-11-04"}' };
+    const turns = [{ call: { call_id: 'c1', name: 'query_availability', arguments: '{"day":"2030-11-04"}' }, output: '{"free":true}', prior_items: [search, loaded, call] }];
+    const offered = searchRequest();
+    await adapter.complete({ ...offered, request: { ...offered.request, tool_turns: turns } });
+    const closing = searchRequest();
+    const { tools: _withdrawn, ...closingRequest } = closing.request;
+    await adapter.complete({ ...closing, request: { ...closingRequest, tool_turns: turns } });
+    expect((bodies[0]!.input as unknown[]).slice(1)).toEqual([search, loaded, call, { type: 'function_call_output', call_id: 'c1', output: '{"free":true}' }]);
+    const { namespace: _namespace, ...plainCall } = call;
+    expect((bodies[1]!.input as unknown[]).slice(1)).toEqual([plainCall, { type: 'function_call_output', call_id: 'c1', output: '{"free":true}' }]);
+  });
+
+  it('sends a deferred function up front when a round another provider ran called it, so its rebuilt call has a definition', async () => {
+    let sent: { tools?: Array<{ type: string; name?: string; tools?: Array<{ name: string }> }>; input?: unknown[] } = {};
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async (body: typeof sent) => { sent = body; return { id: 'r', output_text: 'ok', output: [], usage: { input_tokens: 1, output_tokens: 1 } }; }) });
+    const base = searchRequest();
+    const block = { type: 'tool_use', id: 'c1', name: 'query_availability', input: { day: '2030-11-04' } };
+    await adapter.complete({ ...base, request: { ...base.request, tool_turns: [{ call: { call_id: 'c1', name: 'query_availability', arguments: '{"day":"2030-11-04"}' }, output: 'free', prior_items: [{ type: 'tool_use', provider: 'anthropic', block }] }] } });
+    expect(sent.tools!.filter((tool) => tool.type === 'function').map((tool) => tool.name)).toEqual(['get_context', 'query_availability']);
+    expect(sent.tools!.find((tool) => tool.type === 'namespace')!.tools!.map((tool) => tool.name)).toEqual(['free_form']);
+    expect(sent.input!.slice(1)).toEqual([{ type: 'function_call', call_id: 'c1', name: 'query_availability', arguments: '{"day":"2030-11-04"}' }, { type: 'function_call_output', call_id: 'c1', output: 'free' }]);
+  });
+
+  it('sends no length, count or number bounds in a strict schema; the tool checks them after the call', async () => {
+    let sent: { tools?: Array<{ type: string; name?: string; parameters?: unknown; strict?: boolean }> } = {};
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async (body: typeof sent) => { sent = body; return { id: 'r', output_text: 'ok', output: [], usage: { input_tokens: 1, output_tokens: 1 } }; }) });
+    const base = searchRequest();
+    const bounded = { type: 'object', properties: {
+      body: { type: 'string', minLength: 1, maxLength: 2000 },
+      to: { type: 'array', items: { type: 'string', format: 'email' }, minItems: 1, maxItems: 10 },
+      count: { type: 'integer', minimum: 1, maximum: 50 },
+    }, required: ['body', 'to'], additionalProperties: false };
+    await adapter.complete({ ...base, request: { ...base.request, tools: [{ name: 'send_note', description: 'Send a note', parameters: bounded }] } });
+    const tool = sent.tools!.find((item) => item.name === 'send_note')!;
+    expect(tool.strict).toBe(true);
+    expect(tool.parameters).toEqual({ type: 'object', properties: {
+      body: { type: 'string' },
+      to: { type: 'array', items: { type: 'string', format: 'email' } },
+      count: { anyOf: [{ type: 'integer' }, { type: 'null' }] },
+    }, required: ['body', 'to', 'count'], additionalProperties: false });
+  });
+
+  it('sends a tool non-strict when an optional field already takes null, so leaving it out still means keep it', async () => {
+    let sent: { tools?: Array<{ type: string; name?: string; parameters?: unknown; strict?: boolean }> } = {};
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async (body: typeof sent) => { sent = body; return { id: 'r', output_text: '', usage: { input_tokens: 1, output_tokens: 1 }, output: [
+      { type: 'function_call', call_id: 'c1', name: 'change_task', arguments: '{"task_id":"t1","changes":{"title":"Renamed"}}' },
+    ] }; }) });
+    const base = searchRequest();
+    // What zod writes for `.nullable().optional()`: absent keeps the field, null clears it.
+    const changes = { type: 'object', properties: {
+      title: { type: 'string', minLength: 1 },
+      notes: { anyOf: [{ type: 'string', maxLength: 8192 }, { type: 'null' }] },
+    }, additionalProperties: false };
+    const parameters = { type: 'object', properties: { task_id: { type: 'string' }, changes }, required: ['task_id'], additionalProperties: false };
+    const result = await adapter.complete({ ...base, request: { ...base.request, tools: [{ name: 'change_task', description: 'Change a task', parameters }] } });
+    const tool = sent.tools!.find((item) => item.name === 'change_task')!;
+    expect(tool.strict).toBe(false);
+    expect(tool.parameters).toEqual(parameters);
+    expect(result).toMatchObject({ ok: true, data: { tool_calls: [{ call_id: 'c1', name: 'change_task', arguments: '{"task_id":"t1","changes":{"title":"Renamed"}}' }] } });
   });
 });

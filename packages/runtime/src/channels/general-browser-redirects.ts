@@ -6,7 +6,7 @@ export class GeneralRedirectError extends Error {
   readonly code = 'rejected';
   constructor() { super('browser_redirect_rejected'); }
 }
-type Routing = Readonly<{ authorize(url: string, method: string): Promise<void>; timeout(): number; admit(): Promise<void>; redirect(page: Page, url: string): void; denied(page: Page, status: number): void;attachment?(response:APIResponse):Promise<void> }>;
+type Routing = Readonly<{ authorize(url: string, method: string): Promise<void>; timeout(): number; admit(): Promise<void>; redirect(page: Page, url: string): void; denied(page: Page, status: number): void;challenge?(page: Page): void;document?(page: Page): void;attachment?(response:APIResponse):Promise<void> }>;
 
 // Neither continue nor fulfill(302) re-intercepts the complete Chromium chain.
 // Fetch each response without redirects; main documents re-enter page.goto so
@@ -24,10 +24,15 @@ export async function guardGeneralBrowserRoute(route: Route, options: Routing): 
     await options.admit();
     const status = response.status();
     const mainDocument = request.isNavigationRequest() && !request.frame().parentFrame();
-    if (status >= 400 && mainDocument) { options.denied(request.frame().page(), status); await route.abort('blockedbyclient'); return; }
+    if (status >= 400 && mainDocument) {
+      // Cloudflare marks its own bot-verification interstitial with this header. The document is kept so the
+      // model can see a typed challenge and offer the owner a handoff; any other error document is denied.
+      if (options.challenge && !options.attachment && response.headers()['cf-mitigated'] === 'challenge') { options.challenge(request.frame().page()); await route.fulfill({ response }); return; }
+      options.denied(request.frame().page(), status); await route.abort('blockedbyclient'); return;
+    }
     if (![301, 302, 303, 307, 308].includes(status)) {
       if(options.attachment){if(method!=='GET'||!mainDocument||status!==200)throw new GeneralRedirectError();await options.attachment(response);await options.admit();await route.fulfill({status:204,body:''});}
-      else await route.fulfill({ response });
+      else { if (mainDocument) options.document?.(request.frame().page()); await route.fulfill({ response }); }
       return;
     }
     if (request.isNavigationRequest() && !mainDocument) throw new GeneralRedirectError();

@@ -1,8 +1,10 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { claimStore, ground, turnMemoryPrompt } from '../src/memory/claims';
 import { memoryHandlers } from '../src/tools/live/memory';
 import { createOwnerResponder } from '../src/channels/owner-turn';
+import { holdTopic } from './helpers/pending-topic';
 const seen = vi.hoisted(() => ({ inputs: [] as string[], outputs: [] as unknown[][] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
   seen.inputs.push(JSON.stringify(body));
@@ -10,13 +12,15 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (body: u
 } }; } }));
 beforeEach(() => { seen.inputs.length = 0; seen.outputs.length = 0; });
 const timer = <T>(_name: string, work: () => Promise<T>) => work();
+// The conversation window still carries the topic, so the forget stays pending (held) across the turn.
+const unsettledHistory = async () => ({ rewritten: 0, remaining: 1 });
 it('I prefer AI can be remembered by the main model without a writer call', async () => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('memory-loop-tools')), async (_i, state) => {
     const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
     const tools = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', hideHistory: async () => undefined });
     seen.outputs.push([{ type: 'function_call', call_id: 'remember-1', name: 'remember', arguments: JSON.stringify({ kind: 'preference', text: 'Prefers AI', evidence_quote: 'AI' }) }], []);
     const responder = createOwnerResponder('fixture', undefined, store, undefined, undefined, tools);
-    const reply = await responder.respond({ traceId: 'tg-1', conversationRef: 'owner', surface: 'telegram', text: 'I prefer AI' }, timer);
+    const reply = await responder.respond(ownerTyped({ traceId: 'tg-1', conversationRef: 'owner', surface: 'telegram', text: 'I prefer AI' }), timer);
     expect(seen.inputs).toHaveLength(2);
     expect(seen.inputs.every(input => !input.includes('claim_ops'))).toBe(true);
     expect(store.claims()).toMatchObject([{ text: 'Prefers AI', origin: 'owner' }]);
@@ -27,10 +31,10 @@ it('a pending coffee forget does not remove unrelated history, profile or orders
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('memory-loop-held')), async (_i, state) => {
     const memory = claimStore(state.storage.sql);
     memory.add({ kind: 'fact', text: 'Works in AI', evidence: 'AI', source: 'stated', origin: 'owner', source_ref: 'owner, tg-old' }, '2026-10-08T00:00:00Z');
-    memory.beginTopicCoverage('coffee', '2026-10-08T00:00:00Z');
+    holdTopic(state.storage.sql, 'coffee', '2026-10-08T00:00:00Z');
     const responder = createOwnerResponder('fixture', undefined, memory, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, () => 'Keep replies short');
-    await responder.respond({ traceId: 'tg-before', conversationRef: 'owner', surface: 'telegram', text: 'My project is Orbit' }, timer);
-    await responder.respond({ traceId: 'tg-after', conversationRef: 'owner', surface: 'telegram', text: 'What is on my calendar?', memoryWrites: false }, timer);
+    await responder.respond(ownerTyped({ traceId: 'tg-before', conversationRef: 'owner', surface: 'telegram', text: 'My project is Orbit' }), timer);
+    await responder.respond(ownerTyped({ traceId: 'tg-after', conversationRef: 'owner', surface: 'telegram', text: 'What is on my calendar?', memoryWrites: false }), timer);
     expect(seen.inputs.at(-1)).toContain('My project is Orbit');
     expect(seen.inputs.at(-1)).toContain('Works in AI');
     expect(seen.inputs.at(-1)).toContain('Keep replies short');
@@ -54,13 +58,13 @@ it('forget my favourite coffee returns a tool receipt and removes history recall
     const tools = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', hideHistory: async texts => { expect(texts).toContain('coffee'); historyCleaned = true; } });
     const responder = createOwnerResponder('fixture', undefined, store, undefined, undefined, tools);
     seen.outputs.push([{ type: 'function_call', call_id: 'save', name: 'remember', arguments: JSON.stringify({ kind: 'preference', text: 'Favourite coffee is espresso', evidence_quote: 'espresso' }) }], []);
-    await responder.respond({ traceId: 'tg-save', conversationRef: 'owner', surface: 'telegram', text: 'My favourite coffee is espresso' }, timer);
+    await responder.respond(ownerTyped({ traceId: 'tg-save', conversationRef: 'owner', surface: 'telegram', text: 'My favourite coffee is espresso' }), timer);
     seen.outputs.push([{ type: 'function_call', call_id: 'forget', name: 'forget_memory', arguments: JSON.stringify({ topic: 'coffee', scope_note: 'favourite coffee' }) }], []);
-    const reply = await responder.respond({ traceId: 'tg-forget', conversationRef: 'owner', surface: 'telegram', text: 'Forget my favourite coffee' }, timer);
+    const reply = await responder.respond(ownerTyped({ traceId: 'tg-forget', conversationRef: 'owner', surface: 'telegram', text: 'Forget my favourite coffee' }), timer);
     expect(reply).toContain('memory forgotten');
     expect(historyCleaned).toBe(true);
     expect(store.claims()).toEqual([]);
-    await responder.respond({ traceId: 'tg-ask', conversationRef: 'owner', surface: 'telegram', text: 'What is my favourite coffee?' }, timer);
+    await responder.respond(ownerTyped({ traceId: 'tg-ask', conversationRef: 'owner', surface: 'telegram', text: 'What is my favourite coffee?' }), timer);
     expect(seen.inputs.at(-1)).not.toContain('espresso');
   });
 });
@@ -69,7 +73,7 @@ it('a forged tool quote fails and cannot earn a successful memory receipt', asyn
     const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
     const tools = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', hideHistory: async () => undefined });
     seen.outputs.push([{ type: 'function_call', call_id: 'forged', name: 'remember', arguments: JSON.stringify({ kind: 'fact', text: 'Bank is evilbank', evidence_quote: 'evilbank' }) }], []);
-    const reply = await createOwnerResponder('fixture', undefined, store, undefined, undefined, tools).respond({ traceId: 'tg-1', conversationRef: 'owner', surface: 'telegram', text: 'Read my mail' }, timer);
+    const reply = await createOwnerResponder('fixture', undefined, store, undefined, undefined, tools).respond(ownerTyped({ traceId: 'tg-1', conversationRef: 'owner', surface: 'telegram', text: 'Read my mail' }), timer);
     expect(store.claims()).toEqual([]);
     expect(reply).toContain('memory stored (failed)');
     expect(seen.inputs.at(-1)).toContain('not grounded');
@@ -83,21 +87,22 @@ it('read-time filtering drops held episode rows and aliases but keeps unrelated 
     memory.add({ kind: 'fact', text: 'Coffee meeting is private', evidence: 'coffee', source: 'stated', origin: 'owner', source_ref: 'owner, tg-one' }, '2026-10-08T00:00:00Z');
     memory.add({ kind: 'fact', text: 'Unrelated amber meeting', evidence: 'amber', source: 'stated', origin: 'owner', source_ref: 'owner, tg-two' }, '2026-10-08T00:00:00Z');
     memory.add({ kind: 'preference', text: 'Opaque preference', evidence: 'opaque', aliases: ['coffee'], source: 'stated', origin: 'owner', source_ref: 'owner, tg-three' }, '2026-10-08T00:00:00Z');
-    memory.beginTopicCoverage('coffee', '2026-10-08T00:00:00Z');
+    holdTopic(state.storage.sql, 'coffee', '2026-10-08T00:00:00Z');
     const episodes = episodeIndex(state.storage.sql);
     episodes.add('held', 'owner', 'coffee meeting', 1);
     episodes.add('clean', 'owner', 'amber meeting', 2);
     seen.outputs.push([{ type: 'function_call', call_id: 'episodes', name: 'search_episodes', arguments: JSON.stringify({ query: 'meeting', limit: 10 }) }], []);
     const tools = [searchEpisodesHandler(episodes), ...memoryHandlers({ sql: state.storage.sql, store: memory, conversationRef: 'owner', hideHistory: async () => undefined })];
-    const responder = createOwnerResponder('fixture', undefined, memory, undefined, undefined, tools);
-    await responder.respond({ traceId: 'tg-ask', conversationRef: 'owner', surface: 'telegram', text: 'Read meeting context', memoryWrites: false }, timer);
+    const responder = createOwnerResponder('fixture', undefined, memory, undefined, undefined, tools, undefined, undefined, undefined, undefined, undefined, unsettledHistory);
+    await responder.respond(ownerTyped({ traceId: 'tg-ask', conversationRef: 'owner', surface: 'telegram', text: 'Read meeting context', memoryWrites: false }), timer);
     expect(seen.inputs.at(-1)).toContain('amber');
-    expect(seen.inputs.at(-1)).not.toContain('coffee meeting');
-    expect(seen.inputs.at(-1)).not.toContain('Opaque preference');
+    // The literal purge has already blanked the topic in SQL (the alias included); the held conversation window keeps
+    // the read-time filter on, and nothing that names the topic reaches the model.
+    expect(seen.inputs.at(-1)).not.toMatch(/coffee/i);
     seen.outputs.push([{ type: 'function_call', call_id: 'memory', name: 'read_memory', arguments: JSON.stringify({ limit: 10 }) }], []);
-    await responder.respond({ traceId: 'tg-read', conversationRef: 'owner', surface: 'telegram', text: 'What do you remember?', memoryWrites: false }, timer);
+    await responder.respond(ownerTyped({ traceId: 'tg-read', conversationRef: 'owner', surface: 'telegram', text: 'What do you remember?', memoryWrites: false }), timer);
     expect(seen.inputs.at(-1)).toContain('Unrelated amber meeting');
-    expect(seen.inputs.at(-1)).not.toContain('Opaque preference');
+    expect(seen.inputs.at(-1)).not.toMatch(/coffee/i);
   });
 });
 // A search hit is re-read from its stored row while a topic is held; a re-read that fails drops that hit alone.
@@ -107,7 +112,7 @@ it('a held-topic re-read that fails drops only that hit, says one was withheld, 
     const { searchEpisodesHandler } = await import('../src/tools/live/search-episodes');
     const memory = claimStore(state.storage.sql);
     memory.add({ kind: 'fact', text: 'Coffee meeting is private', evidence: 'coffee', source: 'stated', origin: 'owner', source_ref: 'owner, tg-one' }, '2026-10-08T00:00:00Z');
-    memory.beginTopicCoverage('coffee', '2026-10-08T00:00:00Z');
+    holdTopic(state.storage.sql, 'coffee', '2026-10-08T00:00:00Z');
     const episodes = episodeIndex(state.storage.sql);
     episodes.add('amber', 'owner', 'amber meeting', 1);
     episodes.add('beige', 'owner', 'beige meeting', 2);
@@ -118,8 +123,8 @@ it('a held-topic re-read that fails drops only that hit, says one was withheld, 
     } };
     const logs: unknown[] = [];
     seen.outputs.push([{ type: 'function_call', call_id: 'episodes', name: 'search_episodes', arguments: JSON.stringify({ query: 'meeting', limit: 10 }) }], []);
-    const responder = createOwnerResponder('fixture', undefined, memory, entry => logs.push(entry), undefined, [flaky]);
-    await responder.respond({ traceId: 'tg-ask', conversationRef: 'owner', surface: 'telegram', text: 'Read meeting context', memoryWrites: false }, timer);
+    const responder = createOwnerResponder('fixture', undefined, memory, entry => logs.push(entry), undefined, [flaky], undefined, undefined, undefined, undefined, undefined, unsettledHistory);
+    await responder.respond(ownerTyped({ traceId: 'tg-ask', conversationRef: 'owner', surface: 'telegram', text: 'Read meeting context', memoryWrites: false }), timer);
     expect(seen.inputs.at(-1)).toContain('amber');
     expect(seen.inputs.at(-1)).not.toContain('beige');
     expect(seen.inputs.at(-1)).toMatch(/withheld_items\\*":1/);
@@ -135,7 +140,7 @@ it('a failed asynchronous purge does not block unrelated owner work', async () =
     memory.purge([memory.claims().find(claim => claim.text === 'Private coffee')!.id], '2026-10-08T00:00:00Z');
     const logs: string[] = [];
     const responder = createOwnerResponder('fixture', undefined, memory, entry => logs.push(entry.code ?? ''), undefined, undefined, undefined, undefined, undefined, undefined, undefined, async () => { throw Error('cleanup unavailable'); });
-    await responder.respond({ traceId: 'tg-calendar', conversationRef: 'owner', surface: 'telegram', text: 'What is on my calendar?' }, timer);
+    await responder.respond(ownerTyped({ traceId: 'tg-calendar', conversationRef: 'owner', surface: 'telegram', text: 'What is on my calendar?' }), timer);
     expect(seen.inputs.at(-1)).toContain('Works in AI');
     expect(seen.inputs.at(-1)).not.toContain('Private coffee');
     expect(logs).toContain('retained_cleanup_incomplete');
@@ -148,9 +153,9 @@ it('duplicate remember is not receipted as a new save', async () => {
     const tools = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', hideHistory: async () => undefined });
     const responder = createOwnerResponder('fixture', undefined, store, undefined, undefined, tools);
     seen.outputs.push([{ type: 'function_call', call_id: 'tea-first', name: 'remember', arguments: JSON.stringify(args) }], []);
-    await responder.respond({ traceId: 'tg-first', conversationRef: 'owner', surface: 'telegram', text: 'I prefer tea' }, timer);
+    await responder.respond(ownerTyped({ traceId: 'tg-first', conversationRef: 'owner', surface: 'telegram', text: 'I prefer tea' }), timer);
     seen.outputs.push([{ type: 'function_call', call_id: 'tea-again', name: 'remember', arguments: JSON.stringify(args) }], []);
-    const reply = await responder.respond({ traceId: 'tg-again', conversationRef: 'owner', surface: 'telegram', text: 'I prefer tea' }, timer);
+    const reply = await responder.respond(ownerTyped({ traceId: 'tg-again', conversationRef: 'owner', surface: 'telegram', text: 'I prefer tea' }), timer);
     expect(reply).not.toContain('memory stored');
     expect(store.claims()).toHaveLength(1);
     expect(seen.inputs.at(-1)).toContain('duplicate');

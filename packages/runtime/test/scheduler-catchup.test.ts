@@ -6,8 +6,8 @@ import type { Deps } from '../src/seams/deps';
 let seq = 0;
 function freshStub(): Parameters<typeof runInDurableObject>[0] {
   seq += 1;
-  const id = (env as never as { TRACER_DO: { idFromName(n: string): unknown; get(i: unknown): unknown } }).TRACER_DO.idFromName(`wedge-repro-${seq}`);
-  return (env as never as { TRACER_DO: { get(i: unknown): never } }).TRACER_DO.get(id);
+  const id = (env as never as { TEST_STORAGE_DO: { idFromName(n: string): unknown; get(i: unknown): unknown } }).TEST_STORAGE_DO.idFromName(`wedge-repro-${seq}`);
+  return (env as never as { TEST_STORAGE_DO: { get(i: unknown): never } }).TEST_STORAGE_DO.get(id);
 }
 
 function liveDeps(): Deps {

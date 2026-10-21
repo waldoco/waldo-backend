@@ -16,6 +16,19 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// Drops // line comments outside JSON strings only: wrangler.jsonc vars carry URLs ("https://...").
+const stripJsoncComments = (text) => {
+  let out = '', inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) { out += ch; if (ch === '\\') { out += text[++i] ?? ''; } else if (ch === '"') inString = false; continue; }
+    if (ch === '"') { inString = true; out += ch; continue; }
+    if (ch === '/' && text[i + 1] === '/') { while (i < text.length && text[i] !== '\n') i++; out += '\n'; continue; }
+    out += ch;
+  }
+  return out;
+};
+
 const DRY = process.argv.includes('--dry-run');
 const runtime = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repo = resolve(runtime, '../..');
@@ -87,7 +100,7 @@ try {
   const out = mkdtempSync(join(tmpdir(), 'waldo-imessage-bundle-')), persist = mkdtempSync(join(tmpdir(), 'waldo-imessage-do-'));
   execFileSync('pnpm', ['exec', 'wrangler', 'versions', 'upload', '--env', '', '--dry-run', '--outdir', out], { cwd: runtime, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 120000 });
   const { Miniflare } = createRequire(resolve(realpathSync(resolve(runtime, 'node_modules/@cloudflare/vitest-pool-workers')), 'package.json'))('miniflare');
-  const config = JSON.parse(readFileSync(resolve(runtime, 'wrangler.jsonc'), 'utf8').replace(/\/\/[^\n]*/g, ''));
+  const config = JSON.parse(stripJsoncComments(readFileSync(resolve(runtime, 'wrangler.jsonc'), 'utf8')));
   const modelResponse = (body) => {
     const format = body?.text?.format?.name;
     if (!format) modelTurns++;

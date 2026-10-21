@@ -18,6 +18,7 @@ import { persistTransportWake } from '../src/scheduler/alarm-slot';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
+import { presenceAuthority } from './helpers/directory-presence';
 
 // Proactive work for an owner on both Telegram and the app goes to the app, and Telegram gets one plain copy of it.
 const CARD_TEXT = 'Your morning is clear until noon.';
@@ -25,6 +26,7 @@ const UPDATE_TEXT = 'Your 10:30 moved to 11:00.';
 const FOLLOWUP_TEXT = 'Have you handled the deck review? Pat asked for it by 10.';
 const PREP_TEXT = 'Design review at 09:30. Bring the onboarding mocks; Pat is listed.';
 const ORDER_TEXT = 'Inbox triage done: two threads need you.';
+const CHECK_BACK_TEXT = 'I looked for the invoice in your sent mail and found nothing yet. Want me to draft it?';
 const NUDGE_TEXT = 'A nudge queued for the app.';
 const REPLY_TEXT = 'Here is your answer.';
 const fixture = vi.hoisted(() => ({ event: null as CalendarItem | null, changes: [] as CalendarChange[], requests: [] as string[] }));
@@ -47,7 +49,8 @@ vi.mock('../src/channels/telegram-turn', async load => {
       : content.includes('[Mail follow-up check') ? FOLLOWUP_TEXT
       : content.includes('[Update check') ? UPDATE_TEXT
       : content.includes('[Scheduled card') ? CARD_TEXT
-      : content.includes('[Standing order due now') ? ORDER_TEXT : 'SKIP';
+      : content.includes('[Standing order due now') ? ORDER_TEXT
+      : content.includes('[Check-back due now') ? CHECK_BACK_TEXT : 'SKIP';
     return { ok: true, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
@@ -61,11 +64,11 @@ const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', S
 type Authority = 'current' | 'revoked' | 'outage' | 'error';
 type Sent = { chat_id: number; text: string; reply_markup?: unknown };
 // authorityAfter: the directory answers 'current' this many times, then `authority`.
-const wire = { authority: 'current' as Authority, authorityAfter: 0, asked: 0, presence: true, telegram: 'ok' as 'ok' | 'fails', telegramSent: [] as Sent[] };
+const wire = { authority: 'current' as Authority, authorityAfter: 0, asked: 0, presence: true, telegram: 'ok' as 'ok' | 'fails', telegramSent: [] as Sent[], previews: [] as unknown[] };
 
 beforeEach(() => {
   fixture.event = null; fixture.changes = []; fixture.requests = [];
-  wire.authority = 'current'; wire.authorityAfter = 0; wire.asked = 0; wire.presence = true; wire.telegram = 'ok'; wire.telegramSent = [];
+  wire.authority = 'current'; wire.authorityAfter = 0; wire.asked = 0; wire.presence = true; wire.telegram = 'ok'; wire.telegramSent = []; wire.previews = [];
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
@@ -81,8 +84,10 @@ beforeEach(() => {
     if (fn === 'health_log_recent') return Response.json([]);
     if (fn === 'health_context_read') return Response.json(null);
     if (fn === 'assert_channel_presence') return Response.json(wire.presence);
+    if (fn === 'common_owner_authority') return presenceAuthority(OWNER_ID, init?.body);
     if (/^https:\/\/api\.telegram\.org\/bot[^/]+\/sendMessage$/.test(url)) {
-      const sent = JSON.parse(String(init?.body)) as Sent;
+      const sent = JSON.parse(String(init?.body)) as Sent & { link_preview_options?: unknown };
+      wire.previews.push(sent.link_preview_options);
       wire.telegramSent.push({ chat_id: sent.chat_id, text: sent.text, ...(sent.reply_markup === undefined ? {} : { reply_markup: sent.reply_markup }) });
       if (wire.telegram === 'fails') return Response.json({ ok: false, error_code: 500, description: 'Internal Server Error' }, { status: 500 });
       return Response.json({ ok: true, result: { message_id: 40 + wire.telegramSent.length, chat: { id: sent.chat_id } } });
@@ -119,7 +124,7 @@ const withOwner = async (name: string, run: (owner: Owner, state: DurableObjectS
       await owner.setup('telegram').ready;
       await owner.setup('app').ready;
       state.storage.sql.exec('DELETE FROM schedule');
-      wire.telegramSent = [];
+      wire.telegramSent = []; wire.previews = [];
       await run(owner, state, ctx);
     } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
   });
@@ -214,16 +219,15 @@ describe('proactive work for an owner on Telegram who also uses the app', () => 
     });
   });
 
-  it('a heartbeat nudge is queued for the app, reaches the app chat, and Telegram gets one plain copy', async () => {
+  it('the check-back of a due loop is queued for the app, reaches the app chat, and Telegram gets one plain copy', async () => {
     await withOwner('routing-heartbeat', async (owner, state, ctx) => {
       loopBook(state.storage.sql, { newId: () => 'loop-1', now: () => AT }).open({ title: 'Send the invoice', due: `${DAY}T08:00` });
       await armHeartbeat(new Scheduler(state.storage.sql, state.storage, productionDeps()), Date.now() - 60 * 60_000);
       await schedulePass(owner, state);
       expect(outbox(state).filter(record => record.heartbeat).map(record => record.payload.chat_id)).toEqual([ctx.appSubject]);
       await outboxPass(owner, state, ctx);
-      const nudge = 'From your list, past due:\n- Send the invoice (due 2026-10-03 08:00)';
-      expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: nudge, channel: 'app' }]);
-      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: nudge }]);
+      expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: CHECK_BACK_TEXT, channel: 'app' }]);
+      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: CHECK_BACK_TEXT }]);
     });
   });
 
@@ -345,6 +349,48 @@ describe('the delivery outbox for an owner on both surfaces', () => {
       expect(outbox(state).map(record => record.status)).toEqual(['delivered']);
       expect(wire.telegramSent).toEqual(failure === 'fails' ? [{ chat_id: 7, text: NUDGE_TEXT }] : []);
       expect(copyLog(state)).toEqual([{ ok: 0, note: code }]);
+    });
+  });
+});
+
+// Telegram fetches a link in a message to draw its preview, with no tap from the owner. Text that carries mail or calendar
+// content can carry a link someone else wrote, so no send from the owner object asks for a preview.
+describe('link previews on Telegram', () => {
+  const noPreview = { is_disabled: true };
+
+  it('meeting prep goes to a Telegram-only owner with link previews off', async () => {
+    await withOwner('previews-prep', async (owner, state, ctx) => {
+      fixture.event = { id: 'event-1', title: 'Design review', status: 'confirmed', start: `${DAY}T09:30:00Z`, end: `${DAY}T10:00:00Z`, all_day: false,
+        description: 'Bring the onboarding mocks.', attendee_names: ['Pat'], attendees: 3, etag: 'r1' } as CalendarItem;
+      await dueSweep(state);
+      await schedulePass(owner, state);
+      await outboxPass(owner, state, ctx);
+      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: PREP_TEXT }]);
+      expect(wire.previews).toEqual([noPreview]);
+    }, { app: false });
+  });
+
+  it('an update card, with its buttons, goes out with link previews off', async () => {
+    await withOwner('previews-update', async (owner, state) => {
+      dayPlanBook(state.storage.sql).sent(DAY, 'card:brief');
+      updateBook(state.storage.sql).mark('calendar_since', AT - 3_600_000);
+      fixture.changes = [{ id: 'event-1', title: 'Changed event', status: 'confirmed', start: `${DAY}T11:00:00Z`, end: `${DAY}T11:30:00Z`, all_day: false, description: '', etag: 'r2',
+        created: new Date(AT - 86_400_000).toISOString() } as CalendarChange];
+      await dueSweep(state);
+      await schedulePass(owner, state);
+      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: UPDATE_TEXT, reply_markup: expect.objectContaining({ inline_keyboard: expect.any(Array) }) }]);
+      expect(wire.previews).toEqual([noPreview]);
+    }, { app: false });
+  });
+
+  it('a reply to a Telegram turn and the plain copy of an app message both go out with link previews off', async () => {
+    await withOwner('previews-reply-and-copy', async (owner, state, ctx) => {
+      await queue(state, ctx, 'telegram');
+      await queue(state, ctx, 'app');
+      await outboxPass(owner, state, ctx);
+      await outboxPass(owner, state, ctx);
+      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: REPLY_TEXT }, { chat_id: 7, text: NUDGE_TEXT }]);
+      expect(wire.previews).toEqual([noPreview, noPreview]);
     });
   });
 });

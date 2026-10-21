@@ -88,6 +88,18 @@ describe('app sign-in and main chat routes', () => {
     expect(new URL(forwards[0]!.url).pathname).toBe('/app/v1/chat/main/messages/client-msg-0001/cancel');
     expect(keys).toEqual(['app-read:owner-1']);
   });
+  it('forwards thread calls to the credential owner DO: a list as a read, a change as a send', async () => {
+    forwards.length = 0;
+    const keys: string[] = [];
+    const counted = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async ({ key }: { key: string }) => { keys.push(key); return { success: true }; } } } as never;
+    const bearer = { authorization: `Bearer ${CREDENTIAL}` };
+    expect(await (await handleApp(new Request('https://w.test/app/v1/threads?state=active', { headers: bearer }), counted, fakeAuth().auth))!.json()).toEqual({ forwarded: true });
+    const rename = post('/app/v1/threads/thr_11111111-2222-4333-8444-555555555555/rename', { operation_id: '0b6f3c1e-8a2d-4f5b-9c7e-000000000001', expected_title_revision: 1, title: 'Trip' }, bearer);
+    expect(await (await handleApp(rename, counted, fakeAuth().auth))!.json()).toEqual({ forwarded: true });
+    expect(forwards.map(request => [request.method, new URL(request.url).pathname + new URL(request.url).search, request.headers.get('x-waldo-do-name')])).toEqual([
+      ['GET', '/app/v1/threads?state=active', 'owner-1'], ['POST', '/app/v1/threads/thr_11111111-2222-4333-8444-555555555555/rename', 'owner-1']]);
+    expect(keys).toEqual(['app-read:owner-1', 'app-chat-send:owner-1']);
+  });
   it('rate limits chat sends per owner and fails closed without the limiter', async () => {
     const auth = fakeAuth().auth;
     const limited = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: false }) } } as never;
@@ -101,6 +113,12 @@ describe('app sign-in and main chat routes', () => {
     for(const path of ['/session','/chat/main','/chat/main/messages/client-msg-0001','/controls?view=day','/actions/action-id-0001']) {
       expect((await handleApp(new Request(`https://w.test/app/v1${path}`,{headers:{authorization:`Bearer ${CREDENTIAL}`}}),limited,auth))!.status).toBe(429);
     }
+  });
+  it('forwards the contract revisions a build declares, and drops a value that does not parse', async () => {
+    forwards.length = 0;
+    const auth = fakeAuth().auth, read = (contract?: string) => handleApp(new Request('https://w.test/app/v1/approvals', { headers: { authorization: `Bearer ${CREDENTIAL}`, ...(contract === undefined ? {} : { 'x-waldo-app-contract': contract }) } }), env(), auth);
+    for (const contract of ['approvals=2', 'approvals=2,threads=3', undefined, 'approvals=two', 'approvals=2,approvals=2']) await read(contract);
+    expect(forwards.map(r => r.headers.get('x-waldo-app-contract'))).toEqual(['approvals=2', 'approvals=2,threads=3', null, null, null]);
   });
   it('forwards approval reads and decisions to the credential owner DO, with decisions in their own rate bucket', async () => {
     forwards.length = 0; const keys: string[] = [];
@@ -140,11 +158,12 @@ describe('main chat transcript page', () => {
     expect(older.messages[2]!.channel).toBe('telegram');
     expect(older.next_cursor).toBeNull();
   });
-  it('shows a stored receipt as a part and drops its line from the text, only when the text ends with exactly that line', () => {
+  it('shows a stored receipt as a part and keeps its line in the text, byte for byte the part\'s fallback', () => {
     const receipt = { line: 'Done: reminder set', items: [{ kind: 'reminder_set', target: null, outcome: 'accepted' as const, via_task: false, at: Date.UTC(2026, 9, 13, 8), digest: null }], more: 0 };
     const part = { type: 'receipt', items: receipt.items, more: 0, fallback_text: 'Done: reminder set' };
     const shown = (appPayload: string) => appTranscriptPage([{ ...entry(20, 'assistant', 'app'), appPayload, receipt }], null, 5).messages[0]!;
-    expect(shown('Set for 9.\n\nDone: reminder set')).toMatchObject({ text: 'Set for 9.', parts: [{ type: 'text', text: 'Set for 9.' }, part] });
+    expect(shown('Set for 9.\n\nDone: reminder set')).toMatchObject({ text: 'Set for 9.\n\nDone: reminder set', parts: [{ type: 'text', text: 'Set for 9.\n\nDone: reminder set' }, part] });
+    expect(shown('Set for 9.\n\nDone: reminder set').text.endsWith(`\n\n${part.fallback_text}`)).toBe(true);
     expect(shown('Set for 9. Done: reminder set')).toMatchObject({ text: 'Set for 9. Done: reminder set', parts: [{ type: 'text' }, part] });
     expect(shown('\n\nDone: reminder set')).toMatchObject({ text: '\n\nDone: reminder set', parts: [{ type: 'text' }, part] });
     expect(appTranscriptPage([entry(21, 'assistant', 'app')], null, 5).messages[0]!.parts).toEqual([{ type: 'text', text: 'text 21' }]);
@@ -216,4 +235,28 @@ it('fences the session\'s in-flight work before revoking it, and revokes nothing
     expect(fences[0]!.headers.get('x-waldo-app-session-hash')).toMatch(/^[a-f0-9]{64}$/);
     expect(fences[0]!.headers.get('x-waldo-fence-sig')).toMatch(/^[a-f0-9]{16,}$/);
   }finally{fetcher.mockRestore();}
+});
+
+describe('Connect iMessage from the app', () => {
+  const route = '/app/v1/channels/imessage/link-code';
+  const authed = (method = 'POST') => new Request(`https://w.test${route}`, { method, headers: { authorization: `Bearer ${CREDENTIAL}` } });
+  const withAddress = () => ({ ...(env() as object), IMESSAGE_WALDO_ADDRESS: 'woof@heywaldo.in' }) as never;
+
+  it('issues a one-time imessage code for the signed-in owner, with a one-tap Messages link', async () => {
+    const issued: string[] = [];
+    const { auth } = fakeAuth({ issueProviderLinkCode: async (doName: string, provider: string) => { issued.push(`${doName}:${provider}`); return 'ABCDEFGHJK'; } } as never);
+    const response = await handleApp(authed(), withAddress(), auth);
+    expect(response!.status).toBe(200);
+    expect(await response!.json()).toEqual({ code: 'ABCDEFGHJK', text: 'waldo ABCDEFGHJK', address: 'woof@heywaldo.in',
+      send_url: 'sms:woof@heywaldo.in&body=waldo%20ABCDEFGHJK', expires_in_seconds: 600 });
+    expect(issued).toEqual(['owner-1:imessage']); // always the authenticated owner's own code
+  });
+
+  it('refuses without a session, other methods, and where the Waldo number is not configured', async () => {
+    const { auth } = fakeAuth({ issueProviderLinkCode: async () => 'ABCDEFGHJK' } as never);
+    expect((await handleApp(new Request(`https://w.test${route}`, { method: 'POST' }), withAddress(), auth))!.status).toBe(401);
+    expect((await handleApp(authed('GET'), withAddress(), auth))!.status).toBe(405);
+    expect((await handleApp(authed(), env(), auth))!.status).toBe(503);
+    expect((await handleApp(authed(), withAddress(), fakeAuth({ issueProviderLinkCode: async () => null } as never).auth))!.status).toBe(503);
+  });
 });

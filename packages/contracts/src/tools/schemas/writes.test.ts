@@ -1,26 +1,23 @@
 // Mutating tool arg schemas (ADR-0021; execute_code ADR-0023; destination ADR-0025; drafts
 // ADR-0027). Invariants under test: strictObject arg boundaries, single-owner vocabulary
-// reuse (channel, doc provider, hall — identity-asserted, not re-declared), mandatory
+// reuse (channel, doc provider — identity-asserted, not re-declared), mandatory
 // `reasoning` on task mutations, 'r2_scratch' as the one representation of scratch space,
 // and the ADR-0023 sandbox caps. Failure mode caught: a mutating tool's arg surface
 // silently widening — extra keys, minted vocabulary, loosened caps — past the autonomy gate.
 import { describe, expect, it } from 'vitest';
 import { channelNameSchema } from '../../adapters/channel';
 import { docProviderSchema } from '../../adapters/doc';
-import { MEMORY_BLOCK_CONTENT_MAX } from '../../memory/sanitise';
 import {
   draftDocumentArgsSchema,
   draftEmailArgsSchema,
   executeCodeArgsSchema,
   formZonePreferenceSchema,
-  memoryWriteHallSchema,
   proposeActionArgsSchema,
   proposeScheduleArgsSchema,
   sendMessageArgsSchema,
   sheetWriteModeSchema,
   taskPrioritySchema,
   taskStatusSchema,
-  updateMemoryArgsSchema,
   updateTaskArgsSchema,
   writeSheetCellArgsSchema,
   writeTaskArgsSchema,
@@ -28,80 +25,17 @@ import {
 
 const key = 'a'.repeat(64);
 
-describe('memoryWriteHall', () => {
-  it('is exactly the four agent-writable halls, in order', () => {
-    expect(memoryWriteHallSchema.options).toEqual([
-      'events',
-      'discoveries',
-      'preferences',
-      'advice',
-    ]);
-  });
-
-  it('rejects the facts hall — not agent-writable', () => {
-    expect(memoryWriteHallSchema.safeParse('facts').success).toBe(false);
-  });
-});
-
-describe('updateMemoryArgs', () => {
-  const base = { hall: 'events', content: 'user prefers morning workouts' } as const;
-
-  it('accepts a minimal write and one with tags', () => {
-    expect(updateMemoryArgsSchema.safeParse(base).success).toBe(true);
-    expect(updateMemoryArgsSchema.safeParse({ ...base, tags: ['routine'] }).success).toBe(true);
-  });
-
-  it('accepts the memory block cap and rejects one char over', () => {
-    expect(
-      updateMemoryArgsSchema.safeParse({
-        ...base,
-        content: 'x'.repeat(MEMORY_BLOCK_CONTENT_MAX),
-      }).success,
-    ).toBe(true);
-    expect(
-      updateMemoryArgsSchema.safeParse({
-        ...base,
-        content: 'x'.repeat(MEMORY_BLOCK_CONTENT_MAX + 1),
-      }).success,
-    ).toBe(false);
-  });
-
-  it('rejects more than 10 tags', () => {
-    const tags = Array.from({ length: 11 }, (_, i) => `t${i}`);
-    expect(updateMemoryArgsSchema.safeParse({ ...base, tags }).success).toBe(false);
-  });
-
-  it('rejects an unknown extra key (strictObject)', () => {
-    expect(updateMemoryArgsSchema.safeParse({ ...base, hall_type: 'events' }).success).toBe(false);
-  });
-});
-
 describe('proposeActionArgs', () => {
-  const base = {
-    action_type: 'reschedule_meeting',
-    description: 'move the 3pm sync out of the recovery window',
-    reasoning: 'recovery window collides with the sync',
-  } as const;
+  const base = { tool: 'write_task', args: { title: 'Pay invoice 44', reasoning: 'asked by email' }, reasoning: 'the vendor email asks for it' } as const;
 
-  it('urgency is exactly low/medium/high, in order', () => {
-    expect(proposeActionArgsSchema.shape.urgency.unwrap().options).toEqual([
-      'low',
-      'medium',
-      'high',
-    ]);
+  it('freezes a tool name, its arguments and the reasoning', () => {
+    expect(proposeActionArgsSchema.parse(base)).toEqual(base);
   });
 
-  it('defaults urgency to medium', () => {
-    expect(proposeActionArgsSchema.parse(base).urgency).toBe('medium');
-  });
-
-  it('rejects an out-of-domain urgency', () => {
-    expect(proposeActionArgsSchema.safeParse({ ...base, urgency: 'critical' }).success).toBe(false);
-  });
-
-  it('rejects a missing reasoning — mandatory audit surface', () => {
-    const { reasoning: _reasoning, ...rest } = base;
-    expect(proposeActionArgsSchema.safeParse(rest).success).toBe(false);
+  it('rejects a missing tool, non-object args or an unknown extra key (strictObject)', () => {
+    expect(proposeActionArgsSchema.safeParse({ ...base, tool: '' }).success).toBe(false);
+    expect(proposeActionArgsSchema.safeParse({ ...base, args: 'title=x' }).success).toBe(false);
+    expect(proposeActionArgsSchema.safeParse({ ...base, urgency: 'high' }).success).toBe(false);
   });
 });
 

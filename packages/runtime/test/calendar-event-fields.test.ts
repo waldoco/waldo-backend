@@ -13,6 +13,16 @@ const meet = 'https://meet.example.test/abc-defg-hij';
 const attached = [{ fileId: 'drive-file-1', title: 'Q4 plan', fileUrl: 'https://drive.example.test/file/d/drive-file-1' }];
 
 describe('calendar event fields', () => {
+  // Waldo's own operation markers are 64 hex characters. Any other value in that property isn't Waldo's, so it isn't
+  // reported, and a readback never takes it for proof of Waldo's change.
+  it('reports only an operation marker of Waldo\'s shape', async () => {
+    const ours = 'ab'.repeat(32);
+    expect((await mapped({ extendedProperties: { private: { waldoOperation: ours } } })).operation_marker).toBe(ours);
+    for (const foreign of ['foreign', 'AB'.repeat(32), `${ours}0`, ours.slice(1)]) {
+      expect(await mapped({ extendedProperties: { private: { waldoOperation: foreign } } })).not.toHaveProperty('operation_marker');
+    }
+  });
+
   it('carries the join link from hangoutLink, or else the video entry point', async () => {
     expect((await mapped({ hangoutLink: meet })).conference_url).toBe(meet);
     expect((await mapped({ conferenceData: { entryPoints: [{ entryPointType: 'phone', uri: 'tel:+1-555-0100' }, { entryPointType: 'video', uri: 'https://zoom.example.test/j/123?pwd=synthetic' }] } })).conference_url).toBe('https://zoom.example.test/j/123?pwd=synthetic');

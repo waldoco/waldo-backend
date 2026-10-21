@@ -15,6 +15,8 @@ export const IMESSAGE_OUTBOX_MAX_RECORDS = 256;
 
 export type IMessageOutboxRecord = {
   replyRef: string; commandId: string; text: string; bridgeDoName: string; ownerDoName: string; revision: string; bindingDigest: string;
+  /** The sender this reply answers; selects that sender's own authority on a shared bridge. Absent on older records. */
+  subject?: string;
   frozenAt: number; state: 'frozen' | 'queued' | 'settled'; nextAttemptAt: number; attempts: number;
   result?: IMessageResult; conflicts?: number;
 };
@@ -24,9 +26,12 @@ export class IMessageFinalOutbox {
   records(): IMessageOutboxRecord[] { return [...this.storage.kv.list<IMessageOutboxRecord>({ prefix: PREFIX })].map(([, r]) => r).sort((a, b) => a.frozenAt - b.frozenAt); }
   get(replyRef: string): IMessageOutboxRecord | null { return this.storage.kv.get<IMessageOutboxRecord>(PREFIX + replyRef) ?? null; }
 
-  /** Synchronous: must run inside the run scope's commit transaction. Identical refreeze is a no-op. */
-  freeze(record: IMessageInboxRecord, text: string): IMessageOutboxRecord {
-    const replyRef = `reply:${record.id}`, prior = this.get(replyRef);
+  /**
+   * Synchronous: must run inside the run scope's commit transaction. Identical refreeze is a no-op. A console link sent
+   * for the same inbound message is its own record, under its own commandId, so the reply still sends after it.
+   */
+  freeze(record: IMessageInboxRecord, text: string, kind: 'reply' | 'console' = 'reply'): IMessageOutboxRecord {
+    const replyRef = `${kind}:${record.id}`, prior = this.get(replyRef);
     if (prior) {
       // A settled record no longer holds its text; its stable commandId is the identity check.
       if (prior.commandId !== record.commandId || (prior.state !== 'settled' && prior.text !== text)) throw new Error('imessage_reply_conflict');
@@ -38,7 +43,7 @@ export class IMessageFinalOutbox {
       if (!evict) throw new Error('imessage_outbox_capacity');
       this.storage.kv.delete(PREFIX + evict.replyRef);
     }
-    const row: IMessageOutboxRecord = { replyRef, commandId: record.commandId, text, bridgeDoName: record.bridgeDoName, ownerDoName: record.ownerDoName,
+    const row: IMessageOutboxRecord = { replyRef, commandId: record.commandId, text, bridgeDoName: record.bridgeDoName, ownerDoName: record.ownerDoName, subject: record.binding.subject,
       revision: record.revision, bindingDigest: record.bindingDigest, frozenAt: this.now(), state: 'frozen', nextAttemptAt: this.now(), attempts: 0 };
     this.storage.kv.put(PREFIX + replyRef, row);
     this.storage.kv.put(IMESSAGE_OUTBOX_DUE_KEY, this.dueAt());

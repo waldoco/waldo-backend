@@ -33,11 +33,19 @@ export const appApprovalTaskExactV1Schema = z.strictObject({
 // Derived from the frozen desk payload, exposing no more than the desk review does: never raw MIME,
 // tokens, browser bindings or MCP arguments. Bindings and arguments appear only in `review`, with
 // credential values masked; a browser scope is the page without its query string or fragment.
+const instant = z.iso.datetime({ offset: true });
+// The calendar details are approvals revision 2, each present exactly when the review states it: the invited guests,
+// whether Google emails the guests, the place, a calendar other than the primary one, the Google account, the event's
+// time before a move, and the time zone the review's times are written in.
+const CALENDAR_DETAILS = ['guests', 'emails_guests', 'location', 'calendar', 'account', 'previous', 'time_zone'] as const;
 export const appApprovalExactV1Schema = z.strictObject({
   recipients: z.strictObject({ to: addresses.min(1), cc: addresses, bcc: addresses }).optional(),
   changes: z.strictObject({
     action: z.enum(['create', 'move', 'cancel']), title: z.string().min(1).max(200).nullable(),
-    start: z.iso.datetime({ offset: true }).nullable(), end: z.iso.datetime({ offset: true }).nullable(),
+    start: instant.nullable(), end: instant.nullable(),
+    guests: z.array(z.email()).min(1).max(50).optional(), emails_guests: z.boolean().optional(),
+    location: z.string().min(1).max(300).optional(), calendar: z.string().min(1).max(254).optional(), account: z.email().optional(),
+    previous: z.strictObject({ start: instant, end: instant }).optional(), time_zone: z.string().min(1).max(64).optional(),
   }).optional(),
   scope: z.string().min(1).max(2048).optional(),
   task: appApprovalTaskExactV1Schema.optional(),
@@ -45,7 +53,7 @@ export const appApprovalExactV1Schema = z.strictObject({
 // What each kind must show before it can be decided: who receives a send, what a calendar change
 // does, where a browser or MCP action lands, and which task fields change.
 const EXACT_BY_KIND = {
-  email_send: 'recipients', message_send: 'recipients', calendar_change: 'changes', browser_submit: 'scope', mcp_call: 'scope', google_task_change: 'task',
+  email_send: 'recipients', message_send: 'recipients', calendar_change: 'changes', browser_submit: 'scope', mcp_call: 'scope', google_task_change: 'task', tainted_action: 'scope',
 } as const satisfies Readonly<Record<ApprovalKindV1, keyof z.infer<typeof appApprovalExactV1Schema>>>;
 
 export const appApprovalV1Schema = z.strictObject({
@@ -62,6 +70,14 @@ export const appApprovalV1Schema = z.strictObject({
   .refine(approval => approval.undo_until === undefined || approval.actions.includes('undo'), { error: 'undo_until needs undo offered', path: ['undo_until'] })
   .refine(approval => new Set(approval.actions).size === approval.actions.length
     && approval.actions.every(action => DECISIONS_BY_STATE[approval.state]?.includes(action)), { error: 'actions must be decisions the desk accepts in this state', path: ['actions'] });
+export const APP_APPROVALS_CONTRACT_REVISION = 2;
+// An approval as a build reading `revision` parses it: revision 1 is the shape before the calendar details.
+export const appApprovalAtRevision = (approval: AppApprovalV1, revision: number): AppApprovalV1 => {
+  const changes = approval.exact.changes;
+  if (revision >= 2 || !changes) return approval;
+  const first = Object.fromEntries(Object.entries(changes).filter(([key]) => !(CALENDAR_DETAILS as readonly string[]).includes(key))) as typeof changes;
+  return { ...approval, exact: { ...approval.exact, changes: first } };
+};
 export const appApprovalListQueryV1Schema = z.strictObject({ state: appApprovalStateV1Schema.optional() });
 export const appApprovalListV1Schema = z.strictObject({ approvals: z.array(appApprovalV1Schema).max(100) });
 

@@ -1,16 +1,18 @@
+import { TURN_EVENT_SCHEMA_VERSION, type TurnOutcome } from '@waldo/contracts';
 import type { TurnLogEntry } from '../channels/telegram-listener';
 import { modelCost } from '../llm/pricing';
 import { gateTraceEntry, resolveCaptureText } from './trace-privacy';
 import { ownerTraceFields, ownerTraceIdentity } from './owner-trace-identity';
 
 export type OtlpConfig = Readonly<{ endpoint: string; headers: Readonly<Record<string, string>> }>;
-export type TraceContext = Readonly<{ environment: string; release: string; channel: string; userId: string; sessionId: string; captureText: boolean }>;
+// userId may be read when a trace is written, so a trace buffered before its owner resolved still files under that owner.
+export type TraceContext = Readonly<{ environment: string; release: string; channel: string; userId: string | (() => string); sessionId: string; captureText: boolean }>;
 type Env = Readonly<{ LANGFUSE_PUBLIC_KEY?: string; LANGFUSE_SECRET_KEY?: string; LANGFUSE_BASE_URL?: string }>;
 type Send = (url: string, init: RequestInit) => Promise<Response>;
 type Span = Readonly<{ entry: TurnLogEntry; endMs: number; arrival: number }>;
 
-// Bump when a name, tag or metadata key below changes meaning, so dashboards can filter by it.
-export const TRACE_SCHEMA_VERSION = '6';
+// The contracts schema version: bump there when a name, tag or metadata key below changes meaning.
+export const TRACE_SCHEMA_VERSION = TURN_EVENT_SCHEMA_VERSION;
 
 // Every hop has one feature area and a Langfuse observation type. New hops land in `other`
 // as plain spans until they are added here; model calls (`llm_*`) are always generations.
@@ -43,6 +45,9 @@ export const langfuseOtlpConfig = (env: Env): OtlpConfig | null => {
 const hex = (bytes: number) => [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, '0')).join('');
 const nanos = (ms: number) => `${Math.round(ms)}000000`;
 const attr = (key: string, value: string) => ({ key, value: { stringValue: value } });
+// A v9 field present on the entry becomes one string attribute; an absent field emits nothing.
+const optional = (key: string, value: string | number | boolean | undefined) => value === undefined ? [] : [attr(key, String(value))];
+const share = (cached: number, input: number) => (input > 0 ? (cached / input).toFixed(4) : undefined);
 const list = (key: string, values: readonly string[]) => ({ key, value: { arrayValue: { values: values.map((stringValue) => ({ stringValue })) } } });
 // Outstanding exports keep the 50-item budget. Buffered hops get their own, larger one so a long tool turn keeps every span.
 const MAX_RETAINED = 50;
@@ -58,7 +63,9 @@ const tagsFor = (context: TraceContext, spans: readonly Span[]) => [
 // and a generation per model call with tokens and explicit USD estimates. Message text only when captureText is on.
 export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceContext, send: Send = fetch, now: () => number = Date.now) => {
   const context = { ...suppliedContext, captureText: resolveCaptureText({ WALDO_ENVIRONMENT: suppliedContext.environment, LANGFUSE_CAPTURE_TEXT: suppliedContext.captureText ? 'true' : 'false' }) };
-  const validContext = [context.environment, context.release, context.channel, context.userId, context.sessionId].every((value) => typeof value === 'string' && value.trim().length > 0) && typeof suppliedContext.captureText === 'boolean';
+  const userId = () => typeof context.userId === 'function' ? context.userId() : context.userId;
+  const nonBlank = (value: unknown) => typeof value === 'string' && value.trim().length > 0;
+  const validContext = [context.environment, context.release, context.channel, context.sessionId].every(nonBlank) && (typeof context.userId === 'function' || nonBlank(context.userId)) && typeof suppliedContext.captureText === 'boolean';
   const pending = new Map<string, Span[]>();
   let nextArrival = 0;
   let bufferedHops = 0;
@@ -73,6 +80,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
     const cost = modelCost(usage);
     return [
       attr('langfuse.observation.type', 'generation'),
+      ...optional('langfuse.observation.metadata.cached_share', share(usage.cached, usage.input)),
       attr('langfuse.observation.model.name', usage.model),
       attr('langfuse.observation.usage_details', JSON.stringify({ input: usage.input - usage.cached, input_cached_tokens: usage.cached, output: usage.output })),
       attr('langfuse.observation.metadata.cost_kind', cost ? 'estimate' : 'unpriced'),
@@ -91,12 +99,13 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
   // What filled a model call, as numbers only, so section sizes can be compared across turns and surfaces.
   const contextMetadata = ({ shape }: TurnLogEntry) => {
     if (!shape?.context) return [];
-    const { system_sections: sections = {}, ...counts } = shape.context;
+    const { system_sections: sections = {}, context_sections: turnSections = {}, ...counts } = shape.context;
     return [
       attr('langfuse.observation.metadata.context_system_bytes', String(shape.system_bytes)),
       attr('langfuse.observation.metadata.context_request_bytes', String(shape.request_bytes)),
       ...Object.entries(counts).map(([key, value]) => attr(`langfuse.observation.metadata.context_${key}`, String(value))),
       ...Object.entries(sections).map(([key, value]) => attr(`langfuse.observation.metadata.context_system_${key}_bytes`, String(value))),
+      ...Object.entries(turnSections).map(([key, value]) => attr(`langfuse.observation.metadata.context_turn_${key}_bytes`, String(value))),
     ];
   };
 
@@ -119,16 +128,70 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
     ];
   };
 
+  // The v9 per-hop fields, each as its own attribute so a dashboard can group by it.
+  const hopTelemetry = (entry: TurnLogEntry) => [
+    ...optional('langfuse.observation.metadata.provider', entry.provider),
+    ...optional('langfuse.observation.metadata.fallback_fired', entry.fallback_fired),
+    ...optional('langfuse.observation.metadata.ttft_ms', entry.ttft_ms),
+    ...optional('langfuse.observation.metadata.rung', entry.rung),
+    ...optional('langfuse.observation.metadata.blocked_reason', entry.blocked_reason),
+    ...optional('langfuse.observation.metadata.error_code', entry.error_code),
+    ...optional('langfuse.observation.metadata.parallel_batches', entry.parallel_batches),
+    ...optional('langfuse.observation.metadata.browser_ms', entry.browser_ms),
+    ...optional('langfuse.observation.metadata.sandbox_ms', entry.sandbox_ms),
+  ];
+
+  const sumOf = (values: readonly (number | undefined)[]) => values.some((value) => value !== undefined) ? values.reduce<number>((sum, value) => sum + (value ?? 0), 0) : undefined;
+  const outcomeOf = ({ ok, hop, outcome }: TurnLogEntry): TurnOutcome => outcome ?? (ok ? (hop === 'turn' ? 'answered' : 'completed') : 'failed');
+  // Turn-level v9 metadata derived from the buffered hops; the root's own fields (outcome, job, rung) ride beside it.
+  const turnTelemetry = (root: TurnLogEntry, spans: readonly Span[]) => {
+    const entries = spans.map(({ entry }) => entry);
+    const tools = entries.filter(({ hop }) => hop.startsWith('tool_'));
+    const generations = entries.filter(({ usage }) => usage);
+    const providers = [...new Set(entries.flatMap(({ provider }) => (provider ? [provider] : [])))];
+    const rungs = [...new Set([...entries, root].flatMap(({ rung }) => (rung ? [rung] : [])))].sort();
+    const blocked = [root, ...entries].find(({ blocked_reason }) => blocked_reason)?.blocked_reason;
+    const errorCode = [root, ...entries].find(({ error_code }) => error_code)?.error_code;
+    const offered = generations.flatMap(({ shape }) => (shape?.context ? [shape.context] : []));
+    const maxOf = (values: readonly number[]) => (values.length ? Math.max(...values) : undefined);
+    return [
+      attr('langfuse.trace.metadata.outcome', outcomeOf(root)),
+      attr('langfuse.trace.metadata.tools_called', String(root.tools_called ?? tools.length)),
+      attr('langfuse.trace.metadata.tools_failed', String(tools.filter(({ ok }) => !ok).length)),
+      ...(tools.length ? [list('langfuse.trace.metadata.tools_called_names', [...new Set(tools.map(({ hop }) => hop.slice(5)))].sort())] : []),
+      // One batch per tool call until parallel dispatch lands; a producer that batches reports its own count.
+      attr('langfuse.trace.metadata.parallel_batches', String(root.parallel_batches ?? sumOf(tools.map(({ parallel_batches }) => parallel_batches)) ?? tools.length)),
+      ...optional('langfuse.trace.metadata.tools_offered', maxOf(offered.map(({ tools_count }) => tools_count))),
+      ...optional('langfuse.trace.metadata.tools_bytes', maxOf(offered.map(({ tools_bytes }) => tools_bytes))),
+      ...optional('langfuse.trace.metadata.tools_tokens_est', maxOf(offered.flatMap(({ tools_tokens_est }) => (tools_tokens_est === undefined ? [] : [tools_tokens_est])))),
+      ...optional('langfuse.trace.metadata.ttft_ms', generations.find(({ ttft_ms }) => ttft_ms !== undefined)?.ttft_ms),
+      ...optional('langfuse.trace.metadata.provider', providers.length === 0 ? undefined : providers.length === 1 ? providers[0] : 'mixed'),
+      ...optional('langfuse.trace.metadata.fallback_fired', entries.some(({ fallback_fired }) => fallback_fired !== undefined) ? entries.some(({ fallback_fired }) => fallback_fired) : undefined),
+      ...(rungs.length ? [list('langfuse.trace.metadata.rungs', rungs)] : []),
+      ...optional('langfuse.trace.metadata.blocked_reason', blocked),
+      ...optional('langfuse.trace.metadata.error_code', errorCode),
+      ...optional('langfuse.trace.metadata.job_id', root.job_id),
+      ...optional('langfuse.trace.metadata.job_profile', root.job_profile),
+      ...optional('langfuse.trace.metadata.browser_ms', sumOf([root, ...entries].map(({ browser_ms }) => browser_ms))),
+      ...optional('langfuse.trace.metadata.sandbox_ms', sumOf([root, ...entries].map(({ sandbox_ms }) => sandbox_ms))),
+    ];
+  };
+
   const totals = (spans: readonly Span[]) => {
     const usages = spans.flatMap(({ entry }) => (entry.usage ? [entry.usage] : []));
     const costs = usages.map(modelCost).filter((cost) => cost !== null);
     const cost = costs.reduce((sum, value) => sum + value.total, 0);
     const unpriced = usages.length - costs.length;
+    const searches = usages.reduce((sum, usage) => sum + (usage.web_searches ?? 0), 0);
+    const searchUsd = costs.reduce((sum, value) => sum + (value.web_search ?? 0), 0);
     return [
       attr('langfuse.trace.metadata.model_calls', String(usages.length)),
       attr('langfuse.trace.metadata.tokens_input', String(usages.reduce((sum, usage) => sum + usage.input, 0))),
       attr('langfuse.trace.metadata.tokens_output', String(usages.reduce((sum, usage) => sum + usage.output, 0))),
       attr('langfuse.trace.metadata.tokens_cached', String(usages.reduce((sum, usage) => sum + usage.cached, 0))),
+      ...optional('langfuse.trace.metadata.cached_share', share(usages.reduce((sum, usage) => sum + usage.cached, 0), usages.reduce((sum, usage) => sum + usage.input, 0))),
+      attr('langfuse.trace.metadata.hosted_web_search_calls', String(searches)),
+      attr('langfuse.trace.metadata.hosted_web_search_usd', searchUsd.toFixed(8)),
       attr('langfuse.trace.metadata.cost_kind', 'estimate'),
       attr('langfuse.trace.metadata.cost_scope', 'pre_root_hops'),
       attr('langfuse.trace.metadata.pricing_limit', 'flat_table_not_tier_or_bill_reconciled'),
@@ -145,7 +208,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
     startTimeUnixNano: nanos(endMs - entry.ms), endTimeUnixNano: nanos(endMs),
     attributes: [
       attr('langfuse.environment', context.environment),
-      attr('langfuse.user.id', context.userId),
+      attr('langfuse.user.id', userId()),
       attr('langfuse.session.id', context.sessionId),
       attr('langfuse.release', context.release),
       attr('langfuse.version', context.release),
@@ -168,6 +231,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
       ...(entry.code ? [attr('langfuse.observation.metadata.code', entry.code)] : []),
       ...(entry.guard ? [attr('langfuse.observation.metadata.guard', entry.guard)] : []),
       ...(entry.owner ? [attr('langfuse.observation.metadata.owner', entry.owner)] : []),
+      ...hopTelemetry(entry),
       ...generation(entry),
       ...contextMetadata(entry),
       ...io(entry),
@@ -211,7 +275,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
   };
 
   return (entry: TurnLogEntry): Promise<void> => {
-    if (!validContext) return Promise.reject(new Error('otlp_context_invalid'));
+    if (!validContext || !nonBlank(userId())) return Promise.reject(new Error('otlp_context_invalid'));
     const gated = gateTraceEntry(entry, context.captureText);
     const item = { entry: { ...gated, text: context.captureText && gated.text ? { ...gated.text } : undefined, usage: gated.usage ? { ...gated.usage } : undefined }, endMs: now(), arrival: nextArrival++ };
     const done = exported.get(entry.trace);
@@ -242,7 +306,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
       list('langfuse.trace.tags', tagsFor(context, hops)),
       attr('langfuse.trace.metadata.schema_version', TRACE_SCHEMA_VERSION),
       attr('langfuse.trace.metadata.buffer_evicted_hops', String(evictedHops)),
-      attr('langfuse.trace.metadata.outcome', entry.ok ? (entry.hop === 'turn' ? 'answered' : 'completed') : 'failed'),
+      ...turnTelemetry(item.entry, hops),
       ...totals(hops),
       ...traceIo(item.entry),
     ], entry.hop);

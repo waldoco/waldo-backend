@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { handleConsole, downloadReturnTarget } from '../src/channels/console-signin';
+import { handleConsole, downloadReturnTarget, consoleReturnTarget } from '../src/channels/console-signin';
 import type { ConsoleAuth } from '../src/identity/console-auth';
 
 const downloadTarget = '/console/workspace/file?id=def993c9-db4d-49c4-8998-8465bed3606e&revision=1';
@@ -29,6 +29,29 @@ it('finishes download OTP with an HTML link and unchanged cookie protections', a
   expect(response.headers.get('location')).toBeNull();
   expect(response.headers.get('set-cookie')).toContain('HttpOnly; Secure; SameSite=Strict');
   expect(await response.text()).toContain('id="signin-download"');
+});
+
+it('returns a signed-out owner to the devices page after sign-in so Kennel pairing continues', async () => {
+  const ns = owners();
+  const response = (await handleConsole(new Request('https://w.test/console/devices'), { OWNER_DO: ns.ns }, auth()))!;
+  expect(response.status).toBe(303);
+  expect(response.headers.get('location')).toBe(`/console/signin?return_to=${encodeURIComponent('/console/devices')}`);
+  expect(ns.fetch).not.toHaveBeenCalled();
+  const html = await (await handleConsole(new Request(`https://w.test/console/signin?return_to=${encodeURIComponent('/console/devices')}`), { OWNER_DO: ns.ns }, auth()))!.text();
+  expect(html).toContain('pair your Mac');
+  expect(html).toContain('name="return_to" value="/console/devices"');
+  const verified = (await handleConsole(form('/console/verify', { email: 'owner@example.com', code: '123456', return_to: '/console/devices' }),
+    { OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } as unknown as RateLimit },
+    auth({ verify: async () => 'do-a' })))!;
+  expect(verified.status).toBe(303);
+  expect(verified.headers.get('location')).toBe('/console/devices');
+  expect(verified.headers.get('set-cookie')).toContain('HttpOnly; Secure; SameSite=Strict');
+});
+it('accepts exactly the devices path as a non-download continuation', () => {
+  expect(consoleReturnTarget(['/console/devices'])).toBe('/console/devices');
+  for (const target of ['/console/devices/', '/console/devices?x=1', '/console/devices#x', 'https://evil.test/console/devices', '//evil.test/console/devices', '/console/action', '/console'])
+    expect(consoleReturnTarget([target])).toBeNull();
+  expect(consoleReturnTarget(['/console/devices', '/console/devices'])).toBeNull();
 });
 
 const owners = () => {

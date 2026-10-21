@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CONTROLS_PATH, projectControls, readControlsQuery } from '../src/channels/dashboard-controls';
 import type { ApprovalItem } from '../src/channels/approvals';
 import { SAMPLE_CONSOLE_VIEW } from './fixtures/console-sample';
+import { appControlConnectionsDataV1Schema } from '../../contracts/src/app/controls';
 
 describe('narrow controls read projection', () => {
   it('accepts only explicit views and activity cursors, never identity selectors', () => {
@@ -42,6 +43,24 @@ describe('narrow controls read projection', () => {
     ] }, telegram: { linked: true, unlinkAvailable: true }, sessions: { count: 1 } });
     expect(JSON.stringify(result)).not.toContain('secret-');
     expect(JSON.stringify(result)).not.toContain('verified');
+  });
+
+  it('lists iMessage beside the other channels only when its link state is known, within the app contract', () => {
+    const linked = projectControls({ ...SAMPLE_CONSOLE_VIEW, imessage: { linked: true } }, 'connections');
+    const unlinked = projectControls({ ...SAMPLE_CONSOLE_VIEW, imessage: { linked: false } }, 'connections');
+    expect(linked.data.channels).toEqual([{ channel: 'imessage', state: 'linked', masked_label: 'Your iPhone' }]);
+    expect(unlinked.data.channels).toEqual([{ channel: 'imessage', state: 'unlinked', masked_label: null }]);
+    expect('channels' in projectControls({ ...SAMPLE_CONSOLE_VIEW, imessage: undefined }, 'connections').data).toBe(false);
+    for (const result of [linked, unlinked]) expect(appControlConnectionsDataV1Schema.safeParse(result.data).success).toBe(true);
+  });
+
+  it('lists WhatsApp beside iMessage only when its link state is known; absent is unknown, never unlinked', () => {
+    const both = projectControls({ ...SAMPLE_CONSOLE_VIEW, imessage: { linked: false }, whatsapp: { linked: true } }, 'connections');
+    const onlyWhatsapp = projectControls({ ...SAMPLE_CONSOLE_VIEW, imessage: undefined, whatsapp: { linked: false } }, 'connections');
+    expect(both.data.channels).toEqual([{ channel: 'imessage', state: 'unlinked', masked_label: null }, { channel: 'whatsapp', state: 'linked', masked_label: 'Your WhatsApp' }]);
+    expect(onlyWhatsapp.data.channels).toEqual([{ channel: 'whatsapp', state: 'unlinked', masked_label: null }]);
+    expect('channels' in projectControls({ ...SAMPLE_CONSOLE_VIEW, imessage: undefined, whatsapp: undefined }, 'connections').data).toBe(false);
+    for (const result of [both, onlyWhatsapp]) expect(appControlConnectionsDataV1Schema.safeParse(result.data).success).toBe(true);
   });
 
   it('lists console sessions without credentials beside the count', () => {

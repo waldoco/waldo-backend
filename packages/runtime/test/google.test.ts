@@ -44,7 +44,7 @@ describe('google oauth state', () => {
     expect(url.searchParams.get('prompt')).toBe('consent select_account');
     const scopes = url.searchParams.get('scope')!.split(' ');
     expect(scopes).toEqual([
-      'openid', 'email',
+      'openid', 'email', 'profile',
       'https://www.googleapis.com/auth/calendar.events',
       'https://www.googleapis.com/auth/calendar.events.freebusy',
       'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
@@ -56,9 +56,12 @@ describe('google oauth state', () => {
       'https://www.googleapis.com/auth/documents.readonly',
       'https://www.googleapis.com/auth/spreadsheets.readonly',
       'https://www.googleapis.com/auth/presentations.readonly',
+      'https://www.googleapis.com/auth/contacts.readonly',
+      'https://www.googleapis.com/auth/contacts.other.readonly',
+      'https://www.googleapis.com/auth/user.phonenumbers.read',
     ]);
-    // Read-only Workspace set only: no write, file or contacts scope.
-    expect(scopes.join(' ')).not.toMatch(/drive\.file|auth\/drive |auth\/documents |auth\/spreadsheets |auth\/presentations |contacts|gmail\.modify/);
+    // Read-only Workspace and contacts set only: no write or file scope.
+    expect(scopes.join(' ')).not.toMatch(/drive\.file|auth\/drive |auth\/documents |auth\/spreadsheets |auth\/presentations |auth\/contacts( |$)|gmail\.modify/);
     expect(url.searchParams.get('redirect_uri')).toBe(app.redirectUri);
   });
 });
