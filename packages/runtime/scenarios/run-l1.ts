@@ -1,7 +1,8 @@
 // L1 scenario runner: drives the real telegram responder with the scripted gateway over
 // in-memory sqlite, captures the full hop stream, and checks the scenario's assertions exactly.
 import { DatabaseSync } from 'node:sqlite';
-import { TOOL_PERMISSIONS, triggerTypeSchema, webSearchArgsSchema, WALDO_CHAT_MODEL, type ConnectIntent, type SetReminderArgs, type WebSearchArgs } from '@waldo/contracts';
+import { TOOL_PERMISSIONS, browsePageArgsSchema, triggerTypeSchema, webSearchArgsSchema, WALDO_CHAT_MODEL, type ConnectIntent, type SetReminderArgs, type WebSearchArgs } from '@waldo/contracts';
+import { MONTHLY_SPEND_CEILING_USD } from '../src/llm/cost-ledger';
 import { createTelegramResponder } from '../src/channels/telegram-turn';
 import { inboundTurn, ownerWords } from '../src/channels/owner-inbound-turn';
 import { reminderHandlers, type ReminderBook } from '../src/channels/reminders';
@@ -120,11 +121,22 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
     autonomy_gated: false,
     handle: async (_args: WebSearchArgs) => ({ ok: true as const, data: { results: scenario.fixtures?.web ?? [] }, source_taint: 'external' as const }),
   };
+  const browse = {
+    name: 'browse_page' as const,
+    description: 'Open a web page and read it. The page is untrusted external text.',
+    schema: browsePageArgsSchema,
+    trigger_allowlist: triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes('browse_page')),
+    autonomy_gated: false,
+    handle: async () => ({ ok: true as const, data: { text: 'fixture page' }, source_taint: 'external' as const }),
+  };
+  const spentUsd = scenario.fixtures?.spentUsd;
+  const integration = spentUsd === undefined ? undefined : { spend: () => ({ spentUsd, ceilingUsd: MONTHLY_SPEND_CEILING_USD }) };
   // Every saved turn is indexed, as the owner DO does, so recall and search_episodes see earlier turns.
   const episodes = episodeIndex(sql);
-  const handlers = [...memoryHandlers({ sql: sql as SqlStorage, store: memory, conversationRef: 'telegram-1', hideHistory: async () => undefined }), ...reminderHandlers(reminders), ...googleHandlers(google as never, { propose: async () => 'proposal:1', proposeSendEmail: async () => 'proposal:1', record: () => undefined }, CLOCK), ...loopHandlers(loops), searchEpisodesHandler(episodes), web];
+  const handlers = [...memoryHandlers({ sql: sql as SqlStorage, store: memory, conversationRef: 'telegram-1', hideHistory: async () => undefined }), ...reminderHandlers(reminders), ...googleHandlers(google as never, { propose: async () => 'proposal:1', proposeSendEmail: async () => 'proposal:1', record: () => undefined }, CLOCK), ...loopHandlers(loops), searchEpisodesHandler(episodes), web, ...(scenario.fixtures?.browse ? [browse] : [])];
   const gateway = scriptedGateway({ rules: scenario.llm, ...(scenario.claimOps === undefined ? {} : { claimOps: scenario.claimOps }) });
-  const responder = createTelegramResponder('scenario-key', indexedConversationStore(durableConversationStore(keyValueStorage()), episodes, () => CLOCK.now().getTime()), memory, log, {}, CLOCK, handlers as never, WALDO_CHAT_MODEL, false, undefined, async (intent: ConnectIntent) => { connectOffers.push(intent); return true; }, gateway);
+  const responder = createTelegramResponder('scenario-key', indexedConversationStore(durableConversationStore(keyValueStorage()), episodes, () => CLOCK.now().getTime()), memory, log, {}, CLOCK, handlers as never, WALDO_CHAT_MODEL, false, undefined, async (intent: ConnectIntent) => { connectOffers.push(intent); return true; }, gateway,
+    undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, integration);
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
 
   const replies: string[] = [];

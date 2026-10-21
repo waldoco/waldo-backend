@@ -305,7 +305,7 @@ describe('otlpTurnExporter', () => {
       usage: { model: OPENAI_GPT_6_LUNA_MODEL, input: 100, output: 10, cached: 0 },
       shape: { system_bytes: 40, request_bytes: 90, context: {
         tools_count: 3, tools_bytes: 1200, tool_turns_bytes: 0, history_messages: 2, history_bytes: 30, current_bytes: 12, attachments: 0,
-        system_sections: { behavior: 20, clock: 8, memory: 8 } } } });
+        system_sections: { behavior: 20 }, context_sections: { clock: 8, memory: 8 } } } });
     await log({ trace: 'tg-ctx', hop: 'turn', ms: 10, ok: true });
     const generation = spans(0).find((span) => span.name === 'llm_reply')!;
     expect(attrs(generation)).toMatchObject({
@@ -316,8 +316,10 @@ describe('otlpTurnExporter', () => {
       'langfuse.observation.metadata.context_history_bytes': '30',
       'langfuse.observation.metadata.context_current_bytes': '12',
       'langfuse.observation.metadata.context_system_behavior_bytes': '20',
-      'langfuse.observation.metadata.context_system_memory_bytes': '8',
+      'langfuse.observation.metadata.context_turn_clock_bytes': '8',
+      'langfuse.observation.metadata.context_turn_memory_bytes': '8',
     });
+    expect(attrs(generation)['langfuse.observation.metadata.context_context_sections']).toBeUndefined();
   });
 
   it('keeps every hop of one long turn that exceeds the outstanding-export budget', async () => {

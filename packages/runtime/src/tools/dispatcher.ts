@@ -66,6 +66,8 @@ export type ToolDispatcherContext = HookRuntimeContext & {
   toolCallId?: string;
   runScope?: RunEffectScope;
   session: SessionState;
+  // A host hold on one tool for now (the owner's spend ceiling): the call is refused before anything runs.
+  heldTool?: (tool: ToolName) => ToolError | null;
 };
 
 export type DispatchToolResult = (
@@ -112,6 +114,7 @@ export type ToolDispatchErrorReason =
   | 'effect_receipt_unavailable'
   | 'handler_acl_drift'
   | 'acl_denied'
+  | 'held'
   | 'invalid_args'
   | 'approval_denied'
   | 'egress_denied'
@@ -230,6 +233,9 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
       'handler_acl_drift',
     );
   }
+
+  const held = ctx.heldTool?.(tool.data);
+  if (held) return failDispatch(call.id, tool.data, held, 'rejected', 'held');
 
   // An approval token names one frozen call. A call that is not that call fails closed here, before any hook
   // could read the token and admit it.

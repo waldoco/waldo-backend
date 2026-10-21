@@ -22,6 +22,7 @@ import { approvalReplayContext, proposeActionHandler, taintedActionReplay } from
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
 const allowlist = (tool: ToolName): TriggerType[] => (Object.keys(TOOL_PERMISSIONS) as TriggerType[]).filter((trigger) => TOOL_PERMISSIONS[trigger].includes(tool));
+const tainted = (over: Partial<ToolDispatcherContext> = {}): ToolDispatcherContext => context({ toolArgSourceTaint: 'external', ...over });
 const context = (over: Partial<ToolDispatcherContext> = {}): ToolDispatcherContext => ({
   authenticatedUserId: 'owner-1', trigger: 'user_message', canaryTokens: CANARIES, sourceTaint: null, toolArgSourceTaint: null,
   sanitise, hasApproval: () => true, turnId: 'turn-1',
@@ -159,8 +160,8 @@ describe('taint goes to a card', () => {
       const handlers = [writeTask];
       const { desk, rows, clock } = deskIn(state, taintedActionReplay({ handlers: () => handlers, context: () => context() }));
       const propose = proposeActionHandler(desk);
-      const denied = await propose.handle(proposal as never, context({ toolCallId: 'c1' }));
-      const expired = await propose.handle(proposal as never, context({ toolCallId: 'c2' }));
+      const denied = await propose.handle(proposal as never, tainted({ toolCallId: 'c1' }));
+      const expired = await propose.handle(proposal as never, tainted({ toolCallId: 'c2' }));
       expect(denied.ok && expired.ok).toBe(true);
       const [first, second] = rows('tainted_action');
       expect((await desk.decide(first!.id, 's', 't')).toast).toBe('Not now');
@@ -187,17 +188,20 @@ describe('taint goes to a card', () => {
     await runInDurableObject(stub('refuse'), async (_instance, state) => {
       const { desk, rows } = deskIn(state);
       const propose = proposeActionHandler(desk);
-      expect(await propose.handle({ tool: 'get_context', args: {}, reasoning: 'r' } as never, context())).toMatchObject({ ok: false, code: 'rejected' });
-      expect(await propose.handle({ tool: 'write_task', args: { title: '' }, reasoning: 'r' } as never, context())).toMatchObject({ ok: false, code: 'invalid_args' });
+      // An untainted turn needs no card: the tool is called directly. The menu offers propose_action every round when the
+      // tool list is kept stable, so this refusal is what keeps it a taint-only route.
+      expect(await propose.handle(proposal as never, context())).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining('call the tool directly') });
+      expect(await propose.handle({ tool: 'get_context', args: {}, reasoning: 'r' } as never, tainted())).toMatchObject({ ok: false, code: 'rejected' });
+      expect(await propose.handle({ tool: 'write_task', args: { title: '' }, reasoning: 'r' } as never, tainted())).toMatchObject({ ok: false, code: 'invalid_args' });
       // A card that could never run is refused before it reaches the owner: the Mac needs an untainted owner turn,
       // the host may not hold the tool, and the host's own approval line may never admit it.
-      expect(await propose.handle({ tool: 'use_mac', args: {}, reasoning: 'r' } as never, context())).toMatchObject({ ok: false, code: 'rejected' });
-      expect(await proposeActionHandler(desk, { replayable: () => false }).handle(proposal as never, context())).toMatchObject({ ok: false, code: 'rejected' });
+      expect(await propose.handle({ tool: 'use_mac', args: {}, reasoning: 'r' } as never, tainted())).toMatchObject({ ok: false, code: 'rejected' });
+      expect(await proposeActionHandler(desk, { replayable: () => false }).handle(proposal as never, tainted())).toMatchObject({ ok: false, code: 'rejected' });
       // send_message raises its own card, so the model is told to call it directly rather than wrap it in a second card.
       const send = { tool: 'send_message', args: { channel: 'telegram', content: 'Invoice 44 is due today.', idempotency_key: 'a'.repeat(64) }, reasoning: 'r' };
-      expect(await proposeActionHandler(desk, { raisesOwnCard: (tool) => tool === 'send_message' }).handle(send as never, context())).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining('call it directly') });
-      expect(await propose.handle(proposal as never, context({ hasApproval: () => false }))).toMatchObject({ ok: false, code: 'forbidden' });
-      expect(await propose.handle(proposal as never, context({ hasApproval: () => { throw new Error('down'); } }))).toMatchObject({ ok: false, code: 'forbidden' });
+      expect(await proposeActionHandler(desk, { raisesOwnCard: (tool) => tool === 'send_message' }).handle(send as never, tainted())).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining('call it directly') });
+      expect(await propose.handle(proposal as never, tainted({ hasApproval: () => false }))).toMatchObject({ ok: false, code: 'forbidden' });
+      expect(await propose.handle(proposal as never, tainted({ hasApproval: () => { throw new Error('down'); } }))).toMatchObject({ ok: false, code: 'forbidden' });
       expect(rows('tainted_action')).toEqual([]);
     });
   });
@@ -217,7 +221,7 @@ describe('taint goes to a card', () => {
     await runInDurableObject(stub('host-refuses'), async (_instance, state) => {
       const handlers = [writeTask];
       const refusing = deskIn(state, taintedActionReplay({ handlers: () => handlers, context: () => approvalReplayContext({ authenticatedUserId: 'owner-1', hasApproval: () => false, sanitise }) }));
-      await proposeActionHandler(refusing.desk).handle(proposal as never, context({ toolCallId: 'c2' }));
+      await proposeActionHandler(refusing.desk).handle(proposal as never, tainted({ toolCallId: 'c2' }));
       const [row] = refusing.rows('tainted_action');
       expect((await refusing.desk.decide(row!.id, 'a', 't')).toast).toBe('Not done');
       expect(refusing.rows('tainted_action')[0]!.status).toBe('rejected');
