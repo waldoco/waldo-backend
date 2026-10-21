@@ -16,6 +16,8 @@ const readThread = async (payload: unknown) => {
   return { shown: JSON.stringify(await handler.handle({ thread_id: 't', limit: 10 } as never)), relays };
 };
 
+const digits = ['4', '8', '2', '9', '1', '3'];
+
 describe('the extractor', () => {
   it.each([
     ['Verification code482913', '482913'],
@@ -31,16 +33,139 @@ describe('the extractor', () => {
     ['Your code:\t4829\t1356', '48291356'],
     ['Your code is 1234 5678', '12345678'],
     ['verification code 48 29', '4829'],
-    // The relayed value is the code's own capture, never another digit run in the phrase.
-    ['Acme2024 verification code 482913', '482913'],
+    // Text glued straight onto the adjective, longer than any vendor word, with a noun or separator only the
+    // adjective form covers.
+    ['abcdefghij'.repeat(4) + 'Xverification pin 123456', '123456'],
+    ['abcdefghij'.repeat(4) + 'Xverification code - 123456', '123456'],
+    // As a connector-proxy that predates the cell separator renders cells: indentation between them, any width.
+    ['Your code\n' + digits.join('\n' + ' '.repeat(40)), '482913'],
+    ['Your code \r\n' + digits.join(' \r\n' + ' '.repeat(30)), '482913'],
+    ['Your code\n\n' + digits.join('\n\n      \n    '), '482913'],
+    // Glued to the next cell's text, as a minified table renders before the cell separator.
+    ['Verification code482913Valid', '482913'],
+    ['482913is your verification code', '482913'],
+    // Glued to the previous cell's text.
+    ['Your verificationcode: 482913', '482913'],
+    ['Your verificationPIN482913', '482913'],
+    ['Enter thiscode: 482913', '482913'],
+    ['Hello482913 is your code', '482913'],
+    // Invisible characters between digits: zero-width space, non-joiner, joiner, word joiner, soft hyphen. The last
+    // one has spaces around it, so stripping must come before whitespace is collapsed.
+    ['Your code is 4\u200b8\u200b2\u200b9\u200b1\u200b3', '482913'],
+    ['Your code is 482\u200c913', '482913'],
+    ['Your code is 4829\u200d13', '482913'],
+    ['Your code is 48\u206029\u206013', '482913'],
+    ['Your code is 4\u00ad8\u00ad2\u00ad9\u00ad1\u00ad3', '482913'],
+    ['Your code is 4 \u200b 8 \u200b 2 \u200b 9 \u200b 1 \u200b 3', '482913'],
+    // Direction marks, isolates and the combining grapheme joiner render nothing too. A keyword split by one still
+    // reads whole, and digits joined only by them read as one run when it is no longer than a code.
+    ['Your code is 482\u200e913', '482913'],
+    ['Your code is 48\u206629\u206913', '482913'],
+    ['Your code is 4\u034f8\u034f2\u034f9\u034f1\u034f3', '482913'],
+    ['Your co\u200bde is 482913', '482913'],
+    ['Your code\u200b482913', '482913'],
+    ['Your code is \u200b482913', '482913'],
+    ['482913\u200b is your code', '482913'],
+    ['45\u00ad53\u00ad6\u00ad6 is your code', '455366'],
+    ['2\u00ad4\u00ad9\u00ad6\u00ad912\u00ad4 is your code', '24969124'],
+    // Uneven and hyphenated splits. A hyphenated code relays as written, like "123-456".
+    ['Your code is 4829 13', '482913'],
+    ['Your code is 48 2913', '482913'],
+    ['Your code is 482 9 13', '482913'],
+    ['Your code is 4 829 13', '482913'],
+    ['Your code is 1234-5678', '1234-5678'],
+    ['1234-5678 is your verification code', '1234-5678'],
   ])('catches a code glued to its label or spaced out: %s', (text, code) => {
     const found = extractArtifacts(text);
     expect(found.artifacts).toEqual([{ kind: 'otp', value: code }]);
     expect(found.text.replace(/\D/g, '')).toBe('');
   });
 
-  it.each(['Postcode12345 area', 'see codes 1234 below', 'room 4 8 2 9 is free', 'code 1 2 3 is too short', 'error code 404', 'Room 4021'])('leaves ordinary text alone: %s', (text) => {
+  it('relays the code\'s own capture, never another digit run nearby', () => {
+    expect(extractArtifacts('Acme2024 verification code 482913')).toEqual({ text: 'Acme2024 [quarantined: otp artifact - view in the source app]', artifacts: [{ kind: 'otp', value: '482913' }] });
+  });
+
+  it.each([
+    ['Your code482913Expires in 10 minutes', 'Your [quarantined: otp artifact - view in the source app]Expires in 10 minutes', '482913'],
+    ['Your code 482 913 10 minutes', 'Your [quarantined: otp artifact - view in the source app] 10 minutes', '482913'],
+    ['Your code 48 29 13 5 minutes', 'Your [quarantined: otp artifact - view in the source app] 5 minutes', '482913'],
+    ['Your code 4 8 2 9 1 3 10 minutes', 'Your [quarantined: otp artifact - view in the source app] 10 minutes', '482913'],
+    ['Your code 482913 10 minutes', 'Your [quarantined: otp artifact - view in the source app] 10 minutes', '482913'],
+    ['Total: $12.99\n092893 is your log-in code.', 'Total: $12.99\n[quarantined: otp artifact - view in the source app].', '092893'],
+    ['482913 is your verification codeValid for 10 minutes', '[quarantined: otp artifact - view in the source app]Valid for 10 minutes', '482913'],
+    // A longer run joined only by invisible characters is split at them, so a code never joins the digits beside it.
+    ['Your code is 482913\u200b2026', 'Your [quarantined: otp artifact - view in the source app] 2026', '482913'],
+    ['2026\u200b482913 is your code', '2026 [quarantined: otp artifact - view in the source app]', '482913'],
+    ['Your code is 482913\u200c2026 Acme', 'Your [quarantined: otp artifact - view in the source app] 2026 Acme', '482913'],
+    // Before "is your", a split starts at a word boundary, so it never takes digits from a token like "Acme2024".
+    ['Acme2024 5209 is your sign-in code', 'Acme2024 [quarantined: otp artifact - view in the source app]', '5209'],
+    ['Card ending x1234\n5209 is your verification code', 'Card ending x1234\n[quarantined: otp artifact - view in the source app]', '5209'],
+    ['Account AB12\n48 29 13 is your code', 'Account AB12\n[quarantined: otp artifact - view in the source app]', '482913'],
+  ])('relays the code exactly when other digits are near it: %s', (text, shown, code) => {
+    expect(extractArtifacts(text)).toEqual({ text: shown, artifacts: [{ kind: 'otp', value: code }] });
+  });
+
+  // Catching a code comes before relaying it accurately, so a keyword followed by digits is quarantined even when
+  // they are not a code. Pinned, so a narrowing changes these on purpose.
+  it.each([
+    ['Dress code 1920s', '1920'],
+    ['Promo code 2024SALE', '2024'],
+    ['Area code 020 7946', '0207946'],
+    ['Postcode12345 area', '12345'],
+    ['Your code 4829 13\n10 minutes', '48291310'],
+    // Digits joined only by invisible characters read as one run up to eight digits, so a short code is relayed
+    // with the digits beside it.
+    ['Your code is 4829\u200b2026', '48292026'],
+    ['Acme2024\u200b5209 is your sign-in code', '20245209'],
+  ])('quarantines digits after a keyword even when they are not a code: %s', (text, relayed) => {
+    expect(extractArtifacts(text).artifacts).toEqual([{ kind: 'otp', value: relayed }]);
+  });
+
+  it.each(['see codes 1234 below', 'room 4 8 2 9 is free', 'code 1 2 3 is too short', 'error code 404', 'Room 4021'])('leaves ordinary text alone: %s', (text) => {
     expect(extractArtifacts(text).artifacts).toEqual([]);
+  });
+});
+
+// One pass must not hand the next a broken input. A link loses its invisible characters before digits are split, so
+// it stays whole; "… is your code" is read before the keyword patterns, so they never take its noun.
+describe('the passes, in order', () => {
+  const marker = (kind: string) => `[quarantined: ${kind} artifact - view in the source app]`;
+  const link = 'https://example.com/reset-password?uid=506705670&token=QJXZQJXZsecret';
+
+  it.each([['a zero-width space', '\u200b'], ['a soft hyphen', '\u00ad'], ['a word joiner', '\u2060']])('relay a reset link whole when %s splits its digits', (_char, invisible) => {
+    expect(extractArtifacts(`Reset: ${link.replace('506705670', `50670${invisible}5670`)} now`))
+      .toEqual({ text: `Reset: ${marker('password_reset')} now`, artifacts: [{ kind: 'password_reset', value: link }] });
+  });
+
+  it('show any other link whole, without its invisible characters', () => {
+    expect(extractArtifacts('Your code is 482913. Order: https://shop.example/orders/12345\u200b67890'))
+      .toEqual({ text: `Your ${marker('otp')}. Order: https://shop.example/orders/1234567890`, artifacts: [{ kind: 'otp', value: '482913' }] });
+  });
+
+  it.each([['&#8203;'], ['&shy;']])('keep a reset link from read_thread when %s splits its digits', async (entity) => {
+    const shown = link.replace('506705670', `50670${entity}5670`).replace('&token', '&amp;token');
+    const { shown: body, relays } = await readThread(html(`<p>Reset: <a href="${link.replace('&', '&amp;')}">${shown}</a> now</p>`));
+    for (const leaked of ['QJXZQJXZsecret', '5670']) expect(body).not.toContain(leaked);
+    expect(relays).toEqual([[{ kind: 'password_reset', value: link }]]);
+  });
+
+  it.each([
+    ['482913 is your Acme verification code\n1 800 555 0199', `${marker('otp')}\n1 800 555 0199`, '482913'],
+    ['482913 is your code\n13 10 2026', `${marker('otp')}\n13 10 2026`, '482913'],
+    ['4829 is your login code 12 34', `${marker('otp')} 12 34`, '4829'],
+    ['482913 is your verification code: 12 34', `${marker('otp')}: 12 34`, '482913'],
+  ])('read "… is your code" before a keyword takes its noun: %s', (text, shown, code) => {
+    expect(extractArtifacts(text)).toEqual({ text: shown, artifacts: [{ kind: 'otp', value: code }] });
+  });
+
+  it.each([
+    ['a phone number row', '<tr><td>482913</td><td>is your Acme verification code</td></tr><tr><td>1 800 555 0199</td></tr>', '18005550199'],
+    ['a date row', '<tr><td>482913 is your code</td></tr><tr><td>13 10 2026</td></tr>', '13102026'],
+  ])('relay "… is your code" in table cells followed by %s', async (_row, rows, left) => {
+    const { shown, relays } = await readThread(html(`<table>${rows}</table>`));
+    const result = JSON.parse(shown) as { data?: { messages: { body: string }[] }; messages?: { body: string }[] };
+    expect((result.data ?? result).messages![0]!.body.replace(/\D/g, '')).toBe(left);
+    expect(relays).toEqual([[{ kind: 'otp', value: '482913' }]]);
   });
 });
 
@@ -73,6 +198,9 @@ describe('codes in HTML table cells', () => {
     ['non-breaking padding', '<table><tr><td>Your code</td>' + [4, 8, 2, 9, 1, 3].map(d => `<td>&nbsp;${d}&nbsp;</td>`).join('') + '</tr></table>', '482913'],
     ['double spaces', '<table><tr><td>Your code</td><td>4  8  2  9  1  3</td></tr></table>', '482913'],
     ['an 8-digit code split 4+4', '<table><tr><td>Your code</td><td>1234 5678</td></tr></table>', '12345678'],
+    ['one digit per cell, indented 40', '<table><tr><td>Your code</td>' + digits.map(d => `\n${' '.repeat(40)}<td>${d}</td>`).join('') + '</tr></table>', '482913'],
+    ['one digit per cell, CRLF and 30 spaces', '<table>\r\n<tr>\r\n<td>Your code</td>' + digits.map(d => `\r\n${' '.repeat(30)}<td>${d}</td>`).join('') + '\r\n</tr>\r\n</table>', '482913'],
+    ['a template loop with blank lines between cells', '<table><tr><td>Your code</td>' + digits.map(d => `\n\n    \n      <td>\n        ${d}\n      </td>\n`).join('') + '</tr></table>', '482913'],
   ])('never reach read_thread when %s, and the whole code is relayed', async (_shape, markup, code) => {
     const { shown, relays } = await readThread(html(markup));
     const body = (JSON.parse(shown) as { data?: { messages: { body: string }[] }; messages?: { body: string }[] });
@@ -80,8 +208,23 @@ describe('codes in HTML table cells', () => {
     expect(relays).toEqual([[{ kind: 'otp', value: code }]]);
   });
 
+  // A gap may be a newline, so a code joins digits that start the next row. The code is still hidden; the relay
+  // carries the extra digits. Pinned exactly, so narrowing the gap changes these on purpose.
+  it.each([
+    ['a "2026 Acme" row', '<tr><td>Your code</td><td>4829</td></tr><tr><td>2026 Acme</td></tr>', '48292026', ''],
+    ['a "10:00" row', '<tr><td>Your code</td><td>48 29 13</td></tr><tr><td>10:00</td></tr>', '48291310', '00'],
+    ['a "5 minutes" row', '<tr><td>Your code</td>' + digits.map(d => `<td>${d}</td>`).join('') + '</tr><tr><td>5 minutes</td></tr>', '4829135', ''],
+  ])('hide a code followed by %s, and relay the joined digits', async (_row, rows, relayed, left) => {
+    const { shown, relays } = await readThread(html(`<table>${rows}</table>`));
+    const result = JSON.parse(shown) as { data?: { messages: { body: string }[] }; messages?: { body: string }[] };
+    expect((result.data ?? result).messages![0]!.body.replace(/\D/g, '')).toBe(left);
+    expect(relays).toEqual([[{ kind: 'otp', value: relayed }]]);
+  });
+
   it('render with a space between cells and a line between rows', async () => {
     const [message] = (await mail(html('<table><tr><td>Verification code</td><td>482913</td></tr><tr><th>Expires</th><td>10 minutes</td></tr></table>')).threadPage!('t', 10)).messages;
     expect(message!.body).toBe('Verification code 482913\nExpires 10 minutes');
+    const [indented] = (await mail(html('<div>\n  Your\n      sign-in   code\n</div><p>Thanks,&nbsp; the team</p>')).threadPage!('t', 10)).messages;
+    expect(indented!.body).toBe('Your sign-in code\nThanks, the team');
   });
 });

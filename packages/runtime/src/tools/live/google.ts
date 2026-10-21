@@ -521,7 +521,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     },
   } satisfies ToolHandler<SendEmailArgs, unknown, ToolDispatcherContext>,
   {
-    name:'query_availability',description:"Find free time: the windows of at least duration_minutes that are free across the given calendars and supplied work windows. Use it whenever the owner asks when they are free or for a slot, and offer only windows it returns: each is already computed, with start and end in the owner's time zone and its length in minutes, so never work out free time from query_calendar events. Set duration_minutes to the length the owner needs, and include every calendar that holds their commitments (list them with query_calendar list_calendars). Busy blocks are Google's own free/busy answer for those calendars. An unavailable calendar makes the result unknown rather than free. Read-only, no booking.",
+    name:'query_availability',description:"Find free time: the windows of at least duration_minutes that are free across the given calendars and supplied work windows. Use it whenever the owner asks when they are free or for a slot, and offer only windows it returns: each is already computed, with start and end in the owner's time zone and its length in minutes, so never work out free time from query_calendar events. Set duration_minutes to the length the owner needs, and include every calendar that holds their commitments (list them with query_calendar list_calendars). Busy blocks are Google's own free/busy answer for those calendars. A calendar that cannot be read is never free: free_windows stays empty and windows_free_on_answered_calendars holds time free on the calendars that answered, to offer only as tentative. Read-only, no booking.",
     schema:queryAvailabilityArgsSchema,trigger_allowlist:allowlist('query_availability'),autonomy_gated:false,requires_connector:true,
     // state() does not report the freebusy scope; calendar is its superset here, and a missing scope still returns a connect intent.
     eligible:granted(google,'calendar'),
@@ -530,7 +530,13 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       const observed=await client.freeBusy(range.from,range.to,ids,clock.timezone);
       if(Date.parse(observed.from)!==Date.parse(range.from)||Date.parse(observed.to)!==Date.parse(range.to))throw new Error('availability coverage differs');
       const unavailable=ids.filter(id=>!validFreeBusyCalendar(observed.calendars?.[id])||Boolean(observed.calendars[id]!.errors?.length));
-      if(unavailable.length)return {status:'unknown' as const,from:range.from,to:range.to,timezone:clock.timezone,calendar_ids:ids,unavailable_calendar_ids:unavailable,free_windows:[],observed_at:clock.now().toISOString()};
+      const answered=ids.filter(id=>!unavailable.includes(id));
+      if(!answered.length)return {status:'unknown' as const,from:range.from,to:range.to,timezone:clock.timezone,calendar_ids:ids,unavailable_calendar_ids:unavailable,free_windows:[],observed_at:clock.now().toISOString()};
+      // An unreadable calendar is never free. The answered calendars' free time is kept apart from free_windows,
+      // so the owner can still be offered a tentative slot instead of nothing.
+      if(unavailable.length)return {status:'partial_provider_coverage' as const,from:range.from,to:range.to,timezone:clock.timezone,calendar_ids:ids,answered_calendar_ids:answered,unavailable_calendar_ids:unavailable,free_windows:[],
+        windows_free_on_answered_calendars:ownerWindows(availabilityWindows(range,answered.flatMap(id=>observed.calendars[id]!.busy),windows,duration),clock.timezone,duration),observed_at:clock.now().toISOString(),
+        qualification:`Free only on the calendars that answered. ${unavailable.join(', ')} could not be read and may be busy; offer these as tentative and say which calendar was not checked.`};
       return {status:'complete_provider_coverage' as const,from:range.from,to:range.to,timezone:clock.timezone,calendar_ids:ids,unavailable_calendar_ids:[],free_windows:ownerWindows(availabilityWindows(range,ids.flatMap(id=>observed.calendars[id]!.busy),windows,duration),clock.timezone,duration),observed_at:clock.now().toISOString(),qualification:'Free according to queried calendars and supplied work windows; not a booking or guarantee of personal availability.'};
     },args.account),
   } satisfies ToolHandler<QueryAvailabilityArgs,unknown,ToolDispatcherContext>,
