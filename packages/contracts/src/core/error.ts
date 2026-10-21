@@ -49,6 +49,8 @@ export const toolErrorCodeSchema = z.enum([
   'repeat_refusal',
   'tools_withdrawn',
   'browsing_withheld',
+  // The host held the call before it ran: the owner's monthly spend ceiling covers this paid tool.
+  'spend_ceiling_reached',
 ]);
 export type ToolErrorCode = z.infer<typeof toolErrorCodeSchema>;
 
@@ -93,6 +95,7 @@ export const TOOL_ERRORS: Readonly<Record<ToolErrorCode, Readonly<Omit<ToolError
   repeat_refusal: { cause: 'Same call already made this turn.', fix: 'Use the result it already returned.', retryable: false },
   tools_withdrawn: { cause: 'No more tool calls can run this turn.', fix: 'Answer now with what you found or did and what is left.', retryable: false },
   browsing_withheld: { cause: 'Browsing is unavailable on this Waldo for the rest of this turn.', fix: 'Use what you have or say what you could not read.', retryable: false },
+  spend_ceiling_reached: { cause: 'The owner\'s monthly spend ceiling is reached, so this paid tool is held; nothing ran.', fix: 'Do not call it again this month. Keep going without it: web_search and the other read tools still work and answers come from the cheaper model, so finish what you can with them and tell the owner what was held.', retryable: false },
 });
 
 // `cause` may be overridden only with text the model is allowed to see: its own argument

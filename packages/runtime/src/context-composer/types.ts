@@ -256,6 +256,11 @@ export type ContextCompositionResult =
   | Readonly<{
       ok: true;
       prompt: string;
+      // The same verified layers as prompt, split for a caller that keeps a byte-stable system prompt and sends the
+      // invocation's inputs as the message itself: the layers that hold for every turn of an owner and trigger, and the
+      // operations material (recall, health, workspace, tool results).
+      instructions: string;
+      operations: string;
       // Provider-ready admitted skill section, never parsed back out of prompt text.
       skillPrompt?: string;
       // The admitted health rendering inside prompt, for callers that build their own system prompt.

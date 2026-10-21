@@ -86,6 +86,7 @@ import { HARNESS_MESSAGE_LIMIT, heldRowShapes } from '../memory/held-rows';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { costRollup, costRollupEnabled } from '../observability/cost-rollup';
+import { MONTHLY_SPEND_CEILING_USD } from '../llm/cost-ledger';
 import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
 import { Scheduler } from '../scheduler/multiplexer';
 import { productionDeps } from '../seams/deps';
@@ -583,7 +584,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       try {
       for (const child of await this.inbox.records()) if (child.control?.targetRun === runId && child.attempt) {
         if (child.state === 'claimed' && child.control.kind === 'steer') await this.inbox.returnUnconsumedSteer(child.id, child.attempt);
-        else if (child.state !== 'consumed' || child.control.kind !== 'steer') await this.inbox.transition(child.id, child.attempt, 'quarantined', child.state === 'consumed' ? 'consumed_target_outcome_uncertain' : 'not_consumed');
+        // A steer the run heard keeps the run's outcome: completed with its final, or consumed for the uncertainty notice.
+        else if (child.control.kind !== 'steer' || (child.state !== 'consumed' && child.state !== 'completed')) await this.inbox.transition(child.id, child.attempt, 'quarantined', child.state === 'consumed' ? 'consumed_target_outcome_uncertain' : 'not_consumed');
         this.liveAttempts.delete(child.attempt);
       }
       await this.notifyUncertainRecovery();
@@ -3083,11 +3085,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return createOwnerTurnContext(await surfaceOwnerAdmission({ scope, lookup, expectedPhysicalDoId: this.ctx.id.toString(), surface: 'telegram', subject, occurrenceKey: occurrence.id, occurredAt: occurrence.admittedAt, text: turn.text }),
         { conversationRef: ownerChainRef('telegram', subject), health: () => health ??= healthContext.latest(turn.traceId), ownerProfile: google.nameLine });
     } } } : undefined;
+    // Past the owner's monthly ceiling a turn degrades: the owner's own turns run on the auxiliary model and paid tools are held.
+    // The month total lives beside the cost ledger's deltas, so there is no ceiling while the ledger is off.
+    const spend = costs ? () => ({ spentUsd: costs.monthSpendUsd(deps.now()), ceilingUsd: MONTHLY_SPEND_CEILING_USD }) : undefined;
     // Built from the watch books on each owner turn: a push that is not running, and what fixes it.
     const watchStatus = () => watchStatusLine({ accounts: identity.get<GoogleAccount[]>('google:accounts') ?? [],
       gmail: gmailPushBook(identity).miss(), calendar: calendarPushBook(identity).miss(), timezone: clock.timezone });
     const responder = createTelegramResponder(
-      { openaiApiKey: key, ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), health: this.providerHealth }, { ...indexedConversationStore(kv, episodes, () => Date.now()), recalls: (entryId: string) => recallReach(identity, identity.get<string>('owner_principal_ref'), null)(entryId) }, memory, log,
+      { openaiApiKey: key, ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), health: this.providerHealth, ...(this.env.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true } : {}) }, { ...indexedConversationStore(kv, episodes, () => Date.now()), recalls: (entryId: string) => recallReach(identity, identity.get<string>('owner_principal_ref'), null)(entryId) }, memory, log,
       { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, replayHandlers = [...workspaceTools, ...reminderHandlers(book), ...healthLogHandlers(healthLogs), getHealthHandler(healthRead, clock), ...standingOrderHandlers(orders), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
         // Owner-ruled OTP parity (September 27, 2026): the extracted artifact goes to the owner
         // as a direct message - fixed copy, no model involvement, and the send is never logged
@@ -3156,11 +3161,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return context;
       }},history:context=>({...indexedConversationStore(canonicalOwnerConversationStore(this.ctx.storage,context,this.logSkippedLoad,threadOfChain(context.conversationRef)??undefined),episodes,()=>Date.now()),
         noteUnfinished:(line,scope)=>this.appInbox.noteLanded(scope.runId,scope.attempt,line),
-        recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,threadOfChain(context.conversationRef))}),jobHost:this.jobHostFor(admission=>ownerChainRef('app',admission.invocation.verified_authority.principal_ref)),ownerProfile:google.nameLine,watchStatus} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
+        recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,threadOfChain(context.conversationRef))}),jobHost:this.jobHostFor(admission=>ownerChainRef('app',admission.invocation.verified_authority.principal_ref)),ownerProfile:google.nameLine,watchStatus,...(spend ? { spend } : {})} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
         const record=this.activeIMessage;
         if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==record.text)throw new ClosedRunError();
         return iMessageOwnerContext(this.imessageHost,record,scope,{ownerProfile:google.nameLine});
-      }},history:context=>({...canonicalOwnerConversationStore(this.ctx.storage,context),recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,null)}),ownerProfile:google.nameLine,watchStatus} : {...telegramContext,jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus},
+      }},history:context=>({...canonicalOwnerConversationStore(this.ctx.storage,context),recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,null)}),ownerProfile:google.nameLine,watchStatus,...(spend ? { spend } : {})} : {...telegramContext,jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus,...(spend ? { spend } : {})},
     );
     // A job prompt built on the ledger: the owner's health logs reach the model as this turn's context.
     const ledgerJob = async (trace: string, said: string, toolNames?: Parameters<typeof responder.prompt>[4]) =>
