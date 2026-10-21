@@ -10,7 +10,7 @@ import { deliverTurnAttachments, turnAttachmentBook, type AttachmentSend } from 
 import { EffectNotAppliedError, EffectUnknownError, ownerEffectLedger } from '../src/channels/owner-effect-ledger';
 import { deliverWhatsAppFile, whatsappOutboundKind, type WhatsAppOutboundFile } from '../src/channels/whatsapp-api';
 import { TelegramOwnerListener, type TelegramOwnerApi } from '../src/channels/telegram-listener';
-import { WA_HELD_PREFIX, WA_LAST_INBOUND_KEY, WHATSAPP_HELD, deliverWhatsAppFileInWindow, whatsappWindowCaller } from '../src/channels/whatsapp-window';
+import { WA_HELD_PREFIX, WA_LAST_INBOUND_KEY, WHATSAPP_HELD, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, whatsappWindowCaller } from '../src/channels/whatsapp-window';
 import { TelegramPollingAdapter, type TelegramInboundTurn } from '../src/channels/telegram-polling';
 import { telegramTurnEnvelope } from '../src/channels/telegram-turn';
 import { ClosedRunError, type RunEffectScope } from '../src/channels/run-effect-scope';
@@ -107,6 +107,11 @@ describe('a WhatsApp file and the 24-hour window', () => {
     expect(await deliverWhatsAppFileInWindow(kv, now, call, 15550001111, pdf, async () => 'Open it here: https://waldo.example/f')).toEqual({ status: 'held', reason: 'behind_held' });
     expect(provider.calls).toEqual([]);
     expect(kv.list<{ body: { text: string } }>({ prefix: WA_HELD_PREFIX }).map(([, record]) => record.body.text)).toEqual(['the reply', 'Here is plan.pdf. Open it here: https://waldo.example/f']);
+    // The next delivery of held messages, which sends only what is addressed to the bound number, sends the link after the reply.
+    kv.put(`${WA_HELD_PREFIX}000000000001`, { heldAt: now, body: { chat_id: 15550001111, text: 'the reply' } });
+    await deliverHeldWhatsApp(kv, call, now, () => undefined, '15550001111');
+    expect(provider.calls).toEqual([{ method: 'sendMessage', text: 'the reply' }, { method: 'sendMessage', text: 'Here is plan.pdf. Open it here: https://waldo.example/f' }]);
+    expect(kv.list({ prefix: WA_HELD_PREFIX })).toEqual([]);
   });
 
   it('inside the window with nothing held, a link for a type WhatsApp cannot carry goes out now', async () => {

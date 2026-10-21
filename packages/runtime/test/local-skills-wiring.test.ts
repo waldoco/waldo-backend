@@ -9,7 +9,7 @@ import {
   localTrustedBriefScheduleInput,
   localTrustedBriefTurnSnapshot,
   resolveRunLoopAdapters,
-} from '../src/run-loop/adapters';
+} from '../src/llm/run-loop-adapters';
 import { JoinedConversationPath } from '../src/conversation/joined-path';
 const fixture = localTrustedBriefScheduleInput();
 const accepted = acceptTrustedInvocation(fixture.admission);
@@ -232,8 +232,8 @@ it('gateway refuses private local repository rather than silently dropping it', 
   ).toThrow('local-only');
 });
 it('real host SQLite snapshot attests content and composes without provisioning by loader', async () => {
-  const stub = env.RUNTIME_DO.get(
-    env.RUNTIME_DO.idFromName('private-skills-present'),
+  const stub = env.TEST_STORAGE_DO.get(
+    env.TEST_STORAGE_DO.idFromName('private-skills-present'),
   );
   await runInDurableObject(stub, async (_instance, state) => {
     // Existing schema helper only for isolated test fixture. Runtime seam never calls it.
@@ -261,8 +261,8 @@ it('real host SQLite snapshot attests content and composes without provisioning 
   });
 });
 it('real absent-table host stays absent after fail-closed compose, no DDL or fallback', async () => {
-  const stub = env.RUNTIME_DO.get(
-    env.RUNTIME_DO.idFromName('private-skills-absent'),
+  const stub = env.TEST_STORAGE_DO.get(
+    env.TEST_STORAGE_DO.idFromName('private-skills-absent'),
   );
   await runInDurableObject(stub, async (_instance, state) => {
     const repo = new SqliteSystemSkillRepository(

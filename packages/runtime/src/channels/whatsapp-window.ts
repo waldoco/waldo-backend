@@ -208,6 +208,26 @@ export const releaseWhatsAppOutbox = async (outbox: TelegramFinalOutbox, route: 
   for (let pass = 0; pass < pending; pass += 1) await outbox.drain(delivery);
 };
 
+// The window, the held text and the refusal and knock markers belong to one WhatsApp number. When the owner's number
+// changes or is unlinked they all go: text held for one number must never reach another, and a new number's window opens
+// only when that number writes. Storage only, so callers run it in the same transaction as the binding change.
+export const clearWhatsAppNumber = (kv: Kv): void => {
+  for (const prefix of [WA_HELD_PREFIX, REHELD_PREFIX]) for (const [key] of [...kv.list<unknown>({ prefix })]) kv.delete(key);
+  for (const key of [WA_LAST_INBOUND_KEY, KNOCKED_KEY, REFUSED_KEY]) kv.delete(key);
+};
+
+// Binds this owner's WhatsApp to a number, or unbinds it (null): a confirmed link, the first admission, a reconcile at
+// admission, an unlink. Whatever belonged to another number goes first; binding the number already bound keeps its state. A
+// bound number is linked, so an older unlinked flag goes with any bind. Storage only: callers run it inside the
+// transactionSync that decides the binding, and rebuild their runtimes after.
+export const bindWhatsAppNumber = (kv: Kv, subject: string | null): void => {
+  if (subject === null || kv.get<string>('whatsapp_subject') !== subject) {
+    clearWhatsAppNumber(kv);
+    if (subject === null) kv.delete('whatsapp_subject'); else kv.put('whatsapp_subject', subject);
+  }
+  if (subject !== null) kv.delete('whatsapp_unlinked');
+};
+
 // Runs when the owner's reply has reopened the window, before that reply's turn, so the turn's context
 // matches what the owner has seen. A closed window means the pass does nothing: sending would only re-hold.
 // Each record is removed before its send (at most once, like the wamid claim), and what the send answers decides:
@@ -216,14 +236,17 @@ export const releaseWhatsAppOutbox = async (outbox: TelegramFinalOutbox, route: 
 //   under its own key and the pass stops, keeping the order for the next reply;
 // - WHATSAPP_HELD (the window layer held it again under a new key): the pass stops, nothing is put back;
 // - a throw: the send may have gone out, so the record stays removed and the pass stops.
-export const deliverHeldWhatsApp = async (kv: Kv, call: Caller, now: number, log: Log): Promise<void> => {
+// A record held for another number (a pass still running for the old number can put one back after clearWhatsAppNumber)
+// is dropped unsent: the call goes to the number bound now.
+export const deliverHeldWhatsApp = async (kv: Kv, call: Caller, now: number, log: Log, subject: string): Promise<void> => {
   if (!whatsappWindowOpen(kv, now)) return;
   const held = [...kv.list<Held>({ prefix: WA_HELD_PREFIX })].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
-  let expired = 0;
+  let expired = 0, misaddressed = 0;
   for (const [key, record] of held) {
     // A pass that overlapped this one may already have claimed it; it is sent once, by that pass.
     if (kv.get<Held>(key) === undefined) continue;
     kv.delete(key);
+    if (String((record.body as { chat_id?: unknown }).chat_id) !== subject) { misaddressed += 1; continue; }
     if (now - record.heldAt >= WHATSAPP_HELD_RETENTION_MS) { expired += 1; continue; }
     let result: unknown;
     try { result = await call('sendMessage', record.body); }
@@ -235,6 +258,7 @@ export const deliverHeldWhatsApp = async (kv: Kv, call: Caller, now: number, log
     if (whatsappHeld(result)) { log({ hop: 'whatsapp_held', ok: false, code: 'held_again' }); break; }
   }
   if (expired) log({ hop: 'whatsapp_held', ok: true, expired });
+  if (misaddressed) log({ hop: 'whatsapp_held', ok: false, code: 'other_number', dropped: misaddressed });
 };
 
 // File bytes leave only while the window is open and nothing is held. Outside the window a document would be refused

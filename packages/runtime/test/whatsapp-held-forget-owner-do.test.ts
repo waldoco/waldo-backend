@@ -65,11 +65,11 @@ beforeEach(() => {
     if (fn === 'common_owner_authority') return presenceAuthority(OWNER_ID, init?.body);
     if (fn === 'assert_channel_presence') return Response.json(true);
     if (fn === 'health_context_read') return Response.json(null);
-    if (url === 'https://graph.facebook.com/v21.0/fictional-phone-id/messages') {
+    if (url === 'https://graph.facebook.com/v26.0/fictional-phone-id/messages') {
       const body = JSON.parse(String(init?.body)) as { to: string; type: string; template?: { name: string }; text?: { body: string } };
       wire.events.push(body.type === 'template' ? `template:${body.template!.name}` : `text:${body.text!.body}`);
       wire.wamid += 1;
-      return Response.json({ messaging_product: 'whatsapp', contacts: [{ input: body.to, wa_id: body.to }], messages: [{ id: `wamid.out.${wire.wamid}` }] });
+      return Response.json({ messaging_product: 'whatsapp', contacts: [{ input: body.to, wa_id: body.to.replace(/^\+/, '') }], messages: [{ id: `wamid.out.${wire.wamid}` }] });
     }
     return new Response('unexpected', { status: 500 });
   });

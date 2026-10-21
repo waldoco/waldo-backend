@@ -10,7 +10,7 @@ import { COMPACTION } from '../src/conversation/compaction';
 import { ownerJobAdmission } from '../src/identity/surface-owner-admission';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
 import { claimStore, type ClaimStore } from '../src/memory/claims';
-import { localTrustedBriefScheduleInput } from '../src/run-loop/adapters';
+import { localTrustedBriefScheduleInput } from '../src/llm/run-loop-adapters';
 import { ownerTyped } from './helpers/owner-typed';
 
 const NO_CLAIM_OPS = JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null });

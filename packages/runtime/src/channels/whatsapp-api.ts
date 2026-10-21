@@ -10,19 +10,44 @@ export type WhatsAppCall = (body: object) => Promise<unknown>;
 // Match the existing Telegram transport bound. A timed-out POST is uncertain,
 // so this caller never retries and never reports a successful acknowledgement.
 export const WHATSAPP_API_TIMEOUT_MS = 15_000;
-export const WHATSAPP_GRAPH_VERSION = 'v21.0';
+export const WHATSAPP_GRAPH_VERSION = 'v26.0';
 // https://developers.facebook.com/docs/whatsapp/cloud-api/reference/messages , text object: "Maximum 4096 characters".
 export const WHATSAPP_TEXT_MAX_CHARS = 4096;
 // A Graph refusal with Meta's numeric error code (error.code in the JSON body), or null when the body has none.
 export class WhatsAppApiError extends Error {
   readonly code: number | null;
+  readonly #body: string;
   constructor(readonly status: number, body: string) {
     super(`whatsapp ${status}: ${body.slice(0, 200)}`);
+    this.#body = body.slice(0, 4096);
     let code: unknown = null;
     try { code = (JSON.parse(body) as { error?: { code?: unknown } }).error?.code; } catch { /* not JSON */ }
     this.code = typeof code === 'number' && Number.isSafeInteger(code) ? code : null;
   }
+
+  // Graph's answer (its first 4096 characters), read only by the webhook's staging debug log. A getter over a private
+  // field, so serializing the error never carries it.
+  get body(): string { return this.#body; }
 }
+
+// Graph can quote the token it was sent back in an auth refusal ("Malformed access token ..."), so every form of the token,
+// as stored and trimmed of whitespace and quotes, is masked before Graph's answer becomes an error. A form shorter than 8
+// characters is no real token and is left alone, so it cannot garble the answer.
+const maskToken = (text: string, token: string): string => {
+  let masked = text;
+  for (const form of new Set([token, token.trim(), token.trim().replace(/^["']+|["']+$/g, '')])) {
+    if (form.length >= 8) masked = masked.split(form).join('[token]');
+  }
+  return masked;
+};
+
+// https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/send-messages/ , "WhatsApp user phone
+// number formats": a `to` without its plus gets the business number's country calling code prepended. Callers pass the
+// stored E.164 digits, so an all-digit `to` goes out with its plus. A BSUID goes in `recipient`, which is sent as given.
+const e164To = (body: object): object => {
+  const { to } = body as { to?: unknown };
+  return typeof to === 'string' && /^\d+$/.test(to) ? { ...body, to: `+${to}` } : body;
+};
 
 export const createWhatsAppCaller = (token: string, phoneNumberId: string, fetcher: typeof fetch = fetch): WhatsAppCall =>
   async (body) => {
@@ -33,10 +58,10 @@ export const createWhatsAppCaller = (token: string, phoneNumberId: string, fetch
       const response = await Promise.race([fetcher(`https://graph.facebook.com/${WHATSAPP_GRAPH_VERSION}/${phoneNumberId}/messages`, {
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ messaging_product: 'whatsapp', ...body }),
+        body: JSON.stringify({ messaging_product: 'whatsapp', ...e164To(body) }),
         signal: controller.signal,
       }),timeout]);
-      if (!response.ok) throw new WhatsAppApiError(response.status, await Promise.race([response.text(),timeout]));
+      if (!response.ok) throw new WhatsAppApiError(response.status, maskToken(await Promise.race([response.text(),timeout]), token));
       return await Promise.race([response.json(),timeout]);
     } finally {
       clearTimeout(timer!);

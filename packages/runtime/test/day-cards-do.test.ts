@@ -141,7 +141,7 @@ describe('day-plan memory budget', () => {
       expect(sanitise({ payload: [{ role: 'user', content }], destination: 'internal_context', source_taint: null, canary_tokens: ['1111111111111111', '2222222222222222', '3333333333333333'], max_chars_override: limit }).ok).toBe(true);
       expect(content.endsWith(input)).toBe(true);
       expect(content).toContain('Routine 2499:');
-      const shown = content.split('\n').filter(line => line.startsWith('- [owner-grounded]')).length;
+      const shown = content.split('\n').filter(line => /^- \[c\d+ · owner-grounded\]/.test(line)).length;
       expect(content).toContain(`(${2_500 - shown} older owner facts are not shown here;`);
       expect(content).not.toContain('Routine 0:');
     });
@@ -171,10 +171,10 @@ describe('day-plan memory budget', () => {
 
   it('does not impose a fact-count cap when all facts fit', async () => {
     await withMemory('day-plan-no-count-cap', (store) => {
-      // 120 short facts fill most of the uncurated profile's two block budgets (1,500 + 2,500 characters).
-      for (let i = 0; i < 120; i++) add(store, `Routine ${i}`);
+      // 100 short facts, each line led by its claim id, fill most of the uncurated profile's two block budgets (1,500 + 2,500 characters).
+      for (let i = 0; i < 100; i++) add(store, `Routine ${i}`);
       const content = composeDayPlanInput(input, store);
-      for (let i = 0; i < 120; i++) expect(content).toContain(`- [owner-grounded] Routine ${i}\n`);
+      for (let i = 0; i < 100; i++) expect(content).toContain(`- [c${i + 1} · owner-grounded] Routine ${i}\n`);
       expect(content).not.toContain('older owner facts are not shown here');
       expect(wireSize(content)).toBeLessThanOrEqual(limit);
     });

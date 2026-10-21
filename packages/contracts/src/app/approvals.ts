@@ -53,7 +53,7 @@ export const appApprovalExactV1Schema = z.strictObject({
 // What each kind must show before it can be decided: who receives a send, what a calendar change
 // does, where a browser or MCP action lands, and which task fields change.
 const EXACT_BY_KIND = {
-  email_send: 'recipients', message_send: 'recipients', calendar_change: 'changes', browser_submit: 'scope', mcp_call: 'scope', google_task_change: 'task',
+  email_send: 'recipients', message_send: 'recipients', calendar_change: 'changes', browser_submit: 'scope', mcp_call: 'scope', google_task_change: 'task', tainted_action: 'scope',
 } as const satisfies Readonly<Record<ApprovalKindV1, keyof z.infer<typeof appApprovalExactV1Schema>>>;
 
 export const appApprovalV1Schema = z.strictObject({

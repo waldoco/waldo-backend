@@ -1,9 +1,11 @@
+import { costKindSchema, type CostKind } from '@waldo/contracts';
+
 type Sql = Readonly<{
   exec<T extends Record<string, string | number | null>>(query: string, ...bindings: (string | number | null)[]): { toArray(): T[] };
 }>;
 
-export const COST_KINDS = ['turn', 'background', 'worker', 'heartbeat', 'eval'] as const;
-export type CostKind = (typeof COST_KINDS)[number];
+export const COST_KINDS = costKindSchema.options;
+export type { CostKind };
 
 export type CostEntry = Readonly<{
   kind: CostKind;
@@ -29,7 +31,8 @@ export type SpendPosture = Readonly<{
 
 const utcDay = (at: number): string => new Date(at).toISOString().slice(0, 10);
 
-// Schema for the owner DO migration that is still to be written. costLedger never creates it.
+// The durable per-owner, per-day ledger is Supabase's waldo.cost_ledger_daily, fed by observability/cost-rollup.ts.
+// This DO-local table is a separate, still unapplied schema for the spend ceiling; costLedger never creates it.
 export const COST_LEDGER_DDL = [`CREATE TABLE cost_ledger (
     id INTEGER PRIMARY KEY AUTOINCREMENT, day TEXT NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN (${COST_KINDS.map((kind) => `'${kind}'`).join(',')})),

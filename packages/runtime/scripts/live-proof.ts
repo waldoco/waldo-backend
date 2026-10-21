@@ -3,7 +3,7 @@ import {
   acceptTrustedInvocation, ActivityLedgerModule, ApprovalQueueModule,
   WALDO_CHAT_MODEL, OPENAI_PROVIDER, routingPolicySchema,
 } from '@waldo/contracts';
-import { localTrustedBriefScheduleInput, resolveRunLoopAdapters } from '../src/run-loop/adapters';
+import { localTrustedBriefScheduleInput, resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
 import { JoinedConversationPath, type JoinedConversationModel } from '../src/conversation/joined-path';
 import { OpenAIResponsesAdapter, type OpenAIResponseMetadata } from '../src/llm/openai';
 import { RuntimeLLMProvider } from '../src/llm/provider';
