@@ -110,10 +110,13 @@ describe('nightly eval trial', () => {
       { match: /And now/, rounds: [{ text: 'Nothing shared.' }] },
     ]);
     const run = await result;
-    const systems = gateway.requests().filter((request) => request.request.response_format?.name !== 'claim_ops').map((request) => request.request.system ?? '');
-    expect(systems[0]).toContain('Form zone:');
-    expect(systems.at(-1)).not.toContain('Form zone:');
-    expect(systems.at(-1)).toContain('No derived health context is available');
+    // Health is current for each message, so it rides the owner's message as turn context, not the system prompt.
+    const replies = gateway.requests().filter((request) => request.request.response_format?.name !== 'claim_ops');
+    const told = replies.map((request) => request.request.messages.at(-1)?.content ?? '');
+    expect(told[0]).toContain('Form zone:');
+    expect(told.at(-1)).not.toContain('Form zone:');
+    expect(told.at(-1)).toContain('No derived health context is available');
+    expect(replies.some((request) => (request.request.system ?? '').includes('Form zone:'))).toBe(false);
     expect(run.transcript.filter((turn) => turn.role === 'world').map((turn) => turn.text)).toEqual(['The owner shares health data.', 'The owner withdraws health sharing.']);
   });
 

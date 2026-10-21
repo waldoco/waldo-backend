@@ -37,6 +37,10 @@ it('only structured provider evidence identifies scope or disabled service',asyn
  const c=driveRestClient(vi.fn(async()=>Response.json({error:{status:'PERMISSION_DENIED',message:'PRIVATE',details:[{'@type':'type.googleapis.com/google.rpc.ErrorInfo',domain:'googleapis.com',reason:'SERVICE_DISABLED',metadata:{service:'drive.googleapis.com',consumer:'PRIVATE'}}]}},{status:403})),async()=> 'fixture');
  await expect(c.driveListFiles({})).rejects.toMatchObject({status:403,code:'drive_service_disabled',reason:'SERVICE_DISABLED',service:'drive.googleapis.com'});
 });
+it.each(['userRateLimitExceeded','rateLimitExceeded'])('a 403 carrying %s is a rate limit to back off from, not a denial',async reason=>{
+ const c=driveRestClient(vi.fn(async()=>Response.json({error:{code:403,message:'PRIVATE',errors:[{domain:'usageLimits',reason,message:'PRIVATE'}]}},{status:403})),async()=> 'fixture');
+ await expect(c.driveListFiles({})).rejects.toMatchObject({status:429,code:'drive_rate_limited'});
+});
 it.each([401,403])('non-JSON provider error %i keeps status and safe code',async status=>{
  const c=driveRestClient(vi.fn(async()=>new Response('PRIVATE_CANARY',{status})),async()=> 'fixture');
  await expect(c.driveListFiles({})).rejects.toMatchObject({status,code:status===401?'drive_auth_failed':'drive_access_denied'});
