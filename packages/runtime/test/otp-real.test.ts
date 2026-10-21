@@ -16,15 +16,15 @@ describe('A-8 otp-real: real OTPs still caught, redacted inline', () => {
   it('read_thread replaces only the matched span and keeps the rest (relay ok)', async () => {
     const relays: unknown[] = [];
     const m = await readThread('Sign in: Acme login code is 847291', 'Hi Sam,\nYour login code is 847291. It expires in 10 minutes.', async (from, a) => { relays.push({ from, a }); return true; });
-    expect(m.body).toBe('Hi Sam,\n[otp artifact - sent to the owner in a separate message]. It expires in 10 minutes.');
-    expect(m.subject).toBe('Sign in: [otp artifact - sent to the owner in a separate message]');
+    expect(m.body).toBe('Hi Sam,\nYour [otp artifact - sent to the owner in a separate message]. It expires in 10 minutes.');
+    expect(m.subject).toBe('Sign in: Acme [otp artifact - sent to the owner in a separate message]');
     expect(m.quarantined).toEqual(['otp']);
     expect(relays).toEqual([{ from: 'noreply@example.com', a: [{ kind: 'otp', value: '847291' }] }]);
     expect(JSON.stringify(m)).not.toContain('847291');
   });
   it('failed relay keeps the source-app marker inline, no false sent claim', async () => {
     const m = await readThread('Sign in', 'Hello. Your login code is 847291. Bye.', async () => { throw new Error('down'); });
-    expect(m.body).toBe(`Hello. ${artifactMarker('otp')}. Bye.`);
+    expect(m.body).toBe(`Hello. Your ${artifactMarker('otp')}. Bye.`);
     expect(JSON.stringify(m)).not.toContain('847291');
   });
 });
