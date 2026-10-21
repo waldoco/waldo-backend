@@ -14,7 +14,8 @@ export const CALLS_PER_TURN = { low: 2, high: 5 } as const;
 
 export const callPlan = (scenarios: readonly NightlyScenario[], trials: number) => {
   const runnable = scenarios.filter((scenario) => !scenario.blocked);
-  const turns = runnable.reduce((sum, scenario) => sum + scenario.steps.filter((step) => 'say' in step || 'fire_due' in step).length, 0) * trials;
+  // A late answer is the retry turn that answers once a model is back; the outage turn before it makes no model call.
+  const turns = runnable.reduce((sum, scenario) => sum + scenario.steps.filter((step) => 'say' in step || 'fire_due' in step || 'late_answer' in step).length, 0) * trials;
   const judge = runnable.length * trials + runnable.filter((scenario) => scenario.rubric.voice).length * trials;
   const candidate = { low: turns * CALLS_PER_TURN.low, high: turns * CALLS_PER_TURN.high };
   return {

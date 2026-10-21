@@ -92,6 +92,12 @@ describe('live run plan', () => {
     expect(plan.suggested_max_calls).toBeGreaterThanOrEqual(plan.candidate_calls.high + plan.judge_calls);
   });
 
+  it('counts a late answer as one model turn, whether or not the step type is in this tree yet', async () => {
+    const { callPlan } = await import('../evals/nightly/plan');
+    const late = { ...NIGHTLY_SCENARIOS[0]!, steps: [{ late_answer: 'What should I pack?' }, { say: 'And a charger?' }] } as unknown as (typeof NIGHTLY_SCENARIOS)[number];
+    expect(callPlan([late], 3).owner_turns).toBe(6);
+  });
+
   it('keeps the live workflow\'s cap at or above the plan and passes every setting a live run requires', async () => {
     const { callPlan } = await import('../evals/nightly/plan');
     const workflow = readFileSync(new URL('../../../.github/workflows/evals-live.yml', import.meta.url), 'utf8');
