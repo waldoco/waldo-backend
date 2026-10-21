@@ -49,12 +49,12 @@ beforeEach(() => {
     if (fn === 'presence_hint') return Response.json(!wire.unlinked && String(init?.body).includes('"p_provider":"whatsapp"') ? '1111' : null);
     if (fn === 'unlink_presence') { wire.unlinked = true; return Response.json(true); }
     if (fn === 'health_context_read') return Response.json(null);
-    if (url === 'https://graph.facebook.com/v21.0/fictional-phone-id/messages') {
+    if (url === 'https://graph.facebook.com/v26.0/fictional-phone-id/messages') {
       const body = JSON.parse(String(init?.body)) as { to: string; type: string; template?: { name: string }; text?: { body: string } };
       wire.events.push(body.type === 'template' ? `template:${body.template!.name}` : `text:${body.text!.body}`);
       wire.wamid += 1;
       if (wire.stall && body.text?.body === wire.stall.text) { wire.stall.reached(); await wire.stall.until; }
-      return Response.json({ messaging_product: 'whatsapp', contacts: [{ input: body.to, wa_id: body.to }], messages: [{ id: `wamid.out.${wire.wamid}` }] });
+      return Response.json({ messaging_product: 'whatsapp', contacts: [{ input: body.to, wa_id: body.to.replace(/^\+/, '') }], messages: [{ id: `wamid.out.${wire.wamid}` }] });
     }
     wire.other.push(url);
     return new Response('unexpected', { status: 500 });

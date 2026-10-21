@@ -3,7 +3,9 @@ import {
   ESCALATION_RULES,
   FALLBACK_LADDER,
   GATEWAY_CONSTANT_HEADERS,
+  OPENAI_PROVIDER,
   PROVIDER_OF,
+  providerSchema,
   ROSTER,
   ROUTING_TABLE,
   SKILL_PROMPT_SERIALIZER_REVISION,
@@ -128,6 +130,15 @@ export type TrustedGatewayExecution =
 
 export type SpentTokens = Readonly<Pick<LLMResponse, 'input_tokens' | 'output_tokens' | 'cache_read_input_tokens'>>;
 
+// Replayed output items are provider-specific: OpenAI's reasoning items and Anthropic's content blocks mean nothing to the
+// other provider. OpenAI Responses items carry no mark; every other adapter stamps its items with this key, and each adapter
+// replays only its own, rebuilding the other provider's rounds from the tool-call records a turn keeps for every call.
+export const OUTPUT_ITEM_PROVIDER = 'provider' as const;
+export function outputItemProvider(item: Readonly<Record<string, unknown>>): Provider {
+  const marked = providerSchema.safeParse(item[OUTPUT_ITEM_PROVIDER]);
+  return marked.success ? marked.data : OPENAI_PROVIDER;
+}
+
 // What the model provider said about trying a failed request again: the wait it asked for, and whether it allows
 // another try at all.
 export type ProviderRetryAdvice = Readonly<{ afterMs?: number; allowed?: boolean }>;
@@ -142,6 +153,33 @@ export type LLMGatewayResult = Extract<AdapterResult<LLMResponse>, { ok: true }>
 export interface LLMGatewayAdapter {
   complete(request: LLMGatewayRequest): Promise<LLMGatewayResult>;
   executeOrReconcile?(input: TrustedGatewayExecution): Promise<TrustedGatewayAdapterResult>;
+}
+
+// One gateway for a route whose steps span providers: each step goes to its provider's adapter. A provider without an
+// adapter fails its step as a missing credential, so the route moves on and the attempt log says why.
+export function routedGateway(adapters: Readonly<Partial<Record<Provider, LLMGatewayAdapter>>>): LLMGatewayAdapter {
+  return {
+    complete: (input) => adapters[input.step.provider]?.complete(input)
+      ?? Promise.resolve({ ok: false, code: 'auth_failed', error: `no ${input.step.provider} adapter` }),
+  };
+}
+
+// The misses that say something about the provider rather than the request: an oversize or malformed request fails
+// the same way on a healthy provider, so it must not open the breaker for the owner's other turns.
+const PROVIDER_HEALTH_CODES: ReadonlySet<ErrorCode> = new Set<ErrorCode>(['transient', 'rate_limited', 'auth_failed', 'forbidden']);
+
+// The same breaker, telling its caller when a recorded failure opens a provider. The breaker may be shared across turns,
+// so the caller learns of the opening on the call that caused it and can log it under that call's trace.
+export function observedBreaker(breaker: CircuitBreaker, onOpen: (provider: Provider) => void): CircuitBreaker {
+  return {
+    isOpen: (provider) => breaker.isOpen(provider),
+    recordSuccess: (provider) => breaker.recordSuccess(provider),
+    recordFailure: (provider) => {
+      const wasOpen = breaker.isOpen(provider);
+      breaker.recordFailure(provider);
+      if (!wasOpen && breaker.isOpen(provider)) onOpen(provider);
+    },
+  };
 }
 
 export type RouteSpendState = {
@@ -413,7 +451,8 @@ export class RuntimeLLMProvider {
     let spent: SpentTokens = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0 };
     let lastDetail: string | undefined;
 
-    for (const plan of attemptPlan(effectiveRoute, spendCapped)) {
+    const plans = attemptPlan(effectiveRoute, spendCapped);
+    for (const [index, plan] of plans.entries()) {
       input.runScope?.admit();
       if (settledModels.has(modelKey(plan.step))) continue;
       const wait = resendWaits.get(modelKey(plan.step));
@@ -423,9 +462,10 @@ export class RuntimeLLMProvider {
         input.runScope?.admit();
       }
       // A retry or a later rung starts only while the turn still has time for it.
+      // The floor answers for providers that could not be reached, not for a turn out of time: the turn's own reply
+      // for that says what already ran.
       if (callTimeLeftMs(input.runScope) <= 0) {
-        lastDetail = 'turn_deadline';
-        break;
+        return templateUnavailableFailure(effectiveRoute, attempts, routingLogs, 'turn_deadline');
       }
       if (this.circuitBreaker.isOpen(plan.step.provider)) {
         attempts.push({
@@ -499,7 +539,7 @@ export class RuntimeLLMProvider {
 
       if (!gatewayResult.ok) {
         lastDetail = gatewayResult.error;
-        this.circuitBreaker.recordFailure(plan.step.provider);
+        if (PROVIDER_HEALTH_CODES.has(gatewayResult.code)) this.circuitBreaker.recordFailure(plan.step.provider);
         attempts.push({
           outcome: 'failure',
           model: plan.step.model,
@@ -513,7 +553,10 @@ export class RuntimeLLMProvider {
           return invalidResponseFailure(plan.fallback_step, attempts, routingLogs, undefined, gatewayResult.error);
         }
         const resendWait = resendWaitMs(gatewayResult, callTimeLeftMs(input.runScope));
-        if (resendWait === null) settledModels.add(modelKey(plan.step));
+        // While another provider is still ahead in the route, a model gets its short backoff resend but no longer wait:
+        // during a 429 storm the owner gets the next provider's answer instead of sitting out the first one's retry-after.
+        const otherProviderAhead = plans.slice(index + 1).some((later) => later.step.provider !== plan.step.provider);
+        if (resendWait === null || (resendWait > RATE_LIMIT_BACKOFF_MS && otherProviderAhead)) settledModels.add(modelKey(plan.step));
         else if (resendWait > 0) resendWaits.set(modelKey(plan.step), resendWait);
         continue;
       }

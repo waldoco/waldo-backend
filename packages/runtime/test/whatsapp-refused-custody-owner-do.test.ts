@@ -50,7 +50,7 @@ beforeEach(() => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
     if (fn === 'common_owner_authority') return presenceAuthority(OWNER_ID, init?.body);
     if (fn === 'assert_channel_presence') return Response.json(true);
-    if (url === 'https://graph.facebook.com/v21.0/fictional-phone-id/messages') {
+    if (url === 'https://graph.facebook.com/v26.0/fictional-phone-id/messages') {
       const body = JSON.parse(String(init?.body)) as { to: string; type: string; template?: { name: string }; text?: { body: string } };
       if (body.text && wire.refuse.has(body.text.body)) {
         wire.events.push(`refused:${body.text.body}`);
@@ -59,7 +59,7 @@ beforeEach(() => {
       wire.events.push(body.type === 'template' ? `template:${body.template!.name}` : `text:${body.text!.body}`);
       wire.wamid += 1;
       if (body.type === 'template' && wire.knockStall) { const stall = wire.knockStall; wire.knockStall = null; stall.reached(); await stall.until; }
-      return Response.json({ messaging_product: 'whatsapp', contacts: [{ input: body.to, wa_id: body.to }], messages: [{ id: `wamid.out.${wire.wamid}` }] });
+      return Response.json({ messaging_product: 'whatsapp', contacts: [{ input: body.to, wa_id: body.to.replace(/^\+/, '') }], messages: [{ id: `wamid.out.${wire.wamid}` }] });
     }
     return new Response('unexpected', { status: 500 });
   });

@@ -9,7 +9,7 @@ const canaries=['0123456789abcdef','fedcba9876543210','0011223344556677'];
 it('strict schemas, registry ACL and taint gate cover every lifecycle entry',async()=>{
  expect(skillsVersionArgsSchema.safeParse({name:'document-email-preparation',version:1,body:'forged'}).success).toBe(false);
  expect(skillsListArgsSchema.safeParse({path:'SKILL.md'}).success).toBe(false);
- const stub=env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('curated-skills-tools'));
+ const stub=env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('curated-skills-tools'));
  await runInDurableObject(stub,async(_,state)=>{
   let closed=false;const scope={runId:'run',attempt:'attempt',deadline:Date.now()+60000,signal:new AbortController().signal,admit(){if(closed)throw new Error('closed');},commit<T>(work:()=>T){this.admit();return work();}};
   const turn={owner:'owner',turnId:'turn',trigger:'user_message' as const,ownerText:'/skills install document-email-preparation@1',assertCurrent:async()=>scope.admit()};
@@ -30,7 +30,7 @@ it('strict schemas, registry ACL and taint gate cover every lifecycle entry',asy
  });
 });
 it('renders the catalog as one line per skill with name, version and description, marks disabled skills, and is smaller than JSON',async()=>{
- const stub=env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName('curated-skills-catalog-lines'));
+ const stub=env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('curated-skills-catalog-lines'));
  await runInDurableObject(stub,async(_,state)=>{
   const scope={runId:'run',attempt:'attempt',deadline:Date.now()+60000,signal:new AbortController().signal,admit(){},commit<T>(work:()=>T){return work();}};
   const turn={owner:'owner',turnId:'turn',trigger:'user_message' as const,ownerText:'/skills disable day-brief',assertCurrent:async()=>{}};

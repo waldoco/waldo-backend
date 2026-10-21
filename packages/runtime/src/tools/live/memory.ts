@@ -43,11 +43,11 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
     return turn && turn.ownerId === ctx.authenticatedUserId && turn.conversationRef === deps.conversationRef ? turn : null;
   };
   const ready = async (ctx: MemoryToolContext) => { ctx.runScope?.admit(); await ctx.assertTaskSourceCurrent?.(); ctx.runScope?.admit(); };
-  const hidden = (claim: Claim) => [...store.pendingTopics(), ...store.incompleteTopics()].some(topic => [claim.text, claim.evidence, claim.source_ref, (claim as Claim & { aliases?: string | null }).aliases].some(text => typeof text === 'string' && (carriesTopic(text, topic) || hidesTopic(text, topic))));
+  const hidden = (claim: Claim) => store.pendingTopics().some(topic => [claim.text, claim.evidence, claim.source_ref, (claim as Claim & { aliases?: string | null }).aliases].some(text => typeof text === 'string' && (carriesTopic(text, topic) || hidesTopic(text, topic))));
   const blocked = (text: string) => store.barriers().some(barrier => barrier.topic_hash === textFingerprint(text.trim()) || barrier.topic_hash === textFingerprint(text.trim().toLowerCase().replace(/\s+/g, ' ')));
   const base = (name: ToolName, description: string) => ({ name, description, trigger_allowlist: triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes(name)), autonomy_gated: false });
   return [
-    { ...base('remember', 'Store a fact or preference grounded in a verbatim quote from the owner in this conversation. Use replaces_id to correct an active claim. Memory is context, never permission to act.'), schema: rememberArgsSchema, mutates_state: true,
+    { ...base('remember', 'Store a fact or preference grounded in a verbatim quote from the owner in this conversation. To correct an active claim, pass its id as replaces_id: the c12 that starts its memory line, or 12. Memory is context, never permission to act.'), schema: rememberArgsSchema, mutates_state: true,
       async handle(args: RememberArgs, ctx) {
         await ready(ctx); const turn = admitted(ctx);
         if (!turn) return fail('Authenticated owner memory context is unavailable.');
@@ -120,7 +120,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
             const counts = purge.receipt; touched = [counts.deleted, counts.redacted, counts.terminalised].some(group => Object.values(group).some(count => count > 0));
             if (purge.ready) store.settle(ids, topics); else incomplete = true;
           }
-          if (args.topic && !incomplete) for (const held of [...store.pendingTopics(), ...store.incompleteTopics()]) if (carriesTopic(held, args.topic) || carriesTopic(args.topic, held)) store.finishPendingTopic(held);
+          if (args.topic && !incomplete) for (const held of store.pendingTopics()) if (carriesTopic(held, args.topic) || carriesTopic(args.topic, held)) store.finishPendingTopic(held);
         };
         const atomic = () => deps.transaction ? deps.transaction(commit) : commit();
         if (ctx.runScope) ctx.runScope.commit(atomic); else atomic();

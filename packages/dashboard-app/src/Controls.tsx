@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { SignInRequired } from './model';
-import { fetchControls, submitControl, ControlsActionError, type ActionResult, type ActivityCursors, type ConnectionsRecord, type ControlAction, type ControlFields, type ControlRecord, type ControlsView, type DayRecord } from './controls-model';
+import { fetchControls, submitControl, ControlsActionError, type ActionResult, type ActivityCursors, type ConnectionsRecord, type ControlAction, type ControlFields, type ControlRecord, type ControlsView, type DayRecord, type ProactiveSurface } from './controls-model';
 import { Icon, Logo, type IconName } from './icons';
 import { Patch } from '@lucasmarkes/hairline/react';
 import { DayRail, localMinutes, minutesLabel, type RailMark } from './Infographics';
@@ -27,6 +27,29 @@ function CardTiming({ card, busy, onAction }: { card: DayRecord['data']['cards']
     {card.sent && <p className="meta">This records a send, not verified delivery. Timing edits are unavailable for an already sent card.</p>}
     </div>
   </details>;
+}
+
+const SURFACES: Readonly<Record<ProactiveSurface['value'], string>> = { app: 'The app only', whatsapp: 'WhatsApp only', both: 'The app and WhatsApp' };
+// Each note says what the choice does today, given where the owner can be reached.
+function surfaceNotes({ value, app_linked, whatsapp_linked, telegram_linked }: ProactiveSurface): string[] {
+  if (telegram_linked) return ['While Telegram is linked, Waldo keeps writing to you as it does now. This choice applies once Telegram is unlinked.'];
+  if (!whatsapp_linked) return value === 'app' ? [] : ['WhatsApp isn’t connected, so these come to the app for now.'];
+  if (!app_linked && value !== 'whatsapp') return ['You haven’t written to Waldo in the app yet, so these come to WhatsApp for now.'];
+  if (value === 'app') return [];
+  const window = 'WhatsApp lets Waldo write freely for a day after your last message there.';
+  return value === 'whatsapp'
+    ? ['Meeting prep before your events isn’t sent on WhatsApp yet.', `${window} After that, a day card waits only until your next card is due or its day ends, update cards aren’t sent, and a standing order’s newer report replaces a waiting one. Other messages wait up to 30 days for your next message there, unless they no longer apply.`]
+    : ['Meeting prep before your events, update cards and notices about paused jobs come to the app only.', `${window} After that, each copy waits a day at most for your next message there; the app keeps every message.`];
+}
+function ProactiveSurfaceSetting({ surface, busy, onAction }: { surface: ProactiveSurface } & ActionProps) {
+  const [choice, setChoice] = useState(surface.value);
+  return <details name="day-settings" className="disclosure"><summary><Icon name="bell"/><span className="label key">Where Waldo writes</span><span className="value">{SURFACES[surface.value]}</span></summary><div className="disclosure-body"><p>Your Brief and other day cards, reminders, follow-ups and update cards. Replies always come where you wrote.</p>
+    {surfaceNotes(surface).map(note => <p key={note} className="meta">{note}</p>)}
+    <form className="control-form" onSubmit={event => { event.preventDefault(); onAction('proactive_surface.set', { value: choice }); }}>
+      <label>Send them to<select value={choice} disabled={busy} onChange={event => setChoice(event.target.value as typeof choice)}>{(Object.keys(SURFACES) as ProactiveSurface['value'][]).map(value => <option key={value} value={value}>{SURFACES[value]}</option>)}</select></label>
+      <button className="primary" disabled={busy}>Save where Waldo writes</button>
+    </form>
+  </div></details>;
 }
 
 export function DayControls({ record, busy, onAction }: { record: DayRecord } & ActionProps) {
@@ -61,6 +84,7 @@ export function DayControls({ record, busy, onAction }: { record: DayRecord } & 
         <label>Volume<select value={volume} disabled={busy} onChange={event => setVolume(event.target.value as typeof volume)}><option value="low">Low: only the three day cards</option><option value="normal">Normal: plus updates that change your day</option><option value="high">High: plus smaller useful updates</option></select></label><button className="primary" disabled={busy}>Save quiet hours &amp; volume</button>
       </form>
     </div></details>
+    {record.data.proactive_surface && <ProactiveSurfaceSetting surface={record.data.proactive_surface} busy={busy} onAction={onAction}/>}
     </div>
     <p className="caption">These cards run in chat. Their content and verified Close results aren’t shown here.</p>
   </>;

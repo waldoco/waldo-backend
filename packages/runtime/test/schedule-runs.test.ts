@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { Scheduler, type ScheduleExecutors } from '../src/scheduler/multiplexer';
 import type { Deps } from '../src/seams/deps';
-import type { TracerDO } from '../src/tracer/tracer-do';
+import type { TestStorageDO } from './support/worker-entry';
 import { TelegramFinalOutbox } from '../src/channels/telegram-final-outbox';
 import { heartbeatEligible, heartbeatTick, settleHeartbeat } from '../src/channels/heartbeat';
 import { loopBook } from '../src/channels/loops';
@@ -12,7 +12,7 @@ import { dayPlanBook } from '../src/channels/day-cards';
 const checkedBack = async (loops: readonly { title: string }[]) => `Checked ${loops.map(loop => loop.title).join(', ')}`;
 
 let seq = 0;
-const stub = () => env.TRACER_DO.get(env.TRACER_DO.idFromName(`schedule-runs-${(seq += 1)}`)) as DurableObjectStub<TracerDO>;
+const stub = () => env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`schedule-runs-${(seq += 1)}`)) as DurableObjectStub<TestStorageDO>;
 const deps = (now: number): Deps => ({ now: () => now, newRunId: () => 'run-fixed', newOutboxId: () => 'out-fixed', sha256Hex: async () => 'sha-fixed' });
 
 type RunRow = {

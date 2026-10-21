@@ -1,4 +1,5 @@
 import {
+  TOOL_ERRORS,
   TOOL_PERMISSIONS,
   buildSessionState,
   executeActionArgsSchema,
@@ -35,6 +36,9 @@ import { webSearchHandler } from '../src/tools/live/web-search';
 import type { RunEffectScope } from '../src/channels/run-effect-scope';
 
 const canaryTokens = ['1111111111111111', '2222222222222222', '3333333333333333'];
+
+// The dispatcher's error shape for a catalogue code; cause overridden where the tool's own text rides it.
+const shaped = (code: keyof typeof TOOL_ERRORS, cause = TOOL_ERRORS[code].cause) => ({ error: cause, error_code: code, fix: TOOL_ERRORS[code].fix, retryable: TOOL_ERRORS[code].retryable });
 
 function triggerAllowlistFor(tool: ToolName): TriggerType[] {
   return (Object.keys(TOOL_PERMISSIONS) as TriggerType[]).filter((trigger) =>
@@ -275,7 +279,7 @@ describe('ToolDispatcher', () => {
         ok: false,
         call_id: `call-${label}-subject`,
         tool: 'get_crs',
-        error: 'tool authentication failed',
+        ...shaped('unauthenticated'),
         code: 'auth_failed',
         reason: 'hook_halt',
       });
@@ -343,7 +347,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-health-args',
       tool: 'send_message',
-      error: 'hook halted',
+      ...shaped('sanitise_denied'),
       code: 'forbidden',
       reason: 'sanitise_denied',
     });
@@ -570,7 +574,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-calendar-external-failure',
       tool: 'query_calendar',
-      error: 'provider-controlled failure text',
+      ...shaped('transient', 'provider-controlled failure text'),
       code: 'transient',
       reason: 'tool_result_error',
       source_taint: 'external',
@@ -815,7 +819,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-denied',
       tool: 'execute_action',
-      error: 'tool outside trigger ACL',
+      ...shaped('acl_denied'),
       code: 'forbidden',
       reason: 'acl_denied',
     });
@@ -854,7 +858,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-direct-acl-denied',
       tool: 'execute_action',
-      error: 'tool outside trigger ACL',
+      ...shaped('acl_denied'),
       code: 'forbidden',
       reason: 'acl_denied',
     });
@@ -889,7 +893,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-drift',
       tool: 'get_crs',
-      error: 'tool handler ACL drift',
+      ...shaped('handler_acl_drift'),
       code: 'transient',
       reason: 'handler_acl_drift',
     });
@@ -931,7 +935,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-no-approval',
       tool: 'write_task',
-      error: 'hook halted',
+      ...shaped('approval_denied'),
       code: 'forbidden',
       reason: 'approval_denied',
     });
@@ -964,7 +968,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-large',
       tool: 'get_crs',
-      error: 'tool result exceeded bound',
+      ...shaped('result_oversize'),
       code: 'oversize',
       reason: 'result_oversize',
     });
@@ -1083,7 +1087,7 @@ describe('ToolDispatcher', () => {
       call_id: 'call-invalid-args',
       tool: 'get_crs',
       // The datetime hint is scoped to datetime validation failures; a range error gets none.
-      error: 'invalid tool arguments: range_days: Too big: expected number to be <=90; match the tool schema exactly',
+      ...shaped('invalid_args', 'invalid tool arguments: range_days: Too big: expected number to be <=90; match the tool schema exactly'),
       code: 'invalid_args',
       reason: 'invalid_args',
     });
@@ -1193,7 +1197,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-code',
       tool: 'execute_code',
-      error: 'tool outside trigger ACL',
+      ...shaped('acl_denied'),
       code: 'forbidden',
       reason: 'acl_denied',
     });
@@ -1271,7 +1275,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-error',
       tool: 'get_crs',
-      error: `${'x'.repeat(MAX_TOOL_ERROR_CHARS)}\n[cut: ${20_000 - MAX_TOOL_ERROR_CHARS} more characters]`,
+      ...shaped('transient', `${'x'.repeat(MAX_TOOL_ERROR_CHARS)}\n[cut: ${20_000 - MAX_TOOL_ERROR_CHARS} more characters]`),
       code: 'transient',
       reason: 'tool_result_error',
     });

@@ -1,15 +1,7 @@
-import type { CostKind } from '../llm/cost-ledger';
-import type { ModelUsage } from '../llm/pricing';
+import type { SystemSection, TurnContextShape, TurnEvent, TurnText } from '@waldo/contracts';
 
-// What fills one model call, in UTF-8 bytes: numeric metadata only, never text.
-export type SystemSection = 'reasons' | 'behavior' | 'health' | 'clock' | 'memory' | 'orders' | 'loops' | 'skill_catalog' | 'task_context' | 'connections' | 'skill_procedures' | 'tool_results' | 'owner_profile';
-export type ContextShape = Readonly<{
-  tools_count: number; tools_bytes: number; tool_turns_bytes: number;
-  history_messages: number; history_bytes: number; current_bytes: number; attachments: number;
-  system_sections?: Readonly<Partial<Record<SystemSection, number>>>;
-}>;
-// principal: the verified owner principal, set only on an owner turn's owner_request hop. The host files that runtime's
-// traces under it and strips it before any sink.
-export type TurnLogEntry = Readonly<{ trace: string; hop: string; owner?: string; owner_id?: string; owner_email?: string; owner_identity?: 'verified' | 'email_unavailable' | 'unknown'; principal?: string; ms: number; ok: boolean; error?: string; detail?: string; code?: string; guard?: string; usage?: ModelUsage; cost_kind?: CostKind; responsibility_id?: string; shape?: Readonly<{ system_bytes: number; request_bytes: number; context?: ContextShape }>; text?: TurnText }>;
-export type TurnText = Readonly<{ input: string; output?: string; reasoning?: string }>;
+// The runtime's per-hop turn record is the contracts TurnEvent (schema v9); these aliases keep the runtime's names.
+export type { SystemSection, TurnText };
+export type ContextShape = TurnContextShape;
+export type TurnLogEntry = TurnEvent;
 export type TurnTimer = <T>(hop: string, work: () => Promise<T>) => Promise<T>;

@@ -16,7 +16,6 @@ it('cleanup projection (memory_backups) with a tab-bearing topic must not read c
     const store = claimStore(state.storage.sql);
     const topic = 'alpha\tbeta secret';
     store.backup('fixture', { detail: `note ${topic} tail` }, at);
-    store.beginTopicCoverage(topic, at);
     const r = store.forgetSources(topic);
     expect(r.incomplete || r.sources.length > 0).toBe(true);
     expect(store.purge([], at, [topic]).ready).toBe(false);
@@ -38,7 +37,6 @@ it('end to end: non-strict JSON (trailing comma) hiding a tab-bearing topic behi
     const topic = 'alpha\tbeta secret';
     store.backup('fixture', { detail: 'x' }, at);
     state.storage.sql.exec('UPDATE memory_backups SET payload = ?', '{"detail":"note alpha\\tbeta secret tail",}');
-    store.beginTopicCoverage(topic, at);
     const r = store.forgetSources(topic);
     expect(r.incomplete || r.sources.length > 0).toBe(true);
     expect(store.purge([], at, [topic]).ready).toBe(false);

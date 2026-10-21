@@ -7,7 +7,7 @@ import { CHILD_TOOL_NAMES } from '../src/conversation/subagent';
 import { guardExternalReads, EXTERNAL_READ_TOOLS, SOURCE_SCOPE_CLASS, SourceScopeStore } from '../src/tools/source-scope';
 
 const withDo = (name: string, run: (sql: SqlStorage) => Promise<void>) =>
-  runInDurableObject(env.RUNTIME_DO.get(env.RUNTIME_DO.idFromName(name)), async (_, state) => { provisionDoSchema(state.storage); await run(state.storage.sql); });
+  runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(name)), async (_, state) => { provisionDoSchema(state.storage); await run(state.storage.sql); });
 const owner = { trigger: 'user_message', toolArgSourceTaint: null } as const;
 const NOW = 1_800_000_000_000;
 
