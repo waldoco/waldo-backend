@@ -46,13 +46,6 @@ const TOOL_TIME_WARN_MS = 15_000;
 // back to back is a loop. A write never runs twice, and the browse tools keep their own session rule.
 export const READ_REPEAT_AFTER_MS = MODEL_CALL_TIMEOUT_MS;
 
-// Every round resends the turn's tool results. Past this many characters of result text the oldest results are cleared
-// (the call stays, its result becomes a short note), down to half of it at once, so a long turn stays inside the model's
-// input and the cleared prefix stays byte-stable for the rounds after. The newest round is never cleared.
-export const TOOL_RESULTS_KEEP_CHARS = 160_000;
-export const clearedToolResult = (name: string): string =>
-  `[cleared: this ${name.replaceAll('_', ' ')} result from earlier in this turn is no longer shown, to keep the turn within its context; run it again if you still need it]`;
-
 // 'completed' means the model closed while resources remained. 'budget_exhausted'
 // means the loop withdrew tools at its local/shared round cap, 'time_exhausted' that
 // it withdrew them, or ended the turn, at the turn's deadline. Keep 'withdrawn' in the
@@ -74,6 +67,13 @@ export const BROWSING_UNAVAILABLE = 'Browsing is unavailable on this Waldo for t
 // provider unavailable, a rejected key), so after one both are withheld until the turn ends. Keyed on the typed code.
 const BROWSE_TOOLS: ReadonlySet<string> = new Set(['browse_page', 'browse_act']);
 const TIME_UP_NOTE = `\n[budget: turn time is up - no more tool calls; ${CLOSING}]`;
+
+// Every round resends the turn's tool results. Past this many characters of result text the oldest results are cleared
+// (the call stays, its result becomes a short note), down to half of it at once, so a long turn stays inside the model's
+// input and the cleared prefix stays byte-stable for the rounds after. The newest round is never cleared.
+export const TOOL_RESULTS_KEEP_CHARS = 160_000;
+export const clearedToolResult = (name: string): string =>
+  `[cleared: this ${name.replaceAll('_', ' ')} result from earlier in this turn is no longer shown, to keep the turn within its context; run it again if you still need it]`;
 
 // Set once by the first loop of a turn, from the run it serves, and shared with its child loops through the budget.
 const turnDeadline = (budget: { deadline?: number } | undefined, scope: RunEffectScope | undefined): number => {
