@@ -26,31 +26,16 @@ import {
 const key = 'a'.repeat(64);
 
 describe('proposeActionArgs', () => {
-  const base = {
-    action_type: 'reschedule_meeting',
-    description: 'move the 3pm sync out of the recovery window',
-    reasoning: 'recovery window collides with the sync',
-  } as const;
+  const base = { tool: 'write_task', args: { title: 'Pay invoice 44', reasoning: 'asked by email' }, reasoning: 'the vendor email asks for it' } as const;
 
-  it('urgency is exactly low/medium/high, in order', () => {
-    expect(proposeActionArgsSchema.shape.urgency.unwrap().options).toEqual([
-      'low',
-      'medium',
-      'high',
-    ]);
+  it('freezes a tool name, its arguments and the reasoning', () => {
+    expect(proposeActionArgsSchema.parse(base)).toEqual(base);
   });
 
-  it('defaults urgency to medium', () => {
-    expect(proposeActionArgsSchema.parse(base).urgency).toBe('medium');
-  });
-
-  it('rejects an out-of-domain urgency', () => {
-    expect(proposeActionArgsSchema.safeParse({ ...base, urgency: 'critical' }).success).toBe(false);
-  });
-
-  it('rejects a missing reasoning — mandatory audit surface', () => {
-    const { reasoning: _reasoning, ...rest } = base;
-    expect(proposeActionArgsSchema.safeParse(rest).success).toBe(false);
+  it('rejects a missing tool, non-object args or an unknown extra key (strictObject)', () => {
+    expect(proposeActionArgsSchema.safeParse({ ...base, tool: '' }).success).toBe(false);
+    expect(proposeActionArgsSchema.safeParse({ ...base, args: 'title=x' }).success).toBe(false);
+    expect(proposeActionArgsSchema.safeParse({ ...base, urgency: 'high' }).success).toBe(false);
   });
 });
 

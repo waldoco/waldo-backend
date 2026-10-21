@@ -136,7 +136,10 @@ export async function runToolLoop(input: Readonly<{
     const roundsAvailable = round < input.maxSteps && (input.budget === undefined || input.budget.remaining > 0);
     // A tool round starts only while one full model call is left for the final answer.
     const timeAvailable = timeLeft >= FINAL_ANSWER_RESERVE_MS;
-    const roundTools = browsingWithheld ? tools.filter((tool) => !BROWSE_TOOLS.has(tool.name)) : tools;
+    // propose_action is the route for a privileged call whose arguments came from external content, so it is on the
+    // menu exactly while the turn is tainted; the browse tools leave it once browsing is withheld.
+    const tainted = (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint === 'external';
+    const roundTools = tools.filter((tool) => (tool.name !== 'propose_action' || tainted) && !(browsingWithheld && BROWSE_TOOLS.has(tool.name)));
     const offer = roundTools.length > 0 && roundsAvailable && timeAvailable;
     // An initially empty authority ceiling can reject an illegal request once and
     // give the model a final closing step. This consumes a round and performs no I/O.

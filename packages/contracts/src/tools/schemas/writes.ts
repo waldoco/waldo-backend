@@ -8,11 +8,13 @@ import { idempotencyKeySchema } from '../../runtime/outbox';
 // PreToolUse validation seam for the write tools: strictObject makes an unknown arg a parse
 // failure, and every external mutation is autonomy-gated (ADR-0018) before any adapter call.
 
+// The owner-confirm route for a privileged action whose arguments came from external content (ADR-0049): the
+// intended tool and its exact arguments are frozen on a card, and on approval the dispatcher replays that one call.
+// The tool name is checked against the tool union by the handler, which also validates args against that tool's schema.
 export const proposeActionArgsSchema = z.strictObject({
-  action_type: z.string().min(1).max(100),
-  description: z.string().min(1).max(1_000),
+  tool: z.string().min(1).max(64),
+  args: z.record(z.string(), z.unknown()),
   reasoning: z.string().min(1).max(500),
-  urgency: z.enum(['low', 'medium', 'high']).default('medium'),
 });
 export type ProposeActionArgs = z.infer<typeof proposeActionArgsSchema>;
 

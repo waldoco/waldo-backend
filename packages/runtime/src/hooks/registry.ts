@@ -144,6 +144,11 @@ export type HookRuntimeContext = {
   }) => MaybePromise<boolean>;
   sourceTaint: SourceTaint;
   toolArgSourceTaint: SourceTaint;
+  // An owner-approved tainted action (the propose_action card): the dispatcher verifies the call's tool and argument
+  // digest against it before any hook runs, so the autonomy gate may admit exactly that call despite the taint.
+  approvedTaintedAction?: Readonly<{ tool: ToolName; args_digest: string }>;
+  // Set by the dispatcher for one call whose handler declares proposal_only: the call only raises the owner's card.
+  proposalOnlyCall?: ToolName;
   egressAllowlist?: readonly string[];
   sanitise?: (input: SanitiseInput) => MaybePromise<SanitiseResult>;
   // Typed store provenance from the dispatcher/store boundary (owner review on #212): the
@@ -403,6 +408,9 @@ export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
     // Redaction would corrupt them (the 2026-09-25 halt - [REDACTED_EMAIL] fails zod), so they
     // are checked (hard denies still halt fail-closed) but never rewritten.
     if (destination === 'draft_email') return checkExecutableArgs(payload.args, ctx, destination, sourceTaint.data);
+    // The frozen call inside a proposal is executable too: it is checked here and again, at its own tool's
+    // destination, when the approved call replays through this hook.
+    if (tool.data === 'propose_action') return checkExecutableArgs(payload.args, ctx, destination, sourceTaint.data);
     if (tool.data === 'workspace_write') {
       // Private writes are executable data, including initial text and full replacements.
       // Preserve ordinary contact fields exactly; mandatory substitutions still refuse.
@@ -420,9 +428,9 @@ export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
   },
 };
 
-// Tools with an owner-approval path: a call carrying external content is routed to a proposal
-// the owner approves, instead of being refused. Tools without one stay a hard block.
-const TAINT_APPROVAL_TOOLS: readonly ToolName[] = ['send_message', 'draft_document', 'write_task', 'update_task'];
+// Every external-tainted privileged call is pointed at propose_action: the owner's approval replays exactly that call
+// with the token the dispatcher verified. The proposal handler refuses what the host could never replay (use_mac, a
+// tool outside its handler set), so no dead card reaches the owner.
 export const TAINT_NEEDS_APPROVAL_REASON = 'external-tainted privileged action needs owner approval; propose it for approval with propose_action';
 
 export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
@@ -448,12 +456,10 @@ export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
       return halt('tool argument taint invalid', 'invalid_args');
     }
 
-    if (taintGateBlocksDirectExecution(tool.data, sourceTaint.data)) {
-      // Shadow log (7 days, then delete with the shadow code): old verdict was always a hard block.
-      console.warn(JSON.stringify({ hop: 'send_guard_shadow', ms: 0, ok: true, detail: JSON.stringify({ tool: tool.data, old: 'block', new: TAINT_APPROVAL_TOOLS.includes(tool.data) ? 'propose' : 'block', taint: sourceTaint.data }) }));
-      return TAINT_APPROVAL_TOOLS.includes(tool.data)
-        ? halt(TAINT_NEEDS_APPROVAL_REASON, 'forbidden')
-        : halt('external-tainted privileged action blocked', 'forbidden');
+    // Two calls pass with tainted arguments: the owner-approved replay of a frozen call, and a call whose handler only
+    // raises the owner's card. Neither executes anything the owner has not seen.
+    if (taintGateBlocksDirectExecution(tool.data, sourceTaint.data) && ctx.approvedTaintedAction?.tool !== tool.data && ctx.proposalOnlyCall !== tool.data) {
+      return halt(TAINT_NEEDS_APPROVAL_REASON, 'forbidden');
     }
 
     // This admits a request only; native Mac custody authorizes each effect.
@@ -572,7 +578,6 @@ export type RunHooksOptions<Ctx> = {
 // sanitiser or approval reason never reaches the model, only a code and a fix it can act on.
 const hookToolError = (hook: string, reason: string, code: ErrorCode): ToolError => {
   if (reason === TAINT_NEEDS_APPROVAL_REASON) return toolError('taint_needs_approval');
-  if (reason === 'external-tainted privileged action blocked') return toolError('taint_blocked');
   if (reason === 'privileged action lacks approval') return toolError('approval_denied');
   if (reason === 'approval check unavailable' || reason === 'approval check failed') return toolError('approval_check_unavailable');
   if (reason === 'unknown tool') return toolError('unknown_tool');
