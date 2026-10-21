@@ -3812,7 +3812,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (record.standingOrder && runs.byId(record.standingOrder.runId)?.status === 'running') {
         const unsent: Readonly<Record<string, string>> = { expired: 'order ran; its report expired unsent', surface_held: 'order ran; its report waits for your next message',
           superseded: 'order ran; a newer report replaced this one', provider_failed: 'order ran; WhatsApp could not deliver its report',
-          surface_unlinked: 'order ran; its WhatsApp number was unlinked before the report arrived', delivery_unconfirmed: 'order report delivery unconfirmed' };
+          surface_unlinked: 'order ran; its WhatsApp number was unlinked before the report arrived', lapsed: 'order ran; its report waited 30 days for your WhatsApp window and was not sent',
+          delivery_unconfirmed: 'order report delivery unconfirmed' };
         runs.finish(record.standingOrder.runId, delivered ? 'completed' : record.status === 'quarantined' ? 'failed' : 'stopped',
           delivered ? orderReported(record.standingOrder.gate) : unsent[record.reason ?? ''] ?? (record.status === 'quarantined' ? 'order report delivery unconfirmed' : 'order ran; its report was not sent'));
       }
@@ -3833,7 +3834,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (record.reminder.once) this.ctx.storage.sql.exec('DELETE FROM reminder_notes WHERE id = ?', record.reminder.id);
           runs.finish(record.reminder.runId, 'completed', 'reminder sent');
         } else if (cancelled) runs.finish(record.reminder.runId, 'stopped', unlinked ? 'reminder not sent; its WhatsApp number was unlinked' : 'reminder cancelled before delivery');
-        else runs.finish(record.reminder.runId, 'failed', 'reminder delivery unconfirmed');
+        else runs.finish(record.reminder.runId, 'failed', record.status === 'blocked' && record.reason === 'lapsed' ? 'reminder not sent; your WhatsApp window stayed closed for 30 days' : 'reminder delivery unconfirmed');
       }
       // Never mark a queued or ambiguous turn resolved. Reaction itself is best effort.
       if (delivered && record.reaction) await api.setMessageReaction({ chat_id: record.payload.chat_id,

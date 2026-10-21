@@ -69,6 +69,9 @@ const drive = async (name: string, script: (steps: Readonly<{
   reply(from?: string): Promise<void>;
   windowKeys(): string[];
   cancel(): Promise<void>;
+  // Runs the step with the clock moved forward, as when the owner next writes much later.
+  later<T>(ms: number, step: () => Promise<T>): Promise<T>;
+  reminderRuns(): { status: string; summary: string | null }[];
   refuse(id: string, at?: number): Promise<number>;
   // Meta reports that a message reached the phone; answers the owner's status code.
   arrive(id: string): Promise<number>;
@@ -112,6 +115,12 @@ const drive = async (name: string, script: (steps: Readonly<{
           await Promise.all([...(owner as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
         },
         cancel: async () => { expect(await book.cancel(reminder.id)).toBe(true); },
+        later: async (ms, step) => {
+          const now = Date.now;
+          Date.now = () => now() + ms;
+          try { return await step(); } finally { Date.now = now; }
+        },
+        reminderRuns: () => state.storage.sql.exec<{ status: string; summary: string | null }>("SELECT status, summary FROM background_runs WHERE kind = 'reminder' ORDER BY started_at").toArray(),
         hold: texts => texts.forEach((text, index) => state.storage.kv.put(`wa_held:${String(index + 1).padStart(12, '0')}`, { heldAt: Date.now(), body: { chat_id: Number(SUBJECT), text } })),
         // The owner's message is admitted and its turn's work starts in the background, as after the webhook's ack.
         stall: text => {
@@ -185,6 +194,17 @@ const drive = async (name: string, script: (steps: Readonly<{
 
 // Each alarm pass waits out the 250 ms a queued record takes to fall due, so these run past the 5 s default.
 describe('a WhatsApp-only owner outside the 24-hour window', { timeout: 20_000 }, () => {
+  it('a reminder that never went out because the window stayed closed for Meta\'s 30 days ends as lapsed, and its run says it was not sent', async () => {
+    await drive('whatsapp-only-reminder-lapsed', async ({ alarms, later, ledger, reminderRuns }) => {
+      await alarms(3);
+      expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'pending' }]);
+      await later(31 * 24 * 60 * 60_000, () => alarms(2));
+      expect(ledger().outbox).toEqual([{ id: expect.stringMatching(/^reminder:/), status: 'blocked', reason: 'lapsed' }]);
+      expect(reminderRuns()).toEqual([{ status: 'failed', summary: 'reminder not sent; your WhatsApp window stayed closed for 30 days' }]);
+      expect(ledger().runs).toEqual([expect.objectContaining({ delivery: 'failed' })]);
+    });
+  });
+
   it('holds a due reminder with one template knock, never retries or reports it, and delivers it on the reply before that turn', async () => {
     await drive('whatsapp-only-reminder', async ({ alarms, reply, arrived, ledger }) => {
       await alarms(3);

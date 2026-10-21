@@ -78,6 +78,8 @@ const owned = async (name: string, script: (steps: Readonly<{
   later<T>(ms: number, step: () => Promise<T>): Promise<T>;
   card(): Promise<void>;
   order(): Promise<void>;
+  // The order is cancelled after its report is queued, so no later report replaces that one.
+  endOrder(): void;
   // Meta's status callbacks, as the webhook forwards them: a 131047 refusal, evidence the message reached the phone
   // (delivered, read or played), or any other failure.
   status(kind: 'refused' | 'delivered' | 'failed', ids: readonly (string | null)[], at?: number): Promise<void>;
@@ -139,6 +141,7 @@ const owned = async (name: string, script: (steps: Readonly<{
           const at = new Date(Date.now() - 30 * 60_000).toISOString().slice(11, 16);
           await standingOrderBook(state.storage.sql, scheduler, clock, () => 'ord1').set({ scope: 'check the forecast', trigger: 'daily', at, gate: 'act_and_report', escalation: 'log_only' });
         },
+        endOrder: () => { state.storage.sql.exec("DELETE FROM schedule WHERE kind = 'standing_order'"); },
         status: async (kind, ids, at = Date.now()) => {
           const response = await owner.fetch(new Request('https://telegram-owner/whatsapp-status', {
             method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ [kind]: ids.map(id => ({ id, at })) }),
@@ -356,6 +359,18 @@ describe('a WhatsApp send Meta refuses for the window our check let through', { 
       expect(outbox()[0]).toMatchObject({ status: 'quarantined', reason: 'delivery_unconfirmed' });
       expect(runs()[0]).toEqual({ status: 'failed', summary: 'order report delivery unconfirmed' });
     });
+  });
+
+  it('a report that never went out because the window stayed closed for Meta\'s 30 days ends as lapsed, and the run says it was not sent', async () => {
+    await owned('wa-pending-lapsed', async ({ alarms, later, order, endOrder, runs, outbox }) => {
+      await order();
+      await alarms(3);
+      expect(outbox()).toEqual([{ id: expect.stringMatching(/^standing-order:/), status: 'pending' }]);
+      endOrder();
+      await later(31 * 24 * HOUR, () => alarms(2));
+      expect(outbox()[0]).toMatchObject({ status: 'blocked', reason: 'lapsed' });
+      expect(runs()).toEqual([{ status: 'stopped', summary: 'order ran; its report waited 30 days for your WhatsApp window and was not sent' }]);
+    }, 30 * HOUR);
   });
 
   it('a card and a report still waiting for Meta\'s report never hold back their next occurrence', async () => {

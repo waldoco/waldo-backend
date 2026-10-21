@@ -194,6 +194,8 @@ export class TelegramFinalOutbox {
     // Each part goes with the record it belongs to, so a caller can send it to the surface the record is addressed to.
     send(payload: FinalPayload, record: FinalRecord): Promise<unknown>;
     defer?(record: FinalRecord): Promise<number | null>;
+    // A record that waited past the surface's retention without going out: it ends blocked as lapsed.
+    lapsed?(record: FinalRecord): boolean;
     // How the surface the record went to acknowledges a part; Telegram's when absent.
     receipt?(result: unknown, record: FinalRecord): DeliveryAck;
     // Restricts which records this pass settles and sends. The restart sweep (attempting → quarantined) still covers every
@@ -238,6 +240,7 @@ export class TelegramFinalOutbox {
     if (deferred !== undefined && deferred !== null && deferred > this.now()) {
       row.dueAt = Math.min(deferred, row.expiresAt ?? Infinity); await commit(row, before); return;
     }
+    if (options.lapsed?.(row)) { row.status = 'blocked'; row.reason = 'lapsed'; if (!(await commit(row, before))) return; await options.settled(row); await markSettled(row); return; }
     let allowed = false;
     try { allowed = (row.expiresAt === undefined || this.now() < row.expiresAt) && await options.allowed(row); } catch { /* fail closed */ }
     if (!allowed) { row.status = 'blocked'; row.reason = 'owner_binding'; if (!(await commit(row, before))) return; await options.settled(row); await markSettled(row); return; }

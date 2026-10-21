@@ -5,6 +5,9 @@ export type OutboxRoute = Readonly<{
   addressed(record: FinalRecord): boolean;
   allowed(record: FinalRecord): Promise<boolean>;
   defer(record: FinalRecord): Promise<number | null>;
+  // True when the surface will never take this record because it waited past the surface's own retention. Such a record ends
+  // as lapsed, not as refused for the owner's binding.
+  lapsed?(record: FinalRecord): boolean;
   send(payload: FinalPayload): Promise<unknown>;
   // How the surface acknowledges a send; Telegram's message-and-chat check when absent.
   receipt?(result: unknown, record: FinalRecord): DeliveryAck;
@@ -17,6 +20,7 @@ export const routedDelivery = (routes: readonly OutboxRoute[]) => {
   return {
     allowed: async (record: FinalRecord) => (await routeOf(record)?.allowed(record)) ?? false,
     defer: async (record: FinalRecord) => (await routeOf(record)?.defer(record)) ?? null,
+    lapsed: (record: FinalRecord) => routeOf(record)?.lapsed?.(record) ?? false,
     receipt: (result: unknown, record: FinalRecord): DeliveryAck => {
       const route = routeOf(record);
       return route?.receipt ? route.receipt(result, record) : telegramReceipt(result, record.payload.chat_id);

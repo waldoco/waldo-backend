@@ -174,6 +174,7 @@ export const whatsappWindowRoute = (route: OutboxRoute, options: Readonly<{ kv: 
       await whatsappKnock(kv, knock, template, log);
       return record.createdAt + WHATSAPP_HELD_RETENTION_MS;
     },
+    lapsed: record => lapsed(record) || (route.lapsed?.(record) ?? false),
     allowed: async record => !lapsed(record) && route.allowed(record),
     send: payload => route.send({ ...payload, [OUTBOX_CUSTODY]: true } as typeof payload),
     receipt: ack => whatsappReceipt(ack, subject, now()),
