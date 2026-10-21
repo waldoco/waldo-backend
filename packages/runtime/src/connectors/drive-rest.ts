@@ -82,6 +82,8 @@ export const driveRestClient = (fetcher:typeof fetch,bearer:()=>Promise<string>)
     const legacy=Array.isArray(error?.errors)?error.errors.filter(object).map(item=>item.reason):[];
     const reason=object(info)&&info.reason==='ACCESS_TOKEN_SCOPE_INSUFFICIENT'||legacy.includes('insufficientPermissions')?'ACCESS_TOKEN_SCOPE_INSUFFICIENT':object(info)&&info.reason==='SERVICE_DISABLED'||legacy.includes('accessNotConfigured')?'SERVICE_DISABLED':undefined;
     const service=object(info)&&object(info.metadata)&&info.metadata.service==='drive.googleapis.com'?'drive.googleapis.com':undefined;
+    // Drive reports per-user and per-project rate limits as 403s and asks callers to back off and retry; carried as 429 so no caller reads them as a refusal.
+    if(response.status===403&&(legacy.includes('userRateLimitExceeded')||legacy.includes('rateLimitExceeded')))throw new DriveRestError(429,'drive_rate_limited');
     throw new DriveRestError(response.status,response.status===401?'drive_auth_failed':response.status===403?reason==='ACCESS_TOKEN_SCOPE_INSUFFICIENT'?'drive_scope_missing':reason==='SERVICE_DISABLED'?'drive_service_disabled':'drive_access_denied':response.status===404?'drive_not_found':response.status===429?'drive_rate_limited':'drive_read_failed',reason,service);
    }
    if(object(data)&&Object.hasOwn(data,'error'))return malformed();
