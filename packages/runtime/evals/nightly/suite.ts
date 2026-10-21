@@ -16,6 +16,8 @@ export type NightlyRun = Readonly<{
   candidate: string;
   judgeModel: string;
   model?: ModelName;
+  // The brain's flag-on menu: core tools up front, the rest found by tool search.
+  toolSearch?: boolean;
   // A local look at each judged trial; the scorecard never carries any of it.
   show?: (scenario: NightlyScenario, record: TrialRecord, verdict: Verdict) => void;
 }>;
@@ -28,7 +30,7 @@ export const runNightly = async (scenarios: readonly NightlyScenario[], run: Nig
     for (let trial = 0; trial < run.trials; trial += 1) {
       if (scenario.blocked) { outcomes.push('blocked'); continue; }
       if (run.budget.exhausted()) { outcomes.push('budget_exhausted'); continue; }
-      const record = await runTrial(scenario, { gateway: run.gateway(), budget: run.budget, ...(run.model ? { model: run.model } : {}) });
+      const record = await runTrial(scenario, { gateway: run.gateway(), budget: run.budget, ...(run.model ? { model: run.model } : {}), ...(run.toolSearch ? { toolSearch: true } : {}) });
       if (record.status !== 'ran') { outcomes.push(record.status); if (record.error) errors.push(record.error); continue; }
       const verdict = await run.judge({ scenario: scenario.id, rubric: scenario.rubric, transcript: record.transcript, tools: record.tools, effects: record.effects, final_state: record.final_state });
       outcomes.push(verdict.outcome);

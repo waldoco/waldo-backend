@@ -514,16 +514,27 @@ export class RuntimeLLMProvider {
 
       let gatewayResult: LLMGatewayResult;
       try {
-        input.runScope?.admit();
-        gatewayResult = await this.gateway.complete({
-          ...(input.runScope ? { runScope: input.runScope } : {}),
-          request: sanitisedRequest.request,
-          route: effectiveRoute,
-          step: plan.step,
-          context: plan.context,
-          fallback_step: plan.fallback_step,
-          headers: GATEWAY_CONSTANT_HEADERS,
-        });
+        const send = (request: LLMRequest) => {
+          input.runScope?.admit();
+          return this.gateway.complete({
+            ...(input.runScope ? { runScope: input.runScope } : {}),
+            request,
+            route: effectiveRoute,
+            step: plan.step,
+            context: plan.context,
+            fallback_step: plan.fallback_step,
+            headers: GATEWAY_CONSTANT_HEADERS,
+          });
+        };
+        gatewayResult = await send(sanitisedRequest.request);
+        // Tool search is a request shape a routed model can refuse with a 400, the spend clamp's cheaper models among them.
+        // The step degrades to every tool up front, as the switch-off request sends them, rather than failing the turn.
+        if (!gatewayResult.ok && gatewayResult.code === 'invalid_args' && sanitisedRequest.request.tool_search !== undefined) {
+          attempts.push({ outcome: 'failure', model: plan.step.model, provider: plan.step.provider, context: plan.context, fallback_step: plan.fallback_step, code: 'invalid_args' });
+          if (gatewayResult.spent) spent = addTokens(spent, gatewayResult.spent);
+          const { tool_search: _rejected, ...withoutSearch } = sanitisedRequest.request;
+          gatewayResult = await send(withoutSearch);
+        }
       } catch (error) {
         // Only the class name is kept: a thrown message can quote the request.
         lastDetail = error instanceof Error ? error.constructor.name : typeof error;
