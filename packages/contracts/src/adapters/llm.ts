@@ -22,6 +22,10 @@ export const llmToolSchema = z.strictObject({
   name: z.string().min(1).max(64),
   description: z.string().min(1).max(1024),
   parameters: z.record(z.string(), z.unknown()),
+  // With the request's tool_search on, a deferred tool is loaded through the provider's tool search, grouped under its
+  // namespace where the provider has namespaces. Without tool_search both are ignored and the tool loads up front.
+  namespace: z.string().regex(/^[a-z][a-z_]{0,31}$/).optional(),
+  defer_loading: z.boolean().optional(),
 });
 export type LLMTool = z.infer<typeof llmToolSchema>;
 
@@ -91,6 +95,9 @@ export const llmRequestSchema = z.strictObject({
   // sanitisation never rewrites binary data; providers without file input reject the request.
   attachments: z.array(llmAttachmentSchema).min(1).max(LLM_ATTACHMENTS_MAX).optional(),
   tools: z.array(llmToolSchema).min(1).max(LLM_TOOLS_MAX).optional(),
+  // Offers the provider's tool search over the deferred tools, with one routing line per namespace, and sends schemas
+  // strict where the provider allows it. Absent, the request carries every tool up front, exactly as before.
+  tool_search: z.strictObject({ namespaces: z.record(z.string().regex(/^[a-z][a-z_]{0,31}$/), z.string().min(1).max(512)) }).optional(),
   tool_turns: z.array(llmToolTurnSchema).max(LLM_TOOL_TURNS_MAX).optional(),
   // Offers the provider's own hosted web search beside the function tools, with the owner's approximate location
   // (ISO country code, IANA time zone). Its results arrive inside the response, as external content. Providers without

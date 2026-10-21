@@ -7,7 +7,7 @@ export const reminderCronSchema = scheduleCronExpressionSchema.refine(value => p
 // Owner-set reminders and routines (owner queue slice 2). `at` is wall-clock time in the
 // owner's timezone; `daily` repeats at that time every day.
 export const setReminderArgsSchema = z.strictObject({
-  note: z.string().min(1).max(500).describe('What to remind the owner about, in their words.'),
+  note: z.string().min(1).max(2000).describe('What to remind the owner about, in their words.'),
   at: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/).describe("When, as YYYY-MM-DDTHH:MM in the owner's local time."),
   repeat: z.enum(['none', 'daily', 'weekdays', 'weekly', 'cron']).default('none').describe('Repeats at the owner-local time; weekly uses the weekday of at; cron uses cron.'),
   cron: reminderCronSchema.optional(),
