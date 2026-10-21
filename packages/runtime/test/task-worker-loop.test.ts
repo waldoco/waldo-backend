@@ -1,9 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ANTHROPIC_PROVIDER, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, type LLMToolCall, type LLMToolTurn, type TaskResult } from '@waldo/contracts';
 import type { LoopToolResult } from '../src/conversation/tool-loop';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import type { TaskBrief, TaskTicket } from '../src/tasks/jobs';
-import { FINISH_TASK, runTaskAttempt, taskModel, TaskProviderUnavailable, type TaskBrainPort, type TaskClaim, type TaskModel, type TaskOutcome } from '../src/tasks/worker-loop';
+import { FINISH_TASK, runTaskAttempt, TASK_HEARTBEAT_MS, taskModel, TaskProviderUnavailable, type TaskBrainPort, type TaskClaim, type TaskModel, type TaskOutcome } from '../src/tasks/worker-loop';
 import { faultInjectedProviders } from './helpers/fault-injection';
 
 // One worker attempt against a fake brain and a scripted model. The brain side is a plain recorder here; the job book's
@@ -14,8 +14,8 @@ const result: TaskResult = { status: 'done', summary: 'Two threads wait on you.'
 const search = { name: 'search_communication', description: 'Search mail.', parameters: { type: 'object', properties: {} } };
 
 type Script = Array<{ call: string; args?: unknown } | { text: string } | 'unavailable' | 'hang'>;
-const fakeBrain = (initial: Partial<TaskClaim> = {}, fenceTools = false) => {
-  const log = { tools: [] as LLMToolCall[], checkpoints: [] as Array<{ seq: number; turns: readonly LLMToolTurn[]; events: readonly TurnLogEntry[] }>, reports: [] as TaskOutcome[], events: [] as TurnLogEntry[] };
+const fakeBrain = (initial: Partial<TaskClaim> = {}, fenceTools = false, held: () => boolean = () => true) => {
+  const log = { beats: 0, tools: [] as LLMToolCall[], checkpoints: [] as Array<{ seq: number; turns: readonly LLMToolTurn[]; events: readonly TurnLogEntry[] }>, reports: [] as TaskOutcome[], events: [] as TurnLogEntry[] };
   let saved: readonly LLMToolTurn[] = initial.turns ?? [];
   let seq = initial.seq ?? 0;
   const brain: TaskBrainPort = {
@@ -27,6 +27,7 @@ const fakeBrain = (initial: Partial<TaskClaim> = {}, fenceTools = false) => {
     },
     checkpoint: async (_ticket, next, turns, events) => { log.checkpoints.push({ seq: next, turns, events }); log.events.push(...events); if (next > seq) { seq = next; saved = turns; } return 'ok'; },
     report: async (_ticket, outcome, events) => { log.reports.push(outcome); log.events.push(...events); return 'accepted'; },
+    heartbeat: async () => { log.beats += 1; return held(); },
   };
   return { brain, log };
 };
@@ -75,6 +76,25 @@ describe('a task worker attempt', () => {
     expect(seen[0]!.turns.map(turn => turn.call.name)).toEqual(['search_communication']);
     expect(seen[0]!.content).toContain('interrupted and resumed');
     expect(log.reports).toEqual([{ kind: 'result', result }]);
+  });
+
+  it('a model call longer than the lease: heartbeats keep the lease, and a heartbeat the brain refuses stops the attempt', async () => {
+    vi.useFakeTimers();
+    try {
+      const slow = (model: TaskModel): TaskModel => async (input) => { await new Promise(resolve => setTimeout(resolve, TASK_HEARTBEAT_MS * 4)); return model(input); };
+      const kept = fakeBrain();
+      const reported = runTaskAttempt(ticket, { brain: kept.brain, model: slow(scripted([{ call: FINISH_TASK, args: result }])), sliceEnd: Date.now() + 3_600_000 });
+      await vi.advanceTimersByTimeAsync(TASK_HEARTBEAT_MS * 4);
+      expect(await reported).toBe('reported');
+      expect(kept.log.beats).toBe(4);
+
+      let beats = 0;
+      const lost = fakeBrain({}, false, () => (beats += 1) < 2);
+      const fenced = runTaskAttempt(ticket, { brain: lost.brain, model: slow(scripted([{ call: FINISH_TASK, args: result }])), sliceEnd: Date.now() + 3_600_000 });
+      await vi.advanceTimersByTimeAsync(TASK_HEARTBEAT_MS * 4);
+      expect(await fenced).toBe('fenced');
+      expect(lost.log.reports).toEqual([]);
+    } finally { vi.useRealTimers(); }
   });
 
   it('stops without reporting when the brain fences it (cancelled, or a newer attempt holds the job)', async () => {

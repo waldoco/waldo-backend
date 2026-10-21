@@ -65,6 +65,8 @@ export const taskHost = (deps: TaskHostDeps) => {
     held.abort.abort();
     deps.releaseBrowser(held.scope);
   };
+  // Jobs with a tool call running here now. Their worker is waiting on that call, so its lease cannot have lapsed.
+  const busy = new Map<string, number>();
   const logEvents = (events: readonly TurnLogEntry[]) => { for (const event of events) deps.log(event); };
   const hop = (row: Pick<JobRow, 'id' | 'profile'>, hopName: string, fields: Partial<TurnLogEntry> = {}) =>
     deps.log({ trace: `task:${row.id}`, hop: hopName, ms: 0, ok: true, job_id: row.id, ...(row.profile ? { job_profile: row.profile } : {}), ...fields });
@@ -76,6 +78,9 @@ export const taskHost = (deps: TaskHostDeps) => {
 
   return {
     fence,
+    busy: (): ReadonlySet<string> => new Set(busy.keys()),
+    // The worker keeps its lease while a model call runs.
+    heartbeat: async (ticket: TaskTicket): Promise<boolean> => deps.book.touch(ticket, null),
     async claim(ticket: TaskTicket): Promise<TaskClaim | 'fenced'> {
       const row = deps.book.claim(ticket);
       if (row === 'fenced' || row.kind !== 'task' || row.profile === null) return 'fenced';
@@ -123,14 +128,22 @@ export const taskHost = (deps: TaskHostDeps) => {
           session: buildSessionState({ trigger: 'user_message', canary_tokens: [...canaries], started_at: started }),
         };
         const effect = unreplayable(call.name);
-        if (effect && !deps.book.beginEffect(ticket, { tool: call.name, call_id: call.call_id })) return 'fenced';
-        const run = () => dispatchLoopTool(call, { handlers, ctx });
+        // The intent is written once the call can start, after any wait for the serial lane, with a fresh lease: a job that
+        // waited behind a long turn did nothing yet and must not look like an interrupted effect.
+        const run = async () => {
+          if (!deps.book.touch(ticket, null) || (effect && !deps.book.beginEffect(ticket, { tool: call.name, call_id: call.call_id }))) throw new ClosedRunError();
+          return dispatchLoopTool(call, { handlers, ctx });
+        };
+        busy.set(ticket.jobId, (busy.get(ticket.jobId) ?? 0) + 1);
         try {
           result = BROWSER_TOOLS.has(call.name as never) ? await deps.serialBrowser(scope, run) : await run();
         } catch (error) {
           if (error instanceof ClosedRunError) return 'fenced';
           const failed = toolError('handler_failed');
           result = { ok: false, error: failed.cause, error_code: failed.code, fix: failed.fix, retryable: false, code: 'transient' };
+        } finally {
+          const left = (busy.get(ticket.jobId) ?? 1) - 1;
+          if (left > 0) busy.set(ticket.jobId, left); else busy.delete(ticket.jobId);
         }
         if (effect) deps.book.endEffect(ticket);
       }

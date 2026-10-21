@@ -161,11 +161,12 @@ export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): strin
     // Attempts whose worker stopped calling in. Each lost attempt counts as a crash: the job goes back to the queue to resume
     // from its last checkpoint, or, after TASK_MAX_CRASHES, is parked for the owner to hear about. Past its deadline a job
     // parks whatever the count.
-    lapse(): readonly Readonly<{ id: string; parked: boolean }>[] {
+    // `busy` names jobs whose tool call the brain is running now: their worker is waiting on it, not lost.
+    lapse(busy: ReadonlySet<string> = new Set()): readonly Readonly<{ id: string; parked: boolean }>[] {
       const now = deps.now();
       const lapsed = sql.exec<{ id: string; crashes: number; deadline_at: number; inflight_json: string | null }>(
         "SELECT id, crashes, deadline_at, inflight_json FROM task_jobs WHERE status = 'running' AND lease_until < ?", now,
-      ).toArray();
+      ).toArray().filter(({ id }) => !busy.has(id));
       return lapsed.map(({ id, crashes, deadline_at, inflight_json }) => {
         // An attempt lost while an effect that cannot be replayed was in flight parks at once: the effect may or may not
         // have happened, and running it again blind could do it twice.

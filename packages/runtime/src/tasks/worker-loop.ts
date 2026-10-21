@@ -6,9 +6,10 @@ import { runToolLoop, type LoopExit, type LoopToolResult, type ToolLoopStep } fr
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { ownerModelGateway, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { modelCost } from '../llm/pricing';
+import { OWNER_TURN_CALL_TIMEOUT_MS } from '../llm/time-budget';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
 import { sanitise } from '../scribe/sanitiser';
-import type { TaskBrief, TaskTicket } from './jobs';
+import { TASK_LEASE_MS, type TaskBrief, type TaskTicket } from './jobs';
 
 // One attempt of a task, as a worker runs it. The worker holds no handler, credential or memory: the brain sends the tool
 // definitions of the job's profile when the worker claims its attempt, runs every tool call, takes every checkpoint and
@@ -29,6 +30,8 @@ export type TaskBrainPort = Readonly<{
   tool(ticket: TaskTicket, call: LLMToolCall, canaries: readonly string[]): Promise<LoopToolResult | 'fenced'>;
   checkpoint(ticket: TaskTicket, seq: number, turns: readonly LLMToolTurn[], events: readonly TurnLogEntry[], spend: TaskSpend): Promise<'ok' | 'stale' | 'fenced'>;
   report(ticket: TaskTicket, outcome: TaskOutcome, events: readonly TurnLogEntry[], spend: TaskSpend): Promise<'accepted' | 'duplicate' | 'fenced' | 'deferred' | 'parked'>;
+  // Renews the lease; false once the attempt is fenced.
+  heartbeat(ticket: TaskTicket): Promise<boolean>;
 }>;
 
 // A model step for one task round: the job's system prompt and brief, the profile's tools and the turns so far.
@@ -46,6 +49,8 @@ class TaskSliceEnded extends Error { constructor() { super('alarm slice ended');
 // A job's whole run gets this many tool rounds across its attempts. A long reader job (a week of mail, a long document) runs
 // tens of rounds; a model call per round keeps the cost bounded by the owner's spend ceiling well before this.
 export const TASK_MAX_ROUNDS = 200;
+// A third of the lease, so two missed beats still leave the lease held.
+export const TASK_HEARTBEAT_MS = TASK_LEASE_MS / 3;
 
 export const FINISH_TASK = 'finish_task';
 const FINISH_TOOL: LLMTool = {
@@ -96,6 +101,7 @@ export async function runTaskAttempt(ticket: TaskTicket, deps: Readonly<{ brain:
     claim: (t) => toBrain(() => deps.brain.claim(t)), tool: (t, c, k) => toBrain(() => deps.brain.tool(t, c, k)),
     checkpoint: (t, n, turns, events, spent) => toBrain(() => deps.brain.checkpoint(t, n, turns, events, spent)),
     report: (t, outcome, events, spent) => toBrain(() => deps.brain.report(t, outcome, events, spent)),
+    heartbeat: (t) => deps.brain.heartbeat(t),
   };
   let claim: TaskClaim | 'fenced';
   try { claim = await brain.claim(ticket); } catch { return 'lost'; }
@@ -136,7 +142,15 @@ export async function runTaskAttempt(ticket: TaskTicket, deps: Readonly<{ brain:
         },
       },
       step: async (tools, turns) => {
-        const { response, event } = await deps.model({ ticket, claim, system: TASK_WORKER_SYSTEM_PROMPT, content, tools, turns, canaries });
+        // A model call can outlast the lease (long reasoning, a provider's retry wait, a fallback), so the lease is renewed
+        // while it runs. A heartbeat the brain could not answer changes nothing: the lease then lapses on its own.
+        let fenced = false;
+        const beat = setInterval(() => { brain.heartbeat(ticket).then((held) => { if (!held) fenced = true; }, () => undefined); }, TASK_HEARTBEAT_MS);
+        let step: Awaited<ReturnType<TaskModel>>;
+        try { step = await deps.model({ ticket, claim, system: TASK_WORKER_SYSTEM_PROMPT, content, tools, turns, canaries }); }
+        finally { clearInterval(beat); }
+        if (fenced) throw new TaskFenced();
+        const { response, event } = step;
         events.push(event);
         spend = { rounds: spend.rounds + 1, costUsd: spend.costUsd + (event.usage ? modelCost(event.usage)?.total ?? 0 : 0) };
         return response;
@@ -167,7 +181,8 @@ export const taskModel = (access: OwnerModelAccess, gateway?: LLMGatewayAdapter)
   return async ({ ticket, claim, system, content, tools, turns, canaries }) => {
     const model: ModelName = claim.brief.effort === 'deep' ? WALDO_CHAT_MODEL : WALDO_AUXILIARY_MODEL;
     const started = Date.now();
-    const result = await new RuntimeLLMProvider({ gateway: gateway ?? ownerModelGateway(access), circuitBreaker: health }).complete({
+    // A worker call may reason as long as an owner turn's reply: it has no reply waiting on it.
+    const result = await new RuntimeLLMProvider({ gateway: gateway ?? ownerModelGateway(access, { timeoutMs: OWNER_TURN_CALL_TIMEOUT_MS }), circuitBreaker: health }).complete({
       trigger: 'user_message',
       policy: ownerRoutePolicy(model, WALDO_CHAT_MODEL, access),
       ...(claim.spend ? { spend: { spent_cents: Math.floor(claim.spend.spentUsd * 100), cap_cents: Math.round(claim.spend.ceilingUsd * 100), clamp: ownerRoutePolicy(WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL, access) } } : {}),

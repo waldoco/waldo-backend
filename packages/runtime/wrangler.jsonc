@@ -120,7 +120,8 @@
         { "tag": "v5", "new_sqlite_classes": ["DeviceBridgeDO"] },
         { "tag": "v6", "renamed_classes": [{ "from": "TelegramOwnerDO", "to": "OwnerDO" }] },
         { "tag": "v7", "new_sqlite_classes": ["IMessageBridgeDO"] },
-    { "tag": "v8", "new_sqlite_classes": ["TaskWorkerDO"] }
+        // v8 is reserved for the retired-class deletion (#1334); task workers take v9 and deploy after it or in the same bundle.
+        { "tag": "v9", "new_sqlite_classes": ["TaskWorkerDO"] }
       ],
       "ai": { "binding": "AI" },
       "vectorize": [
@@ -136,6 +137,7 @@
     { "tag": "v5", "new_sqlite_classes": ["DeviceBridgeDO"] },
     { "tag": "v6", "renamed_classes": [{ "from": "TelegramOwnerDO", "to": "OwnerDO" }] },
     { "tag": "v7", "new_sqlite_classes": ["IMessageBridgeDO"] },
-    { "tag": "v8", "new_sqlite_classes": ["TaskWorkerDO"] }
+    // v8 is reserved for the retired-class deletion (#1334); task workers take v9 and deploy after it or in the same bundle.
+    { "tag": "v9", "new_sqlite_classes": ["TaskWorkerDO"] }
   ]
 }

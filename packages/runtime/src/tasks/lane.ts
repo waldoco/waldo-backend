@@ -78,7 +78,7 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
   const hop = (row: Pick<JobRow, 'id' | 'profile' | 'kind'>, name: string, fields: Partial<TurnLogEntry> = {}) =>
     deps.log({ trace: `${row.kind === 'task' ? 'task' : 'retry'}:${row.id}`, hop: name, ms: 0, ok: true, job_id: row.id, ...(row.profile ? { job_profile: row.profile } : {}), ...fields });
 
-  for (const lapsed of book.lapse()) {
+  for (const lapsed of book.lapse(deps.host.busy())) {
     deps.host.fence(lapsed.id);
     const row = book.get(lapsed.id)!;
     hop(row, lapsed.parked ? 'task_parked' : 'task_crashed', { ok: false, ...(row.park_reason ? { code: row.park_reason } : {}), detail: `crashes=${row.crashes}` });

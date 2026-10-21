@@ -396,6 +396,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   async taskReport(ticket: TaskTicket, outcome: TaskOutcome, events: readonly TurnLogEntry[], spend: TaskSpend): ReturnType<OwnerTaskRpc['taskReport']> {
     return this.tasks.report(ticket, outcome, events, spend);
   }
+  async taskHeartbeat(ticket: TaskTicket): Promise<boolean> { return this.tasks.heartbeat(ticket); }
 
   private closeRunAtomic(run: InboxRecord, reason: string, awaitingDelivery = false): void {
     this.ctx.storage.transactionSync(() => {
@@ -2106,10 +2107,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             await rearmSharedAlarm(this.ctx.storage, owner.kind === 'retry' ? Date.now() + APP_ADMISSION_RETRY_MS : null, Date.now(), 30_000);
             return;
           }
-          if (channel === 'telegram' && owner.authority) {
-            this.scheduledAppDelivery = this.copiedToTelegram(this.appDeliveryFor(owner.authority));
-            const app = this.setup('app');
-            await app.ready;
+          const app = await this.appRunsOwnerJobs(channel, owner);
+          if (app) {
             executors = { ...executors, reminder: app.fire, heartbeat: app.beat, pre_activity_spot: app.briefs, brief: app.cards, standing_order: app.fireOrder };
             notices = app.noticeFailures;
           }
@@ -2232,6 +2231,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     await rearmSharedAlarm(this.ctx.storage,null,Date.now());
   }
+  // A Telegram pass for an owner the directory admits on the app runs their jobs on the app, with a Telegram copy. Null
+  // when the pass's own runtime runs them.
+  private async appRunsOwnerJobs(channel: ChannelKind, owner: Extract<ScheduledOwner, { kind: 'admitted' }>): Promise<OwnerRuntime | null> {
+    if (channel !== 'telegram' || !owner.authority) return null;
+    this.scheduledAppDelivery = this.copiedToTelegram(this.appDeliveryFor(owner.authority));
+    const app = this.setup('app');
+    await app.ready;
+    return app;
+  }
+
   // The jobs lane, when its wake is due: task workers started and restarted, their reports told to the owner once, retried
   // turns answered, progress notes sent. It runs as the owner the directory admits, on the surface that takes their
   // proactive work, and leaves its next due time on the wake. The wake is cleared first, so a worker that reports while the
@@ -2242,21 +2251,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     await storage.put(TASK_JOBS_DUE_KEY, null);
     let runtime = this.setup(channel);
     const previous = this.scheduledAppDelivery;
-    let next: number | null = null;
+    // A lane that throws keeps its due time, so the failing-lane retry finds it due again.
+    let next: number | null = due;
     try {
       if (consoleAuth(this.env)) {
         const owner = await this.scheduledOwner();
         // An owner the directory no longer admits runs no jobs; a directory outage asks again soon. A later report or task
         // arms the wake again.
         if (owner.kind !== 'admitted') { next = owner.kind === 'retry' ? Date.now() + APP_ADMISSION_RETRY_MS : null; return; }
-        if (channel === 'telegram' && owner.authority) {
-          this.scheduledAppDelivery = this.copiedToTelegram(this.appDeliveryFor(owner.authority));
-          runtime = this.setup('app');
-          await runtime.ready;
-        }
+        runtime = await this.appRunsOwnerJobs(channel, owner) ?? runtime;
       }
       const kv = storage.kv, jobs = this.jobs();
-      next = await runJobsLane({
+      const ran = await runJobsLane({
         book: jobs, host: this.tasks, now: Date.now, timezone: runtime.timezone, log: runtime.log,
         startWorker: async ticket => {
           const workers = this.env.TASK_WORKER_DO;
@@ -2274,6 +2280,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         room: () => alarmEnd === undefined || alarmEnd - Date.now() >= ALARM_JOB_MIN_MS,
         heldTopics: () => claimStore(storage.sql).pendingTopics(),
       });
+      next = ran;
     } finally {
       this.scheduledAppDelivery = previous;
       const armed = await storage.get<number | null>(TASK_JOBS_DUE_KEY);

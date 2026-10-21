@@ -17,6 +17,7 @@ export type OwnerTaskRpc = Readonly<{
   taskTool(ticket: TaskTicket, call: LLMToolCall, canaries: readonly string[]): Promise<LoopToolResult | 'fenced'>;
   taskCheckpoint(ticket: TaskTicket, seq: number, turns: readonly LLMToolTurn[], events: readonly TurnLogEntry[], spend: TaskSpend): Promise<'ok' | 'stale' | 'fenced'>;
   taskReport(ticket: TaskTicket, outcome: TaskOutcome, events: readonly TurnLogEntry[], spend: TaskSpend): Promise<'accepted' | 'duplicate' | 'fenced' | 'deferred' | 'parked'>;
+  taskHeartbeat(ticket: TaskTicket): Promise<boolean>;
 }>;
 type Held = Readonly<{ owner: string; ticket: TaskTicket }>;
 
@@ -49,6 +50,7 @@ export class TaskWorkerDO extends DurableObject<TelegramWebhookEnv> {
         tool: (ticket, call, canaries) => owner.taskTool(ticket, call, canaries),
         checkpoint: (ticket, seq, turns, events, spend) => owner.taskCheckpoint(ticket, seq, turns, events, spend),
         report: (ticket, result, events, spend) => owner.taskReport(ticket, result, events, spend),
+        heartbeat: (ticket) => owner.taskHeartbeat(ticket),
       };
       const access = { openaiApiKey: this.env.OPENAI_API_KEY ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }) };
       outcome = await runTaskAttempt(held.ticket, { brain, model: taskModel(access), sliceEnd: Date.now() + TASK_ALARM_SLICE_MS });

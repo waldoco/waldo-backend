@@ -28,7 +28,7 @@ export const retryParkedNotice = (brief: RetryBrief, timezone: string): string =
   `I still can't reach my model, so I couldn't answer your message from ${ownerTime(brief.said_at, timezone)}. Could you send it again in a little while?`;
 
 export const retryTurnText = (brief: RetryBrief, timezone: string): string => [
-  `[You could not answer the owner's message from ${ownerTime(brief.said_at, timezone)} because no model was reachable then, and you told them you would come back to them by ${ownerTime(brief.promised_by, timezone)}. ${brief.text ? 'Their message, as they wrote it:]' : 'Their message is in the conversation, just before that reply.]'}`,
+  `[You could not answer the owner's message from ${ownerTime(brief.said_at, timezone)} because no model was reachable then, and you told them you would come back to them by ${ownerTime(brief.promised_by, timezone)}. ${brief.text ? 'Their message, as they wrote it:]' : 'Its text was not kept, because it held health details. It may be in this conversation just before that reply; if it is not, say you could not answer it then and ask them to send it again.]'}`,
   ...(brief.text ? [`<owner_message>\n${brief.text}\n</owner_message>`] : []),
   'Answer it now, saying briefly that this is the late answer. Look at what has happened since first (the conversation after it, and anything already done for it) so nothing is done twice.',
   `If it no longer needs an answer, reply with exactly ${SKIP_UPDATE}.`,
