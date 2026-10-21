@@ -25,7 +25,7 @@ function fakeBrowserUse(script: { outputs: unknown[]; statuses?: string[][] }) {
       const run: Run = { id: `run${++n}`, sessionId, task: body.task, body, statuses: script.statuses?.shift() ?? ['running', 'completed'], output: script.outputs.shift() ?? null, cost: '0.0123' };
       runs.push(run);
       if (!browsers.has(`b-${sessionId}`)) browsers.set(`b-${sessionId}`, { id: `b-${sessionId}`, status: 'active', agentSessionId: sessionId, liveUrl: 'https://live.browser-use.com/x', browserCost: '0.0010', proxyCost: '0', proxyUsedMb: 0 });
-      return reply(200, { id: run.id, sessionId, status: 'queued', model: 'gpt-6-luna', workspaceId: 'w' });
+      return reply(200, { id: run.id, sessionId, status: 'queued', workspaceId: 'w' });
     }
     if (method === 'GET' && (match = /^\/runs\/([^/]+)\/status$/.exec(path))) {
       const run = runs.find(r => r.id === match![1]); if (!run) return reply(404);
