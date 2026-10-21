@@ -92,6 +92,19 @@ describe('canonical store compaction rows', () => {
     expect((await store.load()).entries.find((entry) => entry.id === 'a5-compaction-later')).toMatchObject({ modelPayload: 'Later summary.', modelProjection: { mode: 'include' } });
   });
 
+  it('a summary whose span was trimmed owner-first still walks back to its first row: a forget in a reply it skipped supersedes it', async () => {
+    const { storage, store, tree, leaf } = await seeded(6);
+    // an input budget that holds the owner messages but not every reply
+    const plan = compactionPlan(tree, leaf, null, settings, 160)!;
+    expect(plan.gap).toBeGreaterThan(0);
+    expect(plan.input.some((message) => message.content.startsWith('answer 2 '))).toBe(false);
+    const summary = compactionRow(plan, 'The owner asked five questions.', PRINCIPAL, 99);
+    await store.appendCompaction!(summary, null);
+    const result = await redactConversationEntries(storage, ['answer 2 '], '[forgotten]');
+    expect(result.remaining).toBe(0);
+    expect((await store.load()).entries.find((entry) => entry.id === summary.id)).toMatchObject({ modelPayload: COMPACTION_SUPERSEDED_MARKER, modelProjection: { mode: 'omit' }, covers: summary.covers });
+  });
+
   // An older build hung an app row under the last iMessage row. A turn reads that row on its own chain, so a summary's span
   // crosses the re-linked edge, and a forget must walk the span the summary was written from.
   it('a forget whose topic sits before a re-linked edge in the span supersedes the summary', async () => {
