@@ -4,7 +4,7 @@
 
 0. [What is built](CURRENT_SYSTEM.md): current state at a pinned SHA, with [messaging behavior](behavior/MESSAGING_BEHAVIOR.md), [production architecture](architecture/PRODUCTION_ARCHITECTURE.md) and [adoption direction](planning/ADOPTION_DIRECTION.md). Operations: [dev loop](ops/DEV_LOOP.md), [observability](ops/OBSERVABILITY.md), [staging deploy gate](ops/STAGING_DEPLOY_GATE.md), [teardown](ops/TEARDOWN.md).
 1. [Worker packet](planning/waldo-agent-mvp/README.md): selected MVP decisions, read order and source index.
-2. [Canonical product architecture and build plan](planning/WALDO_PERSONAL_AGENT_PRODUCT_ARCHITECTURE_AND_BUILD_PLAN_2026-09-18.md): one release definition, stack, ownership, slices and acceptance criteria; finalized 21 September 2026.
+2. [Build direction, 21 October 2026](planning/BUILD_DIRECTION_2026-10-21.md): the owner's current product and architecture decisions, the five waves and the proof ladder. The [September build plan](planning/WALDO_PERSONAL_AGENT_PRODUCT_ARCHITECTURE_AND_BUILD_PLAN_2026-09-18.md) keeps its recovery contracts but is historical where the two differ.
 3. [Worker guide](planning/waldo-agent-mvp/WORKER_GUIDE.md) and [first S0 assignment](planning/waldo-agent-mvp/FIRST_WORKER_ASSIGNMENT.md): libraries, role-specific reading, context/tool/harness engineering, verification and completion evidence.
 4. [Next session](foundation/NEXT-SESSION-PLAN.md), [ledger](foundation/EXECUTION-LEDGER.md), [#116](https://github.com/Pin4sf/waldo-backend/issues/116), [onboarding](foundation/CONTRIBUTOR-ONBOARDING.md), [operating workflow](foundation/AGENT-OPERATING-WORKFLOW.md), and [verification pipeline](foundation/LOCAL-DEV-TESTING-PIPELINE.md): bounded delivery workflow.
 
