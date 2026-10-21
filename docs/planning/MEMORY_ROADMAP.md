@@ -9,6 +9,7 @@ The bar is state-of-the-art personal memory. This roadmap merges the locked MVP 
 - Vector search is external (pgvector or Vectorize) and fused with full-text results by reciprocal rank fusion.
 - Wearables feed a health-summary lane only. Raw data stays on the phone.
 - Health routines and preferences are first-class memory content.
+- Sources stay sources (owner direction, 27 Sept 2026): connected accounts (Gmail, Calendar, Drive) are read live at ask time. Durable memory holds meaning - preferences, relationships, commitments, decisions and explicit remember-this - plus pointers to where things live, never copies of source content. Every claim carries provenance, and a correction replaces the old claim rather than piling up next to it.
 
 ## Stages
 

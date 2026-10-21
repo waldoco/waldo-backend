@@ -84,9 +84,11 @@ describe('llmRequest', () => {
     );
   });
 
-  it('rejects max_tokens outside 1..8192', () => {
+  it('rejects max_tokens outside 1..128000 (wire ceiling, S5)', () => {
     expect(llmRequestSchema.safeParse({ ...baseRequest, max_tokens: 0 }).success).toBe(false);
-    expect(llmRequestSchema.safeParse({ ...baseRequest, max_tokens: 8_193 }).success).toBe(false);
+    expect(llmRequestSchema.safeParse({ ...baseRequest, max_tokens: 8_192 }).success).toBe(true);
+    expect(llmRequestSchema.safeParse({ ...baseRequest, max_tokens: 32_768 }).success).toBe(true);
+    expect(llmRequestSchema.safeParse({ ...baseRequest, max_tokens: 128_001 }).success).toBe(false);
   });
 
   it('rejects temperature outside 0..2', () => {
@@ -103,6 +105,25 @@ describe('llmRequest', () => {
       false,
     );
   });
+
+  it('carries an optional reasoning effort of low or medium, never none or minimal', () => {
+    expect(llmRequestSchema.safeParse(baseRequest).success).toBe(true);
+    for (const effort of ['low', 'medium']) {
+      expect(llmRequestSchema.safeParse({ ...baseRequest, reasoning_effort: effort }).success, effort).toBe(true);
+    }
+    for (const effort of ['none', 'minimal', 'max', '']) {
+      expect(llmRequestSchema.safeParse({ ...baseRequest, reasoning_effort: effort }).success, effort).toBe(false);
+    }
+  });
+
+  it('carries an optional hosted web search with an approximate location', () => {
+    for (const web_search of [{}, { country: 'IN' }, { timezone: 'Asia/Kolkata' }, { country: 'IN', timezone: 'Asia/Kolkata' }]) {
+      expect(llmRequestSchema.safeParse({ ...baseRequest, web_search }).success, JSON.stringify(web_search)).toBe(true);
+    }
+    for (const web_search of [{ country: 'India' }, { country: 'in' }, { timezone: '' }, { city: 'Bengaluru' }, null]) {
+      expect(llmRequestSchema.safeParse({ ...baseRequest, web_search }).success, JSON.stringify(web_search)).toBe(false);
+    }
+  });
 });
 
 describe('llmResponse metering', () => {
@@ -116,6 +137,7 @@ describe('llmResponse metering', () => {
       'cache_read_input_tokens',
       'latency_ms',
       'output_items',
+      'truncated',
     ]);
   });
 
@@ -123,6 +145,16 @@ describe('llmResponse metering', () => {
     const call = { call_id: 'c1', name: 'get_context', arguments: '{}' };
     const tools = [{ name: 'get_context', description: 'Current time and timezone', parameters: { type: 'object', properties: {} } }];
     expect(llmRequestSchema.safeParse({ ...baseRequest, tools, tool_turns: [{ call, output: '{"ok":true}' }] }).success).toBe(true);
+  });
+
+  it('tool-call arguments use a wire ceiling, not a size policy (S4)', () => {
+    // A legitimately long tool call (long email body, big doc) must clear the wire schema;
+    // per-destination size policy is the scribe's job, not the wire's. The ceiling only
+    // rejects absurdly large payloads.
+    const legit = { call_id: 'c1', name: 'draft_email', arguments: JSON.stringify({ body: 'x'.repeat(100_000) }) };
+    expect(llmRequestSchema.safeParse({ ...baseRequest, tool_turns: [{ call: legit, output: '{"ok":true}' }] }).success).toBe(true);
+    const absurd = { call_id: 'c1', name: 'draft_email', arguments: 'x'.repeat(131_073) };
+    expect(llmResponseSchema.safeParse({ ...baseResponse, text: '', tool_calls: [absurd] }).success).toBe(false);
   });
 
   it('carries text or tool calls, never neither', () => {

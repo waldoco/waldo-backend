@@ -16,7 +16,7 @@ The MVP must demonstrate:
 5. A coherent iPhone experience with truthful state, clear decisions, stop/correct/forget/revoke controls, useful results and optional health sharing. Demonstrate Telegram when included in the promised surface. WhatsApp remains a first-class supported-route workstream, with eligibility checked before claiming support.
 
 PHASES
-First complete and verify the agreed MVP. Collect baseline experience, outcome, latency and cost measurements during implementation. After the complete MVP works, perform a separate dated competitor comparison and close the observed quality gaps against Instinct and Meta Muse. Do not defer basic usability, reliability, personality or the existing acceptance thresholds to that second phase. Do not expand the first phase into every competitor feature, a full web dashboard, cross-person agent network or all harnesses.
+First complete and verify the agreed MVP. Collect baseline experience, outcome, latency and cost measurements during implementation. After the complete MVP works, perform a separate dated competitor comparison and close the observed quality gaps against Instinct, Meta Muse, Poke and Dots (Dots launch claims are owner-supplied transcription, not independently verified). Do not defer basic usability, reliability, personality or the existing acceptance thresholds to that second phase. Do not expand the first phase into every competitor feature, a full web dashboard, cross-person agent network or all harnesses.
 
 START HERE
 Read current remote refs in fresh isolated checkouts; preserve dirty primary checkouts and user profiles. Read each repository's AGENTS.md and required rules. Use this backend packet:
@@ -76,7 +76,7 @@ Maintain small reviewable commits/PRs and a compatible cross-repository ref set.
 
 MVP completion means the integrated personal criteria pass, the required device/provider/recovery and observation evidence exists, and K0 passes for the joined showcase. Report incomplete/blocked gates honestly; do not relabel a smaller pilot as the full MVP. No fixed launch date, budget or exact cohort has been agreed; revise estimates from measured work and per-user costs.
 
-After that milestone, run the same consented synthetic tasks on dated Instinct/Meta Muse configurations where access permits. Separate advertised claims, observed behavior and unavailable comparisons. Compare completion, initiative, fresh memory, unnecessary interruptions, ease of use, recovery, latency and cost. Prioritize demonstrated gaps without rebuilding the architecture or abandoning Waldo's health-plus-work thesis.
+After that milestone, run the same consented synthetic tasks on dated Instinct/Meta Muse/Poke/Dots configurations where access permits; Dots source claims remain unverified until independently corroborated. Separate advertised claims, observed behavior and unavailable comparisons. Compare completion, initiative, fresh memory, unnecessary interruptions, ease of use, recovery, latency and cost. Prioritize demonstrated gaps without rebuilding the architecture or abandoning Waldo's health-plus-work thesis.
 
 Start with the current-source assessment and first actionable slice, then continue implementing. Ask only for missing information or decisions that genuinely block safe progress; keep independent work moving.
 ```

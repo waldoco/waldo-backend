@@ -1,32 +1,69 @@
-import type { ConversationEntry, ConversationTree } from '@waldo/contracts';
+import type { RunEffectScope } from './run-effect-scope';
+import { literalTextRedactor, redactConversationEntry, type ConversationEntry, type ConversationTree } from '@waldo/contracts';
 import { redactSecretUrls } from './egress-guard';
+import { hidesTopic } from '../memory/forget-guard';
+import { asciiLiteralIncludes, forgetSourceBatch, type ForgetSource, type ForgetBatch } from '../memory/selective-forget';
+import { supersededCompaction } from '../conversation/compaction';
+import { shapeFault, turnLinkedEntries } from '../conversation/canonical-owner-store';
 
 export type ConversationStore = Readonly<{
   load(): Promise<Readonly<{ entries: readonly ConversationEntry[]; leafId: string | null }>>;
-  save(entries: readonly ConversationEntry[], leafId: string): Promise<void>;
+  save(entries: readonly ConversationEntry[], leafId: string, scope?: RunEffectScope): Promise<void>;
+  persistOwnerInput?(entry: ConversationEntry, scope: RunEffectScope): Promise<void>;
+  // An owner message as received (`text`) and its quoted ranges, for the index to keep the owner's own words apart from
+  // what they quote and from what was stored with the message.
+  noteQuoteRanges?(entryId: string, text: string, ranges: readonly Readonly<{ start: number; end: number }>[]): void;
+  // The receipt line of what an owner turn that did not finish already did, for the reply that says it did not finish.
+  noteUnfinished?(receiptLine: string, scope: RunEffectScope): void;
+  // Whether per-turn recall may bring this past message into this chain's turn; without it, every indexed message.
+  recalls?(entryId: string): boolean;
+  forgetSources?(topic: string): Promise<{ sources: ForgetSource[]; incomplete: boolean }>;
+  forgetSourceBatch?(topic: string): Promise<ForgetBatch>;
+  forgetSourceBatchCurrent?(topic: string): ForgetBatch | null;
+  forgetSourcesCurrent?(topic: string): { sources: ForgetSource[]; incomplete: boolean } | null;
+  // A compaction row and the row it supersedes, written as one unit that never moves the chain's leaf.
+  appendCompaction?(row: ConversationEntry, supersededId: string | null, scope?: RunEffectScope): Promise<void>;
+  // When this chain last tried to compact, success or failure; one bounded value with no content.
+  compactionAttempt?(chainRef: string): Promise<number | null>;
+  noteCompactionAttempt?(chainRef: string, at: number, scope?: RunEffectScope): Promise<void>;
 }>;
 
-type KeyValueStorage = Pick<DurableObjectStorage, 'get' | 'list' | 'put'>;
+type KeyValueStorage = Pick<DurableObjectStorage, 'get' | 'list' | 'put'> & { kv?: Pick<DurableObjectStorage['kv'], 'put'> & Partial<Pick<DurableObjectStorage['kv'], 'list'>> };
 
 const entryKey = (seq: number) => `conv:${String(seq).padStart(10, '0')}`;
 
 export const durableConversationStore = (storage: KeyValueStorage): ConversationStore => ({
+  async forgetSourceBatch(topic) {
+    const all = await this.forgetSources!(topic);
+    const batch = forgetSourceBatch(topic, all.sources);
+    return { ...batch, incomplete: batch.incomplete || all.incomplete };
+  },
+  forgetSourceBatchCurrent(topic) {
+    const all = this.forgetSourcesCurrent!(topic);
+    if (!all) return null;
+    const batch = forgetSourceBatch(topic, all.sources);
+    return { ...batch, incomplete: batch.incomplete || all.incomplete };
+  },
+  forgetSources: topic => conversationForgetSources(storage, topic),
+  forgetSourcesCurrent: topic => storage.kv?.list ? conversationForgetSourcesCurrent(storage.kv as Pick<DurableObjectStorage['kv'], 'list'>, topic) : null,
   async load() {
     const rows = await storage.list<ConversationEntry>({ prefix: 'conv:' });
     return { entries: [...rows.values()], leafId: (await storage.get<string>('conv-leaf')) ?? null };
   },
-  async save(entries, leafId) {
+  async save(entries, leafId, scope) {
     const count = (await storage.get<number>('conv-count')) ?? 0;
     const scrubbed = entries.map((entry) => {
       const model = redactSecretUrls(entry.modelPayload);
       const app = redactSecretUrls(entry.appPayload);
       return model.count + app.count > 0 ? { ...entry, modelPayload: model.text, appPayload: app.text } : entry;
     });
-    await storage.put<unknown>({
+    const writes = {
       ...Object.fromEntries(scrubbed.map((entry, index) => [entryKey(count + index), entry])),
       'conv-count': count + entries.length,
       'conv-leaf': leafId,
-    });
+    };
+    if (scope) { if (!storage.kv) throw new Error('fenced synchronous history store unavailable'); scope.commit(() => { for (const [key, value] of Object.entries(writes)) storage.kv!.put(key, value); }); }
+    else await storage.put<unknown>(writes);
   },
 });
 
@@ -50,4 +87,181 @@ export const scrubConversationHistory = async (storage: KeyValueStorage): Promis
   if (Object.keys(writes).length > 0) await storage.put(writes);
   await storage.put('scrub:v1', true);
   return Object.keys(writes).length;
+};
+
+// Forget support: redact forgotten claim text from the persisted rolling window in place.
+// Entries keep their keys, order, conv-count and conv-leaf, so unrelated history and the tree
+// structure are untouched. Matching is case-insensitive literal text (same coverage as the sql
+// stores' LIKE checks): a paraphrase of the forgotten fact in hot context is NOT caught - the
+// forget barrier covers model behavior for those. The returned counts are all a trace may log.
+// Admitted-owner history lives under canonical-owner-v1:<principal>:<tenant>: as conv:* rows plus a witness:<id> copy of each
+// entry (owner-canonical-history.ts). load() requires row and witness to be identical, so both are rewritten together.
+const CANONICAL_PREFIX = 'canonical-owner-v1:';
+type Witness = { entry: ConversationEntry } & Record<string, unknown>;
+// Row kind and chain from the key structure, not substring luck:
+// canonical-owner-v1:<principal>:<tenant>:[thread:<thread id>:](conv|witness):<rest>. A row's witness lives in its own chain.
+const canonicalRow = (key: string): Readonly<{ chain: string; kind: 'conv' | 'witness' }> | null => {
+  if (!key.startsWith(CANONICAL_PREFIX)) return null;
+  const parts = key.slice(CANONICAL_PREFIX.length).split(':');
+  const at = parts[2] === 'thread' ? 4 : 2, kind = parts[at];
+  return kind === 'conv' || kind === 'witness' ? { chain: `${CANONICAL_PREFIX}${parts.slice(0, at).join(':')}:`, kind } : null;
+};
+const canonicalKind = (key: string): 'conv' | 'witness' | null => canonicalRow(key)?.kind ?? null;
+type ExpectedForgetOwner = Readonly<{ principal_ref: string; tenant_ref: string }>;
+export const conversationForgetSources = async (storage: KeyValueStorage, topic: string, expected?: ExpectedForgetOwner) =>
+  conversationSourcesFromRows(await storage.list<ConversationEntry>({ prefix: 'conv:' }), await storage.list<ConversationEntry | Witness>({ prefix: CANONICAL_PREFIX }), topic, expected);
+export const conversationForgetSourcesCurrent = (storage: Pick<DurableObjectStorage['kv'], 'list'>, topic: string, expected?: ExpectedForgetOwner) =>
+  conversationSourcesFromRows(new Map(storage.list<ConversationEntry>({ prefix: 'conv:' })), new Map(storage.list<ConversationEntry | Witness>({ prefix: CANONICAL_PREFIX })), topic, expected);
+// Conversation payloads are plain text that nothing JSON-decodes, so a backslash in prose (a Windows path, code) hides nothing. Only a JSON-shaped payload (starts with { [ or a quote, or decodes as JSON) can carry an escaped topic, so only those take the hidden-escape guard; prose gets the literal match.
+const jsonShaped = (text: string): boolean => {
+  const head = text.trimStart()[0];
+  if (head === '{' || head === '[' || head === '"') return true;
+  try { JSON.parse(text); return true; } catch { return false; }
+};
+const conversationHides = (text: string, topic: string): boolean => jsonShaped(text) && hidesTopic(text, topic);
+const conversationSourcesFromRows = (legacy: Map<string, ConversationEntry>, canonical: Map<string, ConversationEntry | Witness>, topic: string, expected?: ExpectedForgetOwner): { sources: ForgetSource[]; incomplete: boolean } => {
+  const sources: ForgetSource[] = [];
+  let incomplete = false;
+  const expectedPrefix = expected ? `${CANONICAL_PREFIX}${expected.principal_ref}:${expected.tenant_ref}:` : null;
+  const ownEntries = new Map<string, ConversationEntry | null>();
+  if (expectedPrefix) for (const [key, value] of canonical) if (key.startsWith(expectedPrefix) && canonicalKind(key) === 'conv') {
+    const entry = value as ConversationEntry;
+    ownEntries.set(entry.id, ownEntries.has(entry.id) ? null : entry);
+  }
+  const verified = (key: string, entry: ConversationEntry) => {
+    if (!expected || !expectedPrefix) return true;
+    if (!key.startsWith(expectedPrefix) || entry.ownerId !== expected.principal_ref) return false;
+    const witness = canonical.get(`${canonicalRow(key)!.chain}witness:${entry.id}`) as Witness | undefined;
+    if (!witness || witness.lineage !== 'canonical_v1' || witness.principal_ref !== expected.principal_ref || witness.tenant_ref !== expected.tenant_ref || JSON.stringify(witness.entry) !== JSON.stringify(entry)) return false;
+    return JSON.stringify(ownEntries.get(entry.id)) === JSON.stringify(entry);
+  };
+  const add = (key: string, entry: ConversationEntry) => {
+    const fields = [['model', entry.modelPayload], ['app', entry.appPayload], ...(entry.modelProjection.mode === 'replace' ? [['replace', entry.modelProjection.payload]] : [])] as const;
+    // Shared safety line: a hiding escape can spell the topic where asciiLiteralIncludes cannot see it, so the entry is held, never read as clean.
+    if (fields.some(([, text]) => conversationHides(text, topic))) incomplete = true;
+    for (const [field, text] of fields) if (asciiLiteralIncludes(text, topic)) {
+      if (!verified(key, entry)) { incomplete = true; continue; }
+      sources.push({ ref: `conversation:${key}:${field}`, text });
+    }
+  };
+  for (const [key, entry] of legacy) add(key, entry);
+  for (const [key, value] of canonical) {
+    if (canonicalKind(key) === 'conv') add(key, value as ConversationEntry);
+    else if (canonicalKind(key) === 'witness') add(key, (value as Witness).entry);
+  }
+  return { sources, incomplete };
+};
+const entryText = (entry: ConversationEntry): string => `${entry.modelPayload}\n${entry.appPayload}\n${entry.modelProjection.mode === 'replace' ? entry.modelProjection.payload : ''}`.toLowerCase();
+
+// The original rows a compaction row covers: the chain from to_id back to from_id, inclusive, by the parent links a turn
+// reads, which are the links the span was cut from. A walk that never reaches from_id has not seen the whole span: null.
+const coveredRows = (linked: ReadonlyMap<string, ConversationEntry>, covers: NonNullable<ConversationEntry['covers']>): readonly ConversationEntry[] | null => {
+  const seen = new Set<string>(), rows: ConversationEntry[] = [];
+  for (let current = linked.get(covers.to_id); current && !seen.has(current.id); current = current.parentId === null ? undefined : linked.get(current.parentId)) {
+    seen.add(current.id); rows.push(current);
+    if (current.id === covers.from_id) return rows;
+  }
+  return null;
+};
+// Each canonical chain's conv rows in stored order, keyed by the chain's prefix.
+const canonicalChains = (canonical: ReadonlyMap<string, ConversationEntry | Witness>): ReadonlyMap<string, readonly Readonly<{ key: string; entry: ConversationEntry }>[]> => {
+  const chains = new Map<string, { key: string; entry: ConversationEntry }[]>();
+  for (const [key, value] of canonical) {
+    const row = canonicalRow(key);
+    if (row?.kind !== 'conv') continue;
+    const rows = chains.get(row.chain) ?? [];
+    rows.push({ key, entry: value as ConversationEntry });
+    chains.set(row.chain, rows);
+  }
+  return chains;
+};
+
+export const redactConversationEntries = async (
+  storage: KeyValueStorage,
+  texts: readonly string[],
+  marker: string,
+  scope?: RunEffectScope,
+): Promise<Readonly<{ rewritten: number; remaining: number }>> => {
+  const needles = [...new Set(texts.map((text) => text.trim()).filter(Boolean))];
+  if (needles.length === 0) return { rewritten: 0, remaining: 0 };
+  const redact = literalTextRedactor(needles, marker);
+  const legacy = await storage.list<ConversationEntry>({ prefix: 'conv:' });
+  const canonical = await storage.list<ConversationEntry | Witness>({ prefix: CANONICAL_PREFIX });
+  const writes: Record<string, unknown> = {};
+  let rewritten = 0;
+  for (const [key, entry] of legacy) {
+    const next = redactConversationEntry(entry, redact);
+    if (JSON.stringify(next) !== JSON.stringify(entry)) { writes[key] = next; rewritten += 1; }
+  }
+  for (const [key, value] of canonical) {
+    if (canonicalKind(key) === 'conv') {
+      const entry = value as ConversationEntry;
+      const next = redactConversationEntry(entry, redact);
+      if (JSON.stringify(next) !== JSON.stringify(entry)) { writes[key] = next; rewritten += 1; }
+    } else if (canonicalKind(key) === 'witness') {
+      const witness = value as Witness;
+      if (!witness?.entry) continue;
+      const next = redactConversationEntry(witness.entry, redact);
+      if (JSON.stringify(next) !== JSON.stringify(witness.entry)) writes[key] = { ...witness, entry: next };
+    }
+  }
+  const hit = (entry: ConversationEntry): boolean => needles.some((needle) => entryText(entry).includes(needle.toLowerCase()) || [entry.modelPayload, entry.appPayload, ...(entry.modelProjection.mode === 'replace' ? [entry.modelProjection.payload] : [])].some(text => conversationHides(text, needle)));
+  // A compaction row paraphrases its span, which a literal rewrite cannot reach. When the topic sits in any original row of
+  // the span, or in the summary itself, or the span cannot be walked to its first row, the row is superseded to the marker
+  // and omitted, with its witness in the same unit and its covers kept; the hit test reads the rows as stored before this
+  // rewrite. A superseded summary stays as it is.
+  for (const [chain, rows] of canonicalChains(canonical)) {
+    const left = new Map<string, string | null>(), loaded: ConversationEntry[] = [];
+    for (const { entry } of rows) {
+      if (shapeFault(entry) === null) loaded.push(entry);
+      else left.set(entry.id, typeof entry.parentId === 'string' ? entry.parentId : null);
+    }
+    const linked = new Map(turnLinkedEntries(loaded, left).map((entry) => [entry.id, entry]));
+    for (const { key, entry } of rows) {
+      if (entry.role !== 'compaction' || !entry.covers || entry.modelProjection.mode === 'omit') continue;
+      const span = coveredRows(linked, entry.covers);
+      if (!hit(entry) && span !== null && !span.some(hit)) continue;
+      const next = supersededCompaction(entry);
+      writes[key] = next; rewritten += 1;
+      const witnessKey = `${chain}witness:${entry.id}`;
+      const witness = canonical.get(witnessKey) as Witness | undefined;
+      if (witness?.entry) writes[witnessKey] = { ...witness, entry: next };
+    }
+  }
+  if (Object.keys(writes).length > 0) {
+    if (scope) { if (!storage.kv) throw new Error('fenced redaction store unavailable'); scope.commit(() => { for (const [key, value] of Object.entries(writes)) storage.kv!.put(key, value); }); }
+    else {
+      // Durable Object put takes at most 128 keys, and a failure between puts must never leave a redacted canonical row next to
+      // an old-text witness (load() throws on a mismatch). So a conv row and its witness are one unit and always share a put;
+      // units are packed up to 100 keys; legacy rows stand alone.
+      const units: string[][] = [];
+      const taken = new Set<string>();
+      for (const [key, value] of Object.entries(writes)) {
+        if (taken.has(key)) continue;
+        const unit = [key];
+        if (canonicalKind(key) === 'conv') {
+          const witnessKey = `${canonicalRow(key)!.chain}witness:${(value as ConversationEntry).id}`;
+          if (witnessKey in writes) unit.push(witnessKey);
+        }
+        for (const k of unit) taken.add(k);
+        units.push(unit);
+      }
+      let chunk: string[] = [];
+      const flush = async () => { if (chunk.length) await storage.put(Object.fromEntries(chunk.map((k) => [k, writes[k]]))); chunk = []; };
+      for (const unit of units) {
+        if (chunk.length + unit.length > 100) await flush();
+        chunk.push(...unit);
+      }
+      await flush();
+    }
+  }
+  const afterLegacy = rewritten > 0 ? await storage.list<ConversationEntry>({ prefix: 'conv:' }) : legacy;
+  const afterCanonical = Object.keys(writes).length > 0 ? await storage.list<ConversationEntry | Witness>({ prefix: CANONICAL_PREFIX }) : canonical;
+  let remaining = 0;
+  for (const [, entry] of afterLegacy) if (hit(entry)) remaining += 1;
+  for (const [key, value] of afterCanonical) {
+    if (canonicalKind(key) === 'conv' && hit(value as ConversationEntry)) remaining += 1;
+    else if (canonicalKind(key) === 'witness' && (value as Witness)?.entry && hit((value as Witness).entry)) remaining += 1;
+  }
+  return { rewritten, remaining };
 };

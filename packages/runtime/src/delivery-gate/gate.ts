@@ -10,8 +10,9 @@ import type {
 } from '@waldo/contracts';
 import { DAILY_PUSH_BUDGET, DELIVERY_POLICY, TRIGGER_PUSH_CLASSES } from '@waldo/contracts';
 
+import { nextDailyLocalOccurrence } from '../scheduler/multiplexer';
+
 const MS_PER_MINUTE = 60_000;
-const MS_PER_DAY = 24 * 60 * MS_PER_MINUTE;
 
 export type GateDecisionInput = {
   candidate: DeliveryCandidate;
@@ -20,6 +21,8 @@ export type GateDecisionInput = {
   countedSends: number;
   tier?: DeliveryBudgetTier;
   now: number;
+  // Explicit trusted callers may use an owner-local day; legacy admission remains UTC.
+  timezone?: string;
 };
 
 export function computeAdmission(input: GateDecisionInput): Admission {
@@ -73,7 +76,7 @@ export function computeAdmission(input: GateDecisionInput): Admission {
     return holdAdmission(
       candidate.push_class,
       policy,
-      nextUtcDayStart(input.now),
+      nextDailyLocalOccurrence('00:00', input.timezone ?? 'UTC', input.now),
       candidate.expires_at ?? null,
       'class_cap_exhausted',
     );
@@ -150,11 +153,6 @@ function nextCooldownAt(
     throw new Error('cooldown hold requires a prior send and cooldown');
   }
   return counter.last_sent_at + cooldownMin * MS_PER_MINUTE;
-}
-
-function nextUtcDayStart(now: number): number {
-  const day = new Date(now);
-  return Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate()) + MS_PER_DAY;
 }
 
 function dropAdmission(

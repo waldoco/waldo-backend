@@ -6,17 +6,28 @@ import {
   type ScheduleEntry,
   type ScheduleKind,
   type SchedulePayloadRefs,
+  nextCronOccurrence,
+  parseCronExpression,
   type ScheduleRecurrence,
 } from '@waldo/contracts';
 import type { Deps } from '../seams/deps';
-import { armAlarm } from './alarm-slot';
+import { FINAL_OUTBOX_KEY, type FinalRecord } from '../channels/telegram-final-outbox';
+import { rearmSharedAlarm } from './alarm-slot';
+
+const MAX_MISSED_CHAIN = 64;
+// Minimum spacing for an immediate re-arm (next row already due). Live turns are unaffected
+// (due work still fires within DUE_LOOKAHEAD_MS); the pacing lets a long missed-run drain
+// yield the isolate between deliveries instead of starving sibling work back-to-back.
 
 const DUE_LOOKAHEAD_MS = 1_000;
 const MAX_DUE_PER_ALARM = 8;
 const PRODUCT_RETRY_DELAY_MS = 30_000;
 const DURABILITY_RETRY_CAP_MS = 15 * 60_000;
-const QUARANTINE_AFTER_ATTEMPTS = 3;
+export const QUARANTINE_AFTER_ATTEMPTS = 3;
 const QUARANTINE_MS = 24 * 60 * 60_000;
+// A paused row whose pause has ended. rearm() wakes for it. hasDue() counts it as due work and reapQuarantine() returns it to
+// armed, and both read this one condition: a row one counts and the other skips would wake the alarm every 250 ms.
+const PAUSE_ENDED = "status = 'quarantined' AND quarantined_until IS NOT NULL AND quarantined_until <= ?";
 
 type ScheduleSqlRow = {
   id: string;
@@ -42,7 +53,15 @@ export type ScheduleInput = {
   recurrence?: ScheduleRecurrence | null;
 };
 
-export type ScheduleExecutor = (entry: ScheduleEntry) => Promise<void>;
+// Thrown by read(id) for a row this Worker cannot parse, so a caller can tell it apart from a passing fault.
+export class UnreadableScheduleRowError extends Error {
+  constructor() { super('schedule row unreadable'); this.name = 'UnreadableScheduleRowError'; }
+}
+
+// One id's row as this Worker reads it. `unreadable` is a row this Worker cannot parse, such as one a newer Worker wrote.
+export type ScheduleLookup = Readonly<{ state: 'absent' } | { state: 'entry'; entry: ScheduleEntry } | { state: 'unreadable' }>;
+
+export type ScheduleExecutor = (entry: ScheduleEntry) => Promise<void | 'delivery_pending'>;
 export type ScheduleExecutors = Partial<Record<ScheduleKind, ScheduleExecutor>>;
 
 export class Scheduler {
@@ -68,6 +87,17 @@ export class Scheduler {
       created_at: at,
       updated_at: at,
     });
+    // Codex #229 hold: a cron expression must fail BEFORE anything is armed. The charset screen
+    // in the schema only bounds characters; parsing happened first at post-fire reschedule, so
+    // an invalid recurrence fired once (an effect) and then threw. Validate at schedule time:
+    // parse + prove at least one occurrence inside the scan bound, before the row exists.
+    if (parsed.recurrence?.type === 'cron') {
+      const cron = parseCronExpression(parsed.recurrence.expression);
+      if (cron === null) throw new Error(`invalid cron recurrence: ${parsed.recurrence.expression}`);
+      if (nextCronOccurrence(cron, parsed.recurrence.timezone, at) === null) {
+        throw new Error(`cron recurrence has no occurrence within scan bound: ${parsed.recurrence.expression}`);
+      }
+    }
     this.sql.exec(
       `INSERT INTO schedule
          (id, kind, occurrence_at, due_at, recurrence_json, payload_json, status, attempts,
@@ -100,42 +130,145 @@ export class Scheduler {
     return scheduled;
   }
 
+  // Moves an armed entry's next run earlier, to `at`, and nothing else: its last run, retry count and quarantine stay
+  // as the scheduler set them, so an outside wake never resets a retry or lifts a quarantine. A retrying entry keeps its
+  // backoff. Returns whether the entry moved.
+  async pullForward(id: string, at: number): Promise<boolean> {
+    const moved = this.sql.exec(
+      `UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ?
+        WHERE id = ? AND status = 'armed' AND attempts = 0 AND due_at > ?`,
+      at, at, this.deps.now(), id, at,
+    ).rowsWritten > 0;
+    if (moved) await this.rearm();
+    return moved;
+  }
+
   async cancel(id: string): Promise<void> {
     this.sql.exec('DELETE FROM schedule WHERE id = ?', id);
     await this.rearm();
+  }
+
+  async cancelKind(kind: ScheduleKind): Promise<number> {
+    const count = this.sql.exec<{ count: number }>('SELECT COUNT(*) AS count FROM schedule WHERE kind = ?', kind).toArray()[0]!.count;
+    this.sql.exec('DELETE FROM schedule WHERE kind = ?', kind);
+    await this.rearm();
+    return count;
   }
 
   read(id: string): ScheduleEntry | null {
     const row = this.sql
       .exec<ScheduleSqlRow>('SELECT * FROM schedule WHERE id = ?', id)
       .toArray()[0];
-    return row ? toEntry(row) : null;
+    if (!row) return null;
+    const [entry] = readable([row]).entries;
+    if (!entry) throw new UnreadableScheduleRowError();
+    return entry;
   }
 
-  async dispatchDue(executors: ScheduleExecutors): Promise<readonly ScheduleEntry[]> {
+  // For callers that arm or cancel a fixed id at start-up. They treat an unreadable row as present and leave it as it is,
+  // so one reshaped row neither fails the runtime's start nor is overwritten before the Worker that wrote it returns.
+  lookup(id: string): ScheduleLookup {
+    const row = this.sql.exec<ScheduleSqlRow>('SELECT * FROM schedule WHERE id = ?', id).toArray()[0];
+    if (!row) return { state: 'absent' };
+    const [entry] = readable([row]).entries;
+    if (entry) return { state: 'entry', entry };
+    console.log(JSON.stringify({ hop: 'schedule_row_invalid', ok: false, code: 'lookup', count: 1 }));
+    return { state: 'unreadable' };
+  }
+
+  async cancelReadable(id: string): Promise<void> {
+    if (this.lookup(id).state === 'entry') await this.cancel(id);
+  }
+
+  hasDue(): boolean {
+    const now = this.deps.now();
+    return this.dueEntries(now).entries.length > 0
+      || readable(this.sql.exec<ScheduleSqlRow>(`SELECT * FROM schedule WHERE ${PAUSE_ENDED}`, now).toArray()).entries.length > 0;
+  }
+
+  // canStart: asked before each entry; false leaves it and the rest armed and due for the next wake.
+  async dispatchDue(executors: ScheduleExecutors, canStart?: () => boolean): Promise<readonly ScheduleEntry[]> {
     const now = this.deps.now();
     this.reapQuarantine(now);
-    const due = this.dueEntries(now).slice(0, MAX_DUE_PER_ALARM);
+    const { entries, unreadable } = this.dueEntries(now);
+    if (unreadable > 0) console.log(JSON.stringify({ hop: 'schedule_row_invalid', ok: false, count: unreadable }));
+    const due = entries.slice(0, MAX_DUE_PER_ALARM);
     const dispatched: ScheduleEntry[] = [];
 
     try {
       for (const entry of due) {
-        const fresh = this.read(entry.id);
+        if (canStart?.() === false) break;
+        let fresh = this.read(entry.id);
         if (fresh === null || fresh.status !== 'armed' || fresh.due_at > now + DUE_LOOKAHEAD_MS) {
           continue;
         }
+        // Telegram final already committed before a crash at executor-return/complete.
+        // Advance scheduling without replaying its model/tools; outbox owns delivery settlement.
+        if (this.hasCommittedFinal(fresh)) {
+          this.complete(fresh, now);
+          continue;
+        }
+        // C3 dedupe: an occurrence still running (or crashed-and-unsettled) blocks this fire.
+        // The skip is recorded as a missed row, then the schedule advances past it.
+        if (this.hasRunningRun(fresh.id, fresh.occurrence_at)) {
+          this.recordMissed(fresh, fresh.occurrence_at, now);
+          this.advanceWithoutFiring(fresh, now);
+          continue;
+        }
+        // C3 missed-run policy: after a gap, fire only the latest elapsed occurrence once and
+        // record every skipped intermediate occurrence as 'missed' - never a catch-up burst.
+        const { occurrences, gapRemaining } = this.occurrenceChain(fresh, now);
+        if (gapRemaining) {
+          // Gap larger than one delivery's budget: record the whole walked chunk as missed
+          // (the last walked occurrence stays unfired), advance the cursor, and let the
+          // immediate rearm drain the rest over the next deliveries. Firing here would be a
+          // catch-up burst: occurrences[last] is not the latest elapsed occurrence (C3
+          // no-burst invariant), and the repeat fire retries were wedging the isolate.
+          for (const missedAt of occurrences) {
+            this.recordMissed(fresh, missedAt, now);
+          }
+          this.pinOccurrence(fresh, occurrences[occurrences.length - 1]!, now);
+          continue;
+        }
+        if (occurrences.length > 1) {
+          for (const missedAt of occurrences.slice(0, -1)) {
+            this.recordMissed(fresh, missedAt, now);
+          }
+          this.pinOccurrence(fresh, occurrences[occurrences.length - 1]!, now);
+          const repinned = this.read(fresh.id);
+          if (repinned === null) continue;
+          fresh = repinned;
+        }
         const bumped = this.bumpAttempt(fresh.id, now);
+        const runId = this.recordRunStart(bumped, now);
         try {
           const executor = executors[bumped.kind];
-          if (executor === undefined) throw new Error(`no scheduler executor for ${bumped.kind}`);
-          await executor(bumped);
+          if (executor === undefined) {
+            // Scheduler-handoff failure: the run never reached the executor.
+            this.settleRun(runId, 'failed', 'scheduler_handoff', now);
+            throw new Error(`no scheduler executor for ${bumped.kind}`);
+          }
+          const delivery = await executor(bumped);
           this.complete(bumped, now);
+          if (delivery !== 'delivery_pending') this.settleRun(runId, 'ok', null, now);
+          else { this.markHeartbeatDecision(runId, 'acted'); this.markDelivery(runId, 'pending'); }
           dispatched.push(bumped);
         } catch (err) {
           if (isCrashInjectionError(err)) {
+            // No settle: a row stuck in 'running' is the crashed-run evidence.
             throw err;
           }
-          this.applyFailurePolicy(bumped, now);
+          if (this.hasCommittedFinal(bumped)) {
+            this.complete(bumped, now);
+            this.markHeartbeatDecision(runId, 'acted');
+            this.markDelivery(runId, 'pending');
+            dispatched.push(bumped);
+            continue;
+          }
+          const disposition = this.applyFailurePolicy(bumped, now);
+          if (this.runOutcome(runId) === 'running') {
+            this.settleRun(runId, disposition === 'quarantined' ? 'quarantined' : 'failed', 'run', now);
+          }
           if (shouldPropagateDurabilityInvariant(bumped.kind, err)) {
             throw err;
           }
@@ -147,17 +280,25 @@ export class Scheduler {
     }
   }
 
-  private dueEntries(now: number): ScheduleEntry[] {
-    return this.sql
+  private hasCommittedFinal(entry: ScheduleEntry): boolean {
+    if (entry.kind !== 'reminder' && entry.kind !== 'heartbeat') return false;
+    const finals = this.storage.kv.get<readonly FinalRecord[]>(FINAL_OUTBOX_KEY) ?? [];
+    return finals.some(record => {
+      const receipt = entry.kind === 'reminder' ? record.reminder : record.heartbeat;
+      return receipt?.id === entry.id && receipt.occurrence === entry.occurrence_at;
+    });
+  }
+
+  private dueEntries(now: number): Readonly<{ entries: ScheduleEntry[]; unreadable: number }> {
+    const { entries, unreadable } = readable(this.sql
       .exec<ScheduleSqlRow>(
         `SELECT *
            FROM schedule
           WHERE status = 'armed' AND due_at <= ?`,
         now + DUE_LOOKAHEAD_MS,
       )
-      .toArray()
-      .map(toEntry)
-      .sort(compareScheduleEntries);
+      .toArray());
+    return { entries: entries.sort(compareScheduleEntries), unreadable };
   }
 
   private bumpAttempt(id: string, now: number): ScheduleEntry {
@@ -205,7 +346,7 @@ export class Scheduler {
     );
   }
 
-  private applyFailurePolicy(entry: ScheduleEntry, now: number): void {
+  private applyFailurePolicy(entry: ScheduleEntry, now: number): 'quarantined' | 'retry' {
     if (scheduleKindCanQuarantine(entry.kind) && entry.attempts >= QUARANTINE_AFTER_ATTEMPTS) {
       this.sql.exec(
         `UPDATE schedule
@@ -218,7 +359,7 @@ export class Scheduler {
         entry.id,
         entry.updated_at,
       );
-      return;
+      return 'quarantined';
     }
     const delay = scheduleKindCanQuarantine(entry.kind)
       ? PRODUCT_RETRY_DELAY_MS * entry.attempts
@@ -233,6 +374,225 @@ export class Scheduler {
       entry.id,
       entry.updated_at,
     );
+    return 'retry';
+  }
+
+  // C4 run history: one row per fire, inserted before dispatch (recordRunStart) and settled
+  // exactly once (settleRun no-ops on an already-settled row, so the no-executor path can
+  // settle before rethrowing). Crash-injection rethrows leave the row 'running' on purpose.
+  private recordRunStart(entry: ScheduleEntry, now: number): string {
+    // The id's run ordinal comes from the append-only history, not schedule.attempts:
+    // policy state resets (schedule upsert, quarantine reap) but history never does, so
+    // a retry after a reset can never collide with a crashed run's row.
+    const [lower, upper] = occurrenceIdRange(entry.id, entry.occurrence_at);
+    const prior = this.sql
+      .exec<{ n: number }>(
+        'SELECT count(*) AS n FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ?',
+        entry.id,
+        lower,
+        upper,
+      )
+      .one().n;
+    const ordinal = prior + 1;
+    const runId = `${entry.id}:${entry.occurrence_at}:${ordinal}`;
+    this.sql.exec(
+      `INSERT INTO schedule_runs (id, schedule_id, kind, fired_at, attempt) VALUES (?, ?, ?, ?, ?)`,
+      runId,
+      entry.id,
+      entry.kind,
+      now,
+      ordinal,
+    );
+    return runId;
+  }
+
+  // Heartbeat decision + delivery lifecycle (C2/H1): the tick executor records WHAT it
+  // decided (quiet vs acted) and how the SEND went, on its own running row, separately
+  // from the run outcome. delivery 'pending' means decided-but-unconfirmed: a crash there
+  // leaves outcome 'running' + delivery 'pending', which recovery must re-deliver - never
+  // treat a pending tick as delivered.
+  runningRunId(scheduleId: string, occurrenceAt: number): string | null {
+    const [lower, upper] = occurrenceIdRange(scheduleId, occurrenceAt);
+    const row = this.sql
+      .exec<{ id: string }>(
+        `SELECT id FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ? AND outcome = 'running' ORDER BY attempt DESC, id DESC LIMIT 1`,
+        scheduleId,
+        lower,
+        upper,
+      )
+      .toArray()[0];
+    return row?.id ?? null;
+  }
+
+  // Terminal delivery state already recorded for this occurrence by an earlier attempt.
+  // DO alarms are at-least-once: 'sent'/'failed' are never re-sent; only a row stuck at
+  // 'pending' (crashed mid-delivery) is recovered by acting again.
+  occurrenceDelivery(scheduleId: string, occurrenceAt: number): 'sent' | 'failed' | null {
+    const [lower, upper] = occurrenceIdRange(scheduleId, occurrenceAt);
+    const row = this.sql
+      .exec<{ delivery: string }>(
+        `SELECT delivery FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ? AND delivery IN ('sent', 'failed') ORDER BY id LIMIT 1`,
+        scheduleId,
+        lower,
+        upper,
+      )
+      .toArray()[0];
+    return (row?.delivery as 'sent' | 'failed' | undefined) ?? null;
+  }
+
+  markHeartbeatDecision(runId: string, result: 'quiet' | 'acted'): void {
+    this.sql.exec(
+      `UPDATE schedule_runs SET heartbeat_result = ? WHERE id = ? AND outcome = 'running'`,
+      result,
+      runId,
+    );
+  }
+
+  markDelivery(runId: string, delivery: 'pending' | 'sent' | 'failed'): void {
+    this.sql.exec(
+      `UPDATE schedule_runs SET delivery = ? WHERE id = ? AND outcome = 'running'`,
+      delivery,
+      runId,
+    );
+  }
+
+  settleDelivery(runId: string, delivered: boolean): void {
+    this.markHeartbeatDecision(runId, 'acted');
+    this.markDelivery(runId, delivered ? 'sent' : 'failed');
+    this.settleRun(runId, delivered ? 'ok' : 'quarantined', delivered ? null : 'delivery', this.deps.now());
+  }
+
+  // The owner cancelled the work before it was sent: the run did not fail, and no delivery was attempted.
+  settleCancelled(runId: string): void {
+    this.sql.exec(`UPDATE schedule_runs SET delivery = NULL WHERE id = ? AND outcome = 'running'`, runId);
+    this.settleRun(runId, 'ok', null, this.deps.now());
+  }
+
+  private settleRun(runId: string, outcome: 'ok' | 'failed' | 'quarantined' | 'missed', errorClass: 'run' | 'scheduler_handoff' | 'delivery' | null, now: number): void {
+    this.sql.exec(
+      `UPDATE schedule_runs
+          SET outcome = ?, error_class = ?, settled_at = ?, duration_ms = ? - fired_at
+        WHERE id = ? AND outcome = 'running'`,
+      outcome,
+      errorClass,
+      now,
+      now,
+      runId,
+    );
+  }
+
+  private hasRunningRun(scheduleId: string, occurrenceAt: number): boolean {
+    const [lower, upper] = occurrenceIdRange(scheduleId, occurrenceAt);
+    // Preserve crashed attempts as evidence; a later terminal attempt of that exact
+    // occurrence supersedes them. Removing the numeric attempt suffix isolates its prefix.
+    return (
+      this.sql
+        .exec(
+          `SELECT 1 FROM schedule_runs AS running
+            WHERE running.schedule_id = ? AND running.outcome = 'running' AND NOT (running.id >= ? AND running.id < ?)
+              AND NOT EXISTS (
+                SELECT 1 FROM schedule_runs AS recovered
+                 WHERE recovered.schedule_id = running.schedule_id
+                   AND recovered.attempt > running.attempt
+                   AND (recovered.outcome = 'ok' OR recovered.delivery IN ('sent', 'failed'))
+                   AND recovered.id = substr(running.id, 1, length(running.id) - length(CAST(running.attempt AS TEXT))) || recovered.attempt
+              )
+            LIMIT 1`,
+          scheduleId,
+          lower,
+          upper,
+        )
+        .toArray().length > 0
+    );
+  }
+
+  // Missed rows use attempt 0: real fires start at attempt 1, so the skip record never
+  // collides with the run row of an occurrence that did fire. ON CONFLICT keeps a retried
+  // alarm (at-least-once) from double-recording the same skip.
+  private recordMissed(entry: ScheduleEntry, occurrenceAt: number, now: number): void {
+    this.sql.exec(
+      `INSERT INTO schedule_runs (id, schedule_id, kind, fired_at, attempt, outcome, settled_at, duration_ms)
+       SELECT ?, ?, ?, ?, 0, 'missed', ?, 0
+       WHERE NOT EXISTS (
+         SELECT 1 FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ?
+       )`,
+      `${entry.id}:${occurrenceAt}:0`,
+      entry.id,
+      entry.kind,
+      occurrenceAt,
+      now,
+      entry.id,
+      ...occurrenceIdRange(entry.id, occurrenceAt),
+    );
+  }
+
+  // Bounded walk: a fire records at most MAX_MISSED_CHAIN skipped occurrences. Gaps beyond
+  // the cap fire the last walked occurrence - the walk stays O(cap) no matter how stale the
+  // stored occurrence is (an unbounded walk over a years-old occurrence kills the isolate).
+  private occurrenceChain(entry: ScheduleEntry, now: number): { occurrences: number[]; gapRemaining: boolean } {
+    if (entry.recurrence === null) return { occurrences: [entry.occurrence_at], gapRemaining: false };
+    const occurrences = [entry.occurrence_at];
+    let cursor = entry.occurrence_at;
+    while (cursor <= now && occurrences.length < MAX_MISSED_CHAIN) {
+      const next = nextOccurrence(entry.recurrence, cursor);
+      if (next <= cursor || next > now) break;
+      occurrences.push(next);
+      cursor = next;
+    }
+    // gapRemaining: the walk hit the per-delivery cap AND at least one more elapsed
+    // occurrence exists beyond it. The caller must NOT fire in this state -
+    // occurrences[last] is mid-gap, not the latest. One extra look-ahead keeps the exact
+    // cap-boundary case (gap exactly cap-1 long) on the fire path.
+    let gapRemaining = false;
+    if (cursor <= now && occurrences.length >= MAX_MISSED_CHAIN) {
+      const next = nextOccurrence(entry.recurrence, cursor);
+      gapRemaining = next > cursor && next <= now;
+    }
+    return { occurrences, gapRemaining };
+  }
+
+  private pinOccurrence(entry: ScheduleEntry, occurrenceAt: number, now: number): void {
+    this.sql.exec(
+      `UPDATE schedule
+          SET occurrence_at = ?,
+              due_at = ?,
+              updated_at = ?
+        WHERE id = ? AND updated_at = ?`,
+      occurrenceAt,
+      occurrenceAt,
+      now,
+      entry.id,
+      entry.updated_at,
+    );
+  }
+
+  private advanceWithoutFiring(entry: ScheduleEntry, now: number): void {
+    if (entry.recurrence === null) {
+      // One-shot: the missed row is the record; the entry is done.
+      this.sql.exec('DELETE FROM schedule WHERE id = ? AND updated_at = ?', entry.id, entry.updated_at);
+      return;
+    }
+    const next = nextOccurrence(entry.recurrence, now);
+    this.sql.exec(
+      `UPDATE schedule
+          SET occurrence_at = ?,
+              due_at = ?,
+              attempts = 0,
+              updated_at = ?
+        WHERE id = ? AND updated_at = ?`,
+      next,
+      next,
+      now,
+      entry.id,
+      entry.updated_at,
+    );
+  }
+
+  private runOutcome(runId: string): string | null {
+    const row = this.sql
+      .exec<{ outcome: string }>('SELECT outcome FROM schedule_runs WHERE id = ?', runId)
+      .toArray()[0];
+    return row?.outcome ?? null;
   }
 
   private reapQuarantine(now: number): void {
@@ -244,24 +604,28 @@ export class Scheduler {
               occurrence_at = quarantined_until,
               quarantined_until = NULL,
               updated_at = ?
-        WHERE status = 'quarantined'
-          AND quarantined_until IS NOT NULL
-          AND quarantined_until <= ?`,
+        WHERE ${PAUSE_ENDED}`,
       now,
       now,
     );
   }
 
-  private async rearm(): Promise<void> {
+  async rearm(): Promise<void> {
     const bound = nextWakeBound(
-      this.sql.exec<ScheduleSqlRow>('SELECT * FROM schedule').toArray().map(toEntry),
+      readable(this.sql.exec<ScheduleSqlRow>('SELECT * FROM schedule').toArray()).entries,
     );
-    if (bound === null) {
-      await this.storage.deleteAlarm();
-      return;
-    }
-    await armAlarm(this.storage, Math.max(bound, this.deps.now() + 1));
+    await rearmSharedAlarm(this.storage, bound, this.deps.now());
   }
+}
+
+// workerd SQLite enforces a ~50-byte LIKE/GLOB pattern limit
+// (SQLITE_LIMIT_LIKE_PATTERN_LENGTH), and a real schedule id alone exceeds it
+// ("handoff:<uuid>" plus the occurrence suffix), so occurrence-prefix matching cannot
+// use LIKE. Every run id for an occurrence starts with "<scheduleId>:<occurrenceAt>:"
+// and the next ASCII byte after ':' (0x3A) is ';' (0x3B), so the half-open range
+// [lower, upper) matches exactly that prefix and stays index-friendly.
+function occurrenceIdRange(scheduleId: string, occurrenceAt: number): readonly [string, string] {
+  return [`${scheduleId}:${occurrenceAt}:`, `${scheduleId}:${occurrenceAt};`];
 }
 
 function isCrashInjectionError(err: unknown): boolean {
@@ -273,6 +637,19 @@ function shouldPropagateDurabilityInvariant(kind: ScheduleKind, err: unknown): b
   return /invalid option|no outbox row|journal\/outbox delivery state mismatch/i.test(
     err.message,
   );
+}
+
+// A row this Worker cannot read is skipped and left exactly as it is. After a rollback, an older Worker can meet a kind
+// or field only a newer one writes: throwing would stop every other job for this owner, and rewriting or quarantining
+// the row would keep the newer Worker from running it after the roll-forward. Skipped rows also set no wake time, so a
+// due one cannot keep the alarm firing.
+function readable(rows: readonly ScheduleSqlRow[]): { entries: ScheduleEntry[]; unreadable: number } {
+  const entries: ScheduleEntry[] = [];
+  let unreadable = 0;
+  for (const row of rows) {
+    try { entries.push(toEntry(row)); } catch { unreadable += 1; }
+  }
+  return { entries, unreadable };
 }
 
 function toEntry(row: ScheduleSqlRow): ScheduleEntry {
@@ -300,7 +677,7 @@ function compareScheduleEntries(a: ScheduleEntry, b: ScheduleEntry): number {
   );
 }
 
-function nextOccurrence(recurrence: ScheduleRecurrence, now: number): number {
+export function nextOccurrence(recurrence: ScheduleRecurrence, now: number): number {
   if (recurrence.type === 'interval') {
     const phase = recurrence.phase_ms % recurrence.every_ms;
     const next =
@@ -309,10 +686,30 @@ function nextOccurrence(recurrence: ScheduleRecurrence, now: number): number {
       phase;
     return next > now ? next : next + recurrence.every_ms;
   }
-  return nextDailyLocalOccurrence(recurrence.time, recurrence.timezone, now);
+  if (recurrence.type === 'cron') {
+    const schedule = parseCronExpression(recurrence.expression);
+    if (schedule === null) throw new Error(`invalid cron recurrence: ${recurrence.expression}`);
+    const next = nextCronOccurrence(schedule, recurrence.timezone, now);
+    if (next === null) throw new Error(`cron recurrence has no occurrence within scan bound: ${recurrence.expression}`);
+    return next;
+  }
+  if (recurrence.type === 'daily_local') return nextDailyLocalOccurrence(recurrence.time, recurrence.timezone, now);
+  const current = localParts(now, recurrence.timezone);
+  let date = localDate(current);
+  const [hour, minute] = recurrence.time.split(':').map(Number) as [number, number];
+  for (let day = 0; day < 8; day += 1) {
+    const weekday = new Date(Date.UTC(date.year, date.month - 1, date.day)).getUTCDay();
+    const matches = recurrence.type === 'weekdays_local' ? weekday >= 1 && weekday <= 5 : weekday === recurrence.weekday;
+    if (matches && !(day === 0 && current.hour * 60 + current.minute >= hour * 60 + minute)) {
+      const candidate = findLocalOccurrence(date, hour, minute, recurrence.timezone, now);
+      if (sameLocalDate(localParts(candidate, recurrence.timezone), date)) return candidate;
+    }
+    date = addLocalDays(date, 1);
+  }
+  throw new Error('No owner-local recurrence occurrence within one week');
 }
 
-function nextDailyLocalOccurrence(time: string, timezone: string, now: number): number {
+export function nextDailyLocalOccurrence(time: string, timezone: string, now: number): number {
   const [hourText, minuteText] = time.split(':');
   const hour = Number(hourText);
   const minute = Number(minuteText);
@@ -334,16 +731,7 @@ function localParts(at: number, timezone: string): {
   minute: number;
   second: number;
 } {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: timezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(new Date(at));
+  const parts = localFormatter(timezone).formatToParts(new Date(at));
   const get = (type: string) => Number(parts.find((part) => part.type === type)?.value);
   return {
     year: get('year'),
@@ -368,6 +756,22 @@ function addLocalDays(date: LocalDate, days: number): LocalDate {
   };
 }
 
+// Formatter construction dominates localParts; cache one per timezone (immutable, safe to share).
+const LOCAL_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+function localFormatter(timezone: string): Intl.DateTimeFormat {
+  let formatter = LOCAL_FORMATTERS.get(timezone);
+  if (formatter === undefined) {
+    formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hourCycle: 'h23',
+    });
+    LOCAL_FORMATTERS.set(timezone, formatter);
+  }
+  return formatter;
+}
+
 function findLocalOccurrence(
   date: LocalDate,
   hour: number,
@@ -380,13 +784,27 @@ function findLocalOccurrence(
   const searchEnd = Date.UTC(date.year, date.month - 1, date.day + 1) + 24 * 60 * 60_000;
   let fallback: number | null = null;
 
-  for (let at = searchStart; at <= searchEnd; at += 60_000) {
-    if (at <= after) continue;
-    const parts = localParts(at, timezone);
-    if (!sameLocalDate(parts, date)) continue;
-    const localMinutes = parts.hour * 60 + parts.minute;
-    if (localMinutes === targetMinutes) return at;
-    if (localMinutes > targetMinutes && fallback === null) fallback = at;
+  // Hour-step to the bracketing hour first, then refine by minute: a flat minute scan over
+  // the 3-day window costs up to 4320 tz computations per call, and the missed-run walk
+  // calls this up to MAX_MISSED_CHAIN times per delivery (isolate-killing CPU). Semantics
+  // are unchanged: same first-match-wins, same first-later-time fallback, same next-day
+  // recursion - only the scan order is coarsened before refinement.
+  for (let hourStart = searchStart; hourStart <= searchEnd; hourStart += 3_600_000) {
+    const hourEnd = Math.min(hourStart + 3_600_000 - 60_000, searchEnd);
+    const first = localParts(hourStart, timezone);
+    const last = localParts(hourEnd, timezone);
+    const spanCoversDate = sameLocalDate(first, date) || sameLocalDate(last, date) ||
+      (new Date(Date.UTC(first.year, first.month - 1, first.day)) < new Date(Date.UTC(date.year, date.month - 1, date.day)) &&
+       new Date(Date.UTC(last.year, last.month - 1, last.day)) > new Date(Date.UTC(date.year, date.month - 1, date.day)));
+    if (!spanCoversDate) continue;
+    for (let at = hourStart; at <= hourEnd; at += 60_000) {
+      if (at <= after) continue;
+      const parts = localParts(at, timezone);
+      if (!sameLocalDate(parts, date)) continue;
+      const localMinutes = parts.hour * 60 + parts.minute;
+      if (localMinutes === targetMinutes) return at;
+      if (localMinutes > targetMinutes && fallback === null) fallback = at;
+    }
   }
 
   return fallback ?? findLocalOccurrence(addLocalDays(date, 1), hour, minute, timezone, after);

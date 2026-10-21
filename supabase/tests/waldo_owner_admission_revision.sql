@@ -1,0 +1,115 @@
+begin;
+create extension if not exists pgtap with schema extensions;
+select no_plan();
+select col_not_null('waldo','owners','admission_revision','owner admission revision is required');
+insert into auth.users(id) values ('30000000-0000-0000-0000-000000000001');
+insert into waldo.owners(id,do_name) values
+ ('10000000-0000-0000-0000-000000000001','revision-a'),
+ ('10000000-0000-0000-0000-000000000002','revision-b');
+create temporary table revisions as select id, admission_revision from waldo.owners where do_name in ('revision-a','revision-b');
+create function pg_temp.changed(which uuid, label text) returns setof text language plpgsql as $$
+begin
+ return query select extensions.ok(o.admission_revision > r.admission_revision,label)
+ from waldo.owners o join revisions r using(id) where o.id=which;
+ update revisions r set admission_revision=o.admission_revision from waldo.owners o where o.id=r.id and r.id=which;
+end $$;
+create function pg_temp.unchanged(label text) returns setof text language sql as $$
+ select extensions.ok(bool_and(o.admission_revision=r.admission_revision),label)
+ from waldo.owners o join revisions r using(id)
+$$;
+insert into waldo.presences(id,owner_id,provider,subject) values ('20000000-0000-0000-0000-000000000001','10000000-0000-0000-0000-000000000001','telegram','revision-subject');
+select * from pg_temp.changed('10000000-0000-0000-0000-000000000001','presence insertion invalidates');
+create temporary table admission_receipt as select admission_revision from waldo.owners where id='10000000-0000-0000-0000-000000000001';
+update waldo.presences set state='unlinked' where id='20000000-0000-0000-0000-000000000001';
+select * from pg_temp.changed('10000000-0000-0000-0000-000000000001','same-row unlink invalidates');
+update waldo.presences set state='active' where id='20000000-0000-0000-0000-000000000001';
+select * from pg_temp.changed('10000000-0000-0000-0000-000000000001','same-row reactivation invalidates');
+select isnt((select admission_revision from waldo.owners where id='10000000-0000-0000-0000-000000000001'),(select admission_revision from admission_receipt),'same-row ABA receipt differs');
+update admission_receipt set admission_revision=(select admission_revision from waldo.owners where id='10000000-0000-0000-0000-000000000001');
+update waldo.owners set do_name='revision-away' where id='10000000-0000-0000-0000-000000000001';
+select * from pg_temp.changed('10000000-0000-0000-0000-000000000001','do_name away invalidates');
+update waldo.owners set do_name='revision-a' where id='10000000-0000-0000-0000-000000000001';
+select * from pg_temp.changed('10000000-0000-0000-0000-000000000001','do_name back invalidates');
+select isnt((select admission_revision from waldo.owners where id='10000000-0000-0000-0000-000000000001'),(select admission_revision from admission_receipt),'persisted receipt rejects locator away/back ABA');
+update waldo.owners set state='suspended' where id='10000000-0000-0000-0000-000000000001';
+select * from pg_temp.changed('10000000-0000-0000-0000-000000000001','suspend invalidates');
+update waldo.owners set state='active' where id='10000000-0000-0000-0000-000000000001';
+select * from pg_temp.changed('10000000-0000-0000-0000-000000000001','reactivate invalidates');
+update waldo.presences set subject='revision-other' where id='20000000-0000-0000-0000-000000000001';
+select * from pg_temp.changed('10000000-0000-0000-0000-000000000001','subject change invalidates');
+update waldo.presences set provider='console' where id='20000000-0000-0000-0000-000000000001';
+select * from pg_temp.changed('10000000-0000-0000-0000-000000000001','provider change invalidates');
+update waldo.presences set owner_id='10000000-0000-0000-0000-000000000002' where id='20000000-0000-0000-0000-000000000001';
+select * from pg_temp.changed('10000000-0000-0000-0000-000000000001','presence transfer invalidates both owners');
+select * from pg_temp.changed('10000000-0000-0000-0000-000000000002','presence transfer invalidates both owners');
+update waldo.presences set id='20000000-0000-0000-0000-000000000002' where id='20000000-0000-0000-0000-000000000001';
+select * from pg_temp.changed('10000000-0000-0000-0000-000000000002','presence identity change invalidates');
+delete from waldo.presences where id='20000000-0000-0000-0000-000000000002';
+select * from pg_temp.changed('10000000-0000-0000-0000-000000000002','presence deletion invalidates');
+insert into waldo.presences(id,owner_id,provider,subject) values ('20000000-0000-0000-0000-000000000002','10000000-0000-0000-0000-000000000002','console','revision-other');
+select * from pg_temp.changed('10000000-0000-0000-0000-000000000002','presence replacement invalidates');
+update waldo.owners set auth_user_id='30000000-0000-0000-0000-000000000001' where id='10000000-0000-0000-0000-000000000001';
+select * from pg_temp.changed('10000000-0000-0000-0000-000000000001','null to auth binding invalidates');
+update waldo.owners set auth_user_id=null where id='10000000-0000-0000-0000-000000000001';
+select * from pg_temp.changed('10000000-0000-0000-0000-000000000001','auth binding to null invalidates');
+update waldo.owners set email='synthetic@example.invalid',state=state,do_name=do_name,auth_user_id=auth_user_id where id='10000000-0000-0000-0000-000000000001';
+update waldo.presences set created_at=created_at + interval '1 second', unlinked_at=now(),state=state,subject=subject,provider=provider,owner_id=owner_id where id='20000000-0000-0000-0000-000000000002';
+select * from pg_temp.unchanged('noncustody metadata and no-op edits preserve epochs');
+set local role postgres;
+select throws_ok($q$update waldo.owners set admission_revision=admission_revision+1 where id='10000000-0000-0000-0000-000000000001'$q$,'42501','owner admission revision is host managed','postgres direct admission_revision+1 denied');
+select throws_ok($q$update waldo.owners set admission_revision=admission_revision-1 where id='10000000-0000-0000-0000-000000000001'$q$,'42501','owner admission revision is host managed','postgres direct admission_revision-1 denied');
+select throws_ok($q$update waldo.owners set admission_revision=null where id='10000000-0000-0000-0000-000000000001'$q$,'42501','owner admission revision is host managed','postgres direct null denied');
+select throws_ok($q$insert into waldo.owners(do_name,admission_revision) values('forged-revision',123)$q$,'42501','owner admission revision is host managed','explicit insert epoch denied');
+reset role;
+set local role service_role;
+select throws_ok($q$update waldo.owners set admission_revision=admission_revision+1 where id='10000000-0000-0000-0000-000000000001'$q$,'42501','owner admission revision is host managed','service_role direct admission_revision+1 denied');
+select throws_ok($q$update waldo.owners set admission_revision=admission_revision-1 where id='10000000-0000-0000-0000-000000000001'$q$,'42501','owner admission revision is host managed','service_role direct admission_revision-1 denied');
+select throws_ok($q$update waldo.owners set admission_revision=null where id='10000000-0000-0000-0000-000000000001'$q$,'42501','owner admission revision is host managed','service_role direct null denied');
+select throws_ok($q$insert into waldo.owners(do_name,admission_revision) values('forged-revision',123)$q$,'42501','owner admission revision is host managed','explicit insert epoch denied');
+reset role;
+set local role service_role;
+update waldo.owners set state='suspended' where id='10000000-0000-0000-0000-000000000001';
+reset role;
+select * from pg_temp.changed('10000000-0000-0000-0000-000000000001','service role state');
+set local role service_role;
+update waldo.owners set do_name='revision-service' where id='10000000-0000-0000-0000-000000000001';
+reset role;
+select * from pg_temp.changed('10000000-0000-0000-0000-000000000001','service role locator');
+set local role service_role;
+update waldo.owners set auth_user_id='30000000-0000-0000-0000-000000000001' where id='10000000-0000-0000-0000-000000000001';
+reset role;
+select * from pg_temp.changed('10000000-0000-0000-0000-000000000001','service role binding');
+set local role service_role;
+update waldo.presences set subject='revision-service' where id='20000000-0000-0000-0000-000000000002';
+reset role;
+select * from pg_temp.changed('10000000-0000-0000-0000-000000000002','service role presence');
+set local role service_role;
+insert into waldo.owners(do_name) values('service-created-owner');
+insert into waldo.presences(owner_id,provider,subject) select id,'console','service-created-subject' from waldo.owners where do_name='service-created-owner';
+reset role;
+select ok((select admission_revision > 0 from waldo.owners where do_name='service-created-owner'),'service role owner and presence insert privately allocate epochs');
+create temporary table service_insert_epoch as select admission_revision from waldo.owners where do_name='service-created-owner';
+set local role service_role; delete from waldo.presences where subject='service-created-subject'; reset role;
+select ok((select admission_revision from waldo.owners where do_name='service-created-owner') > (select admission_revision from service_insert_epoch),'service role presence delete increments');
+set local role service_role;
+create temporary table unrelated_trigger_fixture(value integer);
+create function pg_temp.forge_revision() returns trigger language plpgsql as $$
+begin
+ update waldo.owners set admission_revision=admission_revision+1 where do_name='revision-service';
+ return new;
+end $$;
+create trigger forge_revision after insert on unrelated_trigger_fixture for each row execute function pg_temp.forge_revision();
+select throws_ok($q$insert into unrelated_trigger_fixture values(1)$q$,'42501','owner admission revision is host managed','unrelated unprivileged nested trigger denied');
+reset role;
+select throws_ok($q$set role service_role; select nextval('waldo.owner_admission_revision_seq')$q$,'42501',null,'service role cannot allocate private epochs directly');
+reset role;
+delete from waldo.owners where id='10000000-0000-0000-0000-000000000002';
+insert into waldo.owners(id,do_name) values ('10000000-0000-0000-0000-000000000002','revision-b');
+select * from pg_temp.changed('10000000-0000-0000-0000-000000000002','owner deletion and UUID reuse invalidates prior receipt');
+delete from auth.users where id='30000000-0000-0000-0000-000000000001';
+select * from pg_temp.changed('10000000-0000-0000-0000-000000000001','auth deletion FK nulls binding and invalidates');
+select ok(not has_sequence_privilege('anon','waldo.owner_admission_revision_seq','usage') and not has_sequence_privilege('authenticated','waldo.owner_admission_revision_seq','usage'),'private sequence unavailable to client roles');
+select ok(not has_function_privilege('service_role','waldo.bump_presence_admission_revision()','execute'),'private trigger writer not callable by service_role');
+select ok((select state_version > 0 from waldo.owners where do_name='revision-service'),'existing lifecycle trigger still increments');
+select * from finish();
+rollback;

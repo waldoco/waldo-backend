@@ -1,0 +1,4 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["src", "test/owner-do-live-smoke.ts", "vitest.live-smoke.config.ts"]
+}

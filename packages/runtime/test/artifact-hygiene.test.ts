@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { artifactMarker, onlyArtifacts, quarantineArtifacts } from '../src/security/artifact-hygiene';
+import { artifactMarker, extractArtifacts, onlyArtifacts, quarantineArtifacts } from '../src/security/artifact-hygiene';
 
 const ARTIFACTS: ReadonlyArray<{ text: string; kinds: string[]; stolen: string }> = [
   // gmail-class OTPs
   { text: 'Your Google verification code is 123456', kinds: ['otp'], stolen: '123456' },
   { text: 'G-729314 is your Google verification code.', kinds: ['otp'], stolen: '729314' },
   { text: '123456 is your Google verification code', kinds: ['otp'], stolen: '123456' },
-  { text: 'Your WhatsApp code: 123-456', kinds: ['otp'], stolen: '123-456' },
+  { text: 'Your WhatsApp passcode: 123-456', kinds: ['otp'], stolen: '123-456' },
   { text: '123-456 is your WhatsApp code. You can also tap this link: wa.me/verify', kinds: ['otp'], stolen: '123-456' },
   { text: 'Your login code is 847291. It expires in 10 minutes.', kinds: ['otp'], stolen: '847291' },
   { text: 'Security code: 003311. Do not share this with anyone.', kinds: ['otp'], stolen: '003311' },
@@ -63,9 +63,9 @@ describe('artifact hygiene quarantine', () => {
 
   it('onlyArtifacts: a message that is nothing but the artifact reads as fully quarantined', () => {
     expect(onlyArtifacts(quarantineArtifacts('G-729314'))).toBe(true);
-    expect(onlyArtifacts(quarantineArtifacts('code: 123456'))).toBe(true);
+    expect(onlyArtifacts(quarantineArtifacts('otp: 123456'))).toBe(true);
     expect(onlyArtifacts(quarantineArtifacts('hello world'))).toBe(false);
-    expect(onlyArtifacts(quarantineArtifacts('my code is 123456, also lunch?'))).toBe(false);
+    expect(onlyArtifacts(quarantineArtifacts('my otp is 123456, also lunch?'))).toBe(false);
   });
 
   it('multi-line forwarded mail with the code on the second line is still caught', () => {
@@ -73,5 +73,29 @@ describe('artifact hygiene quarantine', () => {
     expect(q.kinds).toEqual(['otp']);
     expect(q.text).not.toContain('918273');
     expect(q.text).toContain('Fwd from bank');
+  });
+});
+
+describe('extractArtifacts (owner-ruled OTP parity)', () => {
+  it('captures the bare code from the surrounding phrase, deduped by value', () => {
+    const { text, artifacts } = extractArtifacts('Your login code is 123456. Again: your otp is 123456.');
+    expect(artifacts).toEqual([{ kind: 'otp', value: '123456' }]);
+    expect(text).not.toContain('123456');
+    expect(text).toContain('[quarantined: otp artifact');
+  });
+
+  it('keeps the G- prefix form whole and relays links complete', () => {
+    const { artifacts } = extractArtifacts('G-654321 is your Google verification code');
+    expect(artifacts).toEqual([{ kind: 'otp', value: 'G-654321' }]);
+    const link = extractArtifacts('Sign in: https://x.example/auth/v1/verify?token_hash=abc123&type=magiclink');
+    expect(link.artifacts[0]!.value).toContain('token_hash=abc123');
+    expect(link.text).not.toContain('token_hash');
+  });
+
+  it('returns identity when nothing matches', () => {
+    const source = 'Thursday works, 7pm.';
+    const { text, artifacts } = extractArtifacts(source);
+    expect(text).toBe(source);
+    expect(artifacts).toEqual([]);
   });
 });

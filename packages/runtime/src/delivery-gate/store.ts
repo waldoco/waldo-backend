@@ -9,6 +9,7 @@ import type {
   PushClass,
 } from '@waldo/contracts';
 import { DELIVERY_POLICY, deliveryCandidateSchema, heldCandidateSchema } from '@waldo/contracts';
+import { localIso } from '../channels/reminders';
 
 export class DeliveryGateStore {
   constructor(private readonly sql: SqlStorage) {}
@@ -39,9 +40,14 @@ export class DeliveryGateStore {
     this.sql.exec('DELETE FROM run_candidates WHERE run_id = ?', runId);
   }
 
-  readClassState(userId: string, candidate: DeliveryCandidate, now: number): ClassState {
+  readClassState(
+    userId: string,
+    candidate: DeliveryCandidate,
+    now: number,
+    timezone = 'UTC',
+  ): ClassState {
     const pushClass = candidate.push_class;
-    const localDate = utcLocalDate(now);
+    const localDate = localIso(now, timezone).slice(0, 10);
     const row =
       DELIVERY_POLICY[pushClass].cap_scope === 'lifetime'
         ? this.sql
@@ -80,8 +86,9 @@ export class DeliveryGateStore {
     pushClass: PushClass,
     subKind: AdjustmentSubKind,
     now: number,
+    timezone = 'UTC',
   ): { count: number; last_sent_at: number | null } {
-    const localDate = utcLocalDate(now);
+    const localDate = localIso(now, timezone).slice(0, 10);
     const row = this.sql
       .exec<{ count: number; last_sent_at: number | null }>(
         `SELECT count, last_sent_at
@@ -99,8 +106,13 @@ export class DeliveryGateStore {
     };
   }
 
-  incrementClassState(userId: string, pushClass: PushClass, now: number): void {
-    const localDate = utcLocalDate(now);
+  incrementClassState(
+    userId: string,
+    pushClass: PushClass,
+    now: number,
+    timezone = 'UTC',
+  ): void {
+    const localDate = localIso(now, timezone).slice(0, 10);
     this.sql.exec(
       `INSERT INTO class_state (user_id, local_date, push_class, count, last_sent_at)
          VALUES (?, ?, ?, 1, ?)
@@ -136,8 +148,9 @@ export class DeliveryGateStore {
     pushClass: PushClass,
     subKind: AdjustmentSubKind,
     now: number,
+    timezone = 'UTC',
   ): void {
-    const localDate = utcLocalDate(now);
+    const localDate = localIso(now, timezone).slice(0, 10);
     this.sql.exec(
       `INSERT INTO subkind_state (user_id, local_date, push_class, sub_kind, count, last_sent_at)
          VALUES (?, ?, ?, ?, 1, ?)
@@ -204,8 +217,8 @@ export class DeliveryGateStore {
     return row?.last_sent_at ?? null;
   }
 
-  readBudget(userId: string, now: number): DailyPushBudget {
-    const localDate = utcLocalDate(now);
+  readBudget(userId: string, now: number, timezone = 'UTC'): DailyPushBudget {
+    const localDate = localIso(now, timezone).slice(0, 10);
     const row = this.sql
       .exec<{ sends_total: number; exempt_sends: number }>(
         `SELECT sends_total, exempt_sends
@@ -223,8 +236,8 @@ export class DeliveryGateStore {
     };
   }
 
-  incrementCountedBudget(userId: string, now: number): void {
-    const localDate = utcLocalDate(now);
+  incrementCountedBudget(userId: string, now: number, timezone = 'UTC'): void {
+    const localDate = localIso(now, timezone).slice(0, 10);
     this.sql.exec(
       `INSERT INTO daily_push_budget (user_id, local_date, sends_total)
          VALUES (?, ?, 1)
@@ -235,8 +248,8 @@ export class DeliveryGateStore {
     );
   }
 
-  incrementExemptBudget(userId: string, now: number): void {
-    const localDate = utcLocalDate(now);
+  incrementExemptBudget(userId: string, now: number, timezone = 'UTC'): void {
+    const localDate = localIso(now, timezone).slice(0, 10);
     this.sql.exec(
       `INSERT INTO daily_push_budget (user_id, local_date, exempt_sends)
          VALUES (?, ?, 1)
@@ -338,26 +351,23 @@ export class DeliveryGateStore {
     candidate: DeliveryCandidate,
     admission: Admission,
     now: number,
+    timezone = 'UTC',
   ): void {
     if (admission.verdict !== 'send' && admission.verdict !== 'degrade') return;
     const pushClass = admission.stamped.push_class;
-    this.incrementClassState(userId, pushClass, now);
+    this.incrementClassState(userId, pushClass, now, timezone);
     if (candidate.push_class === 'adjustment' && candidate.sub_kind !== undefined) {
-      this.incrementSubKindState(userId, pushClass, candidate.sub_kind, now);
+      this.incrementSubKindState(userId, pushClass, candidate.sub_kind, now, timezone);
     }
     if (DELIVERY_POLICY[pushClass].cooldown_scope === 'event') {
       this.recordEventCooldown(userId, pushClass, candidate.event_id, now);
     }
     if (admission.budget_charged) {
-      this.incrementCountedBudget(userId, now);
+      this.incrementCountedBudget(userId, now, timezone);
     }
     if (admission.stamped.budget_exempt) {
       this.incrementExemptSend(userId, pushClass);
-      this.incrementExemptBudget(userId, now);
+      this.incrementExemptBudget(userId, now, timezone);
     }
   }
-}
-
-function utcLocalDate(now: number): string {
-  return new Date(now).toISOString().slice(0, 10);
 }

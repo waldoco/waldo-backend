@@ -26,8 +26,8 @@ describe('Telegram unlink', () => {
   });
 
   it('offers Unlink only while linked and when account sign-in exists to link again', () => {
-    expect(renderConsole(SAMPLE_CONSOLE_VIEW)).toContain('value="telegram.unlink"');
-    expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, telegram: { linked: false, unlinkAvailable: true } })).not.toContain('value="telegram.unlink"');
-    expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, telegram: { linked: true, unlinkAvailable: false } })).not.toContain('value="telegram.unlink"');
+    expect(renderConsole(SAMPLE_CONSOLE_VIEW, 'connections')).toContain('value="telegram.unlink"');
+    expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, telegram: { linked: false, unlinkAvailable: true } }, 'connections')).not.toContain('value="telegram.unlink"');
+    expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, telegram: { linked: true, unlinkAvailable: false } }, 'connections')).not.toContain('value="telegram.unlink"');
   });
 });

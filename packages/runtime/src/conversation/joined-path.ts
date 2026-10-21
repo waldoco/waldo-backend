@@ -1,3 +1,4 @@
+import type { RunEffectScope } from '../channels/run-effect-scope';
 import {
   ConversationTree,
   type ConversationEntry,
@@ -5,21 +6,26 @@ import {
   type TrustedInvocationEnvelope,
 } from '@waldo/contracts';
 import type { ContextComposer, RuntimeOwnedContextInputs } from '../context-composer';
+import { compactedHistory, type CompactedStats } from './compaction';
 
 export type JoinedConversationModel = Readonly<{
   complete(request: Readonly<{
     system: string;
+    skillPrompt?: string;
     messages: readonly ConversationModelMessage[];
     tools: readonly string[];
+    composition: Extract<import('../context-composer/types').ContextCompositionResult,{ok:true}>;
   }>): Promise<string>;
 }>;
 
 export type JoinedConversationRequest = Readonly<{
+  runScope?: RunEffectScope;
   authenticatedOwnerId: string;
   invocation: TrustedInvocationEnvelope;
   context: RuntimeOwnedContextInputs;
   userEntry: ConversationEntry;
   assistantEntryId: string;
+  historyStartRef?: string;
 }>;
 
 export type JoinedConversationPublication = Readonly<{
@@ -37,6 +43,7 @@ export class JoinedConversationPath {
     private readonly model: JoinedConversationModel,
     private readonly tree = new ConversationTree(),
     private readonly publications = new Map<string, JoinedConversationPublication>(),
+    private readonly observers?: { onWindow?: (stats: CompactedStats) => void },
   ) {}
 
   async submit(request: JoinedConversationRequest): Promise<JoinedConversationPublication> {
@@ -49,13 +56,25 @@ export class JoinedConversationPath {
     const existing = this.publications.get(request.assistantEntryId);
     if (existing) return existing;
 
-    this.tree.append({ ...request.userEntry, role: 'user' });
+    request.runScope?.admit();
+    const original = { ...request.userEntry, role: 'user' as const };
+    const retained = this.tree.get(original.id);
+    if (retained && JSON.stringify(retained) !== JSON.stringify(original)) throw Error('conversation original input conflict');
+    if (!retained) this.tree.append(original);
     const composition = await this.composer.compose(request.invocation, request.context);
     if (!composition.ok) throw new Error(`conversation context failed: ${composition.failure.code}`);
+    // F1: bound the model input before the call - the full ancestor path grows without limit
+    // otherwise, and provider-side overflow is a failed turn (paper audit, arXiv 2609.20804).
+    // With compaction on, a live summary row is kept ahead of the window instead of being its first casualty.
+    const windowed = compactedHistory(this.tree, request.userEntry.id, request.historyStartRef);
+    this.observers?.onWindow?.(windowed.stats);
+    request.runScope?.admit();
     const text = await this.model.complete({
       system: composition.prompt,
-      messages: this.tree.modelContext(request.userEntry.id),
+      ...(composition.skillPrompt ? { skillPrompt: composition.skillPrompt } : {}),
+      messages: windowed.messages,
       tools: composition.evidence.tool_acl,
+      composition,
     });
     if (text.trim().length === 0) throw new Error('conversation model returned empty output');
     const assistantEntry: ConversationEntry = {
@@ -69,7 +88,9 @@ export class JoinedConversationPath {
       appPayload: text,
       modelProjection: { mode: 'include' },
       role: 'assistant',
+      createdAt: Date.now(),
     };
+    request.runScope?.admit();
     this.tree.append(assistantEntry);
     const publication = Object.freeze({
       ownerId: assistantEntry.ownerId,
@@ -92,3 +113,13 @@ export class JoinedConversationPath {
     return publication;
   }
 }
+
+export const taskHistoryMessages = (tree: ConversationTree, leafId: string, startRef?: string): readonly ConversationModelMessage[] => {
+  if (!startRef) return tree.modelContext(leafId);
+  const entries = tree.path(leafId);
+  const first = entries.findIndex(entry => entry.id === startRef);
+  const taskEntries = first < 0 ? entries.slice(-1) : entries.slice(first);
+  const taskTree = new ConversationTree();
+  taskEntries.forEach((entry, index) => taskTree.append({ ...entry, parentId: index === 0 ? null : entry.parentId }));
+  return taskTree.modelContext(leafId);
+};

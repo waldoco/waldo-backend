@@ -1,6 +1,7 @@
+import { toolNameSchema } from '../tools/permissions';
 import { z } from 'zod';
 import type { AdapterResult } from '../core/error';
-import { modelNameSchema, PROVIDER_OF } from '../model/roster';
+import { modelNameSchema, PROVIDER_OF, reasoningEffortSchema } from '../model/roster';
 
 export const llmMessageSchema = z.strictObject({
   role: z.enum(['user', 'assistant']),
@@ -15,6 +16,7 @@ export const llmAttachmentSchema = z.strictObject({
   data_base64: z.string().min(1),
 });
 export type LLMAttachment = z.infer<typeof llmAttachmentSchema>;
+export const LLM_ATTACHMENTS_MAX = 4;
 
 export const llmToolSchema = z.strictObject({
   name: z.string().min(1).max(64),
@@ -39,7 +41,11 @@ export const toolParameters = (schema: z.ZodType): Record<string, unknown> => {
 export const llmToolCallSchema = z.strictObject({
   call_id: z.string().min(1).max(128),
   name: z.string().min(1).max(64),
-  arguments: z.string().max(16_384),
+  // Wire ceiling only (ego-audit S4): a legitimately long tool call - a long email body, a
+  // big doc - must not die in schema validation before any policy sees it. 128 Ki chars is a
+  // pragmatic ceiling, not a proven provider bound: it is far above any real tool call, and
+  // per-destination size POLICY belongs to the scribe (contracts/memory/sanitise.ts).
+  arguments: z.string().max(131_072),
 });
 export type LLMToolCall = z.infer<typeof llmToolCallSchema>;
 
@@ -54,23 +60,42 @@ export type LLMToolTurn = z.infer<typeof llmToolTurnSchema>;
 
 // No credential field exists here by design: provider keys live in the gateway BYOK store,
 // never in the contract or Worker env (ADR-0069 §5.2).
+// Cap on declared tools per request. Must stay >= the largest TOOL_PERMISSIONS ACL
+// (user_message grants the ratified surface minus execute_code), and stay below
+// provider hard limits (OpenAI: 128). permissions.test.ts asserts
+// the parity so a growing tool surface fails CI instead of every live turn.
+// The closed registry bounds requests; its ACLs must remain representable as the surface grows.
+export const LLM_TOOLS_MAX = Math.min(toolNameSchema.options.length, 128);
+// Tool calls and results one request may replay; a longer turn sends its most recent rounds.
+export const LLM_TOOL_TURNS_MAX = 64;
 export const llmRequestSchema = z.strictObject({
   model: modelNameSchema,
   system: z.string().min(1).optional(),
   messages: z.array(llmMessageSchema).min(1),
-  max_tokens: z.int().min(1).max(8192),
+  // Wire ceiling only (ego-audit S5): 128,000 matches the largest published output limit of
+  // a roster provider. It is not a request default - surfaces pin their own (telegram chat
+  // pins 4,096) and the provider adapter reports an oversize finish as 'incomplete'
+  // truthfully. Per-model derivation lands with the roster window table when the roster grows.
+  max_tokens: z.int().min(1).max(128_000),
   temperature: z.number().min(0).max(2),
   // Prompt-cache affinity hint (OpenAI prompt_cache_key): stable per owner, never content,
   // never a credential. Providers without keyed caching ignore it.
   cache_key: z.string().min(1).max(128).optional(),
+  // OpenAI reasoning effort for this call; without it the adapter sends the roster's effort for
+  // the model (OPENAI_REASONING). Providers without a reasoning effort ignore it.
+  reasoning_effort: reasoningEffortSchema.optional(),
   // Asks the provider to constrain output to this JSON schema where it can (OpenAI strict
   // structured outputs). Callers still validate the result; other providers ignore it.
   response_format: z.strictObject({ name: z.string().min(1).max(64), schema: z.record(z.string(), z.unknown()) }).optional(),
   // Owner-sent images and files for the final user message. Kept outside messages so text
   // sanitisation never rewrites binary data; providers without file input reject the request.
-  attachments: z.array(llmAttachmentSchema).min(1).max(4).optional(),
-  tools: z.array(llmToolSchema).min(1).max(32).optional(),
-  tool_turns: z.array(llmToolTurnSchema).max(64).optional(),
+  attachments: z.array(llmAttachmentSchema).min(1).max(LLM_ATTACHMENTS_MAX).optional(),
+  tools: z.array(llmToolSchema).min(1).max(LLM_TOOLS_MAX).optional(),
+  tool_turns: z.array(llmToolTurnSchema).max(LLM_TOOL_TURNS_MAX).optional(),
+  // Offers the provider's own hosted web search beside the function tools, with the owner's approximate location
+  // (ISO country code, IANA time zone). Its results arrive inside the response, as external content. Providers without
+  // hosted search ignore it.
+  web_search: z.strictObject({ country: z.string().regex(/^[A-Z]{2}$/).optional(), timezone: z.string().min(1).max(64).optional() }).optional(),
 });
 export type LLMRequest = z.infer<typeof llmRequestSchema>;
 
@@ -90,6 +115,7 @@ export const llmResponseSchema = z
     cache_read_input_tokens: z.int().nonnegative(),
     latency_ms: z.int().nonnegative(),
     output_items: z.array(z.record(z.string(), z.unknown())).optional(),
+    truncated: z.boolean().optional(),
   })
   .refine((r) => r.text.length > 0 || r.tool_calls !== undefined, {
     error: 'a response carries text or tool calls',

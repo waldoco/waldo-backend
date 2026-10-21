@@ -1,3 +1,4 @@
+import { TOOL_ERRORS } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
 import { runHooks, HookHaltError, type HookRuntimeContext } from '../src/hooks/registry';
 
@@ -11,7 +12,6 @@ const ctx = (): HookRuntimeContext => ({
   sourceTaint: null,
   toolArgSourceTaint: null,
   sanitise: ({ payload, source_taint }) => ({ ok: true, payload, source_taint, redactions: [] }),
-  medicalGate: () => true,
 });
 
 describe('Tool-arg typed recovery', () => {
@@ -32,9 +32,20 @@ describe('Tool-arg typed recovery', () => {
     expect(halt.clientMessage).not.toBe('hook halted');
   });
 
-  it('non-arg halts keep the opaque message, so security and infrastructure reasons never reach the model', () => {
+  it('non-arg halts map to a catalogue cause, so security and infrastructure reasons never reach the model', () => {
+    const expected = { forbidden: 'acl_denied', rate_limited: 'rate_limited', auth_failed: 'unauthenticated', transient: 'hook_failed' } as const;
     for (const code of ['forbidden', 'rate_limited', 'auth_failed', 'transient'] as const) {
-      expect(new HookHaltError('acl_check', 'tool outside trigger ACL', code).clientMessage).toBe('hook halted');
+      const halt = new HookHaltError('acl_check', 'tool outside trigger ACL', code);
+      expect(halt.toolError.code).toBe(expected[code]);
+      expect(halt.clientMessage).toBe(TOOL_ERRORS[expected[code]].cause);
+      expect(halt.clientMessage).not.toContain('tool outside trigger ACL');
     }
+  });
+
+  it('an egress denial tells the model the address cannot be opened, without the host policy detail', () => {
+    const halt = new HookHaltError('egress_allowlist_check', 'egress destination denied', 'forbidden');
+    expect(halt.toolError.code).toBe('egress_denied');
+    expect(halt.clientMessage).toBe(TOOL_ERRORS.egress_denied.cause);
+    expect(halt.clientMessage).not.toContain('egress destination denied');
   });
 });

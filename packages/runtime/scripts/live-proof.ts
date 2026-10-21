@@ -3,7 +3,7 @@ import {
   acceptTrustedInvocation, ActivityLedgerModule, ApprovalQueueModule,
   WALDO_CHAT_MODEL, OPENAI_PROVIDER, routingPolicySchema,
 } from '@waldo/contracts';
-import { localTrustedBriefScheduleInput, resolveRunLoopAdapters } from '../src/run-loop/adapters';
+import { localTrustedBriefScheduleInput, resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
 import { JoinedConversationPath, type JoinedConversationModel } from '../src/conversation/joined-path';
 import { OpenAIResponsesAdapter, type OpenAIResponseMetadata } from '../src/llm/openai';
 import { RuntimeLLMProvider } from '../src/llm/provider';
@@ -39,7 +39,7 @@ const model: JoinedConversationModel = {
       authenticatedUserId: ownerId, trigger: 'user_message',
       canaryTokens: ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'],
       sourceTaint: null, toolArgSourceTaint: null,
-      sanitise: adapters.safety.sanitise, medicalGate: adapters.safety.medicalGate,
+      sanitise: adapters.safety.sanitise,
     });
     if (!result.ok) throw new Error(`live model failed: ${result.code} ${JSON.stringify((result as { error?: unknown }).error ?? null).slice(0, 300)}`);
     return result.response.text;

@@ -22,7 +22,7 @@ pnpm install --frozen-lockfile
 cp .env.example .env && chmod 600 .env
 ```
 
-Fill in `.env` yourself. It's git-ignored. Secret values never go in the repo, chat or tickets. The names are `SUPABASE_URL`, `CLOUDFLARE_ACCOUNT_ID`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `OPENAI_API_KEY` and `WALDO_OWNER_TELEGRAM_ID`.
+Fill in `.env` yourself. It's git-ignored. Secret values never go in the repo, chat or tickets. The names are `SUPABASE_URL`, `CLOUDFLARE_ACCOUNT_ID`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `OPENAI_API_KEY`, `WALDO_OWNER_TELEGRAM_ID` and, for the second model provider the owner path falls back to, `ANTHROPIC_API_KEY`.
 
 Use a separate checkout for this loop, so your other branches and local edits stay untouched.
 
@@ -60,7 +60,7 @@ Staging Worker (`waldo-runtime-staging`):
 
 - From `packages/runtime`, `npx wrangler tail waldo-runtime-staging --format json` streams live logs.
 - Each Telegram turn logs one JSON line per hop, with a shared trace id `tg-<update_id>`. The fields are in [OBSERVABILITY.md](OBSERVABILITY.md).
-- `npx wrangler deployments list --name waldo-runtime-staging` shows what's deployed.
+- `npx wrangler deployments list --name waldo-runtime-staging` shows what's deployed. After a deploy, run the [staging gate](STAGING_DEPLOY_GATE.md).
 
 Telegram, webhook or local runner:
 

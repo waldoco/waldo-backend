@@ -2,32 +2,19 @@ import { z } from 'zod';
 import { channelNameSchema } from '../../adapters/channel';
 import { docProviderSchema } from '../../adapters/doc';
 import { iso8601Schema } from '../../core/error';
-import { hallTypeSchema } from '../../memory/hall';
-import { MEMORY_BLOCK_CONTENT_MAX } from '../../memory/sanitise';
 import { idempotencyKeySchema } from '../../runtime/outbox';
 
 // Mutating tool arg surface (ADR-0021; execute_code per ADR-0023). These schemas are the
 // PreToolUse validation seam for the write tools: strictObject makes an unknown arg a parse
 // failure, and every external mutation is autonomy-gated (ADR-0018) before any adapter call.
 
-// The facts hall is not agent-writable. Derived from the hall vocabulary's single owner, so
-// a new hall surfaces here (admitted or deliberately excluded) at review time, not by drift.
-export const memoryWriteHallSchema = hallTypeSchema.exclude(['facts']);
-export type MemoryWriteHall = z.infer<typeof memoryWriteHallSchema>;
-
-// update_memory stages through the Scribe inbox (ADR-0006), never memory_blocks direct.
-export const updateMemoryArgsSchema = z.strictObject({
-  hall: memoryWriteHallSchema,
-  content: z.string().min(1).max(MEMORY_BLOCK_CONTENT_MAX),
-  tags: z.array(z.string().min(1)).max(10).optional(),
-});
-export type UpdateMemoryArgs = z.infer<typeof updateMemoryArgsSchema>;
-
+// The owner-confirm route for a privileged action whose arguments came from external content (ADR-0049): the
+// intended tool and its exact arguments are frozen on a card, and on approval the dispatcher replays that one call.
+// The tool name is checked against the tool union by the handler, which also validates args against that tool's schema.
 export const proposeActionArgsSchema = z.strictObject({
-  action_type: z.string().min(1).max(100),
-  description: z.string().min(1).max(1_000),
+  tool: z.string().min(1).max(64),
+  args: z.record(z.string(), z.unknown()),
   reasoning: z.string().min(1).max(500),
-  urgency: z.enum(['low', 'medium', 'high']).default('medium'),
 });
 export type ProposeActionArgs = z.infer<typeof proposeActionArgsSchema>;
 
@@ -74,6 +61,52 @@ export const updateTaskArgsSchema = z.strictObject({
 });
 export type UpdateTaskArgs = z.infer<typeof updateTaskArgsSchema>;
 
+// Google Tasks is an explicitly selected provider surface. Local Hall task tools keep
+// their original meaning. Due dates are calendar dates: this API discards time of day.
+export const googleTaskChangesSchema = z.strictObject({
+  title: z.string().trim().min(1).max(1024).optional(),
+  notes: z.string().max(8192).nullable().optional(),
+  due_date: z.iso.date().nullable().optional(),
+});
+export const proposeGoogleTaskChangeArgsSchema = z.strictObject({
+  source: z.literal('google_tasks'),
+  account: z.email().optional(),
+  action: z.enum(['create', 'update', 'complete', 'reopen']),
+  task_list_id: z.string().trim().min(1).max(1024),
+  task_id: z.string().trim().min(1).max(1024).optional(),
+  changes: googleTaskChangesSchema.optional(),
+  reason: z.string().trim().min(1).max(500),
+}).superRefine((args, ctx) => {
+  const fail = (message: string) => ctx.addIssue({ code: 'custom', message });
+  if (args.action === 'create') {
+    if (args.task_id || !args.changes?.title) fail('Creation requires a title and no existing task id');
+  } else if (!args.task_id) fail('Existing Google task changes require the exact task id');
+  if (args.action === 'update' && (!args.changes || !Object.keys(args.changes).length)) fail('Update requires at least one explicit change');
+  if ((args.action === 'complete' || args.action === 'reopen') && args.changes !== undefined) fail('Completion and reopening only change status');
+});
+export type ProposeGoogleTaskChangeArgs = z.infer<typeof proposeGoogleTaskChangeArgsSchema>;
+export type GoogleTaskChanges = z.infer<typeof googleTaskChangesSchema>;
+// Re-projected evidence from an exact provider read. No credentials or implicit account
+// selection enter a proposal; the host pins connection+email before displaying approval.
+export const googleTaskResourceSchema = z.strictObject({
+  id: z.string().min(1).max(1024), task_list_id: z.string().min(1).max(1024),
+  title: z.string().max(2000), status: z.enum(['todo', 'done']),
+  notes: z.string().max(100_000).nullable(), due_date: z.iso.date().nullable(),
+  etag: z.string().min(1).max(1024), parent: z.string().max(1024).nullable(),
+  deleted: z.boolean(), assigned: z.boolean(),
+});
+export type GoogleTaskResource = z.infer<typeof googleTaskResourceSchema>;
+export const googleTaskProposalSchema = z.strictObject({
+  args: proposeGoogleTaskChangeArgsSchema,
+  operation_ref: z.string().min(1).max(256).optional(),
+  account: z.strictObject({ connection_id: z.string().min(1).max(1024), email: z.email() }),
+  list: z.strictObject({ id: z.string().min(1).max(1024), title: z.string().max(2000), etag: z.string().min(1).max(1024) }),
+  before: googleTaskResourceSchema.nullable(),
+}).superRefine((p, ctx) => {
+  if (p.list.id !== p.args.task_list_id || p.args.account && p.args.account.toLowerCase() !== p.account.email.toLowerCase() || (p.args.action === 'create' ? p.before !== null : !p.before || p.before.id !== p.args.task_id || p.before.task_list_id !== p.args.task_list_id)) ctx.addIssue({ code: 'custom', message: 'Google task proposal target identity differs' });
+});
+export type GoogleTaskProposal = z.infer<typeof googleTaskProposalSchema>;
+
 // destination reuses the DocProvider vocabulary (ADR-0025): 'r2_scratch' is the one
 // representation of the R2 scratch space, so a bare 'scratch' is a parse failure.
 export const draftDocumentArgsSchema = z.strictObject({
@@ -88,6 +121,7 @@ export type DraftDocumentArgs = z.infer<typeof draftDocumentArgsSchema>;
 // Drafts carry no approval rail; sends do. Tool args carry bare addresses: display-name
 // forms are the adapter's inbound draft shape, never the model's outbound one.
 export const draftEmailArgsSchema = z.strictObject({
+  account: z.email().optional(),
   to: z.array(z.email()).min(1).max(50),
   cc: z.array(z.email()).max(50).optional(),
   bcc: z.array(z.email()).max(50).optional(),
@@ -113,6 +147,7 @@ export type FormZonePreference = z.infer<typeof formZonePreferenceSchema>;
 
 // Sending invites is connector_write (ADR-0018) — proposals always confirm, even at L3.
 export const proposeScheduleArgsSchema = z.strictObject({
+  account: z.email().optional(),
   attendees: z.array(z.email()).min(1).max(50),
   duration_min: z.int().min(15).max(480),
   title: z.string().min(1).max(200),
@@ -127,6 +162,7 @@ export const sheetWriteModeSchema = z.enum(['overwrite', 'append']);
 export type SheetWriteMode = z.infer<typeof sheetWriteModeSchema>;
 
 export const writeSheetCellArgsSchema = z.strictObject({
+  account: z.email().optional(),
   sheet_id: z.string().min(1),
   // A1 notation, e.g. "Sheet1!A5"; single-cell-ness is provider-checked (ADR-0026).
   range: z.string().min(1).max(100),

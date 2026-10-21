@@ -1,8 +1,11 @@
+import { sanitise } from '../src/scribe/sanitiser';
+import { deriveContextBudgetChars, SANITISE_DESTINATION_POLICIES, WALDO_AUXILIARY_MODEL } from '@waldo/contracts';
+import { claimStore } from '../src/memory/claims';
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { GoogleClient } from '../src/connectors/google';
-import { applyDayPlan, armDayCards, cardFor, cardWindow, composeDayCard, dayPlanBook, isSkip, parseDayPlan } from '../src/channels/day-cards';
+import { applyDayPlan, armDayCards, cardFor, cardWindow, composeDayCard, composeDayPlanInput, dayPlanBook, isSkip, parseDayPlan } from '../src/channels/day-cards';
 import { DAY_CARDS, dayPlanInput } from '../src/prompt/day-cards';
 import { ensureSchema } from '../src/tracer/schema';
 import { Scheduler } from '../src/scheduler/multiplexer';
@@ -19,6 +22,29 @@ describe('scheduled day cards', () => {
     expect(cardFor('card:close')?.calendar).toBe('tomorrow');
     expect(cardFor('nope')).toBeNull();
     expect([isSkip(' SKIP\n'), isSkip('SKIP it')]).toEqual([true, false]);
+  });
+
+  it('keeps the card prompt inside the provider budget when the ledger and update backlog are huge', async () => {
+    const google = { events: async () => [{ id: 'e1', title: 'Investor call', start: '2026-09-24T10:00:00+05:30', end: '2026-09-24T10:30:00+05:30', all_day: false, description: '' }] } as unknown as GoogleClient;
+    const lines = (prefix: string, count: number) => Array.from({ length: count }, (_, index) => `${prefix}-${index} ${'x'.repeat(200)}`).join('\n');
+    const ledger = lines('ledger', 4000);
+    const updates = lines('update', 4000);
+    const prompt = await composeDayCard(cardFor('card:close')!, now, tz, { google, connectable: false, ledger, today: lines('today', 100), updates });
+    const limit = deriveContextBudgetChars(WALDO_AUXILIARY_MODEL, SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
+    expect(JSON.stringify([{ role: 'user', content: prompt }]).length).toBeLessThanOrEqual(limit / 2);
+    expect(prompt).toContain('Investor call');
+    expect(prompt).toContain('The Close');
+    expect(prompt).toContain('ledger-0 ');
+    expect(prompt).toContain('update-3999 ');
+    expect(prompt).not.toContain('update-0 ');
+    expect(prompt).toMatch(/\d+ (older|later) lines omitted/);
+  });
+
+  it('leaves a card that already fits untouched', async () => {
+    const google = { events: async () => [] } as unknown as GoogleClient;
+    const prompt = await composeDayCard(cardFor('card:brief')!, now, tz, { google, connectable: false, ledger: 'Open\n- nothing', today: 'owner: hi', updates: '' });
+    expect(prompt).not.toMatch(/lines omitted/);
+    expect(prompt).toContain('<ledger>\nOpen\n- nothing\n</ledger>');
   });
 
   it('reads the right calendar window for each card', () => {
@@ -64,7 +90,7 @@ describe('scheduled day cards', () => {
   });
 
   it('seeds default times once a day, then applies a plan without touching sent or past cards', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('day-cards'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('day-cards'));
     await runInDurableObject(stub, async (_instance, state) => {
       ensureSchema(state.storage);
       const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
@@ -85,14 +111,87 @@ describe('scheduled day cards', () => {
       expect(scheduler.read('card:midday')).toBeNull();
       expect(scheduler.read('card:close')?.due_at).toBe(Date.parse('2026-09-23T16:45:00Z'));
       expect(book.read('2026-09-23')).toEqual([
-        { card: 'card:brief', time: '08:00', reason: 'default time', sent: true },
-        { card: 'card:close', time: '22:15', reason: 'winds down at 23:15', sent: false },
-        { card: 'card:midday', time: '15:00', reason: 'already past', sent: false },
+        { card: 'card:brief', time: '08:00', reason: 'default time', sent: true, state: 'sent' },
+        { card: 'card:close', time: '22:15', reason: 'winds down at 23:15', sent: false, state: 'pending' },
+        { card: 'card:midday', time: '15:00', reason: 'already past', sent: false, state: 'pending' },
       ]);
       await applyDayPlan(scheduler, book, tz, now, [{ card: 'card:close', time: null, reason: 'owner asked for no close tonight' }]);
       expect(scheduler.read('card:close')).toBeNull();
       expect(book.pending('2026-09-23').map((card) => card.id)).toEqual(['card:midday', 'card:close']);
       for (const card of DAY_CARDS) await scheduler.cancel(card.id);
     });
+  });
+});
+
+
+describe('day-plan memory budget', () => {
+  const limit = deriveContextBudgetChars(WALDO_AUXILIARY_MODEL, SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
+  const wireSize = (content: string) => JSON.stringify([{ role: 'user', content }]).length;
+  const input = dayPlanInput({ localNow: '2026-10-04T08:00', calendar: 'No events.', cards: DAY_CARDS, proactivity: 'Quiet hours 23:00-07:00' });
+  const withMemory = (name: string, work: (store: ReturnType<typeof claimStore>) => void) =>
+    runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), (_i, state) => work(claimStore(state.storage.sql)));
+  const add = (store: ReturnType<typeof claimStore>, text: string, evidence = text) =>
+    store.add({ kind: 'routine', text, source: 'stated', evidence, origin: 'owner', source_ref: 'owner, synthetic-day-plan' }, '2026-10-04T00:00:00Z');
+
+  it('keeps 2500 facts within the provider wire budget and counts omitted facts exactly', async () => {
+    await withMemory('day-plan-2500', (store) => {
+      for (let i = 0; i < 2_500; i++) add(store, `Routine ${i}: ${'synthetic detail '.repeat(20)}`);
+      const content = composeDayPlanInput(input, store);
+      expect(wireSize(content)).toBeLessThanOrEqual(limit);
+      expect(sanitise({ payload: [{ role: 'user', content }], destination: 'internal_context', source_taint: null, canary_tokens: ['1111111111111111', '2222222222222222', '3333333333333333'], max_chars_override: limit }).ok).toBe(true);
+      expect(content.endsWith(input)).toBe(true);
+      expect(content).toContain('Routine 2499:');
+      const shown = content.split('\n').filter(line => /^- \[c\d+ · owner-grounded\]/.test(line)).length;
+      expect(content).toContain(`(${2_500 - shown} older owner facts are not shown here;`);
+      expect(content).not.toContain('Routine 0:');
+    });
+  });
+
+  it('includes JSON escaping and message framing in the available room', async () => {
+    await withMemory('day-plan-escaping', (store) => {
+      for (let i = 0; i < 2_500; i++) add(store, `Quoted ${i}: ${'"\\\n'.repeat(80)}`);
+      const content = composeDayPlanInput(input, store);
+      expect(wireSize(content)).toBeLessThanOrEqual(limit);
+      expect(content).toContain('older owner facts are not shown here');
+      expect(content.endsWith(input)).toBe(true);
+    });
+  });
+
+  it('never shows claim evidence, so oversized evidence cannot crowd out the profile', async () => {
+    await withMemory('day-plan-recall-room', (store) => {
+      add(store, 'Quiet hours small routine', 'short evidence');
+      add(store, 'Quiet hours huge routine', 'x'.repeat(limit * 2));
+      const content = composeDayPlanInput(input, store);
+      expect(wireSize(content)).toBeLessThanOrEqual(limit);
+      expect(content).toContain('Quiet hours small routine');
+      expect(content).toContain('Quiet hours huge routine');
+      expect(content).not.toContain('x'.repeat(100));
+    });
+  });
+
+  it('does not impose a fact-count cap when all facts fit', async () => {
+    await withMemory('day-plan-no-count-cap', (store) => {
+      // 100 short facts, each line led by its claim id, fill most of the uncurated profile's two block budgets (1,500 + 2,500 characters).
+      for (let i = 0; i < 100; i++) add(store, `Routine ${i}`);
+      const content = composeDayPlanInput(input, store);
+      for (let i = 0; i < 100; i++) expect(content).toContain(`- [c${i + 1} · owner-grounded] Routine ${i}\n`);
+      expect(content).not.toContain('older owner facts are not shown here');
+      expect(wireSize(content)).toBeLessThanOrEqual(limit);
+    });
+  });
+
+  it('fails explicitly when required input fits but leaves no room for omission reporting', async () => {
+    await withMemory('day-plan-no-memory-room', (store) => {
+      add(store, 'Short routine');
+      const exactInput = 'x'.repeat(limit - wireSize(''));
+      expect(wireSize(exactInput)).toBe(limit);
+      expect(composeDayPlanInput(exactInput)).toBe(exactInput);
+      expect(() => composeDayPlanInput(exactInput, store)).toThrow('day plan input leaves no room for memory omission reporting');
+    });
+  });
+
+  it('preserves small inputs without memory, and rejects oversized required input explicitly', () => {
+    expect(composeDayPlanInput(input)).toBe(input);
+    expect(() => composeDayPlanInput('x'.repeat(limit))).toThrow('day plan input exceeds provider context budget');
   });
 });

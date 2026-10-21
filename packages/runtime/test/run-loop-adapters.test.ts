@@ -13,7 +13,7 @@ import {
   isLocalRunLoopEnvironment,
   localTrustedBriefScheduleInput,
   resolveRunLoopAdapters,
-} from '../src/run-loop/adapters';
+} from '../src/llm/run-loop-adapters';
 import type {
   LLMGatewayRequest,
   TrustedProviderEffect,
@@ -142,7 +142,7 @@ describe('resolveRunLoopAdapters', () => {
   ])('uses the production Scribe and medical gate in every provider mode', async (adapters) => {
     const input = {
       payload: { hrv: 41 },
-      destination: 'internal_context' as const,
+      destination: 'send_message' as const,
       canary_tokens: ['aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb', 'cccccccccccccccc'],
       source_taint: null,
     };
@@ -151,12 +151,6 @@ describe('resolveRunLoopAdapters', () => {
       ok: false,
       check: 'health_value',
       reason: 'health_value_leak',
-    });
-    await expect(
-      Promise.resolve(adapters.safety.medicalGate?.('Take 5 mg of melatonin tonight.')),
-    ).resolves.toEqual({
-      ok: false,
-      reason: 'medical_claim',
     });
   });
 

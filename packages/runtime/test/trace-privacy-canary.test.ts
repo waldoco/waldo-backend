@@ -59,6 +59,28 @@ describe('trace privacy canary', () => {
     expect(consoleLines).not.toContain(MARKER);
   });
 
+  it('keeps typed memory and health receipt codes without private text when capture is off', async () => {
+    const entries = [
+      { trace: 'night:constellation', hop: 'constellation_evidence', ms: 0, ok: false, code: 'same_day', detail: 'held:same_day:owner_observation_pattern:1', error: MARKER },
+      { trace: 'tg-test', hop: 'health_context', ms: 5, ok: true, code: 'absent', detail: MARKER, error: MARKER },
+    ].map((entry) => gateTraceEntry(entry, false));
+    expect(entries.map((entry) => entry.detail)).toEqual(['held:same_day:owner_observation_pattern:1', 'absent']);
+    const payload = await exportBodies([...entries, { trace: 'night:constellation', hop: 'machine_turn', ms: 1, ok: true }, { trace: 'tg-test', hop: 'turn', ms: 6, ok: true }], false);
+    expect(payload).not.toContain(MARKER);
+    expect(payload).toContain('same_day');
+    expect(payload).toContain('absent');
+    const failed = gateTraceEntry({ trace: 'tg-failed', hop: 'health_context', ms: 0, ok: false, code: 'read_failed', error: MARKER }, false);
+    expect(failed.detail).toBe('read_failed');
+    expect(JSON.stringify(failed)).not.toContain(MARKER);
+  });
+
+  it('rejects forged safe-hop codes that carry a private marker', () => {
+    const bad = gateTraceEntry({ trace: 't', hop: 'constellation_evidence', ms: 0, ok: false, detail: `held:same_day:owner_observation_pattern:1 ${MARKER}`, code: MARKER }, false);
+    expect(bad.detail).toBeUndefined();
+    expect(bad.code).toBeUndefined();
+    expect(JSON.stringify(bad)).not.toContain(MARKER);
+  });
+
   it('keeps the marker in the OTLP body when capture is on (the test is not vacuous)', async () => {
     const bodies = await exportBodies(markerTurn().map((entry) => gateTraceEntry(entry, true)), true);
     expect(bodies).toContain(MARKER);
@@ -218,5 +240,35 @@ describe('staging release gate: production can never export text', () => {
     );
     expect(entry.error).toBeUndefined();
     expect(entry.detail).toBe('provider_error');
+  });
+});
+
+
+it.each(['invalid_decision', 'uncertain', 'retained_invalid', 'retained_uncertain', 'invalid_decision:json_syntax', 'invalid_decision:invalid_shape', 'invalid_decision:unknown_decision', 'invalid_decision:invalid_sources', 'invalid_decision:invalid_evidence'] as const)('task custody %s diagnostic survives capture-off without private classifier data', async code => {
+  const entry: TurnLogEntry = { trace: 'scope-recovery', hop: 'task_source_custody', ms: 0, ok: code.startsWith('retained_'), code, detail: MARKER, error: MARKER, text: { input: MARKER, output: MARKER } };
+  const gated = gateTraceEntry(entry, false);
+  const bodies = await exportBodies([gated, { trace: entry.trace, hop: 'turn', ms: 0, ok: true }], false);
+  expect(bodies).toContain(code); expect(bodies).not.toContain(MARKER);
+  const sink = noteSink(); traceBook(sink.sql).record(gated, Date.now());
+  expect(sink.notes).toEqual([code]);
+});
+
+describe('v9 typed fields at the gate', () => {
+  it('keeps the typed v9 fields with capture off and drops any that are not in their vocabulary', () => {
+    const typed: TurnLogEntry = {
+      trace: 't9', hop: 'tool_draft_email', ms: 5, ok: false, error: `provider says ${MARKER}`,
+      error_code: 'rate_limited', rung: 'email', blocked_reason: 'approval_required', provider: 'openai', fallback_fired: true,
+      ttft_ms: 120, tools_called: 1, parallel_batches: 1, job_id: 'job_01', job_profile: 'reader', outcome: 'blocked', browser_ms: 0, sandbox_ms: 0,
+    };
+    const gated = gateTraceEntry(typed, false);
+    expect(gated).toMatchObject({ error_code: 'rate_limited', rung: 'email', blocked_reason: 'approval_required', provider: 'openai', fallback_fired: true, ttft_ms: 120, tools_called: 1, parallel_batches: 1, job_id: 'job_01', job_profile: 'reader', outcome: 'blocked', browser_ms: 0, sandbox_ms: 0 });
+    expect(JSON.stringify(gated)).not.toContain(MARKER);
+
+    const smuggled = gateTraceEntry({
+      ...typed, error_code: `rate_limited ${MARKER}`, rung: MARKER as never, blocked_reason: MARKER as never, provider: MARKER as never,
+      job_id: `job ${MARKER}`, job_profile: `reader ${MARKER}`, outcome: MARKER as never, ttft_ms: Number.NaN, tools_called: -1,
+    }, false);
+    expect(JSON.stringify(smuggled)).not.toContain(MARKER);
+    for (const key of ['error_code', 'rung', 'blocked_reason', 'provider', 'job_id', 'job_profile', 'outcome', 'ttft_ms', 'tools_called'] as const) expect(smuggled[key]).toBeUndefined();
   });
 });

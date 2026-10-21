@@ -97,13 +97,29 @@ export const GENERAL_AGENT_TOOLS: readonly ToolName[] = [
 // the complete set here makes a null taint stamp unrepresentable at the dispatcher boundary.
 export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   'query_calendar',
+  'query_availability',
   'get_communication',
+  'search_communication',
+  'search_contacts',
+  'read_thread',
   'get_tasks',
   'web_search',
   'read_document',
   'call_mcp_tool',
+  'read_mcp_tool',
+  'read_drive',
   'search_connector',
   'read_tool_output',
+  'read_artifact',
+  // workspace files hold owner uploads and agent text that can quote provider content; names and bodies are data.
+  'workspace_list',
+  'workspace_read',
+  'workspace_search',
+  'browse_page',
+  'browse_act',
+  // delegate_task: child handbacks carry whatever the child read (web, connector text), so the
+  // summary - and its failure text - is externally influenced and stamped 'external' end-to-end.
+  'delegate_task',
 ];
 
 // A privileged action is any DIRECT external mutation or send (ADR-0049) — the conservative
@@ -121,7 +137,6 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
 // holds ONLY while it is unreachable: any change granting it an ACL MUST add it here in
 // the same change (pinned by handler.test's zero-ACL coupling guard).
 export const PRIVILEGED_ACTION_TOOLS: readonly ToolName[] = [
-  'update_memory',
   'execute_action',
   'send_message',
   'call_mcp_tool',
@@ -135,6 +150,10 @@ export const PRIVILEGED_ACTION_TOOLS: readonly ToolName[] = [
   'restore_message',
   'archive_thread',
   'update_thread_topics',
+  // Changing durable procedure availability is owner-controlled, never provider-authorized.
+  'skills_install',
+  'skills_disable',
+  'use_mac',
 ];
 
 // The single authority of the ADR-0049 taint gate, pure so hook and dispatcher share one law:
@@ -161,6 +180,15 @@ export function handlerAllowlistMatchesAcl(
   );
 }
 
+// Whether a handler can serve the owner at all, from deterministic host facts only (granted account scopes, deploy
+// configuration), never a reading of the message. A tool missing an account feature reports the connect intent a call
+// would return. Hosts check once per turn and keep the tool when the check fails; call-time auth still gates every call.
+export type ToolEligibility = Readonly<
+  | { ok: true }
+  | { ok: false; reason: 'not_configured' }
+  | { ok: false; reason: 'not_connected'; connect: ConnectIntent }
+>;
+
 // The ToolHandler seam (ADR-0029): name is the key the dispatcher routes on, typed as the
 // union so drift is a compile error; schema validates args at PreToolUse priority 200 and
 // autonomy_gated routes through the priority-300 gate (ADR-0032, ADR-0018) before
@@ -172,6 +200,25 @@ export interface ToolHandler<Args, Result, Ctx> {
   schema: z.ZodType<Args>;
   trigger_allowlist: readonly TriggerType[];
   autonomy_gated: boolean;
+  // mutates_state marks calls whose success changes state a repeated identical read would
+  // observe: desk proposals, external writes/sends, internal state changes. The tool loop
+  // keys its no-progress epoch reset on autonomy_gated || mutates_state so live mutation
+  // handlers (which are desk-routed, not privilege-gated) still open a new epoch.
+  mutates_state?: true;
+  // requires_connector marks a handler that cannot run without a live connector (for example a Google account).
+  // The host derives the connector_backed list for ACL intersection from this declaration, never from a host-supplied
+  // list that can be omitted (see connectorBackedTools in tools/acl-intersection.ts).
+  requires_connector?: true;
+  // turn_only_output marks a result that may hold the owner's health values: it reaches the model in the turn that
+  // asked and nowhere else. The cross-turn tool ledger and the unfinished-turn flush record a content-free line for it.
+  turn_only_output?: true;
+  // proposal_only marks a handler that never performs its effect: it only raises the owner's approval card, which
+  // carries the exact effect and performs it on Do it. The taint gate admits such a call with external arguments
+  // (core build plan H-2), because that card is the human confirm ADR-0049 requires. The dispatcher reads it per call
+  // from the handler it routes to, so a tool name alone never earns it.
+  proposal_only?: true;
+  // Absent means always eligible (connect_service must stay offered so an owner can connect).
+  eligible?(): ToolEligibility | Promise<ToolEligibility>;
   handle(args: Args, ctx: Ctx): Promise<ToolResult<Result>>;
   idempotentOnKey?: true;
   executeOrReconcile?(

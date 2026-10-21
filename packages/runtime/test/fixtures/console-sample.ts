@@ -1,14 +1,14 @@
-import { OPENAI_GPT_5_MINI_MODEL } from '@waldo/contracts';
+import { OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
 import type { ConsoleView } from '../../src/channels/console';
 
 const iso = (d: string) => `2026-09-${d}T00:00:00Z`;
 const spot = (id: number, kind: string, text: string, source: 'stated' | 'confirmed' | 'inferred', evidence: string, seen: number, last: string, status = 'active') =>
-  ({ id, kind, text, source, evidence, status, created_at: iso('20'), last_seen_at: iso(last), seen_count: seen });
+  ({ id, kind, text, source, evidence, origin: null, status, created_at: iso('20'), last_seen_at: iso(last), seen_count: seen });
 const step = (name: string, at: string | null, note: string | null = null, state: 'ok' | 'failed' | 'unseen' = at ? 'ok' : 'unseen') => ({ step: name, state, at, note });
 
 // Made-up console state for render tests and design previews. Not owner data.
 export const SAMPLE_CONSOLE_VIEW: ConsoleView = {
-  release: 'sample', timezone: 'Asia/Kolkata', now: '2026-09-23 23:40', sessionUntil: '2026-09-24 11:40', sessionCount: 1, approvals: [{id: 'p1', summary: 'Move "Gym" to Sat 27 Sep, 07:00 to 08:00. Legs day shifted.', state: 'open', undoable: false }], usage: [{ model: OPENAI_GPT_5_MINI_MODEL, calls: 12, input: 48200, cached: 12000, output: 3900, usd: 0.0231 }], csrf: 'c'.repeat(64), notice: 'Spot dismissed. Waldo will stop using it.',
+  release: 'sample', timezone: 'Asia/Kolkata', timezoneConfirmed: true, now: '2026-09-23 23:40', sessionUntil: '2026-09-24 11:40', sessionCount: 1, sessions: [{ signed_in: '2026-09-23 23:40', until: '2026-09-24 11:40', current: true }], approvals: [{id: 'p1', kind: 'calendar_change', summary: 'Move "Gym" to Sat 27 Sep, 07:00 to 08:00. Legs day shifted.', state: 'open', undoable: false, review: { kind: 'calendar_change', action: 'move', title: 'Gym', event_id: 'gym-1', start: '2026-09-27T07:00:00+05:30', end: '2026-09-27T08:00:00+05:30', reason: 'Legs day shifted.' } }], usage: [{ model: OPENAI_GPT_6_LUNA_MODEL, calls: 12, input: 48200, cached: 12000, output: 3900, usd: 0.0231 }], csrf: 'c'.repeat(64), notice: 'Spot dismissed. Waldo will stop using it.',
   telegram: { linked: true, unlinkAvailable: true },
   google: { accounts: [], connectAvailable: true },
   profile: [
@@ -24,6 +24,8 @@ export const SAMPLE_CONSOLE_VIEW: ConsoleView = {
     spot(6, 'health', 'Skips lunch on heavy meeting days', 'stated', 'you said on 22 Sep', 1, '22'),
   ],
   retiredSpots: [spot(2, 'preference', 'Gym at 7am', 'inferred', 'one turn', 1, '21', 'dismissed'), spot(1, 'pattern', 'Late calls most weeks', 'stated', 'calendar', 4, '22', 'promoted')],
+  forgettingSpots: [spot(7, 'fact', 'Old phone number ending 4123', 'stated', 'you said on 19 Sep', 1, '19', 'purging')],
+  holds: [{ id: 1, kind: 'observation', reason: 'self-report', created_at: '2026-09-25T22:00:00.000Z' }],
   nodes: [
     { id: 1, domain: 'work rhythm', label: 'Late calls', summary: 'Calls after 10pm, 2-3 times a week', strength: 0.7, status: 'active', first_seen: iso('21'), last_confirmed: iso('23'), supporting_spots: '[1]' },
     { id: 2, domain: 'sleep', label: 'Short sleep', summary: 'Under 6 hours on those nights', strength: 0.6, status: 'active', first_seen: iso('21'), last_confirmed: iso('23'), supporting_spots: '[4]' },
@@ -36,6 +38,7 @@ export const SAMPLE_CONSOLE_VIEW: ConsoleView = {
     { id: 'card:close', name: 'The Close', defaultTime: '21:30', time: '22:15', reason: 'pinned by you', sent: false, pin: '22:15' },
   ],
   proactivity: { quiet_start: '23:00', quiet_end: '07:30', volume: 'normal' },
+  schedules: { daily_brief: true, followups: true, event_briefs: true, nightly: true, heartbeat: true },
   ledger: 'Open approvals: none\nDone: reminder "drink water" set (daily 09:00)\nReminders:\n- 2026-09-24T09:00 drink water (daily)',
   files: [
     { id: 2, kind: 'document', file_id: 'f2', name: 'blood-panel-sept.pdf', mime: 'application/pdf', size: 482_000, caption: 'can you read this', at: Date.parse('2026-09-23T12:10:00Z') },
@@ -47,11 +50,18 @@ export const SAMPLE_CONSOLE_VIEW: ConsoleView = {
     step('Fetch update card', null), step('Pre-event brief', '2026-09-23 09:50', 'google not connected', 'failed'), step('Nightly memory', '2026-09-23 03:00', '12 turns; MEMORY_CORE'),
     step('Constellation promotion', '2026-09-23 03:00', 'nodes2 edges1 promoted1'),
   ],
+  lastRequest: null,
   trace: [
     { time: '22:40', trace: 'tg-812', hop: 'llm_reply', ok: true, ms: 2140, note: '' },
     { time: '22:40', trace: 'tg-812', hop: 'memory', ok: true, ms: 1320, note: '+1 held0 seen1 confirmed0 dismissed0 forgot0' },
     { time: '22:40', trace: 'tg-812', hop: 'spots', ok: true, ms: 1180, note: '+1 seen1 dismissed0 forgot0' },
     { time: '22:45', trace: 'r-3a1', hop: 'reminder', ok: true, ms: 1900, note: '' },
     { time: '23:38', trace: 'console:1', hop: 'console_action', ok: true, ms: 0, note: 'spot.dismiss 2' },
+  ],
+  runs: [
+    { id: 'bg:a1b2c3d4', kind: 'delegate_task', status: 'completed', summary: 'Pulled the last three invoices and totaled them.', parent_id: 'tg-812', started: '09-23 22:38', ended: '09-23 22:40' },
+    { id: 'bg:e5f6a7b8', kind: 'reminder', status: 'completed', summary: 'reminder sent', parent_id: 'r-3a1', started: '09-23 22:45', ended: '09-23 22:45' },
+    { id: 'bg:c9d0e1f2', kind: 'heartbeat', status: 'failed', summary: 'tick failed', parent_id: null, started: '09-23 23:00', ended: '09-23 23:00' },
+    { id: 'bg:11223344', kind: 'standing_order', status: 'running', summary: null, parent_id: 'so-77', started: '09-23 23:39', ended: null },
   ],
 };

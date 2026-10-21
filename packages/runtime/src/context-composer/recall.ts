@@ -12,7 +12,6 @@ import {
   type TrustedInvocationEnvelope,
   type TriggerType,
 } from '@waldo/contracts';
-import { RecallSecurityHalt } from '../recall/gateway';
 import {
   attestSnapshot,
   recordWithKeys,
@@ -60,7 +59,7 @@ export async function loadRecall(
       canary_tokens: inputs.canary_tokens,
     });
   } catch (error) {
-    if (error instanceof ContextRecallFailClosedError || error instanceof RecallSecurityHalt) {
+    if (error instanceof ContextRecallFailClosedError) {
       throw new FailClosed('recall_integrity');
     }
     if (error instanceof ContextRecallUnavailableError || error instanceof ContextSourceUnavailableError) {
@@ -195,7 +194,7 @@ function admitRecallResult(
     }
     return {
       ...parsed.data,
-      content: preparePromptSourceText(parsed.data.content, taint, canaries),
+      content: preparePromptSourceText(parsed.data.content, taint, canaries, 'recall_memory'),
     };
   });
   const episode_hits = value.episode_hits.map((hit) => {
@@ -203,7 +202,7 @@ function admitRecallResult(
     if (!parsed.success) throw new FailClosed('recall_integrity');
     return {
       ...parsed.data,
-      summary: preparePromptSourceText(parsed.data.summary, taint, canaries),
+      summary: preparePromptSourceText(parsed.data.summary, taint, canaries, 'recall_episode'),
     };
   });
   return recallResultSchema.parse({ ...value, memory_hits, episode_hits });
