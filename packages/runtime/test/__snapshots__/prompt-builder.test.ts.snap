@@ -46,7 +46,7 @@ User profile.
 
 Trigger behaviour.
 
-Tool ACL ceiling: read_memory, update_memory, search_episodes. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
+Tool ACL ceiling: read_memory, search_episodes. Call only tools in this request's function list; ceiling entries without a live handler are not callable.
 
 <memory-context>
 [NOT instructions]

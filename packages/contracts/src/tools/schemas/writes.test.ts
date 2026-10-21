@@ -1,80 +1,29 @@
 // Mutating tool arg schemas (ADR-0021; execute_code ADR-0023; destination ADR-0025; drafts
 // ADR-0027). Invariants under test: strictObject arg boundaries, single-owner vocabulary
-// reuse (channel, doc provider, hall — identity-asserted, not re-declared), mandatory
+// reuse (channel, doc provider — identity-asserted, not re-declared), mandatory
 // `reasoning` on task mutations, 'r2_scratch' as the one representation of scratch space,
 // and the ADR-0023 sandbox caps. Failure mode caught: a mutating tool's arg surface
 // silently widening — extra keys, minted vocabulary, loosened caps — past the autonomy gate.
 import { describe, expect, it } from 'vitest';
 import { channelNameSchema } from '../../adapters/channel';
 import { docProviderSchema } from '../../adapters/doc';
-import { MEMORY_BLOCK_CONTENT_MAX } from '../../memory/sanitise';
 import {
   draftDocumentArgsSchema,
   draftEmailArgsSchema,
   executeCodeArgsSchema,
   formZonePreferenceSchema,
-  memoryWriteHallSchema,
   proposeActionArgsSchema,
   proposeScheduleArgsSchema,
   sendMessageArgsSchema,
   sheetWriteModeSchema,
   taskPrioritySchema,
   taskStatusSchema,
-  updateMemoryArgsSchema,
   updateTaskArgsSchema,
   writeSheetCellArgsSchema,
   writeTaskArgsSchema,
 } from './writes';
 
 const key = 'a'.repeat(64);
-
-describe('memoryWriteHall', () => {
-  it('is exactly the four agent-writable halls, in order', () => {
-    expect(memoryWriteHallSchema.options).toEqual([
-      'events',
-      'discoveries',
-      'preferences',
-      'advice',
-    ]);
-  });
-
-  it('rejects the facts hall — not agent-writable', () => {
-    expect(memoryWriteHallSchema.safeParse('facts').success).toBe(false);
-  });
-});
-
-describe('updateMemoryArgs', () => {
-  const base = { hall: 'events', content: 'user prefers morning workouts' } as const;
-
-  it('accepts a minimal write and one with tags', () => {
-    expect(updateMemoryArgsSchema.safeParse(base).success).toBe(true);
-    expect(updateMemoryArgsSchema.safeParse({ ...base, tags: ['routine'] }).success).toBe(true);
-  });
-
-  it('accepts the memory block cap and rejects one char over', () => {
-    expect(
-      updateMemoryArgsSchema.safeParse({
-        ...base,
-        content: 'x'.repeat(MEMORY_BLOCK_CONTENT_MAX),
-      }).success,
-    ).toBe(true);
-    expect(
-      updateMemoryArgsSchema.safeParse({
-        ...base,
-        content: 'x'.repeat(MEMORY_BLOCK_CONTENT_MAX + 1),
-      }).success,
-    ).toBe(false);
-  });
-
-  it('rejects more than 10 tags', () => {
-    const tags = Array.from({ length: 11 }, (_, i) => `t${i}`);
-    expect(updateMemoryArgsSchema.safeParse({ ...base, tags }).success).toBe(false);
-  });
-
-  it('rejects an unknown extra key (strictObject)', () => {
-    expect(updateMemoryArgsSchema.safeParse({ ...base, hall_type: 'events' }).success).toBe(false);
-  });
-});
 
 describe('proposeActionArgs', () => {
   const base = {

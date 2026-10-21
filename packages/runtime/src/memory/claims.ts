@@ -366,10 +366,8 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
   // fingerprint - never the text. A held claim can quote forgotten or waldo-side text, so
   // persisting the words would re-create the leak the hold prevented.
   sql.exec('CREATE TABLE IF NOT EXISTS claim_holds (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, reason TEXT NOT NULL, fingerprint TEXT NOT NULL, created_at TEXT NOT NULL)');
-  // Durable settle marker: written before the memory-writer call, cleared when it completes.
-  // A row that outlives its cutoff means the write was interrupted (DO eviction before
-  // waitUntil protection) - the next settle sweeps and reports it instead of staying silent.
-  sql.exec('CREATE TABLE IF NOT EXISTS settle_pending (trace TEXT PRIMARY KEY, started_at TEXT NOT NULL)');
+  // The per-exchange settle is gone; its marker table held only trace ids and times.
+  sql.exec('DROP TABLE IF EXISTS settle_pending');
   // External-content FTS keeps no second copy of claim text. Triggers synchronize
   // inserts, text edits and deletes; status filtering hides retired rows. A legacy DO builds once.
   // An index built before aliases existed has one column: drop it and its triggers so the rebuild below indexes both.
@@ -478,19 +476,6 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
     },
     recordHold(kind: string, reason: string, text: string, at: string): void {
       sql.exec('INSERT INTO claim_holds (kind, reason, fingerprint, created_at) VALUES (?, ?, ?, ?)', kind, reason, textFingerprint(text.trim()), at);
-    },
-    beginSettle(trace: string, at: string): void {
-      sql.exec('INSERT OR REPLACE INTO settle_pending (trace, started_at) VALUES (?, ?)', trace, at);
-    },
-    endSettle(trace: string): void {
-      sql.exec('DELETE FROM settle_pending WHERE trace = ?', trace);
-    },
-    // Interrupted settles are re-derivable: the next turns carry the same owner words, so
-    // the sweep reports the count and clears rather than retrying a stale extraction.
-    sweepInterruptedSettles(beforeIso: string): number {
-      const stale = sql.exec<{ trace: string }>('SELECT trace FROM settle_pending WHERE started_at < ?', beforeIso).toArray();
-      for (const row of stale) sql.exec('DELETE FROM settle_pending WHERE trace = ?', row.trace);
-      return stale.length;
     },
     holds: () => sql.exec<{ id: number; kind: string; reason: string; fingerprint: string; created_at: string }>('SELECT * FROM claim_holds ORDER BY id').toArray(),
     backedUp: (reason: string) => sql.exec('SELECT 1 FROM memory_backups WHERE reason = ?', reason).toArray().length > 0,
@@ -1096,12 +1081,6 @@ const CLAIM_RULES = [
   'aliases: up to 5 short words or phrases the owner might use later for the same thing in different words (for example "bedtime" for a claim about sleeping at 11:30). They are only used to find the claim again, are not facts and not evidence. Leave empty when the claim\'s own words are enough. Set aliases_touch_forgotten true when any alias mentions something the owner asked to forget; those aliases are then dropped.',
 ];
 
-export const MEMORY_INSTRUCTION = [
-  'You keep what Waldo knows about its owner as claims. You get the current claims and the latest exchange.',
-  ...CLAIM_RULES,
-  'Most exchanges add nothing; reply with empty lists then.',
-].join('\n');
-
 const PIN_RULES = [
   'Two pinned blocks are shown to Waldo on every turn; every other claim stays in memory and is found by search when a message needs it. Curate the blocks with pin and unpin.',
   `owner_profile, up to ${PROFILE_BLOCK_MAX_CHARS} characters: who the owner is, their stable preferences and routines, and how much autonomy they give Waldo.`,
@@ -1143,11 +1122,6 @@ export const CLAIM_OPS_SCHEMA = {
     unpin: { type: 'array', items: { type: 'integer' } },
   },
 };
-
-export const exchangeInput = (store: ClaimStore, owner: string, shared: string, reply: string): string => [
-  memoryPrompt(store), barrierPrompt(store), 'Latest exchange:',
-  `<owner>\n${fence(owner)}\n</owner>`, ...(shared ? [`<shared_content>\n${fence(shared)}\n</shared_content>`] : []), `<waldo>\n${fence(reply)}\n</waldo>`,
-].join('\n\n');
 
 // How full each pinned block is, measured as a turn renders it: the model cannot count characters, and the budget is in them.
 const pinnedUsage = (store: ClaimStore): string => {

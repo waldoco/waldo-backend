@@ -99,7 +99,6 @@ import {
   taintGateBlocksDirectExecution,
   toolNameSchema,
   triggerTypeSchema,
-  updateMemoryArgsSchema,
   rememberArgsSchema,
   forgetMemoryArgsSchema,
   updateTaskArgsSchema,
@@ -195,7 +194,6 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   query_availability: queryAvailabilityArgsSchema,
   read_owner_context: readOwnerContextArgsSchema,
   read_memory: readMemoryArgsSchema,
-  update_memory: updateMemoryArgsSchema,
   remember: rememberArgsSchema,
   forget_memory: forgetMemoryArgsSchema,
   search_episodes: searchEpisodesArgsSchema,
@@ -914,8 +912,6 @@ function postToolUseDestination(tool: string): SanitiseDestination {
 
 function preToolUseDestination(tool: ToolName): SanitiseDestination {
   switch (tool) {
-    case 'update_memory':
-      return 'memory_block';
     case 'draft_document':
       return 'draft_document';
     case 'draft_email':

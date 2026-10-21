@@ -49,7 +49,7 @@ export const TOOL_REPLAY_CLASS: Readonly<Record<ToolName, ToolReplayRow>> = {
   delegate_task: read('runs a read-only subagent (TOOL_CLAIM_EFFECT comment)'),
   remember: { replay: 'reconcilable_write', basis: 'owner-local active claims dedupe by kind/text and corrections record supersedes_id', evidence: { file: 'tools/live/memory.ts', needle: 'supersedes_id' } },
   forget_memory: unknown('local forget plus retained history cleanup; reconcile scope before retrying'),
-  update_memory: unknown(NO_HANDLER), execute_action: unknown(NO_HANDLER), write_task: unknown(NO_HANDLER), update_task: unknown(NO_HANDLER),
+  execute_action: unknown(NO_HANDLER), write_task: unknown(NO_HANDLER), update_task: unknown(NO_HANDLER),
   draft_document: unknown(NO_HANDLER), write_sheet_cell: unknown(NO_HANDLER), execute_code: unknown(NO_HANDLER),
   create_thread: unknown(NO_HANDLER), delete_message: unknown(NO_HANDLER), restore_message: unknown(NO_HANDLER),
   archive_thread: unknown(NO_HANDLER), update_thread_topics: unknown(NO_HANDLER),
