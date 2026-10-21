@@ -167,6 +167,33 @@ export function taintGateBlocksDirectExecution(tool: ToolName, taint: SourceTain
   return isExternalSourceTaint(taint) && PRIVILEGED_ACTION_TOOLS.includes(tool);
 }
 
+// Standing changes: what outlives the turn and later steers Waldo or reaches the owner without being asked again. A
+// reminder or a loop schedules a later turn, a standing order rides every prompt, proactivity and schedule preferences
+// decide when Waldo speaks. Text that arrived from outside (a mail, a page, a contact card, a server's tool description)
+// can ask for any of them, and one write would make the injection persist, so a tainted turn sends them to the owner's
+// card. They are not privileged: an untainted owner turn makes them directly. Channel links and grants are covered by
+// their own law: send_console_link refuses outside content, and a connect link is itself the owner's consent step.
+export const STANDING_CHANGE_TOOLS: readonly ToolName[] = [
+  'set_reminder',
+  'cancel_reminder',
+  'open_loop',
+  'set_standing_order',
+  'cancel_standing_order',
+  'set_proactivity',
+  'set_schedule_preference',
+];
+
+// The owner-approval law for a tainted turn: every privileged action, and every standing change. One exception, read
+// from the frozen arguments: a loop bound to an observed mail source records that source, its title never enters a prompt
+// as the owner's (openLoopsPrompt leaves source loops out of the owner's open loops), and it only checks back; it is the
+// owner-enabled mail follow-through, so it needs no card. Arguments that are not a plain record count as no exception.
+export function taintGateNeedsOwnerApproval(tool: ToolName, taint: SourceTaint, args?: unknown): boolean {
+  if (taintGateBlocksDirectExecution(tool, taint)) return true;
+  if (!isExternalSourceTaint(taint) || !STANDING_CHANGE_TOOLS.includes(tool)) return false;
+  const sourceBound = tool === 'open_loop' && typeof args === 'object' && args !== null && typeof (args as { source_ref?: unknown }).source_ref === 'string';
+  return !sourceBound;
+}
+
 // ADR-0008 conformance rule, deterministic: a handler's trigger_allowlist is the
 // per-handler inverse of TOOL_PERMISSIONS — name ∈ TOOL_PERMISSIONS[t] exactly when
 // t ∈ trigger_allowlist. A handler claiming a trigger its ACL denies, or hiding one it

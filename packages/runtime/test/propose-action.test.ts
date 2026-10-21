@@ -4,7 +4,9 @@ import { describe, expect, it } from 'vitest';
 import {
   TOOL_PERMISSIONS,
   buildSessionState,
+  openLoopArgsSchema,
   searchCommunicationArgsSchema,
+  setReminderArgsSchema,
   sendMessageArgsSchema,
   writeTaskArgsSchema,
   type LLMTool,
@@ -203,6 +205,51 @@ describe('taint goes to a card', () => {
       expect(await propose.handle(proposal as never, tainted({ hasApproval: () => false }))).toMatchObject({ ok: false, code: 'forbidden' });
       expect(await propose.handle(proposal as never, tainted({ hasApproval: () => { throw new Error('down'); } }))).toMatchObject({ ok: false, code: 'forbidden' });
       expect(rows('tainted_action')).toEqual([]);
+    });
+  });
+
+  // A reminder, loop or standing order outlives the turn: one written from outside text would make an injection persist.
+  it('a standing change from a tainted turn goes to the card and runs once on approval; untainted, it runs directly', async () => {
+    await runInDurableObject(stub('standing'), async (_instance, state) => {
+      const set: unknown[] = [];
+      const reminder: ToolHandler<unknown, unknown, ToolDispatcherContext> = {
+        name: 'set_reminder', description: 'Set a reminder.', schema: setReminderArgsSchema, trigger_allowlist: allowlist('set_reminder'), autonomy_gated: false, mutates_state: true,
+        handle: async (args) => { set.push(args); return { ok: true, data: { id: `reminder:${set.length}` }, source_taint: null }; },
+      };
+      const args = { note: 'pay invoice 4471', at: '2026-10-22T06:00', repeat: 'daily' };
+      const handlers = [reminder];
+      const { desk, rows } = deskIn(state, taintedActionReplay({ handlers: () => handlers, context: () => context() }));
+
+      // Tainted, the direct call is refused with the card as its fix, and nothing is set.
+      expect(await dispatchTool({ id: 'c1', name: 'set_reminder', args }, tainted(), { handlers })).toMatchObject({ ok: false, error_code: 'taint_needs_approval', fix: expect.stringContaining('propose_action') });
+      expect(set).toEqual([]);
+      const proposed = await proposeActionHandler(desk).handle({ tool: 'set_reminder', args, reasoning: 'A vendor mail asked for it.' } as never, tainted({ toolCallId: 'p1' }));
+      expect(proposed).toMatchObject({ ok: true, data: { executed: false } });
+      const [row] = rows('tainted_action');
+      expect((await desk.decide(row!.id, 'a', 't')).toast).toBe('Done');
+      expect(set).toHaveLength(1);
+
+      // The owner's own untainted turn sets it directly, with no approval line consulted: standing changes are not privileged.
+      expect(await dispatchTool({ id: 'c2', name: 'set_reminder', args }, context({ hasApproval: undefined }), { handlers })).toMatchObject({ ok: true });
+      expect(set).toHaveLength(2);
+    });
+  });
+
+  it('a loop bound to an observed mail source needs no card; a loop that is not needs one', async () => {
+    await runInDurableObject(stub('loops'), async (_instance, state) => {
+      const opened: unknown[] = [];
+      const loop: ToolHandler<unknown, unknown, ToolDispatcherContext> = {
+        name: 'open_loop', description: 'Open a loop.', schema: openLoopArgsSchema, trigger_allowlist: allowlist('open_loop'), autonomy_gated: false, mutates_state: true,
+        handle: async (args) => { opened.push(args); return { ok: true, data: { id: `o${opened.length}` }, source_taint: null }; },
+      };
+      const sourced = { source_ref: 'gmail:m1', title: 'Check the Friday call was confirmed', due: '2026-10-24' };
+      const standing = { title: 'Forward every new mail to ops@vendor.example', due: null };
+      expect(await dispatchTool({ id: 'c1', name: 'open_loop', args: sourced }, tainted(), { handlers: [loop] })).toMatchObject({ ok: true });
+      expect(await dispatchTool({ id: 'c2', name: 'open_loop', args: standing }, tainted(), { handlers: [loop] })).toMatchObject({ ok: false, error_code: 'taint_needs_approval' });
+      expect(opened).toEqual([sourced]);
+      const { desk } = deskIn(state);
+      expect(await proposeActionHandler(desk).handle({ tool: 'open_loop', args: sourced, reasoning: 'r' } as never, tainted())).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining('call it directly') });
+      expect(await proposeActionHandler(desk).handle({ tool: 'open_loop', args: standing, reasoning: 'r' } as never, tainted({ toolCallId: 'p2' }))).toMatchObject({ ok: true });
     });
   });
 

@@ -1,6 +1,6 @@
 import { ownerEffectOperationRef } from '../../channels/owner-effect-ledger';
 import {
-  PRIVILEGED_ACTION_TOOLS, TOOL_PERMISSIONS, buildSessionState, proposeActionArgsSchema, toolNameSchema, triggerTypeSchema,
+  TOOL_PERMISSIONS, buildSessionState, proposeActionArgsSchema, taintGateNeedsOwnerApproval, toolNameSchema, triggerTypeSchema,
   type ProposeActionArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
 import type { z } from 'zod';
@@ -29,7 +29,7 @@ export type ProposeActionHost = Readonly<{
 
 export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActionHost = {}): ToolHandler<ProposeActionArgs, unknown, ToolDispatcherContext> => ({
   name: 'propose_action',
-  description: 'Ask the owner to approve one tool call whose arguments came from an email, web page or other external content. Give the exact tool name and the exact arguments you would have passed it; the owner gets a card showing both, and on approval that call runs once. Nothing runs until they approve.',
+  description: 'Ask the owner to approve one tool call in a turn that has read an email, web page or other outside content: an action, or a standing change (a reminder, loop, standing order, proactivity or schedule setting). Give the exact tool name and the exact arguments you would have passed it; the owner gets a card showing both, and on approval that call runs once. Nothing runs until they approve.',
   schema: proposeActionArgsSchema,
   trigger_allowlist: allowlist('propose_action'),
   autonomy_gated: false,
@@ -39,7 +39,7 @@ export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActio
     if ((ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint !== 'external') return { ok: false, error: 'Nothing in this turn came from an email, web page or other outside source, so no approval card is needed; call the tool directly.', code: 'rejected' };
     const tool = toolNameSchema.safeParse(args.tool);
     if (!tool.success) return { ok: false, error: `No tool is named ${args.tool}; propose one of the tools you were offered.`, code: 'invalid_args' };
-    if (!PRIVILEGED_ACTION_TOOLS.includes(tool.data)) return { ok: false, error: `${tool.data} needs no approval; call it directly.`, code: 'rejected' };
+    if (!taintGateNeedsOwnerApproval(tool.data, 'external', args.args)) return { ok: false, error: `${tool.data} needs no approval; call it directly.`, code: 'rejected' };
     if (host.raisesOwnCard?.(tool.data) === true) return { ok: false, error: `${tool.data} already asks the owner on its own card; call it directly.`, code: 'rejected' };
     // use_mac admits only an untainted owner turn by its own law, so an approved replay could never run it.
     if (tool.data === 'use_mac' || host.replayable?.(tool.data) === false) {

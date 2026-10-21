@@ -3168,8 +3168,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }},history:context=>({...canonicalOwnerConversationStore(this.ctx.storage,context),recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,null)}),ownerProfile:google.nameLine,watchStatus,...(spend ? { spend } : {})} : {...telegramContext,jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus,...(spend ? { spend } : {})},
     );
     // A job prompt built on the ledger: the owner's health logs reach the model as this turn's context.
+    // Every job here reads calendar or mail text someone else wrote, so it runs tainted: an action or a standing change it
+    // wants goes to the owner's card, as in an owner turn that read the same text.
     const ledgerJob = async (trace: string, said: string, toolNames?: Parameters<typeof responder.prompt>[4]) =>
-      responder.prompt(trace, owner, said, async (_hop, work) => work(), toolNames, undefined, undefined, await healthLogLines());
+      responder.prompt(trace, owner, said, async (_hop, work) => work(), toolNames, undefined, undefined, await healthLogLines(), 'external');
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);
       if (input === null) return;
@@ -3624,7 +3626,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
         const sent = await briefBook.sweep(await google.client(), Date.now(), async (id, event, said) => {
           const at = Date.now();
-          const text = (await responder.prompt(id, owner, said, async (hop, work) => work())).trim();
+          const text = (await responder.prompt(id, owner, said, async (hop, work) => work(), undefined, undefined, undefined, undefined, 'external')).trim();
           if (text) await sentOrThrow(api.sendMessage({ chat_id: owner, text }));
           log({ trace: id, hop: 'event_brief', ms: Date.now() - at, ok: true, detail: event.id, text: { input: said, output: text } });
         });

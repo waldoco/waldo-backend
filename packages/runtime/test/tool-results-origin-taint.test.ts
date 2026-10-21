@@ -120,8 +120,9 @@ it('text a tool echoes after a mail read in the same turn stays out of later tur
     await turn('owner-1', 'Read the planning thread and handle it.');
     expect(seen.calls).toEqual([]);
     const stored = [...(await state.storage.list<{ tool: string; ok: boolean; taint: unknown }>({ prefix: 'toolout:' })).values()];
+    // A reminder is a standing change: after the mail read it goes to the owner's card instead of being set.
     expect(stored.filter(row => ['set_reminder', 'forget_memory'].includes(row.tool)).map(({ tool, ok, taint }) => ({ tool, ok, taint })))
-      .toEqual([{ tool: 'set_reminder', ok: true, taint: 'external' }, { tool: 'forget_memory', ok: true, taint: 'external' }]);
+      .toEqual([{ tool: 'set_reminder', ok: false, taint: 'external' }, { tool: 'forget_memory', ok: true, taint: 'external' }]);
     const [first] = await turn('owner-2', 'Did it go out?');
     expect(ownerTurn(first!)).not.toContain(NOTE);
     expect(ownerTurn(first!)).not.toContain(SCOPE);

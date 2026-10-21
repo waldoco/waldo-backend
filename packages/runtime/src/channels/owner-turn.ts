@@ -495,7 +495,7 @@ export const createOwnerResponder = (
           const result = await runChildLoop(task, {
           handlers: childHandlers,
           budget: turnBudget,
-          ctx: { ...safety, ...memoryContext(), ...((backgroundSourceTaint || turnReplyContext && !turnReplyOwnAuthored) ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
+          ctx: { ...safety, ...memoryContext(), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
           controlRound: consumeRound,
           complete: async (content, tools, turns) => {
             await assertCurrent();
@@ -523,7 +523,7 @@ export const createOwnerResponder = (
         budget: turnBudget,
         ...(offloadStore === undefined ? {} : { offload: offloadStore }),
         maxSteps: turnRounds,
-        ctx: { ...safety, ...memoryContext(), ...((backgroundSourceTaint || turnReplyContext && !turnReplyOwnAuthored) ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
+        ctx: { ...safety, ...memoryContext(), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
         step: async (tools, turns) => {
           const added = await consumeRound();
           if (added === null) return { text: STOPPED_REPLY };
@@ -661,6 +661,11 @@ export const createOwnerResponder = (
   let turnReplyContext = '';
   let promptContext = '';
   let turnReplyOwnAuthored = false;
+  // Whether this turn starts out having read text someone else wrote: a job over outside data, a reply to another
+  // person's message, or a quote or forward the transport marked in the owner's own message. A voice note's transcript
+  // is not counted: it is how owners speak, and the transport cannot tell who is speaking in it.
+  const readOthersWords = (): boolean => backgroundSourceTaint !== null || (turnReplyContext !== '' && !turnReplyOwnAuthored)
+    || (activeOwnerTurn?.parts.some((part) => part.authorship === 'quoted' || part.authorship === 'forwarded') ?? false);
   const quoteContext = async (reply: ReplyContext | undefined): Promise<string> => {
     if (!reply) return '';
     const unavailable = '[Reply target quote unavailable after external-content safety check. Do not infer its contents or approval.]';
