@@ -26,7 +26,7 @@ The engine is a worker behind an approval and never the authority. `browserErran
 
 ### Which engine submits
 
-`executeBrowserSubmit` (Stagehand on Browserbase) opens a fresh session with no login, so it cannot submit inside a Browser Use profile. The engine that prepared a logged-in errand must also do its submit. "Stagehand stays the guarded path for final submits" is therefore implemented as `submitAdopted(errandType)`: an allowlist of errand types the bake-off adopted, empty by default. A Browser Use submit for any other type is refused, and the held browser is closed. Every non-adopted type stays on the existing Stagehand path end to end. A Stagehand errand engine behind the same seam is not built (see Follow-ups).
+`executeBrowserSubmit` (Stagehand on Browserbase) opens a fresh session with no login, so it cannot submit inside a Browser Use profile. The engine that prepared a logged-in errand must also do its submit. "Stagehand stays the guarded path for final submits" is therefore implemented as `submitAdopted(errandType)`: an allowlist of errand types the bake-off adopted. The wiring must pass `BROWSER_USE_ADOPTED_ERRAND_TYPES`, which is empty until a bake-off result adds a type. A Browser Use submit for any other type is refused, and the held browser is closed. Every non-adopted type stays on the existing Stagehand path end to end. A Stagehand errand engine behind the same seam is not built (see Follow-ups).
 
 ## The errand flow
 
@@ -34,7 +34,7 @@ The engine is a worker behind an approval and never the authority. `browserErran
 2. **Browse to the review screen.** The host admits `prepare`, and the seam saves a `preparing` checkpoint before the engine call. The engine stops on the review screen. A review on another origin is refused.
 3. **Hold the session.** The checkpoint moves to `awaiting_approval` with `holdExpiresAt = now + holdSeconds`. The card's `approvalExpiresAt` is set to the hold minus a two-minute submit margin. The desk already caps a browser card at `min(created + 30 min, approvalExpiresAt)`.
 4. **Approval card with exact details.** The card is a `BrowserSubmitProposal` carrying the review facts as `binding`, the final action and a `continuation` holding errand id, proposal id and scope digest. Vendor ids never appear in it (tested).
-5. **Submit once.** The submit is refused if the proposal id, scope digest, URL or facts digest differ from the stored review, if the approval expired, if the type is not adopted, or if the host does not re-admit. Otherwise the seam saves `submitting` before the request leaves, then saves the run reference as soon as it returns.
+5. **Submit once.** The submit run's task carries the review facts only as a quoted JSON block marked as data, because they were read off the page. The seam has already compared them with the approval. The submit is refused if the proposal id, scope digest, URL or facts digest differ from the stored review, if the approval expired, if the type is not adopted, or if the host does not re-admit. Otherwise the seam saves `submitting` before the request leaves, then saves the run reference as soon as it returns.
 6. **Verify.** When the run has finished, the seam runs a separate read-only check of the account. The errand reaches `verified` only if every `expected` key matches, compared trimmed and case-insensitive. The receipt is bound to the review facts digest. The desk promotes the approval to done only through `receiptVerified`. The agent's success report never decides this: an engine that claims success while the account shows otherwise ends `acknowledged_unverified` (tested in the seam, the adapter and the bake-off).
 7. **Receipt.** `verified_with_receipt` carries the confirmation id, or a digest of the observed facts when the site shows no confirmation number. Then the browser is released.
 
@@ -136,9 +136,9 @@ Vendor-side recording is outside Waldo's control unless the project has zero dat
 
 - `BROWSER_ERRANDS_ENGINE=browser_use_v4`;
 - `BROWSER_USE_API_KEY` is set;
-- `WALDO_ENVIRONMENT !== 'production'`.
+- `WALDO_ENVIRONMENT === 'staging'`; an unset or unknown name counts as not staging.
 
-The production refusal is in code and tested. Neither variable exists in any wrangler config, and the key would be a Worker secret, never a repo value. `.env.example` is not edited in this PR.
+The environment check is in code and tested. Neither variable exists in any wrangler config, and the key would be a Worker secret, never a repo value. `.env.example` is not edited in this PR.
 
 ## Bake-off
 
@@ -175,7 +175,15 @@ Anything else stays on Stagehand.
 
 1. **Wiring.** Construct `browserErrand` per errand in the owner object (store, alarm `sweep`, desk hooks). Add the Browser Use live-view host to the console handoff route. Register an errand tool, with tool owners harness-prompt and harness-turn.
 2. **Stagehand errand engine.** Put Stagehand behind `BrowserErrandEngine` so the bake-off can compare both engines on the same tasks. Today the harness accepts any engine, but only Browser Use is implemented.
-3. **Oracles.** Write a per-site oracle for each errand type the owner picks: a sandbox API, a mailbox receipt, or the operator.
+3. **Approval-tap latency.** On a dispatch that is not done, the desk calls `browserReconcile` straight away. That means a second verify run, and up to `runWaitMs` (10 minutes by default) of polling inside the approval tap. The wiring should give dispatch and reconcile a short wait and leave the rest to the alarm.
+4. **Oracles.** Write a per-site oracle for each errand type the owner picks: a sandbox API, a mailbox receipt, or the operator.
+
+## Unverified
+
+- Whether Browser Use saves the profile before `login.confirm`'s immediate read starts. The docs say only that state is saved "when it stops".
+- The meaning of `X-V4-Queue-Deduplicate`, and whether V4 works on a ZDR project at all (see above).
+- Every Browser Use behaviour described here comes from the docs. No call was made to the live API.
+- `.env.example` could not be read in this session, so the two new variables are not listed there yet.
 
 ## Rollback
 

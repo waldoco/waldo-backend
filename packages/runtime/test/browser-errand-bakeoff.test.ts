@@ -3,7 +3,7 @@ import { ADOPTION, runErrand, scoreBakeoff, type AccountOracle, type BakeoffRun,
 import { liveBakeoffConfig } from '../evals/browser-errand-bakeoff/live-config';
 import { BAKEOFF_SPECS, type ErrandSpec } from '../evals/browser-errand-bakeoff/specs';
 
-type Behaviour = { submitsWhilePreparing?: boolean; overReports?: boolean; needsLogin?: boolean; costUsd?: number | null; minutes?: number; failsEvery?: number };
+type Behaviour = { throwsOnSubmit?: boolean; submitsWhilePreparing?: boolean; overReports?: boolean; needsLogin?: boolean; costUsd?: number | null; minutes?: number; failsEvery?: number };
 
 // A synthetic site per run: the account state only an oracle reads, and an engine whose behaviour is scripted.
 function world(spec: ErrandSpec, behaviour: Behaviour, run: number) {
@@ -20,7 +20,7 @@ function world(spec: ErrandSpec, behaviour: Behaviour, run: number) {
       if (behaviour.submitsWhilePreparing) commit();
       return { kind: 'review', sessionRef: 's1', runRef: 'r1', url: 'https://synthetic.example/review', facts: Object.fromEntries(spec.cardMustShow.map(key => [key, `shown ${key}`])) };
     },
-    submit: async () => { if (!fails && !behaviour.overReports) commit(); return { status: 'started', runRef: 'r2' }; },
+    submit: async () => { if (behaviour.throwsOnSubmit) throw Error('vendor 503'); if (!fails && !behaviour.overReports) commit(); return { status: 'started', runRef: 'r2' }; },
     findSubmit: async () => ({ status: 'absent' }),
     run: async () => ({ state: 'finished', vendorClaim: true }),
     verify: async ({ keys }) => ({ observed: Object.fromEntries(keys.map(key => [key, account[key]!])), confirmationId: null }),
@@ -31,11 +31,11 @@ function world(spec: ErrandSpec, behaviour: Behaviour, run: number) {
   return { engine, oracle, now: () => clock };
 }
 
-const bakeoff = async (behaviour: Behaviour, runs: number = ADOPTION.minRuns, specs = BAKEOFF_SPECS.slice(0, 3)) => {
+const bakeoff = async (behaviour: Behaviour, runs: number = ADOPTION.minRuns, specs = BAKEOFF_SPECS.slice(0, 3), approve = async () => true) => {
   const results: BakeoffRun[] = [];
   for (const spec of specs) for (let run = 1; run <= runs; run++) {
     const w = world(spec, behaviour, run);
-    results.push(await runErrand({ engineName: 'candidate', engine: w.engine, spec, target: { origin: 'https://synthetic.example', profileRef: 'p' }, run, oracle: w.oracle, now: w.now, takeover: async () => 'tester@synthetic.example' }));
+    results.push(await runErrand({ engineName: 'candidate', engine: w.engine, spec, target: { origin: 'https://synthetic.example', profileRef: 'p' }, run, oracle: w.oracle, now: w.now, takeover: async () => 'tester@synthetic.example', approve }));
   }
   return { results, scores: scoreBakeoff(results) };
 };
@@ -81,6 +81,27 @@ describe('browser errand bake-off', () => {
     const { results, scores } = await bakeoff({ needsLogin: true }, 5, BAKEOFF_SPECS.slice(0, 1));
     expect(results.every(run => run.takeovers === 1 && run.verified)).toBe(true);
     expect(scores[0]).toMatchObject({ takeovers: 5, decision: 'adopt' });
+  });
+
+  it('a declined card submits nothing, and an engine failure ends the run without losing it', async () => {
+    const declined = await bakeoff({}, 5, BAKEOFF_SPECS.slice(0, 1), async () => false);
+    expect(declined.results.every(run => run.outcome === 'card_refused' && !run.verified && !run.unapprovedSubmit)).toBe(true);
+    const lost = await bakeoff({ throwsOnSubmit: true, overReports: true }, 5, BAKEOFF_SPECS.slice(0, 1));
+    expect(lost.results.map(run => run.outcome)).toEqual(Array(5).fill('rejected'));
+    expect(lost.scores[0]!.decision).toBe('stay_on_stagehand');
+    const spec = BAKEOFF_SPECS[0]!, w = world(spec, { needsLogin: true }, 1);
+    const crashed = await runErrand({ engineName: 'candidate', engine: w.engine, spec, target: { origin: 'https://synthetic.example', profileRef: 'p' }, run: 1, oracle: w.oracle, now: w.now,
+      takeover: async () => { throw Error('operator closed the terminal'); }, approve: async () => true });
+    expect(crashed).toMatchObject({ outcome: 'failed', verified: false, unapprovedSubmit: false });
+  });
+
+  it('reads an operator answer in another key order or case as unchanged', async () => {
+    const spec = BAKEOFF_SPECS[0]!;
+    const w = world(spec, {}, 1);
+    let reads = 0;
+    const shuffled: AccountOracle = async (s, t, keys) => { const seen = await w.oracle(s, t, keys); reads++; return reads === 2 && seen ? Object.fromEntries(Object.entries(seen).reverse().map(([k, v]) => [k, v.toUpperCase()])) : seen; };
+    const run = await runErrand({ engineName: 'candidate', engine: w.engine, spec, target: { origin: 'https://synthetic.example', profileRef: 'p' }, run: 1, oracle: shuffled, now: w.now, takeover: async () => null, approve: async () => true });
+    expect(run).toMatchObject({ unapprovedSubmit: false, verified: true });
   });
 
   it('refuses a live run without opt-in, a spend cap and a key', () => {
