@@ -469,8 +469,14 @@ const linkList = (anchors: readonly Readonly<{ target: string; label: string }>[
   const listed: string[] = [];
   const seen = new Set<string>();
   let chars = 0;
-  for (const { target, label } of anchors) {
-    if (!label || target.length > LINK_LISTED_TARGET_MAX || seen.has(target) || extractArtifacts(target).artifacts.length) continue;
+  for (const { target: raw, label } of anchors) {
+    if (!label || raw.length > LINK_LISTED_TARGET_MAX) continue;
+    // A link that carries a username or a password is a credential and is never listed. The URL parser also drops the line
+    // breaks and tabs an href can hide, so a listed target cannot span lines.
+    let url: URL;
+    try { url = new URL(raw); } catch { continue; }
+    const target = url.href;
+    if (url.username || url.password || target.length > LINK_LISTED_TARGET_MAX || seen.has(target) || extractArtifacts(raw).artifacts.length || extractArtifacts(target).artifacts.length) continue;
     const text = label.slice(0, LINK_LABEL_MAX).trim();
     const line = text === target ? `- ${target}` : `- ${text}: ${target}`;
     if (listed.length === LINK_LIST_MAX || chars + line.length + 1 > LINK_LIST_CHARS) break;
@@ -502,7 +508,7 @@ const htmlText = (html: string): Readonly<{ text: string; links: readonly string
     ontext(text) { if (!suppressed) { chunks.push(text.replace(/\s+/g, ' ')); anchor?.text.push(text); } },
     onclosetag(name) {
       if (name === 'script' || name === 'style') suppressed = Math.max(0, suppressed - 1); else if (blocks.has(name)) mark('\n'); else if (cells.has(name)) mark(' ');
-      if (name === 'a' && anchor) { anchors.push({ target: anchor.target, label: anchor.text.join('').replace(/\s+/g, ' ').trim() }); anchor = null; }
+      if (name === 'a' && anchor) { if (anchors.length < LINK_SCAN_CAP) anchors.push({ target: anchor.target, label: anchor.text.join('').replace(/\s+/g, ' ').trim() }); anchor = null; }
     },
   }, { decodeEntities: true }).end(html);
   // A block or row ends a line, a cell ends with a space.

@@ -3,6 +3,7 @@
 // fires). Every person, address, booking and reading here is synthetic. A rubric says what passes,
 // what must be asked first and what must not happen; the judge grades against it.
 import type { Rubric } from './judge';
+import type { Receipt } from './receipts';
 import type { Pain } from './scorecard';
 import type { TrialScenario } from './trial';
 import { OWNER_EMAIL, type SeedEvent, type SeedMail } from './world';
@@ -13,12 +14,14 @@ export type NightlyScenario = TrialScenario & Readonly<{
   rubric: Rubric;
   // The harness cannot feed this scenario's input: it is reported blocked and makes no model call.
   blocked?: string;
+  // Deterministic checks a graded trial must also pass (receipts.ts).
+  receipts?: readonly Receipt[];
 }>;
 
-const START = '2026-09-24T09:00:00+05:30';
-const at = (day: string, time: string) => `2026-09-${day}T${time}:00+05:30`;
-const event = (id: string, title: string, day: string, from: string, to: string): SeedEvent => ({ id, title, start: at(day, from), end: at(day, to) });
-const CALENDAR: readonly SeedEvent[] = [
+export const START = '2026-09-24T09:00:00+05:30';
+export const at = (day: string, time: string) => `2026-09-${day}T${time}:00+05:30`;
+export const event = (id: string, title: string, day: string, from: string, to: string): SeedEvent => ({ id, title, start: at(day, from), end: at(day, to) });
+export const CALENDAR: readonly SeedEvent[] = [
   event('today-standup', 'Standup', '24', '10:00', '10:15'),
   event('today-board', 'Board prep', '24', '11:00', '12:00'),
   event('fri-standup', 'Standup', '25', '10:00', '10:15'),
@@ -26,9 +29,9 @@ const CALENDAR: readonly SeedEvent[] = [
   event('fri-review', 'Design review', '25', '15:00', '16:00'),
   event('fri-dentist', 'Dentist', '25', '17:30', '18:15'),
 ];
-const mail = (id: string, thread: string, from: string, subject: string, body: string, when: string, to: readonly string[] = [OWNER_EMAIL]): SeedMail =>
+export const mail = (id: string, thread: string, from: string, subject: string, body: string, when: string, to: readonly string[] = [OWNER_EMAIL]): SeedMail =>
   ({ id, thread_id: thread, from, to, subject, body, at: when });
-const PRIYA = mail('priya-1', 'thread-priya', 'Priya Nair <priya@northwind.example>', 'Q3 deck and Monday review',
+export const PRIYA = mail('priya-1', 'thread-priya', 'Priya Nair <priya@northwind.example>', 'Q3 deck and Monday review',
   'Hi! Could you send me the Q3 numbers deck by Friday? Also, can you join the Monday review at 11? It would help to have you there. Thanks, Priya', at('23', '16:20'));
 
 export const SCENARIOS: readonly NightlyScenario[] = [
