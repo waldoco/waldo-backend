@@ -37,6 +37,7 @@ describe('scheduleKind', () => {
       'heartbeat',
       'standing_order',
       'watch_upkeep',
+      'provider_sync',
     ]);
     expect(scheduleKindPriority).toEqual({
       journal: 0,
@@ -50,6 +51,7 @@ describe('scheduleKind', () => {
       heartbeat: 8,
       standing_order: 9,
       watch_upkeep: 10,
+      provider_sync: 11,
     });
   });
 
@@ -66,6 +68,7 @@ describe('scheduleKind', () => {
       heartbeat: null,
       standing_order: null,
       watch_upkeep: null,
+      provider_sync: null,
     });
   });
 
