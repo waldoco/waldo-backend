@@ -14,7 +14,7 @@ Nothing here was deployed, and no Google setting was changed.
 | Date | What happens | Waldo impact | Source |
 |---|---|---|---|
 | **2026-11-11** | Workspace MCP servers start rejecting OAuth clients not marked "Use this client for an AI-powered agent". A client not marked by **2026-11-12** stays non-agentic for good. | Our only client is **not marked** (console). Staging's `read_mcp_tool` / `call_mcp_tool` reads through `gmailmcp`, `calendarmcp` and `drivemcp` stop on 11 Nov. Production has MCP off (`packages/runtime/wrangler.jsonc:20`). | Gmail, Calendar and Drive release notes, entry of 2026-10-12 |
-| **2026-10-30** | Fitbit Web API turned off. Support already ended 2026-09-30. | **This repo calls no Fitbit, Google Fit or Google Health API**: grep for `api.fitbit.com`, `fitness.googleapis.com` and `health.googleapis.com` finds nothing in `packages/` or `supabase/`. So nothing here breaks. What's at risk is the plan's promise of Fitbit and Pixel data, which needs a new Google Health API integration (§5). | `/health/about` (2026-09-29) |
+| **2026-10-30** | Fitbit Web API turned off. Support already ended 2026-09-30. | **This repo calls no Fitbit, Google Fit or Google Health API**: grep for `api.fitbit.com`, `fitness.googleapis.com` and `health.googleapis.com` finds nothing in `packages/` or `supabase/`. So nothing here breaks. **Google's cloud Health API is not in launch scope** (owner decision, `docs/planning/BUILD_DIRECTION_2026-10-21.md:11`, `:15`: HealthKit, Health Connect, WHOOP, Oura). Fitbit and Pixel data reaches Waldo through Health Connect on Android: the Google Health app writes to Health Connect once the user connects it and allows each data type. On iPhone it syncs to Apple Health instead. The 30 Oct turn-off costs us nothing. | `/health/about` (2026-09-29); support.google.com/googlehealth answer 14506680 (read 21 Oct) |
 | Every 7 days | Refresh tokens issued while the app is in **Testing** expire after 7 days. | All 7 testers lose Google every week. The failure shows up as `invalid_grant`, which the code treats as a dead grant and answers with a reconnect notice (`connectors/google.ts:106`). | `/identity/protocols/oauth2` (2026-10-16) |
 | 2026, no date given | Google Fit REST API deprecated; no new sign-ups since 2024-05-01. | Not used. The Fitness API is still enabled in the project. | `/fit/rest` (2026-10-08) |
 | Later in 2026, with 90 days' notice | Workspace API use above the daily per-project thresholds gets billed, and quota increases will need billing enabled. | None at today's traffic (§2). | `/workspace/tools-safety` (2026-09-03) |
@@ -90,26 +90,24 @@ Nothing here was deployed, and no Google setting was changed.
 | G8 | The Gmail push project name is hard-coded, and only a staging subscription exists. | `connectors/google-push.ts:96` | There is no production push path. |
 | G9 | The MCP allowlist has `get_draft`, which Google's Gmail MCP tool list doesn't include (its reference page returns 404). | `connectors/google-mcp.ts:17` | Harmless, since the server refuses it, but the list has drifted from Google's. |
 | G10 | No prompt-injection screening is documented for MCP or REST content, as Google requires. | n/a | Policy requirement for MCP use and for restricted scopes. Waldo's taint and approval model may satisfy it, but it isn't written up anywhere Google would accept. |
-| G11 | No Google Health API integration. Health enters only through the phone's `/app/v1/health` push. | `channels/app-health.ts` | Fitbit and Pixel users have no cloud path. Whether the app reads Health Connect is not verified from this repo. |
+| G11 | No Google Health API integration. Health enters only through the phone's `/app/v1/health` push. | `channels/app-health.ts` | Not a gap for launch: cloud Google Health is out of scope, and Fitbit and Pixel data come in through Health Connect. Whether the app reads Health Connect, and with which permissions, is not verified from this repo. |
 | G12 | Health source lists disagree: `health_connect` appears in the ingest contract and the migrations, but not in the adapter contract. | `packages/contracts/src/adapters/health.ts:12-19` vs `packages/contracts/src/app/health-ingest.ts:15` | Contract drift. |
 
 ## 5. Verification and CASA: what to decide
 
-The fact that changes the decision: **every Google Health API scope is restricted.** Narrowing Gmail scopes avoids CASA only if Waldo also skips cloud Fitbit and Pixel data.
+Google's cloud Health API is out of launch scope (§1), so its restricted scopes don't enter this decision. The choice between C and D rests only on whether Waldo reads Gmail. Mail reading is core to the product.
 
 | Option | What it means | Cost and limits |
 |---|---|---|
 | **A. Stay in Testing** (today) | Test users only. | Refresh tokens expire every 7 days. At most 100 users ever (7 used). There is no Internal user type, because the project has no organization. |
 | **B. Publish without verification** | Change publishing status to "In production". | Users see the unverified-app screen, and the cap is 100 new users in total. The 7-day expiry is documented for Testing only, so it should stop [inference from `/identity/protocols/oauth2`; check after publishing]. Branding blocks publishing until home page, privacy policy and terms are set. |
-| **C. Verify sensitive scopes only** | Drop `gmail.readonly`, `gmail.compose` and `drive.readonly`. Keep send, calendar, tasks and contacts. Use `drive.file` for files the owner picks. | Brand plus sensitive-scope review, with no CASA. **Waldo loses the ability to read mail**, the core of the mail half of the product, and cannot add Google Health. |
-| **D. Restricted verification plus CASA** | Keep the Gmail read scopes and add the Google Health scopes. | Yearly CASA by an ADA lab, at AL1 or AL2 as Google decides. **Prices aren't published, so ask 2–3 labs for quotes.** Review takes "several weeks". Prerequisites missing today: home page, privacy policy and terms on a verified domain we own; a Limited Use statement; an in-app disclosure before consent; a documented prompt-injection defence; a production project and redirect URI; and probably a custom domain instead of `workers.dev` or the Supabase host (Search Console must verify ownership) [inference; check in Search Console]. |
+| **C. Verify sensitive scopes only** | Drop `gmail.readonly`, `gmail.compose` and `drive.readonly`. Keep send, calendar, tasks and contacts. Use `drive.file` for files the owner picks. | Brand plus sensitive-scope review, with no CASA. **Waldo loses the ability to read mail**, the core of the mail half of the product. |
+| **D. Restricted verification plus CASA** | Keep the Gmail read scopes. Keep `drive.readonly` only if Drive reads ship; otherwise switch to `drive.file`, which keeps Drive out of the restricted review. | Yearly CASA by an ADA lab, at AL1 or AL2 as Google decides. **Prices aren't published, so ask 2–3 labs for quotes.** Review takes "several weeks". Prerequisites missing today: home page, privacy policy and terms on a verified domain we own; a Limited Use statement; an in-app disclosure before consent; a documented prompt-injection defence; a production project and redirect URI; and probably a custom domain instead of `workers.dev` or the Supabase host (Search Console must verify ownership) [inference; check in Search Console]. |
 
 **Recommendation.**
-1. Do **B now** so testers stop losing Google every week.
-2. Start **D's prerequisites** in parallel: production project, domain, policy pages, consent copy.
-3. Ask labs for CASA quotes. Then decide between C and D once the owner has decided whether Google Health is in launch scope.
-
-A choice of C rules out Fitbit and Pixel data in the cloud.
+1. **D for production**, since mail reading is core. Start its prerequisites now: production project, domain, policy pages, consent copy, Limited Use statement, prompt-injection write-up.
+2. Ask 2–3 labs for CASA quotes.
+3. **Keep Testing (A) for the alpha.** The cost is that every tester reconnects Google every 7 days, and every new tester must first be added as a test user, up to 100 in total. If the weekly reconnect hurts the pilot, B removes it without changing scopes, once Branding is filled in.
 
 ## 6. Fixes, ranked and sized for one PR each
 
@@ -124,7 +122,7 @@ A choice of C rules out Fitbit and Pixel data in the cloud.
 | 7 | Calendar `syncToken` with `410` handling for the update sweep (G4, calendar). | M | `connectors/google.ts`, `update-cards.ts` |
 | 8 | Reuse access tokens on the Vault rail for their lifetime, or cache them in the edge per request batch (G7). | S–M | proxy |
 | 9 | Make the Gmail push project configurable per environment; add a production subscription (G8). | S | `google-push.ts`, `wrangler.jsonc` |
-| 10 | Google Health API connector, behind the health plane, before any promise of Fitbit or Pixel data (G11). It needs an ADR: restricted scopes, re-consent flow, `users.getIdentity`, handling `ACCOUNT_NOT_LINKED`, and backfill. | L | new |
+| 10 | Not for launch: a Google Health API connector (G11). Cloud Google Health is out of scope; Fitbit and Pixel data come in through Health Connect. If this is ever reopened, it needs an ADR covering restricted scopes, the re-consent flow, `users.getIdentity`, handling `ACCOUNT_NOT_LINKED`, and backfill. | — | — |
 | 11 | Align the health source enum between the adapter and ingest contracts (G12). | S | contracts |
 | 12 | Drop `get_draft` from the Gmail MCP allowlist (G9). | XS | `google-mcp.ts` |
 
@@ -139,11 +137,10 @@ Items 3, 5, 6 and 7 touch `connectors/google.ts` or `tools/live/google.ts`, whic
 | Add `calendar.calendarlist.readonly`; remove `youtube.readonly`, `calendar.readonly`, `calendar.events.readonly`, `tasks.readonly` and `gmail.metadata` | Auth Platform → Data Access | Avoids a mismatch with what the code requests; keeps scopes to the minimum | next console session |
 | Either enable the Docs, Sheets and Slides APIs, or approve removing those scopes from consent | APIs & Services, or code | They are requested today but cannot be used | with fix 5 |
 | Disable the unused Fitness API and YouTube Data API | APIs & Services | Smaller surface | any time |
-| Fill in home page, privacy policy and terms (heywaldo.in), and logo; replace personal contact emails with a role address | Auth Platform → Branding | Needed to publish (option B) and to verify | before B |
+| Fill in home page, privacy policy and terms (heywaldo.in), and logo; replace personal contact emails with a role address | Auth Platform → Branding | Needed to verify (D), and to publish if B is ever chosen | before submitting D |
 | Create a production project (or decide staging and production share one) with a production redirect URI and Pub/Sub subscription | Cloud console | No production Google path exists | before launch |
-| Decide B now, and C or D | §5 | Testers reconnect weekly today | this week |
-| If D: get CASA quotes (AL1 and AL2) from 2–3 ADA labs; budget for yearly renewal | Spend | Prices aren't published | before submitting |
-| Decide whether Google Health (Fitbit, Pixel) is in launch scope | Product | All its scopes are restricted, so it forces D | before CASA scoping |
+| Approve D for production, with Testing kept for the alpha | §5 | Mail reading needs restricted Gmail scopes | this week |
+| Get CASA quotes (AL1 and AL2) from 2–3 ADA labs; budget for yearly renewal | Spend | Prices aren't published | before submitting D |
 
 ## 8. Not verified
 
@@ -168,3 +165,4 @@ On developers.google.com unless stated otherwise:
 - **App Defense Alliance:** appdefensealliance.dev `/casa` and `/casa/casa-tiering` (2026-06-27)
 - **Google Health and Fit:** `/health/about` (2026-09-29) · `/health/migration` (2026-09-28) · `/health/migration/data-access` (2026-10-09) · `/health/migration/api-specifications` (2026-09-22) · `/fit/rest` (2026-10-08)
 - **Health Connect:** developer.android.com `/health-and-fitness/health-connect/read-data` (2026-10-09)
+- **Google Health app and Health Connect:** support.google.com/googlehealth answer 14506680 (no date shown; read 21 Oct)
