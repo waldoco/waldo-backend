@@ -11,11 +11,11 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (body: u
 const { createOwnerResponder } = await import('../src/channels/owner-turn');
 const { loopHandlers } = await import('../src/channels/loops');
 const { rememberArgsSchema } = await import('@waldo/contracts');
-const memory = { pendingTopics: () => [], claims: () => [], allClaims: () => [], recall: () => [], nodes: () => [], edges: () => [], barriers: () => [], beginSettle: () => {}, endSettle: () => {}, settle: () => {}, sweepInterruptedSettles: () => 0 };
+const memory = { pendingTopics: () => [], claims: () => [], allClaims: () => [], recall: () => [], nodes: () => [], edges: () => [], barriers: () => [], settle: () => {} };
 const loopBook = { close: () => true, open: () => ({}), list: () => [], closed: () => [], proactivity: () => ({}), setProactivity: () => ({}) };
 const tool = (name: string, args: unknown) => [{ type: 'function_call', call_id: name, name, arguments: JSON.stringify(args) }];
 // Narrow handler fake tests transport/order/receipts. Real grounding/store handlers are exercised in memory-health-owner-turn.
-const setup = (opts: { memoryWrites?: boolean; fail?: boolean; throws?: boolean; loops?: boolean } = {}) => {
+const setup = (opts: { memoryWrites?: boolean; fail?: boolean; throws?: boolean; loops?: boolean; log?: (entry: { hop: string }) => void } = {}) => {
   const saved: Array<{ modelPayload: string; appPayload: string }> = [];
   const writes: unknown[] = [];
   const store = { load: async () => ({ entries: [], leafId: null }), save: async (rows: ReadonlyArray<{ modelPayload: string; appPayload: string }>) => { saved.push(...rows); } };
@@ -26,7 +26,7 @@ const setup = (opts: { memoryWrites?: boolean; fail?: boolean; throws?: boolean;
     writes.push(args);
     return { ok: true, data: { id: 1, status: 'stored' }, source_taint: null };
   } };
-  const responder = createOwnerResponder('fixture', store as never, memory as never, undefined, undefined, [remember, ...(opts.loops ? loopHandlers(loopBook as never) : [])] as never);
+  const responder = createOwnerResponder('fixture', store as never, memory as never, opts.log as never, undefined, [remember, ...(opts.loops ? loopHandlers(loopBook as never) : [])] as never);
   const run = (text: string) => responder.respond(ownerTyped({ traceId: 'tg-1', conversationRef: 'owner', surface: 'telegram', text, ...(opts.memoryWrites === undefined ? {} : { memoryWrites: opts.memoryWrites }) }), (_name, work) => work());
   return { responder, run, saved, writes };
 };
@@ -86,4 +86,12 @@ it('a throwing remember tool yields a failed receipt, not the removed partial-wr
   expect(output).toEqual({ ok: false, error: TOOL_ERRORS.handler_failed.cause, error_code: 'handler_failed', fix: TOOL_ERRORS.handler_failed.fix, retryable: false, code: 'transient', reason: 'handler_failed' });
   expect(calls.replyInputs[1]).not.toContain('memory storage unavailable');
   for (const input of calls.replyInputs) expect(input).not.toContain('only partly stored');
+});
+
+it('a failed tool hop logs the typed ToolError code as error_code, beside the loop\'s coarse code', async () => {
+  const hops: { hop: string }[] = [];
+  const { run } = setup({ throws: true, log: entry => { hops.push(entry); } });
+  calls.outputs.push(tool('remember', { kind: 'routine', text: 'Gym in mornings', evidence_quote: 'gym to mornings' }), []);
+  await run('I moved gym to mornings');
+  expect(hops.find(entry => entry.hop === 'tool_remember')).toMatchObject({ ok: false, code: 'transient:handler_failed', error_code: 'handler_failed' });
 });

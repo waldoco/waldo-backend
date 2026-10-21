@@ -183,8 +183,10 @@ export function observedBreaker(breaker: CircuitBreaker, onOpen: (provider: Prov
 }
 
 export type RouteSpendState = {
-  spent_cents_today: number;
+  spent_cents: number;
   cap_cents: number | null;
+  // The caller's own cheaper policy for a capped call. A route clamped without one goes to the roster primary alone.
+  clamp?: RoutingPolicy;
 };
 
 export type SelectModelRouteInput = {
@@ -444,7 +446,7 @@ export class RuntimeLLMProvider {
     if (p6Action?.action === 'defer') {
       return templateUnavailableFailure(route, [], routingLogs);
     }
-    const effectiveRoute = spendCapped ? spendClampedRoute(route) : route;
+    const effectiveRoute = spendCapped ? spendClampedRoute(route, input) : route;
     const attempts: LLMAttempt[] = [];
     const settledModels = new Set<string>();
     const resendWaits = new Map<string, number>();
@@ -630,7 +632,7 @@ export class RuntimeLLMProvider {
     if (p6Action?.action === 'defer') {
       return templateUnavailableFailure(route, [], routingLogs);
     }
-    const effectiveRoute = spendCapped ? spendClampedRoute(route) : route;
+    const effectiveRoute = spendCapped ? spendClampedRoute(route, input) : route;
     const plan = attemptPlan(effectiveRoute, spendCapped)[0];
     if (plan === undefined) return templateUnavailableFailure(effectiveRoute, [], routingLogs);
     const reconcile = this.gateway.executeOrReconcile;
@@ -1172,7 +1174,8 @@ function trustedExecutionMatchesRequest(
   );
 }
 
-function spendClampedRoute(route: ModelRoute): ModelRoute {
+function spendClampedRoute(route: ModelRoute, input: SelectModelRouteInput): ModelRoute {
+  if (input.spend?.clamp) return selectModelRoute({ trigger: input.trigger, policy: input.spend.clamp });
   return {
     ...route,
     primary: {
@@ -1218,6 +1221,7 @@ function attemptPlan(route: ModelRoute, spendCapped = false): readonly {
     return [
       { step: route.primary, context: 'full_context', fallback_step: 'spend_cap_clamp' },
       { step: route.primary, context: 'reduced_context', fallback_step: 'spend_cap_clamp' },
+      ...route.fallback.map((step) => ({ step, context: 'reduced_context' as const, fallback_step: 'gateway_chain' as const })),
     ];
   }
   return [
@@ -1431,7 +1435,7 @@ function spendCapExceeded(spend: RouteSpendState | undefined): boolean {
   return (
     spend !== undefined &&
     spend.cap_cents !== null &&
-    spend.spent_cents_today >= spend.cap_cents
+    spend.spent_cents >= spend.cap_cents
   );
 }
 

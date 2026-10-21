@@ -9,10 +9,10 @@ const memoryStorage = () => {
   const data = new Map<string, unknown>();
   return {
     data,
-    get: async (key: string) => data.get(key),
+    get: async (key: string | string[]) => Array.isArray(key) ? new Map(key.filter((one) => data.has(one)).map((one) => [one, data.get(one)])) : data.get(key),
     put: async (entries: Record<string, unknown> | string, value?: unknown) => { if (typeof entries === 'string') data.set(entries, value); else for (const [key, item] of Object.entries(entries)) data.set(key, item); },
-    list: async ({ prefix, reverse, limit }: { prefix: string; reverse?: boolean; limit?: number }) => {
-      const rows = [...data].filter(([key]) => key.startsWith(prefix)).sort(([a], [b]) => a.localeCompare(b));
+    list: async ({ prefix, reverse, limit, end }: { prefix: string; reverse?: boolean; limit?: number; end?: string }) => {
+      const rows = [...data].filter(([key]) => key.startsWith(prefix) && (end === undefined || key < end)).sort(([a], [b]) => a.localeCompare(b));
       if (reverse) rows.reverse();
       return new Map(limit ? rows.slice(0, limit) : rows);
     },
@@ -90,6 +90,19 @@ describe('canonical store compaction rows', () => {
     await store.appendCompaction!({ ...second, id: 'a5-compaction-later' }, null);
     await redactConversationEntries(storage, ['question 1:'], '[forgotten]');
     expect((await store.load()).entries.find((entry) => entry.id === 'a5-compaction-later')).toMatchObject({ modelPayload: 'Later summary.', modelProjection: { mode: 'include' } });
+  });
+
+  it('a summary whose span was trimmed owner-first still walks back to its first row: a forget in a reply it skipped supersedes it', async () => {
+    const { storage, store, tree, leaf } = await seeded(6);
+    // an input budget that holds the owner messages but not every reply
+    const plan = compactionPlan(tree, leaf, null, settings, 160)!;
+    expect(plan.gap).toBeGreaterThan(0);
+    expect(plan.input.some((message) => message.content.startsWith('answer 2 '))).toBe(false);
+    const summary = compactionRow(plan, 'The owner asked five questions.', PRINCIPAL, 99);
+    await store.appendCompaction!(summary, null);
+    const result = await redactConversationEntries(storage, ['answer 2 '], '[forgotten]');
+    expect(result.remaining).toBe(0);
+    expect((await store.load()).entries.find((entry) => entry.id === summary.id)).toMatchObject({ modelPayload: COMPACTION_SUPERSEDED_MARKER, modelProjection: { mode: 'omit' }, covers: summary.covers });
   });
 
   // An older build hung an app row under the last iMessage row. A turn reads that row on its own chain, so a summary's span
