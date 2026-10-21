@@ -76,6 +76,7 @@ async function withGoogle<T extends object>(google: GoogleAccess, feature: Googl
     // An answer that fails its schema fails the same way on every retry until one side is redeployed, so it is refused.
     // The model hears fixed words: the parse error names fields, never what the owner needs to hear.
     if (error instanceof UnreadableAnswer) return { ok: false, code: 'rejected', error: UNREADABLE_ANSWER, source_taint: 'external' };
+    if (error instanceof BodyWithheld) return { ok: false, code: 'rejected', error: 'This message body could not be checked safely, so it is withheld.', source_taint: 'external' };
     return { ok: false, code: 'transient', error: error instanceof Error ? error.message : String(error), source_taint: 'external' };
   }
 }
@@ -160,9 +161,13 @@ const dropCutTail = (text: string): string => {
   while (end > 0 && !/\s/.test(text[end - 1]!)) end--;
   return text.slice(0, Math.max(0, end - CUT_GUARD));
 };
+// A body the scribe will not pass (health markers can grow a dense one past its size limit) is withheld whole. Retrying
+// reads the same body, so it is never reported as transient.
+class BodyWithheld extends Error {}
+const WITHHELD_BODY = "[This message's body was withheld: it could not be checked safely, so it is not shown.]";
 const scribedBody = (text: string, canaries: readonly string[]): string => {
   const scribed = sanitise({ payload: { body: text }, destination: 'internal_context', source_taint: 'external', canary_tokens: [...canaries] });
-  if (!scribed.ok) throw new Error('mail body refused by the scribe');
+  if (!scribed.ok) throw new BodyWithheld('mail body refused by the scribe');
   return (scribed.payload as { body: string }).body;
 };
 const freshCanaries = () => Array.from({ length: 3 }, () => crypto.randomUUID().replaceAll('-', '').slice(0, 16));
@@ -195,13 +200,19 @@ const readMessages = async (messages: readonly ThreadMessage[], read: BodyRead) 
     const linked = extractArtifacts(omitLongRuns(scan ?? '')).artifacts.filter((artifact) => !shown.some((other) => other.value === artifact.value));
     const artifacts = [...shown, ...linked];
     // An artifact found only in an HTML link target has no span to replace, so its marker is appended.
-    const prepared = [scribedBody(clipped === undefined ? body.text : dropCutTail(body.text), read.canaries), ...new Set(linked.map((artifact) => artifactMarker(artifact.kind)))].join('\n');
+    // On the first read of a thread one such message does not hide the others. A continuation asks for that message alone.
+    let safe: string, withheld = false;
+    try { safe = scribedBody(clipped === undefined ? body.text : dropCutTail(body.text), read.canaries); } catch (error) {
+      if (!(error instanceof BodyWithheld) || !read.first) throw error;
+      safe = WITHHELD_BODY; withheld = true;
+    }
+    const prepared = [safe, ...new Set(linked.map((artifact) => artifactMarker(artifact.kind)))].join('\n');
     if (!Number.isSafeInteger(read.offset) || read.offset < 0 || (read.offset > 0 && read.offset >= prepared.length)) throw new Error('invalid body offset');
     const end = read.offset + Math.min(BODY_CHUNK, budget);
     const chunk = prepared.slice(read.offset, end);
     budget -= chunk.length;
     // The position comes before the body, so it stays in view when a long result is shown only in part.
-    const position = { ...(end < prepared.length ? { body_total_chars: prepared.length, body_next_offset: end } : {}), ...(clipped !== undefined ? { body_truncated: true as const } : {}) };
+    const position = { ...(end < prepared.length ? { body_total_chars: prepared.length, body_next_offset: end } : {}), ...(clipped !== undefined ? { body_truncated: true as const } : {}), ...(withheld ? { body_withheld: 'scribe_refused' as const } : {}) };
     const files = read.first && listed ? { attachments: names.map(({ attachment, name }) => ({ ...attachment, filename: name.text })) } : {};
     if (artifacts.length === 0) { shownMessages.push({ ...position, ...visible, ...files, subject: subject.text, body: chunk }); continue; }
     const kinds = [...new Set(artifacts.map((artifact) => artifact.kind))].sort();

@@ -225,3 +225,25 @@ describe('read_thread arguments', () => {
     expect(readThreadArgsSchema.safeParse({ thread_id: 't', body_message_id: 'm1', body_offset: -1 }).success).toBe(false);
   });
 });
+
+// Health readings are replaced by markers, so a dense body can grow past the scribe's limit. That one message is withheld;
+// the rest of the thread reads, and a retry cannot help, so it is not reported as transient.
+describe('a body the scribe refuses', () => {
+  const dense = 'steps: 3 '.repeat(22_000);
+  it('is withheld on its own, and the other messages in the thread are still read', async () => {
+    const result = await reader(thread([plain('m1', dense), plain('m2', 'short note')])).handle({ thread_id: 't', limit: 10 } as never);
+    expect(result).toMatchObject({ ok: true });
+    const [first, second] = shown(result) as (Shown & { body_withheld?: string })[];
+    expect(first!.body_withheld).toBe('scribe_refused');
+    expect(first!.body).toContain('withheld');
+    expect(first!.body).not.toContain('steps');
+    expect(second).toMatchObject({ id: 'm2', body: 'short note' });
+    expect(second).not.toHaveProperty('body_withheld');
+  });
+
+  it('is refused, not retried as transient, when its continuation is asked for', async () => {
+    const result = await reader(thread([plain('m1', dense), plain('m2', 'short note')])).handle({ thread_id: 't', limit: 10, body_message_id: 'm1', body_offset: 0 } as never);
+    expect(result).toMatchObject({ ok: false, code: 'rejected' });
+    expect(JSON.stringify(result)).not.toContain('steps');
+  });
+});
