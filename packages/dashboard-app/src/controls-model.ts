@@ -16,7 +16,10 @@ export type ConnectionsRecord = Base<'connections', {
   telegram: { linked: boolean; unlinkAvailable: boolean };
   sessions: { until: string; count: number; items: { signed_in: string; until: string; current: boolean }[] };
   channels?: { channel: 'telegram' | 'whatsapp' | 'imessage'; state: 'linked' | 'blocked' | 'pending' | 'unlinked'; masked_label: string | null }[];
+  mcp?: McpServerRecord[];
 }>;
+// A remote MCP server the owner connected. Titles are the server's own text; read_only_hint is its claim.
+export type McpServerRecord = { id: string; name: string; host: string; server_url: string; auth: 'oauth' | 'none'; status: 'active' | 'reauth_needed'; scopes: string[]; wants_scopes: string[]; tools: number; hidden_tools: number; runs_without_asking: number; marked_read_only: number; tools_changed: boolean; tool_list: { tool: string; runs: 'without_asking' | 'asks_first'; read_only_hint: boolean; title?: string }[] };
 export type ProposalReview = { kind: 'email_send'; to: string[]; cc: string[]; bcc: string[]; subject: string; body: string }
   | { kind: 'message_send'; channel: string; content: string }
   | { kind: 'calendar_change'; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string };
@@ -47,7 +50,7 @@ export type DevicesRecord = Base<'devices', {
 }> & { status: { devices: { id: string; online: boolean; last_seen_at: string | null; commands: { class: string; state: string; result_state: string | null }[] }[] } };
 type Records = { day: DayRecord; connections: ConnectionsRecord; waiting: WaitingRecord; activity: ActivityRecord; profile: ProfileRecord; setup: SetupRecord; usage: UsageRecord; files: FilesRecord; imessage: IMessageRecord; devices: DevicesRecord };
 export type ControlRecord = Records[ControlsView];
-export type ControlAction = 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'node.forget' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.skip' | 'approval.undo' | 'file.remove'
+export type ControlAction = 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'node.forget' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs'
   | (typeof IMESSAGE_TOP)[number] | (typeof IMESSAGE_ROW)[number] | 'device.pair' | (typeof DEVICE_ROW)[number];
 export type ControlFields = { id?: string; value?: string; quiet_start?: string; quiet_end?: string; volume?: string; subject?: string; chat?: string; query_kind?: string; body?: string; severity?: string };
 export type ActionReceipt = { state: 'recorded' | 'incomplete' | 'rejected' | 'unconfirmed'; message: string; navigation?: string; signed_out?: boolean };
@@ -97,12 +100,14 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
   }
   if (expected === 'connections') {
     if (!obj(data.google) || typeof data.google.connectAvailable !== 'boolean' || !Array.isArray(data.google.accounts) || !data.google.accounts.every(account => obj(account) && string(account.id) && string(account.email) && ['calendar', 'mail', 'tasks'].every(key => typeof account[key] === 'boolean') && ['access_granted', 'needs_reconnect'].includes(String(account.health))) || !obj(data.telegram) || typeof data.telegram.linked !== 'boolean' || typeof data.telegram.unlinkAvailable !== 'boolean' || !obj(data.sessions) || !string(data.sessions.until) || !Number.isSafeInteger(data.sessions.count) || Number(data.sessions.count) < 1 || !Array.isArray(data.sessions.items) || !data.sessions.items.every(item => obj(item) && string(item.signed_in) && string(item.until) && typeof item.current === 'boolean')
-      || (data.channels !== undefined && (!Array.isArray(data.channels) || !data.channels.every(item => obj(item) && ['telegram', 'whatsapp', 'imessage'].includes(String(item.channel)) && ['linked', 'blocked', 'pending', 'unlinked'].includes(String(item.state)) && optionalString(item.masked_label))))) throw shapeError();
+      || (data.channels !== undefined && (!Array.isArray(data.channels) || !data.channels.every(item => obj(item) && ['telegram', 'whatsapp', 'imessage'].includes(String(item.channel)) && ['linked', 'blocked', 'pending', 'unlinked'].includes(String(item.state)) && optionalString(item.masked_label))))
+      || (data.mcp !== undefined && (!Array.isArray(data.mcp) || !data.mcp.every(mcpServer)))) throw shapeError();
     return { ...base, view: 'connections', data: {
     google: { connectAvailable: data.google.connectAvailable, accounts: data.google.accounts.map(account => ({ id: account.id, email: account.email, calendar: account.calendar, mail: account.mail, tasks: account.tasks, health: account.health })) },
     telegram: { linked: data.telegram.linked, unlinkAvailable: data.telegram.unlinkAvailable },
     sessions: { until: data.sessions.until, count: data.sessions.count, items: (data.sessions.items as { signed_in: string; until: string; current: boolean }[]).map(item => ({ signed_in: item.signed_in, until: item.until, current: item.current })) },
     ...(data.channels === undefined ? {} : { channels: (data.channels as NonNullable<ConnectionsRecord['data']['channels']>).map(item => ({ channel: item.channel, state: item.state, masked_label: item.masked_label })) }),
+    ...(data.mcp === undefined ? {} : { mcp: (data.mcp as McpServerRecord[]).map(server => ({ id: server.id, name: server.name, host: server.host, server_url: server.server_url, auth: server.auth, status: server.status, scopes: [...server.scopes], wants_scopes: [...server.wants_scopes], tools: server.tools, hidden_tools: server.hidden_tools, runs_without_asking: server.runs_without_asking, marked_read_only: server.marked_read_only, tools_changed: server.tools_changed, tool_list: server.tool_list.map(tool => ({ tool: tool.tool, runs: tool.runs, read_only_hint: tool.read_only_hint, ...(tool.title === undefined ? {} : { title: tool.title }) })) })) }),
     } } as Records[V];
   }
   if (expected === 'waiting') {
@@ -188,12 +193,17 @@ export async function fetchControls<V extends ControlsView>(view: V, signal?: Ab
   return readControls(value, view);
 }
 
+const mcpServer = (item: unknown): boolean => obj(item) && string(item.id) && string(item.name) && string(item.host) && string(item.server_url) && ['oauth', 'none'].includes(String(item.auth)) && ['active', 'reauth_needed'].includes(String(item.status))
+  && strings(item.scopes) && strings(item.wants_scopes) && ['tools', 'hidden_tools', 'runs_without_asking', 'marked_read_only'].every(key => count(item[key])) && typeof item.tools_changed === 'boolean'
+  && Array.isArray(item.tool_list) && item.tool_list.every(tool => obj(tool) && string(tool.tool) && ['without_asking', 'asks_first'].includes(String(tool.runs)) && typeof tool.read_only_hint === 'boolean' && (tool.title === undefined || typeof tool.title === 'string'));
+
 // Existing connectUrl issues a first-party /c/<22-character ticket>. Direct
 // Google authorization is constrained to the exact existing provider endpoint.
 export function allowedControlNavigation(value: string, origin: string): string {
   let url: URL;
   try { url = new URL(value, origin); } catch { throw new ControlsActionError('navigation_unavailable', 'The connection link is unavailable. Refresh before connecting again.', true); }
-  const localTicket = url.origin === origin && /^\/c\/[A-Za-z0-9_-]{22}$/.test(url.pathname) && !url.search && !url.hash;
+  // An MCP connect continues on this deployment's own start link, which redirects only for the signed-in owner.
+  const localTicket = url.origin === origin && (/^\/c\/[A-Za-z0-9_-]{22}$/.test(url.pathname) || /^\/console\/mcp\/start\/[A-Za-z0-9_-]{43}$/.test(url.pathname)) && !url.search && !url.hash;
   const google = url.hostname === 'accounts.google.com' && url.port === '' && url.pathname === '/o/oauth2/v2/auth' && !url.hash;
   if (url.protocol !== 'https:' || url.username || url.password || (!localTicket && !google)) throw new ControlsActionError('navigation_unavailable', 'The connection link is unavailable. Refresh before connecting again.', true);
   return url.href;
@@ -207,7 +217,7 @@ export function readActionResult(value: unknown, action: ControlAction, origin: 
     receipt.signed_out = value.receipt.signed_out;
   }
   if (value.receipt.navigation !== undefined) {
-    if (action !== 'google.connect' || receipt.state !== 'recorded') throw new ControlsActionError('receipt_unavailable', 'The navigation receipt is unsupported. Refresh the controls.', true);
+    if ((action !== 'google.connect' && action !== 'mcp.connect') || receipt.state !== 'recorded') throw new ControlsActionError('receipt_unavailable', 'The navigation receipt is unsupported. Refresh the controls.', true);
     receipt.navigation = allowedControlNavigation(value.receipt.navigation, origin);
   }
   if (value.reveal === undefined) return { receipt, duplicate: value.duplicate };

@@ -13,6 +13,7 @@ export const scheduleKindSchema = z.enum([
   'heartbeat',
   'standing_order',
   'watch_upkeep',
+  'provider_sync',
 ]);
 export type ScheduleKind = z.infer<typeof scheduleKindSchema>;
 
@@ -28,6 +29,7 @@ export const scheduleKindPriority: Readonly<Record<ScheduleKind, number>> = {
   heartbeat: 8,
   standing_order: 9,
   watch_upkeep: 10,
+  provider_sync: 11,
 };
 
 export const scheduleKindTrigger: Readonly<Record<ScheduleKind, TriggerType | null>> = {
@@ -45,6 +47,8 @@ export const scheduleKindTrigger: Readonly<Record<ScheduleKind, TriggerType | nu
   standing_order: null,
   // Keeping the owner's Google push watches started is infrastructure work with no model turn and no message.
   watch_upkeep: null,
+  // Syncing a connected wearable's readings into the health plane is infrastructure work: no model turn and no message.
+  provider_sync: null,
 };
 
 export const scheduleStatusSchema = z.enum(['armed', 'quarantined']);
