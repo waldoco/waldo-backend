@@ -70,8 +70,7 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
     const timeout = setTimeout(() => controller.abort(), Math.max(0, Math.min(this.timeoutMs, callTimeLeftMs(input.runScope))));
     const startedAt = Date.now();
     try {
-      const response = await this.client.responses.create(
-        {
+      const body: OpenAI.Responses.ResponseCreateParamsNonStreaming = {
           model: input.request.model,
           instructions: input.request.system,
           input: responsesInput(input.request),
@@ -84,9 +83,20 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
             ...(input.request.web_search ? [hostedWebSearch(input.request.web_search)] : []),
           ] } : {}),
           ...(input.request.response_format ? { text: { format: { type: 'json_schema' as const, name: input.request.response_format.name, schema: input.request.response_format.schema, strict: true } } } : {}),
-        },
-        { signal: controller.signal },
-      );
+      };
+      let response = await this.client.responses.create(body, { signal: controller.signal });
+      // A response that only searched for tools has not answered yet: it is continued with its search items, as a round
+      // after a search replays them, and the items lead the answer's own so later rounds replay the whole search.
+      const searched: OpenAI.Responses.ResponseOutputItem[] = [];
+      const searchSpent = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0 };
+      for (let continuation = 0; continuation < SEARCH_CONTINUATIONS && onlySearched(response); continuation += 1) {
+        searched.push(...response.output);
+        searchSpent.input_tokens += response.usage?.input_tokens ?? 0;
+        searchSpent.output_tokens += response.usage?.output_tokens ?? 0;
+        searchSpent.cache_read_input_tokens += response.usage?.input_tokens_details?.cached_tokens ?? 0;
+        const asked = typeof body.input === 'string' ? [{ role: 'user' as const, content: body.input }] : body.input ?? [];
+        response = await this.client.responses.create({ ...body, input: [...asked, ...searched as unknown as OpenAI.Responses.ResponseInputItem[]] }, { signal: controller.signal });
+      }
       const text = withCitedLinks(responseText(response).trim(), response);
       const strictSent = strictParametersByTool(input.request);
       const toolCalls = response.output.flatMap((item) => item.type === 'function_call' ? [{ call_id: item.call_id, name: item.name, arguments: strictSent.has(item.name) ? fromOpenAIStrictArguments(item.arguments, strictSent.get(item.name)!) : item.arguments }] : []);
@@ -95,9 +105,9 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
         return { ok: false, code: 'oversize', error: `OpenAI output incomplete: ${response.incomplete_details?.reason ?? 'unknown'}` };
       }
       const spent = {
-        input_tokens: response.usage?.input_tokens ?? 0,
-        output_tokens: response.usage?.output_tokens ?? 0,
-        cache_read_input_tokens: response.usage?.input_tokens_details?.cached_tokens ?? 0,
+        input_tokens: searchSpent.input_tokens + (response.usage?.input_tokens ?? 0),
+        output_tokens: searchSpent.output_tokens + (response.usage?.output_tokens ?? 0),
+        cache_read_input_tokens: searchSpent.cache_read_input_tokens + (response.usage?.input_tokens_details?.cached_tokens ?? 0),
       };
       // A reply that is only reasoning (no text, no tool call) is a transient model miss: the provider asks once more,
       // and the tokens it cost still count.
@@ -109,7 +119,7 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
         text,
         ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
         ...spent,
-        output_items: response.output.map((item) => item as unknown as Record<string, unknown>),
+        output_items: [...searched, ...response.output].map((item) => item as unknown as Record<string, unknown>),
         latency_ms: Date.now() - startedAt,
         ...(incomplete ? { truncated: true } : {}),
       };
@@ -165,6 +175,13 @@ function functionTools(request: LLMGatewayRequest['request']): OpenAI.Responses.
   ] as unknown as OpenAI.Responses.Tool[];
 }
 
+// Each continuation is a billed call; past this many a response that keeps only searching fails as an empty one does, and
+// the provider's attempt plan decides what follows.
+const SEARCH_CONTINUATIONS = 2;
+const onlySearched = (response: OpenAI.Responses.Response): boolean => response.status !== 'incomplete'
+  && response.output.some((item) => (item.type as string) === 'tool_search_output')
+  && response.output.every((item) => ['tool_search_call', 'tool_search_output', 'reasoning'].includes(item.type as string));
+
 // A deferred function the replayed history calls without the search output that loaded it goes up front: a round
 // another provider ran is rebuilt from its call record with no namespace, and a trimmed history can drop the round whose
 // search loaded it. Only then does the list change; a turn on this provider alone replays its searches.
@@ -195,10 +212,11 @@ function strictParametersByTool(request: LLMGatewayRequest['request']): Map<stri
   return new Map((request.tools ?? []).flatMap((tool) => openAIStrictParameters(tool.parameters) ? [[tool.name, tool.parameters] as const] : []));
 }
 
-// A round that offers no tools (the turn's closing round) cannot carry tool-search state: the namespaces it loaded are
-// not declared, so the search items are left out and a loaded call is replayed as a plain function call.
-function replayable(item: Record<string, unknown>, toolsOffered: boolean): Record<string, unknown>[] {
-  if (toolsOffered) return [item];
+// A request that declares no tool search (the turn's closing round, which offers no tools, or a resend without the search
+// a model refused) cannot carry tool-search state: the namespaces it loaded are not declared, so the search items are left
+// out and a loaded call is replayed as a plain function call.
+function replayable(item: Record<string, unknown>, searchDeclared: boolean): Record<string, unknown>[] {
+  if (searchDeclared) return [item];
   if (item.type === 'tool_search_call' || item.type === 'tool_search_output') return [];
   if (item.type === 'function_call' && 'namespace' in item) { const { namespace: _namespace, ...call } = item; return [call]; }
   return [item];
@@ -227,7 +245,7 @@ function responsesInput(request: LLMGatewayRequest['request']): OpenAI.Responses
       // left items this API cannot read, so only OpenAI's own are replayed and that round is rebuilt from its records.
       const replayed = new Set<string>();
       return (request.tool_turns ?? []).flatMap((turn): OpenAI.Responses.ResponseInputItem[] => {
-        const prior = (turn.prior_items ?? []).filter((item) => outputItemProvider(item) === OPENAI_PROVIDER).flatMap((item) => replayable(item, request.tools !== undefined)) as unknown as OpenAI.Responses.ResponseInputItem[];
+        const prior = (turn.prior_items ?? []).filter((item) => outputItemProvider(item) === OPENAI_PROVIDER).flatMap((item) => replayable(item, request.tools !== undefined && request.tool_search !== undefined)) as unknown as OpenAI.Responses.ResponseInputItem[];
         for (const item of prior) {
           const record = item as { type?: string; call_id?: string };
           if (record.type === 'function_call' && record.call_id) replayed.add(record.call_id);
