@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { applyClaimOps, applyPromotion, claimStore, withoutHealthClaims, memoryPrompt, turnMemoryPrompt, nightlyInput, profile , FORGOTTEN, textFingerprint } from '../src/memory/claims';
+import { applyClaimOps, applyPromotion, claimStore, withoutHealthClaims, HEALTH_NOTES_OFF, memoryPrompt, turnMemoryPrompt, nightlyInput, profile , FORGOTTEN, textFingerprint } from '../src/memory/claims';
 import { backupAndCopySpots, LEGACY_BACKUP, markCoreFilesMigrated, pendingCoreFiles } from '../src/memory/migration';
 import { CLAIM_OPS_SCHEMA, FACTS_BLOCK_MAX_CHARS, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, PROFILE_BLOCK_MAX_CHARS } from '../src/memory/claims';
 import { createOwnerResponder } from '../src/channels/owner-turn';
@@ -904,12 +904,38 @@ it('the nightly pass keeps no health note when the owner has health notes off, a
       { kind: 'health', text: 'Sleeps badly after late coffee', source: 'stated', evidence: 'I sleep badly after late coffee', touches_forgotten: false },
       { kind: 'preference', text: 'Wants calm evenings', source: 'stated', evidence: 'Please keep my evenings calm', touches_forgotten: false },
     ] });
-    const gateway: LLMGatewayAdapter = { complete: async (request) => ({ ok: true, data: { model: request.request.model, text: reply, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } }) };
+    const asked: string[] = [];
+    const gateway: LLMGatewayAdapter = { complete: async (request) => { asked.push(JSON.stringify(request.request)); return { ok: true, data: { model: request.request.model, text: reply, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } }; } };
     const responder = createOwnerResponder('fixture', undefined, store, undefined, undefined, [], undefined, false, undefined, undefined, gateway);
     await responder.consolidate('night-off', day, { owner: day, shared: '', waldo: '', ownerMessages: [] }, { health: false });
     expect(store.claims().map((claim) => claim.kind)).toEqual(['preference']);
+    // The model is told, so a health note it would file under another kind is its call, not a kind filter's.
+    expect(asked.at(-1)).toContain(HEALTH_NOTES_OFF);
     await responder.consolidate('night-on', day, { owner: day, shared: '', waldo: '', ownerMessages: [] }, { health: true });
     expect(store.claims().filter((claim) => claim.kind === 'health').map((claim) => claim.text)).toEqual(['Sleeps badly after late coffee']);
+    expect(asked.at(-1)).not.toContain(HEALTH_NOTES_OFF);
+  });
+});
+
+// The background writers (the nightly pass, migration, the flush) share the memory floor: an ordinary fact with a number
+// saves, and a reading is held where the owner can see it, by kind and reason, never by its words or value.
+it('the nightly pass saves ordinary facts with numbers and holds readings by kind and reason alone', async () => {
+  await withSql(async (sql) => {
+    const store = claimStore(sql);
+    const ordinary = ['Needs to file Form 16 by July', 'Laundry load at 6', 'Recovery week 2 of marathon plan', 'Kids go to sleep after 30 minutes of reading'];
+    const readings = ['HR was 52 bpm this morning', 'Sleeps about 6h on work nights', 'Weighs 72 kg'];
+    const day = `owner: ${[...ordinary, ...readings].join('. ')}. I like a pulse check at 7 on Mondays.`;
+    const reply = ops({ add: [
+      ...[...ordinary, ...readings].map((text) => ({ kind: 'routine', text, source: 'stated', evidence: text, touches_forgotten: false })),
+      { kind: 'preference', text: 'Likes Monday check-ins', source: 'stated', evidence: 'I like a pulse check at 7 on Mondays', touches_forgotten: false },
+    ] });
+    const gateway: LLMGatewayAdapter = { complete: async (request) => ({ ok: true, data: { model: request.request.model, text: reply, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } }) };
+    const responder = createOwnerResponder('fixture', undefined, store, undefined, undefined, [], undefined, false, undefined, undefined, gateway);
+    await responder.consolidate('night-floor', day, { owner: day, shared: '', waldo: '', ownerMessages: [] }, { health: true });
+    expect(store.claims().map((claim) => claim.text).sort()).toEqual([...ordinary, 'Likes Monday check-ins'].sort());
+    const held = store.holds().filter((hold) => hold.reason === 'numeric-health');
+    expect(held).toHaveLength(readings.length);
+    expect(JSON.stringify(store.holds())).not.toMatch(/52|72|6h/);
   });
 });
 

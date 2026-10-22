@@ -35,6 +35,14 @@ describe('the health notes control', () => {
     await act(async () => root.unmount());
   });
 
+  // Only notes kept as older chat leaves view are named in a reply; the nightly pass names none, so the copy promises no more.
+  it('says which notes are named in a reply and where every note can be corrected', () => {
+    const shown = html(day(true));
+    expect(shown).toContain('A note kept as older chat leaves its view is named in its next reply to you.');
+    expect(shown).toContain('Every note shows in Profile');
+    expect(shown).not.toContain('Each health note it keeps is named');
+  });
+
   it('is not shown when the Worker does not say', () => {
     expect(html(day())).not.toContain('Health notes');
   });

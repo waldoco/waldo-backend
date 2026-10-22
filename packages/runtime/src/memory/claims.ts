@@ -1097,10 +1097,13 @@ const pinnedUsage = (store: ClaimStore): string => {
   return `Pinned blocks now: ${usage.join('; ')}.`;
 };
 
-export const nightlyInput = (store: ClaimStore, day: string): string =>
-  [memoryPrompt(store), barrierPrompt(store), pinnedUsage(store), `The last day of conversation:\n<conversation>\n${fence(day)}\n</conversation>`].join('\n\n');
-export const flushInput = (store: ClaimStore, span: string): string =>
-  [memoryPrompt(store), barrierPrompt(store), `The conversation leaving Waldo's view:\n<conversation>\n${fence(span)}\n</conversation>`].join('\n\n');
+// The owner's health notes setting, told to the model: which claims are about health is its judgment, whatever kind it would
+// file one under. The kind filter below backs it for claims filed as health.
+export const HEALTH_NOTES_OFF = 'The owner turned health notes off: save nothing about their health, body, sleep, energy, mood or symptoms, whatever kind you would file it under.';
+export const nightlyInput = (store: ClaimStore, day: string, health = true): string =>
+  [memoryPrompt(store), barrierPrompt(store), pinnedUsage(store), ...(health ? [] : [HEALTH_NOTES_OFF]), `The last day of conversation:\n<conversation>\n${fence(day)}\n</conversation>`].join('\n\n');
+export const flushInput = (store: ClaimStore, span: string, health = true): string =>
+  [memoryPrompt(store), barrierPrompt(store), ...(health ? [] : [HEALTH_NOTES_OFF]), `The conversation leaving Waldo's view:\n<conversation>\n${fence(span)}\n</conversation>`].join('\n\n');
 
 // The owner turned health notes off for memory Waldo writes on its own: health claims and corrections to them are dropped
 // before admission, so none is written or held.

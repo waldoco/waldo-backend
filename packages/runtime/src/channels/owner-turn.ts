@@ -821,7 +821,7 @@ export const createOwnerResponder = (
     if (!memory || probeGuard?.suppressMemory) return [];
     const before = new Set(memory.allClaims().map(claim => claim.id));
     const started = Date.now();
-    const raw = await ask(traceId, 'memory_flush', FLUSH_INSTRUCTION, flushInput(promptMemory()!, span), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+    const raw = await ask(traceId, 'memory_flush', FLUSH_INSTRUCTION, flushInput(promptMemory()!, span, policy.health), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
     await assertFresh();
     privateRunScope?.admit();
     const detail = applyClaimOps(memory, policy.health ? raw : withoutHealthClaims(raw), new Date().toISOString(), `owner, day of ${traceId}`, undefined, sides, false, undefined, false);
@@ -960,7 +960,7 @@ export const createOwnerResponder = (
       const asOwner = await asOwnerJob(trace, job => job.consolidate(trace, day, sides, policy));
       if (asOwner !== undefined) return asOwner;
       if (!memory) return { done: true, detail: 'no memory' };
-      const raw = await ask(trace, 'nightly_memory', NIGHTLY_MEMORY_INSTRUCTION, nightlyInput(promptMemory()!, day), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+      const raw = await ask(trace, 'nightly_memory', NIGHTLY_MEMORY_INSTRUCTION, nightlyInput(promptMemory()!, day, policy?.health !== false), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
       // The nightly pass is where the pinned blocks are curated.
       return { done: true, detail: applyClaimOps(memory, policy?.health === false ? withoutHealthClaims(raw) : raw, new Date().toISOString(), `owner, day of ${trace}`, undefined, sides ?? { owner: day }, false, undefined, true) };
