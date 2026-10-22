@@ -662,8 +662,8 @@ export const createOwnerResponder = (
   let promptContext = '';
   let turnReplyOwnAuthored = false;
   // Whether this turn starts out having read text someone else wrote: a job over outside data, a reply to another
-  // person's message, or a quote or forward the transport marked in the owner's own message. A voice note's transcript
-  // is not counted: it is how owners speak, and the transport cannot tell who is speaking in it.
+  // person's message, or a quote or forward the transport marked in the owner's own message (a forwarded recording's
+  // transcript included). The owner's own voice note is not counted: it is how owners speak.
   const readOthersWords = (): boolean => backgroundSourceTaint !== null || (turnReplyContext !== '' && !turnReplyOwnAuthored)
     || (activeOwnerTurn?.parts.some((part) => part.authorship === 'quoted' || part.authorship === 'forwarded') ?? false);
   const quoteContext = async (reply: ReplyContext | undefined): Promise<string> => {

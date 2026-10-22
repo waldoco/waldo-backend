@@ -21,6 +21,8 @@ import { sanitise } from '../src/scribe/sanitiser';
 import { dispatchTool, type ToolDispatcherContext } from '../src/tools/dispatcher';
 import { sendMessageHandler } from '../src/tools/live/messaging';
 import { approvalReplayContext, proposeActionHandler, taintedActionReplay } from '../src/tools/live/propose-action';
+import { memoryHandlers } from '../src/tools/live/memory';
+import { claimStore } from '../src/memory/claims';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
 const allowlist = (tool: ToolName): TriggerType[] => (Object.keys(TOOL_PERMISSIONS) as TriggerType[]).filter((trigger) => TOOL_PERMISSIONS[trigger].includes(tool));
@@ -250,6 +252,27 @@ describe('taint goes to a card', () => {
       const { desk } = deskIn(state);
       expect(await proposeActionHandler(desk).handle({ tool: 'open_loop', args: sourced, reasoning: 'r' } as never, tainted())).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining('call it directly') });
       expect(await proposeActionHandler(desk).handle({ tool: 'open_loop', args: standing, reasoning: 'r' } as never, tainted({ toolCallId: 'p2' }))).toMatchObject({ ok: true });
+    });
+  });
+
+  it('a forget by ids from a tainted turn goes to the card and forgets on approval; a forget by the owner\'s own words runs directly', async () => {
+    await runInDurableObject(stub('forget'), async (_instance, state) => {
+      const store = claimStore(state.storage.sql);
+      store.add({ kind: 'fact', text: 'Project codename is copper-lantern', source: 'stated', evidence: 'copper-lantern', origin: 'owner', source_ref: 'owner, tg-1' }, '2026-10-20T09:00:00Z');
+      store.add({ kind: 'preference', text: 'Prefers tea', source: 'stated', evidence: 'tea', origin: 'owner', source_ref: 'owner, tg-1' }, '2026-10-20T09:00:00Z');
+      const handlers = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'chat-1', hideHistory: async () => undefined });
+      const replayContext = () => approvalReplayContext({ authenticatedUserId: 'owner-1', hasApproval: () => true, sanitise });
+      const { desk, rows } = deskIn(state, taintedActionReplay({ handlers: () => handlers, context: replayContext }));
+      const byIds = { claim_ids: [1], scope_note: 'the codename' };
+      expect(await dispatchTool({ id: 'c1', name: 'forget_memory', args: byIds }, tainted(), { handlers })).toMatchObject({ ok: false, error_code: 'taint_needs_approval' });
+      expect(store.claims()).toHaveLength(2);
+      expect(await proposeActionHandler(desk, { replayable: (tool) => handlers.some((h) => h.name === tool) }).handle({ tool: 'forget_memory', args: byIds, reasoning: 'A mail asked to drop it.' } as never, tainted({ toolCallId: 'p1' }))).toMatchObject({ ok: true });
+      const [row] = rows('tainted_action');
+      expect((await desk.decide(row!.id, 'a', 't')).toast).toBe('Done');
+      expect(store.claims().map((claim) => claim.text)).toEqual(['Prefers tea']);
+      const memoryTurn = { ownerId: 'owner-1', conversationRef: 'chat-1', current: { message_ref: 'tg-2', text: 'forget the tea thing' }, recent: [] };
+      expect(await dispatchTool({ id: 'c2', name: 'forget_memory', args: { topic: 'tea', scope_note: 'tea' } }, tainted({ memoryTurn } as never), { handlers })).toMatchObject({ ok: true });
+      expect(store.claims()).toEqual([]);
     });
   });
 
