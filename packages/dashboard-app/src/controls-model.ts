@@ -38,11 +38,11 @@ export type ProfileRecord = Base<'profile', { sections: { title: string; lines: 
 export type SetupRecord = Base<'setup', { telegram_linked: boolean; google_access_granted: boolean; quiet_hours_set: boolean; imessage_linked?: boolean }>;
 export type UsageRecord = Base<'usage', { rows: { model: string; calls: number; input: number; cached: number; output: number; usd: number }[] }>;
 export type FilesRecord = Base<'files', { storage: 'telegram_reference'; items: { id: number; kind: string; name: string; mime: string | null; size: number | null; caption: string; at: number }[] }>;
-const IMESSAGE_TOP = ['imessage.link', 'imessage.unlink', 'imessage.pair', 'imessage.pair_shared'] as const, IMESSAGE_ROW = ['imessage.verify', 'imessage.activate', 'imessage.activate_shared', 'imessage.revoke'] as const;
+const IMESSAGE_TOP = ['imessage.enroll', 'imessage.link', 'imessage.unlink', 'imessage.pair', 'imessage.pair_shared'] as const, IMESSAGE_ROW = ['imessage.verify', 'imessage.activate', 'imessage.activate_shared', 'imessage.revoke'] as const;
 const DEVICE_ROW = ['device.revoke', 'device.query', 'device.notify'] as const;
 // Liveness sits beside data: it is not part of the revision, so it can change between reads without blocking a decision.
 export type IMessageRecord = Base<'imessage', {
-  enabled: boolean; address: string | null; linked_hint: string | null; admin: boolean; actions: (typeof IMESSAGE_TOP)[number][];
+  enabled: boolean; address: string | null; linked_hint: string | null; admin: boolean; phone: string | null; photon: 'connected' | 'disconnected' | null; actions: (typeof IMESSAGE_TOP)[number][];
   bridges: { id: string; kind: 'owner' | 'shared'; state: string; subject: string | null; chat: string | null; observed: boolean; host_version: string; actions: (typeof IMESSAGE_ROW)[number][] }[];
 }> & { status: { bridges: { id: string; online: boolean; text_ready: boolean; sending_paused: boolean }[] } };
 export type DevicesRecord = Base<'devices', {
@@ -52,10 +52,11 @@ type Records = { day: DayRecord; connections: ConnectionsRecord; waiting: Waitin
 export type ControlRecord = Records[ControlsView];
 export type ControlAction = 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'node.forget' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs'
   | (typeof IMESSAGE_TOP)[number] | (typeof IMESSAGE_ROW)[number] | 'device.pair' | (typeof DEVICE_ROW)[number];
-export type ControlFields = { id?: string; value?: string; quiet_start?: string; quiet_end?: string; volume?: string; subject?: string; chat?: string; query_kind?: string; body?: string; severity?: string };
+export type ControlFields = { id?: string; value?: string; quiet_start?: string; quiet_end?: string; volume?: string; subject?: string; chat?: string; phone?: string; query_kind?: string; body?: string; severity?: string };
 export type ActionReceipt = { state: 'recorded' | 'incomplete' | 'rejected' | 'unconfirmed'; message: string; navigation?: string; signed_out?: boolean };
 // A code or challenge shown once with its receipt. It lives only in component state: never in a URL, history or storage.
-export type ActionReveal = { kind: 'link_code' | 'host_code' | 'challenge' | 'pairing_code'; value: string };
+/** to: where a link code is texted (a phone number or Apple ID address), when the server names it. */
+export type ActionReveal = { kind: 'link_code' | 'host_code' | 'challenge' | 'pairing_code'; value: string; to?: string };
 export type ActionResult = { receipt: ActionReceipt; duplicate: boolean; reveal?: ActionReveal };
 export class ControlsActionError extends Error {
   constructor(readonly code: string, message: string, readonly uncertain = false) { super(message); }
@@ -150,12 +151,15 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
   }
   if (expected === 'imessage') {
     const status = value.status;
+    // phone and photon are newer fields: a server without them reads as not enrollable, Photon unknown.
     if (typeof data.enabled !== 'boolean' || !optionalString(data.address) || !optionalString(data.linked_hint) || typeof data.admin !== 'boolean' || !listed(data.actions, IMESSAGE_TOP) || !Array.isArray(data.bridges)
+      || (data.phone !== undefined && !optionalString(data.phone)) || (data.photon !== undefined && data.photon !== null && data.photon !== 'connected' && data.photon !== 'disconnected')
       || !data.bridges.every(row => obj(row) && string(row.id) && /^imb_[0-9a-f]{32}$/.test(row.id) && ['owner', 'shared'].includes(String(row.kind)) && string(row.state) && optionalString(row.subject) && optionalString(row.chat) && typeof row.observed === 'boolean' && string(row.host_version) && listed(row.actions, IMESSAGE_ROW))
       || !obj(status) || !Array.isArray(status.bridges) || !status.bridges.every(row => obj(row) && string(row.id) && typeof row.online === 'boolean' && typeof row.text_ready === 'boolean' && typeof row.sending_paused === 'boolean')) throw shapeError();
     type Bridge = IMessageRecord['data']['bridges'][number];
     return { ...base, view: 'imessage', data: {
-      enabled: data.enabled, address: data.address, linked_hint: data.linked_hint, admin: data.admin, actions: [...data.actions] as IMessageRecord['data']['actions'],
+      enabled: data.enabled, address: data.address, linked_hint: data.linked_hint, admin: data.admin, phone: (data.phone ?? null) as string | null,
+      photon: (data.photon ?? null) as IMessageRecord['data']['photon'], actions: [...data.actions] as IMessageRecord['data']['actions'],
       bridges: (data.bridges as Bridge[]).map(row => ({ id: row.id, kind: row.kind, state: row.state, subject: row.subject, chat: row.chat, observed: row.observed, host_version: row.host_version, actions: [...row.actions] })),
     }, status: { bridges: (status.bridges as IMessageRecord['status']['bridges']).map(row => ({ id: row.id, online: row.online, text_ready: row.text_ready, sending_paused: row.sending_paused })) } } as Records[V];
   }
@@ -227,7 +231,7 @@ export function readActionResult(value: unknown, action: ControlAction, origin: 
 
 // Each one-time value has one action and one exact shape; anything else is refused, never shown.
 const REVEALS: Partial<Record<ControlAction, { kind: ActionReveal['kind']; shape: RegExp }>> = {
-  'imessage.link': { kind: 'link_code', shape: /^waldo [A-HJ-NP-Z2-9]{10}$/ },
+  'imessage.link': { kind: 'link_code', shape: /^waldo [A-HJ-NP-Z2-9]{10}$/ }, 'imessage.enroll': { kind: 'link_code', shape: /^waldo [A-HJ-NP-Z2-9]{10}$/ },
   'imessage.pair': { kind: 'host_code', shape: /^wim_[a-f0-9]{48}$/ }, 'imessage.pair_shared': { kind: 'host_code', shape: /^wim_[a-f0-9]{48}$/ },
   'imessage.verify': { kind: 'challenge', shape: /^wic_[a-f0-9]{48}$/ },
   'device.pair': { kind: 'pairing_code', shape: /^wp1\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[A-Za-z0-9_-]{43}$/ },
@@ -236,7 +240,8 @@ function readReveal(value: unknown, action: ControlAction, fresh: boolean): Acti
   const expected = REVEALS[action];
   const unsupported = () => new ControlsActionError('receipt_unavailable', 'The code in this receipt is unsupported. Refresh the controls before trying again.', true);
   if (!fresh || !expected || !obj(value) || value.kind !== expected.kind || !string(value.value) || !expected.shape.test(value.value)) throw unsupported();
-  return { kind: expected.kind, value: value.value };
+  const to = expected.kind === 'link_code' && string(value.to) && /^(\+[1-9]\d{6,14}|[^\s@<>]{1,64}@[^\s@<>]{1,190})$/.test(value.to) ? value.to : undefined;
+  return { kind: expected.kind, value: value.value, ...(to ? { to } : {}) };
 }
 
 export async function submitControl(data: Pick<ControlRecord,'csrf'|'revision'> & {view:ControlsView|'memory'}, action: ControlAction, fields: ControlFields, requestId: string, origin = globalThis.location?.origin ?? ''): Promise<ActionResult> {

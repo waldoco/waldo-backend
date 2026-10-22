@@ -11,7 +11,7 @@ export type FixtureBridge = {
   expected_subject: string | null; expected_chat_guid: string | null; challenge_hash: string | null; challenge_expires_at: number | null;
   observed: { subject: string; chat: string; at: number } | null; presence_id: string | null; kind: 'owner' | 'shared';
 };
-export type FixtureOwner = { do_name: string; owner_id: string; state: 'active' | 'suspended'; state_version: number; admission_revision: number; admin?: boolean };
+export type FixtureOwner = { do_name: string; owner_id: string; state: 'active' | 'suspended'; state_version: number; admission_revision: number; admin?: boolean; email?: string; phone?: string };
 
 class ClaimedElsewhere extends Error { constructor() { super('presence already linked to another owner'); } }
 
@@ -21,6 +21,7 @@ export function fixtureDirectory(input: { origin: string; secret: string; owners
   const presences = new Map<string, { id: string; owner: string; subject: string; active: boolean; provider?: string }>();
   const linkCodes = new Map<string, { owner: string; provider: string; expires: number; used: boolean }>();
   const onboarding = new Map<string, number>(); // `${bridge}|${subjectHash}` -> last sent ms
+  const enrollments = new Map<string, { environment: string; phone: string; photon_user_id: string; assigned_number: string; photon_created: boolean }>(); // by do_name
   const calls: string[] = [];
   let seq = 1;
   let unavailable = false;
@@ -132,6 +133,24 @@ export function fixtureDirectory(input: { origin: string; secret: string; owners
       const o = owner(a.p_do_name), p = [...presences.values()].find((x) => x.active && x.owner === a.p_do_name && (x.provider ?? 'imessage') === a.p_provider);
       return o && o.state === 'active' && p ? p.subject.slice(p.subject.length >= 8 ? -4 : -2) : null;
     },
+    imessage_enrollment_read: (a) => {
+      const o = owner(a.p_do_name); if (!o || o.state !== 'active') return null;
+      const e = enrollments.get(o.do_name);
+      return { email: o.email ?? `${o.do_name}@fixture.invalid`, phone: o.phone ?? null,
+        enrollment: e && e.environment === a.p_environment ? { phone: e.phone, photon_user_id: e.photon_user_id, assigned_number: e.assigned_number } : null };
+    },
+    imessage_enrollment_record: (a) => {
+      const o = owner(a.p_do_name); if (!o || o.state !== 'active' || !/^\+[1-9]\d{6,14}$/.test(a.p_phone) || !/^\+[1-9]\d{6,14}$/.test(a.p_assigned_number)) return { result: 'rejected' };
+      const linked = (subject: string, mine: boolean) => [...presences.values()].some((p) => p.active && (p.provider ?? 'imessage') === 'imessage' && p.subject === subject && (p.owner === o.do_name) === mine);
+      if (linked(a.p_phone, false)) return { result: 'phone_taken' };
+      const prev = enrollments.get(o.do_name);
+      enrollments.set(o.do_name, { environment: a.p_environment, phone: a.p_phone, photon_user_id: a.p_photon_user_id, assigned_number: a.p_assigned_number,
+        photon_created: prev && prev.photon_user_id === a.p_photon_user_id ? prev.photon_created || a.p_photon_created : a.p_photon_created });
+      const prevUser = prev?.photon_user_id;
+      const release = prev && prev.photon_user_id !== a.p_photon_user_id && prev.photon_created && ![...enrollments.values()].some((e) => e.photon_user_id === prevUser) && !linked(prev.phone, true) ? prev.photon_user_id : null;
+      return { result: 'recorded', release };
+    },
+    imessage_enrolled_handle: (a) => [...enrollments.entries()].some(([name, e]) => e.environment === a.p_environment && e.phone === a.p_subject && owner(name)?.state === 'active'),
     route_presence: (a) => {
       const p = livePresence(a.p_provider, a.p_subject); const o = p ? owner(p.owner) : undefined;
       return p && o && o.state === 'active' ? [{ do_name: o.do_name, subject: p.subject, timezone: 'UTC', owner_id: o.owner_id, owner_email: null }] : [];
@@ -146,7 +165,8 @@ export function fixtureDirectory(input: { origin: string; secret: string; owners
     if (fn === 'assert_channel_presence') return `presence.${a.p_do_name}.${a.p_provider}.${a.p_subject}`;
     const op = ({ imessage_throttle: 'throttle', imessage_issue_invitation: 'invite', imessage_redeem_invitation: 'redeem', imessage_bridge_authority: 'authority',
       imessage_set_expected_scope: 'scope', imessage_record_challenge: 'challenge', imessage_activate: 'activate', imessage_revoke: 'revoke', imessage_list: 'list',
-      imessage_issue_shared_invitation: 'invite_shared', imessage_sender_authority: 'sender', imessage_onboarding_allowed: 'onboard', imessage_activate_shared: 'activate_shared' } as Record<string, string>)[fn];
+      imessage_issue_shared_invitation: 'invite_shared', imessage_sender_authority: 'sender', imessage_onboarding_allowed: 'onboard', imessage_activate_shared: 'activate_shared',
+      imessage_enrollment_read: 'enroll_read', imessage_enrollment_record: 'enroll_record', imessage_enrolled_handle: 'enrolled' } as Record<string, string>)[fn];
     if (!op) return null;
     const { p_at: _at, p_sig: _sig, p_locator, ...params } = a;
     // The SQL re-derives the locator from its parameters before trusting the signature.
@@ -172,5 +192,5 @@ export function fixtureDirectory(input: { origin: string; secret: string; owners
     if (extra) return extra;
     throw new Error(`Unlisted fixture RPC ${fn}`);
   };
-  return { fetcher, calls, bridges, presences, invitations, linkCodes, onboarding, owners: input.owners, setUnavailable: (v: boolean) => { unavailable = v; } };
+  return { fetcher, calls, bridges, presences, invitations, linkCodes, onboarding, enrollments, owners: input.owners, setUnavailable: (v: boolean) => { unavailable = v; } };
 }

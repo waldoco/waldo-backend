@@ -1,6 +1,6 @@
 import type { AppSend, ScheduledAppDelivery } from './surfaces/app';
 import type { OutboxRoute } from './delivery-routes';
-import { telegramReceipt, type FinalRecord } from './telegram-final-outbox';
+import { telegramReceipt, tookPart, type FinalRecord } from './telegram-final-outbox';
 
 // Where Waldo's proactive messages go for an owner reachable on the app and on a chat surface: the day cards (the Brief among
 // them), reminders, follow-ups and update cards. The owner chooses in the console; the app is the default. WhatsApp can take
@@ -91,10 +91,11 @@ export const whatsappSubjects = (kv: Pick<Kv, 'get'>): ReadonlySet<string> => ne
 
 // What a scheduled job queued for one of those numbers: a reminder, a loop's check-back, a mail follow-up, meeting prep, a
 // pause notice, a day card or a standing order's report. When WhatsApp stops taking proactive work it goes to the app instead. A copy of an app message stays behind,
-// since the app has it already, and so would a reply to the owner's own message, which belongs where the owner wrote.
+// since the app has it already, and so would a reply to the owner's own message, which belongs where the owner wrote. So does a
+// message WhatsApp took any part of: it is on the owner's phone in part, and the app would get only the rest.
 export const waitingForWhatsApp = (subjects: ReadonlySet<string>) => (record: FinalRecord): boolean =>
   !!(record.reminder || record.heartbeat || record.mailFollowup || record.calendarPrep || record.scheduleNotice || record.dayCard || record.standingOrder)
-  && subjects.has(record.ownerSubject) && record.payload.chat_id === Number(record.ownerSubject);
+  && subjects.has(record.ownerSubject) && record.payload.chat_id === Number(record.ownerSubject) && !tookPart(record);
 
 // A day card that reaches the app through this route links the app message it became, as a card sent straight to the app does.
 export const linkingCards = (route: OutboxRoute, link: (card: NonNullable<FinalRecord['dayCard']>, appRow: string) => void): OutboxRoute => ({
