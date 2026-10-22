@@ -167,11 +167,12 @@ describe('OpenAIResponsesAdapter', () => {
       apiKey: 'test-key',
       client: client(async (body: unknown) => {
         sent = body;
-        return { id: 'resp_test_2', status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output_text: '', output: [] } as never;
+        return { id: 'resp_test_2', status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output_text: '', output: [], usage: { input_tokens: 9, output_tokens: 32 } } as never;
       }),
     });
     await expect(adapter.complete(gatewayRequest())).resolves.toEqual({
       ok: false, code: 'oversize', error: 'OpenAI output incomplete: max_output_tokens',
+      spent: { input_tokens: 9, output_tokens: 32, cache_read_input_tokens: 0 },
     });
     expect(sent).toMatchObject({ max_output_tokens: 32, reasoning: { effort: 'low', summary: 'auto' } });
   });
@@ -574,6 +575,56 @@ describe('OpenAIResponsesAdapter tool search', () => {
     const result = await adapter.complete(searchRequest());
     expect(calls).toBe(3);
     expect(result).toMatchObject({ ok: false, code: 'transient' });
+  });
+
+  const searchItems = [
+    { type: 'tool_search_call', id: 'ts_1', execution: 'server', status: 'completed', arguments: { query: 'free time' } },
+    { type: 'tool_search_output', id: 'tso_1', execution: 'server', status: 'completed', tools: [{ type: 'namespace', name: 'calendar' }] },
+  ];
+  const answer = { id: 'r2', status: 'completed', output_text: 'Free at 3.', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Free at 3.', annotations: [] }] }], usage: { input_tokens: 1, output_tokens: 1 } };
+
+  it('keeps the spend of a search-only response when its continuation fails', async () => {
+    let calls = 0;
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async () => {
+      calls += 1;
+      if (calls === 1) return { id: 'r1', status: 'completed', output_text: '', output: searchItems, usage: { input_tokens: 100, output_tokens: 7, input_tokens_details: { cached_tokens: 40 } } };
+      throw new OpenAI.APIError(400, { message: 'synthetic', code: 'invalid_value' }, 'synthetic', new Headers());
+    }) });
+    const result = await adapter.complete(searchRequest());
+    expect(calls).toBe(2);
+    expect(result).toMatchObject({ ok: false, code: 'invalid_args', spent: { input_tokens: 100, output_tokens: 7, cache_read_input_tokens: 40 } });
+  });
+
+  it('reports no spend for a first call that fails', async () => {
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async () => { throw new OpenAI.APIError(400, { message: 'synthetic', code: 'invalid_value' }, 'synthetic', new Headers()); }) });
+    const result = await adapter.complete(searchRequest());
+    expect(result).toMatchObject({ ok: false, code: 'invalid_args' });
+    expect(result).not.toHaveProperty('spent');
+  });
+
+  it('keeps the spend of an output cut off at its limit, searches included', async () => {
+    const replies = [
+      { id: 'r1', status: 'completed', output_text: '', output: searchItems, usage: { input_tokens: 10, output_tokens: 2 } },
+      { id: 'r2', status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output_text: '', output: [], usage: { input_tokens: 12, output_tokens: 3 } },
+    ];
+    let calls = 0;
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async () => replies[calls++]) });
+    const result = await adapter.complete(searchRequest());
+    expect(result).toMatchObject({ ok: false, code: 'oversize', spent: { input_tokens: 22, output_tokens: 5 } });
+  });
+
+  // Each continuation is billed, so only a complete response whose every item is search work, and that holds a search
+  // output, is continued; anything else is answered or failed on the call that returned it.
+  it.each([
+    ['holds no items at all', { id: 'r1', status: 'completed', output_text: '', output: [], usage: { input_tokens: 1, output_tokens: 1 } }],
+    ['called the search but holds no output', { id: 'r1', status: 'completed', output_text: '', output: [searchItems[0]], usage: { input_tokens: 1, output_tokens: 1 } }],
+    ['also answered in text', { ...answer, id: 'r1', output: [...searchItems, ...answer.output] }],
+    ['stopped at the output limit', { id: 'r1', status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output_text: '', output: searchItems, usage: { input_tokens: 1, output_tokens: 1 } }],
+  ])('does not continue a response that %s', async (_case, response) => {
+    let calls = 0;
+    const adapter = new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async () => (calls++ === 0 ? response : answer)) });
+    await adapter.complete(searchRequest());
+    expect(calls).toBe(1);
   });
 
   it('replays no search items and no namespaces in a request that declares no tool search', async () => {
