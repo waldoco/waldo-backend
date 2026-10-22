@@ -51,10 +51,12 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
     if (this.missingKey || this.client === undefined) {
       return { ok: false, code: 'auth_failed', error: 'ANTHROPIC_API_KEY is unavailable' };
     }
-    const messages = messagesInput(input.request);
-    if (messages === null) {
+    const rendered = messagesInput(input.request);
+    if (rendered === null) {
       return { ok: false, code: 'invalid_args', error: 'Anthropic adapter received an attachment type it cannot send' };
     }
+    const cached = input.step.cache === 'anthropic_native';
+    const messages = cached ? withMessageBreakpoints(rendered) : rendered;
 
     input.runScope?.admit();
     const controller = new AbortController();
@@ -67,7 +69,7 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
         {
           model: input.request.model,
           max_tokens: input.request.max_tokens,
-          ...(input.request.system ? { system: systemPrompt(input.request.system, input.step.cache === 'anthropic_native') } : {}),
+          ...(input.request.system ? { system: systemPrompt(input.request.system, cached) } : {}),
           messages,
           ...toolsParams(input.request),
           ...outputConfig(input.request),
@@ -125,6 +127,26 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
 
 function systemPrompt(system: string, cached: boolean): Anthropic.MessageCreateParams['system'] {
   return cached ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }] : system;
+}
+
+// Rolling breakpoints beside the system one, four in all as the API allows. A round appends two messages, so the last
+// message the previous request marked is marked again and read back exactly, however many blocks the round added; a
+// turn's first round marks the end of the history, which the next turn's request still starts with. Thinking and server
+// tool blocks take no marker, so the last block of a type that does is marked. Blocks are copied: a replayed block is
+// the stored output item itself.
+const MESSAGE_BREAKPOINTS = 3;
+const MARKABLE: ReadonlySet<string> = new Set(['text', 'image', 'document', 'tool_use', 'tool_result']);
+function withMessageBreakpoints(messages: readonly Anthropic.MessageParam[]): Anthropic.MessageParam[] {
+  return messages.map((message, index) => {
+    if (index < messages.length - MESSAGE_BREAKPOINTS || typeof message.content === 'string') return message;
+    const content = [...message.content];
+    for (let at = content.length - 1; at >= 0; at -= 1) {
+      if (!MARKABLE.has(content[at]!.type)) continue;
+      content[at] = { ...content[at], cache_control: { type: 'ephemeral' } } as Anthropic.ContentBlockParam;
+      return { ...message, content };
+    }
+    return message;
+  });
 }
 
 const IMAGE_TYPES = new Set<Anthropic.Base64ImageSource['media_type']>(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
