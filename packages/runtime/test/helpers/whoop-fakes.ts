@@ -100,7 +100,7 @@ export const planeRpc = (plane: Plane, doName = 'owner-w') => async (fn: string,
   // `consent` is the storage grant and `model` the model-use grant; the database refuses readings on storage alone.
   if (fn === 'health_consent_list') {
     const rows = [['storage_compute', plane.consent], ['model_processing', plane.model]] as const;
-    return { consents: rows.filter(([, status]) => status !== 'none').map(([purpose, status]) => ({ consent_class: 'health_processing', source: 'whoop', purpose, version: 2, status, epoch: plane.epoch, granted_at: '2026-10-01T00:00:00.000Z', withdrawn_at: null, deletion_state: 'not_required' })) };
+    return { consents: rows.filter(([, status]) => status !== 'none').map(([purpose, status]) => ({ consent_class: 'health_processing', source: 'whoop', purpose, version: 3, status, epoch: plane.epoch, granted_at: '2026-10-01T00:00:00.000Z', withdrawn_at: null, deletion_state: 'not_required' })) };
   }
   if (fn === 'health_ingest') {
     const text = String(args.p_payload), body = JSON.parse(text);

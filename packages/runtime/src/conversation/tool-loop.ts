@@ -1,5 +1,5 @@
 import { guardArtifactLinks, receiptUrl } from './artifact-link-guard';
-import { LLM_TOOL_TURNS_MAX, toolError, toolNameSchema, toolParameters, type ConnectIntent, type LLMTool, type LLMToolCall, type LLMToolTurn, type ToolError, type ToolName } from '@waldo/contracts';
+import { LLM_TOOL_TURNS_MAX, toolError, toolNameSchema, toolParameters, type ConnectIntent, type LLMTool, type LLMToolCall, type LLMToolTurn, type RungBlockedOutcome, type ToolError, type ToolName } from '@waldo/contracts';
 import { dispatchTool, type DispatchToolOptions, type ToolDispatcherContext } from '../tools/dispatcher';
 import { CONNECT_BUTTON_SENT, CONNECT_BUTTON_UNSENT } from '../tools/live/connect-text';
 import { ClosedRunError } from '../channels/run-effect-scope';
@@ -31,7 +31,7 @@ export type ToolLoopStep = (
 // taint is the turn's once this result landed: external when this result, an earlier one, or the turn's own context was.
 // parallel_batches is 1 on the first call of a dispatch batch and 0 on the calls that ran beside it, so summing it over a
 // turn's tool hops counts its batches.
-export type ToolLoopEvent = Readonly<{ call: LLMToolCall; ok: boolean; ms: number; output: string; error?: string; error_code?: string; retryable?: boolean; code?: string; reason?: string; guard?: string; taint: 'external' | null; parallel_batches: 0 | 1 }>;
+export type ToolLoopEvent = Readonly<{ call: LLMToolCall; ok: boolean; ms: number; output: string; error?: string; error_code?: string; retryable?: boolean; code?: string; reason?: string; guard?: string; blocked?: RungBlockedOutcome; taint: 'external' | null; parallel_batches: 0 | 1 }>;
 
 export const toolDefinitions = (handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']): LLMTool[] =>
   handlers.map((handler) => ({
@@ -364,7 +364,7 @@ export async function runToolLoop(input: Readonly<{
       // The typed code/reason ride the span as their own fields so a failed hop stays
       // diagnosable from the trace or tail even when the capture switch gates free-form error
       // text off; error keeps the human-facing message for capture-on.
-      const typed = result.ok ? undefined : (result as { code?: string; reason?: string; guard?: string; error_code?: string; retryable?: boolean });
+      const typed = result.ok ? undefined : (result as { code?: string; reason?: string; guard?: string; error_code?: string; retryable?: boolean; blocked?: RungBlockedOutcome });
       const failure = result.ok ? undefined : result.error ?? (typed?.code ? `${typed.code}${typed.reason ? `:${typed.reason}` : ''}` : undefined);
       input.onTool?.({
         call, ok: result.ok, ms: settled?.ms ?? Date.now() - started, output, parallel_batches: batchLead ? 1 : 0,
@@ -375,6 +375,7 @@ export async function runToolLoop(input: Readonly<{
         ...(typed?.retryable !== undefined ? { retryable: typed.retryable } : {}),
         ...(typed?.reason ? { reason: typed.reason } : {}),
         ...(typed?.guard ? { guard: typed.guard } : {}),
+        ...(typed?.blocked ? { blocked: typed.blocked } : {}),
       });
       batchLead = false;
       if(call.name==='use_mac' && result.ok && result.data && typeof result.data==='object' && 'request_id' in result.data && typeof result.data.request_id==='string') {
@@ -408,7 +409,7 @@ const concurrentBatch = (calls: readonly LLMToolCall[], start: number, mutationT
   return batch.length > 1 ? batch : [start];
 };
 
-export type LoopToolResult = Readonly<{ ok: boolean; data?: unknown; error?: string; error_code?: string; fix?: string; retryable?: boolean; code?: string; reason?: string; guard?: string; source_taint?: 'external' | null; connect?: ConnectIntent }>;
+export type LoopToolResult = Readonly<{ ok: boolean; data?: unknown; error?: string; error_code?: string; fix?: string; retryable?: boolean; code?: string; reason?: string; guard?: string; source_taint?: 'external' | null; connect?: ConnectIntent; blocked?: RungBlockedOutcome }>;
 
 // A refusal the loop makes itself, in the dispatcher's error shape; code and reason keep their telemetry vocabulary.
 const refusal = (error: ToolError, code: string, reason?: string): LoopToolResult =>
@@ -440,6 +441,7 @@ export async function dispatchLoopTool(
     error_code: result.error_code,
     fix: result.fix,
     retryable: result.retryable,
+    ...(result.blocked ? { blocked: result.blocked } : {}),
     ...(typed.code ? { code: typed.code } : {}),
     ...(typed.reason ? { reason: typed.reason } : {}),
     // Enum-only guard stage:reason - the trace-visible diagnostic when capture is off.

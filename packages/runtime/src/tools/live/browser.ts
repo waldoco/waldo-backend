@@ -194,7 +194,7 @@ export const browseActHandler = (
   fetcher: typeof fetch = fetch,
 ): ToolHandler<BrowseActArgs, BrowseActResult, ToolDispatcherContext> => ({
   name: 'browse_act',
-  description: 'Open a public web page in a real browser and take a few small in-page actions (click, type, scroll) toward a task, then report what the page shows. Capped steps. It stops before a step that looks like it would submit, pay, send, book, delete, sign in or otherwise commit something, and reports instead. That check is a safety net, not a guarantee: do not use this tool for those actions.',
+  description: 'Open a public web page in a real browser and take a few small in-page actions (click, type, scroll) toward a task, when reading the page with browse_page is not enough, then report what the page shows. Capped steps. It stops before a step that looks like it would submit, pay, send, book, delete, sign in or otherwise commit something, and reports instead. That check is a safety net, not a guarantee: do not use this tool for those actions.',
   schema: browseActArgsSchema,
   trigger_allowlist: allowlist('browse_act'),
   autonomy_gated: false,

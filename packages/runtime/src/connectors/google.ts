@@ -1,4 +1,6 @@
 import { Parser } from 'htmlparser2';
+import { constantTimeEqual } from './constant-time';
+import { extractArtifacts } from '../security/artifact-hygiene.ts';
 // Google connector for the owner's own accounts: OAuth offline grants, Calendar reads and Gmail.
 // Consent asks once for the combined set (owner ruling 2026-09-24 13:31, reversing W3's per-feature asks):
 // calendar + mail + tasks in a single dialog. Scope is not permission: each tool still gates its own effects.
@@ -77,13 +79,13 @@ export async function readConsentState(secret: string, state: string): Promise<R
     const owner = parts.slice(0, -3).join('.');
     if (owner && nonce && (CONSENT_SURFACES as readonly string[]).includes(surface)) {
       const body = `${owner}.${nonce}.${surface}`;
-      if ((await sign(secret, body)) === mac) return { owner, nonce, surface: surface as ConsentSurface };
+      if (constantTimeEqual(await sign(secret, body), mac)) return { owner, nonce, surface: surface as ConsentSurface };
     }
   }
   const nonce = parts[parts.length - 2] ?? '';
   const owner = parts.slice(0, -2).join('.');
   if (!owner || !nonce) return null;
-  return (await sign(secret, `${owner}.${nonce}`)) === mac ? { owner, nonce } : null;
+  return constantTimeEqual(await sign(secret, `${owner}.${nonce}`), mac) ? { owner, nonce } : null;
 }
 
 // The account's name (the profile scope's ID token claims) and phone number are read once, at connect. Neither is a
@@ -91,8 +93,9 @@ export async function readConsentState(secret: string, state: string): Promise<R
 export const GOOGLE_PHONE_SCOPE = `${AUTH}user.phonenumbers.read`;
 export const GOOGLE_CONSENT_SCOPES: readonly string[] = ['openid', 'email', 'profile', ...GOOGLE_FEATURE_SCOPES.calendar, ...GOOGLE_FEATURE_SCOPES.availability, ...GOOGLE_FEATURE_SCOPES.calendar_list, ...GOOGLE_FEATURE_SCOPES.mail, ...GOOGLE_FEATURE_SCOPES.tasks, ...new Set([...GOOGLE_FEATURE_SCOPES.drive, ...GOOGLE_FEATURE_SCOPES.docs, ...GOOGLE_FEATURE_SCOPES.sheets, ...GOOGLE_FEATURE_SCOPES.slides]), ...GOOGLE_FEATURE_SCOPES.contacts, GOOGLE_PHONE_SCOPE];
 
+export const GOOGLE_AUTH_ORIGIN = 'https://accounts.google.com';
 export function googleConsentUrl(app: GoogleApp, state: string, codeChallenge: string): string {
-  const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+  const url = new URL('/o/oauth2/v2/auth', GOOGLE_AUTH_ORIGIN);
   url.search = new URLSearchParams({
     client_id: app.clientId, redirect_uri: app.redirectUri, response_type: 'code', scope: GOOGLE_CONSENT_SCOPES.join(' '),
     access_type: 'offline', prompt: 'consent select_account', include_granted_scopes: 'true', state,
@@ -180,7 +183,7 @@ export async function exchangeGoogleCode(app: GoogleApp, code: string, fetcher: 
 
 export type CalendarItem = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number; etag?: string; operation_marker?: string;
   status?: 'confirmed' | 'tentative' | 'cancelled'; updated?: string; recurring_event_id?: string; original_start?: string; source_url?: string; attendee_names?: readonly string[];
-  attendee_emails?: readonly string[]; conference_url?: string; attachments?: readonly CalendarAttachment[] }>;
+  attendee_emails?: readonly string[]; conference_url?: string; attachments?: readonly CalendarAttachment[]; owner_status?: 'organizer' | 'accepted' }>;
 export type CalendarAttachment = Readonly<{ title: string; file_id?: string }>;
 // Whether Google emails the guests about a write. Left out, Google emails no one.
 export type CalendarSendUpdates = 'all' | 'none';
@@ -188,10 +191,10 @@ export type CalendarWriteOptions = Readonly<{ calendarId?: string; sendUpdates?:
 
 // Provider-internal etags are unnecessary in model-facing context. Keep them in the
 // connector API for concurrency (moveEvent/cancelEvent), not in a card prompt. Attendee emails,
-// the join link and attachments stay out of the shared card projection; meeting prep adds the
-// link and attachment titles itself.
-export const calendarPromptProjection = (event: CalendarItem): Omit<CalendarItem, 'etag' | 'operation_marker' | 'attendee_emails' | 'conference_url' | 'attachments'> => {
-  const { etag: _etag, operation_marker: _marker, attendee_emails: _emails, conference_url: _link, attachments: _attachments, ...projection } = event;
+// the join link, attachments and the owner's status stay out of the shared card projection; meeting
+// prep adds the link and attachment titles itself.
+export const calendarPromptProjection = (event: CalendarItem): Omit<CalendarItem, 'etag' | 'operation_marker' | 'attendee_emails' | 'conference_url' | 'attachments' | 'owner_status'> => {
+  const { etag: _etag, operation_marker: _marker, attendee_emails: _emails, conference_url: _link, attachments: _attachments, owner_status: _status, ...projection } = event;
   return projection;
 };
 
@@ -233,11 +236,17 @@ export type MailItem = Readonly<{ id: string; thread_id: string; from: string; s
 // body_source says what the body was read from; 'snippet' means only Gmail's preview rendered.
 // artifact_scan carries HTML link targets for the verification-artifact relay only and is never shown.
 // fullBodies is opt-in: it fetches parts Gmail holds by attachmentId and returns HTML link targets as
-// artifact_scan, so a caller that only needs headers pays no extra fetches and a caller that does not
-// strip artifact_scan never receives it.
-export type ThreadRead = Readonly<{ fullBodies?: boolean }>;
+// artifact_scan, so a caller that only needs headers pays no extra fetches and a caller that does not strip
+// artifact_scan never receives it. bodyChunks, with fullBodies, also returns the whole body (up to
+// FULL_BODY_MAX) with body_full_chars and attachment metadata, for a caller that prepares the whole body
+// before showing it in chunks. A caller that does not ask keeps the 32,000-character body and no attachment
+// names, so a Worker and a connector-proxy deploy in either order. messageId reads that one message.
+export type ThreadRead = Readonly<{ fullBodies?: boolean; bodyChunks?: boolean; messageId?: string }>;
+export type AttachmentMeta = Readonly<{ filename: string; mime_type: string; size: number }>;
 // to, cc and reply_to are bare addresses (no display names), so a reply or reply-all addresses exactly who is on the thread.
-export type ThreadMessage = Readonly<{ id: string; from: string; subject: string; at: string; body: string; message_id?: string; references?: readonly string[]; to?: readonly string[]; cc?: readonly string[]; reply_to?: readonly string[]; recipients_capped?: true; body_source?: 'plain' | 'html' | 'snippet' | 'none'; artifact_scan?: string }>;
+// body_full_chars is set only when the whole body was longer than FULL_BODY_MAX and was cut there.
+export type ThreadMessage = Readonly<{ id: string; from: string; subject: string; at: string; body: string; message_id?: string; references?: readonly string[]; to?: readonly string[]; cc?: readonly string[]; reply_to?: readonly string[]; recipients_capped?: true; body_source?: 'plain' | 'html' | 'snippet' | 'none'; artifact_scan?: string;
+  body_full_chars?: number; attachments?: readonly AttachmentMeta[] }>;
 
 // RFC 5322 address-list header to its addresses. Commas inside quotes, comments or angle brackets don't split; a
 // backslash escapes the next character in a quote or comment; comments and a group's name ("Team:") are dropped;
@@ -439,14 +448,46 @@ const b64urlDecode = (data: string): string => {
 };
 
 // Thread bodies enter model context only through the E1 verification-artifact quarantine
-// (tools/live/google.ts); this cap is the second wall - a huge body never floods a turn.
+// (tools/live/google.ts). BODY_CAP bounds callers that do not opt in to full bodies; read_thread opts in,
+// takes up to FULL_BODY_MAX, and shows it in chunks after preparing the whole body.
 const BODY_CAP = 32_000;
+const FULL_BODY_MAX = 200_000;
+const ATTACHMENT_LIST_CAP = 50;
 type GmailPayload = Readonly<{ mimeType?: string; filename?: string; body?: { data?: string; attachmentId?: string; size?: number }; parts?: GmailPayload[]; headers?: { name: string; value: string }[] }>;
 type GmailFullMessage = Readonly<{ id?: string; threadId?: string; snippet?: string; internalDate?: string; payload?: GmailPayload }>;
 const LINK_SCAN_CAP = 100;
 // Artifact extraction backtracks across an unbroken run, so its cost grows with the square of a link's
-// length. A longer target is skipped; link targets are only scanned, never shown.
+// length. A longer target is left out of the scan, which feeds only the relay; the Links list below has
+// its own, tighter bound.
 const LINK_TARGET_MAX = 2_048;
+// Rendering keeps an anchor's text and drops its target, so the targets a reader could follow are listed
+// after the body. These are parsing bounds; which link matters is the model's call. Mail, image-only and
+// over-long links are left out, and so are verification artifacts, which go only to the relay.
+const LINK_LIST_MAX = 20;
+const LINK_LIST_CHARS = 2_000;
+const LINK_LISTED_TARGET_MAX = 300;
+const LINK_LABEL_MAX = 100;
+const linkList = (anchors: readonly Readonly<{ target: string; label: string }>[]): string => {
+  const listed: string[] = [];
+  const seen = new Set<string>();
+  let chars = 0;
+  for (const { target: raw, label } of anchors) {
+    if (!label || raw.length > LINK_LISTED_TARGET_MAX) continue;
+    // A link that carries a username or a password is a credential and is never listed. The URL parser also drops the line
+    // breaks and tabs an href can hide, so a listed target cannot span lines.
+    let url: URL;
+    try { url = new URL(raw); } catch { continue; }
+    const target = url.href;
+    if (url.username || url.password || target.length > LINK_LISTED_TARGET_MAX || seen.has(target) || extractArtifacts(raw).artifacts.length || extractArtifacts(target).artifacts.length) continue;
+    const text = label.slice(0, LINK_LABEL_MAX).trim();
+    const line = text === target ? `- ${target}` : `- ${text}: ${target}`;
+    if (listed.length === LINK_LIST_MAX || chars + line.length + 1 > LINK_LIST_CHARS) break;
+    listed.push(line);
+    seen.add(target);
+    chars += line.length + 1;
+  }
+  return listed.length ? `\n\nLinks:\n${listed.join('\n')}` : '';
+};
 const htmlText = (html: string): Readonly<{ text: string; links: readonly string[] }> => {
   const blocks = new Set(['p', 'div', 'br', 'li', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'section', 'article', 'hr']);
   // Adjacent cells would otherwise run together ("Verification code482913"), hiding a code from extraction.
@@ -454,25 +495,40 @@ const htmlText = (html: string): Readonly<{ text: string; links: readonly string
   let suppressed = 0;
   const chunks: string[] = [];
   const links: string[] = [];
+  const anchors: { target: string; label: string }[] = [];
+  let anchor: { target: string; text: string[] } | null = null;
   const mark = (separator: string) => { if (!suppressed) chunks.push(separator); };
   new Parser({
     onopentag(name, attributes) {
       if (name === 'script' || name === 'style') suppressed++;
       else if (blocks.has(name)) mark('\n');
       if (name === 'a' && /^https?:\/\//i.test(attributes.href ?? '') && attributes.href!.length <= LINK_TARGET_MAX && links.length < LINK_SCAN_CAP) links.push(attributes.href!);
+      if (name === 'a') anchor = /^https?:\/\//i.test(attributes.href ?? '') ? { target: attributes.href!, text: [] } : null;
     },
     // A run of source whitespace, line breaks included, becomes one space. Preformatted text collapses too: its layout
     // is lost, its words are kept.
-    ontext(text) { if (!suppressed) chunks.push(text.replace(/\s+/g, ' ')); },
-    onclosetag(name) { if (name === 'script' || name === 'style') suppressed = Math.max(0, suppressed - 1); else if (blocks.has(name)) mark('\n'); else if (cells.has(name)) mark(' '); },
+    ontext(text) { if (!suppressed) { chunks.push(text.replace(/\s+/g, ' ')); anchor?.text.push(text); } },
+    onclosetag(name) {
+      if (name === 'script' || name === 'style') suppressed = Math.max(0, suppressed - 1); else if (blocks.has(name)) mark('\n'); else if (cells.has(name)) mark(' ');
+      if (name === 'a' && anchor) { if (anchors.length < LINK_SCAN_CAP) anchors.push({ target: anchor.target, label: anchor.text.join('').replace(/\s+/g, ' ').replace(/\p{Cc}/gu, '').trim() }); anchor = null; }
+    },
   }, { decodeEntities: true }).end(html);
   // A block or row ends a line, a cell ends with a space.
-  return { text: chunks.join('').replace(/\s+/g, (run) => (run.includes('\n') ? '\n' : ' ')).trim(), links };
+  return { text: chunks.join('').replace(/\s+/g, (run) => (run.includes('\n') ? '\n' : ' ')).trim() + linkList(anchors), links };
 };
 // A huge text part held by attachmentId is left to the snippet rather than decoded whole.
 const MAX_FETCHED_BODY_BYTES = 1_000_000;
 const attachedFile = (part: GmailPayload) => Boolean(part.filename) || (part.headers ?? []).some(h => h.name.toLowerCase() === 'content-disposition' && /^\s*attachment\b/i.test(h.value));
 type RenderedBody = Readonly<{ text: string; source: 'plain' | 'html'; links: readonly string[] }>;
+const mailAttachmentsOf = (payload: GmailPayload): AttachmentMeta[] => {
+  const found: AttachmentMeta[] = [];
+  const walk = (part: GmailPayload) => {
+    if (part.filename && found.length < ATTACHMENT_LIST_CAP) found.push({ filename: part.filename.slice(0, 255), mime_type: (part.mimeType ?? 'application/octet-stream').slice(0, 255), size: Number.isSafeInteger(part.body?.size) ? part.body!.size! : 0 });
+    part.parts?.forEach(walk);
+  };
+  walk(payload);
+  return found;
+};
 // RFC 2046 5.1.4: alternatives run from least to most faithful, so the last one that renders is the body.
 // Any other multipart takes its first part that renders; attached files are never the body.
 const renderedBody = async (part: GmailPayload, data: (part: GmailPayload) => Promise<string | null>): Promise<RenderedBody | null> => {
@@ -505,14 +561,16 @@ export async function googleAccessToken(app: GoogleApp, tokens: GoogleTokens, fe
 }
 
 // Only an invalid grant marks connection health; provider outages and client configuration do not require owner reconnect.
-// calendarDetails adds an event's join link, attachments and attendee emails. A Worker that predates them
-// parses calendar pages strictly and hashes every field into its prep digest, so the connector-proxy maps
-// them only when the calling Worker asks (proxyClientOptions). The Worker's own clients default to on.
-export type GoogleClientOptions = Readonly<{ calendarDetails?: boolean }>;
-export const proxyClientOptions = (body: Readonly<{ calendar_details?: unknown }>): GoogleClientOptions => ({ calendarDetails: body.calendar_details === true });
+// calendarDetails adds an event's join link, attachments and attendee emails; ownerStatus adds owner_status.
+// A Worker that predates a field parses calendar pages strictly and hashes every field into its prep digest,
+// so the connector-proxy maps each only when the calling Worker asks (proxyClientOptions). The Worker's own
+// clients default to on.
+export type GoogleClientOptions = Readonly<{ calendarDetails?: boolean; ownerStatus?: boolean }>;
+export const proxyClientOptions = (body: Readonly<{ calendar_details?: unknown; calendar_owner_status?: unknown }>): GoogleClientOptions =>
+  ({ calendarDetails: body.calendar_details === true, ownerStatus: body.calendar_owner_status === true });
 export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetch = fetch, health?: (error: string) => void, account: CalendarPage['account'] = {connection_id: null, email: tokens.email ?? null}, options: GoogleClientOptions = {}): GoogleClient & Required<Pick<GoogleClient, 'calendarPage' | 'taskListsPage' | 'tasksPage' | 'allTasksPage' | 'changedEventsPage'>> {
   let access: { token: string; until: number } | null = null;
-  const item = (event: GoogleEvent): CalendarItem => toItem(event, options.calendarDetails ?? true);
+  const item = (event: GoogleEvent): CalendarItem => toItem(event, options.calendarDetails ?? true, options.ownerStatus ?? true);
   const bearer = async () => {
     if (access && access.until > Date.now()) return access.token;
     const result = await token(app, { refresh_token: tokens.refresh_token, grant_type: 'refresh_token' }, fetcher).catch((error: unknown) => {
@@ -711,20 +769,29 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
           throw error;
         }
       };
-      const messages = await Promise.all(json.messages.slice(offset, offset + limit).map(async message => {
+      const chosen = read?.messageId === undefined ? json.messages.slice(offset, offset + limit) : json.messages.filter(message => message.id === read.messageId);
+      if (read?.messageId !== undefined && chosen.length === 0) throw new Error('unknown message in thread');
+      const messages = await Promise.all(chosen.map(async message => {
         const header = (name: string) => message.payload?.headers?.find(h => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
         const messageIds = message.payload?.headers?.filter(h => h.name.toLowerCase() === 'message-id') ?? [];
         const messageId = messageIds.length === 1 ? messageIds[0]!.value.trim() : '';
         const references = (message.payload?.headers?.filter(h => h.name.toLowerCase() === 'references').map(h => h.value).join(' ') ?? '').trim().split(/\s+/).filter(Boolean);
         const rendered = message.payload ? await renderedBody(message.payload, partData(message.id!)) : null;
         const snippet = message.snippet ?? '';
-        const body: Pick<ThreadMessage, 'body' | 'body_source' | 'artifact_scan'> = rendered
-          ? { body: rendered.text.slice(0, BODY_CAP), body_source: rendered.source, ...(read?.fullBodies && rendered.links.length ? { artifact_scan: rendered.links.join('\n') } : {}) }
-          : { body: snippet.slice(0, BODY_CAP), body_source: snippet.trim() ? 'snippet' : 'none' };
+        const chunked = read?.fullBodies === true && read.bodyChunks === true;
+        const cap = chunked ? FULL_BODY_MAX : BODY_CAP;
+        const attachments = chunked && message.payload ? mailAttachmentsOf(message.payload) : [];
+        const body: Pick<ThreadMessage, 'body' | 'body_source' | 'artifact_scan' | 'body_full_chars' | 'attachments'> = {
+          ...(rendered
+            ? { body: rendered.text.slice(0, cap), body_source: rendered.source, ...(read?.fullBodies && rendered.links.length ? { artifact_scan: rendered.links.join('\n') } : {}), ...(chunked && rendered.text.length > cap ? { body_full_chars: rendered.text.length } : {}) }
+            : { body: snippet.slice(0, cap), body_source: snippet.trim() ? 'snippet' : 'none' }),
+          ...(attachments.length ? { attachments } : {}),
+        };
         const [to, cc, replyTo] = ['To', 'Cc', 'Reply-To'].map((name) => addressList(header(name)));
         const capped = [to!, cc!, replyTo!].some((list) => list.length > MAX_RECIPIENTS);
         return { ...(validMessageId(messageId) ? {message_id:messageId} : {}), ...(references.length ? {references} : {}), to: to!.slice(0, MAX_RECIPIENTS), cc: cc!.slice(0, MAX_RECIPIENTS), ...(replyTo!.length ? { reply_to: replyTo!.slice(0, MAX_RECIPIENTS) } : {}), ...(capped ? { recipients_capped: true as const } : {}), id: message.id ?? '', from: header('From'), subject: header('Subject'), at: new Date(Number(message.internalDate ?? 0)).toISOString(), ...body };
       }));
+      if (read?.messageId !== undefined) return {messages, cursor: null};
       const next = offset + messages.length;
       return {messages, cursor: next < ids.length ? b64url(new TextEncoder().encode(JSON.stringify({binding,offset:next}))) : null};
   };
@@ -962,7 +1029,7 @@ const calendarTimes = (start: string, end: string) => {
   // PATCH merges nested fields, so explicitly clear the previous representation.
   return allDay ? {start:{date:start,dateTime:null},end:{date:end,dateTime:null}} : {start:{dateTime:start,date:null},end:{dateTime:end,date:null}};
 };
-const toItem = (event: GoogleEvent, details: boolean): CalendarItem => ({
+const toItem = (event: GoogleEvent, details: boolean, ownerStatus: boolean): CalendarItem => ({
   id: event.id, title: event.summary ?? '(no title)',
   start: event.start?.dateTime ?? event.start?.date ?? '', end: event.end?.dateTime ?? event.end?.date ?? '',
   all_day: event.start?.dateTime === undefined,
@@ -979,7 +1046,13 @@ const toItem = (event: GoogleEvent, details: boolean): CalendarItem => ({
   ...(calendarSourceUrl(event.htmlLink) ? { source_url: calendarSourceUrl(event.htmlLink) } : {}),
   ...(event.attendees?.some(a => typeof a.displayName === 'string' && a.displayName.trim() && a.responseStatus !== 'declined') ? { attendee_names: event.attendees.filter(a => a.responseStatus !== 'declined' && typeof a.displayName === 'string' && a.displayName.trim()).slice(0, 20).map(a => a.displayName!.trim().slice(0, 200)) } : {}),
   ...(details ? detailsOf(event) : {}),
+  ...(ownerStatus ? ownerStatusOf(event) : {}),
 });
+// Set only when the owner organized the event or accepted it. An invite they haven't answered, or answered
+// tentatively, gets neither: its title and attendee list were written by someone else.
+const ownerStatusOf = (event: GoogleEvent): Pick<CalendarItem, 'owner_status'> =>
+  event.organizer?.self === true ? { owner_status: 'organizer' }
+    : event.attendees?.find(a => a.self)?.responseStatus === 'accepted' ? { owner_status: 'accepted' } : {};
 const detailsOf = (event: GoogleEvent): Pick<CalendarItem, 'attendee_emails' | 'conference_url' | 'attachments'> => ({
   // The owner's own entry (self) is never listed: a meeting's attendees are the other people in it.
   ...(event.attendees?.some(a => typeof a.email === 'string' && a.email.trim() && a.responseStatus !== 'declined' && !a.self) ? { attendee_emails: event.attendees.filter(a => a.responseStatus !== 'declined' && !a.self && typeof a.email === 'string' && a.email.trim()).slice(0, 20).map(a => a.email!.trim().slice(0, 320)) } : {}),
@@ -992,6 +1065,7 @@ type GoogleEvent = {
   start: { dateTime?: string; date?: string }; end: { dateTime?: string; date?: string };
   extendedProperties?: { private?: Record<string,string> };
   attendees?: { self?: boolean; responseStatus?: string; displayName?: string; email?: string }[];
+  organizer?: { self?: boolean };
   hangoutLink?: string; conferenceData?: { entryPoints?: { entryPointType?: string; uri?: string }[] };
   attachments?: { fileId?: string; title?: string }[];
 };
