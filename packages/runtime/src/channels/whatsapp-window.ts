@@ -230,7 +230,7 @@ export const releaseWhatsAppOutbox = async (outbox: TelegramFinalOutbox, route: 
 export const clearWhatsAppNumber = (kv: Kv, appFallback = false): readonly string[] => {
   const old = kv.get<string>('whatsapp_subject');
   const toApp = old && appFallback ? waitingForWhatsApp(new Set([old])) : () => false;
-  const kept = (record: FinalRecord) => record.status === 'pending' && !(record.providerMessageIds ?? []).some(Boolean) && toApp(record);
+  const kept = (record: FinalRecord) => record.status === 'pending' && toApp(record);
   const retired = old ? retireSurfaceRecords(kv, record => record.ownerSubject === old && String(record.payload.chat_id) === old && !kept(record)) : [];
   if (old && appFallback) rememberWhatsAppSubject(kv, old);
   for (const prefix of [WA_HELD_PREFIX, REHELD_PREFIX]) for (const [key] of [...kv.list<unknown>({ prefix })]) kv.delete(key);
