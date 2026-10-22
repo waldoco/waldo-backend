@@ -1,5 +1,5 @@
 import { Parser } from 'htmlparser2';
-import { constantTimeEqual } from './constant-time';
+import { constantTimeEqual } from './constant-time.ts';
 import { extractArtifacts } from '../security/artifact-hygiene.ts';
 // Google connector for the owner's own accounts: OAuth offline grants, Calendar reads and Gmail.
 // Consent asks once for the combined set (owner ruling 2026-09-24 13:31, reversing W3's per-feature asks):
@@ -401,7 +401,7 @@ export type GoogleClient = Readonly<{
   driveListFiles?(input: Readonly<{ pageSize?: number; pageToken?: string }>): Promise<DriveFilePage>;
   driveSearchFiles?(input: Readonly<{ nameContains: string; pageSize?: number; pageToken?: string }>): Promise<DriveFilePage>;
   driveGetFileMetadata?(input: Readonly<{ fileId: string }>): Promise<DriveFileMeta>;
-  driveReadFileContent?(input: import('./drive-rest').DriveContentArgs): Promise<import('./drive-rest').DriveFileContent>;
+  driveReadFileContent?(input: import('./drive-rest.ts').DriveContentArgs): Promise<import('./drive-rest.ts').DriveFileContent>;
   calendarPage?(calendarId: string, from: string, to: string, limit: number, includeDeclined: boolean, pageToken?: string): Promise<CalendarPage>;
   calendarListsPage?(limit: number, includeHidden: boolean, pageToken?: string): Promise<GoogleCollectionPage<CalendarListItem>>;
   taskListsPage?(limit: number, pageToken?: string): Promise<GoogleCollectionPage<TaskListItem>>;

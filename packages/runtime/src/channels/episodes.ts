@@ -14,8 +14,9 @@ export type Speaker = 'owner' | 'waldo' | 'system' | 'quoted';
 // or by a build that does not), so it is never the owner's own words. The mark is on the row, not inferred from its time.
 export const OWNER_SAID = 'owner_said';
 type StoredSpeaker = Speaker | typeof OWNER_SAID;
-type StoredEpisode = Readonly<{ entry_id: string; speaker: StoredSpeaker; at: number; text: string }>;
-export type Episode = Readonly<{ entry_id: string; speaker: Speaker; at: number; text: string; own?: boolean }>;
+type StoredEpisode = Readonly<{ entry_id: string; speaker: StoredSpeaker; at: number; text: string; row?: number }>;
+// row is the index row's id, where a reader needs to come back to exactly that row.
+export type Episode = Readonly<{ entry_id: string; speaker: Speaker; at: number; text: string; own?: boolean; row?: number }>;
 const episodeOf = ({ speaker, ...row }: StoredEpisode): Episode => (speaker === OWNER_SAID ? { ...row, speaker: 'owner', own: true } : { ...row, speaker });
 // ref is the index row's own id: unique per stored row, so a snippet traces to exactly its row
 // even if the same entry_id was indexed twice (entry_id is informational, not unique).
@@ -87,7 +88,7 @@ export const episodeIndex = (sql: SqlStorage): EpisodeIndex => {
     after(at, maxChars) {
       const kept: Episode[] = [];
       let total = 0;
-      for (const row of sql.exec<StoredEpisode>('SELECT entry_id, speaker, at, text FROM episodes WHERE at > ? ORDER BY at, rowid', at)) {
+      for (const row of sql.exec<StoredEpisode>('SELECT rowid AS row, entry_id, speaker, at, text FROM episodes WHERE at > ? ORDER BY at, rowid', at)) {
         const last = kept.at(-1);
         if (last && row.at !== last.at && total + row.text.length > maxChars) break;
         kept.push(episodeOf(row)); total += row.text.length;
@@ -184,10 +185,17 @@ export const NIGHTLY_TIME = '03:00';
 // A one-off pass that only consolidates, armed when a night could not finish its backlog.
 export const NIGHTLY_CATCH_UP_ID = 'nightly-memory-catch-up';
 export const NIGHTLY_CATCH_UP_DELAY_MS = 15 * 60_000;
-// The time of the last episode a finished pass consolidated. A pass looks back at most a week and reads at most three chunks.
+// The time of the last episode a finished pass consolidated. A pass makes at most NIGHTLY_CHUNKS consolidation calls, each
+// reading at most NIGHTLY_CHUNK_CHARS (turns sharing a time are never split, so one long group can read more); a backlog it
+// leaves is caught up by further passes, each armed NIGHTLY_CATCH_UP_DELAY_MS after the last, until the owner's local day
+// has spent NIGHTLY_DAILY_CALLS calls, and the next night resumes. Nothing is skipped except one time group that has failed
+// NIGHTLY_CHUNK_ATTEMPTS times alone and for longer than NIGHTLY_QUARANTINE_AFTER_MS, which an outage of under a day never is.
 export const NIGHTLY_THROUGH_KEY = 'nightly_consolidated_through_v1';
-export const NIGHTLY_BACKLOG_DAYS = 7;
 export const NIGHTLY_CHUNKS = 3;
+export const NIGHTLY_CHUNK_CHARS = 40_000;
+export const NIGHTLY_DAILY_CALLS = 30;
+export const NIGHTLY_CHUNK_ATTEMPTS = 2;
+export const NIGHTLY_QUARANTINE_AFTER_MS = 20 * 60 * 60_000;
 
 export const armNightly = async (scheduler: Scheduler, timezone: string, now: number): Promise<void> => {
   const found = scheduler.lookup(NIGHTLY_ID);

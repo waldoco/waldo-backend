@@ -49,7 +49,7 @@ const metered = (inner: LLMGatewayAdapter, budget: CallBudget, outage: { down: b
   },
 });
 
-export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway: LLMGatewayAdapter; budget: CallBudget; model?: ModelName; memory?: MemoryMode }>): Promise<TrialRecord> => {
+export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway: LLMGatewayAdapter; budget: CallBudget; model?: ModelName; toolSearch?: boolean; memory?: MemoryMode }>): Promise<TrialRecord> => {
   const world = evalWorld(scenario.world, scenario.start, deps.memory);
   await world.ready;
   const entries: TurnLogEntry[] = [];
@@ -59,7 +59,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
   let retry: RetryBrief | undefined;
   const retryBook = { create: (input: Readonly<{ brief: RetryBrief }>) => { retry = input.brief; return { job: { brief_json: JSON.stringify(input.brief) } }; } } as unknown as JobBook;
   const floorReply = { promise: (turn: FloorTurn) => promiseRetry(retryBook, turn, TIMEZONE, world.clock.now().getTime()) };
-  const responder = createTelegramResponder({ openaiApiKey: 'eval-key', floorReply }, world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
+  const responder = createTelegramResponder({ openaiApiKey: 'eval-key', floorReply, ...(deps.toolSearch ? { toolSearch: true } : {}) }, world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
     world.handlers, model, false, undefined, async () => true, metered(deps.gateway, deps.budget, outage), undefined, undefined, undefined, undefined,
     WALDO_AUXILIARY_MODEL, undefined, world.health, undefined, 'app');
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();

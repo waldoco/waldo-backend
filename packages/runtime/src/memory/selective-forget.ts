@@ -1,14 +1,10 @@
+import { carriesTopic } from './forget-guard';
+
 // Private, ephemeral source selection. The host supplies owner-local source rows;
 // the model judges association, while these bounds enforce exact source custody.
 // One bounded source set must be coverable without dropping a reviewed ref.
 export const MAX_FORGET_SOURCES = 64;
 export type ForgetSource = Readonly<{ ref: string; text: string }>;
-// Align with SQLite LIKE's ASCII case folding. Unicode compatibility variants
-// are outside this literal coverage contract, rather than silently certified.
-export const asciiLiteralIncludes = (text: string, topic: string): boolean => {
-  const fold = (value: string) => value.replace(/[A-Z]/g, letter => letter.toLowerCase());
-  return fold(text).includes(fold(topic));
-};
 // `more` is ordinary page exhaustion. `incomplete` is an unreadable or
 // unprovable source set; it must never be converted into batching progress.
 // Diagnostic only: which store held a forget and by which rule. Table names and counts; never row text or ids.
@@ -24,7 +20,7 @@ export const forgetSourceBatch = (topic: string, rows: readonly ForgetSource[], 
     if (prior === undefined) seenText.set(row.ref, row.text);
     else if (prior !== row.text) incomplete = true;
   }
-  const matched = rows.filter(row => asciiLiteralIncludes(row.text, topic));
+  const matched = rows.filter(row => carriesTopic(row.text, topic));
   const sources: ForgetSource[] = [];
   const refs = new Map<string, string>();
   let full = false;

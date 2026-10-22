@@ -21,11 +21,15 @@ export const APP_CONNECT_GUIDANCE = 'No connect button was sent: the app chat ha
 // is never kept for later on another surface.
 export type AppSend = Readonly<{ nowOnly?: boolean }>;
 export type ScheduledAppDelivery = (text: string, send?: AppSend) => Promise<string>;
-export const appCaller = (scheduledDelivery: () => ScheduledAppDelivery | null = () => null) => async (method: string, body: unknown): Promise<unknown> => {
+// A surface whose turn replies leave through an outbox of their own (iMessage) acknowledges a plain send only during its
+// turn: outside one, a send with no delivery bound has nowhere to go, so it returns no message, which producers read as
+// not sent.
+export const appCaller = (scheduledDelivery: () => ScheduledAppDelivery | null = () => null, inTurn: () => boolean = () => true) => async (method: string, body: unknown): Promise<unknown> => {
   if (method !== 'sendMessage') return undefined;
   const { chat_id: chatId, text, reply_markup: markup } = body as { chat_id?: number; text?: string; reply_markup?: { inline_keyboard?: readonly (readonly unknown[])[] } };
   if ((markup?.inline_keyboard ?? []).some(row => row.length > 0)) return undefined;
   const deliver = scheduledDelivery();
+  if (!deliver && !inTurn()) return undefined;
   const row = deliver ? await deliver(text ?? '', { nowOnly: (body as { [SEND_NOW_ONLY]?: unknown })[SEND_NOW_ONLY] === true }) : undefined;
   return { message_id: 1, chat: { id: chatId ?? 0 }, ...(row === undefined ? {} : { app_row_id: row }) };
 };

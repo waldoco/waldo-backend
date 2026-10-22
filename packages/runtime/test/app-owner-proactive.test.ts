@@ -211,6 +211,20 @@ describe('proactive work for an owner who only uses the app', () => {
     });
   });
 
+  // A day card reads the owner's calendar and mail, text other people wrote, so the turn is tainted from its first round:
+  // a standing change or an action it wants goes to the owner's card, which propose_action, offered only then, raises.
+  it('a day card runs as a turn that has read outside text', async () => {
+    await withAppOwner('proactive-tainted', { zone: 'UTC', confirmed: true }, async (owner, state) => {
+      dayPlanBook(state.storage.sql).save(localIso(Date.now(), 'UTC').slice(0, 10), { card: 'card:brief', time: '00:00', reason: 'planned' });
+      await new Scheduler(state.storage.sql, state.storage, productionDeps())
+        .schedule({ id: 'card:brief', kind: 'brief', payloadRefs: { id: 'card:brief' }, occurrenceAt: Date.now() - 60_000, dueAt: Date.now() - 60_000, recurrence: null });
+      model.requests = [];
+      await owner.alarm();
+      const first = model.requests.map(request => (JSON.parse(request) as { tools?: { name?: string }[] }).tools?.map(tool => tool.name) ?? []).find(names => names.length > 0);
+      expect(first).toContain('propose_action');
+    });
+  });
+
   it('with a confirmed zone, a due day card reaches the app chat and nothing goes to Telegram', async () => {
     await withAppOwner('proactive-confirmed-fire', { zone: 'UTC', confirmed: true }, async (owner, state) => {
       // Today's plan already exists, as it does once nightly or the first arming has planned the day.

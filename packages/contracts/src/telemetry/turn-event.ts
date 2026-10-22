@@ -7,7 +7,9 @@ import { providerSchema } from '../model/roster';
 // clock and the other per-turn sections are counted in `context_sections`, no longer in `system_sections`.
 // v11: `rung_blocked` can name a page's own block (`challenge`, `login_required`, `js_required`), and
 // `shape.voice_version` is set on calls whose system prompt carries the voice block.
-export const TURN_EVENT_SCHEMA_VERSION = '11';
+// v12: `tool_search_degraded` marks a model call answered after the model refused the tool search request shape and
+// every tool was resent up front; `tools_bytes` is the size of the offered catalogue either way.
+export const TURN_EVENT_SCHEMA_VERSION = '12';
 
 // Every v9 addition is a number, a boolean or a member of a closed vocabulary. Free text lives only in the
 // fields named by TURN_EVENT_TEXT_FIELDS, which the privacy gate strips whenever text capture is off.
@@ -92,6 +94,7 @@ export const turnEventSchema = z.strictObject({
   // v9: which provider answered a model call, and whether the routing ladder had to fall back to reach it.
   provider: providerSchema.optional(),
   fallback_fired: z.boolean().optional(),
+  tool_search_degraded: z.boolean().optional(),
   ttft_ms: millis.optional(),
   // v9: how the turn ended, set on the root (turn / machine_turn) hop.
   outcome: turnOutcomeSchema.optional(),
