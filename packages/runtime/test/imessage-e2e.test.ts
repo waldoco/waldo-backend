@@ -927,6 +927,8 @@ it('a very long iMessage turn sends two notes at most, each written from the ste
   expect(sentTexts(w)).toEqual(['Checking your reminders first.', 'Still comparing a few places against your evening.', 'Scripted owner reply.']);
   expect(proof.progressInputs).toHaveLength(2);
   expect(proof.progressInputs[1]).toContain('list_reminders');
+  // Steps are tools only: a hop that merely starts with tool_ (tool_eligibility) is not one.
+  expect(proof.progressInputs[1]).toContain('Steps finished so far, in order: list_reminders.');
   expect(proof.progressInputs[1]).toContain('Checking your reminders first.');
 }, 30_000);
 
