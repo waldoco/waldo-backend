@@ -60,14 +60,16 @@ not break a stored grant). The wording is the app and onboarding lane's; the bac
 WHOOP's terms (§3 and §4 above):
 
 1. Waldo stores the owner's WHOOP data (sleep, recovery and workouts, with WHOOP's scores) in its health store.
-2. AI models process that data to plan the owner's day. The notice must say who does it: the data goes to Waldo's AI model
-   provider, a third party, and only under the model-processing grant, which is the owner's explicit opt-in that WHOOP's §4 asks for
-   before WHOOP data is exposed to a third party.
-3. Waldo never uses WHOOP data to create, train, fine-tune or improve any model. WHOOP's §4 also binds anyone acting for Waldo, so
-   zero-retention and no-training terms with the model provider are a precondition for WHOOP, not optional wording. The notice may
-   say the provider keeps nothing and trains on nothing only once those terms are in place.
-4. Who else sees it: the data, and Waldo's replies drawn from it, are shown only to the owner, on the surfaces the owner chooses. A
-   reply on WhatsApp, Telegram or iMessage passes through that channel's provider (Meta, Telegram, Apple), so the notice names them.
+2. AI models process that data to plan the owner's day. The notice must say who does it: the data goes to the AI model providers
+   an owner turn can route to (today OpenAI and Anthropic), which are third parties, and only under the model-processing grant, which
+   is the owner's explicit opt-in that WHOOP's §4 asks for before WHOOP data is exposed to a third party.
+3. Waldo never uses WHOOP data to create, develop, test, train, fine-tune or improve any model, prompt or eval. WHOOP's §4 also
+   binds anyone acting for Waldo, so zero-retention and no-training terms with every model provider an owner turn can route to are a
+   precondition for WHOOP, not optional wording. The notice may say the providers keep nothing and train on nothing only once those
+   terms are in place with each of them.
+4. Who else sees it: the data, and Waldo's replies drawn from it, are shown only to the owner, on the surfaces the owner chooses,
+   unless the owner asks Waldo to share a specific item. A reply on WhatsApp, Telegram or iMessage passes through that channel's
+   provider (Meta, Telegram, Apple), so the notice names them.
    Staging trace capture (Langfuse) is a further recipient while testing; the owner accepted that on 22 October 2026, so the notice
    names it for as long as staging capture stays on. Waldo's notes about the data are not medical advice.
 5. How to stop: withdrawing storage stops the sync and deletes what was stored; withdrawing AI use stops the sync and AI use; disconnecting
@@ -113,7 +115,8 @@ Set no WHOOP secret and enter no client for the edge until all three hold: the a
 1. Register a WHOOP developer app (Sandbox tier lets 10 members connect; Build lets 100). Scopes requested:
    `offline read:profile read:sleep read:recovery read:workout`.
 2. Set the redirect URL to `https://<worker host>/oauth/whoop/callback` and the webhook URL to `https://<worker host>/events/whoop` (v2 webhooks).
-3. Set Worker secrets `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET` and `WHOOP_REDIRECT_URI` (the redirect URL above, exactly). The Worker
+3. Only once the three conditions under "WHOOP consent copy" hold, set Worker secrets `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET` and
+   `WHOOP_REDIRECT_URI` (the redirect URL above, exactly). The Worker
    uses the client secret only to verify `X-WHOOP-Signature`; the owner object uses the client id and redirect address only. Without all
    three the routes answer `not_configured` and nothing is sent to WHOOP.
 4. Enter the client for the edge once, with the same id, secret and redirect address (the edge reads it by issuer and redirect address,
