@@ -35,7 +35,7 @@ Trace level, set on the root span:
 | environment | `WALDO_ENVIRONMENT` var (`staging`, `production`; `development` if unset) | `langfuse.environment` on every span |
 | release, version | `WALDO_RELEASE` var, the deployed commit SHA | `langfuse.release`, `langfuse.version` |
 | tags | `channel:<channel>` plus `feature:<area>` for every area with a hop in the turn | `langfuse.trace.tags` |
-| metadata.schema_version | `1` | filterable |
+| metadata.schema_version | `TURN_EVENT_SCHEMA_VERSION` (currently `10`) | filterable |
 | metadata.channel | `telegram` | filterable |
 | metadata.trace_key | runtime trace id (`tg-<update id>`), joins Langfuse to Worker logs | filterable |
 | metadata.outcome | `answered` or `failed` | filterable |
