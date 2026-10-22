@@ -52,9 +52,13 @@ describe('forget matches whole words', () => {
     expect(forget(['tea'], String.raw`"\\tea"`)).toBe(String.raw`"\\[forgotten]"`);
     expect(forget(['tea'], String.raw`"\\\tea"`)).toBe(String.raw`"\\\tea"`);
   });
-  it('a backslash that starts no JSON escape is prose, in either case', () => {
+  it('in prose a backslash is a character: only raw JSON keeps an escape whole', () => {
     expect(forget(['Sarah'], String.raw`C:\Users\Sarah\docs`)).toBe(String.raw`C:\Users\[forgotten]\docs`);
-    expect(forget(['tea'], String.raw`C:\Tea and C:\Users\Nina\tea`)).toBe(String.raw`C:\[forgotten] and C:\Users\Nina\tea`);
+    expect(forget(['tom'], String.raw`saved to C:\Users\tom\Docs`)).toBe(String.raw`saved to C:\Users\[forgotten]\Docs`);
+    expect(forget(['tea'], String.raw`C:\Tea and C:\Users\Nina\tea`)).toBe(String.raw`C:\[forgotten] and C:\Users\Nina\[forgotten]`);
+    expect(forget(['tom'], String.raw`"Quote" from C:\Users\tom`)).toBe(String.raw`"Quote" from C:\Users\[forgotten]`);
+    expect(forget(['tom'], String.raw`{"p":"x\tom"}`)).toBe(String.raw`{"p":"x\tom"}`);
+    expect(forget(['tom'], String.raw`{"p":"C:\\Users\\tom"}`)).toBe(String.raw`{"p":"C:\\Users\\[forgotten]"}`);
   });
   it('finds by the same rule the redactor rewrites by, with an open end for a cut prefix', () => {
     expect(literalTextIndex('a team', 'tea')).toBe(-1);

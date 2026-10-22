@@ -139,11 +139,14 @@ describe('the SQL purge', () => {
       episodes.add('tg-2', 'owner', String.raw`saved to C:\Users\Sarah\docs`, 2);
       episodes.add('tg-3', 'owner', String.raw`backup at C:\Users\Sarahs`, 3);
       episodes.add('tg-4', 'owner', String.raw`notes in C:\Tea`, 4);
+      episodes.add('tg-5', 'owner', String.raw`saved to C:\Users\tom\Docs`, 5);
       expect(store.purge([], AT, ['tea'])).toMatchObject({ ready: true, remaining: {} });
       expect(store.purge([], AT, ['Sarah'])).toMatchObject({ ready: true, remaining: {} });
+      expect(store.purge([], AT, ['tom'])).toMatchObject({ ready: true, remaining: {} });
       expect(sql.exec<{ text: string }>('SELECT text FROM episodes ORDER BY rowid').toArray().map(row => row.text)).toEqual([
         String.raw`the team keeps C:\Users\Nina\Docs`, String.raw`saved to C:\Users\@\docs`.replace('@', FORGOTTEN),
         String.raw`backup at C:\Users\Sarahs`, String.raw`notes in C:\@`.replace('@', FORGOTTEN),
+        String.raw`saved to C:\Users\@\Docs`.replace('@', FORGOTTEN),
       ]);
     });
   });

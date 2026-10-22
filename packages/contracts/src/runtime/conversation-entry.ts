@@ -54,8 +54,9 @@ export type ConversationReceipt = Readonly<{
 // a digit or symbol (a number inside +91..., "sarah2024", "C++17"). Under-forgetting is the worse failure, so the boundary
 // applies only where its absence is known to break words. A combining mark continues the letter before it.
 // Stored text can be raw JSON: a real escape (\n, \t, \u00a0) before the literal separates it like the character it decodes
-// to, and a match never starts on the continuation of a real escape, which would leave a broken escape behind. Escapes are
-// read case-sensitively, so a backslash before anything else (C:\Users\Sarah) is prose. `openEnd` drops the end boundary,
+// to. In text that parses as JSON a match never starts on the continuation of a real escape, which would leave a broken
+// escape behind; escapes are read case-sensitively there. Everywhere else a backslash is a character (C:\Users\tom), since
+// keeping a prose escape whole would leave the topic behind and report it gone. `openEnd` drops the end boundary,
 // for a literal cut short of its end. Case folds as Unicode simple folding, and dotted capital I also matches the i plus
 // combining dot it lowercases to, the one letter whose lowercase is longer, so the fold is a superset of toLowerCase.
 const ALPHABETIC = String.raw`[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}]`;
@@ -66,17 +67,19 @@ const afterEscape = new RegExp(`(?<=${ESCAPING_BACKSLASH}(?:[bfnrt]|u[0-9A-Fa-f]
 const insideEscape = new RegExp(`(?<=${ESCAPING_BACKSLASH})(?:["\\\\/bfnrt]|u[0-9A-Fa-f]{4})`, 'uy');
 const beforeLetter = new RegExp(`\\p{M}|${ALPHABETIC}`, 'uy');
 const at = (pattern: RegExp, value: string, index: number) => { pattern.lastIndex = index; return pattern.test(value); };
+const parsesAsJson = (value: string) => { try { JSON.parse(value); return true; } catch { return false; } };
 
 function* literalTextSpans(value: string, text: string, openEnd: boolean): Generator<readonly [number, number]> {
   if (!text) return;
   const body = text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\u0130|i\u0307/gi, '(?:\\u0130|i\\u0307)');
   const [first] = text, last = [...text.replace(/\p{M}+$/u, '')].at(-1);
   const leading = first !== undefined && alphabeticEdge.test(first), trailing = !openEnd && last !== undefined && alphabeticEdge.test(last);
+  const json = value.includes('\\') && parsesAsJson(value);
   let free = 0;
   // Every start position is a candidate, so a candidate the boundary rejects cannot hide an overlapping one that passes.
   for (const candidate of value.matchAll(new RegExp(`(?=(${body}))`, 'giu'))) {
     const start = candidate.index, end = start + candidate[1]!.length;
-    if (start < free || at(insideEscape, value, start)) continue;
+    if (start < free || (json && at(insideEscape, value, start))) continue;
     if (leading && at(afterLetter, value, start) && !at(afterEscape, value, start)) continue;
     if (trailing && at(beforeLetter, value, end)) continue;
     free = end;
