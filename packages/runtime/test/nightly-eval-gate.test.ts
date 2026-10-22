@@ -25,6 +25,20 @@ describe('nightly eval gate', () => {
     ]);
   });
 
+  it('holds the share of ungraded trials to its ceiling only when one is set, so an abstaining judge cannot lift the pass rate', () => {
+    const abstains = card([run('a', ['pass', 'judge_error', 'judge_error']), run('b', ['pass', 'pass', 'judge_error']), run('c', ['blocked', 'blocked', 'blocked'])]);
+    expect(gateScorecard(abstains, thresholds).ok).toBe(true);
+    expect(gateScorecard(abstains, { ...thresholds, max_ungraded_share: null }).ok).toBe(true);
+    expect(gateScorecard(abstains, { ...thresholds, max_ungraded_share: 0.5 }).ok).toBe(true);
+    expect(gateScorecard(abstains, { ...thresholds, max_ungraded_share: 0.4 }).failures).toEqual(['ungraded trials 50% > 40%']);
+  });
+
+  it('shows how many trials went ungraded beside the pass rate, once anything was graded', () => {
+    const markdown = scorecardMarkdown(card([run('a', ['pass', 'judge_error', 'judge_error']), run('b', ['pass', 'pass', 'fail'])]), { ok: true, failures: [] }, 'live');
+    expect(markdown).toContain('Ungraded: 2 of 6 trials');
+    expect(scorecardMarkdown(card([run('a', ['judge_error', 'judge_error', 'judge_error'])]), { ok: true, failures: [] }, 'recorded')).not.toContain('Ungraded:');
+  });
+
   it('holds the pass rate to its floor only when one is set and something was graded', () => {
     const graded = card([run('a', ['pass', 'fail', 'fail']), run('b', ['pass', 'pass', 'pass'])]);
     expect(gateScorecard(graded, { ...thresholds, min_pass_rate: 0.7 }).failures).toEqual(['pass rate 0.667 < 0.7']);
@@ -33,8 +47,8 @@ describe('nightly eval gate', () => {
       .toEqual(['pass rate 0.7 required but nothing was graded']);
   });
 
-  it('keeps the recorded thresholds at the M0 baseline plus the voice and safety set, the runnable errands and the connector case', () => {
-    expect(NIGHTLY_THRESHOLDS.recorded).toEqual({ min_scenarios: 50, max_blocked: 3, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null });
+  it('keeps the recorded thresholds at the M0 baseline plus the voice and safety set, the runnable errands, the connector case, the health trigger case and the state and memory set', () => {
+    expect(NIGHTLY_THRESHOLDS.recorded).toEqual({ min_scenarios: 60, max_blocked: 3, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null });
   });
 
   it('renders a marked, text-free comment with the verdict, totals and each scenario', () => {
