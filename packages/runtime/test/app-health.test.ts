@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { appHealthRoutesV1, healthApiErrorV1Schema, healthScoresResponseV1Schema } from '../../contracts/src/app/health-ingest';
+import { appHealthRoutesV1, healthApiErrorV1Schema, healthIngestV1Schema, healthScoresResponseV1Schema } from '../../contracts/src/app/health-ingest';
 import { handleApp } from '../src/channels/app-api';
 import { md5Hex } from '../src/channels/md5';
 import { routerSignature } from '../src/identity/owner-directory';
@@ -172,6 +172,98 @@ describe('app health routes: signed database calls', () => {
     const response = await post('/app/v1/health/ingest', batch, { 'idempotency-key': 'another-key-0001' });
     expect([response.status, await response.json()]).toEqual([400, { error: 'invalid_request' }]);
     expect(rpcs).toEqual([]);
+  });
+});
+
+// Health revision 3: one bad reading never fails an upload. The Worker checks each change on its own and forwards a bad one
+// as its reason and kind only; the database stores the rest and numbers every rejection on the receipt.
+describe('app health ingest: per-sample rejection at health revision 3', () => {
+  const v3 = { 'x-waldo-app-contract': 'approvals=2,health=3' };
+  // Synthetic marker values: a bad reading's value must never leave the Worker.
+  const tooMany = { ...sample, sample_id: 'steps-bad-1', value: 777_777 };
+  const unknownKind = { ...sample, sample_id: 'temp-1', signal: 'wrist_temperature', unit: 'celsius', value: 36.6123 };
+  const goodDeletion = { sample_id: 'spo2-gone-1', signal: 'spo2', revision: 3 };
+  const mixed = { ...batch, request_id: 'health-upload-v3-1', samples: [sample, tooMany, unknownKind, 'hostile', { ...sample, sample_id: 'steps-2026-10-10T09', start_at: '2026-10-10T09:00:00Z', end_at: '2026-10-10T10:00:00Z' }], deletions: [goodDeletion, { ...goodDeletion, revision: -5 }] };
+  const rejections = [
+    { change: 'sample', index: 1, signal: 'steps_window', reason: 'invalid_sample' }, { change: 'sample', index: 2, signal: null, reason: 'unsupported_signal' },
+    { change: 'sample', index: 3, signal: null, reason: 'invalid_sample' }, { change: 'deletion', index: 1, signal: 'spo2', reason: 'invalid_sample' },
+  ];
+  const v3Receipt = { ...receipt, request_id: mixed.request_id, accepted: 2, deleted: 1, rejected: rejections };
+  it('forwards the good changes and only the position, kind and reason of the bad ones, and returns the receipt with them', async () => {
+    rpcResult = v3Receipt;
+    const response = await post('/app/v1/health/ingest', mixed, { ...v3, 'idempotency-key': mixed.request_id });
+    expect([response.status, await response.json()]).toEqual([200, v3Receipt]);
+    const payload = rpcs[0]!.body.p_payload as string;
+    expect(JSON.parse(payload)).toEqual({
+      ...mixed, rejection: 'per_sample',
+      samples: [sample, { rejected: 'invalid_sample', signal: 'steps_window' }, { rejected: 'unsupported_signal', signal: null }, { rejected: 'invalid_sample', signal: null }, mixed.samples[4]],
+      deletions: [goodDeletion, { rejected: 'invalid_sample', signal: 'spo2' }],
+    });
+    for (const leaked of ['777777', '36.6123', 'hostile', 'wrist_temperature', '-5']) expect(payload).not.toContain(leaked);
+    expect(rpcs[0]!.body.p_sig).toBe(await routerSignature(SECRET, rpcs[0]!.body.p_at as number, `health.ingest.owner-1.${md5Hex(payload)}`));
+  });
+  it('keeps an older build all-or-nothing, exactly as before: the same mixed batch is refused and nothing is called', async () => {
+    for (const header of [{}, { 'x-waldo-app-contract': 'health=2' }, { 'x-waldo-app-contract': 'health=1' }, { 'x-waldo-app-contract': 'health=3,health=3' }, { 'x-waldo-app-contract': 'approvals=3' }] as Record<string, string>[]) {
+      const response = await post('/app/v1/health/ingest', mixed, header);
+      expect([JSON.stringify(header), response.status, await response.json()]).toEqual([JSON.stringify(header), 400, { error: 'invalid_request' }]);
+    }
+    expect(rpcs).toEqual([]);
+    rpcResult = receipt;
+    const response = await post('/app/v1/health/ingest', batch, { 'x-waldo-app-contract': 'health=2' });
+    expect([response.status, await response.json()]).toEqual([200, receipt]);
+    expect(rpcs[0]!.body.p_payload).toBe(JSON.stringify(healthIngestV1Schema.parse(batch)));
+  });
+  it('sends an all-bad batch and an empty one to the database, so the anchor and the receipt still record them', async () => {
+    const allBad = { ...batch, request_id: 'health-upload-v3-2', samples: [tooMany, unknownKind], deletions: [] };
+    rpcResult = { ...receipt, request_id: allBad.request_id, accepted: 0, rejected: rejections.slice(0, 2) };
+    expect((await post('/app/v1/health/ingest', allBad, v3)).status).toBe(200);
+    expect(JSON.parse(rpcs[0]!.body.p_payload as string).samples).toEqual([{ rejected: 'invalid_sample', signal: 'steps_window' }, { rejected: 'unsupported_signal', signal: null }]);
+    const empty = { ...batch, request_id: 'health-upload-v3-3', samples: [], deletions: [] };
+    rpcResult = { ...receipt, request_id: empty.request_id, accepted: 0, rejected: [] };
+    const answered = await post('/app/v1/health/ingest', empty, v3);
+    expect([answered.status, (await answered.json() as { rejected: unknown }).rejected]).toEqual([200, []]);
+    expect(JSON.parse(rpcs[1]!.body.p_payload as string)).toEqual({ ...empty, rejection: 'per_sample' });
+  });
+  it('passes duplicates and out-of-order revisions through in their own positions, for the database to order', async () => {
+    const older = { ...sample, revision: sample.revision - 10 };
+    const twice = { ...batch, request_id: 'health-upload-v3-4', samples: [sample, sample, older] };
+    rpcResult = { ...receipt, request_id: twice.request_id, ignored: 2, rejected: [] };
+    expect((await post('/app/v1/health/ingest', twice, v3)).status).toBe(200);
+    expect(JSON.parse(rpcs[0]!.body.p_payload as string).samples).toEqual([sample, sample, older]);
+  });
+  it('still refuses a whole request whose envelope is wrong, and never lets a client choose the mode', async () => {
+    const refused = [
+      { ...mixed, rejection: 'all_or_nothing' }, { ...mixed, rejection: 'per_sample' }, { ...mixed, owner_id: 'someone-else' }, { ...mixed, samples: { 0: sample } },
+      { ...mixed, samples: Array.from({ length: 129 }, () => 'x'), deletions: [] }, { ...mixed, timezone: 'Not/AZone' }, { ...mixed, source: 'whoop' }, { ...mixed, request_id: 'short' },
+    ];
+    for (const body of refused) {
+      const response = await post('/app/v1/health/ingest', body, v3);
+      expect([response.status, await response.json()]).toEqual([400, { error: 'invalid_request' }]);
+    }
+    expect((await post('/app/v1/health/ingest', '{"samples":[', v3)).status).toBe(400);
+    expect((await post('/app/v1/health/ingest', mixed, { ...v3, 'content-length': '98305' })).status).toBe(413);
+    expect((await post('/app/v1/health/ingest', mixed, { ...v3, 'idempotency-key': 'another-key-0001' })).status).toBe(400);
+    expect(rpcs).toEqual([]);
+  });
+  it('maps a database refusal of the whole request as before', async () => {
+    for (const code of ['consent_required', 'epoch_conflict', 'anchor_conflict', 'idempotency_conflict']) {
+      rpcResult = { error: code };
+      const response = await post('/app/v1/health/ingest', mixed, v3);
+      expect([response.status, await response.json()]).toEqual([code === 'consent_required' ? 403 : 409, { error: code }]);
+    }
+    rpcResult = { ...v3Receipt, rejected: [{ ...rejections[0], value: 777_777 }] };
+    expect((await post('/app/v1/health/ingest', mixed, v3)).status).toBe(503);
+  });
+  it('logs a refused upload by code and status only, so a stuck sync is visible without its readings', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await post('/app/v1/health/ingest', mixed);
+      rpcResult = { error: 'anchor_conflict' };
+      await post('/app/v1/health/ingest', batch);
+      rpcResult = receipt;
+      await post('/app/v1/health/ingest', batch);
+      expect(warn.mock.calls).toEqual([['app health ingest refused', { status: 400, error: 'invalid_request' }], ['app health ingest refused', { status: 409, error: 'anchor_conflict' }]]);
+    } finally { warn.mockRestore(); }
   });
 });
 
