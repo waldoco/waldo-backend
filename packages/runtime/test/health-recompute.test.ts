@@ -107,6 +107,7 @@ const entry = (state: DurableObjectState, id = HEALTH_RECOMPUTE_ID) => state.sto
 const reads = () => plane.calls.filter(call => call.fn === 'health_series_read');
 const writtenDays = () => plane.calls.filter(call => call.fn === 'health_context_write').map(call => call.payload.day);
 const pending = (state: DurableObjectState) => state.storage.sql.exec<{ day: string }>("SELECT day FROM health_trigger_pending").toArray().map(row => row.day);
+const recomputeLogs = () => printed.flatMap(line => { try { const entry = JSON.parse(line) as Record<string, unknown>; return entry.hop === 'health_recompute' ? [{ ok: entry.ok, code: entry.code }] : []; } catch { return []; } });
 const tableExists = (state: DurableObjectState, name: string) => state.storage.sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", name).toArray().length > 0;
 // Today's row as an earlier upload left it, in another Recovery zone than the readings now give.
 const earlierToday = (day = '2026-10-21') => plane.rows.set(day, { recovery: { score: 20, zone: 'low', algorithm_version: 'recovery.candidate.v1' }, form: { reason: 'intraday_inputs_unavailable' }, weight: { reason: 'calendar_demand_unavailable' } });
@@ -204,7 +205,7 @@ describe('the owner object recomputes the derived rows', () => {
       expect(entry(state, HEALTH_TRIGGER_ID)).toMatchObject({ kind: 'patrol' });
       expect(entry(state)).toBeNull();
       for (const leak of LEAKS) for (const [where, text] of [['tables and storage', dump(state)], ['printed lines', printed.join('\n')]] as const) expect(text, `${leak} in ${where}`).not.toContain(leak);
-      expect(printed.join('\n')).toContain('"hop":"health_recompute"');
+      expect(recomputeLogs()).toEqual([{ ok: true, code: 'written' }]);
     });
   });
 
@@ -277,7 +278,7 @@ describe('the owner object recomputes the derived rows', () => {
         expect(entry(state)).toMatchObject(attempt < 3 ? { status: 'armed', attempts: attempt } : { status: 'quarantined' });
       }
       expect(writtenDays()).toEqual([]);
-      expect(printed.join('\n')).toContain('"hop":"health_recompute","ms":0,"ok":false,"code":"failed"');
+      expect(recomputeLogs()).toEqual([{ ok: false, code: 'failed' }, { ok: false, code: 'failed' }, { ok: false, code: 'failed' }]);
       plane.seriesFails = false;
       await upload();
       expect(entry(state)).toMatchObject({ status: 'armed', attempts: 0, due_at: Date.now() + HEALTH_RECOMPUTE_WINDOW_MS });

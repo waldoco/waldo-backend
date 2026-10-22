@@ -3624,8 +3624,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const healthSamples = (timezone: string | null) => recompute.ask(timezone);
     const healthRecomputeRun = async () => {
       const started = Date.now(), trace = `${HEALTH_RECOMPUTE_ID}:${started}`;
-      try { log({ trace, hop: 'health_recompute', ms: Date.now() - started, ok: true, code: await recompute.run() }); }
+      let outcome: string;
+      try { outcome = await recompute.run(); }
       catch (error) { log({ trace, hop: 'health_recompute', ms: Date.now() - started, ok: false, code: 'failed' }); throw error; }
+      log({ trace, hop: 'health_recompute', ms: Date.now() - started, ok: true, code: outcome });
     };
     const healthTrigger = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`, doName = identity.get<string>('do_name'), rpc = signedRpc(this.env), timezone = clock.timezone;
