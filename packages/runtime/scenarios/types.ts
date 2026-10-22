@@ -61,8 +61,8 @@ export type Scenario = Readonly<{
     googleNotConnected?: boolean;
     // The owner's spend so far this month, read against MONTHLY_SPEND_CEILING_USD at each turn's start.
     spentUsd?: number;
-    // Offer a browse_page fixture whose page reads 'fixture page'.
-    browse?: boolean;
+    // Offer a browse_page fixture whose page reads 'fixture page', or one whose site blocks the read with that block.
+    browse?: boolean | 'challenge' | 'login_required' | 'js_required';
   }>;
   assert?: Readonly<{
     mustCall?: readonly string[];

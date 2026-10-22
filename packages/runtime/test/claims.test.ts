@@ -859,3 +859,20 @@ describe('pinned blocks', () => {
     });
   });
 });
+
+// Text built from memory earlier in a turn checks this count, not its own rendering, so every forget path must move it
+// and an ordinary write must not.
+it('every forget moves the forget generation; adding a claim or a node does not', async () => {
+  await withSql((sql) => {
+    const store = claimStore(sql);
+    expect(store.forgetGeneration()).toBe(0);
+    store.add({ kind: 'fact', text: 'Prefers aisle seats', source: 'stated', evidence: '"Prefers aisle seats"', origin: 'owner', source_ref: 'owner, fixture-1' }, AT);
+    const node = store.saveNode({ id: null, domain: 'travel', label: 'Seating', summary: 'Seat choice', strength: 1, status: 'active', supporting_spots: [1] }, AT);
+    expect(store.forgetGeneration()).toBe(0);
+    const forgets = [() => store.barrier('window seats', AT), () => store.forgetNode(node), () => store.purge([1], AT)];
+    for (const [index, forget] of forgets.entries()) {
+      forget();
+      expect(store.forgetGeneration()).toBe(index + 1);
+    }
+  });
+});
