@@ -20,13 +20,17 @@ const setup = (state: DurableObjectState) => {
   return { store, call };
 };
 
-it('an owner-grounded health claim is stored by remember and read_memory returns exact values', async () => {
+// Memory keeps no health measurement: a lab reading the owner states is refused at remember with the fix, and nothing is
+// stored for recall to return. The pattern in words still saves.
+it('an owner-grounded lab reading is refused by remember, and the pattern in words is stored', async () => {
   await withMemory('claims-health', async ({ store, call }) => {
-    const text = 'HbA1c was 9.1 last week; takes metformin 500mg';
-    expect(await call('remember', { kind: 'health', text, evidence_quote: HEALTH_SAID }, HEALTH_SAID)).toMatchObject({ ok: true, data: { id: 1, status: 'stored' } });
-    expect(await call('read_memory', { query: 'HbA1c', hall: 'facts' }, 'what was my HbA1c?')).toMatchObject({ ok: true, data: { claims: [{ text, evidence: HEALTH_SAID, origin: 'owner', source: 'stated', source_ref: 'owner, tg-1' }], authority: 'context_only_not_action_approval' } });
+    expect(await call('remember', { kind: 'health', text: 'HbA1c was 9.1 last week; takes metformin 500mg', evidence_quote: HEALTH_SAID }, HEALTH_SAID))
+      .toMatchObject({ ok: false, code: 'invalid_args', error: expect.stringContaining('never a measurement') });
+    expect(store.allClaims()).toEqual([]);
+    expect(await call('read_memory', { query: 'HbA1c', hall: 'facts' }, 'what was my HbA1c?')).toMatchObject({ ok: true, data: { claims: [] } });
+    const text = 'Takes metformin';
+    expect(await call('remember', { kind: 'health', text, evidence_quote: 'I take metformin' }, HEALTH_SAID)).toMatchObject({ ok: true, data: { id: 1, status: 'stored' } });
     expect(turnMemoryPrompt(store, 'unrelated')).toContain(text);
-    expect(turnMemoryPrompt(store, 'HbA1c')).not.toContain('<relevant_claims>');
   });
 });
 
