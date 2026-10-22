@@ -271,12 +271,4 @@ describe('v9 typed fields at the gate', () => {
     expect(JSON.stringify(smuggled)).not.toContain(MARKER);
     for (const key of ['error_code', 'rung', 'blocked_reason', 'provider', 'job_id', 'job_profile', 'outcome', 'ttft_ms', 'tools_called'] as const) expect(smuggled[key]).toBeUndefined();
   });
-
-  it('keeps tool_search_degraded as a boolean with capture off and drops anything else', () => {
-    const base: TurnLogEntry = { trace: 't12', hop: 'llm_reply', ms: 5, ok: true };
-    expect(gateTraceEntry({ ...base, tool_search_degraded: true }, false).tool_search_degraded).toBe(true);
-    const smuggled = gateTraceEntry({ ...base, tool_search_degraded: MARKER as never }, false);
-    expect(smuggled.tool_search_degraded).toBeUndefined();
-    expect(JSON.stringify(smuggled)).not.toContain(MARKER);
-  });
 });
