@@ -257,6 +257,9 @@ export type RuntimeLLMSuccess = {
   tool_call_source: { text: string };
   fallback_step: RuntimeFallbackStep;
   degraded: boolean;
+  // Set when the step that answered did so after the model refused the tool search request shape and every tool was
+  // resent up front: the refusal is an invalid_args attempt on the same model, so the routing fields cannot show it.
+  tool_search_degraded?: true;
   usage: LLMUsage;
   attempts: LLMAttempt[];
   routing_logs: readonly RoutingLogEvent[];
@@ -513,6 +516,7 @@ export class RuntimeLLMProvider {
       }
 
       let gatewayResult: LLMGatewayResult;
+      let searchDegraded = false;
       try {
         const send = (request: LLMRequest) => {
           input.runScope?.admit();
@@ -533,6 +537,7 @@ export class RuntimeLLMProvider {
           attempts.push({ outcome: 'failure', model: plan.step.model, provider: plan.step.provider, context: plan.context, fallback_step: plan.fallback_step, code: 'invalid_args' });
           if (gatewayResult.spent) spent = addTokens(spent, gatewayResult.spent);
           const { tool_search: _rejected, ...withoutSearch } = sanitisedRequest.request;
+          searchDegraded = true;
           gatewayResult = await send(withoutSearch);
         }
       } catch (error) {
@@ -619,7 +624,9 @@ export class RuntimeLLMProvider {
         degraded:
           routingLogs.length > 0 ||
           plan.fallback_step !== 'configured_model' ||
-          plan.context !== 'full_context',
+          plan.context !== 'full_context' ||
+          searchDegraded,
+        ...(searchDegraded ? { tool_search_degraded: true as const } : {}),
         usage: { ...usage, ...addTokens(usage, spent) },
         attempts,
         routing_logs: routingLogs,
