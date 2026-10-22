@@ -63,26 +63,36 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
     const timeout = setTimeout(() => controller.abort(), Math.max(0, Math.min(this.timeoutMs, callTimeLeftMs(input.runScope))));
     const startedAt = Date.now();
     try {
-      const response = await this.client.messages.create(
-        {
-          model: input.request.model,
-          max_tokens: input.request.max_tokens,
-          ...(input.request.system ? { system: systemPrompt(input.request.system, input.step.cache === 'anthropic_native') } : {}),
-          messages,
-          ...toolsParams(input.request),
-          ...outputConfig(input.request),
-        },
-        { signal: controller.signal },
-      );
+      const body: Anthropic.MessageCreateParamsNonStreaming = {
+        model: input.request.model,
+        max_tokens: input.request.max_tokens,
+        ...(input.request.system ? { system: systemPrompt(input.request.system, input.step.cache === 'anthropic_native') } : {}),
+        messages,
+        ...toolsParams(input.request),
+        ...outputConfig(input.request),
+      };
+      let response = await this.client.messages.create(body, { signal: controller.signal });
+      // A response that only searched for tools (the server paused its turn) has not answered yet. The tool search guide
+      // continues it by sending its content back as the assistant's turn; the searched blocks lead the answer's own, so a
+      // later round replays the whole turn.
+      const searched: Anthropic.ContentBlock[] = [];
+      const searchSpent = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0 };
+      for (let continuation = 0; continuation < SEARCH_CONTINUATIONS && onlySearched(response); continuation += 1) {
+        searched.push(...response.content);
+        searchSpent.input_tokens += response.usage.input_tokens + (response.usage.cache_read_input_tokens ?? 0) + (response.usage.cache_creation_input_tokens ?? 0);
+        searchSpent.output_tokens += response.usage.output_tokens;
+        searchSpent.cache_read_input_tokens += response.usage.cache_read_input_tokens ?? 0;
+        response = await this.client.messages.create({ ...body, messages: [...messages, { role: 'assistant', content: searched as Anthropic.ContentBlockParam[] }] }, { signal: controller.signal });
+      }
       const text = response.content.flatMap((block) => block.type === 'text' ? [block.text] : []).join('\n').trim();
       const toolCalls: LLMToolCall[] = response.content.flatMap((block) => block.type === 'tool_use'
         ? [{ call_id: block.id, name: block.name, arguments: JSON.stringify(block.input ?? {}) }]
         : []);
       // Anthropic's input_tokens excludes cached tokens; the seam reports the whole prompt, cache reads inside it.
       const spent = {
-        input_tokens: response.usage.input_tokens + (response.usage.cache_read_input_tokens ?? 0) + (response.usage.cache_creation_input_tokens ?? 0),
-        output_tokens: response.usage.output_tokens,
-        cache_read_input_tokens: response.usage.cache_read_input_tokens ?? 0,
+        input_tokens: searchSpent.input_tokens + response.usage.input_tokens + (response.usage.cache_read_input_tokens ?? 0) + (response.usage.cache_creation_input_tokens ?? 0),
+        output_tokens: searchSpent.output_tokens + response.usage.output_tokens,
+        cache_read_input_tokens: searchSpent.cache_read_input_tokens + (response.usage.cache_read_input_tokens ?? 0),
       };
       const truncated = response.stop_reason === 'max_tokens' || response.stop_reason === 'model_context_window_exceeded';
       if (text.length === 0 && toolCalls.length === 0) {
@@ -96,7 +106,7 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
         text,
         ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
         ...spent,
-        output_items: response.content.map((block) => ({ type: block.type, [OUTPUT_ITEM_PROVIDER]: ANTHROPIC_PROVIDER, block: block as unknown as Record<string, unknown> })),
+        output_items: [...searched, ...response.content].map((block) => ({ type: block.type, [OUTPUT_ITEM_PROVIDER]: ANTHROPIC_PROVIDER, block: block as unknown as Record<string, unknown> })),
         latency_ms: Date.now() - startedAt,
         ...(truncated ? { truncated: true } : {}),
       };
@@ -122,6 +132,13 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
     }
   }
 }
+
+// Each continuation is a billed call; past this many a response that keeps only searching fails as an empty one does, and
+// the provider's attempt plan decides what follows.
+const SEARCH_CONTINUATIONS = 2;
+const onlySearched = (response: Anthropic.Message): boolean => response.stop_reason !== 'max_tokens'
+  && response.content.some((block) => (block.type as string) === 'tool_search_tool_result')
+  && response.content.every((block) => ['server_tool_use', 'tool_search_tool_result', 'thinking', 'redacted_thinking'].includes(block.type as string));
 
 function systemPrompt(system: string, cached: boolean): Anthropic.MessageCreateParams['system'] {
   return cached ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }] : system;

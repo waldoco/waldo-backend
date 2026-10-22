@@ -23,6 +23,8 @@ export type NightlyRun = Readonly<{
   candidate: string;
   judgeModel: string;
   model?: ModelName;
+  // The brain's flag-on menu: core tools up front, the rest found by tool search.
+  toolSearch?: boolean;
   // The memory the trials run with; the raw-history baseline when set to raw_history.
   memory?: MemoryMode;
   // Read receipts on every completed trial, not only the ones a judge graded: state is checked in code, so a judge that
@@ -47,7 +49,7 @@ export const runNightly = async (scenarios: readonly NightlyScenario[], run: Nig
     for (let trial = 0; trial < run.trials; trial += 1) {
       if (scenario.blocked) { outcomes.push('blocked'); continue; }
       if (run.budget.exhausted()) { outcomes.push('budget_exhausted'); continue; }
-      const record = await runTrial(scenario, { gateway: run.gateway(), budget: run.budget, ...(run.model ? { model: run.model } : {}), ...(run.memory ? { memory: run.memory } : {}) });
+      const record = await runTrial(scenario, { gateway: run.gateway(), budget: run.budget, ...(run.model ? { model: run.model } : {}), ...(run.toolSearch ? { toolSearch: true } : {}), ...(run.memory ? { memory: run.memory } : {}) });
       if (record.status !== 'ran') { outcomes.push(record.status); if (record.error) errors.push(record.error); continue; }
       const verdict = await run.judge({ scenario: scenario.id, rubric: scenario.rubric, transcript: record.transcript, tools: record.tools, effects: record.effects, final_state: record.final_state });
       // What the judges alone made of the trial, before receipts: the figure two memory modes can be compared on.
