@@ -76,13 +76,13 @@ describe('nightly eval suite', () => {
 });
 
 describe('nightly eval catalogue', () => {
-  it('has the twenty research tasks, the owner\'s two, the three errand failures, the connector case and the health trigger case, each with a pain and a rubric', () => {
-    expect(SCENARIOS).toHaveLength(27);
-    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(27);
+  it('has the twenty research tasks, the owner\'s two, the three errand failures, the connector case and the two health cases, each with a pain and a rubric', () => {
+    expect(SCENARIOS).toHaveLength(28);
+    expect(new Set(SCENARIOS.map((scenario) => scenario.id)).size).toBe(28);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('c'))).toHaveLength(1);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('t'))).toHaveLength(20);
     expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('e'))).toHaveLength(3);
-    expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('h'))).toHaveLength(1);
+    expect(SCENARIOS.filter((scenario) => scenario.id.startsWith('h'))).toHaveLength(2);
     expect(new Set(SCENARIOS.map((scenario) => scenario.pain))).toEqual(new Set(['context', 'follow_through', 'judgment']));
     for (const scenario of SCENARIOS) {
       expect(scenario.rubric.outcome.trim()).not.toBe('');
