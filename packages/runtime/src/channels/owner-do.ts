@@ -103,7 +103,7 @@ import { egressGuardedCaller, redactSecretUrls } from './egress-guard';
 import { parseEgressAllowlistEnv } from '../hooks/egress-policy';
 import { toolOutputLedger , redactToolOutputLedger } from '../conversation/tool-output-ledger';
 import { heldTopicsOf, holdsIn } from '../memory/forget-guard';
-import { armNightly, backfillEpisodes, consolidationDay, consolidationSides, episodeIndex, indexedConversationStore, NIGHTLY_BACKLOG_DAYS, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, NIGHTLY_CHUNKS, NIGHTLY_THROUGH_KEY, transcript } from './episodes';
+import { armNightly, backfillEpisodes, consolidationDay, consolidationSides, episodeIndex, indexedConversationStore, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, NIGHTLY_CHUNKS, NIGHTLY_THROUGH_KEY, transcript } from './episodes';
 import { nightlyDiagnostic } from './nightly-diagnostic';
 import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
 import { schedulePreferences, schedulePreferencesLine, schedulePreferenceHandlers, applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePreferences, replanDayCards, type ScheduleHold, type ScheduleKind } from './schedule-preferences';
@@ -3543,13 +3543,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // is not consolidated later either.
     const consolidateBacklog = async (trace: string, now: number): Promise<'done' | 'more' | 'failed'> => {
       const dayMs = 24 * 60 * 60_000;
-      const marked = storage.kv.get<number>(NIGHTLY_THROUGH_KEY) ?? now - dayMs, floor = now - NIGHTLY_BACKLOG_DAYS * dayMs;
-      // Conversation older than the backlog window is left unconsolidated; the line says it happened.
-      if (marked < floor) log({ trace, hop: 'nightly_memory', ms: 0, ok: true, code: 'backlog_clamped' });
-      let through = Math.max(marked, floor);
+      let through = storage.kv.get<number>(NIGHTLY_THROUGH_KEY) ?? now - dayMs;
       for (let chunk = 0; chunk < NIGHTLY_CHUNKS; chunk += 1) {
         const rows = episodes.after(through, 40_000);
         if (rows.length === 0) { if (chunk === 0) log({ trace, hop: 'nightly_memory', ms: 0, ok: true, detail: 'quiet day' }); return 'done'; }
+        // How far behind consolidation is, from the oldest turn not yet consolidated (quiet days are not a backlog), in whole days only.
+        const behind = Math.floor((now - rows[0]!.at) / dayMs);
+        if (chunk === 0 && behind > 1) log({ trace, hop: 'nightly_memory', ms: 0, ok: true, code: 'backlog', detail: `${behind} days behind` });
         const held = holdsIn(heldTopicsOf(memory));
         const turns = consolidationDay(rows), day = turns.filter(episode => !held(episode.text));
         const withheld = turns.length - day.length ? `, ${turns.length - day.length} withheld while a forget finishes` : '';
@@ -3571,20 +3571,26 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       return episodes.after(through, 0).length > 0 ? 'more' : 'done';
     };
+    // A consolidation-only pass, soon: re-arming from inside a catch-up's own run replaces its row, so the run's settle keeps it.
+    const armCatchUp = async () => {
+      if (!schedPrefs.enabled('nightly')) return;
+      const at = Date.now() + NIGHTLY_CATCH_UP_DELAY_MS;
+      await scheduler.schedule({ id: NIGHTLY_CATCH_UP_ID, kind: 'dreaming', payloadRefs: { id: NIGHTLY_CATCH_UP_ID }, occurrenceAt: at, dueAt: at, recurrence: null });
+    };
     const nightly = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`;
       const started = Date.now();
       if (entry.id === NIGHTLY_CATCH_UP_ID) {
         // A catch-up that fails again is retried by the scheduler, which backs off and then pauses it; the next night resumes.
-        if (await consolidateBacklog(trace, entry.occurrence_at) === 'failed') throw new Error('nightly consolidation incomplete');
+        // One that leaves a backlog arms the next, so a long backlog drains a bounded pass at a time instead of a night at a time.
+        const outcome = await consolidateBacklog(trace, entry.occurrence_at);
+        if (outcome === 'failed') throw new Error('nightly consolidation incomplete');
+        if (outcome === 'more') await armCatchUp();
         return;
       }
       try {
         await migrateCoreFiles(`${trace}:migration`);
-        if (await consolidateBacklog(trace, entry.occurrence_at) !== 'done' && schedPrefs.enabled('nightly')) {
-          const at = Date.now() + NIGHTLY_CATCH_UP_DELAY_MS;
-          await scheduler.schedule({ id: NIGHTLY_CATCH_UP_ID, kind: 'dreaming', payloadRefs: { id: NIGHTLY_CATCH_UP_ID }, occurrenceAt: at, dueAt: at, recurrence: null });
-        }
+        if (await consolidateBacklog(trace, entry.occurrence_at) !== 'done') await armCatchUp();
         const promoting = Date.now();
         await responder.promote(trace)
           .then((detail) => log({ trace, hop: 'constellation', ms: Date.now() - promoting, ok: true, detail }))

@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { appSubjectFor } from '../src/channels/app-api';
-import { episodeIndex, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, NIGHTLY_ID, NIGHTLY_THROUGH_KEY, OWNER_SAID } from '../src/channels/episodes';
+import { episodeIndex, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, NIGHTLY_CHUNKS, NIGHTLY_ID, NIGHTLY_THROUGH_KEY, OWNER_SAID } from '../src/channels/episodes';
 import { traceBook } from '../src/channels/harness';
 import { claimStore } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
@@ -13,7 +13,7 @@ import { ensureSchema } from '../src/tracer/schema';
 // The nightly pass consolidates everything since the last pass that finished, so a night that failed or never ran is
 // caught up, and a pass that fails leaves a consolidation-only catch-up that the scheduler retries.
 const HOUR = 3_600_000, DAY = 24 * HOUR;
-const model = vi.hoisted(() => ({ fail: false, asked: [] as string[], nights: [] as string[] }));
+const model = vi.hoisted(() => ({ fail: false, failOn: '', asked: [] as string[], nights: [] as string[] }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
@@ -21,8 +21,9 @@ vi.mock('../src/channels/telegram-turn', async load => {
     const format = request.response_format?.name ?? 'reply';
     model.asked.push(format);
     if (format === 'claim_ops') {
-      if (model.fail) throw new Error('synthetic provider outage');
       const said = JSON.stringify(request.messages);
+      if (model.fail) throw new Error('synthetic provider outage');
+      if (model.failOn && said.includes(model.failOn)) throw new Error('synthetic provider outage');
       model.nights.push(said);
       const add = [['Swims every Friday before work', 'I swim every Friday before work'], ['Has a sister called Mira', 'my sister is called Mira']]
         .filter(([, quote]) => said.includes(quote!)).map(([text, quote]) => ({ kind: 'fact', text, source: 'stated', evidence: `"${quote}"`, touches_forgotten: false, aliases: [], aliases_touch_forgotten: false }));
@@ -39,7 +40,7 @@ const OWNER_ID = '7f6e5d4c-3b2a-4190-8f7e-6d5c4b3a2918';
 const NOW = Date.parse('2026-10-13T03:00:00Z');
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 beforeEach(() => {
-  model.fail = false; model.asked = []; model.nights = [];
+  model.fail = false; model.failOn = ''; model.asked = []; model.nights = [];
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
@@ -123,19 +124,53 @@ it('a night that cannot consolidate keeps its mark and arms a catch-up, which on
   });
 });
 
-it('a mark older than the backlog window is logged as clamped, and the night consolidates only the window', async () => {
-  await withOwner('nightly-catch-up-clamped', async ({ state, fire }) => {
+it('quiet days are not a backlog: the day count is from the oldest turn not yet consolidated', async () => {
+  await withOwner('nightly-catch-up-quiet-days', async ({ state, fire }) => {
     const lines = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     try {
-      state.storage.kv.put(NIGHTLY_THROUGH_KEY, NOW - 10 * DAY);
-      const episodes = episodeIndex(state.storage.sql);
-      episodes.add('app-1000006', OWNER_SAID, 'I swim every Friday before work', NOW - 9 * DAY);
-      episodes.add('app-1000008', OWNER_SAID, 'my sister is called Mira', NOW - 2 * HOUR);
+      state.storage.kv.put(NIGHTLY_THROUGH_KEY, NOW - 5 * DAY);
+      episodeIndex(state.storage.sql).add('app-1000008', OWNER_SAID, 'my sister is called Mira', NOW - 2 * HOUR);
       await fire(NIGHTLY_ID);
       const nightly = lines.mock.calls.map(call => String(call[0])).filter(line => line.includes('"hop":"nightly_memory"')).map(line => JSON.parse(line) as { code?: string });
-      expect(nightly.map(entry => entry.code)).toContain('backlog_clamped');
-      expect(model.nights.join('\n')).not.toContain('I swim every Friday');
-      expect(learned(state)).toEqual([GROUNDED[0]]);
+      expect(model.nights).toHaveLength(1);
+      expect(nightly.map(entry => entry.code)).not.toContain('backlog');
+    } finally { lines.mockRestore(); }
+  });
+});
+
+it('a ten-day backlog is consolidated in full, oldest first, a bounded chunk count per pass, and the mark moves only on success', async () => {
+  await withOwner('nightly-catch-up-ten-days', async ({ scheduler, state, fire }) => {
+    const lines = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      // One long owner message a day, so each chunk holds exactly one day and the backlog needs ten consolidation calls.
+      const days = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf', 'Hotel', 'India', 'Juliet'];
+      state.storage.kv.put(NIGHTLY_THROUGH_KEY, NOW - 10 * DAY - 2 * HOUR);
+      const episodes = episodeIndex(state.storage.sql);
+      days.forEach((day, index) => episodes.add(`app-${2000000 + index}`, OWNER_SAID, `${day} journal: ${'quiet steady notes '.repeat(1300)}`, NOW - (10 - index) * DAY - HOUR));
+      const passes: number[] = [];
+      const pass = async (id: string) => { const before = model.nights.length; await fire(id); passes.push(model.nights.length - before); };
+      await pass(NIGHTLY_ID);
+      const behind = lines.mock.calls.map(call => String(call[0])).filter(line => line.includes('"hop":"nightly_memory"')).map(line => JSON.parse(line) as { code?: string; detail?: string });
+      expect(behind).toContainEqual(expect.objectContaining({ code: 'backlog', detail: '10 days behind' }));
+      expect(scheduler.read(NIGHTLY_CATCH_UP_ID)?.status).toBe('armed');
+      // The second day of this pass fails: the mark stays after the first, and the next pass resumes at the failed day.
+      model.failOn = 'Echo journal';
+      await pass(NIGHTLY_CATCH_UP_ID);
+      model.failOn = '';
+      expect(state.storage.kv.get(NIGHTLY_THROUGH_KEY)).toBe(NOW - 7 * DAY - HOUR);
+      // A catch-up that leaves a backlog arms the next one itself, soon, instead of waiting for the next night.
+      for (let more = 0; more < 5 && scheduler.read(NIGHTLY_CATCH_UP_ID)?.status === 'armed'; more += 1) {
+        expect(scheduler.read(NIGHTLY_CATCH_UP_ID)!.due_at).toBeLessThanOrEqual(Date.now() + NIGHTLY_CATCH_UP_DELAY_MS);
+        await pass(NIGHTLY_CATCH_UP_ID);
+      }
+      expect(scheduler.read(NIGHTLY_CATCH_UP_ID)).toBeNull();
+      expect(passes.every(calls => calls <= NIGHTLY_CHUNKS)).toBe(true);
+      expect(passes).toEqual([3, 1, 3, 3]);
+      // Every day reached the model in a pass that finished it, once, oldest first; none was skipped.
+      const firstNight = days.map(day => model.nights.findIndex(night => night.includes(`${day} journal`)));
+      expect(firstNight).toEqual([...firstNight].sort((a, b) => a - b));
+      expect(days.map(day => model.nights.filter(night => night.includes(`${day} journal`)).length)).toEqual(days.map(() => 1));
+      expect(state.storage.kv.get(NIGHTLY_THROUGH_KEY)).toBe(NOW - DAY - HOUR);
     } finally { lines.mockRestore(); }
   });
 });

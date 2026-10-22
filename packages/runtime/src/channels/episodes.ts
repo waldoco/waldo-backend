@@ -184,9 +184,10 @@ export const NIGHTLY_TIME = '03:00';
 // A one-off pass that only consolidates, armed when a night could not finish its backlog.
 export const NIGHTLY_CATCH_UP_ID = 'nightly-memory-catch-up';
 export const NIGHTLY_CATCH_UP_DELAY_MS = 15 * 60_000;
-// The time of the last episode a finished pass consolidated. A pass looks back at most a week and reads at most three chunks.
+// The time of the last episode a finished pass consolidated. Nothing behind it is ever dropped: a pass reads at most three
+// chunks (three consolidation calls, about 120,000 characters), and a backlog it leaves is caught up by further passes,
+// each armed NIGHTLY_CATCH_UP_DELAY_MS after the last.
 export const NIGHTLY_THROUGH_KEY = 'nightly_consolidated_through_v1';
-export const NIGHTLY_BACKLOG_DAYS = 7;
 export const NIGHTLY_CHUNKS = 3;
 
 export const armNightly = async (scheduler: Scheduler, timezone: string, now: number): Promise<void> => {
