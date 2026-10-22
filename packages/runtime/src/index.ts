@@ -7,6 +7,9 @@ import { handleProbeTurn, PROBE_TURN_PATH } from './channels/probe-turn';
 import { handleWhatsAppWebhook, WHATSAPP_WEBHOOK_PATH } from './channels/whatsapp-webhook';
 import { EVENT_INGRESS_PREFIX, handleEventIngress } from './channels/event-ingress';
 import { handleGoogleCallback } from './channels/google-oauth';
+import { handleWhoopCallback, WHOOP_CALLBACK_PATH } from './health/providers/whoop-routes';
+import { handleMcpCallback, handleMcpClientMetadata } from './channels/mcp-oauth-routes';
+import { MCP_CALLBACK_PATH, MCP_CLIENT_METADATA_PATH } from './connectors/mcp-oauth';
 import { CONNECT_LINK_PREFIX, handleConnectTicket } from './channels/connect-link';
 import { GOOGLE_CALLBACK_PATH } from './connectors/google';
 import { CONSOLE_PATH } from './channels/console';
@@ -62,6 +65,9 @@ declare global {
       TELEGRAM_WEBHOOK_SECRET?: string;
       GOOGLE_CLIENT_ID?: string;
       GOOGLE_CLIENT_SECRET?: string;
+      WHOOP_CLIENT_ID?: string;
+      WHOOP_CLIENT_SECRET?: string;
+      WHOOP_REDIRECT_URI?: string;
       WALDO_OWNER_TELEGRAM_ID?: string;
       OPENAI_API_KEY?: string;
       ANTHROPIC_API_KEY?: string;
@@ -172,9 +178,14 @@ export default {
     if (new URL(request.url).pathname.startsWith(CONNECT_LINK_PREFIX)) {
       return handleConnectTicket(request, env);
     }
+    if (new URL(request.url).pathname === WHOOP_CALLBACK_PATH) {
+      return handleWhoopCallback(request, env);
+    }
     if (new URL(request.url).pathname === GOOGLE_CALLBACK_PATH) {
       return handleGoogleCallback(request, env);
     }
+    if (new URL(request.url).pathname === MCP_CLIENT_METADATA_PATH && request.method === 'GET') return handleMcpClientMetadata(request);
+    if (new URL(request.url).pathname === MCP_CALLBACK_PATH && request.method === 'GET') return handleMcpCallback(request, env);
     return new Response('not found', {
       status: 404,
       headers: {

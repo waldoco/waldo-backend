@@ -63,17 +63,17 @@ WALDO_EVAL_MODE=live WALDO_EVAL_JUDGE_MODEL=claude-opus-5-5 WALDO_EVAL_MAX_CALLS
 2. **Schedule it from `main`, with the job checking out `beta-mvp` explicitly.** A schedule always runs the default branch's latest commit, so without an explicit checkout it tests `main`'s code.
 3. **Make `beta-mvp` the default branch.**
 
-The job's timeout is 240 minutes. Trials run one after another: about 1,020 model calls at several seconds each (the 10 October latency baseline measured about 6 s per call), plus 195 judge calls.
+The job's timeout is 240 minutes. Trials run one after another: about 1,035 model calls at several seconds each (the 10 October latency baseline measured about 6 s per call), plus 198 judge calls.
 
 ## Calls and cost per run
 
-`pnpm eval:plan` computes the call plan from the catalogue. Today that is 54 scenarios, 51 of them runnable, at 3 trials:
+`pnpm eval:plan` computes the call plan from the catalogue. Today that is 55 scenarios, 52 of them runnable, at 3 trials:
 
 | | Calls |
 | --- | --- |
-| Owner turns and fired reminders | 204 |
-| Candidate calls (2 to 5 per turn, memory writer included) | 408 to 1020 |
-| Judge calls (51 outcome + 14 voice, times 3) | 195 |
+| Owner turns and fired reminders | 207 |
+| Candidate calls (2 to 5 per turn, memory writer included) | 414 to 1035 |
+| Judge calls (52 outcome + 14 voice, times 3) | 198 |
 | Suggested `WALDO_EVAL_MAX_CALLS` | 1300 |
 
 A test holds the cap in `evals-live.yml` at or above the plan's suggestion. The wave-1 cap of 300 would have run out on the 22-scenario catalogue alone.
@@ -116,4 +116,4 @@ The scorecard reports token totals per role, but not the cached split. The exact
 6. **Record the baseline.** Open the PR that sets the floor with the scorecard's Markdown (`live-scorecard.md`), the exact SHA, the models, the call and token counts, and the dashboard cost. The scorecard holds no reply text.
 7. **Raise the floor only with evidence.** Raise it when a later run's lower bound clears it. Never lower it to make a run pass; a drop is a regression to classify.
 
-`NIGHTLY_THRESHOLDS.live` holds the other limits too: `min_scenarios` (51), `max_blocked` (3), `max_harness_errors` (0) and `max_incomplete` (0). A PR that adds or unblocks a scenario moves them in the same diff.
+`NIGHTLY_THRESHOLDS.live` holds the other limits too: `min_scenarios` (52), `max_blocked` (3), `max_harness_errors` (0) and `max_incomplete` (0). A PR that adds or unblocks a scenario moves them in the same diff.

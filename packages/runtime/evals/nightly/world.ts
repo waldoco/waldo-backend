@@ -22,6 +22,8 @@ import { taskToolHandlers } from '../../src/tasks/tools';
 import type { JobBook, JobRow } from '../../src/tasks/jobs';
 import type { GoogleClient, MailItem, ThreadMessage } from '../../src/connectors/google';
 import type { OwnerClock } from '../../src/tools/live/get-context';
+import { mcpConnections } from '../../src/connectors/mcp-connections';
+import { callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler } from '../../src/tools/live/mcp';
 
 export const OWNER = 'eval-owner';
 export const OWNER_EMAIL = 'owner@example.com';
@@ -33,13 +35,28 @@ export type SeedMail = Readonly<{ id: string; thread_id: string; from: string; t
 export type SeedWeb = Readonly<{ title: string; url: string; snippet: string }>;
 // The day's derived health, as the app compiles it: a Form score, Recovery and Load zones and the drivers behind them.
 export type SeedHealth = Readonly<{ form_score: number; recovery: HealthRowZone; load: HealthRowZone; drivers: readonly string[] }>;
+// A remote MCP server the owner connected (no sign-in), answered in-process. runs_without_asking names the
+// tools the owner let run without a card; results maps a tool name to the text it returns.
+export type SeedMcpTool = Readonly<{ name: string; description: string; inputSchema: Readonly<Record<string, unknown>>; annotations?: Readonly<Record<string, unknown>> }>;
+export type SeedMcp = Readonly<{ url: string; tools: readonly SeedMcpTool[]; runs_without_asking?: readonly string[]; results: Readonly<Record<string, string>> }>;
 export type WorldSeed = Readonly<{
   events?: readonly SeedEvent[]; mail?: readonly SeedMail[]; web?: readonly SeedWeb[];
   // What the shared health looks like once a step shares it; a moderate day with a short night when unset.
   health?: SeedHealth;
   // unconfirmed_draft: saving a draft may have reached Gmail, but nothing confirms it (the effect ledger's unknown outcome).
   faults?: Readonly<{ draft?: 'unconfirmed' }>;
+  mcp?: SeedMcp;
 }>;
+
+// Just enough of MCP 2026-07-28 over Streamable HTTP for the seeded server: tools/list and tools/call.
+const seededMcpFetch = (seed: SeedMcp): typeof fetch => (async (input: RequestInfo | URL, init?: RequestInit) => {
+  if (String(input instanceof Request ? input.url : input) !== seed.url) throw new Error('the eval world reaches only its seeded MCP server');
+  const body = JSON.parse(String(init?.body ?? '{}')) as { id?: string; method?: string; params?: { name?: string } };
+  const result = body.method === 'tools/list' ? { tools: seed.tools, ttlMs: 3_600_000, cacheScope: 'private' }
+    : body.method === 'tools/call' ? { content: [{ type: 'text', text: seed.results[body.params?.name ?? ''] ?? 'No result.' }] } : null;
+  return Response.json(result ? { jsonrpc: '2.0', id: body.id, result: { resultType: 'complete', ...result } } : { jsonrpc: '2.0', id: body.id, error: { code: -32601, message: 'Method not found' } });
+}) as typeof fetch;
+
 export type Effect = Readonly<{ kind: string; payload: unknown }>;
 
 const sqlite = (): SqlStorage => {
@@ -228,6 +245,15 @@ export const evalWorld = (seed: WorldSeed, start: string) => {
     get: (id: string) => tasks.find((row) => row.id === id) ?? null,
     cancel: (id: string) => { const row = tasks.find((entry) => entry.id === id); if (!row) return false; effect('task.cancel', { id }); return true; },
   } as unknown as JobBook;
+  const mcp = mcpConnections({ sql, transaction: (work) => work(), proxy: null, doName: () => null, fetcher: seed.mcp ? seededMcpFetch(seed.mcp) : fetch, now });
+  // An approved MCP card is an effect like any other: recorded, never run.
+  const mcpDesk = { proposeMcpCall: async (proposal: unknown) => { effect('mcp.card', proposal); return nextId('card'); } };
+  const mcpReady = (async () => {
+    if (!seed.mcp) return;
+    const connected = await mcp.begin(seed.mcp.url, 'https://waldo.example');
+    if (connected.kind !== 'connected') throw new Error('the seeded MCP server did not connect');
+    for (const tool of seed.mcp.runs_without_asking ?? []) await mcp.setRuns(connected.id, tool, true);
+  })();
   const handlers = [
     ...taskToolHandlers({ book: jobs, now, timezone: () => TIMEZONE, surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined }),
     ...googleHandlers(google, desk, clock), connectServiceHandler(google), ...reminderHandlers(reminderBook), ...standingOrderHandlers(standingOrders),
@@ -238,6 +264,7 @@ export const evalWorld = (seed: WorldSeed, start: string) => {
       if (fn === 'health_series_read') return healthSeries(localIso(now(), TIMEZONE).slice(0, 10));
       throw new Error(`unexpected health call ${fn}`);
     }, 'eval-owner'), clock),
+    searchMcpToolsHandler(mcp), readMcpToolHandler(undefined, undefined, false, mcp), callMcpToolHandler(undefined, mcpDesk, undefined, mcp),
   ];
 
   // Synthetic zone-level context only, as the owner object's health book supplies it.
@@ -254,6 +281,7 @@ export const evalWorld = (seed: WorldSeed, start: string) => {
 
   return {
     clock, conversation, memory, handlers,
+    ready: mcpReady,
     health: async () => (sharing === 'shared' ? toContextHealthMaterial(sharedHealth(), clock) : null),
     shareHealth(shared: boolean) { sharing = shared ? 'shared' : 'withdrawn'; },
     // New mail reaching the inbox mid-trial.
