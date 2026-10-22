@@ -38,6 +38,12 @@ describe('the shared guard', () => {
     expect(hidesTopic(String.raw`{"t":"\u0074ea"}`, 'tea')).toBe(true);
     expect(hidesTopic(String.raw`{"t":"\u0074eam"}`, 'tea')).toBe(false);
   });
+  it('an escape that spells the topic holds under any reading; a backslash that only sits in prose does not', () => {
+    expect(hidesTopic(String.raw`green \x74ea`, 'tea')).toBe(true);
+    expect(hidesTopic(String.raw`green t\ea`, 'tea')).toBe(true);
+    expect(hidesTopic(String.raw`team at C:\Users`, 'tea')).toBe(false);
+    expect(hidesTopic(String.raw`backup at C:\Users\Sarahs`, 'Sarah')).toBe(false);
+  });
   it('decoded JSON leaves and the LIKE prefilter follow the same rule', () => {
     expect(decodedLeafHit(JSON.stringify({ note: 'team' }), 'tea')).toBe(false);
     expect(decodedLeafHit(JSON.stringify({ note: 'tea' }), 'tea')).toBe(true);
@@ -109,6 +115,36 @@ describe('the SQL purge', () => {
       episodeIndex(sql).add('tg-1', 'owner', 'Lunch at CAFÉ ZÜRICH today', 1);
       expect(store.purge([], AT, ['Café Zürich']).ready).toBe(true);
       expect(sql.exec<{ text: string }>('SELECT text FROM episodes').one().text).toBe(`Lunch at ${FORGOTTEN} today`);
+    });
+  });
+  it('a script without spaces, a suffixed Indic word and a number inside a number are still forgotten and read back clean', async () => {
+    await inDo('boundary-purge-scripts', (state) => {
+      const sql = state.storage.sql;
+      const store = claimStore(sql, work => state.storage.transactionSync(work));
+      const episodes = episodeIndex(sql);
+      episodes.add('tg-1', 'owner', '我住在北京市朝阳区', 1);
+      episodes.add('tg-2', 'owner', 'मुंबईत भेटू', 2);
+      episodes.add('wa-3', 'owner', 'Call +919876543210 today', 3);
+      for (const topic of ['北京市', 'मुंबई', '9876543210']) expect(store.purge([], AT, [topic])).toMatchObject({ ready: true, remaining: {}, failed: [] });
+      expect(sql.exec<{ text: string }>('SELECT text FROM episodes ORDER BY rowid').toArray().map(row => row.text))
+        .toEqual([`我住在${FORGOTTEN}朝阳区`, `${FORGOTTEN}त भेटू`, `Call +91${FORGOTTEN} today`]);
+    });
+  });
+  it('a backslash in prose that starts no JSON escape never holds a forget', async () => {
+    await inDo('boundary-purge-prose-backslash', (state) => {
+      const sql = state.storage.sql;
+      const store = claimStore(sql);
+      const episodes = episodeIndex(sql);
+      episodes.add('tg-1', 'owner', String.raw`the team keeps C:\Users\Nina\Docs`, 1);
+      episodes.add('tg-2', 'owner', String.raw`saved to C:\Users\Sarah\docs`, 2);
+      episodes.add('tg-3', 'owner', String.raw`backup at C:\Users\Sarahs`, 3);
+      episodes.add('tg-4', 'owner', String.raw`notes in C:\Tea`, 4);
+      expect(store.purge([], AT, ['tea'])).toMatchObject({ ready: true, remaining: {} });
+      expect(store.purge([], AT, ['Sarah'])).toMatchObject({ ready: true, remaining: {} });
+      expect(sql.exec<{ text: string }>('SELECT text FROM episodes ORDER BY rowid').toArray().map(row => row.text)).toEqual([
+        String.raw`the team keeps C:\Users\Nina\Docs`, String.raw`saved to C:\Users\@\docs`.replace('@', FORGOTTEN),
+        String.raw`backup at C:\Users\Sarahs`, String.raw`notes in C:\@`.replace('@', FORGOTTEN),
+      ]);
     });
   });
   it('a genuinely remaining copy still holds the forget', async () => {
@@ -202,6 +238,15 @@ describe('the forget tool', () => {
       expect(result).toMatchObject({ ok: true });
       expect(store.allClaims().map(claim => claim.text)).toEqual(['Works with a team']);
       expect(store.pendingTopics()).toEqual(['steady']);
+    });
+  });
+  it('forgetting a place written without spaces removes the claim that names it, and says so', async () => {
+    await inDo('boundary-tool-cjk', async (state) => {
+      const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
+      store.add({ kind: 'fact', text: '明日新宿駅で会う', source: 'stated', evidence: '明日新宿駅で会う', origin: 'owner', source_ref: 'owner, tg-1' }, AT);
+      const [, , forget] = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', transaction: work => state.storage.transactionSync(work), hideHistory: async () => undefined });
+      expect(await forget!.handle({ topic: '新宿駅', scope_note: '新宿駅' }, owner('新宿駅を忘れて') as never)).toMatchObject({ ok: true });
+      expect(store.allClaims()).toEqual([]);
     });
   });
 });

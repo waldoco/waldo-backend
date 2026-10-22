@@ -1,12 +1,34 @@
 import { describe, expect, it } from 'vitest';
-import { ConversationTree, literalJsonTextRedactor, literalTextPattern, literalTextRedactor, redactConversationEntry, type ConversationEntry } from './conversation-entry';
+import { ConversationTree, literalJsonTextRedactor, literalTextIndex, literalTextRedactor, redactConversationEntry, type ConversationEntry } from './conversation-entry';
 
 describe('forget matches whole words', () => {
   const forget = (topics: readonly string[], text: string) => literalTextRedactor(topics, '[forgotten]')(text);
   it('leaves words that only contain the topic alone', () => {
     expect(forget(['tea'], 'residency banglore team. Steady the rest instead, at the steam room')).toBe('residency banglore team. Steady the rest instead, at the steam room');
     expect(forget(['tea'], 'teapot and teas')).toBe('teapot and teas');
-    expect(forget(['2026'], 'DLD-20261002 and 12026')).toBe('DLD-20261002 and 12026');
+  });
+  it('keeps the substring match where a word boundary cannot be read: scripts without spaces and suffixed Indic words', () => {
+    expect(forget(['北京市'], '我住在北京市朝阳区')).toBe('我住在[forgotten]朝阳区');
+    expect(forget(['新宿駅'], '明日新宿駅で会う')).toBe('明日[forgotten]で会う');
+    expect(forget(['부산역'], '부산역에서 만나요')).toBe('[forgotten]에서 만나요');
+    expect(forget(['กรุงเทพ'], 'ฉันอยู่กรุงเทพมาสามปี')).toBe('ฉันอยู่[forgotten]มาสามปี');
+    expect(forget(['मुंबई'], 'मुंबईत भेटू')).toBe('[forgotten]त भेटू');
+    expect(forget(['दिल्ली'], 'उद्या दिल्लीला जाणार')).toBe('उद्या [forgotten]ला जाणार');
+    expect(forget(['சென்னை'], 'நாளை சென்னையில் சந்திப்போம்')).toBe('நாளை [forgotten]யில் சந்திப்போம்');
+  });
+  it('a digit or symbol at the edge matches as before: numbers inside numbers, a name before digits', () => {
+    expect(forget(['9876543210'], 'Call +919876543210 today')).toBe('Call +91[forgotten] today');
+    expect(forget(['sarah'], 'login sarah2024')).toBe('login [forgotten]2024');
+    expect(forget(['C++'], 'written in C++17')).toBe('written in [forgotten]17');
+    expect(forget(['2026'], 'DLD-20261002 and 12026')).toBe('DLD-[forgotten]1002 and 1[forgotten]');
+  });
+  it('the boundary holds in Latin, Greek and Cyrillic words, and a combining mark continues the letter before it', () => {
+    expect(forget(['чай'], 'чайник и чай')).toBe('чайник и [forgotten]');
+    expect(forget(['cafe'], 'cafe\u0301 and cafe')).toBe('cafe\u0301 and [forgotten]');
+    expect(forget(['tea'], 'e\u0301tea, tea')).toBe('e\u0301tea, [forgotten]');
+  });
+  it('a candidate the boundary rejects never hides an overlapping one that passes', () => {
+    expect(forget(['x-x'], 'ax-x-x')).toBe('ax-[forgotten]');
   });
   it('still removes the topic in any case, next to punctuation, and as a phrase', () => {
     expect(forget(['tea'], "Tea, tea's (tea) TEA tea.")).toBe("[forgotten], [forgotten]'s ([forgotten]) [forgotten] [forgotten].");
@@ -28,11 +50,16 @@ describe('forget matches whole words', () => {
     expect(forget(['tea'], String.raw`"\\tea"`)).toBe(String.raw`"\\[forgotten]"`);
     expect(forget(['tea'], String.raw`"\\\tea"`)).toBe(String.raw`"\\\tea"`);
   });
-  it('builds one pattern the verifiers share, with an open end for a cut prefix', () => {
-    expect('a team'.search(literalTextPattern('tea'))).toBe(-1);
-    expect('a TEA.'.search(literalTextPattern('tea'))).toBe(2);
-    expect('a teapot'.search(literalTextPattern('tea', true))).toBe(2);
-    expect('a steapot'.search(literalTextPattern('tea', true))).toBe(-1);
+  it('a backslash that starts no JSON escape is prose, in either case', () => {
+    expect(forget(['Sarah'], String.raw`C:\Users\Sarah\docs`)).toBe(String.raw`C:\Users\[forgotten]\docs`);
+    expect(forget(['tea'], String.raw`C:\Tea and C:\Users\Nina\tea`)).toBe(String.raw`C:\[forgotten] and C:\Users\Nina\tea`);
+  });
+  it('finds by the same rule the redactor rewrites by, with an open end for a cut prefix', () => {
+    expect(literalTextIndex('a team', 'tea')).toBe(-1);
+    expect(literalTextIndex('a TEA.', 'tea')).toBe(2);
+    expect(literalTextIndex('a teapot', 'tea', true)).toBe(2);
+    expect(literalTextIndex('a steapot', 'tea', true)).toBe(-1);
+    expect(literalTextIndex('ax-x-x', 'x-x')).toBe(3);
   });
   it('redacts JSON values and keys by whole word too', () => {
     const redact = literalJsonTextRedactor(['tea'], '[forgotten]');
