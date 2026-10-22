@@ -44,9 +44,11 @@ const SUBJECT = 'owner@example.invalid', CHAT = `iMessage;-;${SUBJECT}`;
 const forbiddenEgress: string[] = [];
 let addresses = 0;
 
-afterEach(() => { vi.restoreAllMocks(); proof.turns = []; proof.systems = []; proof.hold = null; proof.outputs = []; forbiddenEgress.length = 0; });
+afterEach(() => { vi.restoreAllMocks(); proof.turns = []; proof.systems = []; proof.hold = null; proof.outputs = []; });
 
 async function world(ownerName = `imsg-owner-${crypto.randomUUID()}`, ownerId = '10000000-0000-4000-8000-000000000001') {
+  // Each world counts only its own test's egress.
+  forbiddenEgress.length = 0;
   const owners: FixtureOwner[] = [{ do_name: ownerName, owner_id: ownerId, state: 'active', state_version: 1, admission_revision: 1 }];
   const fx = fixtureDirectory({ origin: ORIGIN, secret: SECRET, owners, extra: (fn) => {
     if (fn === 'console_session_touch' || fn === 'console_session_open') return Response.json(true);
@@ -809,31 +811,6 @@ it('an iMessage drain that finds no turn left keeps the reminder\'s alarm', asyn
   });
 });
 
-// A turn the alarm pass runs queues its reply's drain behind the pass, so that drain is the last re-arm, after the pass has
-// ended. This fixture's owner has only iMessage, so the pass runs on it, and the drain's re-arm, last, keeps the reminder's
-// wake. The message is admitted straight into the owner's inbox, as the bridge's handoff does, so the pass runs it.
-it('a turn the alarm pass runs keeps the reminder\'s alarm once its reply goes out', async () => {
-  const w = await world();
-  await afterOneReply(w);
-  const due = await runInDurableObject(w.ownerStub, async (_i, state) => {
-    const reminder = await remindInTwoHours(state);
-    const owned = new IMessageOwnerInbox(state.storage), first = owned.records()[0]!;
-    const dedupKey = JSON.stringify(['imessage', 'in-pass', crypto.randomUUID()]), digest = await sha256Hex(dedupKey);
-    const admitted = await owned.admit({ environment: first.environment, binding: first.binding, revision: first.revision, ownerDoName: first.ownerDoName,
-      bindingDigest: first.bindingDigest, conversationRef: first.conversationRef, bridgeDoName: first.bridgeDoName, dedupKey, digest,
-      commandId: `wrc_${digest.slice(0, 40)}`, text: 'What is on today?', occurredAt: Date.now() });
-    expect(admitted.kind).toBe('admitted');
-    return reminder;
-  });
-  try {
-    await runDurableObjectAlarm(w.ownerStub);
-    await vi.waitFor(async () => expect((await inbox(w.ownerStub)).map(record => record.state)).toEqual(['completed', 'completed']), { timeout: 8_000, interval: 50 });
-    expect(proof.turns).toHaveLength(2);
-    await ownerIdle(w.ownerStub);
-    expect(await ownerAlarm(w.ownerStub)).toEqual({ alarm: due, due });
-  } finally { await clearOwnerAlarm(w.ownerStub); }
-}, 15_000);
-
 // An owner whose only surface is iMessage: no app, Telegram or WhatsApp binding. Scheduled work reaches them on iMessage,
 // through the delivery outbox: a job settles only once the bridge reports what became of its message.
 const iMessageOnly = async (w: Awaited<ReturnType<typeof world>>) => {
@@ -1004,3 +981,28 @@ it('iMessage results reach the delivery records waiting on them: sent arrives, n
     expect(observeIMessageReports(state.storage, subject, now)).toBe(0);
   });
 });
+
+// A turn the alarm pass runs queues its reply's drain behind the pass, so that drain is the last re-arm, after the pass has
+// ended. This fixture's owner has only iMessage, so the pass runs on it, and the drain's re-arm, last, keeps the reminder's
+// wake. The message is admitted straight into the owner's inbox, as the bridge's handoff does, so the pass runs it.
+it('a turn the alarm pass runs keeps the reminder\'s alarm once its reply goes out', async () => {
+  const w = await world();
+  await afterOneReply(w);
+  const due = await runInDurableObject(w.ownerStub, async (_i, state) => {
+    const reminder = await remindInTwoHours(state);
+    const owned = new IMessageOwnerInbox(state.storage), first = owned.records()[0]!;
+    const dedupKey = JSON.stringify(['imessage', 'in-pass', crypto.randomUUID()]), digest = await sha256Hex(dedupKey);
+    const admitted = await owned.admit({ environment: first.environment, binding: first.binding, revision: first.revision, ownerDoName: first.ownerDoName,
+      bindingDigest: first.bindingDigest, conversationRef: first.conversationRef, bridgeDoName: first.bridgeDoName, dedupKey, digest,
+      commandId: `wrc_${digest.slice(0, 40)}`, text: 'What is on today?', occurredAt: Date.now() });
+    expect(admitted.kind).toBe('admitted');
+    return reminder;
+  });
+  try {
+    await runDurableObjectAlarm(w.ownerStub);
+    await vi.waitFor(async () => expect((await inbox(w.ownerStub)).map(record => record.state)).toEqual(['completed', 'completed']), { timeout: 8_000, interval: 50 });
+    expect(proof.turns).toHaveLength(2);
+    await ownerIdle(w.ownerStub);
+    expect(await ownerAlarm(w.ownerStub)).toEqual({ alarm: due, due });
+  } finally { await clearOwnerAlarm(w.ownerStub); }
+}, 15_000);
