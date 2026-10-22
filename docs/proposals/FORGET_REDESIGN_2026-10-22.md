@@ -252,17 +252,19 @@ Purge: a step that throws stays pending and the barrier still holds; a crash mid
 
 ## 9. Build order
 
-Each is its own PR on `beta-mvp`, Sonnet building, Opus reviewing the privacy surface.
+One PR builds the whole redesign, behind `WALDO_FORGET_BARRIER` (staging `on`; off is today's rule, kept inside the barrier module as the one-line rollback):
+- the barrier and the single seam (`composer.view`, the guard test);
+- the purge job and the store registry, with the per-turn retry and the nightly wait removed;
+- hard deletion of derived memory;
+- the console's held topics and retry, and the graph and profile through the barrier;
+- one nightly failure notice, then quiet;
+- the forget eval, the barrier mutations and the staging E2E.
 
-1. **Barrier semantics**: `context-composer/forget-barrier.ts` holds every rule for model-bound text (owner items dropped, outside text redacted, nothing withheld whole), and every `owner-turn.ts` site that withheld a whole read calls it; `held-turns.ts` deleted; the forget eval and the twelve mutations. Behind `WALDO_FORGET_BARRIER` (staging `on`; off is today's whole-read rule inside the same module) so the flip has a one-line rollback.
-1b. **One seam**: move history, the suffix, pinned memory, loops and orders behind `composer.view`, so the barrier is applied once per model call and a guard test fails on any fragment that bypasses it. Separate from 1 because recall and pinned memory render under a room budget that must see the filtered items; done first, it would mix a refactor with the privacy change. The console graph and profile move to slice 4.
-2. **Purge job + registry**: `forget_purge` kind, `forget_purge_steps`, `FORGET_STORES`, tool commit split, `restored()` removed. Same flag.
-3. **Hard deletion**: §4's delete and regenerate modes, store by store, each with a paraphrase probe.
-4. **Console**: held topics, masked label, retry.
-5. **Cleanup**: delete the flag and the old path; drop `memory_blocks` and `memory_inbox` after the owner's hosted empty check (a read-only script ships with this PR).
-6. **ADRs** land in `waldo-brain` from the drafts.
+Two parts cannot ride in it:
+- Dropping `memory_blocks` and `memory_inbox` waits on the owner's read-only hosted check; the PR ships the check script and a drop gated on it.
+- The ADRs land in `waldo-brain` from the drafts.
 
-Also in this lane, separate and small: one nightly failure notice, then quiet, with a console line (owner yes). M-4 on idle is C0's, inside #1379.
+M-4 on idle stays with C0, inside #1379.
 
 ## 10. Falsifiers and risks
 
