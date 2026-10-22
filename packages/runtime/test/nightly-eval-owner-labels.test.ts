@@ -1,6 +1,6 @@
 // Every owner label in this file is synthetic and lives in the test only; the repository holds none until the owner
 // signs some. Nothing here may be copied into a fixture as though a person had made the call.
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -30,6 +30,18 @@ describe('opaque ids', () => {
     expect(inFileOrder).not.toEqual([...inFileOrder].sort((a, b) => a - b));
     const firstHalf = drafts.filter((draft) => Number(ids.get(draft.id)!.slice(1, 3)) <= Math.floor(drafts.length / 2));
     expect(new Set(firstHalf.map((draft) => draft.label))).toEqual(new Set(['pass', 'fail']));
+  });
+
+  it('stop matching when a reply is edited under the same id, so a label can never attach to text the owner did not see', () => {
+    const edited = drafts.map((draft, index) => (index === 1 ? { ...draft, transcript: draft.transcript.map((turn) => (turn.role === 'waldo' ? { ...turn, text: `${turn.text} Anything else?` } : turn)) } : draft));
+    const newIds = opaqueIds(edited);
+    for (const draft of drafts) expect(newIds.get(draft.id), draft.id).not.toBe(ids.get(draft.id));
+    expect(() => parseOwnerLabels(row(), edited)).toThrow(/not in the labelled set/);
+  });
+
+  it('keep their ids when only a draft\'s verdict or reasons change, since the owner sees neither', () => {
+    const recalled = drafts.map((draft, index) => (index === 1 ? { ...draft, why: 'Reworded reasons.', reviewed_by: 'someone' } : draft));
+    expect([...opaqueIds(recalled).values()]).toEqual([...ids.values()]);
   });
 
   it('stop matching when the set changes, so a label can never attach to a different reply', () => {
@@ -110,6 +122,18 @@ describe('labelling sheet', () => {
     const headings = sheet.split('\n').filter((line) => line.startsWith('## '));
     expect(headings).toEqual([...ids.values()].sort().map((id) => `## ${id}`));
     for (const draft of drafts) expect(sheet).not.toContain(draft.id);
+  });
+
+  it('tells the owner to label from the sheet alone, and not to open the file that holds every draft call', () => {
+    const header = sheet.slice(0, sheet.indexOf('\n## L'));
+    expect(header).toContain('voice-labels-v0.jsonl');
+    expect(header).toMatch(/do not open/i);
+  });
+
+  it('is told the same in the steps for the owner', () => {
+    const doc = readFileSync(new URL('../../../docs/evals/STATE_AND_MEMORY_EVALS.md', import.meta.url), 'utf8');
+    const steps = doc.slice(doc.indexOf('## For Suyash'));
+    expect(steps).toMatch(/do not open[^\n]*voice-labels-v0\.jsonl/i);
   });
 
   it('carries no verdict: not a draft\'s reasons, author, label or failed tests, and no pass or fail word beside a reply', () => {

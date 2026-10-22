@@ -61,12 +61,14 @@ describe('toContextHealthMaterial', () => {
     });
   });
 
-  it('owns the Form bands itself: the zone comes from formZoneOf(score), never the app word', () => {
-    const at = (score: number) => toContextHealthMaterial(row({ context: { ...row().context!, form: { score, zone: 'high' } } }), clock);
-    expect(formZoneOf(at(85)!)).toBe('energized');
-    expect(formZoneOf(at(79)!)).toBe('steady');
-    expect(formZoneOf(at(41)!)).toBe('flagging');
-    expect(formZoneOf(at(12)!)).toBe('depleted');
+  it('takes the Form zone the backend stored, which holds through a steady move, as the app shows it', () => {
+    const at = (score: number, zone: string) => toContextHealthMaterial(row({ context: { ...row().context!, form: { score, zone } } }), clock);
+    expect(formZoneOf(at(77, 'high')!)).toBe('energized');
+    expect(formZoneOf(at(83, 'good')!)).toBe('steady');
+    expect(formZoneOf(at(41, 'moderate')!)).toBe('flagging');
+    expect(formZoneOf(at(12, 'low')!)).toBe('depleted');
+    // A word the bridge does not know is no Form, as for Recovery and Load, never a zone guessed from the score.
+    expect(at(85, 'unknown')!.view.algorithm_version).toBe('recovery.v1');
   });
 
   it('bridges the app zone vocabulary for recovery and load', () => {
@@ -117,7 +119,7 @@ describe('toContextHealthMaterial', () => {
       row({
         context: {
           ...row().context!,
-          form: { score: 72, drivers: ['sleep below baseline', 'HRV 48 ms', 'see https://evil.example/x'] },
+          form: { score: 72, zone: 'good', drivers: ['sleep below baseline', 'HRV 48 ms', 'see https://evil.example/x'] },
           drivers: ['resting heart rate 61'],
           tags: ['travel', 'sick-day-2'],
         },
