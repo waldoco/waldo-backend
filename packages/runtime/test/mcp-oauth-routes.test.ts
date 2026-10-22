@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { handleMcpCallback, handleMcpClientMetadata } from '../src/channels/mcp-oauth-routes';
 import { consoleAccess } from '../src/channels/console';
-import { mcpConnectReceipt, mcpDisconnectReceipt } from '../src/channels/dashboard-control-actions';
+import { mcpConnectReceipt, mcpDisconnectReceipt, mcpRunsReceipt } from '../src/channels/dashboard-control-actions';
 import { MCP_ATTEMPT_TTL_MS, mcpState } from '../src/connectors/mcp-connections';
 import { MCP_CALLBACK_PATH } from '../src/connectors/mcp-oauth';
 import { bindBrowser } from '../src/connectors/oauth-browser-binding';
@@ -35,6 +35,21 @@ describe('MCP OAuth routes', () => {
     const unknown = await handleMcpCallback(new Request(`https://waldo.example/oauth/mcp/callback?code=c&state=${encodeURIComponent(state)}`, { headers: { cookie } }), routeEnv());
     expect(unknown.status).toBe(400);
     expect(await unknown.text()).toContain('This link is not valid');
+  });
+
+  it('allows a tool to run without asking only at the digest the console showed, and refuses a value without one', async () => {
+    const calls: unknown[][] = [];
+    const setRuns = async (...args: unknown[]) => { calls.push(args); return args[3] === 'b'.repeat(64) ? 'changed' as const : true; };
+    const digest = 'a'.repeat(64);
+    expect(await mcpRunsReceipt('c1', `search_pages|on|${digest}`, setRuns)).toEqual({ state: 'recorded', message: 'search_pages runs without asking.' });
+    expect(await mcpRunsReceipt('c1', `*read_only_hint|on|${digest}`, setRuns)).toEqual({ state: 'recorded', message: 'The tools labelled read-only run without asking.' });
+    expect(await mcpRunsReceipt('c1', 'search_pages|off', setRuns)).toEqual({ state: 'recorded', message: 'search_pages asks you first.' });
+    expect(await mcpRunsReceipt('c1', `search_pages|on|${'b'.repeat(64)}`, setRuns)).toEqual({ state: 'rejected', message: 'That server changed its tools since this page loaded, so nothing was allowed. Refresh Connections and choose again.' });
+    expect(calls).toEqual([['c1', 'search_pages', true, digest], ['c1', '*read_only_hint', true, digest], ['c1', 'search_pages', false, undefined], ['c1', 'search_pages', true, 'b'.repeat(64)]]);
+    for (const value of ['search_pages|on', 'search_pages|on|short', 'search_pages|maybe', '|on|' + digest, 'search_pages']) {
+      expect([value, (await mcpRunsReceipt('c1', value, setRuns)).state]).toEqual([value, 'rejected']);
+    }
+    expect(calls).toHaveLength(4);
   });
 
   it('turns connect and disconnect outcomes into receipts with only a first-party start link', () => {

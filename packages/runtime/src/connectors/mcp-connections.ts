@@ -8,7 +8,7 @@ import { authorizationUrl, callbackUrl, clientMetadataUrl, discoverAuthorization
 import { McpChallenge, McpRpcError, McpServerError, mcpRequest, type McpEra } from './mcp-protocol';
 import { OAuthProxyError, type OAuthProxy } from './oauth-proxy-client';
 import type { McpMethod, OAuthProxyFailure } from './oauth-proxy-wire';
-import { argsDigest, checkArgs, marksReadOnly, parseToolsPage, rankTools, toolDigest, toolHeaders, type McpToolDef } from './mcp-tools';
+import { argsDigest, checkArgs, marksReadOnly, parseToolsPage, rankTools, sha256, toolDigest, toolHeaders, type McpToolDef } from './mcp-tools';
 
 // Every tool the server labels read-only. TOOL_NAME never admits '*', so no real tool shares this value.
 export const EVERY_READ_ONLY_HINT = '*read_only_hint';
@@ -25,6 +25,11 @@ const KEEP_SETTLED_MS = 24 * 60 * 60_000;
 const DEFAULT_TOOLS_TTL_MS = 60 * 60_000;
 // Pages of tools/list followed per refresh: a bound against a server that pages forever.
 const MAX_TOOL_PAGES = 50;
+// Every kept definition is stored in the owner object and parsed again for each search and turn, so a server that lists
+// thousands of tools, or one enormous definition, would fill the owner's storage and spend its CPU. Past these bounds
+// Waldo keeps the first tools the server lists, drops an oversized definition, and tells the owner and the model so.
+const MAX_TOOLS_PER_SERVER = 500;
+const MAX_TOOL_DEF_CHARS = 32_768;
 const SEARCH_PAGE = 20;
 const DIRECT = { call: { maxBytes: 16 * 1024 * 1024, timeoutMs: 120_000 }, list: { maxBytes: 4 * 1024 * 1024, timeoutMs: 30_000 } } as const;
 // Refresh ahead of the recorded expiry so a call never leaves with a token about to lapse.
@@ -46,8 +51,10 @@ export type McpConnectionView = Readonly<{
   wants_scopes: readonly string[];
   status: McpStatus;
   tools: number;
-  // Definitions the server sent that break MCP's rules (name, schema, header annotations): never offered.
+  // Definitions the server sent that break MCP's rules (name, schema, header annotations) or are too large: never offered.
   hidden_tools: number;
+  // The server lists more tools than Waldo keeps for one server; only the first MAX_TOOLS_PER_SERVER are offered.
+  tools_capped: boolean;
   runs_without_asking: number;
   marked_read_only: number;
   tools_changed: boolean;
@@ -69,6 +76,10 @@ export type McpToolCard = Readonly<{
 export type McpQuestion = Readonly<{ id: string; message: string; fields: Readonly<Record<string, unknown>> }>;
 export type McpInputRequired = Readonly<{ handle: string; questions: readonly McpQuestion[] }>;
 export type McpAnswers = Readonly<{ handle: string; responses: Readonly<Record<string, unknown>> }>;
+// A server's tools as the console lists them, each with the digest of the definition shown. read_only_digest covers the
+// set behind "let tools labelled read-only run without asking". A grant names the digest the owner saw, so a definition
+// that changes between the page load and the click is never the one granted.
+export type McpConsoleTools = Readonly<{ tools: readonly Readonly<{ tool: string; runs: McpToolCard['runs']; read_only_hint: boolean; title?: string; digest: string }>[]; read_only_digest: string }>;
 export type McpWaiting = Readonly<{ server: string; tool: string; args: Readonly<Record<string, unknown>>; answers_handle: string; questions: readonly McpQuestion[] }>;
 
 type Attempt = Readonly<{
@@ -101,6 +112,9 @@ export class McpRefusal extends Error {
 export class McpToolFailed extends McpRefusal {
   constructor(cause: string) { super('rejected', cause); this.name = 'McpToolFailed'; }
 }
+// Server-written text inside a Waldo sentence, labelled with where it came from and JSON-quoted so it cannot close its
+// own quotes or pass for Waldo's words.
+const serverSaid = (server: string, text: string) => `${server} said (its own words, not Waldo's): ${JSON.stringify(text)}`;
 const toolErrorText = (result: Record<string, unknown>) => {
   const text = Array.isArray(result.content) ? result.content.flatMap((part) => (isRecord(part) && part.type === 'text' && typeof part.text === 'string' ? [part.text] : [])).join(' ') : '';
   return text.slice(0, 500) || 'no detail';
@@ -120,7 +134,7 @@ export type McpConnectionsDeps = Readonly<{
   log?: (entry: Readonly<{ hop: string; ok: boolean; code?: string; ms: number }>) => void;
 }>;
 
-type Row = { id: string; name: string; server_url: string; auth: string; registration: string; issuer: string | null; scopes: string; step_up: string; status: string; era: string | null; version: string | null; expires_at: number | null; tools_fetched_at: number | null; tools_ttl_ms: number | null; hidden_tools: number; connected_at: number };
+type Row = { id: string; name: string; server_url: string; auth: string; registration: string; issuer: string | null; scopes: string; step_up: string; status: string; era: string | null; version: string | null; expires_at: number | null; tools_fetched_at: number | null; tools_ttl_ms: number | null; hidden_tools: number; tools_capped: number; connected_at: number };
 
 const b64url = (bytes: Uint8Array) => {
   let binary = '';
@@ -165,7 +179,7 @@ const refusalFor = (failure: OAuthProxyFailure, server: string): McpRefusal => {
     case 'rate_limited': return new McpRefusal('transient', `${server} is rate limiting requests${failure.retry_after === undefined ? '' : `; it asked to wait ${failure.retry_after} s`}.`);
     case 'unavailable': return new McpRefusal('transient', `${server} could not be reached or failed for a passing reason${failure.retry_after === undefined ? '' : `; it asked to wait ${failure.retry_after} s`}.`);
     case 'egress_oversize': return new McpRefusal('oversize', `${server} returned more data than Waldo reads in one call. Narrow the request (smaller page, fewer items) and call again.`);
-    case 'rpc_error': return new McpRefusal('rejected', `${server} refused the call${failure.rpc_code === undefined ? '' : ` (error ${failure.rpc_code})`}: ${failure.message ?? 'no detail'}`);
+    case 'rpc_error': return new McpRefusal('rejected', `${server} refused the call${failure.rpc_code === undefined ? '' : ` (error ${failure.rpc_code})`}. ${serverSaid(server, failure.message ?? 'no detail')}`);
     case 'intent_pending': case 'intent_unavailable': return new McpRefusal('transient', `The outcome of this ${server} call is unknown; nothing was run again.`);
     case 'intent_conflict': return new McpRefusal('rejected', `This approval was already used for a different ${server} call.`);
     case 'egress_refused': return new McpRefusal('forbidden', `${server} pointed Waldo at an address it does not reach.`);
@@ -191,6 +205,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS mcp_connections (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, server_url TEXT NOT NULL, auth TEXT NOT NULL, registration TEXT NOT NULL,
     issuer TEXT, scopes TEXT NOT NULL DEFAULT '', step_up TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, era TEXT, version TEXT, expires_at INTEGER, tools_fetched_at INTEGER, tools_ttl_ms INTEGER,
     hidden_tools INTEGER NOT NULL DEFAULT 0, connected_at INTEGER NOT NULL)`);
+  if (!sql.exec<{ name: string }>('PRAGMA table_info(mcp_connections)').toArray().some((column) => column.name === 'tools_capped')) sql.exec('ALTER TABLE mcp_connections ADD COLUMN tools_capped INTEGER NOT NULL DEFAULT 0');
   sql.exec('CREATE TABLE IF NOT EXISTS mcp_tools (connection TEXT NOT NULL, name TEXT NOT NULL, position INTEGER NOT NULL, digest TEXT NOT NULL, def TEXT NOT NULL, PRIMARY KEY (connection, name))');
   // A permission is for one tool definition: a changed definition no longer matches and asks again.
   sql.exec('CREATE TABLE IF NOT EXISTS mcp_tool_reads (connection TEXT NOT NULL, name TEXT NOT NULL, digest TEXT NOT NULL, granted_at INTEGER NOT NULL, PRIMARY KEY (connection, name))');
@@ -216,7 +231,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     return {
       id: r.id, name: r.name, host: new URL(r.server_url).hostname, server_url: r.server_url, auth: r.auth as 'oauth' | 'none', registration: r.registration as RegistrationMode | 'none',
       risk: 'unreviewed', issuer: r.issuer, scopes: r.scopes.split(' ').filter(Boolean), wants_scopes: r.step_up.split(' ').filter(Boolean), status: r.status as McpStatus,
-      tools: tools.length, hidden_tools: r.hidden_tools, runs_without_asking: defs.filter((t) => granted.get(t.name) === t.digest).length, marked_read_only: defs.filter((t) => marksReadOnly(t.def)).length,
+      tools: tools.length, hidden_tools: r.hidden_tools, tools_capped: r.tools_capped === 1, runs_without_asking: defs.filter((t) => granted.get(t.name) === t.digest).length, marked_read_only: defs.filter((t) => marksReadOnly(t.def)).length,
       tools_changed: [...granted].some(([name, digest]) => !tools.some((t) => t.name === name && t.digest === digest)), connected_at: r.connected_at,
     };
   };
@@ -247,7 +262,12 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
 
   const send = async (r: Row, method: McpMethod, params: Record<string, unknown>, options: Readonly<{ headers?: Record<string, string>; intentId?: string }> = {}): Promise<unknown> => {
     if (r.auth === 'none') {
-      const out = await mcpRequest(deps.fetcher, { url: r.server_url, pinned: [new URL(r.server_url).origin], ...(r.era ? { era: r.era as McpEra } : {}) }, method, params, method === 'tools/call' ? DIRECT.call : DIRECT.list, options.headers).catch((error: unknown) => { throw directCause(error, r.name); });
+      const out = await mcpRequest(deps.fetcher, { url: r.server_url, pinned: [new URL(r.server_url).origin], ...(r.era ? { era: r.era as McpEra } : {}) }, method, params, method === 'tools/call' ? DIRECT.call : DIRECT.list, options.headers).catch((error: unknown) => {
+        // A server that needed no sign-in now refuses (401, or a 403 with nothing to step up to): the owner's reconnect
+        // probes it again and starts its sign-in, so the console offers Reconnect instead of "already connected".
+        if (error instanceof McpChallenge) update(r.id, { status: 'reauth_needed' });
+        throw directCause(error, r.name);
+      });
       if (out.era !== r.era) update(r.id, { era: out.era });
       return out.result;
     }
@@ -292,8 +312,8 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
   const refreshTools = async (r: Row): Promise<void> => {
     const started = deps.now();
     const tools: McpToolDef[] = [], seen = new Set<string>();
-    let cursor: string | undefined, ttl: number | undefined, hidden = 0;
-    for (let page = 0; page < MAX_TOOL_PAGES; page += 1) {
+    let cursor: string | undefined, ttl: number | undefined, hidden = 0, capped = false;
+    for (let page = 0; page < MAX_TOOL_PAGES && !capped; page += 1) {
       let parsed: ReturnType<typeof parseToolsPage>;
       try { parsed = parseToolsPage(await send(r, 'tools/list', cursor ? { cursor } : {})); } catch (error) {
         log('mcp_tools', started, error instanceof McpRefusal ? error.code : 'malformed');
@@ -301,8 +321,12 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       }
       ttl ??= parsed.ttlMs;
       hidden += parsed.dropped.length;
-      for (const tool of parsed.tools) if (seen.has(tool.name)) hidden += 1; else { seen.add(tool.name); tools.push(tool); }
-      if (!parsed.nextCursor || parsed.nextCursor === cursor) break;
+      for (const tool of parsed.tools) {
+        if (seen.has(tool.name) || JSON.stringify(tool).length > MAX_TOOL_DEF_CHARS) { hidden += 1; continue; }
+        if (tools.length === MAX_TOOLS_PER_SERVER) { capped = true; break; }
+        seen.add(tool.name); tools.push(tool);
+      }
+      if (capped || !parsed.nextCursor || parsed.nextCursor === cursor) break;
       cursor = parsed.nextCursor;
     }
     // Stored in name order whatever order the server sent, so every list Waldo shows is stable.
@@ -311,7 +335,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     deps.transaction(() => {
       sql.exec('DELETE FROM mcp_tools WHERE connection = ?', r.id);
       tools.forEach((tool, index) => sql.exec('INSERT INTO mcp_tools (connection, name, position, digest, def) VALUES (?, ?, ?, ?, ?)', r.id, tool.name, index, digests[index]!, JSON.stringify(tool)));
-      update(r.id, { tools_fetched_at: deps.now(), tools_ttl_ms: ttl ?? DEFAULT_TOOLS_TTL_MS, hidden_tools: hidden });
+      update(r.id, { tools_fetched_at: deps.now(), tools_ttl_ms: ttl ?? DEFAULT_TOOLS_TTL_MS, hidden_tools: hidden, tools_capped: capped ? 1 : 0 });
     });
     log('mcp_tools', started);
   };
@@ -488,10 +512,14 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       if (!deps.proxy || !doName) { const outcome: ConnectOutcome = { kind: 'failed', reason: 'oauth_unavailable' }; settle(nonce, outcome); return outcome; }
       // Settled before the exchange: the code is single-use, so a second callback must never redeem it.
       settle(nonce, { kind: 'failed', reason: 'exchange_unconfirmed' });
+      const previous = rows().find((r) => r.server_url === attempt.server_url);
       const pins: McpPins = { server_url: attempt.server_url, resource: attempt.resource, issuer: attempt.issuer, token_endpoint: attempt.token_endpoint, ...(attempt.revocation_endpoint ? { revocation_endpoint: attempt.revocation_endpoint } : {}), client_id: attempt.client_id, client_auth: attempt.client_auth, redirect_uri: callbackUrl(origin) };
       try {
         const exchanged = await deps.proxy.exchange(doName, 'mcp', pins, callback.code, { verifier: attempt.verifier, ...(attempt.scope ? { scope: attempt.scope } : {}) });
         const r = store({ id: exchanged.id, server_url: attempt.server_url, auth: 'oauth', registration: attempt.registration, issuer: attempt.issuer, scopes: exchanged.scopes, version: exchanged.version, ...(exchanged.expires_at === undefined ? {} : { expires_at: exchanged.expires_at }) });
+        // The edge stored this grant under a new id (the server's sign-in identity moved), and store() moved the server
+        // onto it: the grant it replaced is released so no token stays in Vault that nothing here can reach.
+        if (previous && previous.auth === 'oauth' && previous.id !== exchanged.id) await deps.proxy.revoke(doName, previous.id).catch(() => log('mcp_consent', started, 'superseded_release_failed'));
         await refreshTools(r).catch(() => undefined);
         const outcome: ConnectOutcome = { kind: 'linked', id: r.id, name: r.name };
         settle(nonce, outcome);
@@ -523,13 +551,15 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       }
     },
 
-    // The owner's choice, for the tool definitions as they are now.
-    async setRuns(id: string, tool: string | typeof EVERY_READ_ONLY_HINT, withoutAsking: boolean): Promise<boolean> {
+    // The owner's choice. A grant carries the digest the owner saw (seen) and lands only if the definitions still match it;
+    // 'changed' means they moved since the owner looked, and nothing was granted.
+    async setRuns(id: string, tool: string | typeof EVERY_READ_ONLY_HINT, withoutAsking: boolean, seen?: string): Promise<boolean | 'changed'> {
       const r = row(id);
       if (!r) return false;
       const tools = toolRows(r.id).map((t) => ({ ...t, def: JSON.parse(t.def) as McpToolDef }));
       const targets = tool === EVERY_READ_ONLY_HINT ? tools.filter((t) => marksReadOnly(t.def)) : tools.filter((t) => t.name === tool);
       if (!targets.length && tool !== EVERY_READ_ONLY_HINT) return false;
+      if (withoutAsking && seen !== undefined && seen !== (tool === EVERY_READ_ONLY_HINT ? await readOnlyDigest(targets) : targets[0]!.digest)) return 'changed';
       deps.transaction(() => {
         for (const t of targets) {
           if (withoutAsking) sql.exec('INSERT INTO mcp_tool_reads (connection, name, digest, granted_at) VALUES (?, ?, ?, ?) ON CONFLICT (connection, name) DO UPDATE SET digest = excluded.digest, granted_at = excluded.granted_at', r.id, t.name, t.digest, deps.now());
@@ -540,15 +570,19 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       return true;
     },
 
-    toolsOf(id: string): readonly McpToolCard[] {
+    async consoleTools(id: string): Promise<McpConsoleTools> {
       const r = row(id);
-      if (!r) return [];
+      if (!r) return { tools: [], read_only_digest: await readOnlyDigest([]) };
       const granted = reads(r.id);
-      return toolRows(r.id).map((t) => { const def = JSON.parse(t.def) as McpToolDef; return card(r, def, t.digest, granted); });
+      const tools = toolRows(r.id).map((t) => ({ ...t, def: JSON.parse(t.def) as McpToolDef }));
+      return {
+        tools: tools.map((t) => ({ tool: t.name, runs: granted.get(t.name) === t.digest ? 'without_asking' : 'asks_first', read_only_hint: marksReadOnly(t.def), ...(t.def.title ? { title: t.def.title } : {}), digest: t.digest })),
+        read_only_digest: await readOnlyDigest(tools.filter((t) => marksReadOnly(t.def))),
+      };
     },
 
     // The model's search over the owner's tools: words, or one server's full list, a page at a time.
-    async search(input: Readonly<{ query?: string; server?: string; cursor?: string }>): Promise<Readonly<{ tools: readonly McpToolCard[]; next_cursor?: string; servers: readonly Readonly<{ name: string; status: McpStatus; tools: number }>[]; unmatched?: true; failures: readonly string[]; questions_waiting?: readonly McpWaiting[] }>> {
+    async search(input: Readonly<{ query?: string; server?: string; cursor?: string }>): Promise<Readonly<{ tools: readonly McpToolCard[]; next_cursor?: string; servers: readonly Readonly<{ name: string; status: McpStatus; tools: number; tools_capped?: true }>[]; unmatched?: true; failures: readonly string[]; questions_waiting?: readonly McpWaiting[] }>> {
       const targets = input.server ? [live(input.server)] : rows().filter((r) => r.status === 'active');
       const failures: string[] = [];
       await Promise.all(targets.map((r) => freshTools(r).catch((error: unknown) => { failures.push(`${r.name}: ${directCause(error, r.name).message}`); })));
@@ -561,7 +595,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       return {
         tools: page.map((item) => card(item.r, item.def, item.digest, item.granted)),
         ...(offset + SEARCH_PAGE < pool.length ? { next_cursor: String(offset + SEARCH_PAGE) } : {}),
-        servers: rows().map((r) => ({ name: r.name, status: r.status as McpStatus, tools: toolRows(r.id).length })),
+        servers: rows().map((r) => ({ name: r.name, status: r.status as McpStatus, tools: toolRows(r.id).length, ...(r.tools_capped === 1 ? { tools_capped: true as const } : {}) })),
         ...(input.query && !ranked.length && items.length ? { unmatched: true as const } : {}),
         failures,
         ...(asked.length ? { questions_waiting: asked } : {}),
@@ -600,7 +634,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
         const answered = input.mode === 'approved' && input.answers ? (await answerParams(r, input.tool, input.args, input.answers)).params : {};
         const result = await send(r, 'tools/call', { name: input.tool, arguments: input.args, ...answered }, { headers: toolHeaders(found.def, input.args), ...(input.mode === 'approved' ? { intentId: input.intentId } : {}) });
         if (input.mode === 'approved' && input.answers) sql.exec('DELETE FROM mcp_questions WHERE handle = ?', input.answers.handle);
-        if (isRecord(result) && result.isError === true) throw new McpToolFailed(`${r.name}'s ${input.tool} ran and reported an error: ${toolErrorText(result)}`);
+        if (isRecord(result) && result.isError === true) throw new McpToolFailed(`${r.name}'s ${input.tool} ran and reported an error. ${serverSaid(r.name, toolErrorText(result))}`);
         const asked = await questionsOf(r, input.tool, input.args, result);
         log('mcp_call', started, asked ? 'input_required' : undefined);
         return asked ? { server: r.name, input_required: asked } : { server: r.name, result };
@@ -625,6 +659,7 @@ export const connectorsLine = (views: readonly McpConnectionView[]): string => {
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+const readOnlyDigest = (tools: readonly Readonly<{ name: string; digest: string }>[]) => sha256(tools.map((t) => `${t.name}:${t.digest}`).join('\n'));
 const card = (r: Readonly<{ name: string }>, def: McpToolDef, digest: string, granted: ReadonlyMap<string, string>): McpToolCard => ({
   server: r.name, tool: def.name, runs: granted.get(def.name) === digest ? 'without_asking' : 'asks_first', read_only_hint: marksReadOnly(def),
   server_text: { ...(def.title ? { title: def.title } : {}), ...(def.description ? { description: def.description } : {}) }, input_schema: def.inputSchema,
