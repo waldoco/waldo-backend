@@ -62,6 +62,9 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
     input.runScope?.signal.addEventListener('abort', abortRun, { once: true });
     const timeout = setTimeout(() => controller.abort(), Math.max(0, Math.min(this.timeoutMs, callTimeLeftMs(input.runScope))));
     const startedAt = Date.now();
+    // Declared outside the try: a search-only response was billed even when its continuation then fails.
+    const searched: Anthropic.ContentBlock[] = [];
+    const searchSpent = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0 };
     try {
       const body: Anthropic.MessageCreateParamsNonStreaming = {
         model: input.request.model,
@@ -75,8 +78,6 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
       // A response that only searched for tools (the server paused its turn) has not answered yet. The tool search guide
       // continues it by sending its content back as the assistant's turn; the searched blocks lead the answer's own, so a
       // later round replays the whole turn.
-      const searched: Anthropic.ContentBlock[] = [];
-      const searchSpent = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0 };
       for (let continuation = 0; continuation < SEARCH_CONTINUATIONS && onlySearched(response); continuation += 1) {
         searched.push(...response.content);
         searchSpent.input_tokens += response.usage.input_tokens + (response.usage.cache_read_input_tokens ?? 0) + (response.usage.cache_creation_input_tokens ?? 0);
@@ -125,7 +126,7 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
         ? ` (${[error.status, error.type].filter((part) => part !== undefined && part !== null).join(' ')})`
         : '';
       const retry = error instanceof Anthropic.APIError ? retryAdvice(error.headers) : undefined;
-      return { ok: false, code: anthropicErrorCode(error), error: `Anthropic request failed${detail}`, ...(retry ? { retry } : {}) };
+      return { ok: false, code: anthropicErrorCode(error), error: `Anthropic request failed${detail}`, ...(retry ? { retry } : {}), ...(searched.length > 0 ? { spent: searchSpent } : {}) };
     } finally {
       clearTimeout(timeout);
       input.runScope?.signal.removeEventListener('abort', abortRun);
