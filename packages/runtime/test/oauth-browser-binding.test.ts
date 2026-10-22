@@ -45,7 +45,7 @@ describe('the browser binding every OAuth callback shares', () => {
   });
 
   it('refuses a binding built from the link alone, without the server secret', async () => {
-    for (const provider of ['google', 'mcp', 'whoop', 'handoff'] as const) {
+    for (const provider of ['google', 'mcp', 'whoop', 'handoff', 'photon'] as const) {
       expect(await checkBrowser(callback(await forgedBinding(provider, NONCE, NOW + TTL)), SECRET, provider, NONCE, NOW)).toBe('mismatch');
     }
     const otherDeploy = await bindBrowser('another-oauth-state-secret', 'mcp', NONCE, PATH, TTL, NOW);
