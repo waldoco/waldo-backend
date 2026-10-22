@@ -1,6 +1,7 @@
 import { EffectNotAppliedError, EffectUnknownError, type OwnerEffectLedger, type EffectReceipt, type EffectReadback } from './owner-effect-ledger';
 import type { ProxyIntent } from '../connectors/proxy-intent';
 import { ProxyIntentError } from '../connectors/proxy-intent';
+import { McpRefusal, McpToolFailed } from '../connectors/mcp-connections';
 import { googleTaskProposalSchema, proposeGoogleTaskChangeArgsSchema, type BrowserTaskContinuation, type ProposeCalendarChangeArgs, type ProposeGoogleTaskChangeArgs } from '@waldo/contracts';
 import { GoogleError, sendRefused, sentCheck, sha256Hex, type GoogleClient, type SentEvidence } from '../connectors/google';
 import { stableJson } from '../context-composer/canonical';
@@ -74,8 +75,18 @@ const emailContent = ({ account, to, cc, bcc, subject, body, thread_id, inReplyT
 export type MessageSendProposal = Readonly<{ operation_ref?: string; channel: string; content: string; idempotency_key: string }>;
 
 // call_mcp_tool proposals: server + tool + args replayed on approval. The result is external
-// content - reported to the owner bounded, never re-entered into model context.
-export type McpCallProposal = Readonly<{ operation_ref?: string; server: string; tool: string; args: Record<string, unknown> }>;
+// content - reported to the owner bounded, never re-entered into model context. For a server the owner
+// connected, the card also freezes the connection and the tool definition's digest, and any answers the
+// owner gave to the server's questions (questions holds the server's wording for the card).
+export type McpCallProposal = Readonly<{
+  operation_ref?: string; server: string; tool: string; args: Record<string, unknown>;
+  connection?: string; tool_digest?: string;
+  answers?: Readonly<{ handle: string; responses: Readonly<Record<string, unknown>> }>;
+  questions?: readonly Readonly<{ id: string; message: string }>[];
+}>;
+const isToolError = (value: unknown): value is { tool_error: string } => typeof value === 'object' && value !== null && typeof (value as { tool_error?: unknown }).tool_error === 'string';
+// The frozen identity of an MCP card: everything that decides what runs.
+const mcpDigest = (p: McpCallProposal) => sha256Hex(stableJson({ server: p.server, tool: p.tool, args: p.args, connection: p.connection ?? null, tool_digest: p.tool_digest ?? null, answers: p.answers ?? null }));
 // A privileged tool call whose arguments came from external content (ADR-0049), frozen for the owner's approval: the
 // tool, its validated arguments and their digest. On approval the host replays exactly that call once.
 export type TaintedActionProposal = Readonly<{ operation_ref?: string; tool: string; args: Record<string, unknown>; args_digest: string; reasoning: string; source: 'external' }>;
@@ -199,7 +210,7 @@ const reviewText = (entry: LedgerRow): string => {
   const p = JSON.parse(entry.payload_json);
   if (entry.kind === 'email_send') return `Send this email?${p.earlier_unknown_at ? ` An identical email from ${p.earlier_unknown_at} may already have gone out; check Gmail's Sent folder before sending it again.\n` : ' '}${reviewEmail(p)}`;
   if (entry.kind === 'message_send') return `Send this message on ${p.channel}?\n\n${reviewMessage(p)}`;
-  if (entry.kind === 'mcp_call') return `Run this MCP tool? ${describeMcp(p)}\n\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}`;
+  if (entry.kind === 'mcp_call') return `Run this MCP tool? ${describeMcp(p)}\n\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}${p.questions?.length ? `\n\nThe server asked (its words):\n${p.questions.map((q: { id: string; message: string }) => `- ${q.message}`).join('\n')}\n\nYour answers:\n${JSON.stringify(maskedValue(p.answers?.responses ?? {}), null, 2)}` : ''}`;
   if (entry.kind === 'tainted_action') return `Run this action? ${describeTaintedAction(p)}\n\n${TAINTED_ACTION_WHY}\n\nTool: ${p.tool}\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}`;
   if (entry.kind === 'browser_submit') return `Approve this browser action? ${describeBrowser(p)}`;
   if (entry.kind === 'google_task_change') return reviewGoogleTaskChange(googleTaskProposalSchema.parse(p));
@@ -810,16 +821,45 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           out = { toast: "Can't be undone", message: 'An MCP call cannot be undone from here. Nothing was reversed.' };
         } else if (!deps.mcpCall) {
           out = { toast: 'MCP is not set up', message: 'I could not run that because MCP execution is not set up on this Waldo yet.' };
+        } else if ((entry.proposal_digest || cp.connection) && (!entry.proposal_digest || await mcpDigest(cp) !== entry.proposal_digest)) {
+          setStatus(id, 'failed');
+          out = { toast: 'Call changed', message: `The stored call no longer matches what you approved, so nothing ran: ${describeMcp(cp)}. Ask me again and I'll propose it afresh.` };
         } else {
+          if (!recovering) {
+            const lost = claimOpen(id);
+            if (lost) return lost;
+          }
+          // A refusal that proves nothing ran (the server was never reached, or it answered with an auth
+          // challenge, a rate limit or a question) settles as not done; any other failure stays unknown.
+          let notRun: McpRefusal | undefined, toolFailed: McpToolFailed | undefined;
           try {
-            const receipt = await effect(`${operationRef}:apply`, 'call_mcp_tool', cp, async () => { const result = await deps.mcpCall!(cp,{id:`approval:${id}:apply`}); if (typeof result !== 'string') return result; if (deps.effects) throw new EffectUnknownError(); return { provider_id: `${operationRef}:apply`, result }; }, async () => ({ status: 'unknown' }));
+            const receipt = await effect(`${operationRef}:apply`, 'call_mcp_tool', cp, async () => {
+              let result: string | EffectReceipt;
+              try { result = await deps.mcpCall!(cp, { id: `approval:${id}:apply` }); }
+              catch (error) {
+                // The tool answered with its own error: the call completed, so the ledger records that answer.
+                if (error instanceof McpToolFailed) { toolFailed = error; return { provider_id: `${operationRef}:apply`, result: { tool_error: error.message } }; }
+                if (error instanceof McpRefusal && error.notApplied) notRun = error;
+                throw error;
+              }
+              if (typeof result !== 'string') return result; if (deps.effects) throw new EffectUnknownError(); return { provider_id: `${operationRef}:apply`, result };
+            }, async () => (notRun ? { status: 'not_applied' } : { status: 'unknown' }));
+            const failure = toolFailed?.message ?? (isToolError(receipt.result) ? receipt.result.tool_error : undefined);
+            if (failure !== undefined) {
+              setStatus(id, 'failed');
+              return { toast: 'That failed', message: `${describeMcp(cp)} ran and failed: ${failure}` };
+            }
             const outcome = String(receipt.result);
             setStatus(id, 'done');
             out = { toast: 'Done', message: `Done: ${describeMcp(cp)}. ${outcome}` };
           } catch (error) {
+            if (notRun && (error instanceof EffectNotAppliedError || error === notRun)) {
+              setStatus(id, 'failed');
+              return { toast: 'Nothing ran', message: `Nothing ran: ${notRun.message}` };
+            }
             const recorded = deps.effects?.get(`${operationRef}:apply`);
             if(recorded && recorded.state !== 'rejected') {setStatus(id,'uncertain');return {toast:'Outcome unknown',message:'The MCP outcome is unknown. Check the result before retrying; nothing was run again.'};}
-            if(error instanceof EffectUnknownError || error instanceof ProxyIntentError || (error instanceof GoogleError && error.message==='intent_pending')) {setStatus(id,'uncertain');return {toast:'Outcome unknown',message:'The MCP outcome is unknown. Check it before retrying; nothing was run again.'};}
+            if(error instanceof EffectUnknownError || error instanceof ProxyIntentError || (error instanceof GoogleError && error.message==='intent_pending') || error instanceof McpRefusal) {setStatus(id,'uncertain');return {toast:'Outcome unknown',message:'The MCP outcome is unknown. Check it before retrying; nothing was run again.'};}
             setStatus(id, 'failed');
             out = { toast: 'That failed', message: `The call failed (${error instanceof Error ? error.message : String(error)}). Nothing else ran - ask me to try again.` };
           }
@@ -1040,7 +1080,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const originRunRef = deps.currentRunRef?.();
       const id = `p${deps.newId()}`;
       const summary = describeMcp(payload);
-      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'mcp_call', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
+      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at, proposal_digest) VALUES (?, 'mcp_call', 'card_unconfirmed', ?, ?, NULL, ?, NULL, ?)", id, summary, JSON.stringify(payload), deps.now(), await mcpDigest(payload));
       bindOrigin(id, originRunRef);
       await present(id);
       return id;

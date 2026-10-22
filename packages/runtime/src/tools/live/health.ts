@@ -171,7 +171,7 @@ export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolH
       const values = days.map((day) => ({ day, value: foldDay(SIGNALS[signal].fold, byDay.get(day) ?? [], timezone) }));
       const present = values.map((entry) => entry.value).filter((value): value is number => value !== null);
       valued += present.length;
-      const base = { signal, unit: SIGNALS[signal].unit, source: group.source as 'apple' | 'samsung' | 'health_connect', method: methodOf(signal, group) };
+      const base = { signal, unit: SIGNALS[signal].unit, source: group.source as 'apple' | 'samsung' | 'health_connect' | 'whoop', method: methodOf(signal, group) };
       series.push(args.aggregation === 'summary'
         ? { ...base, summary: { mean: present.length ? round1(present.reduce((total, value) => total + value, 0) / present.length) : null, min: present.length ? Math.min(...present) : null, max: present.length ? Math.max(...present) : null, days_with_value: present.length } }
         : { ...base, days: values });
