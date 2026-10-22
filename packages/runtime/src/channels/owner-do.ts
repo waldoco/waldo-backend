@@ -159,7 +159,7 @@ import { APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_THREADS_PATH, APP_UPDATE_BASE, a
 import { appThreadsRequest, askThreadTitle, nameThread, recallReach, redactThreadTitles, threadChainRef, threadOfChain, threadRecord, threadRowsOfChain, threadRowsPrefix, touchThread, type AppThreadsHost } from './app-threads';
 import { stableJson } from '../context-composer/canonical';
 import { APP_CONNECT_GUIDANCE, appApprovalLink, appCaller, type ScheduledAppDelivery } from './surfaces/app';
-import { linkingCards, proactiveSurface, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, setProactiveSurface, waitingForWhatsApp, wantedTargets, whatsappSubjects, withWhatsAppCopy, WHATSAPP_COPY_FRESH_MS, WHATSAPP_COPY_PREFIX, type ProactiveTarget } from './proactive-surface';
+import { linkingCards, proactiveSurface, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, setProactiveSurface, waitingForWhatsApp, wantedTargets, whatsappSubjects, withCopy, IMESSAGE_COPY_PREFIX, WHATSAPP_COPY_FRESH_MS, WHATSAPP_COPY_PREFIX, type ProactiveTarget } from './proactive-surface';
 import { appApprovalsRequest } from './app-approvals';
 import { WHATSAPP_LINK_CONFIRM_ACTION, whatsappLinkConfirmAction, whatsappLinkConfirmPage } from './whatsapp-link-console';
 import { WHATSAPP_LINK_PATH, whatsappLinkDirectory } from '../identity/whatsapp-link';
@@ -724,8 +724,6 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
   // Set only inside the alarm's unit of work while an app-only owner's scheduled jobs run (see serial()).
   private scheduledAppDelivery: ScheduledAppDelivery | null = null;
-  // The iMessage counterpart: a scheduled pass that sends proactive work to iMessage freezes it into the iMessage outbox.
-  private scheduledIMessageDelivery: ScheduledAppDelivery | null = null;
   // The scheduled job running now, and the owner the directory admitted for this unit of work (both cleared by serial()).
   private ownerJob: Readonly<{ job: OwnerJob; occurrenceKey: string; occurredAt: number }> | null = null;
   private jobOwner: Promise<ScheduledOwner> | null = null;
@@ -926,40 +924,36 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private proactiveReachable(): boolean {
     return !consoleAuth(this.env) || telegramLinked(this.ctx.storage.kv) || this.appBound() || this.whatsappBound();
   }
-  // iMessage takes proactive work while the composition is deployed and the owner's latest iMessage still stands; the bridge
-  // re-checks that sender's authority before each send.
-  private imessageBound(): boolean {
-    return iMessageComposition(this.imessageHost.env) !== null && new IMessageOwnerInbox(this.ctx.storage).latest() !== null;
+  // Whether iMessage takes copies of proactive work: the composition is deployed, the owner has written from a sender, and the
+  // directory still binds that sender to this owner. An unlink or a relink to another number ends it at once; the newest inbox
+  // record alone outlives both. Null when the directory could not say.
+  private async imessageLinked(auth: NonNullable<ReturnType<typeof consoleAuth>>): Promise<boolean | null> {
+    const latest = new IMessageOwnerInbox(this.ctx.storage).latest(), doName = this.ctx.storage.kv.get<string>('do_name');
+    if (iMessageComposition(this.imessageHost.env) === null || !latest || !doName) return false;
+    try { return await auth.assertChannelPresence(doName, 'imessage', latest.binding.subject); } catch { return null; }
   }
-  // Freezes a message Waldo starts into the iMessage outbox, to the sender the owner last wrote from, and hands it to the
-  // bridge. The receipt is the frozen record: the outbox owns its retries and its one terminal result, as for a reply.
-  private iMessageDelivery(): ScheduledAppDelivery {
-    return async (text) => {
-      const latest = new IMessageOwnerInbox(this.ctx.storage).latest();
-      if (!latest) throw new Error('imessage_unbound');
-      const id = crypto.randomUUID();
-      const commandId = `wpc_${(await sha256Hex(id)).slice(0, 40)}`;
-      const frozen = new IMessageFinalOutbox(this.ctx.storage).freezeProactive(id, commandId, targetOf(latest), redactSecretUrls(text).text);
-      this.ctx.waitUntil(drainIMessageOutbox(this.imessageHost, iMessageComposition(this.imessageHost.env)?.policy.replyHandoffMaxAgeMs ?? 0)
-        .then(() => rearmSharedAlarm(this.ctx.storage, null, Date.now())).catch(() => { console.error('imessage outbox drain deferred'); }));
-      return frozen.replyRef;
-    };
+  // Freezes a copy of an app message into the iMessage outbox, to the sender the owner last wrote from, under the app
+  // message's id, and hands it to the bridge. The app's delivery settled the job; the copy's outcome touches nothing else.
+  private async queueIMessageCopy(id: string, text: string): Promise<void> {
+    const latest = new IMessageOwnerInbox(this.ctx.storage).latest();
+    if (!latest) throw new Error('imessage_unbound');
+    const commandId = `wpc_${(await sha256Hex(id)).slice(0, 40)}`;
+    new IMessageFinalOutbox(this.ctx.storage).freezeProactive(id, commandId, targetOf(latest), redactSecretUrls(text).text);
+    this.ctx.waitUntil(drainIMessageOutbox(this.imessageHost, iMessageComposition(this.imessageHost.env)?.policy.replyHandoffMaxAgeMs ?? 0)
+      .then(() => rearmSharedAlarm(this.ctx.storage, null, Date.now())).catch(() => { console.error('imessage outbox drain deferred'); }));
   }
+  // How each surface takes a copy of a message the app already has: under that message's id, behind the surface's prefix.
+  private readonly copyQueues: Readonly<Record<ProactiveTarget, Readonly<{ prefix: string; queue(id: string, text: string, appAt: number): Promise<void> }> | null>> = {
+    app: null,
+    whatsapp: { prefix: WHATSAPP_COPY_PREFIX, queue: (id, text, appAt) => this.queueWhatsAppCopy(id, text, appAt) },
+    imessage: { prefix: IMESSAGE_COPY_PREFIX, queue: (id, text) => this.queueIMessageCopy(id, text) },
+  };
   private copiedTo(target: ProactiveTarget, deliver: ScheduledAppDelivery): ScheduledAppDelivery {
-    const copiers: Readonly<Record<ProactiveTarget, (inner: ScheduledAppDelivery) => ScheduledAppDelivery>> = {
-      app: (inner) => inner, whatsapp: (inner) => this.copiedToWhatsApp(inner), imessage: (inner) => this.copiedToIMessage(inner),
-    };
-    return copiers[target](deliver);
-  }
-  // An iMessage copy of what the app took, as WhatsApp's copy is; a send worth delivering only now is not copied.
-  private copiedToIMessage(deliver: ScheduledAppDelivery): ScheduledAppDelivery {
-    const copy = this.iMessageDelivery();
-    return async (text, send) => {
-      const row = await deliver(text, send);
-      if (send?.nowOnly) return row;
-      try { await copy(text); } catch { console.error(JSON.stringify({ hop: 'imessage_copy', ok: false, code: 'copy_failed' })); }
-      return row;
-    };
+    const copy = this.copyQueues[target];
+    if (!copy) return deliver;
+    const { log } = this.setup('app');
+    return withCopy(copy.prefix, deliver, (id, text) => copy.queue(id, text, Date.now()),
+      code => log({ trace: `copy:${Date.now()}`, hop: `${target}_copy`, ms: 0, ok: false, code, detail: code }));
   }
   private copiedToTelegram(deliver: (text: string) => Promise<string>): (text: string) => Promise<string> {
     const telegram = this.setup('telegram');
@@ -975,7 +969,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (whatsapp && wanted.includes('whatsapp')) {
       try { whatsapp = await auth.assertChannelPresence(kv.get<string>('do_name')!, 'whatsapp', kv.get<string>('whatsapp_subject')!); } catch { return 'retry'; }
     }
-    return proactiveTargets(wanted, { app: true, whatsapp, imessage: this.imessageBound() });
+    const imessage = wanted.includes('imessage') ? await this.imessageLinked(auth) : false;
+    if (imessage === null) return 'retry';
+    return proactiveTargets(wanted, { app: true, whatsapp, imessage });
   }
   // The WhatsApp numbers whose waiting messages go to the app: each one this owner bound, except the one taking proactive
   // work now. Null when there is none.
@@ -991,33 +987,34 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return whatsapp.finalOutbox.enqueue({ id, trace: id, payload: { chat_id: whatsapp.owner, text }, ownerSubject: String(whatsapp.owner),
       doName: this.ctx.storage.kv.get<string>('do_name') ?? '', expiresAt: appAt + WHATSAPP_COPY_FRESH_MS });
   }
-  private copiedToWhatsApp(deliver: ScheduledAppDelivery): ScheduledAppDelivery {
-    const { log } = this.setup('whatsapp');
-    return withWhatsAppCopy(deliver, (id, text) => this.queueWhatsAppCopy(id, text, Date.now()), code => log({ trace: `copy:${Date.now()}`, hop: 'whatsapp_copy', ms: 0, ok: false, code, detail: code }));
-  }
-  // Settles each record and, once a follow-up (a loop's check-back or a mail follow-up) has reached the app, queues its
-  // WhatsApp copy under the record's own id, so settling it again queues nothing new. Meeting prep and pause notices stay in
-  // the app: held for WhatsApp's window, a copy could arrive after the moment it is for.
-  private copiedFollowups(settle: (record: FinalRecord) => Promise<void>): (record: FinalRecord) => Promise<void> {
+  // Settles each record and, once a follow-up (a loop's check-back or a mail follow-up) has reached the app, queues a copy for
+  // each surface the owner chose under the record's own id, so settling it again queues nothing new. Meeting prep and pause
+  // notices stay in the app: held for a chat surface, a copy could arrive after the moment it is for.
+  private copiedFollowups(settle: (record: FinalRecord) => Promise<void>, copies: readonly ProactiveTarget[]): (record: FinalRecord) => Promise<void> {
     const app = this.setup('app');
     return async record => {
       await settle(record);
       if (record.status !== 'delivered' || !(record.heartbeat || record.mailFollowup) || record.payload.chat_id !== app.owner) return;
-      try { await this.queueWhatsAppCopy(`${WHATSAPP_COPY_PREFIX}${record.id}`, record.payload.fallback_text ?? record.payload.text, record.deliveredAt ?? record.createdAt); }
-      catch { app.log({ trace: record.trace, hop: 'whatsapp_copy', ms: 0, ok: false, code: 'copy_failed', detail: 'copy_failed' }); }
+      for (const target of copies) {
+        const copy = this.copyQueues[target];
+        try { await copy?.queue(`${copy.prefix}${record.id}`, record.payload.fallback_text ?? record.payload.text, record.deliveredAt ?? record.createdAt); }
+        catch { app.log({ trace: record.trace, hop: `${target}_copy`, ms: 0, ok: false, code: 'copy_failed', detail: 'copy_failed' }); }
+      }
     };
   }
   // The console's controls read. Its day view also says where Waldo writes and where the owner can be reached, which the
   // app's contract does not carry.
-  private consoleControls(source: ConsoleView, view: ControlsView) {
+  private async consoleControls(source: ConsoleView, view: ControlsView) {
     const projection = projectControls(source, view);
     if (view === 'connections') {
       const mcp = this.mcp();
       return { ...projection, data: { ...projection.data, mcp: mcp.list().map((connection) => ({ ...connection, tool_list: mcp.toolsOf(connection.id).map((tool) => ({ tool: tool.tool, runs: tool.runs, read_only_hint: tool.read_only_hint, ...(tool.server_text.title ? { title: tool.server_text.title } : {}) })) })) } };
     }
     if (view !== 'day') return projection;
-    const kv = this.ctx.storage.kv;
-    return { ...projection, data: { ...projection.data, proactive_surface: { value: proactiveSurface(kv), app_linked: this.appBound(), whatsapp_linked: this.whatsappBound(), imessage_linked: this.imessageBound(), telegram_linked: telegramLinked(kv) } } };
+    const kv = this.ctx.storage.kv, auth = consoleAuth(this.env);
+    // A directory that cannot say leaves iMessage's state out rather than guessing it.
+    const imessage = auth ? await this.imessageLinked(auth) : false;
+    return { ...projection, data: { ...projection.data, proactive_surface: { value: proactiveSurface(kv), app_linked: this.appBound(), whatsapp_linked: this.whatsappBound(), ...(imessage === null ? {} : { imessage_linked: imessage }), telegram_linked: telegramLinked(kv) } } };
   }
 
   private async appAdmission(name: string, hash: string, text: string, occurrence: string, occurredAt: number, scope: RunEffectScope) {
@@ -1837,7 +1834,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             if(!query)return Response.json({error:'invalid_query'},{status:400,headers:DASHBOARD_OVERVIEW_HEADERS});
             let source=await runtime.view(session,null,query.page),pending=0;
             if(query.view==='profile'){pending=this.ctx.storage.sql.exec<{count:number}>('SELECT COUNT(*) AS count FROM purge_pending').toArray()[0]?.count??0;if(pending>0)source={...source,profile:[]};}
-            let projection=this.consoleControls(source,query.view);
+            let projection=await this.consoleControls(source,query.view);
             if(query.view==='profile'){const profile=projectControls(source,'profile');projection={...profile,data:{...profile.data,removal:{state:pending>0||source.forgettingSpots.length?'incomplete':'none_recorded',pending_count:Math.max(pending,source.forgettingSpots.length),items:source.forgettingSpots.map(claim=>({id:`${this.ctx.id.toString()}:claim:${claim.id}`,status:'purging' as const}))}}} as typeof projection;}
             return Response.json({...projection,revision:await controlRevision(projection)},{headers:DASHBOARD_OVERVIEW_HEADERS});
           }
@@ -2112,7 +2109,6 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           copies = rest;
           whatsappTarget = targets.includes('whatsapp');
           this.scheduledAppDelivery = this.appDeliveryFor(appOwner.authority);
-          if (targets.includes('imessage')) this.scheduledIMessageDelivery = this.iMessageDelivery();
           this.jobOwner = Promise.resolve(this.appScheduledOwner(appOwner.authority));
         }
         const whatsappOnly = !telegramBound && appOwner?.kind !== 'admitted' && !this.appBound() && this.whatsappBound();
@@ -2174,7 +2170,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // Messages left waiting for a WhatsApp number that no longer takes proactive work go to the app.
         if (leftForWhatsApp) routes.push(linkingCards(this.outboxRoute('app', waitingForWhatsApp(leftForWhatsApp)),
           (card, appRow) => recordCardDelivery(this.ctx.storage.kv, card.day, card.card, appRow, Date.now())));
-        const settled = copies.includes('whatsapp') ? this.copiedFollowups(settleFinal) : settleFinal;
+        const settled = copies.length ? this.copiedFollowups(settleFinal, copies) : settleFinal;
         try { await lane('transport', () => finalOutbox.drain({ ...routedDelivery(routes), settled })); } finally { await scheduler.rearm(); }
         return;
       }
@@ -2339,7 +2335,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
 
   private serial<T>(work: () => Promise<T>): Promise<T> {
     // The alarm sets a scheduled app delivery inside its unit of work; no later unit, and no turn, inherits it.
-    const run = this.queue.then(work).finally(() => { this.scheduledAppDelivery = null; this.scheduledIMessageDelivery = null; this.jobOwner = null; });
+    const run = this.queue.then(work).finally(() => { this.scheduledAppDelivery = null; this.jobOwner = null; });
     this.queue = run.catch(() => undefined);
     return run;
   }
@@ -2630,7 +2626,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const baseCall = channel === 'app'
       ? appCaller(() => this.scheduledAppDelivery)
       : channel === 'imessage'
-        ? appCaller(() => this.scheduledIMessageDelivery, () => this.activeIMessage !== null)
+        ? appCaller(() => null, () => this.activeIMessage !== null)
       : channel === 'whatsapp'
         ? whatsappWindowCaller(whatsappTelegramShim(this.env.WHATSAPP_ACCESS_TOKEN!, this.env.WHATSAPP_PHONE_NUMBER_ID!, identity.get<string>('whatsapp_subject') ?? ''),
           { kv: identity, template: whatsappTemplateConfig(this.env), log: event => console.log(JSON.stringify(event)) })

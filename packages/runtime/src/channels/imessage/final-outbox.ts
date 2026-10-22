@@ -40,9 +40,9 @@ export class IMessageFinalOutbox {
   }
 
   /**
-   * A message Waldo starts (a reminder, a day card, a follow-up), to the sender the owner last wrote from. Its id is the
-   * scheduled delivery's own, so a retried delivery freezes the same record and command; the bridge re-checks that sender's
-   * authority before it sends, exactly as for a reply.
+   * A copy of a message Waldo started (a reminder, a day card, a follow-up), to the sender the owner last wrote from. Its id
+   * names the app message it copies, so copying that message again freezes the same record and command; the bridge
+   * re-checks that sender's authority before it sends, exactly as for a reply.
    */
   freezeProactive(id: string, commandId: string, target: IMessageProactiveTarget, text: string): IMessageOutboxRecord {
     return this.put(`proactive:${id}`, { ...target, commandId }, text);

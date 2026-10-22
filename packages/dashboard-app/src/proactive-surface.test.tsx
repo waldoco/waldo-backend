@@ -26,7 +26,8 @@ describe('reading where Waldo writes', () => {
 
   it('keeps an iMessage choice and its link state, and refuses a link state that is not a yes or no', () => {
     expect(read(surface({ value: 'app_imessage', imessage_linked: true })).data.proactive_surface).toEqual(surface({ value: 'app_imessage', imessage_linked: true }));
-    expect(() => read({ ...surface({ value: 'imessage' }), imessage_linked: 'yes' })).toThrow('Refresh the records');
+    expect(() => read({ ...surface({ value: 'app_imessage' }), imessage_linked: 'yes' })).toThrow('Refresh the records');
+    expect(() => read(surface({ value: 'imessage' as never }))).toThrow('Refresh the records');
   });
 
   it('reads a Worker that does not say as having no setting', () => {
@@ -56,11 +57,11 @@ describe('the where Waldo writes control', () => {
     expect(setting(html(surface(), true))).toMatch(/<select disabled="">.*<button class="primary" disabled="">Save where Waldo writes/);
   });
 
-  it('offers iMessage the same two ways as WhatsApp, and says what each does today', () => {
-    const shown = html(surface({ value: 'imessage', imessage_linked: true }));
-    for (const label of ['iMessage only', 'The app and iMessage']) expect(shown).toContain(`>${label}</option>`);
-    expect(shown).toMatch(/<option value="imessage" selected="">iMessage only<\/option>/);
-    expect(setting(shown)).toContain('Approval cards still come to the app.');
+  it('offers iMessage only with the app, and says what it does today', () => {
+    const shown = html(surface({ value: 'app_imessage', imessage_linked: true }));
+    expect(shown).toMatch(/<option value="app_imessage" selected="">The app and iMessage<\/option>/);
+    expect(shown).not.toContain('iMessage only');
+    expect(setting(shown)).toContain('The app keeps each one, and iMessage gets a copy.');
     expect(setting(html(surface({ value: 'app_imessage', imessage_linked: false })))).toContain('Write to Waldo on iMessage first');
   });
 

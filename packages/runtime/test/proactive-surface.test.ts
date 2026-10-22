@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { SEND_NOW_ONLY } from '../src/channels/delivery-routes';
 import { PROACTIVE_SURFACE_KEY, WHATSAPP_COPY_PREFIX, WHATSAPP_SUBJECTS_KEY, proactiveSurface, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, setProactiveSurface, UNREACHABLE_CHECK_BACK, wantedTargets,
-  waitingForWhatsApp, whatsappSubjects, withWhatsAppCopy, type ProactiveSurface } from '../src/channels/proactive-surface';
+  waitingForWhatsApp, whatsappSubjects, withCopy, type ProactiveSurface } from '../src/channels/proactive-surface';
 import { appCaller } from '../src/channels/surfaces/app';
 import type { FinalRecord } from '../src/channels/telegram-final-outbox';
 
@@ -18,14 +18,14 @@ describe('the owner\'s proactive surface setting', () => {
     expect(proactiveSurface(kv)).toBe('app');
   });
 
-  it('stores each of its five values and refuses anything else without changing the stored one', () => {
+  it('stores each of its four values and refuses anything else without changing the stored one', () => {
     const kv = memoryKv();
-    for (const value of ['whatsapp', 'both', 'imessage', 'app_imessage', 'app'] as const) {
+    for (const value of ['whatsapp', 'both', 'app_imessage', 'app'] as const) {
       expect(setProactiveSurface(kv, value)).toBe(true);
       expect(proactiveSurface(kv)).toBe(value);
     }
     setProactiveSurface(kv, 'both');
-    for (const value of ['telegram', 'iMessage', 'APP', ' app', '', 'app|both']) expect(setProactiveSurface(kv, value)).toBe(false);
+    for (const value of ['telegram', 'imessage', 'iMessage', 'APP', ' app', '', 'app|both']) expect(setProactiveSurface(kv, value)).toBe(false);
     expect(kv.map.get(PROACTIVE_SURFACE_KEY)).toBe('both');
   });
 });
@@ -52,19 +52,22 @@ describe('where proactive work goes', () => {
     expect(proactiveTargets(wantedTargets(setting), { app, whatsapp, imessage: false })).toEqual(targets);
   });
 
-  // iMessage has the same two choices as WhatsApp, instead of the app or with it, and the same fallback to the app.
-  const imessage: readonly (readonly [ProactiveSurface, boolean, boolean, readonly string[]])[] = [
-    ['imessage', true, true, ['imessage']],
-    ['imessage', true, false, ['app']],
-    ['imessage', false, true, ['imessage']],
-    ['app_imessage', true, true, ['app', 'imessage']],
-    ['app_imessage', true, false, ['app']],
-    ['app_imessage', false, true, ['imessage']],
-    ['app', false, true, ['imessage']],
-    ['app_imessage', false, false, []],
+  // iMessage only ever gets a copy of what the app takes: its bridge's report never reaches the job that sent the message, so
+  // it cannot be what settles a job. Without the app, it gets nothing.
+  const imessage: readonly (readonly [ProactiveSurface, boolean, boolean, boolean, readonly string[]])[] = [
+    ['app_imessage', true, false, true, ['app', 'imessage']],
+    ['app_imessage', true, false, false, ['app']],
+    ['app_imessage', false, false, true, []],
+    ['app_imessage', false, true, true, ['whatsapp']],
+    ['app_imessage', false, false, false, []],
+    ['app', false, false, true, []],
   ];
-  it.each(imessage)('setting %s, app reachable %s, iMessage reachable %s: %j', (setting, app, reachable, targets) => {
-    expect(proactiveTargets(wantedTargets(setting), { app, whatsapp: false, imessage: reachable })).toEqual(targets);
+  it.each(imessage)('setting %s, app reachable %s, WhatsApp reachable %s, iMessage reachable %s: %j', (setting, app, whatsapp, reachable, targets) => {
+    expect(proactiveTargets(wantedTargets(setting), { app, whatsapp, imessage: reachable })).toEqual(targets);
+  });
+  it('never lets iMessage take the work first, whatever list asks for it', () => {
+    expect(proactiveTargets(['imessage', 'app'], { app: true, imessage: true })).toEqual(['app']);
+    expect(proactiveTargets(['imessage'], { app: false, whatsapp: false, imessage: true })).toEqual([]);
   });
 });
 
@@ -78,7 +81,7 @@ describe('the WhatsApp copy of an app message', () => {
 
   it('is queued once per app message, after the app has it, under an id naming that message', async () => {
     const { queued, reports, delivered, deliver } = sends();
-    const copied = withWhatsAppCopy(deliver, async (id, text) => { queued.push({ id, text }); }, code => reports.push(code));
+    const copied = withCopy(WHATSAPP_COPY_PREFIX, deliver, async (id, text) => { queued.push({ id, text }); }, code => reports.push(code));
     expect(await copied('The Brief.')).toBe('scheduled-1');
     expect(await copied('A reminder.')).toBe('scheduled-2');
     expect(delivered.map(row => row.text)).toEqual(['The Brief.', 'A reminder.']);
@@ -88,7 +91,7 @@ describe('the WhatsApp copy of an app message', () => {
 
   it('is never queued for a one-time code or a short-lived link, which WhatsApp could hold for later', async () => {
     const { queued, delivered, deliver } = sends();
-    const copied = withWhatsAppCopy(deliver, async (id, text) => { queued.push({ id, text }); }, () => undefined);
+    const copied = withCopy(WHATSAPP_COPY_PREFIX, deliver, async (id, text) => { queued.push({ id, text }); }, () => undefined);
     await copied('From bank:\nCode: 482913', { nowOnly: true });
     expect(delivered).toEqual([{ text: 'From bank:\nCode: 482913', nowOnly: true }]);
     expect(queued).toEqual([]);
@@ -96,14 +99,14 @@ describe('the WhatsApp copy of an app message', () => {
 
   it('keeps the app message when the copy cannot be queued, and reports it by its code alone', async () => {
     const { reports, deliver } = sends();
-    const copied = withWhatsAppCopy(deliver, async () => { throw new Error('final outbox capacity'); }, code => reports.push(code));
+    const copied = withCopy(WHATSAPP_COPY_PREFIX, deliver, async () => { throw new Error('final outbox capacity'); }, code => reports.push(code));
     expect(await copied('The Brief.')).toBe('scheduled-1');
     expect(reports).toEqual(['copy_failed']);
   });
 
   it('is not queued for a message the app did not take', async () => {
     const queued: string[] = [];
-    const copied = withWhatsAppCopy(async () => { throw new Error('app transcript write failed'); }, async id => { queued.push(id); }, () => undefined);
+    const copied = withCopy(WHATSAPP_COPY_PREFIX, async () => { throw new Error('app transcript write failed'); }, async id => { queued.push(id); }, () => undefined);
     await expect(copied('The Brief.')).rejects.toThrow('app transcript write failed');
     expect(queued).toEqual([]);
   });
