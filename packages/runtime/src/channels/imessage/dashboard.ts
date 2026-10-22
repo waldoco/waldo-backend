@@ -64,7 +64,8 @@ function receiptFor(action: string, outcome: IMessageOutcome, address: string | 
   switch (outcome.kind) {
     case 'link_code': return { receipt: recorded(`Text this from your iPhone to ${outcome.address ?? address ?? 'the Waldo iMessage number'} within 10 minutes. The code works once; from then on only your number reaches your Waldo.`),
       reveal: { kind: 'link_code', value: `waldo ${outcome.code}`, ...((outcome.address ?? address) ? { to: (outcome.address ?? address)! } : {}) } };
-    case 'host_code': return { receipt: recorded(`Enter this code on ${outcome.shared ? "the shared Waldo number's Mac host" : 'your Mac host'}. It works once and expires in ${outcome.minutes} minutes.`), reveal: { kind: 'host_code', value: outcome.code } };
+    case 'host_code': return { receipt: recorded(outcome.shared ? `Give this code to the shared Waldo number's host. It goes live as soon as the host uses it. It works once and expires in ${outcome.minutes} minutes.`
+      : `Enter this code on your Mac host. It works once and expires in ${outcome.minutes} minutes.`), reveal: { kind: 'host_code', value: outcome.code } };
     case 'challenge': return { receipt: recorded("Send this exact text from the sender you entered to your Mac's Messages account, in that direct chat. Then refresh and confirm it here."), reveal: { kind: 'challenge', value: outcome.challenge } };
     case 'done': return recorded(DONE[action] ?? 'The change was recorded.');
     case 'enroll_refused': return { state: 'rejected', message: ENROLL_REFUSED[outcome.reason] };

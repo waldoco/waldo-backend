@@ -232,18 +232,19 @@ describe('titles and erasure', () => {
     });
   });
 
-  // The redactor folds case as a non-Unicode regex does and the remaining check as toLowerCase does, so a title with
-  // the Kelvin sign (U+212A, which lowercases to "k") still holds the topic after redaction. The tool must say so.
-  it('a forget that leaves the topic in a title fails the tool, and nothing is forgotten', async () => {
+  // The redactor and the remaining check share one pattern, so a title still carries the topic after its scrub only when the
+  // marker itself does: a forget of the word "forgotten". The scrub keeps what it rewrote, but the tool must fail, and no
+  // claim is forgotten.
+  it('a forget that leaves the topic in a title fails the tool, and no claim is forgotten', async () => {
     await withOwner('titles-forget-incomplete', async ({ call, state, thread, say }) => {
       const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
-      memory.add({ kind: 'fact', text: 'Wants to learn to kite in Tarifa', source: 'stated', evidence: '"learn to kite"', origin: 'owner' }, '2026-10-13T00:00:00.000Z');
-      const kite = await thread('\u212Aite repair');
-      await say('/chat/main', 'title-client-13', 'Please forget kite.');
+      memory.add({ kind: 'fact', text: 'Keeps the forgotten tapes in the loft', source: 'stated', evidence: '"the forgotten tapes"', origin: 'owner' }, '2026-10-13T00:00:00.000Z');
+      const tapes = await thread('Forgotten tapes');
+      await say('/chat/main', 'title-client-13', 'Please forget forgotten.');
       const answered = model.turnRequests.find(request => request.includes('"tool_turns"'))!;
       expect(answered).toContain(String.raw`"output":"{\"ok\":false,\"error\":\"The tool threw while running.\",\"error_code\":\"handler_failed\"`);
-      expect((await listed(call, kite))!.title).toBe('\u212Aite repair');
-      expect(memory.claims().map(claim => claim.text)).toEqual(['Wants to learn to kite in Tarifa']);
+      expect((await listed(call, tapes))!.title).toBe(`${FORGOTTEN} tapes`);
+      expect(memory.claims().map(claim => claim.text)).toEqual(['Keeps the forgotten tapes in the loft']);
     });
   });
 

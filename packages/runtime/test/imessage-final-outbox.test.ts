@@ -1,6 +1,7 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
-import { IMESSAGE_OUTBOX_MAX_RECORDS, IMessageFinalOutbox } from '../src/channels/imessage/final-outbox';
+import { IMESSAGE_OUTBOX_MAX_RECORDS, IMessageFinalOutbox, targetOf } from '../src/channels/imessage/final-outbox';
+import { IMessageOwnerInbox } from '../src/channels/imessage/owner-inbox';
 import { redactIMessageEntries } from '../src/channels/imessage/forget';
 import type { IMessageInboxRecord } from '../src/channels/imessage/owner-inbox';
 import { HEARTBEAT_EVERY_MS } from '../src/channels/heartbeat';
@@ -24,6 +25,31 @@ it('settling prunes the reply text; the settled identity still dedups and still 
     expect(outbox.get('reply:a')).toMatchObject({ state: 'settled', text: '', result: { state: 'local_recorded' } });
     expect(outbox.freeze(turn('a'), 'the reply').state).toBe('settled'); // identical refreeze stays a no-op
     expect(() => outbox.freeze({ ...turn('a'), commandId: 'other' }, 'the reply')).toThrow('imessage_reply_conflict');
+  });
+});
+
+it('a message Waldo starts is frozen to the sender of the latest turn, under its own id and command, and a retry refreezes it', async () => {
+  await runInDurableObject(stub(), async (_i, state) => {
+    const outbox = new IMessageFinalOutbox(state.storage);
+    const latest = { ...turn('a'), binding: { subject: 'o@example.invalid' } as never };
+    const frozen = outbox.freezeProactive('job-1', 'wpc_job-1', targetOf(latest), 'Time to call Sam.');
+    expect(frozen).toMatchObject({ replyRef: 'proactive:job-1', commandId: 'wpc_job-1', text: 'Time to call Sam.', subject: 'o@example.invalid', revision: '1', bindingDigest: 'b', bridgeDoName: 'bridge', ownerDoName: 'owner', state: 'frozen' });
+    expect(outbox.freezeProactive('job-1', 'wpc_job-1', targetOf(latest), 'Time to call Sam.')).toEqual(frozen);
+    expect(() => outbox.freezeProactive('job-1', 'wpc_other', targetOf(latest), 'Time to call Sam.')).toThrow('imessage_reply_conflict');
+  });
+});
+
+it('the latest iMessage names where Waldo may write first, until its sender\'s authority was revoked', async () => {
+  await runInDurableObject(stub(), async (_i, state) => {
+    const inbox = new IMessageOwnerInbox(state.storage);
+    expect(inbox.latest()).toBeNull();
+    const admit = (key: string) => inbox.admit({ dedupKey: key, digest: '0'.repeat(64), text: 'hi', conversationRef: 'c', binding: { subject: 'o@example.invalid' } as never,
+      bindingDigest: 'b', revision: '1', environment: 'test', bridgeDoName: 'bridge', ownerDoName: 'owner', commandId: `cmd-${key}`, occurredAt: 1 });
+    await admit('one');
+    await admit('two');
+    expect(inbox.latest()?.commandId).toBe('cmd-two');
+    inbox.revokeBridge('bridge');
+    expect(inbox.latest()).toBeNull();
   });
 });
 

@@ -69,6 +69,18 @@ describe('live owner memory', () => {
     const byTopic = await s2.call('forget_memory', { topic: 'copper-lantern', scope_note: 'codename' }, s2.ctx('forget copper-lantern'));
     expect(byTopic).toMatchObject({ ok: true, data: { history_swept: 'topic_literal' } });
   });
+  it('an owner-approved forget by ids runs from its card, with no conversation turn; nothing else does', async () => {
+    const s = setup();
+    await s.call('remember', { kind: 'fact', text: 'Project codename is copper-lantern', evidence_quote: 'copper-lantern' }, s.ctx('project codename is copper-lantern'));
+    const replay = (tool: string): MemoryToolContext => ({ authenticatedUserId: OWNER, trigger: 'user_message', toolArgSourceTaint: 'external', approvedTaintedAction: { tool, args_digest: 'd' } } as unknown as MemoryToolContext);
+    expect(await s.call('forget_memory', { claim_ids: [1], scope_note: 'codename' }, { authenticatedUserId: OWNER, trigger: 'user_message' } as unknown as MemoryToolContext)).toMatchObject({ ok: false });
+    expect(await s.call('forget_memory', { claim_ids: [1], scope_note: 'codename' }, replay('set_reminder'))).toMatchObject({ ok: false });
+    expect(await s.call('forget_memory', { claim_ids: [1], topic: 'copper', scope_note: 'codename' }, replay('forget_memory'))).toMatchObject({ ok: false });
+    expect(s.store.claims()).toHaveLength(1);
+    expect(await s.call('forget_memory', { claim_ids: [1], scope_note: 'codename' }, replay('forget_memory'))).toMatchObject({ ok: true, data: { removed_ids: [1] } });
+    expect(s.store.claims()).toHaveLength(0);
+    expect(s.history.at(-1)).toContain('Project codename is copper-lantern');
+  });
   it('validates every forget selector before any mutation and barriers re-admission', async () => {
     const s = setup();
     await s.call('remember', { kind: 'preference', text: 'Prefers tea', evidence_quote: 'tea' }, s.ctx('tea'));
