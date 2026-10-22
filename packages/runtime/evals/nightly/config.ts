@@ -5,6 +5,7 @@ import OpenAI from 'openai';
 import { modelNameSchema, OPENAI_PROVIDER, PROVIDER_OF, WALDO_CHAT_MODEL } from '@waldo/contracts';
 import { OpenAIResponsesAdapter } from '../../src/llm/openai';
 import { scriptedGateway } from '../../src/testing/scripted-gateway';
+import { ablating, ablationLabel } from './ablation';
 import { callBudget } from './budget';
 import { assertIndependentJudge, liveJudge, type Judge } from './judge';
 import { liveVoiceJudge } from './voice';
@@ -29,7 +30,19 @@ const required = (env: Env, name: string): string => {
 // rate at all. It proves the harness runs end to end, never the model's quality.
 const recordedJudge: Judge = async () => ({ outcome: 'judge_error' });
 
-export const nightlyConfig = (env: Env): NightlyRun => {
+// WALDO_EVAL_ABLATE=<rule id>[,<rule id>...] takes those behaviour rules out of every reply's system prompt (rules.ts lists
+// them); the scorecard's candidate names them, so it is compared only with an unablated run.
+const withAblation = (run: NightlyRun, env: Env): NightlyRun => {
+  const ids = (env.WALDO_EVAL_ABLATE ?? '').split(',').map((id) => id.trim()).filter(Boolean);
+  if (!ids.length) return run;
+  if (!ids.every((id) => /^[0-9a-f]{8}$/.test(id))) throw new Error('WALDO_EVAL_ABLATE takes 8-hex rule ids');
+  let misses = 0;
+  return { ...run, gateway: () => ablating(run.gateway(), ids, () => { misses += 1; }), candidate: ablationLabel(run.candidate, ids), ablationMisses: () => misses };
+};
+
+export const nightlyConfig = (env: Env): NightlyRun => withAblation(baseConfig(env), env);
+
+const baseConfig = (env: Env): NightlyRun => {
   const mode = env.WALDO_EVAL_MODE;
   if (mode !== 'recorded' && mode !== 'live') throw new Error('WALDO_EVAL_MODE must be recorded or live');
   const trials = positive(env, 'WALDO_EVAL_TRIALS', '3');

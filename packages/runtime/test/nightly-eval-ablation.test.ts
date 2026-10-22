@@ -1,0 +1,119 @@
+import { describe, expect, it } from 'vitest';
+import type { LLMGatewayAdapter } from '../src/llm/provider';
+import { ablating, ablationLabel, ablationVerdict, TRIALS, type AblationRun } from '../evals/nightly/ablation';
+import { nightlyConfig } from '../evals/nightly/config';
+import { RULE_COVERAGE, evalBehaviourPrompt, promptRules, ruleInventory, type RuleStatus } from '../evals/nightly/rules';
+import { scorecard, type ScenarioTrials, type TrialOutcome } from '../evals/nightly/scorecard';
+import { SCENARIOS } from '../evals/nightly/scenarios';
+import { runNightly } from '../evals/nightly/suite';
+
+const rule = async (anchor: string) => (await ruleInventory(evalBehaviourPrompt())).find((status) => status.rule.text.includes(anchor))!;
+
+describe('the behaviour rule inventory', () => {
+  it('gives every rule of the prompt a trial sends one id and one standing, and every map entry exactly one rule', async () => {
+    const inventory = await ruleInventory(evalBehaviourPrompt());
+    expect(inventory.length).toBe((await promptRules(evalBehaviourPrompt())).length);
+    expect(new Set(inventory.map((status) => status.rule.id)).size).toBe(inventory.length);
+    expect(inventory.filter((status) => status.kind !== 'uncovered')).toHaveLength(RULE_COVERAGE.length);
+    expect((await rule('Never give medication, supplement or dose instructions')).kind).toBe('boundary');
+    expect((await rule('Every message passes six tests')).kind).toBe('mapped');
+  });
+
+  it('refuses a map entry that names no rule or an unknown scenario', async () => {
+    const system = evalBehaviourPrompt();
+    await expect(ruleInventory(system, [...RULE_COVERAGE, { anchor: 'a rule nobody wrote', scenarios: [] }])).rejects.toThrow('names 0 rules');
+    await expect(ruleInventory(system, [{ anchor: 'Ask almost nothing', scenarios: ['z99-not-a-scenario'] }])).rejects.toThrow('unknown scenario z99-not-a-scenario');
+    const renamed = system.replace('- Ask almost nothing', '- Ask nearly nothing');
+    await expect(ruleInventory(renamed)).rejects.toThrow('"Ask almost nothing" names 0 rules');
+  });
+});
+
+describe('a run with rules taken out', () => {
+  const capture = () => {
+    const systems: string[] = [];
+    const inner: LLMGatewayAdapter = { complete: async (call) => { systems.push(String(call.request.system)); return { ok: true, data: { model: call.request.model, text: 'ok', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 } }; } };
+    return { inner, systems };
+  };
+  const request = (system: string) => ({ request: { model: 'fixture', system, messages: [{ role: 'user' as const, content: 'hi' }], max_tokens: 10 } }) as unknown as Parameters<LLMGatewayAdapter['complete']>[0];
+
+  it('drops exactly the named rule from a reply\'s behaviour prompt and leaves other calls alone', async () => {
+    const { inner, systems } = capture();
+    const target = await rule('Ask almost nothing');
+    let misses = 0;
+    const gateway = ablating(inner, [target.rule.id], () => { misses += 1; });
+    const system = evalBehaviourPrompt();
+    await gateway.complete(request(system));
+    await gateway.complete(request('Summarise this conversation.'));
+    expect(systems[0]).toBe(system.split('\n').filter((line) => line !== target.rule.text).join('\n'));
+    expect(systems[1]).toBe('Summarise this conversation.');
+    expect(misses).toBe(0);
+  });
+
+  it('removes nothing and counts a miss for a rule that is absent or a hard boundary', async () => {
+    const boundary = await rule('Never give medication, supplement or dose instructions');
+    for (const ids of [['0badc0de'], [boundary.rule.id]]) {
+      const { inner, systems } = capture();
+      let misses = 0;
+      await ablating(inner, ids, () => { misses += 1; }).complete(request(evalBehaviourPrompt()));
+      expect(misses).toBe(1);
+      expect(systems[0]).toBe(evalBehaviourPrompt());
+    }
+  });
+
+  it('reports a trial that could not drop its rules as a harness error, and names the ablation on the scorecard', async () => {
+    const scenario = SCENARIOS.find((entry) => entry.id === 't01-calendar-free-hour')!;
+    const run = (ids: string) => runNightly([scenario], nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_TRIALS: '1', WALDO_EVAL_ABLATE: ids }));
+    const missing = await run('0badc0de');
+    expect(missing.candidate_model).toBe(ablationLabel('recorded', ['0badc0de']));
+    expect(missing.scenarios[0]).toMatchObject({ trials: 1, ungraded: 1, harness_errors: ['AblationMiss'] });
+    const real = await run((await rule('Ask almost nothing')).rule.id);
+    expect(real.scenarios[0]!.harness_errors).toBeUndefined();
+  });
+
+  it('refuses an id that is not a rule id', () => {
+    expect(() => nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_ABLATE: 'ask-almost-nothing' })).toThrow('8-hex rule ids');
+  });
+});
+
+describe('the verdict on one rule', () => {
+  const trials = (passed: number): TrialOutcome[] => [...Array(passed).fill('pass'), ...Array(TRIALS - passed).fill('fail')];
+  const card = (candidate: string, rows: Readonly<Record<string, number>>) =>
+    scorecard(Object.entries(rows).map(([id, passed]): ScenarioTrials => ({ id, pain: 'judgment', outcomes: trials(passed) })),
+      { candidate, judge: 'judge', trials: TRIALS, usage: { candidate_calls: 0, judge_calls: 0, budget: 0, exhausted: false, candidate_tokens: 0, judge_tokens: 0 } });
+  let target: RuleStatus;
+  const pair = (base: Readonly<Record<string, number>>, ablated: Readonly<Record<string, number>>): AblationRun =>
+    ({ baseline: card('model', base), ablated: card(ablationLabel('model', [target.rule.id]), ablated) });
+  const fullBase = { 'v03-week-one-preference': 5, 'e1-look-before-asking': 5, 't01-calendar-free-hour': 5, 't05-find-confirmation': 5, 't10-compare-flights': 5 };
+
+  it('keeps a rule whose removal adds 2 failures out of 5 on a scenario it governs, in one run', async () => {
+    target = await rule('Ask almost nothing');
+    expect(ablationVerdict(target, [pair(fullBase, { ...fullBase, 'e1-look-before-asking': 3 })])).toMatchObject({ verdict: 'keep' });
+  });
+
+  it('keeps a rule when the overall rate falls 5 points in two runs, and calls one such run inconclusive', async () => {
+    target = await rule('Ask almost nothing');
+    const fall = pair(fullBase, { ...fullBase, 't01-calendar-free-hour': 4, 't10-compare-flights': 4 });
+    expect(ablationVerdict(target, [fall])).toMatchObject({ verdict: 'inconclusive' });
+    expect(ablationVerdict(target, [fall, fall])).toMatchObject({ verdict: 'keep' });
+  });
+
+  it('prunes only on two runs within 2 points with no governed scenario losing a trial; disagreement is inconclusive', async () => {
+    target = await rule('Ask almost nothing');
+    const held = pair(fullBase, fullBase);
+    expect(ablationVerdict(target, [held, held])).toMatchObject({ verdict: 'prune' });
+    const governedLoss = pair(fullBase, { ...fullBase, 'v03-week-one-preference': 4 });
+    expect(ablationVerdict(target, [held, governedLoss])).toMatchObject({ verdict: 'inconclusive' });
+  });
+
+  it('never prunes an uncovered rule, never judges a boundary rule, and needs 5 trials on a matching pair', async () => {
+    const uncovered = await rule('Answer a greeting or small talk');
+    expect(ablationVerdict(uncovered, [])).toMatchObject({ verdict: 'uncovered' });
+    const boundary = await rule('If the owner may be in danger');
+    expect(() => ablationVerdict(boundary, [])).toThrow('never ablated');
+    target = await rule('Ask almost nothing');
+    const short = { baseline: { ...card('model', fullBase), trials_per_scenario: 3 }, ablated: { ...card(ablationLabel('model', [target.rule.id]), fullBase), trials_per_scenario: 3 } };
+    expect(ablationVerdict(target, [short, short])).toMatchObject({ verdict: 'inconclusive' });
+    const otherRule = { baseline: card('model', fullBase), ablated: card(ablationLabel('model', ['0badc0de']), fullBase) };
+    expect(ablationVerdict(target, [otherRule, otherRule])).toMatchObject({ verdict: 'inconclusive' });
+  });
+});
