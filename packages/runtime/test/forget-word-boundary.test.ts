@@ -16,6 +16,7 @@ import { redactIMessageEntries } from '../src/channels/imessage/forget';
 import { forgetHeldWhatsApp, WA_HELD_PREFIX } from '../src/channels/whatsapp-window';
 import { redactToolOutputLedger, toolOutputLedger } from '../src/conversation/tool-output-ledger';
 import { memoryHandlers } from '../src/tools/live/memory';
+import { forgetPurge } from '../src/memory/forget-purge';
 import { ensureSchema } from '../src/tracer/schema';
 import { holdTopic } from './helpers/pending-topic';
 
@@ -85,11 +86,13 @@ describe('the SQL purge', () => {
       episodes.add('tg-2', 'owner', 'Green tea after lunch', 2);
       store.add({ kind: 'fact', text: 'Works with a team', source: 'stated', evidence: 'Steady the rest', origin: 'owner', source_ref: 'owner, tg-1' }, AT);
       store.backup('fixture', { note: 'x\ntea and the team' }, AT);
+      store.backup('unrelated', { note: 'the team holds steady' }, AT);
       const purge = store.purge([], AT, ['tea']);
       expect(purge).toMatchObject({ ready: true, remaining: {}, failed: [] });
       expect(sql.exec<{ text: string }>('SELECT text FROM episodes ORDER BY rowid').toArray().map(row => row.text)).toEqual([UNRELATED, `Green ${FORGOTTEN} after lunch`]);
       expect(store.allClaims().map(claim => [claim.text, claim.evidence])).toEqual([['Works with a team', 'Steady the rest']]);
-      expect(JSON.parse(store.backups()[0]!.payload)).toEqual({ note: `x\n${FORGOTTEN} and the team` });
+      // A backup is a derived snapshot: the one that carries the topic is deleted, the one that only contains it in words stays.
+      expect(store.backups().map(backup => JSON.parse(backup.payload))).toEqual([{ note: 'the team holds steady' }]);
     });
   });
   it('an outbox payload that only contains the topic inside a word is not replaced, and its run is not terminalised', async () => {
@@ -114,10 +117,11 @@ describe('the SQL purge', () => {
   it('a genuinely remaining copy still holds the forget', async () => {
     await inDo('boundary-purge-holds', (state) => {
       const store = claimStore(state.storage.sql);
-      store.backup('fixture', { note: 'x' }, AT);
-      // The topic spelled with a JSON escape: the literal redaction cannot reach it, and a JSON reader would see it.
-      state.storage.sql.exec('UPDATE memory_backups SET payload = ?', String.raw`{"note":"green \u0074ea"}`);
-      expect(store.purge([], AT, ['tea'])).toMatchObject({ ready: false, remaining: { memory_backups: 1 } });
+      // A reminder note is the owner's own record and is redacted in place, so a copy spelled with an escape that the literal
+      // redaction cannot reach (and a reader would decode) stays, and holds the forget.
+      state.storage.sql.exec('CREATE TABLE IF NOT EXISTS reminder_notes (id TEXT PRIMARY KEY, note TEXT NOT NULL)');
+      state.storage.sql.exec('INSERT INTO reminder_notes (id, note) VALUES (?, ?)', 'r1', String.raw`buy green \u0074ea`);
+      expect(store.purge([], AT, ['tea'])).toMatchObject({ ready: false, remaining: { reminder_notes: 1 } });
       expect(store.pendingTopics()).toEqual(['tea']);
     });
   });
@@ -204,6 +208,20 @@ describe('the forget tool', () => {
       // The forget leaves its own texts in custody for the purge job and does not close the unrelated hold.
       expect(store.pendingTopics()).toEqual(expect.arrayContaining(['steady', 'tea']));
       expect(store.pendingTopics()).not.toContain('Works with a team');
+    });
+  });
+  it('forgetting a claim never deletes another claim that only shares its citation', async () => {
+    await inDo('boundary-tool-citation', async (state) => {
+      const sql = state.storage.sql;
+      const store = claimStore(sql, work => state.storage.transactionSync(work));
+      store.add({ kind: 'fact', text: 'Parks on level two', source: 'stated', evidence: 'owner agreed', origin: 'owner', source_ref: 'owner, tg-1' }, AT);
+      store.add({ kind: 'fact', text: 'Desk is by the window', source: 'stated', evidence: 'owner agreed', origin: 'owner', source_ref: 'owner, tg-2' }, AT);
+      const parks = store.claims().find(claim => claim.text === 'Parks on level two')!.id;
+      const job = () => forgetPurge({ sql, store, stores: [], now: () => Date.parse(AT), arm: async () => undefined });
+      const [, , forget] = memoryHandlers({ sql, store, conversationRef: 'owner', transaction: work => state.storage.transactionSync(work), hideHistory: async (texts) => { await job().track(texts); } });
+      expect(await forget!.handle({ claim_ids: [parks], scope_note: 'parking' }, owner('forget where I park') as never)).toMatchObject({ ok: true });
+      expect(await job().run()).toMatchObject({ pending: 0 });
+      expect(store.allClaims().map(claim => claim.text)).toEqual(['Desk is by the window']);
     });
   });
 });

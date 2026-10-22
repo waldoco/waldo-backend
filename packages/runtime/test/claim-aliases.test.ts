@@ -61,7 +61,7 @@ describe('write-time claim aliases', () => {
     });
   });
 
-  it('purging a claim removes its aliases from the index, and a surviving claim that quotes the forgotten text in its aliases is redacted', async () => {
+  it('purging a claim removes its aliases from the index, and a claim that quotes the forgotten text in its aliases is deleted with it', async () => {
     await runInDurableObject(owner('alias-purge'), (_i, state) => {
       const sql = state.storage.sql;
       const store = claimStore(sql, (work) => state.storage.transactionSync(work));
@@ -73,7 +73,7 @@ describe('write-time claim aliases', () => {
       store.settle([target]);
       expect(store.recall('pills')).toEqual([]);
       expect(store.recall('zebracillin')).toEqual([]);
-      expect(sql.exec<{ aliases: string }>("SELECT aliases FROM claims WHERE text = 'Likes quiet mornings'").one().aliases).toBe('[forgotten]');
+      expect(sql.exec("SELECT count(*) AS n FROM claims WHERE text = 'Likes quiet mornings'").one()).toEqual({ n: 0 });
       expect(sql.exec("SELECT count(*) AS n FROM claims WHERE aliases LIKE '%zebracillin%' OR text LIKE '%zebracillin%'").one()).toEqual({ n: 0 });
     });
   });

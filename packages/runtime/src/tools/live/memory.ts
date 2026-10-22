@@ -103,16 +103,21 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
           texts.add(message.text.slice(span.start, span.end));
           for (const claim of claims) if (claim.origin === 'owner' && claim.source_ref === `owner, ${span.message_ref}` && overlapsEvidence(message.text, claim.evidence, span.start, span.end)) selected.set(claim.id, claim);
         }
-        for (const claim of selected.values()) { texts.add(claim.text); if (claim.origin === 'owner') texts.add(claim.evidence); }
+        // What the owner named and the forgotten claims' own sentences purge the claims table too, deleting the derived memory
+        // that carries them. A claim's evidence may be a citation other claims share, so it only leaves the stores outside it.
+        for (const claim of selected.values()) texts.add(claim.text);
+        const purged = [...texts];
+        const evidence = [...selected.values()].filter(claim => claim.origin === 'owner').map(claim => claim.evidence);
+        for (const words of evidence) texts.add(words);
         await ready(ctx);
         let touched = false;
-        // Custody before destruction: the purge records every text in custody, then deletes the claims and cleans the claims
-        // table and its derived rows, all in one commit. The stores outside it are cleaned by the forget purge job, handed the
-        // same texts after the commit; until it settles, the forget barrier keeps them out of the model's view.
+        // Custody before destruction: the purge records the texts in custody, then deletes the claims and cleans the claims
+        // table and its derived rows, all in one commit. The stores outside it are cleaned by the forget purge job, handed every
+        // text after the commit; until it settles, the forget barrier keeps them out of the model's view.
         const commit = () => {
           for (const text of texts) store.barrier(text, now());
           for (const id of selected.keys()) store.forget(id);
-          const counts = store.purge([...selected.keys()], now(), [...texts]).receipt;
+          const counts = store.purge([...selected.keys()], now(), purged, evidence).receipt;
           touched = [counts.deleted, counts.redacted, counts.terminalised].some(group => Object.values(group).some(count => count > 0));
         };
         const atomic = () => deps.transaction ? deps.transaction(commit) : commit();

@@ -27,19 +27,15 @@ describe('forgetting a claim also redacts the owner words it was grounded on', (
       expect(texts).toContain('unrelated lunch plan');
     });
   });
-  it('redacts a grounded quote with no quotation marks, also when the forget names a topic that covers only part of it', async () => {
-    await run('forget-evidence-grounded-topic', (sql, tx) => {
+  it('redacts a forgotten claim\'s evidence words in episodes together with the topic, longest first, so no fragment is left', async () => {
+    await run('forget-evidence-words-order', (sql, tx) => {
       const store = claimStore(sql, tx);
       const episodes = episodeIndex(sql);
-      // A remembered quote is stored bare; the owner forgets by the word they name and by the claim.
       store.add({ kind: 'fact', text: "The owner's gym locker code is Bluefin 4471.", source: 'stated', evidence: 'Bluefin 4471', origin: 'owner', source_ref: 'owner, tg-1' }, AT);
       episodes.add('tg-1', 'owner', 'My locker code at the gym is Bluefin 4471.', 1);
-      episodes.add('tg-2', 'owner', 'I keep chalk in locker 12', 2);
       const id = store.claims()[0]!.id;
-      expect(store.purge([id], AT, ['Bluefin']).ready).toBe(true);
-      const texts = sql.exec<{ text: string }>('SELECT text FROM episodes ORDER BY rowid').toArray().map((r) => r.text);
-      expect(texts[0]).toBe(`My locker code at the gym is ${FORGOTTEN}.`);
-      expect(texts[1]).toBe('I keep chalk in locker 12');
+      store.purge([id], AT, ['Bluefin'], ['Bluefin 4471']);
+      expect(sql.exec<{ text: string }>('SELECT text FROM episodes').one().text).toBe(`My locker code at the gym is ${FORGOTTEN}.`);
     });
   });
   it('ignores a quoted span on an agent-origin claim, so a common phrase cannot wipe unrelated owner text', async () => {

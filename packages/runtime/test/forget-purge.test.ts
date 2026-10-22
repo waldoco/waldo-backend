@@ -1,6 +1,6 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { claimStore, textFingerprint } from '../src/memory/claims';
+import { claimStore, FORGOTTEN, textFingerprint } from '../src/memory/claims';
 import { forgetPurge, forgetPurgeDelay, type ForgetStore } from '../src/memory/forget-purge';
 
 const AT = Date.parse('2026-10-22T10:00:00Z');
@@ -81,15 +81,39 @@ describe('forget purge job', () => {
     });
   });
 
-  it('does not settle while the claims table still carries the text, even with every store clean', async () => {
+  it('does not settle an everywhere text while the claims table still carries it, even with every store clean', async () => {
     await run('forget-purge-sql', async (sql, tx) => {
       const { store, purge } = setup(sql, tx, [fakeStore('conversation', [])]);
-      // A row the purge cannot rewrite: non-canonical JSON in a redacted store holds the forget open.
-      sql.exec("CREATE TABLE IF NOT EXISTS patrol_log (id INTEGER PRIMARY KEY, summary TEXT)");
-      sql.exec("INSERT INTO patrol_log (summary) VALUES ('{ \"note\": \"tea\" }')");
-      await purge.track(['tea']);
+      // A reminder is the owner's own record, redacted in place; a copy spelled by an escape the redaction cannot reach holds.
+      sql.exec('CREATE TABLE IF NOT EXISTS reminder_notes (id TEXT PRIMARY KEY, note TEXT NOT NULL)');
+      sql.exec('INSERT INTO reminder_notes (id, note) VALUES (?, ?)', 'r1', String.raw`buy \u0074ea`);
+      await purge.track(['tea'], 'everywhere');
       expect(await purge.run()).toEqual({ settled: 0, pending: 1 });
       expect(store.pendingTopics()).toEqual(['tea']);
+    });
+  });
+
+  it('a history text (a claim\'s evidence) is cleared from the stores and never deletes a claim that shares it', async () => {
+    await run('forget-purge-history', async (sql, tx) => {
+      const chat = fakeStore('conversation', ['owner agreed to lunch']);
+      const { store, purge } = setup(sql, tx, [chat]);
+      store.add({ kind: 'fact', text: 'Eats lunch at one', evidence: 'owner agreed', source: 'stated', origin: 'owner', source_ref: 'owner, tg-1' }, new Date(AT).toISOString());
+      await purge.track(['owner agreed']);
+      expect(await purge.run()).toEqual({ settled: 1, pending: 0 });
+      expect(chat.copies).toEqual([]);
+      expect(store.claims().map((claim) => claim.text)).toEqual(['Eats lunch at one']);
+    });
+  });
+
+  it('a text tracked as both keeps the wider scope', async () => {
+    await run('forget-purge-scope', async (sql, tx) => {
+      const { purge } = setup(sql, tx, []);
+      await purge.track(['tea'], 'everywhere');
+      await purge.track(['tea']);
+      expect(sql.exec<{ scope: string }>('SELECT scope FROM topic_purge_pending').one().scope).toBe('everywhere');
+      await purge.track(['coffee']);
+      await purge.track(['coffee'], 'everywhere');
+      expect(sql.exec<{ scope: string }>("SELECT scope FROM topic_purge_pending WHERE topic = 'coffee'").one().scope).toBe('everywhere');
     });
   });
 
@@ -118,6 +142,20 @@ describe('forget purge job', () => {
       expect(armed.at(-1)).toBe(AT);
       expect(purge.status()[0]!.stores[0]!.attempts).toBe(0);
       expect(await purge.retry('fnv1a:missing')).toBe(false);
+    });
+  });
+
+  it('runs a store once with every text, longest first, so a shorter text cannot cut a longer one into a fragment', async () => {
+    await run('forget-purge-order', async (sql, tx) => {
+      const copies = ['My locker code is Bluefin 4471.'];
+      // Redacts the texts in the order given, as one pass of a real store does.
+      const chat: ForgetStore = { name: 'conversation', run: (texts) => { copies[0] = texts.reduce((text, topic) => text.split(topic).join(FORGOTTEN), copies[0]!); return 0; } };
+      const { purge, advance } = setup(sql, tx, [chat]);
+      await purge.track(['Bluefin'], 'everywhere');
+      advance(1_000);
+      await purge.track(['Bluefin 4471']);
+      expect(await purge.run()).toMatchObject({ pending: 0 });
+      expect(copies[0]).toBe(`My locker code is ${FORGOTTEN}.`);
     });
   });
 

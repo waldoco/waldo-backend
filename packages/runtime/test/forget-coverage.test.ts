@@ -4,14 +4,18 @@ import { describe, expect, it } from 'vitest';
 import { episodeIndex } from '../src/channels/episodes';
 import { applyClaimOps, barrierPrompt, claimStore, FORGOTTEN, textFingerprint } from '../src/memory/claims';
 import { durableConversationStore, redactConversationEntries } from '../src/channels/conversation-store';
+import { forgetPurge, type ForgetStore } from '../src/memory/forget-purge';
 
 let sequence = 0;
-const withSql = <T>(fn: (sql: SqlStorage) => T) =>
+const withSql = <T>(fn: (sql: SqlStorage) => T | Promise<T>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`forget-coverage-${sequence++}`)), (_instance, state) => fn(state.storage.sql));
 
 const MARKER = 'zephyr-quinoa-anchor';
 const CLAIM_TEXT = `Owner uses the ${MARKER} code word`;
 const AT = '2026-09-26T04:00:00Z';
+// The forget purge job, which settles what a forget left purging; stores stand in for the ones outside the claims table.
+const purgeJob = (sql: SqlStorage, store: ReturnType<typeof claimStore>, stores: readonly ForgetStore[] = []) =>
+  forgetPurge({ sql, store, stores, now: () => Date.parse(AT), arm: async () => undefined });
 
 // Every store a forgotten fact can survive in. The barrier table is allowed to keep the topic:
 // blocking re-admission is its purpose. Everything else must come back clean.
@@ -31,7 +35,7 @@ const survivors = (sql: SqlStorage): Record<string, number> => {
 
 describe('forget coverage', () => {
   it('forgetting a claim removes it from every derived and legacy store, not just claims', async () => {
-    await withSql((sql) => {
+    await withSql(async (sql) => {
       const store = claimStore(sql);
       const episodes = episodeIndex(sql);
       // Legacy tables are frozen history (migration.ts DDL); create them as the migration would.
@@ -55,6 +59,7 @@ describe('forget coverage', () => {
       const result = applyClaimOps(store, JSON.stringify({
         add: [], seen: [], confirm: [], dismiss: [], forget_claims: [claimId], forget_nodes: [], forget_topic: null,
       }), AT, 'owner agreed', undefined, undefined, true);
+      expect(await purgeJob(sql, store).run()).toMatchObject({ pending: 0 });
 
       expect(survivors(sql)).toEqual({
         claims: 0, episodes_fts: 0, memory_backups: 0, legacy_spots: 0, legacy_core_files: 0, constellation_nodes: 0,
@@ -71,10 +76,8 @@ describe('forget coverage', () => {
       }), AT, 'owner agreed', undefined, undefined, true);
       expect(relearn).toContain('held1');
       expect(store.claims()).toEqual([]);
-      // The node survives (it is not forgotten) but no longer quotes the claim or references its id.
-      const node = store.nodes().find((row) => row.id === nodeId);
-      expect(node).toBeDefined();
-      expect(JSON.parse(node!.supporting_spots)).not.toContain(claimId);
+      // The interpretation quoted the claim and rested on it alone, so it is deleted, not redacted.
+      expect(store.nodes().find((row) => row.id === nodeId)).toBeUndefined();
       // The barrier blocks re-admission WITHOUT keeping the text: the topic is the marker and
       // the fingerprint is the exact-match guard. Anything else would leak the text back into
       // every model prompt (barriers ride every memory pass).
@@ -88,7 +91,7 @@ describe('forget coverage', () => {
   });
 
   it('long claim texts purge and settle cleanly (2026-09-28 staging 1101 receipt: full-text LIKE pattern tripped "LIKE or GLOB pattern too complex")', async () => {
-    await withSql((sql) => {
+    await withSql(async (sql) => {
       const store = claimStore(sql);
       const episodes = episodeIndex(sql);
       // Mirrors the stuck staging spots: long instruction-style texts whose full-length LIKE
@@ -106,33 +109,33 @@ describe('forget coverage', () => {
       // Before the fix: verification threw, the claim sat in 'purging' forever. Now it settles.
       expect(result).toContain('purged');
       expect(result).not.toContain('purge-incomplete');
+      expect(await purgeJob(sql, store).run()).toMatchObject({ pending: 0 });
       expect(store.claims()).toEqual([]);
       expect(store.claims('purging')).toEqual([]);
       expect(sql.exec<{ text: string }>('SELECT text FROM episodes').one().text).toContain(FORGOTTEN);
       expect(sql.exec<{ text: string }>('SELECT text FROM episodes').one().text).not.toContain('get_communication');
-      const backup = sql.exec<{ payload: string }>('SELECT payload FROM memory_backups ORDER BY id DESC LIMIT 1').one().payload;
-      expect(backup).toContain(FORGOTTEN);
-      expect(backup).not.toContain('get_communication');
+      // The one backup carried the text, so it is deleted.
+      expect(sql.exec<{ n: number }>('SELECT count(*) AS n FROM memory_backups').one().n).toBe(0);
     });
   });
 
-  it("a surviving claim's own text and evidence are redacted when they quote the forgotten text", async () => {
+  it('a claim that quotes the forgotten text is deleted with it, and an unrelated claim stays whole', async () => {
     await withSql((sql) => {
       const store = claimStore(sql);
       const forgottenId = Number(
         sql.exec<{ id: number }>(`INSERT INTO claims (kind, text, source, evidence, created_at, last_seen_at) VALUES ('fact', ?, 'stated', 'owner said so', ?, ?) RETURNING id`, CLAIM_TEXT, AT, AT).one().id,
       );
-      const otherId = Number(
+      const quotingId = Number(
         sql.exec<{ id: number }>(`INSERT INTO claims (kind, text, source, evidence, created_at, last_seen_at) VALUES ('fact', ?, 'confirmed', ?, ?, ?) RETURNING id`,
           'Owner likes morning runs', `chat: "Owner uses the ${MARKER} code word"`, AT, AT).one().id,
       );
+      sql.exec(`INSERT INTO claims (kind, text, source, evidence, created_at, last_seen_at) VALUES ('fact', 'Owner reads at night', 'stated', 'owner said so', ?, ?)`, AT, AT);
       applyClaimOps(store, JSON.stringify({
         add: [], seen: [], confirm: [], dismiss: [], forget_claims: [forgottenId], forget_nodes: [], forget_topic: null,
       }), AT, 'owner agreed', undefined, undefined, true);
-      const other = store.claims().find((claim) => claim.id === otherId)!;
-      expect(other.text).toBe('Owner likes morning runs'); // unrelated claim text survives untouched
-      expect(other.evidence).not.toContain(MARKER); // its quote of the forgotten text is redacted
-      expect(other.evidence).toContain(FORGOTTEN);
+      // A claim whose evidence quotes the forgotten text is derived from it: redacting would keep its paraphrase around the marker.
+      expect(store.allClaims().map((claim) => claim.id)).not.toContain(quotingId);
+      expect(store.claims().map((claim) => claim.text)).toEqual(['Owner reads at night']);
     });
   });
 
@@ -167,30 +170,29 @@ describe('forget coverage', () => {
     });
   });
 
-  it('rendered console keeps a KV-survivor row visible with a Retry forget action', async () => {
+  it('rendered console keeps a forget that is still clearing visible, masked, with a Retry action', async () => {
     const { renderConsole } = await import('../src/channels/console');
     const { SAMPLE_CONSOLE_VIEW } = await import('./fixtures/console-sample');
-    await withSql((sql) => {
+    await withSql(async (sql) => {
       const store = claimStore(sql);
       const claimId = Number(
         sql.exec<{ id: number }>(`INSERT INTO claims (kind, text, source, evidence, created_at, last_seen_at) VALUES ('fact', ?, 'stated', 'owner said so', ?, ?) RETURNING id`, CLAIM_TEXT, AT, AT).one().id,
       );
-      // Force the KV-survivor state: SQL verifies clean, the caller KV step never settles.
       applyClaimOps(store, JSON.stringify({
         add: [], seen: [], confirm: [], dismiss: [], forget_claims: [claimId], forget_nodes: [], forget_topic: null,
       }), AT, 'owner, test', () => undefined, undefined, true);
-      expect(store.claims('purging').map((claim) => claim.id)).toEqual([claimId]);
-      // The console view the owner sees: the purging row renders with a Retry action and is
-      // absent from the active spots list.
-      const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, spots: store.claims(), forgettingSpots: store.claims('purging') }, 'spots');
-      expect(html).toContain('Forget in progress (1)');
-      expect(html).toContain(CLAIM_TEXT);
-      expect(html).toContain('Retry forget');
-      expect(html).toContain(`name="id" value="${claimId}"`);
+      // A store outside the claims table still holds a copy, so the job keeps the text in custody.
+      const job = purgeJob(sql, store, [{ name: 'conversation', run: () => 1 }]);
+      expect(await job.run()).toMatchObject({ pending: 1 });
+      const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, spots: store.claims(), forgettingSpots: store.claims('purging'), forgettingTopics: job.status() }, 'spots');
+      expect(html).toContain('Forgetting (1)');
+      expect(html).not.toContain(MARKER);
+      expect(html).toContain('waiting on conversation');
+      expect(html).toContain(`name="id" value="${textFingerprint(CLAIM_TEXT)}"`);
     });
   });
 
-  it('case-variant quoting is redacted too: LIKE matches it, so redaction must as well', async () => {
+  it('case-variant quoting is caught too: LIKE matches it, so the quoting claim is deleted as well', async () => {
     await withSql((sql) => {
       const store = claimStore(sql);
       const forgottenId = Number(
@@ -205,9 +207,9 @@ describe('forget coverage', () => {
         add: [], seen: [], confirm: [], dismiss: [], forget_claims: [forgottenId], forget_nodes: [], forget_topic: null,
       }), AT, 'owner agreed', undefined, undefined, true);
       expect(result).toContain('purged');
-      // The variant is gone AND the source settled - no half-forgotten state.
+      // The claim quoting the variant is deleted with it - no half-forgotten state.
       expect(sql.exec<{ n: number }>(`SELECT count(*) AS n FROM claims WHERE evidence LIKE ?`, `%${variant}%`).one().n).toBe(0);
-      expect(sql.exec<{ evidence: string }>(`SELECT evidence FROM claims WHERE text = 'Owner likes morning runs'`).one().evidence).toContain(FORGOTTEN);
+      expect(sql.exec<{ n: number }>(`SELECT count(*) AS n FROM claims WHERE text = 'Owner likes morning runs'`).one().n).toBe(0);
       expect(store.claims().map((claim) => claim.id)).not.toContain(forgottenId);
     });
   });
@@ -251,8 +253,8 @@ describe('forget coverage', () => {
     });
   });
 
-  it('a failed purge preserves a durable pending intent and the source text, and a retry resumes to completion', async () => {
-    await withSql((rawSql) => {
+  it('a failed purge preserves a durable pending intent and the source text, and the purge job resumes it to completion', async () => {
+    await withSql(async (rawSql) => {
       let failEpisodes = true;
       const sql = new Proxy(rawSql, {
         get: (target, prop, receiver) => {
@@ -279,12 +281,9 @@ describe('forget coverage', () => {
       expect(midClaim.text).toContain(MARKER); // source text preserved for resume
       expect(rawSql.exec<{ n: number }>('SELECT count(*) AS n FROM purge_pending WHERE claim_id = ?', claimId).one().n).toBe(1);
 
-      // Retry (the owner asks again, the model re-lists the same id): the 'purging' claim is
-      // still forgettable, redactions are idempotent no-ops, and the purge settles completely.
+      // The purge job is the retry: the 'purging' claim is picked up, redactions are idempotent, and it settles completely.
       failEpisodes = false;
-      const second = applyClaimOps(store, ops, AT, 'owner agreed', undefined, undefined, true);
-      expect(second).toContain('purged');
-      expect(second).not.toContain('purge-incomplete');
+      expect(await purgeJob(sql, store).run()).toMatchObject({ pending: 0 });
       expect(rawSql.exec<{ n: number }>('SELECT count(*) AS n FROM claims WHERE id = ?', claimId).one().n).toBe(0);
       expect(rawSql.exec<{ n: number }>('SELECT count(*) AS n FROM purge_pending').one().n).toBe(0);
       expect(rawSql.exec<{ n: number }>(`SELECT count(*) AS n FROM episodes WHERE episodes MATCH ?`, `"${MARKER}"`).one().n).toBe(0); // failed store now clean

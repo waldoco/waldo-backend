@@ -68,6 +68,9 @@ export const LITERAL_REDACTED_STORES = [
   ['thread_topic_index', ['topic']], ['memory_blocks', ['content', 'decision_log']], ['memory_inbox', ['claim', 'content']], ['patrol_log', ['summary']],
   ['goals', ['description', 'baseline', 'target', 'progress']],
 ] as const;
+// Of those, the owner's goals are the owner's own record and keep their rows; the rest are Waldo's derived text and a row
+// that carries a forgotten text is deleted.
+const RECORD_STORES: ReadonlySet<string> = new Set(['goals']);
 // Decoded string leaves (and keys) of a JSON value. null: the text is not JSON, so the raw check applies. 'unreadable': it parsed or should have, but the decoder failed on resources (depth, size), so it can never be proven clean. The walk is iterative, so nesting depth cannot throw.
 export const jsonLeaves = (value: string): string[] | null | 'unreadable' => {
   let parsed: unknown;
@@ -560,7 +563,10 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         if (changed || redactedText !== row.text) sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', changed ? redactedChanges : row.changes, redactedText, row.id);
       }
     },
-    purge(ids: readonly number[], at: string, topics: readonly string[] = []): { ready: boolean; remaining: Record<string, number>; texts: readonly string[]; failed: readonly string[]; receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> } } {
+    // words: redact-only texts (a forgotten claim's evidence, which may be a citation other claims share). They leave the
+    // episode index with the topics, longest first, so a shorter text redacted first cannot cut a longer one into a fragment
+    // the longer one no longer matches; they never delete a row and are not held in custody here.
+    purge(ids: readonly number[], at: string, topics: readonly string[] = [], words: readonly string[] = []): { ready: boolean; remaining: Record<string, number>; texts: readonly string[]; failed: readonly string[]; receipt: { deleted: Record<string, number>; redacted: Record<string, number>; terminalised: Record<string, number> } } {
       // Before anything is removed: if the count cannot move, nothing is forgotten either.
       forgetLanded();
       const forgotten = ids.length
@@ -572,13 +578,7 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       // A claim's text is usually a paraphrase; retained history holds the owner's own words. The quoted evidence span (the
       // owner's literal words an OWNER-origin claim was grounded on, at least 12 characters like the admission rule; an agent-origin quote could be any common phrase and would wipe unrelated owner text) is redacted too, so
       // a forget reaches the conversation and episodes that actually quote it. Bare citations and short strings are ignored.
-      // A claim grounded in a message the owner wrote holds its quote whole when it has no quotation marks: the grounding check
-      // found that text in the owner's message. The words go with or without a topic, since a topic forget that also names
-      // the claim must reach the quoted words the topic does not cover (a code beside the word the owner named).
-      const quotedEvidence = forgotten.filter((claim) => claim.origin === 'owner').flatMap((claim) => {
-        const spans = quotedSpans(claim.evidence).map((span) => span.trim()).filter(Boolean);
-        return spans.length || claim.verification_status !== 'owner-grounded' ? spans : [claim.evidence.trim()].filter(Boolean);
-      });
+      const quotedEvidence = topics.length ? [] : forgotten.filter((claim) => claim.origin === 'owner').flatMap((claim) => quotedSpans(claim.evidence).map((span) => span.trim()).filter(Boolean));
       const failed: string[] = [];
       const attempt = (store: string, op: () => void) => {
         try { op(); } catch { failed.push(store); }
@@ -628,42 +628,43 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       // SQLite LIKE is case-insensitive but replace() is case-sensitive: a casing variant of
       // the forgotten text would match the predicate yet survive the redaction. Fetch the
       // matching rows and redact in JS with a case-insensitive literal replace instead.
+      // Episodes mirror the owner's transcript, which is the owner's own record: redacted in place by word, every text of this
+      // forget longest first.
+      if (hasEpisodes) for (const text of [...new Set([...texts, ...words.map((word) => word.trim()).filter(Boolean)])].sort((a, b) => b.length - a.length)) attempt('episodes', () => {
+        for (const row of sql.exec<{ rid: number; text: string }>(`SELECT rowid AS rid, text FROM episodes WHERE text LIKE ? ESCAPE '\\'`, likePrefilter(text)).toArray()) {
+          const redacted = ciRedact(row.text, text, FORGOTTEN);
+          if (redacted !== row.text) { sql.exec('UPDATE episodes SET text = ? WHERE rowid = ?', redacted, row.rid); tally('redacted', 'episodes'); }
+        }
+      });
       for (const text of texts) {
         // Bounded prefilter: fetched rows are a superset; ciRedact below applies the
         // case-insensitive FULL-text replace, so only true matches are rewritten.
         const like = likePrefilter(text);
         const ci = (value: string) => ciRedact(value, text, FORGOTTEN);
-        // Episodes and spots are append-only history: rows are redacted in place, never
-        // deleted, so the record's shape survives while the forgotten text does not.
-        if (hasEpisodes) attempt('episodes', () => {
-          for (const row of sql.exec<{ rid: number; text: string }>(`SELECT rowid AS rid, text FROM episodes WHERE text LIKE ? ESCAPE '\\'`, like).toArray()) {
-            const redacted = ci(row.text);
-            if (redacted !== row.text) { sql.exec('UPDATE episodes SET text = ? WHERE rowid = ?', redacted, row.rid); tally('redacted', 'episodes'); }
-          }
-        });
+        // Derived memory that carries the text is deleted, not redacted: a redacted row keeps the paraphrase around the marker,
+        // a deleted one cannot. Owner records and rows that drive an operation (episodes, reminders, loops, goals, the day plan,
+        // cards, run candidates, outbox and schedule rows) keep their shape and lose only the words.
+        const carries = (value: string | null) => value !== null && (carriesTopic(value, text) || hidesTopic(value, text));
+        // A backup payload is JSON, so the text can sit in it escaped where the literal LIKE cannot see it; every backup is read.
         attempt('memory_backups', () => {
-          for (const row of sql.exec<{ rid: number; payload: string }>(`SELECT id AS rid, payload FROM memory_backups WHERE payload LIKE ? ESCAPE '\\'`, like).toArray()) {
-            const redacted = ci(row.payload);
-            if (redacted !== row.payload) sql.exec('UPDATE memory_backups SET payload = ? WHERE id = ?', redacted, row.rid);
+          for (const row of sql.exec<{ rid: number; payload: string }>('SELECT id AS rid, payload FROM memory_backups').toArray()) {
+            if (carries(row.payload)) { sql.exec('DELETE FROM memory_backups WHERE id = ?', row.rid); tally('deleted', 'memory_backups'); }
           }
         });
         if (hasSpots) attempt('legacy_spots', () => {
           for (const row of sql.exec<{ rid: number; text: string; evidence: string }>(`SELECT id AS rid, text, evidence FROM spots WHERE text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\'`, like, like).toArray()) {
-            const redactedText = ci(row.text); const redactedEvidence = ci(row.evidence);
-            if (redactedText !== row.text || redactedEvidence !== row.evidence) sql.exec('UPDATE spots SET text = ?, evidence = ? WHERE id = ?', redactedText, redactedEvidence, row.rid);
+            if (carries(row.text) || carries(row.evidence)) { sql.exec('DELETE FROM spots WHERE id = ?', row.rid); tally('deleted', 'legacy_spots'); }
           }
         });
         if (hasRevisions) attempt('legacy_core_files', () => {
           for (const row of sql.exec<{ f: string; rev: number; content: string }>(`SELECT file AS f, revision AS rev, content FROM core_file_revisions WHERE content LIKE ? ESCAPE '\\'`, like).toArray()) {
-            const redacted = ci(row.content);
-            if (redacted !== row.content) sql.exec('UPDATE core_file_revisions SET content = ? WHERE file = ? AND revision = ?', redacted, row.f, row.rev);
+            if (carries(row.content)) { sql.exec('DELETE FROM core_file_revisions WHERE file = ? AND revision = ?', row.f, row.rev); tally('deleted', 'legacy_core_files'); }
           }
         });
-        // Other claims may quote the forgotten text in their own text or evidence.
+        // Other claims that quote the forgotten text in their text, evidence, aliases or source go with it.
         attempt('surviving_claims', () => {
           for (const row of sql.exec<{ rid: number; text: string; evidence: string; aliases: string | null; source_ref: string | null }>(`SELECT id AS rid, text, evidence, aliases, source_ref FROM claims WHERE (text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\' OR aliases LIKE ? ESCAPE '\\' OR source_ref LIKE ? ESCAPE '\\')${notPurging}`, like, like, like, like, ...idList).toArray()) {
-            const redactedText = ci(row.text); const redactedEvidence = ci(row.evidence); const redactedAliases = row.aliases === null ? null : ci(row.aliases); const redactedSource = row.source_ref === null ? null : ci(row.source_ref);
-            if (redactedText !== row.text || redactedEvidence !== row.evidence || redactedAliases !== row.aliases || redactedSource !== row.source_ref) sql.exec('UPDATE claims SET text = ?, evidence = ?, aliases = ?, source_ref = ? WHERE id = ?', redactedText, redactedEvidence, redactedAliases, redactedSource, row.rid);
+            if (carries(row.text) || carries(row.evidence) || carries(row.aliases) || carries(row.source_ref)) { sql.exec('DELETE FROM claims WHERE id = ?', row.rid); tally('deleted', 'claims'); }
           }
         });
         // Derived text the model reads back (unfolded update cards, day-plan reasons). Rows and
@@ -676,6 +677,11 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
             if (!sql.exec(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`, column).toArray().length) continue;
             for (const row of sql.exec<{ rowid: number; value: string | null }>(`SELECT rowid, ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL`).toArray()) {
               if (typeof row.value !== 'string') continue;
+              if (!RECORD_STORES.has(table)) {
+                const leaves = jsonLeaves(row.value);
+                if (carries(row.value) || leaves === 'unreadable' || (leaves !== null && leaves.some(carries))) { sql.exec(`DELETE FROM ${table} WHERE rowid = ?`, row.rowid); tally('deleted', table); }
+                continue;
+              }
               // JSON-valued columns are redacted on decoded string leaves and re-serialised only when the row is already canonical; a span that crosses a JSON boundary, or a row that would not round-trip, stays unredacted and the readback keeps the forget incomplete.
               let next = row.value;
               let parsed: unknown; let isJson = true;
@@ -699,10 +705,10 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
             if (note !== row.note) { sql.exec('UPDATE reminder_notes SET note = ? WHERE id = ?', note, row.id); tally('redacted', 'reminder_notes'); }
           }
         });
+        // A run's summary is Waldo's own wording of what it did; the run row stays for its receipts, the summary goes.
         if (tableExists(sql, 'background_runs')) attempt('background_runs', () => {
           for (const row of sql.exec<{ id: string; summary: string }>('SELECT id, summary FROM background_runs WHERE summary IS NOT NULL').toArray()) {
-            const summary = ci(row.summary);
-            if (summary !== row.summary) { sql.exec('UPDATE background_runs SET summary = ? WHERE id = ?', summary, row.id); tally('redacted', 'background_runs'); }
+            if (carries(row.summary)) { sql.exec('UPDATE background_runs SET summary = NULL WHERE id = ?', row.id); tally('deleted', 'background_runs'); }
           }
         });
         if (hasSourceLoops) attempt('loops', () => {
@@ -785,16 +791,26 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         });
         attempt('constellation_nodes', () => {
           for (const row of sql.exec<{ id: number; label: string; summary: string }>(`SELECT id, label, summary FROM constellation_nodes WHERE label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'`, like, like).toArray()) {
-            const redactedLabel = ci(row.label); const redactedSummary = ci(row.summary);
-            if (redactedLabel !== row.label || redactedSummary !== row.summary) sql.exec('UPDATE constellation_nodes SET label = ?, summary = ? WHERE id = ?', redactedLabel, redactedSummary, row.id);
+            if (carries(row.label) || carries(row.summary)) {
+              sql.exec('DELETE FROM constellation_edges WHERE from_id = ? OR to_id = ?', row.id, row.id);
+              sql.exec('DELETE FROM constellation_nodes WHERE id = ?', row.id);
+              tally('deleted', 'constellation_nodes');
+            }
           }
         });
       }
+      // An interpretation is derived from its supporting claims: one left with no support is deleted with its edges.
       attempt('constellation_refs', () => {
+        const live = new Set(sql.exec<{ id: number }>('SELECT id FROM claims').toArray().map((row) => row.id));
         for (const node of sql.exec<ConstellationNode>('SELECT * FROM constellation_nodes').toArray()) {
           const spots = JSON.parse(node.supporting_spots) as number[];
-          const kept = spots.filter((id) => !ids.includes(id));
-          if (kept.length !== spots.length) sql.exec('UPDATE constellation_nodes SET supporting_spots = ? WHERE id = ?', JSON.stringify(kept), node.id);
+          const kept = spots.filter((id) => !ids.includes(id) && live.has(id));
+          if (kept.length === spots.length) continue;
+          if (kept.length === 0) {
+            sql.exec('DELETE FROM constellation_edges WHERE from_id = ? OR to_id = ?', node.id, node.id);
+            sql.exec('DELETE FROM constellation_nodes WHERE id = ?', node.id);
+            tally('deleted', 'constellation_nodes');
+          } else sql.exec('UPDATE constellation_nodes SET supporting_spots = ? WHERE id = ?', JSON.stringify(kept), node.id);
         }
       });
       const remaining: Record<string, number> = {};
