@@ -61,13 +61,13 @@ describe('google-auth MCP servers', () => {
   });
 
   it('proxy 401/403 map to the owner-actionable connect intents', async () => {
-    const failing = (status: number): McpGoogleAuth => ({
+    const failing = (status: number, message = 'proxy failed'): McpGoogleAuth => ({
       resolve: async () => ({ mode: 'proxy', connection: 'conn_123' }),
-      proxy: async () => { throw Object.assign(new Error('proxy failed'), { status }); },
+      proxy: async () => { throw Object.assign(new Error(message), { status }); },
     });
-    await expect(executeMcp({ name: 'g', url: 'https://x', auth: 'google' }, 't', {}, failing(401)))
+    await expect(executeMcp({ name: 'g', url: 'https://drivemcp.googleapis.com/mcp/v1', auth: 'google' }, 'search_files', {}, failing(401)))
       .rejects.toMatchObject({ reason: 'reauth_needed' });
-    await expect(executeMcp({ name: 'g', url: 'https://x', auth: 'google' }, 't', {}, failing(403)))
+    await expect(executeMcp({ name: 'g', url: 'https://drivemcp.googleapis.com/mcp/v1', auth: 'google' }, 'search_files', {}, failing(403, 'insufficient scopes')))
       .rejects.toMatchObject({ reason: 'scope_missing' });
     expect(() => new McpConnectError('not_connected', 'x')).not.toThrow();
   });
