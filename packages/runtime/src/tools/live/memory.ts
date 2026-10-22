@@ -110,6 +110,11 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         const purged = [...texts];
         const evidence = [...selected.values()].filter(claim => claim.origin === 'owner').map(claim => claim.evidence);
         for (const words of evidence) texts.add(words);
+        // With no claim selected, earlier chat the episode index holds counts as memory touched; the owner's current message,
+        // which always names the topic, does not. Read before the commit, which redacts both.
+        const current = new Set([turn.current.text, ...ownerParts(turn.current)]);
+        const inHistory = selected.size === 0 && deps.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'episodes'").one().n > 0
+          && deps.sql.exec<{ text: string }>('SELECT text FROM episodes').toArray().some(row => !current.has(row.text) && purged.some(text => carriesTopic(row.text, text)));
         await ready(ctx);
         let touched = false;
         // Custody before destruction: the purge records the texts in custody, then deletes the claims and cleans the claims
@@ -119,8 +124,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
           for (const text of texts) store.barrier(text, now());
           for (const id of selected.keys()) store.forget(id);
           const counts = store.purge([...selected.keys()], now(), purged, evidence).receipt;
-          // The episode index mirrors the transcript, which always holds the owner's own request, so it is not memory touched.
-          touched = [counts.deleted, counts.redacted, counts.terminalised].some(group => Object.entries(group).some(([name, count]) => name !== 'episodes' && count > 0));
+          touched = inHistory || [counts.deleted, counts.redacted, counts.terminalised].some(group => Object.entries(group).some(([name, count]) => name !== 'episodes' && count > 0));
         };
         const atomic = () => deps.transaction ? deps.transaction(commit) : commit();
         if (ctx.runScope) ctx.runScope.commit(atomic); else atomic();

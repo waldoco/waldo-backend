@@ -2,7 +2,7 @@ import {env,runInDurableObject} from 'cloudflare:test';
 import {expect,it,vi} from 'vitest';
 import {claimStore} from '../src/memory/claims';
 import {TelegramFinalOutbox,FINAL_OUTBOX_KEY} from '../src/channels/telegram-final-outbox';
-it.each([false,true])('node forget hands its label to the purge job, which cleans source-final stores and retries a failed write: %s',async(fail)=>{
+it.each([false,true])('node forget cleans source-final stores at once, and the purge job retries a failed write: %s',async(fail)=>{
  const name='console-forget-reconcile-'+crypto.randomUUID();const stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
  await runInDurableObject(stub,async(instance,state)=>{
   Object.assign((instance as unknown as {env:Record<string,unknown>}).env,{TELEGRAM_BOT_TOKEN:'123:synthetic',OPENAI_API_KEY:'synthetic-key'});state.storage.kv.put('do_name',name);
@@ -17,8 +17,8 @@ it.each([false,true])('node forget hands its label to the purge job, which clean
    const runtime=(instance as unknown as {setup():{act(input:{action:'node.forget',id:string,value:string}):Promise<boolean|string>}}).setup();
    expect(await runtime.act({action:'node.forget',id:String(node.id),value:''})).toBe(true);
    const job=(instance as unknown as {forgetPurgeJob():{run():Promise<{settled:number;pending:number}>}}).forgetPurgeJob();
-   expect(await job.run()).toEqual(fail?{settled:0,pending:1}:{settled:1,pending:0});
-   if(fail)expect(await job.run()).toEqual({settled:1,pending:0});
+   // The forget's own pass cleaned every store unless the write failed; the job settles what it left.
+   expect(await job.run()).toEqual(fail?{settled:1,pending:0}:{settled:0,pending:0});
    const rows=new TelegramFinalOutbox(state.storage.kv).records();
    for(const id of ['prep','mail'])expect(rows.find(r=>r.id===id)!.payload.text).not.toContain(node.label);
    expect(memory.pendingTopics()).toEqual([]);
