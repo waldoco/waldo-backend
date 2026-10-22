@@ -53,7 +53,7 @@ const TYPED_FIELDS = {
   error_code: turnErrorCodeSchema, job_id: turnIdentifierSchema, job_profile: turnIdentifierSchema,
   tools_called: z.number().int().min(0), parallel_batches: z.number().int().min(0),
   browser_ms: z.number().finite().min(0), sandbox_ms: z.number().finite().min(0), ttft_ms: z.number().finite().min(0),
-  fallback_fired: z.boolean(), tool_search_degraded: z.boolean(),
+  fallback_fired: z.boolean(),
 } as const;
 const typedFieldsOnly = (entry: TurnLogEntry): TurnLogEntry => {
   const copy: Record<string, unknown> = { ...entry };

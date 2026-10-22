@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { ANTHROPIC_CLAUDE_OPUS_5_5_MODEL, OPENAI_GPT_6_1_SOL_MODEL, TOOL_PERMISSIONS, triggerTypeSchema, type ModelName, type ToolName } from '@waldo/contracts';
-import OpenAI from 'openai';
 import { createOwnerResponder } from '../src/channels/owner-turn';
-import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { AnthropicMessagesAdapter } from '../src/llm/anthropic';
 import { OpenAIResponsesAdapter, type OpenAIResponsesClient } from '../src/llm/openai';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
@@ -37,35 +35,6 @@ const run = async (model: ModelName, gatewayFor: (bodies: Record<string, unknown
   await responder.respond(ownerTyped({ traceId: 'cache-2', conversationRef: 'cache', surface: 'app', text: 'and the time?', memoryWrites: false }), time);
   return { bodies: bodies.filter((body) => body.tools !== undefined), firstTurn, script };
 };
-
-describe('a refused tool search request is visible on the turn record', () => {
-  const answered = { id: 'r', status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'Done.' }] }], output_text: 'Done.', usage: { input_tokens: 1, output_tokens: 1 } };
-  const replyHops = async (refuse: boolean) => {
-    const entries: TurnLogEntry[] = [];
-    const client = { responses: { create: async (body: Record<string, unknown>) => {
-      const tools = body.tools as { type: string }[] | undefined;
-      if (refuse && tools?.some((tool) => tool.type === 'tool_search')) throw new OpenAI.APIError(400, { message: 'synthetic', code: 'invalid_value' }, 'synthetic', new Headers());
-      return answered;
-    } } } as unknown as OpenAIResponsesClient;
-    const args: Parameters<typeof createOwnerResponder> = [{ openaiApiKey: 'synthetic-key-0123456789', toolSearch: true }];
-    args[3] = (entry) => entries.push(entry);
-    args[5] = handlers as never; args[6] = OPENAI_GPT_6_1_SOL_MODEL; args[10] = new OpenAIResponsesAdapter({ apiKey: 'synthetic-key-0123456789', client });
-    await createOwnerResponder(...args).respond(ownerTyped({ traceId: 'degrade-1', conversationRef: 'degrade', surface: 'app', text: 'what reminders do I have?', memoryWrites: false }), time);
-    return entries.filter((entry) => entry.hop === 'llm_reply');
-  };
-
-  it('marks the call that was answered after a refusal, with the refusal not counted as a provider fallback', async () => {
-    const hops = await replyHops(true);
-    expect(hops.length).toBeGreaterThan(0);
-    for (const hop of hops) expect(hop).toMatchObject({ ok: true, tool_search_degraded: true, fallback_fired: false });
-  });
-
-  it('marks nothing when the request was accepted', async () => {
-    const hops = await replyHops(false);
-    expect(hops.length).toBeGreaterThan(0);
-    for (const hop of hops) expect(hop.tool_search_degraded).toBeUndefined();
-  });
-});
 
 describe('tool search keeps the tools array byte-identical across rounds and turns', () => {
   it('OpenAI Responses', async () => {

@@ -69,9 +69,6 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
     // The request's own limit, cut to what is left of the turn.
     const timeout = setTimeout(() => controller.abort(), Math.max(0, Math.min(this.timeoutMs, callTimeLeftMs(input.runScope))));
     const startedAt = Date.now();
-    // Declared outside the try: a search-only response was billed even when its continuation then fails.
-    const searched: OpenAI.Responses.ResponseOutputItem[] = [];
-    const searchSpent = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0 };
     try {
       const body: OpenAI.Responses.ResponseCreateParamsNonStreaming = {
           model: input.request.model,
@@ -90,6 +87,8 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
       let response = await this.client.responses.create(body, { signal: controller.signal });
       // A response that only searched for tools has not answered yet: it is continued with its search items, as a round
       // after a search replays them, and the items lead the answer's own so later rounds replay the whole search.
+      const searched: OpenAI.Responses.ResponseOutputItem[] = [];
+      const searchSpent = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0 };
       for (let continuation = 0; continuation < SEARCH_CONTINUATIONS && onlySearched(response); continuation += 1) {
         searched.push(...response.output);
         searchSpent.input_tokens += response.usage?.input_tokens ?? 0;
@@ -102,14 +101,14 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
       const strictSent = strictParametersByTool(input.request);
       const toolCalls = response.output.flatMap((item) => item.type === 'function_call' ? [{ call_id: item.call_id, name: item.name, arguments: strictSent.has(item.name) ? fromOpenAIStrictArguments(item.arguments, strictSent.get(item.name)!) : item.arguments }] : []);
       const incomplete = response.status === 'incomplete';
+      if (incomplete && text.length === 0 && toolCalls.length === 0) {
+        return { ok: false, code: 'oversize', error: `OpenAI output incomplete: ${response.incomplete_details?.reason ?? 'unknown'}` };
+      }
       const spent = {
         input_tokens: searchSpent.input_tokens + (response.usage?.input_tokens ?? 0),
         output_tokens: searchSpent.output_tokens + (response.usage?.output_tokens ?? 0),
         cache_read_input_tokens: searchSpent.cache_read_input_tokens + (response.usage?.input_tokens_details?.cached_tokens ?? 0),
       };
-      if (incomplete && text.length === 0 && toolCalls.length === 0) {
-        return { ok: false, code: 'oversize', error: `OpenAI output incomplete: ${response.incomplete_details?.reason ?? 'unknown'}`, spent };
-      }
       // A reply that is only reasoning (no text, no tool call) is a transient model miss: the provider asks once more,
       // and the tokens it cost still count.
       if (text.length === 0 && toolCalls.length === 0) {
@@ -139,7 +138,7 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
         ? ` (${[error.status, error.code, error.param].filter((part) => part !== undefined && part !== null && part !== '').join(' ')})`
         : '';
       const retry = error instanceof OpenAI.APIError ? retryAdvice(error.headers) : undefined;
-      return { ok: false, code: openAIErrorCode(error), error: `OpenAI request failed${detail}`, ...(retry ? { retry } : {}), ...(searched.length > 0 ? { spent: searchSpent } : {}) };
+      return { ok: false, code: openAIErrorCode(error), error: `OpenAI request failed${detail}`, ...(retry ? { retry } : {}) };
     } finally {
       clearTimeout(timeout);
       input.runScope?.signal.removeEventListener('abort', abortRun);
