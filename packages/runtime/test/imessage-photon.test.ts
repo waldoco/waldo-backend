@@ -37,6 +37,7 @@ describe('Photon OAuth custody', () => {
     expect(u.origin + u.pathname).toBe('https://app.photon.codes/api/auth/oauth2/authorize');
     expect(u.searchParams.get('state')).toBe(nonce);
     expect(u.searchParams.get('code_challenge_method')).toBe('S256');
+    expect(u.searchParams.get('prompt')).toBe('consent');
     expect(u.searchParams.get('scope')!.split(' ')).toEqual(expect.arrayContaining(['offline_access', 'spectrum:write']));
     expect(await t.finish(nonce, new URLSearchParams({ code: 'code-1', state: nonce }))).toBe('linked');
     const exchange = new URLSearchParams(calls[0]!.body);
