@@ -21,11 +21,13 @@ describe('forget matches whole words', () => {
     expect(forget(['sarah'], 'login sarah2024')).toBe('login [forgotten]2024');
     expect(forget(['C++'], 'written in C++17')).toBe('written in [forgotten]17');
     expect(forget(['2026'], 'DLD-20261002 and 12026')).toBe('DLD-[forgotten]1002 and 1[forgotten]');
+    expect(forget(['22'], '2222')).toBe('[forgotten][forgotten]');
   });
   it('the boundary holds in Latin, Greek and Cyrillic words, and a combining mark continues the letter before it', () => {
     expect(forget(['чай'], 'чайник и чай')).toBe('чайник и [forgotten]');
     expect(forget(['cafe'], 'cafe\u0301 and cafe')).toBe('cafe\u0301 and [forgotten]');
     expect(forget(['tea'], 'e\u0301tea, tea')).toBe('e\u0301tea, [forgotten]');
+    expect(forget(['cafe\u0301'], 'cafe\u0301s and cafe\u0301')).toBe('cafe\u0301s and [forgotten]');
   });
   it('a candidate the boundary rejects never hides an overlapping one that passes', () => {
     expect(forget(['x-x'], 'ax-x-x')).toBe('ax-[forgotten]');
