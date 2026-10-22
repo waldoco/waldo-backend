@@ -313,6 +313,7 @@ export const createOwnerResponder = (
     if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by, result.scribe?.reason, result.scribe_stage, result.detail].filter(Boolean).join(':'), error_code: result.code, shape, ...routing, ...(metadataOnly ? {} : { text: { input } }) });
     else log({
       trace, hop: `llm_${purpose}`, ms: floor ? Date.now() - started : result.usage.latency_ms, ok: true, ...routing,
+      ...(result.tool_search_degraded ? { tool_search_degraded: true } : {}),
       // No model call answered the floor line, so it carries no usage: the cost rollup counts a call wherever usage is set.
       ...(floor ? { code: 'template_floor' } : { usage: { model: result.usage.model, input: result.usage.input_tokens, output: result.usage.output_tokens, cached: result.usage.cache_read_input_tokens,
         web_searches: response!.output_items?.filter((item) => item.type === 'web_search_call').length ?? 0 } }),
