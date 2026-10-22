@@ -19,7 +19,7 @@ export type ConnectionsRecord = Base<'connections', {
   mcp?: McpServerRecord[];
 }>;
 // A remote MCP server the owner connected. Titles are the server's own text; read_only_hint is its claim.
-export type McpServerRecord = { id: string; name: string; host: string; server_url: string; auth: 'oauth' | 'none'; status: 'active' | 'reauth_needed'; scopes: string[]; wants_scopes: string[]; tools: number; hidden_tools: number; runs_without_asking: number; marked_read_only: number; tools_changed: boolean; tool_list: { tool: string; runs: 'without_asking' | 'asks_first'; read_only_hint: boolean; title?: string }[] };
+export type McpServerRecord = { id: string; name: string; host: string; server_url: string; auth: 'oauth' | 'none'; status: 'active' | 'reauth_needed'; scopes: string[]; wants_scopes: string[]; tools: number; hidden_tools: number; runs_without_asking: number; marked_read_only: number; tools_changed: boolean; tools_capped: boolean; read_only_digest: string; tool_list: { tool: string; runs: 'without_asking' | 'asks_first'; read_only_hint: boolean; title?: string; digest: string }[] };
 export type ProposalReview = { kind: 'email_send'; to: string[]; cc: string[]; bcc: string[]; subject: string; body: string }
   | { kind: 'message_send'; channel: string; content: string }
   | { kind: 'calendar_change'; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string };
@@ -107,7 +107,7 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
     telegram: { linked: data.telegram.linked, unlinkAvailable: data.telegram.unlinkAvailable },
     sessions: { until: data.sessions.until, count: data.sessions.count, items: (data.sessions.items as { signed_in: string; until: string; current: boolean }[]).map(item => ({ signed_in: item.signed_in, until: item.until, current: item.current })) },
     ...(data.channels === undefined ? {} : { channels: (data.channels as NonNullable<ConnectionsRecord['data']['channels']>).map(item => ({ channel: item.channel, state: item.state, masked_label: item.masked_label })) }),
-    ...(data.mcp === undefined ? {} : { mcp: (data.mcp as McpServerRecord[]).map(server => ({ id: server.id, name: server.name, host: server.host, server_url: server.server_url, auth: server.auth, status: server.status, scopes: [...server.scopes], wants_scopes: [...server.wants_scopes], tools: server.tools, hidden_tools: server.hidden_tools, runs_without_asking: server.runs_without_asking, marked_read_only: server.marked_read_only, tools_changed: server.tools_changed, tool_list: server.tool_list.map(tool => ({ tool: tool.tool, runs: tool.runs, read_only_hint: tool.read_only_hint, ...(tool.title === undefined ? {} : { title: tool.title }) })) })) }),
+    ...(data.mcp === undefined ? {} : { mcp: (data.mcp as McpServerRecord[]).map(server => ({ id: server.id, name: server.name, host: server.host, server_url: server.server_url, auth: server.auth, status: server.status, scopes: [...server.scopes], wants_scopes: [...server.wants_scopes], tools: server.tools, hidden_tools: server.hidden_tools, runs_without_asking: server.runs_without_asking, marked_read_only: server.marked_read_only, tools_changed: server.tools_changed, tools_capped: server.tools_capped, read_only_digest: server.read_only_digest, tool_list: server.tool_list.map(tool => ({ tool: tool.tool, runs: tool.runs, read_only_hint: tool.read_only_hint, ...(tool.title === undefined ? {} : { title: tool.title }), digest: tool.digest })) })) }),
     } } as Records[V];
   }
   if (expected === 'waiting') {
@@ -194,8 +194,9 @@ export async function fetchControls<V extends ControlsView>(view: V, signal?: Ab
 }
 
 const mcpServer = (item: unknown): boolean => obj(item) && string(item.id) && string(item.name) && string(item.host) && string(item.server_url) && ['oauth', 'none'].includes(String(item.auth)) && ['active', 'reauth_needed'].includes(String(item.status))
-  && strings(item.scopes) && strings(item.wants_scopes) && ['tools', 'hidden_tools', 'runs_without_asking', 'marked_read_only'].every(key => count(item[key])) && typeof item.tools_changed === 'boolean'
-  && Array.isArray(item.tool_list) && item.tool_list.every(tool => obj(tool) && string(tool.tool) && ['without_asking', 'asks_first'].includes(String(tool.runs)) && typeof tool.read_only_hint === 'boolean' && (tool.title === undefined || typeof tool.title === 'string'));
+  && strings(item.scopes) && strings(item.wants_scopes) && ['tools', 'hidden_tools', 'runs_without_asking', 'marked_read_only'].every(key => count(item[key])) && typeof item.tools_changed === 'boolean' && typeof item.tools_capped === 'boolean'
+  && digest(item.read_only_digest) && Array.isArray(item.tool_list) && item.tool_list.every(tool => obj(tool) && string(tool.tool) && ['without_asking', 'asks_first'].includes(String(tool.runs)) && typeof tool.read_only_hint === 'boolean' && (tool.title === undefined || typeof tool.title === 'string') && digest(tool.digest));
+const digest = (value: unknown): boolean => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 
 // Existing connectUrl issues a first-party /c/<22-character ticket>. Direct
 // Google authorization is constrained to the exact existing provider endpoint.
