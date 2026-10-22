@@ -33,7 +33,7 @@ This is the wording the app shows on the WHOOP consent screen. The app reads it 
 >
 > **1. Store it.** Waldo stores your WHOOP data in its health store and works out your Form, Recovery and Load from it, so you can see them. Readings are kept for 90 days and daily summaries for 24 months.
 >
-> **2. Let Waldo's AI model use it.** To plan your day, Waldo sends a summary of your WHOOP data (zones such as "low" or "high", not your raw numbers) to the company that provides its AI model. That company is a third party. This happens only if you give this second yes.
+> **2. Let Waldo's AI model use it.** To plan your day, Waldo sends a summary of your WHOOP data (zones such as "low" or "high", not your raw numbers) to the company that provides its AI model. That company is a third party. This happens only if you give this second yes. Waldo never uses your WHOOP data to train any model.
 >
 > Waldo's replies that draw on your WHOOP data appear wherever you talk to Waldo: in the app and in any chat channel you have linked, such as iMessage, WhatsApp or Telegram. Waldo's notes about your WHOOP data are not medical advice.
 >
@@ -41,14 +41,15 @@ This is the wording the app shows on the WHOOP consent screen. The app reads it 
 
 What the wording is built to keep true:
 - **Who gets the data.** It says the model provider is a third party and that it receives the data only under the second yes, because WHOOP's terms bar exposing WHOOP data to a third party without the owner's explicit opt-in. It does not say the data is "shown or sent to no one else": replies that draw on it travel through the owner's linked chat channels, and the notice says so.
-- **No promise the provider has not made.** It says nothing about the provider keeping nothing or never training on the data. Add exactly one sentence to that effect, as a new copy version, only once zero-retention and no-training terms with that provider exist. Until then the notice must not promise it.
+- **No promise the provider has not made.** It says nothing about the provider keeping nothing or never training on the data. Waldo's own promise ("Waldo never uses your WHOOP data to train any model") is true today and stays. Once zero-retention and no-training terms with the provider exist, add one sentence saying so, as a new copy version.
 - **The withdrawal effects** match the health plane: withdrawing `storage_compute` withdraws both grants for the source and purges what was stored; withdrawing `model_processing` stops the sync and model use and deletes nothing.
 - **Retention** is the health contract's own constants (90 days of readings, 24 months of daily summaries).
 
 Gates before this notice ships (the owner's, not the app's):
-1. Staging trace capture (Langfuse) would be a further recipient of WHOOP-derived turns. The owner's decision on excluding them is open; the notice must name any recipient that remains, so it does not ship until that is settled.
-2. Whether a consent screen counts as the "express authorization" WHOOP's terms ask for is a legal reading, not a code one.
-3. The provider's no-retention and no-training terms, as above, gate only the extra sentence, not the notice.
+1. **The provider's terms.** WHOOP's §4 also bars others acting on Waldo's behalf from training on the data, so zero-retention and no-training terms with the AI model provider are a precondition for shipping WHOOP, not optional wording. They are a launch gate beside the trace-capture decision below.
+2. **Trace capture.** Staging trace capture (Langfuse) would be a further recipient of WHOOP-derived turns. The owner's decision on excluding them is open; the notice must name any recipient that remains.
+3. **Where replies go.** The notice names the chat channels as places the data can appear. If a channel's own provider (Meta for WhatsApp, Telegram, the iMessage host) should be named as a recipient, that wording is the owner's call.
+4. **The legal reading.** Whether a consent screen counts as the "express authorization" WHOOP's terms ask for is a legal reading, not a code one.
 
 ## The chat-channel step
 
