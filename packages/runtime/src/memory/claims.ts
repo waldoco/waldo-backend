@@ -1,5 +1,5 @@
 type Sql = Pick<SqlStorage, 'exec'>;
-import { literalTextPattern } from '@waldo/contracts';
+import { replaceLiteralText } from '@waldo/contracts';
 import { carriesTopic, hidesTopic, startsTopic } from './forget-guard';
 import type { ForgetSource, ForgetBatch, ForgetHeldBy } from './selective-forget';
 import { MAX_FORGET_SOURCES } from './selective-forget';
@@ -89,7 +89,7 @@ export const jsonLeaves = (value: string): string[] | null | 'unreadable' => {
   } catch { return 'unreadable'; }
 };
 const ciRedact = (value: string, needle: string, marker: string): string =>
-  needle ? value.replace(literalTextPattern(needle), () => marker) : value;
+  needle ? replaceLiteralText(value, needle, marker) : value;
 
 export const FORGOTTEN = '[forgotten]';
 

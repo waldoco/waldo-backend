@@ -74,13 +74,18 @@ describe('hidesTopic unicode escapes', () => {
       expect(hidesTopic(value, topic), `${value} / ${topic}`).toBe(carriesTopic(decoded, topic));
     }
   });
-  it('pins the sigma and dotted-I fail-open found in review, and keeps malformed escapes held', async () => {
+  it('pins the sigma and dotted-I fail-open found in review; a malformed escape is read leniently and holds only what it spells', async () => {
     const { hidesTopic } = await import('../src/memory/forget-guard');
     expect(hidesTopic('\u03b1\\u03a3', '\u03b1\u03c2')).toBe(true);
     expect(hidesTopic('moved \\u2013 see agenda', 'code word')).toBe(false);
-    expect(hidesTopic('moved \\u20 see agenda', 'code word')).toBe(true);
-    expect(hidesTopic('C:\\Users', 'code word')).toBe(true);
-    expect(hidesTopic('x \\U0057 y', 'code word')).toBe(true);
+    // A malformed or non-JSON escape spells no topic here under any reading, so it cannot hold a forget forever.
+    expect(hidesTopic('moved \\u20 see agenda', 'code word')).toBe(false);
+    expect(hidesTopic('C:\\Users', 'code word')).toBe(false);
+    expect(hidesTopic('x \\U0057 y', 'code word')).toBe(false);
+    // One that does spell it still holds: a hex escape, an identity escape inside the word, a line continuation.
+    expect(hidesTopic('moved \\x63ode word', 'code word')).toBe(true);
+    expect(hidesTopic('c\\ode word', 'code word')).toBe(true);
+    expect(hidesTopic('code\\\nword is code \\\u2028word', 'codeword')).toBe(true);
   });
 });
 

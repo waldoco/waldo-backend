@@ -1,12 +1,12 @@
 // A forget that has not finished withholds only what carries its topic: the nightly pass still runs and learns from every
 // other turn, and neither the consolidation model nor the promotion model ever reads the held topic. A pending topic whose
-// stores now verify clean finishes on the next turn with no new forget, and unrelated words survive. Synthetic topics only.
+// stores now verify clean is settled by the purge job, and unrelated words survive. Synthetic topics only.
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { appSubjectFor } from '../src/channels/app-api';
-import { episodeIndex, NIGHTLY_ID, NIGHTLY_THROUGH_KEY, OWNER_SAID } from '../src/channels/episodes';
+import { episodeIndex, NIGHTLY_ID, NIGHTLY_THROUGH_KEY, OWNER_SAID, scrubEpisodeTexts } from '../src/channels/episodes';
 import { traceBook } from '../src/channels/harness';
 import { redactConversationEntries } from '../src/channels/conversation-store';
 import { claimStore, FORGOTTEN } from '../src/memory/claims';
@@ -31,7 +31,8 @@ vi.mock('../src/channels/telegram-turn', async load => {
     const said = JSON.stringify(request.messages);
     if (format === 'claim_ops') {
       model.nights.push(said);
-      const add = said.includes('I swim every Friday before work') ? [{ kind: 'fact', text: 'Swims every Friday before work', source: 'stated', evidence: '"I swim every Friday before work"', touches_forgotten: false, aliases: [], aliases_touch_forgotten: false }] : [];
+      // Only the day's conversation grounds a claim; the memory the prompt also lists is what is already known.
+      const add = (said.split('<conversation>')[1]?.split('</conversation>')[0] ?? '').includes('I swim every Friday before work') ? [{ kind: 'fact', text: 'Swims every Friday before work', source: 'stated', evidence: '"I swim every Friday before work"', touches_forgotten: false, aliases: [], aliases_touch_forgotten: false }] : [];
       return done(JSON.stringify({ add, corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null }));
     }
     if (format === 'promotion') { model.promotions.push(said); return done('{"nodes":[],"edges":[],"promoted":[]}'); }
@@ -88,10 +89,10 @@ const withOwner = (name: string, work: (state: DurableObjectState, fire: () => P
   });
 
 describe('the nightly pass with a forget still pending', () => {
-  it('runs, learns from every other turn, and never sends the held turn to the model', async () => {
+  it('runs, learns from every other turn, and sends the held turns only once the purge has redacted them', async () => {
     await withOwner('nightly-held-topic', async (state, fire) => {
       const sql = state.storage.sql;
-      const memory = claimStore(sql);
+      const memory = claimStore(sql, work => state.storage.transactionSync(work));
       holdTopic(sql, 'tea', '2026-10-18T08:00:00Z');
       memory.backup('escaped-copy', { note: 'x' }, '2026-10-18T08:00:00Z');
       sql.exec('UPDATE memory_backups SET payload = ?', ESCAPED_COPY);
@@ -103,20 +104,33 @@ describe('the nightly pass with a forget still pending', () => {
       episodes.add('app-3', OWNER_SAID, UNRELATED, NOW - 3 * HOUR);
       const lines = vi.spyOn(console, 'log').mockImplementation(() => undefined);
       let logged: string[] = [];
-      try { await fire(); logged = lines.mock.calls.map(call => String(call[0])); } finally { lines.mockRestore(); }
-      // The Patrol line says how many turns waited, never which.
+      try {
+        await fire();
+        // The purge job, not the nightly pass, redacts the held turns; the escaped backup is derived and is deleted.
+        const stores: ForgetStore[] = [{ name: 'episodes', run: (texts) => { scrubEpisodeTexts(sql, texts, FORGOTTEN); return 0; } }];
+        expect(await forgetPurge({ sql, store: memory, stores, now: Date.now, arm: async () => undefined }).run()).toEqual({ settled: 1, pending: 0 });
+        await fire();
+        logged = lines.mock.calls.map(call => String(call[0]));
+      } finally { lines.mockRestore(); }
+      // The Patrol line says how many turns waited, never which; the next pass learns them as redacted.
       const nightly = logged.filter(line => line.includes('"hop":"nightly_memory"')).map(line => JSON.parse(line) as { ok: boolean; detail?: string });
-      expect(nightly).toMatchObject([{ ok: true, detail: expect.stringMatching(/^2 turns, 2 withheld while a forget finishes; /) }]);
-      expect(model.nights).toHaveLength(1);
-      const night = model.nights[0]!;
+      expect(nightly).toMatchObject([
+        { ok: true, detail: expect.stringMatching(/^2 turns, 2 withheld while a forget finishes; /) },
+        { ok: true, detail: 'quiet day' },
+        { ok: true, detail: expect.stringMatching(/^2 turns; /) },
+      ]);
+      expect(model.nights).toHaveLength(2);
+      const [night, retried] = model.nights as [string, string];
       expect(night).toContain('I swim every Friday before work');
       expect(night).toContain(UNRELATED);
-      expect(night).not.toMatch(/green tea/i);
+      expect(night).not.toMatch(/green/i);
+      expect(retried).toContain(`Green ${FORGOTTEN} after lunch`);
+      expect(model.nights.join('\n')).not.toMatch(/green tea/i);
       // The pass finished: what it learned is stored and the mark moved past the withheld turns.
       expect(memory.claims().map(claim => claim.text)).toEqual(['Swims every Friday before work']);
       expect(state.storage.kv.get(NIGHTLY_THROUGH_KEY)).toBe(NOW - 3 * HOUR);
-      // A copy the purge cannot reach keeps the forget pending.
-      expect(memory.pendingTopics()).toEqual(['tea']);
+      expect(memory.pendingTopics()).toEqual([]);
+      expect(memory.backups().map(backup => backup.reason)).not.toContain('escaped-copy');
       expect(model.promotions.join('\n')).not.toMatch(/green tea/i);
     });
   });
@@ -134,6 +148,57 @@ describe('the nightly pass with a forget still pending', () => {
       expect(logged.filter(line => line.includes('"hop":"nightly_memory"')).map(line => JSON.parse(line) as { ok: boolean; detail?: string }))
         .toMatchObject([{ ok: true, detail: '0 turns, 1 withheld while a forget finishes' }]);
       expect(state.storage.kv.get(NIGHTLY_THROUGH_KEY)).toBe(NOW - 4 * HOUR);
+    });
+  });
+});
+
+describe('a withheld turn after its forget finishes', () => {
+  const pend = (state: DurableObjectState) => {
+    holdTopic(state.storage.sql, 'tea', '2026-10-18T08:00:00Z');
+    claimStore(state.storage.sql).backup('escaped-copy', { note: 'x' }, '2026-10-18T08:00:00Z');
+    state.storage.sql.exec('UPDATE memory_backups SET payload = ?', ESCAPED_COPY);
+  };
+  it('is never sent while it carries a held topic, is sent once after, and the mark never waits for it', async () => {
+    await withOwner('nightly-withheld-retry', async (state, fire) => {
+      const sql = state.storage.sql;
+      const memory = claimStore(sql, work => state.storage.transactionSync(work));
+      pend(state);
+      state.storage.kv.put(NIGHTLY_THROUGH_KEY, NOW - DAY);
+      const episodes = episodeIndex(sql);
+      episodes.add('app-1', OWNER_SAID, 'I swim every Friday before work', NOW - 5 * HOUR);
+      // The topic spelled with an escape: the literal purge cannot redact this turn, so it stays held while the topic is pending.
+      episodes.add('app-2', OWNER_SAID, `Green ${String.fromCharCode(92)}u0074ea after lunch`, NOW - 4 * HOUR);
+      await fire();
+      expect(model.nights).toHaveLength(1);
+      expect(state.storage.kv.get(NIGHTLY_THROUGH_KEY)).toBe(NOW - 4 * HOUR);
+      await fire();
+      expect(model.nights).toHaveLength(1);
+      memory.finishPendingTopic('tea');
+      await fire();
+      expect(model.nights).toHaveLength(2);
+      const day = model.nights[1]!.split('<conversation>')[1]!;
+      expect(day).toContain('u0074ea after lunch');
+      expect(day).not.toContain('I swim every Friday before work');
+      await fire();
+      expect(model.nights).toHaveLength(2);
+    });
+  });
+  it('is dropped when its row is gone, so a new turn that reuses the row is learned once', async () => {
+    await withOwner('nightly-withheld-reused-row', async (state, fire) => {
+      const sql = state.storage.sql;
+      pend(state);
+      state.storage.kv.put(NIGHTLY_THROUGH_KEY, NOW - DAY);
+      const episodes = episodeIndex(sql);
+      episodes.add('app-2', OWNER_SAID, HELD, NOW - 4 * HOUR);
+      const withheldRow = sql.exec<{ row: number }>('SELECT rowid AS row FROM episodes').one().row;
+      await fire();
+      expect(model.nights).toEqual([]);
+      episodes.remove(['app-2']);
+      episodes.add('app-5', OWNER_SAID, 'I swim every Friday before work', NOW - 2 * HOUR);
+      expect(sql.exec<{ row: number }>('SELECT rowid AS row FROM episodes').one().row).toBe(withheldRow);
+      await fire();
+      await fire();
+      expect(model.nights.filter(night => night.includes('I swim every Friday before work'))).toHaveLength(1);
     });
   });
 });
