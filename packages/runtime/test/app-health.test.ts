@@ -93,6 +93,31 @@ describe('app health routes: signed database calls', () => {
     expect(call!.body).toMatchObject({ p_do_name: 'owner-1', p_payload: '{}' });
     expect(call!.body.p_sig).toBe(await routerSignature(SECRET, call!.body.p_at as number, `health.consent_list.owner-1.${md5Hex('{}')}`));
   });
+  it('shows a provider\'s consent rows only to a build that names health revision 2', async () => {
+    const whoopRow = { ...consent, source: 'whoop', version: 3 };
+    rpcResult = { consents: [consent, whoopRow] };
+    const older = await get('/app/v1/health/consents');
+    expect(await older.json()).toEqual({ consents: [consent] });
+    const asked = (header: string) => handleApp(new Request('https://w.test/app/v1/health/consents', { headers: headers({ 'x-waldo-app-contract': header }) }), env(), auth) as Promise<Response>;
+    expect(await (await asked('health=2')).json()).toEqual({ consents: [consent, whoopRow] });
+    expect(await (await asked('health=1')).json()).toEqual({ consents: [consent] });
+    expect(await (await asked('approvals=2')).json()).toEqual({ consents: [consent] });
+  });
+  it('refuses an app upload that claims a provider\'s name, and never calls the database', async () => {
+    const whoop = { ...batch, request_id: 'health-upload-w1', source: 'whoop' };
+    const response = await post('/app/v1/health/ingest', whoop, { 'idempotency-key': whoop.request_id });
+    expect([response.status, await response.json(), rpcs]).toEqual([400, { error: 'invalid_request' }, []]);
+  });
+  it('takes a WHOOP grant only on the WHOOP notice\'s copy version, and a device grant only on the device copy', async () => {
+    const whoopGrant = { ...grant, request_id: 'consent-grant-w01', source: 'whoop', version: 3 };
+    for (const refused of [{ ...whoopGrant, version: 2 }, { ...grant, version: 3 }]) {
+      expect((await post('/app/v1/health/consents', refused, { 'idempotency-key': refused.request_id })).status, JSON.stringify(refused)).toBe(400);
+    }
+    expect(rpcs).toEqual([]);
+    rpcResult = { consent: { ...consent, source: 'whoop', version: 3 }, replayed: false, deletion_routed: false };
+    const accepted = await post('/app/v1/health/consents', whoopGrant, { 'idempotency-key': whoopGrant.request_id });
+    expect([accepted.status, rpcs.map(call => call.fn)]).toEqual([200, ['health_consent_grant']]);
+  });
   it('sends the validated body, re-serialized, and never an owner from the client', async () => {
     rpcResult = change;
     const response = await post('/app/v1/health/consents', grant, { 'idempotency-key': grant.request_id });
@@ -119,6 +144,14 @@ describe('app health routes: signed database calls', () => {
     // The Worker signs and forwards its own serialization of the validated body.
     expect(JSON.parse(rpcs[0]!.body.p_payload as string)).toEqual(batch);
     expect(rpcs[0]!.body.p_sig).toBe(await routerSignature(SECRET, rpcs[0]!.body.p_at as number, `health.ingest.owner-1.${md5Hex(rpcs[0]!.body.p_payload as string)}`));
+  });
+  it('ingests a Health Connect batch the same way, keeping its HC origin', async () => {
+    const origin = { read_api: 'health_connect', source_bundle_id: null, source_package_name: 'com.example.ringapp', source_version: null, source_revision: null, device_ref: null, recording_method: 'automatic', client_record_version: 3 };
+    const hc = { ...batch, request_id: 'health-upload-hc-1', source: 'health_connect', samples: [{ ...sample, sample_id: 'hc:steps:2026-10-10T08', origin }] };
+    rpcResult = { ...receipt, request_id: hc.request_id, source: 'health_connect' };
+    const response = await post('/app/v1/health/ingest', hc, { 'idempotency-key': hc.request_id });
+    expect([response.status, rpcs[0]!.fn]).toEqual([200, 'health_ingest']);
+    expect(JSON.parse(rpcs[0]!.body.p_payload as string)).toEqual(hc);
   });
   it('refuses a bad batch before any database call, without echoing it', async () => {
     const bad = [
