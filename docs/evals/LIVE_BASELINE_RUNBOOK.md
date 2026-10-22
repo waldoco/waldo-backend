@@ -122,7 +122,7 @@ The scorecard reports token totals per role, but not the cached split. The exact
 6. **Record the baseline.** Open the PR that sets the floor with the scorecard's Markdown (`live-scorecard.md`), the exact SHA, the models, the call and token counts, and the dashboard cost. The scorecard holds no reply text.
 7. **Raise the floor only with evidence.** Raise it when a later run's lower bound clears it. Never lower it to make a run pass; a drop is a regression to classify.
 
-`NIGHTLY_THRESHOLDS.live` holds the other limits too: `min_scenarios` (49), `max_blocked` (3), `max_harness_errors` (0) and `max_incomplete` (0). A PR that adds or unblocks a scenario moves them in the same diff.
+`NIGHTLY_THRESHOLDS.live` holds the other limits too: `min_scenarios` (60), `max_blocked` (3), `max_harness_errors` (0) and `max_incomplete` (0). A PR that adds or unblocks a scenario moves them in the same diff.
 
 ## The raw-history baseline
 

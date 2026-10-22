@@ -17,12 +17,13 @@ export type GateThresholds = Readonly<{
 export type GateResult = Readonly<{ ok: boolean; failures: readonly string[] }>;
 
 // Set from the M0 recorded baseline (beta-mvp b3fe8891): 22 scenarios, 3 blocked, no harness errors; raised to 36 by
-// the fourteen voice and safety scenarios, to 49 by the thirteen runnable errands, to 50 by the connector case and to 59
-// by two more errands and seven state and memory cases, none blocked. A PR that adds, removes or unblocks a scenario
-// moves these numbers in the same diff. Live mode has no pass-rate floor until a live baseline is recorded.
+// the fourteen voice and safety scenarios, to 49 by the thirteen runnable errands, to 50 by the connector case, to 51 by
+// the health trigger case and to 60 by two more errands and seven state and memory cases, none blocked. A PR that adds,
+// removes or unblocks a scenario moves these numbers in the same diff. Live mode has no pass-rate floor until a live
+// baseline is recorded.
 export const NIGHTLY_THRESHOLDS: Readonly<Record<'recorded' | 'live', GateThresholds>> = {
-  recorded: { min_scenarios: 59, max_blocked: 3, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null },
-  live: { min_scenarios: 59, max_blocked: 3, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null },
+  recorded: { min_scenarios: 60, max_blocked: 3, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null },
+  live: { min_scenarios: 60, max_blocked: 3, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null },
 };
 
 export const SCORECARD_MARKER = '<!-- waldo-eval-scorecard -->';
