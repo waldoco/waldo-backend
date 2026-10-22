@@ -150,7 +150,7 @@ import { googleCircuit } from '../connectors/google-circuit';
 import { confirmGoogleReadback, GoogleReadbackError, readbackFeature, reauthNoticeTransition } from '../connectors/google-reconnect';
 import { connectServiceHandler, googleHandlers } from '../tools/live/google';
 import { getHealthHandler, healthReadBook } from '../tools/live/health';
-import { appApprovalParts, approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals';
+import { appApprovalParts, approvalDesk, endCardWaits, forgetWaitingCards, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { googleTaskApprovals } from './google-task-approvals';
 import { googleTaskHandlers } from '../tools/live/tasks';
 import { approvalHandlers } from '../tools/live/raise-approval';
@@ -364,6 +364,17 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private activeInbox: InboxRecord | null = null;
   private activeScope: RunEffectScope | undefined;
   private activeAbort: AbortController | undefined;
+
+  // Binds this owner's WhatsApp to a number, or unbinds it, inside the caller's transactionSync. When the number changes, an
+  // approval card that waited for the owner's next message there was made for the number that is gone, so it stops waiting.
+  // Answers the outbox records the old number's state retired, for the caller to settle after the transaction.
+  private bindWhatsApp(subject: string | null): readonly string[] {
+    const { kv, sql } = this.ctx.storage;
+    const moving = subject === null || kv.get<string>('whatsapp_subject') !== subject;
+    const retired = bindWhatsAppNumber(kv, subject, this.appBound());
+    if (moving) endCardWaits(sql, 'whatsapp');
+    return retired;
+  }
 
   private closeRunAtomic(run: InboxRecord, reason: string, awaitingDelivery = false): void {
     this.ctx.storage.transactionSync(() => {
@@ -1341,9 +1352,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // Sequence allocation, the turns and the persisted counter are one serial unit, so an overlapping
     // request cannot read the same wa_seq and hand a different message the same update_id.
     await this.serial(async () => {
-      // Messages held outside the 24-hour window go out first, so this reply's turn sees what the owner has seen.
+      // Messages held outside the 24-hour window go out first, and then the approval cards that waited for it, so this reply's
+      // turn sees what the owner has seen.
       try { await deliverHeldWhatsApp(this.ctx.storage.kv, this.setup('whatsapp').call, Date.now(), event => console.log(JSON.stringify(event)), this.ctx.storage.kv.get<string>('whatsapp_subject') ?? ''); } catch { console.error('whatsapp held delivery unavailable'); }
       try { await releaseWhatsAppOutbox(this.setup('whatsapp').finalOutbox, this.outboxRoute('whatsapp'), this.setup('whatsapp').settleFinal); } catch { console.error('whatsapp outbox release unavailable'); }
+      try { await this.setup('whatsapp').desk.ownerWrote(); } catch { console.error('whatsapp waiting approval cards unavailable'); }
       const { updates, seq } = whatsappIngressUpdates(claimed, subject, (await this.ctx.storage.get<number>('wa_seq')) ?? 0);
       // The counter is persisted before each turn, so a turn that throws can never lead the next message to reuse
       // its update_id. Every claimed message still gets its turn; the first failure is rethrown afterwards.
@@ -1462,7 +1475,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const current = kv.get<string>('whatsapp_subject');
       if (current !== subject) {
         if (current !== seen || (seen !== undefined && !reconciled)) { changed = true; return; }
-        retired = bindWhatsAppNumber(kv, subject, this.appBound());
+        retired = this.bindWhatsApp(subject);
         rebound = true;
       }
       claimed = claimNewWhatsAppMessages(kv, value.messages ?? [], Date.now());
@@ -1694,9 +1707,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       // A confirmed text-first link rebinds this owner's WhatsApp subject, so the new number is admitted and the old one is not.
       if (form.get('action') === WHATSAPP_LINK_CONFIRM_ACTION) return whatsappLinkConfirmAction(form, session.csrf, this.ctx.storage.kv.get<string>('do_name') ?? '', whatsappLinkDirectory(this.env), async subject => {
         // A new number starts clean: nothing held for the old one may reach it.
-        const { kv } = this.ctx.storage;
         let retired: readonly string[] = [];
-        this.ctx.storage.transactionSync(() => { retired = bindWhatsAppNumber(kv, subject, this.appBound()); });
+        this.ctx.storage.transactionSync(() => { retired = this.bindWhatsApp(subject); });
         await this.settleRetiredWhatsApp(retired, 'whatsapp');
         this.runtimes = {};
       });
@@ -1833,7 +1845,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
                 // and sends resolve no owner, and what was held for that chat is discarded with it. A refused unlink keeps
                 // the binding, since the old number still routes here.
                 const name=this.ctx.storage.kv.get<string>('do_name'),done=name?await consoleAuth(this.env)?.unlinkWhatsApp?.(name)===true:false;
-                if(done){const {kv}=this.ctx.storage;let retired:readonly string[]=[];this.ctx.storage.transactionSync(()=>{retired=bindWhatsAppNumber(kv,null,this.appBound());});
+                if(done){let retired:readonly string[]=[];this.ctx.storage.transactionSync(()=>{retired=this.bindWhatsApp(null);});
                   await this.settleRetiredWhatsApp(retired);
                   this.runtimes={};}
                 return whatsappUnlinkReceipt(done);
@@ -2950,7 +2962,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const desk = approvalDesk(storage.sql, {
       effects, googleTasks: () => googleTasks, currentRunRef, appReplyRef: () => this.activeApp?.id, ownerRef, ownerRefAliases,
       // iMessage is plain text and can never approve: its turns use the app's desk rules, so cards show only in the app.
-      surface: channel === 'imessage' ? 'app' : channel, appLink: appApprovalLink, commit: work => storage.transactionSync(work),
+      surface: channel === 'imessage' ? 'app' : channel, appLink: appApprovalLink, commit: work => storage.transactionSync(work), writesFirstNow,
       retire: async ({ surface, message_ref }) => {
         const [chat = '', message = ''] = message_ref.split(':');
         if (surface !== 'telegram' || !/^-?\d+$/.test(chat) || !/^\d+$/.test(message)) return;
@@ -3237,9 +3249,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
           const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope);
           forgetHeldWhatsApp(this.ctx.storage.kv, texts);
+          const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now());
           const imessage = redactIMessageEntries(this.ctx.storage, texts, FORGOTTEN, scope);
           const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope);
-          if (result.remaining + mail.remaining + prep.remaining + reports.remaining + imessage.remaining + titles.remaining) throw new Error('Memory history cleanup is incomplete');
+          if (result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + imessage.remaining + titles.remaining) throw new Error('Memory history cleanup is incomplete');
           const scrubEpisodes = () => {
             const redact = literalTextRedactor(texts, FORGOTTEN);
             for (const row of storage.sql.exec<{ ref: number; text: string }>('SELECT rowid AS ref, text FROM episodes').toArray()) {
@@ -4058,6 +4071,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
               kvRemaining += redactCalendarPrepEntries(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
               kvRemaining += redactJobReportEntries(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
               forgetHeldWhatsApp(this.ctx.storage.kv, result.texts);
+              kvRemaining += forgetWaitingCards(this.ctx.storage.sql, result.texts, now).remaining;
               kvRemaining += redactThreadTitles(this.ctx.storage.kv, result.texts, FORGOTTEN).remaining;
               await redactToolOutputLedger(this.ctx.storage, result.texts, FORGOTTEN);
             }
@@ -4087,6 +4101,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           await clean(() => redactCalendarPrepEntries(this.ctx.storage.kv, [node.label], FORGOTTEN));
           await clean(() => redactJobReportEntries(this.ctx.storage.kv, [node.label], FORGOTTEN));
           await clean(() => forgetHeldWhatsApp(this.ctx.storage.kv, [node.label]));
+          await clean(() => forgetWaitingCards(this.ctx.storage.sql, [node.label], now));
           await clean(() => redactThreadTitles(this.ctx.storage.kv, [node.label], FORGOTTEN));
           if (remaining > 0) {
             log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: false, detail: 'node.forget retained-copy redaction incomplete' });
