@@ -4,13 +4,14 @@ import { OWNER_COOKIE, type ConsoleAuth } from '../identity/console-auth';
 import { signupAuth, SIGNUP_COOKIE, SIGNUP_TTL_SECONDS, type SignupAuth, type SignupProgress } from '../identity/console-signup';
 import { CONSOLE_COOKIE, CONSOLE_PATH } from './console';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
+import { DIAGNOSTIC_RECORDING_WORDING, diagnosticRecordingDirectory, type DiagnosticRecordingDirectory } from '../identity/diagnostic-recording';
 
 export const CONSOLE_SIGNUP_PATH = '/console/signup';
 const esc = (s: string) => s.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 const unavailableInvite = 'We could not continue. Check the email code and recipient email. New members also need a valid invite; it may be expired, revoked or already used. Existing member access does not depend on invite validity. Retry the email code or ask the sender for a new link if needed.';
 const unavailableCompletion = 'We could not finish signup. New members need a valid invite for this verified email; it may be expired, revoked or already used. If an earlier attempt was interrupted, retry Finish signup to open the same account. Otherwise ask the sender for a new invite.';
 const unavailable = 'Verification is temporarily unavailable. Try again shortly.';
-const css = `*{box-sizing:border-box}body{margin:0;background:#FAFAF8;color:#1A1A1A;font-family:system-ui,sans-serif;line-height:1.5;overflow-wrap:anywhere}main{max-width:440px;margin:8vh auto;padding:28px}h1{font-size:30px;line-height:1.2}form{display:grid;gap:12px}label{font:bold 1rem system-ui,sans-serif}input,button{font:inherit;font-size:17px;min-height:48px;width:100%;padding:12px;border:1px solid #767676;border-radius:10px}button{background:#1A1A1A;color:#FAFAF8;cursor:pointer}a{color:#1A1A1A}input:focus-visible,button:focus-visible,a:focus-visible{outline:3px solid #5267AF;outline-offset:3px}.eyebrow{font-size:14px;letter-spacing:.08em}.note{border-left:3px solid #5267AF;padding:12px}ol{padding-left:24px}.help{font-size:14px}@media(max-width:480px){main{margin:2vh auto;padding:24px}h1{font-size:28px}}`;
+const css = `*{box-sizing:border-box}body{margin:0;background:#FAFAF8;color:#1A1A1A;font-family:system-ui,sans-serif;line-height:1.5;overflow-wrap:anywhere}main{max-width:440px;margin:8vh auto;padding:28px}h1{font-size:30px;line-height:1.2}form{display:grid;gap:12px}label{font:bold 1rem system-ui,sans-serif}input,button{font:inherit;font-size:17px;min-height:48px;width:100%;padding:12px;border:1px solid #767676;border-radius:10px}button{background:#1A1A1A;color:#FAFAF8;cursor:pointer}a{color:#1A1A1A}input:focus-visible,button:focus-visible,a:focus-visible{outline:3px solid #5267AF;outline-offset:3px}.eyebrow{font-size:14px;letter-spacing:.08em}.note{border-left:3px solid #5267AF;padding:12px}ol{padding-left:24px}.help{font-size:14px}.consent{display:flex;gap:12px;align-items:flex-start;font-weight:normal}.consent input{flex:none;width:22px;height:22px;min-height:0;margin:3px 0 0;padding:0}@media(max-width:480px){main{margin:2vh auto;padding:24px}h1{font-size:28px}}`;
 const restartScript = `const restart=()=>{if(new URLSearchParams(location.hash.slice(1)).has('invite'))location.replace('/console/signup?restart=1'+location.hash);};addEventListener('hashchange',restart);restart();`;
 const entryScript = `const fillInvite=()=>{const fragment=new URLSearchParams(location.hash.slice(1));history.replaceState(null,'',location.pathname);const email=fragment.get('email');const invite=fragment.get('invite');if(email)document.getElementById('email').value=email;if(invite)document.getElementById('invite').value=invite;};addEventListener('hashchange',fillInvite);fillInvite();`;
 const page = (body: string, status = 200, script = '') => {
@@ -25,7 +26,9 @@ const note = (text: string) => text ? `<p class="note" role="alert">${esc(text)}
 const entry = (text = '', email = '') => page(`<h1>Your Waldo starts here.</h1><p>Verify your email to join with your invite.</p><p class="help">Requesting an email code can create a Supabase Auth identity. It does not create your Waldo owner account.</p>${note(text)}<form method="post" action="${CONSOLE_SIGNUP_PATH}/send"><label for="email">Recipient email</label><input id="email" name="email" type="email" autocomplete="email" maxlength="254" value="${esc(email.slice(0, 254))}" required><label for="invite">Invite code</label><input id="invite" name="invite" autocomplete="off" spellcheck="false" maxlength="20" required aria-describedby="invite-help"><p id="invite-help" class="help">Your link fills this in. Opening it does not use the invite. Codes expire after 14 days.</p><button>Send email code</button></form><p class="help">You can finish signup with verified email alone.</p><p><a href="/console/signin">Already a member? Sign in</a></p><noscript><p>Enter the email and code from your invite link manually. Nothing is sent until you submit.</p></noscript>`, 200, entryScript);
 const csrf = (p: SignupProgress) => `<input type="hidden" name="csrf" value="${esc(p.csrf)}">`;
 const otp = (p: SignupProgress, text = '') => page(`<h1>Check your email.</h1><ol aria-label="Verification progress"><li>Email: waiting for a code</li></ol><p>Enter the most recent email code for ${esc(p.email)}. Codes are requested only when this email has existing member access or a valid matching invite. This does not prove that an invite is valid. Delivery can take a few minutes.</p>${note(text)}<form method="post" action="${CONSOLE_SIGNUP_PATH}/verify">${csrf(p)}<label for="code">Email verification code</label><input id="code" name="code" autocomplete="one-time-code" inputmode="numeric" maxlength="16" required><button>Verify email</button></form><form method="post" action="${CONSOLE_SIGNUP_PATH}/resend">${csrf(p)}<button>Send another code</button></form><p><a href="${CONSOLE_SIGNUP_PATH}?restart=1">Use another invite or email</a></p>`, 200, restartScript);
-const finish = (p: SignupProgress, text = '') => page(`<h1>Email verified. Finish signup.</h1><ol aria-label="Verification progress"><li>Email: verified (${esc(p.email)})</li></ol>${note(text)}<p>Your verified email and invite are enough to join. No SMS is sent.</p><form method="post" action="${CONSOLE_SIGNUP_PATH}/complete">${csrf(p)}<button>Finish signup</button></form><p class="help">Finishing checks your invite and opens your member account. If a previous attempt was interrupted, it may already have created the account; retrying opens that same account. Progress expires 15 minutes after starting. If finishing is interrupted, retry here without another email code.</p><p class="help">Temporary progress is a readable signed cookie. Anyone holding a copy can finish this signup until it expires.</p><p><a href="${CONSOLE_SIGNUP_PATH}?restart=1">Start again</a></p><p class="help">Starting again clears this browser’s progress only; it does not revoke copies elsewhere.</p>`, 200, restartScript);
+// Beta diagnostic recording is optional and starts unticked; a retry shows the owner's own earlier choice.
+const diagnosticChoice = (ticked: boolean) => `<label class="consent" for="diagnostic-recording"><input id="diagnostic-recording" name="diagnostic_recording" type="checkbox" value="on" aria-describedby="diagnostic-recording-help"${ticked ? ' checked' : ''}><span>${esc(DIAGNOSTIC_RECORDING_WORDING.label)}</span></label><p id="diagnostic-recording-help" class="help">${esc(DIAGNOSTIC_RECORDING_WORDING.detail)}</p>`;
+const finish = (p: SignupProgress, text = '', ticked = false) => page(`<h1>Email verified. Finish signup.</h1><ol aria-label="Verification progress"><li>Email: verified (${esc(p.email)})</li></ol>${note(text)}<p>Your verified email and invite are enough to join. No SMS is sent.</p><form method="post" action="${CONSOLE_SIGNUP_PATH}/complete">${csrf(p)}${diagnosticChoice(ticked)}<button>Finish signup</button></form><p class="help">Finishing checks your invite and opens your member account. If a previous attempt was interrupted, it may already have created the account; retrying opens that same account. Progress expires 15 minutes after starting. If finishing is interrupted, retry here without another email code.</p><p class="help">Temporary progress is a readable signed cookie. Anyone holding a copy can finish this signup until it expires.</p><p><a href="${CONSOLE_SIGNUP_PATH}?restart=1">Start again</a></p><p class="help">Starting again clears this browser’s progress only; it does not revoke copies elsewhere.</p>`, 200, restartScript);
 const resume = (p: SignupProgress, text = '') => p.emailVerified ? finish(p, text) : otp(p, text);
 const withCookie = (response: Response, value: string) => {
   response.headers.append('set-cookie', `${SIGNUP_COOKIE}=${value}; Path=${CONSOLE_SIGNUP_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=${SIGNUP_TTL_SECONDS}`);
@@ -34,7 +37,8 @@ const withCookie = (response: Response, value: string) => {
 const redirect = (value: string, notice: 'unconfirmed' | 'throttled' | null = null) => withCookie(new Response(null, { status: 303, headers: { location: notice ? `${CONSOLE_SIGNUP_PATH}?send=${notice}` : CONSOLE_SIGNUP_PATH, 'cache-control': 'no-store', 'referrer-policy': 'same-origin' } }), value);
 type SignupEnv = OwnerDirectoryEnv & Readonly<{ RESPONSIBILITY_RATE_LIMITER?: RateLimit; OWNER_DO?: DurableObjectNamespace }>;
 // Completion admits only the verified invite identity. Phone collection never grants channel authority.
-export const handleSignup = async (request: Request, env: SignupEnv, auth: ConsoleAuth | null, signup: SignupAuth | null = signupAuth(env), trace = consoleTrace()): Promise<Response> => {
+export const handleSignup = async (request: Request, env: SignupEnv, auth: ConsoleAuth | null, signup: SignupAuth | null = signupAuth(env), trace = consoleTrace(),
+  diagnostics: DiagnosticRecordingDirectory | null = diagnosticRecordingDirectory(env)): Promise<Response> => {
   const url = new URL(request.url);
   const progress = signup ? await signup.read(request) : null;
   if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname === CONSOLE_SIGNUP_PATH) {
@@ -59,8 +63,9 @@ export const handleSignup = async (request: Request, env: SignupEnv, auth: Conso
   // Seal the draft before attempts, so throttle and transport failures can resume with a
   // hash after the browser has cleared its fragment. This is not proof of eligibility.
   const draftValue = action === '/send' ? await signup.begin(email, invite) : null;
+  const ticked = action === '/complete' && form.get('diagnostic_recording') === 'on';
   const retry = (message: string) => action === '/phone' || action === '/complete'
-    ? finish(progress!, message) : resume(progress!, message);
+    ? finish(progress!, message, ticked) : resume(progress!, message);
   // Coarse per-location and durable per-email/IP limits cover every attempt, including phone
   // collection rechecks. Errors fail closed and expose only a retryable, content-free message.
   try {
@@ -95,28 +100,35 @@ export const handleSignup = async (request: Request, env: SignupEnv, auth: Conso
     }
     const rawPhone = String(form.get('phone') ?? '');
     const compact = rawPhone.replace(/[\s().-]/g, '');
-    if (compact !== '' && !/^\+[1-9]\d{6,14}$/.test(compact)) return finish(progress!, 'Enter a phone with country code, or leave it blank.');
-    if (action === '/complete' && !env.OWNER_DO) return finish(progress!, unavailable);
+    if (compact !== '' && !/^\+[1-9]\d{6,14}$/.test(compact)) return finish(progress!, 'Enter a phone with country code, or leave it blank.', ticked);
+    if (action === '/complete' && !env.OWNER_DO) return finish(progress!, unavailable, ticked);
     let value: string | null;
     try { value = await signup.collectPhone(progress!, compact); }
-    catch { return finish(progress!, unavailable); }
-    if (!value) return finish(progress!, unavailableCompletion);
+    catch { return finish(progress!, unavailable, ticked); }
+    if (!value) return finish(progress!, unavailableCompletion, ticked);
     if (action === '/phone') return redirect(value);
     const saved = await signup.read(new Request(request.url, { headers: { cookie: `${SIGNUP_COOKIE}=${value}` } }));
-    if (!saved) return withCookie(finish(progress!, unavailable), value);
+    if (!saved) return withCookie(finish(progress!, unavailable, ticked), value);
     // Keep verified progress and entered contact on any uncertain completion/session result.
     // A retry resolves the already-bound owner and never replays the consumed OTP.
     try {
       const doName = await signup.complete(saved, compact);
-      if (!doName) return withCookie(finish(saved, unavailableCompletion), value);
+      if (!doName) return withCookie(finish(saved, unavailableCompletion, ticked), value);
       const grant = await withRequestTimeout(async signal => {
         const response = await env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName))
           .fetch('https://telegram-owner/grant-console', { method: 'POST', headers: { 'x-waldo-do-name': doName }, signal });
         return response.ok ? await response.text() : null;
       });
-      if (!grant) return withCookie(finish(saved, unavailable), value);
+      if (!grant) return withCookie(finish(saved, unavailable, ticked), value);
       const ownerCookie = await auth.ownerCookie(doName);
-      if (!ownerCookie) return withCookie(finish(saved, unavailable), value);
+      if (!ownerCookie) return withCookie(finish(saved, unavailable, ticked), value);
+      // Recorded only once the account is open. A failure leaves recording off and signup finished; the owner can agree
+      // later in the console, which shows the state the directory actually holds.
+      if (ticked) {
+        let recorded = false;
+        try { recorded = await diagnostics?.set(doName, true, 'signup') === true; } catch { /* recorded stays false */ }
+        if (!recorded) consoleLog(trace, 'console_signup', false, 'diagnostic_recording_unconfirmed');
+      }
       const headers = new Headers({ location: CONSOLE_PATH, 'cache-control': 'no-store', 'referrer-policy': 'same-origin' });
       const cookie = `Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=43200`;
       headers.append('set-cookie', `${CONSOLE_COOKIE}=${grant}; ${cookie}`);
@@ -126,7 +138,7 @@ export const handleSignup = async (request: Request, env: SignupEnv, auth: Conso
       return new Response(null, { status: 303, headers });
     } catch {
       consoleLog(trace, 'console_signup', false, 'completion_unconfirmed');
-      return withCookie(finish(saved, 'We could not confirm completion. Retry Finish signup; your verified email is retained.'), value);
+      return withCookie(finish(saved, 'We could not confirm completion. Retry Finish signup; your verified email is retained.', ticked), value);
     }
   } catch {
     consoleLog(trace, 'console_signup', false, 'verification_unavailable');

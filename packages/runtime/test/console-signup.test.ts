@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { handleSignup } from '../src/channels/console-signup';
 import { signupAuth, SIGNUP_COOKIE } from '../src/identity/console-signup';
 import type { ConsoleAuth } from '../src/identity/console-auth';
+import { DIAGNOSTIC_RECORDING_WORDING, type DiagnosticRecordingDirectory } from '../src/identity/diagnostic-recording';
 const env = { SUPABASE_PROJECT_URL: 'https://db.test', SUPABASE_PUBLISHABLE_KEY: 'pub', WALDO_ROUTER_HMAC_SECRET: 'test-router', RESPONSIBILITY_RATE_LIMITER: { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit };
 const consoleAuth = { sendCode: vi.fn(async () => true), throttle: vi.fn(async () => true) } as unknown as ConsoleAuth;
 describe('signup entry', () => {
@@ -292,4 +293,62 @@ it('offers email-only signup at entry, OTP and verified completion without a pho
   const html=await response.text();expect(html).not.toMatch(/name="phone"|type="tel"|Phone:|Save contact and continue later/);
   expect(html).not.toContain('+14155550100');
  }
+});
+
+// Beta diagnostic recording is offered on the verified completion step, unticked, and signup works the same either way.
+describe('the diagnostic recording choice at Finish signup', () => {
+  const finishing = async (set: DiagnosticRecordingDirectory['set'], grantFails = false) => {
+    const s = setup();
+    const grant = vi.fn(async () => grantFails ? new Response('down', { status: 503 }) : new Response('console-ticket'));
+    const e = { ...env, OWNER_DO: { idFromName: vi.fn((name: string) => name), get: vi.fn(() => ({ fetch: grant })) } as unknown as DurableObjectNamespace };
+    const a = { ...s.a, ownerCookie: vi.fn(async () => 'owner-session') };
+    const { cookie, progress } = await start(s);
+    const verifiedCookie = cookieFrom(await handleSignup(post('/verify', { csrf: progress.csrf, code: '123456' }, cookie), e, a, s.signup));
+    const diagnostics: DiagnosticRecordingDirectory = { read: vi.fn(async () => null), set: vi.fn(set) };
+    const signup = { ...s.signup, complete: vi.fn(async () => 'owner-new') };
+    const page = await handleSignup(new Request('https://w.test/console/signup', { headers: { cookie: verifiedCookie } }), e, a, signup, undefined, diagnostics);
+    const finish = (fields: Record<string, string>) => handleSignup(post('/complete', { csrf: progress.csrf, ...fields }, verifiedCookie), e, a, signup, undefined, diagnostics);
+    return { page, finish, diagnostics, grant };
+  };
+
+  it('offers the choice unticked, in the agreed wording', async () => {
+    const { page } = await finishing(async () => true);
+    const html = await page.text();
+    expect(html).toMatch(/<input id="diagnostic-recording" name="diagnostic_recording" type="checkbox" value="on" aria-describedby="diagnostic-recording-help">/);
+    expect(html).toContain(DIAGNOSTIC_RECORDING_WORDING.label);
+    expect(html).toContain(DIAGNOSTIC_RECORDING_WORDING.detail);
+    expect(html).not.toMatch(/name="diagnostic_recording"[^>]*checked/);
+  });
+
+  it('signs up with the box unticked and records nothing', async () => {
+    const { finish, diagnostics } = await finishing(async () => true);
+    const done = await finish({});
+    expect(done.status).toBe(303);
+    expect(done.headers.get('location')).toBe('/console');
+    expect(diagnostics.set).not.toHaveBeenCalled();
+  });
+
+  it('records the agreement for the new owner, from signup, when the box is ticked', async () => {
+    const { finish, diagnostics } = await finishing(async () => true);
+    const done = await finish({ diagnostic_recording: 'on' });
+    expect(done.status).toBe(303);
+    expect(diagnostics.set).toHaveBeenCalledTimes(1);
+    expect(diagnostics.set).toHaveBeenCalledWith('owner-new', true, 'signup');
+  });
+
+  it.each([['refused', async () => false], ['unreachable', async () => { throw new Error('directory down'); }]])('still signs in when the agreement is %s, leaving recording off', async (_label, set) => {
+    const { finish, diagnostics } = await finishing(set);
+    const done = await finish({ diagnostic_recording: 'on' });
+    expect(done.status).toBe(303);
+    expect(done.headers.get('set-cookie')).toContain('waldo_owner=owner-session');
+    expect(diagnostics.set).toHaveBeenCalledTimes(1);
+  });
+
+  it('records nothing when signup does not finish, and keeps the owner\'s tick for the retry', async () => {
+    const { finish, diagnostics } = await finishing(async () => true, true);
+    const retry = await finish({ diagnostic_recording: 'on' });
+    expect(retry.status).toBe(200);
+    expect(await retry.text()).toMatch(/name="diagnostic_recording" type="checkbox" value="on" aria-describedby="diagnostic-recording-help" checked>/);
+    expect(diagnostics.set).not.toHaveBeenCalled();
+  });
 });

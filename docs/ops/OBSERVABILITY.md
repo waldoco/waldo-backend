@@ -19,7 +19,7 @@ Secrets never appear in these logs. Bot tokens are redacted in error text.
 
 Instrumentation follows [OpenTelemetry](https://opentelemetry.io/) for traces and metrics, so the pipeline stays vendor-neutral. Langfuse Cloud is the LLM-facing backend and accepts OTLP traces on its [`/api/public/otel` endpoint](https://langfuse.com/integrations/native/opentelemetry). Other OTel backends can be added without touching the runtime.
 
-`packages/runtime/src/observability/otlp-turns.ts` exports each owner turn as one OTLP trace, following Langfuse's [attribute mapping](https://langfuse.com/integrations/native/opentelemetry#property-mapping). It turns on when `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` are Worker secrets. A failed export logs an `otlp_export` hop and never affects the reply. Message text is off by default and exported only when `LANGFUSE_CAPTURE_TEXT=true` (see Text capture below). Worker logs never carry text.
+`packages/runtime/src/observability/otlp-turns.ts` exports each owner turn as one OTLP trace, following Langfuse's [attribute mapping](https://langfuse.com/integrations/native/opentelemetry#property-mapping). It turns on when `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` are Worker secrets. A failed export logs an `otlp_export` hop and never affects the reply. Message text is off by default and exported only when `LANGFUSE_CAPTURE_TEXT=true` and the turn's owner agreed to diagnostic recording (see Text capture below). Worker logs never carry text.
 
 ### Trace schema (version 1)
 
@@ -57,11 +57,25 @@ Feature areas and observation types live in `HOPS`. The root span is type `agent
 
 ### Text capture
 
-`LANGFUSE_CAPTURE_TEXT=true` (a Worker var) exports text for the owner's own project:
+Text is exported for an owner's turn only when both hold:
+- `LANGFUSE_CAPTURE_TEXT=true` (a Worker var), outside production. `resolveCaptureText` in `observability/trace-privacy.ts` keeps production off whatever the var says.
+- The owner has a live agreement to beta diagnostic recording for the current wording (`DIAGNOSTIC_RECORDING_WORDING` in `identity/diagnostic-recording.ts`).
+
+What is exported then:
 - the root span: input is the user message, output is the reply;
 - each `llm_*` generation: input is the system prompt and user content as a message array, output is the model text, or `{ reasoning, text }` when the model returned a reasoning summary (OpenAI `reasoning.summary: auto`).
 
-The owner turned this on for staging on 2026-09-23 to read model inputs, thinking and outputs. Unset or any other value exports no text, which is the default for every other environment and user. Flip it off with `--var LANGFUSE_CAPTURE_TEXT:false` on deploy.
+The same decision gates free-form `error` and `detail` text and the owner's email in the DO trace table, Worker logs and OTLP (`gateTraceEntry`).
+
+The agreement lives in Supabase (`waldo.diagnostic_recording_agreements`, migration `20261022120000`). Each row holds the owner, the wording version, where they agreed (`signup` or `console`), when, and when they withdrew. The two signed functions `set_diagnostic_recording` and `diagnostic_recording_state` are its only writer and reader.
+
+Owners choose at Finish signup (optional, unticked) or later in the console under Settings, Your day. Existing owners start as not agreed.
+
+The owner DO asks the directory at the start of each turn and each scheduled job, and holds the answer until the next one. Anything short of a clear yes for the current wording means no text: no directory, no DO name, an error, a malformed answer, or no answer within 2 s. Turning recording off in the console stops it in the DO at once. A withdrawal made directly in the database takes effect from the owner's next turn or job. Changing the wording means bumping its version, after which every earlier agreement stops counting until the owner agrees again.
+
+Withdrawing stops new recording only; records already in Langfuse stay until they expire or are deleted on request.
+
+The owner turned the environment switch on for staging on 2026-09-23 to read model inputs, thinking and outputs. Since 22 October 2026, by the owner's ruling, it records only testers who agreed. Unset or any other value exports no text for anyone. Flip it off with `--var LANGFUSE_CAPTURE_TEXT:false` on deploy.
 
 Adding a feature: name its hops `snake_case`, add them to `HOPS` with the most specific type, add a row here. Model calls are hops named `llm_<purpose>`.
 

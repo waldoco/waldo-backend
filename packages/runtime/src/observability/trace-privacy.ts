@@ -85,3 +85,8 @@ const gateWithoutCapture = (entry: TurnLogEntry): TurnLogEntry => {
 // says, so a misconfigured prod deploy fails safe (types/counts only), never open.
 export const resolveCaptureText = (env: Readonly<{ LANGFUSE_CAPTURE_TEXT?: string; WALDO_ENVIRONMENT?: string }>): boolean =>
   env.LANGFUSE_CAPTURE_TEXT === 'true' && (env.WALDO_ENVIRONMENT ?? 'development') !== 'production';
+
+// One owner's traces carry free-form text only where the environment allows it AND that owner agreed to beta diagnostic
+// recording. The agreement never widens the environment rule: production stays off whatever the owner chose.
+export const resolveOwnerCapture = (env: Readonly<{ LANGFUSE_CAPTURE_TEXT?: string; WALDO_ENVIRONMENT?: string }>, agreed: boolean): boolean =>
+  agreed === true && resolveCaptureText(env);

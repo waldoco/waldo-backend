@@ -7,6 +7,7 @@ import { claimStore } from '../src/memory/claims';
 import { persistInboxWake } from '../src/scheduler/alarm-slot';
 import { ensureSchema } from '../src/tracer/schema';
 import type { LLMGatewayRequest } from '../src/llm/provider';
+import { DIAGNOSTIC_RECORDING_WORDING } from '../src/identity/diagnostic-recording';
 
 // A directory-backed Telegram owner asks for their console in their own words. The model calls send_console_link, the
 // host mints the one-time link and sends it straight to the chat. Text capture is on, as on staging, so every sink that
@@ -54,6 +55,8 @@ beforeEach(() => {
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
     if (fn === 'common_owner_authority') return Response.json({ admission_revision: '5', auth_user_id: OWNER_ID, do_name: asked.p_do_name, owner_id: OWNER_ID, presence_id: '0d6b1f22-9c4e-4a7b-8e21-5f3a9c7d1b44', provider: asked.p_provider, state_version: 1, subject: asked.p_subject });
     if (fn === 'assert_channel_presence') return Response.json(true);
+    // The owner agreed to diagnostic recording, so the turn's text really is exported.
+    if (fn === 'diagnostic_recording_state') return Response.json({ agreed: true, version: DIAGNOSTIC_RECORDING_WORDING.version, agreed_at: '2026-10-22T09:00:00.000Z' });
     if (fn === 'health_context_read') return Response.json(null);
     return new Response('unexpected', { status: 500 });
   });

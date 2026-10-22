@@ -35,7 +35,7 @@ import { taskSourceFetch } from '../tools/task-source-io';
 import {OWNER_CONTROLS_PATH,OWNER_CONTROLS_ACTION_PATH,ownerControlsView,ownerControlsRead,ownerControlsAction} from './dashboard-owner-controls';
 import {MEMORY_CONTROL_PATH,projectMemoryControl,resolveMemoryAction} from './dashboard-memory-actions';
 import {CONTROLS_PATH,readControlsQuery,projectControls,type ControlsView} from './dashboard-controls';
-import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,googleConnectReceipt,mcpConnectReceipt,mcpDisconnectReceipt,whatsappLinkReceipt,whatsappUnlinkReceipt} from './dashboard-control-actions';
+import {CONTROL_ACTION_PATH,controlAction,controlRevision,approvalControlReceipt,diagnosticRecordingReceipt,googleConnectReceipt,mcpConnectReceipt,mcpDisconnectReceipt,whatsappLinkReceipt,whatsappUnlinkReceipt} from './dashboard-control-actions';
 import {channelControlsAction,channelControlsQuery,channelControlsRead,channelControlView} from './dashboard-channel-controls';
 import { dashboardReceipt } from './dashboard-receipts';
 import { createScopedCuratedSkillCapability, type OwnerSkillCapability } from '../skills/curated-host';
@@ -95,7 +95,8 @@ import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { costRollup, costRollupEnabled } from '../observability/cost-rollup';
 import { MONTHLY_SPEND_CEILING_USD } from '../llm/cost-ledger';
-import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
+import { gateTraceEntry, resolveCaptureText, resolveOwnerCapture } from '../observability/trace-privacy';
+import { DIAGNOSTIC_RECORDING_WORDING, diagnosticRecordingDirectory, readDiagnosticAgreement } from '../identity/diagnostic-recording';
 import { Scheduler } from '../scheduler/multiplexer';
 import { productionDeps } from '../seams/deps';
 import { redactConversationEntries, durableConversationStore, scrubConversationHistory } from './conversation-store';
@@ -497,7 +498,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const steer = parsed.accepted[0];
     const control = target?.runId && text && steer && (text === '/stop' || !text.startsWith('/')) ? { kind: text === '/stop' ? 'stop' as const : 'steer' as const, targetRun: target.runId } : undefined;
     try {
-      const traceIdentity = identityForStorage(readOwnerTraceHeader(request.headers), resolveCaptureText(this.env));
+      // The email rests in the inbox record only for an owner who agreed, asked now: this admission is not a turn.
+      const verifiedIdentity = readOwnerTraceHeader(request.headers);
+      const traceIdentity = identityForStorage(verifiedIdentity, verifiedIdentity?.owner_email ? await this.ownerAgreedToRecording(doName || undefined) : false);
       const admitted = await this.inbox.admit({ bot, subject, doName, ...(traceIdentity ? { traceIdentity } : {}) }, raw.update_id!, admittedBody, control);
       if (admitted === 'conflict' || admitted === 'capacity') return new Response(admitted, { status: admitted === 'conflict' ? 409 : 503 });
       // Binding follows authenticated admission, and never replaces a different binding.
@@ -726,6 +729,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private scheduledAppDelivery: ScheduledAppDelivery | null = null;
   // The scheduled job running now, and the owner the directory admitted for this unit of work (both cleared by serial()).
   private ownerJob: Readonly<{ job: OwnerJob; occurrenceKey: string; occurredAt: number }> | null = null;
+  // Whether the owner agreed to beta diagnostic recording, as the directory answered at the start of the latest turn or job.
+  // It is never stored here: the directory is the record, and every failure to read it answers no.
+  private diagnosticAgreed = false;
+  private async refreshDiagnosticRecording(): Promise<void> {
+    this.diagnosticAgreed = false;
+    this.diagnosticAgreed = await this.ownerAgreedToRecording();
+  }
+  private async ownerAgreedToRecording(doName = this.ctx.storage.kv.get<string>('do_name')): Promise<boolean> {
+    return resolveCaptureText(this.env) && readDiagnosticAgreement(diagnosticRecordingDirectory(this.env), doName);
+  }
+  // Text capture for this owner's traces: the environment allows it and the owner agreed.
+  private get captureText(): boolean { return resolveOwnerCapture(this.env, this.diagnosticAgreed); }
   private jobOwner: Promise<ScheduledOwner> | null = null;
 
   // Scheduled work runs as the owner the directory admits for this Durable Object, asked once per unit of work to pick that
@@ -763,7 +778,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async asOwnerJob<T>(job: OwnerJob, occurrenceKey: string, work: () => Promise<T>): Promise<T> {
     const previous = this.ownerJob;
     this.ownerJob = { job, occurrenceKey, occurredAt: Date.now() };
-    try { return await work(); } finally { this.ownerJob = previous; }
+    try { await this.refreshDiagnosticRecording(); return await work(); } finally { this.ownerJob = previous; }
   }
   // Without a directory there is no owner to resolve and the fixture owner stands. With one, a job runs only as the owner it
   // admitted; work reaching the responder outside a named job runs nothing and asks the directory nothing, and work for an
@@ -965,9 +980,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       catch { app.log({ trace: record.trace, hop: 'whatsapp_copy', ms: 0, ok: false, code: 'copy_failed', detail: 'copy_failed' }); }
     };
   }
-  // The console's controls read. Its day view also says where Waldo writes and where the owner can be reached, which the
-  // app's contract does not carry.
-  private consoleControls(source: ConsoleView, view: ControlsView) {
+  // The console's controls read. Its day view also says where Waldo writes and where the owner can be reached, and what the
+  // owner chose about diagnostic recording, which the app's contract does not carry.
+  private async consoleControls(source: ConsoleView, view: ControlsView) {
     const projection = projectControls(source, view);
     if (view === 'connections') {
       const mcp = this.mcp();
@@ -975,7 +990,27 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     if (view !== 'day') return projection;
     const kv = this.ctx.storage.kv;
-    return { ...projection, data: { ...projection.data, proactive_surface: { value: proactiveSurface(kv), app_linked: this.appBound(), whatsapp_linked: this.whatsappBound(), telegram_linked: telegramLinked(kv) } } };
+    const diagnostic = await this.diagnosticRecordingControl();
+    return { ...projection, data: { ...projection.data, proactive_surface: { value: proactiveSurface(kv), app_linked: this.appBound(), whatsapp_linked: this.whatsappBound(), telegram_linked: telegramLinked(kv) },
+      ...(diagnostic ? { diagnostic_recording: diagnostic } : {}) } };
+  }
+  // The directory's answer, shown as it is: an unreadable record is unknown, never off. recorded_here says whether this
+  // environment records text at all, whatever the owner chose.
+  private async diagnosticRecordingControl() {
+    const directory = diagnosticRecordingDirectory(this.env), doName = this.ctx.storage.kv.get<string>('do_name');
+    if (!directory || !doName) return undefined;
+    let state: 'on' | 'off' | 'unknown' = 'unknown';
+    try { const agreement = await directory.read(doName); state = agreement?.agreed === true && agreement.version === DIAGNOSTIC_RECORDING_WORDING.version ? 'on' : 'off'; } catch { /* unknown */ }
+    return { state, recorded_here: resolveCaptureText(this.env), ...DIAGNOSTIC_RECORDING_WORDING };
+  }
+  // Recording stops in this object at once; the next turn reads whatever the directory now holds.
+  private async setDiagnosticRecording(value: string) {
+    if (value !== 'on' && value !== 'off') return diagnosticRecordingReceipt(value, 'refused');
+    const directory = diagnosticRecordingDirectory(this.env), doName = this.ctx.storage.kv.get<string>('do_name');
+    if (!directory || !doName) return diagnosticRecordingReceipt(value, 'unconfigured');
+    this.diagnosticAgreed = false;
+    try { return diagnosticRecordingReceipt(value, await directory.set(doName, value === 'on', 'console') ? 'done' : 'refused'); }
+    catch { return diagnosticRecordingReceipt(value, 'unconfirmed'); }
   }
 
   private async appAdmission(name: string, hash: string, text: string, occurrence: string, occurredAt: number, scope: RunEffectScope) {
@@ -1795,7 +1830,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             if(!query)return Response.json({error:'invalid_query'},{status:400,headers:DASHBOARD_OVERVIEW_HEADERS});
             let source=await runtime.view(session,null,query.page),pending=0;
             if(query.view==='profile'){pending=this.ctx.storage.sql.exec<{count:number}>('SELECT COUNT(*) AS count FROM purge_pending').toArray()[0]?.count??0;if(pending>0)source={...source,profile:[]};}
-            let projection=this.consoleControls(source,query.view);
+            let projection=await this.consoleControls(source,query.view);
             if(query.view==='profile'){const profile=projectControls(source,'profile');projection={...profile,data:{...profile.data,removal:{state:pending>0||source.forgettingSpots.length?'incomplete':'none_recorded',pending_count:Math.max(pending,source.forgettingSpots.length),items:source.forgettingSpots.map(claim=>({id:`${this.ctx.id.toString()}:claim:${claim.id}`,status:'purging' as const}))}}} as typeof projection;}
             return Response.json({...projection,revision:await controlRevision(projection)},{headers:DASHBOARD_OVERVIEW_HEADERS});
           }
@@ -1803,7 +1838,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           let built:ConsoleView|undefined;
           const read=async()=>built??(built=await runtime.view(session,null));
           const result=await controlAction(form,{csrf:session.csrf,expires:session.expires,sessions:()=>access.list(),store:this.ctx.storage,view:read,
-            projection:async(selected,id)=>{if(selected==='memory')return projectMemoryControl(await read(),this.ctx.id.toString(),id??'');const query=readControlsQuery(new URLSearchParams({view:selected}));return query?this.consoleControls(await read(),query.view):null;},
+            projection:async(selected,id)=>{if(selected==='memory')return projectMemoryControl(await read(),this.ctx.id.toString(),id??'');const query=readControlsQuery(new URLSearchParams({view:selected}));return query?await this.consoleControls(await read(),query.view):null;},
             act:async(action)=>{
               if(['spot.confirm','spot.dismiss','spot.forget','node.forget'].includes(action.action)){const resolved=resolveMemoryAction(await read(),this.ctx.id.toString(),action);return resolved?runtime.act(resolved):false;}
               if(action.action==='google.connect')return googleConnectReceipt(isGoogleFeature(action.value)?await runtime.googleConnectUrl(action.value,'console'):null,url.origin);
@@ -1815,6 +1850,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
                 return code?{state:'recorded' as const,message:`Send this to the Waldo bot on Telegram within 10 minutes: /link ${code}`}:{state:'rejected' as const,message:'Linking Telegram needs account sign-in, which is not configured on this server.'};
               }
               if(action.action==='proactive_surface.set')return setProactiveSurface(this.ctx.storage.kv,action.value);
+              if(action.action==='diagnostic_recording.set')return this.setDiagnosticRecording(action.value);
               if(action.action==='whatsapp.link'){
                 const name=this.ctx.storage.kv.get<string>('do_name');
                 return whatsappLinkReceipt(name?await consoleAuth(this.env)?.issueProviderLinkCode?.(name,'whatsapp')??null:null);
@@ -2358,6 +2394,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
 
   private async turn(update: unknown, channel: ChannelKind = 'telegram', durable = false, scope?: RunEffectScope): Promise<void> {
     update = maskCredentialReply(update, this.ctx.storage.kv);
+    await this.refreshDiagnosticRecording();
     const { listener, owner, call, desk, ledger, updates, control, log, ready } = this.setup(channel);
     await ready;
     if (channel === 'imessage') {
@@ -2526,11 +2563,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }) : undefined;
     const deps = productionDeps();
     const traces = traceBook(this.ctx.storage.sql);
-    const captureText = resolveCaptureText(this.env);
     const costs = costRollupEnabled(this.env) ? costRollup({
       kv: identity, call: signedRpc(this.env), doName: identity.get<string>('do_name') ?? null, newId: () => crypto.randomUUID(),
       onError: (error) => {
-        const failed: TurnLogEntry = gateTraceEntry({ trace: `cost:${channel}`, hop: 'cost_ledger', ms: 0, ok: false, error: String(error), code: 'sync_failed' }, captureText);
+        const failed: TurnLogEntry = gateTraceEntry({ trace: `cost:${channel}`, hop: 'cost_ledger', ms: 0, ok: false, error: String(error), code: 'sync_failed' }, this.captureText);
         console.log(JSON.stringify(failed));
         traces.record(failed, deps.now());
       },
@@ -2546,14 +2582,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       // The historical owner label reaches the DO trace table; canonical ID/email also reach Worker logs and OTLP.
       // The gate runs once here so free-form detail/error text reaches none of the sinks while
-      // the capture switch is off; whitelisted hops keep their count/enum detail either way.
+      // capture is off for this owner; whitelisted hops keep their count/enum detail either way.
+      const captureText = this.captureText;
       const enriched: TurnLogEntry = gateTraceEntry(enrichOwnerTrace(entry,
         channel === 'telegram' ? identity.get<InboxRecord[]>(OWNER_INBOX_KEY) ?? [] : [],
         identity.get<string>('do_name') ?? '', String(owner)), captureText);
       traces.record(enriched, deps.now());
       console.log(JSON.stringify({ ...enriched, text: undefined }));
       if (costs?.record(enriched, deps.now())) this.ctx.waitUntil(costs.flush());
-      if (exportTurn) this.ctx.waitUntil(exportTurn(enriched).catch((error: unknown) => {
+      // The exporter's own switch is the environment's; this owner's turn text leaves only while they agreed.
+      if (exportTurn) this.ctx.waitUntil(exportTurn(captureText ? enriched : { ...enriched, text: undefined }).catch((error: unknown) => {
         const note = String(error);
         const failed: TurnLogEntry = gateTraceEntry({ trace: enriched.trace, hop: 'otlp_export', ms: 0, ok: false, error: note, code: 'export_failed', owner: enriched.owner,
           owner_id: enriched.owner_id, owner_email: enriched.owner_email, owner_identity: enriched.owner_identity }, captureText);
