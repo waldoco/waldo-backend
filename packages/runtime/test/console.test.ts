@@ -380,6 +380,13 @@ describe('owner console', () => {
     expect(parseConsoleAction(formOf({ action: 'schedule.reset', csrf: 'good' }), 'good')).toEqual({ action: 'schedule.reset', id: '', value: '' });
   });
 
+  it('names a job the scheduler paused and when it tries again, and shows nothing when none is paused', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'day');
+    expect(html).toContain('<b>My overnight memory pass</b>');
+    expect(html).toContain('Waldo tries again around Sat 2 Nov, 03:00.');
+    expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, pausedJobs: [] }, 'day')).not.toContain('tries again around');
+  });
+
   it('accepts only known actions carrying the session csrf token', () => {
     expect(parseConsoleAction(formOf({ action: 'spot.dismiss', id: '4', csrf: 'good' }), 'good')).toEqual({ action: 'spot.dismiss', id: '4', value: '' });
     expect(parseConsoleAction(formOf({ action: 'spot.dismiss', id: '4', csrf: 'bad' }), 'good')).toBeNull();

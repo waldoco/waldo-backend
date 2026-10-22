@@ -195,6 +195,8 @@ export type ConsoleView = Readonly<{
   ledger: string;
   proactivity: Proactivity;
   schedules: SchedulePreferences;
+  // Jobs the scheduler paused after their own runs failed, as the owner knows them, with the retry's local time.
+  pausedJobs: readonly Readonly<{ name: string; until: string }>[];
   files: readonly StoredFile[];
   steps: readonly E2EStep[];
   lastRequest: LastRequest | null;
@@ -395,7 +397,8 @@ const timezone = (view: ConsoleView) => `<form class="card-edit" method="post" a
 const proactivity = (view: ConsoleView) => `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="proactivity.set"><label>Quiet from <input type="time" name="quiet_start" value="${esc(view.proactivity.quiet_start ?? '')}"></label><label>until <input type="time" name="quiet_end" value="${esc(view.proactivity.quiet_end ?? '')}"></label><select name="volume">${VOLUMES.map(([value, label]) => `<option value="${value}"${view.proactivity.volume === value ? ' selected' : ''}>${esc(label)}</option>`).join('')}</select><button class="btn quiet">Save</button></form><div class="sub">During quiet hours Waldo holds cards, updates and event briefs. Reminders you set still fire. Leave both times empty for no quiet hours.</div>`;
 
 const scheduleRows = (view: ConsoleView) => SCHEDULE_KINDS.map((kind) => `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="schedule.set"><input type="hidden" name="id" value="${kind}"><input type="hidden" name="value" value="${view.schedules[kind] ? 'off' : 'on'}"><span>${esc(SCHEDULE_LABELS[kind])}: <b>${view.schedules[kind] ? 'on' : 'off'}</b></span><button class="btn quiet">${view.schedules[kind] ? 'Turn off' : 'Turn on'}</button></form>`).join('');
-const schedules = (view: ConsoleView) => `${scheduleRows(view)}<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="schedule.reset"><button class="btn quiet">Reset to defaults</button></form><div class="sub">Nothing here is forced on you. You can also tell Waldo in chat, and both places stay in sync. Reset turns everything back on.</div>`;
+const paused = (view: ConsoleView) => view.pausedJobs.map((job) => `<div class="row"><div class="main"><div class="line"><b>${esc(job.name)}</b> ${chip('Paused')}</div><div class="sub">It failed several times in a row. Waldo tries again around ${esc(job.until)}.</div></div></div>`).join('');
+const schedules = (view: ConsoleView) => `${paused(view)}${scheduleRows(view)}<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="schedule.reset"><button class="btn quiet">Reset to defaults</button></form><div class="sub">Nothing here is forced on you. You can also tell Waldo in chat, and both places stay in sync. Reset turns everything back on.</div>`;
 
 const size = (bytes: number | null) => bytes === null ? '' : bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 const KIND_LABEL: Readonly<Record<string, string>> = { photo: 'Photo', document: 'Document', voice: 'Voice note', audio: 'Audio' };
