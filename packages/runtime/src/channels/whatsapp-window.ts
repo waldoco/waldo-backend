@@ -158,7 +158,7 @@ export const whatsappReceipt = (ack: unknown, subject: string, now: number = Dat
 // custody: one the window refuses, by our clock or Meta's, goes back to pending in the outbox rather than into the held
 // store, and a sent record settles only on Meta's report that it arrived (observeSurfaceStatuses). The knock waits for the
 // route's checks too: a record the route itself still holds or would refuse never knocks. A record still waiting after
-// Meta's 30-day retention is refused. releaseWhatsAppOutbox sends what waited once the owner writes again.
+// Meta's 30-day retention ends as lapsed, blocked if nothing went out and quarantined if any part did. releaseWhatsAppOutbox sends what waited once the owner writes again.
 export const whatsappWindowRoute = (route: OutboxRoute, options: Readonly<{ kv: Kv; subject: string; template: WhatsAppTemplate | null;
   knock: (template: WhatsAppTemplate) => Promise<unknown>; now?: () => number; log: Log }>): OutboxRoute => {
   const { kv, subject, template, knock, log } = options;
@@ -230,7 +230,7 @@ export const releaseWhatsAppOutbox = async (outbox: TelegramFinalOutbox, route: 
 export const clearWhatsAppNumber = (kv: Kv, appFallback = false): readonly string[] => {
   const old = kv.get<string>('whatsapp_subject');
   const toApp = old && appFallback ? waitingForWhatsApp(new Set([old])) : () => false;
-  const kept = (record: FinalRecord) => record.status === 'pending' && !(record.providerMessageIds ?? []).some(Boolean) && toApp(record);
+  const kept = (record: FinalRecord) => record.status === 'pending' && toApp(record);
   const retired = old ? retireSurfaceRecords(kv, record => record.ownerSubject === old && String(record.payload.chat_id) === old && !kept(record)) : [];
   if (old && appFallback) rememberWhatsAppSubject(kv, old);
   for (const prefix of [WA_HELD_PREFIX, REHELD_PREFIX]) for (const [key] of [...kv.list<unknown>({ prefix })]) kv.delete(key);
